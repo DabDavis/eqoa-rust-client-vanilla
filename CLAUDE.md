@@ -23,7 +23,9 @@ current.
   final CLIENT in the Corsten save state, README "duels"), and a GM's flight on a server that turns it on (the
   user's of 2026-11-07, "lets add a gm fly command": `walker.rs`, never in `vi`), and the combat record's window on a
   server that keeps one (the user's of 2026-11-07, "lets add a combat record for pvp and duels to the menu": Character >
-  Combat Record, `record.rs`, `recordplay.rs`, the server's rows by 0x7E20/0x7E21)).
+  Combat Record, `record.rs`, `recordplay.rs`, the server's rows by 0x7E20/0x7E21), and PCSX2's texture packs and
+  texture dumps natively (the user's of 2026-11-08, "one pack works in both": Extended > Textures, both off unless
+  chosen, `texpack.rs`)).
   A new client-side addition is the user's call: ask first. Sharp filtering is for the 2D layer and
   the text only: the world's textures are drawn smooth, as the game filters them (the user,
   2026-10-27, after a Crisp row for them: "world textures cant render proper without smooth. so
@@ -81,6 +83,15 @@ current.
   then asked for in zenity's dialog. `EQOA_OFFSCREEN` never shows a dialog. Test the Linux
   dialogs on :99 with a private bus (`dbus-run-session`, xdg-desktop-portal-gtk) or none (zenity): the session
   bus's portal draws on the user's own screen.
+- Texture packs (`texpack.rs`, `esf::pcsx2`, README "PCSX2's texture packs and dumps"): a texture's file name is
+  PCSX2's (its texture cache's XXH3 of the GS memory the game fills for the surface), so a name is made from what
+  `VIEESurfCache` uploads (`Surface::gs`), never from the decoded RGBA (`Surface::decode` reads a 4-bit row's high
+  nibble first; the GS reads the low, and PCSX2's dumps agree). Off, nothing is set (`render::set_pack(None)`) and
+  every texture is byte for byte the game's; the folders are the config directory's, so a test command has none.
+  Hold a change to the names to PCSX2's dumps: `EQOA_PCSX2_DUMPS=<its dumps> cargo test --release -p esf --test pcsx2`
+  (the tracer with a hardware renderer, Renderer 14, and DumpReplaceableTextures, under a `HOME` of its own, writes
+  them). A change to either row makes every texture again (`App::retexture`: the zones in place, the creatures by
+  `Puppet::textures`, the HUD's layer, the pregame's).
 - The 2002 art (`era.rs`, README "The 2002 art"; the user, 2026-10-24: "texture/model swapping of the eqoa
   2002 era", on F9, "same with loading screens, title screen", and Tunaria keeping Frontiers' "ambient
   sounds and the fog/dust/leaf/flock effects"): a file off the player's USA disc of 2002 stands in for its

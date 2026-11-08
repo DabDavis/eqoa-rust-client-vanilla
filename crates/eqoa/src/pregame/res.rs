@@ -169,6 +169,15 @@ impl Res {
         self.relayer = true;
     }
 
+    /// The textures changed (a texture pack turned on or off, `texpack`):
+    /// what is drawn made again in the art as it is, once its 2002 files (if
+    /// any are being read) are all in, and the 2D layer with it, as for an
+    /// art swapped (`take_art_change`, `take_relayer`).
+    pub fn retexture(&mut self) {
+        self.art_due = true;
+        self.relayer = true;
+    }
+
     /// The art to make what is drawn again in, once: when it changed and its
     /// 2002 files (if any are being read) are all in.
     pub fn take_art_change(&mut self) -> Option<Era> {

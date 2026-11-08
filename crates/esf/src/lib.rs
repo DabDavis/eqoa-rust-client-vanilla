@@ -23,6 +23,7 @@ mod library;
 pub(crate) mod mesh;
 mod surface;
 pub mod font;
+pub mod pcsx2;
 pub mod sound;
 pub mod zone;
 pub use library::{Era, Library, Ref};

@@ -89,6 +89,54 @@ pub fn effects_lod_k() -> f32 {
     if mipmaps() { gs_lod_k(DEFAULT_LOD_BIAS) } else { BASE_LEVEL_K }
 }
 
+/// What stands in for the game's own textures (the options' Texture Packs:
+/// `eqoa`'s `texpack`), asked about every surface a library's texture is
+/// made from (`LibraryTextures`) while one is set (`set_pack`). With none
+/// set, every texture is the surface's own, as ever.
+pub trait Pack: Send + Sync {
+    /// The levels to draw in place of the surface `s` (its record's bytes
+    /// `c.data`, off the disc of `era`), the base first; `None` for its own.
+    fn levels(&self, c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<Vec<esf::Image>>;
+    /// Whether `levels` has a stand-in for the surface `key` names (a
+    /// library's `texture_key`), so that its texture is cached apart from
+    /// the surface's own.
+    fn replaces(&self, key: u64, c: &esf::Container, s: &esf::Surface, era: esf::Era) -> bool;
+    /// What tells this pack's stand-ins apart from an earlier pack's: a
+    /// replaced texture's key carries it (`LibraryTextures::key`).
+    fn generation(&self) -> u64;
+}
+
+static PACK: std::sync::RwLock<Option<std::sync::Arc<dyn Pack>>> = std::sync::RwLock::new(None);
+
+/// Sets what stands in for the game's textures, or with `None` nothing.
+/// What is drawn changes as each texture is next made: the textures made
+/// already stay until their models are made again (`eqoa`'s
+/// `Play::art_changed` makes them again).
+pub fn set_pack(p: Option<std::sync::Arc<dyn Pack>>) {
+    *PACK.write().unwrap_or_else(|e| e.into_inner()) = p;
+}
+
+/// The pack set, if any.
+pub fn pack() -> Option<std::sync::Arc<dyn Pack>> {
+    PACK.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// How many levels a texture's base is past the size its surface gives
+/// (`TextureSource::native_size`): log2 of the larger ratio of their sides,
+/// 0 for the surface's own size. A texture twice its surface's size each way
+/// is sampled a level farther on at every depth (`fs_main`'s level plus it),
+/// so a pack's larger texture keeps the game's texel density at a distance
+/// and adds detail only near, where the game magnifies its base.
+pub fn level_shift(base: (u32, u32), native: Option<(u32, u32)>) -> f32 {
+    match native {
+        Some((w, h)) if w > 0 && h > 0 && base.0 > 0 && base.1 > 0 => {
+            let r = (base.0 as f32 / w as f32).max(base.1 as f32 / h as f32);
+            if r == 1.0 { 0.0 } else { r.log2() }
+        }
+        _ => 0.0,
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Vertex {
@@ -150,6 +198,8 @@ struct Pass {
     /// The UV mapping the pass was made with (`uv0`, `uv1` and the sampler),
     /// which another pass of the batch can be given (`set_layer`).
     made: UvMapping,
+    /// The texture's level shift (`level_shift`), in `base`'s K.
+    shift: f32,
 }
 
 /// A layer's UV mapping: the transform and scroll (`LayerUniform::uv0`,
@@ -339,6 +389,12 @@ pub trait TextureSource {
     fn key(&self, id: i32) -> u64 {
         id as u32 as u64
     }
+    /// The size the game's own texture for `id` has (its surface's), which
+    /// `levels` may hand out larger (a pack's: `level_shift`); `None` when
+    /// the levels are always the source's own.
+    fn native_size(&self, _id: i32) -> Option<(u32, u32)> {
+        None
+    }
 }
 
 impl<F: Fn(i32) -> Option<esf::Image>> TextureSource for F {
@@ -365,8 +421,8 @@ pub struct Renderer {
     samplers: [wgpu::Sampler; 3],
     white: wgpu::TextureView,
     /// A source's key for a DictID (`TextureSource::key`) -> uploaded texture
-    /// (`None`: the id resolved to nothing).
-    textures: std::collections::HashMap<u64, Option<wgpu::TextureView>>,
+    /// and its level shift (`level_shift`; `None`: the id resolved to nothing).
+    textures: std::collections::HashMap<u64, Option<(wgpu::TextureView, f32)>>,
     /// DictIDs a batch asked for that no loaded file holds.
     pub missing_textures: std::collections::BTreeSet<i32>,
     start: web_time::Instant,
@@ -660,6 +716,12 @@ impl Renderer {
     }
 
     fn texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: i32, src: &Textures) -> Option<wgpu::TextureView> {
+        self.texture_shifted(device, queue, id, src).map(|(v, _)| v)
+    }
+
+    /// `texture`, with how many levels its base is past its surface's
+    /// (`level_shift`: 0 but for a pack's larger texture).
+    fn texture_shifted(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: i32, src: &Textures) -> Option<(wgpu::TextureView, f32)> {
         if id == 0 {
             return None;
         }
@@ -672,7 +734,8 @@ impl Renderer {
                     missing.insert(id);
                     return None;
                 }
-                Some(upload_levels(device, queue, &levels))
+                let shift = level_shift((levels[0].width, levels[0].height), src.native_size(id));
+                Some((upload_levels(device, queue, &levels), shift))
             })
             .clone()
     }
@@ -733,8 +796,9 @@ impl Renderer {
             }
             let mut passes = Vec::new();
             for l in layers_of(b) {
-                let view = self.texture(device, queue, l.texture, textures);
+                let (view, shift) = self.texture_shifted(device, queue, l.texture, textures).unzip();
                 let (blend, mut base, si) = layer_state(l, view.is_some());
+                base.flags[2] += shift.unwrap_or(0.0);
                 base.flags[3] = flora as i32 as f32;
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("layer"),
@@ -754,7 +818,7 @@ impl Renderer {
                         wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
                     ],
                 });
-                passes.push(Pass { blend, bg, uniform, base, texture: l.texture, sampler: si, made: (base.uv0, base.uv1, si) });
+                passes.push(Pass { blend, bg, uniform, base, texture: l.texture, sampler: si, made: (base.uv0, base.uv1, si), shift: shift.unwrap_or(0.0) });
             }
             let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("indices"),
@@ -809,9 +873,12 @@ impl Renderer {
         let Some(p) = ps.get(pass) else { return };
         let (uv0, uv1, si) = uv.and_then(|u| ps.get(u)).map_or(FRESH_UV, |src| src.made);
         let rebind = p.texture != texture || p.sampler != si;
-        let view = if rebind { self.texture(device, queue, texture, textures) } else { None };
+        let (view, shift) = if rebind { self.texture_shifted(device, queue, texture, textures).unzip() } else { (None, None) };
         let Some(p) = m.batches.get_mut(batch).and_then(|b| b.2.get_mut(pass)) else { return };
         if rebind {
+            let shift = shift.unwrap_or(0.0);
+            p.base.flags[2] += shift - p.shift;
+            p.shift = shift;
             p.bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("layer"),
                 layout: &self.material_layout,
@@ -1160,8 +1227,9 @@ impl Renderer {
     /// The shared bind group of a layer (cached by texture, sampler and
     /// uniform), and its blend mode.
     fn material(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, l: &esf::Layer, textures: &Textures) -> Material {
-        let view = self.texture(device, queue, l.texture, textures);
-        let (blend, base, si) = layer_state(l, view.is_some());
+        let (view, shift) = self.texture_shifted(device, queue, l.texture, textures).unzip();
+        let (blend, mut base, si) = layer_state(l, view.is_some());
+        base.flags[2] += shift.unwrap_or(0.0);
         let key = (textures.key(l.texture), si, bytemuck::cast(base));
         if let Some(bg) = self.materials.get(&key) {
             return Material { blend, bg: bg.clone() };
@@ -1555,15 +1623,41 @@ pub const IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
 /// its Frontiers namesake are two textures, and an unchanged one is one.
 pub struct LibraryTextures<'a>(pub &'a esf::Library);
 
+impl LibraryTextures<'_> {
+    /// The surface a DictID names in the library's view, its container, and
+    /// the disc its record came off.
+    fn surface(&self, id: i32) -> Option<(&esf::Container, esf::Surface, esf::Era)> {
+        let r = self.0.lookup(id)?;
+        let (c, s) = self.0.surface(id)?;
+        Some((c, s, self.0.era_of(r.file)))
+    }
+}
+
+/// With a pack set (`set_pack`), a surface it has a stand-in for is drawn
+/// as the pack's levels, keyed apart (its generation in bits 40 and up);
+/// every other texture, and every texture with none set, is the surface's
+/// own under its own key.
 impl TextureSource for LibraryTextures<'_> {
     fn image(&self, id: i32) -> Option<esf::Image> {
-        self.0.surface(id).and_then(|(c, s)| s.decode(&c.data))
+        self.levels(id).into_iter().next()
     }
     fn levels(&self, id: i32) -> Vec<esf::Image> {
-        self.0.surface(id).map(|(c, s)| s.decode_levels(&c.data)).unwrap_or_default()
+        let Some((c, s, era)) = self.surface(id) else { return Vec::new() };
+        if let Some(l) = pack().and_then(|p| p.levels(c, &s, era)).filter(|l| !l.is_empty()) {
+            return l;
+        }
+        s.decode_levels(&c.data)
     }
     fn key(&self, id: i32) -> u64 {
-        self.0.texture_key(id)
+        let key = self.0.texture_key(id);
+        let Some(p) = pack() else { return key };
+        match self.surface(id) {
+            Some((c, s, era)) if p.replaces(key, c, &s, era) => key | p.generation() << 40,
+            _ => key,
+        }
+    }
+    fn native_size(&self, id: i32) -> Option<(u32, u32)> {
+        self.0.surface(id).map(|(_, s)| (s.width.max(0) as u32, s.height.max(0) as u32))
     }
 }
 

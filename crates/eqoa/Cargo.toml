@@ -34,6 +34,8 @@ winit = "0.30.13"
 pollster = "1.0.1"
 glam = "0.34.1"
 png = "0.18.1"
+# A texture pack's DDS files (`texpack`): BC1, BC2, BC3 and BC7, as PCSX2 reads them
+bcdec_rs = "0.2.1"
 cpal = "0.16"
 
 # The gamepads natively (SDL's layout, force feedback); a page reads the

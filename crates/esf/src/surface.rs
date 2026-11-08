@@ -27,6 +27,7 @@ pub struct Surface {
 
 /// A decoded image: top-down RGBA8. `alpha` is true when a pixel actually
 /// written has alpha != 255 (an unused translucent palette entry does not count).
+#[derive(Clone)]
 pub struct Image {
     pub width: u32,
     pub height: u32,

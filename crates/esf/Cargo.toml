@@ -9,7 +9,11 @@ license.workspace = true
 flate2.workspace = true
 # a file inside the disc image read by position (`Window`)
 iso.workspace = true
+# PCSX2's texture names (`pcsx2`): its GS texture cache hashes with XXH3-64
+xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
 
 [dev-dependencies]
 crc32fast.workspace = true
 serde_json.workspace = true
+# PCSX2's dumps read back (`tests/pcsx2.rs`)
+png = "0.18.1"

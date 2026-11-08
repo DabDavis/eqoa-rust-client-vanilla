@@ -168,15 +168,22 @@ pub struct UiAssets {
     pub glyphs: Option<crate::pointer::GlyphTable>,
 }
 
+/// A surface into the layer: its picture (a texture pack's, `texpack`, else
+/// its own) at the size the game's own has, which the atlas's rectangles are
+/// in (a pack's larger picture drawn over the same rectangles).
+fn add_texture(ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<usize> {
+    let img = crate::texpack::image(c, s, era)?;
+    Some(ui.add_texture_sized(device, queue, (s.width.max(1) as u32, s.height.max(1) as u32), img.width, img.height, &img.rgba))
+}
+
 impl UiAssets {
-    /// Every surface of a UI file into the layer, by DictID.
-    pub fn add_surfaces(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, c: &esf::Container) {
+    /// Every surface of a UI file (off the disc of `era`) into the layer, by DictID.
+    pub fn add_surfaces(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, c: &esf::Container, era: esf::Era) {
         for s in &c.surfaces {
             if self.surfaces.contains_key(&(s.dict_id as u32)) {
                 continue;
             }
-            if let Some(img) = s.decode(&c.data) {
-                let t = ui.add_texture(device, queue, img.width, img.height, &img.rgba);
+            if let Some(t) = add_texture(ui, device, queue, c, s, era) {
                 self.surfaces.insert(s.dict_id as u32, t);
             }
         }
@@ -189,14 +196,13 @@ impl UiAssets {
     pub fn add_surfaces_of(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, lib: &esf::Library, f: usize) {
         let c = lib.file(f);
         if lib.stands_for(f).is_none() {
-            return self.add_surfaces(ui, device, queue, c);
+            return self.add_surfaces(ui, device, queue, c, lib.era_of(f));
         }
         for s in &c.surfaces {
             if self.surfaces.contains_key(&(s.dict_id as u32)) || !takes_surface(lib, f, s.dict_id) {
                 continue;
             }
-            if let Some(img) = s.decode(&c.data) {
-                let t = ui.add_texture(device, queue, img.width, img.height, &img.rgba);
+            if let Some(t) = add_texture(ui, device, queue, c, s, lib.era_of(f)) {
                 self.surfaces.insert(s.dict_id as u32, t);
             }
         }
@@ -204,12 +210,11 @@ impl UiAssets {
 
     /// One surface of a file into the layer, by its DictID (what the HUD
     /// draws from a file that is not the UI's: FX.CSF's damage font).
-    pub fn add_surface(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, c: &esf::Container, id: u32) {
+    pub fn add_surface(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, c: &esf::Container, id: u32, era: esf::Era) {
         if self.surfaces.contains_key(&id) {
             return;
         }
-        if let Some(img) = c.surfaces.iter().find(|s| s.dict_id as u32 == id).and_then(|s| s.decode(&c.data)) {
-            let t = ui.add_texture(device, queue, img.width, img.height, &img.rgba);
+        if let Some(t) = c.surfaces.iter().find(|s| s.dict_id as u32 == id).and_then(|s| add_texture(ui, device, queue, c, s, era)) {
             self.surfaces.insert(id, t);
         }
     }

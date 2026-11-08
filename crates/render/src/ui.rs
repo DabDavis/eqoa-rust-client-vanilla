@@ -769,11 +769,20 @@ impl Ui {
 
     /// A texture for the layer: RGBA8, top row first. Its index.
     pub fn add_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, rgba: &[u8]) -> usize {
-        self.add_texture_as(device, queue, width, height, rgba, false)
+        self.add_texture_as(device, queue, (width, height), width, height, rgba, false)
     }
 
-    /// `add_texture`, a font's if `font`.
-    fn add_texture_as(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, rgba: &[u8], font: bool) -> usize {
+    /// `add_texture` of a picture `width` x `height` standing in for one of
+    /// `size` (a texture pack's, larger: `texture_size` answers `size`, which
+    /// the quads' texel coordinates are in, and the picture is sampled over
+    /// the same rectangles).
+    pub fn add_texture_sized(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, size: (u32, u32), width: u32, height: u32, rgba: &[u8]) -> usize {
+        self.add_texture_as(device, queue, size, width, height, rgba, false)
+    }
+
+    /// `add_texture`, a font's if `font`, its size `logical` to the quads.
+    #[allow(clippy::too_many_arguments)]
+    fn add_texture_as(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, logical: (u32, u32), width: u32, height: u32, rgba: &[u8], font: bool) -> usize {
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("ui"),
@@ -798,6 +807,7 @@ impl Ui {
             })
         };
         let (bg, filtered) = (bind(&self.sampler), bind(&self.filtering));
+        let (width, height) = logical;
         self.textures.push(Texture { bg, filtered, font, width, height });
         self.textures.len() - 1
     }
@@ -824,7 +834,7 @@ impl Ui {
     /// A font, packed into rows of a 2048-wide texture (`pack`). Its index.
     pub fn add_font(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, font: &esf::font::Font) -> usize {
         let (atlas, ah, glyphs) = pack(font, 2048);
-        let tex = self.add_texture_as(device, queue, 2048, ah, &atlas, true);
+        let tex = self.add_texture_as(device, queue, (2048, ah), 2048, ah, &atlas, true);
         self.fonts.push(Font { tex, height: font.height, glyphs });
         self.fonts.len() - 1
     }

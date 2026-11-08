@@ -338,6 +338,9 @@ pub fn shot_with(
     renderer.set_ps2_sums(render::fog16::supported(&adapter));
     renderer.set_ps2_sequential(fog_sequential());
     renderer.scroll_time = Some(script.as_ref().map_or(0, |s| s.ms) as f32 / 1000.0);
+    // the options' Texture Packs and Dump Textures (kept only under
+    // `$EQOA_CONFIG` for a shot), before a texture is made
+    crate::texpack::sync();
     if let Some(f) = arial(lib) {
         renderer.set_font(&device, &queue, &f);
     }
@@ -1186,6 +1189,7 @@ pub fn shot_with(
     enc.write_header()?.write_image_data(&rgba)?;
     eprintln!("{out}: {} ({cam:?})", s.summary);
     report(&renderer);
+    crate::texpack::flush();
     Ok(())
 }
 
@@ -1951,6 +1955,9 @@ struct App {
     /// The art as last chosen (`settings::art`), against which the Extended
     /// page's row is seen to move.
     art_chosen: esf::Era,
+    /// The textures last drawn with (`texpack::generation`), against which a
+    /// texture pack turned on or off is seen (`poll_textures`).
+    textures_drawn: u64,
 }
 
 /// Whose a finger is, from where it came down (`App::finger`): the touch
@@ -2109,6 +2116,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         unfocused: false,
         art_drawn,
         art_chosen: crate::settings::art(),
+        textures_drawn: crate::texpack::generation(),
         winplace: Default::default(),
         #[cfg(target_os = "android")]
         android: Default::default(),
@@ -2123,6 +2131,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
     #[cfg(not(target_arch = "wasm32"))]
     {
         event_loop.run_app(&mut app)?;
+        // the dumps the writer still holds (`texpack`), written
+        crate::texpack::flush();
         if let Some(e) = app.failed.take() {
             return Err(e.into());
         }
@@ -2304,6 +2314,58 @@ impl App {
                 self.apply_era();
             }
             Err(e) => crate::say(&format!("art: the 2002 disc could not be read: {e}")),
+        }
+    }
+
+    /// The options' Texture Packs and Dump Textures carried out
+    /// (`texpack::sync`), and once what stands in for the game's textures has
+    /// changed, everything drawn made again with it (`retexture`).
+    fn poll_textures(&mut self) {
+        crate::texpack::sync();
+        let g = crate::texpack::generation();
+        if g != self.textures_drawn {
+            self.textures_drawn = g;
+            self.retexture();
+        }
+    }
+
+    /// What is drawn made again with the textures as they are now (a texture
+    /// pack turned on or off, `texpack`), the art as it is: before the world
+    /// the pregame's 2D layer and stages (`Host::retexture`); in it the HUD's
+    /// layer, the creatures, the player's own body, the spell effects, the
+    /// rings and the gears (`Play::retexture`), the sky, the world's zones in
+    /// place (`Streamer::retexture`), the flora and the effect volumes; a
+    /// model viewer's scene at once.
+    fn retexture(&mut self) {
+        if let Some(h) = self.host.as_mut() {
+            h.retexture();
+            return;
+        }
+        if let Some(p) = self.play.as_mut() {
+            p.retexture();
+        }
+        if let (Some(at), Some(g)) = (self.sky_at, self.gfx.as_mut()) {
+            let mut fresh = Vec::new();
+            if crate::sky::upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &mut fresh).is_some() {
+                for (k, m) in fresh.into_iter().enumerate() {
+                    if let Some(slot) = g.models.get_mut(at + k) {
+                        *slot = m;
+                    }
+                }
+            }
+        }
+        if self.walker.is_none() {
+            self.load();
+            return;
+        }
+        if let (Some(s), Some(w), Some(g)) = (self.streamer.as_mut(), self.walker.as_mut(), self.gfx.as_mut()) {
+            s.retexture(&mut w.scene, &self.lib, stream::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue });
+        }
+        if self.flora.is_some() {
+            self.flora = Some(crate::flora::Flora::new());
+        }
+        if self.fx.is_some() {
+            self.fx = crate::fx::enabled().then(crate::fx::Fx::new);
         }
     }
 
@@ -5026,6 +5088,8 @@ impl App {
                 }
                 // the 2002 disc's files, read since (`era`)
                 self.poll_era();
+                // the options' Texture Packs and Dump Textures (`texpack`)
+                self.poll_textures();
                 // Display (the Extended page): what the row asked carried
                 // out, and the window as it is for the row to show
                 #[cfg(not(target_arch = "wasm32"))]
