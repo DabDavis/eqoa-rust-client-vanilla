@@ -123,6 +123,58 @@ fn a_light_pool_lands_between_the_vertices() {
     }
 }
 
+/// The screen's tiles (`lit::tile_masks`) cull exactly: a light off to one
+/// side, its pool across several tiles, matches the strip programs' term at
+/// every pixel of the floor, and a light behind the camera lights none; the
+/// control, a light's tiles flipped top to bottom, would leave its pool's
+/// pixels unlit (`tile_masks` of a mirrored view names other tiles).
+#[test]
+fn the_tiles_cull_no_light_a_pixel_takes() {
+    let Some(g) = gpu() else { return };
+    let mut r = Renderer::new(&g.device, &g.queue, render::TARGET_FORMAT);
+    r.set_dynamic_lighting(&g.device, true);
+    let none = |_: i32| None;
+    let m = r.upload(&g.device, &g.queue, &floor(UP, 1.0), &[render::IDENTITY], &none);
+    let lamp = Vec3::new(-9.0, 1.5, 6.0);
+    let behind = Vec3::new(0.0, 25.0, 0.0);
+    let v = View { lights: Some(Lights::new(&[PointLight { at: lamp, range: 8.0, color: Vec3::X, fixed: false }, PointLight { at: behind, range: 4.0, color: Vec3::Y, fixed: false }])), ..view(0.1) };
+    let px = shot(&g, &mut r, &v, &[Draw::Model(&m)]);
+    let (mut lit, mut worst) = (0, 0.0f32);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let want = 0.1 + point_term(at(x, y), lamp, 8.0);
+            worst = worst.max((red(&px, x, y) - want).abs());
+            lit += (want > 0.11) as u32;
+            let green = px[((y * SIZE + x) * 4 + 1) as usize] as f32 / 255.0;
+            assert!(close(green, 0.1), "the light behind the camera at ({x}, {y}): {green}");
+        }
+    }
+    assert!(worst <= 2.5 / 255.0, "a pixel off the strip programs' term by {worst}");
+    assert!(lit > 100, "the pool covers {lit} pixels");
+    // its tiles: on the left of the screen, its middle's among them, and
+    // not most of the screen (the box is larger than the sphere)
+    let masks = render::lit::tile_masks(v.lights.unwrap().as_slice(), v.view_proj);
+    let (tx, ty) = render::lit::TILES;
+    let tiles: Vec<(usize, usize)> = (0..tx * ty).filter(|&t| masks[t] & 1 != 0).map(|t| (t % tx, t / tx)).collect();
+    assert!(!tiles.is_empty() && tiles.len() < tx * ty / 2, "{} tiles", tiles.len());
+    assert!(tiles.iter().all(|&(x, _)| x < tx / 2), "the light's tiles on the left: {tiles:?}");
+    let c = v.view_proj.project_point3(lamp);
+    let own = ((((c.x * 0.5 + 0.5) * tx as f32) as usize), (((c.y * 0.5 + 0.5) * ty as f32) as usize));
+    assert!(tiles.contains(&own), "its middle's tile {own:?}");
+    assert!(masks.iter().all(|m| m & 2 == 0), "the light behind the camera, out of the view: no tile");
+    // the control: the mask of the view mirrored top to bottom leaves out
+    // tiles where the pool is, which the pixels above would have shown
+    let flip = Mat4::from_scale(Vec3::new(1.0, -1.0, 1.0)) * v.view_proj;
+    let flipped = render::lit::tile_masks(v.lights.unwrap().as_slice(), flip);
+    let tile_of = |x: u32, y: u32| {
+        let (nx, ny) = ((x as f32 + 0.5) / SIZE as f32, 1.0 - (y as f32 + 0.5) / SIZE as f32);
+        ((ny * ty as f32) as usize).min(ty - 1) * tx + ((nx * tx as f32) as usize).min(tx - 1)
+    };
+    let missed = (0..SIZE * SIZE).filter(|&k| 0.1 + point_term(at(k % SIZE, k / SIZE), lamp, 8.0) > 0.11 && flipped[tile_of(k % SIZE, k / SIZE)] & 1 == 0).count();
+    assert!(missed > 50, "the control: a flipped mask misses only {missed} of the pool's pixels");
+    assert!((0..SIZE * SIZE).all(|k| 0.1 + point_term(at(k % SIZE, k / SIZE), lamp, 8.0) <= 0.1 || masks[tile_of(k % SIZE, k / SIZE)] & 1 != 0), "a pool pixel outside the light's tiles");
+}
+
 #[test]
 fn the_sun_lights_each_fragment() {
     let Some(g) = gpu() else { return };
@@ -159,6 +211,11 @@ fn a_baked_instance_takes_no_fixed_light() {
     let pool = 0.1 + point_term(at(32, 32), lamp, 10.0);
     let px = shot(&g, &mut r, &light(false), &[Draw::Model(&m)]);
     assert!(close(red(&px, 32, 32), pool), "a light of the moment (a spell's) on it: {} want {pool}", red(&px, 32, 32));
+    // the personal light lights it, as the console's one point light lights
+    // baked geometry
+    let personal = View { point: Some((lamp, 10.0, Vec3::X)), lights: Some(Lights::default()), ..view(0.1) };
+    let px = shot(&g, &mut r, &personal, &[Draw::Model(&m)]);
+    assert!(close(red(&px, 32, 32), pool), "the personal light on a baked instance: {}", red(&px, 32, 32));
     m.baked = false;
     let px = shot(&g, &mut r, &light(true), &[Draw::Model(&m)]);
     assert!(close(red(&px, 32, 32), pool), "the control: unbaked, the fixed light: {}", red(&px, 32, 32));

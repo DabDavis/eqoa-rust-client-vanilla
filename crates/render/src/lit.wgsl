@@ -12,7 +12,8 @@
 //                         + Σ point · (1 − min(|L|/range, 1)) · max(L·N/|L|, 0), 0, 1)
 //
 // with N the interpolated normal made a unit again, and the points the
-// personal light (the frame's `point`) and the `lights` list. A light marked
+// `lights` list: the personal light first (the frame's `point`, put there by
+// `lit::LightsUniform`), then the rest. A light marked
 // fixed (a fire's, a placed light's) is left out on a baked instance
 // (`fs_lit_baked`), whose colour buffers were baked with the scene's fixed
 // lights: lit by them again it would be lit twice. The rest (the personal
@@ -24,16 +25,19 @@
 // the distance in the plant's own space, as vs_main lights it.
 
 // One point light: where it is, relative to the eye, and its range; its
-// colour, and w = 1 for a fixed light.
+// colour, and w its range's inverse, negative for a fixed light.
 struct Light {
     at: vec4<f32>,
     color: vec4<f32>,
 };
 
 struct Lights {
-    // x: how many of `l` are in use
+    // x: how many of `l` are in use; y, z: the screen's tiles across and down
     count: vec4<u32>,
     l: array<Light, 16>,
+    // each tile's mask of the lights that reach it (`lit::tile_masks`),
+    // four tiles a row, from the bottom left: a fragment evaluates its own
+    tiles: array<vec4<u32>, 96>,
 };
 @group(3) @binding(0) var<uniform> lights: Lights;
 
@@ -51,6 +55,9 @@ struct LitOut {
     // the position relative to the eye, and the normal in the world
     @location(3) rel: vec3<f32>,
     @location(4) nrm: vec3<f32>,
+    // the clip position again, whose x and y over w are the fragment's NDC
+    // (interpolated for perspective, the quotient is exact): its tile
+    @location(5) ndc: vec3<f32>,
 };
 
 @vertex
@@ -77,6 +84,7 @@ fn vs_lit(v: VsIn) -> LitOut {
     // relative to the eye first, as vs_main
     let rel = v.m0.xyz * pos.x + v.m1.xyz * pos.y + v.m2.xyz * pos.z + (v.m3.xyz - frame.eye.xyz);
     o.clip = frame.view_proj * vec4<f32>(rel, 1.0);
+    o.ndc = o.clip.xyw;
     let fog = clamp((frame.fog.y - o.clip.w) / (frame.fog.y - frame.fog.x), 0.0, 1.0);
     let s = layer.uv1.zw * frame.sun.w;
     let scroll = s - trunc(s);
@@ -97,29 +105,39 @@ fn vs_lit(v: VsIn) -> LitOut {
     return o;
 }
 
-// The point term of the strip programs at `l` (the light less the point)
-// for a light of `range`: the falloff times the cosine.
-fn point_term(l: vec3<f32>, range: f32, n: vec3<f32>) -> f32 {
-    let d = length(l);
-    if (d <= 0.0 || d >= range) {
-        return 0.0;
+// The point term of the strip programs at `l` (the light less the point):
+// the falloff times the cosine, (1 − |L|/range) · max(L·N/|L|, 0), out of
+// the squared distance (taken for the reach test) and the range's inverse:
+// one inverse square root, no division.
+fn listed_term(l: vec3<f32>, d2: f32, inv_range: f32, n: vec3<f32>) -> f32 {
+    let inv = inverseSqrt(d2);
+    return (1.0 - d2 * inv * inv_range) * max(dot(l, n) * inv, 0.0);
+}
+
+// The mask of the lights that can reach the fragment: its tile's.
+fn tile_mask(i: LitOut) -> u32 {
+    if (lights.count.x == 0u) {
+        return 0u;
     }
-    return (1.0 - d / range) * max(dot(l, n) / d, 0.0);
+    let n = vec2<f32>(f32(lights.count.y), f32(lights.count.z));
+    let t = clamp(vec2<i32>((i.ndc.xy / i.ndc.z * 0.5 + 0.5) * n), vec2<i32>(0), vec2<i32>(n) - 1);
+    let k = u32(t.y) * lights.count.y + u32(t.x);
+    return lights.tiles[k / 4u][k % 4u];
 }
 
 fn shade(i: LitOut, baked: bool) -> vec3<f32> {
     var light = i.base.rgb;
+    let mask = tile_mask(i);
     if (layer.flags.w > 0.5) {
         // VIRStrip6: the falloff alone, times 0.15, in the plant's space
         let k = 0.15;
-        if (frame.point.w > 0.0) {
-            let d = length((frame.point.xyz - frame.eye.xyz) - i.rel) * i.misc.w;
-            light += frame.point_color.rgb * ((1.0 - min(d / frame.point.w, 1.0)) * k);
-        }
-        for (var j = 0u; j < min(lights.count.x, 16u); j++) {
+        for (var j = 0u; j < min(lights.count.x, 16u) && mask != 0u; j++) {
+            if ((mask & (1u << j)) == 0u) {
+                continue;
+            }
             let p = lights.l[j];
             let d = length(p.at.xyz - i.rel) * i.misc.w;
-            light += p.color.rgb * ((1.0 - min(d / p.at.w, 1.0)) * k);
+            light += p.color.rgb * ((1.0 - min(d * abs(p.color.w), 1.0)) * k);
         }
         return min(light, vec3<f32>(1.0));
     }
@@ -129,20 +147,21 @@ fn shade(i: LitOut, baked: bool) -> vec3<f32> {
         n = i.nrm / len;
     }
     light += frame.sun.rgb * max(-dot(n, frame.sun_dir.xyz), 0.0) * i.base.w;
-    if (frame.point.w > 0.0) {
-        light += frame.point_color.rgb * point_term((frame.point.xyz - frame.eye.xyz) - i.rel, frame.point.w, n);
-    }
-    for (var j = 0u; j < min(lights.count.x, 16u); j++) {
+    for (var j = 0u; j < min(lights.count.x, 16u) && mask != 0u; j++) {
+        if ((mask & (1u << j)) == 0u) {
+            continue;
+        }
         let p = lights.l[j];
-        if (baked && p.color.w > 0.5) {
+        if (baked && p.color.w < 0.0) {
             continue;
         }
         let l = p.at.xyz - i.rel;
         // out of reach: nothing (most fragments, most lights)
-        if (dot(l, l) >= p.at.w * p.at.w) {
+        let d2 = dot(l, l);
+        if (d2 >= p.at.w * p.at.w || d2 <= 0.0) {
             continue;
         }
-        light += p.color.rgb * point_term(l, p.at.w, n);
+        light += p.color.rgb * listed_term(l, d2, abs(p.color.w), n);
     }
     return clamp(light, vec3<f32>(0.0), vec3<f32>(1.0));
 }

@@ -296,10 +296,19 @@ pub fn from_strips(strips: &[Strips], out: &mut Vec<PointLight>) {
     }
 }
 
+/// How many point lights a frame takes past the personal light, which
+/// `render::lit` puts first: `render::MAX_LIGHTS` in all natively, half that
+/// in a page and on Android, where a phone's GPU pays for every one at every
+/// fragment it reaches (`render::lit`'s tiles leave out the rest; one that
+/// reaches the whole of a 1920x1080 frame costs about 0.08 ms on an RX 580).
+pub fn budget() -> usize {
+    if cfg!(any(target_arch = "wasm32", target_os = "android")) { render::MAX_LIGHTS / 2 - 1 } else { render::MAX_LIGHTS - 1 }
+}
+
 /// The frame's lights out of `candidates`, as `SetupTimeOfDayLights` would
 /// choose them with more lights to give (`VIEmitterQuery`): of those whose
 /// sphere is in the view (`view_proj`) and within `QUERY_RADIUS` of the eye,
-/// the most by radius over distance from it, `render::MAX_LIGHTS` at most.
+/// the most by radius over distance from it, `budget()` at most.
 /// Where more are in view than are taken, each one taken dims to nothing as
 /// its key comes down to the first one's left out, so a light comes and goes
 /// without a jump as the camera moves.
@@ -311,10 +320,11 @@ pub fn choose(candidates: &[PointLight], eye: Vec3, view_proj: Mat4) -> render::
         .map(|l| (l.range / (l.at - eye).length().max(0.01), *l))
         .collect();
     keyed.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let cut = keyed.get(render::MAX_LIGHTS).map(|k| k.0);
+    let most = budget();
+    let cut = keyed.get(most).map(|k| k.0);
     let chosen: Vec<PointLight> = keyed
         .iter()
-        .take(render::MAX_LIGHTS)
+        .take(most)
         .map(|&(k, l)| match cut {
             Some(c) => {
                 let x = ((k - c) / (0.25 * c)).clamp(0.0, 1.0);
@@ -389,12 +399,13 @@ mod tests {
         c.push(light(Vec3::new(0.0, 0.0, -600.0), 50.0)); // past the query
         let l = choose(&c, eye, camera());
         let got = l.as_slice();
-        assert_eq!(got.len(), render::MAX_LIGHTS);
+        assert_eq!(got.len(), budget());
         assert_eq!(got[0].at, Vec3::new(0.0, 0.0, 5.0), "the one behind whose sphere reaches into the view, nearest");
         assert!(got.iter().all(|p| p.at.z != 40.0 && p.at.z != -600.0));
-        // 16 taken of 21 in view: the 16th's key 10/150 against the 17th's 10/160
+        // the budget taken of 21 in view (15 natively: 16 with the personal
+        // light), the last's key against the first left out's
         let last = got.last().unwrap();
-        assert_eq!(last.at.z, -150.0);
+        assert_eq!(last.at.z, -10.0 * (budget() - 1) as f32);
         assert!(last.color.x < 0.5, "dimmed near the cut: {last:?}");
         assert_eq!(got[1].color, Vec3::ONE, "well above it: whole");
         // fewer than can be taken: none dimmed

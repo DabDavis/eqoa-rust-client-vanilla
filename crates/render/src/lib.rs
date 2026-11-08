@@ -1175,7 +1175,7 @@ impl Renderer {
         // pipelines and its groups' runs through their lit bundles (`lit`)
         let lit = match (view.lights.as_ref(), self.lit.as_ref()) {
             (Some(l), Some(lit)) if self.lit_on => {
-                queue.write_buffer(&lit.buf, 0, bytemuck::bytes_of(&lit::LightsUniform::new(l, view.eye)));
+                queue.write_buffer(&lit.buf, 0, bytemuck::bytes_of(&lit::LightsUniform::new(view.point, l, view.eye, view.view_proj)));
                 Some(lit)
             }
             _ => None,
