@@ -6,6 +6,15 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · Gargoyles hold their weapons
+- On a server with races of its own, a Gargoyle now shows what it holds: its weapons in its claws and its
+  shield on its left arm, at character select and in the world. The gargoyles' body was made for creatures
+  that carry nothing, so a PS2 draws no weapon on it either; now a player's Gargoyle carries its gear as the
+  other races do, and a bow in hand shoots its arrows. Its swings are still its own claw attacks.
+- Only players' characters change: gargoyle creatures look as they always have, and so does a player
+  turned into a creature by a form or an illusion. Every race that already showed its weapons looks
+  exactly as before.
+
 ## 2026-11-08 · Dynamic Lighting
 - A new option, Options > Extended > Lighting > Dynamic Lighting, lights the world as a PC game would: the light of
   the sky and of your lantern is worked out for every pixel instead of only at the corners of each surface, so it

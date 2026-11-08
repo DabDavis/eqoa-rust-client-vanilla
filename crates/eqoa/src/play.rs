@@ -868,22 +868,35 @@ fn held_items(cs: &CSprite<Ee>, c: &net::entity::Creature) -> Held {
     })
 }
 
-/// A creature's model as `Apply` dresses it: the look on its text slots, the
-/// items and helm on their nodes.
-/// Built in the art its model is drawn in (`esf::Library::view_for`): the
-/// 2002 disc's, whole, for a model that disc has while its art is drawn.
-fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64) -> Option<Puppet> {
-    let era = lib.view_for(e.drawn_model as i32);
-    lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era))
+/// A player's character: its name colour, the server's 2 (an NPC's 0, a
+/// pet's 3).
+fn a_player(e: &net::entity::Entity) -> bool {
+    e.creature.as_ref().is_some_and(|c| c.p256 == 2)
 }
 
-fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era) -> Option<Puppet> {
+/// A creature's model as `Apply` dresses it: the look on its text slots, the
+/// items and helm on their nodes (a player's in a body one of the server's
+/// `races` wears holding items as a race's body does: `racebody`).
+/// Built in the art its model is drawn in (`esf::Library::view_for`): the
+/// 2002 disc's, whole, for a model that disc has while its art is drawn.
+#[allow(clippy::too_many_arguments)]
+fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>) -> Option<Puppet> {
+    let era = lib.view_for(e.drawn_model as i32);
+    lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era, races))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era, races: Option<&net::creation::Creation>) -> Option<Puppet> {
     let textures = render::library_textures(lib);
     lib.lookup(e.drawn_model as i32).and_then(|r| {
                     let mut model = lib.build_model(r)?;
                     let mut anims = AnimScene { time: game_ms, ..Default::default() };
                     let mut rand = Rand(slot as u64 + 1);
-                    let sprite = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand);
+                    let mut sprite = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand);
+                    let player = a_player(e);
+                    if let Some(cs) = sprite.as_mut() {
+                        crate::racebody::grant(cs, e.drawn_model, player, races);
+                    }
                     let held = held_by(sprite.as_ref(), e.creature.as_ref());
                     let (attached, weapons, helm_worn) = match (&sprite, &e.creature) {
                         (Some(cs), Some(c)) => attach(lib, g, cs, c, held),
@@ -893,8 +906,6 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     // ApplyLook: the look's textures and tints on the layers the
                     // sprite's text slots name.
                     if let (Some(cs), Some(look)) = (&sprite, &look) {
-                        // a player's character: its name colour, the server's 2 (an NPC's 0, a pet's 3)
-                        let player = e.creature.as_ref().is_some_and(|c| c.p256 == 2);
                         dress_look(lib, e.drawn_model as i32, &mut model, cs, look, helm_worn, &crate::s2::get().cust(), player);
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
@@ -1011,16 +1022,24 @@ fn redo(was: (u32, u32, Option<vi::cust::Look>, Held), now: (u32, u32, Option<vi
 }
 
 /// `Apply` on a creature's puppet as `redo` decides it, from the entity as
-/// it is now, dressed in `look`. The puppet it replaced, when it was made
-/// anew.
-fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64) -> Option<Option<Puppet>> {
+/// it is now, dressed in `look`, a player's in a body one of the server's
+/// `races` wears holding items (`racebody`: on the puppet's own sprite too,
+/// for a list that came after it was made). The puppet it replaced, when it
+/// was made anew.
+#[allow(clippy::too_many_arguments)]
+fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>) -> Option<Option<Puppet>> {
+    if let Some(p) = p.as_mut().filter(|p| (p.id, p.model) == (e.id, e.drawn_model))
+        && let Some(cs) = p.sprite.as_mut()
+    {
+        crate::racebody::grant(cs, p.model, a_player(e), races);
+    }
     let r = p.as_ref().map_or(Redo::Build, |p| redo((p.id, p.model, p.look, p.held), (e.id, e.drawn_model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
     // the art swapped (F9), or a texture pack turned on or off (`texpack`),
     // since it was built: made anew in the art and the textures now
     let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.drawn_model as i32) || p.textures != crate::texpack::generation()) { Redo::Build } else { r };
     match r {
         Redo::Keep => None,
-        Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms))),
+        Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms, races))),
         Redo::Items => {
             if let Some(p) = p.as_mut()
                 && let (Some(cs), Some(c)) = (&p.sprite, &e.creature)
@@ -2190,6 +2209,113 @@ mod held {
         let by_looks = |a: (u32, u32, Option<vi::cust::Look>, Held), b: (u32, u32, Option<vi::cust::Look>, Held)| redo((0, a.1, a.2, a.3), (0, b.1, b.2, b.3));
         assert_eq!(by_looks(body(100412), body(100437)), Redo::Keep, "the control: by its looks alone the corpse's sprite stays");
     }
+
+    /// A player of a server's race in the gargoyles' body (go-eqoa-server's
+    /// Gargoyle, petition 1278: "gargoyles dont show equiped weapons") holds
+    /// what its channel names as `apply` makes its puppet (`racebody`): the
+    /// weapons on the hands the body names, the shield on its left hand, the
+    /// hands' types and projectiles as a race's body's. The same body as an
+    /// NPC holds nothing, as a PS2 draws every gargoyle; so does a player's on
+    /// a server that lists no races of its own (the control: the build before
+    /// this attached nothing at all). A list that comes after the puppet was
+    /// made hangs the items at its next `apply`, the puppet kept. Needs
+    /// `run/eqoa.iso` and a graphics adapter.
+    #[test]
+    fn a_gargoyle_player_holds_its_weapons() {
+        const GARGOYLE: u32 = 0xB4D2_D132;
+        // Steelwind, the Akessan Longbow, the tower shield of the sands
+        let (sword, bow, shield) = (0x17F9_870Bu32, 0xEF8C_8A36u32, 0x2486_A8D7u32);
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let instance = render::wgpu::Instance::new(render::wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&render::wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let mut g = Gpu { renderer: &mut renderer, device: &device, queue: &queue };
+        let mut lib = Library::new();
+        for f in ["CHAR.ESF", "ITEM.ESF"] {
+            lib.add(f, esf::Container::open(iso.read(f).unwrap()).unwrap());
+        }
+        let races = net::creation::Creation {
+            all_classes: true,
+            races: vec![net::creation::Race { id: 29, like: 9, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [GARGOYLE, GARGOYLE], name: "Gargoyle".into(), short: "GAR".into(), desc: String::new() }],
+        };
+        let entity = |p256: u8| net::entity::Entity {
+            id: 100_501,
+            model: GARGOYLE,
+            drawn_model: GARGOYLE,
+            creature: Some(net::entity::Creature { items: [sword, bow, shield], item_types: [1, 7], p256, ..Default::default() }),
+            ..Default::default()
+        };
+        let nodes = |p: &Option<Puppet>| {
+            let mut v: Vec<i32> = p.as_ref().expect("a puppet").attached.iter().map(|a| a.0).collect();
+            v.sort_unstable();
+            v
+        };
+        let holds = |p: &Option<Puppet>| p.as_ref().and_then(|p| p.sprite.as_ref()).expect("a sprite").holds_items;
+
+        let mut player = None;
+        apply(&lib, &mut g, &mut player, &entity(2), None, 0, 0, Some(&races));
+        let p = player.as_ref().unwrap();
+        assert_eq!(p.held, [Some((sword, 11)), Some((bow, 21)), Some((shield, 20))]);
+        assert_eq!(nodes(&player), [11, 20, 21], "each item's model on its node");
+        assert_eq!(p.projectile, [Some(0), Some(0x845F_ECDD)], "the second hand's bow shoots its arrow");
+        assert_eq!(crate::spells::hand_attack_types(entity(2).creature.as_ref().unwrap(), holds(&player)), [1, 7]);
+
+        for (who, list) in [("an NPC", Some(&races)), ("a server with no races of its own", None)] {
+            let mut bare = None;
+            apply(&lib, &mut g, &mut bare, &entity(if who == "an NPC" { 0 } else { 2 }), None, 0, 0, list);
+            assert!(nodes(&bare).is_empty(), "{who}: nothing hung");
+            assert_eq!((bare.as_ref().unwrap().held, bare.as_ref().unwrap().projectile), ([None; 3], [None; 2]), "{who}");
+            assert!(!holds(&bare), "{who}");
+        }
+
+        // the list after the puppet: its items at the next apply, not made anew
+        let mut late = None;
+        apply(&lib, &mut g, &mut late, &entity(2), None, 0, 0, None);
+        assert!(nodes(&late).is_empty());
+        let made_anew = apply(&lib, &mut g, &mut late, &entity(2), None, 0, 33, Some(&races));
+        assert!(made_anew.is_none(), "the puppet kept");
+        assert_eq!(nodes(&late), [11, 20, 21]);
+    }
+
+    /// The player's own sprite, the walker's, holds items as its puppet's
+    /// does (`grant_walker`), which is what `spells_frame` reads for its own
+    /// hands' attack types: the gargoyles' body, the player told it wears it,
+    /// holds nothing while the server lists no races of its own (the control:
+    /// as a PS2, and as the build before this whatever the list) and its
+    /// items, the shield on its left hand, once the server's races list it.
+    /// Needs `run/eqoa.iso`.
+    #[test]
+    fn the_players_own_gargoyle_holds_items() {
+        const GARGOYLE: u32 = 0xB4D2_D132;
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some(world) = crate::walker::tests::tunaria_round(x, z) else { return };
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let mut iso = iso::Iso::open(&path).unwrap();
+        let mut lib = Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
+        let mut walker = Walker::new(world, x, z, 0.0);
+        walker.set_character(&lib, lib.lookup(GARGOYLE as i32).unwrap());
+        let mut p = super::commands::play();
+        p.self_model = Some(GARGOYLE);
+        let holds = |w: &Walker| w.sprite.as_ref().map(|cs| (cs.holds_items, cs.item_node(0), cs.item_node(2)));
+        p.grant_walker(&mut walker);
+        assert_eq!(holds(&walker), Some((false, None, None)), "the control: no races listed");
+        p.session.creation = Some(net::creation::Creation {
+            all_classes: true,
+            races: vec![net::creation::Race { id: 29, like: 9, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [GARGOYLE, GARGOYLE], name: "Gargoyle".into(), short: "GAR".into(), desc: String::new() }],
+        });
+        p.grant_walker(&mut walker);
+        assert_eq!(holds(&walker), Some((true, Some(11), Some(20))));
+    }
 }
 
 pub struct Gpu<'a> {
@@ -2286,12 +2412,23 @@ impl Play {
     /// a different one (the caller re-dresses the walker). `game_frame`: one
     /// of the game's frames (`frames.rs`), which what it counts in frames
     /// steps on.
+    /// The player's own sprite holds items as its puppet's does
+    /// (`racebody`), so its hands swing and shoot by their weapons: the walker
+    /// wears the model the player was last told of (`self_model`, which the
+    /// viewer puts on it after the frame that names it).
+    fn grant_walker(&self, walker: &mut Walker) {
+        if let (Some(cs), Some(model)) = (walker.sprite.as_mut(), self.self_model) {
+            crate::racebody::grant(cs, model, true, self.session.creation.as_ref());
+        }
+    }
+
     pub fn frame(&mut self, walker: &mut Walker, lib: &Library, mut g: Gpu, game_ms: i64, game_frame: bool, mut sound: Option<&mut crate::sound::Sound>) -> Option<u32> {
         self.take_modules(sound.as_deref_mut());
         self.drawn = self.drawn.wrapping_add(1);
         let now = self.session.now();
         // the loading screen's gears, turning by the clock (`SetTime(now)`)
         self.loading.frame(lib, g.renderer, g.device, g.queue, now as i64);
+        self.grant_walker(walker);
         let mut new_model = None;
         self.actors_scene(walker);
         for e in self.session.pump() {
@@ -2945,7 +3082,7 @@ impl Play {
                 && e.drawn_model != 0
             {
                 let look = e.creature.as_ref().map(look_of);
-                apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms);
+                apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms, self.session.creation.as_ref());
             }
             // a creature's sounds are shared while it is loaded
             let sounds_of = |p: &Option<Puppet>| p.as_ref().and_then(|p| p.sprite.as_ref()).map(|cs| cs.sounds()).unwrap_or_default();
@@ -2957,7 +3094,7 @@ impl Play {
                 continue;
             };
             let look = e.creature.as_ref().map(look_of);
-            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms)
+            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms, self.session.creation.as_ref())
                 && let Some(s) = sound.as_deref_mut()
             {
                 s.share_sounds(lib, &sounds_of(&self.puppets[slot]));
