@@ -207,7 +207,10 @@ or a browser (each described where it lives below):
   build, the platform and graphics adapter, the frame rate, where it shows the
   player and its target), which the server keeps for the GMs beside the
   server's own view. The user, 2026-11-05: "we can add something to the
-  webclient".
+  webclient". Support's request form and its reply hold as long a text as
+  the server says it takes (the offer's second u32: go-eqoa-server's 2,047
+  characters, a PS2's form 511; petition 1300, 2026-11-08), sent in DRDP's
+  pieces, which that server puts back together.
 - **Hide UI** (H): everything drawn over the world hidden until H again or a
   window opens.
 - **Ignore Shouts kept** until Restore Shouts, across logins (the game keeps

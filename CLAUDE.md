@@ -269,7 +269,10 @@ current.
   Support's request form on Bug Report (`Play::open_bug_report`), and each petition the player files
   (the form, a typed `/bug` or `#bug`) goes after the client's note (0x7E0F, `bugnote.rs`: build,
   platform, graphics, frame rate, where it shows the player and its target; one message, at most
-  1,000 bytes; never an account name, an address or a path). Nothing goes unless the player files
+  1,000 bytes; never an account name, an address or a path). Support's forms hold as many characters
+  as the offer's second u32 says the server takes (`Session::petition_text`, at most 2,047, petition
+  1300; none said, the disc's 511): a longer request goes in DRDP's pieces of 1,300 bytes, which only
+  a server that says so puts back together (go-eqoa-server since 2026-11-08). Nothing goes unless the player files
   one, and nothing to a server that made no offer. The log stays on the player's
   machine, theirs to hand on: never log a credential. Natively stderr goes through the log's pipe
   (`logfile::start`, `eqoa boot` only): anything that starts another program in this one's place

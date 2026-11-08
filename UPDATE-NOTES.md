@@ -6,6 +6,14 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · Longer bug reports
+- A bug report or petition now holds up to 2,047 characters on a server that takes them: Support's request form,
+  the one F3 and /bug open, and a reply from Support's inbox. That is four times as much room to say what happened,
+  where, and how to make it happen again. The box scrolls as you type, and Up and Down move through its lines.
+- On a server that does not take them it holds 511 characters, as on a PS2.
+- Typing in a text box and pressing Up or Down straight after could close the game. It no longer does, and a long
+  text no longer slows the game down while its box is open.
+
 ## 2026-11-08 · Fungusmen keep their bag and fungus, skeletons wear real armour
 - A Fungusman in armour keeps its own bag and strap, and its glowing fungus: the growths on its
   shoulders, wrists and shins, its claws and its cap look as they always did, and the armour covers
