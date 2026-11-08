@@ -6,6 +6,10 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · Every class for the newest races
+- On a server with races of its own, character creation now offers classes for all of them. The races
+  numbered past the game's own twenty (Orc, Kobold, Minotaur, Ratman, Satyr, Dryad, Skeleton, Fungusman and
+  Gargoyle on the Heirloom server) showed no class to pick; they now take every class the server allows.
 ## 2026-11-08 · Scroll a spell description with the mouse or the keyboard
 - A spell description too long for its box now scrolls on the mouse wheel over the box, and on PageUp
   and PageDown, as well as on a controller's R1 and R2. Over the list, the wheel still moves the
