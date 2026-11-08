@@ -60,6 +60,8 @@ const UNMEMORIZE_ONE: u32 = 0x080A_0000;
 /// + slot).
 const TAB: i32 = 1000;
 const SLOT: i32 = 2000;
+/// The description's box, for the wheel (`wheel`): no row, tab or slot.
+const DESC: i32 = -2;
 
 /// `VIRec32_C97888`: a row.
 #[derive(Clone, Copy, Debug, Default)]
@@ -181,6 +183,7 @@ impl SpellBook {
             };
         }
         match self.hits.at(p) {
+            Some(DESC) => Vec::new(), // the wheel's (`wheel`), not a click's
             Some(h) if h >= SLOT => {
                 let j = h - SLOT;
                 if self.mode != 2 {
@@ -457,6 +460,19 @@ impl SpellBook {
         }
     }
 
+    /// The wheel's `lines` (up positive) at frame point `p`: over the
+    /// description's box, it a line up or down for each whole line (a
+    /// player's report: only a pad's R1/R2 reached it; the keyboard has
+    /// PageUp/PageDown), held within its text as it is drawn. False off the
+    /// box (the wheel then the list's up and down).
+    pub fn wheel(&mut self, p: [f32; 2], lines: f32) -> bool {
+        if self.mode != 0 || self.popup.visible || self.hits.at(p) != Some(DESC) {
+            return false;
+        }
+        self.desc_top = (self.desc_top - lines.round() as i32).max(0);
+        true
+    }
+
     /// `Pick`: the popup beside the selected row.
     fn pick(&mut self, now: i64) {
         self.reset_fade(now);
@@ -646,6 +662,8 @@ impl SpellBook {
             if of != self.desc_of {
                 (self.desc_of, self.desc_top) = (of, 0);
             }
+            let (tl, br) = (self.window.top_left(), self.window.bottom_right());
+            self.hits.push([tl[0], tl[1], br[0], br[1]], DESC);
             let lines = self.window.text_box(vui, r, &desc, 0, 0, 280, 1000, black, 0xFFFF_FFFF);
             self.desc_top = self.desc_top.clamp(0, (lines - 4).max(0));
             self.window.text_box(vui, r, &desc, 0, 0, 280, 4, black, 2 | ((self.desc_top as u32) << 24));
@@ -1024,6 +1042,16 @@ mod tests {
         }
         b.draw(&vui, &mut r, &map, 0, 1, 0);
         assert_eq!(b.desc_top, 6, "held to its last four lines");
+        // the wheel over the box: down a line (up negative), back up; off it, nothing
+        b.desc_top = 0;
+        b.draw(&vui, &mut r, &map, 0, 1, 0);
+        assert!(b.wheel([300.0, 270.0], -2.0), "the wheel over the description");
+        b.draw(&vui, &mut r, &map, 0, 1, 0);
+        assert_eq!(b.desc_top, 2, "two down on the wheel");
+        assert!(b.wheel([300.0, 270.0], 1.0));
+        b.draw(&vui, &mut r, &map, 0, 1, 0);
+        assert_eq!(b.desc_top, 1, "one up on the wheel");
+        assert!(!b.wheel([60.0, 70.0], -1.0), "off the box the wheel is the list's");
         b.sel = 1;
         b.draw(&vui, &mut r, &map, 0, 1, 0);
         assert_eq!(b.desc_top, 0, "another ability: its top");

@@ -7890,6 +7890,13 @@ impl Play {
     }
 
     /// The wheel's `lines` over the raid list (`Hud::raid_wheel`).
+    /// The wheel over the spell book's description (`spellbook::SpellBook::wheel`):
+    /// true when it took it.
+    pub fn book_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
+        let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        self.mode == 5 && self.book.wheel(f, lines)
+    }
+
     pub fn raid_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
         let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
         self.mode == 0 && self.hud.as_mut().is_some_and(|h| h.2.raid_wheel(f, lines))
