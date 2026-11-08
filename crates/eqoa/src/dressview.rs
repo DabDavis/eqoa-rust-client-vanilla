@@ -126,7 +126,9 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     // (chest red, bracer yellow, gloves green, legs blue, boots magenta);
     // `parts`: the body's own triangles a colour by where they are fitted
     // (body red, arms yellow and orange, legs blue and cyan, head grey, off
-    // the spine light grey, wearing nothing black)
+    // the spine light grey, wearing nothing black); `nodes`: each held item's
+    // node as it is drawn (its axes and place) and the item's bounds, printed
+    // (an item's length runs along its node's z)
     let debug = std::env::var("EQOA_DRESS_DEBUG").unwrap_or_default();
     let flat = |l: &mut esf::Layer, c: [u8; 3]| {
         l.texture = 0;
