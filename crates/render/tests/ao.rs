@@ -363,3 +363,87 @@ fn only_the_draw_after_prepare() {
     assert_eq!(draw(&mut r, How::Viewport), plain, "into part of the target: none");
     assert_ne!(draw(&mut r, How::Prepared), plain, "and prepared again, on");
 }
+
+/// Its cost on the GPU (`-- --ignored --nocapture`): `draw` over a street of
+/// boxes that fills the frame to 100, every pixel in the passes' reach,
+/// timed by the GPU's own timestamps with it off and on, at 1920x1080,
+/// 2560x1440 and 3840x2160, and a 1920x1080 window at Render Scale x2 and x4.
+#[test]
+#[ignore]
+fn ambient_occlusion_cost() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else { return };
+    let want = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+    if !adapter.features().contains(want) {
+        eprintln!("SKIP: no timestamps inside encoders on {:?}", adapter.get_info().name);
+        return;
+    }
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_features: want, ..Default::default() })).unwrap();
+    eprintln!("{:?} ({:?})", adapter.get_info().name, adapter.get_info().backend);
+    let period = queue.get_timestamp_period() as f64;
+    let none = |_: i32| None;
+    // a floor and a street of boxes either side of the camera's way
+    let mut boxes = vec![quad([Vec3::new(-60.0, 0.0, -200.0), Vec3::new(60.0, 0.0, -200.0), Vec3::new(60.0, 0.0, 20.0), Vec3::new(-60.0, 0.0, 20.0)], Vec3::Y, 0.5, 0)];
+    for row in 0..30 {
+        for side in [-1.0f32, 1.0] {
+            let (x, z) = (side * (3.0 + (row % 3) as f32), -(row as f32) * 5.0);
+            for (a, b, n) in [(Vec3::new(x - 1.0, 0.0, z + 1.0), Vec3::new(x + 1.0, 0.0, z + 1.0), Vec3::Z), (Vec3::new(x + 1.0, 0.0, z + 1.0), Vec3::new(x + 1.0, 0.0, z - 1.0), Vec3::X), (Vec3::new(x - 1.0, 0.0, z - 1.0), Vec3::new(x - 1.0, 0.0, z + 1.0), -Vec3::X)] {
+                boxes.push(quad([a, b, b + Vec3::Y * 4.0, a + Vec3::Y * 4.0], n, 0.5, 0));
+            }
+        }
+    }
+    let eye = Vec3::new(0.0, 2.0, 10.0);
+    for ((w, h), k) in [((1920, 1080), 1), ((2560, 1440), 1), ((3840, 2160), 1), ((1920, 1080), 2), ((1920, 1080), 4)] {
+        let vp = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), w as f32 / h as f32, 0.3, 6000.0) * glam::camera::rh::view::look_at_mat4(eye, Vec3::new(0.0, 1.0, -40.0), Vec3::Y);
+        let view = View { eye, ..View::daylight(vp) };
+        let mut r = Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let models: Vec<render::GpuModel> = boxes.iter().map(|m| r.upload(&device, &queue, m, &[render::IDENTITY], &none)).collect();
+        let items: Vec<Draw> = models.iter().map(Draw::Model).collect();
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: render::TARGET_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let tv = target.create_view(&Default::default());
+        let depth = render::depth_view(&device, w, h);
+        r.scale.set(k);
+        let frames = 60u32;
+        let queries = device.create_query_set(&wgpu::QuerySetDescriptor { label: None, ty: wgpu::QueryType::Timestamp, count: frames * 2 });
+        let resolve = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: frames as u64 * 16, usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
+        let read = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: frames as u64 * 16, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let mut time = |r: &mut Renderer, mode: Mode| -> f64 {
+            r.ao.set(Settings::with(mode));
+            let mut samples = Vec::new();
+            for round in 0..3 {
+                let mut enc = device.create_command_encoder(&Default::default());
+                for f in 0..frames {
+                    let t = r.scale.targets(&device, &tv, &depth, (w, h));
+                    r.ao.prepare(&device, &t);
+                    enc.write_timestamp(&queries, f * 2);
+                    r.draw(&queue, &mut enc, &t.color, &t.depth, &view, &items);
+                    enc.write_timestamp(&queries, f * 2 + 1);
+                    r.scale.resolve(&mut enc, &tv);
+                }
+                enc.resolve_query_set(&queries, 0..frames * 2, &resolve, 0);
+                enc.copy_buffer_to_buffer(&resolve, 0, &read, 0, frames as u64 * 16);
+                queue.submit([enc.finish()]);
+                read.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                let ticks: Vec<u64> = bytemuck::cast_slice(&read.slice(..).get_mapped_range().expect("mapped")).to_vec();
+                read.unmap();
+                if round > 0 {
+                    samples.extend(ticks.chunks(2).map(|t| (t[1] - t[0]) as f64 * period / 1e6));
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            samples[samples.len() / 2]
+        };
+        let (off, on) = (time(&mut r, Mode::Off), time(&mut r, Mode::On));
+        eprintln!("{w}x{h} x{k} (frame {}x{}): draw {off:.3} ms off, {on:.3} ms on: +{:.3} ms", w * k, h * k, on - off);
+    }
+}
