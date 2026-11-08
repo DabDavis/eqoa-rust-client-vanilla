@@ -416,7 +416,7 @@ fn ambient_occlusion_cost() {
         let queries = device.create_query_set(&wgpu::QuerySetDescriptor { label: None, ty: wgpu::QueryType::Timestamp, count: frames * 2 });
         let resolve = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: frames as u64 * 16, usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
         let read = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: frames as u64 * 16, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
-        let mut time = |r: &mut Renderer, mode: Mode| -> f64 {
+        let time = |r: &mut Renderer, mode: Mode| -> f64 {
             r.ao.set(Settings::with(mode));
             let mut samples = Vec::new();
             for round in 0..3 {
