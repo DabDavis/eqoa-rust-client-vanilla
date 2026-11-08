@@ -18,6 +18,8 @@
 //! eqoa fxview [visual [secs]]   a human casting a spell visual at another, again and again, as
 //!                               0x00B1 plays it (the GM panel's preview; `fxview`); with an
 //!                               out.png after the visual, `[ms,...] [secs]`: drawn at those times
+//! eqoa emotes <body> <out.png> [pose...]   a body playing its emotes (or actions), a row
+//!                               each, a few moments across (`emoteview`)
 //! eqoa rumble                   each controller the game would read rumbles a moment, as the game
 //!                               rumbles one (the large motor, then the small)
 //!                               (walk: the human walks forward, its footsteps with it;
@@ -129,6 +131,7 @@ mod quantity;
 mod questlog;
 mod quickchat;
 mod racebody;
+mod raceemote;
 mod racelabel;
 mod record;
 mod alarm;
@@ -147,6 +150,7 @@ mod flora;
 mod fx;
 mod fxview;
 mod dressview;
+mod emoteview;
 mod particles;
 mod patcher;
 mod play;
@@ -552,6 +556,22 @@ fn run(args: &[String]) -> Result<()> {
                 lib.add(*f, esf::Container::open(iso.read(f)?)?);
             }
             dressview::shot(&lib, model, &words, out)?;
+        }
+        // `eqoa emotes <body> <out.png> [pose...]`: the body's emotes as a
+        // race's player plays them (`raceemote`), or its own actions, or the
+        // human's carried onto it, a row each (`emoteview`)
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("emotes") => {
+            let usage = "usage: eqoa emotes <body DictID> <out.png> [wave bow point cheer N human:N cols=N size=WxH]";
+            let model = args.get(1).and_then(|m| fxview::parse_visual(m)).ok_or(usage)? as i32;
+            let out = args.get(2).filter(|o| o.ends_with(".png")).ok_or(usage)?;
+            let words = emoteview::parse(&args[3..])?;
+            let mut iso = disc(None)?;
+            let mut lib = esf::Library::new();
+            for f in emoteview::FILES {
+                lib.add(*f, esf::Container::open(iso.read(f)?)?);
+            }
+            emoteview::sheet(&lib, model, &words, out)?;
         }
         Some("listen") => {
             let usage = "usage: eqoa listen <world> <x> <z> <seconds> <out.wav> [hour]";

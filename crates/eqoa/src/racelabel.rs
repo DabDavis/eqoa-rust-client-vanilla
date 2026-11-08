@@ -84,6 +84,11 @@ pub fn clear() {
     set(Labels::new());
 }
 
+/// Whether the list names anyone: the server has races of its own.
+pub fn any() -> bool {
+    LABELS.with_borrow(|l| !l.is_empty())
+}
+
 /// The race line's word for the character of this name, if it reads differently.
 pub fn long(name: &str) -> Option<String> {
     LABELS.with_borrow(|l| l.get(name).map(|x| x.long.clone()))
