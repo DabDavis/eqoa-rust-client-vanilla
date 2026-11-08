@@ -6,6 +6,13 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · eqoaclassic.com is the server out of the box
+- A new install (on a phone too) connects to eqoaclassic.com without being told: the title's Network Setup shows it, and
+  logging in works at once. Until now a client that had never been given a server had none, so a phone's first login
+  could not reach anyone.
+- A server you typed in Network Setup is kept as it is, and so is a blank one (none). The browser page is unchanged: it
+  is told its own server.
+
 ## 2026-11-08 · Fungusmen keep their bag and fungus, skeletons wear real armour
 - A Fungusman in armour keeps its own bag and strap, and its glowing fungus: the growths on its
   shoulders, wrists and shins, its claws and its cap look as they always did, and the armour covers

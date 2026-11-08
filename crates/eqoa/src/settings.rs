@@ -257,10 +257,27 @@ pub fn set_home_shard(name: &str) -> Result<(), String> {
 
 const SERVER_FILE: &str = "server.opt";
 
+/// The server a client that never kept one connects to (the user, 2026-11-08:
+/// "lets make eqoaclassic.com the default network config for the vanilla
+/// client. apk users reporting they cannot login"): natively alone, as a page
+/// is told its own (`web`'s `server` option) and another site's page must not
+/// be sent here.
+pub const DEFAULT_SERVER: &str = "eqoaclassic.com";
+
 /// The server the title's Network Setup keeps (`server.opt`: the address
-/// alone, a host name or IPv4 address), if one was set.
+/// alone, a host name or IPv4 address), if one was set; a blank one kept is
+/// none. With no `server.opt` at all (a new install, a phone's) it is
+/// [`DEFAULT_SERVER`], natively.
 pub fn server() -> Option<String> {
-    store::read(SERVER_FILE).map(|b| String::from_utf8_lossy(&b).trim().to_string()).filter(|s| !s.is_empty())
+    match store::read(SERVER_FILE) {
+        Some(b) => Some(String::from_utf8_lossy(&b).trim().to_string()).filter(|s| !s.is_empty()),
+        None => default_server(),
+    }
+}
+
+/// [`DEFAULT_SERVER`] natively; none in a page.
+fn default_server() -> Option<String> {
+    (!cfg!(target_arch = "wasm32")).then(|| DEFAULT_SERVER.to_string())
 }
 
 /// Keeps `s` as the server (blank: none).
@@ -2478,19 +2495,20 @@ mod tests {
         assert_eq!(saved_login(), (String::new(), String::new(), false));
     }
 
-    /// Network Setup's server: kept trimmed, a blank one is none, and a
-    /// store that refuses keeps nothing.
+    /// Network Setup's server: eqoaclassic.com until one is kept, kept
+    /// trimmed, a blank one is none (not the default again), and a store that
+    /// refuses keeps nothing.
     #[test]
     fn the_server_is_kept_trimmed_and_blank_is_none() {
         testing::reset(false);
-        assert_eq!(server(), None);
+        assert_eq!(server().as_deref(), Some(DEFAULT_SERVER), "none kept yet: the default");
         set_server("  eqoa.example.com \n").unwrap();
         assert_eq!(server().as_deref(), Some("eqoa.example.com"));
         set_server("").unwrap();
         assert_eq!(server(), None, "blank is none");
         testing::reset(true);
         assert!(set_server("192.0.2.1").is_err(), "the control: a refusing store");
-        assert_eq!(server(), None);
+        assert_eq!(server().as_deref(), Some(DEFAULT_SERVER), "nothing kept: the default");
         testing::reset(false);
     }
 
