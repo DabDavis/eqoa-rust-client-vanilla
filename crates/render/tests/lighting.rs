@@ -273,6 +273,42 @@ fn a_view_without_lights_draws_as_before() {
     assert!(px != before, "the control: lit is the same picture");
 }
 
+/// A radial flora plant lit (`VIRStrip6`): no normal, so a listed light is
+/// its falloff times 0.15 at the distance in the plant's own space, as
+/// vs_main lights it with the personal light; the control, the world
+/// distance's falloff, is another colour.
+#[test]
+fn a_plant_takes_its_lights_as_strip6() {
+    let Some(g) = gpu() else { return };
+    let mut r = Renderer::new(&g.device, &g.queue, render::TARGET_FORMAT);
+    r.set_dynamic_lighting(&g.device, true);
+    let none = |_: i32| None;
+    let layer = esf::Layer { flags: 0, texture: 0, wrap: 0, blend: 0, color: [255; 4], uv_transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] };
+    let s = 1.5;
+    let quad = esf::Model {
+        pos: vec![[-s, -s, 0.0], [s, -s, 0.0], [s, s, 0.0], [-s, -s, 0.0], [s, s, 0.0], [-s, s, 0.0]],
+        uv: vec![[0.0, 0.0]; 6],
+        normal: vec![[0.0, 1.0, 0.0]; 6],
+        color: vec![[1.0, 1.0, 1.0, 1.0]; 6],
+        batches: vec![esf::Batch { material: 0, layers: vec![layer], indices: vec![0, 1, 2, 3, 4, 5], lod: None }],
+        ..Default::default()
+    };
+    let plant = r.upload_flora(&g.device, &g.queue, &quad, 2, &none);
+    r.set_instances(&g.queue, &plant, &[Mat4::from_scale_rotation_translation(Vec3::splat(2.0), glam::Quat::IDENTITY, Vec3::new(0.0, 0.0, -1.0)).to_cols_array_2d()]);
+    r.set_static_lights(&g.queue, &plant, &[[0.0, 0.0, 0.0, 1.0]]);
+    let proj = glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1.0, 0.1, 1000.0);
+    let lamp = PointLight { at: Vec3::new(0.0, 0.0, 9.0), range: 20.0, color: Vec3::ONE, fixed: true };
+    let v = View { sun: Vec3::new(1.0, 0.5, 0.25), ambient: Vec3::new(0.1, 0.2, 0.3), sun_dir: Vec3::new(0.0, 0.0, 1.0), clear: Vec3::ZERO, lights: Some(Lights::new(&[lamp])), ..View::daylight(proj) };
+    let px = render::capture(&g.device, &g.queue, &mut r, 4, 4, &v, &[Draw::Instances(&plant, 0..1)], None);
+    let got = [0, 1, 2].map(|c| px[(2 * 4 + 2) * 4 + c] as f32 / 255.0);
+    let base = [0.1 + 0.15, 0.2 + 0.075, 0.3 + 0.0375];
+    let own = 0.15 * (1.0 - 5.0 / 20.0);
+    let world = 0.15 * (1.0 - 10.0 / 20.0);
+    let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 3.0 / 255.0);
+    assert!(near(got, base.map(|c| c + own)), "the listed light's falloff in the plant's space: {got:?}");
+    assert!(!near(got, base.map(|c| c + world)), "the control: the world distance's");
+}
+
 #[test]
 fn a_frame_takes_sixteen_lights() {
     let many: Vec<PointLight> = (0..20).map(|k| PointLight { at: Vec3::splat(k as f32), range: 1.0, color: Vec3::ONE, fixed: false }).collect();

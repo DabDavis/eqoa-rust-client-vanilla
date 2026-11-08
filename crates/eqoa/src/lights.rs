@@ -413,6 +413,60 @@ mod tests {
         assert!(few.as_slice().iter().all(|p| p.color == Vec3::ONE));
     }
 
+    /// Freeport's torches off the disc (SKIPs without it): the row on the
+    /// wall east of the river, each 0x1CCA51EE's flame at its member's place
+    /// and half its rise above, orange, a torch's reach and fixed; none past
+    /// the flames' 100 from the eye. The control: from 150 away, none of them.
+    #[test]
+    fn freeports_torches_light_their_wall() {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let (x, z) = (25352.0, 15590.0);
+        let mut lib = Library::new();
+        let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso, "TUNARIA.ESF").unwrap());
+        let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+        crate::stream::fill(&mut lib, w, x, z, &mut src);
+        let world = World::<Ee>::load(&lib, w).unwrap();
+        let mut f = Fixed::default();
+        f.add_from(&world, 0);
+        let eye = Vec3::new(x, 60.0, z);
+        let mut near = Vec::new();
+        f.lights(&world, &lib, eye, 0, &mut near);
+        let torches: Vec<&PointLight> = near.iter().filter(|l| (l.at.x - 25364.7).abs() < 1.5 && (15520.0..15650.0).contains(&l.at.z) && (l.at.y - 64.4).abs() < 0.3).collect();
+        assert!(torches.len() >= 8, "the wall's torches: {torches:?}");
+        for t in &torches {
+            assert!(t.fixed && t.color.z == 0.0 && (t.color.y / t.color.x - 0.68).abs() < 0.01, "a torch's light: {t:?}");
+            assert!((t.range - 19.2).abs() < 1e-3, "a torch's reach: {t:?}");
+        }
+        assert!(near.iter().all(|l| (l.at - eye).length() < FIRE_REACH), "none past the flames' reach");
+        assert!(f.len() > torches.len(), "the zones' other flames made too");
+        let mut far = Vec::new();
+        f.lights(&world, &lib, eye + Vec3::new(150.0, 0.0, 0.0), 0, &mut far);
+        assert!(far.iter().all(|l| (l.at.x - 25364.7).abs() > 1.5 || !(15520.0..15650.0).contains(&l.at.z)), "the control: the wall's torches from 150 away");
+    }
+
+    /// A placed point light's record (0x2B00) read as `ParsePointLightObj`
+    /// reads it, on the disc's only ones, ARENA.CSF's ten (SKIPs without the
+    /// disc): a radius of 5, 10 or 25 and a colour of full or half channels.
+    #[test]
+    fn the_discs_point_light_records() {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let c = esf::Container::open(iso::Iso::open(&iso).unwrap().read("ARENA.CSF").unwrap()).unwrap();
+        let lights: Vec<(f32, Vec3)> = (0..c.nodes.len()).filter(|&n| c.node(n).ty == 0x2B00).filter_map(|n| point_light_record(&c, n)).collect();
+        assert_eq!(lights.len(), 10);
+        for (r, col) in &lights {
+            assert!([5.0, 10.0, 25.0].contains(r), "{r}");
+            assert!(col.to_array().iter().all(|v| [0.0, 1.0].contains(v) || (v - 0.502).abs() < 1e-3), "{col:?}");
+        }
+    }
+
     #[test]
     fn a_spell_cloud_casts_light_at_its_middle() {
         let q = |x: f32, a: f32| Quad { center: [x, 1.0, 0.0], half: [0.5, 0.5], frame: 0, color: [0.2, 0.6, 1.0, a] };
