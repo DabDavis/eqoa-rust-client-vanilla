@@ -432,7 +432,14 @@ impl Shell {
 
 /// The layer changes on the made-up slots put on `model` as a shell's
 /// batches: per slot with art, the human's triangles there, new vertices of
-/// the body's, with the human's slot layer in the slot's texture and colour.
+/// the body's, with the human's slot layer in the slot's texture and colour;
+/// each triangle twice, its inside too (turned round, its normals reversed).
+/// On a human the armour is a skin over its body and the renderer culls back
+/// faces as the PS2's strip programs do; round a skeleton's thin bones the
+/// shell is hollow, and from where its far side's inside faces the eye (in
+/// at the collar, through a see-through texel) that side was culled and the
+/// armour seen through (the user, 2026-11-08: "the backface culling is
+/// letting me see through the armor").
 pub fn put_on(model: &mut esf::Model, shell: &Shell, changes: &[LayerChange]) -> bool {
     let mut added = false;
     for (slot, (tex, color)) in worn(changes).into_iter().enumerate() {
@@ -447,16 +454,19 @@ pub fn put_on(model: &mut esf::Model, shell: &Shell, changes: &[LayerChange]) ->
             layer.color = c;
         }
         let mut indices = Vec::new();
-        for c in tris.iter().flatten() {
-            indices.push(model.pos.len() as u32);
-            model.pos.push(c.pos);
-            model.uv.push(c.uv);
-            model.normal.push(c.normal);
-            model.color.push(c.color);
-            model.bones.push(c.bones);
-            model.weights.push(c.weights);
+        let inside = |c: &Corner| Corner { normal: c.normal.map(|n| -n), ..*c };
+        for t in tris {
+            for c in [t[0], t[1], t[2], inside(&t[0]), inside(&t[2]), inside(&t[1])] {
+                indices.push(model.pos.len() as u32);
+                model.pos.push(c.pos);
+                model.uv.push(c.uv);
+                model.normal.push(c.normal);
+                model.color.push(c.color);
+                model.bones.push(c.bones);
+                model.weights.push(c.weights);
+            }
         }
-        model.triangles += tris.len() as u32;
+        model.triangles += 2 * tris.len() as u32;
         model.batches.push(esf::Batch { material: ENTRY + slot as i32, layers: vec![layer], indices, lod: None });
         added = true;
     }
@@ -1845,10 +1855,12 @@ mod tests {
 
     /// The skeleton wears a human's armour, not its own bones painted: in
     /// plate, each slot's batch is HumanMale's slot triangles as they are
-    /// (place, bones, weights), and its own triangles under them are taken
-    /// out; in a chest alone, only the chest's, its legs, hands and feet
-    /// bare. The controls: the kappa, on a skeleton of its own, is painted
-    /// as before; bare, the skeleton is as it was.
+    /// (place, bones, weights), each with its inside (turned round, its
+    /// normals reversed: the shell is hollow), and its own triangles under
+    /// them are taken out; in a chest alone, only the chest's, its legs,
+    /// hands and feet bare. The controls: the kappa, on a skeleton of its
+    /// own, is painted as before, one face a triangle; bare, the skeleton is
+    /// as it was.
     #[test]
     fn the_skeleton_wears_a_humans_armour() {
         let Some(lib) = disc() else { return };
@@ -1872,8 +1884,15 @@ mod tests {
             let entry = human.cs.text_slots[i].0;
             let theirs: Vec<[f32; 3]> = near_triangles(&human.model).filter(|(hb, _)| hb.material == entry).flat_map(|(_, t)| t.map(|v| human.model.pos[v])).collect();
             let ours: Vec<[f32; 3]> = b.indices.iter().map(|&v| dressed.pos[v as usize]).collect();
-            assert!(!ours.is_empty() && ours.len() <= theirs.len());
+            assert!(!ours.is_empty() && ours.len() <= 2 * theirs.len());
             assert!(ours.iter().all(|p| theirs.contains(p)), "slot {i}: the human's own places");
+            // each triangle twice: its inside turned round, its normals reversed
+            for t in b.indices.chunks_exact(6) {
+                let (out, inside) = (&t[..3], &t[3..]);
+                let at = |v: u32| (dressed.pos[v as usize], dressed.uv[v as usize], dressed.bones[v as usize], dressed.weights[v as usize]);
+                assert_eq!([at(inside[0]), at(inside[1]), at(inside[2])], [at(out[0]), at(out[2]), at(out[1])], "slot {i}: the inside turned round");
+                assert!([(inside[0], out[0]), (inside[1], out[2]), (inside[2], out[1])].iter().all(|&(a, b)| dressed.normal[a as usize] == dressed.normal[b as usize].map(|n| -n)), "slot {i}: the inside's normals reversed");
+            }
             let bones: std::collections::HashSet<u8> = b.indices.iter().flat_map(|&v| dressed.bones[v as usize]).filter(|&k| k != 255).collect();
             assert!(!bones.contains(&5), "slot {i}: nothing on the skull's top, the one node the skeletons differ in");
         }
@@ -1898,6 +1917,8 @@ mod tests {
         assert_eq!(k.pos[..km.pos.len()], km.pos[..], "painted on its own vertices");
         assert!(k.batches[km.batches.len()..].iter().flat_map(|b| &b.indices).all(|&v| (v as usize) >= km.pos.len()));
         assert!(k.batches[..km.batches.len()].iter().zip(&km.batches).all(|(a, b)| a.indices == b.indices), "none of its own hidden");
+        let turned = |b: &esf::Batch| b.indices.chunks_exact(6).filter(|t| [t[3], t[4], t[5]].map(|v| k.pos[v as usize]) == [t[0], t[2], t[1]].map(|v| k.pos[v as usize])).count();
+        assert_eq!(k.batches[km.batches.len()..].iter().map(turned).sum::<usize>(), 0, "one face a triangle on the kappa");
     }
 
     /// A fit made anew comes out the same every time: its ties (a corner as
