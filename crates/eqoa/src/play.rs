@@ -893,7 +893,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     // ApplyLook: the look's textures and tints on the layers the
                     // sprite's text slots name.
                     if let (Some(cs), Some(look)) = (&sprite, &look) {
-                        dress(&mut model, &vi::cust::apply_look_with(cs, look, helm_worn, |id| lib.surface(id as i32).is_some(), &crate::s2::get().cust()));
+                        dress_look(lib, e.drawn_model as i32, &mut model, cs, look, helm_worn, &crate::s2::get().cust());
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
                     Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation() })
@@ -1128,6 +1128,16 @@ pub fn place_body(body: &mut GpuModel, walker: &Walker, matrix: [[f32; 4]; 4]) -
     crate::lod::place(body, &glam_to_matrix(matrix), &eye);
     body.visible = shown;
     shown
+}
+
+/// `ApplyLook` on body `id`'s model (built from it in the library's view
+/// now, `cs` its sprite): the look's textures and tints on the layers the
+/// sprite's text slots name, by the tables `t`; and on a body with no text
+/// slot at all, the armour laid on as a human wears it (`slotless`).
+pub(crate) fn dress_look(lib: &Library, id: i32, model: &mut esf::Model, cs: &CSprite<Ee>, look: &vi::cust::Look, helm_worn: bool, t: &vi::cust::Tables) {
+    let has = |id: u32| lib.surface(id as i32).is_some();
+    dress(model, &vi::cust::apply_look_with(cs, look, helm_worn, has, t));
+    crate::slotless::dress(lib, id, model, cs, look, helm_worn, has, t);
 }
 
 /// Puts layer changes onto the batches of the palette entries they name.

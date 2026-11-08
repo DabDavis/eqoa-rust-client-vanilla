@@ -144,6 +144,7 @@ mod zones;
 mod flora;
 mod fx;
 mod fxview;
+mod dressview;
 mod particles;
 mod patcher;
 mod play;
@@ -153,6 +154,7 @@ mod rings;
 mod scene;
 mod servers;
 mod shadows;
+mod slotless;
 mod sky;
 mod spelling;
 mod touch;
@@ -533,6 +535,21 @@ fn run(args: &[String]) -> Result<()> {
                 }
                 None => fxview::run(lib, effect, secs(rest.get(1))?, aim, None)?,
             }
+        }
+        // `eqoa dress <body> <out.png> [look...]`: a body off the disc dressed
+        // in a look, standing, from four sides (`dressview`)
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("dress") => {
+            let usage = "usage: eqoa dress <body DictID> <out.png> [set=N armor=a,b,c,d,e tint=T robe=R rtint=T dye=RRGGBB hair=c,l,s face=F at=ms size=WxH]";
+            let model = args.get(1).and_then(|m| fxview::parse_visual(m)).ok_or(usage)? as i32;
+            let out = args.get(2).filter(|o| o.ends_with(".png")).ok_or(usage)?;
+            let (look, at, size) = dressview::parse(&args[3..])?;
+            let mut iso = disc(None)?;
+            let mut lib = esf::Library::new();
+            for f in dressview::FILES {
+                lib.add(*f, esf::Container::open(iso.read(f)?)?);
+            }
+            dressview::shot(&lib, model, &look, at, size, out)?;
         }
         Some("listen") => {
             let usage = "usage: eqoa listen <world> <x> <z> <seconds> <out.wav> [hour]";
