@@ -6,6 +6,11 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · A Skeleton's armour is solid from every side
+- The armour a Skeleton wears round its bones no longer lets you see through it. Looking down at its
+  collar, or in through the gaps of chain and cloth, you now see the inside of the armour, not the
+  ground behind it.
+
 ## 2026-11-08 · The mastery window can't hang
 - If the server's answer to a mastery request (buying a mastery, opening one, your share of experience) is lost on the
   way, the window's "please wait" box now lets go after ten seconds instead of staying up for good with no way out.

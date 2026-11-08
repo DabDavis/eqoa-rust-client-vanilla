@@ -158,8 +158,9 @@ or a browser (each described where it lives below):
   vertex of their own, take the human's sleeve). The skeleton, whose bones are too thin to carry
   armour, wears a human's armour itself (the user: "fit armor on skeletons like humans ... dont make
   the armor model formfitting"): it is built on HumanMale's skeleton, so HumanMale's own surfaces for
-  each worn slot go on its bones, and its bones under them are hidden; where nothing is worn they stay
-  bare. Any body with texture slots is dressed exactly as before (held to every CSprite on the disc).
+  each worn slot go on its bones, drawn from inside too (a hollow shell round thin bones: culled as a
+  human's skin is, its far side was seen through), and its bones under them are hidden; where nothing
+  is worn they stay bare. Any body with texture slots is dressed exactly as before (held to every CSprite on the disc).
   Players' characters only (a creature whose name colour is a player's, 2, and the pregame's figures):
   NPCs keep the look the PS2 gave them (the user: "Players only").
   `eqoa dress <body> <out.png> [set=N robe=R dye=RRGGBB ...]` draws a body in a look from four sides.
