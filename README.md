@@ -139,6 +139,16 @@ or a browser (each described where it lives below):
   Players' characters only (a creature whose name colour is a player's, 2, and the pregame's figures):
   NPCs keep the look the PS2 gave them (the user: "Players only").
   `eqoa dress <body> <out.png> [set=N robe=R dye=RRGGBB ...]` draws a body in a look from four sides.
+- **Weapons on a server's race whose body holds none** (petition 1278, a Gargoyle: "gargoyles dont show
+  equiped weapons"; `racebody`): a CSprite whose header says `npc` 0 holds no items on a PS2 (`AttachItem`
+  returns at once while `m_flags & 1` is clear), and the gargoyles' body (0xB4D2D132) is one, the only one
+  of the bodies go-eqoa-server's races wear. A player's character drawn in a body one of the server's races
+  wears (creation's list, 0x7E1F) holds its items as a race's body does: on the nodes its ASlotList names (the
+  gargoyle's two hands), its shield, where the body names no node for one, on the off hand's hand; its hands
+  take their weapons' types and projectiles (its swings stay its own two claw attacks). NPCs, forms and
+  illusions keep the PS2's look, and every body that held items before holds them on the same nodes (held to
+  every CSprite on the disc). `eqoa dress <body> <out.png> main=ID off=ID shield=ID [race=1] [action=N]`
+  draws what it holds.
 - **The combat record**, on a server that keeps one (go-eqoa-server's offer, 0x7E20,
   and its record, 0x7E21; Sandstorm and eqoa.live have none, and show no entry): the
   start menu's Character > Combat Record, the client's own window (`record.rs`,
