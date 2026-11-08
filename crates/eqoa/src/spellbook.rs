@@ -118,6 +118,12 @@ pub struct SpellBook {
     slots: Vec<(i64, i64, i64)>,
     text: Vec<u16>,
     desc: Vec<u16>,
+    /// The description's first line shown, and the ability it is of: R1 and R2
+    /// scroll a description longer than its four rows (the GM Jibrish's petition
+    /// 1250: "R1 moved the text up and r2 moved the text down on live"), back to
+    /// its top when another ability is selected
+    desc_top: i32,
+    desc_of: i64,
     window: Window,
     flash: KeyFlash,
     popup: MiniMenu,
@@ -147,6 +153,8 @@ impl Default for SpellBook {
             slots: Vec::new(),
             text: Vec::new(),
             desc: Vec::new(),
+            desc_top: 0,
+            desc_of: -1,
             window: Window::default(),
             flash: KeyFlash::default(),
             popup: MiniMenu::fixed(&POPUP.map(|(w, m)| (w, m, 0))),
@@ -348,6 +356,9 @@ impl SpellBook {
                     _ => {}
                 }
             }
+            // R1 and R2: the description up and down a line (`desc_top`)
+            142 if self.mode == 0 => self.desc_top = (self.desc_top - 1).max(0),
+            143 if self.mode == 0 => self.desc_top += 1,
             17 | 136 if self.mode == 0 => self.tab_by(-1, now, &mut out),
             18 | 137 if self.mode == 0 => self.tab_by(1, now, &mut out),
             19 | 138 => match self.mode {
@@ -629,7 +640,15 @@ impl SpellBook {
         self.window.init(vui, r, [300, 270], 280, 4, 0);
         if self.mode == 0 {
             let desc = self.desc.clone();
-            self.window.text_box(vui, r, &desc, 0, 0, 280, 4, black, 2);
+            // from `desc_top` (R1/R2), held within the text: its lines counted
+            // by the same wrap undrawn (flags all set), four rows shown
+            let of = self.rows.get(self.sel.max(0) as usize).filter(|_| self.sel >= 0).map_or(-1, |row| row.id);
+            if of != self.desc_of {
+                (self.desc_of, self.desc_top) = (of, 0);
+            }
+            let lines = self.window.text_box(vui, r, &desc, 0, 0, 280, 1000, black, 0xFFFF_FFFF);
+            self.desc_top = self.desc_top.clamp(0, (lines - 4).max(0));
+            self.window.text_box(vui, r, &desc, 0, 0, 280, 4, black, 2 | ((self.desc_top as u32) << 24));
         } else if self.mode == 2 {
             let s = wide(&format!("|x {}", vui.words.get(268, vui.language)));
             self.window.text_box(vui, r, &s, 0, 0, 280, 4, black, 2);
@@ -975,6 +994,42 @@ mod tests {
         assert_eq!(unmemorize(&mut b), vec![Out::Send0033(9, 3), Out::Sound(13)]);
         b.sel = 0;
         assert_eq!(unmemorize(&mut b), vec![], "not memorized: nothing");
+    }
+
+    /// R1 and R2 scroll a long description a line at a time (petition 1250),
+    /// held within its lines (ten lines, four rows: six down at most) and back
+    /// to its top on another ability; the control: a short one does not move.
+    #[test]
+    fn r1_and_r2_scroll_a_long_description() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let long = (1..=10).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n");
+        let mut a = ability(1, 7, 1, false, -1);
+        a.desc = long;
+        let mut b2 = ability(2, 8, 1, false, -1);
+        b2.desc = "short".into();
+        let (mut b, map) = book(&[a, b2]);
+        b.sel = 0;
+        b.draw(&vui, &mut r, &map, 0, 1, 0);
+        for _ in 0..3 {
+            b.key(&map, 1, 143, true, 0);
+        }
+        b.draw(&vui, &mut r, &map, 0, 1, 0);
+        assert_eq!(b.desc_top, 3, "three down");
+        b.key(&map, 1, 142, true, 0);
+        b.draw(&vui, &mut r, &map, 0, 1, 0);
+        assert_eq!(b.desc_top, 2, "one up");
+        for _ in 0..20 {
+            b.key(&map, 1, 143, true, 0);
+        }
+        b.draw(&vui, &mut r, &map, 0, 1, 0);
+        assert_eq!(b.desc_top, 6, "held to its last four lines");
+        b.sel = 1;
+        b.draw(&vui, &mut r, &map, 0, 1, 0);
+        assert_eq!(b.desc_top, 0, "another ability: its top");
+        b.key(&map, 1, 143, true, 0);
+        b.draw(&vui, &mut r, &map, 0, 1, 0);
+        assert_eq!(b.desc_top, 0, "the control: a short one stays");
     }
 
     /// Arrange: hold one, move, X sends 0x003A (held index, target index);
