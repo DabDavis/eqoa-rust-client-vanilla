@@ -6,6 +6,16 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · Armour shows on the races with creature bodies
+- On a server with races of its own, the Kappa, Brownie, Pixie, Fairy, Minotaur, Dryad, Skeleton,
+  Fungusman and Gargoyle (and the Hill Giant's own body) now show the armour and robes they wear. Their
+  bodies were never made for armour, so nothing they wore was drawn; the armour is now laid over their
+  torso, arms, hands, legs and feet the way it sits on a human, in its own colour and dye. Heads, wings,
+  tails and the like keep their own look.
+- Only players' characters are dressed this way: creatures and other NPCs look as they always have.
+  Every body that already showed armour (the game's races, Kerrans, Goblins, Frogloks and the rest)
+  looks exactly as before.
+
 ## 2026-11-08 · Texture packs and texture dumps, as PCSX2 makes them
 - Texture packs made for PCSX2 now work here as they are: put the pack's files in the `textures/SLUS-20744/replacements`
   folder of the client's settings folder (`eqoa-rs`: in `~/.config` on Linux, `~/Library/Application Support` on a Mac,

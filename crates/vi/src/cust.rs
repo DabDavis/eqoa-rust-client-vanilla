@@ -10,7 +10,9 @@
 use crate::csprite::CSprite;
 use crate::fpu::Model;
 
-/// `Armor[set][slot]`: chest, boots, bracer, legs, gloves textures per set.
+/// `Armor[set][slot]`: chest, bracer, gloves, legs, boots textures per set
+/// (the text slots 0-4: a human's TSlotList names its torso, forearm,
+/// hands, legs and feet materials for them, in that order).
 const ARMOR: [[u32; 5]; 9] = {
     let mut a = [[0u32; 5]; 9];
     a[1] = [0xBF4B7E0A, 0x62444D1A, 0x84D2F275, 0x2CB53288, 0x7AD7D1B1];
@@ -124,7 +126,7 @@ impl Tables {
 /// A look, as a creature update carries it (`ApplyLook`'s arguments).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Look {
-    /// Armour set and tint per slot: chest, boots, bracer, legs, gloves, helm.
+    /// Armour set and tint per slot: chest, bracer, gloves, legs, boots, helm.
     pub armor: [u8; 6],
     pub armor_tint: [u8; 6],
     /// Colour, length, style.
@@ -167,10 +169,18 @@ pub fn apply_look<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, has: 
 }
 
 /// `ApplyLook` by a patch's tables (`Tables`): retail's give `apply_look`.
-#[allow(clippy::needless_range_loop)]
 pub fn apply_look_with<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, has: impl Fn(u32) -> bool, t: &Tables) -> Vec<LayerChange> {
+    apply_look_slots(&cs.text_slots, cs.race, cs.sex, look, helm_worn, has, t)
+}
+
+/// `ApplyLook` on a sprite's text slots (`m_slots`: palette entry and layer
+/// per slot, -1 for none), race and sex as given: `apply_look_with` hands it
+/// the CSprite's own. A client that dresses a body with no TSlotList (the
+/// eqoa crate's `slotless`) hands it slots of its own.
+#[allow(clippy::needless_range_loop)]
+pub fn apply_look_slots(slots: &[(i32, i32); 19], race: i32, sex: i32, look: &Look, helm_worn: bool, has: impl Fn(u32) -> bool, t: &Tables) -> Vec<LayerChange> {
     let mut out = Vec::new();
-    let slot = |i: usize| cs.text_slots[i];
+    let slot = |i: usize| slots[i];
     let found = |id: u32| if id != 0 && has(id) { Some(id) } else { None };
     // Which slots the robe took over (`m_slots[i].m_flags & 1`).
     let mut robed = [false; 5];
@@ -242,8 +252,8 @@ pub fn apply_look_with<M: Model>(cs: &CSprite<M>, look: &Look, helm_worn: bool, 
     }
     // SetFace
     let (entry, layer) = slot(7);
-    if entry != -1 && (0..11).contains(&cs.race) && look.face < 4 {
-        let id = RACE[cs.race as usize][look.face as usize][(cs.sex != 0) as usize];
+    if entry != -1 && (0..11).contains(&race) && look.face < 4 {
+        let id = RACE[race as usize][look.face as usize][(sex != 0) as usize];
         if let Some(t) = found(id) {
             out.push(LayerChange { entry, layer, texture: Some(t), color: None });
         }
@@ -322,6 +332,43 @@ mod tests {
         assert_eq!(apply_look(&cs, &look, false, all), apply_look_with(&cs, &look, false, all, &retail));
         assert_eq!(retail.tint_at_most(20), TINTS[14]);
         assert_eq!(ss.tint_at_most(20), ss.tints[20]);
+    }
+
+    /// `apply_look_slots` on a sprite's own slots, race and sex is
+    /// `apply_look_with`, in every kind of look; on slots of a caller's own
+    /// it dresses the entries those name (the control: a sprite with no slots
+    /// gets nothing at all from the same look).
+    #[test]
+    fn slots_of_ones_own() {
+        let mut cs = sprite();
+        for i in 11..16 {
+            cs.text_slots[i] = (20 + i as i32, 0);
+        }
+        cs.text_slots[7] = (30, 1);
+        let all = |_: u32| true;
+        let looks = [
+            Look::default(),
+            Look { armor: [3, 2, 1, 2, 5, 1], armor_tint: [1, 2, 3, 0, 8, 4], hair: [2, 3, 1], face: 2, robe: -1, ..Default::default() },
+            Look { armor: [4; 6], robe: 1, robe_tint: 6, face: 1, ..Default::default() },
+            Look { armor: [8, 7, 6, 5, 4, 3], armor_color: Some([[9, 8, 7, 255]; 6]), robe_color: Some([1, 2, 3, 255]), robe: 2, ..Default::default() },
+        ];
+        for t in [Tables::retail(), sandstorm()] {
+            for look in &looks {
+                for helm in [false, true] {
+                    assert_eq!(apply_look_slots(&cs.text_slots, cs.race, cs.sex, look, helm, all, &t), apply_look_with(&cs, look, helm, all, &t), "{look:?}");
+                }
+            }
+        }
+        let bare = CSprite::<Ee>::new(HSprite::new(0), 1, 0, 0, F::new(1.0), true);
+        assert!(looks.iter().all(|l| apply_look_with(&bare, l, false, all, &Tables::retail()).is_empty()), "the control");
+        let mut own = [(-1, -1); 19];
+        for (i, s) in own.iter_mut().enumerate().take(5) {
+            *s = (0x5100 + i as i32, 0);
+        }
+        let out = apply_look_slots(&own, bare.race, bare.sex, &looks[2], false, all, &Tables::retail());
+        assert_eq!(out.iter().map(|c| c.entry).collect::<Vec<_>>(), vec![0x5100, 0x5103, 0x5101, 0x5102, 0x5104], "the robe's two halves, then the three slots it leaves");
+        assert_eq!(out[0].texture, Some(ROBE[1][0]));
+        assert_eq!(out[2].texture, Some(ARMOR[4][1]));
     }
 
     /// The live game's colours are the layers' colours, in place of the

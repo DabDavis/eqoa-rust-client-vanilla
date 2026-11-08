@@ -109,10 +109,12 @@ impl Figure {
     fn new_in_view(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
         // a server's race's body not read yet (`res::Res::want_bodies`): its
         // `like` race's of the body's sex stands in, where the game draws a human
-        let r = lib
-            .lookup(model as i32)
-            .or_else(|| crate::pregame::client::create::tables::stand_in(model).and_then(|m| lib.lookup(m as i32)))
-            .or_else(|| lib.lookup(vi::hash::hash_resource_id("HumanMale") as i32))?;
+        let id = if lib.lookup(model as i32).is_some() {
+            model
+        } else {
+            crate::pregame::client::create::tables::stand_in(model).filter(|&m| lib.lookup(m as i32).is_some()).unwrap_or_else(|| vi::hash::hash_resource_id("HumanMale"))
+        };
+        let r = lib.lookup(id as i32)?;
         let textures = render::library_textures(lib);
         let mut built = lib.build_model(r)?;
         let mut anims = AnimScene { time: now, ..Default::default() };
@@ -146,18 +148,7 @@ impl Figure {
                 helm_worn = true;
                 attached.push((cs.node_ids[8], g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
             }
-            for ch in vi::cust::apply_look_with(cs, &look, helm_worn, |id| lib.surface(id as i32).is_some(), &t) {
-                for b in built.batches.iter_mut().filter(|b| b.material == ch.entry) {
-                    if let Some(l) = b.layers.get_mut(ch.layer as usize) {
-                        if let Some(t) = ch.texture {
-                            l.texture = t as i32;
-                        }
-                        if let Some(c) = ch.color {
-                            l.color = c;
-                        }
-                    }
-                }
-            }
+            crate::play::dress_look(lib, id as i32, &mut built, cs, &look, helm_worn, &t, true);
         }
         let gpu = g.renderer.upload(g.device, g.queue, &built, &[render::IDENTITY], &textures);
         Some(Figure { model, look, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new() })
