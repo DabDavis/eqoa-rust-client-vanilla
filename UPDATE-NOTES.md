@@ -6,6 +6,16 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · Dynamic Lighting
+- A new option, Options > Extended > Lighting > Dynamic Lighting, lights the world as a PC game would: the light of
+  the sky and of your lantern is worked out for every pixel instead of only at the corners of each surface, so it
+  falls smoothly across the ground and the walls.
+- With it on, the world's own fires light what is round them: torches, braziers, candles and street lamps throw a
+  warm pool of light onto the ground and onto the characters walking past, flickering a little as a flame does.
+  Spells light up their caster and the walls near them in their own colour while they play, and so do glowing
+  weapons and fiery creatures.
+- It is off unless you turn it on, and off the game looks exactly as it did on a PS2.
+
 ## 2026-11-08 · Texture packs and texture dumps, as PCSX2 makes them
 - Texture packs made for PCSX2 now work here as they are: put the pack's files in the `textures/SLUS-20744/replacements`
   folder of the client's settings folder (`eqoa-rs`: in `~/.config` on Linux, `~/Library/Application Support` on a Mac,
