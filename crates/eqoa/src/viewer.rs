@@ -88,6 +88,7 @@ pub fn lit(
         point: None,
         clear: Vec3::new(0.18, 0.2, 0.24),
         sky_view_proj: None,
+        lights: None,
     };
     let mut sky = None;
     if let Some((b, at, w)) = &blend {
@@ -257,9 +258,11 @@ fn upload(renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, l
     s.parts
         .iter()
         .zip(&s.statics)
-        .map(|((m, mats), st)| {
-            let gm = renderer.upload(device, queue, m, mats, &textures);
+        .zip(&s.baked)
+        .map(|(((m, mats), st), &baked)| {
+            let mut gm = renderer.upload(device, queue, m, mats, &textures);
             renderer.set_static_lights(queue, &gm, st);
+            gm.baked = baked;
             gm
         })
         .collect()

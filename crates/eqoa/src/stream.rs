@@ -526,9 +526,9 @@ impl Streamer {
         let props = AnimatedProps::new(world, lib, &s.hsprites);
         let prop_mats = props.matrices(world);
         let mut parts: Vec<GroupPart> =
-            s.parts.iter().zip(&s.statics).map(|((m, mats), st)| GroupPart { model: m, instances: mats, statics: st, moves: false }).collect();
+            s.parts.iter().zip(&s.statics).zip(&s.baked).map(|(((m, mats), st), &baked)| GroupPart { model: m, instances: mats, statics: st, moves: false, baked }).collect();
         let props_at = parts.len();
-        parts.extend(props.groups.iter().zip(&prop_mats).map(|(group, mats)| GroupPart { model: &group.model, instances: mats, statics: &[], moves: true }));
+        parts.extend(props.groups.iter().zip(&prop_mats).map(|(group, mats)| GroupPart { model: &group.model, instances: mats, statics: &[], moves: true, baked: false }));
         let group = g.renderer.upload_group(g.device, g.queue, &parts, &textures);
         self.zones.insert(z, Loaded { group, props, props_at });
     }
