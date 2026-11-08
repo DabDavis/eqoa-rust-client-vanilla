@@ -69,6 +69,14 @@ pub const FADE_FROM: f32 = 212.5;
 /// a tower up to this far upwind of what is drawn still casts onto it.
 pub const UPWIND: f64 = 500.0;
 
+/// How high over what it shadows a cluster of casters (not the terrain or a
+/// sprite placed all over a zone, which every cascade draws) is taken to
+/// reach: a cascade draws such a cluster only as far toward the sun as one
+/// that tall could shadow its sphere from (`Cascade::reaches_casters`), at
+/// most [`UPWIND`] (the whole box below about 17 degrees). Freeport's walls
+/// and towers are a few tens.
+pub const CASTER_HEIGHT: f64 = 150.0;
+
 /// How far a caster's vertex whose normal is turned from the sun is put back
 /// along the light (`suncast.wgsl`): a ceiling or a cave's roof, seen from
 /// above, still casts, and the underside of a thin thing does not shadow its
@@ -141,18 +149,32 @@ pub struct Cascade {
     pub axes: [DVec3; 3],
     pub lo: [f64; 3],
     pub hi: [f64; 3],
+    /// Along the light, the nearest a cluster of casters no taller than
+    /// [`CASTER_HEIGHT`] over its sphere can be and shadow it.
+    pub casters_from: f64,
 }
 
 impl Cascade {
     /// Whether any of the world box `(lo, hi)` is inside the cascade's box.
-    pub fn reaches(&self, (lo, hi): (Vec3, Vec3)) -> bool {
+    pub fn reaches(&self, b: (Vec3, Vec3)) -> bool {
+        self.inside(b, self.lo[2])
+    }
+
+    /// Whether a cluster of casters in the world box `b` (no taller than
+    /// [`CASTER_HEIGHT`] over what it shadows) can shadow the cascade's
+    /// sphere: its box short of the end toward the sun.
+    pub fn reaches_casters(&self, b: (Vec3, Vec3)) -> bool {
+        self.inside(b, self.casters_from)
+    }
+
+    fn inside(&self, (lo, hi): (Vec3, Vec3), from: f64) -> bool {
         let (lo, hi) = (lo.as_dvec3(), hi.as_dvec3());
         let (c, e) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
         (0..3).all(|k| {
             let a = self.axes[k];
             let mid = c.dot(a);
             let r = e.x * a.x.abs() + e.y * a.y.abs() + e.z * a.z.abs();
-            mid + r >= self.lo[k] && mid - r <= self.hi[k]
+            mid + r >= if k == 2 { from } else { self.lo[k] } && mid - r <= self.hi[k]
         })
     }
 }
@@ -199,6 +221,10 @@ pub fn fit(view_proj: Mat4, eye: Vec3, sun_dir: Vec3, size: u32) -> [Cascade; CA
         let snap = |v: f64| (v / t).round() * t;
         let (x0, y0, zm) = (snap(centre.dot(ax[0])), snap(centre.dot(ax[1])), centre.dot(ax[2]));
         let (z0, z1) = (zm - r - UPWIND, zm + r);
+        // a caster CASTER_HEIGHT over a point of the sphere is that over the
+        // sine of the sun's height nearer the sun
+        let up = -ax[2].y;
+        let reach = if up > 1e-6 { (CASTER_HEIGHT / up).min(UPWIND) } else { UPWIND };
         let depth = z1 - z0;
         // rows over a position less the eye: (p + eye)·axis less the box's
         let row = |a: DVec3, off: f64, scale: f64| DVec4::new(a.x / scale, a.y / scale, a.z / scale, (eye.dot(a) - off) / scale);
@@ -210,6 +236,7 @@ pub fn fit(view_proj: Mat4, eye: Vec3, sun_dir: Vec3, size: u32) -> [Cascade; CA
             axes: ax,
             lo: [x0 - half, y0 - half, z0],
             hi: [x0 + half, y0 + half, z1],
+            casters_from: zm - r - reach,
         }
     })
 }
@@ -301,6 +328,9 @@ struct Cluster {
     bundles: Vec<Option<wgpu::RenderBundle>>,
     /// draw calls a cascade's bundle holds
     draws: u32,
+    /// Its members are the wide ones (the terrain, a sprite placed all over
+    /// the zone): drawn wherever the cascade's whole box reaches them.
+    wide: bool,
 }
 
 /// A cluster's cell, across the ground.
@@ -558,7 +588,7 @@ impl Sun {
                         Some(e.finish(&wgpu::RenderBundleDescriptor { label: Some("sun shadow casters") }))
                     })
                     .collect();
-                clusters.push(Cluster { bounds, bundles, draws });
+                clusters.push(Cluster { bounds, bundles, draws, wide: same[0].0 == i64::MAX });
             }
         }
         GroupSun { clusters }
@@ -601,7 +631,7 @@ impl Sun {
             for item in items {
                 match item {
                     Draw::Group(g) => {
-                        let reached = g.sun.iter().flat_map(|s| &s.clusters).filter(|k| cascade.reaches(k.bounds));
+                        let reached = g.sun.iter().flat_map(|s| &s.clusters).filter(|k| if k.wide { cascade.reaches(k.bounds) } else { cascade.reaches_casters(k.bounds) });
                         let bundles: Vec<&wgpu::RenderBundle> = reached.filter_map(|k| {
                             draws += k.draws;
                             k.bundles[c].as_ref()
@@ -761,6 +791,31 @@ mod tests {
             unsnapped = Some(u);
         }
         assert!(drifted > 90, "the control: on a grid centred on the camera the point moves within its texel ({drifted} of 99 steps)");
+    }
+
+    /// A cluster of casters far toward the sun is drawn only as far as one
+    /// [`CASTER_HEIGHT`] tall could shadow the cascade from: at 45 degrees a
+    /// box 400 up the light from the sphere is out, and 100 up it is in;
+    /// the whole box (the terrain's test) takes both. Under a low sun the
+    /// two are the same.
+    #[test]
+    fn a_far_cluster_is_drawn_where_it_can_shadow() {
+        let eye = Vec3::new(25_300.0, 60.0, 15_700.0);
+        let vp = view(eye, eye + Vec3::new(1.0, -0.3, 0.4));
+        let sun = Vec3::new(1.0, -1.0, 0.0).normalize();
+        let c = fit(vp, eye, sun, 2048)[0];
+        // the sphere's middle, then boxes up the light from it
+        let mid = (c.axes[0] * ((c.lo[0] + c.hi[0]) * 0.5) + c.axes[1] * ((c.lo[1] + c.hi[1]) * 0.5) + c.axes[2] * (c.hi[2] - 20.0)).as_vec3();
+        let at = |s: f32| {
+            let p = mid - sun * s;
+            (p - Vec3::ONE, p + Vec3::ONE)
+        };
+        assert!(c.reaches_casters(at(100.0)) && c.reaches(at(100.0)), "100 up the light");
+        assert!(!c.reaches_casters(at(400.0)), "400 up the light, past a 150-tall caster's reach");
+        assert!(c.reaches(at(400.0)), "the whole box takes it");
+        let low = Vec3::new(1.0, -0.15, 0.0).normalize();
+        let c = fit(vp, eye, low, 2048)[0];
+        assert_eq!(c.casters_from, c.lo[2], "under a low sun, the whole box");
     }
 
     /// A layer is solid when no texel of it can fail the alpha test: its
