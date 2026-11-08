@@ -673,7 +673,7 @@ impl WndOptions {
                     47 => c.ps2_fog = !c.ps2_fog,
                     // Sun Shadows: cast or not from the next frame, with
                     // Dynamic Lighting on (`viewer`, `render::sunshadow`)
-                    54 => c.sun_shadows = !c.sun_shadows,
+                    53 => c.sun_shadows = !c.sun_shadows,
                     // Dynamic Lighting: the world lit per fragment or the
                     // PS2's way from the next frame (`viewer`, `lights`)
                     52 => c.dynamic_lighting = !c.dynamic_lighting,
@@ -1103,7 +1103,7 @@ impl WndOptions {
                 Some(d) => format!("Plays on {d}"),
                 None => "No output now".to_string(),
             }),
-            Note::Lighting => sun_note(&crate::settings::client()).filter(|_| self.item == 54),
+            Note::Lighting => sun_note(&crate::settings::client()).filter(|_| self.item == 53),
             Note::None => None,
         }
     }
@@ -1160,7 +1160,7 @@ const EXTENDED_ITEMS: [(i32, &str); 35] = [
     (50, "Texture Packs"),
     (51, "Dump Textures"),
     (52, "Dynamic Lighting"),
-    (54, "Sun Shadows"),
+    (53, "Sun Shadows"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1201,7 +1201,7 @@ struct Category {
 const ALL_CATEGORIES: [Category; 9] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
-    Category { name: "Lighting", items: &[52, 54], note: Note::Lighting },
+    Category { name: "Lighting", items: &[52, 53], note: Note::Lighting },
     Category { name: "UI", items: &[22, 29, 30, 40, 49], note: Note::None },
     Category { name: "Controller", items: &[16, 19, 48], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
@@ -1301,7 +1301,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         37 => on_off(c.environment),
         46 => on_off(c.shadows),
         47 => wide(if c.ps2_fog { "PS2" } else { "Exact" }),
-        54 => on_off(c.sun_shadows),
+        53 => on_off(c.sun_shadows),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         39 => wide(&format!("x{}", c.render_scale)),
@@ -1691,12 +1691,12 @@ mod tests {
         // Sun Shadows: Off, then On, which without Dynamic Lighting the page
         // says they need
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 54, "Sun Shadows");
-        assert_eq!(value_text(&vui, 54), Some(wide(vui.words.get(552, vui.language))), "Off");
+        assert_eq!(w.item, 53, "Sun Shadows");
+        assert_eq!(value_text(&vui, 53), Some(wide(vui.words.get(552, vui.language))), "Off");
         assert_eq!(w.page_note(2), None, "off: no note");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!((settings::client().sun_shadows, cues.last()), (true, Some(&11)), "On");
-        assert_eq!(value_text(&vui, 54), Some(wide(vui.words.get(551, vui.language))));
+        assert_eq!(value_text(&vui, 53), Some(wide(vui.words.get(551, vui.language))));
         assert_eq!(w.page_note(2).as_deref(), Some("Sun Shadows need Dynamic Lighting"), "on without Dynamic Lighting");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::client().sun_shadows, "and back: two values");
