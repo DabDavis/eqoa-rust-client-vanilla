@@ -128,6 +128,7 @@ mod multibox;
 mod quantity;
 mod questlog;
 mod quickchat;
+mod racebody;
 mod racelabel;
 mod record;
 mod alarm;
@@ -541,16 +542,16 @@ fn run(args: &[String]) -> Result<()> {
         // in a look, standing, from four sides (`dressview`)
         #[cfg(not(target_arch = "wasm32"))]
         Some("dress") => {
-            let usage = "usage: eqoa dress <body DictID> <out.png> [set=N armor=a,b,c,d,e tint=T robe=R rtint=T dye=RRGGBB hair=c,l,s face=F at=ms size=WxH]";
+            let usage = "usage: eqoa dress <body DictID> <out.png> [set=N armor=a,b,c,d,e tint=T robe=R rtint=T dye=RRGGBB hair=c,l,s face=F main=ID off=ID shield=ID race=1 action=N at=ms size=WxH]";
             let model = args.get(1).and_then(|m| fxview::parse_visual(m)).ok_or(usage)? as i32;
             let out = args.get(2).filter(|o| o.ends_with(".png")).ok_or(usage)?;
-            let (look, at, size) = dressview::parse(&args[3..])?;
+            let words = dressview::parse(&args[3..])?;
             let mut iso = disc(None)?;
             let mut lib = esf::Library::new();
             for f in dressview::FILES {
                 lib.add(*f, esf::Container::open(iso.read(f)?)?);
             }
-            dressview::shot(&lib, model, &look, at, size, out)?;
+            dressview::shot(&lib, model, &words, out)?;
         }
         Some("listen") => {
             let usage = "usage: eqoa listen <world> <x> <z> <seconds> <out.wav> [hour]";

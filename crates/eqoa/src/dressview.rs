@@ -10,7 +10,13 @@
 //! `armor=a,b,c,d,e` (chest, bracer, gloves, legs, boots), `tint=T` (every
 //! slot's tint), `robe=R`, `rtint=T`, `dye=RRGGBB` (the live game's colour on
 //! every slot and the robe), `hair=c,l,s`, `face=F`, `at=ms` (the idle's
-//! time), `size=WxH` (one view's). None of them: the body bare.
+//! time), `size=WxH` (one view's). None of them: the body bare. Held items:
+//! `main=ID`, `off=ID`, `shield=ID` (ITEM.ESF DictIDs in hex, the three item
+//! slots), each hung as `AttachItem` hangs it, on the node the body names for
+//! its slot when the body holds items; `race=1` draws the body as a player's
+//! in a body one of a server's races wears (`racebody`: it holds them
+//! whatever its header says). `action=N` plays the sprite's action N from the
+//! start (23: the first hand's attack) instead of standing.
 
 use esf::Library;
 use glam::{Mat4, Vec3};
@@ -22,17 +28,43 @@ use vi::geom::Matrix44;
 use vi::hsprite::AnimScene;
 use vi::vect::Vect3;
 
-/// The files a body needs, in the order the game registers them.
-pub const FILES: &[&str] = &["CHARCUST.CSF", "CHARFACE.CSF", "CHAR.ESF"];
+/// The files a body and what it holds need, in the order the game registers
+/// them.
+pub const FILES: &[&str] = &["CHARCUST.CSF", "CHARFACE.CSF", "CHAR.ESF", "ITEM.ESF"];
 
-/// The look a list of words names, the idle's time, and one view's size.
-pub fn parse(words: &[String]) -> Result<(vi::cust::Look, i64, (u32, u32)), String> {
+/// What a list of words names.
+#[derive(Debug)]
+pub struct Words {
+    pub look: vi::cust::Look,
+    /// The items in the item slots (main hand, off hand, shield): DictIDs, 0
+    /// none.
+    pub items: [u32; 3],
+    /// The body as a player's, one of a server's races wears (`racebody`).
+    pub race: bool,
+    /// The action played from the start, else standing.
+    pub action: Option<i32>,
+    /// The idle's (or the action's) time, ms.
+    pub at: i64,
+    /// One view's size.
+    pub size: (u32, u32),
+}
+
+/// What a list of words names: the look, the items held, the idle's time and
+/// one view's size.
+pub fn parse(words: &[String]) -> Result<Words, String> {
     let mut look = vi::cust::Look { robe: -1, ..Default::default() };
     let (mut at, mut size) = (1500i64, (360u32, 540u32));
+    let (mut items, mut race, mut action) = ([0u32; 3], false, None);
     let nums = |v: &str| v.split(',').map(|n| n.trim().parse::<u8>().map_err(|e| format!("{v}: {e}"))).collect::<Result<Vec<u8>, String>>();
+    let hex = |w: &str, v: &str| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|e| format!("{w}: {e}"));
     for w in words {
         let (k, v) = w.split_once('=').ok_or_else(|| format!("{w}: a look is words like set=3, tint=8, robe=1"))?;
         match k {
+            "main" => items[0] = hex(w, v)?,
+            "off" => items[1] = hex(w, v)?,
+            "shield" => items[2] = hex(w, v)?,
+            "race" => race = v != "0",
+            "action" => action = Some(v.parse().map_err(|e| format!("{w}: {e}"))?),
             "set" => {
                 let n = nums(v)?[0];
                 look.armor[..5].fill(n);
@@ -65,16 +97,27 @@ pub fn parse(words: &[String]) -> Result<(vi::cust::Look, i64, (u32, u32)), Stri
             _ => return Err(format!("{w}: not a word of a look")),
         }
     }
-    Ok((look, at, size))
+    Ok(Words { look, items, race, action, at, size })
 }
 
-/// The body drawn in the look from four sides into `out`.
+/// The body drawn in the look, holding what `words` say, from four sides
+/// into `out`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn shot(lib: &Library, model: i32, look: &vi::cust::Look, at: i64, (w, h): (u32, u32), out: &str) -> Result<(), String> {
+pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), String> {
+    let (look, at, (w, h)) = (&words.look, words.at, words.size);
     let r = lib.lookup(model).ok_or_else(|| format!("no body {:#010x} in CHAR.ESF", model as u32))?;
     let mut anims = AnimScene::<Ee>::default();
     let mut rand = Rand(1);
     let mut cs = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand).ok_or("not a character")?;
+    if words.race {
+        let races = net::creation::Creation {
+            all_classes: false,
+            races: vec![net::creation::Race { id: 11, like: 0, city: 0, bonus: [0; 7], class_mask: 0, body: [model as u32, 0], name: String::new(), short: String::new(), desc: String::new() }],
+        };
+        crate::racebody::grant(&mut cs, model as u32, true, Some(&races));
+    }
+    // `AttachItem`'s test: a node in the slot, on a sprite that holds items
+    let held: Vec<(i32, u32)> = (0..3).filter_map(|i| cs.item_node(i).filter(|_| words.items[i] != 0).map(|n| (n, words.items[i]))).collect();
     let mut mesh = lib.build_model(r).ok_or("no mesh")?;
     let before = mesh.batches.len();
     crate::play::dress_look(lib, model, &mut mesh, &cs, look, false, &vi::cust::Tables::retail(), true);
@@ -129,11 +172,22 @@ pub fn shot(lib: &Library, model: i32, look: &vi::cust::Look, at: i64, (w, h): (
         tris(&mesh.batches[before..]),
         tris(&mesh.batches[..before])
     );
-    // standing, at `at` ms of its idle
+    if words.items.iter().any(|&i| i != 0) {
+        eprintln!("holds items: {} (item nodes {:?}); hung: {:?}", cs.holds_items, &cs.item_nodes[..3], held.iter().map(|(n, i)| format!("{i:#010x} on node {n}")).collect::<Vec<_>>());
+    }
+    // standing, at `at` ms of its idle (or of the action asked for)
     let mut t = 0;
     while t <= at {
         anims.time = t;
-        cs.set_locomotion(0, &anims, &mut rand);
+        match words.action {
+            Some(a) if t == 0 => {
+                cs.set_action(a, &anims, &mut rand);
+            }
+            Some(_) => {}
+            None => {
+                cs.set_locomotion(0, &anims, &mut rand);
+            }
+        }
         cs.h.process(0, &anims);
         t += 16;
     }
@@ -185,6 +239,25 @@ pub fn shot(lib: &Library, model: i32, look: &vi::cust::Look, at: i64, (w, h): (
     if !palette.is_empty() {
         r.set_palette(&queue, &gpu, &palette);
     }
+    // each item on its node's animated place under the centre transform, as
+    // the game draws an attached sprite
+    let mut items = Vec::new();
+    for &(node, id) in &held {
+        let (Some(n), Some(m)) = (cs.h.nodes.get(node as usize), lib.lookup(id as i32).and_then(|r| lib.build_model(r))) else {
+            eprintln!("{id:#010x}: no such item");
+            continue;
+        };
+        let at = Matrix44::mul(&n.world, &centre);
+        if debug == "nodes" {
+            let row = |i: usize| format!("({:6.3} {:6.3} {:6.3})", at.m[i].x.0, at.m[i].y.0, at.m[i].z.0);
+            eprintln!("node {node}: x{} y{} z{} at{}", row(0), row(1), row(2), row(3));
+            let (lo, hi) = m.pos.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| (std::array::from_fn(|k| lo[k].min(p[k])), std::array::from_fn(|k| hi[k].max(p[k]))));
+            eprintln!("  item {id:#010x} bounds {lo:?} .. {hi:?}");
+        }
+        let g = r.upload(&device, &queue, &m, &[render::IDENTITY], &textures);
+        r.set_instances(&queue, &g, &[at.to_cols()]);
+        items.push((g, at));
+    }
     // from the front, from the front a little to its left, from its left,
     // from behind
     let yaws = [0.0f32, 0.6, std::f32::consts::FRAC_PI_2, std::f32::consts::PI];
@@ -198,8 +271,13 @@ pub fn shot(lib: &Library, model: i32, look: &vi::cust::Look, at: i64, (w, h): (
         view.eye = eye;
         // the sun from over the camera's shoulder, so each side is seen lit
         view.sun_dir = (Vec3::new(-dir.x, 0.0, -dir.z) * 0.6 + Vec3::new(dir.z, 0.0, -dir.x) * 0.25 + Vec3::new(0.0, -0.75, 0.0)).normalize();
-        crate::lod::place(&mut gpu, &centre, &Vect3::new(F::new(eye.x), F::new(eye.y), F::new(eye.z)));
-        let rgba = render::capture(&device, &queue, &mut r, w, h, &view, &[render::Draw::Model(&gpu)], None);
+        let at_eye = Vect3::new(F::new(eye.x), F::new(eye.y), F::new(eye.z));
+        crate::lod::place(&mut gpu, &centre, &at_eye);
+        for (g, at) in &mut items {
+            crate::lod::place(g, at, &at_eye);
+        }
+        let draws: Vec<render::Draw> = std::iter::once(render::Draw::Model(&gpu)).chain(items.iter().map(|(g, _)| render::Draw::Model(g))).collect();
+        let rgba = render::capture(&device, &queue, &mut r, w, h, &view, &draws, None);
         for y in 0..h as usize {
             let src = &rgba[y * w as usize * 4..(y + 1) * w as usize * 4];
             let o = (y * (w as usize * yaws.len()) + k * w as usize) * 4;
@@ -217,17 +295,23 @@ pub fn shot(lib: &Library, model: i32, look: &vi::cust::Look, at: i64, (w, h): (
 mod tests {
     use super::*;
 
-    /// The words make the look they say; a stray word is refused (the control).
+    /// The words make the look they say, and the items, race and action;
+    /// a stray word is refused (the control).
     #[test]
     fn looks_from_words() {
         let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
-        let (l, at, size) = parse(&words("set=3 tint=8 robe=1 rtint=2 at=900 size=200x300")).unwrap();
-        assert_eq!((l.armor, l.armor_tint, l.robe, l.robe_tint, at, size), ([3, 3, 3, 3, 3, 0], [8; 6], 1, 2, 900, (200, 300)));
-        let (l, _, _) = parse(&words("armor=1,2,3,4,5 dye=c03020")).unwrap();
+        let w = parse(&words("set=3 tint=8 robe=1 rtint=2 at=900 size=200x300")).unwrap();
+        let l = w.look;
+        assert_eq!((l.armor, l.armor_tint, l.robe, l.robe_tint, w.at, w.size), ([3, 3, 3, 3, 3, 0], [8; 6], 1, 2, 900, (200, 300)));
+        let l = parse(&words("armor=1,2,3,4,5 dye=c03020")).unwrap().look;
         assert_eq!(l.armor, [1, 2, 3, 4, 5, 0]);
         assert_eq!(l.armor_color, Some([[0xC0, 0x30, 0x20, 255]; 6]));
-        let (bare, _, _) = parse(&[]).unwrap();
-        assert_eq!((bare.armor, bare.robe), ([0; 6], -1));
+        let bare = parse(&[]).unwrap();
+        assert_eq!((bare.look.armor, bare.look.robe, bare.items, bare.race, bare.action), ([0; 6], -1, [0; 3], false, None));
+        let held = parse(&words("main=17F9870B off=0xB0A9CBD2 shield=2486a8d7 race=1 action=23")).unwrap();
+        assert_eq!((held.items, held.race, held.action), ([0x17F9_870B, 0xB0A9_CBD2, 0x2486_A8D7], true, Some(23)));
+        assert!(!parse(&words("race=0")).unwrap().race);
         assert!(parse(&words("sett=3")).is_err());
+        assert!(parse(&words("main=sword")).is_err());
     }
 }

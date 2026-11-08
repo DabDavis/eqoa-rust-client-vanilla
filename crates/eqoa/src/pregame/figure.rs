@@ -119,7 +119,12 @@ impl Figure {
         let mut built = lib.build_model(r)?;
         let mut anims = AnimScene { time: now, ..Default::default() };
         let mut rand = Rand(1);
-        let sprite = actor_sprite(lib, r, &mut anims, &mut rand);
+        let mut sprite = actor_sprite(lib, r, &mut anims, &mut rand);
+        // a player's character: in a body one of the server's races wears it
+        // holds items as a race's body does (`racebody`)
+        if let Some(cs) = sprite.as_mut() {
+            crate::racebody::grant(cs, id, true, Some(&crate::pregame::client::create::tables::offer()));
+        }
         let mut attached = Vec::new();
         let mut helm_worn = false;
         if let Some(cs) = &sprite {
