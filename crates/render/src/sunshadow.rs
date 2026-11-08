@@ -7,25 +7,28 @@
 //!
 //! A shadow map of [`CASCADES`] cascades (a 2D depth array, [`map_size`] a
 //! side), each an orthographic view along the sun's light round the sphere
-//! that holds its slice of the view's depth ([`ENDS`]): drawn each frame the
-//! sun is up from what the frame draws (`suncast.wgsl`), the zones' groups
-//! from bundles recorded at their upload (`RunSun::casters`, a run wholly out
-//! of a cascade's box skipped) and the models (characters, what they hold,
-//! the boids) as they are, every opaque layer of a material whose first
-//! layer is opaque, alpha tested as the layer is drawn (leaves cut out), both
-//! faces, a vertex turned from the sun put back a little ([`BACK_PUSH`]);
-//! not the radial flora (`Draw::Instances`), the sky, nor any blended layer
-//! (water, glass, fog, effects), nor the particles, billboards, fans, plates
-//! or the HUD, which `draw` does not draw. Then the world is drawn through a
-//! third set of model pipelines, Dynamic Lighting's with the map in the sun
-//! term (`sunshadow.wgsl`), and the groups' runs through bundles recorded
-//! for them (`RunSun::lit`).
+//! that holds its slice of the view's depth ([`ENDS`]), the near two drawn
+//! every frame the sun is up and the far two in turn (`Sun::draw`), from what
+//! the frame draws (`suncast.wgsl`): the zones' groups from bundles recorded
+//! at their upload in clusters of members near one another (`GroupSun`,
+//! each culled against a cascade's box) and the models (characters, what
+//! they hold, the boids) by their world box, every opaque layer of a
+//! material whose first layer is opaque, both faces, a vertex turned from
+//! the sun put back a little ([`BACK_PUSH`]), a solid layer as depth alone
+//! and any other alpha tested as it is drawn (leaves cut out); not the
+//! radial flora (`Draw::Instances`), the sky, nor any blended layer (water,
+//! glass, fog, effects), nor the particles, billboards, fans, plates or the
+//! HUD, which `draw` does not draw. Then the world is drawn through a third
+//! set of model pipelines, Dynamic Lighting's with the map in the sun term
+//! (`sunshadow.wgsl`), and the groups' runs through bundles recorded for
+//! them (`Run::sun`).
 //!
 //! The map follows the eye: every matrix is built in doubles relative to it
 //! (Freeport is at x 25,300, where a float steps 2 mm), its centre snapped
 //! to its texels in the world (the light's axes from the origin), and each
 //! sphere's radius is rounded up, so a camera that moves or turns moves the
-//! map by whole texels and nothing shimmers. The sun's direction is taken in
+//! map by whole texels and nothing shimmers (but for a far cascade kept a
+//! frame: a margin wider, [`JUMP`], [`TURN`]). The sun's direction is taken in
 //! steps of [`SUN_STEP`] (the game's day passes in an hour: the sun moves a
 //! tenth of a degree a second). The shadows end at [`RANGE`] before the
 //! camera, faded out from [`FADE_FROM`]; they fade in as the sun rises
@@ -539,6 +542,12 @@ impl Sun {
         };
         let (caster, solid) = (cast_pipeline("vs_cast", Some("fs_cast")), cast_pipeline("vs_cast_solid", None));
         Some(Sun { pipelines, bg, buf, caster, solid, cascades, cascade_buf, stride, layers, size, drawn: Default::default(), last: Default::default(), frames: Default::default() })
+    }
+
+    /// Every cascade drawn again at the next frame (none kept from before):
+    /// Sun Shadows turned on or off.
+    pub(crate) fn forget(&self) {
+        self.last.set(None);
     }
 
     /// A group's casters, in clusters: its members that draw an opaque

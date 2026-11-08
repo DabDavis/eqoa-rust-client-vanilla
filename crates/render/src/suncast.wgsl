@@ -15,8 +15,10 @@
 // caster covers in the map is not moved, only how near the sun it is; put
 // back by the vertex, not the fragment, the depth test still runs before
 // the fragment does (written in the fragment it cost 0.6 ms of an RX 580's
-// frame at 2,048 a side). Nothing is written but depth. Positions are taken relative to the eye as vs_main
-// takes them: the cascade's matrix is the eye's too (`sunshadow::fit`).
+// frame at 2,048 a side). Nothing is written but depth; a layer no texel of
+// which can fail the alpha test runs no fragment at all (vs_cast_solid).
+// Positions are taken relative to the eye as vs_main takes them: the
+// cascade's matrix is the eye's too (`sunshadow::fit`).
 
 struct Cascade {
     // a position less the eye to the cascade's clip space
