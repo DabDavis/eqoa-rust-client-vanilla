@@ -4,7 +4,10 @@
 //! every member comes in a message of the server's own (0x7E1A, `group::raid_page`),
 //! to a client that asked (`Session::agree_raid_roster`, the Extended page's Raid
 //! List, on by default), and is drawn here in place of the group's bars: a row a
-//! member, its name over a thin health bar, in as many columns as it takes, down from
+//! member, its name over a thin health bar and a thinner power bar in the HUD's blue
+//! (Dwarfrish's petition 1242, the user's word, 2026-11-08: "Add a thin mana bar to the
+//! raid window frames that shows the players current mana in blue"; the roster has
+//! carried each member's power since it began), in as many columns as it takes, down from
 //! where the bars start and above the chat box, the pet's bar under it. Past what
 //! four columns hold the wheel steps through them. A click targets a member the
 //! client can see (`hud::Pick::Raid`); one out of sight is greyed.
@@ -18,6 +21,8 @@ pub struct Row {
     pub name: String,
     /// Its health of 255.
     pub hp: u8,
+    /// Its power of 255.
+    pub power: u8,
     pub is_target: bool,
     /// The client has its entity (`Play::sees_entity`).
     pub seen: bool,
@@ -25,13 +30,15 @@ pub struct Row {
 }
 
 /// A row, a column and the line over them, in the HUD's frame.
-const ROW_H: i32 = 16;
+const ROW_H: i32 = 18;
 const COL_W: i32 = 100;
 const COL_GAP: i32 = 4;
 const HEAD_H: i32 = 13;
 /// A name's height (the font is scaled to it), and the bar under it.
 const NAME_H: f32 = 12.0;
 const BAR_H: i32 = 3;
+/// The power bar under it.
+const POWER_H: i32 = 2;
 /// The most columns: past them the wheel steps through the rows.
 const MOST_COLUMNS: usize = 4;
 /// The height from where the bars start to above the chat box, and what the pet's
@@ -142,11 +149,14 @@ pub fn draw(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], fit: &Fit, rows: &[Row],
             name.pop();
         }
         text(ui, x, y, name_colour(row), &name);
-        let bar = [x, y + ROW_H - BAR_H - 1, r[2] - 2, y + ROW_H - 1];
+        let bar = [x, y + ROW_H - BAR_H - POWER_H - 1, r[2] - 2, y + ROW_H - 1];
         ui.solid(3, BAR_BACK, corners(bar));
-        let w = ((bar[2] - bar[0]) as f32 * row.hp as f32 / 255.0).round() as i32;
-        if w > 0 {
-            vui.stretch_blit_ex(ui, 7, [bar[0], bar[1]], [w, BAR_H], 3, 1.0);
+        // health in the HUD's own gauge (7), and under it power in its blue (9)
+        for (v, image, top, h) in [(row.hp, 7, bar[1], BAR_H), (row.power, 9, bar[1] + BAR_H, POWER_H)] {
+            let w = ((bar[2] - bar[0]) as f32 * v as f32 / 255.0).round() as i32;
+            if w > 0 {
+                vui.stretch_blit_ex(ui, image, [bar[0], top], [w, h], 3, 1.0);
+            }
         }
         hits.push((r, row.id));
     }
@@ -186,11 +196,13 @@ mod tests {
         let f = |n| Fit::of(n, false);
         assert_eq!((f(5).columns, f(5).rows, f(5).more), (1, 5, 0));
         assert_eq!((f(6).columns, f(6).rows), (1, 6));
-        assert_eq!((f(13).columns, f(13).rows), (1, 13));
-        assert_eq!((f(14).columns, f(14).rows), (2, 7), "evened out");
+        // a row 18 high (the name, health and power): 12 to a column
+        assert_eq!((f(12).columns, f(12).rows), (1, 12));
+        assert_eq!((f(13).columns, f(13).rows), (2, 7), "evened out");
+        assert_eq!((f(14).columns, f(14).rows), (2, 7));
         assert_eq!((f(20).columns, f(20).rows, f(20).shown), (2, 10, 20));
-        assert_eq!((f(52).columns, f(52).rows, f(52).more), (4, 13, 0));
-        assert_eq!((f(53).columns, f(53).rows, f(53).shown, f(53).more), (4, 13, 52, 1), "past that the wheel");
+        assert_eq!((f(48).columns, f(48).rows, f(48).more), (4, 12, 0));
+        assert_eq!((f(49).columns, f(49).rows, f(49).shown, f(49).more), (4, 12, 48, 1), "past that the wheel");
         // the pet's bar takes rows
         assert_eq!((Fit::of(12, true).columns, Fit::of(12, true).rows), (2, 6));
     }
@@ -208,6 +220,6 @@ mod tests {
     #[test]
     fn the_head_says_how_many_and_which() {
         assert_eq!(head(&Fit::of(6, false), 0), "Raid (6)");
-        assert_eq!(head(&Fit::of(60, false), 3), "Raid (60) 4-55");
+        assert_eq!(head(&Fit::of(60, false), 3), "Raid (60) 4-51");
     }
 }

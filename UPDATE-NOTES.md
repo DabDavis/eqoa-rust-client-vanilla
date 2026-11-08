@@ -6,6 +6,15 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · /bug opens the bug report, raid frames show power, unmemorize one ability
+- Typing /bug in chat now opens the bug report form (as F3 does), already set on Bug Report. Anything you
+  type after /bug is put in the form's text, so you can finish it there and send it. On a server without
+  bug reports, /bug goes to the server as before.
+- The raid list shows each member's power as a thin blue bar under their health. Each row is a little taller,
+  so a column holds 12 members (13 before) before the list starts another.
+- The spell book's menu has Unmemorize: it takes the selected ability off its bar slot and leaves the rest,
+  where Unmemorize All clears them all.
+
 ## 2026-11-07 · Your combat record
 - On a server that keeps one, the start menu's Character has a new entry, Combat Record: your PvP kills,
   deaths and assists, your kill streak and your best, the highest-level player you have killed, your last

@@ -423,6 +423,20 @@ pub fn draw_icon(vui: &Vui, r: &mut dyn Raster, icon: i32, pos: [i32; 2], mode: 
     }
 }
 
+/// Vanilla's own words for a fixed popup's rows, by an id below 0, where the
+/// game's WORDS has no row for them: the spell book's Unmemorize of one ability
+/// (the user, 2026-11-08: "lets allow players unmemorize one spell not just
+/// all"; the game has only 1800, Unmemorize All).
+pub const WORD_UNMEMORIZE: i32 = -2;
+
+/// A popup row's text: vanilla's own word (`WORD_UNMEMORIZE`) or the game's.
+fn row_word(vui: &Vui, word: i32) -> String {
+    match word {
+        WORD_UNMEMORIZE => "Unmemorize".to_string(),
+        _ => vui.words.get(word as u16 as i32, vui.language).to_string(),
+    }
+}
+
 /// `VIWndMiniMenu`: kind 0 (`DrawPlain`) grows its frame out of its
 /// corner; kind 1 (`DrawTitled`) has a title over its rows and the Select and
 /// Exit legend under them. Its rows are a CLIENT menu's, or a fixed table
@@ -589,7 +603,7 @@ impl MiniMenu {
         self.list.time = now;
         let mut size = [0, 0];
         for it in &self.list.items {
-            size[0] = size[0].max(vui.string_width(r, &wide(vui.words.get(it.word as u16 as i32, vui.language))));
+            size[0] = size[0].max(vui.string_width(r, &wide(&row_word(vui, it.word))));
         }
         size[0] += 75;
         size[1] = self.list.items.len() as i32 * 19 + 25;
@@ -619,7 +633,7 @@ impl MiniMenu {
                     let t = vui.entry(89);
                     vui.blit_ex(r, 89, [pos[0] - 25, pos[1] - t.uv1[1] / 2], 3, self.list.alpha.min(self.list.x7c), 0);
                 }
-                vui.draw_centered_string_ex(r, &wide(vui.words.get(it.word, vui.language)), pos[0], pos[1], if lit { yellow } else { white }, 1, true);
+                vui.draw_centered_string_ex(r, &wide(&row_word(vui, it.word)), pos[0], pos[1], if lit { yellow } else { white }, 1, true);
                 pos[1] += 19;
             }
         }

@@ -25,12 +25,14 @@ pub struct SupportWindows {
     opening: Option<i32>,
     /// F3's opening (`open_bug_report`): the request form set on Bug Report
     bug_preset: bool,
+    /// `/bug`'s words (`open_bug_report_typed`), put in the form's text as it opens
+    bug_text: Option<Vec<u16>>,
     keys: Vec<(i32, bool)>,
 }
 
 impl Default for SupportWindows {
     fn default() -> Self {
-        SupportWindows { cs: CsClient::default(), request: Request::new(false), inbox: Inbox::default(), script: (0, false), smith: Blacksmith::default(), smith_id: 0, opening: None, bug_preset: false, keys: Vec::new() }
+        SupportWindows { cs: CsClient::default(), request: Request::new(false), inbox: Inbox::default(), script: (0, false), smith: Blacksmith::default(), smith_id: 0, opening: None, bug_preset: false, bug_text: None, keys: Vec::new() }
     }
 }
 
@@ -93,6 +95,23 @@ impl Play {
         }
         self.open_support(31);
         self.support.bug_preset = true;
+        self.support.bug_text = None;
+        true
+    }
+
+    /// `/bug` typed (the user, 2026-11-08: "lets make /bug pop up the f3 bug
+    /// report menu"): F3's form, from the chat line (mode 2) as from the world,
+    /// with the words typed after it already in its text. False (nothing done)
+    /// on a server that did not offer bug reports, or with another window up:
+    /// the line then goes as typed, to a server's own /bug.
+    pub fn open_bug_report_typed(&mut self, words: &str) -> bool {
+        if !self.session.bug_reports || !matches!(self.mode, 0 | 2) {
+            return false;
+        }
+        self.open_support(31);
+        self.support.bug_preset = true;
+        let w: Vec<u16> = words.trim().encode_utf16().take(512).collect();
+        self.support.bug_text = (!w.is_empty()).then_some(w);
         true
     }
 
@@ -183,6 +202,7 @@ impl Play {
                     s.request.focus(vui, r);
                     if std::mem::take(&mut s.bug_preset) {
                         s.request.preset(crate::cs::BUG_REPORT);
+                        s.request.text = s.bug_text.take().unwrap_or_default();
                     }
                 }
                 32 => s.inbox.open(vui, r, &mut s.cs, now),
@@ -314,10 +334,21 @@ mod tests {
         let note = String::from_utf8(m[i][10..].to_vec()).unwrap();
         assert!(note.starts_with("build: ") && note.contains("\nplace: world "), "{note}");
 
+        // a typed /bug opens the form, its words in it (the user, 2026-11-08:
+        // "lets make /bug pop up the f3 bug report menu"), from the chat line
+        // too; nothing goes until it is filed (the note first, as F3's)
+        p.mode = 2;
         p.chat_line("/bug the gate is shut");
-        let m = sent(&mut p);
-        assert_eq!(m.len(), 2, "{m:?}");
-        assert_eq!((&m[0][..2], &m[1][..2]), (&[0x0F, 0x7E][..], &[0x0B, 0x00][..]), "the note, then the line");
+        assert!(sent(&mut p).is_empty(), "nothing goes before the form is filed");
+        assert_eq!((p.mode, p.support.bug_preset, p.support.bug_text.clone()), (31, true, Some("the gate is shut".encode_utf16().collect())));
+        p.run_support(&vui, &mut r);
+        assert_eq!(String::from_utf16_lossy(&p.support.request.text), "the gate is shut");
+        assert!(p.support.bug_text.is_none());
+        // F3 after it: an empty form
+        p.mode = 0;
+        assert!(p.open_bug_report());
+        assert!(p.support.bug_text.is_none());
+        p.mode = 0;
         p.chat_line("hello there");
         assert!(sent(&mut p).iter().all(|d| d[..2] != [0x0F, 0x7E]), "plain chat: no note");
     }
