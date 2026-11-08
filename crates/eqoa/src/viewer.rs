@@ -160,16 +160,17 @@ impl Source {
     /// a streamer for the zones to read and draw.
     pub fn walker(&self, lib: &mut Library, s: &Scene) -> Option<(Walker, esf::Model, Streamer)> {
         let Source::Walk { file, character, spawn: given, .. } = self else { return None };
-        // `EQOA_SPAWN=x,z[,heading[,y]]` picks the spot; else the server's
-        // place, else near the middle. With a height the character stands
-        // there as `Respawn` places it (on the floor within 3 of it, not the
-        // first floor a probe from above meets: Neriak's plaza is under a
-        // roof).
+        // `EQOA_SPAWN=x,z[,heading[,y]]` (in a page, `?spawn=`) picks the
+        // spot; else the server's place, else near the middle. With a height
+        // the character stands there as `Respawn` places it (on the floor
+        // within 3 of it, not the first floor a probe from above meets:
+        // Neriak's plaza is under a roof).
         let c = (s.bounds.0 + s.bounds.1) * 0.5;
-        let spawn: Vec<f32> = std::env::var("EQOA_SPAWN")
-            .ok()
-            .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
-            .unwrap_or_default();
+        #[cfg(target_arch = "wasm32")]
+        let spawn = crate::web::page_value("spawn");
+        #[cfg(not(target_arch = "wasm32"))]
+        let spawn = std::env::var("EQOA_SPAWN").ok();
+        let spawn: Vec<f32> = spawn.map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default();
         let spawn = match (spawn.as_slice(), given) {
             ([x, z], _) => Spawn::ground(*x, *z, 0.0),
             ([x, z, h], _) => Spawn::ground(*x, *z, *h),
