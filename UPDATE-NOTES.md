@@ -6,6 +6,10 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · Scroll a long spell description
+- In the spell book, R1 and R2 scroll a description too long for its box, a line at a time (R1 up, R2
+  down), as the live game did. It goes back to the top when you pick another ability.
+
 ## 2026-11-08 · /bug opens the bug report, raid frames show power, unmemorize one ability
 - Typing /bug in chat now opens the bug report form (as F3 does), already set on Bug Report. Anything you
   type after /bug is put in the form's text, so you can finish it there and send it. On a server without
