@@ -157,6 +157,7 @@ impl Stage {
             point: None,
             clear: glam::Vec3::ZERO,
             sky_view_proj: None,
+            lights: None,
         };
         // the fog and the sky's colour as the terrain profiles under the eye
         // blend them, where the arena has a profile grid

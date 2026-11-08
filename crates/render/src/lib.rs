@@ -16,6 +16,7 @@ pub mod billboard;
 pub mod curve;
 pub mod fans;
 pub mod fog16;
+pub mod lit;
 pub mod overlay;
 pub mod scale;
 pub mod shadow;
@@ -26,6 +27,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
+pub use lit::{Lights, MAX_LIGHTS, PointLight};
 pub use wgpu;
 
 /// Which winding is front, in esf's strip-to-list order. Settled by looking.
@@ -244,6 +246,9 @@ pub struct GpuModel {
     /// The levels' distances (`esf::Model::lod_dists`), for whoever sets
     /// `level`; empty for a model with no levels.
     pub lod_dists: Vec<f32>,
+    /// Its instances' vertex colours are a zone's baked lighting (colour
+    /// buffers): Dynamic Lighting adds no fixed light on it (`lit`).
+    pub baked: bool,
 }
 
 impl GpuModel {
@@ -291,6 +296,9 @@ struct Run {
     bundles: [Option<wgpu::RenderBundle>; 2],
     /// models with anything in either pass, and each pass's draw calls
     drawn: (u32, [u32; 2]),
+    /// The same through Dynamic Lighting's pipelines (`lit`), recorded while
+    /// it is on (`Renderer::relight`); none until then.
+    lit: Option<[Option<wgpu::RenderBundle>; 2]>,
 }
 
 /// One model of a group: its first instance and their count, and each
@@ -299,6 +307,8 @@ struct Member {
     instance0: u32,
     instances: u32,
     batches: Vec<(std::ops::Range<u32>, Vec<Material>)>,
+    /// `GroupPart::baked`
+    baked: bool,
 }
 
 /// A layer pass whose bind group (texture, sampler, uniform) every layer
@@ -318,6 +328,8 @@ pub struct GroupPart<'a> {
     /// Its instances move after the upload (`set_group_instances`: a zone's
     /// animated props), so its bounds are taken loosely.
     pub moves: bool,
+    /// Its vertex colours are baked lighting (`GpuModel::baked`).
+    pub baked: bool,
 }
 
 /// How far past its own size a moving part's bounds reach from where its
@@ -417,6 +429,12 @@ pub struct Renderer {
     sky_frame_bg: wgpu::BindGroup,
     material_layout: wgpu::BindGroupLayout,
     palette_layout: wgpu::BindGroupLayout,
+    /// The frame uniform's layout, which Dynamic Lighting's pipelines share.
+    frame_layout: wgpu::BindGroupLayout,
+    /// Dynamic Lighting's pipelines and lights (`lit`), made when it is first
+    /// turned on, and whether it is on.
+    lit: Option<lit::Lit>,
+    lit_on: bool,
     /// repeat, clamp, mirror.
     samplers: [wgpu::Sampler; 3],
     white: wgpu::TextureView,
@@ -494,6 +512,9 @@ pub struct View {
     pub clear: Vec3,
     /// The view with its translation zeroed, for `GpuModel::sky` models.
     pub sky_view_proj: Option<Mat4>,
+    /// Dynamic Lighting's point lights (`lit`): with them (and it on), the
+    /// models drawn lit per fragment; `None`, the PS2's way.
+    pub lights: Option<Lights>,
 }
 
 impl View {
@@ -509,6 +530,7 @@ impl View {
             point: None,
             clear: Vec3::new(0.18, 0.2, 0.24),
             sky_view_proj: None,
+            lights: None,
         }
     }
 }
@@ -525,6 +547,83 @@ pub(crate) fn blend_state(mode: usize) -> Option<wgpu::BlendState> {
         _ => return None,
     };
     Some(wgpu::BlendState { color, alpha: C { src_factor: Fa::Zero, dst_factor: Fa::One, operation: Op::Add } })
+}
+
+/// A model layer's pipeline for blend `mode` (`blend_state`; the sky's with
+/// no depth test or write), through `module`'s entry points `entries`
+/// (vertex, fragment): the PS2's (shader.wgsl's `vs_main`, `fs_main`) and
+/// Dynamic Lighting's (`lit`) are made alike, over the same vertices.
+pub(crate) fn model_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    entries: (&str, &str),
+    mode: usize,
+    sky: bool,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let blend = blend_state(mode);
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("layer"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module,
+            entry_point: Some(entries.0),
+            compilation_options: Default::default(),
+            buffers: &[
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32x4, 8 => Uint8x4, 9 => Uint8x4],
+                }),
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: 64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4],
+                }),
+                // the instance's static light (VIRaster::SetStaticLighting)
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: 16,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![10 => Float32x4],
+                }),
+            ],
+        },
+        // Strips are lists with the winding made consistent; the
+        // strip programs cull back faces (ADC), so this does too.
+        primitive: wgpu::PrimitiveState {
+            front_face: FRONT_FACE,
+            cull_mode: Some(wgpu::Face::Back),
+            ..Default::default()
+        },
+        // Opaque: depth tested and written. Blended: TEST's
+        // AFAIL = RGB_ONLY with a NEVER alpha test, i.e. colour
+        // only, no depth write.
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(blend.is_none() && !sky),
+            depth_compare: Some(if sky { wgpu::CompareFunction::Always } else { wgpu::CompareFunction::LessEqual }),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some(entries.1),
+            compilation_options: Default::default(),
+            // Colour only, opaque or not: nothing reads the
+            // target's alpha (no GS ALPHA setting the game uses
+            // takes the destination's), and it must stay the
+            // clear's 1. A page's WebGL2 canvas is composited
+            // with it (wgpu makes the context with alpha), and
+            // a picture of it came out with the colour
+            // of every alpha-tested edge wrapped round: a cyan
+            // fringe where red exceeded alpha.
+            targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::COLOR })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 impl Renderer {
@@ -565,70 +664,7 @@ impl Renderer {
             bind_group_layouts: &[Some(&frame_layout), Some(&material_layout), Some(&palette_layout)],
             immediate_size: 0,
         });
-        let make = |mode: usize, sky: bool| {
-                let blend = blend_state(mode);
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("layer"),
-                    layout: Some(&layout),
-                    vertex: wgpu::VertexState {
-                        module: &shader,
-                        entry_point: Some("vs_main"),
-                        compilation_options: Default::default(),
-                        buffers: &[
-                            Some(wgpu::VertexBufferLayout {
-                                array_stride: std::mem::size_of::<Vertex>() as u64,
-                                step_mode: wgpu::VertexStepMode::Vertex,
-                                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32x4, 8 => Uint8x4, 9 => Uint8x4],
-                            }),
-                            Some(wgpu::VertexBufferLayout {
-                                array_stride: 64,
-                                step_mode: wgpu::VertexStepMode::Instance,
-                                attributes: &wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4],
-                            }),
-                            // the instance's static light (VIRaster::SetStaticLighting)
-                            Some(wgpu::VertexBufferLayout {
-                                array_stride: 16,
-                                step_mode: wgpu::VertexStepMode::Instance,
-                                attributes: &wgpu::vertex_attr_array![10 => Float32x4],
-                            }),
-                        ],
-                    },
-                    // Strips are lists with the winding made consistent; the
-                    // strip programs cull back faces (ADC), so this does too.
-                    primitive: wgpu::PrimitiveState {
-                        front_face: FRONT_FACE,
-                        cull_mode: Some(wgpu::Face::Back),
-                        ..Default::default()
-                    },
-                    // Opaque: depth tested and written. Blended: TEST's
-                    // AFAIL = RGB_ONLY with a NEVER alpha test, i.e. colour
-                    // only, no depth write.
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        format: DEPTH_FORMAT,
-                        depth_write_enabled: Some(blend.is_none() && !sky),
-                        depth_compare: Some(if sky { wgpu::CompareFunction::Always } else { wgpu::CompareFunction::LessEqual }),
-                        stencil: Default::default(),
-                        bias: Default::default(),
-                    }),
-                    multisample: Default::default(),
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader,
-                        entry_point: Some("fs_main"),
-                        compilation_options: Default::default(),
-                        // Colour only, opaque or not: nothing reads the
-                        // target's alpha (no GS ALPHA setting the game uses
-                        // takes the destination's), and it must stay the
-                        // clear's 1. A page's WebGL2 canvas is composited
-                        // with it (wgpu makes the context with alpha), and
-                        // a picture of it came out with the colour
-                        // of every alpha-tested edge wrapped round: a cyan
-                        // fringe where red exceeded alpha.
-                        targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::COLOR })],
-                    }),
-                    multiview_mask: None,
-                    cache: None,
-                })
-        };
+        let make = |mode: usize, sky: bool| model_pipeline(device, &layout, &shader, ("vs_main", "fs_main"), mode, sky, format);
         let pipelines = (0..5).map(|m| make(m, false)).collect();
         let sky_pipelines = (0..5).map(|m| make(m, true)).collect();
         let frame_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -690,6 +726,9 @@ impl Renderer {
             sky_frame_bg,
             material_layout,
             palette_layout,
+            frame_layout,
+            lit: None,
+            lit_on: false,
             samplers,
             white,
             textures: Default::default(),
@@ -854,6 +893,7 @@ impl Renderer {
             passes_used: usize::MAX,
             level: Some(0),
             lod_dists: m.lod_dists.clone(),
+            baked: false,
         }
     }
 
@@ -1131,6 +1171,15 @@ impl Renderer {
                 }
             }
         }
+        // Dynamic Lighting: this view's lights, its models through the lit
+        // pipelines and its groups' runs through their lit bundles (`lit`)
+        let lit = match (view.lights.as_ref(), self.lit.as_ref()) {
+            (Some(l), Some(lit)) if self.lit_on => {
+                queue.write_buffer(&lit.buf, 0, bytemuck::bytes_of(&lit::LightsUniform::new(view.point, l, view.eye, view.view_proj)));
+                Some(lit)
+            }
+            _ => None,
+        };
         let planes = frustum(view.view_proj);
         let shown = |r: &&Run| r.bounds.is_some_and(|b| in_view(&planes, b));
         let (mut drawn_models, mut draws) = (0u32, 0u32);
@@ -1157,10 +1206,13 @@ impl Renderer {
                         }
                         if !bound {
                             pass.set_bind_group(0, &self.frame_bg, &[]);
+                            if let Some(l) = lit {
+                                pass.set_bind_group(3, &l.bg, &[]);
+                            }
                             bound = true;
                             current = usize::MAX;
                         }
-                        draws += self.encode_model(&mut pass, m, deferred, &mut current, 0..m.instance_count);
+                        draws += self.encode_model(&mut pass, m, deferred, &mut current, 0..m.instance_count, lit);
                     }
                     Draw::Instances(m, r) => {
                         if !Self::draws_anything(m) || r.is_empty() {
@@ -1168,14 +1220,21 @@ impl Renderer {
                         }
                         if !bound {
                             pass.set_bind_group(0, &self.frame_bg, &[]);
+                            if let Some(l) = lit {
+                                pass.set_bind_group(3, &l.bg, &[]);
+                            }
                             bound = true;
                             current = usize::MAX;
                         }
-                        draws += self.encode_model(&mut pass, m, deferred, &mut current, r.start..r.end.min(m.instance_count));
+                        draws += self.encode_model(&mut pass, m, deferred, &mut current, r.start..r.end.min(m.instance_count), lit);
                     }
                     Draw::Group(g) => {
                         for r in g.runs.iter().filter(shown) {
-                            if let Some(b) = &r.bundles[deferred as usize] {
+                            let bundles = match (lit, &r.lit) {
+                                (Some(_), Some(b)) => b,
+                                _ => &r.bundles,
+                            };
+                            if let Some(b) = &bundles[deferred as usize] {
                                 pass.execute_bundles([b]);
                                 bound = false;
                             }
@@ -1194,9 +1253,10 @@ impl Renderer {
     }
 
     /// One model's commands for one of the two passes, into a pass or a
-    /// bundle; `current` is the blend mode whose pipeline is set. Returns the
-    /// draw calls.
-    fn encode_model<'a, E: wgpu::util::RenderEncoder<'a>>(&'a self, e: &mut E, m: &'a GpuModel, deferred: bool, current: &mut usize, range: std::ops::Range<u32>) -> u32 {
+    /// bundle; `current` is the pipeline set (`pipeline_of`'s key), and with
+    /// `lit` Dynamic Lighting's. Returns the draw calls.
+    #[allow(clippy::too_many_arguments)]
+    fn encode_model<'a, E: wgpu::util::RenderEncoder<'a>>(&'a self, e: &mut E, m: &'a GpuModel, deferred: bool, current: &mut usize, range: std::ops::Range<u32>, lit: Option<&'a lit::Lit>) -> u32 {
         let in_pass = |passes: &[Pass], lod: Option<u8>| passes.first().is_some_and(|p| (p.blend != 0) == deferred) && level_drawn(lod, m.level);
         if !m.batches.iter().any(|(_, _, passes, lod)| in_pass(passes, *lod)) {
             return 0;
@@ -1212,9 +1272,10 @@ impl Renderer {
             }
             e.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             for p in passes.iter().take(m.passes_used) {
-                if p.blend != *current {
-                    e.set_pipeline(&self.pipelines[p.blend]);
-                    *current = p.blend;
+                let (key, pipeline) = self.pipeline_of(p.blend, m.baked, lit);
+                if key != *current {
+                    e.set_pipeline(pipeline);
+                    *current = key;
                 }
                 e.set_bind_group(1, Some(&p.bg), &[]);
                 e.draw_indexed(0..*count, 0, range.clone());
@@ -1300,7 +1361,7 @@ impl Renderer {
             write(&indices, first_index, 4, bytemuck::cast_slice(&part_indices));
             write(&instances, instance0, 64, bytemuck::cast_slice(p.instances));
             write(&statics, instance0, 16, bytemuck::cast_slice(&lights));
-            members.push(Member { instance0, instances: p.instances.len() as u32, batches });
+            members.push(Member { instance0, instances: p.instances.len() as u32, batches, baked: p.baked });
             base += verts.len() as u32;
             first_index += part_indices.len() as u32;
             instance0 += p.instances.len() as u32;
@@ -1310,32 +1371,85 @@ impl Renderer {
             let span = at..(at + RUN).min(parts.len());
             let bounds = parts[span.clone()].iter().filter_map(part_bounds).reduce(|(a, b), (c, d)| (a.min(c), b.max(d)));
             let drawn = g.members[span.clone()].iter().filter(|m| m.instances > 0 && !m.batches.is_empty()).count() as u32;
-            let mut run = Run { bounds, bundles: [None, None], drawn: (drawn, [0, 0]) };
-            for deferred in [false, true] {
-                let mut e = device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
-                    label: Some("group"),
-                    color_formats: &[Some(self.format)],
-                    depth_stencil: Some(wgpu::RenderBundleDepthStencil { format: DEPTH_FORMAT, depth_read_only: false, stencil_read_only: true }),
-                    sample_count: 1,
-                    multiview: None,
-                });
-                let n = self.encode_run(&mut e, &g, &g.members[span.clone()], deferred);
-                if n > 0 {
-                    run.bundles[deferred as usize] = Some(e.finish(&wgpu::RenderBundleDescriptor { label: Some("group") }));
-                }
-                run.drawn.1[deferred as usize] = n;
-            }
-            g.runs.push(run);
+            let (bundles, n) = self.record(device, &g, span.clone(), None);
+            // and through Dynamic Lighting's pipelines while it is on
+            let lit = self.lit.as_ref().filter(|_| self.lit_on).map(|l| self.record(device, &g, span.clone(), Some(l)).0);
+            g.runs.push(Run { bounds, bundles, drawn: (drawn, n), lit });
         }
         g
     }
 
+    /// The bundles of a group's members `span` for the two passes (none for
+    /// a pass they draw nothing in), and each pass's draw calls; with `lit`,
+    /// through Dynamic Lighting's pipelines.
+    fn record(&self, device: &wgpu::Device, g: &GpuGroup, span: std::ops::Range<usize>, lit: Option<&lit::Lit>) -> ([Option<wgpu::RenderBundle>; 2], [u32; 2]) {
+        let (mut bundles, mut drawn) = ([None, None], [0, 0]);
+        for deferred in [false, true] {
+            let mut e = device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
+                label: Some("group"),
+                color_formats: &[Some(self.format)],
+                depth_stencil: Some(wgpu::RenderBundleDepthStencil { format: DEPTH_FORMAT, depth_read_only: false, stencil_read_only: true }),
+                sample_count: 1,
+                multiview: None,
+            });
+            let n = self.encode_run(&mut e, g, &g.members[span.clone()], deferred, lit);
+            if n > 0 {
+                bundles[deferred as usize] = Some(e.finish(&wgpu::RenderBundleDescriptor { label: Some("group") }));
+            }
+            drawn[deferred as usize] = n;
+        }
+        (bundles, drawn)
+    }
+
+    /// Turns Dynamic Lighting on or off (`lit`): on, its pipelines made the
+    /// first time, a view's lights drawn, and a group uploaded from now on
+    /// recorded for it as well; the groups uploaded before need `relight`.
+    pub fn set_dynamic_lighting(&mut self, device: &wgpu::Device, on: bool) {
+        if on && self.lit.is_none() {
+            self.lit = Some(lit::Lit::new(device, [&self.frame_layout, &self.material_layout, &self.palette_layout], self.format));
+        }
+        self.lit_on = on;
+    }
+
+    /// Whether Dynamic Lighting is on (`set_dynamic_lighting`).
+    pub fn dynamic_lighting(&self) -> bool {
+        self.lit_on
+    }
+
+    /// Records a group's lit bundles where it has none, while Dynamic
+    /// Lighting is on (a group uploaded while it was off draws the PS2's way
+    /// until then).
+    pub fn relight(&self, device: &wgpu::Device, g: &mut GpuGroup) {
+        let Some(l) = self.lit.as_ref().filter(|_| self.lit_on) else { return };
+        for k in 0..g.runs.len() {
+            if g.runs[k].lit.is_none() {
+                let span = k * RUN..((k + 1) * RUN).min(g.members.len());
+                let (bundles, _) = self.record(device, g, span, Some(l));
+                g.runs[k].lit = Some(bundles);
+            }
+        }
+    }
+
+    /// The pipeline a layer pass of blend `blend` is drawn through, and its
+    /// key for a run of passes (a pipeline set once while the key stays):
+    /// the PS2's, or with `lit` Dynamic Lighting's, a baked instance's own.
+    fn pipeline_of<'a>(&'a self, blend: usize, baked: bool, lit: Option<&'a lit::Lit>) -> (usize, &'a wgpu::RenderPipeline) {
+        match lit {
+            None => (blend, &self.pipelines[blend]),
+            Some(l) => (8 + blend + 8 * baked as usize, &l.pipelines[baked as usize][blend]),
+        }
+    }
+
     /// The commands of some of a group's members for one of the two passes,
-    /// as `encode_model` issues a model's. Returns the draw calls.
-    fn encode_run<'a>(&'a self, e: &mut wgpu::RenderBundleEncoder<'a>, g: &'a GpuGroup, members: &'a [Member], deferred: bool) -> u32 {
+    /// as `encode_model` issues a model's (with `lit`, Dynamic Lighting's).
+    /// Returns the draw calls.
+    fn encode_run<'a>(&'a self, e: &mut wgpu::RenderBundleEncoder<'a>, g: &'a GpuGroup, members: &'a [Member], deferred: bool, lit: Option<&'a lit::Lit>) -> u32 {
         let in_pass = |passes: &[Material]| passes.first().is_some_and(|p| (p.blend != 0) == deferred);
         e.set_bind_group(0, &self.frame_bg, &[]);
         e.set_bind_group(2, &self.identity_palette, &[]);
+        if let Some(l) = lit {
+            e.set_bind_group(3, &l.bg, &[]);
+        }
         e.set_vertex_buffer(0, g.vertices.slice(..));
         e.set_index_buffer(g.indices.slice(..), wgpu::IndexFormat::Uint32);
         let mut current = usize::MAX;
@@ -1352,9 +1466,10 @@ impl Renderer {
                     continue;
                 }
                 for p in passes {
-                    if p.blend != current {
-                        e.set_pipeline(&self.pipelines[p.blend]);
-                        current = p.blend;
+                    let (key, pipeline) = self.pipeline_of(p.blend, m.baked, lit);
+                    if key != current {
+                        e.set_pipeline(pipeline);
+                        current = key;
                     }
                     e.set_bind_group(1, &p.bg, &[]);
                     e.draw_indexed(range.clone(), 0, 0..m.instances);

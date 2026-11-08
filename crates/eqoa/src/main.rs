@@ -115,6 +115,7 @@ mod faction;
 mod fishing;
 mod duel;
 mod duelwnd;
+mod lights;
 mod loading;
 mod lod;
 mod loot;

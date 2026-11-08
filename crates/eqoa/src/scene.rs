@@ -16,6 +16,10 @@ pub struct Scene {
     /// Each part's instances' static lights (`VIActor::m_p70`: the zone
     /// actor record's colour / 255; (0, 0, 0, 1) for terrain and models).
     pub statics: Vec<Vec<[f32; 4]>>,
+    /// Each part's vertex colours are a baked lighting's colour buffers (a
+    /// lit actor's own copy), which hold the scene's fixed lights: Dynamic
+    /// Lighting adds none of them on it (`render::lit`).
+    pub baked: Vec<bool>,
     /// HSprite placements held out of `parts` to be drawn animated: (sprite
     /// record, actor transform as the game builds it).
     pub hsprites: Vec<(Ref, vi::geom::Matrix44<vi::fpu::Ee>)>,
@@ -49,7 +53,7 @@ pub fn model(dict_id: i32, m: Model) -> Scene {
         if m.skinned { ", skinned" } else { "" }
     );
     let parts = vec![(m, vec![render::IDENTITY])];
-    Scene { bounds: bounds_of(&parts), parts, statics: vec![vec![NO_STATIC]], summary, hsprites: Vec::new() }
+    Scene { bounds: bounds_of(&parts), parts, statics: vec![vec![NO_STATIC]], baked: vec![false], summary, hsprites: Vec::new() }
 }
 
 /// A placement's transform as the game builds it (`VIScene::UpdateActor`:
@@ -110,6 +114,7 @@ fn build(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, animate: 
     }
     let terrain_parts = parts.len();
     let mut statics: Vec<Vec<[f32; 4]>> = vec![vec![NO_STATIC]; terrain_parts];
+    let mut baked = vec![false; terrain_parts];
     // the actors with each zone's baked lighting
     let actors: Vec<(esf::zone::Actor, Option<ColorBuffers>)> = list
         .iter()
@@ -160,6 +165,7 @@ fn build(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, animate: 
                     m.color = cols.iter().map(|c| c.map(|b| b as f32 / 255.0)).collect();
                     parts.push((m, vec![placement(a)]));
                     statics.push(vec![st]);
+                    baked.push(true);
                     lit_drawn += 1;
                     continue;
                 }
@@ -179,6 +185,7 @@ fn build(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, animate: 
                 Some(m) => {
                     parts.push((m, inst.iter().map(|i| i.0).collect()));
                     statics.push(inst.iter().map(|i| i.1).collect());
+                    baked.push(false);
                 }
                 None => *empty.entry(lib.file(r.file).node(r.node).ty).or_default() += inst.len(),
             },
@@ -192,7 +199,7 @@ fn build(lib: &Library, file: usize, list: &[esf::NodeId], name: &str, animate: 
         parts.len() - terrain_parts,
         if empty.is_empty() { "none".into() } else { empty.join(", ") },
     );
-    Scene { bounds: bounds_of(&parts), parts, statics, summary, hsprites }
+    Scene { bounds: bounds_of(&parts), parts, statics, baked, summary, hsprites }
 }
 
 /// Every drawable model in one file, by list position.
