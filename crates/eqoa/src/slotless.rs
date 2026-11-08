@@ -273,11 +273,10 @@ pub fn dress(lib: &Library, id: i32, model: &mut esf::Model, cs: &CSprite<Ee>, l
     if SHELLED.contains(&(id as u32))
         && let Some(shell) = shell_of(lib, id, cs, art)
     {
-        // the body's own triangles where it wears something are hidden: the
-        // fit lays them in that slot, and a skeleton's hips and finger bones
-        // reach out through a human's armour
+        // the body's own triangles under the armour are hidden (a skeleton's
+        // hips and finger bones reach out through a human's)
         if let Some(fit) = &fit {
-            hide(model, fit, &shell);
+            hide(lib, model, fit, &shell, art);
         }
         return put_on(model, &shell, &changes);
     }
@@ -285,10 +284,16 @@ pub fn dress(lib: &Library, id: i32, model: &mut esf::Model, cs: &CSprite<Ee>, l
     apply(model, &fit, &changes)
 }
 
-/// Takes out of `model`'s own batches its triangles the fit lays in a slot
-/// the shell puts armour in.
-fn hide(model: &mut esf::Model, fit: &Fit, shell: &Shell) {
-    let gone: std::collections::HashSet<([u32; 3], Option<u8>)> = (0..SLOTS).filter(|&i| !shell.tris[i].is_empty()).flat_map(|i| fit.tris[i].iter().map(|t| (t.v, t.lod))).collect();
+/// Takes out of `model`'s own batches its triangles under the shell's
+/// armour: those the fit lays in a slot the shell puts armour in, where the
+/// slot's art (`art`) is opaque; where a human would show its skin through
+/// the armour the body shows its own (a skeleton, its bones).
+fn hide(lib: &Library, model: &mut esf::Model, fit: &Fit, shell: &Shell, art: Art) {
+    let mut gone: std::collections::HashSet<([u32; 3], Option<u8>)> = std::collections::HashSet::new();
+    for i in (0..SLOTS).filter(|&i| !shell.tris[i].is_empty()) {
+        let alpha = art[i].and_then(|t| alpha_of(lib, t as i32));
+        gone.extend(fit.tris[i].iter().filter(|t| shows(&alpha, &t.uv)).map(|t| (t.v, t.lod)));
+    }
     if gone.is_empty() {
         return;
     }
@@ -622,14 +627,14 @@ enum Part {
 
 /// The four limbs: the arm whose hand holds the main item (NodeIDList slot
 /// 0), the other's (1), the leg of footstep node 5 and of 6.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Limb {
     Arm(u8),
     Leg(u8),
 }
 
 /// What a triangle is fitted within: the body, or one limb.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Group {
     Body,
     Limb(Limb),
@@ -654,7 +659,7 @@ impl Part {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Seg {
     Body,
     Limb(Limb, u8),
@@ -999,7 +1004,9 @@ fn weight_group(model: &esf::Model, rig: &Rig, t: [usize; 3]) -> Option<Group> {
         }
     }
     let off = by.get(&None).copied().unwrap_or(0);
-    let (_, g, w) = by.into_iter().filter_map(|(g, w)| g.map(|g| (matches!(g, Group::Body), g, w))).max_by_key(|&(body, _, w)| (w, body))?;
+    // the heaviest, the body on a tie, else the first group in order (not
+    // the map's order, which differs from run to run)
+    let (_, g, w) = by.into_iter().filter_map(|(g, w)| g.map(|g| (matches!(g, Group::Body), g, w))).max_by_key(|&(body, g, w)| (w, body, std::cmp::Reverse(g)))?;
     (w > off).then_some(g)
 }
 
@@ -1200,7 +1207,7 @@ impl Carried {
             let p = pos(model, v);
             let s = part_of(model, &rig, v).seg().filter(|s| s.group() == g).or_else(|| {
                 let d = |s: &Seg| frames.get(s).map_or(f32::MAX, |f| seg_distance(f, p));
-                rig.segs.keys().copied().filter(|s| s.group() == g).min_by(|a, b| d(a).total_cmp(&d(b)))
+                rig.segs.keys().copied().filter(|s| s.group() == g).min_by(|a, b| d(a).total_cmp(&d(b)).then(a.cmp(b)))
             })?;
             Some(r.frames.get(&s)?.world(frames.get(&s)?.local(p)))
         };
@@ -1225,7 +1232,11 @@ impl Carried {
 /// and feet a knee-length robe leaves out, or the skirt.
 fn fit(r: &Reference, c: &Carried, alpha: &[Option<Rc<Alpha>>; SLOTS], robed: bool) -> Fit {
     let shown: HashMap<Group, Vec<&Target>> = r.targets.iter().map(|(&g, ts)| (g, ts.iter().filter(|t| t.skin || shows(&alpha[t.slot], &t.uv)).collect())).collect();
-    let skirt: Vec<&Target> = if robed { r.targets.values().flatten().filter(|t| t.slot == 3 && !t.skin && shows(&alpha[3], &t.uv)).collect() } else { Vec::new() };
+    // (the groups in order: which of two targets at one distance is nearest
+    // goes by their order)
+    let mut groups: Vec<&Group> = r.targets.keys().collect();
+    groups.sort();
+    let skirt: Vec<&Target> = if robed { groups.iter().flat_map(|g| &r.targets[g]).filter(|t| t.slot == 3 && !t.skin && shows(&alpha[3], &t.uv)).collect() } else { Vec::new() };
     let hem = hem(&skirt);
     let mid = |t: &Target| (t.p[0] + t.p[1] + t.p[2]) / 3.0;
     // under the hem, per leg: what shows there, and the skirt
@@ -1887,6 +1898,36 @@ mod tests {
         assert_eq!(k.pos[..km.pos.len()], km.pos[..], "painted on its own vertices");
         assert!(k.batches[km.batches.len()..].iter().flat_map(|b| &b.indices).all(|&v| (v as usize) >= km.pos.len()));
         assert!(k.batches[..km.batches.len()].iter().zip(&km.batches).all(|(a, b)| a.indices == b.indices), "none of its own hidden");
+    }
+
+    /// A fit made anew comes out the same every time: its ties (a corner as
+    /// near two segments, a triangle as heavy on two limbs) go by a fixed
+    /// order, never a hash map's, which differs from map to map (the fairy's
+    /// came out two ways, run to run).
+    #[test]
+    fn a_fit_is_the_same_every_time() {
+        let Some(lib) = disc() else { return };
+        let t = Tables::retail();
+        let has = |id: u32| lib.surface(id as i32).is_some();
+        for (id, look) in [(NINE[3], Look { armor: [4; 6], robe: -1, ..Default::default() }), (NINE[3], Look { armor: [3; 6], robe: 1, ..Default::default() }), (NINE[0], Look { armor: [2; 6], robe: -1, ..Default::default() })] {
+            let id = id as i32;
+            let r = lib.lookup(id).unwrap();
+            let model = lib.build_model(r).unwrap();
+            let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+            let changes = vi::cust::apply_look_slots(&slots(), cs.race, cs.sex, &look, false, has, &t);
+            let art = worn(&changes).map(|(t, _)| t);
+            let robed = look.robe >= 0;
+            let anew = || {
+                REFS.with(|c| c.borrow_mut().clear());
+                CARRIED.with(|c| c.borrow_mut().clear());
+                FITS.with(|c| c.borrow_mut().clear());
+                fit_of(&lib, id, &model, &cs, art, robed).expect("a fit")
+            };
+            let first = anew();
+            for _ in 0..12 {
+                assert_eq!(anew().tris, first.tris, "{id:#010x} in {look:?}");
+            }
+        }
     }
 
     trait ConcatSets {
