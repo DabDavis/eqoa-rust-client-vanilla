@@ -250,6 +250,9 @@ pub struct GpuModel {
     /// Its instances' vertex colours are a zone's baked lighting (colour
     /// buffers): Dynamic Lighting adds no fixed light on it (`lit`).
     pub baked: bool,
+    /// The world box its instances cover as last set (`set_instances`), for
+    /// Sun Shadows' casters (`sunshadow::world_box`).
+    world: std::cell::Cell<Option<(Vec3, Vec3)>>,
 }
 
 impl GpuModel {
@@ -282,6 +285,8 @@ pub struct GpuGroup {
     statics: wgpu::Buffer,
     members: Vec<Member>,
     runs: Vec<Run>,
+    /// Its casters for Sun Shadows (`sunshadow`), recorded while they are on.
+    sun: Option<sunshadow::GroupSun>,
 }
 
 /// Members a run of a group.
@@ -300,9 +305,9 @@ struct Run {
     /// The same through Dynamic Lighting's pipelines (`lit`), recorded while
     /// it is on (`Renderer::relight`); none until then.
     lit: Option<[Option<wgpu::RenderBundle>; 2]>,
-    /// The same with Sun Shadows, and the run into each of their cascades
-    /// (`sunshadow`), recorded while they are on; none until then.
-    sun: Option<sunshadow::RunSun>,
+    /// The same through Sun Shadows' pipelines (`sunshadow`), recorded while
+    /// they are on; none until then.
+    sun: Option<[Option<wgpu::RenderBundle>; 2]>,
 }
 
 /// One model of a group: its first instance and their count, and each
@@ -313,6 +318,9 @@ struct Member {
     batches: Vec<(std::ops::Range<u32>, Vec<Material>)>,
     /// `GroupPart::baked`
     baked: bool,
+    /// What it can cover in the world (`part_bounds`), for Sun Shadows'
+    /// casters, which draw the members near one another together.
+    bounds: Option<(Vec3, Vec3)>,
 }
 
 /// A layer pass whose bind group (texture, sampler, uniform) every layer
@@ -904,6 +912,7 @@ impl Renderer {
             level: Some(0),
             lod_dists: m.lod_dists.clone(),
             baked: false,
+            world: std::cell::Cell::new(sunshadow::world_box((lo, hi), m.skinned, instances)),
         }
     }
 
@@ -1050,6 +1059,7 @@ impl Renderer {
     pub fn set_instances(&self, queue: &wgpu::Queue, m: &GpuModel, instances: &[[[f32; 4]; 4]]) {
         let n = instances.len().min(m.instance_count as usize);
         queue.write_buffer(&m.instances, 0, bytemuck::cast_slice(&instances[..n]));
+        m.world.set(sunshadow::world_box(m.bounds, m.skinned, &instances[..n]));
     }
 
     pub fn draw(
@@ -1248,7 +1258,7 @@ impl Renderer {
                     Draw::Group(g) => {
                         for r in g.runs.iter().filter(shown) {
                             let bundles = match (lit, sun, &r.sun, &r.lit) {
-                                (Some(_), Some(_), Some(s), _) => &s.lit,
+                                (Some(_), Some(_), Some(b), _) => b,
                                 (Some(_), _, _, Some(b)) => b,
                                 _ => &r.bundles,
                             };
@@ -1380,12 +1390,12 @@ impl Renderer {
             write(&indices, first_index, 4, bytemuck::cast_slice(&part_indices));
             write(&instances, instance0, 64, bytemuck::cast_slice(p.instances));
             write(&statics, instance0, 16, bytemuck::cast_slice(&lights));
-            members.push(Member { instance0, instances: p.instances.len() as u32, batches, baked: p.baked });
+            members.push(Member { instance0, instances: p.instances.len() as u32, batches, baked: p.baked, bounds: part_bounds(p) });
             base += verts.len() as u32;
             first_index += part_indices.len() as u32;
             instance0 += p.instances.len() as u32;
         }
-        let mut g = GpuGroup { vertices, indices, instances, statics, members, runs: Vec::new() };
+        let mut g = GpuGroup { vertices, indices, instances, statics, members, runs: Vec::new(), sun: None };
         for at in (0..parts.len()).step_by(RUN) {
             let span = at..(at + RUN).min(parts.len());
             let bounds = parts[span.clone()].iter().filter_map(part_bounds).reduce(|(a, b), (c, d)| (a.min(c), b.max(d)));
@@ -1394,9 +1404,11 @@ impl Renderer {
             // and through Dynamic Lighting's pipelines while it is on
             let lit = self.lit.as_ref().filter(|_| self.lit_on).map(|l| self.record(device, &g, span.clone(), Some(l), None).0);
             // and Sun Shadows' while they are on
-            let sun = self.sun_drawn().map(|(l, s)| s.record(self, device, &g, span.clone(), self.record(device, &g, span.clone(), Some(l), Some(s)).0));
+            let sun = self.sun_drawn().map(|(l, s)| self.record(device, &g, span.clone(), Some(l), Some(s)).0);
             g.runs.push(Run { bounds, bundles, drawn: (drawn, n), lit, sun });
         }
+        // and its casters
+        g.sun = self.sun_drawn().map(|(_, s)| s.casters(self, device, &g));
         g
     }
 
@@ -1448,6 +1460,13 @@ impl Renderer {
         self.sun_on
     }
 
+    /// What the last frame drew into Sun Shadows' cascades, all four: the
+    /// casters' bundles executed and the draw calls; `None` before they were
+    /// first on.
+    pub fn sun_shadow_drawn(&self) -> Option<(u32, u32)> {
+        self.sun.as_ref().map(|s| s.drawn.get())
+    }
+
     /// The sun's map and pipelines, the first time Sun Shadows and Dynamic
     /// Lighting are both on.
     fn make_sun(&mut self, device: &wgpu::Device) {
@@ -1483,9 +1502,11 @@ impl Renderer {
             }
             // and Sun Shadows' while they are on
             if let Some(s) = sun.filter(|_| g.runs[k].sun.is_none()) {
-                let lit = self.record(device, g, span.clone(), Some(l), Some(s)).0;
-                g.runs[k].sun = Some(s.record(self, device, g, span, lit));
+                g.runs[k].sun = Some(self.record(device, g, span, Some(l), Some(s)).0);
             }
+        }
+        if let Some(s) = sun.filter(|_| g.sun.is_none()) {
+            g.sun = Some(s.casters(self, device, g));
         }
     }
 

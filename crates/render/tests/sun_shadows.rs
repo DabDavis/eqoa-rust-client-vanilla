@@ -291,6 +291,29 @@ fn a_ceiling_casts_and_an_underside_does_not() {
     assert!(close(red(&px, pixel(3.0, 0.0)), 0.1), "and the pair's shadow on the floor: {}", red(&px, pixel(3.0, 0.0)));
 }
 
+/// A group's casters go by where they are: forty boxes a part each, 50
+/// apart along x, drawn into a cascade only where its box reaches them
+/// (the near cascades a box or two, the last the boxes within its reach
+/// and its 500 upwind), where drawn by the group's runs (32 members, in
+/// order) every cascade drew every box; the box by the camera still casts.
+#[test]
+fn a_cascade_draws_the_casters_it_reaches() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    let bx = cube(Vec3::new(0.0, 3.0, 0.0), 1.0, layer(0, 0));
+    let at: Vec<[[f32; 4]; 4]> = (0..40).map(|k| Mat4::from_translation(Vec3::new(-1000.0 + 50.0 * k as f32, 0.0, 0.0)).to_cols_array_2d()).collect();
+    let parts: Vec<GroupPart> = at.iter().map(|m| GroupPart { model: &bx, instances: std::slice::from_ref(m), statics: &[], moves: false, baked: false }).collect();
+    let mut r = renderer(&g, true);
+    let f = r.upload(&g.device, &g.queue, &floor(HALF, 1.0), &[render::IDENTITY], &none);
+    let grp = r.upload_group(&g.device, &g.queue, &parts, &none);
+    let px = shot(&g, &mut r, &view(Vec3::ZERO, SUN45), &[Draw::Model(&f), Draw::Group(&grp)]);
+    assert!(close(red(&px, pixel(SHADE.0, SHADE.1)), 0.1), "the box at the camera casts: {}", red(&px, pixel(SHADE.0, SHADE.1)));
+    let (_, draws) = r.sun_shadow_drawn().expect("drawn");
+    // the floor once a cascade, and the boxes each cascade reaches
+    assert!(draws < 40, "{draws} draws into the cascades, of 160 by run");
+    assert!(draws > 4 + 4, "and the boxes near enough drawn: {draws}");
+}
+
 /// The floor's baked visibility (vertex alpha 0.5) stays the upper bound:
 /// half the sun in the open, none in the shadow (the lesser of the two).
 #[test]

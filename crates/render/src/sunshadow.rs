@@ -282,11 +282,46 @@ fn vertex_buffers() -> [Option<wgpu::VertexBufferLayout<'static>>; 3] {
 /// `suncast.wgsl`.
 const CAST_WGSL: &str = concat!(include_str!("shader.wgsl"), "\n", include_str!("suncast.wgsl"));
 
-/// A group's run for Sun Shadows: its two passes through the receivers'
-/// pipelines, and its opaque layers into each cascade.
-pub(crate) struct RunSun {
-    pub(crate) lit: [Option<wgpu::RenderBundle>; 2],
-    casters: Vec<Option<wgpu::RenderBundle>>,
+/// A group's casters for Sun Shadows, its members in clusters of those near
+/// one another, each cluster's box and its opaque layers into each cascade.
+/// The group's runs keep its drawing order (`upload_group`), which scatters a
+/// run's members over the zone (its sprites' placements go together): by
+/// run, Freeport's cascades drew three times the world's draws; by cluster,
+/// a cascade draws what its box reaches.
+pub(crate) struct GroupSun {
+    clusters: Vec<Cluster>,
+}
+
+struct Cluster {
+    bounds: (Vec3, Vec3),
+    bundles: Vec<Option<wgpu::RenderBundle>>,
+    /// draw calls a cascade's bundle holds
+    draws: u32,
+}
+
+/// A cluster's cell, across the ground.
+const CELL: f32 = 48.0;
+/// A member wider than this (a sprite placed all over the zone, the
+/// terrain) goes with the other wide ones, in their order.
+const WIDE: f32 = 96.0;
+/// Members a cluster holds at most.
+const CLUSTER_MOST: usize = 48;
+
+/// The world box `instances` (column-major) put a model's `bounds` in: each
+/// instance's eight corners, and a skinned model's box widened by its own
+/// size and a little more, where its palette may move its vertices (a
+/// character's limbs as it moves).
+pub(crate) fn world_box((lo, hi): (Vec3, Vec3), skinned: bool, instances: &[[[f32; 4]; 4]]) -> Option<(Vec3, Vec3)> {
+    if lo.x > hi.x {
+        return None;
+    }
+    let pad = if skinned { (hi - lo).max_element() + 2.0 } else { 0.0 };
+    instances.iter().fold(None, |acc, m| {
+        let m = Mat4::from_cols_array_2d(m);
+        let (a, b) = (0..8).map(|k| m.transform_point3(Vec3::new([lo.x, hi.x][k & 1], [lo.y, hi.y][k >> 1 & 1], [lo.z, hi.z][k >> 2]))).fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(a, b), w| (a.min(w), b.max(w)));
+        let (a, b) = (a - Vec3::splat(pad), b + Vec3::splat(pad));
+        Some(acc.map_or((a, b), |(p, q): (Vec3, Vec3)| (p.min(a), q.max(b))))
+    })
 }
 
 /// The map, its pipelines and uniforms, made the first time Sun Shadows are
@@ -308,8 +343,8 @@ pub(crate) struct Sun {
     /// Each cascade's layer, as the casters' depth attachment.
     layers: Vec<wgpu::TextureView>,
     size: u32,
-    /// The last frame's draws into the map, for `EQOA_PERF`: runs and draw
-    /// calls.
+    /// The last frame's draws into the map: the clusters' bundles executed
+    /// and the draw calls in all.
     pub(crate) drawn: std::cell::Cell<(u32, u32)>,
 }
 
@@ -447,44 +482,69 @@ impl Sun {
         Some(Sun { pipelines, bg, buf, caster, cascades, cascade_buf, stride, layers, size, drawn: Default::default() })
     }
 
-    /// The commands of a group's members `span` drawn into each cascade.
-    pub(crate) fn record(&self, r: &Renderer, device: &wgpu::Device, g: &GpuGroup, span: std::ops::Range<usize>, lit: [Option<wgpu::RenderBundle>; 2]) -> RunSun {
-        let casters = (0..CASCADES)
-            .map(|c| {
-                let mut e = device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
-                    label: Some("sun shadow casters"),
-                    color_formats: &[],
-                    depth_stencil: Some(wgpu::RenderBundleDepthStencil { format: DEPTH_FORMAT, depth_read_only: false, stencil_read_only: true }),
-                    sample_count: 1,
-                    multiview: None,
-                });
-                e.set_pipeline(&self.caster);
-                e.set_bind_group(0, &r.frame_bg, &[]);
-                e.set_bind_group(2, &r.identity_palette, &[]);
-                e.set_bind_group(3, &self.cascades[c], &[]);
-                e.set_vertex_buffer(0, g.vertices.slice(..));
-                e.set_index_buffer(g.indices.slice(..), wgpu::IndexFormat::Uint32);
+    /// A group's casters, in clusters: its members that draw an opaque
+    /// layer, by the cell their box's middle is in (the wide ones apart, in
+    /// order), at most `CLUSTER_MOST` a cluster, each recorded into every
+    /// cascade.
+    pub(crate) fn casters(&self, r: &Renderer, device: &wgpu::Device, g: &GpuGroup) -> GroupSun {
+        let opaque = |passes: &[crate::Material]| passes.first().is_some_and(|p| p.blend == 0);
+        let mut keyed: Vec<(i64, usize)> = Vec::new();
+        for (k, m) in g.members.iter().enumerate() {
+            if m.instances == 0 || !m.batches.iter().any(|(_, p)| opaque(p)) {
+                continue;
+            }
+            let Some((lo, hi)) = m.bounds else { continue };
+            let key = if (hi - lo).max_element() > WIDE {
+                i64::MAX
+            } else {
+                let c = (lo + hi) * 0.5;
+                ((c.x / CELL).floor() as i64) << 32 | ((c.z / CELL).floor() as i64 & 0xFFFF_FFFF)
+            };
+            keyed.push((key, k));
+        }
+        keyed.sort_unstable();
+        let mut clusters = Vec::new();
+        for same in keyed.chunk_by(|a, b| a.0 == b.0) {
+            for chunk in same.chunks(CLUSTER_MOST) {
+                let members: Vec<usize> = chunk.iter().map(|&(_, k)| k).collect();
+                let Some(bounds) = members.iter().filter_map(|&k| g.members[k].bounds).reduce(|(a, b), (c, d)| (a.min(c), b.max(d))) else { continue };
                 let mut draws = 0;
-                for m in g.members[span.clone()].iter().filter(|m| m.instances > 0) {
-                    let opaque = |passes: &[crate::Material]| passes.first().is_some_and(|p| p.blend == 0);
-                    if !m.batches.iter().any(|(_, passes)| opaque(passes)) {
-                        continue;
-                    }
-                    let (i0, n) = (m.instance0 as u64, m.instances as u64);
-                    e.set_vertex_buffer(1, g.instances.slice(i0 * 64..(i0 + n) * 64));
-                    e.set_vertex_buffer(2, g.statics.slice(i0 * 16..(i0 + n) * 16));
-                    for (range, passes) in m.batches.iter().filter(|(_, p)| opaque(p)) {
-                        for p in passes.iter().filter(|p| p.blend == 0) {
-                            e.set_bind_group(1, &p.bg, &[]);
-                            e.draw_indexed(range.clone(), 0, 0..m.instances);
-                            draws += 1;
+                let bundles = (0..CASCADES)
+                    .map(|c| {
+                        let mut e = device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
+                            label: Some("sun shadow casters"),
+                            color_formats: &[],
+                            depth_stencil: Some(wgpu::RenderBundleDepthStencil { format: DEPTH_FORMAT, depth_read_only: false, stencil_read_only: true }),
+                            sample_count: 1,
+                            multiview: None,
+                        });
+                        e.set_pipeline(&self.caster);
+                        e.set_bind_group(0, &r.frame_bg, &[]);
+                        e.set_bind_group(2, &r.identity_palette, &[]);
+                        e.set_bind_group(3, &self.cascades[c], &[]);
+                        e.set_vertex_buffer(0, g.vertices.slice(..));
+                        e.set_index_buffer(g.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        draws = 0;
+                        for &k in &members {
+                            let m = &g.members[k];
+                            let (i0, n) = (m.instance0 as u64, m.instances as u64);
+                            e.set_vertex_buffer(1, g.instances.slice(i0 * 64..(i0 + n) * 64));
+                            e.set_vertex_buffer(2, g.statics.slice(i0 * 16..(i0 + n) * 16));
+                            for (range, passes) in m.batches.iter().filter(|(_, p)| opaque(p)) {
+                                for p in passes.iter().filter(|p| p.blend == 0) {
+                                    e.set_bind_group(1, &p.bg, &[]);
+                                    e.draw_indexed(range.clone(), 0, 0..m.instances);
+                                    draws += 1;
+                                }
+                            }
                         }
-                    }
-                }
-                (draws > 0).then(|| e.finish(&wgpu::RenderBundleDescriptor { label: Some("sun shadow casters") }))
-            })
-            .collect();
-        RunSun { lit, casters }
+                        Some(e.finish(&wgpu::RenderBundleDescriptor { label: Some("sun shadow casters") }))
+                    })
+                    .collect();
+                clusters.push(Cluster { bounds, bundles, draws });
+            }
+        }
+        GroupSun { clusters }
     }
 
     /// Draws the frame's casters into the map for `view`, and sets the
@@ -523,15 +583,21 @@ impl Sun {
             for item in items {
                 match item {
                     Draw::Group(g) => {
-                        for run in g.runs.iter().filter(|run| run.bounds.is_some_and(|b| cascade.reaches(b))) {
-                            if let Some(b) = run.sun.as_ref().and_then(|s| s.casters[c].as_ref()) {
-                                pass.execute_bundles([b]);
-                                bound = false;
-                                runs += 1;
-                            }
+                        let reached = g.sun.iter().flat_map(|s| &s.clusters).filter(|k| cascade.reaches(k.bounds));
+                        let bundles: Vec<&wgpu::RenderBundle> = reached.filter_map(|k| {
+                            draws += k.draws;
+                            k.bundles[c].as_ref()
+                        }).collect();
+                        if !bundles.is_empty() {
+                            runs += bundles.len() as u32;
+                            pass.execute_bundles(bundles);
+                            bound = false;
                         }
                     }
                     Draw::Model(m) => {
+                        if m.world.get().is_some_and(|b| !cascade.reaches(b)) {
+                            continue;
+                        }
                         if !bound {
                             pass.set_pipeline(&self.caster);
                             pass.set_bind_group(0, &r.frame_bg, &[]);
