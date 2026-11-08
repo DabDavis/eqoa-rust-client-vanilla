@@ -143,7 +143,14 @@ or a browser (each described where it lives below):
   dye in its look, laid over its torso, arms, hands, legs and feet as they sit on a human: its triangles
   are carried onto HumanMale (HumanFemale for a female body) bone by bone, and take the slot and texture
   coordinates of what a human shows there in the same look. Heads, necks, wings and tails keep their
-  own look; any body with texture slots is dressed exactly as before (held to every CSprite on the disc).
+  own look, and so do the parts of a body's own model the user named (`slotless::KEPT`: the
+  fungusman's bag and strap, and its fungus, "the fungus that protrudes"); a triangle skinned to the
+  spine that runs along an arm to the elbow is the arm's (the fungusman's upper arms, which have no
+  vertex of their own, take the human's sleeve). The skeleton, whose bones are too thin to carry
+  armour, wears a human's armour itself (the user: "fit armor on skeletons like humans ... dont make
+  the armor model formfitting"): it is built on HumanMale's skeleton, so HumanMale's own surfaces for
+  each worn slot go on its bones, and its bones under them are hidden; where nothing is worn they stay
+  bare. Any body with texture slots is dressed exactly as before (held to every CSprite on the disc).
   Players' characters only (a creature whose name colour is a player's, 2, and the pregame's figures):
   NPCs keep the look the PS2 gave them (the user: "Players only").
   `eqoa dress <body> <out.png> [set=N robe=R dye=RRGGBB ...]` draws a body in a look from four sides.

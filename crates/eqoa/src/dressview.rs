@@ -126,9 +126,10 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     // (chest red, bracer yellow, gloves green, legs blue, boots magenta);
     // `parts`: the body's own triangles a colour by where they are fitted
     // (body red, arms yellow and orange, legs blue and cyan, head grey, off
-    // the spine light grey, wearing nothing black); `nodes`: each held item's
-    // node as it is drawn (its axes and place) and the item's bounds, printed
-    // (an item's length runs along its node's z)
+    // the spine light grey, wearing nothing black, a part the body keeps its
+    // own look on purple); `nodes`: each held item's node as it is drawn (its
+    // axes and place) and the item's bounds, printed (an item's length runs
+    // along its node's z)
     let debug = std::env::var("EQOA_DRESS_DEBUG").unwrap_or_default();
     let flat = |l: &mut esf::Layer, c: [u8; 3]| {
         l.texture = 0;
@@ -148,12 +149,12 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         }
     }
     if debug == "parts"
-        && let Some(groups) = crate::slotless::debug_groups(&mesh, &cs)
+        && let Some(groups) = crate::slotless::debug_groups(lib, model, &mesh, &cs)
     {
-        const C: [[u8; 3]; 8] = [[220, 40, 40], [230, 210, 40], [240, 130, 20], [50, 90, 230], [40, 200, 220], [130, 130, 130], [10, 10, 10], [190, 190, 190]];
+        const C: [[u8; 3]; 9] = [[220, 40, 40], [230, 210, 40], [240, 130, 20], [50, 90, 230], [40, 200, 220], [130, 130, 130], [10, 10, 10], [190, 190, 190], [150, 60, 200]];
         let mut split = Vec::new();
         for (b, g) in mesh.batches[..before].iter().zip(&groups) {
-            for code in 0..8u8 {
+            for code in 0..9u8 {
                 let indices: Vec<u32> = b.indices.chunks_exact(3).zip(g).filter(|(_, c)| **c == code).flat_map(|(t, _)| t.to_vec()).collect();
                 if !indices.is_empty() {
                     let mut layer = b.layers.first().cloned().unwrap_or(esf::Layer { flags: 0, texture: 0, wrap: 0, blend: 0, color: [255; 4], uv_transform: [0.0; 9], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] });
@@ -201,11 +202,11 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     let world = Mat4::from_cols_array_2d(&centre.to_cols());
     let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
     let mut framed = vec![true; mesh.pos.len()];
-    if let Some(groups) = crate::slotless::debug_groups(&mesh, &cs) {
+    if let Some(groups) = crate::slotless::debug_groups(lib, model, &mesh, &cs) {
         framed.fill(false);
         for (b, g) in mesh.batches.iter().zip(&groups) {
             for (t, &code) in b.indices.chunks_exact(3).zip(g) {
-                if code <= 5 {
+                if code <= 5 || code == 8 {
                     t.iter().for_each(|&v| framed[v as usize] = true);
                 }
             }
