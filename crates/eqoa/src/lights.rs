@@ -68,8 +68,8 @@ pub struct Fire {
 /// Its colour is the gradient's over a particle's life, each entry by its
 /// alpha, with the brightest channel at the light's strength. A flame (its
 /// particles rise) reaches farther and burns stronger the larger its
-/// particles are: a candle's 0.2 reaches 13 at 0.33, a torch's 0.36 17 at
-/// 0.39, a brazier's 0.65 24 at 0.51. A glow that does not rise (a street
+/// particles are: a candle's 0.2 reaches 16 at 0.45, a torch's 0.36 19 at
+/// 0.49, a brazier's 0.65 25 at 0.56. A glow that does not rise (a street
 /// lamp's halo, 1 to 2.6 across, Freeport's 0x3F67600E on its post) is a
 /// lamp's: 18 at 0.45, whatever its size. The light sits half the way a
 /// particle rises in its life above the nozzle.
@@ -94,7 +94,7 @@ pub fn fire(d: &Definition<Ee>) -> Option<Fire> {
     }
     let size = a.start_size.0.max(a.end_size.0).max(0.0);
     let rises = a.velocity.0 > 0.0;
-    let (range, strength) = if rises { ((8.0 + 25.0 * size).clamp(9.0, 25.0), (0.25 + 0.4 * size).clamp(0.3, 0.55)) } else { (18.0, 0.45) };
+    let (range, strength) = if rises { ((12.0 + 20.0 * size).clamp(14.0, 26.0), (0.4 + 0.25 * size).clamp(0.4, 0.6)) } else { (18.0, 0.45) };
     let rise = (0.5 * a.velocity.0.max(0.0) * a.lifespan.0.max(0.0)).min(1.0);
     Some(Fire { color: hue / peak * strength * peak.min(1.0), range, rise })
 }
@@ -345,18 +345,18 @@ mod tests {
     }
 
     /// A torch's flame (the disc's most placed: orange, 0.36): a warm light
-    /// reaching 17, the larger flames farther and stronger; a glow that does
+    /// reaching 19, the larger flames farther and stronger; a glow that does
     /// not rise a lamp's whatever its size; smoke and an alpha-blended
     /// emitter cast none.
     #[test]
     fn a_flame_casts_its_own_colour() {
         let torch = fire(&definition(1, [1.0, 0.68, 0.0, 0.5], 0.36)).expect("a torch's light");
-        assert!((torch.range - 17.0).abs() < 1e-3, "{torch:?}");
-        assert!((torch.color.x - 0.394).abs() < 1e-3 && (torch.color.y / torch.color.x - 0.68).abs() < 1e-3 && torch.color.z == 0.0, "its hue: {torch:?}");
+        assert!((torch.range - 19.2).abs() < 1e-3, "{torch:?}");
+        assert!((torch.color.x - 0.49).abs() < 1e-3 && (torch.color.y / torch.color.x - 0.68).abs() < 1e-3 && torch.color.z == 0.0, "its hue: {torch:?}");
         assert!((torch.rise - 0.4).abs() < 1e-3, "half its rise above the nozzle: {torch:?}");
         let candle = fire(&definition(1, [1.0, 0.68, 0.0, 0.5], 0.2)).unwrap();
         let brazier = fire(&definition(1, [1.0, 0.68, 0.0, 0.5], 0.65)).unwrap();
-        assert!(candle.range < torch.range && torch.range < brazier.range && brazier.range < 25.0);
+        assert!(candle.range < torch.range && torch.range < brazier.range && brazier.range < 26.0);
         assert!(candle.color.x < torch.color.x && torch.color.x < brazier.color.x);
         let mut halo = definition(1, [1.0, 0.92, 0.0, 0.5], 2.27);
         halo.attrs.velocity = F::ZERO;
