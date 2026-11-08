@@ -543,6 +543,15 @@ impl Streamer {
         }
     }
 
+    /// Every zone drawn now recorded for Dynamic Lighting where it is not
+    /// yet (`Renderer::relight`: turned on with zones in, which were
+    /// recorded the PS2's way alone).
+    pub fn relight(&mut self, r: &Renderer, device: &wgpu::Device) {
+        for l in self.zones.values_mut() {
+            r.relight(device, &mut l.group);
+        }
+    }
+
     /// Whether the zones round `at` are in and drawn: what the loading screen
     /// waits for (`loading.rs`; `VIScene::StreamFillCache` returns once its
     /// cache is filled there). See [`settled_round`].

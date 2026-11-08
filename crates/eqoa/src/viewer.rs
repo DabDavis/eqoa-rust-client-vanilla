@@ -338,6 +338,9 @@ pub fn shot_with(
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
     let mut renderer = Renderer::new(&device, &queue, render::TARGET_FORMAT);
+    // Dynamic Lighting (kept only under `$EQOA_CONFIG` for a shot), before
+    // a zone is uploaded
+    renderer.set_dynamic_lighting(&device, crate::settings::client().dynamic_lighting);
     renderer.set_ps2_sums(render::fog16::supported(&adapter));
     renderer.set_ps2_sequential(fog_sequential());
     renderer.scroll_time = Some(script.as_ref().map_or(0, |s| s.ms) as f32 / 1000.0);
@@ -372,6 +375,9 @@ pub fn shot_with(
         let say = std::env::var("EQOA_SAY").ok();
         let tab = std::env::var_os("EQOA_TAB").is_some();
         let mut parts = crate::particles::Particles::new(&walker.scene, 0);
+        // where the world's particles end in `batches` (the spells', the held
+        // items' after them: Dynamic Lighting's lights of the moment)
+        let mut world_end = 0;
         let mut held_fx: Option<crate::particles::Held> = None;
         // the last frame's spell bolts and weapon trails, drawn by the shot
         let mut shot_bolts: Vec<render::billboard::Strips> = Vec::new();
@@ -921,6 +927,7 @@ pub fn shot_with(
             let (self_m, _) = walker.pose();
             let (proj, v) = walker.view(aspect);
             batches = parts.frame(&walker.scene, lib, walker.eye_position(), proj * v, t);
+            world_end = batches.len();
             if let Some((sp, n, rand)) = trial.as_mut() {
                 use crate::spells::{Body, Cast, SELF};
                 use vi::fpu::{Ee, F};
@@ -1072,6 +1079,21 @@ pub fn shot_with(
         eprintln!("hour {shot_hour:.2}{}", if server { " (the server's)" } else { "" });
         let mut frame = lit(proj, v, shot_hour, Some((shot_eye, &walker.scene)), Some(&mut weather));
         frame.0.point = point;
+        // Dynamic Lighting's, as the window's frame has them
+        if renderer.dynamic_lighting() {
+            let mut found = Vec::new();
+            parts.fixed.lights(&walker.scene, lib, shot_eye, t, &mut found);
+            crate::lights::from_batches(&batches[world_end.min(batches.len())..], &mut found);
+            crate::lights::from_strips(&shot_bolts, &mut found);
+            frame.0.lights = Some(crate::lights::choose(&found, shot_eye, frame.0.view_proj));
+            eprintln!("dynamic lighting: {} fixed lights made, {} found, {} drawn", parts.fixed.len(), found.len(), frame.0.lights.map_or(0, |l| l.len()));
+            if std::env::var_os("EQOA_LIGHTS_TRACE").is_some() {
+                eprintln!("  eye {shot_eye:?}");
+                for l in frame.0.lights.iter().flat_map(|l| l.as_slice().iter().copied().collect::<Vec<_>>()) {
+                    eprintln!("  light at {:?} range {:.1} colour {:?} fixed {} ({:.1} from the eye)", l.at, l.range, l.color, l.fixed, (l.at - shot_eye).length());
+                }
+            }
+        }
         let (sky_bb, world_bb) = weather.render(&walker.eye);
         renderer.particles_end = batches.len();
         batches.extend(world_bb);
@@ -5321,6 +5343,15 @@ impl App {
                     }
                     mark(perf, 3);
                     let loading = play.as_ref().is_some_and(|p| p.loading());
+                    // Dynamic Lighting as the options have it: its pipelines,
+                    // and the zones in recorded for it (`render::lit`)
+                    let dynamic = crate::settings::client().dynamic_lighting;
+                    if g.renderer.dynamic_lighting() != dynamic {
+                        g.renderer.set_dynamic_lighting(&g.device, dynamic);
+                        if let Some(s) = streamer.as_mut() {
+                            s.relight(&g.renderer, &g.device);
+                        }
+                    }
                     if let Some(s) = streamer.as_mut() {
                         // One zone a frame, as the game's loader takes them;
                         // under the loading screen all at once.
@@ -5362,6 +5393,7 @@ impl App {
                         *batches = ps.frame(&w.scene, lib, w.eye_position(), proj * v, now);
                         bb_view = Some((v, proj));
                     }
+                    let world_end = batches.len();
                     // the spell effects' particles after the world's, their lightning before
                     let mut bolts = Vec::new();
                     if let Some(sp) = play.as_mut().and_then(|p| p.spells.as_mut()) {
@@ -5378,6 +5410,20 @@ impl App {
                     let mut lights = lit(proj, v, hour_now, Some((w.eye_position(), &w.scene)), weather.as_mut());
                     if let Some(p) = play.as_mut() {
                         lights.0.point = p.point_light(w, now, hour_now, weather.as_ref());
+                    }
+                    // Dynamic Lighting's (`lights`): the zones' fires and placed
+                    // lights, and this frame's spells', held items' and
+                    // creatures' emitters (the batches after the world's) and
+                    // the spells' bolts
+                    if dynamic && !loading {
+                        let eye = w.eye_position();
+                        let mut found = Vec::new();
+                        if let Some(ps) = particles.as_mut() {
+                            ps.fixed.lights(&w.scene, lib, eye, now, &mut found);
+                        }
+                        crate::lights::from_batches(&batches[world_end.min(batches.len())..], &mut found);
+                        crate::lights::from_strips(&bolts, &mut found);
+                        lights.0.lights = Some(crate::lights::choose(&found, eye, proj * v));
                     }
                     // the bolts lit by the scene's lights (`spells::light_bolts`),
                     // the weapon trails (VITrailFxRender) after them unlit

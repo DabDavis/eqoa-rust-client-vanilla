@@ -12,8 +12,8 @@
 //! The client's own, beside the game's: an Extended row between Sound and
 //! Save Changes (the menu a row longer), its words the client's (no
 //! WORDS.TXT entry). It opens a menu of its own over the options menu, drawn
-//! as that one is: Video, World, UI, Controller, Camera, Characters, Sound
-//! and natively Textures (`CATEGORIES`), each of which opens a page laid out and driven as
+//! as that one is: Video, World, Lighting, UI, Controller, Camera, Characters,
+//! Sound and natively Textures (`CATEGORIES`), each of which opens a page laid out and driven as
 //! the game's pages are, short enough that none scrolls (`PAGE_MOST`):
 //! - Video: Display (natively: Window or Full Screen, the window's own as
 //!   F11 and Alt+Enter toggle it, `display`: it changes at once and stays,
@@ -41,6 +41,10 @@
 //!   Art (Frontiers' or the 2002 disc's, `era`,
 //!   as F9 swaps it: drawn as it moves, the 2002 disc asked for the first
 //!   time);
+//! - Lighting (2026-11-08): Dynamic Lighting (Off, the PS2's: the strip
+//!   programs' light per vertex, the personal light the one point light;
+//!   On: the light per fragment, and the fires, placed lights, spells and
+//!   glowing weapons lighting what is round them, `lights`, `render::lit`);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Update Notices (one setting for
 //!   every window: off, the game never asks to restart into a newer build,
@@ -663,6 +667,9 @@ impl WndOptions {
                     // Ground Fog: the fog's fans from the next frame (`fx`,
                     // `render::fog16`)
                     47 => c.ps2_fog = !c.ps2_fog,
+                    // Dynamic Lighting: the world lit per fragment or the
+                    // PS2's way from the next frame (`viewer`, `lights`)
+                    52 => c.dynamic_lighting = !c.dynamic_lighting,
                     // Output Device: the sound opened there from the next
                     // frame (`audio::retarget`)
                     32 => step_output(&mut c, &crate::audio::outputs().listed.map(|l| l.1).unwrap_or_default(), d),
@@ -1103,7 +1110,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 33] = [
+const EXTENDED_ITEMS: [(i32, &str); 34] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1137,6 +1144,7 @@ const EXTENDED_ITEMS: [(i32, &str); 33] = [
     (49, "Raid List"),
     (50, "Texture Packs"),
     (51, "Dump Textures"),
+    (52, "Dynamic Lighting"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1168,11 +1176,13 @@ struct Category {
 
 /// Extended's categories, in its menu's order (the user's: "Extended, then
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most;
+/// Lighting after World (2026-11-08: Dynamic Lighting, the world's light);
 /// natively Textures last (2026-11-08: Texture Packs and Dump Textures, a
 /// folder's files a page cannot reach).
-const ALL_CATEGORIES: [Category; 8] = [
+const ALL_CATEGORIES: [Category; 9] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
+    Category { name: "Lighting", items: &[52], note: Note::None },
     Category { name: "UI", items: &[22, 29, 30, 40, 49], note: Note::None },
     Category { name: "Controller", items: &[16, 19, 48], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
@@ -1183,7 +1193,7 @@ const ALL_CATEGORIES: [Category; 8] = [
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
-const CATEGORIES: &[Category] = ALL_CATEGORIES.split_at(7).0;
+const CATEGORIES: &[Category] = ALL_CATEGORIES.split_at(8).0;
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
 /// F11's alone); a page's full screen is the browser's. Fog and Mipmaps went
@@ -1272,6 +1282,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         37 => on_off(c.environment),
         46 => on_off(c.shadows),
         47 => wide(if c.ps2_fog { "PS2" } else { "Exact" }),
+        52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         39 => wide(&format!("x{}", c.render_scale)),
         40 => wide(match c.hud {
@@ -1647,10 +1658,24 @@ mod tests {
         assert_eq!((w.row, cues.last()), (5, Some(&9)), "World's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 1, -1), "back to the categories, World still lit");
+        // Lighting: Dynamic Lighting, Off (the PS2's), then On
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(2), 52), "Lighting, Dynamic Lighting");
+        assert_eq!(value_text(&vui, 52), Some(wide(vui.words.get(552, vui.language))), "Off, the PS2's light");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().dynamic_lighting, cues.last()), (true, Some(&11)), "On");
+        assert_eq!(value_text(&vui, 52), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::client().dynamic_lighting, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (0, Some(&9)), "Lighting's one row");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 2, -1), "back to the categories, Lighting still lit");
         // UI: Ability Bars, Update Notices, Text, HUD, Raid List
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(2), 22), "UI, Ability Bars");
+        assert_eq!((w.cat, w.item), (Some(3), 22), "UI, Ability Bars");
         assert_eq!(settings::ability_bars(), 2, "the game's two");
         for want in [3, 4, 2] {
             press(&mut w, &mut o, key::RIGHT, &mut cues);
@@ -1695,7 +1720,7 @@ mod tests {
         // Controller: Controller Focus, Capture Controller, Touch Pad Size
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(3), 16), "Controller, Controller Focus");
+        assert_eq!((w.cat, w.item), (Some(4), 16), "Controller, Controller Focus");
         assert_eq!(settings::focus(), Focus::Auto);
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!(settings::focus(), Focus::Off, "round to Off");
@@ -1729,7 +1754,7 @@ mod tests {
         // Camera: Camera Distance, Camera Turn Speed, Screen Shake
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(4), 15), "Camera, Camera Distance");
+        assert_eq!((w.cat, w.item), (Some(5), 15), "Camera, Camera Distance");
         for _ in 0..15 {
             press(&mut w, &mut o, key::RIGHT, &mut cues);
         }
@@ -1761,7 +1786,7 @@ mod tests {
         // Characters: Level of Detail, NPC/PC Display, NPC/PC Distance
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(5), 12), "Characters, Level of Detail");
+        assert_eq!((w.cat, w.item), (Some(6), 12), "Characters, Level of Detail");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert!(!settings::client().lod);
         assert_eq!(cues.last(), Some(&11));
@@ -1835,7 +1860,7 @@ mod tests {
         // Sound: Sound in Background
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(6), 21), "Sound, Sound in Background");
+        assert_eq!((w.cat, w.item), (Some(7), 21), "Sound, Sound in Background");
         assert!(settings::background_sound(), "on: a window behind others keeps its sound");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert!(!settings::background_sound());
@@ -1843,32 +1868,32 @@ mod tests {
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 32, "Output Device");
         assert_eq!(value_text(&vui, 32), Some(wide(SYSTEM_DEFAULT)), "the system's default");
-        assert!(w.page_note(6).is_some_and(|n| n.starts_with("Plays on ") || n == "No output now"), "where it plays, beside Back");
+        assert!(w.page_note(7).is_some_and(|n| n.starts_with("Plays on ") || n == "No output now"), "where it plays, beside Back");
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (1, Some(&9)), "Sound's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
         // Textures (natively): Texture Packs and Dump Textures, each Off
         // then On; a test keeps no folder, so the note says there is none
-        assert_eq!((w.cat_sel, cues.last()), (7, Some(&11)), "Textures, after Sound");
+        assert_eq!((w.cat_sel, cues.last()), (8, Some(&11)), "Textures, after Sound");
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(7), 50), "Textures, Texture Packs");
+        assert_eq!((w.cat, w.item), (Some(8), 50), "Textures, Texture Packs");
         assert_eq!(value_text(&vui, 50), Some(wide(vui.words.get(552, vui.language))), "Off, the game's own textures");
-        assert_eq!(w.page_note(7), None, "off: no note");
+        assert_eq!(w.page_note(8), None, "off: no note");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert!(settings::client().texture_packs);
         assert_eq!((value_text(&vui, 50), cues.last()), (Some(wide(vui.words.get(551, vui.language))), Some(&11)));
-        assert_eq!(w.page_note(7).as_deref(), Some("No folder here"));
+        assert_eq!(w.page_note(8).as_deref(), Some("No folder here"));
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 51, "Dump Textures");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::client().dump_textures, "either way turns it over");
-        assert_eq!(w.page_note(7).as_deref(), Some("0 dumped"), "how many dumped, beside Back");
+        assert_eq!(w.page_note(8).as_deref(), Some("0 dumped"), "how many dumped, beside Back");
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (1, Some(&9)), "Textures' last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.cat_sel, cues.last()), (7, Some(&9)), "Textures, the last category");
+        assert_eq!((w.cat_sel, cues.last()), (8, Some(&9)), "Textures, the last category");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.sel), (-1, 3), "the menu, on Extended");
@@ -1895,7 +1920,8 @@ mod tests {
             key::CROSS,
             key::LEFT,
             key::TRIANGLE,
-            // Camera: Camera Turn Speed a step up
+            // Camera: Camera Turn Speed a step up (past Lighting)
+            key::DOWN,
             key::DOWN,
             key::DOWN,
             key::DOWN,
@@ -2145,15 +2171,15 @@ mod tests {
         let y = |w: &WndOptions, k: i32| w.window2.row_center(&vui, &NullRaster, k + 1)[1] as f32;
         let down = |n: usize, last: i32| std::iter::repeat_n(key::DOWN, n).chain([last]).collect::<Vec<_>>();
         // the categories: Camera chosen at once
-        assert_eq!(w.point(category(&w, 4)), vec![key::CROSS]);
-        assert_eq!(w.cat_sel, 4, "Camera");
-        assert_eq!(w.point(category(&w, 6)), vec![key::CROSS]);
-        assert_eq!(w.cat_sel, 6, "Sound");
+        assert_eq!(w.point(category(&w, 5)), vec![key::CROSS]);
+        assert_eq!(w.cat_sel, 5, "Camera");
+        assert_eq!(w.point(category(&w, 7)), vec![key::CROSS]);
+        assert_eq!(w.cat_sel, 7, "Sound");
         assert!(w.point([5.0, 5.0]).is_empty());
-        w.point(category(&w, 4));
+        w.point(category(&w, 5));
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!(w.cat, Some(4), "Camera's page");
+        assert_eq!(w.cat, Some(5), "Camera's page");
         for k in 0..CATEGORIES.len() as i32 {
             assert!(w.hits.at(category(&w, k)).is_none_or(|h| h >= LABEL), "category {k} behind the page answers nothing");
         }
@@ -2201,10 +2227,10 @@ mod tests {
         // Characters: NPC/PC Display's knob at its left end (the game's 24),
         // then at 128 near its middle
         w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
-        w.cat_sel = 5;
+        w.cat_sel = 6;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
-        assert_eq!(w.cat, Some(5), "Characters' page");
+        assert_eq!(w.cat, Some(6), "Characters' page");
         assert_eq!(w.point([frame + 110.0, y(&w, 0)]), vec![key::RIGHT], "Level of Detail's value");
         assert_eq!(w.point([slider + 30.0, y(&w, 1)]), down(1, key::RIGHT));
         assert_eq!(w.point([slider - 2.0, y(&w, 1)]), down(1, key::LEFT), "left of the knob at the bar's end");
@@ -2227,7 +2253,7 @@ mod tests {
         assert_eq!(w.point([slider + 110.0, y(&w, 3)]), down(3, key::LEFT), "left of the knob at 200");
         // Controller: Controller Focus's halves
         w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
-        w.cat_sel = 3;
+        w.cat_sel = 4;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!(w.point([frame + 20.0, y(&w, 0)]), vec![key::LEFT], "Controller Focus's value, left");
