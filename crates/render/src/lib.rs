@@ -203,6 +203,25 @@ struct Pass {
     made: UvMapping,
     /// The texture's level shift (`level_shift`), in `base`'s K.
     shift: f32,
+    /// The least alpha of its texture's texels, every level (255 for none):
+    /// Sun Shadows draw a layer whose alpha test can let nothing through as
+    /// depth alone (`Pass::solid`).
+    alpha_min: u8,
+}
+
+impl Pass {
+    /// Whether no texel of the layer fails the alpha test (`solid`).
+    fn solid(&self) -> bool {
+        solid(self.alpha_min, self.base.tint[3])
+    }
+}
+
+/// Whether a layer whose texture's least alpha is `alpha_min` and whose
+/// colour's alpha is `tint_a` lets every texel through fs_main's alpha test
+/// (texel × tint ≥ 0.5 at every level and every filtered place between):
+/// Sun Shadows draw it as depth alone, with no fragment to run.
+pub(crate) fn solid(alpha_min: u8, tint_a: f32) -> bool {
+    alpha_min as f32 / 255.0 * tint_a >= 0.5
 }
 
 /// A layer's UV mapping: the transform and scroll (`LayerUniform::uv0`,
@@ -329,6 +348,8 @@ struct Member {
 struct Material {
     blend: usize,
     bg: wgpu::BindGroup,
+    /// No texel fails its alpha test (`solid`).
+    solid: bool,
 }
 
 /// A model as `upload_group` takes it: the mesh, a matrix per instance
@@ -457,6 +478,9 @@ pub struct Renderer {
     /// A source's key for a DictID (`TextureSource::key`) -> uploaded texture
     /// and its level shift (`level_shift`; `None`: the id resolved to nothing).
     textures: std::collections::HashMap<u64, Option<(wgpu::TextureView, f32)>>,
+    /// Each uploaded texture's least texel alpha over its levels, by the same
+    /// key (`Pass::alpha_min`).
+    texture_alpha: std::collections::HashMap<u64, u8>,
     /// DictIDs a batch asked for that no loaded file holds.
     pub missing_textures: std::collections::BTreeSet<i32>,
     start: web_time::Instant,
@@ -750,6 +774,7 @@ impl Renderer {
             samplers,
             white,
             textures: Default::default(),
+            texture_alpha: Default::default(),
             missing_textures: Default::default(),
             start: web_time::Instant::now(),
             scroll_time: None,
@@ -783,18 +808,27 @@ impl Renderer {
             return None;
         }
         let missing = &mut self.missing_textures;
+        let alpha = &mut self.texture_alpha;
+        let key = src.key(id);
         self.textures
-            .entry(src.key(id))
+            .entry(key)
             .or_insert_with(|| {
                 let levels = src.levels(id);
                 if levels.is_empty() {
                     missing.insert(id);
                     return None;
                 }
+                alpha.insert(key, levels.iter().flat_map(|l| l.rgba.chunks_exact(4).map(|p| p[3])).min().unwrap_or(255));
                 let shift = level_shift((levels[0].width, levels[0].height), src.native_size(id));
                 Some((upload_levels(device, queue, &levels), shift))
             })
             .clone()
+    }
+
+    /// The least texel alpha of the texture `id` names in `src` (255 for none
+    /// or one not uploaded).
+    fn alpha_min(&self, id: i32, src: &Textures) -> u8 {
+        if id == 0 { 255 } else { self.texture_alpha.get(&src.key(id)).copied().unwrap_or(255) }
     }
 
     /// Uploads a model, drawn once per matrix in `instances` (column-major),
@@ -875,7 +909,8 @@ impl Renderer {
                         wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
                     ],
                 });
-                passes.push(Pass { blend, bg, uniform, base, texture: l.texture, sampler: si, made: (base.uv0, base.uv1, si), shift: shift.unwrap_or(0.0) });
+                let alpha_min = if view.is_some() { self.alpha_min(l.texture, textures) } else { 255 };
+                passes.push(Pass { blend, bg, uniform, base, texture: l.texture, sampler: si, made: (base.uv0, base.uv1, si), shift: shift.unwrap_or(0.0), alpha_min });
             }
             let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("indices"),
@@ -933,6 +968,7 @@ impl Renderer {
         let (uv0, uv1, si) = uv.and_then(|u| ps.get(u)).map_or(FRESH_UV, |src| src.made);
         let rebind = p.texture != texture || p.sampler != si;
         let (view, shift) = if rebind { self.texture_shifted(device, queue, texture, textures).unzip() } else { (None, None) };
+        let alpha_min = if view.is_some() { self.alpha_min(texture, textures) } else { 255 };
         let Some(p) = m.batches.get_mut(batch).and_then(|b| b.2.get_mut(pass)) else { return };
         if rebind {
             let shift = shift.unwrap_or(0.0);
@@ -950,6 +986,7 @@ impl Renderer {
             p.texture = texture;
             p.sampler = si;
             p.base.flags[0] = view.is_some() as i32 as f32;
+            p.alpha_min = alpha_min;
         }
         p.blend = blend.min(4);
         p.base.flags[1] = (p.blend != 0) as i32 as f32;
@@ -1320,9 +1357,10 @@ impl Renderer {
         let (view, shift) = self.texture_shifted(device, queue, l.texture, textures).unzip();
         let (blend, mut base, si) = layer_state(l, view.is_some());
         base.flags[2] += shift.unwrap_or(0.0);
+        let solid = solid(if view.is_some() { self.alpha_min(l.texture, textures) } else { 255 }, base.tint[3]);
         let key = (textures.key(l.texture), si, bytemuck::cast(base));
         if let Some(bg) = self.materials.get(&key) {
-            return Material { blend, bg: bg.clone() };
+            return Material { blend, bg: bg.clone(), solid };
         }
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("material"),
@@ -1339,7 +1377,7 @@ impl Renderer {
             ],
         });
         self.materials.insert(key, bg.clone());
-        Material { blend, bg }
+        Material { blend, bg, solid }
     }
 
     /// Uploads `parts` as one [`GpuGroup`], drawn as `draw` would draw them

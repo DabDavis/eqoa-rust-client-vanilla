@@ -204,19 +204,26 @@ fn a_cut_out_casts_its_shape() {
     };
     // UV u runs along x (corners (0,0) (0,1) (1,1) (1,0) at x −1, −1, 1, 1)
     let card = |id| quad([Vec3::new(-1.0, 3.0, -1.0), Vec3::new(-1.0, 3.0, 1.0), Vec3::new(1.0, 3.0, 1.0), Vec3::new(1.0, 3.0, -1.0)], Vec3::Y, 1.0, layer(id, 0));
-    let frame = |id| {
+    // as a model, and as a group's member (its layers by cluster: a solid
+    // one depth alone, an alpha tested one with its texture)
+    let frame = |id, grouped: bool| {
         let mut r = renderer(&g, true);
         let f = r.upload(&g.device, &g.queue, &floor(HALF, 1.0), &[render::IDENTITY], &|_| None);
-        let c = r.upload(&g.device, &g.queue, &card(id), &[render::IDENTITY], &tex);
-        shot(&g, &mut r, &view(Vec3::ZERO, SUN45), &[Draw::Model(&f), Draw::Model(&c)])
+        let model = card(id);
+        let c = r.upload(&g.device, &g.queue, &model, &[render::IDENTITY], &tex);
+        let grp = r.upload_group(&g.device, &g.queue, &[GroupPart { model: &model, instances: &[render::IDENTITY], statics: &[], moves: false, baked: false }], &tex);
+        let d = if grouped { Draw::Group(&grp) } else { Draw::Model(&c) };
+        shot(&g, &mut r, &view(Vec3::ZERO, SUN45), &[Draw::Model(&f), d])
     };
     // the card's left half (x −1..0) falls on x 2..3, its right on 3..4
     let (left, right) = (pixel(2.5, 0.0), pixel(3.6, 0.0));
-    let cut = frame(1);
-    assert!(close(red(&cut, left), 0.1), "the opaque half's shadow: {}", red(&cut, left));
-    assert!(red(&cut, right) > 0.7, "the clear half casts nothing: {}", red(&cut, right));
-    let whole = frame(2);
-    assert!(close(red(&whole, right), 0.1), "the control: an opaque card casts there: {}", red(&whole, right));
+    for grouped in [false, true] {
+        let cut = frame(1, grouped);
+        assert!(close(red(&cut, left), 0.1), "the opaque half's shadow (grouped {grouped}): {}", red(&cut, left));
+        assert!(red(&cut, right) > 0.7, "the clear half casts nothing (grouped {grouped}): {}", red(&cut, right));
+        let whole = frame(2, grouped);
+        assert!(close(red(&whole, right), 0.1), "the control: an opaque card casts there (grouped {grouped}): {}", red(&whole, right));
+    }
 }
 
 /// A blended layer (water, glass) casts nothing, nor a radial flora plant

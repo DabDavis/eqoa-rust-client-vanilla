@@ -339,7 +339,9 @@ pub(crate) struct Sun {
     /// map, its comparison sampler and the uniform.
     pub(crate) bg: wgpu::BindGroup,
     buf: wgpu::Buffer,
+    /// The casters: alpha tested, and a solid layer's, depth alone.
     caster: wgpu::RenderPipeline,
+    solid: wgpu::RenderPipeline,
     /// Group 3 of the casters, one a cascade (its matrix).
     cascades: Vec<wgpu::BindGroup>,
     cascade_buf: wgpu::Buffer,
@@ -456,34 +458,32 @@ impl Sun {
             bind_group_layouts: &[Some(layouts[0]), Some(layouts[1]), Some(layouts[2]), Some(&cascade_layout)],
             immediate_size: 0,
         });
-        let caster = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("sun shadow casters"),
-            layout: Some(&cast_layout),
-            vertex: wgpu::VertexState {
-                module: &cast_module,
-                entry_point: Some("vs_cast"),
-                compilation_options: Default::default(),
-                buffers: &vertex_buffers(),
-            },
-            // both faces, a vertex turned from the sun put back (`BACK_PUSH`):
-            // culled, a cave's roof or a ceiling seen from above casts
-            // nothing; drawn as they are, the undersides of thin things (an
-            // awning's patches, a roof's planks a little over its top)
-            // shadowed their own tops
-            primitive: wgpu::PrimitiveState { front_face: crate::FRONT_FACE, cull_mode: None, ..Default::default() },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState { module: &cast_module, entry_point: Some("fs_cast"), compilation_options: Default::default(), targets: &[] }),
-            multiview_mask: None,
-            cache: None,
-        });
-        Some(Sun { pipelines, bg, buf, caster, cascades, cascade_buf, stride, layers, size, drawn: Default::default() })
+        let cast_pipeline = |vs: &str, fs: Option<&str>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("sun shadow casters"),
+                layout: Some(&cast_layout),
+                vertex: wgpu::VertexState { module: &cast_module, entry_point: Some(vs), compilation_options: Default::default(), buffers: &vertex_buffers() },
+                // both faces, a vertex turned from the sun put back (`BACK_PUSH`):
+                // culled, a cave's roof or a ceiling seen from above casts
+                // nothing; drawn as they are, the undersides of thin things (an
+                // awning's patches, a roof's planks a little over its top)
+                // shadowed their own tops
+                primitive: wgpu::PrimitiveState { front_face: crate::FRONT_FACE, cull_mode: None, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: fs.map(|fs| wgpu::FragmentState { module: &cast_module, entry_point: Some(fs), compilation_options: Default::default(), targets: &[] }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let (caster, solid) = (cast_pipeline("vs_cast", Some("fs_cast")), cast_pipeline("vs_cast_solid", None));
+        Some(Sun { pipelines, bg, buf, caster, solid, cascades, cascade_buf, stride, layers, size, drawn: Default::default() })
     }
 
     /// A group's casters, in clusters: its members that draw an opaque
@@ -522,21 +522,34 @@ impl Sun {
                             sample_count: 1,
                             multiview: None,
                         });
-                        e.set_pipeline(&self.caster);
                         e.set_bind_group(0, &r.frame_bg, &[]);
                         e.set_bind_group(2, &r.identity_palette, &[]);
                         e.set_bind_group(3, &self.cascades[c], &[]);
                         e.set_vertex_buffer(0, g.vertices.slice(..));
                         e.set_index_buffer(g.indices.slice(..), wgpu::IndexFormat::Uint32);
                         draws = 0;
-                        for &k in &members {
-                            let m = &g.members[k];
-                            let (i0, n) = (m.instance0 as u64, m.instances as u64);
-                            e.set_vertex_buffer(1, g.instances.slice(i0 * 64..(i0 + n) * 64));
-                            e.set_vertex_buffer(2, g.statics.slice(i0 * 16..(i0 + n) * 16));
-                            for (range, passes) in m.batches.iter().filter(|(_, p)| opaque(p)) {
-                                for p in passes.iter().filter(|p| p.blend == 0) {
-                                    e.set_bind_group(1, &p.bg, &[]);
+                        // the solid layers first, depth alone (any layer's
+                        // group bound once: the vertex alone reads none),
+                        // then the alpha tested ones, each with its texture
+                        for solid in [true, false] {
+                            let mut first = true;
+                            for &k in &members {
+                                let m = &g.members[k];
+                                let mut layers = m.batches.iter().filter(|(_, p)| opaque(p)).flat_map(|(range, p)| p.iter().filter(|p| p.blend == 0 && p.solid == solid).map(move |p| (range, p))).peekable();
+                                if layers.peek().is_none() {
+                                    continue;
+                                }
+                                if first {
+                                    e.set_pipeline(if solid { &self.solid } else { &self.caster });
+                                    first = false;
+                                }
+                                let (i0, n) = (m.instance0 as u64, m.instances as u64);
+                                e.set_vertex_buffer(1, g.instances.slice(i0 * 64..(i0 + n) * 64));
+                                e.set_vertex_buffer(2, g.statics.slice(i0 * 16..(i0 + n) * 16));
+                                for (range, p) in layers {
+                                    if !solid || draws == 0 {
+                                        e.set_bind_group(1, &p.bg, &[]);
+                                    }
                                     e.draw_indexed(range.clone(), 0, 0..m.instances);
                                     draws += 1;
                                 }
@@ -584,6 +597,7 @@ impl Sun {
                 multiview_mask: None,
             });
             let mut bound = false;
+            let mut current: Option<bool> = None;
             for item in items {
                 match item {
                     Draw::Group(g) => {
@@ -596,6 +610,7 @@ impl Sun {
                             runs += bundles.len() as u32;
                             pass.execute_bundles(bundles);
                             bound = false;
+                            current = None;
                         }
                     }
                     Draw::Model(m) => {
@@ -603,12 +618,12 @@ impl Sun {
                             continue;
                         }
                         if !bound {
-                            pass.set_pipeline(&self.caster);
                             pass.set_bind_group(0, &r.frame_bg, &[]);
                             pass.set_bind_group(3, &self.cascades[c], &[]);
                             bound = true;
+                            current = None;
                         }
-                        draws += Self::encode_model(&mut pass, m);
+                        draws += self.encode_model(&mut pass, m, &mut current);
                     }
                     // the radial flora casts nothing
                     Draw::Instances(..) => {}
@@ -619,11 +634,11 @@ impl Sun {
         true
     }
 
-    /// One model's opaque layers into a cascade (the pipeline and groups 0
-    /// and 3 set): the batches of its level drawn whose first layer is
-    /// opaque, as `encode_model` draws them in the first pass. Returns the
-    /// draw calls.
-    fn encode_model<'a>(pass: &mut wgpu::RenderPass<'a>, m: &'a GpuModel) -> u32 {
+    /// One model's opaque layers into a cascade (groups 0 and 3 set; the
+    /// pipeline set, solid or alpha tested, `current`): the batches of its
+    /// level drawn whose first layer is opaque, as `encode_model` draws them
+    /// in the first pass. Returns the draw calls.
+    fn encode_model<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, m: &'a GpuModel, current: &mut Option<bool>) -> u32 {
         if !Renderer::draws_anything(m) {
             return 0;
         }
@@ -642,6 +657,11 @@ impl Sun {
             }
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             for p in passes.iter().take(m.passes_used).filter(|p| p.blend == 0) {
+                let solid = p.solid();
+                if *current != Some(solid) {
+                    pass.set_pipeline(if solid { &self.solid } else { &self.caster });
+                    *current = Some(solid);
+                }
                 pass.set_bind_group(1, &p.bg, &[]);
                 pass.draw_indexed(0..*count, 0, 0..m.instance_count);
                 draws += 1;
@@ -741,6 +761,15 @@ mod tests {
             unsnapped = Some(u);
         }
         assert!(drifted > 90, "the control: on a grid centred on the camera the point moves within its texel ({drifted} of 99 steps)");
+    }
+
+    /// A layer is solid when no texel of it can fail the alpha test: its
+    /// least alpha times its colour's at 0.5 or more (128 of 255 with a full
+    /// colour, 255 at a half), not one under.
+    #[test]
+    fn a_layer_is_solid_when_nothing_fails_its_test() {
+        assert!(crate::solid(128, 1.0) && crate::solid(255, 1.0) && crate::solid(255, 0.5));
+        assert!(!crate::solid(127, 1.0) && !crate::solid(0, 1.0) && !crate::solid(255, 0.49));
     }
 
     /// The sun's strength: none under the horizon (the game's night, its

@@ -85,3 +85,35 @@ fn fs_cast(i: CastOut) {
         discard;
     }
 }
+
+// A layer no texel of which fails the alpha test (`solid` in lib.rs) casts
+// as depth alone: the vertex as vs_cast puts it, and no fragment to run (an
+// alpha-tested fragment that ran for every caster cost 0.5 ms of an RX 580's
+// 1080p frame at four cascades of 2,048).
+@vertex
+fn vs_cast_solid(v: VsIn) -> @builtin(position) vec4<f32> {
+    var pos = vec4<f32>(v.pos, 1.0);
+    var nrm = vec4<f32>(v.normal, 0.0);
+    let wsum = f32(v.weights.x + v.weights.y + v.weights.z + v.weights.w);
+    if (wsum > 0.0) {
+        var sp = vec4<f32>(0.0);
+        var sn = vec4<f32>(0.0);
+        for (var k = 0u; k < 4u; k++) {
+            let b = v.bones[k];
+            if (b < 72u && v.weights[k] > 0u) {
+                let w = f32(v.weights[k]) / wsum;
+                sp += palette.m[b] * pos * w;
+                sn += palette.m[b] * nrm * w;
+            }
+        }
+        pos = vec4<f32>(sp.xyz, 1.0);
+        nrm = vec4<f32>(sn.xyz, 0.0);
+    }
+    let rel = v.m0.xyz * pos.x + v.m1.xyz * pos.y + v.m2.xyz * pos.z + (v.m3.xyz - frame.eye.xyz);
+    var clip = cascade.m * vec4<f32>(rel, 1.0);
+    let n = v.m0.xyz * nrm.x + v.m1.xyz * nrm.y + v.m2.xyz * nrm.z;
+    if (dot(n, frame.sun_dir.xyz) > 0.0) {
+        clip.z = min(clip.z + cascade.push.x, 1.0);
+    }
+    return clip;
+}
