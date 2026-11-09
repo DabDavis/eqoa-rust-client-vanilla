@@ -161,7 +161,8 @@ or a browser (each described where it lives below):
   each worn slot go on its bones, drawn from inside too (a hollow shell round thin bones: culled as a
   human's skin is, its far side was seen through), and its bones under them are hidden; where nothing
   is worn they stay bare. Its helm goes on HumanMale's head node where its body names none (the 2002
-  disc's skeleton, on the 2002 HumanMale's skeleton: `slotless::helm_node`). Any body with texture slots is dressed exactly as before (held to every CSprite on the disc).
+  disc's skeleton, on the 2002 HumanMale's skeleton: `slotless::helm_node`). Any body with texture
+  slots is dressed exactly as before (held to every CSprite on the disc).
   Players' characters only (a creature whose name colour is a player's, 2, and the pregame's figures):
   NPCs keep the look the PS2 gave them (the user: "Players only").
   `eqoa dress <body> <out.png> [set=N robe=R dye=RRGGBB ...]` draws a body in a look from four sides.
