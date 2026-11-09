@@ -6160,6 +6160,13 @@ impl Play {
         }
         let rest = &r.data[r.pos..];
         let rgb = number_rgb(crate::s2::get().damage_rgb, rest, tags, &crate::settings::number_colors());
+        // `EQOA_DAMAGE_TRACE`: each one as read, what followed its body and the
+        // colour it is drawn in (none: the game's), on stderr
+        if std::env::var_os("EQOA_DAMAGE_TRACE").is_some() {
+            let after: String = rest.iter().map(|b| format!("{b:02x}")).collect();
+            let paint = rgb.map_or_else(|| "game".to_string(), |c| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2]));
+            eprintln!("damage: {attacker:08x} {amount:+} {defender:08x} after [{after}] colour {paint}");
+        }
         let me = self.self_id32();
         // the player's or its pet's hit: the guide's kill when it dies
         if amount > 0 && (Some(attacker) == me || (attacker == self.pet_id && self.pet_id != u32::MAX)) {
