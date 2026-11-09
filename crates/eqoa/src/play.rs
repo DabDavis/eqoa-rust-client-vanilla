@@ -1039,17 +1039,7 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
     let mut helm_worn = false;
     // the server's patch's tables (`s2`), retail's without one
     let t = crate::s2::get().cust();
-    let node = crate::slotless::helm_node(lib, model, cs, player);
-    if node >= 0
-        && let Some(h) = vi::cust::helm_with(c.armor[5], &t)
-        && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
-    {
-        let tint = look_of(c).helm_color(&t);
-        for b in &mut m.batches {
-            for l in &mut b.layers {
-                l.color = tint;
-            }
-        }
+    if let Some((node, m)) = crate::slotless::helm_on(lib, model, cs, player, c.armor[5], look_of(c).helm_color(&t), &t, true) {
         helm_worn = true;
         attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
     }
