@@ -7,9 +7,9 @@
 //!
 //! A shadow map of [`CASCADES`] cascades (a 2D depth array, [`map_size`] a
 //! side), each an orthographic view along the sun's light round the sphere
-//! that holds its slice of the view's depth ([`ENDS`]), the near two drawn
-//! every frame the sun is up and the far two in turn (`Sun::draw`), from what
-//! the frame draws (`suncast.wgsl`): the zones' groups from bundles recorded
+//! that holds its slice of the view's depth ([`ENDS`]), each drawn every frame
+//! the sun is up (`Sun::draw`), from what the frame draws (`suncast.wgsl`):
+//! the zones' groups from bundles recorded
 //! at their upload in clusters of members near one another (`GroupSun`,
 //! each culled against a cascade's box) and the models (characters, what
 //! they hold, the boids) by their world box, every opaque layer of a
@@ -25,14 +25,15 @@
 //!
 //! The map follows the eye: every matrix is built in doubles relative to it
 //! (Freeport is at x 25,300, where a float steps 2 mm), its centre snapped
-//! to its texels in the world (the light's axes from the origin), and each
-//! sphere's radius is rounded up, so a camera that moves or turns moves the
-//! map by whole texels and nothing shimmers (but for the last cascade kept a
-//! frame: a margin wider, [`JUMP`], [`TURN`]). The sun's direction is taken as
-//! it is every frame (the game's day passes in an hour: the sun moves a tenth
-//! of a degree a second, and the shadows with it, smoothly; taken in steps of
-//! an eighth of a degree they stood still and then jerked, a character's at
-//! 17:00 4 pixels at once). The shadows end at [`RANGE`] before the
+//! to its texels, which stay put in the world ([`Grid`]), and each sphere's
+//! radius is rounded up, so a camera that moves or turns moves the map by
+//! whole texels and nothing shimmers. The sun's direction is taken as it is
+//! every frame (the game's day passes in an hour: the sun moves a tenth of a
+//! degree a second), and the shadows move with it a little every frame, the
+//! texels still under them; taken in eighths of a degree, as at first, they
+//! stood still for a second and a quarter and then jumped (a character's at
+//! 17:00 by 4 pixels, the texels shuffled under every edge at once). The
+//! shadows end at [`RANGE`] before the
 //! camera, faded out from [`FADE_FROM`]; they fade in as the sun rises
 //! clear of the horizon and out as it sets ([`strength`]): by night the
 //! game's "sun" is the sun under the ground, its light travelling up
@@ -60,10 +61,13 @@ pub const CASCADES: usize = 4;
 
 /// Where each cascade ends, in depth before the camera: the practical split
 /// (three quarters logarithmic, a quarter even) of 0.3 to [`RANGE`], each a
-/// sphere that holds its slice, the far two a margin wider ([`TURN`],
-/// [`JUMP`]: they are drawn in turn). At the game's 55° and a 16:9 window
-/// the radii are about 21, 48, 112 and 295: a texel of 2, 5, 11 and 29 cm at
-/// 2,048.
+/// sphere that holds its slice. At the game's 55° and a 16:9 window the radii
+/// are about 20, 46, 100 and 265: a texel of 2, 4.5, 10 and 26 cm at 2,048.
+/// Where a shadow's edge passes from one cascade to the next it moves by under
+/// a pixel (Freeport's street at 960×540: 39 pixels change by more than 16 of
+/// 255 as a seam passes, none by more than 48), so the seams are not blended:
+/// a second cascade's comparisons over a sixth of each slice cost 0.16 ms at
+/// 1080p and 0.39 at 4K on an RX 580.
 pub const ENDS: [f32; CASCADES] = [19.0, 43.0, 94.0, 250.0];
 
 /// How far before the camera the shadows reach.
@@ -76,13 +80,6 @@ pub const FADE_FROM: f32 = 212.5;
 /// a tower up to this far upwind of what is drawn still casts onto it.
 pub const UPWIND: f64 = 500.0;
 
-/// How far the eye may move between two frames, and how far the camera may
-/// turn (radians, 3 degrees), and the far cascade drawn a frame before still
-/// serve (`Sun::draw`): each is that much wider than its slice (the eye's
-/// move and the turn times the distance to its sphere's middle). Farther (a
-/// port, a world's change, a quick turn), every cascade is drawn again.
-pub const JUMP: f32 = 2.0;
-pub const TURN: f64 = 3.0 * std::f64::consts::PI / 180.0;
 
 /// How high over what it shadows a cluster of casters (not the terrain or a
 /// sprite placed all over a zone, which every cascade draws) is taken to
@@ -103,17 +100,6 @@ pub const CASTER_HEIGHT: f64 = 150.0;
 /// up to 0.14% of a cascade's texels (Qeynos; 0 to 0.006% in the others),
 /// which culling those faces would have lost.
 pub const BACK_PUSH: f64 = 0.5;
-
-/// How far the sun may move (radians: a twentieth of a degree, half a
-/// second of the game's day) and the last cascade drawn a frame before still
-/// serve (`Sun::draw`); farther (a lightning flash turns it to hour 10's),
-/// every cascade is drawn again.
-pub const SUN_DRIFT: f64 = 0.05 * std::f64::consts::PI / 180.0;
-
-/// The last part of each of the first three cascades' slices over which its
-/// shadow is blended into the next's (`sunshadow.wgsl`), so the seam where a
-/// point passes from one to the next as the camera moves does not show.
-pub const SEAM: f32 = 0.15;
 
 /// A side of each cascade's map: 2,048 natively, 1,024 in a page and on
 /// Android (a quarter of the memory and fill), never past the device's
@@ -187,27 +173,19 @@ impl Cascade {
     }
 }
 
-/// The direction `view_proj` (the world's, its camera at `eye`) looks.
-pub fn view_axis(view_proj: Mat4, eye: Vec3) -> DVec3 {
-    let inv = (view_proj.as_dmat4() * DMat4::from_translation(eye.as_dvec3())).inverse();
-    let dehom = |v: DVec4| v.truncate() / v.w;
-    let h = inv * DVec4::new(0.0, 0.0, 1.0, 0.0);
-    let apex = if h.w.abs() > 1e-12 { h.truncate() / h.w } else { DVec3::ZERO };
-    (dehom(inv * DVec4::new(0.0, 0.0, 0.0, 1.0)) - apex).normalize_or(DVec3::NEG_Z)
-}
-
 /// Where the cascades' texels lie in the world as the sun moves (`fit`): the
 /// light's across and up axes the last frame took, and what each cascade
 /// takes off a point's place along them. Turned with the sun, the axes move
 /// a point's place along them by its depth along the light from the world's
 /// origin times the turn: at Freeport, 25,000 out, a frame of the game's day
-/// swept cascade 1's texels across the town fifteen at a time, every edge
-/// drawn anew each frame. So each cascade takes back what the turn moves the
-/// middle of its slice by (in the first, about where a third-person
-/// camera's character stands), and a point moves within its texels by
-/// its depth from there times the turn alone (a frame's at most a
-/// thirtieth of a texel), and not at all while the sun stands still: the
-/// camera moves the map by whole texels as before.
+/// (60 a second) swept cascade 1's texels through the town 11 to 15 at a
+/// time, every edge drawn on texels shuffled anew each frame. So each
+/// cascade takes back what the turn moves the middle of its slice by (in the
+/// first, about where a third-person camera's character stands), and a
+/// point moves within its texels by its depth from there times the turn
+/// alone (what its sphere holds, under a twentieth of a texel a frame), and
+/// not at all while the sun stands still: the camera moves the map by whole
+/// texels as before.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Grid {
     axes: Option<[DVec3; 2]>,
@@ -246,11 +224,9 @@ pub fn fit(view_proj: Mat4, eye: Vec3, sun_dir: Vec3, size: u32, grid: &mut Grid
     let s = size.max(4) as f64;
     std::array::from_fn(|c| {
         let (n, f) = (if c == 0 { 0.0 } else { ENDS[c - 1] as f64 }, ENDS[c] as f64);
-        // the sphere round the slice's eight corners, its centre on the axis,
-        // and the last wider by what the camera may do in a frame
+        // the sphere round the slice's eight corners, its centre on the axis
         let zc = ((n + f) * (1.0 + k2) * 0.5).min(f);
         let r = ((f - zc).powi(2) + k2 * f * f).max((zc - n).powi(2) + k2 * n * n).sqrt();
-        let r = if c < CASCADES - 1 { r } else { r + JUMP as f64 + zc * TURN };
         let r = (r * 16.0).ceil() / 16.0;
         // a texel's margin round it, so the snapped box still holds it
         let t = 2.0 * r / (s - 2.0);
@@ -428,10 +404,6 @@ pub(crate) struct Sun {
     /// The last frame's draws into the map: the clusters' bundles executed
     /// and the draw calls in all.
     pub(crate) drawn: std::cell::Cell<(u32, u32)>,
-    /// The cascades as each was last drawn, the eye, its view's axis and the
-    /// sun then, and the frames counted (`draw`: the last every other frame).
-    last: std::cell::Cell<Option<([Cascade; CASCADES], Vec3, DVec3, DVec3)>>,
-    frames: std::cell::Cell<u64>,
     /// Where the cascades' texels lie as the sun moves (`fit`).
     grid: std::cell::Cell<Grid>,
 }
@@ -565,13 +537,7 @@ impl Sun {
             })
         };
         let (caster, solid) = (cast_pipeline("vs_cast", Some("fs_cast")), cast_pipeline("vs_cast_solid", None));
-        Some(Sun { pipelines, bg, buf, caster, solid, cascades, cascade_buf, stride, layers, size, drawn: Default::default(), last: Default::default(), frames: Default::default(), grid: Default::default() })
-    }
-
-    /// Every cascade drawn again at the next frame (none kept from before):
-    /// Sun Shadows turned on or off.
-    pub(crate) fn forget(&self) {
-        self.last.set(None);
+        Some(Sun { pipelines, bg, buf, caster, solid, cascades, cascade_buf, stride, layers, size, drawn: Default::default(), grid: Default::default() })
     }
 
     /// A group's casters, in clusters: its members that draw an opaque
@@ -655,42 +621,30 @@ impl Sun {
     /// Draws the frame's casters into the map for `view`, and sets the
     /// receivers' uniform: whether the sun is up enough to cast (`strength`),
     /// its light not black. `false`: no shadow this frame (the receivers
-    /// need not be used). The first three cascades are drawn every frame (a
-    /// character's shadow moves with it) and the last, 94 to 250 off (40% of
-    /// the draws, and the characters at the edge of their distance), every
-    /// other frame: kept from the frame before it is used as it was drawn,
-    /// wide enough for what the camera did ([`JUMP`], [`TURN`]). Every
-    /// cascade is drawn the first frame, when the eye moves or the camera
-    /// turns more than that, and when the sun moves more than [`SUN_DRIFT`].
+    /// need not be used). Every cascade is drawn every frame: the far two
+    /// drawn in turn, as at first (each every other frame, kept a frame
+    /// between), left a moving thing's shadow where it had been at every
+    /// other frame, and its sunlit side in it (a box running 0.15 a frame 74
+    /// off: its shadow's centroid back 4.4 pixels and on 6.4 by turns, of
+    /// 512); drawing them every frame costs 0.27 ms on an RX 580.
     pub(crate) fn draw(&self, r: &Renderer, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, view: &View, items: &[Draw]) -> bool {
         let dir = view.sun_dir.normalize_or(Vec3::NEG_Y);
         let k = strength(dir);
         if k <= 0.0 || view.sun.max_element() < 0.5 / 255.0 {
             self.drawn.set((0, 0));
-            self.last.set(None);
             return false;
         }
         let mut grid = self.grid.get();
-        let fitted = fit(view.view_proj, view.eye, dir, self.size, &mut grid);
+        let cascades = fit(view.view_proj, view.eye, dir, self.size, &mut grid);
         self.grid.set(grid);
-        let (sun, axis) = (dir.as_dvec3(), view_axis(view.view_proj, view.eye));
-        let frame = self.frames.get();
-        self.frames.set(frame + 1);
-        let kept = self.last.get().filter(|(_, eye, a, s)| (*eye - view.eye).length() <= JUMP && a.angle_between(axis) <= TURN && s.angle_between(sun) <= SUN_DRIFT);
-        let drawn_now = |c: usize| kept.is_none() || c < CASCADES - 1 || frame % 2 == 0;
-        let cascades: [Cascade; CASCADES] = std::array::from_fn(|c| match kept {
-            Some((last, ..)) if !drawn_now(c) => last[c],
-            _ => fitted[c],
-        });
-        self.last.set(Some((cascades, view.eye, axis, sun)));
         queue.write_buffer(&self.buf, 0, bytemuck::bytes_of(&ShadowUniform::new(&cascades, k, self.size)));
-        for (c, cascade) in cascades.iter().enumerate().filter(|(c, _)| drawn_now(*c)) {
+        for (c, cascade) in cascades.iter().enumerate() {
             let push = [(BACK_PUSH / cascade.depth as f64) as f32, 0.0, 0.0, 0.0];
             let u = CascadeUniform { m: cascade.m.to_cols_array_2d(), push };
             queue.write_buffer(&self.cascade_buf, c as u64 * self.stride, bytemuck::bytes_of(&u));
         }
         let (mut runs, mut draws) = (0u32, 0u32);
-        for (c, cascade) in cascades.iter().enumerate().filter(|(c, _)| drawn_now(*c)) {
+        for (c, cascade) in cascades.iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("sun shadow cascade"),
                 color_attachments: &[],
@@ -813,11 +767,8 @@ mod tests {
 
     /// Each cascade's box holds its slice of the view: every corner of the
     /// slice falls inside its map, seen near the origin and far out at
-    /// Freeport's x, on texels the sun has turned a while; the next holds
-    /// the last part of it the shader blends over ([`SEAM`]); and the last
-    /// (drawn every other frame, kept a frame) holds the slice of a camera
-    /// moved by up to [`JUMP`] and turned by up to [`TURN`] since. The
-    /// control: the range's far corner is outside the first cascade's box.
+    /// Freeport's x, on texels the sun has turned a while. The control: the
+    /// range's far corner is outside the first cascade's box.
     #[test]
     fn each_cascade_holds_its_slice() {
         let noon = Vec3::new(-0.3, -0.95, 0.0).normalize();
@@ -835,31 +786,11 @@ mod tests {
                 let q = cs[c].m.as_dmat4() * (p - eye.as_dvec3()).extend(1.0);
                 q.x.abs() <= 1.0 && q.y.abs() <= 1.0 && (0.0..=1.0).contains(&q.z)
             };
-            // the camera a frame on: moved and turned (either way)
-            let later = [1.0f32, -1.0].map(|s| {
-                let e = eye + Vec3::new(0.7, 0.0, -0.7) * JUMP * 0.99;
-                let l = Mat4::from_rotation_y(s * TURN as f32 * 0.99).transform_vector3(look);
-                view(e, e + l)
-            });
             for c in 0..CASCADES {
                 let n = if c == 0 { 0.3 } else { ENDS[c - 1] as f64 };
                 for d in [n, ENDS[c] as f64] {
                     for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
                         assert!(inside(c, corner(vp, x, y, d)), "cascade {c} at {eye}: corner ({x}, {y}) at depth {d}");
-                        if c >= CASCADES - 1 {
-                            for (k, v) in later.iter().enumerate() {
-                                assert!(inside(c, corner(*v, x, y, d)), "cascade {c} kept a frame ({k}): corner ({x}, {y}) at depth {d}");
-                            }
-                        }
-                    }
-                }
-                // the next holds the last part of this one's slice, where the
-                // shader blends the two (`SEAM`)
-                if c + 1 < CASCADES {
-                    let start = if c == 0 { 0.0 } else { ENDS[c - 1] as f64 };
-                    let d = ENDS[c] as f64 - SEAM as f64 * (ENDS[c] as f64 - start);
-                    for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                        assert!(inside(c + 1, corner(vp, x, y, d)), "cascade {}: the seam's corner ({x}, {y}) at depth {d}", c + 1);
                     }
                 }
                 assert!(cs[c].texel > 0.0 && cs[c].texel < [0.03, 0.06, 0.12, 0.3][c], "cascade {c}'s texel {}", cs[c].texel);
@@ -923,12 +854,6 @@ mod tests {
         let low = Vec3::new(1.0, -0.15, 0.0).normalize();
         let c = fit(vp, eye, low, 2048, &mut Grid::default())[0];
         assert_eq!(c.casters_from, c.lo[2], "under a low sun, the whole box");
-    }
-
-    /// The seam's share the shader blends over is the one named here.
-    #[test]
-    fn the_seam_is_the_shaders() {
-        assert!(include_str!("sunshadow.wgsl").contains(&format!("const SUN_SEAM: f32 = {SEAM};")));
     }
 
     /// A layer is solid when no texel of it can fail the alpha test: its
