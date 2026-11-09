@@ -94,6 +94,9 @@ pub struct CharRecord {
     /// held items', armour slots' and robe's, and the slots' ArmorGroup
     /// variants where the disc's has tints; then no tint is sent.
     pub colors: Option<net::entity::LiveColors>,
+    /// The cape it wears, on a server with capes (`cape`: the session's
+    /// `cape_list` by its server id, which comes after the list).
+    pub cape: Option<net::cape::Cape>,
 }
 
 impl CharRecord {
@@ -124,6 +127,7 @@ impl CharRecord {
             armor: std::array::from_fn(|k| g(20 + k)),
             tints: std::array::from_fn(|k| g(26 + k)),
             colors: None,
+            cape: None,
         }
     }
 
@@ -158,6 +162,7 @@ impl CharRecord {
                 armor: std::array::from_fn(|k| rgba(43 + 4 * k)),
                 robe: rgba(67),
             }),
+            cape: None,
         }
     }
 
@@ -413,6 +418,12 @@ impl Client {
     /// the next frame.
     pub fn art_changed(&mut self) {
         self.remake = true;
+    }
+
+    /// The bodies the characters' capes are cut from (`cape::bodies`), which
+    /// CHARSEL's files do not hold.
+    pub fn cape_bodies(&self) -> Vec<u32> {
+        crate::cape::bodies(self.chars.iter().filter_map(|c| c.cape.as_ref()))
     }
 
     /// A server's races' bodies came in (`res::Res::want_bodies`): character
@@ -704,6 +715,12 @@ impl Client {
         // what the server said creation takes past the game's (`net::creation`),
         // for the create pages and character select's stand-ins
         create::tables::set_offer(s.creation.as_ref());
+        // the characters' capes, on a server with capes (`cape`); they come
+        // after the list, and with every list
+        crate::cape::set_offered(s.capes);
+        for c in &mut self.chars {
+            c.cape = if s.capes { s.cape_list.get(&c.server_id).copied() } else { None };
+        }
         for (k, e) in events.iter().enumerate() {
             match e {
                 Event::ShardList(list) if matches!(self.phase, 0 | 1) => {

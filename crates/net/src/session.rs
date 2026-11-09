@@ -158,6 +158,22 @@ pub const OP_FLY: u16 = 0x7E1B;
 pub const OP_COMBAT_RECORD: u16 = 0x7E20;
 /// The record: this client's ask (a u32 1), the server's rows (`record::read`).
 pub const OP_COMBAT_RECORD_DATA: u16 = 0x7E21;
+/// go-eqoa-server's own, no retail message either: capes (`cape`), a u32 after
+/// the opcode, both ways. The server offers them (1) after the session's first
+/// character list, and only where it turns them on (its `world.capes`); this
+/// client answers 1 at once, and from then on it is sent a cape item as one of
+/// wear slot [`crate::cape::WEAR_SLOT`] worn in equip slot
+/// [`crate::cape::EQUIP_SLOT`], the capes of its list's characters
+/// ([`OP_CAPES_LIST`]) and of the players it sees ([`OP_CAPES_IN_VIEW`]). A PS2
+/// ignores the offer and is sent a cape as a plain item; a server that never
+/// makes one gets no answer, and nothing of capes is drawn or worn.
+pub const OP_CAPES: u16 = 0x7E25;
+/// The capes of the players this client sees, by the id it knows each by (its
+/// own character's too): `cape::read`, the whole set each time.
+pub const OP_CAPES_IN_VIEW: u16 = 0x7E26;
+/// The capes of the characters in its list, by each one's server id:
+/// `cape::read`, the whole list after each character list.
+pub const OP_CAPES_LIST: u16 = 0x7E27;
 /// go-eqoa-server's own, no retail message either: the whole of a raid group,
 /// where a roster holds four (`m_group`). The offer, from the server once the
 /// player is in the world, a u32 after the opcode (1); a server without it
@@ -467,6 +483,16 @@ pub struct Session {
     /// The server offered the combat record ([`OP_COMBAT_RECORD`]) and this
     /// client took it: Character > Combat Record. Kept for the session.
     pub combat_record: bool,
+    /// The server offered capes ([`OP_CAPES`]) and this client took them: a
+    /// cape is worn in its slot and drawn. Kept for the session.
+    pub capes: bool,
+    /// The capes of the characters in the list, by server id
+    /// ([`OP_CAPES_LIST`]), and of the players seen, by the id this client
+    /// knows each by ([`OP_CAPES_IN_VIEW`]); `capes_changed` counts the
+    /// messages, so what draws them sees a new one.
+    pub cape_list: std::collections::HashMap<i64, crate::cape::Cape>,
+    pub capes_in_view: std::collections::HashMap<u32, crate::cape::Cape>,
+    pub capes_changed: u64,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -602,6 +628,10 @@ impl Session {
             raid_roster_offer: false,
             raid_roster_asked: None,
             combat_record: false,
+            capes: false,
+            cape_list: Default::default(),
+            capes_in_view: Default::default(),
+            capes_changed: 0,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -1100,6 +1130,24 @@ impl Session {
                     self.send_op_int(OP_RACE_LABELS, 1);
                 }
             }
+            // capes offered: taken (`cape`: worn in their slot, drawn)
+            OP_CAPES => {
+                if r.u32() != 0 && !r.error {
+                    self.capes = true;
+                    self.send_op_int(OP_CAPES, 1);
+                }
+            }
+            OP_CAPES_LIST | OP_CAPES_IN_VIEW if self.capes => match crate::cape::read(&m.data[2.min(m.data.len())..]) {
+                Some(list) => {
+                    if op == OP_CAPES_LIST {
+                        self.cape_list = list.into_iter().map(|(id, c)| (id as i64, c)).collect();
+                    } else {
+                        self.capes_in_view = list.into_iter().collect();
+                    }
+                    self.capes_changed += 1;
+                }
+                None => debug_line(&format!("[net] capes: {} bytes not read", m.data.len())),
+            },
             // creation's races offered: taken (the create pages offer them)
             OP_CREATION_OFFER => {
                 if r.u32() != 0 && !r.error {
@@ -2405,6 +2453,57 @@ mod tests {
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x21, 0x7E, 1, 0, 0]);
         assert!(matches!(&ev[..], [Event::Opcode { op: OP_COMBAT_RECORD_DATA, data }] if data[..] == [1, 0, 0]), "{ev:?}");
         assert_eq!(answers(&mut s), [], "the record answered nothing");
+    }
+
+    // Capes (0x7E25): the offer answered with 1 at once and kept; then the list's
+    // capes (0x7E27, by server id) and those in view (0x7E26, by entity id) kept,
+    // each message the whole of it, a style of 0 left out and a count of each.
+    // The controls: an offer cut short or of 0 is neither answered nor kept, a
+    // session never offered capes keeps no list sent to it anyway, and a list cut
+    // short changes nothing.
+    #[test]
+    fn the_cape_offer_is_answered_and_its_lists_kept() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        let list = |op: u16, entries: &[(u32, u8, u32)]| {
+            let mut m = op.to_le_bytes().to_vec();
+            m.push(entries.len() as u8);
+            for &(id, style, color) in entries {
+                m.extend_from_slice(&id.to_le_bytes());
+                m.push(style);
+                m.extend_from_slice(&color.to_le_bytes());
+            }
+            m
+        };
+        answers(&mut s);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, list(OP_CAPES_IN_VIEW, &[(5, 1, 0)]));
+        assert!(s.capes_in_view.is_empty() && s.capes_changed == 0, "the control: never offered, nothing kept");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x25, 0x7E, 1, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x25, 0x7E, 0, 0, 0, 0]);
+        assert!(!s.capes, "the controls: cut short, or 0");
+        assert_eq!(answers(&mut s), []);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x25, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty() && s.capes, "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x25, 0x7E, 1, 0, 0, 0])]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, list(OP_CAPES_LIST, &[(1234, 3, 0xFF0000FF), (99, 0, 0)]));
+        assert_eq!(s.cape_list.get(&1234), Some(&crate::cape::Cape { style: 3, color: 0xFF0000FF }));
+        assert_eq!((s.cape_list.len(), s.capes_changed), (1, 1), "a style of 0 wears none");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, list(OP_CAPES_IN_VIEW, &[(0x7F00_0001, 2, 0), (40, 1, 0)]));
+        assert_eq!((s.capes_in_view.len(), s.capes_changed), (2, 2));
+        let mut short = list(OP_CAPES_IN_VIEW, &[(40, 4, 0)]);
+        short.pop();
+        deliver(&mut s, drdp::TYPE_GUARANTEED, short);
+        assert_eq!((s.capes_in_view.len(), s.capes_changed), (2, 2), "the control: cut short, the set as it was");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, list(OP_CAPES_IN_VIEW, &[]));
+        assert!(s.capes_in_view.is_empty(), "the whole set each time: none now");
+        assert_eq!(s.cape_list.len(), 1, "the list kept apart");
+        assert_eq!(answers(&mut s), [], "the lists answered nothing");
     }
 
     // A state channel's update that comes before the world entry (live, a

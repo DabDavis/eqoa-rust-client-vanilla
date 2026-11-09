@@ -86,6 +86,10 @@ struct Puppet {
     /// The textures it was built with (`texpack::generation`): a texture
     /// pack turned on or off rebuilds it.
     textures: u64,
+    /// The cape the server says it wears (`cape`) and its model, fitted to
+    /// its skeleton and drawn on its palette; none where no art or body
+    /// fits. None while it wears none: nothing more is drawn.
+    cape: Option<(net::cape::Cape, Option<GpuModel>)>,
 }
 
 /// An entity's actor in the walker's collision world (`VIEntity::m_actor`):
@@ -912,8 +916,33 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                         dress_look(lib, e.drawn_model as i32, &mut model, cs, look, helm_worn, &crate::s2::get().cust(), player);
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation() })
+                    Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None })
                 })
+}
+
+/// A player's character puts on the cape the server says it wears (`cape`:
+/// `want`, the session's `capes_in_view` by its id), or takes it off, when it
+/// changes: fitted to the puppet's own skeleton (in Frontiers' art: capes are
+/// the server's), drawn on its palette. A cape no art or body fits is kept as
+/// asked for, with no model, so it is not tried again each frame.
+fn wear_cape(lib: &Library, g: &mut Gpu, p: &mut Puppet, want: Option<net::cape::Cape>) {
+    if p.cape.as_ref().map(|(c, _)| *c) == want {
+        return;
+    }
+    p.cape = want.map(|c| {
+        let m = p.sprite.as_ref().and_then(|cs| crate::cape::model(lib, c, p.model, cs));
+        let gpu = m.map(|m| lib.with_view(esf::Era::Frontiers, || g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &render::library_textures(lib))));
+        (c, gpu)
+    });
+}
+
+/// The cape `e` wears by what the server sent (`capes_in_view`): only a
+/// player's character, only while the session took capes.
+fn cape_of(session: &net::session::Session, e: &net::entity::Entity) -> Option<net::cape::Cape> {
+    if !session.capes || !a_player(e) {
+        return None;
+    }
+    session.capes_in_view.get(&e.id).copied()
 }
 
 /// Per item slot, the item's DictID and its node (`held_items`).
@@ -2480,7 +2509,10 @@ impl Play {
         self.grant_walker(walker, lib);
         let mut new_model = None;
         self.actors_scene(walker);
-        for e in self.session.pump() {
+        let events = self.session.pump();
+        // capes in their slot while the server's offer is taken (`cape`)
+        crate::cape::set_offered(self.session.capes);
+        for e in events {
             match e {
                 Event::TargetInfo { disposition, b, title, guild, .. } => {
                     self.target_info = Some(disposition);
@@ -3132,6 +3164,10 @@ impl Play {
             {
                 let look = e.creature.as_ref().map(look_of);
                 apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms, self.session.creation.as_ref());
+                let want = cape_of(&self.session, e);
+                if let Some(p) = self.self_puppet.as_mut() {
+                    wear_cape(lib, &mut g, p, want);
+                }
             }
             // a creature's sounds are shared while it is loaded
             let sounds_of = |p: &Option<Puppet>| p.as_ref().and_then(|p| p.sprite.as_ref()).map(|cs| cs.sounds()).unwrap_or_default();
@@ -3150,6 +3186,7 @@ impl Play {
                 let_go(s, &old);
             }
             let Some(p) = self.puppets[slot].as_mut() else { continue };
+            wear_cape(lib, &mut g, p, cape_of(&self.session, e));
             let f = F::<Ee>::new;
             let actor = Matrix44::transform(
                 &Vect3::new(f(e.actor_hpr[0]), f(e.actor_hpr[1]), F::ZERO),
@@ -3256,6 +3293,15 @@ impl Play {
             p.shown = shown;
             for (_, a) in &mut p.attached {
                 a.visible = shown;
+            }
+            // the cape (`cape`): on the body's place and palette, drawn with it
+            if let Some((_, Some(cg))) = p.cape.as_mut() {
+                g.renderer.set_instances(g.queue, cg, &[matrix]);
+                if !palette.is_empty() {
+                    g.renderer.set_palette(g.queue, cg, &palette);
+                }
+                crate::lod::place(cg, &p.centre, &eye);
+                cg.visible = p.gpu.visible;
             }
         }
         self.far_last = far;
@@ -5479,6 +5525,15 @@ impl Play {
         let mut w = net::stream::Writer::op(62);
         w.u32(it.inv_index).u32(self.target).u8(b);
         self.session.send(&w.data);
+    }
+
+    /// The inventory's first item called `name` used as the item menu's Use or
+    /// Equip uses it (`use_item`, 0x003E with 0); false when none is so named.
+    /// A playshot's `EQOA_USE`.
+    pub fn use_item_named(&mut self, name: &str) -> bool {
+        let Some(i) = self.dump.inventory.items.iter().position(|it| it.item.name.eq_ignore_ascii_case(name)) else { return false };
+        self.use_item(i as i32, 0);
+        true
     }
 
     /// What the item menu asked for: `UseItemOn` (0x003C, one at a time),
@@ -8335,6 +8390,14 @@ impl Play {
         for (_, a) in &mut p.attached {
             a.visible = shown;
         }
+        // the cape (`cape`): on the walker's place and palette, drawn with the body
+        if let Some((_, Some(cg))) = p.cape.as_mut() {
+            r.set_instances(queue, cg, &[matrix]);
+            if !palette.is_empty() {
+                r.set_palette(queue, cg, palette);
+            }
+            cg.visible = p.gpu.visible;
+        }
         let Some(cs) = walker.sprite.as_ref() else { return };
         let centre = glam_to_matrix(matrix);
         for (node, gpu) in &p.attached {
@@ -8347,7 +8410,7 @@ impl Play {
     pub fn models(&self) -> impl Iterator<Item = &GpuModel> {
         let me = self.self_puppet.as_ref().filter(|_| self.self_shown);
         let flying = self.projectiles.values().flat_map(|(_, pool)| pool);
-        self.puppets.iter().flatten().chain(me).flat_map(|p| std::iter::once(&p.gpu).chain(p.attached.iter().map(|a| &a.1))).chain(flying)
+        self.puppets.iter().flatten().chain(me).flat_map(|p| std::iter::once(&p.gpu).chain(p.attached.iter().map(|a| &a.1)).chain(p.cape.iter().filter_map(|(_, g)| g.as_ref()))).chain(flying)
     }
 
     pub fn describe(&self) -> String {
@@ -8388,6 +8451,24 @@ mod commands {
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
         Play::new(s, Player::default(), dump)
+    }
+
+    /// A character wears the cape the server's set names for its id
+    /// (`cape_of`): a player's, while the session took capes. The controls: a
+    /// creature (name colour not a player's) with the same id wears none, nor
+    /// does anyone on a session that never took them (every server without
+    /// capes), nor an id the set leaves out.
+    #[test]
+    fn a_cape_is_a_players_and_only_where_capes_are_offered() {
+        let mut p = play();
+        let cape = net::cape::Cape { style: 2, color: 0xB018_18FF };
+        p.session.capes_in_view.insert(0x200, cape);
+        let who = |id: u32, p256: u8| net::entity::Entity { id, kind: net::entity::TYPE_CREATURE, creature: Some(net::entity::Creature { p256, ..Default::default() }), ..Default::default() };
+        assert_eq!(cape_of(&p.session, &who(0x200, 2)), None, "the control: capes never taken");
+        p.session.capes = true;
+        assert_eq!(cape_of(&p.session, &who(0x200, 2)), Some(cape));
+        assert_eq!(cape_of(&p.session, &who(0x200, 0)), None, "the control: not a player's character");
+        assert_eq!(cape_of(&p.session, &who(0x201, 2)), None, "the control: not in the set");
     }
 
     /// A member who does not lead its group invites only on a server that

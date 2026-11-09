@@ -18,7 +18,9 @@
 //! whatever its header says). `action=N` plays the sprite's action N from the
 //! start (23: the first hand's attack) instead of standing. `tilt=DEG` looks
 //! from that far above (negative: below) the body's middle instead of the
-//! usual 14 degrees: into a hollow armour at the collar, say.
+//! usual 14 degrees: into a hollow armour at the collar, say. `cape=N` puts
+//! cape style N on it (`cape`, as a player's character wears one on a server
+//! with capes), `capecolor=RRGGBB` in that colour.
 
 use esf::Library;
 use glam::{Mat4, Vec3};
@@ -51,6 +53,8 @@ pub struct Words {
     pub size: (u32, u32),
     /// The views' height above the middle, in degrees (None: the usual).
     pub tilt: Option<f32>,
+    /// The cape worn (`cape`), style 0 none.
+    pub cape: net::cape::Cape,
 }
 
 /// What a list of words names: the look, the items held, the idle's time and
@@ -59,6 +63,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
     let mut look = vi::cust::Look { robe: -1, ..Default::default() };
     let (mut at, mut size) = (1500i64, (360u32, 540u32));
     let (mut items, mut race, mut action, mut tilt) = ([0u32; 3], false, None, None);
+    let mut cape = net::cape::Cape::default();
     let nums = |v: &str| v.split(',').map(|n| n.trim().parse::<u8>().map_err(|e| format!("{v}: {e}"))).collect::<Result<Vec<u8>, String>>();
     let hex = |w: &str, v: &str| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|e| format!("{w}: {e}"));
     for w in words {
@@ -68,6 +73,8 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             "off" => items[1] = hex(w, v)?,
             "shield" => items[2] = hex(w, v)?,
             "race" => race = v != "0",
+            "cape" => cape.style = v.parse().map_err(|e| format!("{w}: {e}"))?,
+            "capecolor" => cape.color = (u32::from_str_radix(v.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))? << 8) | 0xFF,
             "action" => action = Some(v.parse().map_err(|e| format!("{w}: {e}"))?),
             "set" => {
                 let n = nums(v)?[0];
@@ -102,7 +109,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             _ => return Err(format!("{w}: not a word of a look")),
         }
     }
-    Ok(Words { look, items, race, action, at, size, tilt })
+    Ok(Words { look, items, race, action, at, size, tilt, cape })
 }
 
 /// The body drawn in the look, holding what `words` say, from four sides
@@ -180,6 +187,14 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         tris(&mesh.batches[before..]),
         tris(&mesh.batches[..before])
     );
+    // the cape, fitted to the body as it is built (`cape::model`)
+    let cape = (words.cape.style != 0).then(|| crate::cape::model(lib, words.cape, model as u32, &cs)).flatten();
+    if words.cape.style != 0 {
+        match &cape {
+            Some(m) => eprintln!("cape {} ({}): {} triangles", words.cape.style, crate::cape::style(words.cape.style).map_or("", |s| s.what), tris(&m.batches)),
+            None => eprintln!("cape {}: none on this body", words.cape.style),
+        }
+    }
     if words.items.iter().any(|&i| i != 0) {
         eprintln!("holds items: {} (item nodes {:?}); hung: {:?}", cs.holds_items, &cs.item_nodes[..3], held.iter().map(|(n, i)| format!("{i:#010x} on node {n}")).collect::<Vec<_>>());
     }
@@ -247,6 +262,15 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     if !palette.is_empty() {
         r.set_palette(&queue, &gpu, &palette);
     }
+    // the cape on the body's own palette and place
+    let mut cape = cape.map(|m| {
+        let g = r.upload(&device, &queue, &m, &[render::IDENTITY], &textures);
+        r.set_instances(&queue, &g, &[centre.to_cols()]);
+        if !palette.is_empty() {
+            r.set_palette(&queue, &g, &palette);
+        }
+        g
+    });
     // each item on its node's animated place under the centre transform, as
     // the game draws an attached sprite
     let mut items = Vec::new();
@@ -290,7 +314,10 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         for (g, at) in &mut items {
             crate::lod::place(g, at, &at_eye);
         }
-        let draws: Vec<render::Draw> = std::iter::once(render::Draw::Model(&gpu)).chain(items.iter().map(|(g, _)| render::Draw::Model(g))).collect();
+        if let Some(g) = cape.as_mut() {
+            crate::lod::place(g, &centre, &at_eye);
+        }
+        let draws: Vec<render::Draw> = std::iter::once(render::Draw::Model(&gpu)).chain(items.iter().map(|(g, _)| render::Draw::Model(g))).chain(cape.iter().map(render::Draw::Model)).collect();
         let rgba = render::capture(&device, &queue, &mut r, w, h, &view, &draws, None);
         for y in 0..h as usize {
             let src = &rgba[y * w as usize * 4..(y + 1) * w as usize * 4];
@@ -326,6 +353,9 @@ mod tests {
         assert_eq!((held.items, held.race, held.action), ([0x17F9_870B, 0xB0A9_CBD2, 0x2486_A8D7], true, Some(23)));
         assert!(!parse(&words("race=0")).unwrap().race);
         assert_eq!((bare.tilt, parse(&words("tilt=60")).unwrap().tilt, parse(&words("tilt=-30")).unwrap().tilt), (None, Some(60.0), Some(-30.0)));
+        let caped = parse(&words("cape=3 capecolor=c03020")).unwrap();
+        assert_eq!(caped.cape, net::cape::Cape { style: 3, color: 0xC030_20FF });
+        assert_eq!(bare.cape, net::cape::Cape::default(), "no cape unless asked");
         assert!(parse(&words("sett=3")).is_err());
         assert!(parse(&words("main=sword")).is_err());
     }

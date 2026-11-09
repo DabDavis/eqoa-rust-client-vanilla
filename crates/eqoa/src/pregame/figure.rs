@@ -39,6 +39,11 @@ pub struct Figure {
     held: Option<crate::particles::Held>,
     /// their billboards this frame (`particles_frame`)
     pub fx: Vec<render::billboard::Batch>,
+    /// the body it was built of: the model, or what stood in for it
+    body: u32,
+    /// the cape it wears (`cape`, `wear_cape`) and its model, none where no
+    /// art or body fits; None while it wears none
+    cape: Option<(net::cape::Cape, Option<GpuModel>)>,
 }
 
 /// `CreateActor`'s sprite: a copy of the parsed one (`VICSprite::Copy`,
@@ -100,7 +105,9 @@ impl Figure {
     /// items at its place; its animation starts over (the 2002 disc's bodies
     /// are other skeletons).
     pub fn remake(&mut self, lib: &Library, g: &mut Gpu, now: i64) {
-        if let Some(f) = Figure::new(lib, g, self.model, self.look, self.items, self.at, self.hpr, now) {
+        let cape = self.cape();
+        if let Some(mut f) = Figure::new(lib, g, self.model, self.look, self.items, self.at, self.hpr, now) {
+            f.wear_cape(lib, g, cape);
             *self = f;
         }
     }
@@ -158,7 +165,27 @@ impl Figure {
             crate::play::dress_look(lib, id as i32, &mut built, cs, &look, helm_worn, &t, true);
         }
         let gpu = g.renderer.upload(g.device, g.queue, &built, &[render::IDENTITY], &textures);
-        Some(Figure { model, look, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new() })
+        Some(Figure { model, look, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new(), body: id, cape: None })
+    }
+
+    /// Puts on the cape `want` (`cape`: a character's on a server with capes),
+    /// or takes it off, when it changes: fitted to the figure's skeleton, in
+    /// Frontiers' art, drawn on its palette. A cape no art or body fits is kept
+    /// as asked for, with no model.
+    pub fn wear_cape(&mut self, lib: &Library, g: &mut Gpu, want: Option<net::cape::Cape>) {
+        if self.cape.as_ref().map(|(c, _)| *c) == want {
+            return;
+        }
+        self.cape = want.map(|c| {
+            let m = self.sprite.as_ref().and_then(|cs| crate::cape::model(lib, c, self.body, cs));
+            let gpu = m.map(|m| lib.with_view(esf::Era::Frontiers, || g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &render::library_textures(lib))));
+            (c, gpu)
+        });
+    }
+
+    /// The cape it wears as asked for (none: none).
+    pub fn cape(&self) -> Option<net::cape::Cape> {
+        self.cape.as_ref().map(|(c, _)| *c)
     }
 
     /// `VICSprite::SetAction(id)` (23 the select screen's flourish, 0 back
@@ -199,6 +226,12 @@ impl Figure {
         if !palette.is_empty() {
             g.renderer.set_palette(g.queue, &self.gpu, &palette);
         }
+        if let Some((_, Some(cape))) = &self.cape {
+            g.renderer.set_instances(g.queue, cape, &[matrix]);
+            if !palette.is_empty() {
+                g.renderer.set_palette(g.queue, cape, &palette);
+            }
+        }
     }
 
     /// The particles of the items in its hands one frame at `now`, for a
@@ -223,9 +256,9 @@ impl Figure {
         self.fx = held.frame(lib, &hands, eye, now);
     }
 
-    /// What to draw: the body and what it carries.
+    /// What to draw: the body, what it carries and its cape.
     pub fn models(&self) -> impl Iterator<Item = &GpuModel> {
-        std::iter::once(&self.gpu).chain(self.attached.iter().map(|(_, m)| m))
+        std::iter::once(&self.gpu).chain(self.attached.iter().map(|(_, m)| m)).chain(self.cape.iter().filter_map(|(_, m)| m.as_ref()))
     }
 }
 
@@ -368,6 +401,53 @@ mod tests {
         }));
         assert_eq!(nodes(&mut g), [11, 20], "the sword on node 11, the shield on 20");
         tables::set_offer(None);
+    }
+
+    /// A figure at character select wears its character's cape (`cape`) out
+    /// of the pregame's own files and the cape's body cut out of CHAR.ESF, as
+    /// `res::Res::want_bodies` reads it: one model more, on the body's palette,
+    /// none for a style with no art; taken off, the figure draws as it did.
+    /// The control: a figure asked for no cape draws exactly its body and what
+    /// it carries. Needs `run/eqoa.iso` and a graphics adapter.
+    #[test]
+    fn a_figure_wears_its_cape_and_none_adds_nothing() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let instance = render::wgpu::Instance::new(render::wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&render::wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let mut g = Gpu { renderer: &mut renderer, device: &device, queue: &queue };
+        let mut lib = Library::new();
+        for f in crate::pregame::client::FILES {
+            if let Some(c) = iso.read(f).ok().and_then(|b| esf::Container::open(b).ok()) {
+                lib.add(*f, c);
+            }
+        }
+        let cape = net::cape::Cape { style: 1, color: 0 };
+        let bodies = crate::cape::bodies([&cape]);
+        assert_eq!(bodies, [0xD130_0BD3], "the knight's body");
+        lib.add(crate::pregame::res::BODIES, crate::pregame::res::cut_bodies(iso.read("CHAR.ESF").unwrap(), &bodies).expect("the knight's body"));
+        let human = vi::hash::hash_resource_id("HumanMale");
+        let look = vi::cust::Look { hair: [1, 2, 3], face: 1, robe: -1, ..Default::default() };
+        let mut fig = Figure::new(&lib, &mut g, human, look, [0; 3], [0.0; 3], [0.0; 3], 0).unwrap();
+        let bare = fig.models().count();
+        fig.wear_cape(&lib, &mut g, None);
+        assert_eq!(fig.models().count(), bare, "the control: no cape asked, none drawn");
+        fig.wear_cape(&lib, &mut g, Some(cape));
+        assert_eq!((fig.models().count(), fig.cape()), (bare + 1, Some(cape)), "the cape drawn with the body");
+        fig.pose(&g, 33);
+        fig.wear_cape(&lib, &mut g, Some(net::cape::Cape { style: 200, color: 0 }));
+        assert_eq!(fig.models().count(), bare, "a style with no art: none drawn");
+        fig.wear_cape(&lib, &mut g, None);
+        assert_eq!((fig.models().count(), fig.cape()), (bare, None), "taken off");
     }
 
     /// A figure is its model as the art drawn has it (`era`): with the 2002
