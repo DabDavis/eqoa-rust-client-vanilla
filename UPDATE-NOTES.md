@@ -13,6 +13,8 @@ is put on the page by `.github/workflows/notes.yml`.
 - A bug report from the browser now says which build of the page you were on.
 - When chat lines can't go out (the server reset your connection in the world and hasn't sent the world again), the
   game still sends nothing for them, as the PS2 does, but your next bug report says how many were held back.
+- A crash that could come when the server's connection broke in a particular way (the game stopped the moment
+  you moved) can't happen any more: the game carries on without that connection and says so in its log.
 
 ## 2026-11-09 · A pack and a bank of 100
 - On a server that has them (the Heirloom Test Server), your inventory holds 100 items and your bank 100, where the
