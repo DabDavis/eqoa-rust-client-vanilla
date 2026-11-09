@@ -140,6 +140,7 @@ mod racebody;
 mod raceemote;
 mod racelabel;
 mod raceopts;
+mod wisp;
 mod record;
 mod alarm;
 mod startmenu;

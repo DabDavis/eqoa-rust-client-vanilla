@@ -6,6 +6,16 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · The Jal'Raeth and the Wisp
+- Two more races on a server that has them. The Jal'Raeth float cross-legged: choose their robes, a channeler's
+  body or a knight's armour. They wear chest armour, bracers and gloves as a human does (their crossed legs keep
+  their own garb), their helm sits on their head, their weapons float at their side, and they wave, bow, point
+  and cheer.
+- A Wisp is a light inside an empty suit of armour: you see only what it wears, shaped as a human would wear it,
+  its weapons swinging as a human's do, and the wisp glowing inside the helm. With nothing on, it is the wisp
+  alone, floating where a head would be. Other players with this client see it so; a PlayStation 2 shows a human
+  in the same armour.
+
 ## 2026-11-09 · Light Shadows: no square under lamps, steady weapon glows
 - With Light Shadows on, the ground under a street lamp is lit again. The lamp's light sits inside its little
   housing, and the housing's floor was darkening a square of ground under every lamp.

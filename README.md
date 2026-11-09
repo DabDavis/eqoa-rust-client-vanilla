@@ -341,6 +341,16 @@ or a browser (each described where it lives below):
   rest stood in the air; on a server with jumps a player's character in one of them takes the human's fall
   (looping) and landing (once) carried onto it, or its own nearest (`AIR_OWN`: the pixie's, fairy's and
   fungusman's), in its own view and every other player's, a jump and a fall off a ledge alike.
+- **The Wisp** (a race of go-eqoa-server's own, 31; the owner, 2026-11-09: "the armor will form like a human and also
+  the weapons swing like humans. like when humans are invis, but the wisp is inside the helm"; `wisp`): a human's body
+  of its sex, marked by a race option the server lays always (a texture row of one step, `wisp`, whose value is the
+  will o' wisp's body, CHAR.ESF 0x8143DC70, no texture: an older client lays nothing). Drawn as its worn slots' triangles
+  alone (where `ApplyLook` lays armour or a robe; no skin, face or hair), the wisp a head across on the helm's node
+  inside any helm, hung with the held items and the helm (`play::attach`): the player's own, others', character select
+  and the create pages. A PS2 shows a human in its armour. **The Jal'Raeth** (30): their three bodies wear a helm on
+  the head node they name (`slotless::HEAD_HELMS`: they name no helm node), the human's chest, bracers and gloves
+  carried onto their skeleton by bone names (`slotless::named_shell_of`: their hands and feet hang off the root, so
+  the fit by limbs finds none), and the human's emotes on their upper body (`raceemote::TABLE`).
 - **Capes**, on a server that has them (go-eqoa-server's `world.capes`, the Heirloom Test
   Server's; the server owner, 2026-11-08: "lets add a new equip slot for heirloom server only.
   capes for all. there are many capes we can borrow from for various styles."; `cape`): the
