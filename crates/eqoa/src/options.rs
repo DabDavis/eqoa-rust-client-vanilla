@@ -2434,7 +2434,7 @@ mod tests {
             w.draw(&vui, &mut r, &o, &mut ups);
         }
         assert_eq!((w.cat, w.item), (Some(textures), 55), "Texture Folder, the third row");
-        assert_eq!(w.page_note(textures).as_deref(), Some("In textures beside eqoa.exe"));
+        assert_eq!(w.page_note(textures).as_deref(), Some("Beside eqoa.exe"));
         for k in [key::RIGHT, key::LEFT, key::CROSS] {
             cues.clear();
             w.key(&vui, &mut r, &mut o, k, 0, &mut cues, &mut ups);

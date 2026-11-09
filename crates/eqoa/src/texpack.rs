@@ -86,16 +86,35 @@ pub enum Beside {
     Only,
 }
 
+/// A name as the Extended page's notes say it, which have room for about 30
+/// characters beside Back: as it is up to 12 (`eqoa.exe`, `Eqoa.app`), else
+/// `long` (the release's bare download's, an AppImage's).
+fn shown<'a>(name: &'a str, long: &'a str) -> &'a str {
+    if name.chars().count() <= 12 { name } else { long }
+}
+
 impl Beside {
-    /// Where the folder is, as the Extended page says it (after "12 in" or
-    /// "In"); a long program name (the release's bare download's) as "the
-    /// game", so that it fits.
-    pub fn said(&self) -> String {
-        let shown = |n: &str| if n.chars().count() <= 16 { n.to_string() } else { "the game".to_string() };
+    /// The folder as the note on Texture Packs says it, after "12 in": the
+    /// program's `textures` ("eqoa.exe's textures"), or the settings'
+    /// ("eqoa-rs's textures"); on Android, as before 2026-11-09.
+    pub fn packs(&self) -> String {
         match self {
-            Beside::Program(n) => format!("textures beside {}", shown(n)),
-            Beside::Settings { program, config } => format!("{config}: can't write beside {}", shown(program)),
+            Beside::Program(n) => format!("{}'s textures", shown(n, "the game")),
+            Beside::Settings { config, .. } if config.chars().count() <= 12 => format!("{config}'s textures"),
+            Beside::Settings { .. } => "the settings' textures".to_string(),
             Beside::Only => format!("textures/{}", esf::pcsx2::SERIAL),
+        }
+    }
+
+    /// What the note on Texture Folder says: where it is ("Beside
+    /// eqoa.exe"), or why it is the settings' instead ("eqoa.exe's folder is
+    /// read-only").
+    pub fn folder(&self) -> String {
+        match self {
+            Beside::Program(n) => format!("Beside {}", shown(n, "the game")),
+            Beside::Settings { program, .. } if program.chars().count() <= 12 => format!("{program}'s folder is read-only"),
+            Beside::Settings { .. } => "The game's folder is read-only".to_string(),
+            Beside::Only => "In the settings".to_string(),
         }
     }
 }
@@ -727,24 +746,23 @@ pub fn image(c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<esf:
     s.decode(&c.data)
 }
 
-/// Extended's rows of Textures (`options`): Texture Packs, Dump Textures
-/// and Texture Folder.
-pub const ROW_PACKS: i32 = 50;
+/// Extended's rows of Textures (`options`) with a note of their own: Dump
+/// Textures and Texture Folder (Texture Packs' is every other row's).
 pub const ROW_DUMPS: i32 = 51;
 pub const ROW_FOLDER: i32 = 55;
 
 /// What the Extended page's Textures says beside Back, its row `item`
 /// chosen: on Dump Textures, while it is on, how many textures have been
-/// dumped; on Texture Folder where the folder is (`Beside::said`: beside
-/// the program, or in the settings and why); on Texture Packs, while it is
-/// on, how many replacements the packs hold and where.
+/// dumped; on Texture Folder where the folder is, or why it is the
+/// settings' (`Beside::folder`); on Texture Packs, while it is on, how many
+/// replacements the packs hold and where (`Beside::packs`).
 pub fn note(item: i32) -> Option<String> {
     let c = crate::settings::client();
     if item == ROW_DUMPS {
         return c.dump_textures.then(|| format!("{} dumped", pack().map_or(0, |p| p.dumped())));
     }
     if item == ROW_FOLDER {
-        return Some(place().map_or_else(|| "No folder here".to_string(), |p| format!("In {}", p.beside.said())));
+        return Some(place().map_or_else(|| "No folder here".to_string(), |p| p.beside.folder()));
     }
     if !c.texture_packs {
         return None;
@@ -752,8 +770,8 @@ pub fn note(item: i32) -> Option<String> {
     let Some(place) = place() else { return Some("No folder here".to_string()) };
     // (none read yet in the frame it was turned on: `sync` reads them next)
     Some(match pack().map_or(0, |p| p.count(esf::Era::Frontiers)) {
-        0 => format!("None in {}", place.beside.said()),
-        n => format!("{n} in {}", place.beside.said()),
+        0 => format!("None in {}", place.beside.packs()),
+        n => format!("{n} in {}", place.beside.packs()),
     })
 }
 
@@ -1391,7 +1409,7 @@ mod tests {
             assert_eq!((&p.dir, &p.also, &p.moved), (&old, &Some(new.clone()), &None));
             assert_eq!(p.beside, Beside::Settings { program: "eqoa.exe".into(), config: "config".into() });
             assert!(p.why.as_deref().is_some_and(|w| w.contains("cannot be written to")), "{:?}", p.why);
-            assert_eq!(p.beside.said(), "config: can't write beside eqoa.exe");
+            assert_eq!((p.beside.packs(), p.beside.folder()), ("config's textures".to_string(), "eqoa.exe's folder is read-only".to_string()));
             assert_eq!(std::fs::read(&mine).unwrap(), b"mine", "nothing moved");
             // a read-only folder with none beside the program
             let bare = d.join("bare");
@@ -1473,7 +1491,7 @@ mod tests {
         let (d, game, config) = folders("only");
         assert_eq!(resolve(None, &config), Place { dir: config.join("textures"), also: None, beside: Beside::Only, moved: None, why: None });
         assert!(!config.join("textures").exists());
-        assert_eq!(Beside::Only.said(), "textures/SLUS-20744", "as the page said before");
+        assert_eq!(Beside::Only.packs(), "textures/SLUS-20744", "as the page said before");
         put(&game.join("textures"), "1-2-00001993.png", b"here");
         let p = resolve(Some((&game, "eqoa")), &game);
         assert_eq!((&p.dir, &p.also, &p.moved), (&game.join("textures"), &None, &None));
@@ -1515,6 +1533,8 @@ mod tests {
     /// it. The control: with no folder it shows none.
     #[test]
     fn what_the_textures_page_says_and_shows() {
+        // Texture Packs' row
+        const PACKS: i32 = 50;
         crate::settings::testing::reset(false);
         let d = temp("note");
         let set = |texture_packs: bool, dump_textures: bool| crate::settings::set_client(crate::settings::ClientOptions { texture_packs, dump_textures, ..crate::settings::client() });
@@ -1522,14 +1542,14 @@ mod tests {
         assert_eq!(note(ROW_FOLDER).as_deref(), Some("No folder here"));
         assert!(!open_folder() && testing::shown().is_empty(), "the control: none to show");
         set(true, false);
-        assert_eq!(note(ROW_PACKS).as_deref(), Some("No folder here"));
+        assert_eq!(note(PACKS).as_deref(), Some("No folder here"));
         let beside = Place { dir: d.join("textures"), also: None, beside: Beside::Program("eqoa.exe".into()), moved: None, why: None };
         testing::set_place(Some(beside.clone()));
-        assert_eq!(note(ROW_PACKS).as_deref(), Some("None in textures beside eqoa.exe"));
-        assert_eq!(note(ROW_FOLDER).as_deref(), Some("In textures beside eqoa.exe"));
+        assert_eq!(note(PACKS).as_deref(), Some("None in eqoa.exe's textures"));
+        assert_eq!(note(ROW_FOLDER).as_deref(), Some("Beside eqoa.exe"));
         assert_eq!(note(ROW_DUMPS), None, "Dump Textures off");
         set(false, true);
-        assert_eq!((note(ROW_PACKS), note(ROW_DUMPS).as_deref()), (None, Some("0 dumped")));
+        assert_eq!((note(PACKS), note(ROW_DUMPS).as_deref()), (None, Some("0 dumped")));
         assert!(open_folder());
         let serial = d.join("textures").join(esf::pcsx2::SERIAL);
         assert_eq!(testing::shown(), vec![serial.clone()]);
@@ -1537,9 +1557,15 @@ mod tests {
         let settings = Place { beside: Beside::Settings { program: "eqoa.exe".into(), config: "eqoa-rs".into() }, ..beside };
         testing::set_place(Some(settings));
         set(true, false);
-        assert_eq!(note(ROW_PACKS).as_deref(), Some("None in eqoa-rs: can't write beside eqoa.exe"));
-        assert_eq!(note(ROW_FOLDER).as_deref(), Some("In eqoa-rs: can't write beside eqoa.exe"));
-        assert_eq!(Beside::Program("eqoa-vanilla-windows-x86_64.exe".into()).said(), "textures beside the game", "a long name");
+        assert_eq!(note(PACKS).as_deref(), Some("None in eqoa-rs's textures"));
+        assert_eq!(note(ROW_FOLDER).as_deref(), Some("eqoa.exe's folder is read-only"));
+        // a long name (the release's bare download's, an AppImage's) as the
+        // game, so that the note fits
+        let long = "eqoa-vanilla-windows-x86_64.exe".to_string();
+        assert_eq!((Beside::Program(long.clone()).packs(), Beside::Program(long.clone()).folder()), ("the game's textures".to_string(), "Beside the game".to_string()));
+        let config = "a-config-folder-of-a-test".to_string();
+        assert_eq!(Beside::Settings { program: long, config }.packs(), "the settings' textures");
+        assert_eq!(Beside::Settings { program: "Eqoa-x86_64.AppImage".into(), config: "eqoa-rs".into() }.folder(), "The game's folder is read-only");
         testing::set_place(None);
         crate::settings::testing::reset(false);
         let _ = std::fs::remove_dir_all(&d);
