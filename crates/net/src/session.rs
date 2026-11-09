@@ -63,6 +63,9 @@ impl Datagrams for Udp {
 pub const VERSION: u32 = 18;
 /// The expansion flags a retail Frontiers disc sends.
 pub const EXPANSION_FLAGS: u32 = 3;
+/// The group's chat lines' colour (0x069E: CLIENT's dispatcher adds them in
+/// (.5, .5, 1)).
+pub const GROUP_CHAT: [f32; 4] = [0.5, 0.5, 1.0, 1.0];
 /// go-eqoa-server's own, no retail message: what a client keeps in view, how
 /// many entity slots (`entity`) and how far, two u32s after the opcode, both
 /// ways. The server offers the most it fills and the farthest it looks once
@@ -265,6 +268,127 @@ pub struct RaidMember {
 /// and robe's colours).
 pub const DISC_GEAR_SIZE: usize = 32;
 pub const LIVE_GEAR_SIZE: usize = 71;
+/// go-eqoa-server's own, no retail message: the quest marks the map draws (a
+/// "!" at each giver of a quest the player may take, a "?" where a step of
+/// its quests is to be done). A u32 after the opcode, both ways: offered once
+/// the player is in the world, answered 1 to have them and 0 to stop
+/// (`agree_quest_marks`, the Quest Helper's). A PS2 ignores the offer, as it
+/// does [`OP_ENTITY_VIEW`]'s; a client with the Quest Helper off answers
+/// nothing, and nothing is asked of a server that made none. (0x7E01 and
+/// 0x7E02, others' power for mana bars, this client has no case for.)
+pub const OP_QUEST_MARKERS: u16 = 0x7E03;
+/// The marks, from a server the client asked ([`OP_QUEST_MARKERS`]): a u8
+/// count, then each its u8 kind ([`QuestMark::kind`]), u8 world, f32 x and z,
+/// the NPC's name and a u8 count of quests, each its name, u8 lowest and
+/// highest levels, a line and a detail; every text a u8 byte count and UTF-8.
+/// Each is the whole set.
+pub const OP_QUEST_MARKERS_DATA: u16 = 0x7E04;
+/// go-eqoa-server's own too: the quest tracker the HUD draws (each quest
+/// under way and what its step asks, counted: "Bat Eye 0/3"), offered and
+/// answered as [`OP_QUEST_MARKERS`] is (`agree_quest_progress`).
+pub const OP_QUEST_PROGRESS: u16 = 0x7E05;
+/// The tracker, from a server the client asked ([`OP_QUEST_PROGRESS`]): a u8
+/// count of quests (the journal's, in its order), each its name and a u8
+/// count of objectives, each its text, u16 had and u16 needed (needed 0:
+/// nothing to count); every text a u8 byte count and UTF-8. Each is the
+/// whole tracker.
+pub const OP_QUEST_PROGRESS_DATA: u16 = 0x7E06;
+
+/// One quest on the tracker ([`OP_QUEST_PROGRESS_DATA`]): its name and its
+/// step's objectives.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackedQuest {
+    pub name: String,
+    pub goals: Vec<QuestGoal>,
+}
+
+/// One objective: its words, and how many the player has of how many are
+/// needed (`need` 0: a thing to do, nothing to count).
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuestGoal {
+    pub text: String,
+    pub have: u16,
+    pub need: u16,
+}
+
+impl QuestGoal {
+    /// Counted, and all there.
+    pub fn done(&self) -> bool {
+        self.need > 0 && self.have >= self.need
+    }
+}
+
+/// [`OP_QUEST_PROGRESS_DATA`]'s body, or None when it is short.
+fn read_quest_progress(r: &mut Reader) -> Option<Vec<TrackedQuest>> {
+    let text = |r: &mut Reader| {
+        let n = r.u8() as usize;
+        String::from_utf8_lossy(r.bytes(n)).into_owned()
+    };
+    let n = r.u8() as usize;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let name = text(r);
+        let g = r.u8() as usize;
+        let goals = (0..g)
+            .map(|_| {
+                let text = text(r);
+                QuestGoal { text, have: r.u16(), need: r.u16() }
+            })
+            .collect();
+        out.push(TrackedQuest { name, goals });
+    }
+    (!r.error).then_some(out)
+}
+
+/// One quest mark ([`OP_QUEST_MARKERS_DATA`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuestMark {
+    /// 1 a quest the player may take from this NPC ("!"), 2 a step of its
+    /// quests to do at it ("?"), 3 a kill or loot step's creature ("?")
+    pub kind: u8,
+    /// `gWorldInfo`'s index
+    pub world: u8,
+    pub x: f32,
+    pub z: f32,
+    /// the NPC's (or the creature's) name
+    pub npc: String,
+    pub quests: Vec<MarkQuest>,
+}
+
+/// One quest on a mark: its name and levels, a line (the start of the
+/// giver's offer, or the step's journal line) and a detail (its rewards, or
+/// what the step needs).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarkQuest {
+    pub name: String,
+    pub levels: (u8, u8),
+    pub line: String,
+    pub detail: String,
+}
+
+/// [`OP_QUEST_MARKERS_DATA`]'s body, or None when it is short.
+fn read_quest_marks(r: &mut Reader) -> Option<Vec<QuestMark>> {
+    let text = |r: &mut Reader| {
+        let n = r.u8() as usize;
+        String::from_utf8_lossy(r.bytes(n)).into_owned()
+    };
+    let n = r.u8() as usize;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (kind, world, x, z) = (r.u8(), r.u8(), r.f32(), r.f32());
+        let npc = text(r);
+        let q = r.u8() as usize;
+        let quests = (0..q)
+            .map(|_| {
+                let name = text(r);
+                let levels = (r.u8(), r.u8());
+                MarkQuest { name, levels, line: text(r), detail: text(r) }
+            })
+            .collect();
+        out.push(QuestMark { kind, world, x, z, npc, quests });
+    }
+    (!r.error).then_some(out)
+}
 
 #[derive(Clone, Debug)]
 pub struct Shard {
@@ -427,9 +551,15 @@ pub enum Event {
     /// 0x00D9: the player's +0x2C.
     PlayerP2C(i32),
     /// A line for the chat log, in its colour (RGBA 0..1): 0x0A7A white,
-    /// 0x0A7B its own colour, 0x069E blue, 0x0758 (narrow) white, 0x00CE
-    /// (an error: "Tell Failed", an unknown command) red.
+    /// 0x0A7B its own colour, 0x0758 (narrow) white, 0x00CE (an error: "Tell
+    /// Failed", an unknown command) red.
     Chat(String, [f32; 4]),
+    /// 0x069E, the group's chat: a line for the chat log in `GROUP_CHAT`'s
+    /// blue, "<Name> tells the group: <text>" as the servers word it, and the
+    /// u32 before it (the sender's id as the server knows it; CLIENT reads
+    /// it and lets it go). Its own event, so what reads the group's lines
+    /// (the client's group waypoint) never takes another channel's.
+    GroupChat { from: u32, text: String },
     /// A state channel's full value (0x00-0x17 entities, 0x42 stats...).
     State { channel: u8, data: Vec<u8> },
     /// The ability list (each carries the list's token, `m_p2BB60`, which
@@ -561,6 +691,17 @@ pub struct Session {
     /// jump key, `walker`); gone with the connection, as the server's goes with
     /// its player.
     pub jumps: bool,
+    /// Whether the server offered quest marks ([`OP_QUEST_MARKERS`]), what it
+    /// was last told (none since the offer), and the set it last sent
+    /// ([`OP_QUEST_MARKERS_DATA`]).
+    pub quest_marks_offer: bool,
+    quest_marks_asked: Option<bool>,
+    pub quest_marks: Vec<QuestMark>,
+    /// The same for the quest tracker ([`OP_QUEST_PROGRESS`],
+    /// [`OP_QUEST_PROGRESS_DATA`]).
+    pub quest_progress_offer: bool,
+    quest_progress_asked: Option<bool>,
+    pub quest_progress: Vec<TrackedQuest>,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -704,6 +845,12 @@ impl Session {
             capes_in_view: Default::default(),
             capes_changed: 0,
             jumps: false,
+            quest_marks_offer: false,
+            quest_marks_asked: None,
+            quest_marks: Vec::new(),
+            quest_progress_offer: false,
+            quest_progress_asked: None,
+            quest_progress: Vec::new(),
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -877,7 +1024,42 @@ impl Session {
         self.send(&w.data);
     }
 
-    /// `SendOpcodeByte(op, v)`.
+    /// Quest Markers (the Quest Helper's): a server that offered quest marks
+    /// ([`OP_QUEST_MARKERS`]) is told to send them (`want`) at once, and to
+    /// stop when that changes; one that made no offer is told nothing, nor is
+    /// one never asked for them (the Quest Helper off from the start: as a
+    /// client without it, it answers nothing). Off, the set it sent is
+    /// forgotten.
+    pub fn agree_quest_marks(&mut self, want: bool) {
+        if !want {
+            self.quest_marks.clear();
+        }
+        if !self.quest_marks_offer || self.quest_marks_asked.unwrap_or(false) == want {
+            return;
+        }
+        self.quest_marks_asked = Some(want);
+        let mut w = Writer::op(OP_QUEST_MARKERS);
+        w.u32(want as u32);
+        self.send(&w.data);
+    }
+
+    /// Quest Tracker: a server that offered the tracker
+    /// ([`OP_QUEST_PROGRESS`]) is told whether to send it (`want`), as
+    /// `agree_quest_marks` tells it of the marks. Off, the tracker it sent is
+    /// forgotten.
+    pub fn agree_quest_progress(&mut self, want: bool) {
+        if !want {
+            self.quest_progress.clear();
+        }
+        if !self.quest_progress_offer || self.quest_progress_asked.unwrap_or(false) == want {
+            return;
+        }
+        self.quest_progress_asked = Some(want);
+        let mut w = Writer::op(OP_QUEST_PROGRESS);
+        w.u32(want as u32);
+        self.send(&w.data);
+    }
+
     pub fn send_op_byte(&mut self, op: u16, v: u8) {
         if op == 0x000E {
             self.chat_mode = v;
@@ -1076,6 +1258,12 @@ impl Session {
                 self.jumps = false;
                 // the old connection's channels go with it
                 self.early_states.clear();
+                self.quest_marks_offer = false;
+                self.quest_marks_asked = None;
+                self.quest_marks.clear();
+                self.quest_progress_offer = false;
+                self.quest_progress_asked = None;
+                self.quest_progress.clear();
                 ev.push(Event::Promoted);
             }
             drdp::TYPE_DISCONNECT => {
@@ -1343,6 +1531,33 @@ impl Session {
                     self.live_look = v & 1 != 0;
                 }
             }
+            // the quest marks and tracker offered (again at every world
+            // entry): told afresh what the client wants (`agree_quest_marks`,
+            // `agree_quest_progress`), the server's player being a new one
+            OP_QUEST_MARKERS => {
+                r.u32();
+                if !r.error {
+                    self.quest_marks_offer = true;
+                    self.quest_marks_asked = None;
+                }
+            }
+            OP_QUEST_MARKERS_DATA => {
+                if let Some(set) = read_quest_marks(&mut r) {
+                    self.quest_marks = set;
+                }
+            }
+            OP_QUEST_PROGRESS => {
+                r.u32();
+                if !r.error {
+                    self.quest_progress_offer = true;
+                    self.quest_progress_asked = None;
+                }
+            }
+            OP_QUEST_PROGRESS_DATA => {
+                if let Some(set) = read_quest_progress(&mut r) {
+                    self.quest_progress = set;
+                }
+            }
             0x0013 => {
                 // SetTime: each clock moved to the server's reading at the
                 // local timer's now
@@ -1535,8 +1750,8 @@ impl Session {
                 ev.push(Event::Chat(text, [cr as f32 / 255.0, cg as f32 / 255.0, cb as f32 / 255.0, 1.0]));
             }
             0x069E => {
-                r.u32();
-                ev.push(Event::Chat(r.wide(1024), [0.5, 0.5, 1.0, 1.0]));
+                let from = r.u32();
+                ev.push(Event::GroupChat { from, text: r.wide(1024) });
             }
             0x0758 => ev.push(Event::Chat(String::from_utf8_lossy(&r.string(512)).into_owned(), [1.0; 4])),
             0x00B3 => {
@@ -1973,24 +2188,24 @@ mod tests {
         assert!(matches!(&ev[..], [Event::Chat(t, c)] if t == "hi" && *c == [1.0; 4]), "{ev:?}");
     }
 
-    // 0x069E, the group's chat (a u32, then the line), is a chat line in
-    // blue, as CLIENT's dispatcher adds it in (.5, .5, 1). The control: the
-    // same words on 0x0A7A are white.
+    // 0x069E, the group's chat (a u32, then the line), is its own event: what
+    // reads the group's lines never takes another channel's. The control: the
+    // same words on 0x0A7A are a plain chat line.
     #[test]
-    fn a_group_line_is_a_blue_chat_line() {
-        let text = "Dairine tells the group: meet at the west gate";
+    fn a_group_line_is_its_own_event() {
+        let text = "Dairine tells the group: Waypoint in Tunaria at x 1, z 2";
         let mut v = 0x069Eu16.to_le_bytes().to_vec();
         v.extend(0x0001_4F51u32.to_le_bytes());
         v.extend((text.encode_utf16().count() as u32).to_le_bytes());
         v.extend(text.encode_utf16().flat_map(|c| c.to_le_bytes()));
         let mut s = session();
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, v);
-        assert!(matches!(&ev[..], [Event::Chat(t, c)] if t == text && *c == [0.5, 0.5, 1.0, 1.0]), "{ev:?}");
+        assert!(matches!(&ev[..], [Event::GroupChat { from: 0x0001_4F51, text: t }] if t == text), "{ev:?}");
         let mut w = 0x0A7Au16.to_le_bytes().to_vec();
         w.extend((text.encode_utf16().count() as u32).to_le_bytes());
         w.extend(text.encode_utf16().flat_map(|c| c.to_le_bytes()));
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, w);
-        assert!(matches!(&ev[..], [Event::Chat(t, c)] if t == text && *c == [1.0; 4]), "the control: {ev:?}");
+        assert!(matches!(&ev[..], [Event::Chat(t, _)] if t == text), "the control: {ev:?}");
     }
 
     /// 0x0013 (`SetTime`) sets both clocks at the local timer's now, and the
@@ -2455,12 +2670,13 @@ mod tests {
         assert!(!ev.iter().any(|e| matches!(e, Event::RaidRoster { .. })), "a short one: {ev:?}");
     }
 
-    // go-eqoa-server's offers and sets past 0x7E00 (0x7E01-0x7E06) are
-    // opcodes this client has no case for, as CLIENT's dispatcher has none:
-    // each passed on as one (play reads none of them) and nothing answered.
-    // The control: the same look finds the answer to 0x7E00's offer.
+    // go-eqoa-server's others' power (0x7E01, 0x7E02: mana bars, which this
+    // client does not draw) is opcodes this client has no case for, as
+    // CLIENT's dispatcher has none: each passed on as one (play reads none of
+    // them) and nothing answered. The control: the same look finds the answer
+    // to 0x7E00's offer.
     #[test]
-    fn the_servers_other_offers_go_unanswered() {
+    fn the_servers_power_offer_goes_unanswered() {
         let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
@@ -2470,7 +2686,7 @@ mod tests {
             m
         };
         answers(&mut s);
-        for op in [0x7E01u16, 0x7E02, 0x7E03, 0x7E04, 0x7E05, 0x7E06] {
+        for op in [0x7E01u16, 0x7E02] {
             let mut m = op.to_le_bytes().to_vec();
             m.extend([1, 0, 0, 0]);
             let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m);
@@ -2481,6 +2697,105 @@ mod tests {
         assert_eq!(s.entity_view_offer, Some((204, 1000)), "0x7E00's offer still taken");
         s.send_entity_view(24, 100);
         assert_eq!(answers(&mut s), [(251, vec![0x00, 0x7E, 24, 0, 0, 0, 100, 0, 0, 0])], "the control: 0x7E00's answer");
+    }
+
+    // Quest marks (go-eqoa-server's 0x7E03/0x7E04): nothing asked without an
+    // offer; an offer answered once for each change of mind; a set read whole
+    // (a giver's "!" with its quest's levels, offer and rewards), a short one
+    // not taken, off forgotten.
+    #[test]
+    fn quest_marks_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x03, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_quest_marks(true);
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x03, 0x7E, 1, 0, 0, 0]);
+        s.agree_quest_marks(false);
+        assert_eq!(answers(&mut s), [], "the Quest Helper off from the start: nothing answered, as today's");
+        s.agree_quest_marks(true);
+        s.agree_quest_marks(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x03, 0x7E, 1, 0, 0, 0])], "asked once");
+
+        let text = |b: &mut Vec<u8>, t: &str| {
+            b.push(t.len() as u8);
+            b.extend_from_slice(t.as_bytes());
+        };
+        let mut m = vec![0x04, 0x7E, 1, 1, 0];
+        m.extend_from_slice(&25403.5f32.to_le_bytes());
+        m.extend_from_slice(&15725.5f32.to_le_bytes());
+        text(&mut m, "Malsis");
+        m.push(1);
+        text(&mut m, "The pincers");
+        m.extend_from_slice(&[1, 10]);
+        text(&mut m, "You there.");
+        text(&mut m, "430 XP, Smoldering Aura");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        assert_eq!(
+            s.quest_marks,
+            [QuestMark {
+                kind: 1,
+                world: 0,
+                x: 25403.5,
+                z: 15725.5,
+                npc: "Malsis".into(),
+                quests: vec![MarkQuest { name: "The pincers".into(), levels: (1, 10), line: "You there.".into(), detail: "430 XP, Smoldering Aura".into() }],
+            }]
+        );
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 4].to_vec());
+        assert_eq!(s.quest_marks.len(), 1, "a short set is not taken");
+        s.agree_quest_marks(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x03, 0x7E, 0, 0, 0, 0])], "and stopped");
+        assert!(s.quest_marks.is_empty(), "off: the set forgotten");
+    }
+
+    /// The quest tracker's offer is answered once, its body read whole (the
+    /// counts, a goal done only counted and all there), a short one not
+    /// taken (the control), and off it is stopped and forgotten.
+    #[test]
+    fn quest_progress_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x05, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_quest_progress(true);
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x05, 0x7E, 1, 0, 0, 0]);
+        s.agree_quest_progress(false);
+        assert_eq!(answers(&mut s), [], "the Quest Helper off from the start: nothing answered");
+        s.agree_quest_progress(true);
+        s.agree_quest_progress(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x05, 0x7E, 1, 0, 0, 0])], "asked once");
+        let text = |b: &mut Vec<u8>, t: &str| {
+            b.push(t.len() as u8);
+            b.extend_from_slice(t.as_bytes());
+        };
+        let mut m = vec![0x06, 0x7E, 1];
+        text(&mut m, "Bat eyes");
+        m.push(2);
+        text(&mut m, "Bat Eye");
+        m.extend_from_slice(&[1, 0, 3, 0]);
+        text(&mut m, "Give to Kellina");
+        m.extend_from_slice(&[0, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        let want = [TrackedQuest { name: "Bat eyes".into(), goals: vec![QuestGoal { text: "Bat Eye".into(), have: 1, need: 3 }, QuestGoal { text: "Give to Kellina".into(), have: 0, need: 0 }] }];
+        assert_eq!(s.quest_progress, want);
+        assert!(!s.quest_progress[0].goals[0].done() && !s.quest_progress[0].goals[1].done(), "1 of 3, and nothing counted");
+        assert!(QuestGoal { text: String::new(), have: 3, need: 3 }.done());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 2].to_vec());
+        assert_eq!(s.quest_progress, want, "a short one is not taken");
+        s.agree_quest_progress(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x05, 0x7E, 0, 0, 0, 0])], "and stopped");
+        assert!(s.quest_progress.is_empty(), "off: forgotten");
     }
 
     // go-eqoa-server's offer of the live game's look (0x7E0C) is answered

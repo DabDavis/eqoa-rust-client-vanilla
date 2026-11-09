@@ -48,6 +48,18 @@ pub struct HudState {
     /// The live client's duel (0x1502 sub 8): its centre while the duel is on
     /// and in the player's world, for `DrawPatch`'s orange patch (`duel.rs`).
     pub duel: Option<[f32; 3]>,
+    /// The map's waypoint in this world (x, z): a dot on the compass's rim
+    /// at any distance, the client's own (`map::Map::click`).
+    pub waypoint: Option<[f32; 2]>,
+    /// The group's waypoint in this world (`map::group_waypoint`), the same
+    /// way in its own colour.
+    pub group_waypoint: Option<[f32; 2]>,
+    /// The minimap is up (`map::mini`, drawn by the map's own layer under
+    /// the HUD): its place noted for a pointer, which opens the map there.
+    pub minimap: bool,
+    /// The quest tracker's quests (`tracker`), none while it is not up: drawn
+    /// under the minimap, a pointer on it opens the quest journal.
+    pub tracker: Vec<net::session::TrackedQuest>,
     /// `m_selfId` and `m_target`.
     pub self_id: Option<u32>,
     pub target: u32,
@@ -130,6 +142,10 @@ pub enum Pick {
     Member(u32),
     Pet,
     Raid(u32),
+    /// the minimap (`map::mini`): the map opened
+    Minimap,
+    /// the quest tracker (`tracker`): the quest journal opened
+    Quests,
 }
 
 /// Where `DrawGroup` starts the group's bars and `DrawTarget` the target's.
@@ -259,6 +275,17 @@ impl Hud {
             crate::ui::chat_strip(vui, ui, [p[0] + 2, p[1]], [203, 125]);
         }
         self.draw_target(vui, ui, TARGET_AT, s);
+        // the minimap's place, out at a wide window's right and up a tall
+        // one's top with the quick menus (`map::mini::FRAME`)
+        if s.minimap {
+            ui.ui.anchor = Anchor::Right;
+            ui.ui.vertical = Vertical::Top;
+            self.note(ui, crate::map::mini::FRAME, Pick::Minimap);
+        }
+        // the quest tracker under it, placed the same way (`tracker`)
+        if let Some(r) = crate::tracker::draw(ui, &s.tracker) {
+            self.note(ui, r, Pick::Quests);
+        }
     }
 
     /// `DrawGroup`: a bar for each other active member, 48 apart: its name,
@@ -421,6 +448,14 @@ impl Hud {
             };
             patch(p, color);
         }
+        // the map's waypoints (the client's own, `map::Map::click`), at any
+        // distance: the group's in its orange, the player's own in magenta
+        // over it (`waypoint_point`)
+        for (w, color) in [(s.group_waypoint, crate::map::group_waypoint::COLOR), (s.waypoint, crate::map::WAYPOINT)] {
+            if let Some(w) = w {
+                patch(waypoint_point(s.heading, s.camera, w), color);
+            }
+        }
         // the live client's duel, last (eqoa-live-1500's DrawPatch, 0x0135E124):
         // the duel's centre in orange, at any distance
         if let Some(c) = s.duel {
@@ -441,8 +476,15 @@ fn patch_point(yaw: f32, d: [f32; 3]) -> Option<[f32; 2]> {
     Some(bearing_point(yaw, d))
 }
 
+/// Where the map's waypoint `w` (x, z) goes on the compass seen from the
+/// camera at `camera` turned to `yaw`: `DrawPatch`'s rim at its bearing,
+/// however far it is (the client's own: a member past 2000 has no patch).
+fn waypoint_point(yaw: f32, camera: [f32; 3], w: [f32; 2]) -> [f32; 2] {
+    bearing_point(yaw, [w[0] - camera[0], 0.0, w[1] - camera[2]])
+}
+
 /// `patch_point` at any distance (the live client's duel patch measures
-/// none).
+/// none, nor does the map's waypoint).
 fn bearing_point(yaw: f32, d: [f32; 3]) -> [f32; 2] {
     use std::f32::consts::PI;
     let (center, radius) = ([39.0f32, 55.0], 27.0f32);
@@ -475,7 +517,7 @@ pub fn draw_gauge(vui: &Vui, ui: &mut dyn Raster, bar: i32, frame: i32, at: [i32
 
 #[cfg(test)]
 mod tests {
-    use super::{Hud, HudState, MemberState, Pick, bearing_point, patch_point};
+    use super::{Hud, HudState, MemberState, Pick, bearing_point, patch_point, waypoint_point};
 
     fn near(a: [f32; 2], b: [f32; 2]) -> bool {
         (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3
@@ -522,6 +564,52 @@ mod tests {
         // it is where a member would be within it
         assert!(near(bearing_point(0.0, [100.0, 0.0, 0.0]), [12.0, 55.0]));
         assert!(near(bearing_point(0.0, [4000.0, 0.0, 0.0]), [12.0, 55.0]));
+    }
+
+    /// The map's waypoint sits on the rim at its bearing from the camera,
+    /// as a member's patch does, but at any distance and whatever the
+    /// camera's height: one 5,000 ahead is at the top, one to the east (+x)
+    /// at the left facing +z and at the top facing +x. The control: a
+    /// member as far has no patch at all.
+    #[test]
+    fn the_waypoint_sits_on_the_rim_at_any_distance() {
+        let cam = [25000.0, 60.0, 15000.0];
+        assert!(near(waypoint_point(0.0, cam, [25000.0, 20000.0]), [39.0, 28.0]));
+        assert!(near(waypoint_point(0.0, cam, [25100.0, 15000.0]), [12.0, 55.0]));
+        assert!(near(waypoint_point(std::f32::consts::FRAC_PI_2, cam, [25100.0, 15000.0]), [39.0, 28.0]));
+        assert!(near(waypoint_point(0.0, cam, [25000.0, 15000.0 - 9000.0]), [39.0, 82.0]));
+        assert!(patch_point(0.0, [0.0, 0.0, 5000.0]).is_none(), "the control: a member that far has no patch");
+    }
+
+    /// The minimap's place (`map::mini::FRAME`): a pointer finds it in a
+    /// 4:3 window where it is, in a 16:9 one out at the right with the quick
+    /// menus (106 frame pixels), in a tall one (798x828) up at the top (85);
+    /// the control: with the minimap off nothing is there. Needs a graphics
+    /// adapter; without one it says so and passes.
+    #[test]
+    fn a_pointer_finds_the_minimap_where_the_quick_menus_go() {
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut ui) = crate::ui::tests::layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 27];
+        atlas[26].uv1 = [16, 28];
+        let vui = crate::ui::Vui::new(Default::default(), Default::default(), atlas);
+        let assets = crate::ui::UiAssets::default();
+        let f = crate::map::mini::FRAME;
+        let mid = [(f[0] + f[2]) as f32 / 2.0, (f[1] + f[3]) as f32 / 2.0];
+        for (size, side, up) in [((640, 480), 0.0, 0.0), ((1280, 720), 106.0, 0.0), ((798, 828), 0.0, 85.0)] {
+            for (on, want) in [(true, Some(Pick::Minimap)), (false, None)] {
+                ui.begin(size);
+                let mut hud = Hud::new();
+                hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { minimap: on, ..Default::default() });
+                assert_eq!(hud.pick([mid[0] + side, mid[1] - up]), want, "{size:?}, minimap {on}");
+                if side + up > 0.0 {
+                    assert_eq!(hud.pick(mid), None, "{size:?}: not at the frame's own place");
+                }
+            }
+        }
     }
 
     /// A raid list's rows are where a pointer finds them, past a wide window's left

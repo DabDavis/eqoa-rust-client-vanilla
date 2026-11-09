@@ -157,14 +157,15 @@ pub const PLATE_FLOOR: f32 = 0.5;
 
 /// Every name plate's size this frame against the game's (`VINameSprite`
 /// laid out on the frame's 448 lines, the HUD's scale), from the zoom (F3
-/// pass 11, the user's choice: one size for every name): the game's while
-/// the follow orbit's camera is no farther from its pivot than the game's
-/// ceiling (`orbit_distance`), smaller as it pulls back past it, in
-/// proportion, to `PLATE_FLOOR` at Camera Distance's farthest; in the other
-/// camera modes (whose ceilings are the game's) the game's. `k` is the
-/// window's lines to the frame's 448: a plate is never smaller than the
-/// font's own texels one to a window pixel, under which the nearest texel
-/// drops strokes (at 448 lines or fewer, the game's size at every zoom).
+/// pass 11, the user's choice: one size for every name, as the map's dart
+/// keeps one): the game's while the follow orbit's camera is no farther from
+/// its pivot than the game's ceiling (`orbit_distance`), smaller as it pulls
+/// back past it, in proportion, to `PLATE_FLOOR` at Camera Distance's
+/// farthest; in the other camera modes (whose ceilings are the game's) the
+/// game's. `k` is the window's lines to the frame's 448: a plate is never
+/// smaller than the font's own texels one to a window pixel, under which the
+/// nearest texel drops strokes (at 448 lines or fewer, the game's size at
+/// every zoom).
 pub fn plate_scale(cam: &WalkCamera<Ee>, eye: &Vect3<Ee>, k: f32) -> f32 {
     orbit_distance(cam, eye).map_or(1.0, |d| plate_scale_at(d.0, k))
 }

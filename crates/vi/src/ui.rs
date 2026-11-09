@@ -594,8 +594,9 @@ pub struct FrameParam {
     pub left: (i32, u32),
 }
 
-/// `VIUIWindow::Draw`'s four frame sets.
-fn frame_sets() -> [FrameParam; 4] {
+/// `VIUIWindow::Draw`'s four frame sets (the client's minimap borders
+/// itself in the first, `eqoa::map::mini`).
+pub fn frame_sets() -> [FrameParam; 4] {
     [
         FrameParam { tl: (36, 0), top: (37, 0), tr: (36, 1), right: (42, 1), br: (36, 1), bottom: (37, 0), bl: (36, 0), left: (42, 0) },
         FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) },

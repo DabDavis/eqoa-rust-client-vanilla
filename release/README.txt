@@ -42,7 +42,7 @@ a text file holding its path) are kept in eqoa-rs in the config directory:
 %APPDATA%\eqoa-rs (Windows).
 
 In play: Escape the start menu, F1 the keys and buttons (the Options window's
-Controls page), F11 full screen. A controller works as the PS2's did.
+Controls page), M the map, F11 full screen. A controller works as the PS2's did.
 
 Several windows of eqoa at once (multiboxing): each reads its own controller,
 the first window the first controller, the second the next, whichever window
