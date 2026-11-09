@@ -4,15 +4,28 @@
 //! its textures under PCSX2's names, so one pack works in both. An Extended
 //! page row turns packs on and off.").
 //!
-//! Where: `textures/<serial>/replacements` and `textures/<serial>/dumps` in
-//! the config directory (`settings::config_dir`: `$EQOA_CONFIG`, else
-//! `eqoa-rs` in the platform's), as PCSX2 keeps them in its own
-//! (`EmuFolders::Textures`); the serial is the Frontiers disc's,
-//! `SLUS-20744`, and a texture off the 2002 disc (the 2002 art, `era`) the
-//! 2002 disc's, `SLUS-20470`. A pack's folder is read at any depth, its
-//! names in any case, as PCSX2 reads it (`ReloadReplacementMap`); a run that
-//! keeps no settings (the test commands) has no folder, so nothing changes
-//! a test's picture.
+//! Where (`place`): `<serial>/replacements` and `<serial>/dumps`, as PCSX2
+//! keeps them in its own (`EmuFolders::Textures`), in a `textures` folder
+//! beside the program, where a player finds it (the user, 2026-11-09: "lets
+//! put the dumps/replacements in a folder next to the binary, so players
+//! can find it easy"; `program_folder`): the program's own folder, a Mac
+//! app's the folder holding the `.app` (not the bundle's inside), an
+//! AppImage's the folder of `$APPIMAGE` (not its read-only mount). Where the
+//! game cannot write there (Program Files, /usr/bin, a read-only disk) it is
+//! `textures` in the config directory (`settings::config_dir`:
+//! `$EQOA_CONFIG`, else `eqoa-rs` in the platform's), as it was before
+//! 2026-11-09, and the Extended page says so; on Android, which has no
+//! program folder of a player's, always. The config directory's from before
+//! is moved beside the program the first time it is wanted (one rename: on
+//! the same disk only), else read after the new one (`resolve`). The updater
+//! never touches it (it renames the program's own file and its `.old`s). The
+//! serial is the Frontiers disc's, `SLUS-20744`, and a texture off the 2002
+//! disc (the 2002 art, `era`) the 2002 disc's, `SLUS-20470`. A pack's folder
+//! is read at any depth, its names in any case, as PCSX2 reads it
+//! (`ReloadReplacementMap`); a run that keeps no settings (the test
+//! commands) has no folder, so nothing changes a test's picture.
+//! Extended > Textures > Texture Folder shows the Frontiers disc's folder in
+//! the system's file manager (`open_folder`).
 //!
 //! A file is named as PCSX2 names the texture (`esf::pcsx2`): every name it
 //! can give it is looked for, the whole mip chain's first, then the base's
@@ -25,6 +38,17 @@
 //! farther on (`render::level_shift`), so it adds detail near and keeps the
 //! game's texel density in the distance. Its bytes are the GS's, as the
 //! game's own are (an alpha of 0x80 is the GS's 1.0).
+//!
+//! Read off the frame (the owner, 2026-11-09: "lets make texture packs load
+//! async"): a pack's folder is read on a thread of its own, every file's
+//! name and header (`Index::scan`), and the pack set at the first frame
+//! after (`sync`); each stand-in is read and decoded on the pack's own
+//! thread (`Reader`) the first time it is wanted, its texture made at once
+//! at its size with the surface's own levels drawn into it, and its levels
+//! written over them at a frame's start once read (`render::standin`), so
+//! no frame waits for a file. The 2D layer draws the surface's own and puts
+//! the stand-in in its place once read (`image`, `UiAssets::poll`). A shot
+//! reads each as it is asked for (`sync_now`), as all did before.
 //!
 //! Dumps: each texture made while Dump Textures is on is written to `dumps`
 //! under every name PCSX2 gives it (each picture its first level, as PCSX2's
@@ -55,17 +79,299 @@ pub fn serial(era: esf::Era) -> &'static str {
     }
 }
 
-/// `<config>/textures/<serial>`, where the serial's packs and dumps are;
+// ---- where the folders are ------------------------------------------------------
+
+/// What this run's `textures` folder is beside (`Place::beside`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub enum Beside {
+    /// The program, by its name as a player finds it (`eqoa.exe`, a Mac's
+    /// `Eqoa.app`, an `.AppImage`).
+    Program(String),
+    /// The settings, in the config directory (`config`, its folder's name:
+    /// `eqoa-rs`), the program's folder (`program`'s) being one the game
+    /// cannot write to.
+    Settings { program: String, config: String },
+    /// The settings, on a platform with no program folder of a player's
+    /// (Android).
+    Only,
+}
+
+/// A name as the Extended page's notes say it, which have room for about 30
+/// characters beside Back: as it is up to 12 (`eqoa.exe`, `Eqoa.app`), else
+/// `long` (the release's bare download's, an AppImage's).
+fn shown<'a>(name: &'a str, long: &'a str) -> &'a str {
+    if name.chars().count() <= 12 { name } else { long }
+}
+
+impl Beside {
+    /// The folder as the note on Texture Packs says it, after "12 in": the
+    /// program's `textures` ("eqoa.exe's textures"), or the settings'
+    /// ("eqoa-rs's textures"); on Android, as before 2026-11-09.
+    pub fn packs(&self) -> String {
+        match self {
+            Beside::Program(n) => format!("{}'s textures", shown(n, "the game")),
+            Beside::Settings { config, .. } if config.chars().count() <= 12 => format!("{config}'s textures"),
+            Beside::Settings { .. } => "the settings' textures".to_string(),
+            Beside::Only => format!("textures/{}", esf::pcsx2::SERIAL),
+        }
+    }
+
+    /// What the note on Texture Folder says: where it is ("Beside
+    /// eqoa.exe"), or why it is the settings' instead ("eqoa.exe's folder is
+    /// read-only").
+    pub fn folder(&self) -> String {
+        match self {
+            Beside::Program(n) => format!("Beside {}", shown(n, "the game")),
+            Beside::Settings { program, .. } if program.chars().count() <= 12 => format!("{program}'s folder is read-only"),
+            Beside::Settings { .. } => "The game's folder is read-only".to_string(),
+            Beside::Only => "In the settings".to_string(),
+        }
+    }
+}
+
+/// This run's textures folders (`place`, `resolve`).
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub struct Place {
+    /// The `textures` folder: each disc's packs read here first and its
+    /// dumps written here.
+    pub dir: PathBuf,
+    /// Another read after it: the config directory's from before, where it
+    /// could not be moved beside the program (another disk), or, the
+    /// program's folder being one the game cannot write to, one there.
+    pub also: Option<PathBuf>,
+    pub beside: Beside,
+    /// The config directory's from before, moved to `dir` as this was found.
+    pub moved: Option<PathBuf>,
+    /// What went otherwise (for the log): why that one was not moved, or
+    /// why the program's folder cannot be written to.
+    pub why: Option<String>,
+}
+
+/// The folder a player finds the program at `exe` in, and its name there:
+/// the program's own folder; on a Mac (`mac`) an app's
+/// (`<name>.app/Contents/MacOS/<exe>`) the folder holding the app, not the
+/// bundle's inside; an AppImage's (`appimage`: `$APPIMAGE`, and `$APPDIR`,
+/// the read-only mount it runs from) the folder of the image, when the
+/// program runs from inside that mount (one started by an AppImage, and so
+/// given its variables, is not one).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn program_folder(exe: &Path, appimage: Option<(&Path, &Path)>, mac: bool) -> Option<(PathBuf, String)> {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned());
+    if let Some((image, mount)) = appimage
+        && image.is_absolute()
+        && mount.is_absolute()
+        && exe.starts_with(mount)
+        && let (Some(dir), Some(n)) = (image.parent(), name(image))
+    {
+        return Some((dir.to_path_buf(), n));
+    }
+    if mac {
+        let up = |p: &Path, want: &str| p.parent().filter(|d| d.file_name().is_some_and(|n| n == want)).map(Path::to_path_buf);
+        if let Some(app) = up(exe, "MacOS").and_then(|m| up(&m, "Contents")).and_then(|c| c.parent().map(Path::to_path_buf))
+            && app.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"))
+            && let (Some(dir), Some(n)) = (app.parent(), name(&app))
+        {
+            return Some((dir.to_path_buf(), n));
+        }
+    }
+    Some((exe.parent()?.to_path_buf(), name(exe)?))
+}
+
+/// The running program's folder and name (`program_folder`): its path
+/// with links resolved (on Linux the system's already is; a Mac's may be a
+/// link's), and an AppImage's variables.
+#[cfg(all(not(test), not(target_arch = "wasm32")))]
+fn program() -> Option<(PathBuf, String)> {
+    let exe = std::env::current_exe().ok()?;
+    // (not on Windows: its resolved paths are `\\?\` ones, which Explorer
+    // does not take)
+    #[cfg(unix)]
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let appimage = std::env::var_os("APPIMAGE").zip(std::env::var_os("APPDIR")).map(|(i, m)| {
+        let m = PathBuf::from(m);
+        (PathBuf::from(i), std::fs::canonicalize(&m).unwrap_or(m))
+    });
+    program_folder(&exe, appimage.as_ref().map(|(i, m)| (i.as_path(), m.as_path())), cfg!(target_os = "macos"))
+}
+
+/// Whether the game can write in `dir`, made when it is not there: a file
+/// written in it and taken away, the one test every refusal answers
+/// (permissions, a read-only disk or mount, Windows' protected folders); a
+/// folder made for the test and then refused a file is taken away again.
+#[cfg(not(target_arch = "wasm32"))]
+fn writable(dir: &Path) -> std::io::Result<()> {
+    let made = !dir.is_dir();
+    std::fs::create_dir_all(dir)?;
+    let probe = dir.join(".eqoa-write-test");
+    let r = std::fs::write(&probe, b"");
+    if r.is_ok() {
+        // (a file a scanner holds a moment longer is still a written one)
+        let _ = std::fs::remove_file(&probe);
+    } else if made {
+        let _ = std::fs::remove_dir(dir);
+    }
+    r
+}
+
+/// The folders for a program found in `program` (its folder and the name
+/// shown for it, `program_folder`; none on Android) and settings kept in
+/// `config`. The first time, `config`'s `textures` is moved beside the
+/// program, where none is there yet: one rename, so only on the same disk
+/// (another's is refused), and only a folder itself (a link to one is left,
+/// as a relative one would point elsewhere moved); one not moved is read
+/// after the new one, which takes the dumps. Where the program's folder
+/// cannot be written to (`writable`), `config`'s is the folder, as before,
+/// and one beside the program is read after it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn resolve(program: Option<(&Path, &str)>, config: &Path) -> Place {
+    let old = config.join("textures");
+    let Some((folder, name)) = program else {
+        return Place { dir: old, also: None, beside: Beside::Only, moved: None, why: None };
+    };
+    let new = folder.join("textures");
+    if new == old {
+        return Place { dir: new, also: None, beside: Beside::Program(name.to_string()), moved: None, why: None };
+    }
+    let (mut moved, mut why) = (None, None);
+    let a_folder = std::fs::symlink_metadata(&old).is_ok_and(|m| m.is_dir());
+    if a_folder && std::fs::symlink_metadata(&new).is_err() {
+        match std::fs::rename(&old, &new) {
+            Ok(()) => moved = Some(old.clone()),
+            Err(e) => why = Some(format!("{} was not moved there ({e})", old.display())),
+        }
+    }
+    match writable(&new) {
+        Ok(()) => Place { also: old.is_dir().then(|| old.clone()), dir: new, beside: Beside::Program(name.to_string()), moved, why },
+        Err(e) => {
+            let config = config.file_name().map_or_else(|| "the settings".to_string(), |n| n.to_string_lossy().into_owned());
+            let why = Some(format!("{} cannot be written to ({e})", folder.display()));
+            Place { also: new.is_dir().then(|| new.clone()), dir: old, beside: Beside::Settings { program: name.to_string(), config }, moved: None, why }
+        }
+    }
+}
+
+/// This run's folders (`resolve`): natively, while it keeps its settings
+/// (none in a page, nor in a run that keeps none, the test commands'),
+/// found the first time they are wanted (Texture Packs or Dump Textures
+/// on, or the Texture Folder row chosen) and kept for the run.
+#[cfg(all(not(test), not(target_arch = "wasm32")))]
+pub fn place() -> Option<Place> {
+    static FOUND: Mutex<Option<(PathBuf, Place)>> = Mutex::new(None);
+    let config = crate::settings::config_dir()?;
+    let mut found = FOUND.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((c, p)) = found.as_ref()
+        && *c == config
+    {
+        return Some(p.clone());
+    }
+    let program = if cfg!(target_os = "android") { None } else { program() };
+    let p = resolve(program.as_ref().map(|(d, n)| (d.as_path(), n.as_str())), &config);
+    if let Some(from) = &p.moved {
+        crate::say(&format!("textures: {} moved to {}, beside the program", from.display(), p.dir.display()));
+    }
+    match (&p.beside, &p.why) {
+        (Beside::Settings { .. }, Some(why)) => crate::say(&format!("textures: {why}: the textures folder is {} instead", p.dir.display())),
+        (_, Some(why)) => crate::say(&format!("textures: {why}: it is read after {}", p.dir.display())),
+        _ => {}
+    }
+    *found = Some((config, p.clone()));
+    Some(p)
+}
+
+#[cfg(all(not(test), target_arch = "wasm32"))]
+pub fn place() -> Option<Place> {
+    None
+}
+
+/// A test's folders (`testing::set_place`): none unless it gives some.
+#[cfg(test)]
+pub fn place() -> Option<Place> {
+    testing::PLACE.with(|p| p.borrow().clone())
+}
+
+/// `textures/<serial>`, where the serial's packs and dumps are (`place`);
 /// none in a page or a run that keeps no settings.
 pub fn root(era: esf::Era) -> Option<PathBuf> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        crate::settings::config_dir().map(|d| d.join("textures").join(serial(era)))
+    place().map(|p| p.dir.join(serial(era)))
+}
+
+/// Extended > Textures > Texture Folder: the folder the Frontiers disc's
+/// packs go in and its dumps are written to (`textures/SLUS-20744`, its
+/// `replacements` made in it as PCSX2 makes it) shown in the system's file
+/// manager (Explorer, the Finder, the desktop's through xdg-open). False
+/// with no folder (a run that keeps no settings) or nothing to show it.
+pub fn open_folder() -> bool {
+    let Some(dir) = root(esf::Era::Frontiers) else { return false };
+    if child(&dir, "replacements").is_none() {
+        let _ = std::fs::create_dir_all(dir.join("replacements"));
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = era;
-        None
+    show(&dir)
+}
+
+/// `dir` in the system's file manager.
+#[cfg(all(not(test), not(target_arch = "wasm32"), not(target_os = "android")))]
+fn show(dir: &Path) -> bool {
+    use std::process::{Command, Stdio};
+    let program: PathBuf = if cfg!(windows) {
+        std::env::var_os("SystemRoot").map_or_else(|| "explorer.exe".into(), |r| PathBuf::from(r).join("explorer.exe"))
+    } else if cfg!(target_os = "macos") {
+        "open".into()
+    } else {
+        "xdg-open".into()
+    };
+    // none of this program's streams: its stderr is the log's pipe
+    // (`logfile`), which a file manager it starts would outlive
+    match Command::new(&program).arg(dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        Ok(mut c) => {
+            crate::say(&format!("textures: {} shown", dir.display()));
+            // waited for, so that it does not linger as a zombie
+            let _ = std::thread::Builder::new().name("texture folder".into()).spawn(move || {
+                let _ = c.wait();
+            });
+            true
+        }
+        Err(e) => {
+            crate::say(&format!("textures: {} did not show {} ({e})", program.display(), dir.display()));
+            false
+        }
+    }
+}
+
+/// Nothing shows a folder in a page or an Android app.
+#[cfg(all(not(test), any(target_arch = "wasm32", target_os = "android")))]
+fn show(_dir: &Path) -> bool {
+    false
+}
+
+/// A test's: the folder noted (`testing::shown`), shown if it is there.
+#[cfg(test)]
+fn show(dir: &Path) -> bool {
+    testing::SHOWN.with(|s| s.borrow_mut().push(dir.to_path_buf()));
+    dir.is_dir()
+}
+
+#[cfg(test)]
+pub mod testing {
+    use super::Place;
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+
+    thread_local! {
+        pub static PLACE: RefCell<Option<Place>> = const { RefCell::new(None) };
+        pub static SHOWN: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// This thread's folders (`place`), and none shown yet.
+    pub fn set_place(p: Option<Place>) {
+        PLACE.with(|x| *x.borrow_mut() = p);
+        SHOWN.with(|s| s.borrow_mut().clear());
+    }
+
+    /// The folders `open_folder` showed on this thread.
+    pub fn shown() -> Vec<PathBuf> {
+        SHOWN.with(|s| s.borrow().clone())
     }
 }
 
@@ -80,17 +386,21 @@ fn child(dir: &Path, name: &str) -> Option<PathBuf> {
     std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(name)))
 }
 
-/// A pack's files by the name each gives (`Name::parse`), and the CLUT
-/// hashes among them, which a texture's are looked up by first.
+/// A pack's files by the name each gives (`Name::parse`), the size each
+/// one's header gives (the base's), and the CLUT hashes among them, which a
+/// texture's are looked up by first.
 #[derive(Default)]
 pub struct Index {
     pub files: HashMap<Name, PathBuf>,
+    sizes: HashMap<Name, (u32, u32)>,
     cluts: HashSet<u64>,
 }
 
 impl Index {
-    /// Every PNG and DDS under `dir`, at any depth, whose name PCSX2 reads;
-    /// of two with one name the first in path order.
+    /// Every PNG and DDS under `dir`, at any depth, whose name PCSX2 reads
+    /// and whose header reads (`header_size`: a stand-in's texture is made
+    /// at its size before it is read); of two with one name the first in
+    /// path order.
     pub fn scan(dir: &Path) -> Index {
         let mut paths = Vec::new();
         // a folder's depth kept, so a link back up does not go round for ever
@@ -112,17 +422,42 @@ impl Index {
         let mut ix = Index::default();
         for p in paths {
             let Some(n) = p.file_name().and_then(|f| Name::parse(&f.to_string_lossy())) else { continue };
+            if ix.files.contains_key(&n) {
+                continue;
+            }
+            let Some(size) = header_size(&p) else {
+                crate::say(&format!("textures: {}: not a picture PCSX2 reads", p.display()));
+                continue;
+            };
             ix.cluts.insert(n.clut_hash);
-            ix.files.entry(n).or_insert(p);
+            ix.sizes.insert(n, size);
+            ix.files.insert(n, p);
         }
         ix
     }
 
-    /// The file standing in for a surface, and the level of it the file's
-    /// name stands for: of `names` (`GsTexture::names`, in its order) the
-    /// first a file has.
-    fn find<'a>(&'a self, names: &[(Name, usize)]) -> Option<(&'a Path, Name, usize)> {
-        names.iter().find_map(|&(n, level)| self.files.get(&n).map(|p| (p.as_path(), n, level)))
+    /// Every PNG and DDS under each of `dirs` (`scan`), the first folder's
+    /// over a later one's of the same name.
+    pub fn scan_all(dirs: impl IntoIterator<Item = PathBuf>) -> Index {
+        let mut ix = Index::default();
+        for d in dirs {
+            let one = Index::scan(&d);
+            for (n, p) in one.files {
+                if let std::collections::hash_map::Entry::Vacant(e) = ix.files.entry(n) {
+                    e.insert(p);
+                    ix.cluts.insert(n.clut_hash);
+                    ix.sizes.insert(n, one.sizes[&n]);
+                }
+            }
+        }
+        ix
+    }
+
+    /// The file standing in for a surface, the name it was found by and its
+    /// base's size: of `names` (`GsTexture::names`, in its order) the first
+    /// a file has.
+    fn find(&self, names: &[(Name, usize)]) -> Option<(PathBuf, Name, (u32, u32))> {
+        names.iter().find_map(|&(n, _)| Some((self.files.get(&n)?.clone(), n, *self.sizes.get(&n)?)))
     }
 }
 
@@ -136,9 +471,24 @@ fn loader(p: &Path) -> Option<&'static str> {
     }
 }
 
-/// A stand-in found for a surface: its levels, the base first.
+/// The size a picture's header gives (a PNG's IHDR, a DDS's header), its
+/// first 24 bytes read: what a stand-in's texture is made at before the
+/// file is read (`render::standin`).
+pub fn header_size(p: &Path) -> Option<(u32, u32)> {
+    use std::io::Read;
+    let mut b = [0u8; 24];
+    std::fs::File::open(p).ok()?.read_exact(&mut b).ok()?;
+    let be = |at: usize| u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
+    let size = match loader(p)? {
+        "png" => (b[..8] == *b"\x89PNG\r\n\x1a\n" && b[12..16] == *b"IHDR").then(|| (be(16), be(20)))?,
+        _ => (u32_at(&b, 0) == Some(0x2053_4444)).then(|| (u32_at(&b, 16).unwrap_or(0), u32_at(&b, 12).unwrap_or(0)))?,
+    };
+    (size.0 > 0 && size.1 > 0 && size.0 < 32768 && size.1 < 32768).then_some(size)
+}
+
+/// A stand-in read for a surface: its levels, the base first.
 struct Found {
-    levels: Vec<esf::Image>,
+    levels: Arc<Vec<esf::Image>>,
 }
 
 /// What a surface is known by in `Pack::found`: its DictID, its disc, where
@@ -151,12 +501,108 @@ fn key(d: &[u8], s: &esf::Surface, era: esf::Era) -> Key {
     (s.dict_id, era == esf::Era::Y2002, s.pal_off, d.len())
 }
 
+/// A surface's stand-in file and its base's size (`Index::find`), or none.
+type StandIn = Option<(PathBuf, (u32, u32))>;
+
+/// Each stand-in read, by surface: its levels, or `None` when it would not
+/// read (the surface's own is drawn).
+type Read = Arc<Mutex<HashMap<Key, Option<Arc<Found>>>>>;
+
+/// The thread that reads and decodes stand-ins (the owner's 2026-11-09 "lets
+/// make texture packs load async"): a frame asks (`Pack::request`) and goes
+/// on drawing the surface's own; the levels come back through `ready`.
+struct Reader {
+    tx: Mutex<std::sync::mpsc::Sender<(Key, PathBuf, esf::Surface)>>,
+    /// The surfaces asked for and not yet read, each with the texture keys
+    /// waiting on it (none for the 2D layer's: `Wanted`).
+    asked: Arc<Mutex<HashMap<Key, Vec<u64>>>>,
+    /// Stand-ins read, by the texture key each was asked for under.
+    ready: Arc<Mutex<render::standin::Ready>>,
+    /// Off once the pack is let go: what it had not read yet is not read.
+    alive: Arc<std::sync::atomic::AtomicBool>,
+    /// A test's hold on the thread: nothing is read while it is taken.
+    #[cfg(test)]
+    hold: Arc<Mutex<()>>,
+}
+
+impl Reader {
+    fn new(found: &Read) -> Option<Reader> {
+        let (tx, rx) = std::sync::mpsc::channel::<(Key, PathBuf, esf::Surface)>();
+        let asked: Arc<Mutex<HashMap<Key, Vec<u64>>>> = Default::default();
+        let ready: Arc<Mutex<render::standin::Ready>> = Default::default();
+        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (found, a, r, live) = (found.clone(), asked.clone(), ready.clone(), alive.clone());
+        #[cfg(test)]
+        let (hold, held) = { let h: Arc<Mutex<()>> = Default::default(); (h.clone(), h) };
+        std::thread::Builder::new()
+            .name("texture packs".into())
+            .spawn(move || {
+                for (k, path, s) in rx {
+                    if !live.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    #[cfg(test)]
+                    let _held = held.lock().unwrap_or_else(|e| e.into_inner());
+                    let f = read_stand_in(&path, &s);
+                    // the asking side checks `found` under `asked`'s lock
+                    let mut asked = a.lock().unwrap_or_else(|e| e.into_inner());
+                    found.lock().unwrap_or_else(|e| e.into_inner()).insert(k, f.clone());
+                    let keys = asked.remove(&k).unwrap_or_default();
+                    drop(asked);
+                    if let Some(f) = f {
+                        r.lock().unwrap_or_else(|e| e.into_inner()).extend(keys.into_iter().map(|key| (key, f.levels.clone())));
+                    }
+                }
+            })
+            .ok()?;
+        Some(Reader {
+            tx: Mutex::new(tx),
+            asked,
+            ready,
+            alive,
+            #[cfg(test)]
+            hold,
+        })
+    }
+}
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        self.alive.store(false, Ordering::Relaxed);
+    }
+}
+
+/// A stand-in read and given its levels for the surface `s` (`with_levels`),
+/// or `None` (said) when it does not read.
+fn read_stand_in(path: &Path, s: &esf::Surface) -> Option<Arc<Found>> {
+    match read(path) {
+        Ok(levels) => {
+            let levels = with_levels(levels, s);
+            // `EQOA_TEXTURES_LOG`: each stand-in said as it is read
+            if std::env::var_os("EQOA_TEXTURES_LOG").is_some() {
+                crate::say(&format!("textures: {:08x} drawn as {} ({}x{})", s.dict_id as u32, path.display(), levels[0].width, levels[0].height));
+            }
+            Some(Arc::new(Found { levels: Arc::new(levels) }))
+        }
+        Err(e) => {
+            crate::say(&format!("textures: {}: {e}", path.display()));
+            None
+        }
+    }
+}
+
 /// The options' Texture Packs and Dump Textures, as set (`sync`): the packs'
-/// files by name for each disc, the stand-ins found so far, and the dumper.
+/// files by name for each disc, the stand-ins found and read so far, the
+/// reader and the dumper.
 pub struct Pack {
     generation: u64,
     packs: Option<[Index; 2]>,
-    found: Mutex<HashMap<Key, Option<Arc<Found>>>>,
+    /// Each surface's stand-in file, looked up once.
+    looked: Mutex<HashMap<Key, StandIn>>,
+    found: Read,
+    /// Off: each stand-in read on the thread that asks, as it is asked for
+    /// (a shot's one frame, `sync_now`).
+    reader: Option<Reader>,
     dumper: Option<Dumper>,
 }
 
@@ -164,25 +610,49 @@ pub struct Pack {
 static MADE: AtomicU64 = AtomicU64::new(0);
 
 impl Pack {
-    /// The packs' folders read (`load`) and the dumps' made ready (`dump`);
-    /// `None` when neither has a folder.
-    pub fn new(load: bool, dump: bool) -> Option<Pack> {
-        if !(load || dump) || root(esf::Era::Frontiers).is_none() {
+    /// The packs' folders read (`load`, every file's header with them) and
+    /// the dumps' made ready (`dump`) in this run's (`place`); `None` when it
+    /// has none. Its stand-ins read on a thread of their own unless
+    /// `blocking`.
+    pub fn new(load: bool, dump: bool, blocking: bool) -> Option<Pack> {
+        if !(load || dump) {
             return None;
         }
+        Some(Pack::at(&place()?, load, dump, blocking))
+    }
+
+    /// The packs read and the dumps made ready in `place`'s folders: each
+    /// disc's `replacements` in `dir`, then in `also` (the first's file
+    /// standing for a name both have), its `dumps` in `dir` alone.
+    fn at(place: &Place, load: bool, dump: bool, blocking: bool) -> Pack {
         let eras = [esf::Era::Frontiers, esf::Era::Y2002];
         let packs = load.then(|| {
             eras.map(|era| {
-                let Some(root) = root(era) else { return Index::default() };
+                let root = place.dir.join(serial(era));
                 // made for the player to find, as PCSX2 makes it on a dump
                 if era == esf::Era::Frontiers && child(&root, "replacements").is_none() {
                     let _ = std::fs::create_dir_all(root.join("replacements"));
                 }
-                child(&root, "replacements").map(|d| Index::scan(&d)).unwrap_or_default()
+                let roots = std::iter::once(root).chain(place.also.iter().map(|a| a.join(serial(era))));
+                Index::scan_all(roots.filter_map(|r| child(&r, "replacements")))
             })
         });
-        let dumper = dump.then(|| Dumper::new(eras.map(|era| root(era).map(|r| child(&r, "dumps").unwrap_or_else(|| r.join("dumps")))))).flatten();
-        Some(Pack { generation: (MADE.fetch_add(1, Ordering::Relaxed) + 1) & 0xFF_FFFF, packs, found: Mutex::new(HashMap::new()), dumper })
+        let dumper = dump
+            .then(|| {
+                Dumper::new(eras.map(|era| {
+                    let r = place.dir.join(serial(era));
+                    Some(child(&r, "dumps").unwrap_or_else(|| r.join("dumps")))
+                }))
+            })
+            .flatten();
+        Pack::of(packs, dumper, blocking)
+    }
+
+    /// A pack of these indexes and dumper.
+    fn of(packs: Option<[Index; 2]>, dumper: Option<Dumper>, blocking: bool) -> Pack {
+        let found = Read::default();
+        let reader = if blocking || packs.is_none() { None } else { Reader::new(&found) };
+        Pack { generation: (MADE.fetch_add(1, Ordering::Relaxed) + 1) & 0xFF_FFFF, packs, looked: Mutex::new(HashMap::new()), found, reader, dumper }
     }
 
     /// How many replacements the packs hold (for the disc of `era`).
@@ -195,46 +665,78 @@ impl Pack {
         self.dumper.as_ref().map_or(0, |d| d.written.load(Ordering::Relaxed))
     }
 
-    /// The stand-in for a surface, if a pack has one: looked up once (a
-    /// texture's CLUT first, then its names), read and given its levels.
-    fn find(&self, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<Arc<Found>> {
+    /// The stand-in file for a surface and its base's size, if a pack has
+    /// one: looked up once (a texture's CLUT first, then its names), no file
+    /// read.
+    fn stand_in(&self, d: &[u8], s: &esf::Surface, era: esf::Era) -> StandIn {
         let packs = self.packs.as_ref()?;
+        let k = key(d, s, era);
+        if let Some(f) = self.looked.lock().unwrap_or_else(|e| e.into_inner()).get(&k) {
+            return f.clone();
+        }
+        let ix = &packs[(era == esf::Era::Y2002) as usize];
+        let f = s.gs_clut_hash(d).filter(|h| ix.cluts.contains(h)).and_then(|_| ix.find(&s.gs(d)?.names())).map(|(path, _, size)| (path, size));
+        self.looked.lock().unwrap_or_else(|e| e.into_inner()).insert(k, f.clone());
+        f
+    }
+
+    /// The stand-in for a surface read: at once while blocking (read now,
+    /// once), else only once the reader has read it (`request`).
+    fn found(&self, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<Arc<Found>> {
         let k = key(d, s, era);
         if let Some(f) = self.found.lock().unwrap_or_else(|e| e.into_inner()).get(&k) {
             return f.clone();
         }
-        let ix = &packs[(era == esf::Era::Y2002) as usize];
-        let f = s.gs_clut_hash(d).filter(|h| ix.cluts.contains(h)).and_then(|_| {
-            let t = s.gs(d)?;
-            let names = t.names();
-            let (path, name, _) = ix.find(&names)?;
-            match read(path) {
-                Ok(levels) => {
-                    let levels = with_levels(levels, s);
-                    // `EQOA_TEXTURES_LOG`: each stand-in said as it is read
-                    if std::env::var_os("EQOA_TEXTURES_LOG").is_some() {
-                        crate::say(&format!("textures: {:08x} drawn as {} ({}x{})", s.dict_id as u32, name.file_name(0), levels[0].width, levels[0].height));
-                    }
-                    Some(Arc::new(Found { levels }))
-                }
-                Err(e) => {
-                    crate::say(&format!("textures: {}: {e}", path.display()));
-                    None
-                }
-            }
-        });
+        if self.reader.is_some() {
+            return None;
+        }
+        let f = self.stand_in(d, s, era).and_then(|(path, _)| read_stand_in(&path, s));
         self.found.lock().unwrap_or_else(|e| e.into_inner()).insert(k, f.clone());
         f
     }
 
-    /// The levels to draw for a surface (the pack's, or `None` for its own;
-    /// its record's bytes are `d`), dumping it first while Dump Textures is on.
+    /// The levels to draw for a surface now (the pack's, or `None` for its
+    /// own; its record's bytes are `d`), dumping it first while Dump Textures
+    /// is on: a stand-in still being read is `None` (`request`).
     pub fn levels_for(&self, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<Vec<esf::Image>> {
         if let Some(dumper) = &self.dumper {
             dumper.dump(d, s, era);
         }
-        self.find(d, s, era).map(|f| f.levels.clone())
+        self.found(d, s, era).map(|f| f.levels.to_vec())
     }
+
+    /// A stand-in not yet read, given to the reader (once a surface) with
+    /// `key` to hand it back under (`render::Pack::take_ready`; none for the
+    /// 2D layer, which asks by `Wanted`): its size and level count, as its
+    /// levels will be. `None` when there is none, it is read already, or the
+    /// pack reads on the asking thread.
+    fn ask(&self, key: Option<u64>, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<(u32, u32, u32)> {
+        let reader = self.reader.as_ref()?;
+        let (path, size) = self.stand_in(d, s, era)?;
+        let k = key_of(d, s, era);
+        let mut asked = reader.asked.lock().unwrap_or_else(|e| e.into_inner());
+        if self.found.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&k) {
+            return None;
+        }
+        let first = !asked.contains_key(&k);
+        let keys = asked.entry(k).or_default();
+        // each key once, however often it asks
+        if let Some(key) = key
+            && !keys.contains(&key)
+        {
+            keys.push(key);
+        }
+        drop(asked);
+        if first {
+            let _ = reader.tx.lock().unwrap_or_else(|e| e.into_inner()).send((k, path, s.clone()));
+        }
+        Some((size.0, size.1, level_count(size, s) as u32))
+    }
+}
+
+/// `key`, by another name where `key` is a parameter.
+fn key_of(d: &[u8], s: &esf::Surface, era: esf::Era) -> Key {
+    key(d, s, era)
 }
 
 impl render::Pack for Pack {
@@ -243,13 +745,22 @@ impl render::Pack for Pack {
     }
 
     /// A stand-in's texture, and while dumping every texture (so that each
-    /// is made again, and dumped, when the row turns it on), is keyed apart.
+    /// is made again, and dumped, when the row turns it on), is keyed apart:
+    /// a stand-in's from when it is found, read or not.
     fn replaces(&self, _key: u64, c: &esf::Container, s: &esf::Surface, era: esf::Era) -> bool {
-        self.dumper.is_some() || self.find(&c.data, s, era).is_some()
+        self.dumper.is_some() || self.stand_in(&c.data, s, era).is_some()
     }
 
     fn generation(&self) -> u64 {
         self.generation
+    }
+
+    fn request(&self, key: u64, c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<(u32, u32, u32)> {
+        self.ask(Some(key), &c.data, s, era)
+    }
+
+    fn take_ready(&self) -> render::standin::Ready {
+        self.reader.as_ref().map(|r| std::mem::take(&mut *r.ready.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default()
     }
 }
 
@@ -321,6 +832,10 @@ impl Dumper {
                 continue;
             }
             let l = &t.levels[level];
+            // only ever the game's own picture as the disc has it (the user,
+            // 2026-11-09: "it should only dump the raw, not the upscaled or
+            // replacements"): out of the surface's record (`s.gs`), never a
+            // stand-in or anything drawn from one
             self.pending.fetch_add(1, Ordering::Relaxed);
             if self.tx.lock().unwrap_or_else(|e| e.into_inner()).send((path, l.width, l.height, t.rgba(level))).is_err() {
                 self.pending.fetch_sub(1, Ordering::Relaxed);
@@ -353,13 +868,15 @@ pub fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), String>
 
 // ---- what the options set ----------------------------------------------------
 
-/// The pack set (`sync`), and the rows it was made for.
+/// The pack set (`sync`), the rows it was made for, and a pack being made
+/// on a thread of its own for the rows as they are now (its folder read).
 struct State {
     applied: (bool, bool),
     pack: Option<Arc<Pack>>,
+    building: Option<((bool, bool), std::sync::mpsc::Receiver<Option<Pack>>)>,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { applied: (false, false), pack: None });
+static STATE: Mutex<State> = Mutex::new(State { applied: (false, false), pack: None, building: None });
 
 /// Moves on each time what stands in for the game's textures changes: what
 /// is drawn is made again then (`App::retexture`).
@@ -376,27 +893,78 @@ pub fn pack() -> Option<Arc<Pack>> {
 
 /// The options' Texture Packs and Dump Textures carried out, when they
 /// changed: the packs read and the dumps made ready, set for the renderer
-/// (`render::set_pack`), and `generation` moved on. Called each frame.
+/// (`render::set_pack`), and `generation` moved on. Called each frame. A
+/// pack's folder is read (every file's name and header: `Index::scan`) on a
+/// thread of its own, the game's own textures drawn meanwhile, and the pack
+/// set at the first frame after it is read, if the rows still want it;
+/// Dump Textures alone, and both off, at once.
 pub fn sync() {
     let c = crate::settings::client();
     let want = (c.texture_packs, c.dump_textures);
     let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((rows, rx)) = st.building.take() {
+        match rx.try_recv() {
+            Ok(pack) if rows == want => install(&mut st, pack),
+            Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            Err(std::sync::mpsc::TryRecvError::Empty) => st.building = Some((rows, rx)),
+        }
+    }
     if st.applied == want {
         return;
     }
     st.applied = want;
-    let pack = Pack::new(want.0, want.1).map(Arc::new);
-    if let Some(p) = &pack {
-        if want.0 {
-            crate::say(&format!("textures: {} replacements in {}", p.count(esf::Era::Frontiers), root(esf::Era::Frontiers).map(|r| r.display().to_string()).unwrap_or_default()));
+    st.building = None;
+    // `EQOA_TEXTURES_SYNC`: read as before 2026-11-09, the folder and each
+    // stand-in on the frame that wants it (to measure the two against
+    // each other)
+    if !want.0 || std::env::var_os("EQOA_TEXTURES_SYNC").is_some() {
+        let blocking = want.0;
+        install(&mut st, Pack::new(want.0, want.1, blocking));
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let built = std::thread::Builder::new().name("texture pack folder".into()).spawn(move || {
+        let _ = tx.send(Pack::new(want.0, want.1, false));
+    });
+    match built {
+        Ok(_) => st.building = Some((want, rx)),
+        Err(_) => install(&mut st, Pack::new(want.0, want.1, false)),
+    }
+}
+
+/// `sync` at once, every stand-in read as it is asked for: what a shot's
+/// one frame takes (`viewer::shot_with`), and how packs were read before
+/// 2026-11-09.
+pub fn sync_now() {
+    let c = crate::settings::client();
+    let want = (c.texture_packs, c.dump_textures);
+    let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    st.applied = want;
+    st.building = None;
+    install(&mut st, Pack::new(want.0, want.1, true));
+}
+
+/// `pack` set for the renderer and said, and `generation` moved on.
+fn install(st: &mut State, pack: Option<Pack>) {
+    let pack = pack.map(Arc::new);
+    if let (Some(p), Some(place)) = (&pack, place()) {
+        let at = |dir: &Path, what: &str| dir.join(esf::pcsx2::SERIAL).join(what).display().to_string();
+        if p.packs.is_some() {
+            let also = place.also.as_ref().map(|a| format!(", then {}", at(a, "replacements"))).unwrap_or_default();
+            crate::say(&format!("textures: {} replacements in {}{also}", p.count(esf::Era::Frontiers), at(&place.dir, "replacements")));
         }
-        if want.1 {
-            crate::say(&format!("textures: dumping to {}", root(esf::Era::Frontiers).map(|r| r.join("dumps").display().to_string()).unwrap_or_default()));
+        if p.dumper.is_some() {
+            crate::say(&format!("textures: dumping to {}", at(&place.dir, "dumps")));
         }
     }
     render::set_pack(pack.clone().map(|p| p as Arc<dyn render::Pack>));
     st.pack = pack;
     GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Whether a pack's folder is being read (`sync`).
+pub fn reading() -> bool {
+    STATE.lock().unwrap_or_else(|e| e.into_inner()).building.is_some()
 }
 
 /// Waits (up to ten seconds) for the dumps handed to the writer to be
@@ -413,30 +981,64 @@ pub fn flush() {
 }
 
 /// The base level to draw for a surface the 2D layer takes (`UiAssets`):
-/// the pack's, else its own (`Surface::decode`).
-pub fn image(c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<esf::Image> {
-    if let Some(l) = pack().and_then(|p| p.levels_for(&c.data, s, era)).and_then(|l| l.into_iter().next()) {
-        return Some(l);
+/// the pack's, else its own (`Surface::decode`); and while the pack's is
+/// still being read, what to ask for it by (`ready_image`).
+pub fn image(c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<(esf::Image, Option<Wanted>)> {
+    let p = pack();
+    if let Some(l) = p.as_ref().and_then(|p| p.levels_for(&c.data, s, era)).and_then(|l| l.into_iter().next()) {
+        return Some((l, None));
     }
-    s.decode(&c.data)
+    let wanted = p.and_then(|p| p.ask(None, &c.data, s, era).map(|_| Wanted { generation: p.generation, k: key(&c.data, s, era) }));
+    Some((s.decode(&c.data)?, wanted))
 }
 
-/// What the Extended page's Textures says beside Back: how many
-/// replacements the packs hold, or how many textures have been dumped.
-pub fn note(dumping_row: bool) -> Option<String> {
+/// A stand-in the 2D layer drew a surface's own for while it is read
+/// (`image`), asked again for each frame (`ready_image`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Wanted {
+    generation: u64,
+    k: Key,
+}
+
+/// The base level of a stand-in the 2D layer is waiting for, once read:
+/// `Some(Some(image))`; `Some(None)` when it will not come (it would not
+/// read, or the pack it was asked of is gone: stop asking); `None` while it
+/// is being read.
+pub fn ready_image(w: &Wanted) -> Option<Option<esf::Image>> {
+    let Some(p) = pack().filter(|p| p.generation == w.generation) else { return Some(None) };
+    let f = p.found.lock().unwrap_or_else(|e| e.into_inner()).get(&w.k).cloned()?;
+    Some(f.and_then(|f| f.levels.first().cloned()))
+}
+
+/// Extended's rows of Textures (`options`) with a note of their own: Dump
+/// Textures and Texture Folder (Texture Packs' is every other row's).
+pub const ROW_DUMPS: i32 = 51;
+pub const ROW_FOLDER: i32 = 55;
+
+/// What the Extended page's Textures says beside Back, its row `item`
+/// chosen: on Dump Textures, while it is on, how many textures have been
+/// dumped; on Texture Folder where the folder is, or why it is the
+/// settings' (`Beside::folder`); on Texture Packs, while it is on, how many
+/// replacements the packs hold and where (`Beside::packs`).
+pub fn note(item: i32) -> Option<String> {
     let c = crate::settings::client();
-    let p = pack();
-    if dumping_row {
-        return c.dump_textures.then(|| format!("{} dumped", p.map_or(0, |p| p.dumped())));
+    if item == ROW_DUMPS {
+        return c.dump_textures.then(|| format!("{} dumped", pack().map_or(0, |p| p.dumped())));
+    }
+    if item == ROW_FOLDER {
+        return Some(place().map_or_else(|| "No folder here".to_string(), |p| p.beside.folder()));
     }
     if !c.texture_packs {
         return None;
     }
-    let folder = format!("textures/{}", esf::pcsx2::SERIAL);
-    Some(match p.map(|p| p.count(esf::Era::Frontiers)) {
-        Some(n) if n > 0 => format!("{n} in {folder}"),
-        Some(_) => format!("None in {folder}"),
-        None => "No folder here".to_string(),
+    let Some(place) = place() else { return Some("No folder here".to_string()) };
+    if reading() {
+        return Some(format!("Reading {}", place.beside.packs()));
+    }
+    // (none read yet in the frame it was turned on: `sync` reads them next)
+    Some(match pack().map_or(0, |p| p.count(esf::Era::Frontiers)) {
+        0 => format!("None in {}", place.beside.packs()),
+        n => format!("{n} in {}", place.beside.packs()),
     })
 }
 
@@ -642,9 +1244,7 @@ pub fn read_dds(b: &[u8]) -> Result<Vec<esf::Image>, String> {
 /// mean of each 2 x 2, as the levels on the disc are made).
 pub fn with_levels(mut levels: Vec<esf::Image>, s: &esf::Surface) -> Vec<esf::Image> {
     let base = (levels[0].width, levels[0].height);
-    let shift = render::level_shift(base, Some((s.width.max(1) as u32, s.height.max(1) as u32)));
-    let chain = 32 - base.0.max(base.1).leading_zeros() as usize;
-    let want = ((s.levels() as f32 + shift).round().max(1.0) as usize).min(chain);
+    let want = level_count(base, s);
     // a level of the file's that is not half the one before ends its own
     let mut own = 1;
     while own < levels.len() && own < want && (levels[own].width, levels[own].height) == ((base.0 >> own).max(1), (base.1 >> own).max(1)) {
@@ -656,6 +1256,16 @@ pub fn with_levels(mut levels: Vec<esf::Image>, s: &esf::Surface) -> Vec<esf::Im
         levels.push(next);
     }
     levels
+}
+
+/// How many levels `with_levels` gives a stand-in whose base is `base` for
+/// the surface `s`: as many as the surface keeps and the levels it is
+/// larger by, down to one texel a side at most (what its texture is made
+/// with before it is read: `render::standin`).
+pub fn level_count(base: (u32, u32), s: &esf::Surface) -> usize {
+    let shift = render::level_shift(base, Some((s.width.max(1) as u32, s.height.max(1) as u32)));
+    let chain = 32 - base.0.max(base.1).leading_zeros() as usize;
+    ((s.levels() as f32 + shift).round().max(1.0) as usize).min(chain)
 }
 
 /// A level half the size of `l` each way (one texel at least): each texel
@@ -840,9 +1450,14 @@ mod tests {
     fn a_pack_folder_as_pcsx2_reads_it() {
         let d = temp("scan");
         std::fs::create_dir_all(d.join("a/b")).unwrap();
-        for f in ["1-2-00001993.png", "a/3-4-00001993.PNG", "a/b/5-00000001.dds", "a/b/1-2-00001993.png", "6-7-00001993-mip1.png", "readme.txt", "8-9-00001993.jpg"] {
-            std::fs::write(d.join(f), b"x").unwrap();
+        let png = png_bytes(3, 2, png::ColorType::Rgba, png::BitDepth::Eight, &[0; 24]);
+        let abgr = [32, 0x41, 0, 32, 0x0000_00ff, 0x0000_ff00, 0x00ff_0000, 0xff00_0000];
+        for f in ["1-2-00001993.png", "a/3-4-00001993.PNG", "a/b/1-2-00001993.png", "6-7-00001993-mip1.png", "readme.txt", "8-9-00001993.jpg"] {
+            std::fs::write(d.join(f), &png).unwrap();
         }
+        std::fs::write(d.join("a/b/5-00000001.dds"), dds(4, 8, 0, abgr, None, &[0; 128])).unwrap();
+        // the control: named as PCSX2 names one, but no picture
+        std::fs::write(d.join("a/9-9-00001993.png"), b"x").unwrap();
         let ix = Index::scan(&d);
         let mut names: Vec<String> = ix.files.keys().map(|n| n.file_name(0)).collect();
         names.sort();
@@ -850,6 +1465,8 @@ mod tests {
         let n = Name::parse("1-2-00001993.png").unwrap();
         assert_eq!(ix.files[&n], d.join("1-2-00001993.png"), "the first in path order");
         assert!(ix.cluts.contains(&2) && ix.cluts.contains(&4));
+        assert_eq!((ix.sizes[&n], ix.sizes[&Name::parse("5-00000001.png").unwrap()]), ((3, 2), (4, 8)), "each header's size");
+        assert_eq!(header_size(&d.join("a/9-9-00001993.png")), None);
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -901,9 +1518,11 @@ mod tests {
             let mut ix = Index::default();
             for (n, p) in files {
                 ix.cluts.insert(n.clut_hash);
+                ix.sizes.insert(n, (32, 32));
                 ix.files.insert(n, p);
             }
-            Pack { generation: 1, packs: Some([ix, Index::default()]), found: Mutex::new(HashMap::new()), dumper: None }
+            // read on the asking thread, as before 2026-11-09
+            Pack::of(Some([ix, Index::default()]), None, true)
         };
         let (chain, base) = (pic(&names[0].0, 10), pic(&names[1].0, 20));
         let both = pack(vec![(names[0].0, chain.clone()), (names[1].0, base.clone())]);
@@ -947,5 +1566,399 @@ mod tests {
             assert_eq!((img.width, img.rgba), (t.levels[level].width, t.rgba(level)), "{}", n.file_name(0));
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- where the folders are ----
+
+    /// The folder a player finds the program in: its own; a Mac app's the
+    /// folder holding the app; an AppImage's the image's folder while the
+    /// program runs from inside its mount. The controls: the same app's
+    /// path off a Mac, a `Contents/MacOS` in no `.app`, a program outside
+    /// the AppImage's mount (one it started), and an image or a mount not
+    /// named absolutely, are each the program's own folder.
+    #[test]
+    fn the_folder_a_player_finds_the_program_in() {
+        let p = |s: &str| PathBuf::from(s);
+        let got = |exe: &str, appimage: Option<(&str, &str)>, mac: bool| {
+            let appimage = appimage.map(|(i, m)| (p(i), p(m)));
+            program_folder(&p(exe), appimage.as_ref().map(|(i, m)| (i.as_path(), m.as_path())), mac)
+        };
+        let want = |d: &str, n: &str| Some((p(d), n.to_string()));
+        assert_eq!(got("/home/x/eqoa-vanilla-linux-x86_64/eqoa", None, false), want("/home/x/eqoa-vanilla-linux-x86_64", "eqoa"), "the release's archive");
+        assert_eq!(got("/home/x/Downloads/eqoa-vanilla-linux-x86_64", None, false), want("/home/x/Downloads", "eqoa-vanilla-linux-x86_64"), "its bare program");
+        assert_eq!(got("/Users/x/eqoa-vanilla-macos/eqoa", None, true), want("/Users/x/eqoa-vanilla-macos", "eqoa"), "the release's Mac program, no app");
+        let app = "/Users/x/Games/Eqoa.app/Contents/MacOS/eqoa";
+        assert_eq!(got(app, None, true), want("/Users/x/Games", "Eqoa.app"), "a Mac app: the folder holding it");
+        assert_eq!(got(app, None, false), want("/Users/x/Games/Eqoa.app/Contents/MacOS", "eqoa"), "the control: off a Mac");
+        assert_eq!(got("/Users/x/Games/Eqoa/Contents/MacOS/eqoa", None, true), want("/Users/x/Games/Eqoa/Contents/MacOS", "eqoa"), "the control: no .app");
+        let image = Some(("/home/x/Apps/Eqoa-x86_64.AppImage", "/tmp/.mount_EqoaAb"));
+        assert_eq!(got("/tmp/.mount_EqoaAb/usr/bin/eqoa", image, false), want("/home/x/Apps", "Eqoa-x86_64.AppImage"), "an AppImage: the image's folder");
+        assert_eq!(got("/home/x/eqoa/eqoa", image, false), want("/home/x/eqoa", "eqoa"), "the control: started by an AppImage, not in one");
+        assert_eq!(got("/tmp/.mount_EqoaAb/usr/bin/eqoa", Some(("Eqoa.AppImage", "/tmp/.mount_EqoaAb")), false), want("/tmp/.mount_EqoaAb/usr/bin", "eqoa"), "an image named relatively");
+        assert_eq!(got("/tmp/.mount_EqoaAb/usr/bin/eqoa", Some(("/home/x/Eqoa.AppImage", "")), false), want("/tmp/.mount_EqoaAb/usr/bin", "eqoa"), "an empty mount");
+    }
+
+    /// A test's program folder and config directory, under one of its own:
+    /// `game` and `config`.
+    fn folders(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let d = temp(name);
+        let (game, config) = (d.join("game"), d.join("config"));
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        (d, game, config)
+    }
+
+    /// A pack's file in the `textures` folder `t`, at `rel` under the
+    /// Frontiers disc's replacements.
+    fn put(t: &Path, rel: &str, b: &[u8]) -> PathBuf {
+        let p = t.join(esf::pcsx2::SERIAL).join("replacements").join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b).unwrap();
+        p
+    }
+
+    /// A one-texel PNG of `v` in the `textures` folder `t` (`put`), for what
+    /// reads its headers (`Index::scan`).
+    fn put_png(t: &Path, rel: &str, v: u8) -> PathBuf {
+        put(t, rel, &png_bytes(1, 1, png::ColorType::Rgba, png::BitDepth::Eight, &[v, v, v, 255]))
+    }
+
+    /// `dir`'s mode set (Unix), and whether this test can be refused at all
+    /// (not as root, whom permissions do not stop).
+    #[cfg(unix)]
+    fn mode(dir: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn refused(dir: &Path) -> bool {
+        let probe = dir.join("probe");
+        let wrote = std::fs::write(&probe, b"").is_ok();
+        let _ = std::fs::remove_file(&probe);
+        if wrote {
+            eprintln!("skipped: {} was written to with its write permission off (root?)", dir.display());
+        }
+        !wrote
+    }
+
+    /// Beside the program: a `textures` made there, none in the settings;
+    /// the settings' from before moved there whole, a pack and dumps in it
+    /// (one rename), and found as it is the next time. The control: one
+    /// beside the program already (the player's, or another copy of the
+    /// game's) moves nothing, and the old one is read after it.
+    #[test]
+    fn beside_the_program_and_the_old_folder_moved_there() {
+        let (d, game, config) = folders("beside");
+        let p = resolve(Some((&game, "eqoa.exe")), &config);
+        assert_eq!(p, Place { dir: game.join("textures"), also: None, beside: Beside::Program("eqoa.exe".into()), moved: None, why: None });
+        assert!(game.join("textures").is_dir(), "made for the player to find");
+        assert!(!config.join("textures").exists(), "none in the settings");
+        assert_eq!(std::fs::read_dir(game.join("textures")).unwrap().count(), 0, "the write test's file taken away");
+        let _ = std::fs::remove_dir_all(&d);
+
+        let (d, game, config) = folders("moved");
+        let (old, new) = (config.join("textures"), game.join("textures"));
+        let pack = put(&old, "a/1-2-00001993.png", b"pack");
+        let dump = old.join(esf::pcsx2::SERIAL).join("dumps").join("3-4-00001993.png");
+        std::fs::create_dir_all(dump.parent().unwrap()).unwrap();
+        std::fs::write(&dump, b"dump").unwrap();
+        let p = resolve(Some((&game, "eqoa")), &config);
+        assert_eq!((&p.dir, &p.also, &p.moved, &p.why), (&new, &None, &Some(old.clone()), &None));
+        let there = |f: &Path| new.join(f.strip_prefix(&old).unwrap());
+        assert_eq!((std::fs::read(there(&pack)).unwrap(), std::fs::read(there(&dump)).unwrap()), (b"pack".to_vec(), b"dump".to_vec()));
+        assert!(!old.exists(), "moved, not copied");
+        assert_eq!(resolve(Some((&game, "eqoa")), &config), Place { moved: None, ..p }, "the next start: as it is now");
+        let _ = std::fs::remove_dir_all(&d);
+
+        let (d, game, config) = folders("both");
+        let (old, new) = (config.join("textures"), game.join("textures"));
+        let kept = put(&old, "1-2-00001993.png", b"old");
+        put(&new, "5-6-00001993.png", b"new");
+        let p = resolve(Some((&game, "eqoa")), &config);
+        assert_eq!((&p.dir, &p.also, &p.moved), (&new, &Some(old.clone()), &None), "the control: one there already");
+        assert_eq!(std::fs::read(&kept).unwrap(), b"old", "left where it is");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A program folder the game cannot write to (Program Files, /usr/bin,
+    /// a read-only mount): the settings' folder, as before, said so, with a
+    /// `textures` beside the program read after it; with none there, none
+    /// made. The control: the same folder writable is the one beside it.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_folder_that_cannot_be_written_to() {
+        let (d, game, config) = folders("readonly");
+        let (old, new) = (config.join("textures"), game.join("textures"));
+        let mine = put(&old, "3-4-00001993.png", b"mine");
+        put(&new, "1-2-00001993.png", b"theirs");
+        mode(&new, 0o555);
+        mode(&game, 0o555);
+        if refused(&new) {
+            let p = resolve(Some((&game, "eqoa.exe")), &config);
+            assert_eq!((&p.dir, &p.also, &p.moved), (&old, &Some(new.clone()), &None));
+            assert_eq!(p.beside, Beside::Settings { program: "eqoa.exe".into(), config: "config".into() });
+            assert!(p.why.as_deref().is_some_and(|w| w.contains("cannot be written to")), "{:?}", p.why);
+            assert_eq!((p.beside.packs(), p.beside.folder()), ("config's textures".to_string(), "eqoa.exe's folder is read-only".to_string()));
+            assert_eq!(std::fs::read(&mine).unwrap(), b"mine", "nothing moved");
+            // a read-only folder with none beside the program
+            let bare = d.join("bare");
+            std::fs::create_dir_all(&bare).unwrap();
+            mode(&bare, 0o555);
+            let p = resolve(Some((&bare, "eqoa")), &config);
+            assert_eq!((&p.dir, &p.also), (&old, &None));
+            assert!(!bare.join("textures").exists(), "none made there");
+            mode(&bare, 0o755);
+        }
+        mode(&game, 0o755);
+        mode(&new, 0o755);
+        let p = resolve(Some((&game, "eqoa.exe")), &config);
+        assert_eq!((&p.dir, &p.beside), (&new, &Beside::Program("eqoa.exe".into())), "the control: writable");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The settings' folder that cannot be moved (on another disk, where a
+    /// rename is refused): read after the new one, which takes the dumps.
+    /// Refused here by its config directory's permissions, and, where the
+    /// machine has a RAM disk on another device (/dev/shm), by another
+    /// disk; a link to a folder is never moved (a relative one would point
+    /// elsewhere). The control: the refusal lifted, it is moved.
+    #[cfg(unix)]
+    #[test]
+    fn an_old_folder_not_moved_is_read_after_the_new() {
+        use std::os::unix::fs::MetadataExt;
+        let (d, game, config) = folders("kept");
+        let (old, new) = (config.join("textures"), game.join("textures"));
+        put_png(&old, "1-2-00001993.png", 1);
+        mode(&config, 0o555);
+        if refused(&config) {
+            let p = resolve(Some((&game, "eqoa")), &config);
+            assert_eq!((&p.dir, &p.also, &p.moved), (&new, &Some(old.clone()), &None));
+            assert!(p.why.as_deref().is_some_and(|w| w.contains("was not moved")), "{:?}", p.why);
+            let pack = Pack::at(&p, true, true, true);
+            assert_eq!(pack.count(esf::Era::Frontiers), 1, "its pack read");
+            assert_eq!(pack.dumper.as_ref().unwrap().dirs[0], Some(new.join(esf::pcsx2::SERIAL).join("dumps")), "dumps to the new one");
+        }
+        mode(&config, 0o755);
+        let _ = std::fs::remove_dir_all(&new);
+        let p = resolve(Some((&game, "eqoa")), &config);
+        assert_eq!((&p.also, &p.moved), (&None, &Some(old.clone())), "the control: moved");
+        let _ = std::fs::remove_dir_all(&d);
+
+        // another disk
+        let shm = Path::new("/dev/shm");
+        let other = shm.join(format!("eqoa-texpack-disk-{}", std::process::id()));
+        let devices = std::fs::metadata(shm).ok().zip(std::fs::metadata(std::env::temp_dir()).ok()).map(|(a, b)| (a.dev(), b.dev()));
+        if devices.is_some_and(|(a, b)| a != b) && std::fs::create_dir_all(other.join("config")).is_ok() {
+            let (d, game, _) = folders("disk");
+            let config = other.join("config");
+            put(&config.join("textures"), "1-2-00001993.png", b"old");
+            let p = resolve(Some((&game, "eqoa")), &config);
+            assert_eq!((&p.dir, &p.also, &p.moved), (&game.join("textures"), &Some(config.join("textures")), &None), "another disk");
+            assert!(p.why.as_deref().is_some_and(|w| w.contains("was not moved")), "{:?}", p.why);
+            let _ = std::fs::remove_dir_all(&other);
+            let _ = std::fs::remove_dir_all(&d);
+        } else {
+            eprintln!("no second disk to hand: another disk's refusal not shown");
+        }
+
+        // a link
+        let (d, game, config) = folders("link");
+        let real = d.join("packs");
+        put_png(&real, "1-2-00001993.png", 1);
+        std::os::unix::fs::symlink(&real, config.join("textures")).unwrap();
+        let p = resolve(Some((&game, "eqoa")), &config);
+        assert_eq!((&p.also, &p.moved), (&Some(config.join("textures")), &None), "a link left");
+        assert_eq!(Pack::at(&p, true, false, true).count(esf::Era::Frontiers), 1, "and read");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Android (no program folder of a player's): the settings' folder, as
+    /// before, nothing made until it is wanted; settings kept in the
+    /// program's own folder (`$EQOA_CONFIG` there): the one folder.
+    #[test]
+    fn android_and_settings_in_the_programs_folder() {
+        let (d, game, config) = folders("only");
+        assert_eq!(resolve(None, &config), Place { dir: config.join("textures"), also: None, beside: Beside::Only, moved: None, why: None });
+        assert!(!config.join("textures").exists());
+        assert_eq!(Beside::Only.packs(), "textures/SLUS-20744", "as the page said before");
+        put(&game.join("textures"), "1-2-00001993.png", b"here");
+        let p = resolve(Some((&game, "eqoa")), &game);
+        assert_eq!((&p.dir, &p.also, &p.moved), (&game.join("textures"), &None, &None));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The packs of `dir` read before `also`'s: a name both have is `dir`'s
+    /// file, one `also` alone has its, each disc's; dumps go to `dir`
+    /// alone. The control: without `also` its files are not read.
+    #[test]
+    fn packs_read_in_both_folders_and_dumps_written_in_the_first() {
+        let (d, game, config) = folders("two");
+        let (new, old) = (game.join("textures"), config.join("textures"));
+        let mine = put_png(&new, "1-2-00001993.png", 1);
+        put_png(&old, "1-2-00001993.png", 2);
+        let theirs = put_png(&old, "x/3-4-00001993.png", 3);
+        let y2002 = old.join(SERIAL_2002).join("replacements").join("7-8-00001993.png");
+        std::fs::create_dir_all(y2002.parent().unwrap()).unwrap();
+        std::fs::write(&y2002, png_bytes(1, 1, png::ColorType::Rgba, png::BitDepth::Eight, &[4, 4, 4, 255])).unwrap();
+        let place = Place { dir: new.clone(), also: Some(old.clone()), beside: Beside::Program("eqoa".into()), moved: None, why: None };
+        let pack = Pack::at(&place, true, true, true);
+        let packs = pack.packs.as_ref().unwrap();
+        let file = |era: usize, n: &str| packs[era].files.get(&Name::parse(n).unwrap()).cloned();
+        assert_eq!(file(0, "1-2-00001993.png"), Some(mine), "the new folder's");
+        assert_eq!(file(0, "3-4-00001993.png"), Some(theirs), "the old folder's own");
+        assert_eq!(file(1, "7-8-00001993.png"), Some(y2002), "the 2002 disc's, there too");
+        let dirs = &pack.dumper.as_ref().unwrap().dirs;
+        assert_eq!(dirs, &[Some(new.join(esf::pcsx2::SERIAL).join("dumps")), Some(new.join(SERIAL_2002).join("dumps"))]);
+        assert!(new.join(esf::pcsx2::SERIAL).join("dumps").is_dir() && !old.join(esf::pcsx2::SERIAL).join("dumps").exists());
+        let alone = Pack::at(&Place { also: None, ..place }, true, false, true);
+        assert_eq!((alone.count(esf::Era::Frontiers), alone.count(esf::Era::Y2002)), (1, 0), "the control: the new folder's alone");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// What Extended's Textures says beside Back, row by row, with a folder
+    /// beside the program, one in the settings (the program's read-only),
+    /// and none (a run that keeps no settings); Texture Folder shows the
+    /// Frontiers disc's folder, made with its replacements as PCSX2 makes
+    /// it. The control: with no folder it shows none.
+    #[test]
+    fn what_the_textures_page_says_and_shows() {
+        // Texture Packs' row
+        const PACKS: i32 = 50;
+        crate::settings::testing::reset(false);
+        let d = temp("note");
+        let set = |texture_packs: bool, dump_textures: bool| crate::settings::set_client(crate::settings::ClientOptions { texture_packs, dump_textures, ..crate::settings::client() });
+        testing::set_place(None);
+        assert_eq!(note(ROW_FOLDER).as_deref(), Some("No folder here"));
+        assert!(!open_folder() && testing::shown().is_empty(), "the control: none to show");
+        set(true, false);
+        assert_eq!(note(PACKS).as_deref(), Some("No folder here"));
+        let beside = Place { dir: d.join("textures"), also: None, beside: Beside::Program("eqoa.exe".into()), moved: None, why: None };
+        testing::set_place(Some(beside.clone()));
+        assert_eq!(note(PACKS).as_deref(), Some("None in eqoa.exe's textures"));
+        assert_eq!(note(ROW_FOLDER).as_deref(), Some("Beside eqoa.exe"));
+        assert_eq!(note(ROW_DUMPS), None, "Dump Textures off");
+        set(false, true);
+        assert_eq!((note(PACKS), note(ROW_DUMPS).as_deref()), (None, Some("0 dumped")));
+        assert!(open_folder());
+        let serial = d.join("textures").join(esf::pcsx2::SERIAL);
+        assert_eq!(testing::shown(), vec![serial.clone()]);
+        assert!(serial.join("replacements").is_dir());
+        let settings = Place { beside: Beside::Settings { program: "eqoa.exe".into(), config: "eqoa-rs".into() }, ..beside };
+        testing::set_place(Some(settings));
+        set(true, false);
+        assert_eq!(note(PACKS).as_deref(), Some("None in eqoa-rs's textures"));
+        assert_eq!(note(ROW_FOLDER).as_deref(), Some("eqoa.exe's folder is read-only"));
+        // a long name (the release's bare download's, an AppImage's) as the
+        // game, so that the note fits
+        let long = "eqoa-vanilla-windows-x86_64.exe".to_string();
+        assert_eq!((Beside::Program(long.clone()).packs(), Beside::Program(long.clone()).folder()), ("the game's textures".to_string(), "Beside the game".to_string()));
+        let config = "a-config-folder-of-a-test".to_string();
+        assert_eq!(Beside::Settings { program: long, config }.packs(), "the settings' textures");
+        assert_eq!(Beside::Settings { program: "Eqoa-x86_64.AppImage".into(), config: "eqoa-rs".into() }.folder(), "The game's folder is read-only");
+        testing::set_place(None);
+        crate::settings::testing::reset(false);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A pack of one stand-in, `w` x `h` of the value `v`, for the surface
+    /// `s` of `c` (its first name), read on its own thread unless
+    /// `blocking`; the folder it is in.
+    fn one_stand_in(name: &str, c: &esf::Container, s: &esf::Surface, (w, h): (u32, u32), v: u8, blocking: bool, dumps: Option<PathBuf>) -> (Pack, PathBuf) {
+        let dir = temp(name);
+        let n = s.gs(&c.data).unwrap().names()[0].0;
+        let p = dir.join(n.file_name(0));
+        std::fs::write(&p, png_bytes(w, h, png::ColorType::Rgba, png::BitDepth::Eight, &vec![v; (w * h * 4) as usize])).unwrap();
+        let ix = Index::scan(&dir);
+        assert_eq!(ix.files.len(), 1);
+        let dumper = dumps.map(|d| Dumper::new([Some(d), None]).unwrap());
+        (Pack::of(Some([ix, Index::default()]), dumper, blocking), dir)
+    }
+
+    /// A stand-in is read off the frame (the owner, 2026-11-09: "lets make
+    /// texture packs load async"): asked for, its size and level count are
+    /// known at once (its header's) and the frame goes on with the
+    /// surface's own, frame after frame, while the reader is held; let go,
+    /// it comes back under the key it was asked for, every level the size
+    /// asked, and from then on is the surface's levels. The control: read on
+    /// the asking thread (a shot's, as before), the first ask gives it.
+    #[test]
+    fn a_stand_in_is_read_off_the_frame() {
+        let (c, s) = surface(64, 64, 3);
+        let (pack, dir) = one_stand_in("async", &c, &s, (256, 256), 7, false, None);
+        let reader = pack.reader.as_ref().unwrap();
+        let held = reader.hold.lock().unwrap();
+        let want = (256, 256, level_count((256, 256), &s) as u32);
+        assert_eq!(want.2, 5, "the surface's 3 and the 2 it is larger by");
+        for frame in 0..30 {
+            let t = std::time::Instant::now();
+            assert_eq!(pack.ask(Some(42), &c.data, &s, esf::Era::Frontiers), Some(want), "frame {frame}: its size, asked");
+            assert!(pack.levels_for(&c.data, &s, esf::Era::Frontiers).is_none(), "frame {frame}: the surface's own meanwhile");
+            assert!(render::Pack::take_ready(&pack).is_empty());
+            assert!(t.elapsed() < std::time::Duration::from_millis(250), "frame {frame} waited {:?}", t.elapsed());
+        }
+        drop(held);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut frames = 0;
+        let ready = loop {
+            let r = render::Pack::take_ready(&pack);
+            if !r.is_empty() || std::time::Instant::now() > until {
+                break r;
+            }
+            frames += 1;
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(ready.len(), 1, "once, however often it was asked (after {frames} more frames)");
+        assert_eq!(ready[0].0, 42);
+        assert!(render::standin::fits(&ready[0].1, want));
+        assert_eq!(ready[0].1[0].rgba[..4], [7, 7, 7, 7]);
+        assert_eq!(pack.ask(Some(42), &c.data, &s, esf::Era::Frontiers), None, "read: no more asking");
+        assert_eq!(pack.levels_for(&c.data, &s, esf::Era::Frontiers).unwrap().len(), 5);
+        let _ = std::fs::remove_dir_all(&dir);
+        // the control
+        let (sync, dir) = one_stand_in("sync", &c, &s, (256, 256), 7, true, None);
+        assert_eq!(sync.ask(Some(42), &c.data, &s, esf::Era::Frontiers), None, "nothing to ask: read as it is wanted");
+        assert_eq!(sync.levels_for(&c.data, &s, esf::Era::Frontiers).map(|l| (l.len(), l[0].width)), Some((5, 256)), "the control: at the first ask");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With a pack and Dump Textures together, a dump is the game's own
+    /// texture, the surface's levels as the disc has them, at its own size,
+    /// never the pack's (larger, of another colour), read on the asking
+    /// thread or on the reader's (the user, 2026-11-09: "it should only dump
+    /// the raw, not the upscaled or replacements"). The control: the pack's
+    /// levels are the stand-in's.
+    #[test]
+    fn dumps_are_the_raw_texture_with_a_pack() {
+        let (c, s) = surface(32, 32, 2);
+        let t = s.gs(&c.data).unwrap();
+        for blocking in [true, false] {
+            let dumps = temp(&format!("rawdumps-{blocking}"));
+            let (pack, dir) = one_stand_in(&format!("rawpack-{blocking}"), &c, &s, (128, 128), 9, blocking, Some(dumps.clone()));
+            let _ = pack.ask(Some(1), &c.data, &s, esf::Era::Frontiers);
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            let levels = loop {
+                if let Some(l) = pack.levels_for(&c.data, &s, esf::Era::Frontiers) {
+                    break l;
+                }
+                assert!(std::time::Instant::now() < until, "never read");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            assert_eq!((levels[0].width, &levels[0].rgba[..4]), (128, &[9u8, 9, 9, 9][..]), "the control: the pack's");
+            let d = pack.dumper.as_ref().unwrap();
+            while d.pending.load(Ordering::Relaxed) > 0 && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let names = t.names();
+            assert_eq!(std::fs::read_dir(&dumps).unwrap().count(), names.len(), "every name, once");
+            for (n, level) in names {
+                let img = read_png(&std::fs::read(dumps.join(n.file_name(0))).unwrap()).unwrap();
+                assert_eq!((img.width, img.height), (t.levels[level].width, t.levels[level].height), "{}: its own size", n.file_name(0));
+                assert_eq!(img.rgba, t.rgba(level), "{}: its own texels", n.file_name(0));
+                assert_ne!(img.rgba[..4], [9, 9, 9, 9]);
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::remove_dir_all(&dumps);
+        }
     }
 }

@@ -80,8 +80,8 @@ or a browser (each described where it lives below):
   Characters (Level of Detail, NPC/PC Display and Distance, Name Distance,
   Overlapping Names, Shadows), Sound (Sound in Background, Output Device: the system's
   default, followed when it changes, or a device by its name), natively Textures
-  (Texture Packs, Dump Textures) and Map (Map, Minimap, Map Markers, Quest Helper,
-  Quest Tracker), and the rows below.
+  (Texture Packs, Dump Textures, and on a computer Texture Folder) and Map (Map,
+  Minimap, Map Markers, Quest Helper, Quest Tracker), and the rows below.
 - **The map and the quest helper** (the user's of 2026-11-09: "also add the map and
   quest helper we had in a former update"; they were taken out on 2026-10-27 with the
   others below that are not the game's, and only these two came back): Extended > Map,
@@ -455,11 +455,11 @@ or a browser (each described where it lives below):
   PCSX2 replacement packs as they are ... and can dump its textures under
   PCSX2's names, so one pack works in both"; `texpack.rs`, `esf::pcsx2`):
   natively, Extended > Textures. Texture Packs (off unless chosen) draws a
-  texture a pack in the config directory's `textures/SLUS-20744/replacements`
-  names (PCSX2's folder and file names, read at any depth; PNG and DDS, its
-  BC1/2/3/7 and uncompressed forms, any size) in its place: a larger one with
-  its own levels, sampled that many levels farther on, so it adds detail near
-  and keeps the game's texel density far; a texture off the 2002 disc looks in
+  texture a pack in `textures/SLUS-20744/replacements` names (PCSX2's folder
+  and file names, read at any depth; PNG and DDS, its BC1/2/3/7 and
+  uncompressed forms, any size) in its place: a larger one with its own
+  levels, sampled that many levels farther on, so it adds detail near and
+  keeps the game's texel density far; a texture off the 2002 disc looks in
   `textures/SLUS-20470`. Dump Textures (off unless chosen) writes each texture
   made to `textures/SLUS-20744/dumps` under every name PCSX2 gives it, the
   picture PCSX2 dumps byte for byte. A name is PCSX2's texture cache's own
@@ -467,7 +467,31 @@ or a browser (each described where it lives below):
   as GS blocks, its CLUT), reproduced from the surface record as
   `VIEESurfCache` uploads it; held to PCSX2's dumps of the game (below, the
   `esf` row). Off, every texture is the game's own, byte for byte; a change to
-  either row makes every texture again (`App::retexture`).
+  either row makes every texture again (`App::retexture`). The `textures`
+  folder is beside the program (the user, 2026-11-09: "lets put the
+  dumps/replacements in a folder next to the binary, so players can find it
+  easy"; `texpack::place`): the program's own folder (the release's archive's
+  or its bare download's), a Mac app's the folder holding the `.app`, an
+  AppImage's the folder of `$APPIMAGE` (the release has neither). Where the
+  game cannot write there (Program Files, /usr/bin, a read-only mount) it is
+  the config directory's, as before, and the page says so; on Android always.
+  The config directory's from before is moved over the first time it is
+  wanted (one rename: on the same disk only), else read after the new one.
+  The updater renames only the program, so the folder outlives updates. On a
+  computer Texture Folder (Open) shows the folder in the system's file manager
+  (Explorer, `open`, `xdg-open`), and the page's note says where it is; a run
+  that keeps no settings (the test commands) has no folder. Packs load off the
+  frame (the owner, 2026-11-09: "lets make texture packs load async"): the
+  folder is read on a thread (every file's header with it), and each stand-in
+  is read and decoded on the pack's own thread the first time it is wanted;
+  its texture is made at once at its final size with the surface's own levels
+  drawn into it by the GPU (`render::standin`), and the read levels are
+  written into that same texture at a frame's start (8 MB a frame), so no bind
+  group or render bundle is made again. Arriving at Freeport with 570
+  stand-ins 4x the size (317 MB decoded) froze the old build ~4-6 s; now the
+  worst frame is ~50 ms. A shot reads them as it asks (`texpack::sync_now`),
+  and `EQOA_TEXTURES_SYNC=1` does so in a live run, to measure against.
+  A dump is always the surface's own record's texture, never a stand-in.
 - **Sorted lists**: the Who list and the guild's roster by name, or by any
   column with ○ (C on the keyboard) or a click on its heading (the game keeps
   the server's order).

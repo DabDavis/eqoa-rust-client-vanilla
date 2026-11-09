@@ -6,6 +6,29 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Texture packs load without freezing the game
+- A texture pack's pictures are now read in the background. Until a texture's replacement is ready the game draws
+  its own texture there, then puts the replacement in its place a moment later, so the game no longer stops while a
+  pack is read. With a large HD pack the game used to freeze for seconds on arriving in a city like Freeport; now
+  it keeps moving.
+- Dump Textures only ever writes the game's own textures, as the disc has them, whether a pack is loaded or not:
+  never a pack's picture and never an enlarged one.
+
+## 2026-11-09 · Texture packs in a folder beside the game
+- Texture packs and texture dumps now go in a `textures` folder next to the game itself (beside `eqoa.exe` on
+  Windows, beside `eqoa` on Linux and on a Mac), where they are easy to find: put a pack's files in
+  `textures/SLUS-20744/replacements`, and Dump Textures writes to `textures/SLUS-20744/dumps`. Inside it the folders
+  are PCSX2's, so a pack made for PCSX2 still goes in as it is.
+- Options > Extended > Textures has a new row, Texture Folder: Open shows the folder in your file manager
+  (Explorer, the Finder or your desktop's). Beside Back the page says where the folder is, and how many textures
+  the packs in it replace. A pack you add while the game runs is read when you turn Texture Packs off and on.
+- The packs and dumps you kept in the settings folder (`eqoa-rs`) are moved there the first time the game uses
+  them. If they are on another disk from the game they stay where they are, and are still read.
+- Where the game cannot write in its own folder (in Program Files, say), it keeps them in the settings folder as
+  before, and the Textures page says so.
+- An update replaces only the game's program: the `textures` folder beside it is never touched.
+- In a browser and on Android nothing changes.
+
 ## 2026-11-09 · The map and the quest helper are back
 - M opens the map again: the whole world drawn from your own disc, with the towns' names, the coach routes and
   stops, the XP camps and the places players suggested and a GM accepted. Click (or tap) to put a waypoint, which

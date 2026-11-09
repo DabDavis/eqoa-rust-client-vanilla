@@ -92,12 +92,17 @@
 //!   the system lists, the default while it is not connected: `audio`'s
 //!   `retarget`; its page says where the sound plays now);
 //! - Textures, natively (2026-11-08): Texture Packs (Off, the game's: every
-//!   texture its own; On: one a PCSX2 replacement pack in the config
-//!   directory's `textures/SLUS-20744/replacements` names drawn as the pack
-//!   has it, `texpack`; its page says how many the packs hold) and Dump
+//!   texture its own; On: one a PCSX2 replacement pack in
+//!   `textures/SLUS-20744/replacements` names drawn as the pack has it,
+//!   `texpack`; its page says how many the packs hold, and where) and Dump
 //!   Textures (Off; On: each texture made written to `textures/SLUS-20744/
 //!   dumps` under the names PCSX2 gives it, and how many beside Back), each
-//!   making every texture again as it moves;
+//!   making every texture again as it moves; the `textures` folder is
+//!   beside the program (2026-11-09; in the settings where the program's
+//!   folder cannot be written to, which the page then says, and on
+//!   Android), and on a computer Texture Folder (Open) shows it in the
+//!   system's file manager, the page saying where it is
+//!   (`texpack::open_folder`);
 //! - Map (2026-11-09, the user's "also add the map and quest helper we had in
 //!   a former update"): Map (On: the client's own map on M and the compass's
 //!   click, the minimap, the waypoints on the compass and the group's
@@ -582,7 +587,8 @@ impl WndOptions {
     /// Smooth; Update Notices (29), Overlapping Names (34, Hide and Show),
     /// Mipmaps (35), Loading Screens (38, Longer and Instant), Texture Packs
     /// (50), Dump Textures (51), the Map (41), Minimap (42), Map Markers (43),
-    /// the Quest Helper (44) and Quest Tracker (45) turn over;
+    /// the Quest Helper (44) and Quest Tracker (45) turn over; Texture Folder (55) shows the
+    /// folder (`texpack::open_folder`: sound 8, or 9 with none to show);
     /// Output Device (32) goes round the system default and the devices
     /// listed (`step_output`); Display (33) turns the window over (`display`). A
     /// slider (`slider_at`) makes its own
@@ -675,6 +681,9 @@ impl WndOptions {
                     // `viewer`'s `retexture`)
                     50 => c.texture_packs = !c.texture_packs,
                     51 => c.dump_textures = !c.dump_textures,
+                    // Texture Folder: shown either way, as ✕ shows it
+                    // (`select`)
+                    55 => cues.push(if crate::texpack::open_folder() { 8 } else { 9 }),
                     // Text: every font drawn from the next frame (`viewer`)
                     30 => c.text = c.text.other(),
                     // Loading Screens: the next long trip's (`loading`)
@@ -770,7 +779,8 @@ impl WndOptions {
             }
             _ => {}
         }
-        let inert = self.item == 26 && cfg!(target_arch = "wasm32");
+        // (Texture Folder makes its own sound)
+        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == 55;
         let slides = matches!(self.item, 3 | 4) || slider_at(self.item).is_some();
         if !slides && !inert && ((0..=11).contains(&self.item) || extended(self.item)) {
             cues.push(11);
@@ -805,6 +815,12 @@ impl WndOptions {
             self.cat = Some(c);
             self.row = 0;
             self.page_window(vui, r, CATEGORIES[c].items.len() as i32 + 3);
+            return false;
+        }
+        // ✕ on Texture Folder shows it, as left and right do (`change`); on
+        // any other row of a page it does nothing, as on the game's
+        if self.page == 3 && self.cat.is_some() && self.item == 55 {
+            cues.push(if crate::texpack::open_folder() { 8 } else { 9 });
             return false;
         }
         if self.page != -1 {
@@ -1131,7 +1147,7 @@ impl WndOptions {
                 scale_note(asked, render::scale::would_draw(asked)).filter(|_| self.item == 39)
             }
             Note::Output | Note::Textures if cfg!(target_arch = "wasm32") => None,
-            Note::Textures => crate::texpack::note(self.item == 51),
+            Note::Textures => crate::texpack::note(self.item),
             Note::Output => Some(match crate::audio::playing() {
                 Some(d) => format!("Plays on {d}"),
                 None => "No output now".to_string(),
@@ -1158,7 +1174,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 41] = [
+const EXTENDED_ITEMS: [(i32, &str); 42] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1200,6 +1216,7 @@ const EXTENDED_ITEMS: [(i32, &str); 41] = [
     (52, "Dynamic Lighting"),
     (53, "Sun Shadows"),
     (54, "Ambient Occlusion"),
+    (55, "Texture Folder"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1216,8 +1233,9 @@ enum Note {
     Scale,
     /// where the sound plays now (`audio::playing`), natively
     Output,
-    /// how many replacements the packs hold, or how many textures have been
-    /// dumped while Dump Textures is chosen (`texpack::note`), natively
+    /// how many replacements the packs hold and where, how many textures
+    /// have been dumped while Dump Textures is chosen, or where the folder
+    /// is while Texture Folder is (`texpack::note`), natively
     Textures,
     /// that Sun Shadows need Dynamic Lighting, while they are chosen and on
     /// and it is off (`sun_note`)
@@ -1238,8 +1256,9 @@ struct Category {
 /// Lighting after World (2026-11-08: Dynamic Lighting, the world's light,
 /// and Ambient Occlusion);
 /// natively Textures (2026-11-08: Texture Packs and Dump Textures, a
-/// folder's files a page cannot reach); Map last (2026-11-09: the map and the
-/// quest helper, the client's own, back from before 2026-10-27).
+/// folder's files a page cannot reach; 2026-11-09: Texture Folder); Map last
+/// (2026-11-09: the map and the quest helper, the client's own, back from
+/// before 2026-10-27).
 const ALL_CATEGORIES: [Category; 10] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
@@ -1249,7 +1268,7 @@ const ALL_CATEGORIES: [Category; 10] = [
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34, 46], note: Note::Server },
     Category { name: "Sound", items: SOUND, note: Note::Output },
-    Category { name: "Textures", items: &[50, 51], note: Note::Textures },
+    Category { name: "Textures", items: TEXTURES, note: Note::Textures },
     Category { name: "Map", items: &[41, 42, 43, 44, 45], note: Note::None },
 ];
 #[cfg(not(target_arch = "wasm32"))]
@@ -1276,6 +1295,15 @@ const VIDEO: &[i32] = &[13, 14, 26, 39, 38];
 const SOUND: &[i32] = &[21, 32];
 #[cfg(target_arch = "wasm32")]
 const SOUND: &[i32] = &[21];
+
+/// Textures' rows (natively; a page has none): on a computer Texture Folder
+/// after Texture Packs and Dump Textures, showing the folder beside the
+/// program (`texpack::open_folder`); an Android app's is in its own
+/// storage, which no file manager shows.
+#[cfg(not(target_os = "android"))]
+const TEXTURES: &[i32] = &[50, 51, 55];
+#[cfg(target_os = "android")]
+const TEXTURES: &[i32] = &[50, 51];
 
 /// Extended's menu (`draw_categories`): the categories from its first row,
 /// the legend two under the last, as the options menu's six and its legend
@@ -1348,6 +1376,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         49 => on_off(c.raid_list),
         50 => on_off(c.texture_packs),
         51 => on_off(c.dump_textures),
+        55 => wide("Open"),
         35 => on_off(c.mipmaps),
         36 => on_off(c.flora),
         37 => on_off(c.environment),
@@ -1983,8 +2012,19 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::client().dump_textures, "either way turns it over");
         assert_eq!(w.page_note(8).as_deref(), Some("0 dumped"), "how many dumped, beside Back");
+        // Texture Folder: Open; with no folder here (a test's), nothing to
+        // show, sound 9, by either way or ✕
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (1, Some(&9)), "Textures' last row");
+        assert_eq!((w.item, cues.last()), (55, Some(&11)), "Texture Folder");
+        assert_eq!(value_text(&vui, 55), Some(wide("Open")));
+        assert_eq!(w.page_note(8).as_deref(), Some("No folder here"), "where it is, beside Back");
+        for k in [key::RIGHT, key::LEFT, key::CROSS] {
+            press(&mut w, &mut o, k, &mut cues);
+            assert_eq!(cues.last(), Some(&9), "none to show ({k})");
+        }
+        assert!(crate::texpack::testing::shown().is_empty());
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (2, Some(&9)), "Textures' last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
         // Map: the Map, Minimap, Map Markers, the Quest Helper and Quest
@@ -2167,7 +2207,8 @@ mod tests {
             v.sort();
             v
         };
-        let all: Vec<i32> = EXTENDED_ITEMS.iter().map(|&(i, _)| i).collect();
+        // (an Android app has no Texture Folder: `TEXTURES`)
+        let all: Vec<i32> = EXTENDED_ITEMS.iter().map(|&(i, _)| i).filter(|&i| !(cfg!(target_os = "android") && i == 55)).collect();
         assert_eq!(listed(CATEGORIES), all);
         assert!(fits(CATEGORIES));
         assert!(EXTENDED_ITEMS.iter().all(|&(i, l)| !l.is_empty() && label_of(i) == l));
@@ -2404,7 +2445,7 @@ mod tests {
             // Textures: nothing to say while both are off (a test keeps no
             // folder, so with Texture Packs on there is none to read)
             assert_eq!(CATEGORIES[by_name("Textures")].note, Note::Textures);
-            assert_eq!(CATEGORIES[by_name("Textures")].items, &[50, 51]);
+            assert_eq!(CATEGORIES[by_name("Textures")].items, &[50, 51, 55]);
             assert_eq!(note(&w, by_name("Textures")), None, "both off: no note");
             crate::settings::set_client(crate::settings::ClientOptions { texture_packs: true, ..crate::settings::client() });
             assert_eq!(note(&w, by_name("Textures")).as_deref(), Some("No folder here"), "on, with no folder to read");
@@ -2425,6 +2466,56 @@ mod tests {
         assert_eq!(note(&w, by_name("Video")), None, "the control: none on Video's");
         // no output in a test (no device opened): said so
         assert_eq!(note(&w, by_name("Sound")).as_deref(), Some("No output now"), "Sound: where it plays");
+    }
+
+    /// Texture Folder (55) on a computer: its value Open; right, left and ✕
+    /// each show the Frontiers disc's folder in the `textures` beside the
+    /// program (sound 8), made with its replacements, the page saying
+    /// where, and no setting changes; the control: with no folder (a run
+    /// that keeps no settings) sound 9 and nothing shown.
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn the_texture_folder_row_shows_the_folder() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::texpack::{Beside, Place, testing};
+        crate::settings::testing::reset(false);
+        let vui = vui();
+        let mut r = NullRaster;
+        let mut o = GameOptions::default();
+        let mut w = WndOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        let d = std::env::temp_dir().join(format!("eqoa-options-texture-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        testing::set_place(Some(Place { dir: d.join("textures"), also: None, beside: Beside::Program("eqoa.exe".into()), moved: None, why: None }));
+        let textures = CATEGORIES.iter().position(|c| c.name == "Textures").unwrap();
+        w.open(&vui, &r, &o);
+        w.sel = 3;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        w.cat_sel = textures as i32;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        for _ in 0..2 {
+            w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
+            w.draw(&vui, &mut r, &o, &mut ups);
+        }
+        assert_eq!((w.cat, w.item), (Some(textures), 55), "Texture Folder, the third row");
+        assert_eq!(w.page_note(textures).as_deref(), Some("Beside eqoa.exe"));
+        for k in [key::RIGHT, key::LEFT, key::CROSS] {
+            cues.clear();
+            w.key(&vui, &mut r, &mut o, k, 0, &mut cues, &mut ups);
+            w.draw(&vui, &mut r, &o, &mut ups);
+            assert_eq!(cues, vec![8], "shown ({k})");
+        }
+        let folder = d.join("textures").join(esf::pcsx2::SERIAL);
+        assert_eq!(testing::shown(), vec![folder.clone(); 3]);
+        assert!(folder.join("replacements").is_dir(), "made as PCSX2 makes it");
+        assert_eq!(crate::settings::client(), ClientOptions::default(), "no setting changed");
+        testing::set_place(None);
+        cues.clear();
+        w.key(&vui, &mut r, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
+        assert_eq!((cues, testing::shown()), (vec![9], vec![]), "the control: no folder");
+        crate::settings::testing::reset(false);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// Sun Shadows' note: only while they are on and Dynamic Lighting is
