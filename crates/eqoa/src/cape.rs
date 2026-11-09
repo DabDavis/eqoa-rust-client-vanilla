@@ -55,9 +55,11 @@
 //! vampire's mantle stood out wide and forward round a dark elf's neck): a
 //! flat top's way out is measured from the spine below the neck (`facing`),
 //! and the neck passes through a collar. Each cape is fitted both ways, flat
-//! tops up and flat tops out from the body as the rest, and the fit that
-//! leaves less of the body through it in the poses is kept (a creature's
-//! back under a flat top clears out, not up).
+//! tops up and flat tops out from the body as the rest, and up is kept unless
+//! out leaves clearly less of the body through it over the poses and no more
+//! in the worst of them, as the body's edges through it measure (`through`:
+//! a creature's back under a flat top clears out, not up, and its long edges
+//! cross a cape with neither end under it).
 //!
 //! A cape fitted is in its wearer's bind pose and names its wearer's nodes, so
 //! it is drawn with the body's own skin palette. With none worn nothing is
@@ -527,10 +529,14 @@ fn settle(m: &mut esf::Model, to: &Bones, f: &Frame, body: &esf::Model, poses: &
     let followed = follow(m, &weld, &dir, &under, &kept, &tail, b(f.root).y, SWAY.1 * tall, FOLLOW.0 * tall, FOLLOW.1 * tall);
 
     let skip = free(f, to);
-    let pts: Vec<(Vec3, [u8; 4], [u8; 4])> = used(body)
-        .filter(|&v| !skip.get(heaviest(body, v)).copied().unwrap_or(true))
-        .map(|v| (Vec3::from(body.pos[v]), body.bones[v], body.weights[v]))
-        .collect();
+    // the body's vertices it is fitted against, and their edges
+    let mut index = vec![usize::MAX; body.pos.len()];
+    let mut pts: Vec<(Vec3, [u8; 4], [u8; 4])> = Vec::new();
+    for v in used(body).filter(|&v| !skip.get(heaviest(body, v)).copied().unwrap_or(true)) {
+        index[v] = pts.len();
+        pts.push((Vec3::from(body.pos[v]), body.bones[v], body.weights[v]));
+    }
+    let edges = edges_of(body, &index);
     let nodes = [f.root, f.chest, f.head].map(|i| (i, to.bind[i]));
     // the push's way out: a place whose face lies flat (a mantle, a collar
     // over the shoulders) up along it, so it lifts off the shoulders rather
@@ -551,24 +557,27 @@ fn settle(m: &mut esf::Model, to: &Bones, f: &Frame, body: &esf::Model, poses: &
     let caps: Vec<(f32, f32)> = top.iter().zip(&over).map(|(&t, &o)| (if t { TOP.0 } else if o { TOP.1 } else { 1.0 } * SWAY.2 * tall, if o { REST } else { SWAY.2 } * tall)).collect();
     let gaps: Vec<f32> = top.iter().map(|&t| if t { 0.5 } else { 1.0 } * SWAY.0 * tall).collect();
     // a mantle's flat top up off the shoulders, or out from the body as the
-    // rest: whichever leaves less of the body through it in the poses (a
-    // creature's back under a flat top is cleared out, not up)
+    // rest: up, unless out leaves clearly less of the body through it over
+    // the poses and no more in the worst of them (a creature's back under a
+    // flat top is cleared out, not up), measured by the body's edges (a
+    // creature's long ones cross a cape with neither end under it)
     let hips = b(f.root).y - f.ground;
-    let still = vec![(0.0, 0.0); caps.len()];
-    let tried: Vec<(esf::Model, f32, f32)> = [&away, &dir]
+    let tried: Vec<(esf::Model, f32, (f32, f32))> = [&away, &dir]
         .into_iter()
         .map(|way| {
             let mut c = m.clone();
-            let (moved, _) = sway(&mut c, &weld, way, &pts, nodes, hips, poses, &gaps, SWAY.1 * tall, &caps);
-            let (_, left) = sway(&mut c, &weld, way, &pts, nodes, hips, poses, &gaps, SWAY.1 * tall, &still);
+            let moved = sway(&mut c, &weld, way, &pts, nodes, hips, poses, &gaps, SWAY.1 * tall, &caps);
+            let left = through(&c, &weld, &pts, &edges, nodes, hips, poses);
             (c, moved, left)
         })
         .collect();
-    let pick = usize::from(tried[0].2 > tried[1].2 + 0.01 * tall);
+    let ((up, up_most), (out, out_most)) = (tried[0].2, tried[1].2);
+    let pick = usize::from(up > out + 0.01 * tall && out_most <= up_most + 0.01 * tall);
     let moved = tried[pick].1;
     *m = tried[pick].0.clone();
     if debug {
         eprintln!("cape: {followed} of {} places skinned as the body under them; moved out by up to {moved:.3} over {} poses", weld.members.len(), poses.len());
+        eprintln!("cape: the body through it by {up:.3} (at most {up_most:.3}) with flat tops up, {out:.3} ({out_most:.3}) out; {}", ["up", "out"][pick]);
     }
 }
 
@@ -900,12 +909,9 @@ fn keep(own: &Skin, new: &Skin, kept: &[bool]) -> Skin {
 /// than its `caps` (moving, resting). A posed triangle's face is turned away
 /// from the posed spine below the neck (`nodes`: the root, the chest and the
 /// head, with their binds; the root `hips` over the ground; `facing`). The
-/// most any place moved, and the furthest a point of the body lay outside the
-/// cape as it came (with every cap 0, how far the body still comes through).
+/// most any place moved.
 #[allow(clippy::too_many_arguments)]
-fn sway(m: &mut esf::Model, weld: &Weld, dir: &[Vec3], pts: &[(Vec3, [u8; 4], [u8; 4])], nodes: [(usize, Vec3); 3], hips: f32, poses: &[Vec<glam::Mat4>], gaps: &[f32], reach: f32, caps: &[(f32, f32)]) -> (f32, f32) {
-    // the furthest a point of the body lay outside the cape as it came
-    let mut deepest = 0.0f32;
+fn sway(m: &mut esf::Model, weld: &Weld, dir: &[Vec3], pts: &[(Vec3, [u8; 4], [u8; 4])], nodes: [(usize, Vec3); 3], hips: f32, poses: &[Vec<glam::Mat4>], gaps: &[f32], reach: f32, caps: &[(f32, f32)]) -> f32 {
     let at: Vec<Vec3> = weld.members.iter().map(|vs| Vec3::from(m.pos[vs[0]])).collect();
     let skin: Vec<([u8; 4], [u8; 4])> = weld.members.iter().map(|vs| (m.bones[vs[0]], m.weights[vs[0]])).collect();
     // what the poses the body moves in ask, and what those it rests in ask
@@ -957,7 +963,6 @@ fn sway(m: &mut esf::Model, weld: &Weld, dir: &[Vec3], pts: &[(Vec3, [u8; 4], [u
                 let w = (d00 * d21 - d01 * d20) / den;
                 if v >= 0.0 && w >= 0.0 && v + w <= 1.0 {
                     need = need.max(h + gap);
-                    deepest = deepest.max(h);
                 }
             }
             if need > 0.0 {
@@ -984,7 +989,97 @@ fn sway(m: &mut esf::Model, weld: &Weld, dir: &[Vec3], pts: &[(Vec3, [u8; 4], [u
             m.pos[v] = to.to_array();
         }
     }
-    (most, deepest)
+    most
+}
+
+/// The edges (between `index`'s numbers, each once) of the body's nearest
+/// level of detail's triangles whose corners `index` numbers all three of.
+fn edges_of(body: &esf::Model, index: &[usize]) -> Vec<(usize, usize)> {
+    let num = |v: u32| index.get(v as usize).copied().filter(|&i| i != usize::MAX);
+    let mut out: Vec<(usize, usize)> = body
+        .batches
+        .iter()
+        .filter(|bt| bt.lod.unwrap_or(0) == 0)
+        .flat_map(|bt| bt.indices.chunks_exact(3))
+        .filter_map(|t| Some([num(t[0])?, num(t[1])?, num(t[2])?]))
+        .flat_map(|[a, b, c]| [(a, b), (b, c), (c, a)])
+        .filter(|&(a, b)| a != b)
+        .map(|(a, b)| (a.min(b), a.max(b)))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// How far the body comes through the cape `m` (its places `weld`) in the
+/// poses `poses`, on the mean over them and in the worst of them, each pose's
+/// measured as what shows is (`poke`): the furthest the outer end of an edge
+/// of the body (`pts`, joined by `edges`) lies outside a cape triangle the
+/// edge goes through, along the triangle's way out (`facing`, with `nodes`
+/// and `hips` as `sway`'s). The mean, so a crossing that neither fit clears
+/// in one pose (a tail swung through it) does not hide one fit clearing
+/// more in the rest.
+fn through(m: &esf::Model, weld: &Weld, pts: &[(Vec3, [u8; 4], [u8; 4])], edges: &[(usize, usize)], nodes: [(usize, Vec3); 3], hips: f32, poses: &[Vec<glam::Mat4>]) -> (f32, f32) {
+    let at: Vec<Vec3> = weld.members.iter().map(|vs| Vec3::from(m.pos[vs[0]])).collect();
+    let skin: Vec<([u8; 4], [u8; 4])> = weld.members.iter().map(|vs| (m.bones[vs[0]], m.weights[vs[0]])).collect();
+    let (mut sum, mut most) = (0.0f32, 0.0f32);
+    for pal in poses {
+        let mut worst = 0.0f32;
+        let posed = |p: Vec3, b: [u8; 4], w: [u8; 4]| {
+            let (mut q, mut sum) = (Vec3::ZERO, 0.0);
+            for k in 0..4 {
+                if b[k] != 255 && w[k] > 0 && (b[k] as usize) < pal.len() {
+                    q += pal[b[k] as usize].transform_point3(p) * w[k] as f32;
+                    sum += w[k] as f32;
+                }
+            }
+            if sum > 0.0 { q / sum } else { p }
+        };
+        let node = |(i, bind): (usize, Vec3)| pal.get(i).map_or(bind, |x| x.transform_point3(bind));
+        let [root, chest, head] = nodes.map(node);
+        let axis = [root - Vec3::Y * hips, root, chest, head];
+        let c: Vec<Vec3> = at.iter().zip(&skin).map(|(&p, &(b, w))| posed(p, b, w)).collect();
+        let body: Vec<Vec3> = pts.iter().map(|&(p, b, w)| posed(p, b, w)).collect();
+        // the edges by their lower end, so a triangle looks only at those
+        // level with it (none reaches higher than the tallest)
+        let mut by: Vec<(f32, usize, usize)> = edges.iter().map(|&(a, e)| (body[a].y.min(body[e].y), a, e)).collect();
+        by.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let span = edges.iter().map(|&(a, e)| (body[a].y - body[e].y).abs()).fold(0.0f32, f32::max);
+        for t in &weld.tris {
+            let k3 = t.map(|k| c[k]);
+            let Some(n) = (k3[1] - k3[0]).cross(k3[2] - k3[0]).try_normalize() else { continue };
+            let n = if n.dot(facing(&axis, (k3[0] + k3[1] + k3[2]) / 3.0)) >= 0.0 { n } else { -n };
+            let (lo, hi) = (k3[0].min(k3[1]).min(k3[2]), k3[0].max(k3[1]).max(k3[2]));
+            let (e0, e1) = (k3[1] - k3[0], k3[2] - k3[0]);
+            let (d00, d01, d11) = (e0.dot(e0), e0.dot(e1), e1.dot(e1));
+            let den = d00 * d11 - d01 * d01;
+            if den.abs() < 1e-12 {
+                continue;
+            }
+            let (from, end) = (by.partition_point(|x| x.0 < lo.y - span), by.partition_point(|x| x.0 <= hi.y));
+            for &(_, a, e) in &by[from..end] {
+                let (pa, pe) = (body[a], body[e]);
+                if pa.max(pe).cmplt(lo).any() || pa.min(pe).cmpgt(hi).any() {
+                    continue;
+                }
+                let (da, de) = ((pa - k3[0]).dot(n), (pe - k3[0]).dot(n));
+                if da * de > 0.0 || da == de {
+                    continue;
+                }
+                // where the edge meets the plane, inside the triangle
+                let q = pa + (pe - pa) * (da / (da - de)) - k3[0];
+                let (d20, d21) = (q.dot(e0), q.dot(e1));
+                let v = (d11 * d20 - d01 * d21) / den;
+                let w = (d00 * d21 - d01 * d20) / den;
+                if v >= 0.0 && w >= 0.0 && v + w <= 1.0 {
+                    worst = worst.max(da.max(de));
+                }
+            }
+        }
+        sum += worst;
+        most = most.max(worst);
+    }
+    (sum / poses.len().max(1) as f32, most)
 }
 
 /// How much wider (and deeper, and on a body not a player's taller) a cape
@@ -1554,6 +1649,34 @@ mod tests {
         }
         assert!(top < 0.05 * tall, "the vampire's mantle on the dark elf moved {top:.3} off where the art put it");
         assert!(low > top, "the control: its lower part moves more ({low:.3} against {top:.3})");
+    }
+
+    /// The knight's cape (style 1) on a froglok's and a fungusman's bodies,
+    /// whose backs come through its collar where a flat top is lifted up off
+    /// the shoulders (`settle` fits it out from the body there instead):
+    /// settled, the body shows through it in the frames of the walk and the
+    /// run it was not fitted in (`checked`) by no more than three quarters of
+    /// what it does as placed (the control: as placed, more than a twentieth
+    /// of the body's height to the shoulders).
+    #[test]
+    fn a_froglok_and_a_fungusman_in_the_knights_cape() {
+        let Some(lib) = char_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let plate = vi::cust::Look { armor: [4; 6], robe: -1, ..Default::default() };
+        for id in [0x141B_FE0C, 0x4A4D_88FB] {
+            let (cs, body) = sprite(&lib, id);
+            let to = Bones::of(&cs);
+            let f = Frame::of(&to, &body).unwrap();
+            let tall = f.shoulder_y - f.ground;
+            let placed_m = placed(&source(&lib, style(1).unwrap()).unwrap(), &to, Some(&f), false).unwrap();
+            let settled = model(&lib, Cape { style: 1, color: 0 }, id, &cs).unwrap();
+            let worst = |m: &esf::Model| checked().into_iter().map(|(_, a, ms)| poke(&lib, m, id, &plate, a, ms).0).fold(0.0f32, f32::max);
+            let (before, after) = (worst(&placed_m), worst(&settled));
+            assert!(before > 0.05 * tall, "the control: {id:08X} through the cape as placed ({before:.3})");
+            assert!(after < 0.75 * before, "{id:08X} through the settled cape: {after:.3} ({before:.3} as placed)");
+        }
     }
 
     /// SURVEY (ignored, a few minutes): every player body and race body in
