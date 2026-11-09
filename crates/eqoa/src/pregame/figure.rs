@@ -180,6 +180,10 @@ impl Figure {
             if let Some(rl) = &race_look {
                 crate::raceopts::dress(lib, id, &mut built, rl);
             }
+            // a Wisp: its armour alone, the wisp in the helm (`wisp`)
+            if let Some((node, w)) = crate::wisp::dress(lib, id, &mut built, cs, &look, race_look.as_ref()) {
+                attached.push((node, g.renderer.upload(g.device, g.queue, &w, &[render::IDENTITY], &textures)));
+            }
         }
         let gpu = g.renderer.upload(g.device, g.queue, &built, &[render::IDENTITY], &textures);
         let scale = crate::raceopts::body_size(id);

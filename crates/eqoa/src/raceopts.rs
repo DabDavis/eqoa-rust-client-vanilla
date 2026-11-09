@@ -116,11 +116,13 @@ pub fn dress(lib: &esf::Library, body: u32, model: &mut esf::Model, look: &Look)
 
 /// The look the steps on a create page make (`steps`, one a row of `rows`, a
 /// female's when `sex` is 1) on `body`: each colour or texture row's step on its
-/// parts of the body, a first step (the body's own) laying nothing.
+/// parts of the body, a first step (the body's own) laying nothing, but a texture
+/// row's of one step, which the server lays always (the Wisp's wisp: `wisp`).
 pub fn look_of_steps(rows: &[Row], sex: i32, steps: &[usize], body: u32) -> Look {
     let mut parts = Vec::new();
     for (row, &k) in rows.iter().zip(steps) {
-        if row.kind == Kind::Body || k == 0 {
+        let always = row.kind == Kind::Texture && row.steps(sex).len() == 1;
+        if row.kind == Kind::Body || (k == 0 && !always) {
             continue;
         }
         let Some(step) = row.steps(sex).get(k) else { continue };
@@ -341,6 +343,13 @@ pub(crate) mod tests {
             Row { key: "cap".into(), label: "Cap".into(), kind: Kind::Colour, parts: vec![(0x4A4D_88FB, Part { entries: vec![0], rects: vec![] })], male: vec![step("Natural", 0), step("Red", red)], female: vec![] },
         ];
         assert_eq!(body_of_steps(&rows, 0, &[1, 0]), Some(0x5874_ACFC));
+        // a texture row of one step is laid at its first (the server lays it
+        // always: the Wisp's wisp); the control, a colour row's first, is not
+        let wisp = Row { key: "wisp".into(), label: "Wisp".into(), kind: Kind::Texture, parts: vec![(0x70D8_98C6, Part { entries: vec![2], rects: vec![] })], male: vec![step("Will o' wisp", 0x8143_DC70)], female: vec![] };
+        let laid = look_of_steps(&[wisp.clone()], 0, &[0], 0x70D8_98C6);
+        assert_eq!(laid.parts.len(), 1);
+        assert_eq!((laid.parts[0].0, laid.parts[0].1), (Kind::Texture, 0x8143_DC70));
+        assert!(look_of_steps(&[rows[1].clone()], 0, &[0], 0x4A4D_88FB).parts.is_empty(), "the control: a colour row's first");
         assert_eq!(look_of_steps(&rows, 0, &[0, 1], 0x4A4D_88FB).parts.len(), 1);
         assert!(look_of_steps(&rows, 0, &[0, 0], 0x4A4D_88FB).parts.is_empty(), "the first step: the body's own");
         assert!(look_of_steps(&rows, 0, &[1, 1], 0x5874_ACFC).parts.is_empty(), "a body the row has no part of");

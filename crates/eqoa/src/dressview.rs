@@ -164,8 +164,12 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     let mut mesh = lib.build_model(r).ok_or("no mesh")?;
     let before = mesh.batches.len();
     crate::play::dress_look(lib, model, &mut mesh, &cs, look, false, &vi::cust::Tables::retail(), true);
+    // a Wisp's (`wisp`): its armour alone, the wisp hung on the helm's node as an item is
+    let mut wisp = None;
     if let Some((rows, steps)) = &opts {
-        crate::raceopts::dress(lib, model as u32, &mut mesh, &crate::raceopts::look_of_steps(rows, words.sex, steps, model as u32));
+        let rl = crate::raceopts::look_of_steps(rows, words.sex, steps, model as u32);
+        crate::raceopts::dress(lib, model as u32, &mut mesh, &rl);
+        wisp = crate::wisp::dress(lib, model as u32, &mut mesh, &cs, look, Some(&rl));
     }
     let tris = |b: &[esf::Batch]| b.iter().map(|b| b.indices.len() / 3).sum::<usize>();
     // `EQOA_DRESS_DEBUG=slots`: the made-up batches flat, a colour a slot
@@ -321,6 +325,14 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
             eprintln!("  item {id:#010x} bounds {lo:?} .. {hi:?}");
         }
         let g = r.upload(&device, &queue, &m, &[render::IDENTITY], &textures);
+        r.set_instances(&queue, &g, &[at.to_cols()]);
+        items.push((g, at));
+    }
+    if let Some((node, m)) = &wisp
+        && let Some(n) = cs.h.nodes.get(*node as usize)
+    {
+        let at = Matrix44::mul(&n.world, &centre);
+        let g = r.upload(&device, &queue, m, &[render::IDENTITY], &textures);
         r.set_instances(&queue, &g, &[at.to_cols()]);
         items.push((g, at));
     }

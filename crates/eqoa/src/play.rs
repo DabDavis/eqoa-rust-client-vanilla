@@ -922,7 +922,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                         crate::raceemote::grant(lib, cs, &mut anims, e.drawn_model, player, races);
                     }
                     let held = held_by(sprite.as_ref(), e.creature.as_ref());
-                    let (attached, weapons, helm_worn) = match (&sprite, &e.creature) {
+                    let (mut attached, weapons, helm_worn) = match (&sprite, &e.creature) {
                         (Some(cs), Some(c)) => attach(lib, g, cs, c, held, e.drawn_model, player),
                         _ => (Vec::new(), [None; 3], false),
                     };
@@ -937,6 +937,12 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     let race_look = race_look_of(e);
                     if let Some(l) = &race_look {
                         crate::raceopts::dress(lib, e.drawn_model, &mut model, l);
+                    }
+                    // a Wisp: its armour alone, the wisp in the helm (`wisp`)
+                    if let (Some(cs), Some(lk)) = (&sprite, &look)
+                        && let Some((node, w)) = crate::wisp::dress(lib, e.drawn_model, &mut model, cs, lk, race_look.as_deref())
+                    {
+                        attached.push((node, g.renderer.upload(g.device, g.queue, &w, &[render::IDENTITY], &textures)));
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
                     Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look })

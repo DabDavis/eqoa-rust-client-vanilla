@@ -119,6 +119,12 @@ fn kept(id: i32) -> &'static [i32] {
 /// the troll's skeleton (`SHELL_BODIES`), which wear the troll's.
 const SHELLED: &[u32] = &[0x6AF98A81, 0x45A8B064, 0x198BAA64, 0x648DFC11, 0x6AF98A82, 0x197F51C7, 0x90F16A6F, 0x7D9F41B2];
 
+/// Bodies whose helm goes on the head node their NodeIDList names (slot 7) where
+/// they name no helm node (slot 8): the Jal'Raeth's three (go-eqoa-server's race
+/// 30, 2026-11-09: robes, channeler, knight), a player's only; an NPC keeps none,
+/// as a PS2 draws it.
+const HEAD_HELMS: &[u32] = &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347];
+
 /// The player bodies other than the human's whose armour a body built on their
 /// skeleton wears (`SHELLED`), in the order tried after the human's: the
 /// troll's two males. The great skeletons are built on it: its forty-three
@@ -422,6 +428,10 @@ fn shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<Rc<She
 /// and the dressing turned off keep the body's word, as a PS2 draws it.
 pub fn helm_node(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool) -> i32 {
     let own = cs.node_ids[8];
+    // a body that names no helm node but its head, a player's (`HEAD_HELMS`): the head's
+    if own < 0 && player && enabled() && HEAD_HELMS.contains(&id) {
+        return cs.node_ids[7];
+    }
     if own >= 0 || !player || !enabled() || !SHELLED.contains(&id) {
         return own;
     }
@@ -1973,6 +1983,26 @@ mod tests {
         assert!(k.batches[..km.batches.len()].iter().zip(&km.batches).all(|(a, b)| a.indices == b.indices), "none of its own hidden");
         let turned = |b: &esf::Batch| b.indices.chunks_exact(6).filter(|t| [t[3], t[4], t[5]].map(|v| k.pos[v as usize]) == [t[0], t[2], t[1]].map(|v| k.pos[v as usize])).count();
         assert_eq!(k.batches[km.batches.len()..].iter().map(turned).sum::<usize>(), 0, "one face a triangle on the kappa");
+    }
+
+    /// The Jal'Raeth's bodies name no helm node (slot 8): a player's helm goes on
+    /// the head node they name (slot 7), on each of the three; an NPC's keeps none,
+    /// as a PS2 draws it (the control), and so does any other body that names none.
+    #[test]
+    fn a_jalraeths_helm_goes_on_its_head() {
+        let Some(lib) = disc() else { return };
+        for id in HEAD_HELMS {
+            let r = lib.lookup(*id as i32).unwrap();
+            let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+            assert_eq!(cs.node_ids[8], -1, "{id:#010x} names no helm node");
+            assert!(cs.node_ids[7] >= 0);
+            assert_eq!(helm_node(&lib, *id, &cs, true), cs.node_ids[7], "{id:#010x}: a player's on the head");
+            assert_eq!(helm_node(&lib, *id, &cs, false), -1, "{id:#010x}: an NPC's none");
+        }
+        let kappa = NINE[0];
+        let r = lib.lookup(kappa as i32).unwrap();
+        let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+        assert_eq!(helm_node(&lib, kappa, &cs, true), cs.node_ids[8], "the control: the kappa as before");
     }
 
     /// A great skeleton (the Skeleton race's larger bodies) wears the troll's
