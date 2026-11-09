@@ -6,6 +6,20 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · A Skeleton's helm shows in the 2002 art
+- With the 2002 disc's art on (F9), a Skeleton now wears its helm in the world, as character select
+  already showed it. The 2002 disc's own skeleton has no place on its head for a helm, so the helm
+  went unseen in the world; it now sits on the skeleton's skull, where a human wears it.
+- In the 2002 art, character select and character creation now show a race's body the way the world
+  shows it: the 2002 disc's own Skeleton, Goblin, Lizardman, Brownie, Gnoll, Orc and Minotaur, where
+  they showed the Frontiers bodies before. A Goblin's or an Orc's helm, which their 2002 bodies wear
+  in the world, now shows in character select too. With the Frontiers art nothing changes.
+
+## 2026-11-09 · A Skeleton's armour is solid from every side
+- The armour a Skeleton wears round its bones no longer lets you see through it. Looking down at its
+  collar, or in through the gaps of chain and cloth, you now see the inside of the armour, not the
+  ground behind it.
+
 ## 2026-11-09 · Sun Shadows move smoothly
 - Shadows now move with the sun a little every frame as the day goes on. Until now they stood still for a second or
   so and then jumped to their new place, which showed most on the long shadows of the morning and the evening.

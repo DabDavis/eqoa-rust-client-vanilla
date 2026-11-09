@@ -159,8 +159,11 @@ or a browser (each described where it lives below):
   vertex of their own, take the human's sleeve). The skeleton, whose bones are too thin to carry
   armour, wears a human's armour itself (the user: "fit armor on skeletons like humans ... dont make
   the armor model formfitting"): it is built on HumanMale's skeleton, so HumanMale's own surfaces for
-  each worn slot go on its bones, and its bones under them are hidden; where nothing is worn they stay
-  bare. Any body with texture slots is dressed exactly as before (held to every CSprite on the disc).
+  each worn slot go on its bones, drawn from inside too (a hollow shell round thin bones: culled as a
+  human's skin is, its far side was seen through), and its bones under them are hidden; where nothing
+  is worn they stay bare. Its helm goes on HumanMale's head node where its body names none (the 2002
+  disc's skeleton, on the 2002 HumanMale's skeleton: `slotless::helm_node`). Any body with texture
+  slots is dressed exactly as before (held to every CSprite on the disc).
   Players' characters only (a creature whose name colour is a player's, 2, and the pregame's figures):
   NPCs keep the look the PS2 gave them (the user: "Players only").
   `eqoa dress <body> <out.png> [set=N robe=R dye=RRGGBB ...]` draws a body in a look from four sides.
@@ -686,7 +689,10 @@ model; ITEM.ESF, the arena, Arial and the sounds are the same on both discs.
   disc's (`era::read`) and waits for both: the loading pictures (2002's in
   DATA2), the title's painting with the original game's effects layer, Station's
   and the server list's blue stone, character select and creation with 2002
-  figures, CLIENT's loading screen in the original layout. F9 there makes again
+  figures (a server's race's body too: the same bodies cut out of that disc's
+  CHAR.ESF stand in for Frontiers' cut, `res::stand_in_bodies`, so a body is the
+  one the world draws, its helm node with it), CLIENT's loading screen in the
+  original layout. F9 there makes again
   what each stage built (`Host::art_changed`, `Figure::remake`). The title plays
   the 2002 disc's theme in its art.
 - **The disc**: judged by its SYSTEM.CNF and its DATA2 (`era::judge`), natively

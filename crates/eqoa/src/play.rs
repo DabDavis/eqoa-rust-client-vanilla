@@ -902,7 +902,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     }
                     let held = held_by(sprite.as_ref(), e.creature.as_ref());
                     let (attached, weapons, helm_worn) = match (&sprite, &e.creature) {
-                        (Some(cs), Some(c)) => attach(lib, g, cs, c, held),
+                        (Some(cs), Some(c)) => attach(lib, g, cs, c, held, e.drawn_model, player),
                         _ => (Vec::new(), [None; 3], false),
                     };
                     let projectile = projectiles_of(sprite.as_ref(), e.creature.as_ref());
@@ -962,9 +962,12 @@ fn projectiles_of(sprite: Option<&CSprite<Ee>>, c: Option<&net::entity::Creature
 
 /// What `Apply` attaches to a creature's sprite: the items in hand (`held`,
 /// as `held_items` gives them) and the helm (SetHelm, at node 8, in the
-/// tint), each on its node. With them, the hands' weapon ends and whether a
-/// helm is worn.
-fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creature, held: Held) -> (Vec<(i32, GpuModel)>, Weapons, bool) {
+/// tint; a player's in a body dressed as a human on the human's node when
+/// its own names none, `slotless::helm_node`), each on its node. With them,
+/// the hands' weapon ends and whether a helm is worn. `model`: the body's
+/// DictID; `player`: a player's character.
+#[allow(clippy::too_many_arguments)]
+fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creature, held: Held, model: u32, player: bool) -> (Vec<(i32, GpuModel)>, Weapons, bool) {
     let textures = render::library_textures(lib);
     let mut attached = Vec::new();
     let mut weapons = [None; 3];
@@ -978,7 +981,8 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
     let mut helm_worn = false;
     // the server's patch's tables (`s2`), retail's without one
     let t = crate::s2::get().cust();
-    if cs.node_ids[8] >= 0
+    let node = crate::slotless::helm_node(lib, model, cs, player);
+    if node >= 0
         && let Some(h) = vi::cust::helm_with(c.armor[5], &t)
         && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
     {
@@ -989,7 +993,7 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
             }
         }
         helm_worn = true;
-        attached.push((cs.node_ids[8], g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+        attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
     }
     (attached, weapons, helm_worn)
 }
@@ -1051,7 +1055,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
             {
                 p.held = held_items(cs, c);
                 p.projectile = crate::spells::hand_projectiles(c, cs.holds_items);
-                (p.attached, p.weapons, _) = lib.with_view(p.era, || attach(lib, g, cs, c, p.held));
+                (p.attached, p.weapons, _) = lib.with_view(p.era, || attach(lib, g, cs, c, p.held, p.model, a_player(e)));
             }
             None
         }

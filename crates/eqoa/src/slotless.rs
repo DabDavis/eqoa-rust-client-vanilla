@@ -57,7 +57,6 @@ use esf::{Era, Library};
 use glam::Vec3;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use vi::csprite::{CSprite, Rand};
 use vi::cust::{LayerChange, Look, Tables};
 use vi::fpu::Ee;
@@ -204,18 +203,23 @@ fn colours_of(lib: &Library, id: i32) -> Option<Rc<Texels>> {
     made
 }
 
-static ENABLED: AtomicBool = AtomicBool::new(true);
+thread_local! {
+    /// Whether slotless bodies are dressed: the thread's that makes the
+    /// puppets and figures (the game's), so one test turning it off is not
+    /// seen by another running beside it.
+    static ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
 
 /// Whether slotless bodies are dressed (on unless turned off).
 pub fn enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed)
+    ENABLED.with(|e| e.get())
 }
 
 /// Turns the dressing of slotless bodies on or off, for the puppets made
 /// from then on.
 #[allow(dead_code)]
 pub fn set_enabled(on: bool) {
-    ENABLED.store(on, Ordering::Relaxed);
+    ENABLED.with(|e| e.set(on));
 }
 
 /// A body with no text slot at all: no TSlotList, or one that names none.
@@ -392,6 +396,24 @@ fn shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<Rc<She
     made
 }
 
+/// The node body `id` (`cs` its sprite, in the art it is drawn in) wears its
+/// helm on (`SetHelm`'s, the NodeIDList's slot 8; -1 none): the one it names;
+/// else, for a player's character (`player`) in a body that wears a human's
+/// armour (`SHELLED`) on the human's own skeleton (the same nodes, the same
+/// parents), the human's. The 2002 disc's skeleton is built on its HumanMale's
+/// skeleton (52 nodes, its head node 6) and names no helm node, where
+/// Frontiers' names the human's own (5): in the 2002 disc's art a skeleton's
+/// helm was not drawn (the user, 2026-11-08: "in char select i see skinny with
+/// his helm on, but in game the helm doesnt show"). An NPC, any other body,
+/// and the dressing turned off keep the body's word, as a PS2 draws it.
+pub fn helm_node(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool) -> i32 {
+    let own = cs.node_ids[8];
+    if own >= 0 || !player || !enabled() || !SHELLED.contains(&id) {
+        return own;
+    }
+    Human::load(lib, cs.sex != 0).filter(|h| same_skeleton(&h.cs, cs, std::iter::empty())).map_or(own, |h| h.cs.node_ids[8])
+}
+
 /// Whether two sprites' skeletons are one for vertices skinned to `used`:
 /// the same nodes and parents, and those nodes in the same bind pose (a
 /// vertex skinned to them on one sits on the other's bones as it did). The
@@ -432,7 +454,14 @@ impl Shell {
 
 /// The layer changes on the made-up slots put on `model` as a shell's
 /// batches: per slot with art, the human's triangles there, new vertices of
-/// the body's, with the human's slot layer in the slot's texture and colour.
+/// the body's, with the human's slot layer in the slot's texture and colour;
+/// each triangle twice, its inside too (turned round, its normals reversed).
+/// On a human the armour is a skin over its body and the renderer culls back
+/// faces as the PS2's strip programs do; round a skeleton's thin bones the
+/// shell is hollow, and from where its far side's inside faces the eye (in
+/// at the collar, through a see-through texel) that side was culled and the
+/// armour seen through (the user, 2026-11-08: "the backface culling is
+/// letting me see through the armor").
 pub fn put_on(model: &mut esf::Model, shell: &Shell, changes: &[LayerChange]) -> bool {
     let mut added = false;
     for (slot, (tex, color)) in worn(changes).into_iter().enumerate() {
@@ -447,16 +476,19 @@ pub fn put_on(model: &mut esf::Model, shell: &Shell, changes: &[LayerChange]) ->
             layer.color = c;
         }
         let mut indices = Vec::new();
-        for c in tris.iter().flatten() {
-            indices.push(model.pos.len() as u32);
-            model.pos.push(c.pos);
-            model.uv.push(c.uv);
-            model.normal.push(c.normal);
-            model.color.push(c.color);
-            model.bones.push(c.bones);
-            model.weights.push(c.weights);
+        let inside = |c: &Corner| Corner { normal: c.normal.map(|n| -n), ..*c };
+        for t in tris {
+            for c in [t[0], t[1], t[2], inside(&t[0]), inside(&t[2]), inside(&t[1])] {
+                indices.push(model.pos.len() as u32);
+                model.pos.push(c.pos);
+                model.uv.push(c.uv);
+                model.normal.push(c.normal);
+                model.color.push(c.color);
+                model.bones.push(c.bones);
+                model.weights.push(c.weights);
+            }
         }
-        model.triangles += tris.len() as u32;
+        model.triangles += 2 * tris.len() as u32;
         model.batches.push(esf::Batch { material: ENTRY + slot as i32, layers: vec![layer], indices, lod: None });
         added = true;
     }
@@ -1845,10 +1877,12 @@ mod tests {
 
     /// The skeleton wears a human's armour, not its own bones painted: in
     /// plate, each slot's batch is HumanMale's slot triangles as they are
-    /// (place, bones, weights), and its own triangles under them are taken
-    /// out; in a chest alone, only the chest's, its legs, hands and feet
-    /// bare. The controls: the kappa, on a skeleton of its own, is painted
-    /// as before; bare, the skeleton is as it was.
+    /// (place, bones, weights), each with its inside (turned round, its
+    /// normals reversed: the shell is hollow), and its own triangles under
+    /// them are taken out; in a chest alone, only the chest's, its legs,
+    /// hands and feet bare. The controls: the kappa, on a skeleton of its
+    /// own, is painted as before, one face a triangle; bare, the skeleton is
+    /// as it was.
     #[test]
     fn the_skeleton_wears_a_humans_armour() {
         let Some(lib) = disc() else { return };
@@ -1872,8 +1906,15 @@ mod tests {
             let entry = human.cs.text_slots[i].0;
             let theirs: Vec<[f32; 3]> = near_triangles(&human.model).filter(|(hb, _)| hb.material == entry).flat_map(|(_, t)| t.map(|v| human.model.pos[v])).collect();
             let ours: Vec<[f32; 3]> = b.indices.iter().map(|&v| dressed.pos[v as usize]).collect();
-            assert!(!ours.is_empty() && ours.len() <= theirs.len());
+            assert!(!ours.is_empty() && ours.len() <= 2 * theirs.len());
             assert!(ours.iter().all(|p| theirs.contains(p)), "slot {i}: the human's own places");
+            // each triangle twice: its inside turned round, its normals reversed
+            for t in b.indices.chunks_exact(6) {
+                let (out, inside) = (&t[..3], &t[3..]);
+                let at = |v: u32| (dressed.pos[v as usize], dressed.uv[v as usize], dressed.bones[v as usize], dressed.weights[v as usize]);
+                assert_eq!([at(inside[0]), at(inside[1]), at(inside[2])], [at(out[0]), at(out[2]), at(out[1])], "slot {i}: the inside turned round");
+                assert!([(inside[0], out[0]), (inside[1], out[2]), (inside[2], out[1])].iter().all(|&(a, b)| dressed.normal[a as usize] == dressed.normal[b as usize].map(|n| -n)), "slot {i}: the inside's normals reversed");
+            }
             let bones: std::collections::HashSet<u8> = b.indices.iter().flat_map(|&v| dressed.bones[v as usize]).filter(|&k| k != 255).collect();
             assert!(!bones.contains(&5), "slot {i}: nothing on the skull's top, the one node the skeletons differ in");
         }
@@ -1898,6 +1939,88 @@ mod tests {
         assert_eq!(k.pos[..km.pos.len()], km.pos[..], "painted on its own vertices");
         assert!(k.batches[km.batches.len()..].iter().flat_map(|b| &b.indices).all(|&v| (v as usize) >= km.pos.len()));
         assert!(k.batches[..km.batches.len()].iter().zip(&km.batches).all(|(a, b)| a.indices == b.indices), "none of its own hidden");
+        let turned = |b: &esf::Batch| b.indices.chunks_exact(6).filter(|t| [t[3], t[4], t[5]].map(|v| k.pos[v as usize]) == [t[0], t[2], t[1]].map(|v| k.pos[v as usize])).count();
+        assert_eq!(k.batches[km.batches.len()..].iter().map(turned).sum::<usize>(), 0, "one face a triangle on the kappa");
+    }
+
+    /// The 2002 disc's copies of the character files standing in for
+    /// Frontiers' (`disc`), as the world's library has them in that art
+    /// (`era::install`): `$EQOA_2002_ISO`, else the USA disc under
+    /// `../decomp-builds/discs/eqoa-usa/`. None (skipped, loudly) without
+    /// either disc.
+    fn disc_2002() -> Option<Library> {
+        let mut lib = disc()?;
+        let y2002 = std::env::var_os("EQOA_2002_ISO").map(std::path::PathBuf::from).or_else(|| {
+            let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../decomp-builds/discs/eqoa-usa");
+            std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("iso")))
+        });
+        let Some(mut d) = y2002.and_then(|p| iso::Iso::open(p).ok()) else {
+            eprintln!("SKIP: no 2002 disc (set EQOA_2002_ISO)");
+            return None;
+        };
+        for f in 0..lib.files.len() {
+            let name = lib.files[f].0.clone();
+            if let Ok(bytes) = d.read(&name) {
+                lib.stand_in(f, esf::Container::open(bytes).expect(&name));
+            }
+        }
+        Some(lib)
+    }
+
+    /// Where a player's skeleton wears its helm (`helm_node`): Frontiers'
+    /// skeleton names the human's helm node (5) itself, for a player and an
+    /// NPC alike; the 2002 disc's names none, and a player's wears it on the
+    /// 2002 HumanMale's (6), the same node of the same skeleton, the skull,
+    /// standing where Frontiers' skeleton's does (Frontiers' 3 cm the
+    /// higher), while an NPC's keeps none, as a PS2 draws it. The controls:
+    /// the 2002 brownie, on the same skeleton and naming none, is not dressed
+    /// as a human and keeps none; a human keeps its own in both arts.
+    #[test]
+    fn a_skeletons_helm_goes_on_the_humans_head() {
+        let Some(lib) = disc_2002() else { return };
+        let sprite = |id: u32| {
+            let r = lib.lookup(id as i32).unwrap();
+            vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap()
+        };
+        let (skeleton, brownie, human) = (0x6AF9_8A81u32, 0x4376_EB52u32, vi::hash::hash_resource_id("HumanMale"));
+        let mut heights = Vec::new();
+        for (era, want) in [(Era::Frontiers, 5), (Era::Y2002, 6)] {
+            lib.set_view(era);
+            let (cs, h) = (sprite(skeleton), sprite(human));
+            assert_eq!(h.node_ids[8], want, "{era:?}: the human's helm node");
+            assert_eq!(helm_node(&lib, human, &h, false), want, "{era:?}: a human's own");
+            assert_eq!(cs.node_ids[8], if era == Era::Frontiers { 5 } else { -1 }, "{era:?}: the skeleton's own word");
+            assert_eq!(helm_node(&lib, skeleton, &cs, true), want, "{era:?}: a player's skeleton");
+            assert_eq!(helm_node(&lib, skeleton, &cs, false), cs.node_ids[8], "{era:?}: an NPC's keeps its own word");
+            let b = sprite(brownie);
+            assert_eq!((b.node_ids[8], helm_node(&lib, brownie, &b, true)), (-1, -1), "{era:?}: the brownie");
+            heights.push(-cs.h.nodes[want as usize].inv_bind_world.to_cols()[3][1]);
+        }
+        lib.set_view(Era::Y2002);
+        assert!(same_skeleton(&sprite(human), &sprite(brownie), std::iter::empty()), "the 2002 brownie is on the human's skeleton too");
+        assert!((heights[0] - 1.83).abs() < 0.005 && (heights[1] - 1.80).abs() < 0.005, "the skull, at {heights:?}");
+        // every other CSprite on either disc, a player's or not, in either
+        // art (built in the art it is drawn in, as the world builds it):
+        // its own word
+        let mut ids: Vec<u32> = lib.files.iter().flat_map(|(_, c)| c.dict.iter().filter(|&(_, &n)| c.node(n).ty == 0x2700).map(|(&id, _)| id as u32)).collect();
+        ids.sort();
+        ids.dedup();
+        let mut checked = 0;
+        for era in [Era::Frontiers, Era::Y2002] {
+            lib.set_view(era);
+            for &id in &ids {
+                lib.with_view(lib.view_for(id as i32), || {
+                    let Some(cs) = lib.lookup(id as i32).and_then(|r| vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1))) else { return };
+                    for player in [false, true] {
+                        if !(player && era == Era::Y2002 && id == skeleton) {
+                            assert_eq!(helm_node(&lib, id, &cs, player), cs.node_ids[8], "{era:?} {id:08X}, a player's {player}");
+                            checked += 1;
+                        }
+                    }
+                });
+            }
+        }
+        assert!(checked > 1000, "{checked}");
     }
 
     /// A fit made anew comes out the same every time: its ties (a corner as
