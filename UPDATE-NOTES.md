@@ -6,6 +6,11 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · No cape on a four-legged form
+- A cape is no longer drawn on a character turned into a four-legged animal (Leopard Form, the bear, wolf,
+  lion and panther forms, a rat): it hung from the animal's tail. Two-legged forms (a were, a golem, the
+  illusions of the races) still wear theirs.
+
 ## 2026-11-09 · GMs: every trigger in the TEST menu
 - For a GM, TEST > Programming > TRIGGER now lists every trigger that is switched on, each with its number
   before its name ("140 Marr Twins..."), not only the first eight. Up and Down go through them seven at a time,
