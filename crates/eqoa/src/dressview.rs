@@ -187,7 +187,8 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     };
     if debug == "slots" {
         const C: [[u8; 3]; 5] = [[220, 40, 40], [230, 210, 40], [40, 200, 60], [50, 90, 230], [210, 50, 210]];
-        for b in mesh.batches[before.min(mesh.batches.len())..].iter_mut().filter(|b| b.material >= crate::slotless::ENTRY) {
+        let from = before.min(mesh.batches.len());
+        for b in mesh.batches[from..].iter_mut().filter(|b| b.material >= crate::slotless::ENTRY) {
             let k = (b.material - crate::slotless::ENTRY) as usize;
             b.layers.iter_mut().for_each(|l| flat(l, C[k]));
         }
