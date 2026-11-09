@@ -1802,6 +1802,11 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - Every race can wear one, the server's own races too, but those with wings (pixies, fairies and gargoyles).
   On a server without capes nothing changes.
 
+## 2026-11-09 · White dye is white
+- Armour dyed White by an Armor Dyer now shows white, keeping its stitching, plates and trim. Until now White
+  left the armour exactly as undyed, in its own browns and greys. Undyed armour and every other dye look as
+  before. It needs the server's half too: on a server without it, White still looks undyed.
+
 ## 2026-11-09 · A Skeleton's helm shows in the 2002 art
 - With the 2002 disc's art on (F9), a Skeleton now wears its helm in the world, as character select
   already showed it. The 2002 disc's own skeleton has no place on its head for a helm, so the helm
