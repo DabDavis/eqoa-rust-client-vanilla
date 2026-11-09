@@ -190,6 +190,15 @@ pub const OP_CAPES_IN_VIEW: u16 = 0x7E26;
 /// The capes of the characters in its list, by each one's server id:
 /// `cape::read`, the whole list after each character list.
 pub const OP_CAPES_LIST: u16 = 0x7E27;
+/// go-eqoa-server's own, no retail message either: a jump (`walker`, the client's
+/// own: the game has none), a u32 after the opcode, both ways. The server offers it
+/// (1, `world.jump`) to a client of its own only, one that answered its bug report
+/// offer ([`OP_BUG_REPORTS`]), so a PS2 is never sent it; this client answers 1 at
+/// once and jumps from then on, and the server's movement check takes a jump's arc
+/// from it. A 0 from the server (after a restart into one without jumps) ends it.
+/// A server that never offers it (Sandstorm's, eqoa.live's) gets no answer, and the
+/// walk never leaves the ground there, as the game's never does.
+pub const OP_JUMP: u16 = 0x7E28;
 /// go-eqoa-server's own, no retail message either: the whole of a raid group,
 /// where a roster holds four (`m_group`). The offer, from the server once the
 /// player is in the world, a u32 after the opcode (1); a server without it
@@ -520,6 +529,10 @@ pub struct Session {
     pub cape_list: std::collections::HashMap<i64, crate::cape::Cape>,
     pub capes_in_view: std::collections::HashMap<u32, crate::cape::Cape>,
     pub capes_changed: u64,
+    /// The server offered the jump ([`OP_JUMP`]) and this client took it (the
+    /// jump key, `walker`); gone with the connection, as the server's goes with
+    /// its player.
+    pub jumps: bool,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -661,6 +674,7 @@ impl Session {
             cape_list: Default::default(),
             capes_in_view: Default::default(),
             capes_changed: 0,
+            jumps: false,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -994,6 +1008,7 @@ impl Session {
                 self.self_id = None;
                 self.entity_view_offer = None;
                 self.flying = false;
+                self.jumps = false;
                 // the old connection's channels go with it
                 self.early_states.clear();
                 ev.push(Event::Promoted);
@@ -1115,6 +1130,16 @@ impl Session {
                 let on = r.u32() != 0;
                 if !r.error {
                     self.flying = on;
+                }
+            }
+            // the jump offered: taken (the jump key, `walker`); a 0 ends it
+            OP_JUMP => {
+                let on = r.u32() != 0;
+                if !r.error {
+                    if on && !self.jumps {
+                        self.send_op_int(OP_JUMP, 1);
+                    }
+                    self.jumps = on;
                 }
             }
             // the combat record offered: taken (`record`, Character > Combat
@@ -2219,6 +2244,38 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 1, 0, 0, 0]);
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert!(!s.flying, "a new connection, a new login: not flying");
+    }
+
+    // The jump (0x7E28): the offer answered with 1 at once and kept; a 0 ends it
+    // and is answered nothing; it goes with the connection. The controls: an
+    // offer cut short and an offer of 0 are neither answered nor kept, and a
+    // session never offered one says nothing and does not jump.
+    #[test]
+    fn the_jump_offer_is_answered_and_kept_for_the_connection() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let ours = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        ours(&mut s);
+        assert!(!s.jumps, "never offered: no jump");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x28, 0x7E, 1, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x28, 0x7E, 0, 0, 0, 0]);
+        assert!(!s.jumps, "the controls: cut short, or 0");
+        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "nothing said to them");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x28, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty() && s.jumps, "the offer is the session's: {ev:?}");
+        assert_eq!(ours(&mut s), [vec![0x28, 0x7E, 1, 0, 0, 0]], "answered: it jumps");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x28, 0x7E, 0, 0, 0, 0]);
+        assert!(!s.jumps, "the server's 0 ends it");
+        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "and is answered nothing");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x28, 0x7E, 1, 0, 0, 0]);
+        assert_eq!(ours(&mut s), [vec![0x28, 0x7E, 1, 0, 0, 0]], "offered again: answered again");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.jumps, "a new connection, a new login: no jump until offered");
     }
 
     // The whole of a raid group: told nothing with no offer; offered, told what

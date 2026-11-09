@@ -4083,6 +4083,14 @@ impl App {
                     p.toggle_autorun();
                     return;
                 }
+                // V: a jump (the client's own, `jump`; free in the game's
+                // keyboard table), in play, on a server that offers it
+                (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("v") && !event.repeat => {
+                    if let Some(w) = self.walker.as_mut() {
+                        p.jump_key(w);
+                    }
+                    return;
+                }
                 // 1 to 6: `SelectTarget`, the player, the group's
                 // others, the pet.
                 // (`OnKeyDown` takes them in the manual camera too)

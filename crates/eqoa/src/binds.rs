@@ -119,6 +119,7 @@ pub const ROWS: &[Row] = &[
     row("next_target", "Target: the next (hold: aim)", &["tab"], b(bit::R1), "Held: the view at the eyes, the target the one nearest the crosshair. In a window Tab is |8."),
     row("history", "{424} {1694} (hold)", &["c"], b(bit::R2), "Up and down scroll it while held. In a window C is |c (the factions' next page)."),
     row("autorun", "Autorun", &["x"], b(bit::L3), "A stick pushed past the run's edge ends it."),
+    row("jump", "Jump", &["v"], Pad::None, "On a server that has jumps (its own, not the game's); nothing on any other. A controller's button can take it here: every button of the pad is the game's, so none has it till given."),
     row("chat", "{424}", &["enter"], b(bit::R3), "In a window Enter is |x {212}; over the quick chat, the chat line."),
     row("start_menu", "Start menu", &["escape"], b(bit::START), "In a window Escape is |t {217}. Escape also cancels a key being chosen here."),
     row("camera_style", "Camera style", &["p"], b(bit::SELECT), "First person, and back."),
@@ -1144,11 +1145,11 @@ mod tests {
         assert_eq!(t.bind_key(clear, "q"), Moved::Swapped(talk));
         assert_eq!((t.key(clear), t.key(talk)), (Some("q"), Some("")), "Talk left with no key");
         assert_eq!(t.alias("q"), Alias::Button(bit::TRIANGLE));
-        assert_eq!(t.bind_key(clear, "v"), Moved::Freed(Some("q".into())));
-        assert_eq!((t.alias("v"), t.alias("q")), (Alias::Button(bit::TRIANGLE), Alias::Nothing));
+        assert_eq!(t.bind_key(clear, "y"), Moved::Freed(Some("q".into())));
+        assert_eq!((t.alias("y"), t.alias("q")), (Alias::Button(bit::TRIANGLE), Alias::Nothing));
         // from a key, onto another row's: that row takes the key it left
         assert_eq!(t.bind_key(clear, "e"), Moved::Swapped(use_));
-        assert_eq!(t.key(use_), Some("v"));
+        assert_eq!(t.key(use_), Some("y"));
         // a stick's row has keys; no row without keys or a button exists to refuse
         assert!(ROWS.iter().all(|r| !r.keys.is_empty() || matches!(r.pad, Pad::Button(_))));
     }
