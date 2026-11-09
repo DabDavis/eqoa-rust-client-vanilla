@@ -121,13 +121,16 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), String> {
     let (look, at, (w, h)) = (&words.look, words.at, words.size);
-    // a race's options: the body its body row chose, the look its other rows make
+    // a race's options: the body its body row chose, the look its other rows
+    // make; out of `$EQOA_RACE_OPTIONS`, else the thread's (a test's)
     let opts = match &words.opts {
         Some((race, steps)) => {
-            let path = std::env::var("EQOA_RACE_OPTIONS").map_err(|_| "opts= needs EQOA_RACE_OPTIONS (a file of 0x7E23's body)")?;
-            let data = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
-            let o = net::raceopts::read_options(&data).ok_or_else(|| format!("{path}: not the race options"))?;
-            crate::raceopts::set_options(Some(&o));
+            if let Ok(path) = std::env::var("EQOA_RACE_OPTIONS") {
+                let data = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+                let o = net::raceopts::read_options(&data).ok_or_else(|| format!("{path}: not the race options"))?;
+                crate::raceopts::set_options(Some(&o));
+            }
+            let o = crate::raceopts::options().ok_or("opts= needs EQOA_RACE_OPTIONS (a file of 0x7E23's body)")?;
             Some((o.rows(*race).to_vec(), steps.clone()))
         }
         None => None,

@@ -111,8 +111,11 @@ fn kept(id: i32) -> &'static [i32] {
 /// dont make the armor model formfitting"). It is built on the human's own
 /// skeleton (HumanMale's forty nodes in the same bind pose), so it wears the
 /// human's armour surfaces themselves (`Shell`), skinned to the same nodes;
-/// on any other skeleton a body listed here is dressed as the others are.
-const SHELLED: &[u32] = &[0x6AF98A81];
+/// on any other skeleton a body listed here is dressed as the others are. The
+/// other three are the skeletons a player of the server's Skeleton race may
+/// choose instead (its options, `raceopts`: old, mossy and frost bone), each on
+/// the same skeleton, two drawn a tenth larger.
+const SHELLED: &[u32] = &[0x6AF98A81, 0x45A8B064, 0x198BAA64, 0x648DFC11];
 
 /// Whether a material is opaque and textured (not a wing's translucent
 /// membrane, not a painted eye).

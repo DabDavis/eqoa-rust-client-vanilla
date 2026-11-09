@@ -86,6 +86,9 @@ struct Puppet {
     /// The textures it was built with (`texpack::generation`): a texture
     /// pack turned on or off rebuilds it.
     textures: u64,
+    /// A server's race's look its body took (`raceopts`: a player's, by its
+    /// name): another, or one gone, rebuilds it.
+    race_look: Option<std::rc::Rc<net::raceopts::Look>>,
 }
 
 /// An entity's actor in the walker's collision world (`VIEntity::m_actor`):
@@ -874,6 +877,12 @@ fn a_player(e: &net::entity::Entity) -> bool {
     e.creature.as_ref().is_some_and(|c| c.p256 == 2)
 }
 
+/// The look a server's race's player chose for its parts (`raceopts`), by the
+/// name its channel carries; none for an NPC or any other player.
+fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Look>> {
+    e.creature.as_ref().filter(|_| a_player(e)).and_then(|c| crate::raceopts::look_of(&c.name))
+}
+
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
 /// items and helm on their nodes (a player's in a body one of the server's
 /// `races` wears holding items as a race's body does: `racebody`).
@@ -908,8 +917,14 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if let (Some(cs), Some(look)) = (&sprite, &look) {
                         dress_look(lib, e.drawn_model as i32, &mut model, cs, look, helm_worn, &crate::s2::get().cust(), player);
                     }
+                    // a server's race's player: its parts in the look it chose, on
+                    // the body it chose it on (`raceopts`)
+                    let race_look = race_look_of(e);
+                    if let Some(l) = &race_look {
+                        crate::raceopts::dress(lib, e.drawn_model, &mut model, l);
+                    }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation() })
+                    Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), race_look })
                 })
 }
 
@@ -1034,6 +1049,11 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
         crate::racebody::grant(cs, p.model, a_player(e), races);
     }
     let r = p.as_ref().map_or(Redo::Build, |p| redo((p.id, p.model, p.look, p.held), (e.id, e.drawn_model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
+    // a server's race's look come, changed or gone (`raceopts`): made anew
+    let r = match p.as_ref() {
+        Some(p) if r != Redo::Build && p.race_look != race_look_of(e) => Redo::Build,
+        _ => r,
+    };
     // the art swapped (F9), or a texture pack turned on or off (`texpack`),
     // since it was built: made anew in the art and the textures now
     let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.drawn_model as i32) || p.textures != crate::texpack::generation()) { Redo::Build } else { r };
@@ -2431,7 +2451,14 @@ impl Play {
         self.grant_walker(walker);
         let mut new_model = None;
         self.actors_scene(walker);
-        for e in self.session.pump() {
+        let events = self.session.pump();
+        // a server's races' own options and the looks chosen (`raceopts`): the
+        // creatures in a look made again in it (`apply`)
+        crate::raceopts::set_options(self.session.race_options.as_ref());
+        if let Some(b) = self.session.race_looks.take() {
+            crate::raceopts::take_looks(&b);
+        }
+        for e in events {
             match e {
                 Event::TargetInfo { disposition, b, title, guild, .. } => {
                     self.target_info = Some(disposition);

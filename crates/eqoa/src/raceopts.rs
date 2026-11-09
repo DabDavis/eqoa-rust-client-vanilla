@@ -13,9 +13,9 @@
 //! body, and every other creature that shares the texture, keep theirs; a texture
 //! is a player race's face or hair laid on a head that already wears one of them.
 //!
-//! What each character chose comes by its name ([`take_looks`]) and is drawn
-//! only on the body it was chosen on ([`dress_named`]: a player's character in
-//! the world, character select's figures): under an illusion, a GM's form or a
+//! What each character chose comes by its name ([`take_looks`], [`look_of`]) and
+//! is drawn only on the body it was chosen on ([`dress`]: a player's character
+//! in the world, character select's figures): under an illusion, a GM's form or a
 //! race's armour body ("racearmorbody") the body is another and wears its own.
 //! The create pages build the look from the steps on the page ([`look_of_steps`]).
 //! A body with no look, an NPC, and every body on a server that sends none are
@@ -84,16 +84,21 @@ pub fn options() -> Option<Rc<Options>> {
     OPTIONS.with_borrow(|o| o.clone())
 }
 
+/// The scale a body a race's options offer is drawn at against its race's own
+/// (go-eqoa-server sends it on the entity channel; the pregame's figures take
+/// it here); 1 for any other body.
+pub fn body_size(model: u32) -> f32 {
+    OPTIONS.with_borrow(|o| {
+        o.as_ref().map_or(1.0, |o| {
+            o.races.iter().flat_map(|(_, rows)| rows).filter(|r| r.kind == Kind::Body).flat_map(|r| r.male.iter().chain(&r.female)).find(|s| s.value == model && s.size > 0).map_or(1.0, |s| s.size as f32 / 1000.0)
+        })
+    })
+}
+
 /// Whether `model` is a body a race's options offer (a player chose it): it
 /// holds a player's items as its race's own does (`racebody`).
 pub fn offered_body(model: u32) -> bool {
     OPTIONS.with_borrow(|o| o.as_ref().is_some_and(|o| o.offers_body(model)))
-}
-
-/// Body `body`'s model (built from it, `model`) in the look of the character
-/// named `name`, if it chose one on that body. Whether anything changed.
-pub fn dress_named(lib: &esf::Library, body: u32, model: &mut esf::Model, name: &str) -> bool {
-    look_of(name).is_some_and(|l| dress(lib, body, model, &l))
 }
 
 /// Body `body`'s model in `look`, when the look was chosen on it (on any other
@@ -230,8 +235,33 @@ fn picked(model: &esf::Model, bi: usize, rects: &[[u8; 4]]) -> Vec<bool> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use net::raceopts::{Options, Step};
+
+    /// A fungusman's options as go-eqoa-server sends them, cut down: its body
+    /// row (two bodies), the cap's colour (a part of the blue body only), the
+    /// bag's (the blue body too), the skin's, and a row of one step (shown on
+    /// no page).
+    pub(crate) fn fungus_options() -> Options {
+        let step = |name: &str, value: u32, size: u16| Step { name: name.into(), value, size };
+        let colours = vec![step("Natural", 0, 0), step("Crimson", 0x0100_8C79, 0), step("Gold", 0x0120_998F, 0)];
+        let blue = |entries: Vec<u8>| (0x4A4D_88FB, Part { entries, rects: vec![] });
+        let row = |key: &str, kind: Kind, parts, male| Row { key: key.into(), label: key.to_uppercase(), kind, parts, male, female: vec![] };
+        Options {
+            races: vec![(
+                28,
+                vec![
+                    row("body", Kind::Body, vec![], vec![step("Blue cap", 0x4A4D_88FB, 1000), step("Red cap", 0x5874_ACFC, 1000)]),
+                    row("cap", Kind::Colour, vec![blue(vec![0]), (0x5874_ACFC, Part { entries: vec![0], rects: vec![[115, 115, 255, 255]] })], colours.clone()),
+                    row("bag", Kind::Colour, vec![blue(vec![2])], colours.clone()),
+                    row("skin", Kind::Colour, vec![blue(vec![1]), (0x5874_ACFC, Part { entries: vec![0], rects: vec![[0, 0, 100, 100]] })], colours.clone()),
+                    row("one", Kind::Colour, vec![blue(vec![3])], vec![step("Natural", 0, 0)]),
+                ],
+            )],
+        }
+    }
+
 
     /// A model of two palette entries: entry 0 two triangles, one at the left
     /// of the texture and one at its right; entry 1 one triangle; textures 7
@@ -307,6 +337,107 @@ mod tests {
         assert_eq!(look_of_steps(&rows, 0, &[0, 1], 0x4A4D_88FB).parts.len(), 1);
         assert!(look_of_steps(&rows, 0, &[0, 0], 0x4A4D_88FB).parts.is_empty(), "the first step: the body's own");
         assert!(look_of_steps(&rows, 0, &[1, 1], 0x5874_ACFC).parts.is_empty(), "a body the row has no part of");
+    }
+
+    /// The library of the disc's bodies and their textures, or None (no
+    /// `run/eqoa.iso`).
+    fn disc_lib() -> Option<esf::Library> {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let mut iso = iso::Iso::open(&p).ok()?;
+        let mut lib = esf::Library::new();
+        for f in crate::dressview::FILES {
+            lib.add(*f, esf::Container::open(iso.read(f).ok()?).ok()?);
+        }
+        Some(lib)
+    }
+
+    /// On the disc: the fungusman's body in every row's first step is the body
+    /// as built, batch for batch (no part takes anything); its cap in a colour
+    /// recolours only the cap's triangles (split off the fungus's own entry,
+    /// the cap's top, and its gills off the skin's), each under a texture of
+    /// its own name, and every other triangle keeps its texture; the textures
+    /// as the renderer reads them (`LibraryTextures`): the recoloured one is
+    /// its source's levels recoloured under another key at the source's size,
+    /// the source itself unchanged (the control). A body the look was not
+    /// chosen on takes nothing (a human's). Needs `run/eqoa.iso`.
+    #[test]
+    fn a_look_on_the_discs_fungusman() {
+        use render::TextureSource;
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let opts = fungus_options();
+        let rows = opts.rows(28);
+        let body = 0x4A4D_88FBu32;
+        let plain = lib.build_model(lib.lookup(body as i32).unwrap()).unwrap();
+        let mut natural = plain.clone();
+        assert!(!dress(&lib, body, &mut natural, &look_of_steps(rows, 0, &[0, 0, 0, 0, 0], body)));
+        assert_eq!(format!("{:?}", natural.batches), format!("{:?}", plain.batches), "every first step: the body as built");
+
+        let mut red = plain.clone();
+        assert!(dress(&lib, body, &mut red, &look_of_steps(rows, 0, &[0, 1, 0, 0, 0], body)));
+        let tris = |m: &esf::Model| m.batches.iter().map(|b| b.indices.len() / 3).sum::<usize>();
+        assert_eq!(tris(&red), tris(&plain), "no triangle lost or doubled");
+        let cap = red.batches.iter().filter(|b| b.material == 0 && render::recolor::source_of(b.layers[0].texture).is_some()).count();
+        assert_eq!(cap, 1, "the fungus's own entry: all of it the cap here");
+        for b in &red.batches {
+            let recoloured = render::recolor::source_of(b.layers[0].texture);
+            match b.material {
+                0 => assert!(recoloured.is_some(), "the fungus entry (the cap) recoloured"),
+                _ => assert!(recoloured.is_none(), "entry {} kept", b.material),
+            }
+        }
+        let id = red.batches.iter().find(|b| b.material == 0).unwrap().layers[0].texture;
+        let (source, r) = render::recolor::source_of(id).unwrap();
+        assert_eq!(source, 0x3721_EB55u32 as i32);
+        let textures = render::library_textures(&lib);
+        let (mine, theirs) = (textures.levels(id), textures.levels(source));
+        assert_eq!(mine.len(), theirs.len());
+        let mut want = theirs[0].rgba.clone();
+        render::recolor::recolor_rgba(&mut want, r);
+        assert_eq!(mine[0].rgba, want, "the source's texels recoloured");
+        assert_ne!(mine[0].rgba, theirs[0].rgba);
+        assert_ne!(textures.key(id), textures.key(source));
+        assert_eq!(textures.native_size(id), textures.native_size(source));
+        assert_eq!(textures.levels(source)[0].rgba, theirs[0].rgba, "the control: the source as it was");
+
+        let human = 0x70D8_98C6u32;
+        let as_built = lib.build_model(lib.lookup(human as i32).unwrap()).unwrap();
+        let mut m = as_built.clone();
+        assert!(!dress(&lib, human, &mut m, &look_of_steps(rows, 0, &[0, 1, 1, 1, 0], body)));
+        assert_eq!(format!("{:?}", m.batches), format!("{:?}", as_built.batches), "a human: nothing");
+    }
+
+    /// Drawn (`eqoa dress`, the GPU): the fungusman in every row's first step
+    /// is the plain body's picture byte for byte; its cap in a colour is
+    /// another picture (the control). Needs `run/eqoa.iso` and a GPU.
+    #[test]
+    fn the_first_steps_draw_the_body_as_it_is() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        set_options(Some(&fungus_options()));
+        let dir = std::env::temp_dir().join(format!("raceopts-shots-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shot = |model: u32, words: &str, name: &str| -> Option<Vec<u8>> {
+            let w = crate::dressview::parse(&words.split_whitespace().map(String::from).collect::<Vec<_>>()).unwrap();
+            let out = dir.join(name);
+            match crate::dressview::shot(&lib, model as i32, &w, out.to_str().unwrap()) {
+                Ok(()) => std::fs::read(&out).ok(),
+                Err(e) => {
+                    eprintln!("SKIP the drawing: {e}");
+                    None
+                }
+            }
+        };
+        let fungus = 0x4A4D_88FB;
+        let Some(plain) = shot(fungus, "size=120x180", "plain.png") else { return };
+        assert_eq!(shot(fungus, "size=120x180 opts=28:0,0,0,0,0", "natural.png").unwrap(), plain, "every first step");
+        assert_ne!(shot(fungus, "size=120x180 opts=28:0,1,0,0,0", "crimson.png").unwrap(), plain, "the control: a crimson cap");
+        let _ = std::fs::remove_dir_all(&dir);
+        set_options(None);
     }
 
     /// The looks by name, replaced whole, each change counted; one that does

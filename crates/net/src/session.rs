@@ -110,7 +110,7 @@ pub const OP_CREATION_RACES: u16 = 0x7E1F;
 /// opcode, both ways. The server offers them (1) after the session's first
 /// character list; this client answers 1 at once and is sent each race's options
 /// ([`OP_RACE_OPTIONS_DATA`], kept as [`Session::race_options`]) and the looks
-/// ([`OP_RACE_LOOKS`], an [`Event::Opcode`] the game keeps), and the looks again
+/// ([`OP_RACE_LOOKS`], [`Session::race_looks`]), and the looks again
 /// whenever they change. A PS2 ignores the offer; a server that never makes one
 /// gets no answer, and its creations carry no choice ([`NewChar::options`]).
 pub const OP_RACE_OPTIONS: u16 = 0x7E22;
@@ -118,7 +118,8 @@ pub const OP_RACE_OPTIONS: u16 = 0x7E22;
 /// `raceopts::read_options`.
 pub const OP_RACE_OPTIONS_DATA: u16 = 0x7E23;
 /// The looks the characters chose, to a client that answered
-/// [`OP_RACE_OPTIONS`]: `raceopts::read_looks`, each one the whole list.
+/// [`OP_RACE_OPTIONS`]: `raceopts::read_looks`, each one the whole list, kept
+/// as [`Session::race_looks`] for the game to take.
 pub const OP_RACE_LOOKS: u16 = 0x7E24;
 /// go-eqoa-server's own, no retail message either: SOE's live game's look, a
 /// u32 after the opcode, both ways. The server offers it (1) after the
@@ -460,6 +461,10 @@ pub struct Session {
     /// Each custom race's own options, as the server last told them
     /// ([`OP_RACE_OPTIONS_DATA`]); none from a server that never offers them.
     pub race_options: Option<crate::raceopts::Options>,
+    /// The looks list the server last sent ([`OP_RACE_LOOKS`]: its body),
+    /// until the game takes it (`raceopts`), whatever screen is up: the
+    /// pregame's, the world's, a script's straight login.
+    pub race_looks: Option<Vec<u8>>,
     /// The server has this client's character flying ([`OP_FLY`]); gone with
     /// the connection, as the server's goes with its login. A dump (a respawn,
     /// a restart of the server's) leaves it.
@@ -602,6 +607,7 @@ impl Session {
             member_invites: false,
             creation: None,
             race_options: None,
+            race_looks: None,
             flying: false,
             raid_roster_offer: false,
             raid_roster_asked: None,
@@ -1118,6 +1124,7 @@ impl Session {
                 Some(o) => self.race_options = Some(o),
                 None => debug_line(&format!("[net] race options: {} bytes not read", m.data.len())),
             },
+            OP_RACE_LOOKS => self.race_looks = Some(m.data[2.min(m.data.len())..].to_vec()),
             // any member invites into its group there (`Play::may_invite`)
             OP_MEMBER_INVITES => {
                 if r.u32() != 0 && !r.error {
@@ -2380,7 +2387,8 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x23, 0x7E, 1, 1, 13]);
         assert_eq!(s.race_options, Some(o), "the control: options cut short leave what was kept");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x24, 0x7E, 1, 0, 0]);
-        assert!(matches!(&ev[..], [Event::Opcode { op: OP_RACE_LOOKS, data }] if data[..] == [1, 0, 0]), "{ev:?}");
+        assert!(ev.is_empty(), "the looks are the session's until taken: {ev:?}");
+        assert_eq!(s.race_looks.take(), Some(vec![1, 0, 0]));
         assert_eq!(answers(&mut s), [], "the lists answered nothing");
     }
 

@@ -7,7 +7,7 @@
 //! Enter creates (267), back is 260.
 
 use super::tables;
-use super::{Env, Msg, create_model, frame_camera, legend, word};
+use super::{Env, Msg, create_model_dressed, frame_camera, legend, word};
 use crate::pointer::{Hits, key};
 use crate::pregame::Ctx;
 use crate::pregame::stage::Stage;
@@ -130,7 +130,9 @@ impl ReviewPage {
                 let c = &stage.cam.walk.committed;
                 let (at, hpr) = (c.position.to_array(), c.angles.to_array());
                 let look = [form.face, form.hair_style, form.hair_length, form.hair_color];
-                env.figure = create_model(cx, tables::model_of(form.race, form.sex), look, at, hpr);
+                // a server's race in the body and look its options chose (`raceopts`)
+                let (model, race_look) = tables::chosen(form);
+                env.figure = create_model_dressed(cx, model, look, race_look.as_ref(), at, hpr);
             }
             if self.time == -1 {
                 self.time = now;
@@ -146,7 +148,7 @@ impl ReviewPage {
                 }
             }
             let framing = env.race_camera(tables::like(form.race)).map_or(super::DEFAULT_FRAMING, |c| c.review);
-            let framing = super::body_framing(&cx.res.lib, framing, tables::model_of(form.race, form.sex), tables::model_of(tables::like(form.race), form.sex));
+            let framing = super::body_framing(&cx.res.lib, framing, tables::chosen(form).0, tables::model_of(tables::like(form.race), form.sex));
             frame_camera(stage, framing);
             stage.cam.orbit_right(F::<Ee>::new(0.3));
             stage.process(now);

@@ -301,6 +301,9 @@ pub struct Client {
     remake: bool,
     /// Bodies came in: the figures to be made again (`bodies_in`).
     refigure: bool,
+    /// the race looks' generation character select's figure was made under
+    /// (`raceopts::generation`)
+    looks_seen: u64,
 }
 
 impl Default for Client {
@@ -332,6 +335,7 @@ impl Default for Client {
             entered: None,
             remake: false,
             refigure: false,
+            looks_seen: 0,
         }
     }
 }
@@ -558,6 +562,12 @@ impl Client {
             self.select.remake(&cx.res.lib, g, cx.now);
             self.create.remake(&cx.res.lib, g, cx.now);
         }
+        // the server's race looks changed (`raceopts`): character select's
+        // figure made again in its own
+        if crate::raceopts::generation() != self.looks_seen {
+            self.looks_seen = crate::raceopts::generation();
+            self.select.relook();
+        }
         // the stage, once ARENA.CSF and the GPU are here (`LoadWorld`'s
         // walk camera limits set as it sets them)
         if self.stage.is_none()
@@ -704,6 +714,11 @@ impl Client {
         // what the server said creation takes past the game's (`net::creation`),
         // for the create pages and character select's stand-ins
         create::tables::set_offer(s.creation.as_ref());
+        // and its races' own options and the looks chosen (`raceopts`)
+        crate::raceopts::set_options(s.race_options.as_ref());
+        if let Some(b) = s.race_looks.take() {
+            crate::raceopts::take_looks(&b);
+        }
         for (k, e) in events.iter().enumerate() {
             match e {
                 Event::ShardList(list) if matches!(self.phase, 0 | 1) => {

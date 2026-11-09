@@ -22,12 +22,18 @@ pub struct Figure {
     /// the model's DictID, as asked for
     pub model: u32,
     pub look: vi::cust::Look,
+    /// a server's race's look on its parts (`raceopts`), drawn when the body
+    /// is the one it was chosen on
+    pub race_look: Option<net::raceopts::Look>,
+    /// the actor's scale: 1, or a body a race's options offer at its size
+    /// against the race's own (`raceopts::body_size`), as the world draws it
     pub sprite: Option<CSprite<Ee>>,
     pub anims: AnimScene<Ee>,
     pub rand: Rand,
     pub gpu: GpuModel,
     /// items (and the helm) on their nodes
     pub attached: Vec<(i32, GpuModel)>,
+    pub scale: f32,
     /// the items asked for (DictIDs, 0 none), in the item slots 0..3
     pub items: [u32; 3],
     /// the actor's place and heading, pitch and roll (`CreateActor(at, hpr, 1.0)`)
@@ -93,20 +99,27 @@ impl Figure {
     /// whole in the art its model is drawn in (`esf::Library::view_for`):
     /// the 2002 disc's while its art is drawn and that disc has the model.
     pub fn new(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
-        lib.with_view(lib.view_for(model as i32), || Figure::new_in_view(lib, g, model, look, items, at, hpr, now))
+        Figure::new_dressed(lib, g, model, look, None, items, at, hpr, now)
+    }
+
+    /// `new` in a server's race's look too (`raceopts`: its parts' colours and
+    /// textures, laid only on the body they were chosen on).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_dressed(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, race_look: Option<net::raceopts::Look>, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
+        lib.with_view(lib.view_for(model as i32), || Figure::new_in_view(lib, g, model, look, race_look, items, at, hpr, now))
     }
 
     /// Made again as it stands, in the art drawn now (F9): its model, look and
     /// items at its place; its animation starts over (the 2002 disc's bodies
     /// are other skeletons).
     pub fn remake(&mut self, lib: &Library, g: &mut Gpu, now: i64) {
-        if let Some(f) = Figure::new(lib, g, self.model, self.look, self.items, self.at, self.hpr, now) {
+        if let Some(f) = Figure::new_dressed(lib, g, self.model, self.look, self.race_look.clone(), self.items, self.at, self.hpr, now) {
             *self = f;
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn new_in_view(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
+    fn new_in_view(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, race_look: Option<net::raceopts::Look>, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
         // a server's race's body not read yet (`res::Res::want_bodies`): its
         // `like` race's of the body's sex stands in, where the game draws a human
         let id = if lib.lookup(model as i32).is_some() {
@@ -154,9 +167,14 @@ impl Figure {
                 attached.push((cs.node_ids[8], g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
             }
             crate::play::dress_look(lib, id as i32, &mut built, cs, &look, helm_worn, &t, true);
+            // a server's race's own look, on the body it was chosen on
+            if let Some(rl) = &race_look {
+                crate::raceopts::dress(lib, id, &mut built, rl);
+            }
         }
         let gpu = g.renderer.upload(g.device, g.queue, &built, &[render::IDENTITY], &textures);
-        Some(Figure { model, look, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new() })
+        let scale = crate::raceopts::body_size(id);
+        Some(Figure { model, look, race_look, scale, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new() })
     }
 
     /// `VICSprite::SetAction(id)` (23 the select screen's flourish, 0 back
@@ -167,10 +185,12 @@ impl Figure {
         }
     }
 
-    /// The actor's matrix (`CreateActor`'s place, heading and scale 1).
+    /// The actor's matrix (`CreateActor`'s place, heading and scale 1; a
+    /// body a race's options offer at its size, `scale`).
     pub fn actor(&self) -> Matrix44<Ee> {
         let f = F::<Ee>::new;
-        Matrix44::transform(&Vect3::new(f(self.hpr[0]), f(self.hpr[1]), f(self.hpr[2])), F::ONE, &Vect3::new(f(self.at[0]), f(self.at[1]), f(self.at[2])))
+        let scale = if self.scale == 1.0 { F::ONE } else { f(self.scale) };
+        Matrix44::transform(&Vect3::new(f(self.hpr[0]), f(self.hpr[1]), f(self.hpr[2])), scale, &Vect3::new(f(self.at[0]), f(self.at[1]), f(self.at[2])))
     }
 
     /// One frame at `now` (the scene's clock, ms): the sprite processed, its
