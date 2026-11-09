@@ -6,6 +6,14 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · A server's own worlds, built from your disc
+- A server can now have worlds of its own made of the game's own lands: the Homelands, where a server's new races
+  start (an Aviak hatches in Aviak Village). The client builds such a world from your own disc the first time you
+  reach character select on that server (a few seconds; nothing of the game is downloaded), keeps it, and then
+  plays it like any other world. The start menu names its places, and the create page's review shows a new
+  race's home as its Starting City.
+- Nothing changes on a server without such worlds.
+
 ## 2026-11-08 · The mastery window can't hang
 - If the server's answer to a mastery request (buying a mastery, opening one, your share of experience) is lost on the
   way, the window's "please wait" box now lets go after ten seconds instead of staying up for good with no way out.
