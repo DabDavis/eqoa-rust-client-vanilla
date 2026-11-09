@@ -22,6 +22,85 @@ is put on the page by `.github/workflows/notes.yml`.
   Farther costs more of your graphics card.
 - With it off, the game looks exactly as it did.
 
+## 2026-11-09 · Texture packs load without freezing the game
+- A texture pack's pictures are now read in the background. Until a texture's replacement is ready the game draws
+  its own texture there, then puts the replacement in its place a moment later, so the game no longer stops while a
+  pack is read. With a large HD pack the game used to freeze for seconds on arriving in a city like Freeport; now
+  it keeps moving.
+- Dump Textures only ever writes the game's own textures, as the disc has them, whether a pack is loaded or not:
+  never a pack's picture and never an enlarged one.
+
+## 2026-11-09 · Texture packs in a folder beside the game
+- Texture packs and texture dumps now go in a `textures` folder next to the game itself (beside `eqoa.exe` on
+  Windows, beside `eqoa` on Linux and on a Mac), where they are easy to find: put a pack's files in
+  `textures/SLUS-20744/replacements`, and Dump Textures writes to `textures/SLUS-20744/dumps`. Inside it the folders
+  are PCSX2's, so a pack made for PCSX2 still goes in as it is.
+- Options > Extended > Textures has a new row, Texture Folder: Open shows the folder in your file manager
+  (Explorer, the Finder or your desktop's). Beside Back the page says where the folder is, and how many textures
+  the packs in it replace. A pack you add while the game runs is read when you turn Texture Packs off and on.
+- The packs and dumps you kept in the settings folder (`eqoa-rs`) are moved there the first time the game uses
+  them. If they are on another disk from the game they stay where they are, and are still read.
+- Where the game cannot write in its own folder (in Program Files, say), it keeps them in the settings folder as
+  before, and the Textures page says so.
+- An update replaces only the game's program: the `textures` folder beside it is never touched.
+- In a browser and on Android nothing changes.
+
+## 2026-11-09 · The map and the quest helper are back
+- M opens the map again: the whole world drawn from your own disc, with the towns' names, the coach routes and
+  stops, the XP camps and the places players suggested and a GM accepted. Click (or tap) to put a waypoint, which
+  shows on the compass's rim wherever you are; in a group, O (or Q held, or Shift and a click) tells your group
+  where to meet, and their map and compass show it. G stays the attack.
+- The minimap is back under the quick menus (N shows or hides it), with your group, the creatures and players
+  near you, your target and your waypoint. Click it to open the map; the mouse wheel over it zooms.
+- The quest helper is back: a gold "!" on the map and the minimap at each quest giver you can take a quest from
+  now, a "?" where a step of a quest you have is to be done, each with a card of the quest, and the quest tracker
+  under the minimap ("slashed pawn belt: 0/2"); click the tracker to open your quest journal. On a server that
+  does not send quest marks (Sandstorm), the client works them out itself, marked "(guide)".
+- Both are in Options > Extended > Map, on by default: Map (the map, the minimap and the waypoints), Minimap,
+  Map Markers, Quest Helper (the quest marks, the tracker and the guide) and Quest Tracker. Turn the Map and the
+  Quest Helper off and the game is as it was without them.
+- The Stats Box, other players' mana bars and Target of Target are not coming back.
+- A macro you put on M, N, O, =, +, - or _ (free keys until now) keeps its key: that map key is then
+  left without one, and you can give it another on the Controls page (F1). A key you moved there keeps it too.
+
+## 2026-11-09 · A crash in the browser comes with your next bug report
+- If the game stops in the browser ("The client stopped" or "The graphics stopped"), the next bug report you send
+  (F3, or /bug in chat) carries the message it stopped with, once, so the GMs can see what went wrong without you
+  copying anything. Nothing is sent until you send a report yourself.
+- A bug report from the browser now says which build of the page you were on.
+- When chat lines can't go out (the server reset your connection in the world and hasn't sent the world again), the
+  game still sends nothing for them, as the PS2 does, but your next bug report says how many were held back.
+- A crash that could come when the server's connection broke in a particular way (the game stopped the moment
+  you moved) can't happen any more: the game carries on without that connection and says so in its log.
+
+## 2026-11-09 · Posts no longer pull the camera in
+- Turning the camera with something thin close by, like the posts holding up the roof of the well by the Freeport
+  coach, a lamp post or a pole, the camera no longer jumps in each time one passes behind you: it stays where you
+  had it, zoomed out as far as you like, and the post simply passes across the view. Walls, roofs and anything broad
+  still stop the camera as before.
+
+## 2026-11-09 · Every body of the new races
+- The new races' Customize Character page now offers every other body of their creature on the disc, the named
+  ones' too: goblin kings, overseers, priests and bandits; grey, black-and-tan and risen gnolls; Deathfist and
+  hatebone orcs (three of them women's); two more lizardmen, a ratman trickster, three aviaks no one in the world
+  wears, the fire giant reaver and King Daran, the great skeletons, a brown minotaur, and the dryad's erych and
+  haliai kin. Each stands as tall as its race.
+- Hair colour where the body has hair: goblins, orcs, kappas and the dryad's kin, and a kerran's mane.
+- A body you choose waves, bows, points and cheers as its race does, and a great skeleton wears armour round
+  its bones as a skeleton does.
+- Character select shows a character you just made in the body you chose (it showed the race's usual body
+  until you looked at another character).
+- Characters made before keep their look.
+
+## 2026-11-09 · A Skeleton's helm covers its skull
+- With the 2002 disc's art on (F9), a Skeleton's helm no longer shows the back of its skull poking out
+  through it. The helm now sits a little wider and deeper over the skull, as the Frontiers art's helm
+  always has, so the whole skull stays inside it from every side and in every move.
+- The old, mossy and frost bone skeletons a Skeleton can choose wear their helms a touch further forward
+  in the Frontiers art too, so their cheekbones stay inside the helm's sides, and so do the great skeletons,
+  with either art.
+- Every other race's helm, and a skeleton creature's, is exactly as before.
+
 ## 2026-11-09 · Capes sit clear of armour
 - A cape now sits off what you wear: plate, broad shoulders and a robe's skirt show through it far less as you
   stand, walk and run. Over the back and shoulders it moves with the body under it, and under a robe its lower

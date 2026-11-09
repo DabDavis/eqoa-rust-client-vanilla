@@ -340,6 +340,33 @@ pub(super) mod tests {
         p.chat.back().map(|(t, _)| t.clone()).unwrap_or_default()
     }
 
+    /// Petition 1355 ("i cant chat in /say"): a connection with no self id (no
+    /// world entry on it, or a new game connection the server opened after
+    /// one: CLIENT's `ResetWorld`) sends no chat, as CLIENT's `ChatLine`
+    /// sends none; the line is counted, and a bug report's note says so with
+    /// the connections reopened in the world. The control: with the self id
+    /// the same lines go out (/say as 0x000E, 0x000B, 0x000E) and the note
+    /// says nothing of it.
+    #[test]
+    fn a_chat_line_dropped_for_want_of_a_self_id_is_said_in_the_note() {
+        let mut p = play();
+        p.session.self_id = None;
+        p.chat_line("hello");
+        p.chat_line("/say hello");
+        assert!(sent(&mut p).is_empty(), "no self id: nothing sent, as CLIENT");
+        let note = p.bug_note();
+        assert!(note.contains("chat: 2 lines not sent (no self id), the game connection reopened 0 times in the world"), "{note}");
+        // the control
+        let mut p = play();
+        p.chat_line("hello");
+        p.chat_line("/say hello");
+        let out = sent(&mut p);
+        assert_eq!(out.len(), 4, "{out:?}");
+        assert_eq!(&out[0][..2], &[0x0B, 0x00], "the plain line: 0x000B");
+        assert_eq!((&out[1][..], &out[3][..]), (&[0x0E, 0x00, 0][..], &[0x0E, 0x00, 0][..]), "/say: the mode for the line and back");
+        assert!(!p.bug_note().contains("not sent"), "the control's note says nothing of it");
+    }
+
     fn grouped(p: &mut Play, leader: bool, members: usize) {
         p.group.in_group = true;
         p.group.leader = leader;

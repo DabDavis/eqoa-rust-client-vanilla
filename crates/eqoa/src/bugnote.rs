@@ -47,12 +47,59 @@ pub fn frame_rate() -> Option<f64> {
     (avg > 0.0).then(|| 1000.0 / avg)
 }
 
-/// The build this client is: CI's commit, else a build of one's own.
+/// The build this client is: CI's commit, a page's build (main.js's
+/// `window.eqoaBuild`, the `v/<build>/` it was loaded from: a page is built by
+/// `web/build.sh`, not CI, so it carries no commit), else a build of one's own.
 pub fn build() -> String {
     match crate::update::COMMIT {
         Some(c) => format!("dev-{}", &c[..c.len().min(7)]),
-        None => "local".into(),
+        None => page_build().map_or_else(|| "local".into(), |b| format!("page {b}")),
     }
+}
+
+/// A page's build (`window.eqoaBuild`), None natively or in a page that is
+/// not a built one.
+fn page_build() -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsValue;
+        let w = web_sys::window()?;
+        js_sys::Reflect::get(&w, &JsValue::from_str("eqoaBuild")).ok()?.as_string().filter(|b| !b.is_empty())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    None
+}
+
+/// Where a page keeps its last crash (web/notices.js writes it as the client
+/// stops: when, the page's build, the title and the panic's place and words),
+/// for the next session's note: the page sends no crash reports, so a crash a
+/// player can only describe comes with its words the next time they report.
+#[cfg(target_arch = "wasm32")]
+const LAST_CRASH: &str = "eqoa.lastCrash";
+
+/// The page's last crash, not yet in a note; None natively.
+pub fn last_crash() -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let s = web_sys::window()?.local_storage().ok().flatten()?;
+        s.get_item(LAST_CRASH).ok().flatten().map(|t| crash_line(&t)).filter(|t| !t.is_empty())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    None
+}
+
+/// The last crash has gone with a note: it is not said again.
+pub fn crash_sent() {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.remove_item(LAST_CRASH);
+    }
+}
+
+/// A kept crash as the note says it: one line, no control characters, at
+/// most 600 characters (what the page wrote, should it have written more).
+pub fn crash_line(kept: &str) -> String {
+    kept.chars().map(|c| if c.is_control() { ' ' } else { c }).take(600).collect::<String>().trim().to_string()
 }
 
 /// The platform: the operating system and machine natively, the browser in
@@ -83,12 +130,30 @@ pub fn compose(play: &[(&str, String)]) -> String {
     for (k, v) in play {
         lines.push(format!("{k}: {v}"));
     }
+    if let Some(c) = last_crash() {
+        lines.push(format!("last crash: {c}"));
+    }
     lines.join("\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A page's kept crash (web/notices.js) as the note says it: on one line,
+    /// trimmed, at most 600 characters. The control: a plain line is taken as
+    /// it is.
+    #[test]
+    fn a_kept_crash_is_one_line_in_the_note() {
+        let kept = "2026-11-09T05:00:00Z, page 54bb79225fde: The client stopped: panicked at crates/drdp/src/list.rs:110:23:\ndangling handle\t";
+        assert_eq!(crash_line(kept), "2026-11-09T05:00:00Z, page 54bb79225fde: The client stopped: panicked at crates/drdp/src/list.rs:110:23: dangling handle");
+        assert_eq!(crash_line(&"x".repeat(900)).len(), 600);
+        let plain = "2026-11-09T05:00:00Z, page abc: The graphics stopped: the graphics device was lost";
+        assert_eq!(crash_line(plain), plain, "the control: a plain line as it is");
+        // natively there is no page: no crash to say, and the build is local
+        assert_eq!(last_crash(), None);
+        assert!(!compose(&[]).contains("last crash"));
+    }
 
     // The running average takes the frames' interval and leaves out a pause;
     // the note starts with the client's own facts, then play's lines.

@@ -101,6 +101,13 @@ pub fn offered_body(model: u32) -> bool {
     OPTIONS.with_borrow(|o| o.as_ref().is_some_and(|o| o.offers_body(model)))
 }
 
+/// The race's own body of the race whose options offer `model` (another body
+/// of the same creature: `net::raceopts::Options::race_body_of`), for what is
+/// chosen per race's body (`raceemote`); None for any other model.
+pub fn race_body_of(model: u32) -> Option<u32> {
+    OPTIONS.with_borrow(|o| o.as_ref().and_then(|o| o.race_body_of(model)))
+}
+
 /// Body `body`'s model in `look`, when the look was chosen on it (on any other
 /// body, nothing). Whether anything changed.
 pub fn dress(lib: &esf::Library, body: u32, model: &mut esf::Model, look: &Look) -> bool {

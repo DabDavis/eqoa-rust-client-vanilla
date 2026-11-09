@@ -340,7 +340,8 @@ impl Play {
     /// socket does not act on them).
     pub(super) fn admin_apply_simulation(&mut self) {
         let p = self.admin.part;
-        if let Some(c) = self.session.conn {
+        // (a connection DRDP let go is no connection: `Session::game_conn`)
+        if let Some(c) = self.session.game_conn() {
             self.session.drdp.connection_set_simulated(c, p.loss as i32, p.latency as i32, p.jitter as i32);
         }
     }
@@ -469,7 +470,7 @@ impl Play {
         }
         // ShowNetStats every frame; the window up with Toggle Stats while
         // the HUD is (m_p05C)
-        if let Some(c) = self.session.conn {
+        if let Some(c) = self.session.game_conn() {
             let k = &self.session.drdp.conns[c];
             let ping = k.rtt.iter().skip(1).fold(k.rtt[0] as i32, |m, &v| m.min(v as i32));
             self.admin.net.set_data(0, k.arrival_history, u64::MAX, k.arrival_number, ping);

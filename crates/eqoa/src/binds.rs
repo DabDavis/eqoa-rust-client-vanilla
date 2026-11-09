@@ -12,7 +12,7 @@
 //! in play: `OnKeyDown`'s case lists, 32 with 134, 81/113 with 133 and so on,
 //! and the client's E with ○, the arrows with the d-pad, WASD and I/J/K/L with
 //! the sticks). A row moved to another key makes that key act as the row's own
-//! in every place a key is read (play, the windows), and the row's
+//! in every place a key is read (play, the windows, the map), and the row's
 //! old key do nothing (`alias`). A key moves with everything it does: E is
 //! the quick menu's use in play and ✕ in a window, and both go with it. A key
 //! a row is moved to that another row was on swaps the two. A row the game
@@ -23,12 +23,12 @@
 //! The controller: the physical button on each of the game's `VIConsolePad`
 //! fields (`remap`, before `VIPad::Read`): a button moved onto a field another
 //! button drove swaps the two. A row the game has no button for (the client's
-//! keys: F9's art, targets 1-6 and the rest) can be given one too (F3
-//! 20261024-145732 and -164553), which presses that row's key as the
-//! keyboard's would (`PadEdge`, `App::pad_rows`); the field it drove is left
-//! with none, unless the row had a button, which that field then takes.
-//! Every button is in one place, a field's or a row's. The sticks stay
-//! sticks.
+//! keys: the map, F9's art, targets 1-6 and the rest) can be given one too
+//! (F3 20261024-145732 and -164553: the map on R3), which presses that row's
+//! key as the keyboard's would (`PadEdge`, `App::pad_rows`); the field it
+//! drove is left with none, unless the row had a button, which that field
+//! then takes. Every button is in one place, a field's or a row's. The sticks
+//! stay sticks.
 //!
 //! Space was the attack's (the game's own pair, 32 with ✕) until 2026-11-09,
 //! when the jump took it (the user: "make jump ... spacebar by default"): the
@@ -112,10 +112,10 @@ const fn b(k: u16) -> Pad {
 /// an edit box, paired with the pad's button where the game pairs them, and
 /// the pad's buttons the keyboard has none for.
 pub const ROWS: &[Row] = &[
-    row("walk_forward", "Walk forward", &["w"], Pad::Stick(false, Dir::Up), "Pushed past the run's edge, a stick runs."),
-    row("walk_back", "Walk back", &["s"], Pad::Stick(false, Dir::Down), ""),
-    row("walk_left", "Move left", &["a"], Pad::Stick(false, Dir::Left), "Turns or steps aside, as the camera has it."),
-    row("walk_right", "Move right", &["d"], Pad::Stick(false, Dir::Right), "Turns or steps aside, as the camera has it."),
+    row("walk_forward", "Walk forward", &["w"], Pad::Stick(false, Dir::Up), "Pushed past the run's edge, a stick runs. On the map: pan up."),
+    row("walk_back", "Walk back", &["s"], Pad::Stick(false, Dir::Down), "On the map: pan down."),
+    row("walk_left", "Move left", &["a"], Pad::Stick(false, Dir::Left), "Turns or steps aside, as the camera has it. On the map: pan left."),
+    row("walk_right", "Move right", &["d"], Pad::Stick(false, Dir::Right), "Turns or steps aside, as the camera has it. On the map: pan right."),
     row("look_up", "Camera up", &["i"], Pad::Stick(true, Dir::Up), "Tilts the camera, or brings the orbit in."),
     row("look_down", "Camera down", &["k"], Pad::Stick(true, Dir::Down), "Tilts the camera, or takes the orbit out."),
     row("look_left", "Camera left", &["j"], Pad::Stick(true, Dir::Left), "Orbits the camera, or turns."),
@@ -124,20 +124,20 @@ pub const ROWS: &[Row] = &[
     row("talk", "Talk (hold: {1403})", &["q"], b(bit::SQUARE), "In a window it is |s, the window's own: a trade's {478}, the who list asked again, the mail's inbox."),
     row("clear_target", "Let the target go", &[], b(bit::TRIANGLE), "The game has no key for it: a key put here presses |t. In a window |t is {217}, Escape or Backspace on the keyboard."),
     row("use", "Quick menu: {120}", &["e"], b(bit::CIRCLE), "In a window E is |x {212}, as Enter is."),
-    row("menu_up", "Quick menu: up", &["up"], b(bit::UP), "In a window, up a row."),
-    row("menu_down", "Quick menu: down", &["down"], b(bit::DOWN), "In a window, down a row."),
-    row("menu_prev", "Quick menu: {1692}", &["left"], b(bit::LEFT), "In a window, left."),
-    row("menu_next", "Quick menu: {216}", &["right"], b(bit::RIGHT), "In a window, right."),
-    row("cycle_target", "Target: {1405}, group, {418}", &["`", "~"], b(bit::L1), "Each press the next of the player, the group and the pet; held, aim as with Tab."),
+    row("menu_up", "Quick menu: up", &["up"], b(bit::UP), "In a window, up a row. On the map: pan up."),
+    row("menu_down", "Quick menu: down", &["down"], b(bit::DOWN), "In a window, down a row. On the map: pan down."),
+    row("menu_prev", "Quick menu: {1692}", &["left"], b(bit::LEFT), "In a window, left. On the map: pan left."),
+    row("menu_next", "Quick menu: {216}", &["right"], b(bit::RIGHT), "In a window, right. On the map: pan right."),
+    row("cycle_target", "Target: {1405}, group, {418}", &["`", "~"], b(bit::L1), "Each press the next of the player, the group and the pet; held, aim as with Tab. On the map |7 zooms out."),
     row("quick_chat", "Quick chat", &["z"], b(bit::L2), "Again, it closes the quick chat."),
-    row("next_target", "Target: the next (hold: aim)", &["tab"], b(bit::R1), "Held: the view at the eyes, the target the one nearest the crosshair. In a window Tab is |8."),
+    row("next_target", "Target: the next (hold: aim)", &["tab"], b(bit::R1), "Held: the view at the eyes, the target the one nearest the crosshair. In a window Tab is |8; on the map |8 zooms in."),
     row("history", "{424} {1694} (hold)", &["c"], b(bit::R2), "Up and down scroll it while held. In a window C is |c (the factions' next page)."),
     row("autorun", "Autorun", &["x"], b(bit::L3), "A stick pushed past the run's edge ends it."),
-    row("jump", "Jump", &["space", "v"], Pad::None, "In play, on a server that has jumps (its own, not the game's); V too. Wherever it makes no jump (any other server, a window up) Space is {1018}'s key, as it was before it jumped. A controller's button can take it here: every button of the pad is the game's, so none has it till given."),
-    row("chat", "{424}", &["enter"], b(bit::R3), "In a window Enter is |x {212}; over the quick chat, the chat line."),
+    row("jump", "Jump", &["space", "v"], Pad::None, "In play, on a server that has jumps (its own, not the game's); V too. Wherever it makes no jump (any other server, a window up) Space is {1018}'s key, as it was before it jumped. A controller's button can take it here: every button of the pad is the game's, so none has it till given. On the map Space is |x."),
+    row("chat", "{424}", &["enter"], b(bit::R3), "In a window Enter is |x {212}; over the quick chat, the chat line. On the map: |x."),
     row("start_menu", "Start menu", &["escape"], b(bit::START), "In a window Escape is |t {217}. Escape also cancels a key being chosen here."),
     row("camera_style", "Camera style", &["p"], b(bit::SELECT), "First person, and back."),
-    row("back", "{217} (in a window)", &["backspace"], Pad::None, "In a window it is |t {217}."),
+    row("back", "{217} (in a window)", &["backspace"], Pad::None, "In a window it is |t {217}. On the map it closes it."),
     row("command", "{927}: /", &["/"], Pad::None, "Opens the chat line with / begun."),
     row("reply", "{534}", &["r"], Pad::None, "Opens the chat line with /reply to the last tell."),
     row("tell", "{425}", &["t"], Pad::None, "Opens the chat line with /tell."),
@@ -148,16 +148,21 @@ pub const ROWS: &[Row] = &[
     row("target_5", "Target: group 5", &["5"], Pad::None, ""),
     row("target_pet", "Target: {418}", &["6"], Pad::None, ""),
     row("target_target", "Assist Target", &["f"], Pad::None, "The game's Assist Target: whom the target is targeting, as the server answers."),
-    row("orbit_left", "Orbit left", &["home"], Pad::None, "The orbiting camera's."),
+    row("orbit_left", "Orbit left", &["home"], Pad::None, "The orbiting camera's. On the map: |x."),
     row("orbit_right", "Orbit right", &["end"], Pad::None, "The orbiting camera's."),
-    row("tilt_up", "Tilt up, zoom in", &["pageup"], Pad::None, ""),
-    row("tilt_down", "Tilt down, zoom out", &["pagedown"], Pad::None, ""),
+    row("tilt_up", "Tilt up, zoom in", &["pageup"], Pad::None, "On the map: zoom in."),
+    row("tilt_down", "Tilt down, zoom out", &["pagedown"], Pad::None, "On the map: zoom out."),
+    row("map", "{421}", &["m"], Pad::None, "Again, or Escape, closes it. With Extended's Map off it does nothing."),
+    row("map_in", "{421}: zoom in", &["=", "+"], Pad::None, ""),
+    row("map_out", "{421}: zoom out", &["-", "_"], Pad::None, ""),
+    row("map_group_waypoint", "{421}: group waypoint", &["o"], Pad::None, "On the map, in a group: a waypoint for every member, said in the group's chat, where |s puts yours, else where you stand. Also |s held, or Shift+click."),
     row("group_invite", "Group: {86}", &["f5"], Pad::None, "Invites the target."),
     row("group_remove", "Group: {516}", &["f6"], Pad::None, "Takes the target out of the group."),
     row("group_disband", "Group: {529}", &["f7"], Pad::None, ""),
     row("group_leave", "{994}", &["f8"], Pad::None, ""),
     row("art", "Art: Frontiers' or 2002's", &["f9"], Pad::None, "Everything drawn swaps between Frontiers' art and the 2002 disc's (EverQuest Online Adventures, USA, SLUS-20470), at once; the first time, it asks for that disc."),
     row("hide_ui", "Hide UI", &["h"], Pad::None, "Hides everything over the world: the HUD, the chat, the names over heads, the damage numbers and the target's rings. Again, or any window coming up, shows them."),
+    row("minimap", "Minimap", &["n"], Pad::None, "Shows or hides the minimap, as Extended's Map page does, and keeps it. On the map: a community marker suggested."),
     row("controls", "Controls", &["f1"], Pad::None, "This page, from play."),
 ];
 
@@ -1027,9 +1032,9 @@ mod tests {
 
     /// The default table is today's layout: every key the client's keyboard
     /// dispatch matches outside an edit box (read out of `viewer.rs` itself,
-    /// so a key added there without a row here fails) is a row's; each row's
-    /// keys belong to it alone. The pad's rows are the game's pairs
-    /// (`OnKeyDown`'s case lists).
+    /// so a key added there without a row here fails) is a row's, and the
+    /// map's keys (`map::keyboard`) are too; each row's keys belong to it
+    /// alone. The pad's rows are the game's pairs (`OnKeyDown`'s case lists).
     #[test]
     fn the_default_table_is_todays_layout() {
         let src = include_str!("viewer.rs");
@@ -1052,6 +1057,10 @@ mod tests {
         assert!(names.len() > 60, "the scan found the dispatch's keys: {names:?}");
         for n in &names {
             assert!(default_row(n).is_some(), "{n:?} is in the dispatch and in no row");
+        }
+        for n in ["escape", "backspace", "m", "space", "enter", "home", "+", "=", "pageup", "-", "_", "pagedown", "up", "w", "down", "s", "left", "a", "right", "d", "q", "o"] {
+            assert!(crate::map::keyboard(n).is_some(), "{n} is the map's");
+            assert!(default_row(n).is_some(), "the map's {n:?} is a row's");
         }
         // no key in two rows, no id twice
         let mut seen = std::collections::HashSet::new();
@@ -1140,20 +1149,20 @@ mod tests {
         assert!(text.contains("key.attack=v"), "{text}");
     }
 
-    /// A layout kept by a build with the map, the minimap and the Stats Box
-    /// (their rows gone with them) still loads: those lines are left out and
-    /// written back no more, and a button a removed row had is its field's
-    /// again (R3, the map's, the chat line's). The control: a known row's line
-    /// beside them is read.
+    /// A layout kept by a build with the map's rows (before they went on
+    /// 2026-10-27, or since they came back) reads them again, and the Stats
+    /// Box's line (its row gone for good) is left out and written back no
+    /// more. The control: a known row's line beside them is read.
     #[test]
-    fn a_layout_with_the_maps_rows_still_loads() {
-        let b = Binds::from_text("key.map=k\nbutton.map=r3\nkey.map_in=]\nkey.map_out=\nkey.map_group_waypoint=y\nkey.minimap=\nbutton.minimap=l3\nkey.stats_box=v\nkey.attack=b\n");
-        assert_eq!(b.key(row_named("attack").unwrap()), Some("b"), "the known line read");
-        assert_eq!((b.remap(bit::R3), b.remap(bit::L3)), (bit::R3, bit::L3), "R3 and L3 the game's fields");
-        assert_eq!(b.alias("k"), Alias::Same, "K the camera's still");
+    fn a_layout_with_the_maps_rows_reads_them() {
+        let b = Binds::from_text("key.map=y\nbutton.map=r3\nkey.stats_box=b\nkey.attack=u\n");
+        assert_eq!(b.key(row_named("attack").unwrap()), Some("u"), "the known line read");
+        assert_eq!(b.key(row_named("map").unwrap()), Some("y"), "the map's key read");
+        assert_eq!(b.row_button(row_named("map").unwrap()), bit_index(bit::R3), "and its button");
+        assert!(row_named("stats_box").is_none(), "no Stats Box row");
         let text = b.to_text();
-        assert!(!text.contains("map") && !text.contains("stats_box"), "{text}");
-        assert_eq!(text, "key.attack=b\n");
+        assert!(!text.contains("stats_box"), "{text}");
+        assert!(text.contains("key.map=y\n") && text.contains("button.map=r3\n"), "{text}");
     }
 
     /// Moving a row: to a free key it goes there and its key is free; to
@@ -1475,10 +1484,10 @@ mod tests {
         let mut b = Binds::default();
         assert_eq!(b.to_text(), "");
         b.bind_key(row_named("use").unwrap(), "q");
-        b.bind_key(row_named("hide_ui").unwrap(), "=");
+        b.bind_key(row_named("hide_ui").unwrap(), "y");
         b.bind_button(bit_index(bit::CROSS).unwrap(), bit_index(bit::CIRCLE).unwrap());
         let t = b.to_text();
-        assert_eq!(t, "key.talk=e\nkey.use=q\nkey.hide_ui==\npad.circle=cross\npad.cross=circle\n");
+        assert_eq!(t, "key.talk=e\nkey.use=q\nkey.hide_ui=y\npad.circle=cross\npad.cross=circle\n");
         assert_eq!(Binds::from_text(&t), b);
         let odd = Binds::from_text("key.nope=7\nkey.use=\u{7}\npad.cross=nope\nnoise\nkey.attack=q\nkey.use=q\n");
         assert_eq!(odd.key(row_named("use").unwrap()), Some("q"));
@@ -1547,6 +1556,22 @@ mod tests {
         b.bind_key(row_named("talk").unwrap(), "y");
         assert_eq!(b.macros[0].key, None);
         assert_eq!(b.alias("y"), Alias::To("q"));
+    }
+
+    /// A macro kept on a key that was free when it was set and is a map row's
+    /// by default now (M, the map's, gone from 2026-10-27 to 2026-11-09 while
+    /// macros came): the macro keeps its key and the row is left with none,
+    /// written back so, as master's rule keeps one on G. The control: a row
+    /// the same file put on that key keeps it, the macro refused as ever.
+    #[test]
+    fn a_macro_kept_on_a_map_rows_key_keeps_it() {
+        let b = Binds::from_text("macro.1.key=m\nmacro.1.buttons=cross\n");
+        let map = row_named("map").unwrap();
+        assert_eq!(b.macros[0].key.as_deref(), Some("m"), "the macro keeps M");
+        assert_eq!((b.key(map), b.alias("m")), (Some(""), Alias::Macro(0)), "the row has no key, M is the macro's");
+        assert_eq!(Binds::from_text(&b.to_text()), b, "kept so");
+        let control = Binds::from_text("key.talk=m\nmacro.1.key=m\n");
+        assert_eq!((control.macros[0].key.as_deref(), control.alias("m")), (None, Alias::To("q")), "the control: a row put there in the same file keeps it");
     }
 
     /// A macro's mode steps Hold, Toggle, each turbo, each turbo toggled,
