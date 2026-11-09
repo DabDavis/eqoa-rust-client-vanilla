@@ -81,7 +81,11 @@ pub const BODIES: &str = "CHAR.ESF (bodies)";
 /// meshes, materials and surfaces: built from it alone it is the whole file's
 /// (`tests::a_cut_body_is_the_whole_files`). None when none of them is there.
 pub fn cut_bodies(file: Vec<u8>, ids: &[u32]) -> Option<esf::Container> {
-    let c = esf::Container::open(file).ok()?;
+    cut_of(&esf::Container::open(file).ok()?, ids)
+}
+
+/// `cut_bodies` out of a CHAR.ESF already open.
+fn cut_of(c: &esf::Container, ids: &[u32]) -> Option<esf::Container> {
     let mut bytes = Vec::new();
     for &id in ids {
         let Some(&n) = c.dict.get(&(id as i32)) else { continue };
@@ -102,11 +106,12 @@ pub fn cut_bodies(file: Vec<u8>, ids: &[u32]) -> Option<esf::Container> {
 /// are its own; until 2026-11-08 the pregame drew Frontiers', whose helm
 /// nodes differ: a skeleton's helm showed in character select and not in the
 /// world). A cut with none of them, or its file's bytes, is left out. How
-/// many stand in.
-pub fn stand_in_bodies(lib: &mut esf::Library, files: &[(usize, Vec<u32>)], bytes: &[u8]) -> usize {
+/// many stand in. The file is opened once and let go after (108 MB).
+pub fn stand_in_bodies(lib: &mut esf::Library, files: &[(usize, Vec<u32>)], bytes: Vec<u8>) -> usize {
+    let Ok(whole) = esf::Container::open(bytes) else { return 0 };
     let mut n = 0;
     for (f, ids) in files {
-        let Some(c) = cut_bodies(bytes.to_vec(), ids) else { continue };
+        let Some(c) = cut_of(&whole, ids) else { continue };
         if c.data == lib.file(*f).data {
             continue;
         }
@@ -322,7 +327,7 @@ impl Res {
             Ok(list) => {
                 let files: Vec<(usize, Vec<u32>)> = self.bodies_files.iter().filter(|(f, _)| asked.contains(f)).cloned().collect();
                 for (_, bytes) in list {
-                    if stand_in_bodies(&mut self.lib, &files, &bytes) > 0 {
+                    if stand_in_bodies(&mut self.lib, &files, bytes) > 0 {
                         self.bodies_in = true;
                     }
                 }
@@ -714,7 +719,7 @@ mod tests {
         before.add(BODIES, cut_bodies(bf.clone(), &ids).unwrap());
         let mut pregame = esf::Library::new();
         let g = pregame.add(BODIES, cut_bodies(bf.clone(), &ids).unwrap());
-        assert_eq!(stand_in_bodies(&mut pregame, &[(g, ids.clone())], &by), 1);
+        assert_eq!(stand_in_bodies(&mut pregame, &[(g, ids.clone())], by.clone()), 1);
         let drawn = |lib: &esf::Library, id: u32| {
             lib.with_view(lib.view_for(id as i32), || {
                 let r = lib.lookup(id as i32).expect("there");
@@ -745,7 +750,7 @@ mod tests {
         for one in [hill_giant, kerran] {
             let mut lib = esf::Library::new();
             let h = lib.add(BODIES, cut_bodies(bf.clone(), &[one]).unwrap());
-            assert_eq!(stand_in_bodies(&mut lib, &[(h, vec![one])], &by), 0, "{one:08X}");
+            assert_eq!(stand_in_bodies(&mut lib, &[(h, vec![one])], by.clone()), 0, "{one:08X}");
             assert!(!lib.has_2002());
         }
     }
