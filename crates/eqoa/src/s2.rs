@@ -1354,6 +1354,9 @@ pub fn set(r: Rules) {
 pub fn for_server(host: &str) {
     let r = if crate::servers::keeps() { Rules::from_dir(&crate::servers::folder(host)) } else { Rules::retail() };
     set(r);
+    // another server's own worlds are not this one's (`serverworlds`): it
+    // offers its own after its character list
+    crate::serverworlds::forget();
 }
 
 /// A session begins (`Play::new`): `EQOA_S2_DIR` names a folder whose S2
