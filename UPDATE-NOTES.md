@@ -6,6 +6,13 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Capes sit clear of armour
+- A cape now sits off what you wear: plate, broad shoulders and a robe's skirt show through it far less as you
+  stand, walk and run. Over the back and shoulders it moves with the body under it, and under a robe its lower
+  part swings with the robe's hem.
+- Wherever your race's walk or run would still bring the body through it (a broad back, an arm swung back), it
+  hangs a little further off, only there and never by much; where nothing comes near it, it rests where it did.
+
 ## 2026-11-09 · The camera at posts and low roofs
 - Steering with the right mouse button (or with the camera tilted low), the camera no longer jumps all the way in
   to your character when something close behind you is in its way, like the posts and roof of the well by the
