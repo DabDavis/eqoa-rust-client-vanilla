@@ -73,9 +73,16 @@
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
 //!   the client open, `multibox`; what it reads now is said beside Back),
-//!   Capture Controller (one setting for every window) and Touch Pad Size
-//!   (a slider and its number: the touch screen's pad, 50 to 100% of
-//!   the most that fits in fives, `touch::layout`);
+//!   Capture Controller (one setting for every window), and the touch
+//!   screen's pad (`touch`; 2026-11-09, Jibrish's petition 1386): Touch
+//!   Stick Size and Touch Button Size (sliders and their numbers: the sticks
+//!   and the buttons, each 50 to 200% of the pad as it was in fives, drawn
+//!   larger than it was only as far as the window has room, `touch::layout`;
+//!   where it has none for the size asked the page says the size drawn), Touch
+//!   Opacity (10 to 200% of its own in tens) and Touch Edge (how far in from
+//!   the window's left and right edges it keeps, 0 to 10% of the window's
+//!   shorter side); they took over Touch Pad Size (the whole pad's 50 to 100,
+//!   which an older client.opt's line gives both sizes);
 //! - Camera: Camera Distance (a slider: the follow orbit's zoom-out ceiling,
 //!   8 to 50, `camstyle`), Camera Turn Speed (a slider: how fast the stick
 //!   and the keys turn the view, half to three times the game's,
@@ -144,7 +151,7 @@
 
 use crate::bindpage::ControlsPage;
 use crate::pointer::{Hits, key, rows_rect};
-use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, SHADOW_DISTANCE_GAME, SHADOW_DISTANCE_MAX, SHADOW_DISTANCE_STEP, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
+use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, SHADOW_DISTANCE_GAME, SHADOW_DISTANCE_MAX, SHADOW_DISTANCE_STEP, TOUCH_EDGE_MAX, TOUCH_EDGE_STEP, TOUCH_OPACITY_MAX, TOUCH_OPACITY_MIN, TOUCH_OPACITY_STEP, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
 use vi::fpu::{Ee, F};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -591,8 +598,10 @@ impl WndOptions {
     /// Distance (24) by fifties from the game's 100 to 1000; Art (25) and
     /// VSync (26) turn over, VSync natively only (a page's stays on with
     /// sound 9: the browser paces it); Name Distance (27) by tens from the
-    /// game's 22 to 200 (`step_name_distance`); Touch Pad Size (48) by
-    /// fives from 50 to 100 as a slider; Text (30) goes between Sharp and
+    /// game's 22 to 200 (`step_name_distance`); Touch Stick Size (59) and
+    /// Touch Button Size (60) by fives from 50 to 200, Touch Opacity (61) by
+    /// tens from 10 to 200 and Touch Edge (62) by ones from 0 to 10, each as
+    /// a slider; Text (30) goes between Sharp and
     /// Smooth; Update Notices (29), Overlapping Names (34, Hide and Show),
     /// Mipmaps (35), Loading Screens (38, Longer and Instant), Texture Packs
     /// (50), Dump Textures (51), the Map (41), Minimap (42), Map Markers (43),
@@ -768,9 +777,12 @@ impl WndOptions {
                         }
                     }
                     20 => slide(&mut c.fog, 0, crate::fog::STEPS, 1),
-                    // Touch Pad Size: the pad drawn and touched at it
-                    // from the next frame (`viewer`, `touch::layout`)
-                    48 => slide(&mut c.touch_size, TOUCH_SIZE_MIN, TOUCH_SIZE_MAX, TOUCH_SIZE_STEP),
+                    // the touch rows: the pad drawn and touched so from the
+                    // next frame (`viewer`, `touch::layout`, `TouchPad::draw`)
+                    59 => slide(&mut c.touch_stick, TOUCH_SIZE_MIN, TOUCH_SIZE_MAX, TOUCH_SIZE_STEP),
+                    60 => slide(&mut c.touch_buttons, TOUCH_SIZE_MIN, TOUCH_SIZE_MAX, TOUCH_SIZE_STEP),
+                    61 => slide(&mut c.touch_opacity, TOUCH_OPACITY_MIN, TOUCH_OPACITY_MAX, TOUCH_OPACITY_STEP),
+                    62 => slide(&mut c.touch_edge, 0, TOUCH_EDGE_MAX, TOUCH_EDGE_STEP),
                     15 => slide(&mut c.camera_distance, CAMERA_MIN, CAMERA_MAX, CAMERA_STEP),
                     17 => {
                         let t = &mut c.camera_turn;
@@ -1163,7 +1175,7 @@ impl WndOptions {
     /// row being the one drawn last (`item`).
     fn page_note(&self, c: usize) -> Option<String> {
         match CATEGORIES[c].note {
-            Note::Reads => Some(crate::input::reads()),
+            Note::Reads => Some(touch_note(self.item, &crate::settings::client().touch_opts(), crate::touch::drawn_here).unwrap_or_else(crate::input::reads)),
             Note::Server => self.server_note.clone().filter(|_| matches!(self.item, 23 | 24)),
             Note::Scale => {
                 let asked = crate::settings::client().render_scale as u32;
@@ -1182,6 +1194,27 @@ impl WndOptions {
             },
             Note::None => None,
         }
+    }
+}
+
+/// What Controller's page says beside Back while Touch Stick Size, Touch
+/// Button Size or Touch Edge is chosen (`drawn` answers the sizes the pad is
+/// drawn at in its window as `o` asks, `touch::drawn_here`): where the window
+/// has no room for a size asked, the size it is drawn at (the larger comes
+/// down first: `touch::layout`), named when only one is; none otherwise
+/// (the page says what this window reads).
+fn touch_note(item: i32, o: &crate::touch::Opts, drawn: impl Fn(&crate::touch::Opts) -> Option<[f32; 2]>) -> Option<String> {
+    if !matches!(item, 59 | 60 | 62) {
+        return None;
+    }
+    let [s, b] = drawn(o)?;
+    // in whole percent, never above what is drawn
+    let pct = |v: f32| (v * 100.0 + 1e-3).floor() as u32;
+    match (s < o.stick, b < o.buttons) {
+        (true, true) => Some(format!("Drawn at {}% here", pct(s.max(b)))),
+        (true, false) => Some(format!("Sticks drawn at {}% here", pct(s))),
+        (false, true) => Some(format!("Buttons drawn at {}% here", pct(b))),
+        (false, false) => None,
     }
 }
 
@@ -1206,7 +1239,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 44] = [
+const EXTENDED_ITEMS: [(i32, &str); 47] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1241,7 +1274,6 @@ const EXTENDED_ITEMS: [(i32, &str); 44] = [
     (45, "Quest Tracker"),
     (46, "Shadows"),
     (47, "Ground Fog"),
-    (48, "Touch Pad Size"),
     (49, "Raid List"),
     (50, "Texture Packs"),
     (51, "Dump Textures"),
@@ -1251,13 +1283,19 @@ const EXTENDED_ITEMS: [(i32, &str); 44] = [
     (55, "Texture Folder"),
     (56, "Light Shadows"),
     (57, "Shadow Distance"),
+    (59, "Touch Stick Size"),
+    (60, "Touch Button Size"),
+    (61, "Touch Opacity"),
+    (62, "Touch Edge"),
 ];
 
 /// What a category's page says beside its Back legend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Note {
     None,
-    /// what this window reads (`input::reads`)
+    /// what this window reads (`input::reads`); while a touch size or
+    /// Touch Edge is chosen and the window has no room for a size asked, the
+    /// size drawn (`touch_note`)
     Reads,
     /// what this server gives (`WndOptions::server_note`), while NPC/PC
     /// Display or Distance is chosen
@@ -1298,7 +1336,7 @@ const ALL_CATEGORIES: [Category; 10] = [
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54], note: Note::Lighting },
     Category { name: "UI", items: &[22, 29, 30, 40, 49], note: Note::None },
-    Category { name: "Controller", items: &[16, 19, 48], note: Note::Reads },
+    Category { name: "Controller", items: &[16, 19, 59, 60, 61, 62], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34, 46], note: Note::Server },
     Category { name: "Sound", items: SOUND, note: Note::Output },
@@ -1473,7 +1511,10 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         23 => (at(c.entity_slots as f32, ENTITY_SLOTS_GAME as f32, ENTITY_SLOTS_MAX as f32), Some(c.entity_slots as u16)),
         24 => (at(c.entity_view as f32, ENTITY_VIEW_GAME as f32, ENTITY_VIEW_MAX as f32), Some(c.entity_view)),
         27 => name_distance_slider(&c),
-        48 => (at(c.touch_size as f32, TOUCH_SIZE_MIN as f32, TOUCH_SIZE_MAX as f32), Some(c.touch_size as u16)),
+        59 => (at(c.touch_stick as f32, TOUCH_SIZE_MIN as f32, TOUCH_SIZE_MAX as f32), Some(c.touch_stick as u16)),
+        60 => (at(c.touch_buttons as f32, TOUCH_SIZE_MIN as f32, TOUCH_SIZE_MAX as f32), Some(c.touch_buttons as u16)),
+        61 => (at(c.touch_opacity as f32, TOUCH_OPACITY_MIN as f32, TOUCH_OPACITY_MAX as f32), Some(c.touch_opacity as u16)),
+        62 => (c.touch_edge as f32 / TOUCH_EDGE_MAX as f32, Some(c.touch_edge as u16)),
         57 => (at(c.shadow_distance as f32, SHADOW_DISTANCE_GAME as f32, SHADOW_DISTANCE_MAX as f32), Some(c.shadow_distance)),
         _ => return None,
     })
@@ -1923,21 +1964,56 @@ mod tests {
         assert!(!settings::capture(), "off: every window on a pad reads it");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert!(settings::capture());
+        // the touch rows (they took over Touch Pad Size): each from the pad
+        // as it was, to both ends, sound 9 past each
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!(w.item, 48, "Touch Pad Size");
-        assert_eq!((settings::client().touch_size, settings::touch_scale(), slider_at(48)), (100, 1.0, Some((1.0, Some(100)))), "the full pad, the most that fits");
+        assert_eq!(w.item, 59, "Touch Stick Size");
+        assert_eq!((settings::client().touch_stick, slider_at(59)), (100, Some((50.0 / 150.0, Some(100)))), "the pad's as it was, a third along");
+        for _ in 0..21 {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+        }
+        assert_eq!((settings::client().touch_stick, slider_at(59)), (200, Some((1.0, Some(200)))), "100 to 200 in 20 steps of 5");
+        assert_eq!(&cues[cues.len() - 2..], &[11, 9], "the last step, then its end");
+        for _ in 0..31 {
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+        }
+        assert_eq!((settings::client().touch_stick, slider_at(59), cues.last()), (50, Some((0.0, Some(50))), Some(&9)), "down to 50 in 30");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().touch_size, cues.last()), (100, Some(&9)), "no larger");
+        assert_eq!(settings::client().touch_stick, 55);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 60, "Touch Button Size");
+        assert_eq!((settings::client().touch_buttons, slider_at(60)), (100, Some((50.0 / 150.0, Some(100)))));
         for _ in 0..11 {
             press(&mut w, &mut o, key::LEFT, &mut cues);
         }
-        assert_eq!((settings::client().touch_size, settings::touch_scale()), (50, 0.5), "100 to 50 in 10 steps of 5");
-        assert_eq!(&cues[cues.len() - 2..], &[11, 9], "the last step, then its end");
-        assert_eq!(slider_at(48), Some((0.0, Some(50))));
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().touch_size, slider_at(48)), (55, Some((0.1, Some(55)))));
+        assert_eq!((settings::client().touch_buttons, cues.last()), (50, Some(&9)), "100 to 50 in 10 steps of 5");
+        for _ in 0..31 {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+        }
+        assert_eq!((settings::client().touch_buttons, slider_at(60), cues.last()), (200, Some((1.0, Some(200))), Some(&9)));
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (2, Some(&9)), "Controller's last row");
+        assert_eq!(w.item, 61, "Touch Opacity");
+        assert_eq!((settings::client().touch_opacity, slider_at(61)), (100, Some((90.0 / 190.0, Some(100)))), "its own alphas");
+        for _ in 0..10 {
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+        }
+        assert_eq!((settings::client().touch_opacity, slider_at(61), cues.last()), (10, Some((0.0, Some(10))), Some(&9)), "100 to 10 in 9 steps of 10");
+        for _ in 0..20 {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+        }
+        assert_eq!((settings::client().touch_opacity, cues.last()), (200, Some(&9)), "to 200 in 19");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 62, "Touch Edge");
+        assert_eq!((settings::client().touch_edge, slider_at(62)), (0, Some((0.0, Some(0)))), "none");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!((settings::client().touch_edge, cues.last()), (0, Some(&9)), "no less");
+        for _ in 0..11 {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+        }
+        assert_eq!((settings::client().touch_edge, slider_at(62), cues.last()), (10, Some((1.0, Some(10))), Some(&9)), "0 to 10 in ones");
+        assert_eq!(settings::touch_options(), crate::touch::Opts { stick: 0.55, buttons: 2.0, opacity: 2.0, edge: 0.1 }, "the pad drawn so");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (5, Some(&9)), "Controller's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Camera: Camera Distance, Camera Turn Speed, Screen Shake
         press(&mut w, &mut o, key::DOWN, &mut cues);
@@ -2605,6 +2681,30 @@ mod tests {
         assert_eq!(with(false, true), None);
         assert_eq!(sun_note(&ClientOptions { light_shadows: true, ..Default::default() }), None, "Sun Shadows' note not theirs");
         assert_eq!(light_note(&ClientOptions { sun_shadows: true, ..Default::default() }), None, "nor theirs Sun Shadows'");
+    }
+
+    /// Controller's page names the size the touch pad is drawn at while a
+    /// touch size or Touch Edge is chosen and the window has no room for the
+    /// size asked, naming which when only one is; otherwise, and on any other
+    /// row, none (the page says what this window reads). With the real
+    /// layout: a phone held upright has no room for buttons at 200%, one held
+    /// wide has for sticks at 200%.
+    #[test]
+    fn controllers_page_says_the_touch_size_drawn_where_less_than_asked() {
+        let o = crate::touch::Opts { stick: 2.0, buttons: 1.5, ..Default::default() };
+        let note = |item: i32, d: Option<[f32; 2]>| touch_note(item, &o, |_| d);
+        assert_eq!(note(59, Some([1.6834, 1.5])).as_deref(), Some("Sticks drawn at 168% here"));
+        assert_eq!(note(60, Some([2.0, 1.25])).as_deref(), Some("Buttons drawn at 125% here"));
+        assert_eq!(note(62, Some([1.2, 1.2])).as_deref(), Some("Drawn at 120% here"));
+        assert_eq!(note(62, Some([1.5, 1.5])).as_deref(), Some("Sticks drawn at 150% here"), "the sticks down to the buttons' size");
+        assert_eq!(note(59, Some([2.0, 1.5])), None, "as asked");
+        assert_eq!(note(61, Some([1.0, 1.0])), None, "not on Touch Opacity");
+        assert_eq!(note(16, Some([1.0, 1.0])), None);
+        assert_eq!(note(59, None), None, "no window drawn yet");
+        let real = |item: i32, o: crate::touch::Opts, size: (u32, u32)| touch_note(item, &o, |o| Some(crate::touch::layout(size, o).drawn));
+        let upright = real(60, crate::touch::Opts { buttons: 2.0, ..Default::default() }, (1080, 2400));
+        assert!(upright.as_deref().is_some_and(|n| n.starts_with("Buttons drawn at 1") && n.ends_with("% here")), "{upright:?}");
+        assert_eq!(real(59, crate::touch::Opts { stick: 2.0, ..Default::default() }, (2400, 1080)), None);
     }
 
     /// Every Extended row is one item, and each category's rows are rows:

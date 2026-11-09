@@ -461,7 +461,7 @@ pub fn shot_with(
                 p.map.show();
             }
             touch.window = play.as_ref().is_some_and(|p| p.window_up() || p.map.open);
-            touch.scale = crate::settings::touch_scale();
+            touch.opts = crate::settings::touch_options();
             for (_, id, phase, at) in touch_script.iter().filter(|e| e.0 == t) {
                 touch.touch(*id, *phase, *at, Instant::now(), (w, h));
             }
@@ -3048,8 +3048,8 @@ impl App {
         }
         match whose {
             Finger::Pad => {
-                // at the size the options give it now (Touch Pad Size)
-                self.touch.scale = crate::settings::touch_scale();
+                // as the options have it now (the Extended page's touch rows)
+                self.touch.opts = crate::settings::touch_options();
                 self.touch.touch(id, phase, at, Instant::now(), size);
                 if let Some(p) = self.play.as_mut() {
                     p.keyboard = false;
@@ -3302,7 +3302,7 @@ impl App {
         // mouse's); its drags scroll nothing (no screen before the world
         // takes the wheel)
         self.touch.window = true;
-        self.touch.scale = crate::settings::touch_scale();
+        self.touch.opts = crate::settings::touch_options();
         let taps = self.touch.take_clicks();
         let _ = self.touch.take_look();
         if let (Some(h), Some(g)) = (self.host.as_mut(), self.gfx.as_ref()) {
@@ -5488,7 +5488,7 @@ impl App {
                 }
                 self.touch.holds = self.play.as_ref().is_some_and(|p| p.map.open);
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.window_up() || p.map.open);
-                self.touch.scale = crate::settings::touch_scale();
+                self.touch.opts = crate::settings::touch_options();
                 mark(&mut self.perf, 17);
                 self.grab_pointer(true);
                 let sticks = self.sticks();
