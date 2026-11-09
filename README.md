@@ -75,7 +75,7 @@ or a browser (each described where it lives below):
   Characters (Level of Detail, NPC/PC Display and Distance, Name Distance,
   Overlapping Names, Shadows), Sound (Sound in Background, Output Device: the system's
   default, followed when it changes, or a device by its name) and natively Textures
-  (Texture Packs, Dump Textures), and the rows below.
+  (Texture Packs, Dump Textures, and on a computer Texture Folder), and the rows below.
 - **Dynamic Lighting** (the user's of 2026-11-08, phase 1; Extended > Lighting, off
   by default, and off the PS2's light exactly): the strip programs' light worked out
   for every pixel instead of every vertex (the sun and the personal light, the same
@@ -323,11 +323,11 @@ or a browser (each described where it lives below):
   PCSX2 replacement packs as they are ... and can dump its textures under
   PCSX2's names, so one pack works in both"; `texpack.rs`, `esf::pcsx2`):
   natively, Extended > Textures. Texture Packs (off unless chosen) draws a
-  texture a pack in the config directory's `textures/SLUS-20744/replacements`
-  names (PCSX2's folder and file names, read at any depth; PNG and DDS, its
-  BC1/2/3/7 and uncompressed forms, any size) in its place: a larger one with
-  its own levels, sampled that many levels farther on, so it adds detail near
-  and keeps the game's texel density far; a texture off the 2002 disc looks in
+  texture a pack in `textures/SLUS-20744/replacements` names (PCSX2's folder
+  and file names, read at any depth; PNG and DDS, its BC1/2/3/7 and
+  uncompressed forms, any size) in its place: a larger one with its own
+  levels, sampled that many levels farther on, so it adds detail near and
+  keeps the game's texel density far; a texture off the 2002 disc looks in
   `textures/SLUS-20470`. Dump Textures (off unless chosen) writes each texture
   made to `textures/SLUS-20744/dumps` under every name PCSX2 gives it, the
   picture PCSX2 dumps byte for byte. A name is PCSX2's texture cache's own
@@ -335,7 +335,20 @@ or a browser (each described where it lives below):
   as GS blocks, its CLUT), reproduced from the surface record as
   `VIEESurfCache` uploads it; held to PCSX2's dumps of the game (below, the
   `esf` row). Off, every texture is the game's own, byte for byte; a change to
-  either row makes every texture again (`App::retexture`).
+  either row makes every texture again (`App::retexture`). The `textures`
+  folder is beside the program (the user, 2026-11-09: "lets put the
+  dumps/replacements in a folder next to the binary, so players can find it
+  easy"; `texpack::place`): the program's own folder (the release's archive's
+  or its bare download's), a Mac app's the folder holding the `.app`, an
+  AppImage's the folder of `$APPIMAGE` (the release has neither). Where the
+  game cannot write there (Program Files, /usr/bin, a read-only mount) it is
+  the config directory's, as before, and the page says so; on Android always.
+  The config directory's from before is moved over the first time it is
+  wanted (one rename: on the same disk only), else read after the new one.
+  The updater renames only the program, so the folder outlives updates. On a
+  computer Texture Folder (Open) shows the folder in the system's file manager
+  (Explorer, `open`, `xdg-open`), and the page's note says where it is; a run
+  that keeps no settings (the test commands) has no folder.
 - **Sorted lists**: the Who list and the guild's roster by name, or by any
   column with ○ (C on the keyboard) or a click on its heading (the game keeps
   the server's order).

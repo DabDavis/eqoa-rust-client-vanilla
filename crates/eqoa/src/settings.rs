@@ -690,10 +690,10 @@ pub struct ClientOptions {
     pub touch_size: u8,
     /// Texture Packs, natively (the user, 2026-11-08: PCSX2's replacement
     /// packs read as they are, "an Extended page row turns packs on and
-    /// off"): on, a texture a pack in the config directory's
-    /// `textures/SLUS-20744/replacements` names is drawn as the pack has it
-    /// (`texpack`); off, every texture the game's own. Off by default, as
-    /// PCSX2's Load Textures is.
+    /// off"): on, a texture a pack in `textures/SLUS-20744/replacements`
+    /// names (the `textures` beside the program, `texpack::place`) is drawn
+    /// as the pack has it (`texpack`); off, every texture the game's own.
+    /// Off by default, as PCSX2's Load Textures is.
     pub texture_packs: bool,
     /// Dump Textures, natively: on, each texture made is written to
     /// `textures/SLUS-20744/dumps` under the names PCSX2 gives it

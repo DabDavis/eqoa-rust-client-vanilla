@@ -6,6 +6,21 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Texture packs in a folder beside the game
+- Texture packs and texture dumps now go in a `textures` folder next to the game itself (beside `eqoa.exe` on
+  Windows, beside `eqoa` on Linux and on a Mac), where they are easy to find: put a pack's files in
+  `textures/SLUS-20744/replacements`, and Dump Textures writes to `textures/SLUS-20744/dumps`. Inside it the folders
+  are PCSX2's, so a pack made for PCSX2 still goes in as it is.
+- Options > Extended > Textures has a new row, Texture Folder: Open shows the folder in your file manager
+  (Explorer, the Finder or your desktop's). Beside Back the page says where the folder is, and how many textures
+  the packs in it replace. A pack you add while the game runs is read when you turn Texture Packs off and on.
+- The packs and dumps you kept in the settings folder (`eqoa-rs`) are moved there the first time the game uses
+  them. If they are on another disk from the game they stay where they are, and are still read.
+- Where the game cannot write in its own folder (in Program Files, say), it keeps them in the settings folder as
+  before, and the Textures page says so.
+- An update replaces only the game's program: the `textures` folder beside it is never touched.
+- In a browser and on Android nothing changes.
+
 ## 2026-11-09 · Jump
 - On a server that has jumps (eqoaclassic can turn them on), V jumps: about half your height, straight up when you
   stand and on along your way when you run. You come down as a fall comes down and land where you came down, and

@@ -4,15 +4,28 @@
 //! its textures under PCSX2's names, so one pack works in both. An Extended
 //! page row turns packs on and off.").
 //!
-//! Where: `textures/<serial>/replacements` and `textures/<serial>/dumps` in
-//! the config directory (`settings::config_dir`: `$EQOA_CONFIG`, else
-//! `eqoa-rs` in the platform's), as PCSX2 keeps them in its own
-//! (`EmuFolders::Textures`); the serial is the Frontiers disc's,
-//! `SLUS-20744`, and a texture off the 2002 disc (the 2002 art, `era`) the
-//! 2002 disc's, `SLUS-20470`. A pack's folder is read at any depth, its
-//! names in any case, as PCSX2 reads it (`ReloadReplacementMap`); a run that
-//! keeps no settings (the test commands) has no folder, so nothing changes
-//! a test's picture.
+//! Where (`place`): `<serial>/replacements` and `<serial>/dumps`, as PCSX2
+//! keeps them in its own (`EmuFolders::Textures`), in a `textures` folder
+//! beside the program, where a player finds it (the user, 2026-11-09: "lets
+//! put the dumps/replacements in a folder next to the binary, so players
+//! can find it easy"; `program_folder`): the program's own folder, a Mac
+//! app's the folder holding the `.app` (not the bundle's inside), an
+//! AppImage's the folder of `$APPIMAGE` (not its read-only mount). Where the
+//! game cannot write there (Program Files, /usr/bin, a read-only disk) it is
+//! `textures` in the config directory (`settings::config_dir`:
+//! `$EQOA_CONFIG`, else `eqoa-rs` in the platform's), as it was before
+//! 2026-11-09, and the Extended page says so; on Android, which has no
+//! program folder of a player's, always. The config directory's from before
+//! is moved beside the program the first time it is wanted (one rename: on
+//! the same disk only), else read after the new one (`resolve`). The updater
+//! never touches it (it renames the program's own file and its `.old`s). The
+//! serial is the Frontiers disc's, `SLUS-20744`, and a texture off the 2002
+//! disc (the 2002 art, `era`) the 2002 disc's, `SLUS-20470`. A pack's folder
+//! is read at any depth, its names in any case, as PCSX2 reads it
+//! (`ReloadReplacementMap`); a run that keeps no settings (the test
+//! commands) has no folder, so nothing changes a test's picture.
+//! Extended > Textures > Texture Folder shows the Frontiers disc's folder in
+//! the system's file manager (`open_folder`).
 //!
 //! A file is named as PCSX2 names the texture (`esf::pcsx2`): every name it
 //! can give it is looked for, the whole mip chain's first, then the base's
@@ -55,17 +68,280 @@ pub fn serial(era: esf::Era) -> &'static str {
     }
 }
 
-/// `<config>/textures/<serial>`, where the serial's packs and dumps are;
+// ---- where the folders are ------------------------------------------------------
+
+/// What this run's `textures` folder is beside (`Place::beside`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub enum Beside {
+    /// The program, by its name as a player finds it (`eqoa.exe`, a Mac's
+    /// `Eqoa.app`, an `.AppImage`).
+    Program(String),
+    /// The settings, in the config directory (`config`, its folder's name:
+    /// `eqoa-rs`), the program's folder (`program`'s) being one the game
+    /// cannot write to.
+    Settings { program: String, config: String },
+    /// The settings, on a platform with no program folder of a player's
+    /// (Android).
+    Only,
+}
+
+impl Beside {
+    /// Where the folder is, as the Extended page says it (after "12 in" or
+    /// "In"); a long program name (the release's bare download's) as "the
+    /// game", so that it fits.
+    pub fn said(&self) -> String {
+        let shown = |n: &str| if n.chars().count() <= 16 { n.to_string() } else { "the game".to_string() };
+        match self {
+            Beside::Program(n) => format!("textures beside {}", shown(n)),
+            Beside::Settings { program, config } => format!("{config}: can't write beside {}", shown(program)),
+            Beside::Only => format!("textures/{}", esf::pcsx2::SERIAL),
+        }
+    }
+}
+
+/// This run's textures folders (`place`, `resolve`).
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub struct Place {
+    /// The `textures` folder: each disc's packs read here first and its
+    /// dumps written here.
+    pub dir: PathBuf,
+    /// Another read after it: the config directory's from before, where it
+    /// could not be moved beside the program (another disk), or, the
+    /// program's folder being one the game cannot write to, one there.
+    pub also: Option<PathBuf>,
+    pub beside: Beside,
+    /// The config directory's from before, moved to `dir` as this was found.
+    pub moved: Option<PathBuf>,
+    /// What went otherwise (for the log): why that one was not moved, or
+    /// why the program's folder cannot be written to.
+    pub why: Option<String>,
+}
+
+/// The folder a player finds the program at `exe` in, and its name there:
+/// the program's own folder; on a Mac (`mac`) an app's
+/// (`<name>.app/Contents/MacOS/<exe>`) the folder holding the app, not the
+/// bundle's inside; an AppImage's (`appimage`: `$APPIMAGE`, and `$APPDIR`,
+/// the read-only mount it runs from) the folder of the image, when the
+/// program runs from inside that mount (one started by an AppImage, and so
+/// given its variables, is not one).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn program_folder(exe: &Path, appimage: Option<(&Path, &Path)>, mac: bool) -> Option<(PathBuf, String)> {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned());
+    if let Some((image, mount)) = appimage
+        && image.is_absolute()
+        && mount.is_absolute()
+        && exe.starts_with(mount)
+        && let (Some(dir), Some(n)) = (image.parent(), name(image))
+    {
+        return Some((dir.to_path_buf(), n));
+    }
+    if mac {
+        let up = |p: &Path, want: &str| p.parent().filter(|d| d.file_name().is_some_and(|n| n == want)).map(Path::to_path_buf);
+        if let Some(app) = up(exe, "MacOS").and_then(|m| up(&m, "Contents")).and_then(|c| c.parent().map(Path::to_path_buf))
+            && app.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"))
+            && let (Some(dir), Some(n)) = (app.parent(), name(&app))
+        {
+            return Some((dir.to_path_buf(), n));
+        }
+    }
+    Some((exe.parent()?.to_path_buf(), name(exe)?))
+}
+
+/// The running program's folder and name (`program_folder`): its path
+/// with links resolved (on Linux the system's already is; a Mac's may be a
+/// link's), and an AppImage's variables.
+#[cfg(all(not(test), not(target_arch = "wasm32")))]
+fn program() -> Option<(PathBuf, String)> {
+    let exe = std::env::current_exe().ok()?;
+    // (not on Windows: its resolved paths are `\\?\` ones, which Explorer
+    // does not take)
+    #[cfg(unix)]
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let appimage = std::env::var_os("APPIMAGE").zip(std::env::var_os("APPDIR")).map(|(i, m)| {
+        let m = PathBuf::from(m);
+        (PathBuf::from(i), std::fs::canonicalize(&m).unwrap_or(m))
+    });
+    program_folder(&exe, appimage.as_ref().map(|(i, m)| (i.as_path(), m.as_path())), cfg!(target_os = "macos"))
+}
+
+/// Whether the game can write in `dir`, made when it is not there: a file
+/// written in it and taken away, the one test every refusal answers
+/// (permissions, a read-only disk or mount, Windows' protected folders); a
+/// folder made for the test and then refused a file is taken away again.
+#[cfg(not(target_arch = "wasm32"))]
+fn writable(dir: &Path) -> std::io::Result<()> {
+    let made = !dir.is_dir();
+    std::fs::create_dir_all(dir)?;
+    let probe = dir.join(".eqoa-write-test");
+    let r = std::fs::write(&probe, b"");
+    if r.is_ok() {
+        // (a file a scanner holds a moment longer is still a written one)
+        let _ = std::fs::remove_file(&probe);
+    } else if made {
+        let _ = std::fs::remove_dir(dir);
+    }
+    r
+}
+
+/// The folders for a program found in `program` (its folder and the name
+/// shown for it, `program_folder`; none on Android) and settings kept in
+/// `config`. The first time, `config`'s `textures` is moved beside the
+/// program, where none is there yet: one rename, so only on the same disk
+/// (another's is refused), and only a folder itself (a link to one is left,
+/// as a relative one would point elsewhere moved); one not moved is read
+/// after the new one, which takes the dumps. Where the program's folder
+/// cannot be written to (`writable`), `config`'s is the folder, as before,
+/// and one beside the program is read after it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn resolve(program: Option<(&Path, &str)>, config: &Path) -> Place {
+    let old = config.join("textures");
+    let Some((folder, name)) = program else {
+        return Place { dir: old, also: None, beside: Beside::Only, moved: None, why: None };
+    };
+    let new = folder.join("textures");
+    if new == old {
+        return Place { dir: new, also: None, beside: Beside::Program(name.to_string()), moved: None, why: None };
+    }
+    let (mut moved, mut why) = (None, None);
+    let a_folder = std::fs::symlink_metadata(&old).is_ok_and(|m| m.is_dir());
+    if a_folder && std::fs::symlink_metadata(&new).is_err() {
+        match std::fs::rename(&old, &new) {
+            Ok(()) => moved = Some(old.clone()),
+            Err(e) => why = Some(format!("{} was not moved there ({e})", old.display())),
+        }
+    }
+    match writable(&new) {
+        Ok(()) => Place { also: old.is_dir().then(|| old.clone()), dir: new, beside: Beside::Program(name.to_string()), moved, why },
+        Err(e) => {
+            let config = config.file_name().map_or_else(|| "the settings".to_string(), |n| n.to_string_lossy().into_owned());
+            let why = Some(format!("{} cannot be written to ({e})", folder.display()));
+            Place { also: new.is_dir().then(|| new.clone()), dir: old, beside: Beside::Settings { program: name.to_string(), config }, moved: None, why }
+        }
+    }
+}
+
+/// This run's folders (`resolve`): natively, while it keeps its settings
+/// (none in a page, nor in a run that keeps none, the test commands'),
+/// found the first time they are wanted (Texture Packs or Dump Textures
+/// on, or the Texture Folder row chosen) and kept for the run.
+#[cfg(all(not(test), not(target_arch = "wasm32")))]
+pub fn place() -> Option<Place> {
+    static FOUND: Mutex<Option<(PathBuf, Place)>> = Mutex::new(None);
+    let config = crate::settings::config_dir()?;
+    let mut found = FOUND.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((c, p)) = found.as_ref()
+        && *c == config
+    {
+        return Some(p.clone());
+    }
+    let program = if cfg!(target_os = "android") { None } else { program() };
+    let p = resolve(program.as_ref().map(|(d, n)| (d.as_path(), n.as_str())), &config);
+    if let Some(from) = &p.moved {
+        crate::say(&format!("textures: {} moved to {}, beside the program", from.display(), p.dir.display()));
+    }
+    match (&p.beside, &p.why) {
+        (Beside::Settings { .. }, Some(why)) => crate::say(&format!("textures: {why}: the textures folder is {} instead", p.dir.display())),
+        (_, Some(why)) => crate::say(&format!("textures: {why}: it is read after {}", p.dir.display())),
+        _ => {}
+    }
+    *found = Some((config, p.clone()));
+    Some(p)
+}
+
+#[cfg(all(not(test), target_arch = "wasm32"))]
+pub fn place() -> Option<Place> {
+    None
+}
+
+/// A test's folders (`testing::set_place`): none unless it gives some.
+#[cfg(test)]
+pub fn place() -> Option<Place> {
+    testing::PLACE.with(|p| p.borrow().clone())
+}
+
+/// `textures/<serial>`, where the serial's packs and dumps are (`place`);
 /// none in a page or a run that keeps no settings.
 pub fn root(era: esf::Era) -> Option<PathBuf> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        crate::settings::config_dir().map(|d| d.join("textures").join(serial(era)))
+    place().map(|p| p.dir.join(serial(era)))
+}
+
+/// Extended > Textures > Texture Folder: the folder the Frontiers disc's
+/// packs go in and its dumps are written to (`textures/SLUS-20744`, its
+/// `replacements` made in it as PCSX2 makes it) shown in the system's file
+/// manager (Explorer, the Finder, the desktop's through xdg-open). False
+/// with no folder (a run that keeps no settings) or nothing to show it.
+pub fn open_folder() -> bool {
+    let Some(dir) = root(esf::Era::Frontiers) else { return false };
+    if child(&dir, "replacements").is_none() {
+        let _ = std::fs::create_dir_all(dir.join("replacements"));
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = era;
-        None
+    show(&dir)
+}
+
+/// `dir` in the system's file manager.
+#[cfg(all(not(test), not(target_arch = "wasm32"), not(target_os = "android")))]
+fn show(dir: &Path) -> bool {
+    use std::process::{Command, Stdio};
+    let program: PathBuf = if cfg!(windows) {
+        std::env::var_os("SystemRoot").map_or_else(|| "explorer.exe".into(), |r| PathBuf::from(r).join("explorer.exe"))
+    } else if cfg!(target_os = "macos") {
+        "open".into()
+    } else {
+        "xdg-open".into()
+    };
+    // none of this program's streams: its stderr is the log's pipe
+    // (`logfile`), which a file manager it starts would outlive
+    match Command::new(&program).arg(dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        Ok(mut c) => {
+            crate::say(&format!("textures: {} shown", dir.display()));
+            // waited for, so that it does not linger as a zombie
+            let _ = std::thread::Builder::new().name("texture folder".into()).spawn(move || {
+                let _ = c.wait();
+            });
+            true
+        }
+        Err(e) => {
+            crate::say(&format!("textures: {} did not show {} ({e})", program.display(), dir.display()));
+            false
+        }
+    }
+}
+
+/// Nothing shows a folder in a page or an Android app.
+#[cfg(all(not(test), any(target_arch = "wasm32", target_os = "android")))]
+fn show(_dir: &Path) -> bool {
+    false
+}
+
+/// A test's: the folder noted (`testing::shown`), shown if it is there.
+#[cfg(test)]
+fn show(dir: &Path) -> bool {
+    testing::SHOWN.with(|s| s.borrow_mut().push(dir.to_path_buf()));
+    dir.is_dir()
+}
+
+#[cfg(test)]
+pub mod testing {
+    use super::Place;
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+
+    thread_local! {
+        pub static PLACE: RefCell<Option<Place>> = const { RefCell::new(None) };
+        pub static SHOWN: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// This thread's folders (`place`), and none shown yet.
+    pub fn set_place(p: Option<Place>) {
+        PLACE.with(|x| *x.borrow_mut() = p);
+        SHOWN.with(|s| s.borrow_mut().clear());
+    }
+
+    /// The folders `open_folder` showed on this thread.
+    pub fn shown() -> Vec<PathBuf> {
+        SHOWN.with(|s| s.borrow().clone())
     }
 }
 
@@ -118,6 +394,19 @@ impl Index {
         ix
     }
 
+    /// Every PNG and DDS under each of `dirs` (`scan`), the first folder's
+    /// over a later one's of the same name.
+    pub fn scan_all(dirs: impl IntoIterator<Item = PathBuf>) -> Index {
+        let mut ix = Index::default();
+        for d in dirs {
+            for (n, p) in Index::scan(&d).files {
+                ix.cluts.insert(n.clut_hash);
+                ix.files.entry(n).or_insert(p);
+            }
+        }
+        ix
+    }
+
     /// The file standing in for a surface, and the level of it the file's
     /// name stands for: of `names` (`GsTexture::names`, in its order) the
     /// first a file has.
@@ -164,25 +453,40 @@ pub struct Pack {
 static MADE: AtomicU64 = AtomicU64::new(0);
 
 impl Pack {
-    /// The packs' folders read (`load`) and the dumps' made ready (`dump`);
-    /// `None` when neither has a folder.
+    /// The packs' folders read (`load`) and the dumps' made ready (`dump`)
+    /// in this run's (`place`); `None` when it has none.
     pub fn new(load: bool, dump: bool) -> Option<Pack> {
-        if !(load || dump) || root(esf::Era::Frontiers).is_none() {
+        if !(load || dump) {
             return None;
         }
+        Some(Pack::at(&place()?, load, dump))
+    }
+
+    /// The packs read and the dumps made ready in `place`'s folders: each
+    /// disc's `replacements` in `dir`, then in `also` (the first's file
+    /// standing for a name both have), its `dumps` in `dir` alone.
+    fn at(place: &Place, load: bool, dump: bool) -> Pack {
         let eras = [esf::Era::Frontiers, esf::Era::Y2002];
         let packs = load.then(|| {
             eras.map(|era| {
-                let Some(root) = root(era) else { return Index::default() };
+                let root = place.dir.join(serial(era));
                 // made for the player to find, as PCSX2 makes it on a dump
                 if era == esf::Era::Frontiers && child(&root, "replacements").is_none() {
                     let _ = std::fs::create_dir_all(root.join("replacements"));
                 }
-                child(&root, "replacements").map(|d| Index::scan(&d)).unwrap_or_default()
+                let roots = std::iter::once(root).chain(place.also.iter().map(|a| a.join(serial(era))));
+                Index::scan_all(roots.filter_map(|r| child(&r, "replacements")))
             })
         });
-        let dumper = dump.then(|| Dumper::new(eras.map(|era| root(era).map(|r| child(&r, "dumps").unwrap_or_else(|| r.join("dumps")))))).flatten();
-        Some(Pack { generation: (MADE.fetch_add(1, Ordering::Relaxed) + 1) & 0xFF_FFFF, packs, found: Mutex::new(HashMap::new()), dumper })
+        let dumper = dump
+            .then(|| {
+                Dumper::new(eras.map(|era| {
+                    let r = place.dir.join(serial(era));
+                    Some(child(&r, "dumps").unwrap_or_else(|| r.join("dumps")))
+                }))
+            })
+            .flatten();
+        Pack { generation: (MADE.fetch_add(1, Ordering::Relaxed) + 1) & 0xFF_FFFF, packs, found: Mutex::new(HashMap::new()), dumper }
     }
 
     /// How many replacements the packs hold (for the disc of `era`).
@@ -386,12 +690,14 @@ pub fn sync() {
     }
     st.applied = want;
     let pack = Pack::new(want.0, want.1).map(Arc::new);
-    if let Some(p) = &pack {
+    if let (Some(p), Some(place)) = (&pack, place()) {
+        let at = |dir: &Path, what: &str| dir.join(esf::pcsx2::SERIAL).join(what).display().to_string();
         if want.0 {
-            crate::say(&format!("textures: {} replacements in {}", p.count(esf::Era::Frontiers), root(esf::Era::Frontiers).map(|r| r.display().to_string()).unwrap_or_default()));
+            let also = place.also.as_ref().map(|a| format!(", then {}", at(a, "replacements"))).unwrap_or_default();
+            crate::say(&format!("textures: {} replacements in {}{also}", p.count(esf::Era::Frontiers), at(&place.dir, "replacements")));
         }
         if want.1 {
-            crate::say(&format!("textures: dumping to {}", root(esf::Era::Frontiers).map(|r| r.join("dumps").display().to_string()).unwrap_or_default()));
+            crate::say(&format!("textures: dumping to {}", at(&place.dir, "dumps")));
         }
     }
     render::set_pack(pack.clone().map(|p| p as Arc<dyn render::Pack>));
@@ -421,22 +727,33 @@ pub fn image(c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<esf:
     s.decode(&c.data)
 }
 
-/// What the Extended page's Textures says beside Back: how many
-/// replacements the packs hold, or how many textures have been dumped.
-pub fn note(dumping_row: bool) -> Option<String> {
+/// Extended's rows of Textures (`options`): Texture Packs, Dump Textures
+/// and Texture Folder.
+pub const ROW_PACKS: i32 = 50;
+pub const ROW_DUMPS: i32 = 51;
+pub const ROW_FOLDER: i32 = 55;
+
+/// What the Extended page's Textures says beside Back, its row `item`
+/// chosen: on Dump Textures, while it is on, how many textures have been
+/// dumped; on Texture Folder where the folder is (`Beside::said`: beside
+/// the program, or in the settings and why); on Texture Packs, while it is
+/// on, how many replacements the packs hold and where.
+pub fn note(item: i32) -> Option<String> {
     let c = crate::settings::client();
-    let p = pack();
-    if dumping_row {
-        return c.dump_textures.then(|| format!("{} dumped", p.map_or(0, |p| p.dumped())));
+    if item == ROW_DUMPS {
+        return c.dump_textures.then(|| format!("{} dumped", pack().map_or(0, |p| p.dumped())));
+    }
+    if item == ROW_FOLDER {
+        return Some(place().map_or_else(|| "No folder here".to_string(), |p| format!("In {}", p.beside.said())));
     }
     if !c.texture_packs {
         return None;
     }
-    let folder = format!("textures/{}", esf::pcsx2::SERIAL);
-    Some(match p.map(|p| p.count(esf::Era::Frontiers)) {
-        Some(n) if n > 0 => format!("{n} in {folder}"),
-        Some(_) => format!("None in {folder}"),
-        None => "No folder here".to_string(),
+    let Some(place) = place() else { return Some("No folder here".to_string()) };
+    // (none read yet in the frame it was turned on: `sync` reads them next)
+    Some(match pack().map_or(0, |p| p.count(esf::Era::Frontiers)) {
+        0 => format!("None in {}", place.beside.said()),
+        n => format!("{n} in {}", place.beside.said()),
     })
 }
 
@@ -947,5 +1264,284 @@ mod tests {
             assert_eq!((img.width, img.rgba), (t.levels[level].width, t.rgba(level)), "{}", n.file_name(0));
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- where the folders are ----
+
+    /// The folder a player finds the program in: its own; a Mac app's the
+    /// folder holding the app; an AppImage's the image's folder while the
+    /// program runs from inside its mount. The controls: the same app's
+    /// path off a Mac, a `Contents/MacOS` in no `.app`, a program outside
+    /// the AppImage's mount (one it started), and an image or a mount not
+    /// named absolutely, are each the program's own folder.
+    #[test]
+    fn the_folder_a_player_finds_the_program_in() {
+        let p = |s: &str| PathBuf::from(s);
+        let got = |exe: &str, appimage: Option<(&str, &str)>, mac: bool| {
+            let appimage = appimage.map(|(i, m)| (p(i), p(m)));
+            program_folder(&p(exe), appimage.as_ref().map(|(i, m)| (i.as_path(), m.as_path())), mac)
+        };
+        let want = |d: &str, n: &str| Some((p(d), n.to_string()));
+        assert_eq!(got("/home/x/eqoa-vanilla-linux-x86_64/eqoa", None, false), want("/home/x/eqoa-vanilla-linux-x86_64", "eqoa"), "the release's archive");
+        assert_eq!(got("/home/x/Downloads/eqoa-vanilla-linux-x86_64", None, false), want("/home/x/Downloads", "eqoa-vanilla-linux-x86_64"), "its bare program");
+        assert_eq!(got("/Users/x/eqoa-vanilla-macos/eqoa", None, true), want("/Users/x/eqoa-vanilla-macos", "eqoa"), "the release's Mac program, no app");
+        let app = "/Users/x/Games/Eqoa.app/Contents/MacOS/eqoa";
+        assert_eq!(got(app, None, true), want("/Users/x/Games", "Eqoa.app"), "a Mac app: the folder holding it");
+        assert_eq!(got(app, None, false), want("/Users/x/Games/Eqoa.app/Contents/MacOS", "eqoa"), "the control: off a Mac");
+        assert_eq!(got("/Users/x/Games/Eqoa/Contents/MacOS/eqoa", None, true), want("/Users/x/Games/Eqoa/Contents/MacOS", "eqoa"), "the control: no .app");
+        let image = Some(("/home/x/Apps/Eqoa-x86_64.AppImage", "/tmp/.mount_EqoaAb"));
+        assert_eq!(got("/tmp/.mount_EqoaAb/usr/bin/eqoa", image, false), want("/home/x/Apps", "Eqoa-x86_64.AppImage"), "an AppImage: the image's folder");
+        assert_eq!(got("/home/x/eqoa/eqoa", image, false), want("/home/x/eqoa", "eqoa"), "the control: started by an AppImage, not in one");
+        assert_eq!(got("/tmp/.mount_EqoaAb/usr/bin/eqoa", Some(("Eqoa.AppImage", "/tmp/.mount_EqoaAb")), false), want("/tmp/.mount_EqoaAb/usr/bin", "eqoa"), "an image named relatively");
+        assert_eq!(got("/tmp/.mount_EqoaAb/usr/bin/eqoa", Some(("/home/x/Eqoa.AppImage", "")), false), want("/tmp/.mount_EqoaAb/usr/bin", "eqoa"), "an empty mount");
+    }
+
+    /// A test's program folder and config directory, under one of its own:
+    /// `game` and `config`.
+    fn folders(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let d = temp(name);
+        let (game, config) = (d.join("game"), d.join("config"));
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        (d, game, config)
+    }
+
+    /// A pack's file in the `textures` folder `t`, at `rel` under the
+    /// Frontiers disc's replacements.
+    fn put(t: &Path, rel: &str, b: &[u8]) -> PathBuf {
+        let p = t.join(esf::pcsx2::SERIAL).join("replacements").join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b).unwrap();
+        p
+    }
+
+    /// `dir`'s mode set (Unix), and whether this test can be refused at all
+    /// (not as root, whom permissions do not stop).
+    #[cfg(unix)]
+    fn mode(dir: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn refused(dir: &Path) -> bool {
+        let probe = dir.join("probe");
+        let wrote = std::fs::write(&probe, b"").is_ok();
+        let _ = std::fs::remove_file(&probe);
+        if wrote {
+            eprintln!("skipped: {} was written to with its write permission off (root?)", dir.display());
+        }
+        !wrote
+    }
+
+    /// Beside the program: a `textures` made there, none in the settings;
+    /// the settings' from before moved there whole, a pack and dumps in it
+    /// (one rename), and found as it is the next time. The control: one
+    /// beside the program already (the player's, or another copy of the
+    /// game's) moves nothing, and the old one is read after it.
+    #[test]
+    fn beside_the_program_and_the_old_folder_moved_there() {
+        let (d, game, config) = folders("beside");
+        let p = resolve(Some((&game, "eqoa.exe")), &config);
+        assert_eq!(p, Place { dir: game.join("textures"), also: None, beside: Beside::Program("eqoa.exe".into()), moved: None, why: None });
+        assert!(game.join("textures").is_dir(), "made for the player to find");
+        assert!(!config.join("textures").exists(), "none in the settings");
+        assert_eq!(std::fs::read_dir(game.join("textures")).unwrap().count(), 0, "the write test's file taken away");
+        let _ = std::fs::remove_dir_all(&d);
+
+        let (d, game, config) = folders("moved");
+        let (old, new) = (config.join("textures"), game.join("textures"));
+        let pack = put(&old, "a/1-2-00001993.png", b"pack");
+        let dump = old.join(esf::pcsx2::SERIAL).join("dumps").join("3-4-00001993.png");
+        std::fs::create_dir_all(dump.parent().unwrap()).unwrap();
+        std::fs::write(&dump, b"dump").unwrap();
+        let p = resolve(Some((&game, "eqoa")), &config);
+        assert_eq!((&p.dir, &p.also, &p.moved, &p.why), (&new, &None, &Some(old.clone()), &None));
+        let there = |f: &Path| new.join(f.strip_prefix(&old).unwrap());
+        assert_eq!((std::fs::read(there(&pack)).unwrap(), std::fs::read(there(&dump)).unwrap()), (b"pack".to_vec(), b"dump".to_vec()));
+        assert!(!old.exists(), "moved, not copied");
+        assert_eq!(resolve(Some((&game, "eqoa")), &config), Place { moved: None, ..p }, "the next start: as it is now");
+        let _ = std::fs::remove_dir_all(&d);
+
+        let (d, game, config) = folders("both");
+        let (old, new) = (config.join("textures"), game.join("textures"));
+        let kept = put(&old, "1-2-00001993.png", b"old");
+        put(&new, "5-6-00001993.png", b"new");
+        let p = resolve(Some((&game, "eqoa")), &config);
+        assert_eq!((&p.dir, &p.also, &p.moved), (&new, &Some(old.clone()), &None), "the control: one there already");
+        assert_eq!(std::fs::read(&kept).unwrap(), b"old", "left where it is");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A program folder the game cannot write to (Program Files, /usr/bin,
+    /// a read-only mount): the settings' folder, as before, said so, with a
+    /// `textures` beside the program read after it; with none there, none
+    /// made. The control: the same folder writable is the one beside it.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_folder_that_cannot_be_written_to() {
+        let (d, game, config) = folders("readonly");
+        let (old, new) = (config.join("textures"), game.join("textures"));
+        let mine = put(&old, "3-4-00001993.png", b"mine");
+        put(&new, "1-2-00001993.png", b"theirs");
+        mode(&new, 0o555);
+        mode(&game, 0o555);
+        if refused(&new) {
+            let p = resolve(Some((&game, "eqoa.exe")), &config);
+            assert_eq!((&p.dir, &p.also, &p.moved), (&old, &Some(new.clone()), &None));
+            assert_eq!(p.beside, Beside::Settings { program: "eqoa.exe".into(), config: "config".into() });
+            assert!(p.why.as_deref().is_some_and(|w| w.contains("cannot be written to")), "{:?}", p.why);
+            assert_eq!(p.beside.said(), "config: can't write beside eqoa.exe");
+            assert_eq!(std::fs::read(&mine).unwrap(), b"mine", "nothing moved");
+            // a read-only folder with none beside the program
+            let bare = d.join("bare");
+            std::fs::create_dir_all(&bare).unwrap();
+            mode(&bare, 0o555);
+            let p = resolve(Some((&bare, "eqoa")), &config);
+            assert_eq!((&p.dir, &p.also), (&old, &None));
+            assert!(!bare.join("textures").exists(), "none made there");
+            mode(&bare, 0o755);
+        }
+        mode(&game, 0o755);
+        mode(&new, 0o755);
+        let p = resolve(Some((&game, "eqoa.exe")), &config);
+        assert_eq!((&p.dir, &p.beside), (&new, &Beside::Program("eqoa.exe".into())), "the control: writable");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The settings' folder that cannot be moved (on another disk, where a
+    /// rename is refused): read after the new one, which takes the dumps.
+    /// Refused here by its config directory's permissions, and, where the
+    /// machine has a RAM disk on another device (/dev/shm), by another
+    /// disk; a link to a folder is never moved (a relative one would point
+    /// elsewhere). The control: the refusal lifted, it is moved.
+    #[cfg(unix)]
+    #[test]
+    fn an_old_folder_not_moved_is_read_after_the_new() {
+        use std::os::unix::fs::MetadataExt;
+        let (d, game, config) = folders("kept");
+        let (old, new) = (config.join("textures"), game.join("textures"));
+        put(&old, "1-2-00001993.png", b"old");
+        mode(&config, 0o555);
+        if refused(&config) {
+            let p = resolve(Some((&game, "eqoa")), &config);
+            assert_eq!((&p.dir, &p.also, &p.moved), (&new, &Some(old.clone()), &None));
+            assert!(p.why.as_deref().is_some_and(|w| w.contains("was not moved")), "{:?}", p.why);
+            let pack = Pack::at(&p, true, true);
+            assert_eq!(pack.count(esf::Era::Frontiers), 1, "its pack read");
+            assert_eq!(pack.dumper.as_ref().unwrap().dirs[0], Some(new.join(esf::pcsx2::SERIAL).join("dumps")), "dumps to the new one");
+        }
+        mode(&config, 0o755);
+        let _ = std::fs::remove_dir_all(&new);
+        let p = resolve(Some((&game, "eqoa")), &config);
+        assert_eq!((&p.also, &p.moved), (&None, &Some(old.clone())), "the control: moved");
+        let _ = std::fs::remove_dir_all(&d);
+
+        // another disk
+        let shm = Path::new("/dev/shm");
+        let other = shm.join(format!("eqoa-texpack-disk-{}", std::process::id()));
+        let devices = std::fs::metadata(shm).ok().zip(std::fs::metadata(std::env::temp_dir()).ok()).map(|(a, b)| (a.dev(), b.dev()));
+        if devices.is_some_and(|(a, b)| a != b) && std::fs::create_dir_all(other.join("config")).is_ok() {
+            let (d, game, _) = folders("disk");
+            let config = other.join("config");
+            put(&config.join("textures"), "1-2-00001993.png", b"old");
+            let p = resolve(Some((&game, "eqoa")), &config);
+            assert_eq!((&p.dir, &p.also, &p.moved), (&game.join("textures"), &Some(config.join("textures")), &None), "another disk");
+            assert!(p.why.as_deref().is_some_and(|w| w.contains("was not moved")), "{:?}", p.why);
+            let _ = std::fs::remove_dir_all(&other);
+            let _ = std::fs::remove_dir_all(&d);
+        } else {
+            eprintln!("no second disk to hand: another disk's refusal not shown");
+        }
+
+        // a link
+        let (d, game, config) = folders("link");
+        let real = d.join("packs");
+        put(&real, "1-2-00001993.png", b"linked");
+        std::os::unix::fs::symlink(&real, config.join("textures")).unwrap();
+        let p = resolve(Some((&game, "eqoa")), &config);
+        assert_eq!((&p.also, &p.moved), (&Some(config.join("textures")), &None), "a link left");
+        assert_eq!(Pack::at(&p, true, false).count(esf::Era::Frontiers), 1, "and read");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Android (no program folder of a player's): the settings' folder, as
+    /// before, nothing made until it is wanted; settings kept in the
+    /// program's own folder (`$EQOA_CONFIG` there): the one folder.
+    #[test]
+    fn android_and_settings_in_the_programs_folder() {
+        let (d, game, config) = folders("only");
+        assert_eq!(resolve(None, &config), Place { dir: config.join("textures"), also: None, beside: Beside::Only, moved: None, why: None });
+        assert!(!config.join("textures").exists());
+        assert_eq!(Beside::Only.said(), "textures/SLUS-20744", "as the page said before");
+        put(&game.join("textures"), "1-2-00001993.png", b"here");
+        let p = resolve(Some((&game, "eqoa")), &game);
+        assert_eq!((&p.dir, &p.also, &p.moved), (&game.join("textures"), &None, &None));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The packs of `dir` read before `also`'s: a name both have is `dir`'s
+    /// file, one `also` alone has its, each disc's; dumps go to `dir`
+    /// alone. The control: without `also` its files are not read.
+    #[test]
+    fn packs_read_in_both_folders_and_dumps_written_in_the_first() {
+        let (d, game, config) = folders("two");
+        let (new, old) = (game.join("textures"), config.join("textures"));
+        let mine = put(&new, "1-2-00001993.png", b"new");
+        put(&old, "1-2-00001993.png", b"old");
+        let theirs = put(&old, "x/3-4-00001993.png", b"old alone");
+        let y2002 = old.join(SERIAL_2002).join("replacements").join("7-8-00001993.png");
+        std::fs::create_dir_all(y2002.parent().unwrap()).unwrap();
+        std::fs::write(&y2002, b"2002").unwrap();
+        let place = Place { dir: new.clone(), also: Some(old.clone()), beside: Beside::Program("eqoa".into()), moved: None, why: None };
+        let pack = Pack::at(&place, true, true);
+        let packs = pack.packs.as_ref().unwrap();
+        let file = |era: usize, n: &str| packs[era].files.get(&Name::parse(n).unwrap()).cloned();
+        assert_eq!(file(0, "1-2-00001993.png"), Some(mine), "the new folder's");
+        assert_eq!(file(0, "3-4-00001993.png"), Some(theirs), "the old folder's own");
+        assert_eq!(file(1, "7-8-00001993.png"), Some(y2002), "the 2002 disc's, there too");
+        let dirs = &pack.dumper.as_ref().unwrap().dirs;
+        assert_eq!(dirs, &[Some(new.join(esf::pcsx2::SERIAL).join("dumps")), Some(new.join(SERIAL_2002).join("dumps"))]);
+        assert!(new.join(esf::pcsx2::SERIAL).join("dumps").is_dir() && !old.join(esf::pcsx2::SERIAL).join("dumps").exists());
+        let alone = Pack::at(&Place { also: None, ..place }, true, false);
+        assert_eq!((alone.count(esf::Era::Frontiers), alone.count(esf::Era::Y2002)), (1, 0), "the control: the new folder's alone");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// What Extended's Textures says beside Back, row by row, with a folder
+    /// beside the program, one in the settings (the program's read-only),
+    /// and none (a run that keeps no settings); Texture Folder shows the
+    /// Frontiers disc's folder, made with its replacements as PCSX2 makes
+    /// it. The control: with no folder it shows none.
+    #[test]
+    fn what_the_textures_page_says_and_shows() {
+        crate::settings::testing::reset(false);
+        let d = temp("note");
+        let set = |texture_packs: bool, dump_textures: bool| crate::settings::set_client(crate::settings::ClientOptions { texture_packs, dump_textures, ..crate::settings::client() });
+        testing::set_place(None);
+        assert_eq!(note(ROW_FOLDER).as_deref(), Some("No folder here"));
+        assert!(!open_folder() && testing::shown().is_empty(), "the control: none to show");
+        set(true, false);
+        assert_eq!(note(ROW_PACKS).as_deref(), Some("No folder here"));
+        let beside = Place { dir: d.join("textures"), also: None, beside: Beside::Program("eqoa.exe".into()), moved: None, why: None };
+        testing::set_place(Some(beside.clone()));
+        assert_eq!(note(ROW_PACKS).as_deref(), Some("None in textures beside eqoa.exe"));
+        assert_eq!(note(ROW_FOLDER).as_deref(), Some("In textures beside eqoa.exe"));
+        assert_eq!(note(ROW_DUMPS), None, "Dump Textures off");
+        set(false, true);
+        assert_eq!((note(ROW_PACKS), note(ROW_DUMPS).as_deref()), (None, Some("0 dumped")));
+        assert!(open_folder());
+        let serial = d.join("textures").join(esf::pcsx2::SERIAL);
+        assert_eq!(testing::shown(), vec![serial.clone()]);
+        assert!(serial.join("replacements").is_dir());
+        let settings = Place { beside: Beside::Settings { program: "eqoa.exe".into(), config: "eqoa-rs".into() }, ..beside };
+        testing::set_place(Some(settings));
+        set(true, false);
+        assert_eq!(note(ROW_PACKS).as_deref(), Some("None in eqoa-rs: can't write beside eqoa.exe"));
+        assert_eq!(note(ROW_FOLDER).as_deref(), Some("In eqoa-rs: can't write beside eqoa.exe"));
+        assert_eq!(Beside::Program("eqoa-vanilla-windows-x86_64.exe".into()).said(), "textures beside the game", "a long name");
+        testing::set_place(None);
+        crate::settings::testing::reset(false);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
