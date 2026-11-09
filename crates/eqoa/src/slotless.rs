@@ -2337,7 +2337,9 @@ mod tests {
     /// skeletons a player may wear (`SHELLED`: the Skeleton race's own and
     /// the three its options offer), each in the 2002 disc's art alone and
     /// each onto the 2002 human's node 6: on both discs the four are one
-    /// skeleton, Frontiers' each naming node 5 and the 2002 disc's none.
+    /// skeleton, Frontiers' each naming node 5 and the 2002 disc's none; and
+    /// the Jal'Raeth's three (`HEAD_HELMS`), a player's in either art, which
+    /// name no helm node: onto their node 6, named as the human's helm node.
     /// Needs both discs (`disc_2002`; without them it passes having checked
     /// nothing, and says so only under `--nocapture`).
     #[test]
@@ -2391,7 +2393,13 @@ mod tests {
         let mut skeletons = SHELLED.to_vec();
         skeletons.sort();
         assert!(skeletons.contains(&skeleton), "the Skeleton race's own body among them");
-        assert_eq!(moved, skeletons.iter().map(|&id| (Era::Y2002, id, true, -1, 6)).collect::<Vec<_>>());
+        // and the Jal'Raeth's three (`HEAD_HELMS`), a player's in either art, which
+        // name none: onto their node of the human helm node's name, 6
+        let want: Vec<_> = [Era::Frontiers, Era::Y2002]
+            .into_iter()
+            .flat_map(|era| ids.iter().filter(move |&&id| HEAD_HELMS.contains(&id) || (era == Era::Y2002 && SHELLED.contains(&id))).map(move |&id| (era, id, true, -1, 6)))
+            .collect();
+        assert_eq!(moved, want);
     }
 
     /// A fit made anew comes out the same every time: its ties (a corner as
