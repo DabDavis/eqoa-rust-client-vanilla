@@ -6,6 +6,11 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Weapons cast shadows standing still
+- With Light Shadows on, at night your weapons now cast a shadow from your lantern while you stand still, as they do
+  while you move. A sword held across you at rest was being taken for your body (which your own lantern never
+  shadows) and cast nothing. Shadows from the sun and from torches were not affected.
+
 ## 2026-11-09 · The on-screen controller: its size, opacity and edge
 - On a phone or a tablet (the browser page and the Android app), Extended > Controller has four new rows for
   the on-screen controller. Touch Stick Size and Touch Button Size set the two sticks and the buttons apart,
