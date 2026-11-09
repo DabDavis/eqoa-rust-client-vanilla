@@ -592,6 +592,13 @@ impl Stage {
         &self.spells.batches
     }
 
+    /// The frame's spell bolts, as the last `step` left them (`prepare`
+    /// hands them to the renderer).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn strips(&self) -> &[render::billboard::Strips] {
+        &self.spells.strips
+    }
+
     /// The frame drawn into `target`: the two and the projectiles, then the
     /// particles and the lightning over them (`VIScene::Render`'s
     /// particle system, then the spell effects).

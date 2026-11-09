@@ -377,12 +377,12 @@ pub fn shot_with(
         let say = std::env::var("EQOA_SAY").ok();
         let tab = std::env::var_os("EQOA_TAB").is_some();
         let mut parts = crate::particles::Particles::new(&walker.scene, 0);
-        // where the world's particles end in `batches` (the spells', the held
-        // items' after them: Dynamic Lighting's lights of the moment)
-        let mut world_end = 0;
         let mut held_fx: Option<crate::particles::Held> = None;
         // the last frame's spell bolts and weapon trails, drawn by the shot
         let mut shot_bolts: Vec<render::billboard::Strips> = Vec::new();
+        // and Dynamic Lighting's lights of the moment, held through the
+        // walk's frames as the window's frames hold them (`lights::Moment`)
+        let mut moment_lights: Vec<(u64, render::PointLight)> = Vec::new();
         let mut shot_trails: Vec<render::billboard::Strips> = Vec::new();
         fx = crate::fx::enabled().then(crate::fx::Fx::new);
         // `EQOA_SPELL=n`: SPELLFX's n-th effect, cast by the character at a
@@ -929,7 +929,9 @@ pub fn shot_with(
             let (self_m, _) = walker.pose();
             let (proj, v) = walker.view(aspect);
             batches = parts.frame(&walker.scene, lib, walker.eye_position(), proj * v, t);
-            world_end = batches.len();
+            // where the world's particles end (the spells', the held items'
+            // after them: Dynamic Lighting's lights of the moment)
+            let world_end = batches.len();
             if let Some((sp, n, rand)) = trial.as_mut() {
                 use crate::spells::{Body, Cast, SELF};
                 use vi::fpu::{Ee, F};
@@ -971,6 +973,13 @@ pub fn shot_with(
             // the weapon trails (VITrailFxRender) after them
             if let Some(p) = play.as_mut() {
                 shot_trails = std::mem::take(&mut p.trail_strips);
+            }
+            if renderer.dynamic_lighting() {
+                let mut raw = Vec::new();
+                crate::lights::from_batches(&batches[world_end.min(batches.len())..], &mut raw);
+                crate::lights::from_strips(&shot_bolts, &mut raw);
+                moment_lights.clear();
+                parts.lighting.moment.frame(&raw, t, &mut moment_lights);
             }
             // the atmosphere every frame; the last frame's lights and render
             // are the shot's
@@ -1085,8 +1094,7 @@ pub fn shot_with(
         if renderer.dynamic_lighting() {
             let mut found = Vec::new();
             parts.fixed.lights(&walker.scene, lib, shot_eye, t, &mut found);
-            crate::lights::from_batches(&batches[world_end.min(batches.len())..], &mut found);
-            crate::lights::from_strips(&shot_bolts, &mut found);
+            found.extend(moment_lights.iter().map(|&(_, l)| l));
             frame.0.lights = Some(crate::lights::choose(&found, shot_eye, frame.0.view_proj));
             eprintln!("dynamic lighting: {} fixed lights made, {} found, {} drawn", parts.fixed.len(), found.len(), frame.0.lights.map_or(0, |l| l.len()));
             if std::env::var_os("EQOA_LIGHTS_TRACE").is_some() {
@@ -5441,16 +5449,25 @@ impl App {
                     // Dynamic Lighting's (`lights`): the zones' fires and placed
                     // lights, and this frame's spells', held items' and
                     // creatures' emitters (the batches after the world's) and
-                    // the spells' bolts
+                    // the spells' bolts, held from frame to frame
+                    // (`lights::Lighting`): none comes, goes or changes in a frame
                     if dynamic && !loading {
                         let eye = w.eye_position();
-                        let mut found = Vec::new();
-                        if let Some(ps) = particles.as_mut() {
-                            ps.fixed.lights(&w.scene, lib, eye, now, &mut found);
-                        }
-                        crate::lights::from_batches(&batches[world_end.min(batches.len())..], &mut found);
-                        crate::lights::from_strips(&bolts, &mut found);
-                        lights.0.lights = Some(crate::lights::choose(&found, eye, proj * v));
+                        let moment = &batches[world_end.min(batches.len())..];
+                        lights.0.lights = Some(match particles.as_mut() {
+                            Some(ps) => {
+                                let mut fixed = Vec::new();
+                                ps.fixed.keyed(&w.scene, lib, eye, now, &mut fixed);
+                                ps.lighting.frame(fixed, moment, &bolts, eye, proj * v, now)
+                            }
+                            // (no world's particles: none walks there)
+                            None => {
+                                let mut found = Vec::new();
+                                crate::lights::from_batches(moment, &mut found);
+                                crate::lights::from_strips(&bolts, &mut found);
+                                crate::lights::choose(&found, eye, proj * v)
+                            }
+                        });
                     }
                     // the bolts lit by the scene's lights (`spells::light_bolts`),
                     // the weapon trails (VITrailFxRender) after them unlit
