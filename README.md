@@ -74,7 +74,7 @@ or a browser (each described where it lives below):
   Scale: x1, x2 or x4, Loading Screens: Longer or Instant), World (Fog, Mipmaps,
   Flora, Environment, Ground Fog: PS2 or Exact, Art), Lighting (Dynamic Lighting, Sun Shadows, Light Shadows,
   Shadow Distance: 250 to 1000, Ambient Occlusion, Particles: PS2 or Exact), UI (Ability Bars, Update
-  Notices, Text: Sharp or Smooth, HUD: Nearest or Sharp, Raid List), Controller (Controller
+  Notices, Text: Sharp or Smooth, HUD: Nearest or Sharp, Raid List, Pet Effects), Controller (Controller
   Focus, Capture Controller, and the touch screen's pad: Touch Stick Size and Touch Button Size,
   50 to 200% of the pad as it was, larger only as far as the screen has room; Touch Opacity, 10
   to 200%; Touch Edge, 0 to 10% of the screen in from its sides), Camera (Distance, Turn Speed, Screen Shake),
@@ -244,6 +244,15 @@ or a browser (each described where it lives below):
   by the wheel. A click targets a member the client can see, and L1's cycle reaches
   them. Extended > UI's Raid List, on by default; a client that does not ask gets the
   game's bars, as a PS2 does.
+- **The pet's effects under its bar** (the server owner's of 2026-11-09, "jibcro is
+  showing pets buffs as if on him, put the buff icons under the pet name plate";
+  `hud::pet_effects_pieces`): CLIENT shows a pet's effects nowhere, so on a server
+  that sends them (go-eqoa-server's 0x7E32/0x7E33: each effect's icon, time left and
+  name, whenever they change) a row of their icons goes under the pet's bar, the
+  player's own effects' strip at half its size, each gone as it runs out; a click on
+  it targets the pet. The player's own effects window (channel 0x43) stays the
+  player's own, on every client. Extended > UI's Pet Effects, on by default; off, or
+  on a server that sends none, nothing is drawn, as on a PS2.
 - **A render scale and a sharp HUD**: Render Scale (off unless chosen) x2 or
   x4 draws the whole picture, the world and everything over it, two or
   four times the window's size each way and averages it down, which smooths

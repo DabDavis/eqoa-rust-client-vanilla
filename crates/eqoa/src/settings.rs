@@ -645,6 +645,11 @@ pub struct ClientOptions {
     /// HUD where the server sends them, in place of the group's bars, which
     /// hold three. On by default (the user, 2026-11-07).
     pub raid_list: bool,
+    /// Pet Effects (`hud`'s pet bar; the user, 2026-11-09: "put the buff icons
+    /// under the pet name plate"): the effects on the player's pet in a row
+    /// under its bar, where the server sends them (`Session::agree_pet_effects`);
+    /// off, none, as the game shows them nowhere. On by default.
+    pub pet_effects: bool,
     /// Map (the user, 2026-11-09: "also add the map and quest helper we had
     /// in a former update"; on by default): the client's own map (M, the
     /// compass's click, `map`), the minimap, the waypoints on the compass and
@@ -930,6 +935,7 @@ impl Default for ClientOptions {
             name_distance: NAME_DISTANCE_GAME,
             overlapping_names: false,
             raid_list: true,
+            pet_effects: true,
             map: true,
             minimap: true,
             map_markers: true,
@@ -1023,6 +1029,9 @@ impl ClientOptions {
         }
         if !self.raid_list {
             s.push_str("raid_list=off\n");
+        }
+        if !self.pet_effects {
+            s.push_str("pet_effects=off\n");
         }
         // the map's and the quests' only when off
         for (on, key) in [
@@ -1181,6 +1190,8 @@ impl ClientOptions {
                 ("update_notices", "off") => c.update_notices = false,
                 ("raid_list", "on") => c.raid_list = true,
                 ("raid_list", "off") => c.raid_list = false,
+                ("pet_effects", "on") => c.pet_effects = true,
+                ("pet_effects", "off") => c.pet_effects = false,
                 ("map", "on") => c.map = true,
                 ("map", "off") => c.map = false,
                 ("minimap", "on") => c.minimap = true,
@@ -1458,6 +1469,11 @@ pub fn overlapping_names() -> bool {
 /// The Raid List (`raidlist`).
 pub fn raid_list() -> bool {
     client().raid_list
+}
+
+/// Pet Effects: the pet's effects under its bar (`hud`).
+pub fn pet_effects() -> bool {
+    client().pet_effects
 }
 
 /// What the windows share as another window saved it (Capture Controller,
@@ -2511,6 +2527,16 @@ mod tests {
     /// Changes in a later window puts it in client.opt (never in its own
     /// file), and window 1 reads it back. The control: this window's own
     /// brightness stays as it read it.
+    #[test]
+    fn pet_effects_are_kept_only_when_off() {
+        assert!(ClientOptions::default().pet_effects, "on by default");
+        assert!(!ClientOptions::default().to_text().contains("pet_effects"));
+        assert!(ClientOptions { pet_effects: false, ..Default::default() }.to_text().contains("pet_effects=off\n"));
+        assert!(!ClientOptions::from_text("pet_effects=off").pet_effects);
+        assert!(ClientOptions::from_text("pet_effects=on").pet_effects);
+        assert!(ClientOptions::from_text("pet_effects=maybe").pet_effects, "the default");
+    }
+
     #[test]
     fn the_raid_list_is_kept_only_when_off() {
         assert!(ClientOptions::default().raid_list, "on by default");

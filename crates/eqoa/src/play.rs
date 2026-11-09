@@ -3222,6 +3222,9 @@ impl Play {
         }
         self.agree_entity_view();
         self.agree_raid_roster();
+        // Pet Effects: the server told what the Extended row says (off, what it
+        // sent forgotten)
+        self.session.agree_pet_effects(crate::settings::pet_effects());
         self.agree_quests();
         self.guide_wait(now);
         self.record_menu(); // Character > Combat Record once the server offers it
@@ -8347,6 +8350,9 @@ impl Play {
             name: self.pet_name.clone(),
             is_target: self.target == self.pet_id,
             creature: pet_e.and_then(|e| e.creature.as_ref().map(|c| (e.p19 as i32, c.flags262 & 4 != 0, c.flags262 & 8 != 0))),
+            // the client's own: the effects on it the server sent, those not
+            // over yet, for the row under its bar (Extended's Pet Effects)
+            effects: self.pet_effects(),
         });
         let dir = walker.eye.direction;
         let (heading, _, _) = dir.get_hpr();
@@ -8677,6 +8683,19 @@ impl Play {
     /// its next pass; what was past a lowered number is dropped here at once,
     /// and its puppets with it). The view distance draws farther on any
     /// server (`lod::view_dist`); only one that offered sends from farther.
+    /// The effects on the pet the server sent (`Session::agree_pet_effects`, which
+    /// each frame tells it what Extended's Pet Effects says), those not over now:
+    /// their icons in their order, for the row under the pet's bar. None with the
+    /// row off, from a server that sends none (Sandstorm, eqoa.live), or with no
+    /// pet; the game shows a pet's effects nowhere, and nor does this client
+    /// anywhere else.
+    fn pet_effects(&self) -> Vec<u32> {
+        if !crate::settings::pet_effects() {
+            return Vec::new();
+        }
+        self.session.pet_effects_left(self.session.now()).into_iter().map(|(icon, _)| icon).collect()
+    }
+
     /// The Raid List: the server told what the Extended row says, and off, what it
     /// sent forgotten (`group.bars` are drawn again).
     fn agree_raid_roster(&mut self) {

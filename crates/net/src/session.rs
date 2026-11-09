@@ -303,6 +303,44 @@ pub const OP_QUEST_PROGRESS: u16 = 0x7E05;
 /// nothing to count); every text a u8 byte count and UTF-8. Each is the
 /// whole tracker.
 pub const OP_QUEST_PROGRESS_DATA: u16 = 0x7E06;
+/// go-eqoa-server's own: the effects on the player's pet, for the row under
+/// the pet's bar (the user, 2026-11-09: "put the buff icons under the pet name
+/// plate"; `Play::pet_effects`). A u32 after the opcode, both ways: offered
+/// once the player is in the world, answered 1 to have them and 0 to stop, at
+/// once and whenever that changes (`agree_pet_effects`, the Extended page's Pet
+/// Effects). CLIENT shows the pet's effects nowhere (its effects window is
+/// channel 0x43, the player's own), so a PS2 ignores the offer and is sent
+/// none; nothing is asked of a server that made no offer.
+pub const OP_PET_EFFECTS: u16 = 0x7E32;
+/// The pet's effects, from a server the client asked ([`OP_PET_EFFECTS`]),
+/// whenever they change: a u8 count, then each its u32 icon (a DictID, as
+/// channel 0x43's), u32 milliseconds left as the server made the message, and
+/// its name (a u8 byte count and UTF-8), in the order they went on. Each is the
+/// whole set; none, no pet.
+pub const OP_PET_EFFECTS_DATA: u16 = 0x7E33;
+
+/// One effect on the pet ([`OP_PET_EFFECTS_DATA`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PetEffect {
+    /// Its icon's DictID (UI.CSF's 32x32 surfaces).
+    pub icon: u32,
+    /// What was left of it when the server sent it, in ms.
+    pub left_ms: u32,
+    pub name: String,
+}
+
+/// [`OP_PET_EFFECTS_DATA`]'s body, or None when it is short.
+fn read_pet_effects(r: &mut Reader) -> Option<Vec<PetEffect>> {
+    let n = r.u8() as usize;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (icon, left_ms) = (r.u32(), r.u32());
+        let len = r.u8() as usize;
+        let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
+        out.push(PetEffect { icon, left_ms, name });
+    }
+    (!r.error).then_some(out)
+}
 
 /// One quest on the tracker ([`OP_QUEST_PROGRESS_DATA`]): its name and its
 /// step's objectives.
@@ -716,6 +754,14 @@ pub struct Session {
     pub quest_progress_offer: bool,
     quest_progress_asked: Option<bool>,
     pub quest_progress: Vec<TrackedQuest>,
+    /// Whether the server offered the pet's effects ([`OP_PET_EFFECTS`]),
+    /// what it was last told (none since the offer), the set it last sent
+    /// ([`OP_PET_EFFECTS_DATA`]) and when it came (`now`'s clock): what is
+    /// left of each is counted down from then (`pet_effects_left`).
+    pub pet_effects_offer: bool,
+    pet_effects_asked: Option<bool>,
+    pub pet_effects: Vec<PetEffect>,
+    pub pet_effects_at: u32,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -866,6 +912,10 @@ impl Session {
             quest_progress_offer: false,
             quest_progress_asked: None,
             quest_progress: Vec::new(),
+            pet_effects_offer: false,
+            pet_effects_asked: None,
+            pet_effects: Vec::new(),
+            pet_effects_at: 0,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -1088,6 +1138,31 @@ impl Session {
         self.send(&w.data);
     }
 
+    /// Pet Effects: a server that offered the pet's effects
+    /// ([`OP_PET_EFFECTS`]) is told whether to send them (`want`), at once and
+    /// whenever that changes, and afresh at another offer (each world entry's
+    /// player is a new one on the server); one that made no offer is told
+    /// nothing. Off, the set it sent is forgotten.
+    pub fn agree_pet_effects(&mut self, want: bool) {
+        if !want {
+            self.pet_effects.clear();
+        }
+        if !self.pet_effects_offer || self.pet_effects_asked == Some(want) {
+            return;
+        }
+        self.pet_effects_asked = Some(want);
+        self.send_op_int(OP_PET_EFFECTS, want as u32);
+    }
+
+    /// The pet's effects the server last sent that are not over at `now`
+    /// (`now`'s clock): each its icon and the ms left of it, in their order.
+    pub fn pet_effects_left(&self, now: u32) -> Vec<(u32, u32)> {
+        let gone = now.wrapping_sub(self.pet_effects_at);
+        // a clock read before the set came (none: it is read after) counts as no time gone
+        let gone = if (gone as i32) < 0 { 0 } else { gone };
+        self.pet_effects.iter().filter(|e| e.left_ms > gone).map(|e| (e.icon, e.left_ms - gone)).collect()
+    }
+
     pub fn send_op_byte(&mut self, op: u16, v: u8) {
         if op == 0x000E {
             self.chat_mode = v;
@@ -1293,6 +1368,9 @@ impl Session {
                 self.quest_progress_offer = false;
                 self.quest_progress_asked = None;
                 self.quest_progress.clear();
+                self.pet_effects_offer = false;
+                self.pet_effects_asked = None;
+                self.pet_effects.clear();
                 ev.push(Event::Promoted);
             }
             drdp::TYPE_DISCONNECT => {
@@ -1592,6 +1670,22 @@ impl Session {
             OP_QUEST_PROGRESS_DATA => {
                 if let Some(set) = read_quest_progress(&mut r) {
                     self.quest_progress = set;
+                }
+            }
+            // the pet's effects offered (again at every world entry): told
+            // afresh what the client wants (`agree_pet_effects`), the server's
+            // player being a new one
+            OP_PET_EFFECTS => {
+                r.u32();
+                if !r.error {
+                    self.pet_effects_offer = true;
+                    self.pet_effects_asked = None;
+                }
+            }
+            OP_PET_EFFECTS_DATA => {
+                if let Some(set) = read_pet_effects(&mut r) {
+                    self.pet_effects = set;
+                    self.pet_effects_at = self.now();
                 }
             }
             0x0013 => {
@@ -2815,6 +2909,68 @@ mod tests {
         s.agree_quest_marks(false);
         assert_eq!(answers(&mut s), [(251, vec![0x03, 0x7E, 0, 0, 0, 0])], "and stopped");
         assert!(s.quest_marks.is_empty(), "off: the set forgotten");
+    }
+
+    // The pet's effects (go-eqoa-server's 0x7E32/0x7E33): nothing asked with
+    // no offer (the control); an offer answered at once with what is wanted
+    // (0 too, as 0x7E01 is) and again only when that changes; a set read whole
+    // and counted down from when it came, an effect over gone from it, a short
+    // set not taken; off, stopped and forgotten; a new connection asks nothing
+    // until it is offered again.
+    #[test]
+    fn pet_effects_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x32, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_pet_effects(true);
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x32, 0x7E, 1, 0, 0, 0]);
+        s.agree_pet_effects(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x32, 0x7E, 0, 0, 0, 0])], "off from the start: told at once, as 0x7E01");
+        s.agree_pet_effects(true);
+        s.agree_pet_effects(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x32, 0x7E, 1, 0, 0, 0])], "asked once");
+
+        let effect = |m: &mut Vec<u8>, icon: u32, left: u32, name: &str| {
+            m.extend_from_slice(&icon.to_le_bytes());
+            m.extend_from_slice(&left.to_le_bytes());
+            m.push(name.len() as u8);
+            m.extend_from_slice(name.as_bytes());
+        };
+        let mut m = vec![0x33, 0x7E, 2];
+        effect(&mut m, 0xBDD6_0F01, 1_780_000, "Undead Proc");
+        effect(&mut m, 0xBDD6_0F02, 900, "Soul Mastery");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        let want = vec![
+            PetEffect { icon: 0xBDD6_0F01, left_ms: 1_780_000, name: "Undead Proc".into() },
+            PetEffect { icon: 0xBDD6_0F02, left_ms: 900, name: "Soul Mastery".into() },
+        ];
+        assert_eq!(s.pet_effects, want);
+        let at = s.pet_effects_at;
+        assert_eq!(s.pet_effects_left(at), [(0xBDD6_0F01, 1_780_000), (0xBDD6_0F02, 900)], "as it came");
+        assert_eq!(s.pet_effects_left(at.wrapping_add(400)), [(0xBDD6_0F01, 1_779_600), (0xBDD6_0F02, 500)], "counted down");
+        assert_eq!(s.pet_effects_left(at.wrapping_add(900)), [(0xBDD6_0F01, 1_779_100)], "one over");
+        assert_eq!(s.pet_effects_left(at.wrapping_sub(5)), [(0xBDD6_0F01, 1_780_000), (0xBDD6_0F02, 900)], "a clock from before it: no time gone");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 3].to_vec());
+        assert_eq!(s.pet_effects, want, "a short set is not taken");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x33, 0x7E, 0]);
+        assert!(s.pet_effects.is_empty(), "the pet gone: an empty set");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m);
+        s.agree_pet_effects(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x32, 0x7E, 0, 0, 0, 0])], "and stopped");
+        assert!(s.pet_effects.is_empty(), "off: the set forgotten");
+
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        s.agree_pet_effects(true);
+        assert_eq!(answers(&mut s), [], "a new connection: nothing asked before its offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x32, 0x7E, 1, 0, 0, 0]);
+        s.agree_pet_effects(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x32, 0x7E, 1, 0, 0, 0])], "its offer answered");
     }
 
     /// The quest tracker's offer is answered once, its body read whole (the

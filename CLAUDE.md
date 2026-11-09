@@ -15,6 +15,9 @@ current.
   Extended options, the updater, the 2002 disc's art on F9, Hide UI
   on H, names from farther and smaller zoomed out (and every one in a crowd, Overlapping Names Show),
   the raid list on a server that has raid groups (the user's of 2026-11-07: `raidlist`, an Extended row, on by default),
+  the pet's effects in a row under its bar on a server that sends them (the server owner's of 2026-11-09, "put the
+  buff icons under the pet name plate": `hud::pet_effects_pieces`, go-eqoa-server's 0x7E32/0x7E33, Extended > UI's
+  Pet Effects, on by default; off, or on any other server, nothing is drawn),
   Ignore Shouts kept, Update Notices, Text Sharp or Smooth, Loading Screens Longer or Instant, Render
   Scale x1, x2 or x4 (off unless chosen), HUD Nearest or Sharp (Nearest, the game's, by default: the
   user's of 2026-10-28, "make nearest the default ... since there is a cost"; Sharp was the default
