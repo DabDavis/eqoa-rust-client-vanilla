@@ -6,6 +6,13 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Capes over broad shoulders and round the neck
+- On the big race bodies (a minotaur's hunched shoulders, say) a cape's collar now comes up over the shoulders
+  instead of sinking into them, standing and in the battle stance.
+- The vampire's cape and its mantle sit on the shoulders again: the last update stood the mantle out wide and
+  forward round some bodies, leaving a big opening at the neck. It now closes round the neck and lies on the
+  shoulders as it does on the vampire himself, and walking and running lift it only a little.
+
 ## 2026-11-09 · Fewer quest marks, and GMs travel by the map
 - The minimap keeps only your own quests' "?" on its rim, pointing the way to them. A "!" (a quest you can take)
   shows on the minimap only where it lies within what the minimap shows, so its edge is no longer ringed with them.
