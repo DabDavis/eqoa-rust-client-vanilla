@@ -119,11 +119,22 @@ fn kept(id: i32) -> &'static [i32] {
 /// the troll's skeleton (`SHELL_BODIES`), which wear the troll's.
 const SHELLED: &[u32] = &[0x6AF98A81, 0x45A8B064, 0x198BAA64, 0x648DFC11, 0x6AF98A82, 0x197F51C7, 0x90F16A6F, 0x7D9F41B2];
 
-/// Bodies whose helm goes on the head node their NodeIDList names (slot 7) where
-/// they name no helm node (slot 8): the Jal'Raeth's three (go-eqoa-server's race
-/// 30, 2026-11-09: robes, channeler, knight), a player's only; an NPC keeps none,
-/// as a PS2 draws it.
+/// Bodies whose helm goes on their node of the human's helm node's name (a child of
+/// the head), else on the head node their NodeIDList names (slot 7), where they name
+/// no helm node (slot 8): the Jal'Raeth's three (go-eqoa-server's race 30,
+/// 2026-11-09: robes, channeler, knight; HumanMale's helm node 5 is their node 6), a
+/// player's only; an NPC keeps none, as a PS2 draws it.
 const HEAD_HELMS: &[u32] = &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347];
+
+/// Body `id`'s node of the same ref id as the human's helm node (HumanFemale's for
+/// `female`).
+fn named_helm_node(lib: &Library, id: u32, female: bool) -> Option<i32> {
+    let h = Human::load(lib, female)?;
+    let hid = if female { vi::hash::hash_resource_id("HumanFemale") } else { vi::hash::hash_resource_id("HumanMale") };
+    let (hr, br) = (crate::raceemote::Rig::load(lib, hid)?, crate::raceemote::Rig::load(lib, id)?);
+    let r = hr.refs.get(usize::try_from(h.cs.node_ids[8]).ok()?).copied().flatten()?;
+    br.by_ref.get(&r).map(|&n| n as i32)
+}
 
 /// The player bodies other than the human's whose armour a body built on their
 /// skeleton wears (`SHELLED`), in the order tried after the human's: the
@@ -303,8 +314,89 @@ pub fn dress(lib: &Library, id: i32, model: &mut esf::Model, cs: &CSprite<Ee>, l
         }
         return put_on(model, &shell, &changes);
     }
+    if NAMED_SHELLS.contains(&(id as u32))
+        && let Some(shell) = named_shell_of(lib, id, cs, art)
+    {
+        return put_on(model, &shell, &changes);
+    }
     let Some(fit) = fit else { return false };
     apply(model, &fit, &changes)
+}
+
+/// Bodies that wear a human's chest, bracer and gloves carried onto their own
+/// skeleton by its bone names (`named_shell_of`): the Jal'Raeth's three
+/// (go-eqoa-server's race 30, 2026-11-09), whose upper body has the human's names
+/// (spine, arms, hands, head) and whose legs float crossed under a robe with names
+/// of their own. Their item and footstep nodes hang off the root, so the fit by limbs
+/// finds no hands on them, and no legs or boots are worn there.
+const NAMED_SHELLS: &[u32] = &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347];
+
+/// The slots a named shell carries: chest, bracer, gloves.
+const NAMED_SLOTS: usize = 3;
+
+/// The human's armour for one look carried onto body `id` (`cs` its sprite) by
+/// bone names: each corner of the human's shell (`Shell::of`) whose bones all have
+/// a node of the same ref id on the body takes those nodes, and its place and
+/// normal are carried from the human's bind pose to the body's (each bone's bind
+/// on the body times its inverse bind on the human, blended by the weights), so
+/// the armour hugs the body's own spine and arms at their lengths; a triangle with
+/// a corner on a bone the body lacks (a leg's) is left out, and so are the legs and
+/// boots (`NAMED_SLOTS`). None without a human or with nothing carried.
+fn named_shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<Rc<Shell>> {
+    let key = (id, lib.view(), art);
+    if let Some(s) = NAMED.with(|s| s.borrow().get(&key).cloned()) {
+        return s;
+    }
+    let made = (|| {
+        let h = Human::load(lib, cs.sex != 0)?;
+        let hid = if cs.sex != 0 { vi::hash::hash_resource_id("HumanFemale") } else { vi::hash::hash_resource_id("HumanMale") };
+        let (hr, br) = (crate::raceemote::Rig::load(lib, hid)?, crate::raceemote::Rig::load(lib, id as u32)?);
+        let bind = |n: &vi::hsprite::Node<Ee>| glam::Mat4::from_cols_array_2d(&n.inv_bind_world.to_cols());
+        // human node -> (body node, body bind times human inverse bind)
+        let map: Vec<Option<(u8, glam::Mat4)>> = (0..h.cs.h.nodes.len())
+            .map(|i| {
+                let j = hr.refs.get(i).copied().flatten().and_then(|r| br.by_ref.get(&r).copied())?;
+                let (hn, bn) = (h.cs.h.nodes.get(i)?, cs.h.nodes.get(j)?);
+                Some((u8::try_from(j).ok()?, bind(bn).inverse() * bind(hn)))
+            })
+            .collect();
+        let full = Shell::of(lib, &h, art);
+        let mut tris: [Vec<[Corner; 3]>; SLOTS] = Default::default();
+        for (slot, out) in tris.iter_mut().enumerate().take(NAMED_SLOTS) {
+            'tri: for t in &full.tris[slot] {
+                let mut c3 = *t;
+                for c in &mut c3 {
+                    let (mut p, mut nrm, mut sum) = (Vec3::ZERO, Vec3::ZERO, 0.0);
+                    for k in 0..4 {
+                        if c.weights[k] == 0 {
+                            continue;
+                        }
+                        let Some(Some((j, m))) = map.get(c.bones[k] as usize) else { continue 'tri };
+                        let w = c.weights[k] as f32;
+                        p += m.transform_point3(Vec3::from(c.pos)) * w;
+                        nrm += m.transform_vector3(Vec3::from(c.normal)) * w;
+                        sum += w;
+                        c.bones[k] = *j;
+                    }
+                    if sum <= 0.0 {
+                        continue 'tri;
+                    }
+                    c.pos = (p / sum).to_array();
+                    c.normal = nrm.normalize_or_zero().to_array();
+                }
+                out.push(c3);
+            }
+        }
+        tris.iter().any(|t| !t.is_empty()).then(|| Rc::new(Shell { tris, layers: full.layers }))
+    })();
+    NAMED.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.len() >= 256 {
+            s.clear();
+        }
+        s.insert(key, made.clone());
+    });
+    made
 }
 
 /// Takes out of `model`'s own batches its triangles under the shell's
@@ -428,9 +520,10 @@ fn shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<Rc<She
 /// and the dressing turned off keep the body's word, as a PS2 draws it.
 pub fn helm_node(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool) -> i32 {
     let own = cs.node_ids[8];
-    // a body that names no helm node but its head, a player's (`HEAD_HELMS`): the head's
+    // a body that names no helm node, a player's (`HEAD_HELMS`): its node of the
+    // human's helm node's name, else its head's
     if own < 0 && player && enabled() && HEAD_HELMS.contains(&id) {
-        return cs.node_ids[7];
+        return named_helm_node(lib, id, cs.sex != 0).unwrap_or(cs.node_ids[7]);
     }
     if own >= 0 || !player || !enabled() || !SHELLED.contains(&id) {
         return own;
@@ -556,6 +649,7 @@ thread_local! {
     static ALPHAS: Cache<(i32, Era), Alpha> = std::cell::RefCell::new(HashMap::new());
     /// Shells made, by body, art and what each slot wears.
     static SHELLS: Cache<(i32, Era, Art), Shell> = std::cell::RefCell::new(HashMap::new());
+    static NAMED: Cache<(i32, Era, Art), Shell> = std::cell::RefCell::new(HashMap::new());
     /// The colours of the textures kept parts are drawn in, by DictID and art.
     static TEXELS: Cache<(i32, Era), Texels> = std::cell::RefCell::new(HashMap::new());
 }
@@ -1986,8 +2080,9 @@ mod tests {
     }
 
     /// The Jal'Raeth's bodies name no helm node (slot 8): a player's helm goes on
-    /// the head node they name (slot 7), on each of the three; an NPC's keeps none,
-    /// as a PS2 draws it (the control), and so does any other body that names none.
+    /// their node of the human's helm node's name, a child of their head, on each of
+    /// the three; an NPC's keeps none, as a PS2 draws it, and the kappa (named in no
+    /// list) keeps its own word (the controls).
     #[test]
     fn a_jalraeths_helm_goes_on_its_head() {
         let Some(lib) = disc() else { return };
@@ -1996,13 +2091,44 @@ mod tests {
             let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
             assert_eq!(cs.node_ids[8], -1, "{id:#010x} names no helm node");
             assert!(cs.node_ids[7] >= 0);
-            assert_eq!(helm_node(&lib, *id, &cs, true), cs.node_ids[7], "{id:#010x}: a player's on the head");
+            let named = named_helm_node(&lib, *id, false).expect("the human's helm node by name");
+            assert_eq!(helm_node(&lib, *id, &cs, true), named, "{id:#010x}: a player's on its node of the human's helm node's name");
+            assert_eq!(cs.h.nodes[named as usize].parent, cs.node_ids[7], "a child of the head");
             assert_eq!(helm_node(&lib, *id, &cs, false), -1, "{id:#010x}: an NPC's none");
         }
         let kappa = NINE[0];
         let r = lib.lookup(kappa as i32).unwrap();
         let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
         assert_eq!(helm_node(&lib, kappa, &cs, true), cs.node_ids[8], "the control: the kappa as before");
+    }
+
+    /// The Jal'Raeth in plate wear the human's chest, bracer and gloves carried onto
+    /// their skeleton by bone names: three made-up batches (no legs or boots: theirs
+    /// float crossed), every corner on one of the body's own nodes; bare, nothing
+    /// (the control), and the fit by limbs had found no hands on them.
+    #[test]
+    fn a_jalraeth_wears_a_humans_upper_armour() {
+        let Some(lib) = disc() else { return };
+        let t = Tables::retail();
+        for id in NAMED_SHELLS.iter().map(|&b| b as i32) {
+            let r = lib.lookup(id).unwrap();
+            let model = lib.build_model(r).unwrap();
+            let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+            assert!(is_slotless(&cs));
+            let plate = Look { armor: [4; 6], robe: -1, ..Default::default() };
+            let mut dressed = model.clone();
+            crate::play::dress_look(&lib, id, &mut dressed, &cs, &plate, false, &t, true);
+            let n = model.batches.len();
+            let made: Vec<i32> = dressed.batches[n..].iter().map(|b| b.material).collect();
+            assert_eq!(made, vec![ENTRY, ENTRY + 1, ENTRY + 2], "{id:#010x}: chest, bracer and gloves");
+            let nodes = cs.h.nodes.len() as u8;
+            for b in &dressed.batches[n..] {
+                assert!(b.indices.iter().all(|&v| dressed.bones[v as usize].iter().zip(dressed.weights[v as usize]).all(|(&j, w)| w == 0 || j < nodes)), "{id:#010x}: on its own nodes");
+            }
+            let mut bare = model.clone();
+            crate::play::dress_look(&lib, id, &mut bare, &cs, &Look { robe: -1, ..Default::default() }, false, &t, true);
+            assert!(same(&bare, &model), "{id:#010x}: bare, as it was");
+        }
     }
 
     /// A great skeleton (the Skeleton race's larger bodies) wears the troll's
