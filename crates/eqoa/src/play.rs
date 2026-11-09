@@ -7985,6 +7985,9 @@ impl Play {
         self.take_map_suggest();
         self.take_map_group_waypoint();
         self.keep_group_waypoint();
+        // a GM's travel by the map (Ctrl+click), while the server offers it
+        self.map.travel = self.session.map_travel;
+        self.take_map_travel();
         let guide_on = self.guide_on(now);
         let p = &walker.cam.walk.phys;
         let me = self.self_id32();
@@ -8027,6 +8030,21 @@ impl Play {
         } else {
             self.map.mini_off();
         }
+    }
+
+    /// The map's travel ask (a GM's Ctrl+click, `Map::take_travel_ask`): the
+    /// spot asked of the server (`Session::map_travel_to`), which moves a GM's
+    /// character there on the ground's floor and says so in the chat, and the
+    /// map closed so the GM sees where it lands. Nothing of a server that no
+    /// longer offers it.
+    fn take_map_travel(&mut self) {
+        let Some(spot) = self.map.take_travel_ask() else { return };
+        if spot.world < 0 || !self.session.map_travel_to(spot.world as u32, spot.at[0], spot.at[1]) {
+            eprintln!("map: no travel asked: the server offers none, or world {}", spot.world);
+            return;
+        }
+        eprintln!("map: travel asked to x {:.0}, z {:.0} in world {}", spot.at[0], spot.at[1], spot.world);
+        self.map.close();
     }
 
     /// Whether the minimap is up (`map::mini`): Extended's Map and Minimap

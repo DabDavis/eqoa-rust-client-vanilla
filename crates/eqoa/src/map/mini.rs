@@ -20,7 +20,8 @@
 //!   thousands of units apart crosses 600 units of picture saying nothing of
 //!   where it goes) nor its town names (a name is as wide as the minimap);
 //! - marks of other kinds it is given (`Mark`, `MiniView::marks`: the
-//!   quests'), a quest's over the rest and on the rim while farther.
+//!   quests'), a quest's over the rest: a quest to take ("!") where it lies,
+//!   a step of the player's own ("?") there or on the rim while farther.
 //!
 //! Every mark is a `Mark` (a kind, a world, a place, its card's lines): the
 //! one under the mouse's pointer shows its card left of the minimap.
@@ -132,18 +133,25 @@ pub enum MarkKind {
     Camp,
     /// a coach: the stable's horseshoe, as the map marks it
     Coach,
-    /// a quest to take there: "!" in gold, over the other marks and on the
-    /// rim while it is farther than the minimap shows
+    /// a quest to take there: "!" in gold, over the other marks, where it
+    /// lies on the pictures alone (a level 60 may take dozens of quests
+    /// across the world: on the rim they would ring it)
     QuestOffer,
-    /// a quest's step to do there: "?" in gold, as `QuestOffer` is drawn
+    /// a quest's step to do there: "?" in gold, over a "!", and kept on the
+    /// rim while it is farther than the minimap shows
     QuestStep,
 }
 
 impl MarkKind {
-    /// Whether it is a quest's: drawn over the other marks, and kept on the
-    /// rim while it lies farther than the minimap shows, pointing the way.
+    /// Whether it is a quest's: drawn over the other marks.
     pub fn quest(self) -> bool {
         matches!(self, MarkKind::QuestOffer | MarkKind::QuestStep)
+    }
+
+    /// Whether it is kept on the rim while it lies farther than the minimap
+    /// shows, pointing the way: a step of the player's own quests.
+    pub fn on_rim(self) -> bool {
+        self == MarkKind::QuestStep
     }
 }
 
@@ -306,18 +314,22 @@ fn wrap(line: &str, most: i32, width: impl Fn(&[u16]) -> i32) -> Vec<Vec<u16>> {
 
 /// Where `marks` go on a minimap whose pictures fill window rectangle
 /// `inside` (`to_px` places a world point, `mid` its middle): only world
-/// `world`'s; a camp or a coach stop where it lies, while it is on the
-/// pictures (`r` its half-width); a quest's where it lies or on the rim of
-/// `edge` while farther, pointing the way, and after the others, so drawn
-/// over them.
+/// `world`'s; a camp, a coach stop or a quest to take where it lies, while it
+/// is on the pictures (`r` its half-width); a step's where it lies or on the
+/// rim of `edge` while farther, pointing the way. The quests' come after the
+/// others and a step's last, so drawn over them.
 fn place_marks<'a>(marks: &[&'a Mark], world: i32, to_px: &dyn Fn([f32; 2]) -> [f32; 2], inside: [f32; 4], r: f32, mid: [f32; 2], edge: [f32; 4]) -> Vec<([f32; 2], &'a Mark)> {
     let here = || marks.iter().copied().filter(move |m| m.world == world);
-    let mut placed: Vec<([f32; 2], &Mark)> = here()
-        .filter(|m| !m.kind.quest())
-        .map(|m| (to_px(m.at), m))
-        .filter(|(q, _)| q[0] >= inside[0] - r && q[0] <= inside[2] + r && q[1] >= inside[1] - r && q[1] <= inside[3] + r)
-        .collect();
-    placed.extend(here().filter(|m| m.kind.quest()).map(|m| (to_rim(mid, to_px(m.at), edge), m)));
+    let lies = |kinds: &dyn Fn(MarkKind) -> bool| -> Vec<([f32; 2], &'a Mark)> {
+        here()
+            .filter(|m| kinds(m.kind))
+            .map(|m| (to_px(m.at), m))
+            .filter(|(q, _)| q[0] >= inside[0] - r && q[0] <= inside[2] + r && q[1] >= inside[1] - r && q[1] <= inside[3] + r)
+            .collect()
+    };
+    let mut placed = lies(&|k| !k.quest());
+    placed.extend(lies(&|k| k.quest() && !k.on_rim()));
+    placed.extend(here().filter(|m| m.kind.on_rim()).map(|m| (to_rim(mid, to_px(m.at), edge), m)));
     placed
 }
 
@@ -443,8 +455,8 @@ impl Map {
         let (dot, dot_o) = dot_radius(size);
         let font = l.assets.font;
         // where the marks go: the map's own camps and coaches (Map Markers),
-        // then the rest it is given; the quests' on the rim while farther, a
-        // glyph's half height in from it
+        // then the rest it is given; the quests' steps on the rim while
+        // farther, a glyph's half height in from it
         let half = font.map_or(8.0, |fo| ui.fonts[fo].height as f32 / 2.0) * px_line;
         let edge = [inside[0] + half * 0.6, inside[1] + half, inside[2] - half * 0.6, inside[3] - half];
         let own = own_marks(&self.mini.map_marks, cx.world, crate::settings::map_markers());
@@ -654,20 +666,22 @@ mod tests {
         assert!(tall[1] < unplaced[1] - 50.0 && tall[1] >= 0.0, "up with the top: {tall:?} {unplaced:?}");
     }
 
-    /// The marks go where they lie, the world's own only: a camp past the
-    /// pictures is not drawn, a quest's is kept on the rim along its way, and
-    /// the quests' come after the rest (drawn over them). The controls:
-    /// another world's mark, and a quest's on the pictures, which stays where
-    /// it lies.
+    /// The marks go where they lie, the world's own only: a camp or a quest
+    /// to take past the pictures is not drawn, a step's is kept on the rim
+    /// along its way, and the quests' come after the rest, a step's last
+    /// (drawn over them). The controls: another world's mark, a quest to take
+    /// on the pictures and a step on them, which stay where they lie.
     #[test]
-    fn the_quests_marks_point_the_way_from_the_rim() {
+    fn the_quests_steps_point_the_way_from_the_rim() {
         let mark = |kind, world, at: [f32; 2]| Mark { kind, world, at, tip: Vec::new() };
         let marks = [
-            mark(MarkKind::QuestOffer, 0, [1000.0, 0.0]),
+            mark(MarkKind::QuestStep, 0, [1000.0, 0.0]),
+            mark(MarkKind::QuestOffer, 0, [-1000.0, 0.0]),
             mark(MarkKind::Camp, 0, [10.0, 20.0]),
             mark(MarkKind::Camp, 0, [1000.0, 0.0]),
             mark(MarkKind::Coach, 1, [0.0, 0.0]),
             mark(MarkKind::QuestStep, 0, [-20.0, -30.0]),
+            mark(MarkKind::QuestOffer, 0, [5.0, 6.0]),
         ];
         // 100 pixels round (0, 0), a world unit a pixel
         let (inside, mid) = ([0.0, 0.0, 100.0, 100.0], [50.0, 50.0]);
@@ -675,11 +689,12 @@ mod tests {
         let marks: Vec<&Mark> = marks.iter().collect();
         let placed = place_marks(&marks, 0, &to_px, inside, 3.0, mid, [5.0, 8.0, 95.0, 92.0]);
         let kinds: Vec<MarkKind> = placed.iter().map(|(_, m)| m.kind).collect();
-        assert_eq!(kinds, [MarkKind::Camp, MarkKind::QuestOffer, MarkKind::QuestStep]);
+        assert_eq!(kinds, [MarkKind::Camp, MarkKind::QuestOffer, MarkKind::QuestStep, MarkKind::QuestStep], "the far quest to take left out");
         let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3;
         assert!(near(placed[0].0, [60.0, 70.0]), "the camp where it lies: {:?}", placed[0].0);
-        assert!(near(placed[1].0, [95.0, 50.0]), "the far quest on the east rim: {:?}", placed[1].0);
-        assert!(near(placed[2].0, [30.0, 20.0]), "the near one where it lies: {:?}", placed[2].0);
+        assert!(near(placed[1].0, [55.0, 56.0]), "the near quest to take where it lies: {:?}", placed[1].0);
+        assert!(near(placed[2].0, [95.0, 50.0]), "the far step on the east rim: {:?}", placed[2].0);
+        assert!(near(placed[3].0, [30.0, 20.0]), "the near one where it lies: {:?}", placed[3].0);
         assert!(place_marks(&marks, 2, &to_px, inside, 3.0, mid, [5.0, 8.0, 95.0, 92.0]).is_empty(), "no marks of world 2");
     }
 

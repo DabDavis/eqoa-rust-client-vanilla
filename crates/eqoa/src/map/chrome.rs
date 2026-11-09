@@ -24,6 +24,12 @@ const KEY_LEGEND: [&str; 8] = ["M Close", "Space Center", "+ - or wheel Zoom", "
 const PAD_LEGEND_GROUP: (i32, &str) = (67, "Waypoint, held: the group's");
 const TAP_LEGEND_GROUP: &str = "Tap: waypoint, hold: the group's";
 const KEY_LEGEND_GROUP: &str = "O, Q held or Shift+click Group waypoint";
+/// A GM's, while the server offers travel by the map (`Map::travel`): the
+/// click that asks for it, ⌘ on a Mac.
+#[cfg(target_os = "macos")]
+pub const LEGEND_TRAVEL: &str = "Cmd+click Travel here";
+#[cfg(not(target_os = "macos"))]
+pub const LEGEND_TRAVEL: &str = "Ctrl+click Travel here";
 
 pub const NAME: [f32; 4] = [1.0, 0.97, 0.85, 1.0];
 /// The community list's answer under the title: the game's gold words.
@@ -55,6 +61,9 @@ pub struct Chrome {
     pub notice: Option<String>,
     /// in a group: the legend names the group's waypoint (`group_waypoint`)
     pub group: bool,
+    /// a GM's, offered travel by the map: the legend names its click
+    /// (`LEGEND_TRAVEL`)
+    pub travel: bool,
 }
 
 /// A panel the size of `w` x `h` at `at` (VIWndGoto's).
@@ -200,6 +209,12 @@ pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
             }
         }
     }
+    if c.travel {
+        // a GM's: after the waypoints' keys, a keyboard's and a pad's alike
+        // (a mouse goes with either)
+        let at = pieces.iter().rposition(|p| p.1.contains("aypoint")).map_or(pieces.len(), |i| i + 1);
+        pieces.insert(at, (-1, LEGEND_TRAVEL));
+    }
     if c.quests.is_some() {
         // after the towns' key (R3's glyph, 215, inline)
         let at = pieces.iter().position(|p| p.1.ends_with("Towns")).map_or(pieces.len(), |i| i + 1);
@@ -289,7 +304,7 @@ mod tests {
     }
 
     fn chrome(keyboard: bool) -> Chrome {
-        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)), quests: None, pointer: None, notice: None, group: false }
+        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)), quests: None, pointer: None, notice: None, group: false, travel: false }
     }
 
     /// The chrome's footprint covers its title (top left), its buttons (top
@@ -410,6 +425,14 @@ mod tests {
             let alone = said(keyboard, false);
             assert!(alone.iter().any(|s| s.contains("aypoint")), "the control drew its legend: {alone:?}");
             assert!(!alone.iter().any(|s| s.contains("group's") || s.contains("Group waypoint")), "out of a group: {alone:?}");
+        }
+        // a GM's offered travel: its click named, a keyboard's legend and a
+        // pad's; the control: none of it for anyone else (`said` above)
+        for keyboard in [true, false] {
+            let mut r = Words::default();
+            draw(&mut r, &vui(), &Chrome { travel: true, ..chrome(keyboard) });
+            assert!(r.0.iter().any(|s| s == LEGEND_TRAVEL), "{:?}", r.0);
+            assert!(!said(keyboard, true).iter().any(|s| s == LEGEND_TRAVEL));
         }
     }
 }

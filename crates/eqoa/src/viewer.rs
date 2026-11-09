@@ -527,6 +527,15 @@ pub fn shot_with(
                 }
             }
             for (_, step) in mouse_script.iter().filter(|s| s.0 == t) {
+                // `ctrl down|up`: Ctrl held or let go, as the window's modifiers
+                // say it (the map's: a GM's click then travels)
+                if let Some(how) = step.strip_prefix("ctrl ") {
+                    if let Some(p) = play.as_mut() {
+                        p.map.ctrl = how.trim() == "down";
+                        eprintln!("mouse {step}: the map's Ctrl {}", if p.map.ctrl { "held" } else { "let go" });
+                    }
+                    continue;
+                }
                 // `click @<name>`: at the creature called that, where it is drawn
                 let mut step = step.clone();
                 if let Some((verb, name)) = step.split_once(" @")
@@ -2747,6 +2756,9 @@ impl App {
         self.taps.forget();
         if let Some(p) = self.play.as_mut() {
             p.map.let_go();
+            // Ctrl's release may never come (Wayland's): no click travels
+            // until it is pressed again
+            p.map.ctrl = false;
         }
     }
 
@@ -5080,9 +5092,12 @@ impl App {
                 {
                     self.ctrl_held = m.state().control_key();
                 }
-                // Shift and a click on the map: the group's waypoint (`map`)
+                // Shift and a click on the map: the group's waypoint; a GM's
+                // Ctrl (or ⌘, a Mac's and a page's on one) and a click: travel
+                // there (`map`)
                 if let Some(p) = self.play.as_mut() {
                     p.map.shift = m.state().shift_key();
+                    p.map.ctrl = m.state().control_key() || m.state().super_key();
                 }
                 #[cfg(target_os = "macos")]
                 {

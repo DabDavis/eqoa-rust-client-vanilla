@@ -6,6 +6,17 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Fewer quest marks, and GMs travel by the map
+- The minimap keeps only your own quests' "?" on its rim, pointing the way to them. A "!" (a quest you can take)
+  shows on the minimap only where it lies within what the minimap shows, so its edge is no longer ringed with them.
+  On the map, a "?" is drawn over a "!" beside it.
+- On go-eqoa-server servers (eqoaclassic's) the "!" marks are far fewer: a quest given in every city, such as
+  Armorcrafting and Jewelcrafting, is marked once, at its nearest giver, and not at all while you have it under way
+  or once you have done it; only quests near your level are marked (from 10 levels below yours, as the server
+  sets it); and a giver where a step of yours is to be done shows that step's "?" alone.
+- GMs: with the map up, Ctrl and a click (Cmd and a click on a Mac) takes you to that spot, on the ground there;
+  the map's legend says so while you are a GM. Anyone else's click puts a waypoint, as before.
+
 ## 2026-11-09 · Texture packs load without freezing the game
 - A texture pack's pictures are now read in the background. Until a texture's replacement is ready the game draws
   its own texture there, then puts the replacement in its place a moment later, so the game no longer stops while a

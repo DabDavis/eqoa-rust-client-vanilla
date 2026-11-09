@@ -46,7 +46,10 @@ current.
   eqoaclassic.com on any server), the waypoints and the group's waypoint, the minimap on N; the quest marks on
   the map and the minimap and the quest tracker from a server that sends them, else the client's own quest
   guide's, labelled "(guide)"; the Map and the Quest Helper off are the game without them, exactly. The Stats
-  Box, others' mana bars and Target of Target stay out)).
+  Box, others' mana bars and Target of Target stay out; the owner's "they are everywhere" the same day: the
+  minimap's rim keeps only the player's own steps' "?", a "!" only where it lies, and the server marks a quest's
+  name once near the player's level; and a GM's Ctrl+click on the map travels there, offered by go-eqoa-server
+  to a GM's client alone, 0x7E34/0x7E35)).
   `render::lit`, `lights.rs`; off it is the PS2's light exactly, every test and oracle unchanged, and `vi` untouched), and Sun
   Shadows (2026-11-08: Extended > Lighting, off unless chosen, drawn only with Dynamic Lighting; `render::sunshadow`; off, every
   frame byte for byte as before, on Vulkan and GL)).

@@ -310,6 +310,12 @@ pub struct Map {
     square_hold: Option<(f32, bool)>,
     /// Shift is held (the viewer's): a click puts the group's waypoint
     pub shift: bool,
+    /// Ctrl (or ⌘) is held (the viewer's), and the server offered a GM's
+    /// travel by the map (`net::session::Session::map_travel`, Play's every
+    /// frame): together, a click asks to travel to its spot (`take_travel_ask`)
+    pub ctrl: bool,
+    pub travel: bool,
+    travel_ask: Option<community::Spot>,
     /// the group's waypoint, and the spot the player asked the group to be
     /// told of (`take_group_ask`)
     group_mark: Option<group_waypoint::GroupMark>,
@@ -519,10 +525,17 @@ impl Map {
     /// `view::waypoint_reach`, a finger's miss more) it takes it away, else
     /// on the group's it takes that away, else it puts this world's waypoint
     /// there, on the world's ground. With Shift held it asks the group to be
-    /// told of the spot under it instead (`spot_under`). Whether it did any.
+    /// told of the spot under it instead (`spot_under`), and a GM's with Ctrl
+    /// (or ⌘) held, while the server offers it (`travel`), asks to travel
+    /// there (`take_travel_ask`). Whether it did any.
     pub fn click(&mut self, s: [f32; 2], finger: bool) -> bool {
         let (true, Some(v), Some(w)) = (self.open, self.view, self.world.as_ref()) else { return false };
         let (world, extent, size) = (w.index, w.builder.cells.extent(), self.size);
+        if self.ctrl && self.travel && !finger {
+            let Some(at) = self.spot_under(s, finger) else { return false };
+            self.travel_ask = Some(community::Spot { world, at });
+            return true;
+        }
         if self.shift && !finger {
             let Some(at) = self.spot_under(s, finger) else { return false };
             self.ask_group(world, at);
@@ -638,6 +651,12 @@ impl Map {
     /// in the group's chat (`play::groupmark`).
     pub fn take_group_ask(&mut self) -> Option<community::Spot> {
         self.group_ask.take()
+    }
+
+    /// The spot a GM's Ctrl+click asked to travel to, once: Play asks the
+    /// server (`Play::take_map_travel`).
+    pub fn take_travel_ask(&mut self) -> Option<community::Spot> {
+        self.travel_ask.take()
     }
 
     /// A line under the map's title for a few seconds (the community list's
@@ -1475,6 +1494,7 @@ impl Map {
             pointer,
             notice: self.community.notice_now().map(str::to_string),
             group: cx.in_group,
+            travel: self.travel,
         };
         let fallback;
         let vui = match cx.vui {
@@ -1596,15 +1616,17 @@ impl Map {
             community::draw_names(ui, white, fo, &placed, &names, t, pad);
         }
         // the quest marks (`quests`) over the markers and the towns' names,
-        // under the group and the player
+        // under the group and the player; the quests to take first, so a step
+        // of the player's own ("?") is drawn over a "!" beside it
         let (lo, hi) = ([-40.0, -40.0], [size.0 as f32 + 40.0, size.1 as f32 + 40.0]);
-        let marks: Vec<(u8, [f32; 2])> = self
+        let mut marks: Vec<(u8, [f32; 2])> = self
             .quests
             .of_world(w.index)
             .map(|(_, m)| (m.kind, v.to_window(size, [m.x, m.z])))
             .filter(|(_, p)| p[0] >= lo[0] && p[1] >= lo[1] && p[0] <= hi[0] && p[1] <= hi[1])
             .map(|(kind, p)| (kind, f(p)))
             .collect();
+        marks.sort_by_key(|&(kind, _)| kind != 1);
         let (r, o) = view::quest_radius(size);
         quests::draw_marks(ui, &l.assets, vui, white, &marks, r * k, o * k);
         // the group's members, their compass colours (1 green, 2 blue, 3 cyan, the rest yellow)

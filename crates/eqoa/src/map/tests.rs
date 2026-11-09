@@ -501,6 +501,50 @@ fn shift_and_a_click_or_a_finger_held_tell_the_group() {
     assert_eq!(far.take_group_ask(), None);
 }
 
+/// A GM's click with Ctrl held, while the server offers travel by the map,
+/// asks to travel to the spot under it (a coach's own spot on its
+/// horseshoe), and leaves the waypoints be; a finger's tap never travels. The
+/// controls: Ctrl without the offer is a click (the player's own waypoint),
+/// the offer without Ctrl a click too, and off the world's edge nothing.
+#[test]
+fn a_gms_ctrl_and_a_click_asks_to_travel_there() {
+    use super::markers_data::COACHES;
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    let v = m.view.unwrap();
+    m.ctrl = true;
+    assert!(m.click([900.0, 300.0], false));
+    assert_eq!(m.take_travel_ask(), None, "the control: not offered");
+    assert!(m.waypoint(0).is_some(), "not offered: a click, the waypoint put");
+    m.set_waypoint(0, None);
+    m.travel = true;
+    assert!(m.click([900.0, 300.0], false));
+    let asked = m.take_travel_ask().expect("asked");
+    assert!(near(asked.at, v.to_world(size, [900.0, 300.0]), 1e-3) && asked.world == 0, "{asked:?}");
+    assert_eq!(m.take_travel_ask(), None, "once");
+    assert_eq!(m.waypoint(0), None, "the waypoint left be");
+    let ronks = COACHES.iter().position(|c| c.coachman == "Coachman Ronks").unwrap();
+    let p = v.to_window(size, COACHES[ronks].at);
+    assert!(m.click([p[0] + 2.0, p[1]], false));
+    assert_eq!(m.take_travel_ask().map(|s| s.at), Some(COACHES[ronks].at), "the coach's own spot");
+    m.shift = true;
+    assert!(m.click([900.0, 300.0], false));
+    assert!(m.take_travel_ask().is_some() && m.take_group_ask().is_none(), "Ctrl before Shift");
+    m.shift = false;
+    m.click([700.0, 200.0], true);
+    assert_eq!(m.take_travel_ask(), None, "a finger's tap");
+    m.ctrl = false;
+    assert!(m.click([900.0, 300.0], false));
+    assert_eq!(m.take_travel_ask(), None, "the control: no Ctrl");
+    let mut far = up(size);
+    far.view = Some(View { center: [2000.0, 0.0], scale: 10.0 });
+    far.ctrl = true;
+    far.travel = true;
+    assert!(!far.click([10.0, 10.0], false), "past the world's edge");
+    assert_eq!(far.take_travel_ask(), None);
+}
+
 /// The group's waypoint goes once the player reaches it, but only after
 /// being away from it (the sender's own, put where they stand, stays until
 /// they leave and come back); a click on its diamond takes it away; □

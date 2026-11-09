@@ -133,8 +133,19 @@ or a browser (each described where it lives below):
   levels, the start of the offer or the step's journal line, and the rewards
   or what the step needs) under the mouse, on a tap (a second puts the
   waypoint on it, as a click does), or under the pad's middle cross; on the
-  minimap too (its rim while farther than it shows, the tooltip under the
-  mouse); J or R3 (or the map's Quests button) hides them, kept.
+  minimap too (a "?" on its rim while farther than it shows, a "!" only where
+  it lies on its pictures: 2026-11-09, the owner's "they are everywhere", a
+  level 60's dozens rang the rim; the tooltip under the mouse); a "?" drawn
+  over a "!" beside it; J or R3 (or the map's Quests button) hides them, kept.
+- **A GM travels by the map**: a server that offers it (go-eqoa-server, to a
+  GM's client alone with the GM's channel: 0x7E34, `Session::map_travel`) has
+  the map take Ctrl and a click (⌘, or the Super key, as well) for a trip to
+  the spot under it (a quest mark's, a marker's, else the ground's): Play asks
+  for it (0x7E35: u32 world, f32 x, f32 z; `Session::map_travel_to`), the
+  server checks the GM's level and puts the character on the ground's floor
+  there, and the map closes; the legend says "Ctrl+click Travel here" ("Cmd+"
+  on a Mac) only while it is offered. Anyone else's Ctrl and a click is a
+  click. A playshot's `EQOA_MOUSE` takes `ctrl down|up@<ms>`.
 - **The quest tracker** (the Quest Helper's, and its own Quest Tracker row),
   from a server that sends it (go-eqoa-server does, 0x7E05/0x7E06), else the
   quest guide's: the quests under way under the minimap and above the chat box, with no backing,
