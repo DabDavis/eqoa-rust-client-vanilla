@@ -16,6 +16,10 @@ is put on the page by `.github/workflows/notes.yml`.
   a second, so no shadow pops in or out.
 - Your own lantern does not shadow the ground round your feet; the people and things near you cast shadows away
   from you as you walk.
+- Shadow Distance, a slider beside them: how far out shadows reach. At its left, where it starts, they reach as far
+  as before; to the right the sun's shadows reach up to four times as far (1000) and more of the nearby lights cast
+  at once, up to every lit torch and lamp you can see (sixteen on a computer, eight in a browser and on a phone).
+  Farther costs more of your graphics card.
 - With it off, the game looks exactly as it did.
 
 ## 2026-11-09 · Capes sit clear of armour

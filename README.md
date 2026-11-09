@@ -73,7 +73,7 @@ or a browser (each described where it lives below):
   screen, as F11 and Alt+Enter toggle it; Brightness, Frame Rate, VSync, Render
   Scale: x1, x2 or x4, Loading Screens: Longer or Instant), World (Fog, Mipmaps,
   Flora, Environment, Ground Fog: PS2 or Exact, Art), Lighting (Dynamic Lighting, Sun Shadows, Light Shadows,
-  Ambient Occlusion), UI (Ability Bars, Update
+  Shadow Distance: 250 to 1000, Ambient Occlusion), UI (Ability Bars, Update
   Notices, Text: Sharp or Smooth, HUD: Nearest or Sharp, Raid List), Controller (Controller
   Focus, Capture Controller, Touch Pad Size: the touch screen's pad, 50 to
   100% of the most that fits), Camera (Distance, Turn Speed, Screen Shake),
@@ -126,6 +126,11 @@ or a browser (each described where it lives below):
   the leaving light's shadow fades out and the coming one's in, a quarter of a second
   each. The personal light's own body casts nothing for it, nor a body round a light;
   nothing nearer a light than 0.5 does (its own fixture) (`render::lightshadow`).
+  **Shadow Distance** (the user's "the light shadows need a slider to raise to a
+  greater distance"; a slider, the game's 250 to 1000 in 125s): the sun's far two
+  cascades stretched (the third by the scale's square root, the last to the distance,
+  the near two kept) and the lights shadowed raised evenly from 8 to all 16 Dynamic
+  Lighting draws (4 to 8 in a page and on Android); at 250 every number as before.
 - **The raid list** (the user's of 2026-11-07, "show names and hp in a way to
   accomodate"; `raidlist.rs`): on a server that has raid groups (go-eqoa-server: a
   group past four, its 0x7E18-0x7E1A), every member's name over a thin health bar in
