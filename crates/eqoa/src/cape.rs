@@ -45,16 +45,15 @@
 //! comes through it, or within a little of it (a broad back, an arm swung
 //! back), it is moved out from the body that far (`sway`): only there, and
 //! never more than 8% of the body's height to the shoulders, so where nothing
-//! comes near it it rests where it did. Where the body comes through it
-//! standing, it goes out as far as 20%: a man's collar on a creature's
-//! hunched shoulders (a minotaur's, under the knight's cape) comes
-//! up over them instead of sinking in. A collar or a mantle over the
+//! comes near it it rests where it did. A collar or a mantle over the
 //! shoulders lies near where it rests: the body moving moves a mantle a
 //! fifth and a collar's sides half as far as the rest, and a face lying flat
-//! moves up off the shoulders, not out (the
-//! vampire's mantle stood out wide and forward round a dark elf's neck): a
-//! flat top's way out is measured from the spine below the neck (`facing`),
-//! and the neck passes through a collar. Each cape is fitted both ways, flat
+//! moves up off the shoulders, not out, so a man's collar on a creature's
+//! hunched shoulders (a minotaur's, under the knight's cape) comes up over
+//! them instead of sinking in, and the vampire's mantle no longer stands out
+//! wide and forward round a dark elf's neck: a flat top's way out is
+//! measured from the spine below the neck (`facing`), and the neck passes
+//! through a collar. Each cape is fitted both ways, flat
 //! tops up and flat tops out from the body as the rest, and up is kept unless
 //! out leaves clearly less of the body through it over the poses and no more
 //! in the worst of them, as the body's edges through it measure (`through`:
@@ -483,11 +482,6 @@ const FOLLOW: (f32, f32) = (0.15, 0.35);
 /// still push it out (further, a tail or a hand swung back, which no cape
 /// covers), and the most it is pushed, of the same height.
 const SWAY: (f32, f32, f32) = (0.02, 0.12, 0.08);
-/// The most a cape's top (over the shoulders) is pushed for a pose the body
-/// rests in (`AT_REST`), of the same height: so far, a collar comes out round
-/// a creature's hunched shoulders, where the body only moving through it, or
-/// coming through the cape lower down, moves it no more than `SWAY`'s.
-const REST: f32 = 0.2;
 /// How steep a face's way out is (its height's share) for the face to lie
 /// flat over the body (`settle`).
 const FLAT: f32 = 0.6;
@@ -554,7 +548,7 @@ fn settle(m: &mut esf::Model, to: &Bones, f: &Frame, body: &esf::Model, poses: &
     // an arm swung back moves them some, and the neck opening stays small
     let top = &flat;
     let over: Vec<bool> = weld.members.iter().map(|vs| m.pos[vs[0]][1] > f.shoulder_y - 0.05 * tall).collect();
-    let caps: Vec<(f32, f32)> = top.iter().zip(&over).map(|(&t, &o)| (if t { TOP.0 } else if o { TOP.1 } else { 1.0 } * SWAY.2 * tall, if o { REST } else { SWAY.2 } * tall)).collect();
+    let caps: Vec<(f32, f32)> = top.iter().zip(&over).map(|(&t, &o)| (if t { TOP.0 } else if o { TOP.1 } else { 1.0 } * SWAY.2 * tall, SWAY.2 * tall)).collect();
     let gaps: Vec<f32> = top.iter().map(|&t| if t { 0.5 } else { 1.0 } * SWAY.0 * tall).collect();
     // a mantle's flat top up off the shoulders, or out from the body as the
     // rest: up, unless out leaves clearly less of the body through it over
@@ -1514,7 +1508,7 @@ mod tests {
                 let tall = f.shoulder_y - f.ground;
                 if Bones::of(&cs).same(&src.bones) {
                     let most = m.pos.iter().zip(&src.model.pos).map(|(a, b)| Vec3::from(*a).distance(Vec3::from(*b))).fold(0.0f32, f32::max);
-                    assert!(most <= REST * tall + 1e-4, "style {} on {id:08X}: as it is, or moved out a little ({most:.3})", s.id);
+                    assert!(most <= SWAY.2 * tall + 1e-4, "style {} on {id:08X}: as it is, or moved out a little ({most:.3})", s.id);
                     continue;
                 }
                 let (lo, hi) = m.pos.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(Vec3::from(*p)), hi.max(Vec3::from(*p))));
