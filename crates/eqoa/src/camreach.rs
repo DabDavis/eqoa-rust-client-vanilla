@@ -59,8 +59,9 @@
 //! the way in to char, but shouldnt zoom at all"): from the well's middle
 //! the posts and the roof's eaves meet the sweep 3.3 to 4.7 out, nearer
 //! than the closest collision distance only toward the eaves' middles,
-//! where the game itself swings round to a gable end without coming in at
-//! all; ours now comes in from the game's own 3.38 to about 3.25 there.
+//! where the game itself swings round 45 degrees to a clear angle without
+//! coming in at all; ours now comes in from the game's own 3.38 to about
+//! 3.25 there.
 //! The game's own way in to its closest, when no angle of the eight is clear
 //! (flag 2), stays the game's. A frame longer than the camera's 32 ms tick
 //! can let a swing move before it is stopped: under a degree at 30 frames a

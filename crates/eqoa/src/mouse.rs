@@ -1458,7 +1458,7 @@ mod tests {
     /// orbit at the game's own 3.38, steered a whole turn by the right
     /// button: the camera stays on the body's back and comes in only as far
     /// as the roof needs, to about 3.25 toward the eaves' middles (where the
-    /// game's own camera swings round to a gable end and does not come in).
+    /// game's own camera swings round 45 degrees and does not come in).
     /// The control: the rule before, a swing turned into the game's way in
     /// to its closest, took it all the way in, 1.5. At 60 and 30 frames a
     /// second.
