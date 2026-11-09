@@ -583,6 +583,18 @@ const FAR_POSE_BUDGET: u32 = 50;
 /// offers them at once, with the world entry's first replies.
 const GUIDE_WAIT_MS: u32 = 3000;
 
+/// The colour a 0x00DB's number is drawn in, from what follows its body
+/// (`rest`): a server's patch's three bytes when it colours them (`patch`:
+/// Sandstorm's S2, `s2::Rules::damage_rgb`, read as ever, and nothing else
+/// then), else its tag's row's (`numcolor::rgb`, with the rows `choices`) when
+/// the server offered tags (`tags`); none, the game's own colour.
+fn number_rgb(patch: bool, rest: &[u8], tags: bool, choices: &[crate::numcolor::Choice; crate::numcolor::ROWS]) -> Option<[u8; 3]> {
+    if patch {
+        return (rest.len() >= 3).then(|| [rest[0], rest[1], rest[2]]);
+    }
+    crate::numcolor::rgb(net::session::number_tag(rest, tags), choices)
+}
+
 /// The quest marks for the map and the minimap: the guide's while it is on
 /// (`guide_on`), else the server's while it offers them, none of either with
 /// Quest Markers off; `None` (no Quests button) with neither, or with the
@@ -3225,6 +3237,7 @@ impl Play {
         // Pet Effects: the server told what the Extended row says (off, what it
         // sent forgotten)
         self.session.agree_pet_effects(crate::settings::pet_effects());
+        self.agree_number_tags();
         self.agree_quests();
         self.guide_wait(now);
         self.record_menu(); // Character > Combat Record once the server offers it
@@ -6134,15 +6147,26 @@ impl Play {
     /// first person (`m_cameraMode` 0) and no manual camera (mode 38,
     /// `IsModal`). Both off under the options' `m_x92`.
     fn damage_indication(&mut self, data: &[u8], camera_mode: i32) {
+        self.damage_indication_tagged(data, camera_mode, self.session.number_tags_offer);
+    }
+
+    /// `damage_indication`, a byte after the body read as the number's tag
+    /// when `tags` (the server offered them: `number_tag`).
+    fn damage_indication_tagged(&mut self, data: &[u8], camera_mode: i32, tags: bool) {
         let mut r = net::stream::Reader::new(data);
         let (attacker, amount, defender) = (r.u32(), r.signed() as i32, r.u32());
         if r.error {
             return;
         }
-        // a server's patch (`s2`, Sandstorm's S2: its control panel's
-        // colours): three more bytes, when there, are the number's colour
         let rest = &r.data[r.pos..];
-        let rgb = (crate::s2::get().damage_rgb && rest.len() >= 3).then(|| [rest[0], rest[1], rest[2]]);
+        let rgb = number_rgb(crate::s2::get().damage_rgb, rest, tags, &crate::settings::number_colors());
+        // `EQOA_DAMAGE_TRACE`: each one as read, what followed its body and the
+        // colour it is drawn in (none: the game's), on stderr
+        if std::env::var_os("EQOA_DAMAGE_TRACE").is_some() {
+            let after: String = rest.iter().map(|b| format!("{b:02x}")).collect();
+            let paint = rgb.map_or_else(|| "game".to_string(), |c| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2]));
+            eprintln!("damage: {attacker:08x} {amount:+} {defender:08x} after [{after}] colour {paint}");
+        }
         let me = self.self_id32();
         // the player's or its pet's hit: the guide's kill when it dies
         if amount > 0 && (Some(attacker) == me || (attacker == self.pet_id && self.pet_id != u32::MAX)) {
@@ -6176,6 +6200,12 @@ impl Play {
     }
 
     pub fn fake_damage(&mut self, attacker: &str, amount: i64, defender: &str, camera_mode: i32) {
+        self.fake_damage_tagged(attacker, amount, defender, None, camera_mode);
+    }
+
+    /// `fake_damage` with a tag after the body (`EQOA_DAMAGE`'s fourth
+    /// field, in hex), read as a server that offered tags sends it.
+    pub fn fake_damage_tagged(&mut self, attacker: &str, amount: i64, defender: &str, tag: Option<u8>, camera_mode: i32) {
         let id = |s: &str| match s {
             "self" => self.self_id32().unwrap_or(u32::MAX),
             "target" => self.target,
@@ -6183,7 +6213,13 @@ impl Play {
         };
         let mut w = net::stream::Writer::default();
         w.u32(id(attacker)).signed(amount).u32(id(defender));
-        self.damage_indication(&w.data, camera_mode);
+        match tag {
+            Some(t) => {
+                w.u8(t);
+                self.damage_indication_tagged(&w.data, camera_mode, true);
+            }
+            None => self.damage_indication(&w.data, camera_mode),
+        }
     }
 
     /// Effects as if state channel 0x43 had brought them
@@ -8696,6 +8732,12 @@ impl Play {
         self.session.pet_effects_left(self.session.now()).into_iter().map(|(icon, _)| icon).collect()
     }
 
+    /// Number Colors: the server told to tag the numbers while a row is not
+    /// Default, and to stop when every one is (`numcolor::wanted`).
+    fn agree_number_tags(&mut self) {
+        self.session.agree_number_tags(crate::numcolor::wanted(&crate::settings::number_colors()));
+    }
+
     /// The Raid List: the server told what the Extended row says, and off, what it
     /// sent forgotten (`group.bars` are drawn again).
     fn agree_raid_roster(&mut self) {
@@ -10725,6 +10767,130 @@ mod commands {
         p.damage_indication(&hit(me, 0x200), 0);
         let s = shown(&mut p, 0x200);
         assert_eq!((s.len(), s[0].color), (1, [1.0; 4]));
+    }
+
+    /// What colours a number (`number_rgb`): a patch's three bytes when it
+    /// colours them, whatever else is chosen, and no tag read then (Sandstorm's
+    /// path as it was); else a tag's row's colour from a server that offered
+    /// tags, Default the game's (none); a byte from a server that made no
+    /// offer, no byte, or three bytes are no tag.
+    #[test]
+    fn a_numbers_colour_is_the_patchs_or_its_rows() {
+        let mut c = [0; crate::numcolor::ROWS];
+        c[1] = crate::numcolor::from_key("red").unwrap();
+        c[3] = crate::numcolor::from_key("purple").unwrap();
+        let red = Some([255, 48, 48]);
+        assert_eq!(number_rgb(true, &[255, 128, 0], true, &c), Some([255, 128, 0]), "the patch's");
+        assert_eq!(number_rgb(true, &[0x05], true, &c), None, "a patch colours: no tag read");
+        assert_eq!(number_rgb(true, &[], false, &[0; 6]), None, "a patch's number with no colour: the game's");
+        assert_eq!(number_rgb(false, &[0x05], true, &c), red, "a proc: Your Procs");
+        assert_eq!(number_rgb(false, &[0x81], true, &c), Some([176, 96, 255]), "its pet's swing: Pet Damage");
+        assert_eq!(number_rgb(false, &[0x85], true, &c), None, "Pet Procs Default: the game's");
+        assert_eq!(number_rgb(false, &[0x05], false, &c), None, "no offer: no tag");
+        assert_eq!(number_rgb(false, &[], true, &c), None, "untagged");
+        assert_eq!(number_rgb(false, &[255, 128, 0], true, &c), None, "no patch: three bytes are nothing");
+        assert_eq!(number_rgb(false, &[0x05], true, &[0; 6]), None, "every row Default");
+    }
+
+    /// Number Colors on the screen (`numcolor`, go-eqoa-server's tags): with
+    /// every row Default a tagged number is drawn as an untagged one, white
+    /// made, yellow taken, green a heal (the game's); a row chosen paints its
+    /// own figures in it, the pet's heal on the player too (drawn over the
+    /// player, from the pet), and nothing else: an untagged one, one of
+    /// another row, and a number taken keep the game's.
+    #[test]
+    fn number_colors_paint_the_tagged_numbers() {
+        crate::settings::testing::reset(false);
+        let msg = |attacker: u32, amount: i64, defender: u32, tag: Option<u8>| {
+            let mut w = net::stream::Writer::default();
+            w.u32(attacker).signed(amount).u32(defender);
+            if let Some(t) = tag {
+                w.u8(t);
+            }
+            w.data
+        };
+        let colors = |p: &mut Play, me: u32, foe: u32| -> Vec<[f32; 4]> {
+            p.damage.step(33, |e| (e == me || e == foe).then_some(crate::damage::Target { pos: [0.0; 3], slot4: None })).iter().map(|s| s.color).collect()
+        };
+        let (white, yellow, green) = ([1.0; 4], [0.8, 0.8, 0.1, 1.0], [0.0, 1.0, 0.0, 1.0]);
+        let run = |p: &mut Play, tags: [Option<u8>; 5]| -> Vec<[f32; 4]> {
+            let me = p.self_id32().expect("the player's id");
+            let (foe, pet) = (0x200, 0x300);
+            p.pet_id = pet;
+            p.damage_indication(&msg(me, -40, foe, tags[0]), 1); // its hit
+            p.damage_indication(&msg(me, -9, foe, tags[1]), 1); // its proc
+            p.damage_indication(&msg(me, 25, me, tags[2]), 1); // its heal on itself
+            p.damage_indication(&msg(pet, 30, me, tags[3]), 1); // its pet's heal on it
+            p.damage_indication(&msg(foe, -12, me, tags[4]), 1); // a hit taken
+            colors(p, me, foe)
+        };
+        let tagged = [Some(0x01), Some(0x05), Some(0x06), Some(0x86), None];
+        // every row Default: the game's colours, tags or none
+        let mut p = play();
+        p.session.number_tags_offer = true;
+        let game = run(&mut p, tagged);
+        assert_eq!(game, [white, white, green, green, yellow]);
+        let mut p = play();
+        assert_eq!(run(&mut p, [None; 5]), game, "Default draws exactly as untagged numbers");
+        // Your Procs red, Pet Heals cyan: those two alone
+        let mut c = crate::settings::client();
+        c.number_colors[1] = crate::numcolor::from_key("red").unwrap();
+        c.number_colors[5] = crate::numcolor::from_key("cyan").unwrap();
+        crate::settings::set_client(c);
+        let (red, cyan) = ([1.0, 48.0 / 255.0, 48.0 / 255.0, 1.0], [0.0, 240.0 / 255.0, 240.0 / 255.0, 1.0]);
+        let mut p = play();
+        p.session.number_tags_offer = true;
+        assert_eq!(run(&mut p, tagged), [white, red, green, cyan, yellow]);
+        // the control: the same rows chosen, the numbers untagged (another server): the game's
+        let mut p = play();
+        p.session.number_tags_offer = true;
+        assert_eq!(run(&mut p, [None; 5]), game);
+        // and tagged numbers from a server that made no offer: the byte is not read
+        let mut p = play();
+        assert_eq!(run(&mut p, tagged), game);
+        crate::settings::testing::reset(false);
+    }
+
+    /// Number Colors asks the server for the tags while a row is not Default
+    /// and stops it when every row is again (0x7E39), only once it offered
+    /// them (0x7E38); the control: no offer, nothing asked.
+    #[test]
+    fn number_colors_ask_the_server_while_a_row_is_chosen() {
+        struct Rec(std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>);
+        impl net::session::Datagrams for Rec {
+            fn send_to(&mut self, d: &[u8], _: [u8; 4], _: u16) {
+                self.0.borrow_mut().push(d.to_vec());
+            }
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        crate::settings::testing::reset(false);
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let mut p = Play::new(s, Player::default(), Box::default());
+        let answers = |p: &mut Play| -> Vec<Vec<u8>> {
+            p.session.flush();
+            let m = guaranteed(&sent.borrow()).into_iter().filter(|m| m.starts_with(&[0x39, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        let set = |row: usize, key: &str| {
+            let mut c = crate::settings::client();
+            c.number_colors[row] = crate::numcolor::from_key(key).unwrap();
+            crate::settings::set_client(c);
+        };
+        set(0, "orange");
+        p.agree_number_tags();
+        assert!(answers(&mut p).is_empty(), "no offer: nothing asked");
+        p.session.number_tags_offer = true;
+        p.agree_number_tags();
+        p.agree_number_tags();
+        assert_eq!(answers(&mut p), vec![vec![0x39, 0x7E, 1]], "a row chosen: asked once");
+        set(0, "default");
+        p.agree_number_tags();
+        assert_eq!(answers(&mut p), vec![vec![0x39, 0x7E, 0]], "every row Default: stopped");
+        crate::settings::testing::reset(false);
     }
 
     /// 0x1402 sub-op 3 (`VIClientPart4EC58::Recv03`): a rise in Class

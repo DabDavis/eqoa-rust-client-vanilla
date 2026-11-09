@@ -81,8 +81,9 @@ or a browser (each described where it lives below):
   Characters (Level of Detail, NPC/PC Display and Distance, Name Distance,
   Overlapping Names, Shadows), Sound (Sound in Background, Output Device: the system's
   default, followed when it changes, or a device by its name), natively Textures
-  (Texture Packs, Dump Textures, and on a computer Texture Folder) and Map (Map,
-  Minimap, Map Markers, Quest Helper, Quest Tracker), and the rows below.
+  (Texture Packs, Dump Textures, and on a computer Texture Folder), Map (Map,
+  Minimap, Map Markers, Quest Helper, Quest Tracker) and Number Colors (Your Damage,
+  Your Procs, Your Heals, Pet Damage, Pet Procs, Pet Heals), and the rows below.
 - **The map and the quest helper** (the user's of 2026-11-09: "also add the map and
   quest helper we had in a former update"; they were taken out on 2026-10-27 with the
   others below that are not the game's, and only these two came back): Extended > Map,
@@ -253,6 +254,18 @@ or a browser (each described where it lives below):
   it targets the pet. The player's own effects window (channel 0x43) stays the
   player's own, on every client. Extended > UI's Pet Effects, on by default; off, or
   on a server that sends none, nothing is drawn, as on a PS2.
+- **Number colours by what made them** (the server owner's of 2026-11-09, of a player's
+  ask "to see/change colors of damage/procs/healing for player/pets similar to the way SS
+  does": "we can add the number colors to extended menu"; `numcolor.rs`): CLIENT colours
+  a floating number by its sign and by who made it, and a pet's hit reaches its owner as
+  the owner's own, so on a server that says what made each (go-eqoa-server's tags: 0x7E38
+  offers, 0x7E39 answers 1 while a row is not Default, then one byte after 0x00DB's body,
+  `net::session::number_tag`) the player's own figures and its pet's are drawn in the
+  colour chosen for their row: Your Damage (a swing, a spell or ability, a damage over
+  time's tick, a damage shield), Your Procs, Your Heals (and a heal over time's tick), and
+  the pet's three. Extended > Number Colors, each row Default (the game's own colour) or one
+  of `numcolor::PALETTE`, every row Default by default; an untagged number, a number taken,
+  a heal received and a server's patch's own colours (Sandstorm's S2) are the game's as ever.
 - **A render scale and a sharp HUD**: Render Scale (off unless chosen) x2 or
   x4 draws the whole picture, the world and everything over it, two or
   four times the window's size each way and averages it down, which smooths

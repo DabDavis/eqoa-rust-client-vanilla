@@ -99,6 +99,7 @@ mod livewords;
 mod hud;
 mod raidlist;
 mod damage;
+mod numcolor;
 mod display;
 mod hudmenu;
 mod influence;
