@@ -6,6 +6,15 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Sun Shadows move smoothly
+- Shadows now move with the sun a little every frame as the day goes on. Until now they stood still for a second or
+  so and then jumped to their new place, which showed most on the long shadows of the morning and the evening.
+- The shadows of characters walking or running some way off keep up with them now. Farther than about 40 from the
+  camera they were redrawn only every other frame, so they trailed a step behind and flickered over the character's
+  own sunlit side.
+- Sun Shadows ask a little more of the graphics card for it: about a third of a millisecond a frame on a Radeon RX 580,
+  at 1080p and at 4K alike.
+
 ## 2026-11-09 · The new races wave, bow, point and cheer
 - On a server with races of its own, every new race now does the four emotes. Most do them the way a human
   does, in their own size and shape: a Hill Giant raises its huge arm over its head to wave and bends right
