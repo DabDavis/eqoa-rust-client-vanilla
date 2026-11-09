@@ -1,5 +1,6 @@
 //! The corpse window (CLIENT `viwndloot.cpp`, `VIWndLoot`, the game
-//! window's mode 1): the inventory (40 rows, at (5, 10)) and the corpse (42
+//! window's mode 1): the inventory (40 rows, or the pack's on a server that
+//! holds more, at (5, 10)) and the corpse (42
 //! rows at (144, 10): "LEAVE ALL" (word 119) or "Empty" (641) on top, the
 //! items, "TAKE ALL" (118) after them) as two lists rebuilt every frame, and
 //! the selected item's text in a window at (460, 152). Enter on the corpse
@@ -51,9 +52,14 @@ impl Default for Loot {
 }
 
 /// The inventory list's rows (`OnDrawSelf`): a stack shows its count, a worn
-/// item the arrows.
+/// item the arrows; as many rows as the pack holds (CLIENT's 40, or a larger
+/// server's: `inventory::pack_cap`).
 fn fill_inv(list: &mut WndList, inv: &ItemList, icon: &dyn Fn(usize) -> i32) {
-    let n = inv.items.len().min(40);
+    let rows = crate::inventory::pack_cap();
+    if list.items.len() != rows {
+        list.init(rows);
+    }
+    let n = inv.items.len().min(rows);
     for (i, it) in inv.items.iter().take(n).enumerate() {
         let mut flags = if it.quantity >= 2 { 5 } else { 1 };
         let mut arrows = -1;
@@ -63,7 +69,7 @@ fn fill_inv(list: &mut WndList, inv: &ItemList, icon: &dyn Fn(usize) -> i32) {
         }
         list.set_item(i, flags, icon(i), arrows, -1, it.quantity as i32);
     }
-    for i in n..40 {
+    for i in n..rows {
         list.set_item(i, 0, -1, -1, -1, 0);
     }
 }

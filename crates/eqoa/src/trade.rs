@@ -150,7 +150,7 @@ impl TradeState {
     pub fn remove_slot(&mut self, id: i32) {
         if let Some(at) = self.mine.iter().position(|o| o.id == id) {
             let it = self.mine[at].item.clone();
-            crate::infotext::merge(&mut self.inv, &it, it.item.max_stack, 40);
+            crate::infotext::merge(&mut self.inv, &it, it.item.max_stack, crate::inventory::pack_cap());
             self.mine.remove(at);
         }
     }
@@ -631,6 +631,9 @@ fn box_key(key: i32) -> Option<BoxKey> {
 /// count, a worn item the arrows (138), one the player cannot use the red
 /// ones (140).
 fn fill(list: &mut WndList, items: &[&NetItem], cap: usize, icon: &dyn Fn(&NetItem) -> i32, can_use: &dyn Fn(&NetItem) -> bool) {
+    if list.items.len() != cap {
+        list.init(cap);
+    }
     let n = items.len().min(cap);
     for (i, it) in items.iter().take(n).enumerate() {
         let mut flags = if it.quantity >= 2 { 5 } else { 1 };
@@ -1020,7 +1023,8 @@ impl Trade {
         if self.focus != -1 {
             // RefreshLists
             let inv: Vec<&NetItem> = st.inv.items.iter().collect();
-            fill(&mut self.list, &inv, 40, icon, can_use);
+            // the inventory's 40, or as many as the server holds (`inventory`)
+            fill(&mut self.list, &inv, crate::inventory::pack_cap(), icon, can_use);
             let mine: Vec<&NetItem> = st.mine.iter().map(|o| &o.item).collect();
             fill(&mut self.mine, &mine, 4, icon, can_use);
             let theirs: Vec<&NetItem> = st.theirs.iter().map(|o| &o.item).collect();

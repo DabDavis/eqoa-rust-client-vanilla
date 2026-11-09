@@ -14,6 +14,58 @@ is put on the page by `.github/workflows/notes.yml`.
   in the Frontiers art too, so their cheekbones stay inside the helm's sides.
 - Every other race's helm, and a skeleton creature's, is exactly as before.
 
+## 2026-11-09 · Capes sit clear of armour
+- A cape now sits off what you wear: plate, broad shoulders and a robe's skirt show through it far less as you
+  stand, walk and run. Over the back and shoulders it moves with the body under it, and under a robe its lower
+  part swings with the robe's hem.
+- Wherever your race's walk or run would still bring the body through it (a broad back, an arm swung back), it
+  hangs a little further off, only there and never by much; where nothing comes near it, it rests where it did.
+
+## 2026-11-09 · The camera at posts and low roofs
+- Steering with the right mouse button (or with the camera tilted low), the camera no longer jumps all the way in
+  to your character when something close behind you is in its way, like the posts and roof of the well by the
+  Freeport coach. It comes in only as far as it must, just in front of what is in the way, and goes back out to
+  where you had it once the way is clear.
+
+## 2026-11-09 · Jump on Space, and a fall from the top
+- Space jumps now, on a server that has jumps (the Heirloom Test Server), and V still does. The attack (hold to
+  attack, Auto Attack's toggle, a corpse's loot) is on G.
+- Wherever Space makes no jump it still does what it always did: on a server without jumps (the Live Server,
+  Sandstorm, eqoa.live) Space attacks, and with a window up it takes from a corpse, opens a trade's chat line and
+  casts a fishing line, as before.
+- Keys you moved on the Controls page (F1) stay where you put them. A macro you had put on G keeps G; the attack
+  then has no key until you give it one there.
+- Other players using this client now see your jump as you do: from the top of the arc you fall, and you land with
+  your landing when you come down. Before, they saw the rise and the top standing or running, and no landing.
+- The new races whose bodies had no fall of their own (froglok, giants, kerran, goblin, aviak, lizardman, kappa,
+  gnoll, kobold, minotaur, ratman, satyr and gargoyle) now fall and land as a human does, fitted to their size;
+  pixies, fairies and fungusmen use the nearest moves of their own, as their emotes do. Before, they stood in the
+  air. That is on a server with jumps, in a jump or a fall off a ledge, for you and for others using this client;
+  a PlayStation 2 still shows them standing.
+
+## 2026-11-09 · Spells' lights no longer flash
+- With Dynamic Lighting on, the light a spell throws on the ground and the walls round it now changes smoothly.
+  Some spells' light flickered many times a second, jumping in brightness and in colour (white to blue and
+  back) over a wide circle, which could be hard on the eyes and a risk for anyone sensitive to flashing light.
+  A spell's light now swells in as the spell starts, holds steady while it plays and fades out as it ends: it
+  never flashes more than three times a second, the limit photosensitivity guidance sets.
+- Spells still light their surroundings in their own colours; only a lightning bolt's light, which turned
+  everything round it full white, is toned down a little. The glow of an epic weapon and the light of a fiery
+  creature are steadied the same way.
+- Where more lights are about than the game draws at once (a town's torches at night when a spell goes off), a
+  torch that gives up its place to the spell's light now dims out over a moment instead of going dark at once,
+  and comes back the same way.
+- Torches, braziers and lamps look as they did. With Dynamic Lighting off nothing changes.
+
+## 2026-11-09 · A pack and a bank of 100
+- On a server that has them (the Heirloom Test Server), your inventory holds 100 items and your bank 100, where the
+  game holds 40 of each. What you wear counts among the 100, as it counts among the game's 40.
+- Every window shows them all: the inventory's tabs, the bank, a merchant's list when you sell, a trade, a corpse,
+  the forge and the auction's bank list. They scroll as they always have: hold up or down, or turn the mouse wheel;
+  up from the first row goes to the last.
+- On a server without them nothing changes. A character carrying more than 40 who logs in on a PS2 sees its first 40
+  (what it wears first), and the server keeps the rest safe; they come back when you log in here again.
+
 ## 2026-11-09 · Jump
 - On a server that has jumps (eqoaclassic can turn them on), V jumps: about half your height, straight up when you
   stand and on along your way when you run. You come down as a fall comes down and land where you came down, and

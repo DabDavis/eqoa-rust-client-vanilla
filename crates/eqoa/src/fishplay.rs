@@ -161,7 +161,8 @@ impl Play {
     }
 
     /// `Caught`: the catch at `slot` into the inventory as far as it goes
-    /// (`AddItem` on its own stack limit, 40 slots; unequipped), that many
+    /// (`AddItem` on its own stack limit, the pack's slots: `inventory::pack_cap`;
+    /// unequipped), that many
     /// `Took` off the catch, and state 3. `VIItemList::Get` hands over only
     /// a slot that holds something; another (an assert in `Took` that hangs
     /// the console) changes nothing here.
@@ -174,7 +175,7 @@ impl Play {
         let mut item = item.clone();
         item.equip_slot = -1;
         let limit = item.item.max_stack;
-        let n = crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::CAPACITY);
+        let n = crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::pack_cap());
         crate::inventory::took(catch, slot as usize, n);
         eprintln!("play: caught {n} of {} (the server's {x}; {} left on the line)", item.item.name, catch.items.len());
         self.fish.part.state = state::CAUGHT;

@@ -729,6 +729,13 @@ fn alpha_of(lib: &Library, id: i32) -> Option<Rc<Alpha>> {
     made
 }
 
+/// Whether a triangle textured `id` at `uv` shows, not wholly see-through
+/// (for the capes' tests, `cape::poke`: a robe's skirt only under a robe).
+#[cfg(test)]
+pub(crate) fn texture_shows(lib: &Library, id: i32, uv: &[[f32; 2]; 3]) -> bool {
+    shows(&alpha_of(lib, id), uv)
+}
+
 fn shows(a: &Option<Rc<Alpha>>, uv: &[[f32; 2]; 3]) -> bool {
     a.as_ref().is_none_or(|a| a.shows(uv))
 }

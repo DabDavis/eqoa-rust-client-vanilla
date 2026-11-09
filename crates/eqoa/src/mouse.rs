@@ -26,7 +26,8 @@
 //!   (`camreach::GAME_PITCH`) the ground behind meets the camera on any
 //!   slope, and where the game would then swing it round to a clear side
 //!   (which turns a run, since the stick and autorun go the way the camera
-//!   looks) it comes in to its closest instead, as when steered.
+//!   looks) it comes in instead, only as far as what is in the way needs,
+//!   as when steered.
 //! - the right button steers (`look_held`, `Mouse::steer`): in the follow
 //!   orbit (3) the body and the camera behind it turn together, the tilt as
 //!   the left button's, and the walk is on the body's own axes
@@ -35,7 +36,9 @@
 //!   once as the hold begins) and the camera put back behind it every frame
 //!   (the game re-derives the orbit from where the camera was, so a sidestep
 //!   would drag it round); where the game would swing the camera round to a
-//!   clear angle it comes in to its closest instead.
+//!   clear angle it comes in instead, only as far as what is in the way
+//!   needs (`camreach::come_in`: in Freeport's well the roof's posts and
+//!   eaves had taken it all the way in to the character).
 //! - while the player moves (the keys, a stick, autorun: `moving`), the
 //!   left button in the follow orbit steers as the right does (`held_as`),
 //!   the body turned to the view as the run begins; standing still it looks
@@ -603,18 +606,23 @@ impl Mouse {
 }
 
 /// An angle snap the game began (`MoveCamera`'s `FindOrbitAngle` found a
-/// clear angle: flag 1) ends where it is, and the camera comes in to its
-/// closest instead, as when `FindOrbitAngle` finds none (flag 2): the
-/// client's own, where swinging round would turn the player with it (the
-/// right button's steer, and a tilt under the game's pitch:
-/// `camreach::Reach::process`).
-pub fn come_in_instead(cam: &mut WalkCamera<Ee>) {
-    if cam.cur.flags & 1 != 0 {
-        cam.cur.snap_angle = cam.cur.orbit.x;
-        cam.cur.flags |= 2;
-        cam.last.snap_angle = cam.cur.snap_angle;
-        cam.last.flags = cam.cur.flags;
+/// clear angle: flag 1) ends where it is: the client's own, where swinging
+/// round would turn the player with it (the right button's steer, and a
+/// tilt under the game's pitch). Its target is the orbit as it is, so the
+/// game's own snap ends it at its next tick (clearing the no-turn bit with
+/// it); the camera then comes in only as far as what is in the way needs
+/// (`camreach::come_in`), never to its closest for it (F3 2026-11-09, in
+/// Freeport's well: steered round, the roof's posts and eaves took the
+/// camera all the way in to the character, where the game swings round
+/// without coming in at all). Whether a snap was under way.
+pub fn end_swing(cam: &mut WalkCamera<Ee>) -> bool {
+    if cam.cur.flags & 1 == 0 {
+        return false;
     }
+    cam.cur.snap_angle = cam.cur.orbit.x;
+    cam.last.snap_angle = cam.cur.snap_angle;
+    cam.last.flags = cam.cur.flags;
+    true
 }
 
 /// The mouse's look this frame, (dx, dy) pixels of its motion with `held`
@@ -635,8 +643,9 @@ pub fn look_held(cam: &mut WalkCamera<Ee>, held: [bool; 2], dx: f32, dy: f32, in
             set_heading(cam, from + along(dx));
             let behind = cam.walk.phys.angles.x + F::new(PI);
             cam.set_orbit_angle(behind);
-            // an angle snap would swing the camera off the body
-            come_in_instead(cam);
+            // an angle snap would swing the camera off the body: it ends
+            // here (the camera comes in as far as it must: `camreach`)
+            end_swing(cam);
             if dy != 0.0 {
                 tilt(cam, up(dy));
             }
@@ -1422,10 +1431,11 @@ mod tests {
 
     /// Steered, a snap of the orbit to a clear angle (the game's, near a
     /// wall) would swing the camera off the body's back: it ends where it
-    /// is and the camera comes in to its closest. The control: unsteered
-    /// the game's snap goes on.
+    /// is (its target the orbit as it is), and no way in to the closest is
+    /// begun for it (the camera comes in as far as it must: `camreach`).
+    /// The control: unsteered the game's snap goes on.
     #[test]
-    fn steered_the_camera_comes_in_where_the_game_would_swing_it_round() {
+    fn steered_the_camera_does_not_swing_where_the_game_would_swing_it_round() {
         for steered in [true, false] {
             let mut cam = follow();
             cam.cur.flags |= 1;
@@ -1433,9 +1443,66 @@ mod tests {
             look_held(&mut cam, [!steered, steered], 0.0, 0.0, false, 1.0 / 60.0, true);
             if steered {
                 assert_eq!(cam.cur.snap_angle, cam.cur.orbit.x);
-                assert_eq!(cam.cur.flags & 3, 3, "the snap ends at once, the camera comes in");
+                assert_eq!(cam.cur.flags & 7, 1, "the snap ends at once, and no pull to the closest");
             } else {
                 assert_eq!((cam.cur.snap_angle.0, cam.cur.flags & 3), (2.0, 1));
+            }
+        }
+    }
+
+    /// F3 2026-11-09, the user, playing Fun in Freeport's well: "when I(Fun)
+    /// is in the well and move camera it hits the poles and zooms all the way
+    /// in to char, but shouldnt zoom at all". Standing in the well (its floor
+    /// a disc at 54.49 inside the ring; four posts round it hold a gabled
+    /// roof whose eaves meet the camera's sweep 3.3 to 4.7 out), the follow
+    /// orbit at the game's own 3.38, steered a whole turn by the right
+    /// button: the camera stays on the body's back and comes in only as far
+    /// as the roof needs, to about 3.25 toward the eaves' middles (where the
+    /// game's own camera swings round 45 degrees and does not come in).
+    /// The control: the rule before, a swing turned into the game's way in
+    /// to its closest, took it all the way in, 1.5. At 60 and 30 frames a
+    /// second.
+    #[test]
+    fn steered_round_in_freeports_well_the_camera_comes_in_only_as_far_as_the_roof_needs() {
+        let (x, y, z) = (25296.73f32, 54.493f32, 15750.06f32);
+        for ms in [16i64, 33] {
+            for old in [false, true] {
+                let Some(world) = crate::walker::tests::tunaria_round(x, z) else { return };
+                let spawn = crate::walker::Spawn { pos: [x, y, z], heading: 0.0, placing: crate::walker::Placing::AsGiven };
+                let mut w = Walker::arrive(world, spawn);
+                assert!((w.cam.walk.phys.position.y.0 - y).abs() < 0.05, "in the well: {:?}", w.cam.walk.phys.position);
+                crate::camstyle::set_style(&mut w.cam, 3, None, &mut w.scene);
+                let mut m = Mouse::default();
+                m.held = [false, true];
+                let frame_s = ms as f32 / 1000.0;
+                // a quarter turn a second, for four and a half seconds
+                let dx = std::f32::consts::FRAC_PI_2 * frame_s / LOOK_PER_PIXEL;
+                let client = crate::controls::Client { steer: !old, ..Default::default() };
+                let mut t = w.scene.time;
+                let (mut nearest, mut off_back) = (f32::MAX, 0.0f32);
+                for _ in 0..4500 / ms {
+                    w.rewind();
+                    m.look = (dx as f64, 0.0);
+                    m.look(&mut w, false, frame_s);
+                    assert!(m.steer(3), "the right button steers");
+                    if old && w.cam.cur.flags & 1 != 0 {
+                        // `come_in_instead` as it was: the game's way in to
+                        // its closest for every swing ended
+                        w.cam.cur.flags |= 2;
+                        w.cam.last.flags = w.cam.cur.flags;
+                    }
+                    t += ms;
+                    w.frame_with([0.0; 4], t, &client, true);
+                    nearest = nearest.min(w.cam.cur.dist.0);
+                    let off = wrapped((w.cam.cur.orbit.x - (w.cam.walk.phys.angles.x + F::new(PI))).0).abs();
+                    off_back = off_back.max(off);
+                }
+                if old {
+                    assert_eq!(nearest, 1.5, "the control: the old rule went all the way in, {ms} ms");
+                } else {
+                    assert!(nearest > 3.2 && nearest < 3.38, "{ms} ms: the nearest {nearest}");
+                    assert!(off_back < 0.02, "{ms} ms: off the body's back by {off_back}");
+                }
             }
         }
     }
