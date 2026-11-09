@@ -337,6 +337,29 @@ pub const MOMENT_TAU_AT: f32 = 0.1;
 /// A light of the moment fainter than this (its brightest channel) is gone.
 const MOMENT_GONE: f32 = 1.0 / 512.0;
 
+/// How bright a light of the moment may be ([`Moment`]): its brightest
+/// channel as it is up to the knee (no one emitter's passes 0.9, no bolt's
+/// 0.8, and a body's few emitters together come to 2 to 3.5), and past it
+/// eased toward the most. A lightning's dozen bolt drawings summed to 7.75:
+/// everything within 12 of it lit full, and held, it stayed so for most of a
+/// second after its bolts went (the fade shows only once it comes down under
+/// about 1), the target's body lit full to its edges while it played its hit
+/// reaction. Eased to 2 the strongly lit area came to 57-64% of master's;
+/// past 2 toward 4 a body's lights stay as they were.
+pub const MOMENT_KNEE: f32 = 2.0;
+pub const MOMENT_MOST: f32 = 4.0;
+
+/// A cluster's colour with its brightest channel eased toward `MOMENT_MOST`
+/// past `MOMENT_KNEE` (its hue kept).
+fn eased(c: Vec3) -> Vec3 {
+    let m = c.max_element();
+    if m <= MOMENT_KNEE {
+        return c;
+    }
+    let room = MOMENT_MOST - MOMENT_KNEE;
+    c * ((MOMENT_KNEE + room * (1.0 - (-(m - MOMENT_KNEE) / room).exp())) / m)
+}
+
 /// One light of the moment held from frame to frame: where it is, its reach
 /// and its colour, each through the two stages, and this frame's cluster.
 #[derive(Clone, Copy, Debug)]
@@ -357,7 +380,8 @@ struct Track {
 /// particles, its middle a metre off the next frame, under the floor the one
 /// after), how bright and what colour (a spark born white in a blue cloud).
 /// So those within `MOMENT_MERGE` of one another are one (their colours
-/// summed, at their middle by strength, the mean reach), each is followed
+/// summed and eased past `MOMENT_KNEE`, at their middle by strength, the
+/// mean reach), each is followed
 /// from frame to frame by where it is, its colour and reach eased toward the
 /// frame's through two stages of `MOMENT_TAU` and its middle through two of
 /// `MOMENT_TAU_AT`; a new one comes up from nothing, one whose particles are
@@ -398,6 +422,9 @@ impl Moment {
                 }
                 None => clusters.push((PointLight { fixed: false, ..*l }, w)),
             }
+        }
+        for (c, _) in &mut clusters {
+            c.color = eased(c.color);
         }
         // each to the nearest held light not taken, within reach of it
         for t in &mut self.tracks {
@@ -993,6 +1020,40 @@ mod tests {
         let behind = 119.0 * 20.0 / 60.0 - bolt.at.x;
         assert!((behind - 20.0 * 2.0 * MOMENT_TAU_AT).abs() < 0.5 && (bolt.color - Vec3::ONE * 0.4).abs().max_element() < 0.01, "followed {behind} behind, its colour its own: {bolt:?}");
         assert!(m.len() == 3, "not made anew as it moves: {} held", m.len());
+    }
+
+    /// A cluster's brightness eased past `MOMENT_KNEE` toward `MOMENT_MOST`:
+    /// one emitter's light (0.9 at most), one bolt drawing's (0.8) or a
+    /// body's few together (2 at the knee) as it is; a lightning's dozen
+    /// drawings summed (7.75, 0x58f4da33's) under 4, its hue kept; brighter
+    /// always brighter. The control: summed as master summed them in the
+    /// shader, 7.75.
+    #[test]
+    fn a_clusters_light_is_eased_not_blown_out() {
+        let one = Vec3::new(0.9, 0.6, 0.1);
+        assert_eq!(eased(one), one, "one emitter's light as it is");
+        let body = Vec3::new(2.0, 1.4, 0.2);
+        assert_eq!(eased(body), body, "a body's few at the knee as they are");
+        let dozen = Vec3::new(0.8, 0.65, 0.0) * 9.7;
+        let e = eased(dozen);
+        assert!(dozen.max_element() > 7.7, "the control: summed, {dozen:?}");
+        assert!(e.max_element() < MOMENT_MOST && e.max_element() > 3.8, "eased under the most: {e:?}");
+        assert!((e.y / e.x - dozen.y / dozen.x).abs() < 1e-5 && e.z == 0.0, "its hue kept: {e:?}");
+        let mut last = 0.0;
+        for k in 1..120 {
+            let m = eased(Vec3::splat(k as f32 * 0.1)).x;
+            assert!(m > last, "brighter always brighter at {k}: {m} after {last}");
+            last = m;
+        }
+        // a lightning's held through `Moment` comes no brighter than the most
+        let mut m = Moment::default();
+        let mut out = Vec::new();
+        for k in 0..120 {
+            out.clear();
+            let draws: Vec<PointLight> = (0..12).map(|i| PointLight { at: Vec3::new(0.0, 1.0, 1.0 + i as f32 * 0.3), range: 15.0, color: Vec3::new(0.8, 0.65, 0.0), fixed: false }).collect();
+            m.frame(&draws, k * 1000 / 60, &mut out);
+        }
+        assert!(out.len() == 1 && out[0].1.color.max_element() < MOMENT_MOST, "{out:?}");
     }
 
     /// The budget changing hands: 20 fires down the view, each a fifth
