@@ -15,6 +15,8 @@ is put on the page by `.github/workflows/notes.yml`.
 - Hair colour where the body has hair: goblins, orcs, kappas and the dryad's kin, and a kerran's mane.
 - A body you choose waves, bows, points and cheers as its race does, and a great skeleton wears armour round
   its bones as a skeleton does.
+- Character select shows a character you just made in the body you chose (it showed the race's usual body
+  until you looked at another character).
 - Characters made before keep their look.
 
 ## 2026-11-09 · Jump
