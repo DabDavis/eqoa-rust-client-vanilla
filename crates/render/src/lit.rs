@@ -40,7 +40,16 @@ pub struct PointLight {
     /// A light fixed in the scene (a fire's, a placed light's), which a
     /// baked instance's colour buffers already hold.
     pub fixed: bool,
+    /// Which light it is from frame to frame (`eqoa`'s `lights`: a fixed
+    /// light's place in its list, a light of the moment's own), for what
+    /// follows a light over frames (Light Shadows' maps, `lightshadow`); 0
+    /// for one with none, [`PERSONAL_KEY`] the personal light's.
+    pub key: u64,
 }
+
+/// The personal light's key ([`PointLight::key`]): the view's `point`, put
+/// first in the frame's list ([`listed`]).
+pub const PERSONAL_KEY: u64 = u64::MAX;
 
 /// A frame's point lights, at most [`MAX_LIGHTS`] (the rest dropped), in a
 /// form a view can copy.
@@ -87,6 +96,17 @@ pub(crate) struct LightsUniform {
     tiles: [[u32; 4]; TILES.0 * TILES.1 / 4],
 }
 
+/// The frame's lights as `lit.wgsl` takes them, in its order: the personal
+/// light `point` (the view's: position, range, colour; none at range 0),
+/// then `lights`, at most [`MAX_LIGHTS`] in all. The personal light is one
+/// of the list, not fixed (the console's one point light lights baked
+/// geometry too).
+pub fn listed(point: Option<(Vec3, f32, Vec3)>, lights: &Lights) -> Lights {
+    let personal = point.filter(|p| p.1 > 0.0).map(|(at, range, color)| PointLight { at, range, color, fixed: false, key: PERSONAL_KEY });
+    let all: Vec<PointLight> = personal.into_iter().chain(lights.as_slice().iter().copied()).take(MAX_LIGHTS).collect();
+    Lights::new(&all)
+}
+
 impl LightsUniform {
     /// The personal light `point` (the view's: position, range, colour),
     /// then `lights`, as the shader takes them, at most `MAX_LIGHTS` in all:
@@ -97,9 +117,7 @@ impl LightsUniform {
     /// one of the list, not fixed (the console's one point light lights baked
     /// geometry too), so it is culled by the tiles and evaluated as cheaply.
     pub(crate) fn new(point: Option<(Vec3, f32, Vec3)>, lights: &Lights, eye: Vec3, view_proj: Mat4) -> Self {
-        let personal = point.filter(|p| p.1 > 0.0).map(|(at, range, color)| PointLight { at, range, color, fixed: false });
-        let all: Vec<PointLight> = personal.into_iter().chain(lights.as_slice().iter().copied()).take(MAX_LIGHTS).collect();
-        let lights = Lights::new(&all);
+        let lights = listed(point, lights);
         let mut u = LightsUniform::zeroed();
         let fixed = lights.as_slice().iter().enumerate().filter(|(_, p)| p.fixed).fold(0u32, |m, (k, _)| m | 1 << k);
         u.count = [lights.len() as u32, TILES.0 as u32, TILES.1 as u32, fixed];

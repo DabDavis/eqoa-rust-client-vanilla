@@ -731,6 +731,8 @@ impl Client {
         // the characters' capes, on a server with capes (`cape`); they come
         // after the list, and with every list
         crate::cape::set_offered(s.capes);
+        // and the lists' sizes, as that server last said (`inventory`)
+        crate::inventory::set_caps(s.item_lists);
         for c in &mut self.chars {
             c.cape = if s.capes { s.cape_list.get(&c.server_id).copied() } else { None };
         }

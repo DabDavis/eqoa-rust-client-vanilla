@@ -26,6 +26,10 @@ mod liveplay;
 mod duelplay;
 #[path = "recordplay.rs"]
 mod recordplay;
+#[path = "mapsuggest.rs"]
+mod mapsuggest;
+#[path = "groupmark.rs"]
+mod groupmark;
 
 use crate::walker::{Placing, Spawn, Walker};
 use esf::Library;
@@ -184,6 +188,9 @@ pub struct Play {
     /// its speed up (+) or down, its update's and then carried under the walk's
     /// gravity between updates (`jump::extrapolate_move`).
     aloft_vy: Vec<Option<F<Ee>>>,
+    /// Each player's jump as drawn, by slot (`jump::Air`): its fall in by the
+    /// top of its arc, its landing played once it comes down.
+    airs: Vec<crate::jump::Air>,
     /// Each entity's actor in the walker's collision world (`m_actor`), by
     /// slot (`place_actors`), and the player's own (`place_self_actor`): what
     /// a walk stops at. The scene they are in (`World::serial`), and the
@@ -413,7 +420,21 @@ pub struct Play {
     quests: crate::questlog::Quests,
     quest_log: crate::questlog::QuestLog,
     quest_open: bool,
+    /// the journal was opened from the quest tracker (`Pick::Quests`): closed,
+    /// it goes back to the world, not to the start menu
+    quest_from_hud: bool,
     quest_keys: Vec<(i32, bool)>,
+    /// The quest guide (`questguide`, the Quest Helper's): the client's own
+    /// quest marks and tracker where the server sends none; whether this
+    /// server offered its own in the session (then the guide stays off for
+    /// good); when the guide may begin, on the session's clock
+    /// (`GUIDE_WAIT_MS` into the world, so a server's offer comes first); and
+    /// whether a scripted run turned it on whatever the server offers
+    /// (`EQOA_QUEST_GUIDE`).
+    guide: crate::questguide::Guide,
+    server_quests: bool,
+    guide_from: Option<u32>,
+    guide_forced: bool,
     /// The stat trainer (mode 12): opened, 0x001D's refresh, keys.
     trainer: crate::trainer::Trainer,
     trainer_open: bool,
@@ -448,6 +469,14 @@ pub struct Play {
     /// it sent dropped since (said once in the log).
     shouts_told: bool,
     shouts_dropped: bool,
+    /// Chat lines `chat_line` dropped because this connection has no self id
+    /// (CLIENT's `m_selfId == -1`: no world entry on it, or the server opened a
+    /// new game connection after one, `ResetWorld`), and how many times that
+    /// happened in the world: said in the log and in a bug report's note,
+    /// since the game drops such a line without a word (petition 1355, "i cant
+    /// chat in /say").
+    chat_unsent: u32,
+    reopened: u32,
     /// The buddy list (VIClient's map, `VIWndBuddy`: mode 18, a request
     /// mode 17) and the ignore list (`VIClientPart38300`,
     /// `VIWndIgnoreList`: mode 26); a panel to open with the next HUD
@@ -520,6 +549,8 @@ pub struct Play {
     alarm: crate::alarm::Alarm,
     /// `EQOA_QUICK_TEXT`'s progress: the piece, the character.
     quick_typed: (usize, usize),
+    /// The map (M; the client's own, `map.rs`; Extended's Map).
+    pub map: crate::map::Map,
     /// The loading screen (`VIClient::LoadingProgress`, `loading.rs`): up
     /// from a move or world entry until the zones round the arrival are in.
     loading: crate::loading::Screen,
@@ -546,6 +577,28 @@ pub struct Play {
 /// stepped at a quarter of the frame rate (F3 20261024-065253: Desert
 /// Madmen, a human's LOD body, at 110 in the dawn fog).
 const FAR_POSE_BUDGET: u32 = 50;
+
+/// How long into the world the quest guide waits for a server's own quest
+/// marks and tracker before making its own (`Play::guide_on`): go-eqoa-server
+/// offers them at once, with the world entry's first replies.
+const GUIDE_WAIT_MS: u32 = 3000;
+
+/// The quest marks for the map and the minimap: the guide's while it is on
+/// (`guide_on`), else the server's while it offers them, none of either with
+/// Quest Markers off; `None` (no Quests button) with neither, or with the
+/// Quest Helper off. Of the fields, not of `Play`, so the map borrows beside
+/// it.
+fn quest_marks_of<'a>(session: &'a Session, guide: &'a crate::questguide::Guide, guide_on: bool) -> Option<&'a [net::session::QuestMark]> {
+    if !crate::settings::quest_helper() {
+        return None;
+    }
+    let on = crate::settings::quest_markers();
+    if guide_on {
+        Some(if on { &guide.estimate.marks[..] } else { &[] })
+    } else {
+        session.quest_marks_offer.then_some(if on { &session.quest_marks[..] } else { &[] })
+    }
+}
 
 /// How many frames drawn a far character waits between poses with `far` of
 /// them in view: every frame up to `FAR_POSE_BUDGET`, then about that many
@@ -901,15 +954,17 @@ fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Lo
 /// items and helm on their nodes (a player's in a body one of the server's
 /// `races` wears holding items as a race's body does: `racebody`).
 /// Built in the art its model is drawn in (`esf::Library::view_for`): the
-/// 2002 disc's, whole, for a model that disc has while its art is drawn.
+/// 2002 disc's, whole, for a model that disc has while its art is drawn. On a
+/// server with `jumps`, a player's in a body with no fall or landing of its
+/// own falls and lands as the table has it (`raceemote::grant_air`).
 #[allow(clippy::too_many_arguments)]
-fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>) -> Option<Puppet> {
+fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Puppet> {
     let era = lib.view_for(e.drawn_model as i32);
-    lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era, races))
+    lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era, races, jumps))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era, races: Option<&net::creation::Creation>) -> Option<Puppet> {
+fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Puppet> {
     let textures = render::library_textures(lib);
     lib.lookup(e.drawn_model as i32).and_then(|r| {
                     let mut model = lib.build_model(r)?;
@@ -920,6 +975,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if let Some(cs) = sprite.as_mut() {
                         crate::racebody::grant(cs, e.drawn_model, player, races);
                         crate::raceemote::grant(lib, cs, &mut anims, e.drawn_model, player, races);
+                        crate::raceemote::grant_air(lib, cs, &mut anims, e.drawn_model, player, jumps);
                     }
                     let held = held_by(sprite.as_ref(), e.creature.as_ref());
                     let (attached, weapons, helm_worn) = match (&sprite, &e.creature) {
@@ -1039,17 +1095,7 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
     let mut helm_worn = false;
     // the server's patch's tables (`s2`), retail's without one
     let t = crate::s2::get().cust();
-    let node = crate::slotless::helm_node(lib, model, cs, player);
-    if node >= 0
-        && let Some(h) = vi::cust::helm_with(c.armor[5], &t)
-        && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
-    {
-        let tint = look_of(c).helm_color(&t);
-        for b in &mut m.batches {
-            for l in &mut b.layers {
-                l.color = tint;
-            }
-        }
+    if let Some((node, m)) = crate::slotless::helm_on(lib, model, cs, player, c.armor[5], look_of(c).helm_color(&t), &t, true) {
         helm_worn = true;
         attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
     }
@@ -1102,13 +1148,16 @@ fn redo(was: (u32, u32, Option<vi::cust::Look>, Held), now: (u32, u32, Option<vi
 /// for a list that came after it was made). The puppet it replaced, when it
 /// was made anew.
 #[allow(clippy::too_many_arguments)]
-fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>) -> Option<Option<Puppet>> {
+fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Option<Puppet>> {
     if let Some(p) = p.as_mut().filter(|p| (p.id, p.model) == (e.id, e.drawn_model))
         && let Some(cs) = p.sprite.as_mut()
     {
         crate::racebody::grant(cs, p.model, a_player(e), races);
         let anims = &mut p.anims;
-        lib.with_view(p.era, || crate::raceemote::grant(lib, cs, anims, p.model, a_player(e), races));
+        lib.with_view(p.era, || {
+            crate::raceemote::grant(lib, cs, anims, p.model, a_player(e), races);
+            crate::raceemote::grant_air(lib, cs, anims, p.model, a_player(e), jumps)
+        });
     }
     let r = p.as_ref().map_or(Redo::Build, |p| redo((p.id, p.model, p.look, p.held), (e.id, e.drawn_model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
     // a server's race's look come, changed or gone (`raceopts`): made anew
@@ -1121,7 +1170,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
     let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.drawn_model as i32) || p.textures != crate::texpack::generation()) { Redo::Build } else { r };
     match r {
         Redo::Keep => None,
-        Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms, races))),
+        Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms, races, jumps))),
         Redo::Items => {
             if let Some(p) = p.as_mut()
                 && let (Some(cs), Some(c)) = (&p.sprite, &e.creature)
@@ -2375,7 +2424,7 @@ mod held {
         let holds = |p: &Option<Puppet>| p.as_ref().and_then(|p| p.sprite.as_ref()).expect("a sprite").holds_items;
 
         let mut player = None;
-        apply(&lib, &mut g, &mut player, &entity(2), None, 0, 0, Some(&races));
+        apply(&lib, &mut g, &mut player, &entity(2), None, 0, 0, Some(&races), false);
         let p = player.as_ref().unwrap();
         assert_eq!(p.held, [Some((sword, 11)), Some((bow, 21)), Some((shield, 20))]);
         assert_eq!(nodes(&player), [11, 20, 21], "each item's model on its node");
@@ -2384,7 +2433,7 @@ mod held {
 
         for (who, list) in [("an NPC", Some(&races)), ("a server with no races of its own", None)] {
             let mut bare = None;
-            apply(&lib, &mut g, &mut bare, &entity(if who == "an NPC" { 0 } else { 2 }), None, 0, 0, list);
+            apply(&lib, &mut g, &mut bare, &entity(if who == "an NPC" { 0 } else { 2 }), None, 0, 0, list, false);
             assert!(nodes(&bare).is_empty(), "{who}: nothing hung");
             assert_eq!((bare.as_ref().unwrap().held, bare.as_ref().unwrap().projectile), ([None; 3], [None; 2]), "{who}");
             assert!(!holds(&bare), "{who}");
@@ -2392,9 +2441,9 @@ mod held {
 
         // the list after the puppet: its items at the next apply, not made anew
         let mut late = None;
-        apply(&lib, &mut g, &mut late, &entity(2), None, 0, 0, None);
+        apply(&lib, &mut g, &mut late, &entity(2), None, 0, 0, None, false);
         assert!(nodes(&late).is_empty());
-        let made_anew = apply(&lib, &mut g, &mut late, &entity(2), None, 0, 33, Some(&races));
+        let made_anew = apply(&lib, &mut g, &mut late, &entity(2), None, 0, 33, Some(&races), false);
         assert!(made_anew.is_none(), "the puppet kept");
         assert_eq!(nodes(&late), [11, 20, 21]);
     }
@@ -2488,7 +2537,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_keys: Vec::new(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2511,6 +2560,7 @@ impl Play {
     pub fn client_data(&mut self, img: &crate::client_image::ClientImage) {
         self.start = Some(crate::startmenu::StartData::from_image(img));
         self.race_cams = Some(crate::camstyle::race_cameras(img));
+        self.map.client_data(img);
         // the server's trigger names, if they came before the menus
         self.trigger_labels();
         // and the duel's entry, if the server's feature word came before them
@@ -2571,7 +2621,11 @@ impl Play {
         if let (Some(cs), Some(model)) = (walker.sprite.as_mut(), self.self_model) {
             crate::racebody::grant(cs, model, true, self.session.creation.as_ref());
             let anims = &mut walker.anims;
-            lib.with_view(lib.view_for(model as i32), || crate::raceemote::grant(lib, cs, anims, model, true, self.session.creation.as_ref()));
+            lib.with_view(lib.view_for(model as i32), || {
+                crate::raceemote::grant(lib, cs, anims, model, true, self.session.creation.as_ref());
+                // on a server with jumps, its fall and landing the table's
+                crate::raceemote::grant_air(lib, cs, anims, model, true, self.session.jumps)
+            });
         }
     }
 
@@ -2587,6 +2641,9 @@ impl Play {
         let events = self.session.pump();
         // capes in their slot while the server's offer is taken (`cape`)
         crate::cape::set_offered(self.session.capes);
+        // the pack's and the bank's records, as the server last said before a
+        // dump (`inventory::pack_cap`; CLIENT's 40 where none says)
+        crate::inventory::set_caps(self.session.item_lists);
         // a server's races' own options and the looks chosen (`raceopts`): the
         // creatures in a look made again in it (`apply`)
         crate::raceopts::set_options(self.session.race_options.as_ref());
@@ -2608,7 +2665,12 @@ impl Play {
                     let line = format!("{}: {}", w(550), w(if on { 551 } else { 552 }));
                     self.add_chat(line, [1.0; 4]);
                 }
-                Event::Dialog { text, .. } => self.show_dialog(&text),
+                Event::Dialog { text, .. } => {
+                    if crate::questguide::is_finished(&text) {
+                        self.guide_finished(now);
+                    }
+                    self.show_dialog(&text);
+                }
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
                 Event::Opcode { op: 0x005E, .. } => self.msg_005e(walker),
                 // the live game's duel (`duelplay`): 0x1502 (the feature word
@@ -2618,7 +2680,15 @@ impl Play {
                 }
                 // PumpMessages' connect: the duel part reset (the live
                 // client's)
-                Event::Promoted => self.duel_reset(),
+                Event::Promoted => {
+                    // the server opened a new game connection under a session in
+                    // the world: CLIENT's `ResetWorld` (no self id until a
+                    // MemoryDump), which leaves chat unsent; said, as the game
+                    // says nothing
+                    self.reopened += 1;
+                    crate::say("net: the server opened a new game connection in the world: no chat is sent until it sends the world again (a MemoryDump)");
+                    self.duel_reset();
+                }
                 Event::Teleport { world, pos, hpr, token } => self.msg_00b2(walker, world, pos, hpr, token, now as i64),
                 // 0x00F8: `m_speed`, then SetSpeed (a speed buff, a snare)
                 Event::Speed(v) => self.set_speed(v),
@@ -2679,7 +2749,7 @@ impl Play {
                 Event::InvAdd(item) => {
                     // AddInvItem
                     let limit = item.item.max_stack;
-                    crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::CAPACITY);
+                    crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::pack_cap());
                     self.npcw_item_added();
                 }
                 Event::InvTook { slot, sound, n } => {
@@ -2982,6 +3052,7 @@ impl Play {
                     let had = self.actors[slot];
                     let jumps = self.session.jumps;
                     let vy = &mut self.aloft_vy[slot];
+                    let air = &mut self.airs[slot];
                     // the live game's look, when the server said it is in force
                     self.entities.live_look = self.session.live_look;
                     // where it was drawn and its speed, before this update
@@ -2991,6 +3062,7 @@ impl Play {
                             let mut w = WalkControl::<Ee>::default();
                             w.init(Vect3::default(), Vect3::default(), scene);
                             *walk = Some((e.id, w));
+                            *air = Default::default();
                         }
                         // VICreatureEntity::Sync: the update becomes the walk
                         // control's physics; a creature that does not walk is
@@ -3018,7 +3090,15 @@ impl Play {
                             // height (`jump`), the rest on the ground
                             let aloft = e.creature.as_ref().is_some_and(|c| crate::jump::aloft(jumps, c));
                             *vy = e.creature.as_ref().filter(|_| aloft).map(|c| F::new(c.velocity[1]));
-                            crate::jump::ground(scene, skel, aloft, &mut pos, &mut hpr);
+                            let stood = crate::jump::ground(scene, skel, aloft, &mut pos, &mut hpr);
+                            // its jump as drawn: up from the update in the air,
+                            // down at one on a floor's gait or stood on one
+                            if let Some(c) = e.creature.as_ref() {
+                                *air = air.update(aloft, c.state, c.velocity[1]);
+                                if aloft {
+                                    *air = air.drawn(stood, F::new(c.velocity[1]));
+                                }
+                            }
                             e.pos = pos.to_array();
                             e.hpr = hpr.to_array();
                         }
@@ -3049,6 +3129,9 @@ impl Play {
                     self.disconnected = Some(r);
                 }
                 Event::Chat(text, color) => self.server_line(text, color),
+                // the group's chat: the group's waypoint read too, with the
+                // Map on (`groupmark`)
+                Event::GroupChat { text, .. } => self.group_line(text),
                 // CastingCombat (0x00B1) and Msg0776: an effect to play; one
                 // the player cast itself (0x0776) it has already played.
                 Event::Opcode { op, data } => {
@@ -3139,6 +3222,8 @@ impl Play {
         }
         self.agree_entity_view();
         self.agree_raid_roster();
+        self.agree_quests();
+        self.guide_wait(now);
         self.record_menu(); // Character > Combat Record once the server offers it
         self.drop_dead_target_info();
         if self.has_self() {
@@ -3234,7 +3319,11 @@ impl Play {
             let dt = F::<Ee>::new((game_ms - e.extrapolated) as i32 as f32) * F::new(0.001);
             let (mut pos, mut hpr) = (v3(e.pos), v3(e.hpr));
             let vy = self.aloft_vy[slot].as_mut().filter(|_| crate::jump::aloft(self.session.jumps, c));
-            crate::jump::extrapolate_move(&mut walker.scene, skel, vy, &v3(c.velocity), dt, &mut pos, &mut hpr);
+            let stood = crate::jump::extrapolate_move(&mut walker.scene, skel, vy, &v3(c.velocity), dt, &mut pos, &mut hpr);
+            // a jumper drawn down to a floor (`jump::Air`)
+            if let Some(vy) = self.aloft_vy[slot].filter(|_| crate::jump::aloft(self.session.jumps, c)) {
+                self.airs[slot] = self.airs[slot].drawn(stood, vy);
+            }
             e.pos = pos.to_array();
             e.hpr = hpr.to_array();
             e.extrapolated = game_ms;
@@ -3266,7 +3355,7 @@ impl Play {
                 && e.drawn_model != 0
             {
                 let look = e.creature.as_ref().map(look_of);
-                apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms, self.session.creation.as_ref());
+                apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms, self.session.creation.as_ref(), self.session.jumps);
                 let want = cape_of(&self.session, e);
                 if let Some(p) = self.self_puppet.as_mut() {
                     wear_cape(lib, &mut g, p, want);
@@ -3282,7 +3371,7 @@ impl Play {
                 continue;
             };
             let look = e.creature.as_ref().map(look_of);
-            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms, self.session.creation.as_ref())
+            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms, self.session.creation.as_ref(), self.session.jumps)
                 && let Some(s) = sound.as_deref_mut()
             {
                 s.share_sounds(lib, &sounds_of(&self.puppets[slot]));
@@ -3329,12 +3418,17 @@ impl Play {
                             (CreatureLoco::Walk, Some(w)) => {
                                 w.update_sprite(cs, &p.anims, &mut p.rand);
                             }
-                            _ => cs.set_locomotion(c.state as i32, &p.anims, &mut p.rand),
+                            _ => {
+                                cs.set_locomotion(c.state as i32, &p.anims, &mut p.rand);
+                                // a player's jump: the fall in by its top, the
+                                // landing once down (`jump::draw_air`)
+                                crate::jump::draw_air(&mut self.airs[slot], self.aloft_vy[slot], cs, &p.anims, &mut p.rand);
+                            }
                         }
                         if watching(&c.name) {
                             let w = self.walks[slot].as_ref().map(|(_, w)| w);
                             eprintln!(
-                                "[watch] {game_ms} {} pos {:.2?} drawn {:.2?} state {} p255 {} walk {:?} vel {:.2?} anim {:?} stamp {} pose {} frame {}",
+                                "[watch] {game_ms} {} pos {:.2?} drawn {:.2?} state {} p255 {} walk {:?} vel {:.2?} anim {:?} stamp {} pose {} frame {} blend {:.2} air {:?}",
                                 c.name,
                                 e.pos,
                                 e.actor_pos,
@@ -3345,7 +3439,9 @@ impl Play {
                                 [cs.cur[0].anim, cs.cur[1].anim],
                                 e.stamp,
                                 pose,
-                                if cs.cur[0].play >= 0 { cs.h.plays.get(cs.cur[0].play).frame_a } else { -1 }
+                                if cs.cur[0].play >= 0 { cs.h.plays.get(cs.cur[0].play).frame_a } else { -1 },
+                                crate::jump::blended(cs, &p.anims),
+                                self.airs[slot]
                             );
                         }
                     }
@@ -3929,11 +4025,11 @@ impl Play {
         self.mode != 0 && self.mode != 38
     }
 
-    /// What brings back what Hide UI hid (`hideui::frame`): a window up, a
-    /// server's player search, the target's details (Q held), a line being
-    /// typed, or the player dead.
+    /// What brings back what Hide UI hid (`hideui::frame`): a window up, the
+    /// map, a server's player search, the target's details (Q held), a line
+    /// being typed, or the player dead.
     pub fn wants_ui(&mut self) -> bool {
-        self.window_up() || self.search.open || self.info_up || self.info_window.open > 0.0 || self.keyboard_typing() || self.is_dead()
+        self.window_up() || self.map.open || self.search.open || self.info_up || self.info_window.open > 0.0 || self.keyboard_typing() || self.is_dead()
     }
 
     /// The loading screen is up (drawn on the 2D layer, never hidden).
@@ -4075,7 +4171,7 @@ impl Play {
         }
         if game_frame {
             let now = self.session.now();
-            let busy = self.mode != 0 || self.search.open || self.typing.is_some();
+            let busy = self.mode != 0 || self.map.open || self.search.open || self.typing.is_some();
             if self.aim_hold && now.wrapping_sub(self.aim_at) as i32 > 300 && !busy {
                 self.begin_manual_camera(cam, dir);
                 self.aim_hold = false;
@@ -4464,6 +4560,16 @@ impl Play {
         self.keyboard = !finger;
         let (Click::Target(x, y) | Click::Interact(x, y) | Click::Right(x, y)) = c;
         let f = render::ui::frame_from_window(size, [x as f32, y as f32]);
+        // the map, while it is up: its buttons and glyphs; a right click is △;
+        // a click on the map itself puts the waypoint there or takes it away
+        if self.map.open {
+            let keys = if matches!(c, Click::Right(..)) { vec![crate::pointer::key::TRIANGLE] } else { self.map.point(f, finger) };
+            if keys.is_empty() && matches!(c, Click::Target(..)) {
+                self.map.click([x as f32, y as f32], finger);
+            }
+            self.press(&keys);
+            return true;
+        }
         // in play; a server's player search over it is a window
         if self.mode == 0 && !self.search.open {
             // Hide UI (`hideui`): none of the HUD's buttons is there to press
@@ -4471,9 +4577,16 @@ impl Play {
                 return false;
             }
             // the quick menus and the chat box are drawn out at a wide
-            // window's right; in a tall window the quick menus up at its top,
-            // the chat box down at its bottom (each answers in its own place)
+            // window's right, the compass at its left; in a tall window the
+            // compass and the quick menus up at its top, the chat box down at
+            // its bottom (each answers in its own place)
             let (side, up) = (render::ui::side(size), render::ui::top(size));
+            // the compass opens the map, with the Map on (the touch screen's
+            // way to it)
+            if crate::settings::map() && crate::map::on_compass([f[0] + side, f[1] + up]) && self.hud.is_some() {
+                self.map.show();
+                return true;
+            }
             if let Some(k) = self.hud_menus.point([f[0] - side, f[1] + up]) {
                 // the pad key it stands for in S2's record, let go at once
                 self.note_hud_key(k, true);
@@ -4497,6 +4610,19 @@ impl Play {
                 // id is a stand-in, nothing to target)
                 Some(crate::hud::Pick::Raid(id)) => Some(id).filter(|&id| self.sees_entity(id)),
                 Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),
+                // the minimap: the map opened, as the compass opens it
+                Some(crate::hud::Pick::Minimap) => {
+                    self.map.show();
+                    return true;
+                }
+                // the quest tracker: the quest journal (OpenQuestLog's mode
+                // 22), closed back to the world
+                Some(crate::hud::Pick::Quests) => {
+                    self.quest_open = true;
+                    self.quest_from_hud = true;
+                    self.mode = 22;
+                    return true;
+                }
                 None => return false,
             };
             if let Some(id) = id.filter(|&id| id != self.target) {
@@ -4772,7 +4898,14 @@ impl Play {
     /// commands.
     pub fn chat_line(&mut self, text: &str) {
         let wide: Vec<u16> = text.encode_utf16().collect();
-        if self.session.self_id.is_none() || wide.len() >= 128 {
+        if self.session.self_id.is_none() {
+            self.chat_unsent += 1;
+            if self.chat_unsent == 1 || self.chat_unsent.is_multiple_of(10) {
+                crate::say(&format!("chat: a line not sent ({} so far): this connection has had no world entry since the server opened it, so the game sends no chat (CLIENT's ChatLine)", self.chat_unsent));
+            }
+            return;
+        }
+        if wide.len() >= 128 {
             return;
         }
         let target = self.target;
@@ -4866,6 +4999,8 @@ impl Play {
         if self.session.bug_reports {
             let note = self.bug_note();
             self.session.send_bug_note(&note);
+            // a page's last crash went with it: said once (`bugnote::last_crash`)
+            crate::bugnote::crash_sent();
         }
     }
 
@@ -4889,6 +5024,9 @@ impl Play {
         }
         lines.push(("entities shown", self.entities.slots.iter().flatten().count().to_string()));
         lines.push(("window", self.mode.to_string()));
+        if self.chat_unsent > 0 || self.reopened > 0 {
+            lines.push(("chat", format!("{} lines not sent (no self id), the game connection reopened {} times in the world", self.chat_unsent, self.reopened)));
+        }
         crate::bugnote::compose(&lines)
     }
 
@@ -5103,11 +5241,11 @@ impl Play {
         self.death.is_some()
     }
 
-    /// Play alone on the screen (no window or box up, nothing typed into, no
-    /// world change under way) and the player alive: where a box of the
-    /// client's own may stay (`update`'s question).
+    /// Play alone on the screen (no window, box or map up, nothing typed
+    /// into, no world change under way) and the player alive: where a box of
+    /// the client's own may stay (`update`'s question).
     pub fn plain(&mut self) -> bool {
-        self.mode == 0 && !self.keyboard_typing() && !self.is_dead() && self.world_change.is_none()
+        self.mode == 0 && !self.map.open && !self.keyboard_typing() && !self.is_dead() && self.world_change.is_none()
     }
 
     /// `plain`, and no fight on: where such a box may come up.
@@ -5199,7 +5337,7 @@ impl Play {
     /// Whether a pointer may look round: in play (no window up) and with the
     /// camera free (the start menu's framing takes it, `m_p06DC4`).
     pub fn look_free(&self) -> bool {
-        self.mode == 0 && self.locks.1
+        self.mode == 0 && self.locks.1 && !self.map.open
     }
 
     /// What `UpdateControls` reads of the client this frame.
@@ -5268,6 +5406,10 @@ impl Play {
     /// the chat box's history, a dialog. False in play (mode 0), where
     /// `VIWndGame` takes them.
     fn window_key(&mut self, key: i32, down: bool) -> bool {
+        // the map, while it is up, over everything (`map.rs`)
+        if self.map.key(key, down) {
+            return true;
+        }
         // a server's player search, while it is up: every key (S2 puts its
         // handler in `VIWndGame`'s and the HUD's menus' `OnKeyDown`)
         if self.search.open {
@@ -5790,9 +5932,12 @@ impl Play {
         let inv = &self.dump.inventory;
         let pl = &self.dump.player;
         let flags = net::session::EXPANSION_FLAGS;
+        // each tab holds the definition's 40, or every record of a pack past
+        // them (`inventory::pack_cap`)
+        let counts = s.item_counts.map(|c| c.max(crate::inventory::pack_cap() as i32));
         self.items.set_built(crate::itemmenu::build(
             inv,
-            s.item_counts,
+            counts,
             &|k| crate::inventory::item_icon(&inv.items[k], flags) as i32,
             &|k| crate::inventory::can_use(&inv.items[k], pl.class, pl.race, pl.level),
         ));
@@ -5996,6 +6141,10 @@ impl Play {
         let rest = &r.data[r.pos..];
         let rgb = (crate::s2::get().damage_rgb && rest.len() >= 3).then(|| [rest[0], rest[1], rest[2]]);
         let me = self.self_id32();
+        // the player's or its pet's hit: the guide's kill when it dies
+        if amount > 0 && (Some(attacker) == me || (attacker == self.pet_id && self.pet_id != u32::MAX)) {
+            self.guide.hit(defender, self.session.now());
+        }
         // the player's own hit: after a swap the swing timer follows the
         // server's rounds (`attackclock`), whatever the damage numbers show
         if Some(attacker) == me {
@@ -6311,10 +6460,13 @@ impl Play {
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
         for up in ups {
             match up {
-                // ClosePanel6DC: CloseQuestLog, back to the start menu
+                // ClosePanel6DC: CloseQuestLog, back to the start menu (to
+                // the world when the quest tracker opened it)
                 crate::questlog::QuestUp::Close => {
                     self.mode = 0;
-                    self.open_start_menu(false);
+                    if !std::mem::take(&mut self.quest_from_hud) {
+                        self.open_start_menu(false);
+                    }
                 }
                 crate::questlog::QuestUp::Drop(i) => {
                     let m = self.quests.send_remove(i);
@@ -6527,7 +6679,10 @@ impl Play {
             match self.edit.key(vui, r, key, now, &mut cues) {
                 crate::editbox::EditUp::Done(purpose) => self.edit_done(purpose),
                 crate::editbox::EditUp::Cancel => {
-                    self.mode = if self.who_tell.take().is_some() { 35 } else { 0 };
+                    let purpose = self.edit.purpose;
+                    if !self.map_edit_done(purpose, false) {
+                        self.mode = if self.who_tell.take().is_some() { 35 } else { 0 };
+                    }
                 }
                 _ => {}
             }
@@ -6537,6 +6692,10 @@ impl Play {
 
     /// 259: the edit box's text to where it was for.
     fn edit_done(&mut self, purpose: u32) {
+        // a community marker's name and note (`mapsuggest`)
+        if self.map_edit_done(purpose, true) {
+            return;
+        }
         let text = String::from_utf16_lossy(&self.edit.text);
         // VIWndWhoList::SendTell, back to the list
         if let Some(name) = self.who_tell.take() {
@@ -7849,6 +8008,215 @@ impl Play {
         }
     }
 
+    /// The map's frame (`map.rs`): its build behind the game, and while it
+    /// is up its view and quads, the player and the group on it. It closes
+    /// when a window comes up (the server's, a dialog) or the player dies.
+    /// With Extended's Map off none of it: an open map closes and lets go of
+    /// what it made (`Map::off`), and nothing is built, drawn or asked for.
+    /// The quest guide's frame runs first, whatever the Map (the Quest
+    /// Helper's tracker is the HUD's).
+    #[allow(clippy::too_many_arguments)]
+    pub fn map_frame(&mut self, walker: &Walker, lib: &Library, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, size: (u32, u32), dt: f32, sticks: [f32; 4]) {
+        let now = self.session.now();
+        self.guide_frame(walker, now);
+        if !crate::settings::map() {
+            self.map.off();
+            return;
+        }
+        if self.map.open && (self.mode != 0 || self.is_dead()) {
+            self.map.close();
+        }
+        // a community marker the map asked to suggest: the edit box for its
+        // name (`mapsuggest`); the group's waypoint asked, said to the group,
+        // and kept while its sender is in the group (`groupmark`)
+        self.take_map_suggest();
+        self.take_map_group_waypoint();
+        self.keep_group_waypoint();
+        let guide_on = self.guide_on(now);
+        let p = &walker.cam.walk.phys;
+        let me = self.self_id32();
+        let world = self.world_id();
+        let group = self.group.members[..self.group.count()]
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| Some(m.id) != me)
+            .filter_map(|(index, m)| {
+                // the entity's actor while it has one, else channel 0x40's place in this world
+                let pos = self.actor_pos(m.id).or_else(|| (m.x == world).then_some(m.pos))?;
+                Some((pos, index))
+            })
+            .collect();
+        let origin = walker.scene.grid.as_ref().map_or([1000.0, 1000.0], |g| [g.origin.x.0, g.origin.z.0]);
+        let cx = crate::map::Context {
+            lib,
+            device,
+            queue,
+            format,
+            size,
+            dt,
+            player: Some(([p.position.x.0, p.position.y.0, p.position.z.0], p.angles.x.0)),
+            world,
+            origin,
+            group,
+            in_group: self.group.in_group && self.group.count() > 0,
+            target: self.actor_pos(self.target).filter(|_| Some(self.target) != me).map(|t| [t[0], t[2]]),
+            sticks,
+            keyboard: self.keyboard,
+            words: self.words.as_ref(),
+            vui: self.hud.as_ref().map(|h| &h.0),
+            quest_marks: quest_marks_of(&self.session, &self.guide, guide_on),
+        };
+        self.map.frame(&cx);
+        // the minimap where the quick menus are, not under Hide UI
+        if self.minimap_up() && !crate::hideui::hidden() {
+            let mv = self.mini_view();
+            self.map.mini_frame(&cx, &mv);
+        } else {
+            self.map.mini_off();
+        }
+    }
+
+    /// Whether the minimap is up (`map::mini`): Extended's Map and Minimap
+    /// on, in play where the HUD's quick menus are (no window up, no player
+    /// search), the HUD made, the map not up and no loading screen.
+    pub fn minimap_up(&self) -> bool {
+        crate::settings::minimap() && self.right_hud_up()
+    }
+
+    /// Whether the HUD's right side under the quick menus is up: the game's
+    /// own play (mode 0, the quick chat's 30, the manual camera's 38), no
+    /// search, map or loading screen over it, the HUD made.
+    fn right_hud_up(&self) -> bool {
+        (self.mode == 0 || self.mode == 30 || self.mode == 38) && !self.search.open && !self.map.open && !self.loading.up() && self.hud.is_some()
+    }
+
+    /// The quest tracker's quests while it is up (`tracker`): the Quest
+    /// Helper and its Quest Tracker on, where the minimap could be.
+    fn tracker_quests(&self) -> Vec<net::session::TrackedQuest> {
+        if !crate::settings::quest_tracker() || !self.right_hud_up() {
+            Vec::new()
+        } else if self.guide_on(self.session.now()) {
+            self.guide.estimate.tracker.clone()
+        } else {
+            self.session.quest_progress.clone()
+        }
+    }
+
+    /// The quest marks for the map and the minimap now (`quest_marks_of`).
+    fn quest_marks(&self, now: u32) -> Option<&[net::session::QuestMark]> {
+        quest_marks_of(&self.session, &self.guide, self.guide_on(now))
+    }
+
+    /// The Quest Helper: a server that offers quest marks and the quest
+    /// tracker told whether to send them, at once and whenever that changes
+    /// (none while a scripted run has the guide make them; the marks only
+    /// with the Map on, which shows them). Off from the start, a server is
+    /// told nothing, as by a client without them.
+    fn agree_quests(&mut self) {
+        let forced = self.guide_forced;
+        self.session.agree_quest_marks(crate::settings::quest_markers() && crate::settings::map() && !forced);
+        self.session.agree_quest_progress(crate::settings::quest_tracker() && !forced);
+    }
+
+    /// The guide off for good once this server offers its own quest marks or
+    /// tracker; its wait begun once the player is in the world.
+    fn guide_wait(&mut self, now: u32) {
+        self.server_quests |= !self.guide_forced && (self.session.quest_marks_offer || self.session.quest_progress_offer);
+        if self.guide_from.is_none() && self.self_id32().is_some() && !self.loading.up() {
+            self.guide_from = Some(now.wrapping_add(GUIDE_WAIT_MS));
+        }
+    }
+
+    /// Whether the quest guide makes the marks and the tracker: the Quest
+    /// Helper on, this server never offered its own in the session (a
+    /// scripted run may say it did not), and the wait into the world is over.
+    fn guide_on(&self, now: u32) -> bool {
+        crate::settings::quest_helper() && !self.server_quests && self.guide_from.is_some_and(|t| now.wrapping_sub(t) as i32 >= 0)
+    }
+
+    /// The guide's frame while it is on: the journal, the player and its
+    /// items as they are, and the creatures the player hit that lie dead.
+    fn guide_frame(&mut self, walker: &Walker, now: u32) {
+        if !self.guide_on(now) {
+            return;
+        }
+        self.guide.character(self.player.server_id, &self.dump.player.name);
+        let p = &walker.cam.walk.phys.position;
+        let journal: Vec<String> = self.quests.titles.iter().map(|t| String::from_utf16_lossy(t)).collect();
+        let input = crate::questguide::Input {
+            journal: &journal,
+            class: self.dump.player.class,
+            race: self.dump.player.race,
+            level: self.dump.player.level,
+            world: self.world_id(),
+            at: [p.x.0, p.z.0],
+            items: &self.dump.inventory.items,
+            tunar: self.dump.player.p34,
+        };
+        let entities = &self.entities;
+        let dead = |id: u32| entities.slots.iter().flatten().find(|e| e.id == id && e.p18 & 2 != 0).and_then(|e| e.creature.as_ref()).map(|c| c.name.clone());
+        self.guide.frame(&input, &dead, now);
+    }
+
+    /// The game's "You have finished a quest!" (0x0046): the guide's quest
+    /// whose line left the journal is finished.
+    fn guide_finished(&mut self, now: u32) {
+        if !self.guide_on(now) {
+            return;
+        }
+        let journal: Vec<String> = self.quests.titles.iter().map(|t| String::from_utf16_lossy(t)).collect();
+        let at = self.dump.player.pos;
+        let input = crate::questguide::Input {
+            journal: &journal,
+            class: self.dump.player.class,
+            race: self.dump.player.race,
+            level: self.dump.player.level,
+            world: self.world_id(),
+            at: [at[0], at[2]],
+            items: &self.dump.inventory.items,
+            tunar: self.dump.player.p34,
+        };
+        self.guide.finished_notice(&input, now);
+    }
+
+    /// What the minimap shows of the entities: every creature and player in
+    /// the scene but the player and the group (the minimap draws those as
+    /// the map does) and corpses, in its name's colour (`plates`), and the
+    /// target.
+    fn mini_view(&self) -> crate::map::mini::MiniView {
+        let me = self.self_id32();
+        let group: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
+        let dots = self
+            .entities
+            .slots
+            .iter()
+            .flatten()
+            .filter(|e| Some(e.id) != me && !group.contains(&e.id) && e.p18 & 2 == 0 && self.in_scene(e))
+            .filter_map(|e| {
+                let c = e.creature.as_ref()?;
+                let color = if c.p256 < 2 { 0 } else if c.p299 & 1 != 0 { 2 } else { 1 };
+                Some(([e.actor_pos[0], e.actor_pos[2]], NAME_COLORS[color]))
+            })
+            .collect();
+        let target = self.actor_pos(self.target).filter(|_| Some(self.target) != me).map(|p| [p[0], p[2]]);
+        crate::map::mini::MiniView { dots, target, marks: self.mini_marks() }
+    }
+
+    /// The marks on the minimap (`map::mini::Mark`: a kind, a world, a place
+    /// and a tooltip), every source's: the map's XP camps and coach stops,
+    /// the quests' to take and steps to do. Each source appends its own here;
+    /// the minimap draws what it is given (the quests' over the rest, on its
+    /// rim while farther).
+    fn mini_marks(&self) -> Vec<crate::map::mini::Mark> {
+        let mut out = Vec::new();
+        // the quests' (`map::quests`, the server's or the guide's), while
+        // the Quest Helper and its Quest Markers are on
+        if let Some(m) = self.quest_marks(self.session.now()) {
+            out.extend(crate::map::quests::mini_marks(m));
+        }
+        out
+    }
+
     /// Builds the HUD on the viewer's device: the 2D layer, UI.CSF's and
     /// ITEMICON.ESF's surfaces (the item icons the client's icon cache
     /// would stream), ADDART.CSF's (the compass's patch), FX.CSF's damage
@@ -7887,6 +8255,13 @@ impl Play {
             assets.glyphs = Some(crate::pointer::GlyphTable::new(&vui));
             self.hud = Some((vui, assets, crate::hud::Hud::new()));
             self.wnd_chat = Some(crate::chat::WndChat::new());
+        }
+        // the texture pack's stand-ins read since, in the layer's place of
+        // the surfaces' own (`UiAssets::poll`)
+        if let Some(ui) = renderer.ui.as_mut()
+            && let Some(assets) = self.hud.as_mut().map(|h| &mut h.1).or(self.ui_assets.as_mut())
+        {
+            assets.poll(ui, device, queue);
         }
     }
 
@@ -8001,6 +8376,12 @@ impl Play {
             camera: walker.eye.position.to_array(),
             time_ms,
             duel: self.duel_patch(),
+            // the map's waypoints on the compass, none with the Map off (one
+            // put before it was turned off stays the map's, unshown)
+            waypoint: self.map.waypoint(self.world_id()).filter(|_| crate::settings::map()),
+            group_waypoint: self.map.group_waypoint(self.world_id()).filter(|_| crate::settings::map()),
+            minimap: self.minimap_up(),
+            tracker: self.tracker_quests(),
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
@@ -8539,6 +8920,11 @@ impl Play {
             for (k, it) in self.dump.inventory.items.iter().enumerate() {
                 eprintln!("inv {k}: {} wear {} equip {} quick {} p4c {} p54 {} qty {} icon {:#x}/{:#x}", it.item.name, it.item.wear_slot, it.equip_slot, it.quick_slot, it.item.p4c, it.item.p54, it.quantity, it.item.icon, it.item.icon2);
             }
+            for (k, it) in self.dump.bank.items.items.iter().enumerate() {
+                eprintln!("bank {k}: {} qty {} key {}", it.item.name, it.quantity, it.inv_index);
+            }
+            let [pack, bank] = self.session.item_lists;
+            eprintln!("lists: pack {} of {pack}, bank {} of {bank}", self.dump.inventory.items.len(), self.dump.bank.items.items.len());
         }
         let n = self.entities.slots.iter().flatten().count();
         // the characters within their distance this frame (NPC/PC Distance's)
@@ -8711,6 +9097,151 @@ mod commands {
         p.cues.clear();
         p.level_exp(35, 2_000);
         assert!(p.cues.is_empty(), "no sound for experience alone");
+    }
+
+    /// The quest guide speaks only where the server does not (the user's
+    /// "so sandstorm can benefit without server additions"; no mixing): its
+    /// marks once the wait into the world is over on a server that offered
+    /// none; the server's alone, the guide off for good, once it offers its
+    /// own, even after a world change takes the offer back; a scripted run's
+    /// `EQOA_QUEST_GUIDE` the guide's whatever the server offers. With the
+    /// Quest Helper off, none of either and no guide.
+    #[test]
+    fn the_quest_guide_speaks_only_where_the_server_does_not() {
+        crate::settings::testing::reset(false);
+        let mark = |npc: &str| net::session::QuestMark { kind: 1, world: 0, x: 0.0, z: 0.0, npc: npc.into(), quests: Vec::new() };
+        let npcs = |m: Option<&[net::session::QuestMark]>| m.map(|m| m.iter().map(|m| m.npc.clone()).collect::<Vec<_>>());
+        let mut p = play();
+        p.guide.estimate.marks = vec![mark("Commander Nothard (guide)")];
+        p.guide_wait(500);
+        assert_eq!((p.guide_from, npcs(p.quest_marks(500))), (None, None), "under the loading screen: no wait yet, no Quests button");
+        p.loading.wait = None;
+        p.guide_wait(1000);
+        assert_eq!(p.guide_from, Some(1000 + GUIDE_WAIT_MS));
+        assert!(!p.guide_on(1000 + GUIDE_WAIT_MS - 1), "the wait");
+        assert_eq!(npcs(p.quest_marks(1000 + GUIDE_WAIT_MS)), Some(vec!["Commander Nothard (guide)".to_string()]), "Sandstorm: the guide's");
+        // a server's own: its alone, for good
+        p.session.quest_marks_offer = true;
+        p.session.quest_marks = vec![mark("Commander Nothard")];
+        p.guide_wait(9000);
+        assert!(!p.guide_on(9000));
+        assert_eq!(npcs(p.quest_marks(9000)), Some(vec!["Commander Nothard".to_string()]), "the server's, none of the guide's");
+        p.session.quest_marks_offer = false;
+        p.guide_wait(9100);
+        assert_eq!(npcs(p.quest_marks(9100)), None, "a world change: still not the guide's");
+        // Quest Markers off: none of either
+        crate::settings::set_client(crate::settings::ClientOptions { quest_markers: false, ..Default::default() });
+        let mut q = play();
+        q.guide.estimate.marks = vec![mark("Commander Nothard (guide)")];
+        q.loading.wait = None;
+        q.guide_wait(0);
+        assert_eq!(npcs(q.quest_marks(GUIDE_WAIT_MS)), Some(Vec::new()), "off: the button, no marks");
+        // the Quest Helper off: no guide, no marks, no Quests button, a
+        // server's offer or not
+        crate::settings::set_client(crate::settings::ClientOptions { quest_helper: false, ..Default::default() });
+        let mut h = play();
+        h.guide.estimate.marks = vec![mark("Commander Nothard (guide)")];
+        h.loading.wait = None;
+        h.guide_wait(0);
+        assert!(!h.guide_on(GUIDE_WAIT_MS), "the Quest Helper off: no guide");
+        assert_eq!(npcs(h.quest_marks(GUIDE_WAIT_MS)), None, "nor its marks");
+        h.session.quest_marks_offer = true;
+        h.session.quest_marks = vec![mark("Commander Nothard")];
+        assert_eq!(npcs(h.quest_marks(GUIDE_WAIT_MS)), None, "nor a server's");
+        assert!(h.tracker_quests().is_empty(), "nor a tracker");
+        crate::settings::testing::reset(false);
+        // a scripted run's: the guide's, the server's offer ignored
+        let mut r = play();
+        r.guide_forced = true;
+        r.session.quest_marks_offer = true;
+        r.loading.wait = None;
+        r.guide_wait(0);
+        assert!(r.guide_on(GUIDE_WAIT_MS));
+    }
+
+    /// What the Quest Helper asks of a server that offered quest marks and
+    /// the tracker (`agree_quests`): both while it is on (the marks only with
+    /// the Map on, which shows them), each once; nothing at all with it off
+    /// from the start, as a client without it answers (no 0 either); turned
+    /// off after asking, a 0 for each. The control: on, the same offers are
+    /// answered.
+    #[test]
+    fn the_quest_helper_asks_only_while_it_is_on() {
+        crate::settings::testing::reset(false);
+        let asked = |p: &mut Play| -> Vec<Vec<u8>> {
+            p.session.flush();
+            let sent = p.session.record.replace(Vec::new()).unwrap_or_default();
+            sent.into_iter().map(|(_, m)| m).filter(|m| m.len() == 6 && m[1] == 0x7E && matches!(m[0], 0x03 | 0x05)).collect()
+        };
+        let offered = |helper: bool, map: bool| {
+            crate::settings::set_client(crate::settings::ClientOptions { quest_helper: helper, map, ..Default::default() });
+            let mut p = play();
+            p.session.record = Some(Vec::new());
+            p.session.quest_marks_offer = true;
+            p.session.quest_progress_offer = true;
+            p
+        };
+        let mut off = offered(false, true);
+        off.agree_quests();
+        off.agree_quests();
+        assert_eq!(asked(&mut off), Vec::<Vec<u8>>::new(), "off from the start: nothing said");
+        let mut on = offered(true, true);
+        on.agree_quests();
+        on.agree_quests();
+        assert_eq!(asked(&mut on), vec![vec![0x03, 0x7E, 1, 0, 0, 0], vec![0x05, 0x7E, 1, 0, 0, 0]], "the control: on, each asked once");
+        crate::settings::set_client(crate::settings::ClientOptions { quest_helper: false, ..Default::default() });
+        on.agree_quests();
+        assert_eq!(asked(&mut on), vec![vec![0x03, 0x7E, 0, 0, 0, 0], vec![0x05, 0x7E, 0, 0, 0, 0]], "turned off: each stopped");
+        let mut no_map = offered(true, false);
+        no_map.agree_quests();
+        assert_eq!(asked(&mut no_map), vec![vec![0x05, 0x7E, 1, 0, 0, 0]], "the Map off: the tracker alone");
+        crate::settings::testing::reset(false);
+    }
+
+    /// A click on the map while it is up, on no button of its, puts the
+    /// waypoint under it (`Map::click`) and is the map's; a right click is
+    /// △ (it closes the map) and puts none. The control: the map not up,
+    /// the same click puts none.
+    #[test]
+    fn a_click_on_the_map_puts_the_waypoint() {
+        use crate::mouse::Click;
+        crate::settings::testing::reset(false);
+        let size = (1280, 720);
+        let mut p = play();
+        p.point(Click::Target(900.0, 300.0), size, false);
+        assert_eq!(p.map.waypoint(0), None, "the control: the map not up");
+        p.map = crate::map::testing::up(size);
+        assert!(p.point(Click::Target(900.0, 300.0), size, false), "the map's");
+        let at = p.map.waypoint(0).expect("put");
+        assert!(p.point(Click::Right(200.0, 200.0), size, false));
+        assert_eq!(p.map.waypoint(0), Some(at), "a right click puts none");
+        assert!(!p.map.open, "a right click is △: the map closed");
+        p.map.show();
+        assert!(p.point(Click::Target(400.0, 500.0), size, true), "a finger's tap");
+        assert_ne!(p.map.waypoint(0), Some(at), "moved by the tap");
+    }
+
+    /// Extended's Map off: the compass's click is the world's, the map does
+    /// not come up (M, the minimap's click and a script all `Map::show`), an
+    /// open one goes (`Map::off`), and nothing of it wants the UI. The
+    /// control: on, the same click on the compass opens the map.
+    #[test]
+    fn with_the_map_off_the_map_never_comes_up() {
+        crate::settings::testing::reset(false);
+        let compass = crate::mouse::Click::Target(39.0, 54.0);
+        let mut p = play();
+        p.hud = Some((crate::ui::Vui::new(Default::default(), Default::default(), Vec::new()), crate::ui::UiAssets::default(), crate::hud::Hud::new()));
+        crate::settings::set_client(crate::settings::ClientOptions { map: false, ..Default::default() });
+        assert!(!p.point(compass, (640, 448), false), "off: the compass is the world's");
+        p.map.show();
+        assert!(!p.map.open && !p.wants_ui(), "off: no map");
+        crate::settings::testing::reset(false);
+        assert!(p.point(compass, (640, 448), false), "the control: on, the HUD's");
+        assert!(p.map.open && p.wants_ui(), "and the compass opens the map");
+        crate::settings::set_client(crate::settings::ClientOptions { map: false, ..Default::default() });
+        p.map.off();
+        assert!(!p.map.open, "turned off: it closes");
+        crate::settings::testing::reset(false);
     }
 
     fn last_line(p: &Play) -> &str {
@@ -10430,6 +10961,9 @@ mod commands {
         p.mode = 38;
         assert!(!p.wants_ui(), "the manual camera is play's");
         p.mode = 0;
+        p.map.open = true;
+        assert!(p.wants_ui(), "the map");
+        p.map.open = false;
         p.info_up = true;
         assert!(p.wants_ui(), "the target's details");
         p.info_up = false;

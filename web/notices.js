@@ -59,6 +59,16 @@ function crash(title, detail) {
   dead = true;
   running = false;
   console.error(`${title}: ${detail}`);
+  // kept for the next session's bug report (the client's bugnote.rs reads
+  // `eqoa.lastCrash`, says it once in the note and lets it go): the page sends
+  // no crash reports, so a crash a player only describes (petition 1355: "I hold
+  // down keys", nothing else) comes with its message the next time they press F3
+  try {
+    // a panic's first line is its place ("panicked at crates/...:12:34:"), its
+    // second what went wrong: both
+    const lines = String(detail).split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 2).join(' ');
+    localStorage.setItem('eqoa.lastCrash', `${new Date().toISOString().slice(0, 19)}Z, page ${window.eqoaBuild || 'unbuilt'}: ${title}: ${lines}`.slice(0, 600));
+  } catch { /* a private window: nothing kept */ }
   notice('crash', 'bad', `${title}: ${String(detail).split('\n')[0]}\n\nThe client cannot go on: reload the page to play again.`, [
     ['Reload', () => location.reload(), true],
   ]);

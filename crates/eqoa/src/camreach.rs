@@ -48,15 +48,42 @@
 //! on a PS2 it takes a wall or broken ground; tilted level with the head, a
 //! slope of 18 to 25 degrees behind a run downhill swung it 45 to 90 degrees
 //! (F3 20261024-100428), and tilted lower, gentler ones did (from 8 degrees,
-//! the camera 11 degrees under the head). Under the game's pitch the swing is
-//! not begun: the camera comes in to its closest instead
-//! (`mouse::come_in_instead`, as the right button's steer does), and the
-//! way back out above brings it out again once the slope is behind. A frame
-//! longer than the camera's 32 ms tick can let a swing move before it is
-//! stopped: under a degree at 30 frames a second.
+//! the camera 11 degrees under the head). Under the game's pitch, and while
+//! the right button steers (the camera kept behind the body), the swing is
+//! not begun: it ends where it is (`mouse::end_swing`) and the camera comes
+//! in instead, only as far as what is in the way needs (`come_in`): `SHORT`
+//! this side of where the game's sweep meets it, at least the game's
+//! closest (1.5), and the way back out above brings it out again once that
+//! is behind. It had come in to its closest every time (F3 2026-11-09, the
+//! user, steering round in Freeport's well: "it hits the poles and zooms all
+//! the way in to char, but shouldnt zoom at all"): from the well's middle
+//! the posts and the roof's eaves meet the sweep 3.3 to 4.7 out, nearer
+//! than the closest collision distance only toward the eaves' middles,
+//! where the game itself swings round 45 degrees to a clear angle without
+//! coming in at all; ours now comes in from the game's own 3.38 to about
+//! 3.25 there.
+//! The game's own way in to its closest, when no angle of the eight is clear
+//! (flag 2), stays the game's. A frame longer than the camera's 32 ms tick
+//! can let a swing move before it is stopped: under a degree at 30 frames a
+//! second.
+//!
+//! Something thin in the way moves the camera not at all (`PastThin`, the
+//! client's own; F3 2026-11-09, the user, zoomed out in Freeport's well: "we
+//! rotate cam the posts collision make the cam zoom"): every sweep the
+//! camera makes, the game's and ours, goes on past a post, a pole or a beam
+//! narrower than its sphere is across, as modern third-person cameras let
+//! poles stand in front of them. Thin is read off the geometry where the
+//! sweep met it: nothing within `THIN_SIDE` to either side of the contact,
+//! from just before it to just past where the sweep goes on, and a far side
+//! within `THIN_DEEP` behind it. A wall, a roof's underside, the well's
+//! stone ring, a broad trunk: the game's as before. The well's four posts
+//! are 0.28 across; turning a camera zoomed out round its middle, each had
+//! pulled it in four times a turn, toward 3.5-4.1 where the turn rested on
+//! one (tilted under 10 degrees they are all that is in the way there; at the
+//! game's 15 its roof's underside is too, past them, and still stops it).
 
 use vi::camera::{Eye, WalkCamera};
-use vi::coll::CollSphere;
+use vi::coll::{CollSphere, EnvRay};
 use vi::fpu::{Ee, F, clamp, vimax, vimin};
 use vi::scene::{Filter, FilterKind, Scene};
 use vi::vect::Vect3;
@@ -81,6 +108,19 @@ const MOVING: f32 = 0.001;
 /// (`SetCameraStyle(3)`: `SetDefOrbitPitchAngle(0.2617994)`, 15 degrees).
 pub const GAME_PITCH: f32 = 0.261_799_4;
 
+/// What is thin to the camera (`thin`): the side probes run this far to
+/// either side of where the sweep met it (half the sphere across: a post
+/// 0.28 wide is clear of both wherever it was met), along lines this far
+/// into what was met, from this far before it; what was met has its far
+/// side no deeper than `THIN_DEEP` along the sweep. The probes are this
+/// thin, and a sweep goes past at most `THIN_LEGS` thin things.
+const THIN_SIDE: f32 = 0.5;
+const THIN_INTO: f32 = 0.05;
+const THIN_BEFORE: f32 = 0.6;
+const THIN_DEEP: f32 = 0.6;
+const THIN_PROBE: f32 = 0.01;
+const THIN_LEGS: usize = 4;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Reach {
     /// the follow orbit's distance the player chose; none before the orbit
@@ -90,6 +130,10 @@ pub struct Reach {
     end: Option<(i32, F<Ee>)>,
     /// the way back out's speed now, a second
     speed: f32,
+    /// the mouse steers this frame (`controls::Client::steer`, set by
+    /// `Walker::frame_with`): the camera is kept behind the body, so no
+    /// swing round is begun (`come_in`)
+    pub steered: bool,
 }
 
 impl Reach {
@@ -100,8 +144,10 @@ impl Reach {
     }
 
     /// The camera's frame (`Process`), `dt_s` seconds after the last: the
-    /// choice kept, the way back out before it, and the game's pull held
-    /// short of what is in the way after it.
+    /// choice kept, the way back out before it, and after it a swing round
+    /// ended (steered, or tilted under the game's pitch) with the camera come
+    /// in only as far as it must (`come_in`), or else the game's pull held
+    /// short of what is in the way.
     pub fn process<S: Scene<Ee>>(&mut self, cam: &mut WalkCamera<Ee>, scene: &mut S, dt_s: f32) -> Eye<Ee> {
         let mode = cam.camera_mode;
         if mode == 3 {
@@ -123,19 +169,23 @@ impl Reach {
         // the shake's sample as `Process` found it, for the eye made again
         let sample = cam.effect.sample;
         let mut eye = cam.process(scene);
-        // tilted under the game's pitch, no swing round (the module's doc)
-        if cam.camera_mode == 3 && cam.def_orbit_pitch < F::new(GAME_PITCH) {
-            crate::mouse::come_in_instead(cam);
+        // steered, or tilted under the game's pitch, no swing round: the
+        // camera comes in instead, as far as it must (the module's doc)
+        let came_in = cam.camera_mode == 3 && (self.steered || cam.def_orbit_pitch < F::new(GAME_PITCH)) && come_in(cam, scene);
+        if came_in {
+            cam.effect.sample = sample;
+            eye = cam.set_camera();
         }
         let pull = (f0 | cam.cur.flags) & 6 != 0;
-        // the stick's zoom (the spring) is a choice; a pull (flags 2, 4) is not
-        if mode == 3 && cam.camera_mode == 3 && spring && !pull && cam.cur.dist != d0 {
+        // the stick's zoom (the spring) is a choice; a pull (flags 2, 4) is
+        // not, nor is coming in for what is in the way
+        if mode == 3 && cam.camera_mode == 3 && spring && !pull && !came_in && cam.cur.dist != d0 {
             self.chosen = Some(cam.cur.dist);
         }
         // the game's pull (or one begun and ended inside this frame's ticks:
         // the distance down with no zoom of the stick's) held short of what
         // is in the way, when that is past its closest collision distance
-        if mode == 3 && cam.camera_mode == 3 && (pull || (!spring && cam.cur.dist < d0))
+        if mode == 3 && cam.camera_mode == 3 && !came_in && (pull || (!spring && cam.cur.dist < d0))
             && let Some(d) = hold(cam, scene, d0, self.chosen(cam))
         {
             place(cam, d);
@@ -216,6 +266,139 @@ fn hold<S: Scene<Ee>>(cam: &WalkCamera<Ee>, scene: &mut S, from: F<Ee>, want: F<
     };
     let to = vimin(to, cam.max_orbit_distance);
     (cam.min_collision_dist < to && cam.cur.dist < to).then_some(to)
+}
+
+/// A swing round the game began (`MoveCamera`'s `FindOrbitAngle` found a
+/// clear angle: flag 1) ended where it is (`mouse::end_swing`), and the
+/// camera come in instead, only as far as what is in the way needs: `SHORT`
+/// this side of where the game's own sweep at its default pitch meets it,
+/// at most where it is and at least the game's closest. Nothing in the way
+/// now, it stays. Whether a swing was under way.
+fn come_in<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, scene: &mut S) -> bool {
+    if !crate::mouse::end_swing(cam) {
+        return false;
+    }
+    if let Some(r) = reach(cam, scene, cam.cur.dist) {
+        let d = clamp(r - F::new(SHORT), cam.min_orbit_distance, cam.cur.dist);
+        place(cam, d);
+    }
+    true
+}
+
+/// The scene as the camera sees it (the module's doc): the camera's sweeps
+/// (`VIWalkCameraFilter`'s) go on past what is thin, the first broad thing
+/// they meet answered with its hit time on the whole sweep; every other
+/// query is the scene's own, so the walk is untouched. With nothing thin in
+/// the way it answers as the scene does, bit for bit.
+pub struct PastThin<'a, S> {
+    pub scene: &'a mut S,
+}
+
+impl<S: Scene<Ee>> Scene<Ee> for PastThin<'_, S> {
+    fn time(&self) -> i64 {
+        self.scene.time()
+    }
+    fn collide_sphere(&mut self, s: &mut CollSphere<Ee>, f: &mut Filter) -> bool {
+        if f.kind != FilterKind::WalkCamera {
+            return self.scene.collide_sphere(s, f);
+        }
+        let (from, to, radius, len, dir) = (s.ray.start, s.ray.end, s.radius, s.ray.length, s.ray.dir);
+        let (actor, sprite) = (f.hit_actor, f.hit_sprite);
+        // the first leg is the sweep itself; each after it begins past a
+        // thin thing, its sphere clear of it
+        let mut leg = *s;
+        let mut at = F::ZERO;
+        for n in 0..THIN_LEGS {
+            if !self.scene.collide_sphere(&mut leg, f) {
+                // the first leg's answer is the scene's own, as it left it
+                if n == 0 {
+                    *s = leg;
+                } else {
+                    (f.hit_actor, f.hit_sprite) = (actor, sprite);
+                }
+                return false;
+            }
+            let hit = at + leg.ray.hit_distance();
+            let past = if n + 1 < THIN_LEGS { thin(&mut *self.scene, &leg, f.actor) } else { None };
+            let Some(past) = past else {
+                if n == 0 {
+                    *s = leg;
+                } else {
+                    s.ray.hit_time = hit / len;
+                    s.ray.hit_idx = leg.ray.hit_idx;
+                    s.ray.hit_normal = leg.ray.hit_normal;
+                }
+                return true;
+            };
+            at = hit + past + radius;
+            if !(at < len) {
+                (f.hit_actor, f.hit_sprite) = (actor, sprite);
+                return false;
+            }
+            let mut a = from;
+            a.add_scaled(&dir, at);
+            leg = CollSphere::default();
+            leg.init(a, to, radius);
+        }
+        unreachable!("the last leg answers")
+    }
+    fn collide_env(&mut self, ray: &mut EnvRay<Ee>) -> bool {
+        self.scene.collide_env(ray)
+    }
+    fn env_flags(&self, at: &Vect3<Ee>) -> u32 {
+        self.scene.env_flags(at)
+    }
+}
+
+/// Whether what the sweep `leg` met is thin (the module's doc): a far side
+/// within `THIN_DEEP` behind the contact, along the sweep (a probe back from
+/// past it), and nothing within `THIN_SIDE` to either side of the contact
+/// from `THIN_BEFORE` before it to just past where the sweep goes on (so a
+/// wall behind a post is still met). The distance along the sweep from the
+/// contact to the thing's far side when thin, else None.
+fn thin<S: Scene<Ee>>(scene: &mut S, leg: &CollSphere<Ee>, actor: i32) -> Option<F<Ee>> {
+    let dir = leg.ray.dir;
+    let mut side = Vect3::cross(&dir, &Vect3::of(0.0, 1.0, 0.0));
+    if side.magnitude() < F::new(0.001) {
+        return None;
+    }
+    side.normalize();
+    // the sphere's centre at the contact, and a line just inside what it met
+    let c = leg.hit_point();
+    let mut q = c;
+    q.sub_scaled(&leg.ray.hit_normal, leg.radius + F::new(THIN_INTO));
+    let mut cq = q;
+    cq -= c;
+    let into = cq.dot(&dir);
+    let mut back = q;
+    back.add_scaled(&dir, F::new(THIN_DEEP));
+    let mut far = probe(scene, back, q, actor)?;
+    far -= c;
+    let past = far.dot(&dir);
+    if past + leg.radius < F::new(0.05) {
+        return None;
+    }
+    // the probes reach past the front of the sphere the sweep goes on with
+    let reach = past + leg.radius + leg.radius + F::new(SHORT) - into;
+    for k in [-THIN_SIDE, THIN_SIDE] {
+        let mut a = q;
+        a.add_scaled(&side, F::new(k));
+        let mut b = a;
+        a.sub_scaled(&dir, F::new(THIN_BEFORE));
+        b.add_scaled(&dir, reach);
+        if probe(scene, a, b, actor).is_some() {
+            return None;
+        }
+    }
+    Some(past)
+}
+
+/// A thin probe of the camera's from `a` to `b`: where it met something.
+fn probe<S: Scene<Ee>>(scene: &mut S, a: Vect3<Ee>, b: Vect3<Ee>, actor: i32) -> Option<Vect3<Ee>> {
+    let mut s = CollSphere::<Ee>::default();
+    s.init(a, b, F::new(THIN_PROBE));
+    let mut f = Filter::new(FilterKind::WalkCamera, actor);
+    scene.collide_sphere(&mut s, &mut f).then(|| s.hit_point())
 }
 
 /// The camera put `d` out along its orbit as `MoveCamera` places it in the
@@ -340,11 +523,80 @@ pub mod testing {
             0
         }
     }
+
+    /// Real geometry, for what is thin and what is broad: the ground at
+    /// y = 0 (two triangles 400 across) and boxes standing on it, each face
+    /// two triangles facing out, every sweep against every triangle with the
+    /// game's own test (`collide_tri`). The clock is `t` (ms).
+    pub struct Boxes {
+        pub t: i64,
+        pub tris: Vec<[Vect3<Ee>; 3]>,
+    }
+
+    impl Boxes {
+        pub fn new() -> Boxes {
+            let mut b = Boxes { t: 0, tris: Vec::new() };
+            let g = 200.0;
+            b.quad([-g, 0.0, -g], [g, 0.0, -g], [g, 0.0, g], [-g, 0.0, g], [0.0, 1.0, 0.0]);
+            b
+        }
+
+        /// A box from `lo` to `hi`, its faces facing out.
+        pub fn with(mut self, lo: [f32; 3], hi: [f32; 3]) -> Boxes {
+            let ([x0, y0, z0], [x1, y1, z1]) = (lo, hi);
+            self.quad([x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1], [-1.0, 0.0, 0.0]);
+            self.quad([x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1], [1.0, 0.0, 0.0]);
+            self.quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], [0.0, -1.0, 0.0]);
+            self.quad([x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1], [0.0, 1.0, 0.0]);
+            self.quad([x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [0.0, 0.0, -1.0]);
+            self.quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [0.0, 0.0, 1.0]);
+            self
+        }
+
+        /// A square post `side` across and `high` tall, centred at (x, z).
+        pub fn post(self, x: f32, z: f32, side: f32, high: f32) -> Boxes {
+            let h = side / 2.0;
+            self.with([x - h, 0.0, z - h], [x + h, high, z + h])
+        }
+
+        /// A quad's two triangles, each turned to face `out`.
+        fn quad(&mut self, a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3], out: [f32; 3]) {
+            let v = |p: [f32; 3]| Vect3::of(p[0], p[1], p[2]);
+            for (p, q, r) in [(a, b, c), (a, c, d)] {
+                let (p, mut q, mut r) = (v(p), v(q), v(r));
+                let mut pl = vi::geom::Plane::<Ee>::default();
+                pl.from_tri(&p, &q, &r);
+                if pl.n.x.0 * out[0] + pl.n.y.0 * out[1] + pl.n.z.0 * out[2] < 0.0 {
+                    std::mem::swap(&mut q, &mut r);
+                }
+                self.tris.push([p, q, r]);
+            }
+        }
+    }
+
+    impl Scene<Ee> for Boxes {
+        fn time(&self) -> i64 {
+            self.t
+        }
+        fn collide_sphere(&mut self, s: &mut CollSphere<Ee>, _: &mut Filter) -> bool {
+            let mut hit = false;
+            for [a, b, c] in &self.tris {
+                hit |= vi::collide::collide_tri(s, 0, a, b, c);
+            }
+            hit
+        }
+        fn collide_env(&mut self, _: &mut EnvRay<Ee>) -> bool {
+            false
+        }
+        fn env_flags(&self, _: &Vect3<Ee>) -> u32 {
+            0
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::testing::Room;
+    use super::testing::{Boxes, Room};
     use super::*;
 
     /// The follow orbit (style 3) at `dist`, standing on the room's floor,
@@ -609,10 +861,20 @@ mod tests {
     /// The follow orbit at 11 behind a body facing `h0` at `at` on `sc`, its
     /// default pitch `pitch` (the mouse's tilt), then `near` put in the
     /// scene's place (an obstacle moved in once the style has chosen its
-    /// angle behind); `ms` frames for 4 seconds, through the reach (ours)
-    /// or the game's `Process` alone (the control). The most the orbit
-    /// turned off where it began, and the distance at the end.
-    fn swing(sc: &mut super::testing::Planes, near: Option<super::testing::Planes>, at: [f32; 3], h0: f32, pitch: f32, ours: bool, ms: i64) -> (f32, f32) {
+    /// angle behind); `ms` frames for 4 seconds, through the reach (ours,
+    /// `steered` or not) or the game's `Process` alone (the control). The
+    /// most the orbit turned off where it began, the distance at the end,
+    /// and the camera.
+    fn swing(
+        sc: &mut super::testing::Planes,
+        near: Option<super::testing::Planes>,
+        at: [f32; 3],
+        h0: f32,
+        pitch: f32,
+        ours: bool,
+        steered: bool,
+        ms: i64,
+    ) -> (f32, f32, WalkCamera<Ee>) {
         let mut cam = WalkCamera::<Ee>::default();
         cam.init(Vect3::of(at[0], at[1], at[2]), Vect3::of(h0, 0.0, 0.0), sc);
         crate::camstyle::set_style(&mut cam, 3, None, sc);
@@ -621,7 +883,7 @@ mod tests {
         if let Some(n) = near {
             sc.planes = n.planes;
         }
-        let mut reach = Reach::default();
+        let mut reach = Reach { steered, ..Default::default() };
         let start = cam.cur.orbit.x.0;
         let mut most = 0.0f32;
         for _ in 0..4000 / ms {
@@ -634,7 +896,14 @@ mod tests {
             let d = (cam.cur.orbit.x.0 - start).rem_euclid(std::f32::consts::TAU);
             most = most.max(d.min(std::f32::consts::TAU - d));
         }
-        (most, cam.cur.dist.0)
+        (most, cam.cur.dist.0, cam)
+    }
+
+    /// The camera right in front of what is in the way, as `come_in` holds
+    /// it: the game's own sweep at its pitch clear to it, and meeting
+    /// something `SHORT` and a hair farther out.
+    fn in_front(sc: &mut super::testing::Planes, cam: &WalkCamera<Ee>) -> bool {
+        reach(cam, sc, cam.cur.dist).is_none() && reach(cam, sc, cam.cur.dist + F::new(SHORT + 0.01)).is_some()
     }
 
     /// Turned by no more than the rounding of the orbit's re-derivation
@@ -723,18 +992,20 @@ mod tests {
     /// default pitch -0.0094, the report's), a 22-degree slope rising behind
     /// a run downhill. The game's camera swings a quarter turn round (the
     /// control: `Process` alone), and the run would turn with it; ours stays
-    /// behind and comes in to its closest. Lower still (-0.2), a 10-degree
+    /// behind and comes in only as far as the slope needs (it went to its
+    /// closest, 1.5, until 2026-11-09). Lower still (-0.2), a 10-degree
     /// slope did it.
     #[test]
     fn tilted_under_the_games_pitch_a_slope_brings_the_camera_in_not_round() {
         let (at, h0) = ([100.0, 0.0, 100.0], 0.5);
         for (slope, pitch) in [(22.0f32, -0.0094), (10.0, -0.2)] {
             let mut sc = super::testing::Planes::slope(at, behind(h0), slope.to_radians().tan());
-            let (game, _) = swing(&mut sc, None, at, h0, pitch, false, 16);
+            let (game, _, _) = swing(&mut sc, None, at, h0, pitch, false, false, 16);
             assert!(game > 0.7, "the control: the game's swings round ({game} at {slope} degrees)");
             let mut sc = super::testing::Planes::slope(at, behind(h0), slope.to_radians().tan());
-            let (ours, dist) = swing(&mut sc, None, at, h0, pitch, true, 16);
-            assert!(ours < STILL && dist == 1.5, "{slope} degrees, pitch {pitch}: {ours}, {dist}");
+            let (ours, dist, cam) = swing(&mut sc, None, at, h0, pitch, true, false, 16);
+            assert!(ours < STILL, "{slope} degrees, pitch {pitch}: turned {ours}");
+            assert!(dist > 2.5 && in_front(&mut sc, &cam), "{slope} degrees, pitch {pitch}: in front of the slope, not at the closest: {dist}");
         }
     }
 
@@ -748,17 +1019,43 @@ mod tests {
         let (at, h0) = ([100.0, 0.0, 100.0], 0.5);
         for slope in [10.0f32, 22.0, 25.0, 30.0] {
             let mut sc = super::testing::Planes::slope(at, behind(h0), slope.to_radians().tan());
-            let (turned, _) = swing(&mut sc, None, at, h0, GAME_PITCH, false, 16);
+            let (turned, _, _) = swing(&mut sc, None, at, h0, GAME_PITCH, false, false, 16);
             assert!(turned < STILL, "{slope} degrees: {turned}");
         }
         let wall = |away| super::testing::Planes::wall(at, behind(h0), away);
         for ours in [false, true] {
-            let (turned, _) = swing(&mut wall(100.0), Some(wall(2.5)), at, h0, GAME_PITCH, ours, 16);
+            let (turned, _, _) = swing(&mut wall(100.0), Some(wall(2.5)), at, h0, GAME_PITCH, ours, false, 16);
             assert!((turned - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "ours {ours}: {turned}");
         }
-        // the control: the same wall with the camera tilted under it comes in
-        let (turned, dist) = swing(&mut wall(100.0), Some(wall(2.5)), at, h0, 0.1, true, 16);
-        assert!(turned < STILL && dist == 1.5, "{turned}, {dist}");
+        // the control: the same wall with the camera tilted under it comes
+        // in, as far as the wall needs
+        let mut sc = wall(100.0);
+        let (turned, dist, cam) = swing(&mut sc, Some(wall(2.5)), at, h0, 0.1, true, false, 16);
+        assert!(turned < STILL && dist > 1.5 && in_front(&mut sc, &cam), "{turned}, {dist}");
+    }
+
+    /// Steered (the camera kept behind the body: the right button), a wall
+    /// close behind does not swing the camera round, where the game swings it
+    /// a quarter turn (the control: unsteered, as above), and it comes in only
+    /// as far as the wall needs: 2.0 out, where it went to its closest (1.5)
+    /// until 2026-11-09 (F3, the user, steering round in Freeport's well: "it
+    /// hits the poles and zooms all the way in to char"). At 30 and 165
+    /// frames a second (at 30 a swing begun in a frame's first tick moves in
+    /// its second before it is ended: under a degree).
+    #[test]
+    fn steered_a_wall_brings_the_camera_in_only_as_far_as_it_not_round() {
+        let (at, h0) = ([100.0, 0.0, 100.0], 0.5);
+        let wall = |away| super::testing::Planes::wall(at, behind(h0), away);
+        for (ms, most) in [(6i64, STILL), (33, 0.0175)] {
+            let (game, _, _) = swing(&mut wall(100.0), Some(wall(2.5)), at, h0, GAME_PITCH, true, false, ms);
+            assert!((game - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "the control: unsteered it swings round, {ms} ms: {game}");
+            let mut sc = wall(100.0);
+            let (turned, dist, cam) = swing(&mut sc, Some(wall(2.5)), at, h0, GAME_PITCH, true, true, ms);
+            assert!(turned < most, "{ms} ms: turned {turned}");
+            // the sweep meets the wall 2.0 across: 2.07 along the 15 degrees
+            let want = 2.0 / GAME_PITCH.cos() - SHORT;
+            assert!((dist - want).abs() < 1e-3 && in_front(&mut sc, &cam), "{ms} ms: {dist}, not {want}");
+        }
     }
 
     /// At 30 frames a second a frame can hold two of the camera's 32 ms
@@ -769,9 +1066,217 @@ mod tests {
         let (at, h0) = ([100.0, 0.0, 100.0], 0.5);
         for (ms, most) in [(6i64, STILL), (33, 0.0175)] {
             let mut sc = super::testing::Planes::slope(at, behind(h0), 22f32.to_radians().tan());
-            let (turned, dist) = swing(&mut sc, None, at, h0, -0.2, true, ms);
-            assert!(turned < most && dist == 1.5, "{ms} ms: {turned}, {dist}");
+            let (turned, dist, cam) = swing(&mut sc, None, at, h0, -0.2, true, false, ms);
+            assert!(turned < most && dist > 1.5 && in_front(&mut sc, &cam), "{ms} ms: {turned}, {dist}");
         }
+    }
+
+    /// The follow orbit at `dist` (of 50) behind a body facing heading 0 (the
+    /// camera toward -z) at (100, 0, 100), at the game's pitch, its angle
+    /// chosen with nothing in the way; then 3 seconds of `ms` frames on `sc`
+    /// through the reach, the scene seen through `PastThin` (ours) or as it is
+    /// (the control). Each frame's state as `bits`, and the camera.
+    fn behind_boxes(sc: &mut Boxes, dist: f32, ours: bool, ms: i64) -> (Vec<Vec<u32>>, WalkCamera<Ee>) {
+        let mut cam = WalkCamera::<Ee>::default();
+        let mut open = Boxes::new();
+        cam.init(Vect3::of(100.0, 0.0, 100.0), Vect3::of(0.0, 0.0, 0.0), &mut open);
+        crate::camstyle::set_style(&mut cam, 3, None, &mut open);
+        cam.max_orbit_distance = F::new(50.0);
+        cam.set_orbit_distance(F::new(dist));
+        let mut reach = Reach::default();
+        sc.t = open.t;
+        let mut out = Vec::new();
+        for _ in 0..3000 / ms {
+            sc.t += ms;
+            let dt = ms as f32 / 1000.0;
+            let eye = if ours { reach.process(&mut cam, &mut PastThin { scene: &mut *sc }, dt) } else { reach.process(&mut cam, &mut *sc, dt) };
+            out.push(bits(&cam, &eye));
+        }
+        (out, cam)
+    }
+
+    /// A frame's distance out of its `bits`.
+    fn dist_of(b: &[u32]) -> f32 {
+        f32::from_bits(b[0])
+    }
+
+    /// A post 0.28 across (the well's) 3 behind the body, on the camera's
+    /// line or 0.4 off it, does not bring a camera 11 out in at all, nor swing
+    /// it; the game's comes in to 3.5 and swings round past it (the control).
+    /// At 30 and 165 frames a second.
+    #[test]
+    fn a_post_brings_the_camera_in_not_at_all() {
+        for ms in [33i64, 6] {
+            for off in [0.0f32, 0.4] {
+                let posted = || Boxes::new().post(100.0 + off, 97.0, 0.28, 4.0);
+                let (ours, cam) = behind_boxes(&mut posted(), 11.0, true, ms);
+                let nearest = ours.iter().map(|b| dist_of(b)).fold(11.0, f32::min);
+                assert_eq!(nearest, 11.0, "{ms} ms, {off} off: in to {nearest}");
+                assert!(off_behind(cam.cur.orbit.x.0) < 1e-3, "{ms} ms, {off} off: swung to {}", cam.cur.orbit.x.0);
+                let (game, _) = behind_boxes(&mut posted(), 11.0, false, ms);
+                let (nearest, turned) = moved(&game);
+                assert!(nearest <= 3.5 && turned > 0.7, "the control, {ms} ms, {off} off: the game's in to {nearest}, round {turned}");
+            }
+        }
+    }
+
+    /// How far an orbit angle is off straight behind (pi), either way.
+    fn off_behind(a: f32) -> f32 {
+        let d = (a - std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
+        d.min(std::f32::consts::TAU - d)
+    }
+
+    /// The nearest a run's camera came, and the most its orbit turned off
+    /// straight behind (radians).
+    fn moved(run: &[Vec<u32>]) -> (f32, f32) {
+        let nearest = run.iter().map(|b| dist_of(b)).fold(f32::MAX, f32::min);
+        let turned = run.iter().map(|b| off_behind(f32::from_bits(b[4]))).fold(0.0, f32::max);
+        (nearest, turned)
+    }
+
+    /// What is broad is the game's, bit for bit, every frame: a wall 6
+    /// across 3 behind, a trunk 1.2 across, and nothing in the way. The
+    /// control: a post is not.
+    #[test]
+    fn walls_and_trunks_are_the_games() {
+        let cases: [(&str, Boxes, bool); 4] = [
+            ("a wall", Boxes::new().with([97.0, 0.0, 96.85], [103.0, 6.0, 97.15]), true),
+            ("a trunk", Boxes::new().post(100.0, 97.0, 1.2, 6.0), true),
+            ("nothing", Boxes::new(), true),
+            ("a post", Boxes::new().post(100.0, 97.0, 0.28, 4.0), false),
+        ];
+        for (what, sc, same) in cases {
+            for ms in [33i64, 6] {
+                let (ours, _) = behind_boxes(&mut Boxes { t: 0, tris: sc.tris.clone() }, 11.0, true, ms);
+                let (game, _) = behind_boxes(&mut Boxes { t: 0, tris: sc.tris.clone() }, 11.0, false, ms);
+                let differ = ours.iter().zip(&game).filter(|(a, b)| a != b).count();
+                assert_eq!(differ == 0, same, "{what}, {ms} ms: {differ} frames differ");
+            }
+        }
+    }
+
+    /// A post 3 behind and a wall 7 behind: the camera goes on past the post
+    /// and is held in front of the wall (`SHORT` this side of where the sweep
+    /// meets it, 6.35 across), never past it; the game's comes in to 3.5 at
+    /// the post (the control).
+    #[test]
+    fn past_a_post_a_wall_still_stops_the_camera() {
+        for ms in [33i64, 6] {
+            let walled = || Boxes::new().post(100.0, 97.0, 0.28, 4.0).with([95.0, 0.0, 92.85], [105.0, 8.0, 93.15]);
+            let (ours, _) = behind_boxes(&mut walled(), 11.0, true, ms);
+            let want = 6.35 / GAME_PITCH.cos() - SHORT;
+            let end = dist_of(ours.last().unwrap());
+            assert!((end - want).abs() < 1e-3, "{ms} ms: held at {end}, not {want}");
+            assert!(ours.iter().all(|b| dist_of(b) >= want - 1e-3), "{ms} ms: past the post, it never came in further");
+            let (game, _) = behind_boxes(&mut walled(), 11.0, false, ms);
+            assert!(moved(&game).0 <= 3.5, "the control, {ms} ms: the game's came in to {}", moved(&game).0);
+        }
+    }
+
+    /// A wall 0.3 behind a post (the probes beside the post meet it): once
+    /// the camera has had a second to come in from 11 (where both begin,
+    /// behind the wall), it never looks through the wall, its line from the
+    /// head never crossing the wall's face, at 30 and 165 frames a second;
+    /// the control, the same with the game's camera, never does either.
+    #[test]
+    fn a_wall_just_behind_a_post_is_never_looked_through() {
+        for ms in [33i64, 6] {
+            for ours in [true, false] {
+                let mut sc = Boxes::new().post(100.0, 97.0, 0.28, 4.0).with([97.0, 0.0, 96.25], [103.0, 6.0, 96.55]);
+                let (run, _) = behind_boxes(&mut sc, 11.0, ours, ms);
+                for (i, b) in run.iter().enumerate().skip(1000 / ms as usize) {
+                    let f = |k: usize| f32::from_bits(b[k]);
+                    let (head, eye) = ([f(19), f(20) + 1.68, f(21)], [f(7), f(8), f(9)]);
+                    // where the head-to-eye line meets the wall's face (z 96.55)
+                    if eye[2] < 96.55 {
+                        let t = (head[2] - 96.55) / (head[2] - eye[2]);
+                        let (x, y) = (head[0] + (eye[0] - head[0]) * t, head[1] + (eye[1] - head[1]) * t);
+                        assert!(!((97.0..103.0).contains(&x) && (0.0..6.0).contains(&y)), "ours {ours}, {ms} ms, frame {i}: through the wall at ({x}, {y})");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The camera turned (as the left button turns it, `SetOrbitAngle` a
+    /// frame: a quarter turn a second) from `from` to `to` degrees (0 toward
+    /// +z, 90 toward +x) round a body standing at `at` in Freeport's well,
+    /// its default pitch `pitch` degrees, `dist` out of `max`; through
+    /// `PastThin` (ours) or not (the control). Each frame's orbit (degrees,
+    /// as turned), distance, and orbit after the frame (degrees).
+    #[allow(clippy::too_many_arguments)]
+    fn turn_in_the_well(world: &mut vi::world::World<Ee>, at: [f32; 3], pitch: f32, dist: f32, max: f32, from: f32, to: f32, ours: bool) -> Vec<(f32, f32, f32)> {
+        let mut cam = WalkCamera::<Ee>::default();
+        cam.init(Vect3::of(at[0], at[1], at[2]), Vect3::of(0.0, 0.0, 0.0), world);
+        crate::camstyle::set_style(&mut cam, 3, None, world);
+        cam.max_orbit_distance = F::new(max);
+        cam.set_orbit_distance(F::new(dist));
+        cam.set_def_orbit_pitch_angle(F::new(pitch.to_radians()));
+        cam.set_orbit_angle(F::new(from.to_radians()));
+        let mut reach = Reach::default();
+        let step = std::f32::consts::FRAC_PI_2 * 0.016;
+        let mut out = Vec::new();
+        let mut a = from.to_radians();
+        while a <= to.to_radians() {
+            cam.set_orbit_angle(F::new(a));
+            world.time += 16;
+            if ours {
+                reach.process(&mut cam, &mut PastThin { scene: &mut *world }, 0.016);
+            } else {
+                reach.process(&mut cam, &mut *world, 0.016);
+            }
+            let after = cam.cur.orbit.x.0.rem_euclid(std::f32::consts::TAU).to_degrees();
+            out.push((a.to_degrees(), cam.cur.dist.0, after));
+            a += step;
+        }
+        out
+    }
+
+    /// F3 2026-11-09, the user, zoomed out in Freeport's well: "we rotate cam
+    /// the posts collision make the cam zoom". Its four posts (0.28 across,
+    /// at 38, 142, 218 and 322 degrees round its middle) no longer bring the
+    /// camera in at all. From the middle, the camera tilted to 5 degrees
+    /// (where the posts are all that is in the way), 30 out of 50 and 11 out
+    /// of 11, turned the half turn between the gables: never in, where the
+    /// game's came in to the posts (the control). At the game's 15 degrees,
+    /// 11 out: never in through the first post's sector, and still in under
+    /// the roof's eaves past it (broad: the control that the roof still
+    /// stops it). Beside a post at the game's own 3.38: the camera neither
+    /// comes in nor swings while the post is behind it, where the game's
+    /// swings round (the control).
+    #[test]
+    fn turned_round_in_freeports_well_the_posts_bring_the_camera_in_not_at_all() {
+        let (x, y, z) = (25296.73f32, 54.493f32, 15750.06f32);
+        let Some(mut world) = crate::walker::tests::tunaria_round(x, z) else { return };
+        let middle = [x, y, z];
+        for (dist, max) in [(30.0f32, 50.0f32), (11.0, 11.0)] {
+            let ours = turn_in_the_well(&mut world, middle, 5.0, dist, max, 0.0, 180.0, true);
+            let nearest = ours.iter().map(|o| o.1).fold(f32::MAX, f32::min);
+            assert_eq!(nearest, dist, "tilted 5 degrees, {dist} out: in to {nearest}");
+            let game = turn_in_the_well(&mut world, middle, 5.0, dist, max, 0.0, 180.0, false);
+            let pulled = game.iter().filter(|o| (25.0..50.0).contains(&o.0)).map(|o| o.1).fold(f32::MAX, f32::min);
+            assert!(pulled < dist - 1.0, "the control, {dist} out: the game's came in only to {pulled} at the first post");
+        }
+        let ours = turn_in_the_well(&mut world, middle, 15.0, 11.0, 11.0, 0.0, 180.0, true);
+        let post = ours.iter().filter(|o| o.0 < 43.0).map(|o| o.1).fold(f32::MAX, f32::min);
+        assert_eq!(post, 11.0, "at 15 degrees, through the first post's sector");
+        let eaves = ours.iter().filter(|o| (70.0..110.0).contains(&o.0)).map(|o| o.1).fold(f32::MAX, f32::min);
+        assert!(eaves < 6.0, "the roof's underside still brings it in: {eaves}");
+        let game = turn_in_the_well(&mut world, middle, 15.0, 11.0, 11.0, 0.0, 180.0, false);
+        let post = game.iter().filter(|o| o.0 < 43.0).map(|o| o.1).fold(f32::MAX, f32::min);
+        assert!(post < 10.0, "the control: the game's came in at the first post: {post}");
+        // beside the post at 38 degrees, the game's own distance, the post
+        // behind the camera from 20 to 65 degrees
+        let beside = [x + 1.6, y, z + 2.2];
+        let ours = turn_in_the_well(&mut world, beside, 15.0, 3.38, 11.0, 10.0, 65.0, true);
+        for &(want, d, after) in &ours {
+            assert!(d == 3.38 && (after - want).abs() < 0.05, "beside the post at {want}: {d} out, the orbit at {after}");
+        }
+        let game = turn_in_the_well(&mut world, beside, 15.0, 3.38, 11.0, 10.0, 65.0, false);
+        // (the turn puts the orbit back each frame: a swing begun shows as up
+        // to its pi a second for a frame, 2.9 degrees at 60)
+        let swung = game.iter().map(|&(want, _, after)| (after - want).abs()).fold(0.0, f32::max);
+        assert!(swung > 1.0, "the control: the game's swings round the post: {swung} degrees");
     }
 }
 

@@ -1284,6 +1284,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// The `textures` folder beside the program (texture packs and dumps,
+    /// `texpack`) is kept by an update, its files as they were, and by the
+    /// next start's clean-up of the program moved aside, which never
+    /// removes a folder; the control: that program is found beside it, and
+    /// removed.
+    #[test]
+    fn an_update_keeps_the_textures_folder_beside_the_program() {
+        let d = dir("textures");
+        let exe = d.join("eqoa");
+        std::fs::write(&exe, OLD).unwrap();
+        let pack = d.join("textures").join("SLUS-20744").join("replacements").join("1-2-00001993.png");
+        let dump = d.join("textures").join("SLUS-20744").join("dumps").join("3-4-00001993.png");
+        for (f, b) in [(&pack, b"a pack".as_slice()), (&dump, b"a dump")] {
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, b).unwrap();
+        }
+        let base = serve(vec![("update.txt", manifest(THEIRS, &sha(NEW), NEW.len())), ("eqoa-vanilla-linux-x86_64", NEW.to_vec())]);
+        assert_eq!(update(&base, &exe, MINE, "linux-x86_64", &|_| {}), Ok(Some("dev-2222222".into())));
+        assert_eq!(std::fs::read(&exe).unwrap(), NEW);
+        // the next start's clean-up (`clean_up`, for the running program)
+        let aside = asides(&exe);
+        assert_eq!(aside, vec![sibling(&exe, "old")], "the control: the program moved aside, and nothing else");
+        assert!(aside.iter().all(|p| remove(p)));
+        assert!(!remove(&d.join("textures")), "a folder is never removed");
+        assert_eq!((std::fs::read(&pack).unwrap(), std::fs::read(&dump).unwrap()), (b"a pack".to_vec(), b"a dump".to_vec()));
+        let mut left: Vec<String> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, ["eqoa", "textures"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// The second rename failing puts the old program back.
     #[test]
     fn a_failed_swap_puts_the_program_back() {

@@ -15,6 +15,7 @@
 //! eqoa view <world> walk <n>     the character, walking in a zone
 //! eqoa shot <file> [model | zone <n>] <out.png> [camera]   one view, offscreen
 //! eqoa listen <world> <x> <z> <seconds> <out.wav> [hour] [walk]   the world's sound there, offline
+//! eqoa mapshot <world> <out.png> [x z [heading [scale [secs]]]]   the map (M) built as in play, drawn
 //! eqoa fxview [visual [secs]]   a human casting a spell visual at another, again and again, as
 //!                               0x00B1 plays it (the GM panel's preview; `fxview`); with an
 //!                               out.png after the visual, `[ms,...] [secs]`: drawn at those times
@@ -123,6 +124,7 @@ mod lights;
 mod loading;
 mod lod;
 mod loot;
+mod map;
 // the memory the log carries (F3 crash 20261026-220031)
 mod mem;
 mod merchant;
@@ -130,7 +132,9 @@ mod modules;
 mod mouse;
 mod multibox;
 mod quantity;
+mod questguide;
 mod questlog;
+mod tracker;
 mod quickchat;
 mod racebody;
 mod raceemote;
@@ -550,7 +554,7 @@ fn run(args: &[String]) -> Result<()> {
         // in a look, standing, from four sides (`dressview`)
         #[cfg(not(target_arch = "wasm32"))]
         Some("dress") => {
-            let usage = "usage: eqoa dress <body DictID> <out.png> [set=N armor=a,b,c,d,e tint=T robe=R rtint=T dye=RRGGBB hair=c,l,s face=F main=ID off=ID shield=ID race=1 action=N at=ms size=WxH cape=N capecolor=RRGGBB]";
+            let usage = "usage: eqoa dress <body DictID> <out.png> [set=N armor=a,b,c,d,e tint=T robe=R rtint=T dye=RRGGBB hair=c,l,s face=F helm=N helmfit=0 main=ID off=ID shield=ID race=1 action=N at=ms size=WxH cape=N capecolor=RRGGBB era=2002]";
             let model = args.get(1).and_then(|m| fxview::parse_visual(m)).ok_or(usage)? as i32;
             let out = args.get(2).filter(|o| o.ends_with(".png")).ok_or(usage)?;
             let words = dressview::parse(&args[3..])?;
@@ -558,6 +562,16 @@ fn run(args: &[String]) -> Result<()> {
             let mut lib = esf::Library::new();
             for f in dressview::FILES {
                 lib.add(*f, esf::Container::open(iso.read(f)?)?);
+            }
+            // the 2002 disc's copies standing in, as the world has them with F9
+            if words.y2002 {
+                let path = era::disc().ok_or("era=2002 needs the 2002 disc (EQOA_2002_ISO)")?;
+                let mut d = iso::Iso::open(&path).map_err(|e| format!("{path}: {e}"))?;
+                let mut art = Vec::new();
+                for f in dressview::FILES {
+                    art.push((f.to_string(), esf::Container::open(d.read(f)?)?));
+                }
+                era::install(&mut lib, art);
             }
             dressview::shot(&lib, model, &words, out)?;
         }
@@ -588,6 +602,29 @@ fn run(args: &[String]) -> Result<()> {
             let cues = args[7.min(args.len())..].iter().any(|a| a == "cues");
             let fight = args[7.min(args.len())..].iter().any(|a| a == "fight");
             listen(file, x, z, secs, out, hour, walk, cues, fight)?;
+        }
+        Some("mapshot") => {
+            // `eqoa mapshot <world> <out.png> [x z [heading [scale [secs]]]]`: the
+            // world's map built as in play and drawn round (x, z)
+            let usage = "usage: eqoa mapshot <world> <out.png> [x z [heading [scale [secs]]]]";
+            let world = args.get(1).ok_or(usage)?.to_uppercase();
+            let out = args.get(2).ok_or(usage)?;
+            let num = |i: usize| args.get(i).map(|v| v.parse::<f32>()).transpose();
+            let size = std::env::var("EQOA_SHOT_SIZE").ok().and_then(|v| {
+                let (w, h) = v.split_once('x')?;
+                Some((w.parse().ok()?, h.parse().ok()?))
+            });
+            let budget = std::env::var("EQOA_MAP_BUDGET").ok().and_then(|v| v.parse().ok());
+            let shot = map::tool::Shot {
+                world,
+                at: [num(3)?.unwrap_or(25300.0), num(4)?.unwrap_or(15200.0)],
+                heading: num(5)?.unwrap_or(0.0),
+                scale: num(6)?,
+                size: size.unwrap_or((1280, 720)),
+                secs: num(7)?.unwrap_or(120.0),
+                budget_ms: budget,
+            };
+            map::tool::shot(&shot, out)?;
         }
         Some("login") => {
             let host = args.get(1).ok_or("usage: eqoa login <host> <user> (password in EQOA_PASSWORD)")?;
@@ -906,7 +943,8 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
             lib.file(main).zones().get(index).ok_or("no such zone")?;
             add_twin(&mut lib, main, file);
             stream::load_zone_now(&mut lib, main, index)?;
-            let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
+            // `EQOA_BODY=<DictID>`: another body than the human's (`viewer::shot_body`)
+            let character = lib.lookup(viewer::shot_body() as i32).ok_or("no such body")?;
             Ok((lib, viewer::Source::Walk { file: main, index, character, spawn: None }))
         }
         [z, n] if z == "zone" => {

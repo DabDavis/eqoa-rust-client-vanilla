@@ -596,7 +596,7 @@ impl Craft {
         let v: Vec<i32> = (0..8).map(|_| r.u32() as i32).collect();
         self.took(r);
         let item = net::dump::read_net_item(r);
-        inventory::add_item(&mut self.items, &item, item.item.max_stack, inventory::CAPACITY);
+        inventory::add_item(&mut self.items, &item, item.item.max_stack, inventory::pack_cap());
         let name = w16(&item.item.name);
         let (text, skill) = self.skill_report(&v, &name, words);
         let icon = inventory::item_icon(&item, expansion) as i32;

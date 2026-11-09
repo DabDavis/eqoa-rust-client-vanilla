@@ -897,8 +897,10 @@ impl<M: Model> Drdp<M> {
         }
     }
 
-    /// `drdp_close_connections_to_endpoint`.
-    fn close_connections_to_endpoint(&mut self, id: u64) {
+    /// `drdp_close_connections_to_endpoint`: every connection to `id` destroyed,
+    /// no DISCONNECT delivered (system messages 20 and 21 do this); public for
+    /// the session's tests of a connection that goes from under it.
+    pub fn close_connections_to_endpoint(&mut self, id: u64) {
         for c in self.connections_to(id) {
             if self.conns.contains(c) {
                 self.endpoint_connection_destroy(c);

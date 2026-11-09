@@ -25,6 +25,14 @@
 //! (`raceopts`), out of the list go-eqoa-server sends (`$EQOA_RACE_OPTIONS`, a
 //! file of 0x7E23's body): the body row's step is the body drawn, the others
 //! its parts' colours and textures; `sex=1` a female's steps.
+//! `helm=N` puts on armour set N's helm (`SetHelm`, on the node and seated
+//! as a player's character wears it: `slotless::helm_on`), in the helm's
+//! tint (`tint=T`); `helmfit=0` seats it as the PS2 does, without this
+//! client's fit to a skeleton's skull (`slotless::helm_fit`), to judge the fit
+//! by. `era=2002` draws the body, its helm and what it holds in the 2002
+//! disc's art (`$EQOA_2002_ISO`), as the world draws them with F9.
+//! `frame=head` frames the views on the head (the node the body names for
+//! it and the nodes under it) instead of the body.
 
 use esf::Library;
 use glam::{Mat4, Vec3};
@@ -63,6 +71,12 @@ pub struct Words {
     /// sex's of.
     pub opts: Option<(i32, Vec<usize>)>,
     pub sex: i32,
+    /// The helm seated with this client's fit (`slotless::helm_fit`).
+    pub helm_fit: bool,
+    /// The 2002 disc's art.
+    pub y2002: bool,
+    /// Framed on the head alone.
+    pub head: bool,
 }
 
 /// What a list of words names: the look, the items held, the idle's time and
@@ -73,6 +87,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
     let (mut items, mut race, mut action, mut tilt) = ([0u32; 3], false, None, None);
     let mut cape = net::cape::Cape::default();
     let (mut opts, mut sex) = (None, 0);
+    let (mut helm_fit, mut y2002, mut head) = (true, false, false);
     let nums = |v: &str| v.split(',').map(|n| n.trim().parse::<u8>().map_err(|e| format!("{v}: {e}"))).collect::<Result<Vec<u8>, String>>();
     let hex = |w: &str, v: &str| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|e| format!("{w}: {e}"));
     for w in words {
@@ -116,6 +131,18 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                 opts = Some((race, steps));
             }
             "sex" => sex = v.parse().map_err(|e| format!("{w}: {e}"))?,
+            "helm" => look.armor[5] = nums(v)?[0],
+            "helmfit" => helm_fit = v != "0",
+            "frame" => match v {
+                "head" => head = true,
+                "body" => head = false,
+                _ => return Err(format!("{w}: frame=head or frame=body")),
+            },
+            "era" => match v {
+                "2002" => y2002 = true,
+                "frontiers" => y2002 = false,
+                _ => return Err(format!("{w}: era=2002 or era=frontiers")),
+            },
             "at" => at = v.parse().map_err(|e| format!("{w}: {e}"))?,
             "tilt" => tilt = Some(v.parse::<f32>().map_err(|e| format!("{w}: {e}"))?),
             "size" => {
@@ -125,7 +152,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             _ => return Err(format!("{w}: not a word of a look")),
         }
     }
-    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex })
+    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex, helm_fit, y2002, head })
 }
 
 /// The body drawn in the look, holding what `words` say, from four sides
@@ -148,6 +175,11 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         None => None,
     };
     let model = opts.as_ref().and_then(|(rows, steps)| crate::raceopts::body_of_steps(rows, words.sex, steps)).map_or(model, |b| b as i32);
+    // built whole in the art the body is drawn in (`esf::Library::view_for`)
+    if words.y2002 {
+        lib.set_view(esf::Era::Y2002);
+        lib.set_view(lib.view_for(model));
+    }
     let r = lib.lookup(model).ok_or_else(|| format!("no body {:#010x} in CHAR.ESF", model as u32))?;
     let mut anims = AnimScene::<Ee>::default();
     let mut rand = Rand(1);
@@ -163,14 +195,22 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     let held: Vec<(i32, u32)> = (0..3).filter_map(|i| cs.item_node(i).filter(|_| words.items[i] != 0).map(|n| (n, words.items[i]))).collect();
     let mut mesh = lib.build_model(r).ok_or("no mesh")?;
     let before = mesh.batches.len();
-    let tables = vi::cust::Tables::retail();
-    crate::play::dress_look(lib, model, &mut mesh, &cs, look, false, &tables, true);
+    // the helm, on its node and seated as a player's character wears it
+    let t = vi::cust::Tables::retail();
+    let helm = crate::slotless::helm_on(lib, model as u32, &cs, true, look.armor[5], look.helm_color(&t), &t, words.helm_fit);
+    if look.armor[5] != 0 {
+        match &helm {
+            Some((node, _)) => eprintln!("helm {} on node {node}{}", look.armor[5], if !words.helm_fit { " (no fit)" } else if crate::slotless::helm_fit(lib, model as u32, true).is_some() { " (fitted)" } else { "" }),
+            None => eprintln!("helm {}: none on this body", look.armor[5]),
+        }
+    }
+    crate::play::dress_look(lib, model, &mut mesh, &cs, look, helm.is_some(), &t, true);
     // a Wisp's (`wisp`): its armour alone, the wisp hung on the helm's node as an item is
     let mut wisp = None;
     if let Some((rows, steps)) = &opts {
         let rl = crate::raceopts::look_of_steps(rows, words.sex, steps, model as u32);
         crate::raceopts::dress(lib, model as u32, &mut mesh, &rl);
-        crate::wisp::dress(lib, model as u32, &mut mesh, &cs, look, Some(&rl), &tables);
+        crate::wisp::dress(lib, model as u32, &mut mesh, &cs, look, Some(&rl), &t);
         wisp = crate::wisp::attachment(lib, model as u32, &cs, Some(&rl));
     }
     let tris = |b: &[esf::Batch]| b.iter().map(|b| b.indices.len() / 3).sum::<usize>();
@@ -278,6 +318,28 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
             framed.fill(true);
         }
     }
+    // `frame=head`: on the head alone (the vertices on the node the body
+    // names for its head, 7, and the nodes under it), to judge a helm by
+    let head = cs.node_ids[7];
+    if words.head && head >= 0 {
+        let under = |mut n: i32| {
+            while n >= 0 && (n as usize) < cs.h.nodes.len() {
+                if n == head {
+                    return true;
+                }
+                n = cs.h.nodes[n as usize].parent;
+            }
+            false
+        };
+        for (i, f) in framed.iter_mut().enumerate() {
+            let (b, wt) = (mesh.bones[i], mesh.weights[i]);
+            let k = (0..4).max_by_key(|&k| wt[k]).unwrap_or(0);
+            *f = b[k] != 255 && wt[k] > 0 && under(b[k] as i32);
+        }
+        if !framed.contains(&true) {
+            framed.fill(true);
+        }
+    }
     for (i, p) in mesh.pos.iter().enumerate().filter(|(i, _)| framed[*i]) {
         let (b, wt) = (mesh.bones[i], mesh.weights[i]);
         let mut q = Vec3::ZERO;
@@ -291,6 +353,18 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         let q = world.transform_point3(if sum > 0.0 { q / sum } else { Vec3::from(*p) });
         lo = lo.min(q);
         hi = hi.max(q);
+    }
+    // the head framed with the helm on it
+    if words.head
+        && let Some((node, m)) = &helm
+        && let Some(n) = cs.h.nodes.get(*node as usize)
+    {
+        let at = Mat4::from_cols_array_2d(&Matrix44::mul(&n.world, &centre).to_cols());
+        for p in &m.pos {
+            let q = at.transform_point3(Vec3::from(*p));
+            lo = lo.min(q);
+            hi = hi.max(q);
+        }
     }
     let mid = (lo + hi) * 0.5;
     let fov = 30f32.to_radians();
@@ -314,11 +388,12 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         }
         g
     });
-    // each item on its node's animated place under the centre transform, as
-    // the game draws an attached sprite
+    // each item (and the helm) on its node's animated place under the centre
+    // transform, as the game draws an attached sprite
     let mut items = Vec::new();
-    for &(node, id) in &held {
-        let (Some(n), Some(m)) = (cs.h.nodes.get(node as usize), lib.lookup(id as i32).and_then(|r| lib.build_model(r))) else {
+    let hung = held.iter().map(|&(node, id)| (node, id, lib.lookup(id as i32).and_then(|r| lib.build_model(r)))).chain(helm.map(|(node, m)| (node, 0, Some(m))));
+    for (node, id, m) in hung {
+        let (Some(n), Some(m)) = (cs.h.nodes.get(node as usize), m) else {
             eprintln!("{id:#010x}: no such item");
             continue;
         };
@@ -407,7 +482,12 @@ mod tests {
         let caped = parse(&words("cape=3 capecolor=c03020")).unwrap();
         assert_eq!(caped.cape, net::cape::Cape { style: 3, color: 0xC030_20FF });
         assert_eq!(bare.cape, net::cape::Cape::default(), "no cape unless asked");
+        let helmed = parse(&words("set=3 helm=4 helmfit=0 era=2002 frame=head")).unwrap();
+        assert_eq!((helmed.look.armor, helmed.helm_fit, helmed.y2002, helmed.head), ([3, 3, 3, 3, 3, 4], false, true, true));
+        assert_eq!((bare.look.armor[5], bare.helm_fit, bare.y2002, bare.head), (0, true, false, false), "no helm, the fit on, Frontiers' art and the body framed unless asked");
+        assert!(parse(&words("frame=feet")).is_err());
         assert!(parse(&words("sett=3")).is_err());
         assert!(parse(&words("main=sword")).is_err());
+        assert!(parse(&words("era=1999")).is_err());
     }
 }
