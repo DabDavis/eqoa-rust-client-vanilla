@@ -352,6 +352,98 @@ fn the_shadow_distance_shadows_more_lights() {
     assert_eq!((render::lightshadow::slots_at(1.0), render::lightshadow::slots_at(4.0)), (render::lightshadow::slots(), render::lightshadow::most_slots()));
 }
 
+/// A lamp's light inside its housing (a street lamp's: its light at its
+/// halo's middle, a solid plate under it 0.7 down, glass round it): the plate
+/// filled the downward face's view and darkened the floor under the lamp in
+/// that face's square (the owner's "the shadow around the light shadows is
+/// square"). The housing, a placed thing no more than `FIXTURE` across whose
+/// box holds the light, casts nothing for it: the floor is lit as the light's
+/// own falloff lights it, every pixel within a level of Light Shadows off (the
+/// control); and a room of walls 12 across round the light still shadows the
+/// floor outside it.
+#[test]
+fn a_lamps_housing_casts_no_square() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    let lamp = Vec3::new(0.0, 3.0, 0.0);
+    let lights = [fire(lamp, 20.0, 11)];
+    // the housing's two plates, 1.4 across, 0.7 under and over the light
+    let plate = |y: f32, n: Vec3| quad([Vec3::new(-0.7, y, -0.7), Vec3::new(-0.7, y, 0.7), Vec3::new(0.7, y, 0.7), Vec3::new(0.7, y, -0.7)], n, layer(0, 0));
+    // one model, as a lamp's housing is
+    let (mut housing, over, flat) = (plate(2.3, Vec3::NEG_Y), plate(3.7, Vec3::Y), floor(HALF));
+    let base = housing.pos.len() as u32;
+    housing.pos.extend(over.pos);
+    housing.uv.extend(over.uv);
+    housing.normal.extend(over.normal);
+    housing.color.extend(over.color);
+    let more: Vec<u32> = over.batches[0].indices.iter().map(|i| i + base).collect();
+    housing.batches[0].indices.extend(more);
+    let frame = |light: bool| {
+        let mut r = renderer(&g, true, false, light);
+        let part = |m| GroupPart { model: m, instances: &[render::IDENTITY], statics: &[], moves: false, baked: false };
+        let gr = r.upload_group(&g.device, &g.queue, &[part(&flat), part(&housing)], &none);
+        shot(&g, &mut r, &view(Vec3::ZERO, &lights, None), &[Draw::Group(&gr)])
+    };
+    let (on, off) = (frame(true), frame(false));
+    // the floor round the housing's own pixels, every pixel
+    let worst = worst_outside(&on, &off, pixel(-1.0, -1.0), pixel(1.0, 1.0));
+    assert!(worst <= 1, "the floor under the lamp off its falloff alone by {worst} (a square under the housing)");
+    // a room 12 across round the light, walls 0.5 thick and 1.5 high: the
+    // floor 8 out, past its wall, in the wall's shadow
+    // one model, two walls: its box holds the light
+    let mut room = cuboid(Vec3::new(5.5, 0.0, -6.0), Vec3::new(6.0, 1.5, 6.0), layer(0, 0));
+    let other = cuboid(Vec3::new(-6.0, 0.0, -6.0), Vec3::new(-5.5, 1.5, 6.0), layer(0, 0));
+    let base = room.pos.len() as u32;
+    room.pos.extend(other.pos);
+    room.uv.extend(other.uv);
+    room.normal.extend(other.normal);
+    room.color.extend(other.color);
+    let more: Vec<u32> = other.batches[0].indices.iter().map(|i| i + base).collect();
+    room.batches[0].indices.extend(more);
+    let mut r = renderer(&g, true, false, true);
+    let part = |m| GroupPart { model: m, instances: &[render::IDENTITY], statics: &[], moves: false, baked: false };
+    let gr = r.upload_group(&g.device, &g.queue, &[part(&flat), part(&room)], &none);
+    let px = shot(&g, &mut r, &view(Vec3::ZERO, &lights, None), &[Draw::Group(&gr)]);
+    assert!((red(&px, pixel(8.0, 0.0)) - 0.1).abs() <= 2.5 / 255.0, "past the room's wall: its shadow ({})", red(&px, pixel(8.0, 0.0)));
+}
+
+/// A light of the moment riding a body (a weapon's glow in its hand, a
+/// spell's particles on it), a hair in and out of the body's box from frame
+/// to frame as its particles move: the body cast no shadow for it every other
+/// frame and a long one in between, the floor behind the body dark and lit 30
+/// times a second (Bam's two glowing swords' shadows "appearing disappearing
+/// quickly"). A light of the moment casts what does not move alone, so the
+/// floor behind the body keeps the light's own falloff; the control, a fire
+/// moved the same way, still flips the body's shadow (a fire never moves).
+#[test]
+fn a_light_riding_a_body_does_not_flicker() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    let behind = pixel(-3.0, 0.0);
+    let run = |fixed: bool| {
+        let mut r = renderer(&g, true, false, true);
+        let f = r.upload(&g.device, &g.queue, &floor(HALF), &[at(Vec3::ZERO)], &none);
+        let body = r.upload(&g.device, &g.queue, &cuboid(Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 2.0, 1.0), layer(0, 0)), &[at(Vec3::ZERO)], &none);
+        let mut seen = Vec::new();
+        for k in 0..60 {
+            r.scroll_time = Some(k as f32 / 60.0);
+            // just inside the body's side, then just outside, by turns
+            let x = if k % 2 == 0 { 0.95 } else { 1.05 };
+            let light = PointLight { at: Vec3::new(x, 1.5, 0.0), range: 10.0, color: Vec3::X, fixed, key: if fixed { 5 } else { (1 << 40) | 5 } };
+            let px = shot(&g, &mut r, &view(Vec3::ZERO, &[light], None), &[Draw::Model(&f), Draw::Model(&body)]);
+            seen.push(red(&px, behind));
+        }
+        let lo = seen.iter().copied().fold(f32::MAX, f32::min);
+        let hi = seen.iter().copied().fold(f32::MIN, f32::max);
+        let flips = seen.windows(2).filter(|w| (w[1] - w[0]).abs() > 0.1).count();
+        (hi - lo, flips)
+    };
+    let (spread, flips) = run(false);
+    assert!(spread < 8.0 / 255.0 && flips == 0, "a light of the moment riding a body: the floor behind it changed by {spread} with {flips} flips in a second");
+    let (spread, flips) = run(true);
+    assert!(spread > 0.1 && flips > 20, "the control, a fire moved so: the body's shadow flips ({spread}, {flips})");
+}
+
 /// With Sun Shadows on too: at noon the box casts the sun's shadow and the
 /// light's; by night (the game's sun under the ground, its light travelling
 /// up, a ceiling lit) the sun's term is the strip programs' alone, the last

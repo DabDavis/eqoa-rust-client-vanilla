@@ -102,6 +102,15 @@ pub const GUARD: f32 = 2.0;
 /// thing does not shadow its own top, and a closed body still casts.
 pub const BACK_PUSH: f32 = 0.5;
 
+/// The most a placed thing whose own box holds a light may measure across
+/// and still be that light's fixture, which casts nothing for it (`near`): a
+/// street lamp's light sits at its halo's middle, inside its housing, whose
+/// solid bottom plate filled the downward face's whole view and darkened the
+/// ground under the lamp in that face's square (the owner's "the shadow
+/// around the light shadows is square"). A building or a courtyard's walls
+/// round their torches are larger, and cast.
+pub const FIXTURE: f32 = 6.0;
+
 /// How long, in seconds, a shadow takes to come or go when a map changes
 /// hands (`eqoa`'s `lights::BUDGET_FADE`).
 pub const FADE: f32 = 0.25;
@@ -644,7 +653,14 @@ impl Points {
             let reached: Vec<&GpuGroup> = groups.iter().copied().filter(|g| g.bounds.is_some_and(|b| meets(b, at, range))).collect();
             let ids: Vec<u64> = reached.iter().map(|g| g.id).collect();
             let personal = s.key == lit::PERSONAL_KEY;
-            let casting: Vec<&Mover> = movers.iter().filter(|m| self.casts(m, at, range, personal)).collect();
+            // a light of the moment (a held item's glow, a spell's particles)
+            // rides the very body or weapon that would shadow it, following
+            // its particles 0.2 s behind: in and out of its carrier's box and
+            // within 0.5 of it by turns, it flipped that carrier's shadow on
+            // and off from frame to frame (Bam's two glowing swords). It casts
+            // what does not move alone; a fire and the personal light cast the
+            // movers too
+            let casting: Vec<&Mover> = if l.fixed || personal { movers.iter().filter(|m| self.casts(m, at, range, personal)).collect() } else { Vec::new() };
             let mover_box = |m: &Mover| match m {
                 Mover::Model(m) => m.world.get(),
                 Mover::Prop(_, p) => p.posed.get(),
@@ -902,15 +918,18 @@ impl Points {
 
 /// The instances of the groups' members that do not move whose boxes meet
 /// the light's sphere at `at` reaching `range` (a member's whole box tested
-/// first), member by member, instance by instance.
+/// first), member by member, instance by instance, but the light's own
+/// fixture: one whose box holds the light and is no more than [`FIXTURE`]
+/// across.
 fn near<'g>(groups: &[&'g GpuGroup], at: Vec3, range: f32) -> Vec<(&'g GpuGroup, &'g Member, usize)> {
+    let fixture = |b: &(Vec3, Vec3)| b.0.cmple(at).all() && at.cmple(b.1).all() && (b.1 - b.0).max_element() <= FIXTURE;
     let mut out = Vec::new();
     for gr in groups {
         for m in &gr.members {
             if m.moves || m.instances == 0 || m.bounds.is_some_and(|b| !meets(b, at, range)) || !m.batches.iter().any(|(_, p)| opaque(p)) {
                 continue;
             }
-            out.extend(m.boxes.iter().enumerate().filter(|(_, b)| meets(**b, at, range)).map(|(i, _)| (*gr, m, i)));
+            out.extend(m.boxes.iter().enumerate().filter(|(_, b)| meets(**b, at, range) && !fixture(b)).map(|(i, _)| (*gr, m, i)));
         }
     }
     out
