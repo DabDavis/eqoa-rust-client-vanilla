@@ -194,8 +194,10 @@ or a browser (each described where it lives below):
   by `tests::measure_helm_fits`): the least change that holds every vertex of the skull half a
   millimetre inside each of the eight helms, in every pose (the skull rides the helm's node rigidly in
   every action); Frontiers' own skeleton needs none, the three its options offer (skulls a tenth larger)
-  a few millimetres for their cheeks. Any body with texture slots is dressed exactly as before (held
-  to every CSprite on the disc), and so is every other body's helm.
+  a few millimetres for their cheeks. The great skeletons a Skeleton player may choose are built on the
+  troll's skeleton (its 43 nodes, every bind pose but the skull's top) and wear the troll's armour so
+  (`slotless::SHELL_BODIES`). Any body with texture slots is dressed exactly as before (held to every
+  CSprite on the disc), and so is every other body's helm.
   Players' characters only (a creature whose name colour is a player's, 2, and the pregame's figures):
   NPCs keep the look the PS2 gave them (the user: "Players only").
   `eqoa dress <body> <out.png> [set=N robe=R dye=RRGGBB ...]` draws a body in a look from four sides;
@@ -219,7 +221,8 @@ or a browser (each described where it lives below):
   one of them, on a server with races of its own, plays what a small table chosen by sight says
   (`raceemote::TABLE`): the human's emote carried onto the body's skeleton where it is built on the human's bone
   names (the body's own bone lengths, its tail and wings at rest), else its own nearest (the pixie's, fairy's
-  and fungusman's). The emote's entry itself is replaced, so a player's own emote and another player's are the
+  and fungusman's). Another body a race's options offer a player (the ice giant's, a goblin king's, the faun's)
+  plays its race's own body's (`raceemote::poses_of`: the body row's first step). The emote's entry itself is replaced, so a player's own emote and another player's are the
   same; NPCs and every other body keep the game's (held to every CSprite on the disc). `eqoa emotes <body>
   <out.png> [wave bow point cheer N human:N ...]` draws a body's emotes, or its actions, a row each. The fall
   and the landing the same way (2026-11-09, "Yes, borrow the human's"; `raceemote::grant_air`): of the table's

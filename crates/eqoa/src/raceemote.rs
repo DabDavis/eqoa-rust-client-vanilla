@@ -163,6 +163,16 @@ pub fn air_poses(model: u32) -> Option<[Pose; 2]> {
     own.or_else(|| poses(model).map(|_| [Pose::Human; 2]))
 }
 
+/// What `model` plays for each emote on this server: `TABLE`'s, else, for
+/// another body of a race's creature its options offer a player (the ice
+/// giant's, a goblin king's, the faun's: `raceopts::race_body_of`), its race's
+/// own body's. Every such body is its race's creature on its race's skeleton
+/// or one of its bone names (the great skeletons' the troll's, 37 of the
+/// human's), and the fungusmen's three share the slots `Own` names.
+pub fn poses_of(model: u32) -> Option<[Pose; 4]> {
+    poses(model).or_else(|| crate::raceopts::race_body_of(model).and_then(poses))
+}
+
 /// One body's skeleton as its 0x2700 record has it: each node's parent,
 /// its bind pose in its parent's space (`rest`: the hierarchy's frames are
 /// the model's, `SetNodeBindPose`, and `rest` the parent's taken off), and
@@ -635,10 +645,11 @@ pub fn server_has_races(races: Option<&net::creation::Creation>) -> bool {
 
 /// `TABLE`'s emotes on `cs` (made of `model`, its clips in `sc`) when it is
 /// a player's character (`player`) on a server with races of its own
-/// (`races`, `server_has_races`) in a body the table lists; anything else is
+/// (`races`, `server_has_races`) in a body the table lists, or another body a
+/// race's options offer (`poses_of`: its race's own body's); anything else is
 /// left as the game made it. Whether its emotes are the table's.
 pub fn grant(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, model: u32, player: bool, races: Option<&net::creation::Creation>) -> bool {
-    let Some(p) = poses(model).filter(|_| player && server_has_races(races)) else { return false };
+    let Some(p) = poses_of(model).filter(|_| player && server_has_races(races)) else { return false };
     put(lib, cs, sc, p);
     true
 }
@@ -682,6 +693,31 @@ mod tests {
 
     fn entries(cs: &CSprite<Ee>) -> Vec<String> {
         cs.entries.iter().map(|e| format!("{:?} {:?} {} {:?} {:?} {}", e.animation, e.weight.0.to_bits(), e.sync, e.sound, e.priority, e.channel)).collect()
+    }
+
+    /// Another body a race's options offer plays its race's own body's emotes
+    /// (the fungusman's red body its own slots, as the blue one; a goblin
+    /// king's the human's carried, as the grey goblin), granted on a player's
+    /// character; with no options (the control) such a body is not listed and
+    /// keeps the game's, as does a body no row offers.
+    #[test]
+    fn an_offered_body_plays_its_races_emotes() {
+        crate::raceopts::set_options(None);
+        let red = 0x5874_ACFCu32;
+        assert_eq!(poses_of(red), None, "the control: no options");
+        crate::raceopts::set_options(Some(&crate::raceopts::tests::fungus_options()));
+        assert_eq!(poses_of(red), poses(0x4A4D_88FB));
+        assert!(matches!(poses_of(red), Some([Pose::Own(15), ..])));
+        assert_eq!(poses_of(0x1234_5678), None);
+        let listed = races(&[0x4A4D_88FB]);
+        let mut cs = creature();
+        assert!(grant(&Library::new(), &mut cs, &mut AnimScene::default(), red, true, Some(&listed)));
+        assert_ne!(cs.entries[56].animation, cs.entries[0].animation, "the wave is the body's own slot now");
+        let mut npc = creature();
+        assert!(!grant(&Library::new(), &mut npc, &mut AnimScene::default(), red, false, Some(&listed)), "an NPC keeps the game's");
+        crate::raceopts::set_options(None);
+        let mut cs = creature();
+        assert!(!grant(&Library::new(), &mut cs, &mut AnimScene::default(), red, true, Some(&listed)), "the control: no options");
     }
 
     /// An own slot goes over the emote's entry: its clips and speed, played
