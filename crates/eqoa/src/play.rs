@@ -2532,6 +2532,9 @@ impl Play {
         let events = self.session.pump();
         // capes in their slot while the server's offer is taken (`cape`)
         crate::cape::set_offered(self.session.capes);
+        // the pack's and the bank's records, as the server last said before a
+        // dump (`inventory::pack_cap`; CLIENT's 40 where none says)
+        crate::inventory::set_caps(self.session.item_lists);
         // a server's races' own options and the looks chosen (`raceopts`): the
         // creatures in a look made again in it (`apply`)
         crate::raceopts::set_options(self.session.race_options.as_ref());
@@ -2624,7 +2627,7 @@ impl Play {
                 Event::InvAdd(item) => {
                     // AddInvItem
                     let limit = item.item.max_stack;
-                    crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::CAPACITY);
+                    crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::pack_cap());
                     self.npcw_item_added();
                 }
                 Event::InvTook { slot, sound, n } => {
@@ -5695,9 +5698,12 @@ impl Play {
         let inv = &self.dump.inventory;
         let pl = &self.dump.player;
         let flags = net::session::EXPANSION_FLAGS;
+        // each tab holds the definition's 40, or every record of a pack past
+        // them (`inventory::pack_cap`)
+        let counts = s.item_counts.map(|c| c.max(crate::inventory::pack_cap() as i32));
         self.items.set_built(crate::itemmenu::build(
             inv,
-            s.item_counts,
+            counts,
             &|k| crate::inventory::item_icon(&inv.items[k], flags) as i32,
             &|k| crate::inventory::can_use(&inv.items[k], pl.class, pl.race, pl.level),
         ));
@@ -8444,6 +8450,11 @@ impl Play {
             for (k, it) in self.dump.inventory.items.iter().enumerate() {
                 eprintln!("inv {k}: {} wear {} equip {} quick {} p4c {} p54 {} qty {} icon {:#x}/{:#x}", it.item.name, it.item.wear_slot, it.equip_slot, it.quick_slot, it.item.p4c, it.item.p54, it.quantity, it.item.icon, it.item.icon2);
             }
+            for (k, it) in self.dump.bank.items.items.iter().enumerate() {
+                eprintln!("bank {k}: {} qty {} key {}", it.item.name, it.quantity, it.inv_index);
+            }
+            let [pack, bank] = self.session.item_lists;
+            eprintln!("lists: pack {} of {pack}, bank {} of {bank}", self.dump.inventory.items.len(), self.dump.bank.items.items.len());
         }
         let n = self.entities.slots.iter().flatten().count();
         // the characters within their distance this frame (NPC/PC Distance's)

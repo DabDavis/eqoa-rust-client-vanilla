@@ -695,9 +695,9 @@ impl Info<'_> {
     pub fn stat_with_merchant_item(&self, src: &NetItem, stat: i64) -> (i64, bool) {
         let mut list = ItemList::default();
         for it in self.inv.items.iter().filter(|it| it.equip_slot != -1) {
-            merge(&mut list, it, it.item.max_stack, inventory::CAPACITY);
+            merge(&mut list, it, it.item.max_stack, inventory::pack_cap());
         }
-        let (n, mut key) = add_item_key(&mut list, src, src.item.max_stack, inventory::CAPACITY);
+        let (n, mut key) = add_item_key(&mut list, src, src.item.max_stack, inventory::pack_cap());
         if n == 0 {
             // FindFullStack
             match list.items.iter().find(|it| src.item.id == it.item.id && src.item.max_stack == it.quantity && src.item.max_stack > 1) {

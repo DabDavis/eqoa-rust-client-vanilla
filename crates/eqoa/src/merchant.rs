@@ -529,12 +529,18 @@ impl Merchant {
         vui.blit_bar(r, &s, [1.0; 4], [(640 - w) / 2, 8], 33, 34, w, 0, 1.0, 0, true);
     }
 
-    /// `FillInvList` / `FillMerchantList`.
+    /// `FillInvList` / `FillMerchantList`: the list's 40 rows (the selling
+    /// side's as many as the pack holds, `inventory::pack_cap`; the wares'
+    /// always CLIENT's 40, a merchant's list).
     fn fill(&mut self, view: &View) {
         let n;
+        let rows = if self.mode == 1 { crate::inventory::pack_cap() } else { crate::inventory::CAPACITY };
+        if self.list.items.len() != rows {
+            self.list.init(rows);
+        }
         if self.mode == 1 {
             let inv = &view.info.inv.items;
-            n = inv.len().min(40);
+            n = inv.len().min(rows);
             for (i, it) in inv.iter().take(n).enumerate() {
                 let mut flags = if it.quantity >= 2 { 5 } else { 1 };
                 let mut arrow = -1;
@@ -550,7 +556,7 @@ impl Merchant {
             }
         } else {
             let wares = &view.shop.wares.items;
-            n = wares.len().min(40);
+            n = wares.len().min(rows);
             for (i, it) in wares.iter().take(n).enumerate() {
                 let mut flags = 1;
                 let mut arrow = -1;
@@ -561,7 +567,7 @@ impl Merchant {
                 self.list.set_item(i, flags, (view.inv_icon)(it), arrow, -1, 1);
             }
         }
-        for i in n..40 {
+        for i in n..rows {
             self.list.set_item(i, 0, -1, -1, -1, 0);
         }
     }

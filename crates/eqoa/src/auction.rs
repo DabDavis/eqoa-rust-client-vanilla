@@ -484,7 +484,8 @@ enum SellChild {
     MBox,
 }
 
-/// `VIWndAuction`: the bank's items (80 rows); Enter on one that can be sold
+/// `VIWndAuction`: the bank's items (80 rows, or the bank's on a server that
+/// holds more: `inventory::bank_cap`); Enter on one that can be sold
 /// opens the form (the item, minimum bid, buyout, duration, Ok and the fee),
 /// whose numbers are typed into the editor and whose Ok is confirmed in a
 /// Yes/No box before the sale is sent. A pointer (`pointer`) takes the
@@ -761,11 +762,17 @@ impl SellWnd {
     /// `FillLists`' bank half: a stack shows its count, what cannot be sold
     /// the red arrows.
     fn fill(&mut self, bank: &ItemList, icon: &dyn Fn(&NetItem) -> i32) {
-        for i in 0..80 {
+        // `Init(80)`'s rows, or as many as the bank holds past them
+        // (`inventory::bank_cap`)
+        let rows = crate::inventory::bank_cap().max(80);
+        if self.bank.items.len() != rows {
+            self.bank.init(rows);
+        }
+        for i in 0..rows {
             self.bank.set_item(i, 0, -1, -1, -1, 0);
         }
         let stack = crate::s2::get().sell_stack;
-        for (i, it) in bank.items.iter().take(80).enumerate() {
+        for (i, it) in bank.items.iter().take(rows).enumerate() {
             let mut flags = if it.quantity >= 2 { 5 } else { 1 };
             let mut color = -1;
             if !can_sell_by(it, stack) {
