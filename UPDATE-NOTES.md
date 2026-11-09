@@ -6,6 +6,12 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Posts no longer pull the camera in
+- Turning the camera with something thin close by, like the posts holding up the roof of the well by the Freeport
+  coach, a lamp post or a pole, the camera no longer jumps in each time one passes behind you: it stays where you
+  had it, zoomed out as far as you like, and the post simply passes across the view. Walls, roofs and anything broad
+  still stop the camera as before.
+
 ## 2026-11-09 · Capes sit clear of armour
 - A cape now sits off what you wear: plate, broad shoulders and a robe's skirt show through it far less as you
   stand, walk and run. Over the back and shoulders it moves with the body under it, and under a robe its lower
