@@ -15,7 +15,7 @@ fn read(b: &[u8]) -> (u16, Vec<u8>, Vec<i64>, Vec<u32>, usize) {
 
 #[test]
 fn the_creation_form() {
-    let c = NewChar { name: "Arwen".into(), race: 1, class: 13, sex: 1, hair_color: 7, hair_length: 2, hair_style: 3, face: 0, city: 0, stats: [5, 0, 3, 2, 4, 6, 0] };
+    let c = NewChar { name: "Arwen".into(), race: 1, class: 13, sex: 1, hair_color: 7, hair_length: 2, hair_style: 3, face: 0, city: 0, stats: [5, 0, 3, 2, 4, 6, 0], options: vec![] };
     let b = new_char_message(&c);
     let (op, name, f, s, end) = read(&b);
     assert_eq!(op, 0x002B);
@@ -39,4 +39,19 @@ fn the_name_fits_the_forms_buffer() {
     long[2] = 24;
     long.insert(6 + 23, b'y');
     assert!(read(&long).1.is_empty());
+}
+
+/// A custom race's options chosen go after the stats as go-eqoa-server's
+/// `raceOptionsBlock` reads them; none chosen, the message is the game's own
+/// bytes (the control: the same form with no options is exactly 0x002B as it
+/// was, and the one with them is that plus the block).
+#[test]
+fn race_options_go_after_the_stats() {
+    let plain = NewChar { name: "Spore".into(), race: 28, class: 9, sex: 0, city: 0, ..Default::default() };
+    let with = NewChar { options: vec![("body".into(), 1), ("cap".into(), 3)], ..plain.clone() };
+    let (a, b) = (new_char_message(&plain), new_char_message(&with));
+    let (_, _, _, _, end) = read(&a);
+    assert_eq!(end, a.len(), "none chosen: nothing after the stats");
+    assert_eq!(&b[..a.len()], &a[..], "the game's own fields as they were");
+    assert_eq!(&b[a.len()..], [b"R".as_slice(), &[1, 2, 4], b"body", &[1, 3], b"cap", &[3]].concat());
 }

@@ -21,6 +21,10 @@
 //! usual 14 degrees: into a hollow armour at the collar, say. `cape=N` puts
 //! cape style N on it (`cape`, as a player's character wears one on a server
 //! with capes), `capecolor=RRGGBB` in that colour.
+//! `opts=R:a,b,c` dresses it in the steps a, b, c of race R's option rows
+//! (`raceopts`), out of the list go-eqoa-server sends (`$EQOA_RACE_OPTIONS`, a
+//! file of 0x7E23's body): the body row's step is the body drawn, the others
+//! its parts' colours and textures; `sex=1` a female's steps.
 
 use esf::Library;
 use glam::{Mat4, Vec3};
@@ -55,6 +59,10 @@ pub struct Words {
     pub tilt: Option<f32>,
     /// The cape worn (`cape`), style 0 none.
     pub cape: net::cape::Cape,
+    /// A race's option rows' steps (`opts=R:a,b,c`), and the sex they are a
+    /// sex's of.
+    pub opts: Option<(i32, Vec<usize>)>,
+    pub sex: i32,
 }
 
 /// What a list of words names: the look, the items held, the idle's time and
@@ -64,6 +72,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
     let (mut at, mut size) = (1500i64, (360u32, 540u32));
     let (mut items, mut race, mut action, mut tilt) = ([0u32; 3], false, None, None);
     let mut cape = net::cape::Cape::default();
+    let (mut opts, mut sex) = (None, 0);
     let nums = |v: &str| v.split(',').map(|n| n.trim().parse::<u8>().map_err(|e| format!("{v}: {e}"))).collect::<Result<Vec<u8>, String>>();
     let hex = |w: &str, v: &str| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|e| format!("{w}: {e}"));
     for w in words {
@@ -100,6 +109,13 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                 }
             }
             "face" => look.face = nums(v)?[0],
+            "opts" => {
+                let (r, steps) = v.split_once(':').ok_or_else(|| format!("{w}: opts=race:step,step"))?;
+                let race = r.parse().map_err(|e| format!("{w}: {e}"))?;
+                let steps = steps.split(',').filter(|s| !s.is_empty()).map(|s| s.trim().parse::<usize>().map_err(|e| format!("{w}: {e}"))).collect::<Result<Vec<_>, _>>()?;
+                opts = Some((race, steps));
+            }
+            "sex" => sex = v.parse().map_err(|e| format!("{w}: {e}"))?,
             "at" => at = v.parse().map_err(|e| format!("{w}: {e}"))?,
             "tilt" => tilt = Some(v.parse::<f32>().map_err(|e| format!("{w}: {e}"))?),
             "size" => {
@@ -109,7 +125,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             _ => return Err(format!("{w}: not a word of a look")),
         }
     }
-    Ok(Words { look, items, race, action, at, size, tilt, cape })
+    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex })
 }
 
 /// The body drawn in the look, holding what `words` say, from four sides
@@ -117,6 +133,21 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), String> {
     let (look, at, (w, h)) = (&words.look, words.at, words.size);
+    // a race's options: the body its body row chose, the look its other rows
+    // make; out of `$EQOA_RACE_OPTIONS`, else the thread's (a test's)
+    let opts = match &words.opts {
+        Some((race, steps)) => {
+            if let Ok(path) = std::env::var("EQOA_RACE_OPTIONS") {
+                let data = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+                let o = net::raceopts::read_options(&data).ok_or_else(|| format!("{path}: not the race options"))?;
+                crate::raceopts::set_options(Some(&o));
+            }
+            let o = crate::raceopts::options().ok_or("opts= needs EQOA_RACE_OPTIONS (a file of 0x7E23's body)")?;
+            Some((o.rows(*race).to_vec(), steps.clone()))
+        }
+        None => None,
+    };
+    let model = opts.as_ref().and_then(|(rows, steps)| crate::raceopts::body_of_steps(rows, words.sex, steps)).map_or(model, |b| b as i32);
     let r = lib.lookup(model).ok_or_else(|| format!("no body {:#010x} in CHAR.ESF", model as u32))?;
     let mut anims = AnimScene::<Ee>::default();
     let mut rand = Rand(1);
@@ -133,6 +164,9 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     let mut mesh = lib.build_model(r).ok_or("no mesh")?;
     let before = mesh.batches.len();
     crate::play::dress_look(lib, model, &mut mesh, &cs, look, false, &vi::cust::Tables::retail(), true);
+    if let Some((rows, steps)) = &opts {
+        crate::raceopts::dress(lib, model as u32, &mut mesh, &crate::raceopts::look_of_steps(rows, words.sex, steps, model as u32));
+    }
     let tris = |b: &[esf::Batch]| b.iter().map(|b| b.indices.len() / 3).sum::<usize>();
     // `EQOA_DRESS_DEBUG=slots`: the made-up batches flat, a colour a slot
     // (chest red, bracer yellow, gloves green, legs blue, boots magenta);

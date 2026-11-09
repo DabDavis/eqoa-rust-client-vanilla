@@ -19,6 +19,7 @@ pub mod fans;
 pub mod fog16;
 pub mod lit;
 pub mod overlay;
+pub mod recolor;
 pub mod scale;
 pub mod shadow;
 pub mod sunshadow;
@@ -1903,18 +1904,38 @@ impl LibraryTextures<'_> {
 /// as the pack's levels, keyed apart (its generation in bits 40 and up);
 /// every other texture, and every texture with none set, is the surface's
 /// own under its own key.
+///
+/// A recoloured texture's id ([`recolor::recolored`]: a body's part a player
+/// recoloured) is its source's levels, recoloured, under a key of its own; a
+/// texture's own id resolves as it always did.
 impl TextureSource for LibraryTextures<'_> {
     fn image(&self, id: i32) -> Option<esf::Image> {
         self.levels(id).into_iter().next()
     }
     fn levels(&self, id: i32) -> Vec<esf::Image> {
-        let Some((c, s, era)) = self.surface(id) else { return Vec::new() };
+        let Some((c, s, era)) = self.surface(id) else {
+            return match recolor::source_of(id) {
+                Some((source, r)) => {
+                    let mut levels = self.levels(source);
+                    for l in &mut levels {
+                        recolor::recolor_rgba(&mut l.rgba, r);
+                    }
+                    levels
+                }
+                None => Vec::new(),
+            };
+        };
         if let Some(l) = pack().and_then(|p| p.levels(c, &s, era)).filter(|l| !l.is_empty()) {
             return l;
         }
         s.decode_levels(&c.data)
     }
     fn key(&self, id: i32) -> u64 {
+        if self.surface(id).is_none()
+            && let Some((source, r)) = recolor::source_of(id)
+        {
+            return recolor::key_of(self.key(source), r);
+        }
         let key = self.0.texture_key(id);
         let Some(p) = pack() else { return key };
         match self.surface(id) {
@@ -1923,7 +1944,10 @@ impl TextureSource for LibraryTextures<'_> {
         }
     }
     fn native_size(&self, id: i32) -> Option<(u32, u32)> {
-        self.0.surface(id).map(|(_, s)| (s.width.max(0) as u32, s.height.max(0) as u32))
+        if let Some((_, s)) = self.0.surface(id) {
+            return Some((s.width.max(0) as u32, s.height.max(0) as u32));
+        }
+        recolor::source_of(id).and_then(|(source, _)| self.native_size(source))
     }
 }
 

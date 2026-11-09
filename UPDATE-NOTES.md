@@ -6,6 +6,17 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Customise the new races
+- On a server with races of its own, the Customize Character page now offers each new race its own choices
+  instead of faces and hair it cannot wear: another kind of the same creature (hill, ice, sand and fire giants and
+  cyclopes; grey, green, ice and fire goblins; hawk, raven, vulture and owl aviaks; tiger and lion kerran; red and
+  pale fungusmen, and more), a satyr's face and hair, a brownie's hair, and colours for a fungusman's skin, cap,
+  growths and bag, a pixie's or fairy's wings and dress, a minotaur's hide and horns, a dryad's bark and leaves and
+  a giant's whole tone. Left and right step through them on the model, as with faces and hair.
+- What you choose shows at character select and in the world, to every player using this client. The kind of body
+  shows on every client, a PS2 included; the colours, faces and hair show on this client.
+- Characters made before keep their look, and every other race looks exactly as it did.
+
 ## 2026-11-09 · Capes
 - On a server that has capes (the Heirloom Test Server), your character can wear one: a cape goes in its own
   slot, so it is worn with everything else. Equip it from the Equipment tab like any other piece; its

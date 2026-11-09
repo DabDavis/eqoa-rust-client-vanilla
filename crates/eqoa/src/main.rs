@@ -134,6 +134,7 @@ mod quickchat;
 mod racebody;
 mod raceemote;
 mod racelabel;
+mod raceopts;
 mod record;
 mod alarm;
 mod startmenu;

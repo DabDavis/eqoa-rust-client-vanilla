@@ -306,6 +306,9 @@ pub struct Client {
     remake: bool,
     /// Bodies came in: the figures to be made again (`bodies_in`).
     refigure: bool,
+    /// the race looks' generation character select's figure was made under
+    /// (`raceopts::generation`)
+    looks_seen: u64,
 }
 
 impl Default for Client {
@@ -337,6 +340,7 @@ impl Default for Client {
             entered: None,
             remake: false,
             refigure: false,
+            looks_seen: 0,
         }
     }
 }
@@ -569,6 +573,12 @@ impl Client {
             self.select.remake(&cx.res.lib, g, cx.now);
             self.create.remake(&cx.res.lib, g, cx.now);
         }
+        // the server's race looks changed (`raceopts`): character select's
+        // figure made again in its own
+        if crate::raceopts::generation() != self.looks_seen {
+            self.looks_seen = crate::raceopts::generation();
+            self.select.relook();
+        }
         // the stage, once ARENA.CSF and the GPU are here (`LoadWorld`'s
         // walk camera limits set as it sets them)
         if self.stage.is_none()
@@ -720,6 +730,11 @@ impl Client {
         crate::cape::set_offered(s.capes);
         for c in &mut self.chars {
             c.cape = if s.capes { s.cape_list.get(&c.server_id).copied() } else { None };
+        }
+        // and its races' own options and the looks chosen (`raceopts`)
+        crate::raceopts::set_options(s.race_options.as_ref());
+        if let Some(b) = s.race_looks.take() {
+            crate::raceopts::take_looks(&b);
         }
         for (k, e) in events.iter().enumerate() {
             match e {
@@ -1119,7 +1134,7 @@ mod tests {
         c.chars = vec![CharRecord::of(&character("A", 1, vec![7; 32]))];
         (c.top, c.active) = (Wnd::Create, Wnd::Create);
         c.select.set_pending();
-        let form = net::session::NewChar { name: "Brakk".into(), race: 4, class: 9, sex: 1, hair_color: 2, hair_length: 1, hair_style: 3, face: 2, city: 0, stats: [0; 7] };
+        let form = net::session::NewChar { name: "Brakk".into(), race: 4, class: 9, sex: 1, hair_color: 2, hair_length: 1, hair_style: 3, face: 2, city: 0, stats: [0; 7], options: vec![] };
         c.create_character(&form);
         assert_eq!(c.chars.len(), 2);
         let n = &c.chars[1];
