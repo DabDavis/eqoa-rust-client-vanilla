@@ -200,7 +200,15 @@ or a browser (each described where it lives below):
   (`raceemote::TABLE`): the human's emote carried onto the body's skeleton where it is built on the human's bone
   names (the body's own bone lengths, its tail and wings at rest), else its own nearest (the pixie's, fairy's
   and fungusman's). Another body a race's options offer a player (the ice giant's, a goblin king's, the faun's)
-  plays its race's own body's (`raceemote::poses_of`: the body row's first step). The emote's entry itself is replaced, so a player's own emote and another player's are the
+  plays its race's own body's (`raceemote::poses_of`: the body row's first step).
+- **The Wisp** (a race of go-eqoa-server's own, 31; the owner, 2026-11-09: "the armor will form like a human and also
+  the weapons swing like humans. like when humans are invis, but the wisp is inside the helm"; `wisp`): a human's body
+  of its sex, marked by a race option the server lays always (a texture row of one step, `wisp`, whose value is the
+  will o' wisp's body, CHAR.ESF 0x8143DC70, no texture: an older client lays nothing). Drawn as its worn slots' triangles
+  alone (armour, a robe; no skin, face or hair), the wisp a head across on the helm's node inside any helm, its held items
+  and helm as any human's: the player's own, others', character select and the create pages. A PS2 shows a human in its
+  armour. The Jal'Raeth's three bodies wear a helm on the head node they name (`slotless::HEAD_HELMS`: they name no helm
+  node) and carry the human's emotes on their upper body (`raceemote::TABLE`). The emote's entry itself is replaced, so a player's own emote and another player's are the
   same; NPCs and every other body keep the game's (held to every CSprite on the disc). `eqoa emotes <body>
   <out.png> [wave bow point cheer N human:N ...]` draws a body's emotes, or its actions, a row each.
 - **Capes**, on a server that has them (go-eqoa-server's `world.capes`, the Heirloom Test

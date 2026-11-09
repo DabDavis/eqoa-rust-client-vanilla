@@ -6,6 +6,14 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · The Jal'Raeth and the Wisp
+- Two more races on a server that has them. The Jal'Raeth float cross-legged: choose their robes, a channeler's
+  body or a knight's armour. Their helm sits on their head, and they wave, bow, point and cheer.
+- A Wisp is a light inside an empty suit of armour: you see only what it wears, shaped as a human would wear it,
+  its weapons swinging as a human's do, and the wisp glowing inside the helm. With nothing on, it is the wisp
+  alone, floating where a head would be. Other players with this client see it so; a PlayStation 2 shows a human
+  in the same armour.
+
 ## 2026-11-09 · Every body of the new races
 - The new races' Customize Character page now offers every other body of their creature on the disc, the named
   ones' too: goblin kings, overseers, priests and bandits; grey, black-and-tan and risen gnolls; Deathfist and
