@@ -370,6 +370,13 @@ pub fn shot_with(
     let aspect = w as f32 / h as f32;
     let mut view = cam.view(s.bounds, aspect);
     if let Some((mut walker, body, mut streamer)) = source.walker(lib, &s) {
+        // a race's body jumping as on a server with jumps (`EQOA_JUMP`): the
+        // fall and the landing the race table gives it
+        if std::env::var_os("EQOA_JUMP").is_some()
+            && let Some(cs) = walker.sprite.as_mut()
+        {
+            crate::raceemote::grant_air(lib, cs, &mut walker.anims, shot_body(), true, true);
+        }
         // 60 frames a second of game time, the controls held throughout.
         let script = script.unwrap_or(Script { ms: 0, controls: Controls::default() });
         let mut t = 0;
@@ -1455,6 +1462,14 @@ fn held_name(k: &Key) -> Option<String> {
         Key::Character(c) => c.to_lowercase(),
         _ => return None,
     })
+}
+
+/// `EQOA_BODY=<DictID>` (hex, 0x optional): the body a walk shot plays,
+/// the human's (`HUMAN`) unless said. With `EQOA_JUMP`, as on a server with
+/// jumps: a body the race table lists falls and lands as it has it
+/// (`raceemote::grant_air`).
+pub fn shot_body() -> u32 {
+    std::env::var("EQOA_BODY").ok().and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok()).unwrap_or(HUMAN as u32)
 }
 
 /// `EQOA_WALK=fwd,strafe,orbit,ms[;...]`: each set of controls held for its

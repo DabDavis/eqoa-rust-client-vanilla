@@ -904,15 +904,17 @@ fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Lo
 /// items and helm on their nodes (a player's in a body one of the server's
 /// `races` wears holding items as a race's body does: `racebody`).
 /// Built in the art its model is drawn in (`esf::Library::view_for`): the
-/// 2002 disc's, whole, for a model that disc has while its art is drawn.
+/// 2002 disc's, whole, for a model that disc has while its art is drawn. On a
+/// server with `jumps`, a player's in a body with no fall or landing of its
+/// own falls and lands as the table has it (`raceemote::grant_air`).
 #[allow(clippy::too_many_arguments)]
-fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>) -> Option<Puppet> {
+fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Puppet> {
     let era = lib.view_for(e.drawn_model as i32);
-    lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era, races))
+    lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era, races, jumps))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era, races: Option<&net::creation::Creation>) -> Option<Puppet> {
+fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Puppet> {
     let textures = render::library_textures(lib);
     lib.lookup(e.drawn_model as i32).and_then(|r| {
                     let mut model = lib.build_model(r)?;
@@ -923,6 +925,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if let Some(cs) = sprite.as_mut() {
                         crate::racebody::grant(cs, e.drawn_model, player, races);
                         crate::raceemote::grant(lib, cs, &mut anims, e.drawn_model, player, races);
+                        crate::raceemote::grant_air(lib, cs, &mut anims, e.drawn_model, player, jumps);
                     }
                     let held = held_by(sprite.as_ref(), e.creature.as_ref());
                     let (attached, weapons, helm_worn) = match (&sprite, &e.creature) {
@@ -1089,13 +1092,16 @@ fn redo(was: (u32, u32, Option<vi::cust::Look>, Held), now: (u32, u32, Option<vi
 /// for a list that came after it was made). The puppet it replaced, when it
 /// was made anew.
 #[allow(clippy::too_many_arguments)]
-fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>) -> Option<Option<Puppet>> {
+fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Option<Puppet>> {
     if let Some(p) = p.as_mut().filter(|p| (p.id, p.model) == (e.id, e.drawn_model))
         && let Some(cs) = p.sprite.as_mut()
     {
         crate::racebody::grant(cs, p.model, a_player(e), races);
         let anims = &mut p.anims;
-        lib.with_view(p.era, || crate::raceemote::grant(lib, cs, anims, p.model, a_player(e), races));
+        lib.with_view(p.era, || {
+            crate::raceemote::grant(lib, cs, anims, p.model, a_player(e), races);
+            crate::raceemote::grant_air(lib, cs, anims, p.model, a_player(e), jumps)
+        });
     }
     let r = p.as_ref().map_or(Redo::Build, |p| redo((p.id, p.model, p.look, p.held), (e.id, e.drawn_model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
     // a server's race's look come, changed or gone (`raceopts`): made anew
@@ -1108,7 +1114,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
     let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.drawn_model as i32) || p.textures != crate::texpack::generation()) { Redo::Build } else { r };
     match r {
         Redo::Keep => None,
-        Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms, races))),
+        Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms, races, jumps))),
         Redo::Items => {
             if let Some(p) = p.as_mut()
                 && let (Some(cs), Some(c)) = (&p.sprite, &e.creature)
@@ -2331,7 +2337,7 @@ mod held {
         let holds = |p: &Option<Puppet>| p.as_ref().and_then(|p| p.sprite.as_ref()).expect("a sprite").holds_items;
 
         let mut player = None;
-        apply(&lib, &mut g, &mut player, &entity(2), None, 0, 0, Some(&races));
+        apply(&lib, &mut g, &mut player, &entity(2), None, 0, 0, Some(&races), false);
         let p = player.as_ref().unwrap();
         assert_eq!(p.held, [Some((sword, 11)), Some((bow, 21)), Some((shield, 20))]);
         assert_eq!(nodes(&player), [11, 20, 21], "each item's model on its node");
@@ -2340,7 +2346,7 @@ mod held {
 
         for (who, list) in [("an NPC", Some(&races)), ("a server with no races of its own", None)] {
             let mut bare = None;
-            apply(&lib, &mut g, &mut bare, &entity(if who == "an NPC" { 0 } else { 2 }), None, 0, 0, list);
+            apply(&lib, &mut g, &mut bare, &entity(if who == "an NPC" { 0 } else { 2 }), None, 0, 0, list, false);
             assert!(nodes(&bare).is_empty(), "{who}: nothing hung");
             assert_eq!((bare.as_ref().unwrap().held, bare.as_ref().unwrap().projectile), ([None; 3], [None; 2]), "{who}");
             assert!(!holds(&bare), "{who}");
@@ -2348,9 +2354,9 @@ mod held {
 
         // the list after the puppet: its items at the next apply, not made anew
         let mut late = None;
-        apply(&lib, &mut g, &mut late, &entity(2), None, 0, 0, None);
+        apply(&lib, &mut g, &mut late, &entity(2), None, 0, 0, None, false);
         assert!(nodes(&late).is_empty());
-        let made_anew = apply(&lib, &mut g, &mut late, &entity(2), None, 0, 33, Some(&races));
+        let made_anew = apply(&lib, &mut g, &mut late, &entity(2), None, 0, 33, Some(&races), false);
         assert!(made_anew.is_none(), "the puppet kept");
         assert_eq!(nodes(&late), [11, 20, 21]);
     }
@@ -2527,7 +2533,11 @@ impl Play {
         if let (Some(cs), Some(model)) = (walker.sprite.as_mut(), self.self_model) {
             crate::racebody::grant(cs, model, true, self.session.creation.as_ref());
             let anims = &mut walker.anims;
-            lib.with_view(lib.view_for(model as i32), || crate::raceemote::grant(lib, cs, anims, model, true, self.session.creation.as_ref()));
+            lib.with_view(lib.view_for(model as i32), || {
+                crate::raceemote::grant(lib, cs, anims, model, true, self.session.creation.as_ref());
+                // on a server with jumps, its fall and landing the table's
+                crate::raceemote::grant_air(lib, cs, anims, model, true, self.session.jumps)
+            });
         }
     }
 
@@ -3236,7 +3246,7 @@ impl Play {
                 && e.drawn_model != 0
             {
                 let look = e.creature.as_ref().map(look_of);
-                apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms, self.session.creation.as_ref());
+                apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms, self.session.creation.as_ref(), self.session.jumps);
                 let want = cape_of(&self.session, e);
                 if let Some(p) = self.self_puppet.as_mut() {
                     wear_cape(lib, &mut g, p, want);
@@ -3252,7 +3262,7 @@ impl Play {
                 continue;
             };
             let look = e.creature.as_ref().map(look_of);
-            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms, self.session.creation.as_ref())
+            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms, self.session.creation.as_ref(), self.session.jumps)
                 && let Some(s) = sound.as_deref_mut()
             {
                 s.share_sounds(lib, &sounds_of(&self.puppets[slot]));

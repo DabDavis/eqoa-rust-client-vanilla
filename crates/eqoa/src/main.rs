@@ -905,7 +905,8 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
             lib.file(main).zones().get(index).ok_or("no such zone")?;
             add_twin(&mut lib, main, file);
             stream::load_zone_now(&mut lib, main, index)?;
-            let character = lib.lookup(viewer::HUMAN).ok_or("no human model")?;
+            // `EQOA_BODY=<DictID>`: another body than the human's (`viewer::shot_body`)
+            let character = lib.lookup(viewer::shot_body() as i32).ok_or("no such body")?;
             Ok((lib, viewer::Source::Walk { file: main, index, character, spawn: None }))
         }
         [z, n] if z == "zone" => {

@@ -204,7 +204,12 @@ or a browser (each described where it lives below):
   names (the body's own bone lengths, its tail and wings at rest), else its own nearest (the pixie's, fairy's
   and fungusman's). The emote's entry itself is replaced, so a player's own emote and another player's are the
   same; NPCs and every other body keep the game's (held to every CSprite on the disc). `eqoa emotes <body>
-  <out.png> [wave bow point cheer N human:N ...]` draws a body's emotes, or its actions, a row each.
+  <out.png> [wave bow point cheer N human:N ...]` draws a body's emotes, or its actions, a row each. The fall
+  and the landing the same way (2026-11-09, "Yes, borrow the human's"; `raceemote::grant_air`): of the table's
+  bodies only the brownie's, dryad's, orc's and skeleton's have their own (every player race's body has), the
+  rest stood in the air; on a server with jumps a player's character in one of them takes the human's fall
+  (looping) and landing (once) carried onto it, or its own nearest (`AIR_OWN`: the pixie's, fairy's and
+  fungusman's), in its own view and every other player's, a jump and a fall off a ledge alike.
 - **Capes**, on a server that has them (go-eqoa-server's `world.capes`, the Heirloom Test
   Server's; the server owner, 2026-11-08: "lets add a new equip slot for heirloom server only.
   capes for all. there are many capes we can borrow from for various styles."; `cape`): the

@@ -16,6 +16,11 @@ is put on the page by `.github/workflows/notes.yml`.
   then has no key until you give it one there.
 - Other players using this client now see your jump as you do: from the top of the arc you fall, and you land with
   your landing when you come down. Before, they saw the rise and the top standing or running, and no landing.
+- The new races whose bodies had no fall of their own (froglok, giants, kerran, goblin, aviak, lizardman, kappa,
+  gnoll, kobold, minotaur, ratman, satyr and gargoyle) now fall and land as a human does, fitted to their size;
+  pixies, fairies and fungusmen use the nearest moves of their own, as their emotes do. Before, they stood in the
+  air. That is on a server with jumps, in a jump or a fall off a ledge, for you and for others using this client;
+  a PlayStation 2 still shows them standing.
 
 ## 2026-11-09 · Jump
 - On a server that has jumps (eqoaclassic can turn them on), V jumps: about half your height, straight up when you
