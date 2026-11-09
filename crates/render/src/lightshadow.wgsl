@@ -22,9 +22,9 @@ struct LightShadows {
     // each light of `lights.l` its map's place + 1 (0: none), four a vec4
     slot: array<vec4<u32>, 4>,
     // each map's origin less the eye, and w its strength (0 none, 1 whole)
-    origin: array<vec4<f32>, 8>,
+    origin: array<vec4<f32>, 16>,
     // each map's depth mapping: x a, y b
-    depth: array<vec4<f32>, 8>,
+    depth: array<vec4<f32>, 16>,
     // x: the faces' half width (a little over 1), y: 1 / the size, z: a
     // texel's world size per unit of distance along a face's axis
     params: vec4<f32>,

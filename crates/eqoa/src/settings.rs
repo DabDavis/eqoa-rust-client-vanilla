@@ -651,6 +651,14 @@ pub struct ClientOptions {
     /// Shadows stop the sun's (`render::lightshadow`); off, those lights
     /// light through everything. Off by default.
     pub light_shadows: bool,
+    /// Shadow Distance (Extended > Lighting, 2026-11-09, the user's "the light
+    /// shadows need a slider to raise to a greater distance"): how far out
+    /// Sun Shadows and Light Shadows reach, from the game's
+    /// `SHADOW_DISTANCE_GAME` (Sun Shadows' 250 before the camera, 8 lights
+    /// shadowed, 4 in a page and on Android) to `SHADOW_DISTANCE_MAX` (1000,
+    /// every light Dynamic Lighting draws) in `SHADOW_DISTANCE_STEP`s
+    /// (`render::Renderer::set_shadow_distance`).
+    pub shadow_distance: u16,
     /// Dynamic Lighting (the user's of 2026-11-08, phase 1): off, the
     /// PS2's, the strip programs' light per vertex with the personal light
     /// the one point light; on, the light per fragment and the scene's fires,
@@ -716,6 +724,16 @@ pub const RENDER_SCALES: [u8; 3] = [1, 2, 4];
 pub const TOUCH_SIZE_MIN: u8 = (crate::touch::SMALLEST * 100.0) as u8;
 pub const TOUCH_SIZE_MAX: u8 = 100;
 pub const TOUCH_SIZE_STEP: u8 = 5;
+
+/// Shadow Distance's ends and step (`ClientOptions::shadow_distance`).
+pub const SHADOW_DISTANCE_GAME: u16 = 250;
+pub const SHADOW_DISTANCE_MAX: u16 = 1000;
+pub const SHADOW_DISTANCE_STEP: u16 = 125;
+
+/// Shadow Distance as the renderer takes it: times the game's.
+pub fn shadow_scale() -> f32 {
+    client().shadow_distance as f32 / SHADOW_DISTANCE_GAME as f32
+}
 
 /// The touch screen's pad's size now, of the full pad (`touch::layout`).
 pub fn touch_scale() -> f32 {
@@ -789,6 +807,7 @@ impl Default for ClientOptions {
             ambient_occlusion: false,
             sun_shadows: false,
             light_shadows: false,
+            shadow_distance: SHADOW_DISTANCE_GAME,
             dynamic_lighting: false,
             loading_longer: true,
             render_scale: 1,
@@ -901,6 +920,10 @@ impl ClientOptions {
         if self.light_shadows {
             s.push_str("light_shadows=on\n");
         }
+        // Shadow Distance only when not the game's
+        if self.shadow_distance != SHADOW_DISTANCE_GAME {
+            s.push_str(&format!("shadow_distance={}\n", self.shadow_distance));
+        }
         // Dynamic Lighting only when on
         if self.dynamic_lighting {
             s.push_str("dynamic_lighting=on\n");
@@ -998,6 +1021,11 @@ impl ClientOptions {
                 ("sun_shadows", "off") => c.sun_shadows = false,
                 ("light_shadows", "on") => c.light_shadows = true,
                 ("light_shadows", "off") => c.light_shadows = false,
+                ("shadow_distance", v) => {
+                    if let Some(d) = v.parse::<u16>().ok().filter(|d| (SHADOW_DISTANCE_GAME..=SHADOW_DISTANCE_MAX).contains(d)) {
+                        c.shadow_distance = d;
+                    }
+                }
                 ("dynamic_lighting", "on") => c.dynamic_lighting = true,
                 ("dynamic_lighting", "off") => c.dynamic_lighting = false,
                 ("loading", "longer") => c.loading_longer = true,
@@ -1910,6 +1938,22 @@ mod tests {
         for bad in ["light_shadows=1", "light_shadows=", "light_shadows=On", "shadows=on", "sun_shadows=on"] {
             assert!(!ClientOptions::from_text(bad).light_shadows, "{bad}: off, the default");
         }
+    }
+
+    /// Shadow Distance, the game's 250 by default and not written then, kept
+    /// between it and 1000; anything else leaves the game's.
+    #[test]
+    fn shadow_distance_kept_when_raised() {
+        let d = ClientOptions::default();
+        assert_eq!(d.shadow_distance, 250, "the game's");
+        assert!(!d.to_text().contains("shadow_distance"), "the default not written");
+        let far = ClientOptions { shadow_distance: 750, ..Default::default() };
+        assert_eq!(far.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nshadow_distance=750\n");
+        assert_eq!(ClientOptions::from_text(&far.to_text()), far);
+        for bad in ["shadow_distance=1001", "shadow_distance=249", "shadow_distance=", "shadow_distance=far", "shadow_distance=-500"] {
+            assert_eq!(ClientOptions::from_text(bad).shadow_distance, 250, "{bad}: the game's");
+        }
+        assert_eq!(ClientOptions::from_text("shadow_distance=1000").shadow_distance, 1000);
     }
 
     /// Dynamic Lighting, off by default (the PS2's light), kept only when

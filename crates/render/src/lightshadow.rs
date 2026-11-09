@@ -51,14 +51,30 @@ use crate::{Draw, GpuGroup, GpuModel, Material, Member, Renderer, View, lit, sun
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3, Vec4};
 
-/// The most lights a frame shadows (the receivers' uniform holds this many).
-pub const MAX_SLOTS: usize = 8;
+/// The most lights a frame shadows (the receivers' uniform holds this many):
+/// every light Dynamic Lighting draws (`lit::MAX_LIGHTS`).
+pub const MAX_SLOTS: usize = lit::MAX_LIGHTS;
 
-/// How many lights a frame shadows: natively [`MAX_SLOTS`] (the personal
-/// light and seven more), half that in a page and on Android, where a
-/// phone's GPU pays for every comparison at every fragment a light reaches.
+/// How many lights a frame shadows at the options' Shadow Distance's game
+/// value: natively 8 (the personal light and seven more), half that in a page
+/// and on Android, where a phone's GPU pays for every comparison at every
+/// fragment a light reaches.
 pub fn slots() -> usize {
+    if cfg!(any(target_arch = "wasm32", target_os = "android")) { 4 } else { 8 }
+}
+
+/// The most it shadows when the Shadow Distance is raised all the way: every
+/// light Dynamic Lighting draws (natively 16, in a page and on Android 8).
+pub fn most_slots() -> usize {
     if cfg!(any(target_arch = "wasm32", target_os = "android")) { MAX_SLOTS / 2 } else { MAX_SLOTS }
+}
+
+/// How many lights a frame shadows at `scale` times the game's Shadow
+/// Distance (1 to 4): `slots()` at 1, `most_slots()` at 4, evenly between;
+/// the more cast, the farther from the eye a light still casts.
+pub fn slots_at(scale: f32) -> usize {
+    let (lo, hi) = (slots(), most_slots());
+    (lo + (((hi - lo) as f32) * ((scale - 1.0) / 3.0).clamp(0.0, 1.0)).round() as usize).min(hi)
 }
 
 /// A side of each face's map: 512 natively, a texel of 2 cm at 5 from the
@@ -364,13 +380,13 @@ pub(crate) struct Points {
 impl Points {
     pub(crate) fn new(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3], lit: &lit::Lit, sun: Option<&sunshadow::Sun>, format: wgpu::TextureFormat) -> Option<Points> {
         let size = map_size(device);
-        let slots = slots();
+        let slots = most_slots();
         // a layer more than the maps use: wgpu's GL backend makes a square 2D
         // texture of a multiple of six layers a cube map array (its "cube
         // compatible" guess), which then samples as nothing through a 2D
         // array's comparison (every light wholly in shadow, on GL and in a
         // page's WebGL2)
-        let layers = (6 * MAX_SLOTS + 1) as u32;
+        let layers = (6 * slots + 1) as u32;
         let array = |label: &str| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -586,7 +602,7 @@ impl Points {
         let dt = st.last.map_or(0.0, |t| (now - t).clamp(0.0, 0.25));
         st.last = Some(now);
         let step = dt / FADE;
-        self.choose(&mut st, lights, view.eye, step, dt);
+        self.choose(&mut st, lights, view.eye, step, slots_at(r.shadow_scale).min(self.slots));
         let mut drawn = Drawn::default();
         let g = widen(self.size);
         let mut u = ShadowUniform::zeroed();
@@ -688,8 +704,7 @@ impl Points {
     /// one that holds a map and is not wanted fades out by `step`, its place
     /// freed at nothing; one wanted takes a free place, at once if it is new
     /// to the frame's lights (or has no key), else fading in by `step`.
-    fn choose(&self, st: &mut State, lights: &[lit::PointLight], eye: Vec3, step: f32, dt: f32) {
-        let _ = dt;
+    fn choose(&self, st: &mut State, lights: &[lit::PointLight], eye: Vec3, step: f32, budget: usize) {
         // each map's light this frame, by its key; a map whose light is gone
         // (or had no key to be found by) goes with it
         for slot in st.slots.iter_mut() {
@@ -707,7 +722,7 @@ impl Points {
             .map(|(j, l)| (rank(l, eye) * if held(st, j) { HOLD } else { 1.0 }, j))
             .collect();
         ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
-        let wanted: Vec<usize> = ranked.iter().take(self.slots).map(|&(_, j)| j).collect();
+        let wanted: Vec<usize> = ranked.iter().take(budget).map(|&(_, j)| j).collect();
         for slot in st.slots.iter_mut() {
             let Some(s) = slot else { continue };
             s.wanted = wanted.contains(&s.j);
@@ -720,7 +735,7 @@ impl Points {
             if st.slots.iter().flatten().any(|s| s.j == j) {
                 continue;
             }
-            let Some(free) = st.slots[..self.slots].iter().position(Option::is_none) else { break };
+            let Some(free) = st.slots[..budget].iter().position(Option::is_none) else { break };
             let l = lights[j];
             let new = l.key == 0 || !st.seen.contains(&l.key);
             st.slots[free] = Some(Slot { key: l.key, at: l.at, range: l.range, strength: if new { 1.0 } else { approach(0.0, 1.0, step) }, wanted: true, still: 0.0, cache: None, dirty: [true; 6], j });

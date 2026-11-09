@@ -538,6 +538,10 @@ pub struct Renderer {
     /// they are first on with Dynamic Lighting, and whether they are on.
     points: Option<lightshadow::Points>,
     points_on: bool,
+    /// The options' Shadow Distance, times the game's (1 to 4,
+    /// `set_shadow_distance`): the sun's cascades' far edge, and how many
+    /// lights cast.
+    shadow_scale: f32,
     /// repeat, clamp, mirror.
     samplers: [wgpu::Sampler; 3],
     white: wgpu::TextureView,
@@ -841,6 +845,7 @@ impl Renderer {
             sun_on: false,
             points: None,
             points_on: false,
+            shadow_scale: 1.0,
             samplers,
             white,
             textures: Default::default(),
@@ -1643,6 +1648,14 @@ impl Renderer {
     pub fn set_light_shadows(&mut self, device: &wgpu::Device, on: bool) {
         self.points_on = on;
         self.make_points(device);
+    }
+
+    /// The options' Shadow Distance, `scale` times the game's (1 to 4, as
+    /// built at 1): Sun Shadows' far edge (`sunshadow::ends`) and how many
+    /// lights Light Shadows shadow (`lightshadow::slots_at`), from the next
+    /// frame.
+    pub fn set_shadow_distance(&mut self, scale: f32) {
+        self.shadow_scale = scale.clamp(1.0, 4.0);
     }
 
     /// Whether Light Shadows are on (`set_light_shadows`; drawn only with

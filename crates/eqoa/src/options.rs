@@ -53,7 +53,11 @@
 //!   spells lighting through everything; On, with Dynamic Lighting on: what
 //!   stands between a surface and one of those lights casting a shadow
 //!   away from it, as Sun Shadows' from the sun, `render::lightshadow`; on
-//!   without it, the page says what they need)
+//!   without it, the page says what they need), Shadow Distance (a slider
+//!   and its number: how far out Sun Shadows and Light Shadows reach, the
+//!   game's 250 to 1000 in 125s: the sun's cascades' far edge, and from the 8
+//!   lights shadowed (4 in a page and on Android) to every light Dynamic
+//!   Lighting draws, `render::Renderer::set_shadow_distance`)
 //!   and Ambient Occlusion (Off, the game's picture; On: the opaque scene's
 //!   creases, corners and contacts darkened per pixel, `render::ao`);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
@@ -122,7 +126,7 @@
 
 use crate::bindpage::ControlsPage;
 use crate::pointer::{Hits, key, rows_rect};
-use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
+use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, SHADOW_DISTANCE_GAME, SHADOW_DISTANCE_MAX, SHADOW_DISTANCE_STEP, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
 use vi::fpu::{Ee, F};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -684,6 +688,17 @@ impl WndOptions {
                     // Light Shadows: cast or not from the next frame, with
                     // Dynamic Lighting on (`viewer`, `render::lightshadow`)
                     55 => c.light_shadows = !c.light_shadows,
+                    // Shadow Distance: a step of 125 from the game's 250 to
+                    // 1000, the shadows' reach from the next frame (`viewer`)
+                    56 => {
+                        let v = c.shadow_distance as i32 + d.signum() * SHADOW_DISTANCE_STEP as i32;
+                        if (SHADOW_DISTANCE_GAME as i32..=SHADOW_DISTANCE_MAX as i32).contains(&v) {
+                            c.shadow_distance = v as u16;
+                            cues.push(11);
+                        } else {
+                            cues.push(9);
+                        }
+                    }
                     // Ambient Occlusion: its passes over the world from the
                     // next frame (`viewer`, `render::ao`)
                     54 => c.ambient_occlusion = !c.ambient_occlusion,
@@ -1147,7 +1162,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 37] = [
+const EXTENDED_ITEMS: [(i32, &str); 38] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1185,6 +1200,7 @@ const EXTENDED_ITEMS: [(i32, &str); 37] = [
     (53, "Sun Shadows"),
     (54, "Ambient Occlusion"),
     (55, "Light Shadows"),
+    (56, "Shadow Distance"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1226,7 +1242,7 @@ struct Category {
 const ALL_CATEGORIES: [Category; 9] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
-    Category { name: "Lighting", items: &[52, 53, 55, 54], note: Note::Lighting },
+    Category { name: "Lighting", items: &[52, 53, 55, 56, 54], note: Note::Lighting },
     Category { name: "UI", items: &[22, 29, 30, 40, 49], note: Note::None },
     Category { name: "Controller", items: &[16, 19, 48], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
@@ -1384,6 +1400,7 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         24 => (at(c.entity_view as f32, ENTITY_VIEW_GAME as f32, ENTITY_VIEW_MAX as f32), Some(c.entity_view)),
         27 => name_distance_slider(&c),
         48 => (at(c.touch_size as f32, TOUCH_SIZE_MIN as f32, TOUCH_SIZE_MAX as f32), Some(c.touch_size as u16)),
+        56 => (at(c.shadow_distance as f32, SHADOW_DISTANCE_GAME as f32, SHADOW_DISTANCE_MAX as f32), Some(c.shadow_distance)),
         _ => return None,
     })
 }
@@ -1738,6 +1755,24 @@ mod tests {
         assert_eq!(w.page_note(2).as_deref(), Some("Light Shadows need Dynamic Lighting"), "on without Dynamic Lighting");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::client().light_shadows, "and back: two values");
+        // Shadow Distance: a slider and its number, the game's 250 at the
+        // left, a step of 125 a press, 1000 at the right
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 56, "Shadow Distance");
+        assert_eq!(slider_at(56), Some((0.0, Some(250))), "the game's 250");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!((settings::client().shadow_distance, cues.last()), (250, Some(&9)), "nothing under the game's");
+        for want in [375u16, 500, 625, 750, 875, 1000] {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((settings::client().shadow_distance, cues.last()), (want, Some(&11)));
+        }
+        assert_eq!(slider_at(56), Some((1.0, Some(1000))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().shadow_distance, cues.last()), (1000, Some(&9)), "nothing past 1000");
+        for _ in 0..6 {
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+        }
+        assert_eq!(settings::client().shadow_distance, 250, "and back");
         // Ambient Occlusion, Off (the game's picture), then On
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 54, "Ambient Occlusion");
@@ -1748,7 +1783,7 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::client().ambient_occlusion, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (3, Some(&9)), "Lighting's last row");
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Lighting's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 2, -1), "back to the categories, Lighting still lit");
         // UI: Ability Bars, Update Notices, Text, HUD, Raid List

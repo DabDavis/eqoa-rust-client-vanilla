@@ -326,6 +326,32 @@ fn the_budget_hands_maps_on_without_a_jump() {
     assert!(jumps > 60, "the control, a second a frame: {jumps}");
 }
 
+/// The options' Shadow Distance raised all the way: twelve lights in view
+/// all get a map where the game's distance gives eight (natively; a page's
+/// four and eight), the farthest of them casting too; lowered again, the
+/// four farthest give theirs back.
+#[test]
+fn the_shadow_distance_shadows_more_lights() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    let lights: Vec<PointLight> = (0..12).map(|k| fire(Vec3::new(-8.0 + (k % 4) as f32 * 5.0, 3.0, -6.0 + (k / 4) as f32 * 6.0), 10.0, 200 + k as u64)).collect();
+    let mut r = renderer(&g, true, false, true);
+    let f = r.upload(&g.device, &g.queue, &floor(HALF), &[at(Vec3::ZERO)], &none);
+    let maps = |r: &mut Renderer, t: f32| {
+        r.scroll_time = Some(t);
+        shot(&g, r, &view(Vec3::ZERO, &lights, None), &[Draw::Model(&f)]);
+        r.light_shadow_drawn().unwrap().maps as usize
+    };
+    assert_eq!(maps(&mut r, 0.0), render::lightshadow::slots().min(12), "the game's distance");
+    r.set_shadow_distance(4.0);
+    assert_eq!(maps(&mut r, 0.1), render::lightshadow::most_slots().min(12), "raised all the way: the farthest cast too");
+    r.set_shadow_distance(1.0);
+    // the extra maps fade out over a quarter of a second, then are let go
+    let _ = maps(&mut r, 0.2);
+    assert_eq!(maps(&mut r, 0.6), render::lightshadow::slots().min(12), "lowered: given back");
+    assert_eq!((render::lightshadow::slots_at(1.0), render::lightshadow::slots_at(4.0)), (render::lightshadow::slots(), render::lightshadow::most_slots()));
+}
+
 /// With Sun Shadows on too: at noon the box casts the sun's shadow and the
 /// light's; by night (the game's sun under the ground, its light travelling
 /// up, a ceiling lit) the sun's term is the strip programs' alone, the last
