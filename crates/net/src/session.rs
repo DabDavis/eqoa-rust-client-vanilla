@@ -122,9 +122,12 @@ pub const OP_LIVE_LOOK_IN_FORCE: u16 = 0x7E0D;
 /// the opcode, both ways. The server offers them (1) once the player is in
 /// the world; this client answers 1 at once, and then F3 opens Support's
 /// request form on Bug Report, and each petition it files (the form, or a
-/// typed `/bug`/`#bug`) goes after its own note ([`OP_BUG_NOTE`]). A PS2
-/// ignores the offer; a server that never makes one (Sandstorm's,
-/// eqoa.live's) gets no key and no note.
+/// typed `/bug`/`#bug`) goes after its own note ([`OP_BUG_NOTE`]). A second
+/// u32 after the offer's is the most characters of a petition's text the
+/// server takes (go-eqoa-server's since 2026-11-08: 2,047): the form holds
+/// that many, up to [`PETITION_TEXT_MOST`] ([`Session::petition_text`]),
+/// else a PS2's [`PETITION_TEXT_DISC`]. A PS2 ignores the offer; a server
+/// that never makes one (Sandstorm's, eqoa.live's) gets no key and no note.
 pub const OP_BUG_REPORTS: u16 = 0x7E0E;
 /// This client's note for the petition it files next, to a server that
 /// offered [`OP_BUG_REPORTS`]: a u32 version (1), then a u32 byte count and
@@ -194,9 +197,20 @@ pub const OP_RAID_ROSTER_ANSWER: u16 = 0x7E19;
 /// each [`RaidMember`] (u32 id, u8 and the bytes of its name, u8 class, u8
 /// level, u8 HP of 255, u8 power of 255). 0 members: no raid group (now).
 pub const OP_RAID_ROSTER: u16 = 0x7E1A;
-/// The most of a note sent, in bytes: one message, as go-eqoa-server takes
-/// each fragment of a longer one for a message of its own.
+/// The most of a note sent, in bytes: one message, as a go-eqoa-server of
+/// before 2026-11-08 takes each fragment of a longer one for a message of its
+/// own (and says nothing of a petition's length in its offer).
 pub const BUG_NOTE_MAX: usize = 1000;
+/// The most characters of a petition's text (Support's request or reply,
+/// 0x0AA1) for a server that says nothing of it: a PS2's form
+/// (`VIWndCSRequest`'s `m_text[512]`, 511 and its end), which every server takes.
+pub const PETITION_TEXT_DISC: usize = 511;
+/// The most this client's form holds (2,048 with its end), for a server whose
+/// bug report offer ([`OP_BUG_REPORTS`]) says it takes as many (petition 1300,
+/// 2026-11-08: "Increase the text limit in the bug reporting window"). A request
+/// that long is 4,103 bytes, past one message (1,300): DRDP sends it in four
+/// pieces, which go-eqoa-server puts back together since it says so.
+pub const PETITION_TEXT_MOST: usize = 2047;
 
 /// One member of a raid group ([`OP_RAID_ROSTER`]): `id` as this client knows
 /// it (its own, an entity's, or the roster's stand-in for one out of sight).
@@ -458,6 +472,10 @@ pub struct Session {
     /// The server offered bug reports ([`OP_BUG_REPORTS`]) and this client
     /// took them: F3 and the note. Kept for the session.
     pub bug_reports: bool,
+    /// The most characters of a petition's text Support's forms hold: what
+    /// the offer said the server takes, up to [`PETITION_TEXT_MOST`], else
+    /// [`PETITION_TEXT_DISC`]. Kept for the session.
+    pub petition_text: usize,
     /// The server lets any member of a group invite into it
     /// ([`OP_MEMBER_INVITES`]). Kept for the session.
     pub member_invites: bool,
@@ -610,6 +628,7 @@ impl Session {
             entity_view_offer: None,
             live_look: false,
             bug_reports: false,
+            petition_text: PETITION_TEXT_DISC,
             member_invites: false,
             creation: None,
             server_worlds: None,
@@ -1122,10 +1141,17 @@ impl Session {
                     self.send_op_int(OP_LIVE_LOOK, 1);
                 }
             }
-            // bug reports offered: taken (F3 and the note, `bugnote`)
+            // bug reports offered: taken (F3 and the note, `bugnote`), with the
+            // most of a petition's text the server takes when it says
             OP_BUG_REPORTS => {
                 if r.u32() != 0 && !r.error {
                     self.bug_reports = true;
+                    if m.data.len() >= r.pos + 4 {
+                        let most = r.u32() as usize;
+                        if most > 0 {
+                            self.petition_text = most.min(PETITION_TEXT_MOST);
+                        }
+                    }
                     self.send_op_int(OP_BUG_REPORTS, 1);
                 }
             }
@@ -2100,6 +2126,28 @@ mod tests {
         let m = ours(&mut s);
         let n = u32::from_le_bytes(m[0][6..10].try_into().unwrap()) as usize;
         assert!(n <= BUG_NOTE_MAX && n % 2 == 0 && m[0].len() == 10 + n, "cut on a character's edge: {n}");
+    }
+
+    // The most of a petition's text: a PS2's 511 from an offer that says
+    // nothing more (a go-eqoa-server of before 2026-11-08), else what it says,
+    // up to this client's form; a 0 or a second field cut short says nothing
+    // (the last kept). The answer is 1 either way.
+    #[test]
+    fn the_offer_says_how_long_a_petition_may_be() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0E, 0x7E, 1, 0, 0, 0]);
+        assert!(s.bug_reports);
+        assert_eq!(s.petition_text, PETITION_TEXT_DISC, "an offer that says nothing of a petition's length");
+        for (said, want) in [(vec![0xFF, 0x07, 0, 0], 2047), (vec![0xFF, 0xFF, 0, 0], PETITION_TEXT_MOST), (vec![0x2C, 0x01, 0, 0], 300), (vec![0, 0, 0, 0], 300), (vec![0xFF, 0x07], 300)] {
+            let mut offer = vec![0x0E, 0x7E, 1, 0, 0, 0];
+            offer.extend(said);
+            deliver(&mut s, drdp::TYPE_GUARANTEED, offer);
+            assert_eq!(s.petition_text, want);
+        }
+        s.flush();
+        let answers: Vec<Vec<u8>> = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+        assert!(!answers.is_empty() && answers.iter().all(|a| *a == [0x0E, 0x7E, 1, 0, 0, 0]), "{answers:?}");
     }
 
     // Any member's invites (0x7E17): the offer kept, a short one not, and

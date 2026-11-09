@@ -6,13 +6,42 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
-## 2026-11-08 · A server's own worlds, built from your disc
+## 2026-11-09 · A server's own worlds, built from your disc
 - A server can now have worlds of its own made of the game's own lands: the Homelands, where a server's new races
   start (an Aviak hatches in Aviak Village). The client builds such a world from your own disc the first time you
   reach character select on that server (a few seconds; nothing of the game is downloaded), keeps it, and then
   plays it like any other world. The start menu names its places, and the create page's review shows a new
   race's home as its Starting City.
 - Nothing changes on a server without such worlds.
+
+## 2026-11-09 · Sun Shadows move smoothly
+- Shadows now move with the sun a little every frame as the day goes on. Until now they stood still for a second or
+  so and then jumped to their new place, which showed most on the long shadows of the morning and the evening.
+- The shadows of characters walking or running some way off keep up with them now. Farther than about 40 from the
+  camera they were redrawn only every other frame, so they trailed a step behind and flickered over the character's
+  own sunlit side.
+- Sun Shadows ask a little more of the graphics card for it: about a third of a millisecond a frame on a Radeon RX 580,
+  at 1080p and at 4K alike.
+
+## 2026-11-09 · The new races wave, bow, point and cheer
+- On a server with races of its own, every new race now does the four emotes. Most do them the way a human
+  does, in their own size and shape: a Hill Giant raises its huge arm over its head to wave and bends right
+  over to bow, a Kerran points, a Gnoll cheers with a fist in the air.
+- Pixies, Fairies and Fungusmen, built too differently for that, use moves of their own: a Pixie raises a hand
+  high to wave and dives forward to bow, a Fairy opens its wings, a Fungusman swings an arm out and tips its
+  cap.
+- Other players see your emote as you do. Until now a new race's emote did nothing at all (it started its
+  standing animation over), which is still what a PS2 shows.
+- Brownies and Skeletons, which always had the human's emotes, and everyone else, creatures included, are
+  unchanged.
+
+## 2026-11-09 · Longer bug reports
+- A bug report or petition now holds up to 2,047 characters on a server that takes them: Support's request form,
+  the one F3 and /bug open, and a reply from Support's inbox. That is four times as much room to say what happened,
+  where, and how to make it happen again. The box scrolls as you type, and Up and Down move through its lines.
+- On a server that does not take them it holds 511 characters, as on a PS2.
+- Typing in a text box and pressing Up or Down straight after could close the game. It no longer does, and a long
+  text no longer slows the game down while its box is open.
 
 ## 2026-11-08 · The mastery window can't hang
 - If the server's answer to a mastery request (buying a mastery, opening one, your share of experience) is lost on the

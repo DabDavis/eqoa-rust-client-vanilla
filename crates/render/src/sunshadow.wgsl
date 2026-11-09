@@ -12,15 +12,14 @@
 //
 // The map is four cascades of the view's depth (`sunshadow::ENDS`), each an
 // orthographic view along the sun's light round the sphere that holds its
-// slice of the view, snapped to its texels in the world so it does not
-// shimmer as the camera moves (`sunshadow::fit`). A fragment takes the
-// cascade its depth before the camera falls in, looked up from a point moved
-// off the surface along its normal (more as the sun grazes it) and a little
-// toward the sun, four bilinear comparisons a texel apart; past
-// `params.y` the shadow fades out, gone by `params.z`, the cascades' end.
-// The far two cascades are drawn in turn, one of them a frame old, each a
-// margin wider than its slice for what the camera did meanwhile
-// (`sunshadow::Sun::draw`).
+// slice of the view, drawn every frame and snapped to its texels, which stay
+// put in the world as the camera moves and as the sun turns, so nothing
+// shimmers and a shadow moves with the sun a little every frame
+// (`sunshadow::fit`, `Grid`). A fragment takes the cascade its depth before
+// the camera falls in, looked up from a point moved off the surface along its
+// normal (more as the sun grazes it) and a little toward the sun, four
+// bilinear comparisons a texel apart; past `params.y` the shadow fades out,
+// gone by `params.z`, the cascades' end.
 
 struct SunShadow {
     // each cascade's matrix: a position less the eye to its clip space

@@ -1518,9 +1518,6 @@ impl Renderer {
     pub fn set_sun_shadows(&mut self, device: &wgpu::Device, on: bool) {
         self.sun_on = on;
         self.make_sun(device);
-        if let Some(s) = &self.sun {
-            s.forget();
-        }
     }
 
     /// Whether Sun Shadows are on (`set_sun_shadows`; drawn only with

@@ -321,14 +321,13 @@ fn a_cascade_draws_the_casters_it_reaches() {
     assert!(draws > 4 + 4, "and the boxes near enough drawn: {draws}");
 }
 
-/// The far two cascades are drawn in turn: with nothing moving, the
-/// frames after the first (each drawing the near two and one far one, the
-/// other kept) are byte for byte the first; with the camera turned away and
-/// back (150 degrees a frame: every cascade drawn again), and turned a
-/// little a frame (a far cascade kept), the shadow of a box 70 off is shaded
-/// as a renderer drawing every cascade at once shades it.
+/// Every cascade is drawn every frame, on texels that hold still while the
+/// sun does: with nothing moving, the frames after the first are byte for
+/// byte the first; and after the camera has turned away and back (150
+/// degrees a frame) and a little a frame, each frame is byte for byte what a
+/// renderer drawing that view first draws, the shadow of a box 70 off in it.
 #[test]
-fn the_far_cascades_drawn_in_turn_keep_the_picture() {
+fn every_cascade_is_drawn_every_frame() {
     let Some(g) = gpu() else { return };
     let none = |_: i32| None;
     let far_view = |turn: f32| {
@@ -347,25 +346,23 @@ fn the_far_cascades_drawn_in_turn_keep_the_picture() {
     let (f, b) = scene(&mut r);
     let first = shot(&g, &mut r, &far_view(0.0), &[Draw::Model(&f), Draw::Model(&b)]);
     for k in 1..4 {
-        assert!(shot(&g, &mut r, &far_view(0.0), &[Draw::Model(&f), Draw::Model(&b)]) == first, "frame {k}: a far cascade kept, the same picture");
+        assert!(shot(&g, &mut r, &far_view(0.0), &[Draw::Model(&f), Draw::Model(&b)]) == first, "frame {k}: nothing moving, the same picture");
     }
     // the box's shadow on the floor, 70 off: where each frame draws it
     let shadow_px = |v: &View| {
         let c = v.view_proj.project_point3(Vec3::new(3.5, 0.0, 0.0));
         (((c.x * 0.5 + 0.5) * SIZE as f32) as u32, ((0.5 - c.y * 0.5) * SIZE as f32) as u32)
     };
-    // turned away and back (every cascade drawn again), then a little a
-    // frame (one far cascade kept from the frame before)
     for (before, turn) in [(2.6f32, 0.3f32), (-2.6, -0.3), (0.13, 0.15), (0.15, 0.17), (0.17, 0.19)] {
         shot(&g, &mut r, &far_view(before), &[Draw::Model(&f), Draw::Model(&b)]);
         let v = far_view(turn);
-        let kept = shot(&g, &mut r, &v, &[Draw::Model(&f), Draw::Model(&b)]);
+        let after = shot(&g, &mut r, &v, &[Draw::Model(&f), Draw::Model(&b)]);
         let mut fresh = renderer(&g, true);
         let (f2, b2) = scene(&mut fresh);
         let whole = shot(&g, &mut fresh, &v, &[Draw::Model(&f2), Draw::Model(&b2)]);
         let p = shadow_px(&v);
-        assert!(red(&whole, p) < 0.3, "turned {turn}: every cascade drawn, the shadow at {p:?}: {}", red(&whole, p));
-        assert!(close(red(&kept, p), red(&whole, p)), "turned {turn}: a far cascade kept, the shadow at {p:?}: {} against {}", red(&kept, p), red(&whole, p));
+        assert!(red(&whole, p) < 0.3, "turned {turn}: the shadow at {p:?}: {}", red(&whole, p));
+        assert!(after == whole, "turned {turn}: the frame as a renderer drawing it first draws it");
     }
 }
 
@@ -446,4 +443,118 @@ fn a_group_casts_once_relit() {
     let after = r.upload_group(&g.device, &g.queue, &[part()], &none);
     let px = shot(&g, &mut r, &v, &[Draw::Model(&f), Draw::Group(&after)]);
     assert!(close(red(&px, shade), 0.1), "uploaded with them on: its shadow ({})", red(&px, shade));
+}
+
+/// The shadows move with the sun as it is: as the sun turns a hundredth of
+/// a degree a frame out at Freeport (six frames of the game's day), the
+/// shadow of a tall box turned across the map's texels lengthens a little at
+/// almost every frame, no move more than a few times the mean; the control,
+/// the same turn taken in eighths of a degree (the build before), stands
+/// still and then jumps. The shadow's place is its darkness's centroid along
+/// the light (Dynamic Lighting alone less Sun Shadows, each its own
+/// renderer, frame by frame).
+#[test]
+fn the_shadows_move_with_the_sun_as_it_is() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    const N: u32 = 256;
+    let floor_m = floor(HALF, 1.0);
+    let pole = cube(Vec3::new(0.0, 1.0, 0.0), 1.0, layer(0, 0));
+    let pole_at = at(FREEPORT, Mat4::from_translation(Vec3::new(-10.0, 0.0, 0.0)) * Mat4::from_rotation_y(0.5) * Mat4::from_scale(Vec3::new(1.0, 5.0, 1.0)));
+    // the game's path: 30 degrees up at 240, its light travelling +x and down
+    let sun_at = |deg: f32| {
+        let a = deg.to_radians();
+        Vec3::new(-a.sin(), a.cos(), 0.0)
+    };
+    let places = |step: Option<f32>| -> Vec<f64> {
+        let (mut on, mut alone) = (renderer(&g, true), renderer(&g, false));
+        let scene = |r: &mut Renderer| (r.upload(&g.device, &g.queue, &floor_m, &[at(FREEPORT, Mat4::IDENTITY)], &none), r.upload(&g.device, &g.queue, &pole, &[pole_at], &none));
+        let (a, b) = (scene(&mut on), scene(&mut alone));
+        (0..=25)
+            .map(|k| {
+                let deg = 240.0 + 0.01 * k as f32;
+                let v = view(FREEPORT, sun_at(step.map_or(deg, |s| (deg / s).round() * s)));
+                let lit = render::capture(&g.device, &g.queue, &mut on, N, N, &v, &[Draw::Model(&a.0), Draw::Model(&a.1)], None);
+                let plain = render::capture(&g.device, &g.queue, &mut alone, N, N, &v, &[Draw::Model(&b.0), Draw::Model(&b.1)], None);
+                let (mut sum, mut moment) = (0.0f64, 0.0f64);
+                for y in 0..N {
+                    for x in 0..N {
+                        let k = ((y * N + x) * 4) as usize;
+                        let dark = (plain[k] as f64 - lit[k] as f64 - 2.0).max(0.0);
+                        sum += dark;
+                        moment += dark * x as f64;
+                    }
+                }
+                assert!(sum > 0.0, "a shadow at {deg}");
+                moment / sum
+            })
+            .collect()
+    };
+    let moves = |p: &[f64]| -> Vec<f64> { p.windows(2).map(|w| w[1] - w[0]).collect() };
+    let smooth = moves(&places(None));
+    let mean = smooth.iter().map(|m| m.abs()).sum::<f64>() / smooth.len() as f64;
+    let moved = smooth.iter().filter(|m| m.abs() > 1e-4).count();
+    let largest = smooth.iter().fold(0.0f64, |a, m| a.max(m.abs()));
+    assert!(mean > 0.005 && moved >= 20 && largest < 4.0 * mean, "the sun as it is: moved at {moved} of 25 frames, the largest move {largest} px, the mean {mean} ({smooth:?})");
+    let stepped = moves(&places(Some(0.125)));
+    let mean_s = stepped.iter().map(|m| m.abs()).sum::<f64>() / stepped.len() as f64;
+    let moved_s = stepped.iter().filter(|m| m.abs() > 1e-4).count();
+    let largest_s = stepped.iter().fold(0.0f64, |a, m| a.max(m.abs()));
+    assert!(moved_s <= 3 && largest_s > 8.0 * mean_s, "the control, in eighths of a degree: moved at {moved_s} of 25 frames, the largest move {largest_s} px, the mean {mean_s}");
+}
+
+/// A character's shadow keeps up with it wherever there are shadows: a box
+/// (turned across the map's texels) running 0.15 a frame (a run at 60 frames
+/// a second) 74 off, in the third cascade, and 149 off, in the last (a lens
+/// half as wide, so it is as large in the picture), moves its shadow with it
+/// at every frame, its darkness's centroid (Dynamic Lighting alone less Sun
+/// Shadows) on by no less than half the mean move any frame. The far two
+/// cascades drawn in turn, as at first, held the shadow where it had been
+/// at every other frame and the box's sunlit side in it: the centroid went
+/// back 4.4 pixels and on 6.4 by turns at 74, back 1.2 and on 3.4 at 149.
+#[test]
+fn a_running_box_casts_where_it_is_each_frame() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    const N: u32 = 512;
+    let floor_m = floor(HALF * 8.0, 1.0);
+    let bx = cube(Vec3::new(0.0, 3.0, 0.0), 1.0, layer(0, 0));
+    for (cascade, far) in [(2usize, 1.0f32), (3, 2.0)] {
+        let proj = glam::camera::rh::proj::directx::perspective((55.0 / far).to_radians(), 1.0, 0.3, 800.0);
+        let eye = Vec3::new(0.0, 25.0, 70.0) * far;
+        let v = View { eye, sun: Vec3::X, sun_dir: SUN45.normalize(), ambient: Vec3::splat(0.1), clear: Vec3::ZERO, lights: Some(Lights::default()), ..View::daylight(proj * glam::camera::rh::view::look_at_mat4(eye, Vec3::ZERO, Vec3::Y)) };
+        let depth = (v.view_proj * Vec3::new(3.0, 0.0, 0.0).extend(1.0)).w;
+        assert!(depth > sunshadow_end(cascade - 1) && depth < sunshadow_end(cascade), "the shadow in cascade {cascade}: {depth}");
+        let (mut on, mut alone) = (renderer(&g, true), renderer(&g, false));
+        let scene = |r: &mut Renderer| (r.upload(&g.device, &g.queue, &floor_m, &[render::IDENTITY], &none), r.upload(&g.device, &g.queue, &bx, &[render::IDENTITY], &none));
+        let (a, b) = (scene(&mut on), scene(&mut alone));
+        let places: Vec<f64> = (0..12)
+            .map(|k| {
+                let m = (Mat4::from_translation(Vec3::new(-0.9 + 0.15 * k as f32, 0.0, 0.0)) * Mat4::from_rotation_y(0.5)).to_cols_array_2d();
+                on.set_instances(&g.queue, &a.1, &[m]);
+                alone.set_instances(&g.queue, &b.1, &[m]);
+                let lit = render::capture(&g.device, &g.queue, &mut on, N, N, &v, &[Draw::Model(&a.0), Draw::Model(&a.1)], None);
+                let plain = render::capture(&g.device, &g.queue, &mut alone, N, N, &v, &[Draw::Model(&b.0), Draw::Model(&b.1)], None);
+                let (mut sum, mut moment) = (0.0f64, 0.0f64);
+                for y in 0..N {
+                    for x in 0..N {
+                        let i = ((y * N + x) * 4) as usize;
+                        let dark = (plain[i] as f64 - lit[i] as f64 - 2.0).max(0.0);
+                        sum += dark;
+                        moment += dark * x as f64;
+                    }
+                }
+                assert!(sum > 0.0, "cascade {cascade}: a shadow at frame {k}");
+                moment / sum
+            })
+            .collect();
+        let moves: Vec<f64> = places.windows(2).map(|w| w[1] - w[0]).collect();
+        let mean = moves.iter().sum::<f64>() / moves.len() as f64;
+        assert!(mean > 0.3 && moves.iter().all(|m| *m > 0.5 * mean), "cascade {cascade}: the shadow's moves, frame by frame: {moves:?}");
+    }
+}
+
+/// Where cascade `c` ends before the camera (`render::sunshadow::ENDS`).
+fn sunshadow_end(c: usize) -> f32 {
+    render::sunshadow::ENDS[c]
 }
