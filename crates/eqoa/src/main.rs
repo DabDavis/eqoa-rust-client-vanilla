@@ -752,7 +752,21 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
     let server = net::addr::resolve(host, port("EQOA_GAME_PORT", 10070))?;
     let mut s = Session::connect(server, user, l.token)?;
     let t = std::time::Instant::now();
+    // the character picked, and when its list came: it is asked for a second
+    // after, so the offers that follow a list (the live look, creation's races,
+    // capes) are answered on the session before the selection, as a player at
+    // character select answers them; an answer the server reads after it has
+    // made the game's session is acked on the new connection, which then never
+    // forms (go-eqoa-server's promotion spends its new-instance flag on that ack)
+    let mut picked: Option<(net::session::Character, std::time::Instant)> = None;
     while t.elapsed() < std::time::Duration::from_secs(30) {
+        if let Some((c, at)) = picked.take() {
+            if at.elapsed() >= std::time::Duration::from_secs(1) {
+                s.select_character(&c);
+            } else {
+                picked = Some((c, at));
+            }
+        }
         let events = s.pump();
         for (k, e) in events.iter().enumerate() {
             match e {
@@ -775,8 +789,10 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
                     // `EQOA_CHAR=<name>` picks one; else the first.
                     let want = std::env::var("EQOA_CHAR").ok();
                     let pick = list.iter().find(|c| want.as_deref() == Some(c.name.as_str())).or(list.first());
-                    if let Some(c) = pick {
-                        s.select_character(&c.clone());
+                    if let Some(c) = pick
+                        && picked.is_none()
+                    {
+                        picked = Some((c.clone(), std::time::Instant::now()));
                     }
                 }
                 Event::WorldEntry { self_id, player, dump } => {
