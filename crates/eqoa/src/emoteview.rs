@@ -3,12 +3,15 @@
 //! from the front a little to its left, under the GM preview's daylight
 //! (`dressview`'s), with no window. For choosing by eye what a race's body
 //! plays for each emote (`raceemote::TABLE`), and for its contact sheets.
+//! Each action is set over the idle a moment after it starts, as a received
+//! emote is.
 //!
 //! The poses, as words: `wave`, `bow`, `point`, `cheer` (the emote as this
 //! client plays it for a race's player in that body: `raceemote`), `N` (the
 //! body's own action N, as `SetAction` plays it), `human:N` (the human's
-//! action N carried onto the body's skeleton, `raceemote::retarget`). None:
-//! the four emotes. `cols=N` moments of each (default 3, at 1/4, 1/2 and 3/4
+//! action N carried onto the body's skeleton, `raceemote::retarget`, from the
+//! two bind poses), `idle:N` (the same from the poses the two idles stand
+//! in, `raceemote::Base::Idle`). None: the four emotes. `cols=N` moments of each (default 3, at 1/4, 1/2 and 3/4
 //! of the action), `size=WxH` one view's, `yaw=R` the view's turn round the
 //! body (radians from its front; 0.6 unless said), `tight` framed on the body
 //! standing rather than on every moment (for one that flies about). Every
@@ -279,4 +282,26 @@ pub fn sheet(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), 
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header().and_then(|mut wr| wr.write_image_data(&sheet)).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The words make the rows, moments, size, framing and turn they say;
+    /// none is the four emotes; a stray word or a slot past the play list's
+    /// 66 is refused (the control).
+    #[test]
+    fn rows_from_words() {
+        let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
+        let w = parse(&words("wave 37 human:57 idle:61 cols=5 size=100x120 tight yaw=-0.3")).unwrap();
+        assert_eq!(w.rows, vec![Row::Emote(0), Row::Slot(37), Row::Human(57, raceemote::Base::Bind), Row::Human(61, raceemote::Base::Idle)]);
+        assert_eq!((w.cols, w.size, w.tight, w.yaw), (5, (100, 120), true, -0.3));
+        assert_eq!(w.rows.iter().map(Row::label).collect::<Vec<_>>(), ["wave", "37", "human:57", "idle:61"]);
+        let none = parse(&[]).unwrap();
+        assert_eq!((none.rows, none.cols, none.tight), ((0..4).map(Row::Emote).collect::<Vec<_>>(), 3, false));
+        assert!(parse(&words("wav")).is_err());
+        assert!(parse(&words("66")).is_err());
+        assert!(parse(&words("human:66")).is_err());
+    }
 }

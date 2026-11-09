@@ -6,6 +6,18 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-08 · The new races wave, bow, point and cheer
+- On a server with races of its own, every new race now does the four emotes. Most do them the way a human
+  does, in their own size and shape: a Hill Giant raises its huge arm over its head to wave and bends right
+  over to bow, a Kerran points, a Gnoll cheers with a fist in the air.
+- Pixies, Fairies and Fungusmen, built too differently for that, use moves of their own: a Pixie raises a hand
+  high to wave and dives forward to bow, a Fairy opens its wings, a Fungusman swings an arm out and tips its
+  cap.
+- Other players see your emote as you do. Until now a new race's emote did nothing at all (it started its
+  standing animation over), which is still what a PS2 shows.
+- Brownies and Skeletons, which always had the human's emotes, and everyone else, creatures included, are
+  unchanged.
+
 ## 2026-11-08 · eqoaclassic.com is the server out of the box
 - A new install (on a phone too) connects to eqoaclassic.com without being told: the title's Network Setup shows it, and
   logging in works at once. Until now a client that had never been given a server had none, so a phone's first login

@@ -12,11 +12,11 @@
 //! `m_entries[action]`. A player race's body has the four (HumanMale's play
 //! list names them; every player race's does). Of the bodies the server's
 //! races wear (racedefs 11 to 29 and the froglok), only the brownie's and the
-//! skeleton's have them, and they are HumanMale's own clips; the other
-//! eighteen have none, and `SetDefaultEntries` fills an empty 56, 57, 60 or
-//! 61 from the idle, played once (`src/vicsprite.cpp`): on a PS2 and in this
-//! client alike, a hill giant's wave was its idle starting over, nothing to
-//! see.
+//! skeleton's have them, and they are HumanMale's own clips (and not on the
+//! 2002 disc, the 2002 art's); the other eighteen have none, and
+//! `SetDefaultEntries` fills an empty 56, 57, 60 or 61 from the idle, played
+//! once (`src/vicsprite.cpp`): on a PS2 and in this client alike, a hill
+//! giant's wave was its idle starting over, nothing to see.
 //!
 //! Here such a body plays something for each, as `TABLE` says, body by body,
 //! chosen by sight (`eqoa emotes <body> <out.png> [pose ...]`, `emoteview`):
@@ -72,9 +72,11 @@ const H: [Pose; 4] = [Pose::Human; 4];
 
 /// Per body (CHAR.ESF DictID), what wave, bow, point and cheer play: the
 /// bodies go-eqoa-server's races wore on 2026-11-08 (racedefs 11 to 29, the
-/// froglok, and the hill giant's bodies for its armour, racearmorbody) but
-/// the brownie's and the skeleton's, whose play lists have the four (the
-/// human's own clips). Chosen by sight (`eqoa emotes`). No body has a wave,
+/// froglok, and the hill giant's bodies for its armour, racearmorbody).
+/// The brownie's and the skeleton's play lists have the four on the
+/// Frontiers disc (the human's own clips), so `put` leaves them as they are;
+/// the 2002 disc's (the 2002 art, F9) have none, and take the human's
+/// carried. Chosen by sight (`eqoa emotes`). No body has a wave,
 /// a bow or a point of its own, and every body built on the human's bone
 /// names carries the human's emote cleanly (its arms, spine and head; the
 /// gargoyle's, froglok's and aviak's spines bend by `retarget`'s rule for a
@@ -96,6 +98,7 @@ pub const TABLE: &[(u32, [Pose; 4])] = &[
     (0x8EFD_12EA, H), // aviak, female
     (0x9112_20E2, H), // lizardman
     (0x31A1_5F17, H), // kappa
+    (0x4376_EB52, H), // brownie (its own on the Frontiers disc)
     // a hand raised high and a swoop; a dive forward (a flying bow); arms
     // spread and a lunge, an arm out; both arms overhead
     (0x94BA_77CD, [Pose::Own(25), Pose::Own(23), Pose::Own(22), Pose::Own(37)]), // pixie
@@ -108,6 +111,7 @@ pub const TABLE: &[(u32, [Pose; 4])] = &[
     (0xBADC_25C9, H), // ratman
     (0xBE10_226F, H), // satyr
     (0x70EF_CE05, H), // dryad (HumanFemale's skeleton: the human's clips as they are)
+    (0x6AF9_8A81, H), // skeleton (its own on the Frontiers disc)
     // an arm swung out to the side, twice; the cap tipped forward; an arm
     // thrust forward; arms flung wide
     (0x4A4D_88FB, [Pose::Own(15), Pose::Own(42), Pose::Own(30), Pose::Own(37)]), // fungusman
@@ -341,20 +345,24 @@ pub fn retarget(human: &Rig, human_idle: &[Anim<Ee>], clips: &[Anim<Ee>], body: 
     // the human node each body node turns as: its own, or the one holding
     // every human node mapped below it
     let mine: Vec<Option<usize>> = body.refs.iter().map(|r| r.and_then(|r| human.by_ref.get(&r).copied())).collect();
-    let hdepth: Vec<usize> = (0..human.parent.len()).map(|i| human.depth(i)).collect();
+    // the lowest human node over both (`a`'s root when they share none)
+    let up = |i: usize| usize::try_from(human.parent[i]).ok().filter(|&p| p != i && p < human.parent.len());
     let lca = |a: usize, b: usize| {
-        let (mut a, mut b) = (a, b);
-        while hdepth[a] > hdepth[b] {
-            a = human.parent[a] as usize;
+        let mut over = vec![a];
+        while let Some(p) = up(*over.last().unwrap()).filter(|_| over.len() < 256) {
+            over.push(p);
         }
-        while hdepth[b] > hdepth[a] {
-            b = human.parent[b] as usize;
+        let mut b = b;
+        for _ in 0..256 {
+            if over.contains(&b) {
+                return b;
+            }
+            match up(b) {
+                Some(p) => b = p,
+                None => break,
+            }
         }
-        while a != b {
-            a = human.parent[a] as usize;
-            b = human.parent[b] as usize;
-        }
-        a
+        *over.last().unwrap()
     };
     let order = body.order();
     // the lowest human node over every mapped one below each body node
@@ -658,22 +666,34 @@ mod tests {
     }
 
     /// Every body the table lists, on the disc: its play list has no emote
-    /// (each is `SetDefaultEntries`' idle), each slot it borrows is one of
-    /// its own (not a fill), and a body that takes the human's emotes has
-    /// the human's arms (the four arm bones by ref id). Every body the
-    /// server's races wore on 2026-11-08 is listed but the brownie's and
-    /// the skeleton's, whose play lists have the four, the human's own
-    /// clips. The control: the human's play list has them too, and the
+    /// (each is `SetDefaultEntries`' idle), or has the four, the human's own
+    /// clips (the brownie's and the skeleton's), which `put` leaves as they
+    /// are; each slot it borrows is one of its own (not a fill), and a body
+    /// that takes the human's emotes has the human's arms (the four arm
+    /// bones by ref id). Every body the server's races wore on 2026-11-08 is
+    /// listed. The control: the human's play list has the four, and the
     /// pixie's arms are not the human's. Needs `run/eqoa.iso`.
     #[test]
     fn the_listed_bodies_on_the_disc() {
         let Some(lib) = disc() else { return };
         let human = Rig::load(&lib, HUMAN).unwrap();
         let arms: Vec<i32> = [12, 13, 21, 22].iter().map(|&n| human.refs[n].unwrap()).collect();
+        let hrow = |e| row(&lib, HUMAN, e).unwrap().clips;
+        let mut own = Vec::new();
         for &(id, p) in TABLE {
-            let (cs, sc) = load(&lib, id);
+            let (mut cs, mut sc) = load(&lib, id);
+            if row(&lib, id, 56).is_some() {
+                for e in EMOTES {
+                    assert_eq!(row(&lib, id, e).map(|r| r.clips), Some(hrow(e)), "{id:#010x}: the human's emote {e}");
+                }
+                let had = entries(&cs);
+                assert!(!put(&lib, &mut cs, &mut sc, p), "{id:#010x}: its own, left as they are");
+                assert_eq!(entries(&cs), had);
+                own.push(id);
+                continue;
+            }
             for e in EMOTES {
-                assert!(row(&lib, id, e).is_none(), "{id:#010x} has emote {e} of its own");
+                assert!(row(&lib, id, e).is_none(), "{id:#010x} has emote {e} but not 56");
                 assert_eq!(cs.entries[e as usize].animation, cs.entries[0].animation, "{id:#010x}: emote {e} is the idle");
             }
             for pose in p {
@@ -686,21 +706,46 @@ mod tests {
                 }
             }
         }
+        own.sort_unstable();
+        assert_eq!(own, vec![BROWNIE, SKELETON], "the bodies with emotes of their own");
         let servers = [
             0x141B_FE0C, 0xFFB1_EA2C, 0x2217_6258, 0xB749_BF57, 0x6C13_08E0, 0x3151_DF13, 0x8EFD_12EA, 0x9112_20E2, 0x31A1_5F17, BROWNIE, PIXIE, 0x7A85_646C, 0xCF41_5561, 0x8214_A32D, 0xCFC4_78EE, 0xC5CB_F4CF, 0xBADC_25C9, 0xBE10_226F, DRYAD, SKELETON, 0x4A4D_88FB, 0xB4D2_D132,
         ];
-        let hrow = |e| row(&lib, HUMAN, e).unwrap().clips;
         for id in servers {
-            if poses(id).is_none() {
-                assert!([BROWNIE, SKELETON].contains(&id), "{id:#010x} not listed");
-                for e in EMOTES {
-                    assert_eq!(row(&lib, id, e).map(|r| r.clips), Some(hrow(e)), "{id:#010x}: the human's emote {e}");
-                }
-            }
+            assert!(poses(id).is_some(), "{id:#010x} not listed");
         }
         assert!(EMOTES.iter().all(|&e| row(&lib, HUMAN, e).is_some()), "the control: the human's");
         let (pixie, sc) = load(&lib, PIXIE);
         assert!(!arms.iter().all(|r| sc.ref_maps[pixie.h.ref_map].contains_key(r)), "the control: the pixie's arms are its own");
+    }
+
+    /// The 2002 disc's brownie and skeleton (the 2002 art) have no emotes,
+    /// and take the 2002 human's, carried onto them; the Frontiers disc's
+    /// keep their own (`the_listed_bodies_on_the_disc`). The control: the
+    /// 2002 human's own play list has the four. Needs the 2002 disc
+    /// (`$EQOA_2002_ISO`, default the USA disc under
+    /// `../decomp-builds/discs/eqoa-usa/`).
+    #[test]
+    fn the_2002_brownie_and_skeleton() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let y2002 = std::env::var_os("EQOA_2002_ISO").map(std::path::PathBuf::from).or_else(|| {
+            std::fs::read_dir(root.join("../decomp-builds/discs/eqoa-usa")).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("iso")))
+        });
+        let Some(mut iso) = y2002.and_then(|p| iso::Iso::open(&p).ok()) else {
+            eprintln!("SKIP: no 2002 disc (set EQOA_2002_ISO)");
+            return;
+        };
+        let mut lib = Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
+        assert!(EMOTES.iter().all(|&e| row(&lib, HUMAN, e).is_some()), "the control: the 2002 human's");
+        for id in [BROWNIE, SKELETON] {
+            assert!(EMOTES.iter().all(|&e| row(&lib, id, e).is_none()), "{id:#010x}: none on the 2002 disc");
+            let (mut cs, mut sc) = load(&lib, id);
+            assert!(put(&lib, &mut cs, &mut sc, poses(id).unwrap()), "{id:#010x}");
+            for e in EMOTES {
+                assert_ne!(cs.entries[e as usize].animation, cs.entries[0].animation, "{id:#010x}: emote {e} carried");
+            }
+        }
     }
 
     /// The carried emote's frames against the human's clip for `against`,
@@ -822,7 +867,8 @@ mod tests {
     /// Every CSprite on the disc through `grant`: for an NPC, and on a
     /// server with no races, no sprite's entries change (byte for byte); for
     /// a player on a server with races, exactly the bodies the table lists
-    /// change. The control: the table's own poses put on every body that
+    /// change, but the two whose emotes are their own (the brownie's, the
+    /// skeleton's), and every player race's body stays as it was. The control: the table's own poses put on every body that
     /// has the human's arms and no emote of its own change those too, so
     /// the sweep sees a change where there is one. Needs `run/eqoa.iso`.
     #[test]
@@ -852,9 +898,10 @@ mod tests {
         };
         assert_eq!(changed(false, Some(&listed), false), Vec::<u32>::new(), "an NPC's: none");
         assert_eq!(changed(true, None, false), Vec::<u32>::new(), "a server with no races: none");
-        let mut want: Vec<u32> = TABLE.iter().map(|(b, _)| *b).collect();
+        let mut want: Vec<u32> = TABLE.iter().map(|(b, _)| *b).filter(|&b| row(&lib, b, 56).is_none()).collect();
         want.sort_unstable();
-        assert_eq!(changed(true, Some(&listed), false), want, "a player's: the listed bodies");
+        assert_eq!(want.len(), TABLE.len() - 2, "the brownie's and skeleton's are their own");
+        assert_eq!(changed(true, Some(&listed), false), want, "a player's: the listed bodies with no emote of their own");
         let every = changed(true, None, true);
         assert!(every.len() > want.len() + 100, "the control: {} bodies change with the human's emotes on all", every.len());
     }

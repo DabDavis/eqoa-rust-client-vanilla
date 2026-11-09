@@ -164,6 +164,17 @@ or a browser (each described where it lives below):
   illusions keep the PS2's look, and every body that held items before holds them on the same nodes (held to
   every CSprite on the disc). `eqoa dress <body> <out.png> main=ID off=ID shield=ID [race=1] [action=N]`
   draws what it holds.
+- **Emotes on a server's own races** (the user's of 2026-11-08, "lets add emotes to the new playable races";
+  `raceemote`): a wave, bow, point or cheer is an action every client looks up in the body's own play list
+  (`PlayEmote` on the player's sprite, 0x0775 on another's), and eighteen of the bodies go-eqoa-server's races
+  wear have none (the brownie's and the skeleton's have the human's own): `SetDefaultEntries` gives them the
+  idle, so such a player's emote was its idle starting over, as it still is on a PS2. A player's character in
+  one of them, on a server with races of its own, plays what a small table chosen by sight says
+  (`raceemote::TABLE`): the human's emote carried onto the body's skeleton where it is built on the human's bone
+  names (the body's own bone lengths, its tail and wings at rest), else its own nearest (the pixie's, fairy's
+  and fungusman's). The emote's entry itself is replaced, so a player's own emote and another player's are the
+  same; NPCs and every other body keep the game's (held to every CSprite on the disc). `eqoa emotes <body>
+  <out.png> [wave bow point cheer N human:N ...]` draws a body's emotes, or its actions, a row each.
 - **The combat record**, on a server that keeps one (go-eqoa-server's offer, 0x7E20,
   and its record, 0x7E21; Sandstorm and eqoa.live have none, and show no entry): the
   start menu's Character > Combat Record, the client's own window (`record.rs`,
