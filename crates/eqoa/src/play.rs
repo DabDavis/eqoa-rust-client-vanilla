@@ -5478,6 +5478,15 @@ impl Play {
         self.session.send(&w.data);
     }
 
+    /// The inventory's first item called `name` used as the item menu's Use or
+    /// Equip uses it (`use_item`, 0x003E with 0); false when none is so named.
+    /// A playshot's `EQOA_USE`.
+    pub fn use_item_named(&mut self, name: &str) -> bool {
+        let Some(i) = self.dump.inventory.items.iter().position(|it| it.item.name.eq_ignore_ascii_case(name)) else { return false };
+        self.use_item(i as i32, 0);
+        true
+    }
+
     /// What the item menu asked for: `UseItemOn` (0x003C, one at a time),
     /// `SwapItems` (61), `RequestQuickSlot` (`SendMsg(10, ...)`).
     fn item_outs(&mut self, outs: Vec<crate::itemmenu::ItemOut>) {

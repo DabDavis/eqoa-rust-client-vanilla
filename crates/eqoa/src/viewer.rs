@@ -833,6 +833,19 @@ pub fn shot_with(
                         }
                     }
                 }
+                // `EQOA_USE=<item name>@<ms>[;...]`: the inventory's item of that
+                // name used then, as the item menu's Use or Equip sends it
+                // (0x003E; worn, the same takes it off)
+                if let Ok(spec) = std::env::var("EQOA_USE") {
+                    for part in spec.split(';') {
+                        if let Some((name, ms)) = part.rsplit_once('@')
+                            && let Ok(ms) = ms.trim().parse::<i64>()
+                            && t == ms / 16 * 16
+                        {
+                            eprintln!("use {name}: {}", p.use_item_named(name));
+                        }
+                    }
+                }
                 // `EQOA_GROUP_ACTION=<hex>@<ms>`: a start-menu group action then.
                 if let Ok(spec) = std::env::var("EQOA_GROUP_ACTION")
                     && let Some((a, ms)) = spec.split_once('@')
@@ -1003,6 +1016,10 @@ pub fn shot_with(
         }
         if let Some(h) = &held_fx {
             eprintln!("{}", h.describe());
+        }
+        // `EQOA_INV`: the inventory as the client holds it at the end
+        if let Some(p) = play.as_ref().filter(|_| std::env::var_os("EQOA_INV").is_some()) {
+            eprintln!("{}", p.describe());
         }
         let body = match play.as_ref().and_then(|p| p.self_model).and_then(|m| lib.lookup(m as i32)).and_then(|r| lib.build_model(r)) {
             Some(m) => m,
