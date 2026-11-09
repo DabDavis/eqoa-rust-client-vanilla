@@ -163,13 +163,15 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     let held: Vec<(i32, u32)> = (0..3).filter_map(|i| cs.item_node(i).filter(|_| words.items[i] != 0).map(|n| (n, words.items[i]))).collect();
     let mut mesh = lib.build_model(r).ok_or("no mesh")?;
     let before = mesh.batches.len();
-    crate::play::dress_look(lib, model, &mut mesh, &cs, look, false, &vi::cust::Tables::retail(), true);
+    let tables = vi::cust::Tables::retail();
+    crate::play::dress_look(lib, model, &mut mesh, &cs, look, false, &tables, true);
     // a Wisp's (`wisp`): its armour alone, the wisp hung on the helm's node as an item is
     let mut wisp = None;
     if let Some((rows, steps)) = &opts {
         let rl = crate::raceopts::look_of_steps(rows, words.sex, steps, model as u32);
         crate::raceopts::dress(lib, model as u32, &mut mesh, &rl);
-        wisp = crate::wisp::dress(lib, model as u32, &mut mesh, &cs, look, Some(&rl));
+        crate::wisp::dress(lib, model as u32, &mut mesh, &cs, look, Some(&rl), &tables);
+        wisp = crate::wisp::attachment(lib, model as u32, &cs, Some(&rl));
     }
     let tris = |b: &[esf::Batch]| b.iter().map(|b| b.indices.len() / 3).sum::<usize>();
     // `EQOA_DRESS_DEBUG=slots`: the made-up batches flat, a colour a slot
