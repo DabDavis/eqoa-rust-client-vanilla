@@ -811,7 +811,8 @@ pub fn give_pointer(window: &winit::window::Window, home: (f64, f64)) {
 /// the window's middle), `wheel <lines>@<ms>`, `press l|r@<ms>` /
 /// `release l|r@<ms>` and `move <dx> <dy>@<ms>` (the mouse moved: the
 /// cursor, or once a drag holds the pointer its own motion), played
-/// through a `Mouse` as the window's events would be.
+/// through a `Mouse` as the window's events would be; and `ctrl down|up@<ms>`,
+/// Ctrl held for the clicks between (the map's: `viewer`).
 pub fn script() -> Vec<(i64, String)> {
     let Ok(s) = std::env::var("EQOA_MOUSE") else { return Vec::new() };
     s.split(';')

@@ -343,14 +343,17 @@ pub fn shot_with(
     // a zone is uploaded
     renderer.set_dynamic_lighting(&device, crate::settings::client().dynamic_lighting);
     renderer.set_sun_shadows(&device, crate::settings::client().sun_shadows);
+    renderer.set_light_shadows(&device, crate::settings::client().light_shadows);
+    renderer.set_shadow_distance(crate::settings::shadow_scale());
     renderer.set_ps2_sums(render::fog16::supported(&adapter));
     renderer.set_ps2_sequential(fog_sequential());
     // the particles' blend (kept only under `$EQOA_CONFIG` for a shot)
     renderer.set_ps2_particles(crate::settings::client().ps2_particles);
     renderer.scroll_time = Some(script.as_ref().map_or(0, |s| s.ms) as f32 / 1000.0);
     // the options' Texture Packs and Dump Textures (kept only under
-    // `$EQOA_CONFIG` for a shot), before a texture is made
-    crate::texpack::sync();
+    // `$EQOA_CONFIG` for a shot), before a texture is made, every stand-in
+    // read as it is asked for (a shot's one frame waits for its textures)
+    crate::texpack::sync_now();
     if let Some(f) = arial(lib) {
         renderer.set_font(&device, &queue, &f);
     }
@@ -460,7 +463,7 @@ pub fn shot_with(
                 p.map.show();
             }
             touch.window = play.as_ref().is_some_and(|p| p.window_up() || p.map.open);
-            touch.scale = crate::settings::touch_scale();
+            touch.opts = crate::settings::touch_options();
             for (_, id, phase, at) in touch_script.iter().filter(|e| e.0 == t) {
                 touch.touch(*id, *phase, *at, Instant::now(), (w, h));
             }
@@ -528,6 +531,15 @@ pub fn shot_with(
                 }
             }
             for (_, step) in mouse_script.iter().filter(|s| s.0 == t) {
+                // `ctrl down|up`: Ctrl held or let go, as the window's modifiers
+                // say it (the map's: a GM's click then travels)
+                if let Some(how) = step.strip_prefix("ctrl ") {
+                    if let Some(p) = play.as_mut() {
+                        p.map.ctrl = how.trim() == "down";
+                        eprintln!("mouse {step}: the map's Ctrl {}", if p.map.ctrl { "held" } else { "let go" });
+                    }
+                    continue;
+                }
                 // `click @<name>`: at the creature called that, where it is drawn
                 let mut step = step.clone();
                 if let Some((verb, name)) = step.split_once(" @")
@@ -1166,6 +1178,13 @@ pub fn shot_with(
         eprintln!("hour {shot_hour:.2}{}", if server { " (the server's)" } else { "" });
         let mut frame = lit(proj, v, shot_hour, Some((shot_eye, &walker.scene)), Some(&mut weather));
         frame.0.point = point;
+        // `EQOA_LANTERN`: with no server's session (whose `Play` steps it),
+        // the personal light as it is by night, 3 over the walker at its
+        // full 20 (`vi::tod::PersonalLight`'s), for looking at what it lights
+        if frame.0.point.is_none() && std::env::var_os("EQOA_LANTERN").is_some() {
+            let p = walker.cam.walk.phys.position;
+            frame.0.point = Some((Vec3::new(p.x.0, p.y.0 + 3.0, p.z.0), 20.0, Vec3::new(1.0, 0.69, 0.36)));
+        }
         // Dynamic Lighting's, as the window's frame has them
         if renderer.dynamic_lighting() {
             let mut found = Vec::new();
@@ -1841,6 +1860,10 @@ struct Perf {
     mark: Instant,
     frames: u32,
     worst: f64,
+    /// frames of 50 ms or more, and of 100 ms or more, since `since` (a
+    /// texture pack's stand-ins read as they are first drawn stalled them:
+    /// `texpack`)
+    slow: (u32, u32),
     /// seconds per phase since `since`
     total: [f64; Perf::NAMES.len()],
     /// this frame's seconds per phase (from `begin`), for a stall's line
@@ -1870,7 +1893,7 @@ impl Perf {
 
     fn new(print: bool) -> Perf {
         let now = Instant::now();
-        Perf { print, since: now, mark: now, frames: 0, worst: 0.0, total: [0.0; Perf::NAMES.len()], frame: [0.0; Perf::NAMES.len()], drawn: (0, 0), last_start: None }
+        Perf { print, since: now, mark: now, frames: 0, worst: 0.0, slow: (0, 0), total: [0.0; Perf::NAMES.len()], frame: [0.0; Perf::NAMES.len()], drawn: (0, 0), last_start: None }
     }
 
     /// Five seconds begun again at `now`.
@@ -1909,7 +1932,10 @@ impl Perf {
 
     fn end(&mut self, frame_start: Instant) {
         self.frames += 1;
-        self.worst = self.worst.max(frame_start.elapsed().as_secs_f64());
+        let took = frame_start.elapsed().as_secs_f64();
+        self.worst = self.worst.max(took);
+        self.slow.0 += (took >= 0.05) as u32;
+        self.slow.1 += (took >= 0.1) as u32;
         self.last_start = Some(frame_start);
         let span = self.since.elapsed().as_secs_f64();
         if span < 5.0 {
@@ -1925,10 +1951,12 @@ impl Perf {
                 .map(|(name, t)| format!("{name} {:.2}", t * 1e3 / n))
                 .collect();
             crate::say(&format!(
-                "perf: {:.1} fps, cpu {:.2} ms/frame (worst {:.1}), {} models in {} draws: {}",
+                "perf: {:.1} fps, cpu {:.2} ms/frame (worst {:.1}, {} of 50 ms or more, {} of 100), {} models in {} draws: {}",
                 n / span,
                 cpu * 1e3 / n,
                 self.worst * 1e3,
+                self.slow.0,
+                self.slow.1,
                 self.drawn.0,
                 self.drawn.1,
                 phases.join(", ")
@@ -2477,6 +2505,11 @@ impl App {
     /// changed, everything drawn made again with it (`retexture`).
     fn poll_textures(&mut self) {
         crate::texpack::sync();
+        // the stand-ins read since, written over their placeholders at this
+        // frame's start (`render::standin`)
+        if let Some(g) = self.gfx.as_mut() {
+            g.renderer.take_stand_ins(&g.queue);
+        }
         let g = crate::texpack::generation();
         if g != self.textures_drawn {
             self.textures_drawn = g;
@@ -2734,6 +2767,9 @@ impl App {
         self.taps.forget();
         if let Some(p) = self.play.as_mut() {
             p.map.let_go();
+            // Ctrl's release may never come (Wayland's): no click travels
+            // until it is pressed again
+            p.map.ctrl = false;
         }
     }
 
@@ -3014,8 +3050,8 @@ impl App {
         }
         match whose {
             Finger::Pad => {
-                // at the size the options give it now (Touch Pad Size)
-                self.touch.scale = crate::settings::touch_scale();
+                // as the options have it now (the Extended page's touch rows)
+                self.touch.opts = crate::settings::touch_options();
                 self.touch.touch(id, phase, at, Instant::now(), size);
                 if let Some(p) = self.play.as_mut() {
                     p.keyboard = false;
@@ -3268,7 +3304,7 @@ impl App {
         // mouse's); its drags scroll nothing (no screen before the world
         // takes the wheel)
         self.touch.window = true;
-        self.touch.scale = crate::settings::touch_scale();
+        self.touch.opts = crate::settings::touch_options();
         let taps = self.touch.take_clicks();
         let _ = self.touch.take_look();
         if let (Some(h), Some(g)) = (self.host.as_mut(), self.gfx.as_ref()) {
@@ -5067,9 +5103,12 @@ impl App {
                 {
                     self.ctrl_held = m.state().control_key();
                 }
-                // Shift and a click on the map: the group's waypoint (`map`)
+                // Shift and a click on the map: the group's waypoint; a GM's
+                // Ctrl (or ⌘, a Mac's and a page's on one) and a click: travel
+                // there (`map`)
                 if let Some(p) = self.play.as_mut() {
                     p.map.shift = m.state().shift_key();
+                    p.map.ctrl = m.state().control_key() || m.state().super_key();
                 }
                 #[cfg(target_os = "macos")]
                 {
@@ -5451,7 +5490,7 @@ impl App {
                 }
                 self.touch.holds = self.play.as_ref().is_some_and(|p| p.map.open);
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.window_up() || p.map.open);
-                self.touch.scale = crate::settings::touch_scale();
+                self.touch.opts = crate::settings::touch_options();
                 mark(&mut self.perf, 17);
                 self.grab_pointer(true);
                 let sticks = self.sticks();
@@ -5584,10 +5623,15 @@ impl App {
                     // Dynamic Lighting as the options have it: its pipelines,
                     // and the zones in recorded for it (`render::lit`)
                     let dynamic = crate::settings::client().dynamic_lighting;
-                    // and Sun Shadows (`render::sunshadow`), with it
+                    // and Sun Shadows (`render::sunshadow`) and Light Shadows
+                    // (`render::lightshadow`), with it
                     let sun_shadows = crate::settings::client().sun_shadows;
-                    if g.renderer.dynamic_lighting() != dynamic || g.renderer.sun_shadows() != sun_shadows {
+                    let light_shadows = crate::settings::client().light_shadows;
+                    // and how far they reach (the options' Shadow Distance)
+                    g.renderer.set_shadow_distance(crate::settings::shadow_scale());
+                    if g.renderer.dynamic_lighting() != dynamic || g.renderer.sun_shadows() != sun_shadows || g.renderer.light_shadows() != light_shadows {
                         g.renderer.set_sun_shadows(&g.device, sun_shadows);
+                        g.renderer.set_light_shadows(&g.device, light_shadows);
                         g.renderer.set_dynamic_lighting(&g.device, dynamic);
                         if let Some(s) = streamer.as_mut() {
                             s.relight(&g.renderer, &g.device);

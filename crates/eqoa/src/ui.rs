@@ -166,14 +166,19 @@ pub struct UiAssets {
     /// The atlas's button glyphs, once SUPPORT's atlas is here: the raster
     /// notes where each is drawn (`pointer::Glyphs`).
     pub glyphs: Option<crate::pointer::GlyphTable>,
+    /// Layer textures drawn as the surface's own while a texture pack's
+    /// stand-in for it is read (`texpack::image`), put in place once read
+    /// (`poll`).
+    pending: Vec<(usize, crate::texpack::Wanted)>,
 }
 
 /// A surface into the layer: its picture (a texture pack's, `texpack`, else
 /// its own) at the size the game's own has, which the atlas's rectangles are
-/// in (a pack's larger picture drawn over the same rectangles).
-fn add_texture(ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<usize> {
-    let img = crate::texpack::image(c, s, era)?;
-    Some(ui.add_texture_sized(device, queue, (s.width.max(1) as u32, s.height.max(1) as u32), img.width, img.height, &img.rgba))
+/// in (a pack's larger picture drawn over the same rectangles); and while
+/// the pack's is still being read, what to ask for it by (`poll`).
+fn add_texture(ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue, c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<(usize, Option<crate::texpack::Wanted>)> {
+    let (img, wanted) = crate::texpack::image(c, s, era)?;
+    Some((ui.add_texture_sized(device, queue, (s.width.max(1) as u32, s.height.max(1) as u32), img.width, img.height, &img.rgba), wanted))
 }
 
 impl UiAssets {
@@ -184,7 +189,7 @@ impl UiAssets {
                 continue;
             }
             if let Some(t) = add_texture(ui, device, queue, c, s, era) {
-                self.surfaces.insert(s.dict_id as u32, t);
+                self.took(s.dict_id as u32, t);
             }
         }
     }
@@ -203,7 +208,7 @@ impl UiAssets {
                 continue;
             }
             if let Some(t) = add_texture(ui, device, queue, c, s, lib.era_of(f)) {
-                self.surfaces.insert(s.dict_id as u32, t);
+                self.took(s.dict_id as u32, t);
             }
         }
     }
@@ -215,8 +220,31 @@ impl UiAssets {
             return;
         }
         if let Some(t) = c.surfaces.iter().find(|s| s.dict_id as u32 == id).and_then(|s| add_texture(ui, device, queue, c, s, era)) {
-            self.surfaces.insert(id, t);
+            self.took(id, t);
         }
+    }
+
+    /// A surface's layer texture kept, and waited on while its stand-in is
+    /// read (`add_texture`).
+    fn took(&mut self, id: u32, (t, wanted): (usize, Option<crate::texpack::Wanted>)) {
+        self.surfaces.insert(id, t);
+        if let Some(w) = wanted {
+            self.pending.push((t, w));
+        }
+    }
+
+    /// The texture pack's stand-ins the layer drew surfaces' own for while
+    /// they were read, each put in its texture's place once read
+    /// (`Ui::replace_texture`): called each frame the layer is drawn.
+    pub fn poll(&mut self, ui: &mut Ui, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.pending.retain(|(t, w)| match crate::texpack::ready_image(w) {
+            None => true,
+            Some(Some(img)) => {
+                ui.replace_texture(device, queue, *t, img.width, img.height, &img.rgba);
+                false
+            }
+            Some(None) => false,
+        });
     }
 
     /// The white texel solid fills draw with.

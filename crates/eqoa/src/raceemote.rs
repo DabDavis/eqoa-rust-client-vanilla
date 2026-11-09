@@ -133,6 +133,11 @@ pub const TABLE: &[(u32, [Pose; 4])] = &[
     // thrust forward; arms flung wide
     (0x4A4D_88FB, [Pose::Own(15), Pose::Own(42), Pose::Own(30), Pose::Own(37)]), // fungusman
     (0xB4D2_D132, H), // gargoyle
+    // the Jal'Raeth (2026-11-09: race 30), floating cross-legged: 22 of the
+    // human's bone names (the spine, arms and head), so the human's emote moves
+    // its upper body and its crossed legs keep their float (the channeler's and
+    // knight's bodies take these by `poses_of`)
+    (0xF51B_AB09, H),
 ];
 
 /// What `model` plays for each emote, if `TABLE` lists it.

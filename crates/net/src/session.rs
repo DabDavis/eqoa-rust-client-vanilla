@@ -222,6 +222,16 @@ pub const OP_CAPES_LIST: u16 = 0x7E27;
 /// A server that never offers it (Sandstorm's, eqoa.live's) gets no answer, and the
 /// walk never leaves the ground there, as the game's never does.
 pub const OP_JUMP: u16 = 0x7E28;
+/// go-eqoa-server's own, no retail message either: a GM's travel by the map. The
+/// server offers it with the GM's channel at world entry, to a GM's client alone,
+/// a u32 after the opcode (1, [`Session::map_travel`]); no answer. A PS2 ignores
+/// the offer; a server that never makes one (Sandstorm's, eqoa.live's) is never
+/// asked ([`OP_MAP_TRAVEL_TO`]).
+pub const OP_MAP_TRAVEL: u16 = 0x7E34;
+/// A GM's ask to travel to a spot of its map (`Session::map_travel_to`): u32 the
+/// world (the MemoryDump's world index), f32 x, f32 z. The server moves a GM's
+/// character there, on the ground's floor, and refuses anyone else's.
+pub const OP_MAP_TRAVEL_TO: u16 = 0x7E35;
 /// go-eqoa-server's own, no retail message either: the whole of a raid group,
 /// where a roster holds four (`m_group`). The offer, from the server once the
 /// player is in the world, a u32 after the opcode (1); a server without it
@@ -691,6 +701,10 @@ pub struct Session {
     /// jump key, `walker`); gone with the connection, as the server's goes with
     /// its player.
     pub jumps: bool,
+    /// The server offered a GM's travel by the map ([`OP_MAP_TRAVEL`]): the
+    /// map's Ctrl+click asks for its spot (`map_travel_to`); gone with the
+    /// connection, as the GM's channel goes with its login.
+    pub map_travel: bool,
     /// Whether the server offered quest marks ([`OP_QUEST_MARKERS`]), what it
     /// was last told (none since the offer), and the set it last sent
     /// ([`OP_QUEST_MARKERS_DATA`]).
@@ -845,6 +859,7 @@ impl Session {
             capes_in_view: Default::default(),
             capes_changed: 0,
             jumps: false,
+            map_travel: false,
             quest_marks_offer: false,
             quest_marks_asked: None,
             quest_marks: Vec::new(),
@@ -980,6 +995,19 @@ impl Session {
         let mut w = Writer::op(op);
         w.u32(v);
         self.send(&w.data);
+    }
+
+    /// A GM's travel to (`x`, `z`) of world `world` (the map's Ctrl+click), asked
+    /// of a server that offered it ([`OP_MAP_TRAVEL`]); false, and nothing sent,
+    /// otherwise (a player's map, Sandstorm's, eqoa.live's).
+    pub fn map_travel_to(&mut self, world: u32, x: f32, z: f32) -> bool {
+        if !self.map_travel {
+            return false;
+        }
+        let mut w = Writer::op(OP_MAP_TRAVEL_TO);
+        w.u32(world).u32(x.to_bits()).u32(z.to_bits());
+        self.send(&w.data);
+        true
     }
 
     /// The combat record asked for now (its window opening), of a server that
@@ -1256,6 +1284,7 @@ impl Session {
                 self.entity_view_offer = None;
                 self.flying = false;
                 self.jumps = false;
+                self.map_travel = false;
                 // the old connection's channels go with it
                 self.early_states.clear();
                 self.quest_marks_offer = false;
@@ -1376,6 +1405,13 @@ impl Session {
                 if r.u32() != 0 && !r.error {
                     self.send_op_int(OP_GM_TRIGGERS, 1);
                     self.send_op_int(OP_FLY, 1);
+                }
+            }
+            // a GM's travel by the map offered (the map's Ctrl+click), or no more
+            OP_MAP_TRAVEL => {
+                let on = r.u32() != 0;
+                if !r.error {
+                    self.map_travel = on;
                 }
             }
             // flight on or off (`Play::control_client`, `walker`)
@@ -2697,6 +2733,33 @@ mod tests {
         assert_eq!(s.entity_view_offer, Some((204, 1000)), "0x7E00's offer still taken");
         s.send_entity_view(24, 100);
         assert_eq!(answers(&mut s), [(251, vec![0x00, 0x7E, 24, 0, 0, 0, 100, 0, 0, 0])], "the control: 0x7E00's answer");
+    }
+
+    // A GM's map travel (go-eqoa-server's 0x7E34/0x7E35): nothing asked without
+    // the offer; offered, the spot sent as the world, x and z; a 0 ends it, and
+    // so does a new connection.
+    #[test]
+    fn map_travel_offered_then_asked() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let asks = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x35, 0x7E])).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        assert!(!s.map_travel_to(0, 25500.0, 15600.0), "not offered");
+        assert_eq!(asks(&mut s), Vec::<Vec<u8>>::new(), "nothing asked without the offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x34, 0x7E, 1, 0, 0, 0]);
+        assert!(s.map_travel);
+        assert!(s.map_travel_to(2, 25500.5, -15600.0));
+        let mut want = vec![0x35, 0x7E, 2, 0, 0, 0];
+        want.extend_from_slice(&25500.5f32.to_le_bytes());
+        want.extend_from_slice(&(-15600.0f32).to_le_bytes());
+        assert_eq!(asks(&mut s), [want]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x34, 0x7E, 0, 0, 0, 0]);
+        assert!(!s.map_travel && !s.map_travel_to(0, 1.0, 1.0), "a 0 ends it");
+        assert_eq!(asks(&mut s), Vec::<Vec<u8>>::new());
     }
 
     // Quest marks (go-eqoa-server's 0x7E03/0x7E04): nothing asked without an

@@ -41,6 +41,14 @@ a text file holding its path) are kept in eqoa-rs in the config directory:
 ~/.config/eqoa-rs (Linux), ~/Library/Application Support/eqoa-rs (macOS),
 %APPDATA%\eqoa-rs (Windows).
 
+Texture packs made for PCSX2, and the game's own textures dumped for making
+one, go in a folder named textures next to eqoa (eqoa.exe on Windows), made the
+first time you turn on Options, Extended, Textures, Texture Packs or Dump
+Textures: a pack's files in textures/SLUS-20744/replacements, the dumps in
+textures/SLUS-20744/dumps, as PCSX2 has them. Texture Folder on that page opens
+the folder. Where the game cannot write next to itself, it keeps the folder in
+eqoa-rs (above) instead, and the page says so. Updates never touch it.
+
 In play: Escape the start menu, F1 the keys and buttons (the Options window's
 Controls page), M the map, F11 full screen. A controller works as the PS2's did.
 

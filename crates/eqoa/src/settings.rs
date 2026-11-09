@@ -746,6 +746,21 @@ pub struct ClientOptions {
     /// shadows that move with the time of day (`render::sunshadow`); off, the
     /// sun lights through everything, as the PS2's. Off by default.
     pub sun_shadows: bool,
+    /// Light Shadows (Extended > Lighting, 2026-11-09, the user's "sun
+    /// shadows lets make all light sources act similar"): on, and with
+    /// Dynamic Lighting on, the fires', the personal light's and the spells'
+    /// light stopped by what stands between a surface and the light, as Sun
+    /// Shadows stop the sun's (`render::lightshadow`); off, those lights
+    /// light through everything. Off by default.
+    pub light_shadows: bool,
+    /// Shadow Distance (Extended > Lighting, 2026-11-09, the user's "the light
+    /// shadows need a slider to raise to a greater distance"): how far out
+    /// Sun Shadows and Light Shadows reach, from the game's
+    /// `SHADOW_DISTANCE_GAME` (Sun Shadows' 250 before the camera, 8 lights
+    /// shadowed, 4 in a page and on Android) to `SHADOW_DISTANCE_MAX` (1000,
+    /// every light Dynamic Lighting draws) in `SHADOW_DISTANCE_STEP`s
+    /// (`render::Renderer::set_shadow_distance`).
+    pub shadow_distance: u16,
     /// Dynamic Lighting (the user's of 2026-11-08, phase 1): off, the
     /// PS2's, the strip programs' light per vertex with the personal light
     /// the one point light; on, the light per fragment and the scene's fires,
@@ -785,17 +800,31 @@ pub struct ClientOptions {
     /// a device by its name, the default while it is not connected
     /// (`audio::retarget`). Each window its own.
     pub output: Option<DeviceName>,
-    /// Touch Pad Size: the touch screen's pad (`touch`), percent of the
-    /// full pad, which is the most that fits (its rows already meet), down
-    /// to `TOUCH_SIZE_MIN` in `TOUCH_SIZE_STEP`s (a player, 2026-11-02:
-    /// "Is there a way to make the on screen controller size adjustable?").
-    pub touch_size: u8,
+    /// Touch Stick Size and Touch Button Size: the touch screen's pad's
+    /// sticks and buttons (`touch::layout`), each percent of the pad as it
+    /// was, `TOUCH_SIZE_MIN` to `TOUCH_SIZE_MAX` in `TOUCH_SIZE_STEP`s, drawn
+    /// larger than it was only as far as the window has room (a player,
+    /// 2026-11-02: "Is there a way to make the on screen controller size
+    /// adjustable?"; Jibrish's petition 1386, 2026-11-09: "Mobile clients and
+    /// mobile browser need the ability to adjust the on screen controler
+    /// size"). They took over Touch Pad Size, the whole pad's 50 to 100,
+    /// which an older client.opt's `touch_size` gives both.
+    pub touch_stick: u8,
+    pub touch_buttons: u8,
+    /// Touch Opacity: the pad's alphas, percent of its own (`touch`'s
+    /// `TouchPad::draw`), `TOUCH_OPACITY_MIN` to `TOUCH_OPACITY_MAX` in
+    /// `TOUCH_OPACITY_STEP`s.
+    pub touch_opacity: u8,
+    /// Touch Edge: how far in from the window's left and right edges the
+    /// pad keeps, percent of the window's shorter side, 0 to
+    /// `TOUCH_EDGE_MAX` (`touch::layout`).
+    pub touch_edge: u8,
     /// Texture Packs, natively (the user, 2026-11-08: PCSX2's replacement
     /// packs read as they are, "an Extended page row turns packs on and
-    /// off"): on, a texture a pack in the config directory's
-    /// `textures/SLUS-20744/replacements` names is drawn as the pack has it
-    /// (`texpack`); off, every texture the game's own. Off by default, as
-    /// PCSX2's Load Textures is.
+    /// off"): on, a texture a pack in `textures/SLUS-20744/replacements`
+    /// names (the `textures` beside the program, `texpack::place`) is drawn
+    /// as the pack has it (`texpack`); off, every texture the game's own.
+    /// Off by default, as PCSX2's Load Textures is.
     pub texture_packs: bool,
     /// Dump Textures, natively: on, each texture made is written to
     /// `textures/SLUS-20744/dumps` under the names PCSX2 gives it
@@ -806,15 +835,45 @@ pub struct ClientOptions {
 /// Render Scale's steps, the first the game's picture as drawn.
 pub const RENDER_SCALES: [u8; 3] = [1, 2, 4];
 
-/// Touch Pad Size's range (percent of the full pad: `touch::layout`)
-/// and its step.
+/// Touch Stick Size's and Touch Button Size's range (percent of the pad as
+/// it was, `TOUCH_SIZE_WAS`: `touch::layout`) and their step.
 pub const TOUCH_SIZE_MIN: u8 = (crate::touch::SMALLEST * 100.0) as u8;
-pub const TOUCH_SIZE_MAX: u8 = 100;
+pub const TOUCH_SIZE_WAS: u8 = 100;
+pub const TOUCH_SIZE_MAX: u8 = (crate::touch::LARGEST * 100.0) as u8;
 pub const TOUCH_SIZE_STEP: u8 = 5;
+/// Touch Opacity's range (percent of the pad's own alphas, `TOUCH_OPACITY_WAS`)
+/// and its step.
+pub const TOUCH_OPACITY_MIN: u8 = (crate::touch::FAINTEST * 100.0 + 0.5) as u8;
+pub const TOUCH_OPACITY_WAS: u8 = 100;
+pub const TOUCH_OPACITY_MAX: u8 = (crate::touch::BRIGHTEST * 100.0) as u8;
+pub const TOUCH_OPACITY_STEP: u8 = 10;
+/// Touch Edge's most (percent of the window's shorter side) and its step.
+pub const TOUCH_EDGE_MAX: u8 = (crate::touch::EDGE_MOST * 100.0 + 0.5) as u8;
+pub const TOUCH_EDGE_STEP: u8 = 1;
 
-/// The touch screen's pad's size now, of the full pad (`touch::layout`).
-pub fn touch_scale() -> f32 {
-    client().touch_size as f32 / 100.0
+/// Shadow Distance's ends and step (`ClientOptions::shadow_distance`).
+pub const SHADOW_DISTANCE_GAME: u16 = 250;
+pub const SHADOW_DISTANCE_MAX: u16 = 1000;
+pub const SHADOW_DISTANCE_STEP: u16 = 125;
+
+/// Shadow Distance as the renderer takes it: times the game's.
+pub fn shadow_scale() -> f32 {
+    client().shadow_distance as f32 / SHADOW_DISTANCE_GAME as f32
+}
+
+/// How the touch screen's pad is drawn now (`touch::layout`, `TouchPad::draw`):
+/// the Extended page's Touch Stick Size, Touch Button Size, Touch Opacity and
+/// Touch Edge.
+pub fn touch_options() -> crate::touch::Opts {
+    client().touch_opts()
+}
+
+impl ClientOptions {
+    /// Its touch rows as the pad takes them (`touch::Opts`).
+    pub fn touch_opts(&self) -> crate::touch::Opts {
+        let share = |v: u8| v as f32 / 100.0;
+        crate::touch::Opts { stick: share(self.touch_stick), buttons: share(self.touch_buttons), opacity: share(self.touch_opacity), edge: share(self.touch_edge) }
+    }
 }
 
 /// The game's ability bars (with the expansion's second).
@@ -891,12 +950,17 @@ impl Default for ClientOptions {
             ps2_particles: true,
             ambient_occlusion: false,
             sun_shadows: false,
+            light_shadows: false,
+            shadow_distance: SHADOW_DISTANCE_GAME,
             dynamic_lighting: false,
             loading_longer: true,
             render_scale: 1,
             hud: render::ui::HudFilter::Nearest,
             output: None,
-            touch_size: TOUCH_SIZE_MAX,
+            touch_stick: TOUCH_SIZE_WAS,
+            touch_buttons: TOUCH_SIZE_WAS,
+            touch_opacity: TOUCH_OPACITY_WAS,
+            touch_edge: 0,
             texture_packs: false,
             dump_textures: false,
         }
@@ -915,9 +979,10 @@ impl ClientOptions {
     /// is the 2002 disc's, VSync, Shouts and Update
     /// Notices only when off, Text only when Smooth, Render Scale only above
     /// 1, HUD only when Nearest, Output Device only when a device is
-    /// chosen (by its name), Touch Pad Size only when smaller than
-    /// the full pad, and Texture Packs and Dump Textures only when on
-    /// (Ambient Occlusion and Dynamic Lighting the same).
+    /// chosen (by its name), Touch Stick Size, Touch Button Size, Touch
+    /// Opacity and Touch Edge only when not the pad as it was (no Touch Pad
+    /// Size, which they took over), and Texture Packs and Dump Textures only
+    /// when on (Ambient Occlusion and Dynamic Lighting the same).
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
         if let Some(r) = self.frame_rate {
@@ -1019,6 +1084,14 @@ impl ClientOptions {
         if self.sun_shadows {
             s.push_str("sun_shadows=on\n");
         }
+        // Light Shadows only when on
+        if self.light_shadows {
+            s.push_str("light_shadows=on\n");
+        }
+        // Shadow Distance only when not the game's
+        if self.shadow_distance != SHADOW_DISTANCE_GAME {
+            s.push_str(&format!("shadow_distance={}\n", self.shadow_distance));
+        }
         // Dynamic Lighting only when on
         if self.dynamic_lighting {
             s.push_str("dynamic_lighting=on\n");
@@ -1037,8 +1110,16 @@ impl ClientOptions {
         if let Some(d) = self.output {
             s.push_str(&format!("output={}\n", d.as_str()));
         }
-        if self.touch_size != TOUCH_SIZE_MAX {
-            s.push_str(&format!("touch_size={}\n", self.touch_size));
+        // the touch rows only when not the pad as it was
+        for (v, was, key) in [
+            (self.touch_stick, TOUCH_SIZE_WAS, "touch_stick"),
+            (self.touch_buttons, TOUCH_SIZE_WAS, "touch_buttons"),
+            (self.touch_opacity, TOUCH_OPACITY_WAS, "touch_opacity"),
+            (self.touch_edge, 0, "touch_edge"),
+        ] {
+            if v != was {
+                s.push_str(&format!("{key}={v}\n"));
+            }
         }
         // Texture Packs and Dump Textures only when on
         if self.texture_packs {
@@ -1051,9 +1132,13 @@ impl ClientOptions {
     }
 
     /// The settings `to_text` wrote; a line not understood, or a value out
-    /// of range, leaves that setting at its default.
+    /// of range, leaves that setting at its default. An older file's Touch
+    /// Pad Size (`touch_size`, the whole pad's 50 to 100) is both touch sizes
+    /// where the file gives neither of its own.
     pub fn from_text(s: &str) -> ClientOptions {
         let mut c = ClientOptions::default();
+        let (mut old_size, mut stick, mut buttons) = (None, None, None);
+        let ranged = |v: &str, lo: u8, hi: u8| v.parse::<u8>().ok().filter(|t| (lo..=hi).contains(t));
         for line in s.lines() {
             let Some((k, v)) = line.split_once('=') else { continue };
             match (k.trim(), v.trim()) {
@@ -1130,6 +1215,13 @@ impl ClientOptions {
                 ("ambient_occlusion", "off") => c.ambient_occlusion = false,
                 ("sun_shadows", "on") => c.sun_shadows = true,
                 ("sun_shadows", "off") => c.sun_shadows = false,
+                ("light_shadows", "on") => c.light_shadows = true,
+                ("light_shadows", "off") => c.light_shadows = false,
+                ("shadow_distance", v) => {
+                    if let Some(d) = v.parse::<u16>().ok().filter(|d| (SHADOW_DISTANCE_GAME..=SHADOW_DISTANCE_MAX).contains(d)) {
+                        c.shadow_distance = d;
+                    }
+                }
                 ("dynamic_lighting", "on") => c.dynamic_lighting = true,
                 ("dynamic_lighting", "off") => c.dynamic_lighting = false,
                 ("loading", "longer") => c.loading_longer = true,
@@ -1166,9 +1258,17 @@ impl ClientOptions {
                         c.name_distance = d;
                     }
                 }
-                ("touch_size", v) => {
-                    if let Some(t) = v.parse::<u8>().ok().filter(|t| (TOUCH_SIZE_MIN..=TOUCH_SIZE_MAX).contains(t)) {
-                        c.touch_size = t;
+                ("touch_size", v) => old_size = ranged(v, TOUCH_SIZE_MIN, TOUCH_SIZE_WAS).or(old_size),
+                ("touch_stick", v) => stick = ranged(v, TOUCH_SIZE_MIN, TOUCH_SIZE_MAX).or(stick),
+                ("touch_buttons", v) => buttons = ranged(v, TOUCH_SIZE_MIN, TOUCH_SIZE_MAX).or(buttons),
+                ("touch_opacity", v) => {
+                    if let Some(t) = ranged(v, TOUCH_OPACITY_MIN, TOUCH_OPACITY_MAX) {
+                        c.touch_opacity = t;
+                    }
+                }
+                ("touch_edge", v) => {
+                    if let Some(t) = ranged(v, 0, TOUCH_EDGE_MAX) {
+                        c.touch_edge = t;
                     }
                 }
                 (k, v) if k.starts_with("controller.") => {
@@ -1180,6 +1280,8 @@ impl ClientOptions {
                 _ => {}
             }
         }
+        c.touch_stick = stick.or(old_size).unwrap_or(c.touch_stick);
+        c.touch_buttons = buttons.or(old_size).unwrap_or(c.touch_buttons);
         c
     }
 }
@@ -2101,6 +2203,43 @@ mod tests {
         }
     }
 
+    /// Light Shadows, off by default, kept only when on, and apart from
+    /// Dynamic Lighting and Sun Shadows (each may be on without the others);
+    /// anything but on or off leaves them off.
+    #[test]
+    fn light_shadows_kept_only_when_on() {
+        let d = ClientOptions::default();
+        assert!(!d.light_shadows, "off by default");
+        assert!(!d.to_text().contains("light_shadows"), "the default not written");
+        let on = ClientOptions { light_shadows: true, ..Default::default() };
+        assert_eq!(on.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nlight_shadows=on\n");
+        assert_eq!(ClientOptions::from_text(&on.to_text()), on);
+        let all = ClientOptions { light_shadows: true, sun_shadows: true, dynamic_lighting: true, ..Default::default() };
+        assert_eq!(ClientOptions::from_text(&all.to_text()), all);
+        let them = ClientOptions::from_text("light_shadows=on");
+        assert!(!them.dynamic_lighting && !them.sun_shadows, "Dynamic Lighting and Sun Shadows not turned on with them");
+        assert!(ClientOptions::from_text("light_shadows=off") == d);
+        for bad in ["light_shadows=1", "light_shadows=", "light_shadows=On", "shadows=on", "sun_shadows=on"] {
+            assert!(!ClientOptions::from_text(bad).light_shadows, "{bad}: off, the default");
+        }
+    }
+
+    /// Shadow Distance, the game's 250 by default and not written then, kept
+    /// between it and 1000; anything else leaves the game's.
+    #[test]
+    fn shadow_distance_kept_when_raised() {
+        let d = ClientOptions::default();
+        assert_eq!(d.shadow_distance, 250, "the game's");
+        assert!(!d.to_text().contains("shadow_distance"), "the default not written");
+        let far = ClientOptions { shadow_distance: 750, ..Default::default() };
+        assert_eq!(far.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nshadow_distance=750\n");
+        assert_eq!(ClientOptions::from_text(&far.to_text()), far);
+        for bad in ["shadow_distance=1001", "shadow_distance=249", "shadow_distance=", "shadow_distance=far", "shadow_distance=-500"] {
+            assert_eq!(ClientOptions::from_text(bad).shadow_distance, 250, "{bad}: the game's");
+        }
+        assert_eq!(ClientOptions::from_text("shadow_distance=1000").shadow_distance, 1000);
+    }
+
     /// Dynamic Lighting, off by default (the PS2's light), kept only when
     /// on; anything but on or off leaves it off.
     #[test]
@@ -2154,19 +2293,45 @@ mod tests {
         assert!(ClientOptions::from_text("environment=off").ps2_fog);
     }
 
-    /// Touch Pad Size: the full pad unless chosen, written only when
-    /// smaller, read back in its range; anything else is the full pad.
+    /// The touch rows: the pad as it was unless chosen (both sizes 100, its
+    /// own opacity, no edge), each written only when not, read back in its
+    /// range; anything else leaves that row as it was. An older file's Touch
+    /// Pad Size is both sizes, unless the file has a size of its own (in
+    /// either order); a save then writes the two, not it. The controls: out
+    /// of its 50 to 100 the old line is nothing, and the default pad's
+    /// options are `touch::Opts`' default.
     #[test]
-    fn touch_size_kept_only_when_smaller() {
+    fn touch_rows_kept_only_when_not_the_pad_as_it_was() {
         let d = ClientOptions::default();
-        assert_eq!((d.touch_size, TOUCH_SIZE_MIN, TOUCH_SIZE_MAX), (100, 50, 100));
-        assert!(!d.to_text().contains("touch_size"), "the default not written");
-        let c = ClientOptions { touch_size: 70, ..Default::default() };
-        assert_eq!(c.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntouch_size=70\n");
+        assert_eq!((d.touch_stick, d.touch_buttons, d.touch_opacity, d.touch_edge), (100, 100, 100, 0));
+        assert_eq!(d.touch_opts(), crate::touch::Opts::default(), "the pad as it was");
+        assert_eq!((TOUCH_SIZE_MIN, TOUCH_SIZE_MAX, TOUCH_OPACITY_MIN, TOUCH_OPACITY_MAX, TOUCH_EDGE_MAX), (50, 200, 10, 200, 10));
+        assert!(!d.to_text().contains("touch"), "the defaults not written");
+        let c = ClientOptions { touch_stick: 150, touch_buttons: 55, touch_opacity: 40, touch_edge: 6, ..Default::default() };
+        assert_eq!(c.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntouch_stick=150\ntouch_buttons=55\ntouch_opacity=40\ntouch_edge=6\n");
         assert!(ClientOptions::from_text(&c.to_text()) == c);
-        assert_eq!(ClientOptions::from_text("touch_size=50").touch_size, 50);
-        for bad in ["touch_size=49", "touch_size=101", "touch_size=", "touch_size=x", "touch_size=-5", "touchsize=70"] {
-            assert_eq!(ClientOptions::from_text(bad).touch_size, 100, "{bad}: the full pad");
+        assert_eq!(c.touch_opts(), crate::touch::Opts { stick: 1.5, buttons: 0.55, opacity: 0.4, edge: 0.06 });
+        for (line, want) in [("touch_stick=200", (200, 100, 100, 0)), ("touch_buttons=50", (100, 50, 100, 0)), ("touch_opacity=10", (100, 100, 10, 0)), ("touch_edge=10", (100, 100, 100, 10))] {
+            let c = ClientOptions::from_text(line);
+            assert_eq!((c.touch_stick, c.touch_buttons, c.touch_opacity, c.touch_edge), want, "{line}");
+        }
+        for bad in ["touch_stick=49", "touch_stick=201", "touch_buttons=", "touch_buttons=x", "touch_opacity=9", "touch_opacity=201", "touch_edge=11", "touch_edge=-1", "touchstick=150"] {
+            let c = ClientOptions::from_text(bad);
+            assert_eq!((c.touch_stick, c.touch_buttons, c.touch_opacity, c.touch_edge), (100, 100, 100, 0), "{bad}: as it was");
+        }
+        // an older client.opt's Touch Pad Size: both sizes
+        let old = ClientOptions::from_text("lod=on\ntouch_size=70\n");
+        assert_eq!((old.touch_stick, old.touch_buttons), (70, 70));
+        assert_eq!(old.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntouch_stick=70\ntouch_buttons=70\n", "saved as the two");
+        assert_eq!(old.touch_opts(), crate::touch::Opts::sized(0.7), "drawn as Touch Pad Size 70 was");
+        assert_eq!(ClientOptions::from_text("touch_size=50").touch_buttons, 50);
+        for (text, want) in [("touch_size=70\ntouch_stick=120", (120, 70)), ("touch_stick=120\ntouch_size=70", (120, 70)), ("touch_buttons=80\ntouch_size=60", (60, 80))] {
+            let c = ClientOptions::from_text(text);
+            assert_eq!((c.touch_stick, c.touch_buttons), want, "{text:?}: a size of its own wins");
+        }
+        for bad in ["touch_size=49", "touch_size=101", "touch_size=150", "touch_size=", "touch_size=x"] {
+            let c = ClientOptions::from_text(bad);
+            assert_eq!((c.touch_stick, c.touch_buttons), (100, 100), "{bad}: the control, as it was");
         }
     }
 

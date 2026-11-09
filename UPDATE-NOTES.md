@@ -16,6 +16,97 @@ is put on the page by `.github/workflows/notes.yml`.
 - It is in Options > Extended > Lighting > Particles: PS2 (the game's look, the default) or Exact (as before,
   smoother and darker where many overlap). The fires and glows are unchanged.
 
+## 2026-11-09 · Weapons cast shadows standing still
+- With Light Shadows on, at night your weapons now cast a shadow from your lantern while you stand still, as they do
+  while you move. A sword held across you at rest was being taken for your body (which your own lantern never
+  shadows) and cast nothing. Shadows from the sun and from torches were not affected.
+
+## 2026-11-09 · The on-screen controller: its size, opacity and edge
+- On a phone or a tablet (the browser page and the Android app), Extended > Controller has four new rows for
+  the on-screen controller. Touch Stick Size and Touch Button Size set the two sticks and the buttons apart,
+  from half their size to twice it; Touch Opacity makes the whole controller fainter or brighter (10% to 200%);
+  Touch Edge keeps it farther in from the screen's left and right sides (up to a tenth of the screen).
+- Larger sizes use the room the screen has: on a phone held sideways the sticks go to twice their size and the
+  buttons to about two-thirds larger, the sticks moving in toward the middle to make room. A tablet, or a phone
+  held upright, has less room; where a size you pick does not fit, the controller is drawn as large as fits
+  and the options page says the size it is drawn at. No control ever goes off the screen or onto another.
+- Nothing changes unless you change these rows. They replace Touch Pad Size: if you had set it, both sizes
+  start where it was, so your controller looks just as it did.
+
+## 2026-11-09 · Capes over broad shoulders and round the neck
+- On the big race bodies (a minotaur's hunched shoulders, say) a cape's collar now comes up over the shoulders
+  instead of sinking into them, standing and in the battle stance.
+- The vampire's cape and its mantle sit on the shoulders again: the last update stood the mantle out wide and
+  forward round some bodies, leaving a big opening at the neck. It now closes round the neck and lies on the
+  shoulders as it does on the vampire himself, and walking and running lift it only a little.
+
+## 2026-11-09 · Fewer quest marks, and GMs travel by the map
+- The minimap keeps only your own quests' "?" on its rim, pointing the way to them. A "!" (a quest you can take)
+  shows on the minimap only where it lies within what the minimap shows, so its edge is no longer ringed with them.
+  On the map, a "?" is drawn over a "!" beside it.
+- On go-eqoa-server servers (eqoaclassic's) the "!" marks are far fewer: a quest given in every city, such as
+  Armorcrafting and Jewelcrafting, is marked once, at its nearest giver, and not at all while you have it under way
+  or once you have done it; only quests near your level are marked (from 10 levels below yours, as the server
+  sets it); and a giver where a step of yours is to be done shows that step's "?" alone.
+- GMs: with the map up, Ctrl and a click (Cmd and a click on a Mac) takes you to that spot, on the ground there;
+  the map's legend says so while you are a GM. Anyone else's click puts a waypoint, as before.
+
+## 2026-11-09 · The Jal'Raeth and the Wisp
+- Two more races on a server that has them. The Jal'Raeth float cross-legged: choose their robes, a channeler's
+  body or a knight's armour. They wear chest armour, bracers and gloves as a human does (their crossed legs keep
+  their own garb), their helm sits on their head, their weapons float at their side, and they wave, bow, point
+  and cheer.
+- A Wisp is a light inside an empty suit of armour: you see only what it wears, shaped as a human would wear it,
+  its weapons swinging as a human's do, and the wisp glowing inside the helm. With nothing on, it is the wisp
+  alone, floating where a head would be. Other players with this client see it so; a PlayStation 2 shows a human
+  in the same armour.
+
+## 2026-11-09 · Light Shadows: no square under lamps, steady weapon glows
+- With Light Shadows on, the ground under a street lamp is lit again. The lamp's light sits inside its little
+  housing, and the housing's floor was darkening a square of ground under every lamp.
+- A glowing weapon (an epic sword's glow) or a spell's light no longer makes the shadows of the person or weapon
+  carrying it flicker on and off. Those lights still cast the shadows of walls and everything else that stands
+  still, steadily; torches, braziers and your lantern still cast everyone's shadows as before.
+
+## 2026-11-09 · Torches, lamps and spells cast shadows
+- A new option, Extended > Lighting > Light Shadows (off unless you turn it on; like Sun Shadows it needs Dynamic
+  Lighting on): the light of torches, braziers, candles, lamps, your lantern and spells now stops at whatever stands
+  in its way. A character standing by a brazier casts a shadow away from it, a stool by a torch casts its own, and a
+  torch's light no longer comes through the wall it hangs on into the room behind.
+- Each moment the brightest and nearest lights cast shadows (eight on a computer, four in a browser and on a
+  phone). When another light takes one's place, the old shadow fades out and the new one fades in over a quarter of
+  a second, so no shadow pops in or out.
+- Your own lantern does not shadow the ground round your feet; the people and things near you cast shadows away
+  from you as you walk.
+- Shadow Distance, a slider beside them: how far out shadows reach. At its left, where it starts, they reach as far
+  as before; to the right the sun's shadows reach up to four times as far (1000) and more of the nearby lights cast
+  at once, up to every lit torch and lamp you can see (sixteen on a computer, eight in a browser and on a phone).
+  Farther costs more of your graphics card.
+- With it off, the game looks exactly as it did.
+
+## 2026-11-09 · Texture packs load without freezing the game
+- A texture pack's pictures are now read in the background. Until a texture's replacement is ready the game draws
+  its own texture there, then puts the replacement in its place a moment later, so the game no longer stops while a
+  pack is read. With a large HD pack the game used to freeze for seconds on arriving in a city like Freeport; now
+  it keeps moving.
+- Dump Textures only ever writes the game's own textures, as the disc has them, whether a pack is loaded or not:
+  never a pack's picture and never an enlarged one.
+
+## 2026-11-09 · Texture packs in a folder beside the game
+- Texture packs and texture dumps now go in a `textures` folder next to the game itself (beside `eqoa.exe` on
+  Windows, beside `eqoa` on Linux and on a Mac), where they are easy to find: put a pack's files in
+  `textures/SLUS-20744/replacements`, and Dump Textures writes to `textures/SLUS-20744/dumps`. Inside it the folders
+  are PCSX2's, so a pack made for PCSX2 still goes in as it is.
+- Options > Extended > Textures has a new row, Texture Folder: Open shows the folder in your file manager
+  (Explorer, the Finder or your desktop's). Beside Back the page says where the folder is, and how many textures
+  the packs in it replace. A pack you add while the game runs is read when you turn Texture Packs off and on.
+- The packs and dumps you kept in the settings folder (`eqoa-rs`) are moved there the first time the game uses
+  them. If they are on another disk from the game they stay where they are, and are still read.
+- Where the game cannot write in its own folder (in Program Files, say), it keeps them in the settings folder as
+  before, and the Textures page says so.
+- An update replaces only the game's program: the `textures` folder beside it is never touched.
+- In a browser and on Android nothing changes.
+
 ## 2026-11-09 · The map and the quest helper are back
 - M opens the map again: the whole world drawn from your own disc, with the towns' names, the coach routes and
   stops, the XP camps and the places players suggested and a GM accepted. Click (or tap) to put a waypoint, which
