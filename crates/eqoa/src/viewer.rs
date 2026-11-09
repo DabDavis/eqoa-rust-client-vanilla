@@ -370,6 +370,13 @@ pub fn shot_with(
     let aspect = w as f32 / h as f32;
     let mut view = cam.view(s.bounds, aspect);
     if let Some((mut walker, body, mut streamer)) = source.walker(lib, &s) {
+        // a race's body jumping as on a server with jumps (`EQOA_JUMP`): the
+        // fall and the landing the race table gives it
+        if std::env::var_os("EQOA_JUMP").is_some()
+            && let Some(cs) = walker.sprite.as_mut()
+        {
+            crate::raceemote::grant_air(lib, cs, &mut walker.anims, shot_body(), true, true);
+        }
         // 60 frames a second of game time, the controls held throughout.
         let script = script.unwrap_or(Script { ms: 0, controls: Controls::default() });
         let mut t = 0;
@@ -413,6 +420,9 @@ pub fn shot_with(
         let at: i64 = std::env::var("EQOA_AT").ok().and_then(|v| v.parse().ok()).map_or(2000, |v: i64| v / 16 * 16);
         let attack = std::env::var_os("EQOA_ATTACK").is_some();
         let trace_walk: Option<i64> = std::env::var("EQOA_TRACE_WALK").ok().and_then(|v| v.parse::<i64>().ok()).map(|v| (v / 16 * 16).max(16));
+        // `EQOA_JUMP=<ms>[;<ms>...]`: the jump key then (`Walker::ask_jump`); with
+        // no server, as though one had offered it and the walk stood
+        let jump_at: Vec<i64> = std::env::var("EQOA_JUMP").map(|s| s.split(';').filter_map(|ms| ms.trim().parse().ok()).collect()).unwrap_or_default();
         let walk = walk_script();
         // `EQOA_FRAME_MS=n`: frames of n ms instead of 16 (a display's rate:
         // 6 is about 165 a second, 33 the console's 30)
@@ -569,6 +579,12 @@ pub fn shot_with(
             }
             let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
             client.steer = look_free && mouse.steer(walker.cam.camera_mode);
+            if play.is_none() && !jump_at.is_empty() {
+                (client.jumps, client.stood_sent) = (true, true);
+            }
+            if jump_at.iter().any(|&ms| t - frame_ms < ms && ms <= t) {
+                walker.ask_jump();
+            }
             // a stick that ran runs until it comes back well under the
             // threshold (`input::RunHold`), as the window's
             run_hold.apply(&mut sticks);
@@ -1316,14 +1332,16 @@ fn write_png(path: &str, w: u32, h: u32, rgba: &[u8]) -> Result<(), Error> {
 /// The corpse, merchant and trade windows' keys (modes 1, 10, 15, 16) on
 /// the keyboard, as the game's keys and pad buttons: the arrows the d-pad,
 /// Enter or E ✕, Escape or Backspace △, Q □ (a trade's accept, as the
-/// game's 81/113), Space the game's 32 (a trade's chat line, as R3) but in
-/// the corpse's window, where it is ✕: on the pad the attack (✕, Space on
-/// the keyboard) opens a corpse and in its window takes the row chosen
-/// (`VIWndList::OnKeyDown`: LEAVE ALL closes it, an item takes it, TAKE ALL
-/// takes everything), while 32 there is nothing to the game
-/// (`VIWndLoot::OnKeyDown` takes 27, 132 and 134), so the key that opened
-/// it did nothing in it (F3 20261029-024647: "spacebar can open loot, it
-/// should also allow you to close or loot the items as well").
+/// game's 81/113), the attack's key (G; Space too while the jump's row has
+/// it, `binds::KeyEdge::space_attacks`, which hands it here as G) the game's
+/// 32 (a trade's chat line, as R3, Space's in the game's keyboard table) but
+/// in the corpse's window, where it is ✕: on the pad the attack (✕) opens a
+/// corpse and in its window takes the row chosen (`VIWndList::OnKeyDown`:
+/// LEAVE ALL closes it, an item takes it, TAKE ALL takes everything), while
+/// 32 there is nothing to the game (`VIWndLoot::OnKeyDown` takes 27, 132 and
+/// 134), so the key that opened it did nothing in it (F3 20261029-024647:
+/// "spacebar can open loot, it should also allow you to close or loot the
+/// items as well").
 pub(crate) fn npcw_key_of(key: &Key, mode: i32) -> Option<i32> {
     use crate::startmenu::keys as K;
     match key {
@@ -1334,8 +1352,8 @@ pub(crate) fn npcw_key_of(key: &Key, mode: i32) -> Option<i32> {
         Key::Named(NamedKey::Enter) => Some(K::CROSS),
         Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
         Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(113),
-        Key::Named(NamedKey::Space) if mode == 1 => Some(K::CROSS),
-        Key::Named(NamedKey::Space) => Some(32),
+        Key::Character(c) if c.eq_ignore_ascii_case("g") && mode == 1 => Some(K::CROSS),
+        Key::Character(c) if c.eq_ignore_ascii_case("g") => Some(32),
         Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
         _ => None,
     }
@@ -1452,6 +1470,14 @@ fn held_name(k: &Key) -> Option<String> {
         Key::Character(c) => c.to_lowercase(),
         _ => return None,
     })
+}
+
+/// `EQOA_BODY=<DictID>` (hex, 0x optional): the body a walk shot plays,
+/// the human's (`HUMAN`) unless said. With `EQOA_JUMP`, as on a server with
+/// jumps: a body the race table lists falls and lands as it has it
+/// (`raceemote::grant_air`).
+pub fn shot_body() -> u32 {
+    std::env::var("EQOA_BODY").ok().and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok()).unwrap_or(HUMAN as u32)
 }
 
 /// `EQOA_WALK=fwd,strafe,orbit,ms[;...]`: each set of controls held for its
@@ -2659,8 +2685,9 @@ impl App {
     /// none while a dialog of the client's has them). So a hold would hold
     /// on for good (F3 20261024-085139: the aim, Tab held as the window
     /// went, still up when it came back): the aim or its wait (Tab, `), the
-    /// chat box's history (C), the target's window (Q), the attack (Space), a
-    /// walk or a turn, a key moved onto a button's row, and the pregame's.
+    /// chat box's history (C), the target's window (Q), the attack (G, or
+    /// Space as it), a walk or a turn, a key moved onto a button's row, and
+    /// the pregame's.
     fn let_go_keys(&mut self, el: &ActiveEventLoop) {
         use crate::binds::Sent;
         let aspect = self.gfx.as_ref().map_or(4.0 / 3.0, |g| g.config.width as f32 / g.config.height as f32);
@@ -3673,8 +3700,8 @@ impl App {
         // The corpse, merchant and trade windows (modes 1, 10, 15,
         // 16), and the duel's invitation and wager (43, 44, the trade's
         // copy): `npcw_key_of`'s keys; the trade's and the wager's chat
-        // line, once Space has opened it, takes the keyboard as the edit box
-        // does.
+        // line, once the attack's key (G, or Space) has opened it, takes the
+        // keyboard as the edit box does.
         if let Some(p) = self.play.as_mut()
             && p.typing.is_none()
             && (p.npcw_owns() || p.duel_owns())
@@ -3806,7 +3833,8 @@ impl App {
             }
             return;
         }
-        // The fishing window (mode 36): Space casts and throws (X),
+        // The fishing window (mode 36): the attack's key casts and throws (X;
+        // G, or Space as it: Space's 32 in the game's keyboard table),
         // Escape leaves (triangle), Enter its chat line, C held the chat
         // box's history with the arrows' up and down, the codes the game's
         // keyboard gives `VIWndFishing::OnKeyDown` (32, 27, 13, 67, 19, 20);
@@ -3836,7 +3864,7 @@ impl App {
                 return;
             }
             let k = match &event.logical_key {
-                Key::Named(NamedKey::Space) => Some(32),
+                Key::Character(c) if c.eq_ignore_ascii_case("g") => Some(32),
                 Key::Named(NamedKey::Escape) => Some(27),
                 Key::Named(NamedKey::Enter) => Some(13),
                 Key::Named(NamedKey::ArrowUp) => Some(19),
@@ -4091,8 +4119,20 @@ impl App {
                     p.toggle_autorun();
                     return;
                 }
-                // V: a jump (the client's own, `jump`; free in the game's
-                // keyboard table), in play, on a server that offers it
+                // Space (and V, its key before): a jump (the client's own,
+                // `jump`), in play, on a server that offers it. Where Space
+                // makes no jump it comes here as the attack's G
+                // (`binds::KeyEdge::space_attacks`); a key moved onto the
+                // jump's row, or a button on it, comes as Space everywhere,
+                // and is nothing where there is no jump.
+                (None, Key::Named(NamedKey::Space)) if p.mode == 0 => {
+                    if !event.repeat
+                        && let Some(w) = self.walker.as_mut()
+                    {
+                        p.jump_key(w);
+                    }
+                    return;
+                }
                 (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("v") && !event.repeat => {
                     if let Some(w) = self.walker.as_mut() {
                         p.jump_key(w);
@@ -4185,13 +4225,21 @@ impl App {
             p.info_up = false;
             return;
         }
-        // Space: attack, held (`ToggleAutoAttack` / `MaybeStopAutoAttack`).
-        if let (Some(p), Key::Named(NamedKey::Space)) = (self.play.as_mut(), &event.logical_key) {
+        // G: attack, held (`ToggleAutoAttack` / `MaybeStopAutoAttack`), the
+        // game's Space (32): Space too, as G, wherever it makes no jump
+        // (`binds::KeyEdge::space_attacks`).
+        if let (Some(p), Key::Character(c)) = (self.play.as_mut(), &event.logical_key)
+            && c.eq_ignore_ascii_case("g")
+        {
             if event.state == ElementState::Pressed && !event.repeat && p.mode == 0 {
                 p.attack_press();
             } else if event.state == ElementState::Released {
                 p.attack_release();
             }
+            return;
+        }
+        // Space let go (its press a jump, or nothing): no more
+        if self.play.is_some() && event.logical_key == Key::Named(NamedKey::Space) && event.state == ElementState::Released {
             return;
         }
         // The HUD's quick menus in play on the arrows, the d-pad
@@ -4822,6 +4870,10 @@ impl App {
                 use crate::binds::Sent;
                 let typing = self.play.as_mut().is_some_and(|p| p.keyboard_typing());
                 let down = event.state == ElementState::Pressed;
+                // Space, the jump's, is the attack's wherever it makes no
+                // jump: in the world but not in play on a server that offered
+                // jumps (a window up, any other server)
+                self.keys_edge.space_attacks = self.play.as_ref().is_some_and(|p| !(p.mode == 0 && p.session.jumps));
                 match crate::settings::with_binds(|b| self.keys_edge.key(&name, down, event.repeat, typing, b)) {
                     Some(Sent::Key(to)) if to == name => event,
                     Some(Sent::Key(to)) => KeyIn { logical_key: crate::binds::key_of(&to), text: None, ..event },
@@ -5778,18 +5830,30 @@ mod tests {
         assert_eq!(frames(false), 5, "the control: every frame counted");
     }
 
-    /// The corpse, merchant and trade windows' keys: Space is ✕ in the
-    /// corpse's window (mode 1), the key that opened it (the attack: ✕ on the
-    /// pad, whose ✕ takes the row there), and the game's 32 in the merchant's
-    /// and the trade's (a trade's chat line, as R3); the rest the same in all
+    /// The corpse, merchant and trade windows' keys: the attack's key (G,
+    /// and Space as G, `binds::KeyEdge::space_attacks`) is ✕ in the corpse's
+    /// window (mode 1), the key that opened it (the attack: ✕ on the pad,
+    /// whose ✕ takes the row there), and the game's 32 in the merchant's and
+    /// the trade's (a trade's chat line, as R3); the rest the same in all
     /// four: Enter and E ✕, Escape and Backspace △ (27), Q □ (113), the
-    /// arrows the d-pad. The control: Space was 32 in all four.
+    /// arrows the d-pad. The controls: the attack's key was 32 in all four
+    /// before 2026-10-29; Space itself (the jump's, a moved key's or a
+    /// button's on its row) is nothing in a window.
     #[test]
-    fn space_is_cross_in_the_corpses_window_alone() {
-        let space = Key::Named(NamedKey::Space);
-        assert_eq!(npcw_key_of(&space, 1), Some(134));
-        for mode in [10, 15, 16] {
-            assert_eq!(npcw_key_of(&space, mode), Some(32), "mode {mode}: the game's 32");
+    fn the_attacks_key_is_cross_in_the_corpses_window_alone() {
+        for g in [Key::Character("g".into()), Key::Character("G".into())] {
+            assert_eq!(npcw_key_of(&g, 1), Some(134));
+            for mode in [10, 15, 16] {
+                assert_eq!(npcw_key_of(&g, mode), Some(32), "mode {mode}: the game's 32");
+            }
+        }
+        // Space as the edge hands it over where it makes no jump: G
+        let mut edge = crate::binds::KeyEdge::default();
+        edge.space_attacks = true;
+        let sent = edge.key("space", true, false, false, &crate::binds::Binds::default());
+        assert_eq!(sent, Some(crate::binds::Sent::Key("g".into())));
+        for mode in [1, 10, 15, 16] {
+            assert_eq!(npcw_key_of(&Key::Named(NamedKey::Space), mode), None, "mode {mode}: Space itself");
         }
         for mode in [1, 10, 15, 16] {
             let k = |key: Key| npcw_key_of(&key, mode);

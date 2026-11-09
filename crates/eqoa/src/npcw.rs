@@ -625,20 +625,25 @@ mod tests {
         assert_eq!(q.mode, 15);
     }
 
-    /// Space in the corpse's window is ✕ (`viewer::npcw_key_of`), as on the
-    /// pad the attack that opened the corpse (✕, Space on the keyboard) is
-    /// the window's ✕ too: on LEAVE ALL, where the window opens, it leaves
-    /// the corpse (0x0016), on an item takes that item (0x0019, the server's
-    /// key and the count), on TAKE ALL takes everything (0x001A), each row
-    /// chosen as a pointer chooses it. The control: Space as the game's 32
-    /// (what it was until 2026-10-29: `VIWndLoot` takes no 32) sends nothing
-    /// and leaves the window up (F3 20261029-024647).
+    /// The attack's key in the corpse's window is ✕ (`viewer::npcw_key_of`;
+    /// G, and Space as G while the jump's row has it: in a window Space makes
+    /// no jump, `binds::KeyEdge::space_attacks`), as on the pad the attack
+    /// that opened the corpse (✕) is the window's ✕ too: on LEAVE ALL, where
+    /// the window opens, it leaves the corpse (0x0016), on an item takes that
+    /// item (0x0019, the server's key and the count), on TAKE ALL takes
+    /// everything (0x001A), each row chosen as a pointer chooses it. The
+    /// control: the key as the game's 32 (what it was until 2026-10-29:
+    /// `VIWndLoot` takes no 32) sends nothing and leaves the window up (F3
+    /// 20261029-024647).
     #[test]
     fn space_takes_from_the_corpse_as_cross_does() {
         use crate::pointer::testing::{NullRaster, vui};
-        use winit::keyboard::{Key, NamedKey};
+        use winit::keyboard::Key;
         let (vui, mut r) = (vui(), NullRaster);
-        let space = crate::viewer::npcw_key_of(&Key::Named(NamedKey::Space), 1).unwrap();
+        let mut edge = crate::binds::KeyEdge::default();
+        edge.space_attacks = true;
+        let Some(crate::binds::Sent::Key(as_key)) = edge.key("space", true, false, false, &crate::binds::Binds::default()) else { panic!("Space sent nothing") };
+        let space = crate::viewer::npcw_key_of(&Key::Character(as_key.into()), 1).unwrap();
         assert_eq!(space, crate::pointer::key::CROSS);
         // the corpse's window up on two records, row `row` chosen by the
         // pointer; Space's key pressed and let go: what was sent
