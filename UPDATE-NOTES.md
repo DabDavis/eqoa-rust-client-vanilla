@@ -6,6 +6,12 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Posts no longer pull the camera in
+- Turning the camera with something thin close by, like the posts holding up the roof of the well by the Freeport
+  coach, a lamp post or a pole, the camera no longer jumps in each time one passes behind you: it stays where you
+  had it, zoomed out as far as you like, and the post simply passes across the view. Walls, roofs and anything broad
+  still stop the camera as before.
+
 ## 2026-11-09 · Every body of the new races
 - The new races' Customize Character page now offers every other body of their creature on the disc, the named
   ones' too: goblin kings, overseers, priests and bandits; grey, black-and-tan and risen gnolls; Deathfist and
