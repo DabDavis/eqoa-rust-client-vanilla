@@ -86,6 +86,10 @@ pub fn bodies() -> Vec<u32> {
     let mut out: Vec<u32> = offer().races.iter().flat_map(|r| r.body).filter(|&b| b != 0).collect();
     if let Some(o) = crate::raceopts::options() {
         out.extend(o.races.iter().flat_map(|(_, rows)| rows).filter(|r| r.kind == net::raceopts::Kind::Body).flat_map(|r| r.male.iter().chain(&r.female)).map(|s| s.value).filter(|&b| b != 0));
+        // a texture row of one step, laid always, names a body (the Wisp's wisp:
+        // `wisp`), which the pregame must have to draw it
+        let always = |r: &&net::raceopts::Row| r.kind == net::raceopts::Kind::Texture && r.male.len() == 1 && r.female.len() <= 1;
+        out.extend(o.races.iter().flat_map(|(_, rows)| rows).filter(always).flat_map(|r| r.male.iter().chain(&r.female)).map(|s| s.value).filter(|&b| b != 0));
     }
     out.sort_unstable();
     out.dedup();
@@ -275,6 +279,26 @@ pub fn capitalize_name(name: &str) -> String {
 
 #[cfg(test)]
 pub(crate) mod tests {
+
+    /// The pregame reads the body a texture row of one step names (the Wisp's
+    /// wisp) beside the options' bodies; with no options (the control), neither.
+    #[test]
+    fn the_pregame_reads_the_wisps_body() {
+        use net::raceopts::{Kind, Options, Part, Row, Step};
+        let step = |v: u32| Step { name: "s".into(), value: v, size: 1000 };
+        let rows = vec![
+            Row { key: "body".into(), label: "Body".into(), kind: Kind::Body, parts: vec![], male: vec![step(0x70D8_98C6)], female: vec![step(0x0D53_7335)] },
+            Row { key: "wisp".into(), label: "Wisp".into(), kind: Kind::Texture, parts: vec![(0x70D8_98C6, Part { entries: vec![2], rects: vec![] })], male: vec![Step { size: 0, ..step(0x8143_DC70) }], female: vec![] },
+            Row { key: "hair".into(), label: "Hair".into(), kind: Kind::Texture, parts: vec![], male: vec![step(0), step(0x98F8_6489)], female: vec![] },
+        ];
+        crate::raceopts::set_options(None);
+        assert!(!bodies().contains(&0x8143_DC70), "the control: no options");
+        crate::raceopts::set_options(Some(&Options { races: vec![(31, rows)] }));
+        let b = bodies();
+        assert!(b.contains(&0x8143_DC70) && b.contains(&0x70D8_98C6) && b.contains(&0x0D53_7335));
+        assert!(!b.contains(&0x98F8_6489), "a hair row's textures are no bodies");
+        crate::raceopts::set_options(None);
+    }
     use super::*;
 
     #[test]
