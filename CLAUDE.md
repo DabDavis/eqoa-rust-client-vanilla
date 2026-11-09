@@ -35,7 +35,14 @@ current.
   (the server owner's of 2026-11-08: "lets add a new equip slot for heirloom server only. capes for all. there
   are many capes we can borrow from for various styles": `cape.rs`, go-eqoa-server's offer 0x7E25 and its lists
   0x7E26/0x7E27; the disc's own capes cut out of their bodies and fitted to the wearer's skeleton; with none
-  worn, or on any other server, nothing is made or drawn)).
+  worn, or on any other server, nothing is made or drawn), and the map and the quest helper (the user's of
+  2026-11-09, "also add the map and quest helper we had in a former update", back from before the
+  2026-10-27 strip: Extended > Map, every row on by default; the map on M with its XP camps, coaches, routes,
+  town names and the community's markers (suggested from the map, accepted by a GM, the list asked of
+  eqoaclassic.com on any server), the waypoints and the group's waypoint, the minimap on N; the quest marks on
+  the map and the minimap and the quest tracker from a server that sends them, else the client's own quest
+  guide's, labelled "(guide)"; the Map and the Quest Helper off are the game without them, exactly. The Stats
+  Box, others' mana bars and Target of Target stay out)).
   `render::lit`, `lights.rs`; off it is the PS2's light exactly, every test and oracle unchanged, and `vi` untouched), and Sun
   Shadows (2026-11-08: Extended > Lighting, off unless chosen, drawn only with Dynamic Lighting; `render::sunshadow`; off, every
   frame byte for byte as before, on Vulkan and GL)).

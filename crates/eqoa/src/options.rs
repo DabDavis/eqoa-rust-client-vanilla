@@ -13,7 +13,7 @@
 //! Save Changes (the menu a row longer), its words the client's (no
 //! WORDS.TXT entry). It opens a menu of its own over the options menu, drawn
 //! as that one is: Video, World, Lighting, UI, Controller, Camera, Characters,
-//! Sound and natively Textures (`CATEGORIES`), each of which opens a page laid out and driven as
+//! Sound, natively Textures, and Map (`CATEGORIES`), each of which opens a page laid out and driven as
 //! the game's pages are, short enough that none scrolls (`PAGE_MOST`):
 //! - Video: Display (natively: Window or Full Screen, the window's own as
 //!   F11 and Alt+Enter toggle it, `display`: it changes at once and stays,
@@ -97,7 +97,20 @@
 //!   has it, `texpack`; its page says how many the packs hold) and Dump
 //!   Textures (Off; On: each texture made written to `textures/SLUS-20744/
 //!   dumps` under the names PCSX2 gives it, and how many beside Back), each
-//!   making every texture again as it moves.
+//!   making every texture again as it moves;
+//! - Map (2026-11-09, the user's "also add the map and quest helper we had in
+//!   a former update"): Map (On: the client's own map on M and the compass's
+//!   click, the minimap, the waypoints on the compass and the group's
+//!   waypoint, `map`; Off: none of them, the game's own), Minimap (On: the
+//!   map round the player under the quick menus, `map::mini`; N turns it
+//!   too), Map Markers (On: the map's XP camps and coaches, `map::markers`;
+//!   the map's own X or ○ turns it too), Quest Helper (On: the quests' marks
+//!   on the map and the minimap and their tracker, from a server that sends
+//!   them, else the client's own guide, `questguide`, `map::quests`; Off:
+//!   none, and no server asked for them) and Quest Tracker (On: the HUD's
+//!   list of the quests under way, each step counted, under the minimap,
+//!   `tracker`). Each defaults to On; the Map and the Quest Helper Off are
+//!   the game as it is without them.
 //! Triangle goes back a step: a page to the categories, the categories to
 //! the options menu. They change as they are moved, Triangle on the options
 //! menu puts them back, and Save Changes keeps them with the game's
@@ -568,7 +581,8 @@ impl WndOptions {
     /// fives from 50 to 100 as a slider; Text (30) goes between Sharp and
     /// Smooth; Update Notices (29), Overlapping Names (34, Hide and Show),
     /// Mipmaps (35), Loading Screens (38, Longer and Instant), Texture Packs
-    /// (50) and Dump Textures (51) turn over;
+    /// (50), Dump Textures (51), the Map (41), Minimap (42), Map Markers (43),
+    /// the Quest Helper (44) and Quest Tracker (45) turn over;
     /// Output Device (32) goes round the system default and the devices
     /// listed (`step_output`); Display (33) turns the window over (`display`). A
     /// slider (`slider_at`) makes its own
@@ -642,6 +656,20 @@ impl WndOptions {
                     // Raid List: the server told from the next frame
                     // (`Session::agree_raid_roster`)
                     49 => c.raid_list = !c.raid_list,
+                    // the Map: the map, the minimap and the waypoints from
+                    // the next frame (`Play::map_frame`; off, an open map
+                    // closes)
+                    41 => c.map = !c.map,
+                    // Minimap: drawn or not from the next frame (`map::mini`)
+                    42 => c.minimap = !c.minimap,
+                    // Map Markers: the map's camps and coaches from its next
+                    // frame (`map::markers`)
+                    43 => c.map_markers = !c.map_markers,
+                    // the Quest Helper and its Quest Tracker: the server told
+                    // from the next frame (`Play::agree_quests`), the marks
+                    // and the HUD's list drawn or not
+                    44 => c.quest_helper = !c.quest_helper,
+                    45 => c.quest_tracker = !c.quest_tracker,
                     // Texture Packs and Dump Textures: set from the next
                     // frame, every texture made again (`texpack::sync`,
                     // `viewer`'s `retexture`)
@@ -1130,7 +1158,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 36] = [
+const EXTENDED_ITEMS: [(i32, &str); 41] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1158,6 +1186,11 @@ const EXTENDED_ITEMS: [(i32, &str); 36] = [
     (38, "Loading Screens"),
     (39, "Render Scale"),
     (40, "HUD"),
+    (41, "Map"),
+    (42, "Minimap"),
+    (43, "Map Markers"),
+    (44, "Quest Helper"),
+    (45, "Quest Tracker"),
     (46, "Shadows"),
     (47, "Ground Fog"),
     (48, "Touch Pad Size"),
@@ -1193,6 +1226,7 @@ enum Note {
 
 /// One of Extended's categories: its name, its rows (their items, in the
 /// page's order) and its note.
+#[derive(Clone, Copy)]
 struct Category {
     name: &'static str,
     items: &'static [i32],
@@ -1203,9 +1237,10 @@ struct Category {
 /// Video, UI, Controller, etc."), each a page of `PAGE_MOST` rows at most;
 /// Lighting after World (2026-11-08: Dynamic Lighting, the world's light,
 /// and Ambient Occlusion);
-/// natively Textures last (2026-11-08: Texture Packs and Dump Textures, a
-/// folder's files a page cannot reach).
-const ALL_CATEGORIES: [Category; 9] = [
+/// natively Textures (2026-11-08: Texture Packs and Dump Textures, a
+/// folder's files a page cannot reach); Map last (2026-11-09: the map and the
+/// quest helper, the client's own, back from before 2026-10-27).
+const ALL_CATEGORIES: [Category; 10] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
     Category { name: "Lighting", items: &[52, 53, 54], note: Note::Lighting },
@@ -1215,11 +1250,16 @@ const ALL_CATEGORIES: [Category; 9] = [
     Category { name: "Characters", items: &[12, 23, 24, 27, 34, 46], note: Note::Server },
     Category { name: "Sound", items: SOUND, note: Note::Output },
     Category { name: "Textures", items: &[50, 51], note: Note::Textures },
+    Category { name: "Map", items: &[41, 42, 43, 44, 45], note: Note::None },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
+/// A page's: all but Textures.
 #[cfg(target_arch = "wasm32")]
-const CATEGORIES: &[Category] = ALL_CATEGORIES.split_at(8).0;
+const CATEGORIES: &[Category] = &{
+    let a = ALL_CATEGORIES;
+    [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[9]]
+};
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
 /// F11's alone); a page's full screen is the browser's. Fog and Mipmaps went
@@ -1299,6 +1339,11 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         }),
         26 => on_off(crate::settings::vsync()),
         29 => on_off(c.update_notices),
+        41 => on_off(c.map),
+        42 => on_off(c.minimap),
+        43 => on_off(c.map_markers),
+        44 => on_off(c.quest_helper),
+        45 => on_off(c.quest_tracker),
         34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
         49 => on_off(c.raid_list),
         50 => on_off(c.texture_packs),
@@ -1942,7 +1987,26 @@ mod tests {
         assert_eq!((w.row, cues.last()), (1, Some(&9)), "Textures' last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.cat_sel, cues.last()), (8, Some(&9)), "Textures, the last category");
+        // Map: the Map, Minimap, Map Markers, the Quest Helper and Quest
+        // Tracker, each On then Off, one moving no other
+        assert_eq!((w.cat_sel, cues.last()), (9, Some(&11)), "Map, after Textures");
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(9), 41), "Map, the Map");
+        for (item, on) in [(41, settings::map as fn() -> bool), (42, settings::minimap), (43, settings::map_markers), (44, settings::quest_helper), (45, settings::quest_tracker)] {
+            assert_eq!(w.item, item, "{}", label_of(item));
+            assert!(on(), "{}: on by default", label_of(item));
+            assert_eq!(value_text(&vui, item), Some(wide(vui.words.get(551, vui.language))), "{}: On, the game's word", label_of(item));
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((on(), cues.last()), (false, Some(&11)), "{}: off", label_of(item));
+            assert_eq!(value_text(&vui, item), Some(wide(vui.words.get(552, vui.language))));
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+            assert!(on(), "{}: and back, two values", label_of(item));
+            press(&mut w, &mut o, key::DOWN, &mut cues);
+        }
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Map's last row");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.cat_sel, cues.last()), (9, Some(&9)), "Map, the last category");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.sel), (-1, 3), "the menu, on Extended");

@@ -96,6 +96,10 @@ struct Finger {
     id: u64,
     role: Role,
     at: [f32; 2],
+    /// when it came down, and whether it was held still long enough to be a
+    /// long press (`take_holds`), whose lift is then no tap
+    since: Instant,
+    held: bool,
 }
 
 /// A button on the screen: its pad bit, its centre and radius (window
@@ -287,6 +291,9 @@ pub struct TouchPad {
     /// viewer sets it each frame): the pad drawn fainter, and a stick takes
     /// only a finger put down inside its ring
     pub window: bool,
+    /// a finger held still is a long press (`take_holds`; the viewer sets it
+    /// each frame: the map is up, where it puts the group's waypoint)
+    pub holds: bool,
 }
 
 impl Default for TouchPad {
@@ -304,6 +311,7 @@ impl Default for TouchPad {
             size: (0, 0),
             tex: None,
             window: false,
+            holds: false,
         }
     }
 }
@@ -336,7 +344,7 @@ impl TouchPad {
                     Role::Look { start: at, moved: false }
                 };
                 self.fingers.retain(|f| f.id != id);
-                self.fingers.push(Finger { id, role, at });
+                self.fingers.push(Finger { id, role, at, since: now, held: false });
             }
             Phase::Moved => {
                 let looking = self.fingers.iter().filter(|f| matches!(f.role, Role::Look { .. })).count();
@@ -366,7 +374,7 @@ impl TouchPad {
             Phase::Ended | Phase::Cancelled => {
                 let Some(k) = self.fingers.iter().position(|f| f.id == id) else { return };
                 let f = self.fingers.remove(k);
-                if let (Role::Look { start, moved: false }, Phase::Ended) = (f.role, phase) {
+                if let (Role::Look { start, moved: false }, Phase::Ended, false) = (f.role, phase, f.held) {
                     let double = self.last_tap.is_some_and(|(p, t)| now.duration_since(t) < DOUBLE && dist(p, start) < 0.5 * l.full);
                     let (x, y) = (start[0] as f64, start[1] as f64);
                     if double {
@@ -414,6 +422,29 @@ impl TouchPad {
     /// The taps since the last frame.
     pub fn take_clicks(&mut self) -> Vec<Click> {
         std::mem::take(&mut self.clicks)
+    }
+
+    /// While long presses are wanted (`holds`: the map is up), a finger held
+    /// still on the screen (no button's, not moved past a tap's slop, the
+    /// only one looking) for `map::group_waypoint::HOLD` by `now`: where it
+    /// came down, once; its lift is then no tap. None else.
+    pub fn take_holds(&mut self, now: Instant) -> Vec<[f32; 2]> {
+        let looking = self.fingers.iter().filter(|f| matches!(f.role, Role::Look { .. })).count();
+        if !self.holds || looking != 1 {
+            return Vec::new();
+        }
+        let hold = Duration::from_secs_f32(crate::map::group_waypoint::HOLD);
+        let mut out = Vec::new();
+        for f in &mut self.fingers {
+            if let Role::Look { start, moved: false } = f.role
+                && !f.held
+                && now.saturating_duration_since(f.since) >= hold
+            {
+                f.held = true;
+                out.push(start);
+            }
+        }
+        out
     }
 
     /// A key or a controller in use: the overlay goes, every finger let go.
@@ -704,6 +735,49 @@ mod tests {
         assert_eq!(t.fingers.len(), TAP_FINGERS);
         t.touch(9, Phase::Started, [10.0, 20.0], SIZE);
         assert_eq!(t.touch(9, Phase::Ended, [10.0, 20.0], SIZE), Some([10.0, 20.0]));
+    }
+
+    /// With long presses wanted (the map up), a finger held still past the
+    /// hold is one, once, where it came down, and its lift no tap; a finger
+    /// lifted sooner is a tap, one that moved a drag, two at once a pinch.
+    /// The control: not wanted, the same long hold is a tap at its lift.
+    #[test]
+    fn a_finger_held_still_on_the_map_is_a_long_press() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let at = [1000.0, 400.0];
+        let mut p = TouchPad::new(true);
+        p.window = true;
+        p.holds = true;
+        p.touch(1, Phase::Started, at, ms(0), SIZE);
+        assert!(p.take_holds(ms(500)).is_empty(), "not yet");
+        assert_eq!(p.take_holds(ms(650)), vec![at]);
+        assert!(p.take_holds(ms(900)).is_empty(), "once");
+        p.touch(1, Phase::Ended, at, ms(950), SIZE);
+        assert!(p.take_clicks().is_empty(), "its lift no tap");
+        // lifted sooner: a tap
+        p.touch(2, Phase::Started, at, ms(2000), SIZE);
+        p.touch(2, Phase::Ended, at, ms(2200), SIZE);
+        assert!(p.take_holds(ms(2700)).is_empty());
+        assert_eq!(p.take_clicks().len(), 1, "a tap");
+        // moved past the slop: a drag
+        p.touch(3, Phase::Started, at, ms(4000), SIZE);
+        p.touch(3, Phase::Moved, [at[0] + 80.0, at[1]], ms(4100), SIZE);
+        assert!(p.take_holds(ms(4800)).is_empty(), "a drag");
+        p.touch(3, Phase::Ended, [at[0] + 80.0, at[1]], ms(4900), SIZE);
+        // two fingers: a pinch's
+        p.touch(4, Phase::Started, at, ms(6000), SIZE);
+        p.touch(5, Phase::Started, [at[0] + 300.0, at[1]], ms(6010), SIZE);
+        assert!(p.take_holds(ms(6800)).is_empty(), "two fingers");
+        p.touch(4, Phase::Ended, at, ms(6900), SIZE);
+        p.touch(5, Phase::Ended, [at[0] + 300.0, at[1]], ms(6900), SIZE);
+        p.take_clicks();
+        // the control: not wanted, held as long, it is a tap
+        p.holds = false;
+        p.touch(6, Phase::Started, at, ms(8000), SIZE);
+        assert!(p.take_holds(ms(8700)).is_empty());
+        p.touch(6, Phase::Ended, at, ms(8800), SIZE);
+        assert_eq!(p.take_clicks().len(), 1, "the control: a tap");
     }
 
     /// Window shapes: phones and tablets either way up, desktop windows, a

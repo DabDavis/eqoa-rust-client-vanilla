@@ -6,6 +6,24 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · The map and the quest helper are back
+- M opens the map again: the whole world drawn from your own disc, with the towns' names, the coach routes and
+  stops, the XP camps and the places players suggested and a GM accepted. Click (or tap) to put a waypoint, which
+  shows on the compass's rim wherever you are; in a group, G (or Q held, or Shift and a click) tells your group
+  where to meet, and their map and compass show it.
+- The minimap is back under the quick menus (N shows or hides it), with your group, the creatures and players
+  near you, your target and your waypoint. Click it to open the map; the mouse wheel over it zooms.
+- The quest helper is back: a gold "!" on the map and the minimap at each quest giver you can take a quest from
+  now, a "?" where a step of a quest you have is to be done, each with a card of the quest, and the quest tracker
+  under the minimap ("slashed pawn belt: 0/2"); click the tracker to open your quest journal. On a server that
+  does not send quest marks (Sandstorm), the client works them out itself, marked "(guide)".
+- Both are in Options > Extended > Map, on by default: Map (the map, the minimap and the waypoints), Minimap,
+  Map Markers, Quest Helper (the quest marks, the tracker and the guide) and Quest Tracker. Turn the Map and the
+  Quest Helper off and the game is as it was without them.
+- The Stats Box, other players' mana bars and Target of Target are not coming back.
+- A macro you put on M, N, G, =, +, - or _ (free keys while the map was away) keeps its key: that map key is then
+  left without one, and you can give it another on the Controls page (F1).
+
 ## 2026-11-09 · Jump
 - On a server that has jumps (eqoaclassic can turn them on), V jumps: about half your height, straight up when you
   stand and on along your way when you run. You come down as a fall comes down and land where you came down, and

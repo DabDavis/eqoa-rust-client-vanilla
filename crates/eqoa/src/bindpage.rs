@@ -798,8 +798,8 @@ mod tests {
         assert_eq!(page.capture, Some(Column::Keyboard));
         page.capture_key(&vui, "q", &mut cues);
         assert_eq!(page.capture, Some(Column::Keyboard), "Q is Talk's");
-        page.capture_key(&vui, "g", &mut cues);
-        assert_eq!((page.capture, settings::binds().macros[0].key.as_deref()), (None, Some("g")));
+        page.capture_key(&vui, "b", &mut cues);
+        assert_eq!((page.capture, settings::binds().macros[0].key.as_deref()), (None, Some("b")));
         // its button: L3, off Autorun's field
         page.col = 1;
         page.key(key::CROSS, true, 0, &mut cues);
@@ -833,12 +833,12 @@ mod tests {
         page.row = 0;
         page.col = 0;
         page.key(key::CROSS, true, 2500, &mut cues);
-        page.capture_key(&vui, "g", &mut cues);
+        page.capture_key(&vui, "b", &mut cues);
         assert_eq!(settings::binds().macros[0].key, None);
         assert!(page.note.as_deref().is_some_and(|n| n.ends_with("Macro 1 has no key now.")), "{:?}", page.note);
         page.key(key::CROSS, true, 2500, &mut cues);
         page.capture_key(&vui, "u", &mut cues);
-        assert_eq!(page.note.as_deref(), Some("Walk forward: U. G does nothing now."));
+        assert_eq!(page.note.as_deref(), Some("Walk forward: U. B does nothing now."));
         page.row = trigger + 1;
         // the control: nothing pressed for eight seconds gives up, unchanged
         page.col = 0;

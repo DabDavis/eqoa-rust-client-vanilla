@@ -226,6 +226,63 @@ pub fn save_login(user: &str, password: &str, on: bool) -> bool {
     }
 }
 
+// ---- the map's waypoints (`map::Map::click`) ------------------------------------------
+
+/// The map's waypoints as this window keeps them (`waypoints.opt`, window n's
+/// `waypoints-<n>.opt`): a line a world, `<world> <x> <z>`, its `gWorldInfo`
+/// index and the point on its ground. The client's own (the game has no
+/// map), kept the moment one is set or cleared and never sent anywhere; a
+/// line that does not read is left out.
+pub fn waypoints() -> Vec<(i32, [f32; 2])> {
+    let Some(b) = store::read(&own_file("waypoints", place())) else { return Vec::new() };
+    String::from_utf8_lossy(&b)
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            let world = it.next()?.parse().ok()?;
+            let (x, z): (f32, f32) = (it.next()?.parse().ok()?, it.next()?.parse().ok()?);
+            (it.next().is_none() && x.is_finite() && z.is_finite()).then_some((world, [x, z]))
+        })
+        .collect()
+}
+
+/// Keeps this window's waypoints (`waypoints`): whether they were kept.
+pub fn save_waypoints(w: &[(i32, [f32; 2])]) -> bool {
+    let text: String = w.iter().map(|(world, p)| format!("{world} {} {}\n", p[0], p[1])).collect();
+    match store::write(&own_file("waypoints", place()), text.as_bytes()) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::say(&format!("the map's waypoint was not kept: {e}"));
+            false
+        }
+    }
+}
+
+// ---- the quest guide's record (`questguide`) --------------------------------------------
+
+/// The quest guide's file: what it keeps of each character (the quests it
+/// finished, its home city, the kills seen), one line a character
+/// (`questguide::Kept`). One file for every window, as a character is the same
+/// in any of them: read again before each write, so another window's lines
+/// stay.
+const QUEST_GUIDE_FILE: &str = "questguide.opt";
+
+/// The quest guide's file as text (empty when there is none).
+pub fn quest_guide() -> String {
+    store::read(QUEST_GUIDE_FILE).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+}
+
+/// Keeps the quest guide's file: whether it was kept.
+pub fn save_quest_guide(text: &str) -> bool {
+    match store::write(QUEST_GUIDE_FILE, text.as_bytes()) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::say(&format!("the quest guide's record was not kept: {e}"));
+            false
+        }
+    }
+}
+
 // ---- game.opt's home shard (`VIGameOptions::m_homeShard`) ---------------------------
 
 /// `m_homeShard[64]` at +0x98: the server list's last pick, UTF-16.
@@ -588,6 +645,43 @@ pub struct ClientOptions {
     /// HUD where the server sends them, in place of the group's bars, which
     /// hold three. On by default (the user, 2026-11-07).
     pub raid_list: bool,
+    /// Map (the user, 2026-11-09: "also add the map and quest helper we had
+    /// in a former update"; on by default): the client's own map (M, the
+    /// compass's click, `map`), the minimap, the waypoints on the compass and
+    /// the group's waypoint said in its chat; off, none of them, as the game
+    /// has none (M does nothing, the compass is the game's, a group line is a
+    /// chat line, nothing is built or kept, the community's marks are not
+    /// asked for). Its own parts under it: Minimap (N turns it too), Map
+    /// Markers (the map's X or ○) and the town names (the map's T or Select).
+    pub map: bool,
+    /// Minimap (on by default): the map's pictures round the player under
+    /// the quick menus' name plate (`map::mini`); off, none.
+    pub minimap: bool,
+    /// Map Markers: on, the map (M) marks EQOA-Data's XP camps and every
+    /// coach (`map::markers`), each with a card of what it is under the
+    /// pointer (the user, F3 pass 18: "mark popular xp camps on map with an XP
+    /// icon", "also add all coaches to the map"); off, the map shows neither.
+    /// The map's own key (X, ○) turns it too.
+    pub map_markers: bool,
+    /// Town names on the map (the user, F3 pass 18: "add town names to the
+    /// map too", `map::markers`): the map's own key (T, Select) turns them,
+    /// kept as Map Markers is; on by default.
+    pub map_towns: bool,
+    /// Quest Helper (the user, 2026-11-09; on by default): the quest marks on
+    /// the map and the minimap (a "!" at each giver of a quest the player may
+    /// take, a "?" where a step is to be done) and the quest tracker on the
+    /// HUD, from a server that sends them (`net::session::OP_QUEST_MARKERS`,
+    /// `OP_QUEST_PROGRESS`: go-eqoa-server), else the client's own guide's
+    /// (`questguide`: Sandstorm sends no such thing); off, none, the server
+    /// asked for none and the guide not run, as the game has none.
+    pub quest_helper: bool,
+    /// Quest Markers (under the Quest Helper, on by default): the map's and
+    /// the minimap's quest marks; the map's own key (J, R3) turns it.
+    pub quest_markers: bool,
+    /// Quest Tracker (under the Quest Helper, on by default): the HUD's list
+    /// of the quests under way under the minimap, each step's objectives
+    /// counted ("Bat Eye 0/3"); off, none.
+    pub quest_tracker: bool,
     /// Art: Frontiers' (the disc the game runs off), or the 2002 disc's
     /// (`era`, F9)
     pub art: esf::Era,
@@ -769,6 +863,13 @@ impl Default for ClientOptions {
             name_distance: NAME_DISTANCE_GAME,
             overlapping_names: false,
             raid_list: true,
+            map: true,
+            minimap: true,
+            map_markers: true,
+            map_towns: true,
+            quest_helper: true,
+            quest_markers: true,
+            quest_tracker: true,
             art: esf::Era::Frontiers,
             vsync: true,
             shouts: true,
@@ -800,7 +901,9 @@ impl ClientOptions {
     /// it is not Auto, Capture Controller only when on, Sound in Background
     /// only when off, Ability Bars, NPC/PC Display, NPC/PC Distance and
     /// Name Distance only when not the game's, Overlapping Names only when
-    /// Show, Art only when it is the 2002 disc's, VSync, Shouts and Update
+    /// Show, the Map, Minimap, Map Markers, the map's town names, the Quest
+    /// Helper, Quest Markers and Quest Tracker only when off, Art only when it
+    /// is the 2002 disc's, VSync, Shouts and Update
     /// Notices only when off, Text only when Smooth, Render Scale only above
     /// 1, HUD only when Nearest, Output Device only when a device is
     /// chosen (by its name), Touch Pad Size only when smaller than
@@ -846,6 +949,20 @@ impl ClientOptions {
         }
         if !self.raid_list {
             s.push_str("raid_list=off\n");
+        }
+        // the map's and the quests' only when off
+        for (on, key) in [
+            (self.map, "map"),
+            (self.minimap, "minimap"),
+            (self.map_markers, "map_markers"),
+            (self.map_towns, "map_towns"),
+            (self.quest_helper, "quest_helper"),
+            (self.quest_markers, "quest_markers"),
+            (self.quest_tracker, "quest_tracker"),
+        ] {
+            if !on {
+                s.push_str(&format!("{key}=off\n"));
+            }
         }
         if self.art == esf::Era::Y2002 {
             s.push_str("art=2002\n");
@@ -966,6 +1083,20 @@ impl ClientOptions {
                 ("update_notices", "off") => c.update_notices = false,
                 ("raid_list", "on") => c.raid_list = true,
                 ("raid_list", "off") => c.raid_list = false,
+                ("map", "on") => c.map = true,
+                ("map", "off") => c.map = false,
+                ("minimap", "on") => c.minimap = true,
+                ("minimap", "off") => c.minimap = false,
+                ("map_markers", "on") => c.map_markers = true,
+                ("map_markers", "off") => c.map_markers = false,
+                ("map_towns", "on") => c.map_towns = true,
+                ("map_towns", "off") => c.map_towns = false,
+                ("quest_helper", "on") => c.quest_helper = true,
+                ("quest_helper", "off") => c.quest_helper = false,
+                ("quest_markers", "on") => c.quest_markers = true,
+                ("quest_markers", "off") => c.quest_markers = false,
+                ("quest_tracker", "on") => c.quest_tracker = true,
+                ("quest_tracker", "off") => c.quest_tracker = false,
                 ("overlapping_names", "show") => c.overlapping_names = true,
                 ("overlapping_names", "hide") => c.overlapping_names = false,
                 ("text", "sharp") => c.text = render::ui::TextFilter::Sharp,
@@ -1268,6 +1399,84 @@ pub fn shouts() -> bool {
 pub fn set_shouts(heard: bool) -> Result<(), String> {
     let mut c = client();
     c.shouts = heard;
+    set_client(c);
+    save_client()
+}
+
+/// Whether the map is on (Extended's Map): the map, the minimap, the
+/// waypoints and the group's waypoint; off, none of them.
+pub fn map() -> bool {
+    client().map
+}
+
+/// Whether the minimap is up where it could be: the Map on, and its own
+/// Minimap.
+pub fn minimap() -> bool {
+    let c = client();
+    c.map && c.minimap
+}
+
+/// Whether the map marks the XP camps and the coaches (Map Markers).
+pub fn map_markers() -> bool {
+    client().map_markers
+}
+
+/// Map Markers turned (the map's own key), and kept at once, as the waypoints
+/// are.
+pub fn set_map_markers(on: bool) -> Result<(), String> {
+    let mut c = client();
+    c.map_markers = on;
+    set_client(c);
+    save_client()
+}
+
+/// Whether the map names the towns.
+pub fn map_towns() -> bool {
+    client().map_towns
+}
+
+/// The map's town names turned (its own key), and kept at once.
+pub fn set_map_towns(on: bool) -> Result<(), String> {
+    let mut c = client();
+    c.map_towns = on;
+    set_client(c);
+    save_client()
+}
+
+/// Whether the Quest Helper is on (Extended's): the quest marks, the tracker
+/// and the guide; off, none of them, and no server asked for them.
+pub fn quest_helper() -> bool {
+    client().quest_helper
+}
+
+/// Whether the map and the minimap show quest marks: the Quest Helper on,
+/// and its own Quest Markers (the map's J).
+pub fn quest_markers() -> bool {
+    let c = client();
+    c.quest_helper && c.quest_markers
+}
+
+/// Quest Markers turned (the map's own key), and kept at once, as Map
+/// Markers is.
+pub fn set_quest_markers(on: bool) -> Result<(), String> {
+    let mut c = client();
+    c.quest_markers = on;
+    set_client(c);
+    save_client()
+}
+
+/// Whether the HUD shows the quest tracker where it could: the Quest Helper
+/// on, and its own Quest Tracker.
+pub fn quest_tracker() -> bool {
+    let c = client();
+    c.quest_helper && c.quest_tracker
+}
+
+/// Minimap turned (its key, N: `binds`' "minimap"), and kept at once, as
+/// the map's own keys keep theirs.
+pub fn set_minimap(on: bool) -> Result<(), String> {
+    let mut c = client();
+    c.minimap = on;
     set_client(c);
     save_client()
 }
@@ -2000,20 +2209,55 @@ mod tests {
         assert!(text.contains("flora=off\n") && text.contains("loading=instant\n"), "{text}");
     }
 
-    /// The options kept by a build with the map, the minimap, the Stats Box,
-    /// others' mana bars, Target of Target and the quests' marks and tracker
-    /// (all gone) still load: their lines are left out and written back no
-    /// more. The control: the lines beside them are read.
+    /// The options kept by a build with the Stats Box, others' mana bars
+    /// and Target of Target (all gone) still load: their lines are left out
+    /// and written back no more; the map's and the quests' beside them (gone
+    /// on 2026-10-27, back on 2026-11-09) are read again. The control: the
+    /// lines beside them are read.
     #[test]
     fn options_with_the_lines_of_rows_gone_still_load() {
         let old = "target_of_target=on\nmana_bars=off\nminimap=off\nstats_box=on\nquest_markers=off\nquest_tracker=off\nmap_markers=off\nmap_towns=off\nflora=off\nloading=instant\n";
         let c = ClientOptions::from_text(old);
-        assert_eq!(c, ClientOptions { flora: false, loading_longer: false, ..Default::default() }, "the lines beside them read");
+        let want = ClientOptions { minimap: false, quest_markers: false, quest_tracker: false, map_markers: false, map_towns: false, flora: false, loading_longer: false, ..Default::default() };
+        assert_eq!(c, want, "the lines beside them read");
         let text = c.to_text();
-        for gone in ["target_of_target", "mana_bars", "minimap", "stats_box", "quest_", "map_"] {
+        for gone in ["target_of_target", "mana_bars", "stats_box"] {
             assert!(!text.contains(gone), "{gone}: {text}");
         }
-        assert!(text.contains("flora=off\n") && text.contains("loading=instant\n"), "{text}");
+        for kept in ["minimap=off\n", "quest_markers=off\n", "quest_tracker=off\n", "map_markers=off\n", "map_towns=off\n", "flora=off\n", "loading=instant\n"] {
+            assert!(text.contains(kept), "{kept}: {text}");
+        }
+        assert!(c.map && c.quest_helper, "the Map and the Quest Helper on, their defaults");
+    }
+
+    /// The Map, the Quest Helper and the parts under them: on by default,
+    /// each kept only when off and read back off; anything but on or off
+    /// leaves it on. A part off leaves its master on and the other parts
+    /// (the controls: one line moves one setting); a master off turns off
+    /// what reads through it (`minimap`, `quest_markers`, `quest_tracker`)
+    /// while the parts' own settings stay as they were.
+    #[test]
+    fn the_map_and_the_quest_helper_kept_only_when_off() {
+        let d = ClientOptions::default();
+        assert!(d.map && d.minimap && d.map_markers && d.map_towns && d.quest_helper && d.quest_markers && d.quest_tracker, "on by default");
+        for key in ["map", "minimap", "map_markers", "map_towns", "quest_helper", "quest_markers", "quest_tracker"] {
+            let off = ClientOptions::from_text(&format!("{key}=off"));
+            assert_ne!(off, d, "{key}=off read");
+            assert_eq!(off.to_text(), format!("lod=on\nbrightness=5\ncamera_distance=11\n{key}=off\n"), "{key}: only when off");
+            assert_eq!(ClientOptions::from_text(&off.to_text()), off, "{key}: read back off");
+            assert_eq!(ClientOptions::from_text(&format!("{key}=on")), d, "{key}=on");
+            for bad in ["0", "no", ""] {
+                assert_eq!(ClientOptions::from_text(&format!("{key}={bad}")), d, "{key}={bad}: on, the default");
+            }
+        }
+        testing::reset(false);
+        assert!(minimap() && quest_markers() && quest_tracker() && map() && quest_helper());
+        set_client(ClientOptions { map: false, quest_helper: false, ..Default::default() });
+        assert!(!minimap() && !quest_markers() && !quest_tracker() && !map() && !quest_helper(), "the masters off: their parts off");
+        assert!(client().minimap && client().quest_markers && client().quest_tracker, "the parts' own settings kept");
+        set_client(ClientOptions { minimap: false, ..Default::default() });
+        assert!(!minimap() && map() && quest_markers(), "the control: a part off alone");
+        testing::reset(false);
     }
 
     /// Capture Controller is one setting for every window: another window's

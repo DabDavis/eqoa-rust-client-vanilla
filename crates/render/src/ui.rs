@@ -91,7 +91,7 @@ pub fn window_from_frame(size: (u32, u32), p: [f32; 2]) -> [f32; 2] {
 pub const SAMPLE_BIAS: f32 = 1.0 / 32.0;
 
 /// How the game's fonts are drawn scaled to the target: every 2D layer's
-/// (the HUD, the windows, the pregame) and the labels' and name
+/// (the HUD, the windows, the pregame, the map) and the labels' and name
 /// plates' (`text`). The game's fonts hold whole texels only (ArialUI white
 /// or clear, Arial with a grey edge as well), two texels to a stroke, drawn
 /// one texel to a pixel on the PS2's 640x448 and softened by the TV.
