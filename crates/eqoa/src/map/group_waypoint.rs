@@ -4,7 +4,7 @@
 //! game has no such thing, and no server is asked for anything new.
 //!
 //! On the map a long press puts it (□ held `HOLD` seconds, so Q held on a
-//! keyboard; G at once; a click with Shift held; a finger held still on the
+//! keyboard; O at once; a click with Shift held; a finger held still on the
 //! map), at the spot `Map` picks (its header says which). The spot goes to the
 //! group as a plain line of group chat through the game's own channel (`/g`:
 //! 0x000E 2, 0x000B, 0x000E back), at most one every `EVERY_MS`: `line`'s

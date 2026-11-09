@@ -2,7 +2,8 @@
 //! book, VIWndGame mode 6) and `VIWndExperiment` (`viwndexperiment.cpp`,
 //! mode 37), over [`crate::craft::Craft`]. Each has its message box; the book
 //! has a pop-up menu on a recipe and an inspect window, the experiment a menu
-//! of the inventory's components (40 rows, three options each). What they ask
+//! of the inventory's components (40 rows, or the pack's on a server that holds
+//! more; three options each). What they ask
 //! of the client comes back as [`CraftUp`].
 //!
 //! A pointer (`pointer`) takes them as their keys reach them: in the book a
@@ -653,11 +654,12 @@ impl ExperimentWnd {
             _ => self.menu.point(p),
         }
     }
-    /// `Refresh()`: 40 rows emptied, then one per component in the copy (an
-    /// item with `m_p54`, not of type 8), each with its three options.
+    /// `Refresh()`: 40 rows emptied (as many as the pack holds on a server
+    /// that holds more: `inventory::pack_cap`), then one per component in the
+    /// copy (an item with `m_p54`, not of type 8), each with its three options.
     fn refresh(&mut self, part: &Craft, icon: &dyn Fn(usize) -> i32) {
         let mut menus = Menus::default();
-        let mut rows = vec![MenuEntry::default(); 40];
+        let mut rows = vec![MenuEntry::default(); crate::inventory::pack_cap()];
         let mut row = 0;
         for (i, it) in part.items.items.iter().enumerate() {
             if row >= rows.len() {

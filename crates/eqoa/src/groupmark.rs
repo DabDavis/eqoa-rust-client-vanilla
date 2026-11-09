@@ -142,7 +142,7 @@ mod tests {
             .collect()
     }
 
-    /// G on the map (`map::KEY_GROUP`), in a group: the spot is said in the
+    /// O on the map (`map::KEY_GROUP`), in a group: the spot is said in the
     /// group's channel (0x000E 2 around the 0x000B, the channel put back)
     /// in `group_waypoint::line`'s words, and the player's own group
     /// waypoint is there at once, from the player; a second within five

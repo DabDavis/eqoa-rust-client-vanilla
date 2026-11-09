@@ -3,8 +3,9 @@
 //! window's mode 11): `VIWndBank` and its pages. The menu (Money, Items, the
 //! auction when the bank offers one, Done); the money page, a three-way menu
 //! (deposit, withdraw, back) over `VIWndDeposit` in its bank modes 1 and 2;
-//! the item page, the inventory and the bank side by side (40 rows each), the
-//! selected item's text between them, `VIWndQuantity` for a stack.
+//! the item page, the inventory and the bank side by side (40 rows each, or as
+//! many as a server that holds more says: `inventory::pack_cap`, `bank_cap`),
+//! the selected item's text between them, `VIWndQuantity` for a stack.
 //!
 //! As in the other windows, the window tree's messages come back up as
 //! values: `BankOut` is what `VIBankControl` and `VIWndGame` are asked.
@@ -127,9 +128,13 @@ pub struct View<'a> {
 }
 
 /// A row of either list (`OnDrawSelf`): a stack shows its count, a worn
-/// item (the inventory) the arrows, one the player cannot use the red ones.
-fn fill(list: &mut WndList, l: &ItemList, worn: bool, icon: &dyn Fn(&NetItem) -> i32, can_use: &dyn Fn(&NetItem) -> bool) {
-    let n = l.items.len().min(40);
+/// item (the inventory) the arrows, one the player cannot use the red ones;
+/// `rows` the list's (CLIENT's 40, or what the server holds), the rest empty.
+fn fill(list: &mut WndList, l: &ItemList, rows: usize, worn: bool, icon: &dyn Fn(&NetItem) -> i32, can_use: &dyn Fn(&NetItem) -> bool) {
+    if list.items.len() != rows {
+        list.init(rows);
+    }
+    let n = l.items.len().min(rows);
     for (i, it) in l.items.iter().take(n).enumerate() {
         let mut flags = if it.quantity >= 2 { 5 } else { 1 };
         let mut color = -1;
@@ -143,7 +148,7 @@ fn fill(list: &mut WndList, l: &ItemList, worn: bool, icon: &dyn Fn(&NetItem) ->
         }
         list.set_item(i, flags, icon(it), color, -1, it.quantity as i32);
     }
-    for i in n..40 {
+    for i in n..rows {
         list.set_item(i, 0, -1, -1, -1, 0);
     }
 }
@@ -579,8 +584,8 @@ impl Bank {
         let it = &mut self.item;
         let text = wide(&it.text);
         it.window.text_box(vui, r, &text, 0, 0, 280, 14, [0.0, 0.0, 0.0, 1.0], 2);
-        fill(&mut it.inv, v.inv, true, icon, can_use);
-        fill(&mut it.bank, v.bank, false, icon, can_use);
+        fill(&mut it.inv, v.inv, crate::inventory::pack_cap(), true, icon, can_use);
+        fill(&mut it.bank, v.bank, crate::inventory::bank_cap(), false, icon, can_use);
         // the lists' frames, as `VIWndList::OnDrawSelf` sizes them
         let (stud, fill_e) = (vui.entry(36), vui.entry(82));
         let size = [stud.uv1[0] * 2 + fill_e.uv1[0] + 114, stud.uv1[1] * 2 + 264];
@@ -644,13 +649,33 @@ mod tests {
         let mut inv = list(&[1, 5]);
         inv.items[0].equip_slot = 3;
         inv.items[1].item.wear_slot = 2;
-        fill(&mut l, &inv, true, &|it| it.inv_index as i32, &|_| false);
+        fill(&mut l, &inv, 40, true, &|it| it.inv_index as i32, &|_| false);
         let rows: Vec<_> = l.items[..3].iter().map(|r| (r.flags, r.icon, r.icon2, r.number)).collect();
         assert_eq!(rows, vec![(9, 100, 138, 1), (13, 101, 140, 5), (0, -1, -1, 0)]);
         // the bank side never shows the worn arrows
         let mut l2 = WndList::with_rows([0, 0], 0, 40);
-        fill(&mut l2, &inv, false, &|it| it.inv_index as i32, &|_| true);
+        fill(&mut l2, &inv, 40, false, &|it| it.inv_index as i32, &|_| true);
         assert_eq!((l2.items[0].flags, l2.items[0].icon2), (1, -1));
+    }
+
+    /// A server that holds 100 (`inventory::pack_cap`): both lists show all
+    /// 100, and scroll down to the last; the control: CLIENT's 40 shows the
+    /// first 40 and stops there.
+    #[test]
+    fn a_list_of_a_hundred_shows_every_row() {
+        let inv = list(&[1; 100]);
+        let mut l = WndList::with_rows([0, 0], 0, 40);
+        fill(&mut l, &inv, 100, false, &|it| it.inv_index as i32, &|_| true);
+        assert_eq!((l.items.len(), l.count(), l.items[99].icon), (100, 100, 199));
+        let mut cues = Vec::new();
+        l.scroll(-1, 0, &mut cues);
+        assert_eq!((l.sel, l.top), (99, 94), "Up from the first row: the last, the last six shown");
+        // the control: CLIENT's 40, the last row the 40th
+        let mut l = WndList::with_rows([0, 0], 0, 40);
+        fill(&mut l, &inv, 40, false, &|it| it.inv_index as i32, &|_| true);
+        assert_eq!((l.items.len(), l.count()), (40, 40), "the control: CLIENT's 40");
+        l.scroll(-1, 0, &mut cues);
+        assert_eq!((l.sel, l.top), (39, 34));
     }
 
     #[test]

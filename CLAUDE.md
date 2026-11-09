@@ -23,7 +23,8 @@ current.
   final CLIENT in the Corsten save state, README "duels"), and a GM's flight on a server that turns it on (the
   user's of 2026-11-07, "lets add a gm fly command": `walker.rs`, never in `vi`), and a jump on a server that offers
   one (the user's of 2026-11-09, "lets add jump to the game": go-eqoa-server's `world.jump`, 0x7E28; `walker.rs` and
-  `jump.rs`, never in `vi`; V, a Controls row; others in the air drawn at their height there), and the combat record's window on a
+  `jump.rs`, never in `vi`; Space (and V), a Controls row, the attack on G with Space still the attack's where it makes no
+  jump; others in the air drawn at their height there, their fall in by the top and their landing played), and the combat record's window on a
   server that keeps one (the user's of 2026-11-07, "lets add a combat record for pvp and duels to the menu": Character >
   Combat Record, `record.rs`, `recordplay.rs`, the server's rows by 0x7E20/0x7E21), and PCSX2's texture packs and
   texture dumps natively (the user's of 2026-11-08, "one pack works in both": Extended > Textures, both off unless
@@ -35,7 +36,10 @@ current.
   (the server owner's of 2026-11-08: "lets add a new equip slot for heirloom server only. capes for all. there
   are many capes we can borrow from for various styles": `cape.rs`, go-eqoa-server's offer 0x7E25 and its lists
   0x7E26/0x7E27; the disc's own capes cut out of their bodies and fitted to the wearer's skeleton; with none
-  worn, or on any other server, nothing is made or drawn), and the map and the quest helper (the user's of
+  worn, or on any other server, nothing is made or drawn), and a pack and a bank of 100 on a server that offers them (the
+  server owner's of 2026-11-09: "lets increase inventory and bank space to 100": go-eqoa-server's offer 0x7E29 and the sizes
+  in force before each dump 0x7E2A, `inventory::pack_cap`/`bank_cap`; every list's window takes them, CLIENT's 40 everywhere
+  else; a merchant's wares, a corpse and the trade's offers stay the game's), and the map and the quest helper (the user's of
   2026-11-09, "also add the map and quest helper we had in a former update", back from before the
   2026-10-27 strip: Extended > Map, every row on by default; the map on M with its XP camps, coaches, routes,
   town names and the community's markers (suggested from the map, accepted by a GM, the list asked of
@@ -197,6 +201,11 @@ current.
   real GPU without a presentable display (here: `DISPLAY=:99`, the Xvfb, whose Vulkan has no DRI3);
   `EQOA_QUIT=s`, `EQOA_WALK` script a run. A renderer change is held to `shot` PNGs byte for byte
   (`EQOA_HOUR` pinned; a shot's layers scroll by its script time).
+- Dynamic Lighting's lights of the moment (spells', held items', fiery creatures') are held from frame to
+  frame (`lights::Moment`) and the choice among all the lights is eased (`lights::Chooser`): no light may
+  come, go or change in a frame (petition 1321: each frame's own, out of a few particles, flashed up to 18
+  times a second; photosensitivity guidance, WCAG 2.2's 2.3.1, allows 3). `lights::tests::no_spell_visual_flashes`
+  holds every visual on the disc to it; `survey_spell_flashes` (`--ignored --nocapture`) measures them.
 - The `vi` structs are `#[repr(C)]` in the EE layout because the oracle compares raw bytes; keep it that way while ports are being proven. Later (not urgent): native runtime types beside them, converted at the edges, the layout types kept for oracle tests.
 - `ee`'s adder has the EE's one guard bit (PCSX2's recompiler, `FPU_ADD_SUB`); go-eqoa-vi measured through
   the tracer's `call`, which runs PCSX2's INTERPRETER (every bit kept): that adder is `ee::interp`.

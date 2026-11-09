@@ -19,11 +19,11 @@ pub const BUTTONS: [(&str, i32); 5] = [("Close", key::TRIANGLE), ("+", key::R1),
 const PAD_LEGEND: [(i32, &str); 10] = [(65, "Close"), (66, "Center"), (67, "Waypoint"), (68, "Markers"), (189, "Towns"), (214, "Suggest"), (185, ""), (187, "Zoom"), (-1, "Sticks, drag, pinch: pan and zoom"), (-1, "Tap: waypoint")];
 const KEY_LEGEND: [&str; 8] = ["M Close", "Space Center", "+ - or wheel Zoom", "Arrows, WASD or drag Pan", "Click or Q Waypoint", "X Markers", "T Towns", "N Suggest"];
 /// In a group, the legend's words for the waypoint keys, the group's beside
-/// the player's own (`group_waypoint`): □ held, a finger held, G or a click
+/// the player's own (`group_waypoint`): □ held, a finger held, O or a click
 /// with Shift.
 const PAD_LEGEND_GROUP: (i32, &str) = (67, "Waypoint, held: the group's");
 const TAP_LEGEND_GROUP: &str = "Tap: waypoint, hold: the group's";
-const KEY_LEGEND_GROUP: &str = "G, Q held or Shift+click Group waypoint";
+const KEY_LEGEND_GROUP: &str = "O, Q held or Shift+click Group waypoint";
 
 pub const NAME: [f32; 4] = [1.0, 0.97, 0.85, 1.0];
 /// The community list's answer under the title: the game's gold words.
@@ -368,7 +368,7 @@ mod tests {
     }
 
     /// In a group the legend names the group's waypoint beside the player's
-    /// own: a keyboard's G, Q held or Shift and a click, a pad's □ held and a
+    /// own: a keyboard's O, Q held or Shift and a click, a pad's □ held and a
     /// finger held on the map. The control: out of a group, none of it.
     #[test]
     fn in_a_group_the_legend_names_the_groups_waypoint() {

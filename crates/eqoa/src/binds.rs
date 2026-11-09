@@ -30,6 +30,19 @@
 //! then takes. Every button is in one place, a field's or a row's. The sticks
 //! stay sticks.
 //!
+//! Space was the attack's (the game's own pair, 32 with ✕) until 2026-11-09,
+//! when the jump took it (the user: "make jump ... spacebar by default"): the
+//! attack's row is on G, free in the game's keyboard table and the client's
+//! dispatch alike, and V, the jump's key before, stays the jump's beside Space
+//! (nothing else claims it). Space, while the jump's row has it, is still the
+//! attack's wherever it makes no jump (`KeyEdge::space_attacks`): on a server
+//! that never offered one (Sandstorm's, eqoa.live's, eqoaclassic's Live
+//! shard) and with a window up (the corpse's ✕, a trade's chat line, the
+//! fishing cast), so a player there finds Space as it was. A layout kept
+//! before (`keys.opt`) keeps every row it moved, each line read onto today's
+//! defaults (a row it put on G takes G, the attack the key that row left), and
+//! a macro it put on G keeps G (`Binds::from_text`).
+//!
 //! With nothing moved every key is itself and every button its own field
 //! (`Binds::default`, the tests). Kept per device in `keys.opt` beside the
 //! client's options (`settings`), as the PS2 keeps every option on its card.
@@ -77,8 +90,9 @@ pub struct Row {
     /// what it does in play: the client's words, a WORDS.TXT word by number
     /// in braces (`{1018}` Attack)
     pub label: &'static str,
-    /// the keys today's dispatch takes for it, the first shown (the rest the
-    /// same key shifted: ~ with `)
+    /// the keys today's dispatch takes for it, the first shown (the rest go
+    /// with it: the same key shifted, ~ with `, and Jump's V, its key before
+    /// it had Space)
     pub keys: &'static [&'static str],
     pub pad: Pad,
     /// the rest of what the key and the button do, the window's keys above
@@ -106,7 +120,7 @@ pub const ROWS: &[Row] = &[
     row("look_down", "Camera down", &["k"], Pad::Stick(true, Dir::Down), "Tilts the camera, or takes the orbit out."),
     row("look_left", "Camera left", &["j"], Pad::Stick(true, Dir::Left), "Orbits the camera, or turns."),
     row("look_right", "Camera right", &["l"], Pad::Stick(true, Dir::Right), "Orbits the camera, or turns."),
-    row("attack", "{1018} (hold)", &["space"], b(bit::CROSS), "With Auto Attack on, a toggle; on a corpse, its loot. In a window |x is {212}; Space is |x too in the corpse's window, and |( in the others (a trade's {424}). On the map: |x."),
+    row("attack", "{1018} (hold)", &["g"], b(bit::CROSS), "With Auto Attack on, a toggle; on a corpse, its loot. In a window |x is {212}; G is |x too in the corpse's window, and |( in the others (a trade's {424}). Space does all of it too wherever it makes no jump (Jump's row)."),
     row("talk", "Talk (hold: {1403})", &["q"], b(bit::SQUARE), "In a window it is |s, the window's own: a trade's {478}, the who list asked again, the mail's inbox."),
     row("clear_target", "Let the target go", &[], b(bit::TRIANGLE), "The game has no key for it: a key put here presses |t. In a window |t is {217}, Escape or Backspace on the keyboard."),
     row("use", "Quick menu: {120}", &["e"], b(bit::CIRCLE), "In a window E is |x {212}, as Enter is."),
@@ -119,7 +133,7 @@ pub const ROWS: &[Row] = &[
     row("next_target", "Target: the next (hold: aim)", &["tab"], b(bit::R1), "Held: the view at the eyes, the target the one nearest the crosshair. In a window Tab is |8; on the map |8 zooms in."),
     row("history", "{424} {1694} (hold)", &["c"], b(bit::R2), "Up and down scroll it while held. In a window C is |c (the factions' next page)."),
     row("autorun", "Autorun", &["x"], b(bit::L3), "A stick pushed past the run's edge ends it."),
-    row("jump", "Jump", &["v"], Pad::None, "On a server that has jumps (its own, not the game's); nothing on any other. A controller's button can take it here: every button of the pad is the game's, so none has it till given."),
+    row("jump", "Jump", &["space", "v"], Pad::None, "In play, on a server that has jumps (its own, not the game's); V too. Wherever it makes no jump (any other server, a window up) Space is {1018}'s key, as it was before it jumped. A controller's button can take it here: every button of the pad is the game's, so none has it till given. On the map Space is |x."),
     row("chat", "{424}", &["enter"], b(bit::R3), "In a window Enter is |x {212}; over the quick chat, the chat line. On the map: |x."),
     row("start_menu", "Start menu", &["escape"], b(bit::START), "In a window Escape is |t {217}. Escape also cancels a key being chosen here."),
     row("camera_style", "Camera style", &["p"], b(bit::SELECT), "First person, and back."),
@@ -141,7 +155,7 @@ pub const ROWS: &[Row] = &[
     row("map", "{421}", &["m"], Pad::None, "Again, or Escape, closes it. With Extended's Map off it does nothing."),
     row("map_in", "{421}: zoom in", &["=", "+"], Pad::None, ""),
     row("map_out", "{421}: zoom out", &["-", "_"], Pad::None, ""),
-    row("map_group_waypoint", "{421}: group waypoint", &["g"], Pad::None, "On the map, in a group: a waypoint for every member, said in the group's chat, where |s puts yours, else where you stand. Also |s held, or Shift+click."),
+    row("map_group_waypoint", "{421}: group waypoint", &["o"], Pad::None, "On the map, in a group: a waypoint for every member, said in the group's chat, where |s puts yours, else where you stand. Also |s held, or Shift+click."),
     row("group_invite", "Group: {86}", &["f5"], Pad::None, "Invites the target."),
     row("group_remove", "Group: {516}", &["f6"], Pad::None, "Takes the target out of the group."),
     row("group_disband", "Group: {529}", &["f7"], Pad::None, ""),
@@ -155,6 +169,19 @@ pub const ROWS: &[Row] = &[
 /// A row's index by its name.
 pub fn row_named(id: &str) -> Option<usize> {
     ROWS.iter().position(|r| r.id == id)
+}
+
+/// The attack's key as the dispatch takes it (its row's default, G):
+/// Space's, where Space makes no jump (`KeyEdge::space_attacks`).
+pub fn attack_key() -> &'static str {
+    ROWS[row_named("attack").expect("the attack's row")].keys[0]
+}
+
+/// Whether Space is the jump's own key (the jump's row on it as by default,
+/// no row or macro moved onto it): then Space is the attack's too wherever it
+/// makes no jump (`KeyEdge::space_attacks`).
+pub fn space_is_jumps(b: &Binds) -> bool {
+    b.alias("space") == Alias::Same
 }
 
 /// The row whose default keys hold `name`.
@@ -671,17 +698,23 @@ impl Binds {
             {
                 let m = n - 1;
                 match what {
+                    // a key a row has only by its default (the defaults moved
+                    // since the file was kept: G was free till the attack
+                    // took it) stays the macro's: the row is left with none,
+                    // or keeps its first key where the macro's is the other
                     "key" if valid_name(v) => {
-                        // a key that was free when the macro took it and is a
-                        // row's default now (a row that came later: the map's,
-                        // back on 2026-11-09 after macros came): the macro keeps
-                        // it and the row is left with none; a row this file put
-                        // on the key keeps it, the macro refused as ever
                         if let Err(MacroKey::Row(r)) = b.bind_macro_key(m, Some(v))
                             && !b.moved(r)
                         {
-                            b.clear_key(r);
-                            let _ = b.bind_macro_key(m, Some(v));
+                            if ROWS[r].keys.first() == Some(&v) {
+                                b.clear_key(r);
+                                let _ = b.bind_macro_key(m, Some(v));
+                            } else if !reserved(v) {
+                                if let Some(o) = b.macro_on_key(v) {
+                                    b.macros[o].key = None;
+                                }
+                                b.macros[m].key = Some(v.to_string());
+                            }
                         }
                     }
                     "button" => {
@@ -826,6 +859,11 @@ pub enum Sent {
 #[derive(Clone, Debug, Default)]
 pub struct KeyEdge {
     pressed: std::collections::HashMap<String, Option<Sent>>,
+    /// Whether Space, while the jump's row has it, is the attack's key now:
+    /// wherever it makes no jump (in the world, and not in play on a server
+    /// that offered jumps), as the viewer sets it before each key. A key
+    /// let go is still what it was pressed as.
+    pub space_attacks: bool,
 }
 
 impl KeyEdge {
@@ -853,7 +891,11 @@ impl KeyEdge {
         if repeat && let Some(was) = self.pressed.get(name) {
             return was.clone();
         }
-        let out = now(name);
+        let out = match now(name) {
+            // Space, the jump's own key, where it makes no jump: the attack's
+            Some(Sent::Key(k)) if k == "space" && name == "space" && self.space_attacks => same(attack_key()),
+            o => o,
+        };
         self.pressed.insert(name.to_string(), out.clone());
         out
     }
@@ -1016,7 +1058,7 @@ mod tests {
         for n in &names {
             assert!(default_row(n).is_some(), "{n:?} is in the dispatch and in no row");
         }
-        for n in ["escape", "backspace", "m", "space", "enter", "home", "+", "=", "pageup", "-", "_", "pagedown", "up", "w", "down", "s", "left", "a", "right", "d", "q", "g"] {
+        for n in ["escape", "backspace", "m", "space", "enter", "home", "+", "=", "pageup", "-", "_", "pagedown", "up", "w", "down", "s", "left", "a", "right", "d", "q", "o"] {
             assert!(crate::map::keyboard(n).is_some(), "{n} is the map's");
             assert!(default_row(n).is_some(), "the map's {n:?} is a row's");
         }
@@ -1029,12 +1071,15 @@ mod tests {
             }
         }
         // the game's own pairs, `VIWndGame::OnKeyDown`'s cases: 27/144,
-        // 80,112/145, 32/134, 81,113/133, 96,126/140, 9/142, 90,122/141,
-        // 67,99/143, 13/147, 88,120 with 146 (both ToggleP74)
+        // 80,112/145, 81,113/133, 96,126/140, 9/142, 90,122/141, 67,99/143,
+        // 13/147, 88,120 with 146 (both ToggleP74); and 32/134, Space with
+        // ✕, which the attack's G has taken (Space jumps, and is ✕'s key
+        // only where it makes no jump: `KeyEdge::space_attacks`)
         let pair = |k: &str| ROWS.iter().find(|r| r.keys.contains(&k)).map(|r| r.pad);
-        for (k, p) in [("escape", bit::START), ("p", bit::SELECT), ("space", bit::CROSS), ("q", bit::SQUARE), ("`", bit::L1), ("~", bit::L1), ("tab", bit::R1), ("z", bit::L2), ("c", bit::R2), ("enter", bit::R3), ("x", bit::L3)] {
+        for (k, p) in [("escape", bit::START), ("p", bit::SELECT), ("g", bit::CROSS), ("q", bit::SQUARE), ("`", bit::L1), ("~", bit::L1), ("tab", bit::R1), ("z", bit::L2), ("c", bit::R2), ("enter", bit::R3), ("x", bit::L3)] {
             assert_eq!(pair(k), Some(Pad::Button(p)), "{k}");
         }
+        assert_eq!((pair("space"), pair("v")), (Some(Pad::None), Some(Pad::None)), "the jump's");
         // every button the game reads has its row
         for i in 0..16u16 {
             assert_eq!(ROWS.iter().filter(|r| r.pad == Pad::Button(1 << i)).count(), 1, "button {i}");
@@ -1149,13 +1194,13 @@ mod tests {
         let hide = row_named("hide_ui").unwrap();
         assert_eq!(c.bind_key(hide, "~"), Moved::Freed(Some("h".into())));
         assert_eq!((c.alias("~"), c.alias("`")), (Alias::To("h"), Alias::Same));
-        // a three-way: attack onto Q (talk takes Space), then talk onto E
-        // (use takes Space)
+        // a three-way: attack onto Q (talk takes G), then talk onto E (use
+        // takes G)
         let mut d = Binds::default();
         d.bind_key(attack, "q");
         d.bind_key(talk, "e");
-        assert_eq!((d.key(attack), d.key(talk), d.key(use_)), (Some("q"), Some("e"), Some("space")));
-        assert_eq!(d.alias("space"), Alias::To("e"));
+        assert_eq!((d.key(attack), d.key(talk), d.key(use_)), (Some("q"), Some("e"), Some("g")));
+        assert_eq!(d.alias("g"), Alias::To("e"));
         // △'s row, with no key of its own: onto a free key it presses △;
         // onto another row's key, that row is left with none
         let mut t = Binds::default();
@@ -1486,9 +1531,9 @@ mod tests {
         assert_eq!(b.bind_macro_key(0, Some("q")), Err(MacroKey::Row(row_named("talk").unwrap())));
         assert_eq!(b.bind_macro_key(0, Some("~")), Err(MacroKey::Row(row_named("cycle_target").unwrap())), "a row's other key");
         assert_eq!(b.bind_macro_key(0, Some("f12")), Err(MacroKey::Reserved));
-        assert_eq!(b.bind_macro_key(0, Some("g")), Err(MacroKey::Row(row_named("map_group_waypoint").unwrap())), "the map's");
-        assert_eq!(b.bind_macro_key(0, Some("b")), Ok(()));
-        assert_eq!(b.alias("b"), Alias::Macro(0));
+        assert_eq!(b.bind_macro_key(0, Some("g")), Err(MacroKey::Row(row_named("attack").unwrap())), "the attack's");
+        assert_eq!(b.bind_macro_key(0, Some("y")), Ok(()));
+        assert_eq!(b.alias("y"), Alias::Macro(0));
         let l3 = bit_index(bit::L3).unwrap();
         assert_eq!(b.bind_macro_button(0, l3), Moved::Swapped(l3 as usize));
         assert_eq!(b.remap(bit::L3), 0, "L3 is the macro's now");
@@ -1498,35 +1543,35 @@ mod tests {
         b.macros[0].toggle = true;
         b.macros[0].turbo = 4;
         let t = b.to_text();
-        assert!(t.contains("macro.1.key=b\nmacro.1.button=l3\nmacro.1.buttons=circle+cross\nmacro.1.toggle=1\nmacro.1.turbo=4\n"), "{t}");
+        assert!(t.contains("macro.1.key=y\nmacro.1.button=l3\nmacro.1.buttons=circle+cross\nmacro.1.toggle=1\nmacro.1.turbo=4\n"), "{t}");
         assert_eq!(Binds::from_text(&t), b);
-        assert!(b.describe().contains("macro 1 on b and l3 pressing |c|x (Toggle, turbo 4)"), "{}", b.describe());
+        assert!(b.describe().contains("macro 1 on y and l3 pressing |c|x (Toggle, turbo 4)"), "{}", b.describe());
         // a second macro taking L3 takes it from the first
         assert_eq!(b.bind_macro_button(1, l3), Moved::SwappedMacro(0));
         assert_eq!((b.macros[0].button, b.macros[1].button), (None, Some(l3)));
         // L3 back on its field: the macro has none
         assert_eq!(b.bind_button(l3, l3), Moved::SwappedMacro(1));
         assert_eq!((b.macros[1].button, b.remap(bit::L3)), (None, bit::L3));
-        // a row moved onto B takes it from the macro
-        b.bind_key(row_named("talk").unwrap(), "b");
+        // a row moved onto Y takes it from the macro
+        b.bind_key(row_named("talk").unwrap(), "y");
         assert_eq!(b.macros[0].key, None);
-        assert_eq!(b.alias("b"), Alias::To("q"));
+        assert_eq!(b.alias("y"), Alias::To("q"));
     }
 
-    /// A macro kept on a key that was free when it was set and is a row's by
-    /// default now (G, the map's group waypoint, gone from 2026-10-27 to
-    /// 2026-11-09 while macros came): the macro keeps its key and the row is
-    /// left with none, written back so. The control: a row the same file put
-    /// on that key keeps it, the macro refused as ever.
+    /// A macro kept on a key that was free when it was set and is a map row's
+    /// by default now (M, the map's, gone from 2026-10-27 to 2026-11-09 while
+    /// macros came): the macro keeps its key and the row is left with none,
+    /// written back so, as master's rule keeps one on G. The control: a row
+    /// the same file put on that key keeps it, the macro refused as ever.
     #[test]
-    fn a_macro_kept_on_a_key_a_row_came_back_to_keeps_it() {
-        let b = Binds::from_text("macro.1.key=g\nmacro.1.buttons=cross\n");
-        let g = row_named("map_group_waypoint").unwrap();
-        assert_eq!(b.macros[0].key.as_deref(), Some("g"), "the macro keeps G");
-        assert_eq!((b.key(g), b.alias("g")), (Some(""), Alias::Macro(0)), "the row has no key, G is the macro's");
+    fn a_macro_kept_on_a_map_rows_key_keeps_it() {
+        let b = Binds::from_text("macro.1.key=m\nmacro.1.buttons=cross\n");
+        let map = row_named("map").unwrap();
+        assert_eq!(b.macros[0].key.as_deref(), Some("m"), "the macro keeps M");
+        assert_eq!((b.key(map), b.alias("m")), (Some(""), Alias::Macro(0)), "the row has no key, M is the macro's");
         assert_eq!(Binds::from_text(&b.to_text()), b, "kept so");
-        let control = Binds::from_text("key.talk=g\nmacro.1.key=g\n");
-        assert_eq!((control.macros[0].key.as_deref(), control.alias("g")), (None, Alias::To("q")), "the control: a row put there in the same file keeps it");
+        let control = Binds::from_text("key.talk=m\nmacro.1.key=m\n");
+        assert_eq!((control.macros[0].key.as_deref(), control.alias("m")), (None, Alias::To("q")), "the control: a row put there in the same file keeps it");
     }
 
     /// A macro's mode steps Hold, Toggle, each turbo, each turbo toggled,
@@ -1542,6 +1587,105 @@ mod tests {
         assert_eq!(seen.first(), seen.last());
         assert_eq!(&seen[..4], &["Hold", "Toggle", "Turbo 1", "Turbo 2"]);
         assert!(seen.contains(&"Toggle, turbo 15".to_string()));
+    }
+
+    /// Today's layout (the user, 2026-11-09: "make jump ... spacebar by
+    /// default"): Space jumps and V with it, the attack is G, each itself
+    /// with nothing moved; Space and V go with the jump's row when it moves,
+    /// and Space taken by another row is that row's. The control: the layout
+    /// before, Space the attack's and V the jump's, is not today's.
+    #[test]
+    fn space_jumps_and_g_attacks_by_default() {
+        let b = Binds::default();
+        let (jump, attack) = (row_named("jump").unwrap(), row_named("attack").unwrap());
+        assert_eq!((b.key(jump), b.key(attack), attack_key()), (Some("space"), Some("g"), "g"));
+        assert_eq!((b.alias("space"), b.alias("v"), b.alias("g")), (Alias::Same, Alias::Same, Alias::Same));
+        assert!(space_is_jumps(&b));
+        assert_eq!((default_row("space"), default_row("v"), default_row("g")), (Some(jump), Some(jump), Some(attack)));
+        let mut moved = Binds::default();
+        assert_eq!(moved.bind_key(jump, "b"), Moved::Freed(Some("space".into())));
+        assert_eq!((moved.alias("b"), moved.alias("space"), moved.alias("v")), (Alias::To("space"), Alias::Nothing, Alias::Nothing));
+        assert!(!space_is_jumps(&moved), "Space left with nothing");
+        let mut taken = Binds::default();
+        assert_eq!(taken.bind_key(row_named("talk").unwrap(), "space"), Moved::Swapped(jump));
+        assert_eq!((taken.alias("space"), taken.key(jump)), (Alias::To("q"), Some("q")));
+        assert!(!space_is_jumps(&taken), "Space Talk's");
+        assert_ne!((ROWS[jump].keys, ROWS[attack].keys), (&["v"][..], &["space"][..]), "the control: the layout before");
+    }
+
+    /// Space, while the jump's row has it, is the attack's key wherever it
+    /// makes no jump (`KeyEdge::space_attacks`, the viewer's: a window up,
+    /// a server without jumps): pressed, held and let go as G, whatever the
+    /// flag became between; while it jumps, itself. Never while typing, and
+    /// never once the jump's row has moved off it or another row is on it,
+    /// nor for the jump's V or a key moved onto its row. The controls: the
+    /// flag clear, Space is Space, and G is G with it set or clear.
+    #[test]
+    fn space_is_the_attack_where_it_makes_no_jump() {
+        let b = Binds::default();
+        let key = |k: &str| Some(Sent::Key(k.to_string()));
+        let mut e = KeyEdge::default();
+        e.space_attacks = true;
+        assert_eq!(e.key("space", true, false, false, &b), key("g"));
+        assert_eq!(e.key("space", true, true, false, &b), key("g"), "its repeat");
+        e.space_attacks = false;
+        assert_eq!(e.key("space", false, false, false, &b), key("g"), "let go as pressed");
+        assert_eq!(e.key("space", true, false, false, &b), key("space"), "the control: where it jumps");
+        e.space_attacks = true;
+        assert_eq!(e.key("space", false, false, false, &b), key("space"), "let go as pressed");
+        // held as the window lost the keys: let go as G
+        e.key("space", true, false, false, &b);
+        assert_eq!(e.let_go(), vec![Sent::Key("g".into())]);
+        assert_eq!(e.key("space", true, false, true, &b), key("space"), "typed as itself");
+        e.key("space", false, false, true, &b);
+        for k in ["g", "v"] {
+            let mut c = KeyEdge::default();
+            for on in [false, true] {
+                c.space_attacks = on;
+                assert_eq!(c.key(k, true, false, false, &b), key(k), "{k}");
+                assert_eq!(c.key(k, false, false, false, &b), key(k), "{k}");
+            }
+        }
+        // the jump's row moved onto B: B is the jump's everywhere, Space nothing
+        let mut moved = Binds::default();
+        moved.bind_key(row_named("jump").unwrap(), "b");
+        assert_eq!(e.key("b", true, false, false, &moved), key("space"));
+        e.key("b", false, false, false, &moved);
+        assert_eq!(e.key("space", true, false, false, &moved), None);
+        e.key("space", false, false, false, &moved);
+        // Talk on Space: Talk's
+        let mut taken = Binds::default();
+        taken.bind_key(row_named("talk").unwrap(), "space");
+        assert_eq!(e.key("space", true, false, false, &taken), key("q"));
+    }
+
+    /// A layout kept before Space jumped keeps every row it moved, each line
+    /// read onto today's defaults: the attack it put on Q (Talk then on
+    /// Space) stays on Q with Talk on Space, the jump taking G; a row it put
+    /// on G keeps G, the attack taking that row's key; the jump it put on B
+    /// stays on B (Space and V with nothing). A macro it put on G (free then)
+    /// keeps G, the attack left with no key, and one on ~ (an alternate:
+    /// never written by the client) keeps it beside the row's `. The
+    /// controls: a macro on a key a line of the file moved a row onto is
+    /// refused, as before, and a file of nothing is today's layout.
+    #[test]
+    fn a_layout_kept_before_space_jumped_keeps_what_was_moved() {
+        let (attack, talk, jump, hide) = (row_named("attack").unwrap(), row_named("talk").unwrap(), row_named("jump").unwrap(), row_named("hide_ui").unwrap());
+        let b = Binds::from_text("key.attack=q\nkey.talk=space\n");
+        assert_eq!((b.key(attack), b.key(talk), b.key(jump)), (Some("q"), Some("space"), Some("g")));
+        let b = Binds::from_text("key.hide_ui=g\n");
+        assert_eq!((b.key(hide), b.key(attack), b.key(jump)), (Some("g"), Some("h"), Some("space")));
+        let b = Binds::from_text("key.jump=b\n");
+        assert_eq!((b.key(jump), b.alias("space"), b.alias("v"), b.alias("b")), (Some("b"), Alias::Nothing, Alias::Nothing, Alias::To("space")));
+        let b = Binds::from_text("macro.3.key=g\nmacro.3.buttons=cross+circle\n");
+        assert_eq!((b.macros[2].key.as_deref(), b.alias("g"), b.key(attack)), (Some("g"), Alias::Macro(2), Some("")));
+        assert_eq!(b.alias("space"), Alias::Same, "Space still the jump's");
+        assert_eq!(Binds::from_text(&b.to_text()), b, "kept so");
+        let b = Binds::from_text("macro.1.key=~\n");
+        assert_eq!((b.macros[0].key.as_deref(), b.alias("~"), b.alias("`")), (Some("~"), Alias::Macro(0), Alias::Same));
+        let c = Binds::from_text("key.hide_ui=g\nmacro.1.key=g\n");
+        assert_eq!((c.macros[0].key.as_deref(), c.key(hide)), (None, Some("g")), "the control: a row the file moved keeps it");
+        assert!(Binds::from_text("").is_default());
     }
 
     #[test]

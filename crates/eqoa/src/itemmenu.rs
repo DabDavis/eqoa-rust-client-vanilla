@@ -1187,6 +1187,21 @@ mod tests {
         assert_eq!(menus.list[t[0]].entries[0].number, 3);
     }
 
+    /// A pack of 100 misc items (a server that holds 100, `inventory::pack_cap`,
+    /// `Play::run_start_menu`'s counts): the Misc tab lists every one; the
+    /// control is the definition's 40, which lists the first 40.
+    #[test]
+    fn a_tab_holds_a_pack_of_a_hundred() {
+        let inv = ItemList { p04: 0, items: (0..100).map(|_| it(-1, 0, 0, 1)).collect() };
+        let ids = |counts: [i32; 4]| {
+            let (menus, t) = build(&inv, counts, &|k| 100 + k as i32, &|_| true);
+            menus.list[t[3]].entries.iter().filter(|e| e.id >= 0).map(|e| e.id).collect::<Vec<_>>()
+        };
+        let counts = crate::inventory::with_caps([100, 100], || [40; 4].map(|c| c.max(crate::inventory::pack_cap() as i32)));
+        assert_eq!(ids(counts), (0..100).collect::<Vec<_>>());
+        assert_eq!(ids([40; 4]), (0..40).collect::<Vec<_>>(), "the control: the definition's 40");
+    }
+
     /// Words 159 and 160 as the disc has them ("UNUSED"), the rest empty.
     fn gear_vui() -> Vui {
         let mut lines = vec![String::new(); 160];

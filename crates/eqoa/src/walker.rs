@@ -147,6 +147,10 @@ pub struct Walker {
     frame_s: f32,
     /// A jump asked (`ask_jump`): when, on the walk's clock.
     jump_asked: Option<i64>,
+    /// In a jump, from its take-off until the body is on a floor again: its
+    /// fall wholly in by its top (`jump::fall_by_top`), which a jump that
+    /// reaches its top has already.
+    in_jump: bool,
 }
 
 /// A jump's start speed upward (units a second): with the walk's own integrator,
@@ -457,7 +461,7 @@ impl Walker {
         cam.set_orbit_distance(dist);
         cam.set_orbit_angle_behind();
         let eye = cam.process(&mut scene);
-        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None, scale: F::ONE, flying: false, fly_tilt: None, frame_s: 0.0, jump_asked: None }
+        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None, scale: F::ONE, flying: false, fly_tilt: None, frame_s: 0.0, jump_asked: None, in_jump: false }
     }
 
     /// `Respawn`'s placing: the character stood at `pos` (on the ground
@@ -544,6 +548,13 @@ impl Walker {
             w.update_sprite(cs, &self.anims, &mut self.rand);
         } else {
             self.cam.walk.update_sprite(cs, &self.anims, &mut self.rand);
+            // a jump's fall in by its top, till the feet are on a floor
+            let p = &self.cam.walk.phys;
+            if p.flags & ON_FLOOR != 0 && p.velocity.y <= F::ZERO {
+                self.in_jump = false;
+            } else if self.in_jump {
+                crate::jump::fall_by_top(cs, p.velocity.y, &self.anims);
+            }
         }
         if sound.is_some() {
             let at = self.cam.walk.phys.smooth_location();
@@ -614,6 +625,8 @@ impl Walker {
         if !game_frame {
             self.cam.effect.sample = self.shake;
         }
+        // steered, the camera kept behind the body: no swing round (`camreach`)
+        self.reach.steered = c.steer;
         self.eye = self.reach.process(&mut self.cam, &mut self.scene, dt_s);
         if game_frame {
             self.shake = next;
@@ -784,6 +797,7 @@ impl Walker {
         w.phys.floor = lift;
         w.committed.floor = lift;
         w.phys.velocity.y = F::new(JUMP_SPEED);
+        self.in_jump = true;
         eprintln!("walker: jump from {:?}", w.phys.position.to_array());
     }
 

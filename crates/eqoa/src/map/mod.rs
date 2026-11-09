@@ -44,9 +44,9 @@
 //!
 //! The group's waypoint (`group_waypoint`, F3 20261026-212034, a player's
 //! "Long-press square on map to set a group waypoint"; the user's choice:
-//! over the group's chat): □ held `HOLD` (Q held), G, a click with Shift held
+//! over the group's chat): □ held `HOLD` (Q held), O, a click with Shift held
 //! or a finger held still on the map asks Play to tell the group
-//! (`take_group_ask`): □ held and G at □'s spot (the middle once panned, else
+//! (`take_group_ask`): □ held and O at □'s spot (the middle once panned, else
 //! the target, else the player's own place: come to me), a click or a finger
 //! at the spot under it (a marker's own spot on one). It is drawn orange under
 //! the personal one with its sender's name, on the minimap and the compass
@@ -323,7 +323,7 @@ pub struct Map {
     group_told: Option<u32>,
 }
 
-/// G on a keyboard while the map is up (`keyboard`): the group's waypoint at
+/// O on a keyboard while the map is up (`keyboard`): the group's waypoint at
 /// □'s spot at once. No pad key has it; □ held is the pad's.
 pub const KEY_GROUP: i32 = 0x7E31_0001;
 
@@ -1051,7 +1051,7 @@ impl Map {
         }
     }
 
-    /// □ held (`hold`) or G: the group asked to be told of □'s spot (Play's,
+    /// □ held (`hold`) or O: the group asked to be told of □'s spot (Play's,
     /// `take_group_ask`): the map's middle once it is panned, else the
     /// target's spot, else the player's own place (the middle while the map
     /// follows the player: come to me).
@@ -1772,8 +1772,9 @@ pub fn keyboard(name: &str) -> Option<(i32, Hold)> {
         // Q is the keyboard's □ (`binds`' "talk" row): the waypoint, held
         // the group's (its release counts, `Map::square_key`)
         "q" => (key::SQUARE, Hold::Held),
-        // G: the group's waypoint at once (`binds`' "map_group_waypoint" row)
-        "g" => (KEY_GROUP, Hold::Once),
+        // O: the group's waypoint at once (`binds`' "map_group_waypoint" row;
+        // G was its key till the attack took G, 2026-11-09)
+        "o" => (KEY_GROUP, Hold::Once),
         // J (the journal's letter) is R3: the quest marks shown or hidden
         "j" => (key::R3, Hold::Once),
         // N is L3: a community marker suggested (`community`)

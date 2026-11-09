@@ -231,7 +231,8 @@ fn the_keyboard_works_the_map() {
     assert!(m.open, "the control: Y is not the map's");
     assert_eq!(keyboard("y"), None);
     assert_eq!(keyboard("q"), Some((key::SQUARE, Hold::Held)), "Q is the keyboard's □: the waypoint, held the group's");
-    assert_eq!(keyboard("g"), Some((KEY_GROUP, Hold::Once)), "G: the group's waypoint");
+    assert_eq!(keyboard("o"), Some((KEY_GROUP, Hold::Once)), "O: the group's waypoint");
+    assert_eq!(keyboard("g"), None, "G: the attack's, not the map's");
     m.keyboard_key("escape", true, false);
     assert!(!m.open);
 }
@@ -382,7 +383,7 @@ fn square_puts_it_at_the_middle_once_panned() {
 /// the waypoint on the target's spot and a second □ takes it away there;
 /// once the map is panned, the middle is □'s spot, the target or not (what
 /// the player chose on the map first); with the target out of view □ is as
-/// it was. G (the group's at once) takes the same spots. The control: the
+/// it was. O (the group's at once) takes the same spots. The control: the
 /// same □ with no target takes the waypoint away.
 #[test]
 fn the_target_is_squares_spot_while_following() {
@@ -397,7 +398,7 @@ fn the_target_is_squares_spot_while_following() {
     assert_eq!(m.waypoint(0), None, "on it already: taken away");
     tap(&mut m);
     m.key(KEY_GROUP, true);
-    assert_eq!(m.take_group_ask(), Some(community::Spot { world: 0, at: merchant }), "G: the target's spot");
+    assert_eq!(m.take_group_ask(), Some(community::Spot { world: 0, at: merchant }), "O: the target's spot");
     // another world mapped than the player's: no target on it
     m.player_world = 2;
     assert_eq!(m.target_spot(), None);
@@ -409,7 +410,7 @@ fn the_target_is_squares_spot_while_following() {
     tap(&mut m);
     assert_eq!(m.waypoint(0), Some(there), "panned: the middle, not the target");
     m.key(KEY_GROUP, true);
-    assert_eq!(m.take_group_ask(), Some(community::Spot { world: 0, at: there }), "G panned: the middle");
+    assert_eq!(m.take_group_ask(), Some(community::Spot { world: 0, at: there }), "O panned: the middle");
     // following again, the target out of view: as it was
     m.follow = true;
     m.view = Some(View { center: FREEPORT, ..m.view.unwrap() });
@@ -417,7 +418,7 @@ fn the_target_is_squares_spot_while_following() {
     tap(&mut m);
     assert_eq!(m.waypoint(0), None, "the control: no target, taken away");
     m.key(KEY_GROUP, true);
-    assert_eq!(m.take_group_ask(), Some(community::Spot { world: 0, at: FREEPORT }), "G, no target: the player's own place");
+    assert_eq!(m.take_group_ask(), Some(community::Spot { world: 0, at: FREEPORT }), "O, no target: the player's own place");
 }
 
 /// □ held `group_waypoint::HOLD` seconds of the clock asks the group to be

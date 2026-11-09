@@ -96,10 +96,11 @@ impl Play {
                 self.bank.state = 0;
             }
             0x1251 => {
-                // RecvAdded: AddItem(item, its maximum stack, 40)
+                // RecvAdded: AddItem(item, its maximum stack, 40), or as many
+                // as a server that holds more says (`inventory::bank_cap`)
                 let item = net::dump::read_net_item(&mut r);
                 let limit = item.item.max_stack;
-                crate::inventory::add_item(&mut self.dump.bank.items, &item, limit, 40);
+                crate::inventory::add_item(&mut self.dump.bank.items, &item, limit, crate::inventory::bank_cap());
                 self.cues.push(crate::sound::Cue::Ui(5));
                 self.bank.state = 0;
             }

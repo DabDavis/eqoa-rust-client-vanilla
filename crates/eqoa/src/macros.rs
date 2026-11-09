@@ -118,7 +118,7 @@ mod tests {
     /// held it stays on. The control: a macro with no buttons presses none.
     #[test]
     fn a_held_macro_presses_its_chord_while_held() {
-        let b = macros(Macro { key: Some("g".into()), button: Some(14), chord: bit::CROSS | bit::CIRCLE, ..Macro::default() });
+        let b = macros(Macro { key: Some("y".into()), button: Some(14), chord: bit::CROSS | bit::CIRCLE, ..Macro::default() });
         let mut r = Run::default();
         assert_eq!(r.frame(0, true, &b), 0, "nothing held");
         r.key(0, true, &b);
@@ -133,7 +133,7 @@ mod tests {
         r.key(0, false, &b);
         assert_eq!(r.frame(0, true, &b), 0);
         // the control
-        let none = macros(Macro { key: Some("g".into()), ..Macro::default() });
+        let none = macros(Macro { key: Some("y".into()), ..Macro::default() });
         let mut r = Run::default();
         r.key(0, true, &none);
         assert_eq!(r.frame(0, true, &none), 0);
@@ -142,7 +142,7 @@ mod tests {
     /// Toggled: on at a press, still on when let go, off at the next press.
     #[test]
     fn a_toggled_macro_runs_from_one_press_to_the_next() {
-        let b = macros(Macro { key: Some("g".into()), chord: bit::SQUARE, toggle: true, ..Macro::default() });
+        let b = macros(Macro { key: Some("y".into()), chord: bit::SQUARE, toggle: true, ..Macro::default() });
         let mut r = Run::default();
         r.key(0, true, &b);
         r.key(0, false, &b);
@@ -168,7 +168,7 @@ mod tests {
     /// state.
     #[test]
     fn a_turbo_steps_on_the_games_frames_at_any_rate() {
-        let b = macros(Macro { key: Some("g".into()), chord: bit::CROSS, turbo: 2, ..Macro::default() });
+        let b = macros(Macro { key: Some("y".into()), chord: bit::CROSS, turbo: 2, ..Macro::default() });
         for hz in [30.0, 165.0] {
             let mut r = Run::default();
             r.key(0, true, &b);
@@ -192,7 +192,7 @@ mod tests {
     /// each its key up when the macro is let go.
     #[test]
     fn a_macros_buttons_reach_the_games_pad() {
-        let b = macros(Macro { key: Some("g".into()), chord: bit::CROSS | bit::CIRCLE, ..Macro::default() });
+        let b = macros(Macro { key: Some("y".into()), chord: bit::CROSS | bit::CIRCLE, ..Macro::default() });
         let mut r = Run::default();
         let mut c = crate::input::Console::new();
         let poll = |c: &mut crate::input::Console, buttons| c.poll(crate::input::Report { buttons, sticks: [0.0; 4] }, true, false, false);
@@ -211,7 +211,7 @@ mod tests {
     /// Let go of every trigger (the window lost the keys): every macro off.
     #[test]
     fn letting_go_ends_every_macro() {
-        let b = macros(Macro { key: Some("g".into()), chord: bit::R1, toggle: true, ..Macro::default() });
+        let b = macros(Macro { key: Some("y".into()), chord: bit::R1, toggle: true, ..Macro::default() });
         let mut r = Run::default();
         r.key(0, true, &b);
         assert_eq!(r.frame(0, true, &b), bit::R1);

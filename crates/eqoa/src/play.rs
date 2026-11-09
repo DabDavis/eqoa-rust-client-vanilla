@@ -188,6 +188,9 @@ pub struct Play {
     /// its speed up (+) or down, its update's and then carried under the walk's
     /// gravity between updates (`jump::extrapolate_move`).
     aloft_vy: Vec<Option<F<Ee>>>,
+    /// Each player's jump as drawn, by slot (`jump::Air`): its fall in by the
+    /// top of its arc, its landing played once it comes down.
+    airs: Vec<crate::jump::Air>,
     /// Each entity's actor in the walker's collision world (`m_actor`), by
     /// slot (`place_actors`), and the player's own (`place_self_actor`): what
     /// a walk stops at. The scene they are in (`World::serial`), and the
@@ -943,15 +946,17 @@ fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Lo
 /// items and helm on their nodes (a player's in a body one of the server's
 /// `races` wears holding items as a race's body does: `racebody`).
 /// Built in the art its model is drawn in (`esf::Library::view_for`): the
-/// 2002 disc's, whole, for a model that disc has while its art is drawn.
+/// 2002 disc's, whole, for a model that disc has while its art is drawn. On a
+/// server with `jumps`, a player's in a body with no fall or landing of its
+/// own falls and lands as the table has it (`raceemote::grant_air`).
 #[allow(clippy::too_many_arguments)]
-fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>) -> Option<Puppet> {
+fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Puppet> {
     let era = lib.view_for(e.drawn_model as i32);
-    lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era, races))
+    lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era, races, jumps))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era, races: Option<&net::creation::Creation>) -> Option<Puppet> {
+fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Puppet> {
     let textures = render::library_textures(lib);
     lib.lookup(e.drawn_model as i32).and_then(|r| {
                     let mut model = lib.build_model(r)?;
@@ -962,6 +967,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if let Some(cs) = sprite.as_mut() {
                         crate::racebody::grant(cs, e.drawn_model, player, races);
                         crate::raceemote::grant(lib, cs, &mut anims, e.drawn_model, player, races);
+                        crate::raceemote::grant_air(lib, cs, &mut anims, e.drawn_model, player, jumps);
                     }
                     let held = held_by(sprite.as_ref(), e.creature.as_ref());
                     let (attached, weapons, helm_worn) = match (&sprite, &e.creature) {
@@ -1128,13 +1134,16 @@ fn redo(was: (u32, u32, Option<vi::cust::Look>, Held), now: (u32, u32, Option<vi
 /// for a list that came after it was made). The puppet it replaced, when it
 /// was made anew.
 #[allow(clippy::too_many_arguments)]
-fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>) -> Option<Option<Puppet>> {
+fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Option<Puppet>> {
     if let Some(p) = p.as_mut().filter(|p| (p.id, p.model) == (e.id, e.drawn_model))
         && let Some(cs) = p.sprite.as_mut()
     {
         crate::racebody::grant(cs, p.model, a_player(e), races);
         let anims = &mut p.anims;
-        lib.with_view(p.era, || crate::raceemote::grant(lib, cs, anims, p.model, a_player(e), races));
+        lib.with_view(p.era, || {
+            crate::raceemote::grant(lib, cs, anims, p.model, a_player(e), races);
+            crate::raceemote::grant_air(lib, cs, anims, p.model, a_player(e), jumps)
+        });
     }
     let r = p.as_ref().map_or(Redo::Build, |p| redo((p.id, p.model, p.look, p.held), (e.id, e.drawn_model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
     // a server's race's look come, changed or gone (`raceopts`): made anew
@@ -1147,7 +1156,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
     let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.drawn_model as i32) || p.textures != crate::texpack::generation()) { Redo::Build } else { r };
     match r {
         Redo::Keep => None,
-        Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms, races))),
+        Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms, races, jumps))),
         Redo::Items => {
             if let Some(p) = p.as_mut()
                 && let (Some(cs), Some(c)) = (&p.sprite, &e.creature)
@@ -2370,7 +2379,7 @@ mod held {
         let holds = |p: &Option<Puppet>| p.as_ref().and_then(|p| p.sprite.as_ref()).expect("a sprite").holds_items;
 
         let mut player = None;
-        apply(&lib, &mut g, &mut player, &entity(2), None, 0, 0, Some(&races));
+        apply(&lib, &mut g, &mut player, &entity(2), None, 0, 0, Some(&races), false);
         let p = player.as_ref().unwrap();
         assert_eq!(p.held, [Some((sword, 11)), Some((bow, 21)), Some((shield, 20))]);
         assert_eq!(nodes(&player), [11, 20, 21], "each item's model on its node");
@@ -2379,7 +2388,7 @@ mod held {
 
         for (who, list) in [("an NPC", Some(&races)), ("a server with no races of its own", None)] {
             let mut bare = None;
-            apply(&lib, &mut g, &mut bare, &entity(if who == "an NPC" { 0 } else { 2 }), None, 0, 0, list);
+            apply(&lib, &mut g, &mut bare, &entity(if who == "an NPC" { 0 } else { 2 }), None, 0, 0, list, false);
             assert!(nodes(&bare).is_empty(), "{who}: nothing hung");
             assert_eq!((bare.as_ref().unwrap().held, bare.as_ref().unwrap().projectile), ([None; 3], [None; 2]), "{who}");
             assert!(!holds(&bare), "{who}");
@@ -2387,9 +2396,9 @@ mod held {
 
         // the list after the puppet: its items at the next apply, not made anew
         let mut late = None;
-        apply(&lib, &mut g, &mut late, &entity(2), None, 0, 0, None);
+        apply(&lib, &mut g, &mut late, &entity(2), None, 0, 0, None, false);
         assert!(nodes(&late).is_empty());
-        let made_anew = apply(&lib, &mut g, &mut late, &entity(2), None, 0, 33, Some(&races));
+        let made_anew = apply(&lib, &mut g, &mut late, &entity(2), None, 0, 33, Some(&races), false);
         assert!(made_anew.is_none(), "the puppet kept");
         assert_eq!(nodes(&late), [11, 20, 21]);
     }
@@ -2483,7 +2492,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2567,7 +2576,11 @@ impl Play {
         if let (Some(cs), Some(model)) = (walker.sprite.as_mut(), self.self_model) {
             crate::racebody::grant(cs, model, true, self.session.creation.as_ref());
             let anims = &mut walker.anims;
-            lib.with_view(lib.view_for(model as i32), || crate::raceemote::grant(lib, cs, anims, model, true, self.session.creation.as_ref()));
+            lib.with_view(lib.view_for(model as i32), || {
+                crate::raceemote::grant(lib, cs, anims, model, true, self.session.creation.as_ref());
+                // on a server with jumps, its fall and landing the table's
+                crate::raceemote::grant_air(lib, cs, anims, model, true, self.session.jumps)
+            });
         }
     }
 
@@ -2583,6 +2596,9 @@ impl Play {
         let events = self.session.pump();
         // capes in their slot while the server's offer is taken (`cape`)
         crate::cape::set_offered(self.session.capes);
+        // the pack's and the bank's records, as the server last said before a
+        // dump (`inventory::pack_cap`; CLIENT's 40 where none says)
+        crate::inventory::set_caps(self.session.item_lists);
         // a server's races' own options and the looks chosen (`raceopts`): the
         // creatures in a look made again in it (`apply`)
         crate::raceopts::set_options(self.session.race_options.as_ref());
@@ -2680,7 +2696,7 @@ impl Play {
                 Event::InvAdd(item) => {
                     // AddInvItem
                     let limit = item.item.max_stack;
-                    crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::CAPACITY);
+                    crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::pack_cap());
                     self.npcw_item_added();
                 }
                 Event::InvTook { slot, sound, n } => {
@@ -2983,6 +2999,7 @@ impl Play {
                     let had = self.actors[slot];
                     let jumps = self.session.jumps;
                     let vy = &mut self.aloft_vy[slot];
+                    let air = &mut self.airs[slot];
                     // the live game's look, when the server said it is in force
                     self.entities.live_look = self.session.live_look;
                     // where it was drawn and its speed, before this update
@@ -2992,6 +3009,7 @@ impl Play {
                             let mut w = WalkControl::<Ee>::default();
                             w.init(Vect3::default(), Vect3::default(), scene);
                             *walk = Some((e.id, w));
+                            *air = Default::default();
                         }
                         // VICreatureEntity::Sync: the update becomes the walk
                         // control's physics; a creature that does not walk is
@@ -3019,7 +3037,15 @@ impl Play {
                             // height (`jump`), the rest on the ground
                             let aloft = e.creature.as_ref().is_some_and(|c| crate::jump::aloft(jumps, c));
                             *vy = e.creature.as_ref().filter(|_| aloft).map(|c| F::new(c.velocity[1]));
-                            crate::jump::ground(scene, skel, aloft, &mut pos, &mut hpr);
+                            let stood = crate::jump::ground(scene, skel, aloft, &mut pos, &mut hpr);
+                            // its jump as drawn: up from the update in the air,
+                            // down at one on a floor's gait or stood on one
+                            if let Some(c) = e.creature.as_ref() {
+                                *air = air.update(aloft, c.state, c.velocity[1]);
+                                if aloft {
+                                    *air = air.drawn(stood, F::new(c.velocity[1]));
+                                }
+                            }
                             e.pos = pos.to_array();
                             e.hpr = hpr.to_array();
                         }
@@ -3240,7 +3266,11 @@ impl Play {
             let dt = F::<Ee>::new((game_ms - e.extrapolated) as i32 as f32) * F::new(0.001);
             let (mut pos, mut hpr) = (v3(e.pos), v3(e.hpr));
             let vy = self.aloft_vy[slot].as_mut().filter(|_| crate::jump::aloft(self.session.jumps, c));
-            crate::jump::extrapolate_move(&mut walker.scene, skel, vy, &v3(c.velocity), dt, &mut pos, &mut hpr);
+            let stood = crate::jump::extrapolate_move(&mut walker.scene, skel, vy, &v3(c.velocity), dt, &mut pos, &mut hpr);
+            // a jumper drawn down to a floor (`jump::Air`)
+            if let Some(vy) = self.aloft_vy[slot].filter(|_| crate::jump::aloft(self.session.jumps, c)) {
+                self.airs[slot] = self.airs[slot].drawn(stood, vy);
+            }
             e.pos = pos.to_array();
             e.hpr = hpr.to_array();
             e.extrapolated = game_ms;
@@ -3272,7 +3302,7 @@ impl Play {
                 && e.drawn_model != 0
             {
                 let look = e.creature.as_ref().map(look_of);
-                apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms, self.session.creation.as_ref());
+                apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms, self.session.creation.as_ref(), self.session.jumps);
                 let want = cape_of(&self.session, e);
                 if let Some(p) = self.self_puppet.as_mut() {
                     wear_cape(lib, &mut g, p, want);
@@ -3288,7 +3318,7 @@ impl Play {
                 continue;
             };
             let look = e.creature.as_ref().map(look_of);
-            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms, self.session.creation.as_ref())
+            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms, self.session.creation.as_ref(), self.session.jumps)
                 && let Some(s) = sound.as_deref_mut()
             {
                 s.share_sounds(lib, &sounds_of(&self.puppets[slot]));
@@ -3335,12 +3365,17 @@ impl Play {
                             (CreatureLoco::Walk, Some(w)) => {
                                 w.update_sprite(cs, &p.anims, &mut p.rand);
                             }
-                            _ => cs.set_locomotion(c.state as i32, &p.anims, &mut p.rand),
+                            _ => {
+                                cs.set_locomotion(c.state as i32, &p.anims, &mut p.rand);
+                                // a player's jump: the fall in by its top, the
+                                // landing once down (`jump::draw_air`)
+                                crate::jump::draw_air(&mut self.airs[slot], self.aloft_vy[slot], cs, &p.anims, &mut p.rand);
+                            }
                         }
                         if watching(&c.name) {
                             let w = self.walks[slot].as_ref().map(|(_, w)| w);
                             eprintln!(
-                                "[watch] {game_ms} {} pos {:.2?} drawn {:.2?} state {} p255 {} walk {:?} vel {:.2?} anim {:?} stamp {} pose {} frame {}",
+                                "[watch] {game_ms} {} pos {:.2?} drawn {:.2?} state {} p255 {} walk {:?} vel {:.2?} anim {:?} stamp {} pose {} frame {} blend {:.2} air {:?}",
                                 c.name,
                                 e.pos,
                                 e.actor_pos,
@@ -3351,7 +3386,9 @@ impl Play {
                                 [cs.cur[0].anim, cs.cur[1].anim],
                                 e.stamp,
                                 pose,
-                                if cs.cur[0].play >= 0 { cs.h.plays.get(cs.cur[0].play).frame_a } else { -1 }
+                                if cs.cur[0].play >= 0 { cs.h.plays.get(cs.cur[0].play).frame_a } else { -1 },
+                                crate::jump::blended(cs, &p.anims),
+                                self.airs[slot]
                             );
                         }
                     }
@@ -5830,9 +5867,12 @@ impl Play {
         let inv = &self.dump.inventory;
         let pl = &self.dump.player;
         let flags = net::session::EXPANSION_FLAGS;
+        // each tab holds the definition's 40, or every record of a pack past
+        // them (`inventory::pack_cap`)
+        let counts = s.item_counts.map(|c| c.max(crate::inventory::pack_cap() as i32));
         self.items.set_built(crate::itemmenu::build(
             inv,
-            s.item_counts,
+            counts,
             &|k| crate::inventory::item_icon(&inv.items[k], flags) as i32,
             &|k| crate::inventory::can_use(&inv.items[k], pl.class, pl.race, pl.level),
         ));
@@ -8808,6 +8848,11 @@ impl Play {
             for (k, it) in self.dump.inventory.items.iter().enumerate() {
                 eprintln!("inv {k}: {} wear {} equip {} quick {} p4c {} p54 {} qty {} icon {:#x}/{:#x}", it.item.name, it.item.wear_slot, it.equip_slot, it.quick_slot, it.item.p4c, it.item.p54, it.quantity, it.item.icon, it.item.icon2);
             }
+            for (k, it) in self.dump.bank.items.items.iter().enumerate() {
+                eprintln!("bank {k}: {} qty {} key {}", it.item.name, it.quantity, it.inv_index);
+            }
+            let [pack, bank] = self.session.item_lists;
+            eprintln!("lists: pack {} of {pack}, bank {} of {bank}", self.dump.inventory.items.len(), self.dump.bank.items.items.len());
         }
         let n = self.entities.slots.iter().flatten().count();
         // the characters within their distance this frame (NPC/PC Distance's)
