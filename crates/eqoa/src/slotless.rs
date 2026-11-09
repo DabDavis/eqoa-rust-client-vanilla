@@ -476,8 +476,10 @@ const SEATS: &[(u32, Era, [f32; 2], f32)] = &[
     (0x648DFC11, Era::Y2002, [1.09, 1.09], -0.0035),
 ];
 
-/// How far inside each helm every vertex of a skeleton's skull is kept.
-pub const SKULL_INSIDE: f32 = 0.0005;
+/// How far inside each helm every vertex of a skeleton's skull is kept (the
+/// tests that measure `SEATS` hold it to this).
+#[cfg(test)]
+const SKULL_INSIDE: f32 = 0.0005;
 
 /// How body `id`'s helm is seated past the node it hangs on: a player's
 /// skeleton (`SEATS`, in the art the body is drawn in now: the file the
