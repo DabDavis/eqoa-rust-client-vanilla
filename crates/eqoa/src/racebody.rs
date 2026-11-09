@@ -64,7 +64,10 @@ pub fn grant(cs: &mut CSprite<Ee>, model: u32, player: bool, races: Option<&Crea
         if cs.item_nodes[2] < 0
             && let Some(off) = usize::try_from(cs.item_nodes[1]).ok().and_then(|i| cs.h.nodes.get(i))
         {
-            cs.item_nodes[2] = if off.parent >= 0 { off.parent } else { cs.item_nodes[1] };
+            // the root is no hand: an off hand's node hung off it (the Jal'Raeth's,
+            // whose item nodes float beside them as their knights' blades do) takes
+            // the shield itself
+            cs.item_nodes[2] = if off.parent > 0 { off.parent } else { cs.item_nodes[1] };
         }
     }
     cs.holds_items

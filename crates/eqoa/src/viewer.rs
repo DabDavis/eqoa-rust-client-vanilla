@@ -343,6 +343,8 @@ pub fn shot_with(
     // a zone is uploaded
     renderer.set_dynamic_lighting(&device, crate::settings::client().dynamic_lighting);
     renderer.set_sun_shadows(&device, crate::settings::client().sun_shadows);
+    renderer.set_light_shadows(&device, crate::settings::client().light_shadows);
+    renderer.set_shadow_distance(crate::settings::shadow_scale());
     renderer.set_ps2_sums(render::fog16::supported(&adapter));
     renderer.set_ps2_sequential(fog_sequential());
     renderer.scroll_time = Some(script.as_ref().map_or(0, |s| s.ms) as f32 / 1000.0);
@@ -1174,6 +1176,13 @@ pub fn shot_with(
         eprintln!("hour {shot_hour:.2}{}", if server { " (the server's)" } else { "" });
         let mut frame = lit(proj, v, shot_hour, Some((shot_eye, &walker.scene)), Some(&mut weather));
         frame.0.point = point;
+        // `EQOA_LANTERN`: with no server's session (whose `Play` steps it),
+        // the personal light as it is by night, 3 over the walker at its
+        // full 20 (`vi::tod::PersonalLight`'s), for looking at what it lights
+        if frame.0.point.is_none() && std::env::var_os("EQOA_LANTERN").is_some() {
+            let p = walker.cam.walk.phys.position;
+            frame.0.point = Some((Vec3::new(p.x.0, p.y.0 + 3.0, p.z.0), 20.0, Vec3::new(1.0, 0.69, 0.36)));
+        }
         // Dynamic Lighting's, as the window's frame has them
         if renderer.dynamic_lighting() {
             let mut found = Vec::new();
@@ -5612,10 +5621,15 @@ impl App {
                     // Dynamic Lighting as the options have it: its pipelines,
                     // and the zones in recorded for it (`render::lit`)
                     let dynamic = crate::settings::client().dynamic_lighting;
-                    // and Sun Shadows (`render::sunshadow`), with it
+                    // and Sun Shadows (`render::sunshadow`) and Light Shadows
+                    // (`render::lightshadow`), with it
                     let sun_shadows = crate::settings::client().sun_shadows;
-                    if g.renderer.dynamic_lighting() != dynamic || g.renderer.sun_shadows() != sun_shadows {
+                    let light_shadows = crate::settings::client().light_shadows;
+                    // and how far they reach (the options' Shadow Distance)
+                    g.renderer.set_shadow_distance(crate::settings::shadow_scale());
+                    if g.renderer.dynamic_lighting() != dynamic || g.renderer.sun_shadows() != sun_shadows || g.renderer.light_shadows() != light_shadows {
                         g.renderer.set_sun_shadows(&g.device, sun_shadows);
+                        g.renderer.set_light_shadows(&g.device, light_shadows);
                         g.renderer.set_dynamic_lighting(&g.device, dynamic);
                         if let Some(s) = streamer.as_mut() {
                             s.relight(&g.renderer, &g.device);

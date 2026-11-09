@@ -49,6 +49,15 @@
 //!   Dynamic Lighting on: walls, roofs, trees, characters and hills casting
 //!   shadows that move with the sun, `render::sunshadow`; on without it,
 //!   the page says what they need),
+//!   Light Shadows (2026-11-09: Off, the fires, the personal light and the
+//!   spells lighting through everything; On, with Dynamic Lighting on: what
+//!   stands between a surface and one of those lights casting a shadow
+//!   away from it, as Sun Shadows' from the sun, `render::lightshadow`; on
+//!   without it, the page says what they need), Shadow Distance (a slider
+//!   and its number: how far out Sun Shadows and Light Shadows reach, the
+//!   game's 250 to 1000 in 125s: the sun's cascades' far edge, and from the 8
+//!   lights shadowed (4 in a page and on Android) to every light Dynamic
+//!   Lighting draws, `render::Renderer::set_shadow_distance`)
 //!   and Ambient Occlusion (Off, the game's picture; On: the opaque scene's
 //!   creases, corners and contacts darkened per pixel, `render::ao`);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
@@ -135,7 +144,7 @@
 
 use crate::bindpage::ControlsPage;
 use crate::pointer::{Hits, key, rows_rect};
-use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
+use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, SHADOW_DISTANCE_GAME, SHADOW_DISTANCE_MAX, SHADOW_DISTANCE_STEP, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
 use vi::fpu::{Ee, F};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -713,6 +722,20 @@ impl WndOptions {
                     // Sun Shadows: cast or not from the next frame, with
                     // Dynamic Lighting on (`viewer`, `render::sunshadow`)
                     53 => c.sun_shadows = !c.sun_shadows,
+                    // Light Shadows: cast or not from the next frame, with
+                    // Dynamic Lighting on (`viewer`, `render::lightshadow`)
+                    56 => c.light_shadows = !c.light_shadows,
+                    // Shadow Distance: a step of 125 from the game's 250 to
+                    // 1000, the shadows' reach from the next frame (`viewer`)
+                    57 => {
+                        let v = c.shadow_distance as i32 + d.signum() * SHADOW_DISTANCE_STEP as i32;
+                        if (SHADOW_DISTANCE_GAME as i32..=SHADOW_DISTANCE_MAX as i32).contains(&v) {
+                            c.shadow_distance = v as u16;
+                            cues.push(11);
+                        } else {
+                            cues.push(9);
+                        }
+                    }
                     // Ambient Occlusion: its passes over the world from the
                     // next frame (`viewer`, `render::ao`)
                     54 => c.ambient_occlusion = !c.ambient_occlusion,
@@ -1152,7 +1175,11 @@ impl WndOptions {
                 Some(d) => format!("Plays on {d}"),
                 None => "No output now".to_string(),
             }),
-            Note::Lighting => sun_note(&crate::settings::client()).filter(|_| self.item == 53),
+            Note::Lighting => match self.item {
+                53 => sun_note(&crate::settings::client()),
+                56 => light_note(&crate::settings::client()),
+                _ => None,
+            },
             Note::None => None,
         }
     }
@@ -1165,6 +1192,11 @@ fn sun_note(c: &ClientOptions) -> Option<String> {
     (c.sun_shadows && !c.dynamic_lighting).then(|| "Sun Shadows need Dynamic Lighting".to_string())
 }
 
+/// And while Light Shadows are chosen: the same of them.
+fn light_note(c: &ClientOptions) -> Option<String> {
+    (c.light_shadows && !c.dynamic_lighting).then(|| "Light Shadows need Dynamic Lighting".to_string())
+}
+
 /// The client's words for its own pages (no WORDS.TXT entry): the menu's
 /// rows, Extended's categories and its rows (`EXTENDED_ITEMS`). (WORDS.TXT's
 /// "CONTROLS", 1039, is in capitals and used by none of the game's modules.)
@@ -1174,7 +1206,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 42] = [
+const EXTENDED_ITEMS: [(i32, &str); 44] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1217,6 +1249,8 @@ const EXTENDED_ITEMS: [(i32, &str); 42] = [
     (53, "Sun Shadows"),
     (54, "Ambient Occlusion"),
     (55, "Texture Folder"),
+    (56, "Light Shadows"),
+    (57, "Shadow Distance"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1237,8 +1271,8 @@ enum Note {
     /// have been dumped while Dump Textures is chosen, or where the folder
     /// is while Texture Folder is (`texpack::note`), natively
     Textures,
-    /// that Sun Shadows need Dynamic Lighting, while they are chosen and on
-    /// and it is off (`sun_note`)
+    /// that Sun Shadows or Light Shadows need Dynamic Lighting, while they
+    /// are chosen and on and it is off (`sun_note`, `light_note`)
     Lighting,
 }
 
@@ -1262,7 +1296,7 @@ struct Category {
 const ALL_CATEGORIES: [Category; 10] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
-    Category { name: "Lighting", items: &[52, 53, 54], note: Note::Lighting },
+    Category { name: "Lighting", items: &[52, 53, 56, 57, 54], note: Note::Lighting },
     Category { name: "UI", items: &[22, 29, 30, 40, 49], note: Note::None },
     Category { name: "Controller", items: &[16, 19, 48], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
@@ -1383,6 +1417,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         46 => on_off(c.shadows),
         47 => wide(if c.ps2_fog { "PS2" } else { "Exact" }),
         53 => on_off(c.sun_shadows),
+        56 => on_off(c.light_shadows),
         54 => on_off(c.ambient_occlusion),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
@@ -1439,6 +1474,7 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         24 => (at(c.entity_view as f32, ENTITY_VIEW_GAME as f32, ENTITY_VIEW_MAX as f32), Some(c.entity_view)),
         27 => name_distance_slider(&c),
         48 => (at(c.touch_size as f32, TOUCH_SIZE_MIN as f32, TOUCH_SIZE_MAX as f32), Some(c.touch_size as u16)),
+        57 => (at(c.shadow_distance as f32, SHADOW_DISTANCE_GAME as f32, SHADOW_DISTANCE_MAX as f32), Some(c.shadow_distance)),
         _ => return None,
     })
 }
@@ -1782,6 +1818,35 @@ mod tests {
         assert_eq!(w.page_note(2).as_deref(), Some("Sun Shadows need Dynamic Lighting"), "on without Dynamic Lighting");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::client().sun_shadows, "and back: two values");
+        // Light Shadows: the same, with their own note
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 56, "Light Shadows");
+        assert_eq!(value_text(&vui, 56), Some(wide(vui.words.get(552, vui.language))), "Off");
+        assert_eq!(w.page_note(2), None, "off: no note");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().light_shadows, settings::client().sun_shadows, cues.last()), (true, false, Some(&11)), "On, Sun Shadows still off");
+        assert_eq!(value_text(&vui, 56), Some(wide(vui.words.get(551, vui.language))));
+        assert_eq!(w.page_note(2).as_deref(), Some("Light Shadows need Dynamic Lighting"), "on without Dynamic Lighting");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::client().light_shadows, "and back: two values");
+        // Shadow Distance: a slider and its number, the game's 250 at the
+        // left, a step of 125 a press, 1000 at the right
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 57, "Shadow Distance");
+        assert_eq!(slider_at(57), Some((0.0, Some(250))), "the game's 250");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!((settings::client().shadow_distance, cues.last()), (250, Some(&9)), "nothing under the game's");
+        for want in [375u16, 500, 625, 750, 875, 1000] {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((settings::client().shadow_distance, cues.last()), (want, Some(&11)));
+        }
+        assert_eq!(slider_at(57), Some((1.0, Some(1000))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().shadow_distance, cues.last()), (1000, Some(&9)), "nothing past 1000");
+        for _ in 0..6 {
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+        }
+        assert_eq!(settings::client().shadow_distance, 250, "and back");
         // Ambient Occlusion, Off (the game's picture), then On
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 54, "Ambient Occlusion");
@@ -1792,7 +1857,7 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::client().ambient_occlusion, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (2, Some(&9)), "Lighting's last row");
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Lighting's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 2, -1), "back to the categories, Lighting still lit");
         // UI: Ability Bars, Update Notices, Text, HUD, Raid List
@@ -2527,6 +2592,19 @@ mod tests {
         assert_eq!(with(true, true), None, "both on: drawn");
         assert_eq!(with(false, false), None);
         assert_eq!(with(false, true), None);
+    }
+
+    /// Light Shadows' note: the same, of them alone (Sun Shadows' says
+    /// nothing of them, nor theirs of Sun Shadows).
+    #[test]
+    fn light_shadows_say_what_they_need() {
+        let with = |light_shadows: bool, dynamic_lighting: bool| light_note(&ClientOptions { light_shadows, dynamic_lighting, ..Default::default() });
+        assert_eq!(with(true, false).as_deref(), Some("Light Shadows need Dynamic Lighting"));
+        assert_eq!(with(true, true), None, "both on: drawn");
+        assert_eq!(with(false, false), None);
+        assert_eq!(with(false, true), None);
+        assert_eq!(sun_note(&ClientOptions { light_shadows: true, ..Default::default() }), None, "Sun Shadows' note not theirs");
+        assert_eq!(light_note(&ClientOptions { sun_shadows: true, ..Default::default() }), None, "nor theirs Sun Shadows'");
     }
 
     /// Every Extended row is one item, and each category's rows are rows:

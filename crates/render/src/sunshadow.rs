@@ -72,6 +72,17 @@ pub const ENDS: [f32; CASCADES] = [19.0, 43.0, 94.0, 250.0];
 /// How far before the camera the shadows reach.
 pub const RANGE: f32 = ENDS[CASCADES - 1];
 
+/// The cascades' ends for the options' Shadow Distance at `scale` times the
+/// game's ([`ENDS`] at 1 and under, exactly): the far two stretched, the third
+/// by the scale's square root and the last by the scale, the near two kept
+/// (their texels the same where the eye is nearest).
+pub fn ends(scale: f32) -> [f32; CASCADES] {
+    if scale <= 1.0 {
+        return ENDS;
+    }
+    [ENDS[0], ENDS[1], ENDS[2] * scale.sqrt(), ENDS[3] * scale]
+}
+
 /// Where they start to fade, gone by [`RANGE`].
 pub const FADE_FROM: f32 = 212.5;
 
@@ -200,6 +211,12 @@ pub struct Grid {
 /// a sixteenth: the same world point falls on the same texel's centre as the
 /// camera moves.
 pub fn fit(view_proj: Mat4, eye: Vec3, sun_dir: Vec3, size: u32, grid: &mut Grid) -> [Cascade; CASCADES] {
+    fit_to(view_proj, eye, sun_dir, size, grid, ENDS)
+}
+
+/// `fit` with the cascades ending at `ends` (`ends`: the options' Shadow
+/// Distance).
+pub fn fit_to(view_proj: Mat4, eye: Vec3, sun_dir: Vec3, size: u32, grid: &mut Grid, ends: [f32; CASCADES]) -> [Cascade; CASCADES] {
     let eye = eye.as_dvec3();
     let rel = view_proj.as_dmat4() * DMat4::from_translation(eye);
     let inv = rel.inverse();
@@ -221,7 +238,7 @@ pub fn fit(view_proj: Mat4, eye: Vec3, sun_dir: Vec3, size: u32, grid: &mut Grid
     let turned = grid.axes.replace([ax[0], ax[1]]).map(|p| [ax[0] - p[0], ax[1] - p[1]]);
     let s = size.max(4) as f64;
     std::array::from_fn(|c| {
-        let (n, f) = (if c == 0 { 0.0 } else { ENDS[c - 1] as f64 }, ENDS[c] as f64);
+        let (n, f) = (if c == 0 { 0.0 } else { ends[c - 1] as f64 }, ends[c] as f64);
         // the sphere round the slice's eight corners, its centre on the axis
         let zc = ((n + f) * (1.0 + k2) * 0.5).min(f);
         let r = ((f - zc).powi(2) + k2 * f * f).max((zc - n).powi(2) + k2 * n * n).sqrt();
@@ -274,13 +291,15 @@ pub(crate) struct ShadowUniform {
 }
 
 impl ShadowUniform {
-    fn new(cascades: &[Cascade; CASCADES], strength: f32, size: u32) -> Self {
+    fn new(cascades: &[Cascade; CASCADES], strength: f32, size: u32, ends: [f32; CASCADES]) -> Self {
+        // the shadows fade out over the last 15% of their reach (`FADE_FROM`)
+        let (fade, range) = if ends == ENDS { (FADE_FROM, RANGE) } else { (ends[CASCADES - 1] * (FADE_FROM / RANGE), ends[CASCADES - 1]) };
         ShadowUniform {
             m: std::array::from_fn(|c| cascades[c].m.to_cols_array_2d()),
-            ends: ENDS,
+            ends,
             texel: std::array::from_fn(|c| cascades[c].texel),
             inv_depth: std::array::from_fn(|c| 1.0 / cascades[c].depth.max(1e-3)),
-            params: [strength, FADE_FROM, RANGE, 1.0 / size as f32],
+            params: [strength, fade, range, 1.0 / size as f32],
         }
     }
 }
@@ -302,16 +321,23 @@ const PLANT_RETURN: &str = "        return min(light, vec3<f32>(1.0));\n";
 const PLANT_RETURN_SHADOWED: &str = "        return min(light - frame.sun.rgb * (0.15 * (1.0 - sun_shadow(i, vec3<f32>(0.0, 1.0, 0.0)))), vec3<f32>(1.0));\n";
 
 /// The receivers' module: shader.wgsl, lit.wgsl with its sun term taking the
-/// map's visibility (the lesser of the two) and a plant's sun the map's,
-/// then `sunshadow.wgsl`. `None` if lit.wgsl's lines are not there to
-/// change (tests::the_receivers_take_the_sun_line holds them to it).
+/// map's visibility (the lesser of the two) and a plant's sun the map's
+/// (`shadowed_lit`), then `sunshadow.wgsl`. `None` if lit.wgsl's lines are
+/// not there to change (tests::the_receivers_take_the_sun_line holds them
+/// to it).
 pub(crate) fn receivers_wgsl() -> Option<String> {
-    let lit = include_str!("lit.wgsl");
+    let lit = shadowed_lit(include_str!("lit.wgsl"))?;
+    Some([include_str!("shader.wgsl"), &lit, include_str!("sunshadow.wgsl")].join("\n"))
+}
+
+/// lit.wgsl's text `lit` with its sun line and a plant's return taking the
+/// map's visibility, as the receivers have them (Light Shadows' with the
+/// sun's too, `lightshadow::receivers_wgsl`, change this further).
+pub(crate) fn shadowed_lit(lit: &str) -> Option<String> {
     if lit.matches(SUN_LINE).count() != 1 || lit.matches(PLANT_RETURN).count() != 1 {
         return None;
     }
-    let lit = lit.replace(SUN_LINE, SUN_LINE_SHADOWED).replace(PLANT_RETURN, PLANT_RETURN_SHADOWED);
-    Some([include_str!("shader.wgsl"), &lit, include_str!("sunshadow.wgsl")].join("\n"))
+    Some(lit.replace(SUN_LINE, SUN_LINE_SHADOWED).replace(PLANT_RETURN, PLANT_RETURN_SHADOWED))
 }
 
 /// The models' vertex buffers as `model_pipeline` lays them out: the
@@ -386,9 +412,12 @@ pub(crate) struct Sun {
     /// lit by every light, `[1]` for a baked one.
     pub(crate) pipelines: [Vec<wgpu::RenderPipeline>; 2],
     /// Group 3 of the receivers: the lights (Dynamic Lighting's buffer), the
-    /// map, its comparison sampler and the uniform.
+    /// map, its comparison sampler and the uniform; and those three, for
+    /// Light Shadows' receivers with the sun's map (`lightshadow`).
     pub(crate) bg: wgpu::BindGroup,
-    buf: wgpu::Buffer,
+    pub(crate) buf: wgpu::Buffer,
+    pub(crate) whole: wgpu::TextureView,
+    pub(crate) cmp: wgpu::Sampler,
     /// The casters: alpha tested, and a solid layer's, depth alone.
     caster: wgpu::RenderPipeline,
     solid: wgpu::RenderPipeline,
@@ -535,7 +564,7 @@ impl Sun {
             })
         };
         let (caster, solid) = (cast_pipeline("vs_cast", Some("fs_cast")), cast_pipeline("vs_cast_solid", None));
-        Some(Sun { pipelines, bg, buf, caster, solid, cascades, cascade_buf, stride, layers, size, drawn: Default::default(), grid: Default::default() })
+        Some(Sun { pipelines, bg, buf, whole, cmp, caster, solid, cascades, cascade_buf, stride, layers, size, drawn: Default::default(), grid: Default::default() })
     }
 
     /// A group's casters, in clusters: its members that draw an opaque
@@ -634,9 +663,10 @@ impl Sun {
             return false;
         }
         let mut grid = self.grid.get();
-        let cascades = fit(view.view_proj, view.eye, dir, self.size, &mut grid);
+        let ends = ends(r.shadow_scale);
+        let cascades = fit_to(view.view_proj, view.eye, dir, self.size, &mut grid, ends);
         self.grid.set(grid);
-        queue.write_buffer(&self.buf, 0, bytemuck::bytes_of(&ShadowUniform::new(&cascades, k, self.size)));
+        queue.write_buffer(&self.buf, 0, bytemuck::bytes_of(&ShadowUniform::new(&cascades, k, self.size, ends)));
         for (c, cascade) in cascades.iter().enumerate() {
             let push = [(BACK_PUSH / cascade.depth as f64) as f32, 0.0, 0.0, 0.0];
             let u = CascadeUniform { m: cascade.m.to_cols_array_2d(), push };
@@ -692,6 +722,16 @@ impl Sun {
         }
         self.drawn.set((runs, draws));
         true
+    }
+
+    /// The receivers' uniform with no shadow in it, for a frame the sun
+    /// casts none in (`draw` false: by night) that Light Shadows' receivers
+    /// with the sun's map still draw through (`lightshadow`): their sun term
+    /// then the strip programs' alone.
+    pub(crate) fn unshadowed(&self, queue: &wgpu::Queue) {
+        let mut u = ShadowUniform::zeroed();
+        u.params = [0.0, FADE_FROM, RANGE, 1.0 / self.size as f32];
+        queue.write_buffer(&self.buf, 0, bytemuck::bytes_of(&u));
     }
 
     /// One model's opaque layers into a cascade (groups 0 and 3 set; the
@@ -862,6 +902,31 @@ mod tests {
     fn a_layer_is_solid_when_nothing_fails_its_test() {
         assert!(crate::solid(128, 1.0) && crate::solid(255, 1.0) && crate::solid(255, 0.5));
         assert!(!crate::solid(127, 1.0) && !crate::solid(0, 1.0) && !crate::solid(255, 0.49));
+    }
+
+    /// The options' Shadow Distance: at the game's (1) the cascades end
+    /// exactly where they did, and raised to 4 the last reaches 1,000, a point
+    /// 900 down the view inside it, which the game's last does not hold; the
+    /// near two the same.
+    #[test]
+    fn the_shadow_distance_stretches_the_far_cascades() {
+        assert_eq!(ends(1.0), ENDS, "the game's, exactly");
+        assert_eq!(ends(0.5), ENDS);
+        let far = ends(4.0);
+        assert_eq!((far[0], far[1], far[2], far[3]), (ENDS[0], ENDS[1], ENDS[2] * 2.0, 1000.0));
+        let eye = Vec3::new(25_300.0, 60.0, 15_700.0);
+        let look = Vec3::new(1.0, -0.05, 0.3);
+        let vp = view(eye, eye + look);
+        let sun = Vec3::new(-0.4, -0.9, 0.1).normalize();
+        let p = eye.as_dvec3() + look.as_dvec3().normalize() * 900.0;
+        let inside = |c: &Cascade| {
+            let q = c.m.as_dmat4() * (p - eye.as_dvec3()).extend(1.0);
+            q.x.abs() <= 1.0 && q.y.abs() <= 1.0 && (0.0..=1.0).contains(&q.z)
+        };
+        let raised = fit_to(vp, eye, sun, 2048, &mut Grid::default(), far);
+        let game = fit(vp, eye, sun, 2048, &mut Grid::default());
+        assert!(inside(&raised[3]) && !inside(&game[3]), "900 out: in the raised last cascade, not the game's");
+        assert_eq!((raised[0], raised[1]), (game[0], game[1]), "the near two the same");
     }
 
     /// The sun's strength: none under the horizon (the game's night, its

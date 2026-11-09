@@ -17,6 +17,39 @@ is put on the page by `.github/workflows/notes.yml`.
 - GMs: with the map up, Ctrl and a click (Cmd and a click on a Mac) takes you to that spot, on the ground there;
   the map's legend says so while you are a GM. Anyone else's click puts a waypoint, as before.
 
+## 2026-11-09 · The Jal'Raeth and the Wisp
+- Two more races on a server that has them. The Jal'Raeth float cross-legged: choose their robes, a channeler's
+  body or a knight's armour. They wear chest armour, bracers and gloves as a human does (their crossed legs keep
+  their own garb), their helm sits on their head, their weapons float at their side, and they wave, bow, point
+  and cheer.
+- A Wisp is a light inside an empty suit of armour: you see only what it wears, shaped as a human would wear it,
+  its weapons swinging as a human's do, and the wisp glowing inside the helm. With nothing on, it is the wisp
+  alone, floating where a head would be. Other players with this client see it so; a PlayStation 2 shows a human
+  in the same armour.
+
+## 2026-11-09 · Light Shadows: no square under lamps, steady weapon glows
+- With Light Shadows on, the ground under a street lamp is lit again. The lamp's light sits inside its little
+  housing, and the housing's floor was darkening a square of ground under every lamp.
+- A glowing weapon (an epic sword's glow) or a spell's light no longer makes the shadows of the person or weapon
+  carrying it flicker on and off. Those lights still cast the shadows of walls and everything else that stands
+  still, steadily; torches, braziers and your lantern still cast everyone's shadows as before.
+
+## 2026-11-09 · Torches, lamps and spells cast shadows
+- A new option, Extended > Lighting > Light Shadows (off unless you turn it on; like Sun Shadows it needs Dynamic
+  Lighting on): the light of torches, braziers, candles, lamps, your lantern and spells now stops at whatever stands
+  in its way. A character standing by a brazier casts a shadow away from it, a stool by a torch casts its own, and a
+  torch's light no longer comes through the wall it hangs on into the room behind.
+- Each moment the brightest and nearest lights cast shadows (eight on a computer, four in a browser and on a
+  phone). When another light takes one's place, the old shadow fades out and the new one fades in over a quarter of
+  a second, so no shadow pops in or out.
+- Your own lantern does not shadow the ground round your feet; the people and things near you cast shadows away
+  from you as you walk.
+- Shadow Distance, a slider beside them: how far out shadows reach. At its left, where it starts, they reach as far
+  as before; to the right the sun's shadows reach up to four times as far (1000) and more of the nearby lights cast
+  at once, up to every lit torch and lamp you can see (sixteen on a computer, eight in a browser and on a phone).
+  Farther costs more of your graphics card.
+- With it off, the game looks exactly as it did.
+
 ## 2026-11-09 · Texture packs load without freezing the game
 - A texture pack's pictures are now read in the background. Until a texture's replacement is ready the game draws
   its own texture there, then puts the replacement in its place a moment later, so the game no longer stops while a

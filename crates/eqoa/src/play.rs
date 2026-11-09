@@ -985,14 +985,19 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     let projectile = projectiles_of(sprite.as_ref(), e.creature.as_ref());
                     // ApplyLook: the look's textures and tints on the layers the
                     // sprite's text slots name.
+                    let cust = crate::s2::get().cust();
                     if let (Some(cs), Some(look)) = (&sprite, &look) {
-                        dress_look(lib, e.drawn_model as i32, &mut model, cs, look, helm_worn, &crate::s2::get().cust(), player);
+                        dress_look(lib, e.drawn_model as i32, &mut model, cs, look, helm_worn, &cust, player);
                     }
                     // a server's race's player: its parts in the look it chose, on
                     // the body it chose it on (`raceopts`)
                     let race_look = race_look_of(e);
                     if let Some(l) = &race_look {
                         crate::raceopts::dress(lib, e.drawn_model, &mut model, l);
+                    }
+                    // a Wisp: its armour alone (`wisp`; its wisp in the helm `attach` hung)
+                    if let (Some(cs), Some(lk)) = (&sprite, &look) {
+                        crate::wisp::dress(lib, e.drawn_model, &mut model, cs, lk, race_look.as_deref(), &cust);
                     }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
                     Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look })
@@ -1071,7 +1076,8 @@ fn projectiles_of(sprite: Option<&CSprite<Ee>>, c: Option<&net::entity::Creature
 /// What `Apply` attaches to a creature's sprite: the items in hand (`held`,
 /// as `held_items` gives them) and the helm (SetHelm, at node 8, in the
 /// tint; a player's in a body dressed as a human on the human's node when
-/// its own names none, `slotless::helm_node`), each on its node. With them,
+/// its own names none, `slotless::helm_node`), each on its node, and a
+/// Wisp's wisp in its helm (`wisp`, a server's race). With them,
 /// the hands' weapon ends and whether a helm is worn. `model`: the body's
 /// DictID; `player`: a player's character.
 #[allow(clippy::too_many_arguments)]
@@ -1093,7 +1099,17 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
         helm_worn = true;
         attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
     }
+    if let Some((node, m)) = wisp_of(lib, cs, c, model, player) {
+        attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+    }
     (attached, weapons, helm_worn)
+}
+
+/// A Wisp's wisp (`wisp`), for a player's character whose race look (by its
+/// name, `raceopts`) is on `model` and has one: its node and mesh.
+fn wisp_of(lib: &Library, cs: &CSprite<Ee>, c: &net::entity::Creature, model: u32, player: bool) -> Option<(i32, esf::Model)> {
+    let rl = crate::raceopts::look_of(&c.name).filter(|_| player)?;
+    crate::wisp::attachment(lib, model, cs, Some(&rl))
 }
 
 /// What `Apply` does to a creature's sprite when its entity is applied again.
@@ -2302,6 +2318,37 @@ mod held {
         let by_model_and_look = |a: (u32, Option<vi::cust::Look>), b: (u32, Option<vi::cust::Look>)| if a != b { Redo::Build } else { Redo::Keep };
         let now = state(&human, &swapped, 0xC698D870);
         assert_eq!(by_model_and_look((was.1, was.2), (now.1, now.2)), Redo::Keep, "the control: by the model and look alone the old weapon stays");
+    }
+
+    /// A Wisp's wisp is one of the attachments `attach` hangs (`wisp_of`), so a
+    /// weapon swapped, which attaches the items again (`Redo::Items`), keeps it
+    /// (it was hung only as the puppet was made, and a swap took it away): for
+    /// a player whose race look (by name) has one, on the body it was chosen
+    /// on; none for an NPC of the name, on another body, or for a name with no
+    /// look. Needs `run/eqoa.iso`.
+    #[test]
+    fn a_wisps_wisp_is_attached_with_its_items() {
+        const HUMAN: u32 = 0x70D8_98C6;
+        const WISP: u32 = 0x8143_DC70;
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
+        let r = lib.lookup(HUMAN as i32).unwrap();
+        let cs = load_csprite(&lib, r, &mut AnimScene::default(), &mut AnimCache::new(), &mut Rand(1)).unwrap();
+        let look = net::raceopts::Look { body: HUMAN, parts: vec![(net::raceopts::Kind::Texture, WISP, net::raceopts::Part { entries: vec![2], rects: vec![] })] };
+        crate::raceopts::set_looks(std::collections::HashMap::from([("Glim".to_string(), std::rc::Rc::new(look))]));
+        let named = |name: &str| net::entity::Creature { name: name.into(), ..Default::default() };
+        let (node, m) = wisp_of(&lib, &cs, &named("Glim"), HUMAN, true).expect("a Wisp's wisp");
+        assert_eq!(node, crate::wisp::node(&cs));
+        assert!(!m.pos.is_empty());
+        assert!(wisp_of(&lib, &cs, &named("Glim"), HUMAN, false).is_none(), "an NPC of the name");
+        assert!(wisp_of(&lib, &cs, &named("Glim"), 0x0D53_7335, true).is_none(), "on another body");
+        assert!(wisp_of(&lib, &cs, &named("Glimmer"), HUMAN, true).is_none(), "a name with no look");
+        crate::raceopts::set_looks(Default::default());
     }
 
     /// Another entity in a slot is made anew though it looks just like the

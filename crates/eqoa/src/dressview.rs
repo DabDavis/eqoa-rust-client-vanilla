@@ -205,8 +205,13 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         }
     }
     crate::play::dress_look(lib, model, &mut mesh, &cs, look, helm.is_some(), &t, true);
+    // a Wisp's (`wisp`): its armour alone, the wisp hung on the helm's node as an item is
+    let mut wisp = None;
     if let Some((rows, steps)) = &opts {
-        crate::raceopts::dress(lib, model as u32, &mut mesh, &crate::raceopts::look_of_steps(rows, words.sex, steps, model as u32));
+        let rl = crate::raceopts::look_of_steps(rows, words.sex, steps, model as u32);
+        crate::raceopts::dress(lib, model as u32, &mut mesh, &rl);
+        crate::wisp::dress(lib, model as u32, &mut mesh, &cs, look, Some(&rl), &t);
+        wisp = crate::wisp::attachment(lib, model as u32, &cs, Some(&rl));
     }
     let tris = |b: &[esf::Batch]| b.iter().map(|b| b.indices.len() / 3).sum::<usize>();
     // `EQOA_DRESS_DEBUG=slots`: the made-up batches flat, a colour a slot
@@ -224,12 +229,13 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     };
     if debug == "slots" {
         const C: [[u8; 3]; 5] = [[220, 40, 40], [230, 210, 40], [40, 200, 60], [50, 90, 230], [210, 50, 210]];
-        for b in &mut mesh.batches[before..] {
+        let from = before.min(mesh.batches.len());
+        for b in mesh.batches[from..].iter_mut().filter(|b| b.material >= crate::slotless::ENTRY) {
             let k = (b.material - crate::slotless::ENTRY) as usize;
             b.layers.iter_mut().for_each(|l| flat(l, C[k]));
         }
         // a body's own slots alike
-        for b in &mut mesh.batches[..before] {
+        for b in mesh.batches.iter_mut().take(before) {
             if let Some(k) = (0..5).find(|&i| cs.text_slots[i].0 == b.material) {
                 b.layers.iter_mut().for_each(|l| flat(l, C[k]));
             }
@@ -240,7 +246,7 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     {
         const C: [[u8; 3]; 9] = [[220, 40, 40], [230, 210, 40], [240, 130, 20], [50, 90, 230], [40, 200, 220], [130, 130, 130], [10, 10, 10], [190, 190, 190], [150, 60, 200]];
         let mut split = Vec::new();
-        for (b, g) in mesh.batches[..before].iter().zip(&groups) {
+        for (b, g) in mesh.batches.iter().take(before).zip(&groups) {
             for code in 0..9u8 {
                 let indices: Vec<u32> = b.indices.chunks_exact(3).zip(g).filter(|(_, c)| **c == code).flat_map(|(t, _)| t.to_vec()).collect();
                 if !indices.is_empty() {
@@ -253,14 +259,16 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         }
         mesh.batches = split;
     }
+    // a Wisp's body is stripped (`wisp`): fewer batches than it was dressed with
+    let kept = before.min(mesh.batches.len());
     eprintln!(
         "{:#010x}: {} text slots, {} batches dressed, {} made-up batches ({} triangles of {})",
         model as u32,
         cs.text_slots.iter().filter(|s| s.0 != -1).count(),
         before,
-        mesh.batches.len() - before,
-        tris(&mesh.batches[before..]),
-        tris(&mesh.batches[..before])
+        mesh.batches.len() - kept,
+        tris(&mesh.batches[kept..]),
+        tris(&mesh.batches[..kept])
     );
     // the cape, fitted to the body as it is built (`cape::model`)
     let cape = (words.cape.style != 0).then(|| crate::cape::model(lib, words.cape, model as u32, &cs)).flatten();
@@ -397,6 +405,14 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
             eprintln!("  item {id:#010x} bounds {lo:?} .. {hi:?}");
         }
         let g = r.upload(&device, &queue, &m, &[render::IDENTITY], &textures);
+        r.set_instances(&queue, &g, &[at.to_cols()]);
+        items.push((g, at));
+    }
+    if let Some((node, m)) = &wisp
+        && let Some(n) = cs.h.nodes.get(*node as usize)
+    {
+        let at = Matrix44::mul(&n.world, &centre);
+        let g = r.upload(&device, &queue, m, &[render::IDENTITY], &textures);
         r.set_instances(&queue, &g, &[at.to_cols()]);
         items.push((g, at));
     }
