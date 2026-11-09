@@ -356,34 +356,43 @@ async def drive(a, base, ws_url, target_id):
                 await js("window.drivePad.timestamp = performance.now()")
                 out(f"gamepad {step}")
 
+        # an event's SECONDS: from the start (the click, or --start-when), or written
+        # +N, N seconds from the first console line holding --then's text (a stage
+        # whose time varies with the machine's load: 'in the world as'); those
+        # come after every timed one
+        THEN = 1e6
+
+        def when(t):
+            return THEN + float(t[1:]) if t.startswith("+") else float(t)
+
         events = []
         for s in a.touch:
             t, spec = s.split("=", 1)
-            events.append((float(t), "touch", spec))
+            events.append((when(t), "touch", spec))
         for s in a.gamepad:
             t, spec = s.split("=", 1)
-            events.append((float(t), "gamepad", spec))
+            events.append((when(t), "gamepad", spec))
         for s in a.mouse:
             t, spec = s.split("=", 1)
-            events.append((float(t), "mouse", spec))
+            events.append((when(t), "mouse", spec))
         for s in a.shot:
             t, f = s.split("=", 1)
-            events.append((float(t), "shot", f))
+            events.append((when(t), "shot", f))
         for s in a.keys:
             t, spec = s.split("=", 1)
-            events.append((float(t), "keys", spec))
+            events.append((when(t), "keys", spec))
         for s in a.js:
             t, expr = s.split("=", 1)
-            events.append((float(t), "js", expr))
+            events.append((when(t), "js", expr))
         for s in a.resize:
             t, size = s.split("=", 1)
-            events.append((float(t), "resize", size))
+            events.append((when(t), "resize", size))
         for s in a.type:
             t, text = s.split("=", 1)
-            events.append((float(t), "type", os.environ.get(text[1:], "") if text.startswith("$") else text))
+            events.append((when(t), "type", os.environ.get(text[1:], "") if text.startswith("$") else text))
         for s in a.insert:
             t, text = s.split("=", 1)
-            events.append((float(t), "insert", os.environ.get(text[1:], "") if text.startswith("$") else text))
+            events.append((when(t), "insert", os.environ.get(text[1:], "") if text.startswith("$") else text))
         for s in a.hide:
             t, dur = s.split("=", 1)
             events.append((float(t), "hide", ""))
@@ -397,7 +406,19 @@ async def drive(a, base, ws_url, target_id):
                 body = r.read()
             return json.loads(body) if body.strip().startswith(b"{") else body
         deadline = t_click + a.timeout
+        then_at = None  # when --then's line came, on the events' clock
         for t, kind, arg in events:
+            if t >= THEN:
+                while then_at is None and time.monotonic() < deadline and not until.is_set():
+                    hit = next((l for l in lines if a.then and a.then in l), None)
+                    if hit:
+                        then_at = time.monotonic()
+                        out(f"then: {a.then!r} came {then_at - t_click:.1f} s after the start")
+                    else:
+                        await asyncio.sleep(0.25)
+                if then_at is None:
+                    break
+                t = then_at - t_click + (t - THEN)
             while time.monotonic() < t_click + t:
                 if until.is_set():
                     break
@@ -505,6 +526,7 @@ if __name__ == "__main__":
     ap.add_argument("--touch", action="append", default=[], help="SECONDS=STEPS: touches on the canvas")
     ap.add_argument("--gamepad", action="append", default=[], help="SECONDS=STEPS: a gamepad, through navigator.getGamepads")
     ap.add_argument("--mouse", action="append", default=[], help="SECONDS=STEPS: the mouse over the canvas")
+    ap.add_argument("--then", help="console text: an event's SECONDS written +N count N seconds from the first line holding it ('in the world as')")
     ap.add_argument("--start-when", help="a page expression, or line:TEXT for a console line: the events' seconds count from when it first holds ('line:the HUD is in')")
     ap.add_argument("--hide", action="append", default=[], help="SECONDS=DURATION: another tab in front for DURATION seconds (the page hidden)")
     ap.add_argument("--final-shot")
