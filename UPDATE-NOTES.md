@@ -24,7 +24,8 @@ is put on the page by `.github/workflows/notes.yml`.
   through it. The helm now sits a little wider and deeper over the skull, as the Frontiers art's helm
   always has, so the whole skull stays inside it from every side and in every move.
 - The old, mossy and frost bone skeletons a Skeleton can choose wear their helms a touch further forward
-  in the Frontiers art too, so their cheekbones stay inside the helm's sides.
+  in the Frontiers art too, so their cheekbones stay inside the helm's sides, and so do the great skeletons,
+  with either art.
 - Every other race's helm, and a skeleton creature's, is exactly as before.
 
 ## 2026-11-09 · Capes sit clear of armour

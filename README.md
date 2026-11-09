@@ -196,7 +196,9 @@ or a browser (each described where it lives below):
   every action); Frontiers' own skeleton needs none, the three its options offer (skulls a tenth larger)
   a few millimetres for their cheeks. The great skeletons a Skeleton player may choose are built on the
   troll's skeleton (its 43 nodes, every bind pose but the skull's top) and wear the troll's armour so
-  (`slotless::SHELL_BODIES`). Any body with texture slots is dressed exactly as before (held to every
+  (`slotless::SHELL_BODIES`); their helms, on their own node in Frontiers (SOE's FixScale 1.4, 1.2, 1.2)
+  and on the 2002 HumanMale's in the 2002 art (whose skeleton the 2002 disc builds them on), take a few
+  millimetres for their cheeks too (`SEATS`). Any body with texture slots is dressed exactly as before (held to every
   CSprite on the disc), and so is every other body's helm.
   Players' characters only (a creature whose name colour is a player's, 2, and the pregame's figures):
   NPCs keep the look the PS2 gave them (the user: "Players only").

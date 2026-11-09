@@ -470,7 +470,11 @@ pub fn helm_on(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, set: u8, 
 /// head clipping out the back slightly"). Frontiers' skeleton needs nothing
 /// past that FixScale (0.6 mm inside at the closest); the three skeletons its
 /// options offer have skulls a tenth larger on the same node, whose cheeks
-/// came out up to 3 mm at the face's edges.
+/// came out up to 3 mm at the face's edges. The four great skeletons, on the
+/// troll's skeleton in Frontiers (their own helm node, which SOE stretched
+/// 1.4 across and 1.2 up and front to back) and on the 2002 HumanMale's in
+/// the 2002 art (that human's node 6, as the skeleton's), came out at the
+/// cheeks too: 3.9 and 1.4 mm.
 const SEATS: &[(u32, Era, [f32; 2], f32)] = &[
     // (body, art, [stretch across, front to back], move front to back);
     // Frontiers' skeleton (0x6AF98A81): 0.6 mm inside every helm at the closest
@@ -479,12 +483,24 @@ const SEATS: &[(u32, Era, [f32; 2], f32)] = &[
     (0x198BAA64, Era::Frontiers, [1.04, 1.03], 0.0015),
     // the frost bone: cheeks out 1.8 mm (helm 2); moved 3.5 mm
     (0x648DFC11, Era::Frontiers, [1.00, 1.00], 0.0035),
+    // the great skeletons, all four alike (great, old, mossy and frost bone):
+    // cheeks out 3.9 mm (helm 6); moved 8.0 mm at most
+    (0x6AF98A82, Era::Frontiers, [1.02, 1.02], 0.0040),
+    (0x197F51C7, Era::Frontiers, [1.02, 1.02], 0.0040),
+    (0x90F16A6F, Era::Frontiers, [1.02, 1.02], 0.0040),
+    (0x7D9F41B2, Era::Frontiers, [1.02, 1.02], 0.0040),
     // the 2002 disc's: the back of the skull out 10.8 to 13.5 mm (helm 3), 4 mm
     // and more through every helm; moved 12.4, 15.8, 16.3 and 16.3 mm at most
     (0x6AF98A81, Era::Y2002, [1.07, 1.05], -0.0050),
     (0x45A8B064, Era::Y2002, [1.07, 1.09], -0.0030),
     (0x198BAA64, Era::Y2002, [1.09, 1.09], -0.0035),
     (0x648DFC11, Era::Y2002, [1.09, 1.09], -0.0035),
+    // the 2002 disc's great skeletons, all four alike: cheeks out 1.4 mm
+    // (helm 4); moved 2.3 mm at most
+    (0x6AF98A82, Era::Y2002, [1.01, 1.00], 0.0020),
+    (0x197F51C7, Era::Y2002, [1.01, 1.00], 0.0020),
+    (0x90F16A6F, Era::Y2002, [1.01, 1.00], 0.0020),
+    (0x7D9F41B2, Era::Y2002, [1.01, 1.00], 0.0020),
 ];
 
 /// How far inside each helm every vertex of a skeleton's skull is kept (the
@@ -2434,66 +2450,87 @@ mod tests {
     }
 
     /// The report (the owner, 2026-11-09: "the skeleton helm has its head
-    /// clipping out the back slightly"), measured on the four skeletons a
-    /// player may wear, in both arts, against the eight helms as a player's
-    /// character wears them: seated by `helm_fit`, every vertex of the skull
-    /// is at least `SKULL_INSIDE` inside every helm. The skull rides the
-    /// helm's node rigidly in every action (sampled: walking, running, dying,
-    /// the battle stance, attacks, character select's flourish, casting and
-    /// the wave), so one pose holds for all. The controls, seated as the node
-    /// alone seats them (what this client drew until now): in the 2002 art
-    /// each skeleton's skull came out of the back of every helm by 4 mm or
-    /// more (the 2002 skeleton names no helm node, and the 2002 HumanMale's
-    /// it hangs on is a human head's); in Frontiers' the skeleton's own stays
-    /// inside every helm, on the node SOE stretched for it (FixScale 1.1
-    /// across and front to back), and has no fit; the three its options offer
-    /// came out at the cheeks, their skulls a tenth larger on the same node.
-    /// Needs both discs (`disc_2002`; without them it passes having checked
-    /// nothing, and says so only under `--nocapture`).
+    /// clipping out the back slightly"), measured on the eight skeletons a
+    /// player may wear (`SHELLED`: the Skeleton race's own and the three its
+    /// options offer, on the human's skeleton; the four great skeletons, on the
+    /// troll's in Frontiers and the 2002 HumanMale's in the 2002 art), in both
+    /// arts, each body built whole in the art it is drawn in, as the world
+    /// builds it (`view_for`), against the eight helms as a player's character
+    /// wears them: seated by `helm_fit`, every vertex of the skull is at least
+    /// `SKULL_INSIDE` inside every helm. The skull rides the helm's node
+    /// rigidly in every action (sampled: walking, running, dying, the battle
+    /// stance, attacks, character select's flourish, casting and the wave), so
+    /// one pose holds for all. The controls, seated as the node alone seats
+    /// them (what this client drew until now): a body has a fit exactly where
+    /// its skull came out of a helm so. In the 2002 art each of the four on the
+    /// human's skeleton came out of the back of every helm by 4 mm or more (the
+    /// 2002 skeletons name no helm node, and the 2002 HumanMale's they hang on
+    /// is a human head's); in Frontiers' the skeleton's own stays inside every
+    /// helm, on the node SOE stretched for it (FixScale 1.1 across and front to
+    /// back), and has no fit; the rest came out at the cheeks: the three
+    /// options, their skulls a tenth larger on the same node, the great
+    /// skeletons in Frontiers on their own node (SOE's FixScale 1.4, 1.2, 1.2)
+    /// and in the 2002 art on that human's. Needs both discs (`disc_2002`;
+    /// without them it passes having checked nothing, and says so only under
+    /// `--nocapture`).
     #[test]
     fn a_skeletons_skull_stays_inside_its_helm() {
         let (Some(front), Some(y2002)) = (disc(), disc_2002()) else { return };
         y2002.set_view(Era::Y2002);
         let skeleton = 0x6AF9_8A81u32;
-        for (lib, era) in [(&front, Era::Frontiers), (&y2002, Era::Y2002)] {
+        let great = [0x6AF9_8A82u32, 0x197F_51C7, 0x90F1_6A6F, 0x7D9F_41B2];
+        assert!(great.iter().all(|g| SHELLED.contains(g)), "the great skeletons are a player's");
+        let mut checked = 0;
+        for (lib, art) in [(&front, Era::Frontiers), (&y2002, Era::Y2002)] {
             for &id in SHELLED {
-                let cs = sprite_of(lib, id);
-                let head = skull(lib, id, 0, 1500);
-                assert!(head.len() > 150, "{era:?} {id:#010x}: {} vertices on the head", head.len());
-                for action in [1, 2, 14, 17, 22, 23, 37, 56] {
-                    for at in [200, 900] {
-                        let posed = skull(lib, id, action, at);
-                        let moved = head.iter().zip(&posed).map(|(a, b)| a.distance(*b)).fold(0.0, f32::max);
-                        assert!(moved < 1e-4, "{era:?} {id:#010x}: the skull moved {moved} on its helm's node in action {action}");
-                    }
-                }
-                let mid = middle(&head);
-                let (out, set, at) = worst_out(&helms_on(lib, id, &cs, true), &head, mid, None);
-                assert!(out <= -SKULL_INSIDE, "{era:?} {id:#010x}: out by {out:.4} through helm {set} at {at:.3}");
-                // the controls: the helms on the node alone
-                let bare = helms_on(lib, id, &cs, false);
-                assert_eq!(bare.len(), 8);
-                match era {
-                    Era::Y2002 => {
-                        assert!(helm_fit(lib, id, true).is_some());
-                        for helm in &bare {
-                            let (out, _, at) = worst_out(std::slice::from_ref(helm), &head, mid, None);
-                            assert!(out > 0.004 && at.z < -0.1, "{id:#010x}: the back of the skull out of helm {} by {out:.4} at {at:.3}", helm.0);
+                lib.with_view(lib.view_for(id as i32), || {
+                    let era = lib.era_of(lib.lookup(id as i32).unwrap().file);
+                    assert_eq!(era, art, "{id:#010x}: on both discs");
+                    let cs = sprite_of(lib, id);
+                    let head = skull(lib, id, 0, 1500);
+                    assert!(head.len() > 150, "{era:?} {id:#010x}: {} vertices on the head", head.len());
+                    for action in [1, 2, 14, 17, 22, 23, 37, 56] {
+                        for at in [200, 900] {
+                            let posed = skull(lib, id, action, at);
+                            let moved = head.iter().zip(&posed).map(|(a, b)| a.distance(*b)).fold(0.0, f32::max);
+                            assert!(moved < 1e-4, "{era:?} {id:#010x}: the skull moved {moved} on its helm's node in action {action}");
                         }
                     }
-                    Era::Frontiers if id == skeleton => {
-                        let own = cs.h.nodes[cs.node_ids[8] as usize].fix_scale.to_array();
-                        assert!(own.iter().zip([1.1, 1.0, 1.1]).all(|(a, b)| (a - b).abs() < 1e-6), "SOE's stretch on its own helm node: {own:?}");
-                        assert!(helm_fit(lib, id, true).is_none(), "nothing past it");
-                        assert!(worst_out(&bare, &head, mid, None).0 <= -SKULL_INSIDE);
+                    let mid = middle(&head);
+                    let (out, set, at) = worst_out(&helms_on(lib, id, &cs, true), &head, mid, None);
+                    assert!(out <= -SKULL_INSIDE, "{era:?} {id:#010x}: out by {out:.4} through helm {set} at {at:.3}");
+                    // the controls: the helms on the node alone
+                    let bare = helms_on(lib, id, &cs, false);
+                    assert_eq!(bare.len(), 8);
+                    let (out, _, at) = worst_out(&bare, &head, mid, None);
+                    assert_eq!(helm_fit(lib, id, true).is_some(), out > -SKULL_INSIDE, "{era:?} {id:#010x}: a fit where the node alone lets the skull out ({out:.4} at {at:.3})");
+                    let own_fix = |want: [f32; 3]| {
+                        let fix = cs.h.nodes[cs.node_ids[8] as usize].fix_scale.to_array();
+                        assert!(fix.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-6), "{id:#010x}: SOE's stretch on its own helm node: {fix:?}");
+                    };
+                    match era {
+                        Era::Y2002 if !great.contains(&id) => {
+                            for helm in &bare {
+                                let (out, _, at) = worst_out(std::slice::from_ref(helm), &head, mid, None);
+                                assert!(out > 0.004 && at.z < -0.1, "{id:#010x}: the back of the skull out of helm {} by {out:.4} at {at:.3}", helm.0);
+                            }
+                        }
+                        Era::Frontiers if id == skeleton => {
+                            own_fix([1.1, 1.0, 1.1]);
+                            assert!(helm_fit(lib, id, true).is_none(), "nothing past it");
+                        }
+                        _ => {
+                            if era == Era::Frontiers && great.contains(&id) {
+                                own_fix([1.4, 1.2, 1.2]);
+                            }
+                            assert!(out > 0.0 && at.z > 0.03 && at.x.abs() > 0.04, "{era:?} {id:#010x}: its cheek out by {out:.4} at {at:.3}");
+                        }
                     }
-                    Era::Frontiers => {
-                        let (out, _, at) = worst_out(&bare, &head, mid, None);
-                        assert!(out > 0.0 && at.z > 0.03 && at.x.abs() > 0.04, "{id:#010x}: its cheek out by {out:.4} at {at:.3}");
-                    }
-                }
+                    checked += 1;
+                });
             }
         }
+        assert_eq!(checked, 2 * SHELLED.len());
     }
 
     /// How far a fit moves the helms' vertices at most (`helms`, each set's
@@ -2532,6 +2569,9 @@ mod tests {
         for &(id, era, [x, z], dz) in SEATS {
             assert!(SHELLED.contains(&id) && seen.insert((id, era)), "{id:#010x} {era:?}");
             let lib = if era == Era::Y2002 { &y2002 } else { &front };
+            let was = lib.view();
+            lib.set_view(lib.view_for(id as i32));
+            assert_eq!(lib.era_of(lib.lookup(id as i32).unwrap().file), era, "{id:#010x}: drawn in its row's art");
             let cs = sprite_of(lib, id);
             let bare = helms_on(lib, id, &cs, false);
             let head = skull(lib, id, 0, 1500);
@@ -2548,6 +2588,7 @@ mod tests {
                 }
                 assert!(worst_out(&bare, &head, mid, Some(&n)).0 > -SKULL_INSIDE, "{id:#010x} {era:?}: {n:?} holds too, and is better");
             }
+            lib.set_view(was);
         }
     }
 
@@ -2615,7 +2656,8 @@ mod tests {
     }
 
     /// The search `SEATS` is the result of (run with `--ignored --nocapture`;
-    /// needs both discs): for each skeleton a player may wear in each art,
+    /// needs both discs): for each skeleton a player may wear in each art (the
+    /// body, its skull and its helms built in the art it is drawn in),
     /// among `fits()` that hold its skull at least `SKULL_INSIDE` inside each
     /// of the eight helms on its node, the best by `better`; none for a
     /// skeleton whose node alone holds it. Prints the table's rows.
@@ -2624,16 +2666,22 @@ mod tests {
     fn measure_helm_fits() {
         let (Some(front), Some(y2002)) = (disc(), disc_2002()) else { return };
         y2002.set_view(Era::Y2002);
-        for (lib, era) in [(&front, Era::Frontiers), (&y2002, Era::Y2002)] {
+        for (lib, art) in [(&front, Era::Frontiers), (&y2002, Era::Y2002)] {
             for &id in SHELLED {
+                // the body, its skull and its helms in the art it is drawn in
+                lib.with_view(lib.view_for(id as i32), || {
+                let era = lib.era_of(lib.lookup(id as i32).unwrap().file);
                 let cs = sprite_of(lib, id);
                 let bare = helms_on(lib, id, &cs, false);
                 let head = skull(lib, id, 0, 1500);
                 let mid = middle(&head);
+                let node = helm_node(lib, id, &cs, true);
+                let fix = cs.h.nodes[node as usize].fix_scale.to_array();
+                eprintln!("    // {art:?} art {id:#010x}, drawn in {era:?}'s: {} nodes, helm node {node} (its own word {}), FixScale {fix:.2?}; per helm {:?}", cs.h.nodes.len(), cs.node_ids[8], bare.iter().map(|h| { let (o, _, at) = worst_out(std::slice::from_ref(h), &head, mid, None); format!("{}: {:+.1} mm at {at:.3}", h.0, o * 1000.0) }).collect::<Vec<_>>());
                 let (out, set, at) = worst_out(&bare, &head, mid, None);
                 if out <= -SKULL_INSIDE {
                     eprintln!("    // {era:?} {id:#010x}: inside every helm on its node alone ({:.1} mm at the closest)", -out * 1000.0);
-                    continue;
+                    return;
                 }
                 // the vertices that can come out: within 2.5 cm of a helm, the
                 // farthest out first (a fit fails at the first)
@@ -2654,6 +2702,7 @@ mod tests {
                 let b = best.expect("a fit in the search");
                 eprintln!("    // {era:?} {id:#010x}: out by {:.1} mm through helm {set} at {at:.3} on its node alone; {:.1} mm inside fitted, the helms moved {:.1} mm at most", out * 1000.0, -worst_out(&bare, &head, mid, Some(&b)).0 * 1000.0, moved_by(&bare, &b) * 1000.0);
                 eprintln!("    ({id:#010X}, Era::{era:?}, [{:.2}, {:.2}], {:.4}),", b.scale.x, b.scale.z, b.offset.z);
+                });
             }
         }
     }
