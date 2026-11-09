@@ -45,6 +45,10 @@
 //!   programs' light per vertex, the personal light the one point light;
 //!   On: the light per fragment, and the fires, placed lights, spells and
 //!   glowing weapons lighting what is round them, `lights`, `render::lit`)
+//!   and Sun Shadows (Off, the sun through everything as on a PS2; On, with
+//!   Dynamic Lighting on: walls, roofs, trees, characters and hills casting
+//!   shadows that move with the sun, `render::sunshadow`; on without it,
+//!   the page says what they need),
 //!   and Ambient Occlusion (Off, the game's picture; On: the opaque scene's
 //!   creases, corners and contacts darkened per pixel, `render::ao`);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
@@ -669,6 +673,9 @@ impl WndOptions {
                     // Ground Fog: the fog's fans from the next frame (`fx`,
                     // `render::fog16`)
                     47 => c.ps2_fog = !c.ps2_fog,
+                    // Sun Shadows: cast or not from the next frame, with
+                    // Dynamic Lighting on (`viewer`, `render::sunshadow`)
+                    53 => c.sun_shadows = !c.sun_shadows,
                     // Ambient Occlusion: its passes over the world from the
                     // next frame (`viewer`, `render::ao`)
                     54 => c.ambient_occlusion = !c.ambient_occlusion,
@@ -1101,9 +1108,17 @@ impl WndOptions {
                 Some(d) => format!("Plays on {d}"),
                 None => "No output now".to_string(),
             }),
+            Note::Lighting => sun_note(&crate::settings::client()).filter(|_| self.item == 53),
             Note::None => None,
         }
     }
+}
+
+/// What Lighting's page says beside Back while Sun Shadows are chosen: that
+/// they need Dynamic Lighting, when they are on and it is off (they are
+/// drawn only with it).
+fn sun_note(c: &ClientOptions) -> Option<String> {
+    (c.sun_shadows && !c.dynamic_lighting).then(|| "Sun Shadows need Dynamic Lighting".to_string())
 }
 
 /// The client's words for its own pages (no WORDS.TXT entry): the menu's
@@ -1115,7 +1130,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 35] = [
+const EXTENDED_ITEMS: [(i32, &str); 36] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1150,6 +1165,7 @@ const EXTENDED_ITEMS: [(i32, &str); 35] = [
     (50, "Texture Packs"),
     (51, "Dump Textures"),
     (52, "Dynamic Lighting"),
+    (53, "Sun Shadows"),
     (54, "Ambient Occlusion"),
 ];
 
@@ -1170,6 +1186,9 @@ enum Note {
     /// how many replacements the packs hold, or how many textures have been
     /// dumped while Dump Textures is chosen (`texpack::note`), natively
     Textures,
+    /// that Sun Shadows need Dynamic Lighting, while they are chosen and on
+    /// and it is off (`sun_note`)
+    Lighting,
 }
 
 /// One of Extended's categories: its name, its rows (their items, in the
@@ -1189,7 +1208,7 @@ struct Category {
 const ALL_CATEGORIES: [Category; 9] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
-    Category { name: "Lighting", items: &[52, 54], note: Note::None },
+    Category { name: "Lighting", items: &[52, 53, 54], note: Note::Lighting },
     Category { name: "UI", items: &[22, 29, 30, 40, 49], note: Note::None },
     Category { name: "Controller", items: &[16, 19, 48], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
@@ -1289,6 +1308,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         37 => on_off(c.environment),
         46 => on_off(c.shadows),
         47 => wide(if c.ps2_fog { "PS2" } else { "Exact" }),
+        53 => on_off(c.sun_shadows),
         54 => on_off(c.ambient_occlusion),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
@@ -1676,6 +1696,18 @@ mod tests {
         assert_eq!(value_text(&vui, 52), Some(wide(vui.words.get(551, vui.language))));
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::client().dynamic_lighting, "and back: two values");
+        // Sun Shadows: Off, then On, which without Dynamic Lighting the page
+        // says they need
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 53, "Sun Shadows");
+        assert_eq!(value_text(&vui, 53), Some(wide(vui.words.get(552, vui.language))), "Off");
+        assert_eq!(w.page_note(2), None, "off: no note");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().sun_shadows, cues.last()), (true, Some(&11)), "On");
+        assert_eq!(value_text(&vui, 53), Some(wide(vui.words.get(551, vui.language))));
+        assert_eq!(w.page_note(2).as_deref(), Some("Sun Shadows need Dynamic Lighting"), "on without Dynamic Lighting");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::client().sun_shadows, "and back: two values");
         // Ambient Occlusion, Off (the game's picture), then On
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!(w.item, 54, "Ambient Occlusion");
@@ -1686,7 +1718,7 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::client().ambient_occlusion, "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (1, Some(&9)), "Lighting's last row");
+        assert_eq!((w.row, cues.last()), (2, Some(&9)), "Lighting's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 2, -1), "back to the categories, Lighting still lit");
         // UI: Ability Bars, Update Notices, Text, HUD, Raid List
@@ -2301,7 +2333,8 @@ mod tests {
         assert_eq!(CATEGORIES[by_name("Characters")].note, Note::Server);
         assert_eq!(CATEGORIES[by_name("Sound")].note, Note::Output);
         assert_eq!(CATEGORIES[by_name("Video")].note, Note::Scale);
-        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 4 } else { 5 }, "the notes only");
+        assert_eq!(CATEGORIES[by_name("Lighting")].note, Note::Lighting);
+        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 5 } else { 6 }, "the notes only");
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Textures: nothing to say while both are off (a test keeps no
@@ -2328,5 +2361,38 @@ mod tests {
         assert_eq!(note(&w, by_name("Video")), None, "the control: none on Video's");
         // no output in a test (no device opened): said so
         assert_eq!(note(&w, by_name("Sound")).as_deref(), Some("No output now"), "Sound: where it plays");
+    }
+
+    /// Sun Shadows' note: only while they are on and Dynamic Lighting is
+    /// off (they are drawn only with it); none with both on, none off.
+    #[test]
+    fn sun_shadows_say_what_they_need() {
+        let with = |sun_shadows: bool, dynamic_lighting: bool| sun_note(&ClientOptions { sun_shadows, dynamic_lighting, ..Default::default() });
+        assert_eq!(with(true, false).as_deref(), Some("Sun Shadows need Dynamic Lighting"));
+        assert_eq!(with(true, true), None, "both on: drawn");
+        assert_eq!(with(false, false), None);
+        assert_eq!(with(false, true), None);
+    }
+
+    /// Every Extended row is one item, and each category's rows are rows:
+    /// two branches that took the same number for a row (Lighting's) fail
+    /// here, where a second match arm would only warn.
+    #[test]
+    fn every_extended_row_has_its_own_item() {
+        let mut items: Vec<i32> = EXTENDED_ITEMS.iter().map(|r| r.0).collect();
+        items.sort_unstable();
+        let n = items.len();
+        items.dedup();
+        assert_eq!(items.len(), n, "an item named twice in EXTENDED_ITEMS");
+        for c in ALL_CATEGORIES.iter() {
+            for i in c.items {
+                assert!(EXTENDED_ITEMS.iter().any(|r| r.0 == *i), "{}'s item {i} has no row", c.name);
+            }
+        }
+        let listed: Vec<i32> = ALL_CATEGORIES.iter().flat_map(|c| c.items.iter().copied()).collect();
+        let mut once = listed.clone();
+        once.sort_unstable();
+        once.dedup();
+        assert_eq!(once.len(), listed.len(), "an item on two pages");
     }
 }

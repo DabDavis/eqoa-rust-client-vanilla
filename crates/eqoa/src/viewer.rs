@@ -342,6 +342,7 @@ pub fn shot_with(
     // Dynamic Lighting (kept only under `$EQOA_CONFIG` for a shot), before
     // a zone is uploaded
     renderer.set_dynamic_lighting(&device, crate::settings::client().dynamic_lighting);
+    renderer.set_sun_shadows(&device, crate::settings::client().sun_shadows);
     renderer.set_ps2_sums(render::fog16::supported(&adapter));
     renderer.set_ps2_sequential(fog_sequential());
     renderer.scroll_time = Some(script.as_ref().map_or(0, |s| s.ms) as f32 / 1000.0);
@@ -5369,7 +5370,10 @@ impl App {
                     // Dynamic Lighting as the options have it: its pipelines,
                     // and the zones in recorded for it (`render::lit`)
                     let dynamic = crate::settings::client().dynamic_lighting;
-                    if g.renderer.dynamic_lighting() != dynamic {
+                    // and Sun Shadows (`render::sunshadow`), with it
+                    let sun_shadows = crate::settings::client().sun_shadows;
+                    if g.renderer.dynamic_lighting() != dynamic || g.renderer.sun_shadows() != sun_shadows {
+                        g.renderer.set_sun_shadows(&g.device, sun_shadows);
                         g.renderer.set_dynamic_lighting(&g.device, dynamic);
                         if let Some(s) = streamer.as_mut() {
                             s.relight(&g.renderer, &g.device);
