@@ -164,13 +164,13 @@ pub const OP_COMBAT_RECORD_DATA: u16 = 0x7E21;
 /// ([`OP_CAPES_LIST`]) and of the players it sees ([`OP_CAPES_IN_VIEW`]). A PS2
 /// ignores the offer and is sent a cape as a plain item; a server that never
 /// makes one gets no answer, and nothing of capes is drawn or worn.
-pub const OP_CAPES: u16 = 0x7E24;
+pub const OP_CAPES: u16 = 0x7E25;
 /// The capes of the players this client sees, by the id it knows each by (its
 /// own character's too): `cape::read`, the whole set each time.
-pub const OP_CAPES_IN_VIEW: u16 = 0x7E25;
+pub const OP_CAPES_IN_VIEW: u16 = 0x7E26;
 /// The capes of the characters in its list, by each one's server id:
 /// `cape::read`, the whole list after each character list.
-pub const OP_CAPES_LIST: u16 = 0x7E26;
+pub const OP_CAPES_LIST: u16 = 0x7E27;
 /// go-eqoa-server's own, no retail message either: the whole of a raid group,
 /// where a roster holds four (`m_group`). The offer, from the server once the
 /// player is in the world, a u32 after the opcode (1); a server without it
@@ -2407,8 +2407,8 @@ mod tests {
         assert_eq!(answers(&mut s), [], "the record answered nothing");
     }
 
-    // Capes (0x7E24): the offer answered with 1 at once and kept; then the list's
-    // capes (0x7E26, by server id) and those in view (0x7E25, by entity id) kept,
+    // Capes (0x7E25): the offer answered with 1 at once and kept; then the list's
+    // capes (0x7E27, by server id) and those in view (0x7E26, by entity id) kept,
     // each message the whole of it, a style of 0 left out and a count of each.
     // The controls: an offer cut short or of 0 is neither answered nor kept, a
     // session never offered capes keeps no list sent to it anyway, and a list cut
@@ -2436,13 +2436,13 @@ mod tests {
         answers(&mut s);
         deliver(&mut s, drdp::TYPE_GUARANTEED, list(OP_CAPES_IN_VIEW, &[(5, 1, 0)]));
         assert!(s.capes_in_view.is_empty() && s.capes_changed == 0, "the control: never offered, nothing kept");
-        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x24, 0x7E, 1, 0, 0]);
-        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x24, 0x7E, 0, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x25, 0x7E, 1, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x25, 0x7E, 0, 0, 0, 0]);
         assert!(!s.capes, "the controls: cut short, or 0");
         assert_eq!(answers(&mut s), []);
-        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x24, 0x7E, 1, 0, 0, 0]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x25, 0x7E, 1, 0, 0, 0]);
         assert!(ev.is_empty() && s.capes, "the offer is the session's: {ev:?}");
-        assert_eq!(answers(&mut s), [(251, vec![0x24, 0x7E, 1, 0, 0, 0])]);
+        assert_eq!(answers(&mut s), [(251, vec![0x25, 0x7E, 1, 0, 0, 0])]);
         deliver(&mut s, drdp::TYPE_GUARANTEED, list(OP_CAPES_LIST, &[(1234, 3, 0xFF0000FF), (99, 0, 0)]));
         assert_eq!(s.cape_list.get(&1234), Some(&crate::cape::Cape { style: 3, color: 0xFF0000FF }));
         assert_eq!((s.cape_list.len(), s.capes_changed), (1, 1), "a style of 0 wears none");
