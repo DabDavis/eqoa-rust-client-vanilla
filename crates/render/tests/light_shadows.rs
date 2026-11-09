@@ -207,7 +207,8 @@ fn a_body_does_not_shadow_its_own_light() {
     let frame = |lights: &[PointLight], point: Option<(Vec3, f32, Vec3)>, light: bool| {
         let mut r = renderer(&g, true, false, light);
         let f = r.upload(&g.device, &g.queue, &floor(HALF), &[at(Vec3::ZERO)], &none);
-        let body = r.upload(&g.device, &g.queue, &cuboid(Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 2.0, 1.0), layer(0, 0)), &[at(Vec3::ZERO)], &none);
+        // a character's body is skinned (its footprint rule's)
+        let body = r.upload(&g.device, &g.queue, &esf::Model { skinned: true, ..cuboid(Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 2.0, 1.0), layer(0, 0)) }, &[at(Vec3::ZERO)], &none);
         shot(&g, &mut r, &view(Vec3::ZERO, lights, point), &[Draw::Model(&f), Draw::Model(&body)])
     };
     let past = pixel(1.5, 0.0);
@@ -405,6 +406,39 @@ fn a_lamps_housing_casts_no_square() {
     let gr = r.upload_group(&g.device, &g.queue, &[part(&flat), part(&room)], &none);
     let px = shot(&g, &mut r, &view(Vec3::ZERO, &lights, None), &[Draw::Group(&gr)]);
     assert!((red(&px, pixel(8.0, 0.0)) - 0.1).abs() <= 2.5 / 255.0, "past the room's wall: its shadow ({})", red(&px, pixel(8.0, 0.0)));
+}
+
+/// A character standing still under its own personal light (the lantern 3
+/// over its feet), a sword held across its front as an idle stance holds it:
+/// the sword's box straddled the lantern's line, so the footprint rule meant
+/// for the body took the sword too and it cast nothing, while walking (the
+/// sword at its side) it did: weapon shadows only while moving (petition
+/// 1389). The body (skinned) still casts nothing for its own lantern; the
+/// sword casts in every one of ten idle frames, as it does held at the side
+/// (the control, walking).
+#[test]
+fn a_still_characters_sword_casts_for_its_lantern() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    let lamp = (Vec3::new(0.0, 3.0, 0.0), 20.0, Vec3::X);
+    let probe = pixel(1.3, 0.0);
+    let run = |sword: (Vec3, Vec3)| {
+        let mut r = renderer(&g, true, false, true);
+        let f = r.upload(&g.device, &g.queue, &floor(HALF), &[at(Vec3::ZERO)], &none);
+        let body = r.upload(&g.device, &g.queue, &esf::Model { skinned: true, ..cuboid(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 2.0, 0.5), layer(0, 0)) }, &[at(Vec3::ZERO)], &none);
+        let blade = r.upload(&g.device, &g.queue, &cuboid(sword.0, sword.1, layer(0, 0)), &[at(Vec3::ZERO)], &none);
+        (0..10)
+            .map(|k| {
+                r.scroll_time = Some(k as f32 / 60.0);
+                let px = shot(&g, &mut r, &view(Vec3::ZERO, &[], Some(lamp)), &[Draw::Model(&f), Draw::Model(&body), Draw::Model(&blade)]);
+                red(&px, probe)
+            })
+            .collect::<Vec<f32>>()
+    };
+    let idle = run((Vec3::new(-0.9, 0.9, -0.2), Vec3::new(0.9, 1.1, 0.2)));
+    assert!(idle.iter().all(|&v| v < 0.15), "the idle sword's shadow from its lantern, every frame: {idle:?}");
+    let walking = run((Vec3::new(0.6, 0.5, -0.2), Vec3::new(0.8, 1.5, 0.2)));
+    assert!(walking.iter().all(|&v| v < 0.15), "the control, the sword at its side: {walking:?}");
 }
 
 /// A light of the moment riding a body (a weapon's glow in its hand, a

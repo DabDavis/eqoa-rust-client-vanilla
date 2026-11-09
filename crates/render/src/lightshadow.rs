@@ -772,7 +772,12 @@ impl Points {
                     return false;
                 }
                 match m.core.get() {
-                    Some((lo, hi)) if personal => !(lo.x <= at.x && at.x <= hi.x && lo.z <= at.z && at.z <= hi.z),
+                    // the personal light's own body (a skinned one, and what
+                    // its palette carries: a cape) by its footprint; a held
+                    // sword's box straddles the lantern's line in an idle
+                    // stance, and was taken for the body: weapons cast only
+                    // while walking (petition 1389)
+                    Some((lo, hi)) if personal && m.skinned => !(lo.x <= at.x && at.x <= hi.x && lo.z <= at.z && at.z <= hi.z),
                     Some((lo, hi)) => !(lo.cmple(at).all() && at.cmple(hi).all()),
                     None => true,
                 }

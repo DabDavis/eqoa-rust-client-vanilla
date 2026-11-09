@@ -6,6 +6,11 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Weapons cast shadows standing still
+- With Light Shadows on, at night your weapons now cast a shadow from your lantern while you stand still, as they do
+  while you move. A sword held across you at rest was being taken for your body (which your own lantern never
+  shadows) and cast nothing. Shadows from the sun and from torches were not affected.
+
 ## 2026-11-09 · Capes over broad shoulders and round the neck
 - On the big race bodies (a minotaur's hunched shoulders, say) a cape's collar now comes up over the shoulders
   instead of sinking into them, standing and in the battle stance.
