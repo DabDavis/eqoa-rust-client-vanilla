@@ -6,6 +6,14 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Texture packs load without freezing the game
+- A texture pack's pictures are now read in the background. Until a texture's replacement is ready the game draws
+  its own texture there, then puts the replacement in its place a moment later, so the game no longer stops while a
+  pack is read. With a large HD pack the game used to freeze for seconds on arriving in a city like Freeport; now
+  it keeps moving.
+- Dump Textures only ever writes the game's own textures, as the disc has them, whether a pack is loaded or not:
+  never a pack's picture and never an enlarged one.
+
 ## 2026-11-09 · Texture packs in a folder beside the game
 - Texture packs and texture dumps now go in a `textures` folder next to the game itself (beside `eqoa.exe` on
   Windows, beside `eqoa` on Linux and on a Mac), where they are easy to find: put a pack's files in

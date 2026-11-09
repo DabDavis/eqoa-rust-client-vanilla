@@ -812,6 +812,20 @@ impl Ui {
         self.textures.len() - 1
     }
 
+    /// Texture `tex`'s picture replaced by one `width` x `height` (a
+    /// texture pack's stand-in, read after the layer drew the surface's own:
+    /// `eqoa`'s `texpack`), from the next quads drawn: its size to the quads
+    /// stays the one it was added at. Nothing for an index the layer does
+    /// not hold.
+    pub fn replace_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, tex: usize, width: u32, height: u32, rgba: &[u8]) {
+        let Some(t) = self.textures.get(tex) else { return };
+        let (logical, font) = ((t.width, t.height), t.font);
+        let at = self.add_texture_as(device, queue, logical, width, height, rgba, font);
+        let t = self.textures.pop().expect("just added");
+        debug_assert_eq!(at, self.textures.len());
+        self.textures[tex] = t;
+    }
+
     /// This layer's own number among every layer made. A texture index is
     /// good only on the layer that made it, and a layer goes with its session
     /// (the next one's HUD makes another), so what keeps an index from frame

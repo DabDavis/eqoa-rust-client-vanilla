@@ -348,7 +348,18 @@ or a browser (each described where it lives below):
   The updater renames only the program, so the folder outlives updates. On a
   computer Texture Folder (Open) shows the folder in the system's file manager
   (Explorer, `open`, `xdg-open`), and the page's note says where it is; a run
-  that keeps no settings (the test commands) has no folder.
+  that keeps no settings (the test commands) has no folder. Packs load off the
+  frame (the owner, 2026-11-09: "lets make texture packs load async"): the
+  folder is read on a thread (every file's header with it), and each stand-in
+  is read and decoded on the pack's own thread the first time it is wanted;
+  its texture is made at once at its final size with the surface's own levels
+  drawn into it by the GPU (`render::standin`), and the read levels are
+  written into that same texture at a frame's start (8 MB a frame), so no bind
+  group or render bundle is made again. Arriving at Freeport with 570
+  stand-ins 4x the size (317 MB decoded) froze the old build ~4-6 s; now the
+  worst frame is ~50 ms. A shot reads them as it asks (`texpack::sync_now`),
+  and `EQOA_TEXTURES_SYNC=1` does so in a live run, to measure against.
+  A dump is always the surface's own record's texture, never a stand-in.
 - **Sorted lists**: the Who list and the guild's roster by name, or by any
   column with ○ (C on the keyboard) or a click on its heading (the game keeps
   the server's order).

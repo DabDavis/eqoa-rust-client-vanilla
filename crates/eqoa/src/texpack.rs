@@ -39,6 +39,17 @@
 //! game's texel density in the distance. Its bytes are the GS's, as the
 //! game's own are (an alpha of 0x80 is the GS's 1.0).
 //!
+//! Read off the frame (the owner, 2026-11-09: "lets make texture packs load
+//! async"): a pack's folder is read on a thread of its own, every file's
+//! name and header (`Index::scan`), and the pack set at the first frame
+//! after (`sync`); each stand-in is read and decoded on the pack's own
+//! thread (`Reader`) the first time it is wanted, its texture made at once
+//! at its size with the surface's own levels drawn into it, and its levels
+//! written over them at a frame's start once read (`render::standin`), so
+//! no frame waits for a file. The 2D layer draws the surface's own and puts
+//! the stand-in in its place once read (`image`, `UiAssets::poll`). A shot
+//! reads each as it is asked for (`sync_now`), as all did before.
+//!
 //! Dumps: each texture made while Dump Textures is on is written to `dumps`
 //! under every name PCSX2 gives it (each picture its first level, as PCSX2's
 //! dump of that name is: what PCSX2 writes as it meets the texture near and
@@ -375,17 +386,21 @@ fn child(dir: &Path, name: &str) -> Option<PathBuf> {
     std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(name)))
 }
 
-/// A pack's files by the name each gives (`Name::parse`), and the CLUT
-/// hashes among them, which a texture's are looked up by first.
+/// A pack's files by the name each gives (`Name::parse`), the size each
+/// one's header gives (the base's), and the CLUT hashes among them, which a
+/// texture's are looked up by first.
 #[derive(Default)]
 pub struct Index {
     pub files: HashMap<Name, PathBuf>,
+    sizes: HashMap<Name, (u32, u32)>,
     cluts: HashSet<u64>,
 }
 
 impl Index {
-    /// Every PNG and DDS under `dir`, at any depth, whose name PCSX2 reads;
-    /// of two with one name the first in path order.
+    /// Every PNG and DDS under `dir`, at any depth, whose name PCSX2 reads
+    /// and whose header reads (`header_size`: a stand-in's texture is made
+    /// at its size before it is read); of two with one name the first in
+    /// path order.
     pub fn scan(dir: &Path) -> Index {
         let mut paths = Vec::new();
         // a folder's depth kept, so a link back up does not go round for ever
@@ -407,8 +422,16 @@ impl Index {
         let mut ix = Index::default();
         for p in paths {
             let Some(n) = p.file_name().and_then(|f| Name::parse(&f.to_string_lossy())) else { continue };
+            if ix.files.contains_key(&n) {
+                continue;
+            }
+            let Some(size) = header_size(&p) else {
+                crate::say(&format!("textures: {}: not a picture PCSX2 reads", p.display()));
+                continue;
+            };
             ix.cluts.insert(n.clut_hash);
-            ix.files.entry(n).or_insert(p);
+            ix.sizes.insert(n, size);
+            ix.files.insert(n, p);
         }
         ix
     }
@@ -418,19 +441,23 @@ impl Index {
     pub fn scan_all(dirs: impl IntoIterator<Item = PathBuf>) -> Index {
         let mut ix = Index::default();
         for d in dirs {
-            for (n, p) in Index::scan(&d).files {
-                ix.cluts.insert(n.clut_hash);
-                ix.files.entry(n).or_insert(p);
+            let one = Index::scan(&d);
+            for (n, p) in one.files {
+                if let std::collections::hash_map::Entry::Vacant(e) = ix.files.entry(n) {
+                    e.insert(p);
+                    ix.cluts.insert(n.clut_hash);
+                    ix.sizes.insert(n, one.sizes[&n]);
+                }
             }
         }
         ix
     }
 
-    /// The file standing in for a surface, and the level of it the file's
-    /// name stands for: of `names` (`GsTexture::names`, in its order) the
-    /// first a file has.
-    fn find<'a>(&'a self, names: &[(Name, usize)]) -> Option<(&'a Path, Name, usize)> {
-        names.iter().find_map(|&(n, level)| self.files.get(&n).map(|p| (p.as_path(), n, level)))
+    /// The file standing in for a surface, the name it was found by and its
+    /// base's size: of `names` (`GsTexture::names`, in its order) the first
+    /// a file has.
+    fn find(&self, names: &[(Name, usize)]) -> Option<(PathBuf, Name, (u32, u32))> {
+        names.iter().find_map(|&(n, _)| Some((self.files.get(&n)?.clone(), n, *self.sizes.get(&n)?)))
     }
 }
 
@@ -444,9 +471,24 @@ fn loader(p: &Path) -> Option<&'static str> {
     }
 }
 
-/// A stand-in found for a surface: its levels, the base first.
+/// The size a picture's header gives (a PNG's IHDR, a DDS's header), its
+/// first 24 bytes read: what a stand-in's texture is made at before the
+/// file is read (`render::standin`).
+pub fn header_size(p: &Path) -> Option<(u32, u32)> {
+    use std::io::Read;
+    let mut b = [0u8; 24];
+    std::fs::File::open(p).ok()?.read_exact(&mut b).ok()?;
+    let be = |at: usize| u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
+    let size = match loader(p)? {
+        "png" => (b[..8] == *b"\x89PNG\r\n\x1a\n" && b[12..16] == *b"IHDR").then(|| (be(16), be(20)))?,
+        _ => (u32_at(&b, 0) == Some(0x2053_4444)).then(|| (u32_at(&b, 16).unwrap_or(0), u32_at(&b, 12).unwrap_or(0)))?,
+    };
+    (size.0 > 0 && size.1 > 0 && size.0 < 32768 && size.1 < 32768).then_some(size)
+}
+
+/// A stand-in read for a surface: its levels, the base first.
 struct Found {
-    levels: Vec<esf::Image>,
+    levels: Arc<Vec<esf::Image>>,
 }
 
 /// What a surface is known by in `Pack::found`: its DictID, its disc, where
@@ -459,12 +501,108 @@ fn key(d: &[u8], s: &esf::Surface, era: esf::Era) -> Key {
     (s.dict_id, era == esf::Era::Y2002, s.pal_off, d.len())
 }
 
+/// A surface's stand-in file and its base's size (`Index::find`), or none.
+type StandIn = Option<(PathBuf, (u32, u32))>;
+
+/// Each stand-in read, by surface: its levels, or `None` when it would not
+/// read (the surface's own is drawn).
+type Read = Arc<Mutex<HashMap<Key, Option<Arc<Found>>>>>;
+
+/// The thread that reads and decodes stand-ins (the owner's 2026-11-09 "lets
+/// make texture packs load async"): a frame asks (`Pack::request`) and goes
+/// on drawing the surface's own; the levels come back through `ready`.
+struct Reader {
+    tx: Mutex<std::sync::mpsc::Sender<(Key, PathBuf, esf::Surface)>>,
+    /// The surfaces asked for and not yet read, each with the texture keys
+    /// waiting on it (none for the 2D layer's: `Wanted`).
+    asked: Arc<Mutex<HashMap<Key, Vec<u64>>>>,
+    /// Stand-ins read, by the texture key each was asked for under.
+    ready: Arc<Mutex<render::standin::Ready>>,
+    /// Off once the pack is let go: what it had not read yet is not read.
+    alive: Arc<std::sync::atomic::AtomicBool>,
+    /// A test's hold on the thread: nothing is read while it is taken.
+    #[cfg(test)]
+    hold: Arc<Mutex<()>>,
+}
+
+impl Reader {
+    fn new(found: &Read) -> Option<Reader> {
+        let (tx, rx) = std::sync::mpsc::channel::<(Key, PathBuf, esf::Surface)>();
+        let asked: Arc<Mutex<HashMap<Key, Vec<u64>>>> = Default::default();
+        let ready: Arc<Mutex<render::standin::Ready>> = Default::default();
+        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (found, a, r, live) = (found.clone(), asked.clone(), ready.clone(), alive.clone());
+        #[cfg(test)]
+        let (hold, held) = { let h: Arc<Mutex<()>> = Default::default(); (h.clone(), h) };
+        std::thread::Builder::new()
+            .name("texture packs".into())
+            .spawn(move || {
+                for (k, path, s) in rx {
+                    if !live.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    #[cfg(test)]
+                    let _held = held.lock().unwrap_or_else(|e| e.into_inner());
+                    let f = read_stand_in(&path, &s);
+                    // the asking side checks `found` under `asked`'s lock
+                    let mut asked = a.lock().unwrap_or_else(|e| e.into_inner());
+                    found.lock().unwrap_or_else(|e| e.into_inner()).insert(k, f.clone());
+                    let keys = asked.remove(&k).unwrap_or_default();
+                    drop(asked);
+                    if let Some(f) = f {
+                        r.lock().unwrap_or_else(|e| e.into_inner()).extend(keys.into_iter().map(|key| (key, f.levels.clone())));
+                    }
+                }
+            })
+            .ok()?;
+        Some(Reader {
+            tx: Mutex::new(tx),
+            asked,
+            ready,
+            alive,
+            #[cfg(test)]
+            hold,
+        })
+    }
+}
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        self.alive.store(false, Ordering::Relaxed);
+    }
+}
+
+/// A stand-in read and given its levels for the surface `s` (`with_levels`),
+/// or `None` (said) when it does not read.
+fn read_stand_in(path: &Path, s: &esf::Surface) -> Option<Arc<Found>> {
+    match read(path) {
+        Ok(levels) => {
+            let levels = with_levels(levels, s);
+            // `EQOA_TEXTURES_LOG`: each stand-in said as it is read
+            if std::env::var_os("EQOA_TEXTURES_LOG").is_some() {
+                crate::say(&format!("textures: {:08x} drawn as {} ({}x{})", s.dict_id as u32, path.display(), levels[0].width, levels[0].height));
+            }
+            Some(Arc::new(Found { levels: Arc::new(levels) }))
+        }
+        Err(e) => {
+            crate::say(&format!("textures: {}: {e}", path.display()));
+            None
+        }
+    }
+}
+
 /// The options' Texture Packs and Dump Textures, as set (`sync`): the packs'
-/// files by name for each disc, the stand-ins found so far, and the dumper.
+/// files by name for each disc, the stand-ins found and read so far, the
+/// reader and the dumper.
 pub struct Pack {
     generation: u64,
     packs: Option<[Index; 2]>,
-    found: Mutex<HashMap<Key, Option<Arc<Found>>>>,
+    /// Each surface's stand-in file, looked up once.
+    looked: Mutex<HashMap<Key, StandIn>>,
+    found: Read,
+    /// Off: each stand-in read on the thread that asks, as it is asked for
+    /// (a shot's one frame, `sync_now`).
+    reader: Option<Reader>,
     dumper: Option<Dumper>,
 }
 
@@ -472,19 +610,21 @@ pub struct Pack {
 static MADE: AtomicU64 = AtomicU64::new(0);
 
 impl Pack {
-    /// The packs' folders read (`load`) and the dumps' made ready (`dump`)
-    /// in this run's (`place`); `None` when it has none.
-    pub fn new(load: bool, dump: bool) -> Option<Pack> {
+    /// The packs' folders read (`load`, every file's header with them) and
+    /// the dumps' made ready (`dump`) in this run's (`place`); `None` when it
+    /// has none. Its stand-ins read on a thread of their own unless
+    /// `blocking`.
+    pub fn new(load: bool, dump: bool, blocking: bool) -> Option<Pack> {
         if !(load || dump) {
             return None;
         }
-        Some(Pack::at(&place()?, load, dump))
+        Some(Pack::at(&place()?, load, dump, blocking))
     }
 
     /// The packs read and the dumps made ready in `place`'s folders: each
     /// disc's `replacements` in `dir`, then in `also` (the first's file
     /// standing for a name both have), its `dumps` in `dir` alone.
-    fn at(place: &Place, load: bool, dump: bool) -> Pack {
+    fn at(place: &Place, load: bool, dump: bool, blocking: bool) -> Pack {
         let eras = [esf::Era::Frontiers, esf::Era::Y2002];
         let packs = load.then(|| {
             eras.map(|era| {
@@ -505,7 +645,14 @@ impl Pack {
                 }))
             })
             .flatten();
-        Pack { generation: (MADE.fetch_add(1, Ordering::Relaxed) + 1) & 0xFF_FFFF, packs, found: Mutex::new(HashMap::new()), dumper }
+        Pack::of(packs, dumper, blocking)
+    }
+
+    /// A pack of these indexes and dumper.
+    fn of(packs: Option<[Index; 2]>, dumper: Option<Dumper>, blocking: bool) -> Pack {
+        let found = Read::default();
+        let reader = if blocking || packs.is_none() { None } else { Reader::new(&found) };
+        Pack { generation: (MADE.fetch_add(1, Ordering::Relaxed) + 1) & 0xFF_FFFF, packs, looked: Mutex::new(HashMap::new()), found, reader, dumper }
     }
 
     /// How many replacements the packs hold (for the disc of `era`).
@@ -518,46 +665,78 @@ impl Pack {
         self.dumper.as_ref().map_or(0, |d| d.written.load(Ordering::Relaxed))
     }
 
-    /// The stand-in for a surface, if a pack has one: looked up once (a
-    /// texture's CLUT first, then its names), read and given its levels.
-    fn find(&self, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<Arc<Found>> {
+    /// The stand-in file for a surface and its base's size, if a pack has
+    /// one: looked up once (a texture's CLUT first, then its names), no file
+    /// read.
+    fn stand_in(&self, d: &[u8], s: &esf::Surface, era: esf::Era) -> StandIn {
         let packs = self.packs.as_ref()?;
+        let k = key(d, s, era);
+        if let Some(f) = self.looked.lock().unwrap_or_else(|e| e.into_inner()).get(&k) {
+            return f.clone();
+        }
+        let ix = &packs[(era == esf::Era::Y2002) as usize];
+        let f = s.gs_clut_hash(d).filter(|h| ix.cluts.contains(h)).and_then(|_| ix.find(&s.gs(d)?.names())).map(|(path, _, size)| (path, size));
+        self.looked.lock().unwrap_or_else(|e| e.into_inner()).insert(k, f.clone());
+        f
+    }
+
+    /// The stand-in for a surface read: at once while blocking (read now,
+    /// once), else only once the reader has read it (`request`).
+    fn found(&self, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<Arc<Found>> {
         let k = key(d, s, era);
         if let Some(f) = self.found.lock().unwrap_or_else(|e| e.into_inner()).get(&k) {
             return f.clone();
         }
-        let ix = &packs[(era == esf::Era::Y2002) as usize];
-        let f = s.gs_clut_hash(d).filter(|h| ix.cluts.contains(h)).and_then(|_| {
-            let t = s.gs(d)?;
-            let names = t.names();
-            let (path, name, _) = ix.find(&names)?;
-            match read(path) {
-                Ok(levels) => {
-                    let levels = with_levels(levels, s);
-                    // `EQOA_TEXTURES_LOG`: each stand-in said as it is read
-                    if std::env::var_os("EQOA_TEXTURES_LOG").is_some() {
-                        crate::say(&format!("textures: {:08x} drawn as {} ({}x{})", s.dict_id as u32, name.file_name(0), levels[0].width, levels[0].height));
-                    }
-                    Some(Arc::new(Found { levels }))
-                }
-                Err(e) => {
-                    crate::say(&format!("textures: {}: {e}", path.display()));
-                    None
-                }
-            }
-        });
+        if self.reader.is_some() {
+            return None;
+        }
+        let f = self.stand_in(d, s, era).and_then(|(path, _)| read_stand_in(&path, s));
         self.found.lock().unwrap_or_else(|e| e.into_inner()).insert(k, f.clone());
         f
     }
 
-    /// The levels to draw for a surface (the pack's, or `None` for its own;
-    /// its record's bytes are `d`), dumping it first while Dump Textures is on.
+    /// The levels to draw for a surface now (the pack's, or `None` for its
+    /// own; its record's bytes are `d`), dumping it first while Dump Textures
+    /// is on: a stand-in still being read is `None` (`request`).
     pub fn levels_for(&self, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<Vec<esf::Image>> {
         if let Some(dumper) = &self.dumper {
             dumper.dump(d, s, era);
         }
-        self.find(d, s, era).map(|f| f.levels.clone())
+        self.found(d, s, era).map(|f| f.levels.to_vec())
     }
+
+    /// A stand-in not yet read, given to the reader (once a surface) with
+    /// `key` to hand it back under (`render::Pack::take_ready`; none for the
+    /// 2D layer, which asks by `Wanted`): its size and level count, as its
+    /// levels will be. `None` when there is none, it is read already, or the
+    /// pack reads on the asking thread.
+    fn ask(&self, key: Option<u64>, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<(u32, u32, u32)> {
+        let reader = self.reader.as_ref()?;
+        let (path, size) = self.stand_in(d, s, era)?;
+        let k = key_of(d, s, era);
+        let mut asked = reader.asked.lock().unwrap_or_else(|e| e.into_inner());
+        if self.found.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&k) {
+            return None;
+        }
+        let first = !asked.contains_key(&k);
+        let keys = asked.entry(k).or_default();
+        // each key once, however often it asks
+        if let Some(key) = key
+            && !keys.contains(&key)
+        {
+            keys.push(key);
+        }
+        drop(asked);
+        if first {
+            let _ = reader.tx.lock().unwrap_or_else(|e| e.into_inner()).send((k, path, s.clone()));
+        }
+        Some((size.0, size.1, level_count(size, s) as u32))
+    }
+}
+
+/// `key`, by another name where `key` is a parameter.
+fn key_of(d: &[u8], s: &esf::Surface, era: esf::Era) -> Key {
+    key(d, s, era)
 }
 
 impl render::Pack for Pack {
@@ -566,13 +745,22 @@ impl render::Pack for Pack {
     }
 
     /// A stand-in's texture, and while dumping every texture (so that each
-    /// is made again, and dumped, when the row turns it on), is keyed apart.
+    /// is made again, and dumped, when the row turns it on), is keyed apart:
+    /// a stand-in's from when it is found, read or not.
     fn replaces(&self, _key: u64, c: &esf::Container, s: &esf::Surface, era: esf::Era) -> bool {
-        self.dumper.is_some() || self.find(&c.data, s, era).is_some()
+        self.dumper.is_some() || self.stand_in(&c.data, s, era).is_some()
     }
 
     fn generation(&self) -> u64 {
         self.generation
+    }
+
+    fn request(&self, key: u64, c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<(u32, u32, u32)> {
+        self.ask(Some(key), &c.data, s, era)
+    }
+
+    fn take_ready(&self) -> render::standin::Ready {
+        self.reader.as_ref().map(|r| std::mem::take(&mut *r.ready.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default()
     }
 }
 
@@ -644,6 +832,10 @@ impl Dumper {
                 continue;
             }
             let l = &t.levels[level];
+            // only ever the game's own picture as the disc has it (the user,
+            // 2026-11-09: "it should only dump the raw, not the upscaled or
+            // replacements"): out of the surface's record (`s.gs`), never a
+            // stand-in or anything drawn from one
             self.pending.fetch_add(1, Ordering::Relaxed);
             if self.tx.lock().unwrap_or_else(|e| e.into_inner()).send((path, l.width, l.height, t.rgba(level))).is_err() {
                 self.pending.fetch_sub(1, Ordering::Relaxed);
@@ -676,13 +868,15 @@ pub fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), String>
 
 // ---- what the options set ----------------------------------------------------
 
-/// The pack set (`sync`), and the rows it was made for.
+/// The pack set (`sync`), the rows it was made for, and a pack being made
+/// on a thread of its own for the rows as they are now (its folder read).
 struct State {
     applied: (bool, bool),
     pack: Option<Arc<Pack>>,
+    building: Option<((bool, bool), std::sync::mpsc::Receiver<Option<Pack>>)>,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { applied: (false, false), pack: None });
+static STATE: Mutex<State> = Mutex::new(State { applied: (false, false), pack: None, building: None });
 
 /// Moves on each time what stands in for the game's textures changes: what
 /// is drawn is made again then (`App::retexture`).
@@ -699,29 +893,78 @@ pub fn pack() -> Option<Arc<Pack>> {
 
 /// The options' Texture Packs and Dump Textures carried out, when they
 /// changed: the packs read and the dumps made ready, set for the renderer
-/// (`render::set_pack`), and `generation` moved on. Called each frame.
+/// (`render::set_pack`), and `generation` moved on. Called each frame. A
+/// pack's folder is read (every file's name and header: `Index::scan`) on a
+/// thread of its own, the game's own textures drawn meanwhile, and the pack
+/// set at the first frame after it is read, if the rows still want it;
+/// Dump Textures alone, and both off, at once.
 pub fn sync() {
     let c = crate::settings::client();
     let want = (c.texture_packs, c.dump_textures);
     let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((rows, rx)) = st.building.take() {
+        match rx.try_recv() {
+            Ok(pack) if rows == want => install(&mut st, pack),
+            Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            Err(std::sync::mpsc::TryRecvError::Empty) => st.building = Some((rows, rx)),
+        }
+    }
     if st.applied == want {
         return;
     }
     st.applied = want;
-    let pack = Pack::new(want.0, want.1).map(Arc::new);
+    st.building = None;
+    // `EQOA_TEXTURES_SYNC`: read as before 2026-11-09, the folder and each
+    // stand-in on the frame that wants it (to measure the two against
+    // each other)
+    if !want.0 || std::env::var_os("EQOA_TEXTURES_SYNC").is_some() {
+        let blocking = want.0;
+        install(&mut st, Pack::new(want.0, want.1, blocking));
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let built = std::thread::Builder::new().name("texture pack folder".into()).spawn(move || {
+        let _ = tx.send(Pack::new(want.0, want.1, false));
+    });
+    match built {
+        Ok(_) => st.building = Some((want, rx)),
+        Err(_) => install(&mut st, Pack::new(want.0, want.1, false)),
+    }
+}
+
+/// `sync` at once, every stand-in read as it is asked for: what a shot's
+/// one frame takes (`viewer::shot_with`), and how packs were read before
+/// 2026-11-09.
+pub fn sync_now() {
+    let c = crate::settings::client();
+    let want = (c.texture_packs, c.dump_textures);
+    let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    st.applied = want;
+    st.building = None;
+    install(&mut st, Pack::new(want.0, want.1, true));
+}
+
+/// `pack` set for the renderer and said, and `generation` moved on.
+fn install(st: &mut State, pack: Option<Pack>) {
+    let pack = pack.map(Arc::new);
     if let (Some(p), Some(place)) = (&pack, place()) {
         let at = |dir: &Path, what: &str| dir.join(esf::pcsx2::SERIAL).join(what).display().to_string();
-        if want.0 {
+        if p.packs.is_some() {
             let also = place.also.as_ref().map(|a| format!(", then {}", at(a, "replacements"))).unwrap_or_default();
             crate::say(&format!("textures: {} replacements in {}{also}", p.count(esf::Era::Frontiers), at(&place.dir, "replacements")));
         }
-        if want.1 {
+        if p.dumper.is_some() {
             crate::say(&format!("textures: dumping to {}", at(&place.dir, "dumps")));
         }
     }
     render::set_pack(pack.clone().map(|p| p as Arc<dyn render::Pack>));
     st.pack = pack;
     GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Whether a pack's folder is being read (`sync`).
+pub fn reading() -> bool {
+    STATE.lock().unwrap_or_else(|e| e.into_inner()).building.is_some()
 }
 
 /// Waits (up to ten seconds) for the dumps handed to the writer to be
@@ -738,12 +981,33 @@ pub fn flush() {
 }
 
 /// The base level to draw for a surface the 2D layer takes (`UiAssets`):
-/// the pack's, else its own (`Surface::decode`).
-pub fn image(c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<esf::Image> {
-    if let Some(l) = pack().and_then(|p| p.levels_for(&c.data, s, era)).and_then(|l| l.into_iter().next()) {
-        return Some(l);
+/// the pack's, else its own (`Surface::decode`); and while the pack's is
+/// still being read, what to ask for it by (`ready_image`).
+pub fn image(c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<(esf::Image, Option<Wanted>)> {
+    let p = pack();
+    if let Some(l) = p.as_ref().and_then(|p| p.levels_for(&c.data, s, era)).and_then(|l| l.into_iter().next()) {
+        return Some((l, None));
     }
-    s.decode(&c.data)
+    let wanted = p.and_then(|p| p.ask(None, &c.data, s, era).map(|_| Wanted { generation: p.generation, k: key(&c.data, s, era) }));
+    Some((s.decode(&c.data)?, wanted))
+}
+
+/// A stand-in the 2D layer drew a surface's own for while it is read
+/// (`image`), asked again for each frame (`ready_image`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Wanted {
+    generation: u64,
+    k: Key,
+}
+
+/// The base level of a stand-in the 2D layer is waiting for, once read:
+/// `Some(Some(image))`; `Some(None)` when it will not come (it would not
+/// read, or the pack it was asked of is gone: stop asking); `None` while it
+/// is being read.
+pub fn ready_image(w: &Wanted) -> Option<Option<esf::Image>> {
+    let Some(p) = pack().filter(|p| p.generation == w.generation) else { return Some(None) };
+    let f = p.found.lock().unwrap_or_else(|e| e.into_inner()).get(&w.k).cloned()?;
+    Some(f.and_then(|f| f.levels.first().cloned()))
 }
 
 /// Extended's rows of Textures (`options`) with a note of their own: Dump
@@ -768,6 +1032,9 @@ pub fn note(item: i32) -> Option<String> {
         return None;
     }
     let Some(place) = place() else { return Some("No folder here".to_string()) };
+    if reading() {
+        return Some(format!("Reading {}", place.beside.packs()));
+    }
     // (none read yet in the frame it was turned on: `sync` reads them next)
     Some(match pack().map_or(0, |p| p.count(esf::Era::Frontiers)) {
         0 => format!("None in {}", place.beside.packs()),
@@ -977,9 +1244,7 @@ pub fn read_dds(b: &[u8]) -> Result<Vec<esf::Image>, String> {
 /// mean of each 2 x 2, as the levels on the disc are made).
 pub fn with_levels(mut levels: Vec<esf::Image>, s: &esf::Surface) -> Vec<esf::Image> {
     let base = (levels[0].width, levels[0].height);
-    let shift = render::level_shift(base, Some((s.width.max(1) as u32, s.height.max(1) as u32)));
-    let chain = 32 - base.0.max(base.1).leading_zeros() as usize;
-    let want = ((s.levels() as f32 + shift).round().max(1.0) as usize).min(chain);
+    let want = level_count(base, s);
     // a level of the file's that is not half the one before ends its own
     let mut own = 1;
     while own < levels.len() && own < want && (levels[own].width, levels[own].height) == ((base.0 >> own).max(1), (base.1 >> own).max(1)) {
@@ -991,6 +1256,16 @@ pub fn with_levels(mut levels: Vec<esf::Image>, s: &esf::Surface) -> Vec<esf::Im
         levels.push(next);
     }
     levels
+}
+
+/// How many levels `with_levels` gives a stand-in whose base is `base` for
+/// the surface `s`: as many as the surface keeps and the levels it is
+/// larger by, down to one texel a side at most (what its texture is made
+/// with before it is read: `render::standin`).
+pub fn level_count(base: (u32, u32), s: &esf::Surface) -> usize {
+    let shift = render::level_shift(base, Some((s.width.max(1) as u32, s.height.max(1) as u32)));
+    let chain = 32 - base.0.max(base.1).leading_zeros() as usize;
+    ((s.levels() as f32 + shift).round().max(1.0) as usize).min(chain)
 }
 
 /// A level half the size of `l` each way (one texel at least): each texel
@@ -1175,9 +1450,14 @@ mod tests {
     fn a_pack_folder_as_pcsx2_reads_it() {
         let d = temp("scan");
         std::fs::create_dir_all(d.join("a/b")).unwrap();
-        for f in ["1-2-00001993.png", "a/3-4-00001993.PNG", "a/b/5-00000001.dds", "a/b/1-2-00001993.png", "6-7-00001993-mip1.png", "readme.txt", "8-9-00001993.jpg"] {
-            std::fs::write(d.join(f), b"x").unwrap();
+        let png = png_bytes(3, 2, png::ColorType::Rgba, png::BitDepth::Eight, &[0; 24]);
+        let abgr = [32, 0x41, 0, 32, 0x0000_00ff, 0x0000_ff00, 0x00ff_0000, 0xff00_0000];
+        for f in ["1-2-00001993.png", "a/3-4-00001993.PNG", "a/b/1-2-00001993.png", "6-7-00001993-mip1.png", "readme.txt", "8-9-00001993.jpg"] {
+            std::fs::write(d.join(f), &png).unwrap();
         }
+        std::fs::write(d.join("a/b/5-00000001.dds"), dds(4, 8, 0, abgr, None, &[0; 128])).unwrap();
+        // the control: named as PCSX2 names one, but no picture
+        std::fs::write(d.join("a/9-9-00001993.png"), b"x").unwrap();
         let ix = Index::scan(&d);
         let mut names: Vec<String> = ix.files.keys().map(|n| n.file_name(0)).collect();
         names.sort();
@@ -1185,6 +1465,8 @@ mod tests {
         let n = Name::parse("1-2-00001993.png").unwrap();
         assert_eq!(ix.files[&n], d.join("1-2-00001993.png"), "the first in path order");
         assert!(ix.cluts.contains(&2) && ix.cluts.contains(&4));
+        assert_eq!((ix.sizes[&n], ix.sizes[&Name::parse("5-00000001.png").unwrap()]), ((3, 2), (4, 8)), "each header's size");
+        assert_eq!(header_size(&d.join("a/9-9-00001993.png")), None);
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -1236,9 +1518,11 @@ mod tests {
             let mut ix = Index::default();
             for (n, p) in files {
                 ix.cluts.insert(n.clut_hash);
+                ix.sizes.insert(n, (32, 32));
                 ix.files.insert(n, p);
             }
-            Pack { generation: 1, packs: Some([ix, Index::default()]), found: Mutex::new(HashMap::new()), dumper: None }
+            // read on the asking thread, as before 2026-11-09
+            Pack::of(Some([ix, Index::default()]), None, true)
         };
         let (chain, base) = (pic(&names[0].0, 10), pic(&names[1].0, 20));
         let both = pack(vec![(names[0].0, chain.clone()), (names[1].0, base.clone())]);
@@ -1331,6 +1615,12 @@ mod tests {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, b).unwrap();
         p
+    }
+
+    /// A one-texel PNG of `v` in the `textures` folder `t` (`put`), for what
+    /// reads its headers (`Index::scan`).
+    fn put_png(t: &Path, rel: &str, v: u8) -> PathBuf {
+        put(t, rel, &png_bytes(1, 1, png::ColorType::Rgba, png::BitDepth::Eight, &[v, v, v, 255]))
     }
 
     /// `dir`'s mode set (Unix), and whether this test can be refused at all
@@ -1439,13 +1729,13 @@ mod tests {
         use std::os::unix::fs::MetadataExt;
         let (d, game, config) = folders("kept");
         let (old, new) = (config.join("textures"), game.join("textures"));
-        put(&old, "1-2-00001993.png", b"old");
+        put_png(&old, "1-2-00001993.png", 1);
         mode(&config, 0o555);
         if refused(&config) {
             let p = resolve(Some((&game, "eqoa")), &config);
             assert_eq!((&p.dir, &p.also, &p.moved), (&new, &Some(old.clone()), &None));
             assert!(p.why.as_deref().is_some_and(|w| w.contains("was not moved")), "{:?}", p.why);
-            let pack = Pack::at(&p, true, true);
+            let pack = Pack::at(&p, true, true, true);
             assert_eq!(pack.count(esf::Era::Frontiers), 1, "its pack read");
             assert_eq!(pack.dumper.as_ref().unwrap().dirs[0], Some(new.join(esf::pcsx2::SERIAL).join("dumps")), "dumps to the new one");
         }
@@ -1475,11 +1765,11 @@ mod tests {
         // a link
         let (d, game, config) = folders("link");
         let real = d.join("packs");
-        put(&real, "1-2-00001993.png", b"linked");
+        put_png(&real, "1-2-00001993.png", 1);
         std::os::unix::fs::symlink(&real, config.join("textures")).unwrap();
         let p = resolve(Some((&game, "eqoa")), &config);
         assert_eq!((&p.also, &p.moved), (&Some(config.join("textures")), &None), "a link left");
-        assert_eq!(Pack::at(&p, true, false).count(esf::Era::Frontiers), 1, "and read");
+        assert_eq!(Pack::at(&p, true, false, true).count(esf::Era::Frontiers), 1, "and read");
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -1505,14 +1795,14 @@ mod tests {
     fn packs_read_in_both_folders_and_dumps_written_in_the_first() {
         let (d, game, config) = folders("two");
         let (new, old) = (game.join("textures"), config.join("textures"));
-        let mine = put(&new, "1-2-00001993.png", b"new");
-        put(&old, "1-2-00001993.png", b"old");
-        let theirs = put(&old, "x/3-4-00001993.png", b"old alone");
+        let mine = put_png(&new, "1-2-00001993.png", 1);
+        put_png(&old, "1-2-00001993.png", 2);
+        let theirs = put_png(&old, "x/3-4-00001993.png", 3);
         let y2002 = old.join(SERIAL_2002).join("replacements").join("7-8-00001993.png");
         std::fs::create_dir_all(y2002.parent().unwrap()).unwrap();
-        std::fs::write(&y2002, b"2002").unwrap();
+        std::fs::write(&y2002, png_bytes(1, 1, png::ColorType::Rgba, png::BitDepth::Eight, &[4, 4, 4, 255])).unwrap();
         let place = Place { dir: new.clone(), also: Some(old.clone()), beside: Beside::Program("eqoa".into()), moved: None, why: None };
-        let pack = Pack::at(&place, true, true);
+        let pack = Pack::at(&place, true, true, true);
         let packs = pack.packs.as_ref().unwrap();
         let file = |era: usize, n: &str| packs[era].files.get(&Name::parse(n).unwrap()).cloned();
         assert_eq!(file(0, "1-2-00001993.png"), Some(mine), "the new folder's");
@@ -1521,7 +1811,7 @@ mod tests {
         let dirs = &pack.dumper.as_ref().unwrap().dirs;
         assert_eq!(dirs, &[Some(new.join(esf::pcsx2::SERIAL).join("dumps")), Some(new.join(SERIAL_2002).join("dumps"))]);
         assert!(new.join(esf::pcsx2::SERIAL).join("dumps").is_dir() && !old.join(esf::pcsx2::SERIAL).join("dumps").exists());
-        let alone = Pack::at(&Place { also: None, ..place }, true, false);
+        let alone = Pack::at(&Place { also: None, ..place }, true, false, true);
         assert_eq!((alone.count(esf::Era::Frontiers), alone.count(esf::Era::Y2002)), (1, 0), "the control: the new folder's alone");
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -1569,5 +1859,106 @@ mod tests {
         testing::set_place(None);
         crate::settings::testing::reset(false);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A pack of one stand-in, `w` x `h` of the value `v`, for the surface
+    /// `s` of `c` (its first name), read on its own thread unless
+    /// `blocking`; the folder it is in.
+    fn one_stand_in(name: &str, c: &esf::Container, s: &esf::Surface, (w, h): (u32, u32), v: u8, blocking: bool, dumps: Option<PathBuf>) -> (Pack, PathBuf) {
+        let dir = temp(name);
+        let n = s.gs(&c.data).unwrap().names()[0].0;
+        let p = dir.join(n.file_name(0));
+        std::fs::write(&p, png_bytes(w, h, png::ColorType::Rgba, png::BitDepth::Eight, &vec![v; (w * h * 4) as usize])).unwrap();
+        let ix = Index::scan(&dir);
+        assert_eq!(ix.files.len(), 1);
+        let dumper = dumps.map(|d| Dumper::new([Some(d), None]).unwrap());
+        (Pack::of(Some([ix, Index::default()]), dumper, blocking), dir)
+    }
+
+    /// A stand-in is read off the frame (the owner, 2026-11-09: "lets make
+    /// texture packs load async"): asked for, its size and level count are
+    /// known at once (its header's) and the frame goes on with the
+    /// surface's own, frame after frame, while the reader is held; let go,
+    /// it comes back under the key it was asked for, every level the size
+    /// asked, and from then on is the surface's levels. The control: read on
+    /// the asking thread (a shot's, as before), the first ask gives it.
+    #[test]
+    fn a_stand_in_is_read_off_the_frame() {
+        let (c, s) = surface(64, 64, 3);
+        let (pack, dir) = one_stand_in("async", &c, &s, (256, 256), 7, false, None);
+        let reader = pack.reader.as_ref().unwrap();
+        let held = reader.hold.lock().unwrap();
+        let want = (256, 256, level_count((256, 256), &s) as u32);
+        assert_eq!(want.2, 5, "the surface's 3 and the 2 it is larger by");
+        for frame in 0..30 {
+            let t = std::time::Instant::now();
+            assert_eq!(pack.ask(Some(42), &c.data, &s, esf::Era::Frontiers), Some(want), "frame {frame}: its size, asked");
+            assert!(pack.levels_for(&c.data, &s, esf::Era::Frontiers).is_none(), "frame {frame}: the surface's own meanwhile");
+            assert!(render::Pack::take_ready(&pack).is_empty());
+            assert!(t.elapsed() < std::time::Duration::from_millis(250), "frame {frame} waited {:?}", t.elapsed());
+        }
+        drop(held);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut frames = 0;
+        let ready = loop {
+            let r = render::Pack::take_ready(&pack);
+            if !r.is_empty() || std::time::Instant::now() > until {
+                break r;
+            }
+            frames += 1;
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(ready.len(), 1, "once, however often it was asked (after {frames} more frames)");
+        assert_eq!(ready[0].0, 42);
+        assert!(render::standin::fits(&ready[0].1, want));
+        assert_eq!(ready[0].1[0].rgba[..4], [7, 7, 7, 7]);
+        assert_eq!(pack.ask(Some(42), &c.data, &s, esf::Era::Frontiers), None, "read: no more asking");
+        assert_eq!(pack.levels_for(&c.data, &s, esf::Era::Frontiers).unwrap().len(), 5);
+        let _ = std::fs::remove_dir_all(&dir);
+        // the control
+        let (sync, dir) = one_stand_in("sync", &c, &s, (256, 256), 7, true, None);
+        assert_eq!(sync.ask(Some(42), &c.data, &s, esf::Era::Frontiers), None, "nothing to ask: read as it is wanted");
+        assert_eq!(sync.levels_for(&c.data, &s, esf::Era::Frontiers).map(|l| (l.len(), l[0].width)), Some((5, 256)), "the control: at the first ask");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With a pack and Dump Textures together, a dump is the game's own
+    /// texture, the surface's levels as the disc has them, at its own size,
+    /// never the pack's (larger, of another colour), read on the asking
+    /// thread or on the reader's (the user, 2026-11-09: "it should only dump
+    /// the raw, not the upscaled or replacements"). The control: the pack's
+    /// levels are the stand-in's.
+    #[test]
+    fn dumps_are_the_raw_texture_with_a_pack() {
+        let (c, s) = surface(32, 32, 2);
+        let t = s.gs(&c.data).unwrap();
+        for blocking in [true, false] {
+            let dumps = temp(&format!("rawdumps-{blocking}"));
+            let (pack, dir) = one_stand_in(&format!("rawpack-{blocking}"), &c, &s, (128, 128), 9, blocking, Some(dumps.clone()));
+            let _ = pack.ask(Some(1), &c.data, &s, esf::Era::Frontiers);
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            let levels = loop {
+                if let Some(l) = pack.levels_for(&c.data, &s, esf::Era::Frontiers) {
+                    break l;
+                }
+                assert!(std::time::Instant::now() < until, "never read");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            assert_eq!((levels[0].width, &levels[0].rgba[..4]), (128, &[9u8, 9, 9, 9][..]), "the control: the pack's");
+            let d = pack.dumper.as_ref().unwrap();
+            while d.pending.load(Ordering::Relaxed) > 0 && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let names = t.names();
+            assert_eq!(std::fs::read_dir(&dumps).unwrap().count(), names.len(), "every name, once");
+            for (n, level) in names {
+                let img = read_png(&std::fs::read(dumps.join(n.file_name(0))).unwrap()).unwrap();
+                assert_eq!((img.width, img.height), (t.levels[level].width, t.levels[level].height), "{}: its own size", n.file_name(0));
+                assert_eq!(img.rgba, t.rgba(level), "{}: its own texels", n.file_name(0));
+                assert_ne!(img.rgba[..4], [9, 9, 9, 9]);
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::remove_dir_all(&dumps);
+        }
     }
 }

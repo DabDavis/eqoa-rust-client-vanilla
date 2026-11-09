@@ -22,6 +22,7 @@ pub mod overlay;
 pub mod recolor;
 pub mod scale;
 pub mod shadow;
+pub mod standin;
 pub mod sunshadow;
 pub mod text;
 pub mod ui;
@@ -109,6 +110,19 @@ pub trait Pack: Send + Sync {
     /// What tells this pack's stand-ins apart from an earlier pack's: a
     /// replaced texture's key carries it (`LibraryTextures::key`).
     fn generation(&self) -> u64;
+    /// A stand-in still being read for the surface (on the pack's own
+    /// thread): its size and level count, `(w, h, n)`, as `levels` will
+    /// give them, its read asked for under the texture key `key`
+    /// (`take_ready` hands its levels back under it); `None` when the pack
+    /// has none for the surface, or has its levels already (`levels`).
+    fn request(&self, _key: u64, _c: &esf::Container, _s: &esf::Surface, _era: esf::Era) -> Option<(u32, u32, u32)> {
+        None
+    }
+    /// The stand-ins read since the last call, by the key each was asked
+    /// for under (`request`).
+    fn take_ready(&self) -> standin::Ready {
+        Vec::new()
+    }
 }
 
 static PACK: std::sync::RwLock<Option<std::sync::Arc<dyn Pack>>> = std::sync::RwLock::new(None);
@@ -442,6 +456,14 @@ pub trait TextureSource {
     fn native_size(&self, _id: i32) -> Option<(u32, u32)> {
         None
     }
+    /// A pack's stand-in for `id` still being read (`Pack::request`, asked
+    /// under the texture key `key`): its size and level count, which its
+    /// texture is made at at once, the surface's own levels drawn into it
+    /// (`standin::placeholder`) until it is read (`Renderer::take_stand_ins`).
+    /// `None`: `levels` are the texture's now.
+    fn pending(&self, _id: i32, _key: u64) -> Option<(u32, u32, u32)> {
+        None
+    }
 }
 
 impl<F: Fn(i32) -> Option<esf::Image>> TextureSource for F {
@@ -483,6 +505,13 @@ pub struct Renderer {
     /// Each uploaded texture's least texel alpha over its levels, by the same
     /// key (`Pass::alpha_min`).
     texture_alpha: std::collections::HashMap<u64, u8>,
+    /// The textures of stand-ins being read, by key, with the size and level
+    /// count each was made at (`standin`), and the stand-ins read and not
+    /// yet written into them, in order (`take_stand_ins`).
+    stand_ins: std::collections::HashMap<u64, (wgpu::Texture, (u32, u32, u32))>,
+    stand_ins_ready: std::collections::VecDeque<(u64, std::sync::Arc<Vec<esf::Image>>)>,
+    /// What draws a placeholder's levels, made with the first.
+    blit: Option<standin::Blit>,
     /// DictIDs a batch asked for that no loaded file holds.
     pub missing_textures: std::collections::BTreeSet<i32>,
     start: web_time::Instant,
@@ -779,6 +808,9 @@ impl Renderer {
             white,
             textures: Default::default(),
             texture_alpha: Default::default(),
+            stand_ins: Default::default(),
+            stand_ins_ready: Default::default(),
+            blit: None,
             missing_textures: Default::default(),
             start: web_time::Instant::now(),
             scroll_time: None,
@@ -812,22 +844,64 @@ impl Renderer {
         if id == 0 {
             return None;
         }
+        let key = src.key(id);
+        if !self.textures.contains_key(&key) && self.blit.is_none() && pack().is_some() {
+            self.blit = Some(standin::Blit::new(device));
+        }
         let missing = &mut self.missing_textures;
         let alpha = &mut self.texture_alpha;
-        let key = src.key(id);
+        let (stand_ins, blit) = (&mut self.stand_ins, &self.blit);
         self.textures
             .entry(key)
             .or_insert_with(|| {
+                // a pack's stand-in still being read: its texture made at its
+                // size now, the surface's own drawn into it, written over
+                // once read (`standin`); asked first, so that a stand-in
+                // read meanwhile is still written in
+                let pending = src.pending(id, key);
                 let levels = src.levels(id);
                 if levels.is_empty() {
                     missing.insert(id);
                     return None;
+                }
+                if let (Some(size), Some(blit)) = (pending, blit) {
+                    let (tex, view) = standin::placeholder(device, queue, blit, &levels, size);
+                    // its texels unknown until read: never drawn as one no
+                    // texel of which fails its alpha test (Sun Shadows)
+                    alpha.insert(key, 0);
+                    stand_ins.insert(key, (tex, size));
+                    return Some((view, level_shift((size.0, size.1), src.native_size(id))));
                 }
                 alpha.insert(key, levels.iter().flat_map(|l| l.rgba.chunks_exact(4).map(|p| p[3])).min().unwrap_or(255));
                 let shift = level_shift((levels[0].width, levels[0].height), src.native_size(id));
                 Some((upload_levels(device, queue, &levels), shift))
             })
             .clone()
+    }
+
+    /// The stand-ins a pack has read since (`Pack::take_ready`) written over
+    /// their textures' placeholders (`standin`), as many as `standin::BUDGET`
+    /// bytes allow (one at least), the rest left for the next frame: called
+    /// once a frame, before it is drawn. How many were written.
+    pub fn take_stand_ins(&mut self, queue: &wgpu::Queue) -> usize {
+        if let Some(p) = pack() {
+            self.stand_ins_ready.extend(p.take_ready());
+        }
+        let sizes: Vec<usize> = self.stand_ins_ready.iter().map(|(_, l)| standin::bytes(l)).collect();
+        let n = standin::due(&sizes, standin::BUDGET);
+        for (key, levels) in self.stand_ins_ready.drain(..n) {
+            if let Some((tex, size)) = self.stand_ins.remove(&key)
+                && standin::fits(&levels, size)
+            {
+                standin::write(queue, &tex, &levels);
+            }
+        }
+        n
+    }
+
+    /// Stand-ins read and not yet written (`take_stand_ins`).
+    pub fn stand_ins_waiting(&self) -> usize {
+        self.stand_ins_ready.len()
     }
 
     /// The least texel alpha of the texture `id` names in `src` (255 for none
@@ -1706,7 +1780,7 @@ fn layer_state(l: &esf::Layer, textured: bool) -> (usize, LayerUniform, usize) {
     (blend, base, si)
 }
 
-fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+pub(crate) fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
@@ -1717,7 +1791,7 @@ fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGrou
 
 /// A texture of `levels` (the base first, each half the one before), as
 /// the surface cache puts a surface's levels in the GS's memory.
-fn upload_levels(device: &wgpu::Device, queue: &wgpu::Queue, levels: &[esf::Image]) -> wgpu::TextureView {
+pub(crate) fn upload_levels(device: &wgpu::Device, queue: &wgpu::Queue, levels: &[esf::Image]) -> wgpu::TextureView {
     let base = &levels[0];
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("surface"),
@@ -1948,6 +2022,10 @@ impl TextureSource for LibraryTextures<'_> {
             return Some((s.width.max(0) as u32, s.height.max(0) as u32));
         }
         recolor::source_of(id).and_then(|(source, _)| self.native_size(source))
+    }
+    fn pending(&self, id: i32, key: u64) -> Option<(u32, u32, u32)> {
+        let (c, s, era) = self.surface(id)?;
+        pack()?.request(key, c, &s, era)
     }
 }
 

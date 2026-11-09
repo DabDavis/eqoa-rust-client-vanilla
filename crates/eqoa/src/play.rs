@@ -7841,6 +7841,13 @@ impl Play {
             self.hud = Some((vui, assets, crate::hud::Hud::new()));
             self.wnd_chat = Some(crate::chat::WndChat::new());
         }
+        // the texture pack's stand-ins read since, in the layer's place of
+        // the surfaces' own (`UiAssets::poll`)
+        if let Some(ui) = renderer.ui.as_mut()
+            && let Some(assets) = self.hud.as_mut().map(|h| &mut h.1).or(self.ui_assets.as_mut())
+        {
+            assets.poll(ui, device, queue);
+        }
     }
 
     /// The touch screen's pad over the HUD (`touch.rs`): its discs, and the

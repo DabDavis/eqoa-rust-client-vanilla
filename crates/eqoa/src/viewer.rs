@@ -347,8 +347,9 @@ pub fn shot_with(
     renderer.set_ps2_sequential(fog_sequential());
     renderer.scroll_time = Some(script.as_ref().map_or(0, |s| s.ms) as f32 / 1000.0);
     // the options' Texture Packs and Dump Textures (kept only under
-    // `$EQOA_CONFIG` for a shot), before a texture is made
-    crate::texpack::sync();
+    // `$EQOA_CONFIG` for a shot), before a texture is made, every stand-in
+    // read as it is asked for (a shot's one frame waits for its textures)
+    crate::texpack::sync_now();
     if let Some(f) = arial(lib) {
         renderer.set_font(&device, &queue, &f);
     }
@@ -1752,6 +1753,10 @@ struct Perf {
     mark: Instant,
     frames: u32,
     worst: f64,
+    /// frames of 50 ms or more, and of 100 ms or more, since `since` (a
+    /// texture pack's stand-ins read as they are first drawn stalled them:
+    /// `texpack`)
+    slow: (u32, u32),
     /// seconds per phase since `since`
     total: [f64; Perf::NAMES.len()],
     /// this frame's seconds per phase (from `begin`), for a stall's line
@@ -1781,7 +1786,7 @@ impl Perf {
 
     fn new(print: bool) -> Perf {
         let now = Instant::now();
-        Perf { print, since: now, mark: now, frames: 0, worst: 0.0, total: [0.0; Perf::NAMES.len()], frame: [0.0; Perf::NAMES.len()], drawn: (0, 0), last_start: None }
+        Perf { print, since: now, mark: now, frames: 0, worst: 0.0, slow: (0, 0), total: [0.0; Perf::NAMES.len()], frame: [0.0; Perf::NAMES.len()], drawn: (0, 0), last_start: None }
     }
 
     /// Five seconds begun again at `now`.
@@ -1820,7 +1825,10 @@ impl Perf {
 
     fn end(&mut self, frame_start: Instant) {
         self.frames += 1;
-        self.worst = self.worst.max(frame_start.elapsed().as_secs_f64());
+        let took = frame_start.elapsed().as_secs_f64();
+        self.worst = self.worst.max(took);
+        self.slow.0 += (took >= 0.05) as u32;
+        self.slow.1 += (took >= 0.1) as u32;
         self.last_start = Some(frame_start);
         let span = self.since.elapsed().as_secs_f64();
         if span < 5.0 {
@@ -1836,10 +1844,12 @@ impl Perf {
                 .map(|(name, t)| format!("{name} {:.2}", t * 1e3 / n))
                 .collect();
             crate::say(&format!(
-                "perf: {:.1} fps, cpu {:.2} ms/frame (worst {:.1}), {} models in {} draws: {}",
+                "perf: {:.1} fps, cpu {:.2} ms/frame (worst {:.1}, {} of 50 ms or more, {} of 100), {} models in {} draws: {}",
                 n / span,
                 cpu * 1e3 / n,
                 self.worst * 1e3,
+                self.slow.0,
+                self.slow.1,
                 self.drawn.0,
                 self.drawn.1,
                 phases.join(", ")
@@ -2388,6 +2398,11 @@ impl App {
     /// changed, everything drawn made again with it (`retexture`).
     fn poll_textures(&mut self) {
         crate::texpack::sync();
+        // the stand-ins read since, written over their placeholders at this
+        // frame's start (`render::standin`)
+        if let Some(g) = self.gfx.as_mut() {
+            g.renderer.take_stand_ins(&g.queue);
+        }
         let g = crate::texpack::generation();
         if g != self.textures_drawn {
             self.textures_drawn = g;
