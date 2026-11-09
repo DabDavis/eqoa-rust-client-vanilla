@@ -898,6 +898,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     let player = a_player(e);
                     if let Some(cs) = sprite.as_mut() {
                         crate::racebody::grant(cs, e.drawn_model, player, races);
+                        crate::raceemote::grant(lib, cs, &mut anims, e.drawn_model, player, races);
                     }
                     let held = held_by(sprite.as_ref(), e.creature.as_ref());
                     let (attached, weapons, helm_worn) = match (&sprite, &e.creature) {
@@ -1034,6 +1035,8 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
         && let Some(cs) = p.sprite.as_mut()
     {
         crate::racebody::grant(cs, p.model, a_player(e), races);
+        let anims = &mut p.anims;
+        lib.with_view(p.era, || crate::raceemote::grant(lib, cs, anims, p.model, a_player(e), races));
     }
     let r = p.as_ref().map_or(Redo::Build, |p| redo((p.id, p.model, p.look, p.held), (e.id, e.drawn_model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
     // the art swapped (F9), or a texture pack turned on or off (`texpack`),
@@ -2309,14 +2312,52 @@ mod held {
         let mut p = super::commands::play();
         p.self_model = Some(GARGOYLE);
         let holds = |w: &Walker| w.sprite.as_ref().map(|cs| (cs.holds_items, cs.item_node(0), cs.item_node(2)));
-        p.grant_walker(&mut walker);
+        p.grant_walker(&mut walker, &lib);
         assert_eq!(holds(&walker), Some((false, None, None)), "the control: no races listed");
         p.session.creation = Some(net::creation::Creation {
             all_classes: true,
             races: vec![net::creation::Race { id: 29, like: 9, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [GARGOYLE, GARGOYLE], name: "Gargoyle".into(), short: "GAR".into(), desc: String::new() }],
         });
-        p.grant_walker(&mut walker);
+        p.grant_walker(&mut walker, &lib);
         assert_eq!(holds(&walker), Some((true, Some(11), Some(20))));
+    }
+
+    /// The player's own emotes, the walker's (`PlayEmote`'s `SetAction`), are
+    /// the table's once the server has races of its own (`raceemote`): the
+    /// hill giant's wave is the human's carried onto it, not its idle, and
+    /// set again (every frame) nothing more changes. The control: with no
+    /// races listed the wave is the idle `SetDefaultEntries` gave it, as on a
+    /// PS2. Needs `run/eqoa.iso`.
+    #[test]
+    fn the_players_own_emotes() {
+        const HILL_GIANT: u32 = 0xFFB1_EA2C;
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some(world) = crate::walker::tests::tunaria_round(x, z) else { return };
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let mut iso = iso::Iso::open(&path).unwrap();
+        let mut lib = Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
+        let mut walker = Walker::new(world, x, z, 0.0);
+        walker.set_character(&lib, lib.lookup(HILL_GIANT as i32).unwrap());
+        let mut p = super::commands::play();
+        p.self_model = Some(HILL_GIANT);
+        crate::racelabel::clear();
+        let wave = |w: &Walker| w.sprite.as_ref().map(|cs| (cs.entries[56].animation, cs.entries[0].animation));
+        p.grant_walker(&mut walker, &lib);
+        let (w, idle) = wave(&walker).unwrap();
+        assert_eq!(w, idle, "the control: no races listed, the idle");
+        p.session.creation = Some(net::creation::Creation {
+            all_classes: true,
+            races: vec![net::creation::Race { id: 11, like: 9, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [HILL_GIANT, HILL_GIANT], name: "Hill Giant".into(), short: "HGT".into(), desc: String::new() }],
+        });
+        p.grant_walker(&mut walker, &lib);
+        let (w, idle) = wave(&walker).unwrap();
+        assert_ne!(w, idle, "the human's wave");
+        let clips = walker.anims.anims.len();
+        p.grant_walker(&mut walker, &lib);
+        assert_eq!((wave(&walker).unwrap().0, walker.anims.anims.len()), (w, clips), "again: as it was");
+        assert!(walker.set_action(56).is_some());
+        assert_eq!(walker.sprite.as_ref().unwrap().cur[0].anim, 56, "the wave plays");
     }
 }
 
@@ -2418,9 +2459,11 @@ impl Play {
     /// (`racebody`), so its hands swing and shoot by their weapons: the walker
     /// wears the model the player was last told of (`self_model`, which the
     /// viewer puts on it after the frame that names it).
-    fn grant_walker(&self, walker: &mut Walker) {
+    fn grant_walker(&self, walker: &mut Walker, lib: &Library) {
         if let (Some(cs), Some(model)) = (walker.sprite.as_mut(), self.self_model) {
             crate::racebody::grant(cs, model, true, self.session.creation.as_ref());
+            let anims = &mut walker.anims;
+            lib.with_view(lib.view_for(model as i32), || crate::raceemote::grant(lib, cs, anims, model, true, self.session.creation.as_ref()));
         }
     }
 
@@ -2430,7 +2473,7 @@ impl Play {
         let now = self.session.now();
         // the loading screen's gears, turning by the clock (`SetTime(now)`)
         self.loading.frame(lib, g.renderer, g.device, g.queue, now as i64);
-        self.grant_walker(walker);
+        self.grant_walker(walker, lib);
         let mut new_model = None;
         self.actors_scene(walker);
         for e in self.session.pump() {

@@ -6,6 +6,18 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · The new races wave, bow, point and cheer
+- On a server with races of its own, every new race now does the four emotes. Most do them the way a human
+  does, in their own size and shape: a Hill Giant raises its huge arm over its head to wave and bends right
+  over to bow, a Kerran points, a Gnoll cheers with a fist in the air.
+- Pixies, Fairies and Fungusmen, built too differently for that, use moves of their own: a Pixie raises a hand
+  high to wave and dives forward to bow, a Fairy opens its wings, a Fungusman swings an arm out and tips its
+  cap.
+- Other players see your emote as you do. Until now a new race's emote did nothing at all (it started its
+  standing animation over), which is still what a PS2 shows.
+- Brownies and Skeletons, which always had the human's emotes, and everyone else, creatures included, are
+  unchanged.
+
 ## 2026-11-09 · Longer bug reports
 - A bug report or petition now holds up to 2,047 characters on a server that takes them: Support's request form,
   the one F3 and /bug open, and a reply from Support's inbox. That is four times as much room to say what happened,
