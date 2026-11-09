@@ -583,11 +583,6 @@ const FAR_POSE_BUDGET: u32 = 50;
 /// offers them at once, with the world entry's first replies.
 const GUIDE_WAIT_MS: u32 = 3000;
 
-/// The quest marks for the map and the minimap: the guide's while it is on
-/// (`guide_on`), else the server's while it offers them, none of either with
-/// Quest Markers off; `None` (no Quests button) with neither, or with the
-/// Quest Helper off. Of the fields, not of `Play`, so the map borrows beside
-/// it.
 /// The colour a 0x00DB's number is drawn in, from what follows its body
 /// (`rest`): a server's patch's three bytes when it colours them (`patch`:
 /// Sandstorm's S2, `s2::Rules::damage_rgb`, read as ever, and nothing else
@@ -600,6 +595,11 @@ fn number_rgb(patch: bool, rest: &[u8], tags: bool, choices: &[crate::numcolor::
     crate::numcolor::rgb(net::session::number_tag(rest, tags), choices)
 }
 
+/// The quest marks for the map and the minimap: the guide's while it is on
+/// (`guide_on`), else the server's while it offers them, none of either with
+/// Quest Markers off; `None` (no Quests button) with neither, or with the
+/// Quest Helper off. Of the fields, not of `Play`, so the map borrows beside
+/// it.
 fn quest_marks_of<'a>(session: &'a Session, guide: &'a crate::questguide::Guide, guide_on: bool) -> Option<&'a [net::session::QuestMark]> {
     if !crate::settings::quest_helper() {
         return None;
