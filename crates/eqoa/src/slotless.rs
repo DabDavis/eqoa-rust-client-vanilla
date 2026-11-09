@@ -57,7 +57,6 @@ use esf::{Era, Library};
 use glam::Vec3;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use vi::csprite::{CSprite, Rand};
 use vi::cust::{LayerChange, Look, Tables};
 use vi::fpu::Ee;
@@ -204,18 +203,23 @@ fn colours_of(lib: &Library, id: i32) -> Option<Rc<Texels>> {
     made
 }
 
-static ENABLED: AtomicBool = AtomicBool::new(true);
+thread_local! {
+    /// Whether slotless bodies are dressed: the thread's that makes the
+    /// puppets and figures (the game's), so one test turning it off is not
+    /// seen by another running beside it.
+    static ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
 
 /// Whether slotless bodies are dressed (on unless turned off).
 pub fn enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed)
+    ENABLED.with(|e| e.get())
 }
 
 /// Turns the dressing of slotless bodies on or off, for the puppets made
 /// from then on.
 #[allow(dead_code)]
 pub fn set_enabled(on: bool) {
-    ENABLED.store(on, Ordering::Relaxed);
+    ENABLED.with(|e| e.set(on));
 }
 
 /// A body with no text slot at all: no TSlotList, or one that names none.
@@ -390,6 +394,24 @@ fn shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<Rc<She
         s.insert(key, made.clone());
     });
     made
+}
+
+/// The node body `id` (`cs` its sprite, in the art it is drawn in) wears its
+/// helm on (`SetHelm`'s, the NodeIDList's slot 8; -1 none): the one it names;
+/// else, for a player's character (`player`) in a body that wears a human's
+/// armour (`SHELLED`) on the human's own skeleton (the same nodes, the same
+/// parents), the human's. The 2002 disc's skeleton is built on its HumanMale's
+/// skeleton (52 nodes, its head node 6) and names no helm node, where
+/// Frontiers' names the human's own (5): in the 2002 disc's art a skeleton's
+/// helm was not drawn (the user, 2026-11-08: "in char select i see skinny with
+/// his helm on, but in game the helm doesnt show"). An NPC, any other body,
+/// and the dressing turned off keep the body's word, as a PS2 draws it.
+pub fn helm_node(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool) -> i32 {
+    let own = cs.node_ids[8];
+    if own >= 0 || !player || !enabled() || !SHELLED.contains(&id) {
+        return own;
+    }
+    Human::load(lib, cs.sex != 0).filter(|h| same_skeleton(&h.cs, cs, std::iter::empty())).map_or(own, |h| h.cs.node_ids[8])
 }
 
 /// Whether two sprites' skeletons are one for vertices skinned to `used`:
@@ -1919,6 +1941,64 @@ mod tests {
         assert!(k.batches[..km.batches.len()].iter().zip(&km.batches).all(|(a, b)| a.indices == b.indices), "none of its own hidden");
         let turned = |b: &esf::Batch| b.indices.chunks_exact(6).filter(|t| [t[3], t[4], t[5]].map(|v| k.pos[v as usize]) == [t[0], t[2], t[1]].map(|v| k.pos[v as usize])).count();
         assert_eq!(k.batches[km.batches.len()..].iter().map(turned).sum::<usize>(), 0, "one face a triangle on the kappa");
+    }
+
+    /// The 2002 disc's copies of the character files standing in for
+    /// Frontiers' (`disc`), as the world's library has them in that art
+    /// (`era::install`): `$EQOA_2002_ISO`, else the USA disc under
+    /// `../decomp-builds/discs/eqoa-usa/`. None (skipped, loudly) without
+    /// either disc.
+    fn disc_2002() -> Option<Library> {
+        let mut lib = disc()?;
+        let y2002 = std::env::var_os("EQOA_2002_ISO").map(std::path::PathBuf::from).or_else(|| {
+            let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../decomp-builds/discs/eqoa-usa");
+            std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("iso")))
+        });
+        let Some(mut d) = y2002.and_then(|p| iso::Iso::open(p).ok()) else {
+            eprintln!("SKIP: no 2002 disc (set EQOA_2002_ISO)");
+            return None;
+        };
+        for f in 0..lib.files.len() {
+            let name = lib.files[f].0.clone();
+            if let Ok(bytes) = d.read(&name) {
+                lib.stand_in(f, esf::Container::open(bytes).expect(&name));
+            }
+        }
+        Some(lib)
+    }
+
+    /// Where a player's skeleton wears its helm (`helm_node`): Frontiers'
+    /// skeleton names the human's helm node (5) itself, for a player and an
+    /// NPC alike; the 2002 disc's names none, and a player's wears it on the
+    /// 2002 HumanMale's (6), the same node of the same skeleton, the skull,
+    /// standing where Frontiers' skeleton's does (Frontiers' 3 cm the
+    /// higher), while an NPC's keeps none, as a PS2 draws it. The controls:
+    /// the 2002 brownie, on the same skeleton and naming none, is not dressed
+    /// as a human and keeps none; a human keeps its own in both arts.
+    #[test]
+    fn a_skeletons_helm_goes_on_the_humans_head() {
+        let Some(lib) = disc_2002() else { return };
+        let sprite = |id: u32| {
+            let r = lib.lookup(id as i32).unwrap();
+            vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap()
+        };
+        let (skeleton, brownie, human) = (0x6AF9_8A81u32, 0x4376_EB52u32, vi::hash::hash_resource_id("HumanMale"));
+        let mut heights = Vec::new();
+        for (era, want) in [(Era::Frontiers, 5), (Era::Y2002, 6)] {
+            lib.set_view(era);
+            let (cs, h) = (sprite(skeleton), sprite(human));
+            assert_eq!(h.node_ids[8], want, "{era:?}: the human's helm node");
+            assert_eq!(helm_node(&lib, human, &h, false), want, "{era:?}: a human's own");
+            assert_eq!(cs.node_ids[8], if era == Era::Frontiers { 5 } else { -1 }, "{era:?}: the skeleton's own word");
+            assert_eq!(helm_node(&lib, skeleton, &cs, true), want, "{era:?}: a player's skeleton");
+            assert_eq!(helm_node(&lib, skeleton, &cs, false), cs.node_ids[8], "{era:?}: an NPC's keeps its own word");
+            let b = sprite(brownie);
+            assert_eq!((b.node_ids[8], helm_node(&lib, brownie, &b, true)), (-1, -1), "{era:?}: the brownie");
+            heights.push(-cs.h.nodes[want as usize].inv_bind_world.to_cols()[3][1]);
+        }
+        lib.set_view(Era::Y2002);
+        assert!(same_skeleton(&sprite(human), &sprite(brownie), std::iter::empty()), "the 2002 brownie is on the human's skeleton too");
+        assert!((heights[0] - 1.83).abs() < 0.005 && (heights[1] - 1.80).abs() < 0.005, "the skull, at {heights:?}");
     }
 
     /// A fit made anew comes out the same every time: its ties (a corner as
