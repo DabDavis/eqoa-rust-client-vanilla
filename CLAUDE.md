@@ -18,6 +18,10 @@ current.
   the pet's effects in a row under its bar on a server that sends them (the server owner's of 2026-11-09, "put the
   buff icons under the pet name plate": `hud::pet_effects_pieces`, go-eqoa-server's 0x7E32/0x7E33, Extended > UI's
   Pet Effects, on by default; off, or on any other server, nothing is drawn),
+  the floating numbers of the player's own figures and its pet's in a colour chosen for what made them on a server
+  that tags them (the server owner's of 2026-11-09, "we can add the number colors to extended menu": `numcolor`,
+  go-eqoa-server's 0x7E38/0x7E39 and one byte after 0x00DB's body, Extended > Number Colors; every row Default, the
+  game's own colour, until chosen),
   Ignore Shouts kept, Update Notices, Text Sharp or Smooth, Loading Screens Longer or Instant, Render
   Scale x1, x2 or x4 (off unless chosen), HUD Nearest or Sharp (Nearest, the game's, by default: the
   user's of 2026-10-28, "make nearest the default ... since there is a cost"; Sharp was the default

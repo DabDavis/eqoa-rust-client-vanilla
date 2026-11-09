@@ -6,6 +6,21 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Damage numbers in your colours
+- The numbers that float up in a fight can be coloured by what made them, so you can see at a glance that a
+  proc fired or a heal over time ticked. It is in Options > Extended > Number Colors: Your Damage, Your Procs,
+  Your Heals, Pet Damage, Pet Procs and Pet Heals, each Default or one of eleven colours (White, Yellow,
+  Orange, Red, Pink, Purple, Blue, Light Blue, Cyan, Green, Gray), shown in its own colour on the page.
+- Your Damage is your swings and bow shots, your spells and abilities, your damage over time and your damage
+  shield. Your Procs is everything a proc does: a weapon's, a buff's, a worn item's, its hits and its heals.
+  Your Heals is your heals and heals over time, on yourself or anyone else. Your pet's three rows are the same
+  for your pet, its heals on you included.
+- Default is the game's own colour (white for a hit you made, green for a heal), and every row starts on
+  Default, so nothing changes until you pick a colour. Numbers on you that others made (a hit you take, a heal
+  someone else gives you) always keep the game's colours.
+- It needs a server that marks its numbers: eqoaclassic's does from its update of the same day. On any other
+  server (Sandstorm, or one not updated) your numbers stay the game's colours whatever the rows say.
+
 ## 2026-11-09 · GMs: every trigger in the TEST menu
 - For a GM, TEST > Programming > TRIGGER now lists every trigger that is switched on, each with its number
   before its name ("140 Marr Twins..."), not only the first eight. Up and Down go through them seven at a time,
