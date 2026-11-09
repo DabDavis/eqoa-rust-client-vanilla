@@ -259,6 +259,9 @@ pub fn can_rumble() -> bool {
 /// player without the console open would see only a frame that no longer
 /// moves.
 pub fn start() {
+    // the net library's own lines (`debug_line`: a connection gone, a message
+    // not read) to the console: a page has no stderr
+    net::session::set_debug_sink(log);
     std::panic::set_hook(Box::new(|info| {
         console_error_panic_hook::hook(info);
         crash("The client stopped", &info.to_string());
