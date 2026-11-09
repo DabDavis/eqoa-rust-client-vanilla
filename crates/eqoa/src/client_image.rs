@@ -113,6 +113,10 @@ pub struct Menus {
     /// id, set at run time (the server's names for the TRIGGER entries,
     /// `adminplay`).
     pub labels: HashMap<(u32, i32), Label>,
+    /// The TRIGGER menu (its index) and its entries as CLIENT has them, kept
+    /// while the server's whole list of triggers stands in their place
+    /// (`adminplay::set_trigger_list`).
+    pub trigger_lines: Option<(usize, Vec<MenuEntry>)>,
 }
 
 /// An entry's text set at run time (`Menus::labels`).
