@@ -14,9 +14,10 @@ canvas (the licence, the title, Station's login screen...): drive it with
 
 --shot SECONDS=FILE.png screenshots that long after the button (repeatable);
 --until TEXT exits 0 once a console line has it; --keys SECONDS=KEYS holds
-keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s; 'w:down'
-and 'w:up' press it and let it go apart, the canvas focused only for the press,
-so a --js between them can move the focus: a key let go elsewhere);
+keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s; 'w:r2000'
+holds it 2 s as a keyboard does, its repeats coming as a browser sends them;
+'w:down' and 'w:up' press it and let it go apart, the canvas focused only for the
+press, so a --js between them can move the focus: a key let go elsewhere);
 --type SECONDS=TEXT types TEXT on the canvas then, a character at a time
 (an account's name into Station's login; a password from the environment:
 --type 20='$EQOA_PASSWORD'); --insert SECONDS=TEXT puts TEXT into the element
@@ -241,7 +242,11 @@ async def drive(a, base, ws_url, target_id):
                    "-": ("Minus", 189), "_": ("Minus", 189), "'": ("Quote", 222), "`": ("Backquote", 192),
                    "~": ("Backquote", 192), "=": ("Equal", 187), "+": ("Equal", 187)}
 
-        async def key(k, down):
+        # the named keys' Windows key codes, as a keyboard's come
+        NAMED = {"ArrowLeft": 37, "ArrowUp": 38, "ArrowRight": 39, "ArrowDown": 40, "Enter": 13, "Escape": 27,
+                 "Backspace": 8, "Tab": 9, "Insert": 45, "Delete": 46, "Home": 36, "End": 35, "F1": 112, "F3": 114, "F9": 120}
+
+        async def key(k, down, repeat=False):
             if len(k) == 1 and k.isalpha():
                 code, vk = "Key" + k.upper(), ord(k.upper())
             elif len(k) == 1 and k.isdigit():
@@ -249,9 +254,9 @@ async def drive(a, base, ws_url, target_id):
             elif k in SYMBOLS:
                 code, vk = SYMBOLS[k]
             else:
-                code, vk = k, 0
+                code, vk = k, NAMED.get(k, 0)
             await call("Input.dispatchKeyEvent", type="keyDown" if down else "keyUp", key=k, code=code,
-                       text=k if (down and len(k) == 1) else "", windowsVirtualKeyCode=vk)
+                       text=k if (down and len(k) == 1) else "", windowsVirtualKeyCode=vk, autoRepeat=repeat)
 
         async def touch(kind, pts):
             await call("Input.dispatchTouchEvent", type=kind, touchPoints=[{"x": x, "y": y, "id": 1} for x, y in pts])
@@ -351,34 +356,43 @@ async def drive(a, base, ws_url, target_id):
                 await js("window.drivePad.timestamp = performance.now()")
                 out(f"gamepad {step}")
 
+        # an event's SECONDS: from the start (the click, or --start-when), or written
+        # +N, N seconds from the first console line holding --then's text (a stage
+        # whose time varies with the machine's load: 'in the world as'); those
+        # come after every timed one
+        THEN = 1e6
+
+        def when(t):
+            return THEN + float(t[1:]) if t.startswith("+") else float(t)
+
         events = []
         for s in a.touch:
             t, spec = s.split("=", 1)
-            events.append((float(t), "touch", spec))
+            events.append((when(t), "touch", spec))
         for s in a.gamepad:
             t, spec = s.split("=", 1)
-            events.append((float(t), "gamepad", spec))
+            events.append((when(t), "gamepad", spec))
         for s in a.mouse:
             t, spec = s.split("=", 1)
-            events.append((float(t), "mouse", spec))
+            events.append((when(t), "mouse", spec))
         for s in a.shot:
             t, f = s.split("=", 1)
-            events.append((float(t), "shot", f))
+            events.append((when(t), "shot", f))
         for s in a.keys:
             t, spec = s.split("=", 1)
-            events.append((float(t), "keys", spec))
+            events.append((when(t), "keys", spec))
         for s in a.js:
             t, expr = s.split("=", 1)
-            events.append((float(t), "js", expr))
+            events.append((when(t), "js", expr))
         for s in a.resize:
             t, size = s.split("=", 1)
-            events.append((float(t), "resize", size))
+            events.append((when(t), "resize", size))
         for s in a.type:
             t, text = s.split("=", 1)
-            events.append((float(t), "type", os.environ.get(text[1:], "") if text.startswith("$") else text))
+            events.append((when(t), "type", os.environ.get(text[1:], "") if text.startswith("$") else text))
         for s in a.insert:
             t, text = s.split("=", 1)
-            events.append((float(t), "insert", os.environ.get(text[1:], "") if text.startswith("$") else text))
+            events.append((when(t), "insert", os.environ.get(text[1:], "") if text.startswith("$") else text))
         for s in a.hide:
             t, dur = s.split("=", 1)
             events.append((float(t), "hide", ""))
@@ -392,7 +406,19 @@ async def drive(a, base, ws_url, target_id):
                 body = r.read()
             return json.loads(body) if body.strip().startswith(b"{") else body
         deadline = t_click + a.timeout
+        then_at = None  # when --then's line came, on the events' clock
         for t, kind, arg in events:
+            if t >= THEN:
+                while then_at is None and time.monotonic() < deadline and not until.is_set():
+                    hit = next((l for l in lines if a.then and a.then in l), None)
+                    if hit:
+                        then_at = time.monotonic()
+                        out(f"then: {a.then!r} came {then_at - t_click:.1f} s after the start")
+                    else:
+                        await asyncio.sleep(0.25)
+                if then_at is None:
+                    break
+                t = then_at - t_click + (t - THEN)
             while time.monotonic() < t_click + t:
                 if until.is_set():
                     break
@@ -445,6 +471,23 @@ async def drive(a, base, ws_url, target_id):
             else:
                 for part in arg.split(","):
                     k, ms = part.split(":")
+                    if ms.startswith("r"):
+                        # held as a keyboard holds a key: pressed, then its repeats as
+                        # a browser sends them (keydown with repeat set; Windows'
+                        # default delay of 500 ms, then about 30 a second), let go
+                        hold = int(ms[1:]) / 1000
+                        await js("document.getElementById('eqoa').focus()")
+                        await key(k, True)
+                        end = time.monotonic() + hold
+                        await asyncio.sleep(min(0.5, hold))
+                        n = 0
+                        while time.monotonic() < end:
+                            await key(k, True, repeat=True)
+                            n += 1
+                            await asyncio.sleep(0.033)
+                        await key(k, False)
+                        out(f"keys {part} ({n} repeats)")
+                        continue
                     if ms != "up":
                         await js("document.getElementById('eqoa').focus()")
                         await key(k, True)
@@ -483,6 +526,7 @@ if __name__ == "__main__":
     ap.add_argument("--touch", action="append", default=[], help="SECONDS=STEPS: touches on the canvas")
     ap.add_argument("--gamepad", action="append", default=[], help="SECONDS=STEPS: a gamepad, through navigator.getGamepads")
     ap.add_argument("--mouse", action="append", default=[], help="SECONDS=STEPS: the mouse over the canvas")
+    ap.add_argument("--then", help="console text: an event's SECONDS written +N count N seconds from the first line holding it ('in the world as')")
     ap.add_argument("--start-when", help="a page expression, or line:TEXT for a console line: the events' seconds count from when it first holds ('line:the HUD is in')")
     ap.add_argument("--hide", action="append", default=[], help="SECONDS=DURATION: another tab in front for DURATION seconds (the page hidden)")
     ap.add_argument("--final-shot")

@@ -6,6 +6,16 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · A crash in the browser comes with your next bug report
+- If the game stops in the browser ("The client stopped" or "The graphics stopped"), the next bug report you send
+  (F3, or /bug in chat) carries the message it stopped with, once, so the GMs can see what went wrong without you
+  copying anything. Nothing is sent until you send a report yourself.
+- A bug report from the browser now says which build of the page you were on.
+- When chat lines can't go out (the server reset your connection in the world and hasn't sent the world again), the
+  game still sends nothing for them, as the PS2 does, but your next bug report says how many were held back.
+- A crash that could come when the server's connection broke in a particular way (the game stopped the moment
+  you moved) can't happen any more: the game carries on without that connection and says so in its log.
+
 ## 2026-11-09 · Posts no longer pull the camera in
 - Turning the camera with something thin close by, like the posts holding up the roof of the well by the Freeport
   coach, a lamp post or a pole, the camera no longer jumps in each time one passes behind you: it stays where you

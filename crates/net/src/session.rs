@@ -495,6 +495,10 @@ pub struct Session {
     pub drdp: Drdp<Ee>,
     socket: Box<dyn Datagrams>,
     pub conn: Option<ConnId>,
+    /// Messages not sent since the game connection went from under the session
+    /// (`game_conn`), and whether it did.
+    pub sends_lost: u32,
+    conn_gone: bool,
     pub state: State,
     pub self_id: Option<u64>,
     /// 0x07D1's mask (`VIClient+0x50304`), as the server last sent it.
@@ -708,6 +712,8 @@ impl Session {
             datagrams_in: 0,
             last_datagram: None,
             debug: std::env::var_os("EQOA_NET_DEBUG").is_some(),
+            sends_lost: 0,
+            conn_gone: false,
             chat_mode: 0,
             held: Vec::new(),
             early_states: Vec::new(),
@@ -745,7 +751,7 @@ impl Session {
 
     /// `SendRaw`: a guaranteed message on the current connection.
     pub fn send(&mut self, data: &[u8]) {
-        if let Some(c) = self.conn {
+        if let Some(c) = self.game_conn() {
             if let Some(r) = self.record.as_mut() {
                 r.push((drdp::TYPE_GUARANTEED, data.to_vec()));
             }
@@ -755,11 +761,39 @@ impl Session {
 
     /// A state channel update (0x40 is the player's own state).
     pub fn send_state(&mut self, channel: u8, data: &[u8]) {
-        if let Some(c) = self.conn {
+        if let Some(c) = self.game_conn() {
             if let Some(r) = self.record.as_mut() {
                 r.push((channel, data.to_vec()));
             }
             self.drdp.connection_send(c, data, channel);
+        }
+    }
+
+    /// The game connection, while the DRDP library still has it. The library
+    /// can let a connection go with no DISCONNECT reaching the session (system
+    /// messages 20 and 21 close every connection to an endpoint,
+    /// `drdp_close_connections_to_endpoint`), and its handle then names a freed
+    /// slot: a send on it panicked ("dangling handle"), or once the slot was
+    /// taken again went on another connection (petition 1355's crashes are
+    /// unexplained; this one is prevented). The handle is let go, its loss said
+    /// once, and every message after it counted (`sends_lost`) and not sent,
+    /// as `msg_07e0` and `msg_0790_done` already skip a connection gone.
+    pub fn game_conn(&mut self) -> Option<ConnId> {
+        match self.conn {
+            Some(c) if self.drdp.conns.contains(c) => Some(c),
+            Some(_) => {
+                self.conn = None;
+                self.conn_gone = true;
+                self.sends_lost += 1;
+                debug_line("[net] the game connection is gone: DRDP let it go with no disconnect (as its system messages 20 and 21 do); nothing more is sent on it");
+                None
+            }
+            None => {
+                if self.conn_gone {
+                    self.sends_lost += 1;
+                }
+                None
+            }
         }
     }
 
@@ -869,11 +903,14 @@ impl Session {
         self.state = State::Shard;
         // a shard is a server of its own: its lists' sizes are what it says
         self.item_lists = [ITEM_LIST_DISC; 2];
-        if let Some(c) = self.conn.take() {
+        if let Some(c) = self.conn.take()
+            && self.drdp.conns.contains(c)
+        {
             self.drdp.connection_close(c);
         }
         let sys = self.drdp.system_endpoint;
         self.conn = self.drdp.connection_open(sys, endpoint);
+        self.conn_gone = false;
         match hello {
             Some(h) => {
                 let mut w = Writer::op(0x0000);
@@ -1032,6 +1069,7 @@ impl Session {
                     self.drdp.connection_close(c);
                 }
                 self.conn = m.connection;
+                self.conn_gone = false;
                 self.self_id = None;
                 self.entity_view_offer = None;
                 self.flying = false;
@@ -1849,6 +1887,55 @@ mod tests {
         assert_eq!(s.record.as_deref(), Some(&[][..]), "nothing sent on receipt");
         s.answer_teleport(7);
         assert_eq!(s.record.unwrap(), [(drdp::TYPE_GUARANTEED, vec![0x49, 0x00, 14])]);
+    }
+
+    /// The net library's lines, as a test reads them (`set_debug_sink`: once
+    /// for the process, so every test's lines come here after it is set).
+    static NET_LINES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn keep_net_line(s: &str) {
+        NET_LINES.lock().unwrap().push(s.to_string());
+    }
+
+    // A game connection the DRDP library let go with no DISCONNECT reaching
+    // the session, as its system messages 20 and 21 close every connection to
+    // an endpoint (`drdp_close_connections_to_endpoint`): a send on its handle
+    // panicked ("dangling handle"). Now the handle is let go, the loss said
+    // once, every message after it counted and not sent, and a game connection
+    // opened again sends. Control: with the connection live, the same sends go
+    // into its queue and nothing is lost or said.
+    #[test]
+    fn a_connection_drdp_let_go_is_never_sent_on() {
+        set_debug_sink(keep_net_line);
+        let said = || NET_LINES.lock().unwrap().iter().filter(|l| l.contains("the game connection is gone")).count();
+        // the control
+        let mut s = session();
+        s.record = Some(Vec::new());
+        let c = s.conn.unwrap();
+        let queued = s.drdp.conns[c].send_queue.len();
+        s.send(&[0x0B, 0x00]);
+        s.send_state(0x40, &[1, 2, 3]);
+        assert_eq!(s.drdp.conns[c].send_queue.len(), queued + 2, "the control: both queued");
+        assert_eq!((s.sends_lost, s.record.as_ref().unwrap().len()), (0, 2));
+        let before = said();
+        // gone from under the session, as system messages 20 and 21 make it
+        let remote = s.drdp.conns[c].remote_id;
+        s.drdp.close_connections_to_endpoint(remote);
+        assert!(!s.drdp.conns.contains(c), "the connection is gone");
+        assert_eq!(s.conn, Some(c), "and the session still holds its handle");
+        s.send(&[0x0B, 0x00]);
+        s.send_state(0x40, &[1, 2, 3]);
+        s.send(&[0x0E, 0x00, 0]);
+        assert_eq!(s.conn, None, "the handle let go");
+        assert_eq!(s.sends_lost, 3, "every message after it counted");
+        assert_eq!(s.record.as_ref().unwrap().len(), 2, "none of them sent");
+        assert_eq!(said() - before, 1, "said once");
+        // a new game connection sends again (as connect_shard opens one)
+        s.connect_shard(remote, None);
+        let c2 = s.conn.expect("a new connection");
+        let queued = s.drdp.conns[c2].send_queue.len();
+        s.send(&[0x0B, 0x00]);
+        assert_eq!(s.drdp.conns[c2].send_queue.len(), queued + 1);
+        assert_eq!(s.sends_lost, 3, "nothing lost on the new one");
     }
 
     // 0x07A4, what go-eqoa-server sends a session whose character logged in
