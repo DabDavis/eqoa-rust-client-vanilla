@@ -323,10 +323,10 @@ pub(crate) struct Points {
     /// The copy from a cache's face to its live one.
     copy: wgpu::RenderPipeline,
     copy_bg: wgpu::BindGroup,
-    /// Each face of each map's uniform, at `stride`, through one bind group
-    /// with a dynamic offset (the casters' group 3, the copy's group 0).
+    /// Each face of each map's uniform, at `stride`, and a bind group each
+    /// (the casters' group 3, the copy's group 0).
     faces: wgpu::Buffer,
-    face_bg: wgpu::BindGroup,
+    face_bgs: Vec<wgpu::BindGroup>,
     stride: u64,
     size: u32,
     slots: usize,
@@ -338,7 +338,12 @@ impl Points {
     pub(crate) fn new(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3], lit: &lit::Lit, sun: Option<&sunshadow::Sun>, format: wgpu::TextureFormat) -> Option<Points> {
         let size = map_size(device);
         let slots = slots();
-        let layers = (6 * MAX_SLOTS) as u32;
+        // a layer more than the maps use: wgpu's GL backend makes a square 2D
+        // texture of a multiple of six layers a cube map array (its "cube
+        // compatible" guess), which then samples as nothing through a 2D
+        // array's comparison (every light wholly in shadow, on GL and in a
+        // page's WebGL2)
+        let layers = (6 * MAX_SLOTS + 1) as u32;
         let array = |label: &str| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -390,15 +395,19 @@ impl Points {
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: wgpu::BufferSize::new(size_of::<FaceUniform>() as u64) },
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: wgpu::BufferSize::new(size_of::<FaceUniform>() as u64) },
                 count: None,
             }],
         });
-        let face_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("light shadow face"),
-            layout: &face_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &faces, offset: 0, size: wgpu::BufferSize::new(size_of::<FaceUniform>() as u64) }) }],
-        });
+        let face_bgs = (0..layers as u64)
+            .map(|l| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("light shadow face"),
+                    layout: &face_layout,
+                    entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &faces, offset: l * stride, size: wgpu::BufferSize::new(size_of::<FaceUniform>() as u64) }) }],
+                })
+            })
+            .collect();
         let cast_module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("light shadow casters"), source: wgpu::ShaderSource::Wgsl(CAST_WGSL.into()) });
         let cast_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("light shadow casters"),
@@ -476,7 +485,7 @@ impl Points {
             copy,
             copy_bg,
             faces,
-            face_bg,
+            face_bgs,
             stride,
             size,
             slots,
@@ -626,7 +635,7 @@ impl Points {
                 }
                 let mut pass = self.pass(encoder, &self.live[k * 6 + face]);
                 pass.set_pipeline(&self.copy);
-                pass.set_bind_group(0, &self.face_bg, &[((k * 6 + face) as u64 * self.stride) as u32]);
+                pass.set_bind_group(0, &self.face_bgs[k * 6 + face], &[]);
                 pass.set_bind_group(1, &self.copy_bg, &[]);
                 pass.draw(0..3, 0..1);
                 drawn.copied += 1;
@@ -746,7 +755,7 @@ impl Points {
             if bound.is_none() {
                 pass.set_bind_group(0, &r.frame_bg, &[]);
                 pass.set_bind_group(2, &r.identity_palette, &[]);
-                pass.set_bind_group(3, &self.face_bg, &[(layer as u64 * self.stride) as u32]);
+                pass.set_bind_group(3, &self.face_bgs[layer], &[]);
             }
             if bound != Some(gr as *const GpuGroup) {
                 pass.set_vertex_buffer(0, gr.vertices.slice(..));
@@ -779,7 +788,7 @@ impl Points {
             return 0;
         }
         pass.set_bind_group(0, &r.frame_bg, &[]);
-        pass.set_bind_group(3, &self.face_bg, &[(layer as u64 * self.stride) as u32]);
+        pass.set_bind_group(3, &self.face_bgs[layer], &[]);
         let mut set_pipeline = |pass: &mut wgpu::RenderPass<'_>, solid: bool| {
             if *current != Some(solid) {
                 pass.set_pipeline(if solid { &self.solid } else { &self.caster });
