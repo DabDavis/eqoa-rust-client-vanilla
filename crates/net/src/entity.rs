@@ -50,6 +50,9 @@ pub fn channel_of_slot(slot: usize) -> Option<u8> {
 /// `ApplyLook` hands each colour to `SetArmorSlot` / `SetRobe` / `SetHelm`,
 /// which with no ArmorGroup make it the slot's layer colour, where the disc's
 /// take `GetTintColor(tint)`; nothing draws the held items' colours.
+/// go-eqoa-server sends a slot dyed White as ff ff fe ff (its
+/// `database.WhiteDyeWire`), which the renderer draws bleached
+/// (`render::WHITE_DYE`); plain white is an undyed slot's tint 0.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct LiveColors {
     /// The three attach items' (primary, secondary, shield), `+0x296`.
