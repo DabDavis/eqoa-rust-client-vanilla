@@ -39,6 +39,9 @@ pub struct Part {
     pub row: u8,
     /// Its name, shown where the game names a zone.
     pub name: String,
+    /// The race whose home it is (a server's race by its id, 0 none): where a
+    /// new character of it starts, which the create pages name.
+    pub race: u8,
 }
 
 fn str8(r: &mut Reader) -> String {
@@ -68,7 +71,8 @@ pub fn read(b: &[u8]) -> Option<Vec<World>> {
             let (size, crc) = (r.u32(), r.u32());
             let (col, row) = (r.u8(), r.u8());
             let name = str8(&mut r);
-            parts.push(Part { from, zone, size, crc, col, row, name });
+            let race = r.u8();
+            parts.push(Part { from, zone, size, crc, col, row, name, race });
         }
         out.push(World { id, name, size, crc, parts });
     }
@@ -106,6 +110,7 @@ pub(crate) fn encode(worlds: &[World]) -> Vec<u8> {
             b.push(p.col);
             b.push(p.row);
             s8(&mut b, &p.name);
+            b.push(p.race);
         }
     }
     b
@@ -121,7 +126,7 @@ mod tests {
             name: "the Homelands".into(),
             size: 5_880_303,
             crc: 0xB6D9_4C34,
-            parts: vec![Part { from: "TUNARIA.ESF".into(), zone: 115, size: 5_879_151, crc: 0x7257_AE33, col: 4, row: 10, name: "Featherfall".into() }],
+            parts: vec![Part { from: "TUNARIA.ESF".into(), zone: 115, size: 5_879_151, crc: 0x7257_AE33, col: 4, row: 10, name: "Aviak Village".into(), race: 14 }],
         }]
     }
 

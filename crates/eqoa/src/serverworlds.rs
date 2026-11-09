@@ -78,6 +78,12 @@ pub fn zone_name(world: i64, col: i32, row: i32) -> Option<String> {
     h.parts.iter().find(|p| i32::from(p.col) == col && i32::from(p.row) == row).map(|p| p.name.clone())
 }
 
+/// The name of the zone a server's race starts in, when it is a world of the
+/// server's held here (the create pages' starting place).
+pub fn home_of(race: i32) -> Option<String> {
+    held().into_iter().flat_map(|h| h.parts).find(|p| p.race != 0 && i32::from(p.race) == race).map(|p| p.name)
+}
+
 /// Where built worlds are kept: `$EQOA_CACHE/worlds`, else `eqoa-rs/worlds`
 /// in the platform's cache directory.
 fn cache_dir() -> Option<PathBuf> {
@@ -614,7 +620,7 @@ mod tests {
             eprintln!("SKIP: no run/eqoa.iso");
             return;
         };
-        let part = |from: &str, zone: u16, size: u32, crc: u32, col: u8, row: u8| Part { from: from.into(), zone, size, crc, col, row, name: String::new() };
+        let part = |from: &str, zone: u16, size: u32, crc: u32, col: u8, row: u8| Part { from: from.into(), zone, size, crc, col, row, name: String::new(), race: 0 };
         let aviak = part("TUNARIA.ESF", 115, 5_879_151, 0x7257_AE33, 4, 10);
         let one = World { id: 10, name: "the Homelands".into(), size: 5_880_303, crc: 0xB6D9_4C34, parts: vec![aviak.clone()] };
         let b = compose(&disc, &one).expect("the server's world");
@@ -659,7 +665,7 @@ mod tests {
             ("TUNARIA.ESF", 157, 8968801, 0x4E29CED4, 12, 14),
             ("ODUS.ESF", 28, 7848248, 0x4454CF3C, 5, 4),
         ];
-        let parts = parts.iter().map(|&(from, zone, size, crc, col, row)| Part { from: from.into(), zone, size, crc, col, row, name: String::new() }).collect();
+        let parts = parts.iter().map(|&(from, zone, size, crc, col, row)| Part { from: from.into(), zone, size, crc, col, row, name: String::new(), race: 0 }).collect();
         let w = World { id: 10, name: "the Homelands".into(), size: 133406681, crc: 0xBC6C27E3, parts };
         let b = compose(&disc, &w).expect("the server's world");
         assert_eq!((b.len(), crc32(&b)), (133406681, 0xBC6C27E3));
