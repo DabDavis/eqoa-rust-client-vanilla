@@ -5,7 +5,8 @@
 //!
 //! The group's and the pet's bars and the group's patches on the compass are
 //! here; the breath gauge, the target's details box and the quick menus are
-//! drawn by `play`.
+//! drawn by `play`. So is the client's own row of the pet's effects under its
+//! bar (`pet_effects_pieces`), which the game has nowhere.
 
 use crate::ui::{Raster, UiRaster, Vui, icon_id, wide};
 use render::ui::{Anchor, Quad, Vertical};
@@ -91,12 +92,99 @@ pub struct MemberState {
 }
 
 /// What `DrawPet` reads: `GetPetName`, whether the pet is the target, and
-/// for a creature pet (`PetIsCreature`) its +0x19 and `Flag4`/`Flag8`.
+/// for a creature pet (`PetIsCreature`) its +0x19 and `Flag4`/`Flag8`; and
+/// the client's own, the icons (DictIDs) of the effects on the pet in their
+/// order, where the server sends them (`net::session::OP_PET_EFFECTS_DATA`),
+/// for the row under the bar: none with Extended's Pet Effects off.
 #[derive(Clone, Debug, Default)]
 pub struct PetState {
     pub name: String,
     pub is_target: bool,
     pub creature: Option<(i32, bool, bool)>,
+    pub effects: Vec<u32>,
+}
+
+/// The pet's effects' row (the user, 2026-11-09: "put the buff icons under the
+/// pet name plate"; CLIENT shows a pet's effects nowhere, and from petition 1041
+/// the server had put them on the player's own effects window, channel 0x43):
+/// `VIWndInfluence`'s strip of the player's own (`influence::draw`: the left cap
+/// 159, a cell of 157 per effect with its icon 3 in and 6 down, the last cell 3
+/// narrower, the right cap 160) at `PET_FX_SCALE` of its size, from the health
+/// gauge's left and `PET_FX_AT`'s 48 under the bar's top (the group's bars'
+/// stride: clear of the gauge and the status icons), `PET_FX_PER_ROW` to a row,
+/// a second row under the first for more, up to `PET_FX_MOST` (the server's most).
+const PET_FX_SCALE: f32 = 0.5;
+const PET_FX_AT: [i32; 2] = [10, 48];
+const PET_FX_PER_ROW: usize = 9;
+pub const PET_FX_MOST: usize = 16;
+/// A row's height: its icons' (6 down in their cells and 32 high at the
+/// scale, so 2 past a cell's 17, as the strip's own hang 4 past its cells),
+/// and a pixel between rows.
+const PET_FX_ROW_H: i32 = 20;
+
+/// What the row takes under the pet's bar for `n` effects: none for none.
+pub fn pet_effects_height(n: usize) -> i32 {
+    n.min(PET_FX_MOST).div_ceil(PET_FX_PER_ROW) as i32 * PET_FX_ROW_H
+}
+
+/// What a piece of the row is drawn with: an atlas entry's texels, `size` of
+/// them from its corner (the strip's art), or an effect's icon, its surface
+/// whole.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FxArt {
+    Entry(i32, [i32; 2]),
+    Icon(u32),
+}
+
+/// One piece of the row, over frame rectangle `r` (x, y, width, height).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FxPiece {
+    pub art: FxArt,
+    pub r: [f32; 4],
+}
+
+/// The row's pieces for the pet's bar at `at`, in the order the player's strip
+/// draws them (each cell over the last icon's 3 pixels past it, as there).
+pub fn pet_effects_pieces(vui: &Vui, at: [i32; 2], icons: &[u32]) -> Vec<FxPiece> {
+    let k = PET_FX_SCALE;
+    let (cap_l, cell, cap_r) = (vui.entry(159), vui.entry(157), vui.entry(160));
+    let piece = |art, x: f32, y: f32, w: i32, h: i32| FxPiece { art, r: [x, y, w as f32 * k, h as f32 * k] };
+    let mut out = Vec::new();
+    for (row, icons) in icons[..icons.len().min(PET_FX_MOST)].chunks(PET_FX_PER_ROW).enumerate() {
+        let y = (at[1] + PET_FX_AT[1] + row as i32 * PET_FX_ROW_H) as f32;
+        let mut x = (at[0] + PET_FX_AT[0]) as f32;
+        out.push(piece(FxArt::Entry(159, cap_l.uv1), x, y, cap_l.uv1[0], cap_l.uv1[1]));
+        x += cap_l.uv1[0] as f32 * k;
+        for (i, &icon) in icons.iter().enumerate() {
+            let w = if i == icons.len() - 1 { cell.uv1[0] - 3 } else { cell.uv1[0] };
+            out.push(piece(FxArt::Entry(157, [w, 34]), x, y, w, 34));
+            out.push(piece(FxArt::Icon(icon), x + 3.0 * k, y + 6.0 * k, 32, 32));
+            x += w as f32 * k;
+        }
+        out.push(piece(FxArt::Entry(160, cap_r.uv1), x, y, cap_r.uv1[0], cap_r.uv1[1]));
+    }
+    out
+}
+
+/// The row drawn: each piece's texels over its rectangle, in floats (half the
+/// strip's size falls between the frame's pixels), as `Blit` draws them.
+fn draw_pet_effects(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], icons: &[u32]) {
+    for p in pet_effects_pieces(vui, at, icons) {
+        let (id, texels) = match p.art {
+            FxArt::Entry(n, size) => {
+                let e = vui.entry(n);
+                (vui.entry_id(&e), Some([e.uv0[0], e.uv0[1], size[0], size[1]]))
+            }
+            FxArt::Icon(id) => (id, None),
+        };
+        let Some(tex) = ui.assets.surface(id) else { continue };
+        let (w, h) = ui.ui.texture_size(tex);
+        let t = texels.unwrap_or([0, 0, w as i32, h as i32]).map(|v| v as f32);
+        let (u0, v0, u1, v1) = (t[0] / w as f32, t[1] / h as f32, (t[0] + t[2]) / w as f32, (t[1] + t[3]) / h as f32);
+        let (x0, y0, x1, y1) = (p.r[0], p.r[1], p.r[0] + p.r[2], p.r[1] + p.r[3]);
+        ui.ui.push(Quad { tex, blend: 0, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[u0, v0], [u1, v0], [u1, v1], [u0, v1]], color: [1.0; 4], clip: None });
+        ui.glyphs.other();
+    }
 }
 
 /// `ExpForLevel`.
@@ -257,7 +345,9 @@ impl Hud {
             GROUP_AT[1] + ((s.group_count - 1) * 48).max(0)
         } else {
             self.glow1_on = -1;
-            let fit = crate::raidlist::Fit::of(s.raid.len(), s.pet.is_some());
+            // the pet's bar under it, and its effects' row
+            let below = s.pet.as_ref().map_or(0, |p| crate::raidlist::PET_H + pet_effects_height(p.effects.len()));
+            let fit = crate::raidlist::Fit::under(s.raid.len(), below);
             self.raid_first = self.raid_first.min(fit.more);
             for (r, id) in crate::raidlist::draw(vui, ui, GROUP_AT, &fit, &s.raid, self.raid_first) {
                 self.note(ui, r, Pick::Raid(id));
@@ -321,7 +411,9 @@ impl Hud {
     }
 
     /// `DrawPet`: the bar, glowing while the pet is the target, its name,
-    /// and for a creature its health and two status icons.
+    /// and for a creature its health and two status icons; and the client's
+    /// own row of its effects under them (`pet_effects_pieces`), a pointer on
+    /// which finds the pet as on its bar.
     fn draw_pet(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2], s: &HudState) {
         let Some(pet) = &s.pet else {
             self.glow2_on = -1;
@@ -329,7 +421,9 @@ impl Hud {
             return;
         };
         let mut p = at;
-        self.note(ui, [p[0], p[1], p[0] + 174, p[1] + 46], Pick::Pet);
+        let fx = &pet.effects[..pet.effects.len().min(PET_FX_MOST)];
+        let bottom = if fx.is_empty() { 46 } else { PET_FX_AT[1] + pet_effects_height(fx.len()) };
+        self.note(ui, [p[0], p[1], p[0] + 174, p[1] + bottom], Pick::Pet);
         self.glow2_on = if pet.is_target { 1 } else { -1 };
         let g = self.glow2;
         vui.blit_bar(ui, &[], [0.0; 4], p, 25, 26, 174, 3, g, 0, true);
@@ -337,6 +431,7 @@ impl Hud {
         w.init(vui, ui, [p[0] + 87, p[1] + 12], 160, 1, 0);
         w.open(true);
         w.text_box(vui, ui, &wide(&pet.name), 0, 0, 160, 1, [0.0, 0.0, 0.0, g], 10);
+        draw_pet_effects(vui, ui, p, fx);
         let Some((hp, f4, f8)) = pet.creature else { return };
         p = [p[0] + 10, p[1] + 25];
         draw_gauge(vui, ui, 7, 136, p, pet.is_target, hp as f32 / 255.0);
@@ -517,7 +612,89 @@ pub fn draw_gauge(vui: &Vui, ui: &mut dyn Raster, bar: i32, frame: i32, at: [i32
 
 #[cfg(test)]
 mod tests {
-    use super::{Hud, HudState, MemberState, Pick, bearing_point, patch_point, waypoint_point};
+    use super::{FxArt, FxPiece, Hud, HudState, MemberState, PetState, Pick, bearing_point, patch_point, pet_effects_height, pet_effects_pieces, waypoint_point};
+
+    /// A Vui whose atlas has the player's effects strip's art at the disc's
+    /// sizes (SUPPORT's: the cell 157 32x32, the caps 159 5x34 and 160 3x34).
+    fn strip_vui() -> crate::ui::Vui {
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 161];
+        atlas[157].uv1 = [32, 32];
+        atlas[159].uv1 = [5, 34];
+        atlas[160].uv1 = [3, 34];
+        crate::ui::Vui::new(Default::default(), Default::default(), atlas)
+    }
+
+    /// The pet's effects' row: the player's own strip at half its size (the
+    /// caps, a cell per effect, the last 3 narrower, each icon 3 in and 6 down
+    /// in it, all halved), from the gauge's left 48 under the bar's top, under
+    /// the gauge (to 35) and the status icons (to 48) and within the bar's 174;
+    /// nine to a row, a second row 20 under the first, sixteen at most. The
+    /// control: no effects, no pieces and no height.
+    #[test]
+    fn the_pets_effects_sit_in_a_row_under_its_bar() {
+        let vui = strip_vui();
+        let at = [20, 141];
+        assert!(pet_effects_pieces(&vui, at, &[]).is_empty(), "the control: none");
+        assert_eq!(pet_effects_height(0), 0);
+        let got = pet_effects_pieces(&vui, at, &[7, 8, 9]);
+        let p = |art, r| FxPiece { art, r };
+        let want = vec![
+            p(FxArt::Entry(159, [5, 34]), [30.0, 189.0, 2.5, 17.0]),
+            p(FxArt::Entry(157, [32, 34]), [32.5, 189.0, 16.0, 17.0]),
+            p(FxArt::Icon(7), [34.0, 192.0, 16.0, 16.0]),
+            p(FxArt::Entry(157, [32, 34]), [48.5, 189.0, 16.0, 17.0]),
+            p(FxArt::Icon(8), [50.0, 192.0, 16.0, 16.0]),
+            p(FxArt::Entry(157, [29, 34]), [64.5, 189.0, 14.5, 17.0]),
+            p(FxArt::Icon(9), [66.0, 192.0, 16.0, 16.0]),
+            p(FxArt::Entry(160, [3, 34]), [79.0, 189.0, 1.5, 17.0]),
+        ];
+        assert_eq!(got, want);
+        assert_eq!(pet_effects_height(3), 20);
+        let icons = |v: &[FxPiece]| v.iter().filter(|q| matches!(q.art, FxArt::Icon(_))).count();
+        for n in [1, 9, 10, 16, 20] {
+            let all: Vec<u32> = (1..=n as u32).collect();
+            let v = pet_effects_pieces(&vui, at, &all);
+            assert_eq!(icons(&v), n.min(16), "{n}: sixteen at most");
+            let rows = if n > 9 { 2 } else { 1 };
+            assert_eq!(pet_effects_height(n), rows * 20, "{n}");
+            for q in &v {
+                assert!(q.r[1] >= (at[1] + 48) as f32, "{n}: {q:?} over the gauge and the status icons");
+                assert!(q.r[1] + q.r[3] <= (at[1] + 48 + rows * 20) as f32, "{n}: {q:?} past its rows");
+                assert!(q.r[0] >= (at[0] + 10) as f32 && q.r[0] + q.r[2] <= (at[0] + 174) as f32, "{n}: {q:?} out of the bar's width");
+            }
+        }
+        let ten = pet_effects_pieces(&vui, at, &(1..=10).collect::<Vec<u32>>());
+        let tenth = ten.iter().find(|q| q.art == FxArt::Icon(10)).unwrap();
+        assert_eq!(tenth.r, [34.0, 212.0, 16.0, 16.0], "the tenth starts the second row, as the first did");
+        // the first row's icons clear of the second's art
+        let first_bottom = ten.iter().filter(|q| q.r[1] < 200.0).map(|q| q.r[1] + q.r[3]).fold(0.0, f32::max);
+        let second_top = ten.iter().filter(|q| q.r[1] >= 200.0).map(|q| q.r[1]).fold(f32::MAX, f32::min);
+        assert!(first_bottom < second_top, "rows overlap: {first_bottom} over {second_top}");
+    }
+
+    /// A pointer on the pet's effects' row finds the pet, as one on its bar
+    /// does; the control: with no effects the same place finds nothing. Needs a
+    /// graphics adapter; without one it says so and passes.
+    #[test]
+    fn a_pointer_finds_the_pet_on_its_effects_row() {
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut ui) = crate::ui::tests::layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let vui = strip_vui();
+        let assets = crate::ui::UiAssets::default();
+        // no group: the pet's bar where the group's start (20, 93), its row 48 under it
+        let row = [60.0, 93.0 + 48.0 + 8.0];
+        for (effects, want) in [(vec![1, 2, 3], Some(Pick::Pet)), (Vec::new(), None)] {
+            ui.begin((640, 480));
+            let mut hud = Hud::new();
+            let s = HudState { pet: Some(PetState { name: "Swarming Death".into(), effects: effects.clone(), ..Default::default() }), ..Default::default() };
+            hud.draw(&vui, &mut assets.raster(&mut ui), &s);
+            assert_eq!(hud.pick(row), want, "{} effects", effects.len());
+            assert_eq!(hud.pick([60.0, 100.0]), Some(Pick::Pet), "the bar itself");
+        }
+    }
 
     fn near(a: [f32; 2], b: [f32; 2]) -> bool {
         (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3
@@ -627,7 +804,7 @@ mod tests {
         let assets = crate::ui::UiAssets::default();
         let row = |id: u32| crate::raidlist::Row { id, name: format!("m{id}"), hp: 255, seen: true, ..Default::default() };
         // the third row's middle, then the second column's first row's, of twenty
-        let fit = crate::raidlist::Fit::of(20, false);
+        let fit = crate::raidlist::Fit::under(20, 0);
         assert_eq!((fit.columns, fit.rows), (2, 10));
         let (third, next) = ([40.0, 93.0 + 13.0 + 2.0 * 16.0 + 7.0], [20.0 + 104.0 + 20.0, 93.0 + 13.0 + 7.0]);
         for (size, side) in [((640, 480), 0.0), ((1280, 720), 106.0)] {

@@ -6,6 +6,15 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Your pet's buffs show under your pet's name
+- The buffs on your pet (its own, and the ones you cast on it) show in a small row under your pet's name and
+  health, the same icons as your own buffs at half their size, and each goes away when it wears off. With the
+  server's update of the same day they no longer show in your own buff row next to the compass, on any client: that
+  row is your own buffs only again.
+- Clicking your pet's buff row targets your pet, as clicking its name does.
+- It is in Options > Extended > UI as Pet Effects, on by default. Off, your pet's buffs show nowhere, as on a
+  PS2. On a server that does not send them (Sandstorm), there is no row.
+
 ## 2026-11-09 · The map and the quest helper are back
 - M opens the map again: the whole world drawn from your own disc, with the towns' names, the coach routes and
   stops, the XP camps and the places players suggested and a GM accepted. Click (or tap) to put a waypoint, which

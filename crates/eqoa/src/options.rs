@@ -656,6 +656,10 @@ impl WndOptions {
                     // Raid List: the server told from the next frame
                     // (`Session::agree_raid_roster`)
                     49 => c.raid_list = !c.raid_list,
+                    // Pet Effects: the server told from the next frame
+                    // (`Session::agree_pet_effects`), the row under the pet's
+                    // bar drawn or not (`hud`)
+                    58 => c.pet_effects = !c.pet_effects,
                     // the Map: the map, the minimap and the waypoints from
                     // the next frame (`Play::map_frame`; off, an open map
                     // closes)
@@ -1158,7 +1162,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 41] = [
+const EXTENDED_ITEMS: [(i32, &str); 42] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1200,6 +1204,7 @@ const EXTENDED_ITEMS: [(i32, &str); 41] = [
     (52, "Dynamic Lighting"),
     (53, "Sun Shadows"),
     (54, "Ambient Occlusion"),
+    (58, "Pet Effects"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1244,7 +1249,7 @@ const ALL_CATEGORIES: [Category; 10] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
     Category { name: "Lighting", items: &[52, 53, 54], note: Note::Lighting },
-    Category { name: "UI", items: &[22, 29, 30, 40, 49], note: Note::None },
+    Category { name: "UI", items: &[22, 29, 30, 40, 49, 58], note: Note::None },
     Category { name: "Controller", items: &[16, 19, 48], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
     Category { name: "Characters", items: &[12, 23, 24, 27, 34, 46], note: Note::Server },
@@ -1346,6 +1351,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         45 => on_off(c.quest_tracker),
         34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
         49 => on_off(c.raid_list),
+        58 => on_off(c.pet_effects),
         50 => on_off(c.texture_packs),
         51 => on_off(c.dump_textures),
         35 => on_off(c.mipmaps),
@@ -1766,7 +1772,7 @@ mod tests {
         assert_eq!((w.row, cues.last()), (2, Some(&9)), "Lighting's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 2, -1), "back to the categories, Lighting still lit");
-        // UI: Ability Bars, Update Notices, Text, HUD, Raid List
+        // UI: Ability Bars, Update Notices, Text, HUD, Raid List, Pet Effects
         press(&mut w, &mut o, key::DOWN, &mut cues);
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.cat, w.item), (Some(3), 22), "UI, Ability Bars");
@@ -1809,7 +1815,16 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::raid_list(), "and back: two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (4, Some(&9)), "UI's last row");
+        assert_eq!(w.item, 58, "Pet Effects");
+        assert!(settings::pet_effects(), "on: the pet's effects under its bar");
+        assert_eq!(value_text(&vui, 58), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::pet_effects(), cues.last()), (false, Some(&11)), "off: the game's bar alone");
+        assert_eq!(value_text(&vui, 58), Some(wide(vui.words.get(552, vui.language))));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::pet_effects(), "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (5, Some(&9)), "UI's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         // Controller: Controller Focus, Capture Controller, Touch Pad Size
         press(&mut w, &mut o, key::DOWN, &mut cues);
