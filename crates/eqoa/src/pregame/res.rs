@@ -680,18 +680,24 @@ mod tests {
     /// disc's CHAR.ESF, the 2002 cut standing in for Frontiers'
     /// (`stand_in_bodies`), against both whole files as the world has them
     /// (the 2002 CHAR.ESF standing in for Frontiers', `era::install`). Per
-    /// race body (every one go-eqoa-server's races wear, and the human that
-    /// dresses the skeleton) and art: the same record off the same disc, the
-    /// same model and skeleton, and a player's helm on the same node
-    /// (`slotless::helm_node`). The control: without the stand-in (the
-    /// pregame until 2026-11-08) only the 2002 art differed, on the bodies
-    /// the 2002 disc has its own of, and with them the helm nodes of the
-    /// skeleton (Frontiers' names one, the 2002 disc's none), the goblin and
-    /// the orc (the 2002 disc's name one, Frontiers' none). A cut that is its
+    /// body (every one go-eqoa-server's races wear, and the three skeletons
+    /// its Skeleton race's options offer, which `create::tables::bodies` cuts
+    /// with them) and art: the same record off the same disc, the same model
+    /// and skeleton, and a player's helm on the same node
+    /// (`slotless::helm_node`). The human that dresses the skeletons is cut in
+    /// beside them, where character select has it out of CHARSEL3.CSF (whose
+    /// 2002 copy stands in as every pregame file's does): it is not one of the
+    /// bodies, and its own helm node is 5 in Frontiers' art and 6 in the 2002
+    /// disc's. The control: without the stand-in (the pregame until
+    /// 2026-11-08) only the 2002 art differed, on the bodies the 2002 disc has
+    /// its own of, and with them the helm nodes of the four skeletons
+    /// (Frontiers' each name node 5, the 2002 disc's none), the goblin and the
+    /// orc (the 2002 disc's name one, Frontiers' none). A cut that is its
     /// file's bytes (the hill giant is the same on both discs) or has none of
     /// the bodies (no kerran on the 2002 disc) stands in for nothing. Needs
     /// both discs (`run/eqoa.iso`, and `$EQOA_2002_ISO` or the USA disc under
-    /// `../decomp-builds/discs/eqoa-usa/`).
+    /// `../decomp-builds/discs/eqoa-usa/`; without them it passes having
+    /// checked nothing, and says so only under `--nocapture`).
     #[test]
     fn the_2002_art_draws_a_races_body_as_the_world_does() {
         let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
@@ -709,9 +715,13 @@ mod tests {
         };
         let (bf, by) = (d.read("CHAR.ESF").unwrap(), d2.read("CHAR.ESF").unwrap());
         let (goblin, orc, skeleton, hill_giant, kerran) = (0x6C13_08E0u32, 0x8214_A32Du32, 0x6AF9_8A81u32, 0xFFB1_EA2Cu32, 0x2217_6258u32);
-        let mut ids = vec![0x141B_FE0C, hill_giant, kerran, 0xB749_BF57, goblin, 0x3151_DF13, 0x8EFD_12EA, 0x9112_20E2, 0x31A1_5F17, 0x4376_EB52, 0x94BA_77CD];
-        ids.extend([0x7A85_646C, 0xCF41_5561, orc, 0xCFC4_78EE, 0xC5CB_F4CF, 0xBADC_25C9, 0xBE10_226F, 0x70EF_CE05, skeleton, 0x4A4D_88FB, 0xB4D2_D132]);
-        ids.push(vi::hash::hash_resource_id("HumanMale"));
+        // the skeleton's options: old, mossy and frost bone
+        let options = [0x45A8_B064u32, 0x198B_AA64, 0x648D_FC11];
+        let mut bodies = vec![0x141B_FE0C, hill_giant, kerran, 0xB749_BF57, goblin, 0x3151_DF13, 0x8EFD_12EA, 0x9112_20E2, 0x31A1_5F17, 0x4376_EB52, 0x94BA_77CD];
+        bodies.extend([0x7A85_646C, 0xCF41_5561, orc, 0xCFC4_78EE, 0xC5CB_F4CF, 0xBADC_25C9, 0xBE10_226F, 0x70EF_CE05, skeleton, 0x4A4D_88FB, 0xB4D2_D132]);
+        bodies.extend(options);
+        let human = vi::hash::hash_resource_id("HumanMale");
+        let ids: Vec<u32> = bodies.iter().copied().chain([human]).collect();
         let mut world = esf::Library::new();
         let f = world.add("CHAR.ESF", esf::Container::open(bf.clone()).unwrap());
         world.stand_in(f, esf::Container::open(by.clone()).unwrap());
@@ -729,23 +739,28 @@ mod tests {
             })
         };
         let mut differed = Vec::new();
-        for era in [Era::Frontiers, Era::Y2002] {
+        for (era, own) in [(Era::Frontiers, 5), (Era::Y2002, 6)] {
             for lib in [&world, &before, &pregame] {
                 lib.set_view(era);
             }
-            for &id in &ids {
+            for &id in &bodies {
                 let (w, b) = (drawn(&world, id), drawn(&before, id));
                 assert_eq!(drawn(&pregame, id), w, "{era:?}: {id:08X}");
                 if b != w {
                     differed.push((era, id, b.5, w.5));
                 }
             }
+            // the human beside them, as the world has it
+            assert_eq!(drawn(&pregame, human), drawn(&world, human), "{era:?}: the human");
+            assert_eq!(drawn(&world, human).5, own, "{era:?}: the human's own helm node");
         }
         // the control: the pregame as it was
         assert!(differed.iter().all(|d| d.0 == Era::Y2002), "{differed:08X?}");
-        assert_eq!(differed.len(), 8, "the seven race bodies the 2002 disc has its own of, and the human: {differed:08X?}");
+        assert_eq!(differed.len(), 10, "the seven race bodies the 2002 disc has its own of, and the three options: {differed:08X?}");
         let helms: Vec<(u32, i32, i32)> = differed.iter().filter(|d| d.2 != d.3).map(|d| (d.1, d.2, d.3)).collect();
-        assert_eq!(helms, [(goblin, -1, 5), (orc, -1, 6), (skeleton, 5, 6)]);
+        let mut want = vec![(goblin, -1, 5), (orc, -1, 6), (skeleton, 5, 6)];
+        want.extend(options.map(|o| (o, 5, 6)));
+        assert_eq!(helms, want);
         // a cut of its file's bytes, and one of none of them
         for one in [hill_giant, kerran] {
             let mut lib = esf::Library::new();
