@@ -1977,7 +1977,15 @@ mod tests {
     /// standing where Frontiers' skeleton's does (Frontiers' 3 cm the
     /// higher), while an NPC's keeps none, as a PS2 draws it. The controls:
     /// the 2002 brownie, on the same skeleton and naming none, is not dressed
-    /// as a human and keeps none; a human keeps its own in both arts.
+    /// as a human and keeps none; a human keeps its own in both arts. Over
+    /// every CSprite on either disc in either art, a player's or not, the
+    /// only bodies whose helm goes elsewhere than their own word are the
+    /// skeletons a player may wear (`SHELLED`: the Skeleton race's own and
+    /// the three its options offer), each in the 2002 disc's art alone and
+    /// each onto the 2002 human's node 6: on both discs the four are one
+    /// skeleton, Frontiers' each naming node 5 and the 2002 disc's none.
+    /// Needs both discs (`disc_2002`; without them it passes having checked
+    /// nothing, and says so only under `--nocapture`).
     #[test]
     fn a_skeletons_helm_goes_on_the_humans_head() {
         let Some(lib) = disc_2002() else { return };
@@ -2002,28 +2010,34 @@ mod tests {
         lib.set_view(Era::Y2002);
         assert!(same_skeleton(&sprite(human), &sprite(brownie), std::iter::empty()), "the 2002 brownie is on the human's skeleton too");
         assert!((heights[0] - 1.83).abs() < 0.005 && (heights[1] - 1.80).abs() < 0.005, "the skull, at {heights:?}");
-        // every other CSprite on either disc, a player's or not, in either
-        // art (built in the art it is drawn in, as the world builds it):
-        // its own word
+        // every CSprite on either disc, a player's or not, in either art
+        // (built in the art it is drawn in, as the world builds it): its own
+        // word, but a player's skeletons in the 2002 disc's art
         let mut ids: Vec<u32> = lib.files.iter().flat_map(|(_, c)| c.dict.iter().filter(|&(_, &n)| c.node(n).ty == 0x2700).map(|(&id, _)| id as u32)).collect();
         ids.sort();
         ids.dedup();
         let mut checked = 0;
+        let mut moved = Vec::new();
         for era in [Era::Frontiers, Era::Y2002] {
             lib.set_view(era);
             for &id in &ids {
                 lib.with_view(lib.view_for(id as i32), || {
                     let Some(cs) = lib.lookup(id as i32).and_then(|r| vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1))) else { return };
                     for player in [false, true] {
-                        if !(player && era == Era::Y2002 && id == skeleton) {
-                            assert_eq!(helm_node(&lib, id, &cs, player), cs.node_ids[8], "{era:?} {id:08X}, a player's {player}");
-                            checked += 1;
+                        let node = helm_node(&lib, id, &cs, player);
+                        if node != cs.node_ids[8] {
+                            moved.push((era, id, player, cs.node_ids[8], node));
                         }
+                        checked += 1;
                     }
                 });
             }
         }
         assert!(checked > 1000, "{checked}");
+        let mut skeletons = SHELLED.to_vec();
+        skeletons.sort();
+        assert!(skeletons.contains(&skeleton), "the Skeleton race's own body among them");
+        assert_eq!(moved, skeletons.iter().map(|&id| (Era::Y2002, id, true, -1, 6)).collect::<Vec<_>>());
     }
 
     /// A fit made anew comes out the same every time: its ties (a corner as
