@@ -102,6 +102,15 @@ impl Options {
         model != 0 && self.races.iter().flat_map(|(_, rows)| rows).filter(|r| r.kind == Kind::Body).any(|r| r.male.iter().chain(&r.female).any(|s| s.value == model))
     }
 
+    /// The race's own body of the race whose body row offers `model`: the
+    /// row's first male step (a body row opens on its race's own body), when
+    /// `model` is another body. None for a body no row offers, and for the
+    /// race's own.
+    pub fn race_body_of(&self, model: u32) -> Option<u32> {
+        let row = self.races.iter().flat_map(|(_, rows)| rows).filter(|r| r.kind == Kind::Body).find(|r| r.male.iter().chain(&r.female).any(|s| s.value == model))?;
+        row.male.first().map(|s| s.value).filter(|&b| b != model && b != 0)
+    }
+
     /// The scale a body a body row offers is drawn at against its race's own
     /// (`Step::size`); 1 for any other.
     pub fn body_size(&self, race: i32, model: u32) -> f32 {
@@ -281,6 +290,11 @@ mod tests {
         assert_eq!(o.body_size(28, 0xE8B0_ADC8), 0.91);
         assert_eq!(o.body_size(28, 0x1234), 1.0, "a body no row offers: 1");
         assert!(o.rows(11).is_empty(), "a race the server listed nothing for");
+        // the race's own body of another body a row offers: the row's first male step
+        assert_eq!(o.race_body_of(0xE8B0_ADC8), Some(0x4A4D_88FB));
+        assert_eq!(o.race_body_of(0x5874_ACFC), Some(0x4A4D_88FB), "a female's step");
+        assert_eq!(o.race_body_of(0x4A4D_88FB), None, "the race's own");
+        assert_eq!(o.race_body_of(0x1234), None, "a body no row offers");
     }
 
     /// Every cut of either message is refused, never half read; another

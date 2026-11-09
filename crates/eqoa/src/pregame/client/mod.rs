@@ -674,13 +674,16 @@ impl Client {
 
     /// `CreateCharacter`, once creation has sent the form (0x002B): the form
     /// becomes the next entry with no server id yet (its race's model by
-    /// sex, no robe, level 1, the rest zero), selected and shown, and
-    /// `ShowWord(413)` (empty: the pending states end). The server's list
-    /// replaces it; a refusal takes it away.
+    /// sex, or the body its race's options chose: `tables::chosen`; no robe,
+    /// level 1, the rest zero), selected and shown, and `ShowWord(413)`
+    /// (empty: the pending states end). The server's list replaces it; a
+    /// refusal takes it away. (The figure made of it stays until something
+    /// makes it again: a look a server's race chose, a change of selection;
+    /// a body chosen with no look showed its race's own until then.)
     fn create_character(&mut self, f: &net::session::NewChar) {
         let rec = CharRecord {
             server_id: -1,
-            model: create::tables::model_of(f.race, f.sex),
+            model: create::tables::chosen(f).0,
             class: f.class,
             // a server's race as the list will have it: its `like` race's place
             race: create::tables::like(f.race),
@@ -1155,6 +1158,26 @@ mod tests {
         (c.top, c.active) = (Wnd::Create, Wnd::Create);
         c.create_out(create::Out::Back);
         assert_eq!((c.chars.len(), c.top), (1, Wnd::Select));
+    }
+
+    /// A server's race's character waits in the list in the body its options
+    /// chose (the fungusman's red body), as the list will have it, so
+    /// character select shows that body before the list comes, not its race's
+    /// own; with no body chosen (the control) its race's own.
+    #[test]
+    fn a_created_character_waits_in_its_chosen_body() {
+        let race = net::creation::Race { id: 28, like: 1, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [0x4A4D_88FB; 2], name: "Fungusman".into(), short: "FNG".into(), desc: String::new() };
+        create::tables::set_offer(Some(&net::creation::Creation { all_classes: true, races: vec![race] }));
+        crate::raceopts::set_options(Some(&crate::raceopts::tests::fungus_options()));
+        let mut form = net::session::NewChar { name: "Spore".into(), race: 28, class: 9, sex: 0, hair_color: 0, hair_length: 0, hair_style: 0, face: 0, city: 0, stats: [0; 7], options: vec![("body".into(), 1)] };
+        let mut c = Client::new();
+        c.create_character(&form);
+        assert_eq!(c.chars[0].model, 0x5874_ACFC, "the red body chosen");
+        form.options.clear();
+        c.create_character(&form);
+        assert_eq!(c.chars[1].model, 0x4A4D_88FB, "the control: none chosen, its race's own");
+        crate::raceopts::set_options(None);
+        create::tables::set_offer(None);
     }
 
     /// The server's list resets creation's form (`CharacterList`'s `Reset`)
