@@ -29,7 +29,11 @@ current.
   `render::lit`, `lights.rs`; off it is the PS2's light exactly, every test and oracle unchanged, and `vi` untouched), and
   Ambient Occlusion (the user's of 2026-11-08, "lets add ambient occlusion": Extended > Lighting, off unless chosen;
   `render::ao`, screen-space between `draw`'s opaque and blended passes, run only in the draw `prepare` readied; off
-  there is no pass at all, the picture byte for byte the game's)).
+  there is no pass at all, the picture byte for byte the game's), and capes on a server that has them
+  (the server owner's of 2026-11-08: "lets add a new equip slot for heirloom server only. capes for all. there
+  are many capes we can borrow from for various styles": `cape.rs`, go-eqoa-server's offer 0x7E25 and its lists
+  0x7E26/0x7E27; the disc's own capes cut out of their bodies and fitted to the wearer's skeleton; with none
+  worn, or on any other server, nothing is made or drawn)).
   `render::lit`, `lights.rs`; off it is the PS2's light exactly, every test and oracle unchanged, and `vi` untouched), and Sun
   Shadows (2026-11-08: Extended > Lighting, off unless chosen, drawn only with Dynamic Lighting; `render::sunshadow`; off, every
   frame byte for byte as before, on Vulkan and GL)).

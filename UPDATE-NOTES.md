@@ -6,6 +6,18 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Capes
+- On a server that has capes (the Heirloom Test Server), your character can wear one: a cape goes in its own
+  slot, so it is worn with everything else. Equip it from the Equipment tab like any other piece; its
+  description says Slot: Cape.
+- Capes are drawn on you, on the other players around you and at character select. They hang from the
+  shoulders and move with the body: they sway as you walk and run, and fold when you swing.
+- Five looks, borrowed from capes the game's own characters wear: a knight's long blue silk cape, a
+  vampire's black cape with a high red-lined collar, a long pleated violet cape, Dread's maroon cape with
+  its tall collar, and the same with Dread's fur mantle over the shoulders. Some come in other colours.
+- Every race can wear one, the server's own races too, but those with wings (pixies, fairies and gargoyles).
+  On a server without capes nothing changes.
+
 ## 2026-11-08 · Sun Shadows
 - A new option, Options > Extended > Lighting > Sun Shadows, lets the sun cast shadows. Buildings, walls, roofs,
   trees and their leaves, rocks, hills and every character block the sunlight, and their shadows fall across the

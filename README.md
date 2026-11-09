@@ -173,6 +173,30 @@ or a browser (each described where it lives below):
   illusions keep the PS2's look, and every body that held items before holds them on the same nodes (held to
   every CSprite on the disc). `eqoa dress <body> <out.png> main=ID off=ID shield=ID [race=1] [action=N]`
   draws what it holds.
+- **Capes**, on a server that has them (go-eqoa-server's `world.capes`, the Heirloom Test
+  Server's; the server owner, 2026-11-08: "lets add a new equip slot for heirloom server only.
+  capes for all. there are many capes we can borrow from for various styles."; `cape`): the
+  server offers them after the first character list (0x7E25) and this client answers at once;
+  from then on a cape item comes as wear slot 28, worn in equip slot 22 (no retail table has
+  either: a PS2, and this client on any other server, gets the item as a plain one and never
+  the slot), the list's characters' capes by server id (0x7E27) and the capes of the players
+  seen by entity id (0x7E26), each the whole set. The item menu equips one as any wearable
+  (`inventory::can_wear_in`, `infotext`: Slot: Cape). The art is the disc's own capes
+  (`cape::STYLES`, by the style the server's item names): the silver knight's (0xD1300BD3),
+  Magnus Jaeger's (0xCE1B8083), the Dawn Maiden's (0xD7540FDA) and Dread's (0xDC3B3450),
+  alone or with its fur mantle, each its body's cape materials cut out, and drawn in the
+  item's colour when it has one. Every player race's body is built on one of two skeletons
+  (forty nodes or forty-three, the same bone for bone across the races); a cape goes on the
+  one it was made on as it is, on the other bone for bone by role, and on a server's races'
+  bodies by their parts (spine by height, head, arms from the hands, legs from the thighs), so
+  a cape whose corners ride the arms folds with them; wider and further back on a broader
+  body. It names the wearer's nodes in its bind pose and is drawn on the body's own palette,
+  swaying with the robe-tail bones every player skeleton's walk swings. Players' characters
+  only, in the world, on the player and at character select (the bodies a list's capes are
+  cut from read out of CHAR.ESF there, `res::Res::want_bodies`); bodies with wings (the
+  pixie's, the fairy's, the gargoyle's) wear none. With none worn nothing is made or drawn.
+  `eqoa dress <body> <out.png> cape=N [capecolor=RRGGBB]` draws one; `EQOA_CAPE_DEBUG=1`
+  says how a cape was fitted.
 - **The combat record**, on a server that keeps one (go-eqoa-server's offer, 0x7E20,
   and its record, 0x7E21; Sandstorm and eqoa.live have none, and show no entry): the
   start menu's Character > Combat Record, the client's own window (`record.rs`,
