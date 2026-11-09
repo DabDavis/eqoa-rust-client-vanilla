@@ -6,6 +6,17 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Jump on Space, and a fall from the top
+- Space jumps now, on a server that has jumps (the Heirloom Test Server), and V still does. The attack (hold to
+  attack, Auto Attack's toggle, a corpse's loot) is on G.
+- Wherever Space makes no jump it still does what it always did: on a server without jumps (the Live Server,
+  Sandstorm, eqoa.live) Space attacks, and with a window up it takes from a corpse, opens a trade's chat line and
+  casts a fishing line, as before.
+- Keys you moved on the Controls page (F1) stay where you put them. A macro you had put on G keeps G; the attack
+  then has no key until you give it one there.
+- Other players using this client now see your jump as you do: from the top of the arc you fall, and you land with
+  your landing when you come down. Before, they saw the rise and the top standing or running, and no landing.
+
 ## 2026-11-09 · Jump
 - On a server that has jumps (eqoaclassic can turn them on), V jumps: about half your height, straight up when you
   stand and on along your way when you run. You come down as a fall comes down and land where you came down, and

@@ -51,15 +51,20 @@ or a browser (each described where it lives below):
   turn it on for.
 - **A jump** (the user's of 2026-11-09, "lets add jump to the game"; `walker`, `jump`, `Session::jumps`): on a server
   that offers it (go-eqoa-server's `world.jump`, opcode 0x7E28, offered only to a client that answered its bug report
-  offer, so never to a PS2), V (a Controls row; a controller has none until one is given it there: every button of the
-  pad is the game's) jumps 0.9 high, half the walk's body: the game's own walk given a start speed up (7.1 a second) and
+  offer, so never to a PS2), Space (V too; a Controls row; a controller has none until one is given it there: every
+  button of the pad is the game's) jumps 0.9 high, half the walk's body: the game's own walk given a start speed up (7.1 a second) and
   the floor it remembers lifted over the jump's top, so its own gravity, air (nothing pushes in the air, the run is
   carried across, a running jump goes 5 ahead) and landing take it, with the fall's clip in the air and the landing's
   after, 0.6 s on flat ground. Not in a liquid, in the air, flying, casting, held (0x00FC or no speed) or with a window
   up, and only once a report standing has gone out since the last landing or move (the server judges a jump from one).
   Others on this client see a player in the air at the height the server sends (`jump::aloft`: CLIENT stands every
-  creature on the floor within 1.5 of it, so a PS2 shows a jumper on the ground playing the fall). The console frames
-  are kept as ever, and a client that may jump and does not walks bit for bit as one that may not; `vi` is untouched.
+  creature on the floor within 1.5 of it, so a PS2 shows a jumper on the ground playing the fall), its fall wholly in
+  by the top of its arc as drawn and its landing played once it comes down (`jump::Air`; the user's of the same day,
+  "the jump needs a falling animation once you hit the zenith": its first update in the air comes 0.1-0.3 s into the
+  jump, and the fall's 250 ms blend from there was half in at the top). The console frames are kept as ever, and a
+  client that may jump and does not walks bit for bit as one that may not; `vi` is untouched. Space was the attack's
+  until then: the attack is on G, and Space, while the jump's row has it, is still the attack's wherever it makes no
+  jump (a server without jumps, a window up: `binds::KeyEdge::space_attacks`).
   Nothing on a server that does not offer it.
 - **1,000 lines of chat history** (the game's ring holds 31).
 - **The start menu's windows over the world**, with no green backdrop behind
