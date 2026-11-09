@@ -6,6 +6,14 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · A Skeleton's helm covers its skull
+- With the 2002 disc's art on (F9), a Skeleton's helm no longer shows the back of its skull poking out
+  through it. The helm now sits a little wider and deeper over the skull, as the Frontiers art's helm
+  always has, so the whole skull stays inside it from every side and in every move.
+- The old, mossy and frost bone skeletons a Skeleton can choose wear their helms a touch further forward
+  in the Frontiers art too, so their cheekbones stay inside the helm's sides.
+- Every other race's helm, and a skeleton creature's, is exactly as before.
+
 ## 2026-11-09 · Capes sit clear of armour
 - A cape now sits off what you wear: plate, broad shoulders and a robe's skirt show through it far less as you
   stand, walk and run. Over the back and shoulders it moves with the body under it, and under a robe its lower

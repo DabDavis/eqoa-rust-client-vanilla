@@ -160,18 +160,8 @@ impl Figure {
             }
             // the server's patch's tables (`s2`), retail's without one
             let t = crate::s2::get().cust();
-            // the node the world puts it on (`play::attach`)
-            let node = crate::slotless::helm_node(lib, id, cs, true);
-            if node >= 0
-                && let Some(h) = vi::cust::helm_with(look.armor[5], &t)
-                && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
-            {
-                let tint = look.helm_color(&t);
-                for b in &mut m.batches {
-                    for l in &mut b.layers {
-                        l.color = tint;
-                    }
-                }
+            // on the node the world puts it on, seated as there (`play::attach`)
+            if let Some((node, m)) = crate::slotless::helm_on(lib, id, cs, true, look.armor[5], look.helm_color(&t), &t, true) {
                 helm_worn = true;
                 attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
             }
