@@ -14,9 +14,10 @@ canvas (the licence, the title, Station's login screen...): drive it with
 
 --shot SECONDS=FILE.png screenshots that long after the button (repeatable);
 --until TEXT exits 0 once a console line has it; --keys SECONDS=KEYS holds
-keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s; 'w:down'
-and 'w:up' press it and let it go apart, the canvas focused only for the press,
-so a --js between them can move the focus: a key let go elsewhere);
+keys for a while (w, a, s, d, ArrowLeft...: 'w:2000' holds w for 2 s; 'w:r2000'
+holds it 2 s as a keyboard does, its repeats coming as a browser sends them;
+'w:down' and 'w:up' press it and let it go apart, the canvas focused only for the
+press, so a --js between them can move the focus: a key let go elsewhere);
 --type SECONDS=TEXT types TEXT on the canvas then, a character at a time
 (an account's name into Station's login; a password from the environment:
 --type 20='$EQOA_PASSWORD'); --insert SECONDS=TEXT puts TEXT into the element
@@ -241,7 +242,11 @@ async def drive(a, base, ws_url, target_id):
                    "-": ("Minus", 189), "_": ("Minus", 189), "'": ("Quote", 222), "`": ("Backquote", 192),
                    "~": ("Backquote", 192), "=": ("Equal", 187), "+": ("Equal", 187)}
 
-        async def key(k, down):
+        # the named keys' Windows key codes, as a keyboard's come
+        NAMED = {"ArrowLeft": 37, "ArrowUp": 38, "ArrowRight": 39, "ArrowDown": 40, "Enter": 13, "Escape": 27,
+                 "Backspace": 8, "Tab": 9, "Insert": 45, "Delete": 46, "Home": 36, "End": 35, "F1": 112, "F3": 114, "F9": 120}
+
+        async def key(k, down, repeat=False):
             if len(k) == 1 and k.isalpha():
                 code, vk = "Key" + k.upper(), ord(k.upper())
             elif len(k) == 1 and k.isdigit():
@@ -249,9 +254,9 @@ async def drive(a, base, ws_url, target_id):
             elif k in SYMBOLS:
                 code, vk = SYMBOLS[k]
             else:
-                code, vk = k, 0
+                code, vk = k, NAMED.get(k, 0)
             await call("Input.dispatchKeyEvent", type="keyDown" if down else "keyUp", key=k, code=code,
-                       text=k if (down and len(k) == 1) else "", windowsVirtualKeyCode=vk)
+                       text=k if (down and len(k) == 1) else "", windowsVirtualKeyCode=vk, autoRepeat=repeat)
 
         async def touch(kind, pts):
             await call("Input.dispatchTouchEvent", type=kind, touchPoints=[{"x": x, "y": y, "id": 1} for x, y in pts])
@@ -445,6 +450,23 @@ async def drive(a, base, ws_url, target_id):
             else:
                 for part in arg.split(","):
                     k, ms = part.split(":")
+                    if ms.startswith("r"):
+                        # held as a keyboard holds a key: pressed, then its repeats as
+                        # a browser sends them (keydown with repeat set; Windows'
+                        # default delay of 500 ms, then about 30 a second), let go
+                        hold = int(ms[1:]) / 1000
+                        await js("document.getElementById('eqoa').focus()")
+                        await key(k, True)
+                        end = time.monotonic() + hold
+                        await asyncio.sleep(min(0.5, hold))
+                        n = 0
+                        while time.monotonic() < end:
+                            await key(k, True, repeat=True)
+                            n += 1
+                            await asyncio.sleep(0.033)
+                        await key(k, False)
+                        out(f"keys {part} ({n} repeats)")
+                        continue
                     if ms != "up":
                         await js("document.getElementById('eqoa').focus()")
                         await key(k, True)
