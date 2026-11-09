@@ -1151,7 +1151,8 @@ struct Frame {
 impl Frame {
     /// The frame of a skeleton and its mesh; None when the skeleton's
     /// NodeIDList does not name two hands, two feet and a head joined by a
-    /// spine (not a body standing on two legs), or its torso has no skin.
+    /// spine, or its spine lies along the ground (not a body standing on two
+    /// legs: a four-legged one), or its torso has no skin.
     fn of(b: &Bones, body: &esf::Model) -> Option<Frame> {
         let n = b.parents.len();
         let node = |i: i32| usize::try_from(i).ok().filter(|&i| i < n);
@@ -1187,6 +1188,18 @@ impl Frame {
             (arms[s], chests[s]) = (arm, c);
         }
         let chest = if b.bind[chests[0]].y >= b.bind[chests[1]].y { chests[0] } else { chests[1] };
+        // standing up: the spine rises from the pelvis to the chest more than
+        // it runs along the ground. A body on four legs names two hands (its
+        // forepaws), two feet and a head too, but its spine lies along the
+        // ground (the leopard's, the bears', the wolves' and the lions' bodies
+        // a player is turned into: 0.03 up for 1.18 along; every body that
+        // stands, 0.14 up or more for 0.06 along at most), and a cape on it
+        // hung from its tail (petition 1411: Leopard Form's cape "attached to
+        // his arse").
+        let (pelvis, top) = (b.bind[root], b.bind[chest]);
+        if top.y - pelvis.y <= ((top.x - pelvis.x).powi(2) + (top.z - pelvis.z).powi(2)).sqrt() {
+            return None;
+        }
         let spine: Vec<usize> = chain.iter().copied().skip_while(|&i| i != chest).collect();
         // the legs: the chain from the root down to each footstep node, from
         // its first node off the middle (the thigh)
@@ -1456,6 +1469,32 @@ mod tests {
         0xFFB1_EA2C, 0x2217_6258, 0xB749_BF57, 0x6C13_08E0, 0x3151_DF13, 0x8EFD_12EA, 0x9112_20E2, 0x31A1_5F17, 0x4376_EB52, 0xCF41_5561, 0x8214_A32D, 0xCFC4_78EE, 0xC5CB_F4CF, 0xBADC_25C9,
         0xBE10_226F, 0x70EF_CE05, 0x6AF9_8A81, 0x4A4D_88FB, 0x141B_FE0C,
     ];
+
+    /// A body on four legs wears no cape (petition 1411: Bunsen's cape hung
+    /// from Leopard Form's tail): every form a player is turned into on four
+    /// legs, for every style; its spine lies along the ground, so it has no
+    /// frame. The control: the forms on two legs (a were's, a golem's, Spirit
+    /// Form's giant, Vampire Form) still wear one, with a frame.
+    #[test]
+    fn no_cape_on_a_body_on_four_legs() {
+        let Some(lib) = char_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        // Leopard Form, Bear Form, Wolf Form, Feral Lion Form, Panther Form,
+        // Form of the Great Bear, Feral Rat Form
+        const FOURS: &[u32] = &[0x125E_78F2, 0x1517_DBC3, 0x30F8_E15A, 0x485A_D952, 0xAC48_18AA, 0x87D4_A9A9, 0x1138_0781];
+        // Gatorwere, Illusion: Clay Golem, Spirit Form, Vampire Form
+        const TWOS: &[u32] = &[0x2C1D_8724, 0xBFF3_143C, 0x5271_A1F5, 0xCE1B_8083];
+        for &id in FOURS.iter().chain(TWOS) {
+            let (cs, body) = sprite(&lib, id);
+            let four = FOURS.contains(&id);
+            assert_eq!(Frame::of(&Bones::of(&cs), &body).is_none(), four, "{id:08X}: a frame only on two legs");
+            for s in STYLES {
+                assert_eq!(model(&lib, Cape { style: s.id, color: 0 }, id, &cs).is_none(), four, "style {} on {id:08X}", s.id);
+            }
+        }
+    }
 
     /// Every style is a cape cut out of its body: its own materials' triangles
     /// alone, behind the body (its middle behind the spine) and long (from
