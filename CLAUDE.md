@@ -35,7 +35,10 @@ current.
   (the server owner's of 2026-11-08: "lets add a new equip slot for heirloom server only. capes for all. there
   are many capes we can borrow from for various styles": `cape.rs`, go-eqoa-server's offer 0x7E25 and its lists
   0x7E26/0x7E27; the disc's own capes cut out of their bodies and fitted to the wearer's skeleton; with none
-  worn, or on any other server, nothing is made or drawn)).
+  worn, or on any other server, nothing is made or drawn), and a pack and a bank of 100 on a server that offers them (the
+  server owner's of 2026-11-09: "lets increase inventory and bank space to 100": go-eqoa-server's offer 0x7E29 and the sizes
+  in force before each dump 0x7E2A, `inventory::pack_cap`/`bank_cap`; every list's window takes them, CLIENT's 40 everywhere
+  else; a merchant's wares, a corpse and the trade's offers stay the game's)).
   `render::lit`, `lights.rs`; off it is the PS2's light exactly, every test and oracle unchanged, and `vi` untouched), and Sun
   Shadows (2026-11-08: Extended > Lighting, off unless chosen, drawn only with Dynamic Lighting; `render::sunshadow`; off, every
   frame byte for byte as before, on Vulkan and GL)).

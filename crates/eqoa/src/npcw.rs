@@ -132,7 +132,7 @@ impl Play {
                         let mut item = c.items[i].clone();
                         item.equip_slot = -1;
                         let limit = item.item.max_stack;
-                        let n = crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::CAPACITY);
+                        let n = crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::pack_cap());
                         crate::inventory::took(c, i, n);
                         if n != item.quantity {
                             i += 1;
@@ -173,7 +173,8 @@ impl Play {
     }
 
     /// `Msg0019`: the corpse's item in `slot` into the inventory as far as
-    /// it goes (`AddItem` with its own stack limit, 40 slots; unequipped),
+    /// it goes (`AddItem` with its own stack limit, the pack's slots: 40, or
+    /// what the server holds, `inventory::pack_cap`; unequipped),
     /// and `Took` that many off the corpse. The corpse window shows the list
     /// as it is left. `VIItemList::Get` hands over only an item a slot holds:
     /// another slot (an assert in CLIENT's `Took`) changes nothing.
@@ -186,7 +187,7 @@ impl Play {
         let mut item = item.clone();
         item.equip_slot = -1;
         let limit = item.item.max_stack;
-        let n = crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::CAPACITY);
+        let n = crate::inventory::add_item(&mut self.dump.inventory, &item, limit, crate::inventory::pack_cap());
         crate::inventory::took(corpse, slot, n);
         eprintln!("play: looted {n} of {} ({} on the corpse)", item.item.name, corpse.items.len());
     }

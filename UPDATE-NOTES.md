@@ -6,6 +6,15 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · A pack and a bank of 100
+- On a server that has them (the Heirloom Test Server), your inventory holds 100 items and your bank 100, where the
+  game holds 40 of each. What you wear counts among the 100, as it counts among the game's 40.
+- Every window shows them all: the inventory's tabs, the bank, a merchant's list when you sell, a trade, a corpse,
+  the forge and the auction's bank list. They scroll as they always have: hold up or down, or turn the mouse wheel;
+  up from the first row goes to the last.
+- On a server without them nothing changes. A character carrying more than 40 who logs in on a PS2 sees its first 40
+  (what it wears first), and the server keeps the rest safe; they come back when you log in here again.
+
 ## 2026-11-09 · Jump
 - On a server that has jumps (eqoaclassic can turn them on), V jumps: about half your height, straight up when you
   stand and on along your way when you run. You come down as a fall comes down and land where you came down, and

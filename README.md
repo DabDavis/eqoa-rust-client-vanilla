@@ -224,6 +224,19 @@ or a browser (each described where it lives below):
   pixie's, the fairy's, the gargoyle's) wear none. With none worn nothing is made or drawn.
   `eqoa dress <body> <out.png> cape=N [capecolor=RRGGBB]` draws one; `EQOA_CAPE_DEBUG=1`
   says how a cape was fitted.
+- **A pack and a bank past CLIENT's 40**, on a server that has them (go-eqoa-server's `world.pack_slots`,
+  `world.bank_slots`, the Heirloom Test Server's 100 each; the server owner, 2026-11-09: "lets increase inventory and
+  bank space to 100"; `net::session::OP_ITEM_LISTS`, `inventory::pack_cap`, `bank_cap`): CLIENT's `VIItemList` is 40
+  records and no more (`ItemInternal[40]`, `AddItem(.., 40)` everywhere; `Read` takes a dump's count with no check),
+  so the server offers more after the first character list (0x7E29: 1, the pack's, the bank's) and this client answers
+  at once with what it holds of each (the offer's, at most 255: the server names a record by a byte); before every
+  MemoryDump the server says the sizes in force (0x7E2A), which the lists fill to (`add_item`'s capacity at every
+  site: loot, a purchase, a trade's copy, a catch, a craft's copy, the bank's 0x1251, the stat preview) and every
+  window shows: the item menu's four tabs (the definitions' 40 each, or the pack's), the bank's two lists, the
+  merchant's selling list (its wares stay a merchant's 40), the trade's, the corpse window's, the forge's, the
+  auction's bank list (its `Init(80)`, or the bank's) and the experiment's components, each scrolling as the game's
+  lists do. Worn items count among the pack's, as among CLIENT's 40. A server that never says, a shard switched to,
+  and a PS2 keep 40 of each; the server sends a PS2 the first 40 (worn first) and keeps the rest for the character.
 - **A server's race's own customisation**, on a server that sends it (the user, 2026-11-08: "lets add char
   customization to the new races, if any other faces and hair add them, but if not add color swaps";
   go-eqoa-server's offer, 0x7E22, the options, 0x7E23, and the looks chosen, 0x7E24; `net::raceopts`,

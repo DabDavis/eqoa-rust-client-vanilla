@@ -187,6 +187,26 @@ pub const OP_CAPES: u16 = 0x7E25;
 /// The capes of the players this client sees, by the id it knows each by (its
 /// own character's too): `cape::read`, the whole set each time.
 pub const OP_CAPES_IN_VIEW: u16 = 0x7E26;
+/// go-eqoa-server's own, no retail message either: a pack and a bank past
+/// CLIENT's 40 records (its `world.pack_slots`, `world.bank_slots`), both ways.
+/// The server offers them after the session's first character list: a u32 1,
+/// then u32 the pack's records and u32 the bank's; this client answers at once
+/// with a u32 1 and the records it holds of each (the offer's, at most
+/// [`ITEM_LISTS_MOST`]), and is told the sizes in force before every
+/// MemoryDump ([`OP_ITEM_LISTS_IN_FORCE`]). A PS2 ignores the offer and holds
+/// 40; a server that never makes one gets no answer, and this client holds
+/// CLIENT's 40 of each too.
+pub const OP_ITEM_LISTS: u16 = 0x7E29;
+/// The sizes in force, to a client that answered [`OP_ITEM_LISTS`]: u32 the
+/// pack's records, u32 the bank's, before every MemoryDump, whose lists hold
+/// that many at most; kept as [`Session::item_lists`] until the next.
+pub const OP_ITEM_LISTS_IN_FORCE: u16 = 0x7E2A;
+/// The records a list holds when no server said otherwise: CLIENT's
+/// (`VIItemList`'s `ItemInternal[40]`, every `AddItem`'s 40).
+pub const ITEM_LIST_DISC: u32 = 40;
+/// The most this client holds in a list: the server names a record by its
+/// index in a byte (0x003C, 0x003E, 0x003F, 0x1250).
+pub const ITEM_LISTS_MOST: u32 = 255;
 /// The capes of the characters in its list, by each one's server id:
 /// `cape::read`, the whole list after each character list.
 pub const OP_CAPES_LIST: u16 = 0x7E27;
@@ -522,6 +542,10 @@ pub struct Session {
     /// The server offered capes ([`OP_CAPES`]) and this client took them: a
     /// cape is worn in its slot and drawn. Kept for the session.
     pub capes: bool,
+    /// The records the pack (worn items among them) and the bank hold, as the
+    /// server last said before a MemoryDump ([`OP_ITEM_LISTS_IN_FORCE`]);
+    /// CLIENT's [`ITEM_LIST_DISC`] of each from a server that never says.
+    pub item_lists: [u32; 2],
     /// The capes of the characters in the list, by server id
     /// ([`OP_CAPES_LIST`]), and of the players seen, by the id this client
     /// knows each by ([`OP_CAPES_IN_VIEW`]); `capes_changed` counts the
@@ -671,6 +695,7 @@ impl Session {
             raid_roster_asked: None,
             combat_record: false,
             capes: false,
+            item_lists: [ITEM_LIST_DISC; 2],
             cape_list: Default::default(),
             capes_in_view: Default::default(),
             capes_changed: 0,
@@ -842,6 +867,8 @@ impl Session {
     /// and its device block); `None` is retail's.
     pub fn connect_shard(&mut self, endpoint: u64, hello: Option<&[u8]>) {
         self.state = State::Shard;
+        // a shard is a server of its own: its lists' sizes are what it says
+        self.item_lists = [ITEM_LIST_DISC; 2];
         if let Some(c) = self.conn.take() {
             self.drdp.connection_close(c);
         }
@@ -1189,6 +1216,25 @@ impl Session {
                 if r.u32() != 0 && !r.error {
                     self.capes = true;
                     self.send_op_int(OP_CAPES, 1);
+                }
+            }
+            // a pack and a bank past 40 offered: taken, as many as offered up
+            // to what this client holds; their sizes count from the server's
+            // word before a dump
+            OP_ITEM_LISTS => {
+                let (on, pack, bank) = (r.u32(), r.u32(), r.u32());
+                if on != 0 && !r.error {
+                    let mut w = Writer::op(OP_ITEM_LISTS);
+                    w.u32(1);
+                    w.u32(pack.clamp(ITEM_LIST_DISC, ITEM_LISTS_MOST));
+                    w.u32(bank.clamp(ITEM_LIST_DISC, ITEM_LISTS_MOST));
+                    self.send(&w.data);
+                }
+            }
+            OP_ITEM_LISTS_IN_FORCE => {
+                let (pack, bank) = (r.u32(), r.u32());
+                if !r.error {
+                    self.item_lists = [pack.clamp(ITEM_LIST_DISC, ITEM_LISTS_MOST), bank.clamp(ITEM_LIST_DISC, ITEM_LISTS_MOST)];
                 }
             }
             OP_CAPES_LIST | OP_CAPES_IN_VIEW if self.capes => match crate::cape::read(&m.data[2.min(m.data.len())..]) {
@@ -2650,6 +2696,48 @@ mod tests {
         assert!(s.capes_in_view.is_empty(), "the whole set each time: none now");
         assert_eq!(s.cape_list.len(), 1, "the list kept apart");
         assert_eq!(answers(&mut s), [], "the lists answered nothing");
+    }
+
+    // A pack and a bank past 40 (0x7E29): the offer answered at once with what
+    // this client holds of each (the offer's, between 40 and 255), the sizes
+    // taken only from the server's word before a dump (0x7E2A). The controls:
+    // an offer cut short or of 0 is not answered, a session never told keeps
+    // CLIENT's 40, and a word cut short changes nothing.
+    #[test]
+    fn the_item_lists_offer_is_answered_and_its_sizes_kept() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        let words = |op: u16, w: &[u32]| {
+            let mut m = op.to_le_bytes().to_vec();
+            for v in w {
+                m.extend_from_slice(&v.to_le_bytes());
+            }
+            m
+        };
+        answers(&mut s);
+        assert_eq!(s.item_lists, [40, 40], "the control: never told, CLIENT's");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_ITEM_LISTS, &[1, 100]));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_ITEM_LISTS, &[0, 100, 100]));
+        assert_eq!(answers(&mut s), [], "the controls: cut short, or 0");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_ITEM_LISTS, &[1, 100, 1000]));
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, words(OP_ITEM_LISTS, &[1, 100, 255]))]);
+        assert_eq!(s.item_lists, [40, 40], "an answer is not the sizes: the server's word is");
+        let mut short = words(OP_ITEM_LISTS_IN_FORCE, &[100, 100]);
+        short.pop();
+        deliver(&mut s, drdp::TYPE_GUARANTEED, short);
+        assert_eq!(s.item_lists, [40, 40], "the control: cut short, as it was");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_ITEM_LISTS_IN_FORCE, &[100, 100]));
+        assert_eq!(s.item_lists, [100, 100]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_ITEM_LISTS_IN_FORCE, &[12, 9000]));
+        assert_eq!(s.item_lists, [40, 255], "never under CLIENT's, never past a byte's index");
+        assert_eq!(answers(&mut s), [], "the sizes answered nothing");
     }
 
     // A state channel's update that comes before the world entry (live, a
