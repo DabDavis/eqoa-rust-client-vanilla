@@ -7,19 +7,19 @@
 //!
 //! A shadow map of [`CASCADES`] cascades (a 2D depth array, [`map_size`] a
 //! side), each an orthographic view along the sun's light round the sphere
-//! that holds its slice of the view's depth ([`ENDS`]), each drawn every frame
-//! the sun is up (`Sun::draw`), from what the frame draws (`suncast.wgsl`):
-//! the zones' groups from bundles recorded
-//! at their upload in clusters of members near one another (`GroupSun`,
-//! each culled against a cascade's box) and the models (characters, what
-//! they hold, the boids) by their world box, every opaque layer of a
-//! material whose first layer is opaque, both faces, a vertex turned from
-//! the sun put back a little ([`BACK_PUSH`]), a solid layer as depth alone
-//! and any other alpha tested as it is drawn (leaves cut out); not the
-//! radial flora (`Draw::Instances`), the sky, nor any blended layer (water,
-//! glass, fog, effects), nor the particles, billboards, fans, plates or the
-//! HUD, which `draw` does not draw. Then the world is drawn through a third
-//! set of model pipelines, Dynamic Lighting's with the map in the sun term
+//! that holds its slice of the view's depth ([`ENDS`]), each drawn every
+//! frame the sun is up (`Sun::draw`), from what the frame draws
+//! (`suncast.wgsl`): the zones' groups from bundles recorded at their upload
+//! in clusters of members near one another (`GroupSun`, each culled against
+//! a cascade's box) and the models (characters, what they hold, the boids)
+//! by their world box, every opaque layer of a material whose first layer is
+//! opaque, both faces, a vertex turned from the sun put back a little
+//! ([`BACK_PUSH`]), a solid layer as depth alone and any other alpha tested
+//! as it is drawn (leaves cut out); not the radial flora
+//! (`Draw::Instances`), the sky, nor any blended layer (water, glass, fog,
+//! effects), nor the particles, billboards, fans, plates or the HUD, which
+//! `draw` does not draw. Then the world is drawn through a third set of
+//! model pipelines, Dynamic Lighting's with the map in the sun term
 //! (`sunshadow.wgsl`), and the groups' runs through bundles recorded for
 //! them (`Run::sun`).
 //!
@@ -33,12 +33,11 @@
 //! texels still under them; taken in eighths of a degree, as at first, they
 //! stood still for a second and a quarter and then jumped (a character's at
 //! 17:00 by 4 pixels, the texels shuffled under every edge at once). The
-//! shadows end at [`RANGE`] before the
-//! camera, faded out from [`FADE_FROM`]; they fade in as the sun rises
-//! clear of the horizon and out as it sets ([`strength`]): by night the
-//! game's "sun" is the sun under the ground, its light travelling up
-//! (`vi::tod`: (−sin 15h°, cos 15h°, 0), a purple light on what faces down),
-//! not a moon, and nothing is shadowed.
+//! shadows end at [`RANGE`] before the camera, faded out from [`FADE_FROM`];
+//! they fade in as the sun rises clear of the horizon and out as it sets
+//! ([`strength`]): by night the game's "sun" is the sun under the ground,
+//! its light travelling up (`vi::tod`: (−sin 15h°, cos 15h°, 0), a purple
+//! light on what faces down), not a moon, and nothing is shadowed.
 //!
 //! The rule for what the console already darkens: the sun's visibility is
 //! the lesser of the strip programs' (colour.a × static.a) and the map's
@@ -79,7 +78,6 @@ pub const FADE_FROM: f32 = 212.5;
 /// How far toward the sun past its sphere a cascade takes casters: a hill or
 /// a tower up to this far upwind of what is drawn still casts onto it.
 pub const UPWIND: f64 = 500.0;
-
 
 /// How high over what it shadows a cluster of casters (not the terrain or a
 /// sprite placed all over a zone, which every cascade draws) is taken to
@@ -626,7 +624,8 @@ impl Sun {
     /// between), left a moving thing's shadow where it had been at every
     /// other frame, and its sunlit side in it (a box running 0.15 a frame 74
     /// off: its shadow's centroid back 4.4 pixels and on 6.4 by turns, of
-    /// 512); drawing them every frame costs 0.27 ms on an RX 580.
+    /// 512); every cascade every frame costs a third of a millisecond more on
+    /// an RX 580.
     pub(crate) fn draw(&self, r: &Renderer, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, view: &View, items: &[Draw]) -> bool {
         let dir = view.sun_dir.normalize_or(Vec3::NEG_Y);
         let k = strength(dir);
