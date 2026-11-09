@@ -625,6 +625,8 @@ impl Walker {
         if !game_frame {
             self.cam.effect.sample = self.shake;
         }
+        // steered, the camera kept behind the body: no swing round (`camreach`)
+        self.reach.steered = c.steer;
         self.eye = self.reach.process(&mut self.cam, &mut self.scene, dt_s);
         if game_frame {
             self.shake = next;

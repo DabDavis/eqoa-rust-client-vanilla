@@ -6,6 +6,12 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · The camera at posts and low roofs
+- Steering with the right mouse button (or with the camera tilted low), the camera no longer jumps all the way in
+  to your character when something close behind you is in its way, like the posts and roof of the well by the
+  Freeport coach. It comes in only as far as it must, just in front of what is in the way, and goes back out to
+  where you had it once the way is clear.
+
 ## 2026-11-09 · Jump on Space, and a fall from the top
 - Space jumps now, on a server that has jumps (the Heirloom Test Server), and V still does. The attack (hold to
   attack, Auto Attack's toggle, a corpse's loot) is on G.
