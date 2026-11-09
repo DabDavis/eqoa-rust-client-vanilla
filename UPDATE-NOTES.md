@@ -6,6 +6,18 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · The on-screen controller: its size, opacity and edge
+- On a phone or a tablet (the browser page and the Android app), Extended > Controller has four new rows for
+  the on-screen controller. Touch Stick Size and Touch Button Size set the two sticks and the buttons apart,
+  from half their size to twice it; Touch Opacity makes the whole controller fainter or brighter (10% to 200%);
+  Touch Edge keeps it farther in from the screen's left and right sides (up to a tenth of the screen).
+- Larger sizes use the room the screen has: on a phone held sideways the sticks go to twice their size and the
+  buttons to about two-thirds larger, the sticks moving in toward the middle to make room. A tablet, or a phone
+  held upright, has less room; where a size you pick does not fit, the controller is drawn as large as fits
+  and the options page says the size it is drawn at. No control ever goes off the screen or onto another.
+- Nothing changes unless you change these rows. They replace Touch Pad Size: if you had set it, both sizes
+  start where it was, so your controller looks just as it did.
+
 ## 2026-11-09 · Fewer quest marks, and GMs travel by the map
 - The minimap keeps only your own quests' "?" on its rim, pointing the way to them. A "!" (a quest you can take)
   shows on the minimap only where it lies within what the minimap shows, so its edge is no longer ringed with them.
