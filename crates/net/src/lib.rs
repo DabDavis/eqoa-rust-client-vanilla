@@ -8,5 +8,6 @@ pub mod auth;
 pub mod creation;
 pub mod dump;
 pub mod entity;
+pub mod serverworlds;
 pub mod session;
 pub mod stream;

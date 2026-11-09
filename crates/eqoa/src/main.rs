@@ -60,6 +60,7 @@ mod client_image;
 mod playersearch;
 mod searchwnd;
 mod s2;
+mod serverworlds;
 mod controls;
 mod arrival;
 mod craft;
@@ -409,6 +410,9 @@ fn volumes(file: &str) -> Result<()> {
 }
 
 fn run(args: &[String]) -> Result<()> {
+    // a server's own worlds are built off the player's disc (`serverworlds`)
+    #[cfg(not(target_arch = "wasm32"))]
+    serverworlds::install();
     match args.first().map(String::as_str) {
         // `eqoa` alone, or `eqoa boot [server]`: the game from the disc's
         // boot (`boot`)
@@ -623,6 +627,8 @@ fn run(args: &[String]) -> Result<()> {
 /// (`discs::settle`, in the window's event loop).
 fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
     settings::keep_in_user_dir();
+    #[cfg(not(target_arch = "wasm32"))]
+    serverworlds::install();
     // the log (`logfile`); the program as it starts, for a start again
     // after a lost graphics device
     #[cfg(not(target_arch = "wasm32"))]
@@ -751,6 +757,8 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
     let server = net::addr::resolve(host, port("EQOA_GAME_PORT", 10070))?;
     let mut s = Session::connect(server, user, l.token)?;
     let t = std::time::Instant::now();
+    // a list sent again (the live look's) picks nothing more
+    let mut picked = false;
     while t.elapsed() < std::time::Duration::from_secs(30) {
         let events = s.pump();
         for (k, e) in events.iter().enumerate() {
@@ -767,15 +775,29 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
                         s.connect_shard(ep, crate::s2::get().shard_hello().as_deref());
                     }
                 }
+                Event::Characters(_) if picked => {}
                 Event::Characters(list) => {
                     for c in list {
                         eprintln!("character: {} (id {}, race {}, class {}, level {})", c.name, c.server_id, c.race, c.class, c.level);
+                    }
+                    // the server's own worlds, offered after the list, are
+                    // built and the server told which are held before a
+                    // character is picked: it places the character by them
+                    // (`serverworlds`); a player at character select is slower
+                    let wait = std::time::Instant::now();
+                    while wait.elapsed() < std::time::Duration::from_millis(400) || s.server_worlds_pending() && wait.elapsed() < std::time::Duration::from_secs(60) {
+                        let more = s.pump();
+                        if !more.is_empty() {
+                            s.held.extend(more);
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(16));
                     }
                     // `EQOA_CHAR=<name>` picks one; else the first.
                     let want = std::env::var("EQOA_CHAR").ok();
                     let pick = list.iter().find(|c| want.as_deref() == Some(c.name.as_str())).or(list.first());
                     if let Some(c) = pick {
                         s.select_character(&c.clone());
+                        picked = true;
                     }
                 }
                 Event::WorldEntry { self_id, player, dump } => {

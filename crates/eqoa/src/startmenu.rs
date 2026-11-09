@@ -529,8 +529,11 @@ impl MainMenu {
         let col = (loc.pos[0] / loc.cell) as i32;
         let row = (loc.pos[2] / loc.cell) as i32;
         let off = [loc.pos[0] - col as f32 * loc.cell - loc.origin[0], loc.pos[2] - row as f32 * loc.cell - loc.origin[2]];
-        let zone = zone_name(loc, row - 1, col - 1);
-        let name = vui.words.get(zone as i32, vui.language).to_string();
+        // one of the server's own worlds names its zones itself (`serverworlds`)
+        let name = match crate::serverworlds::zone_name(i64::from(loc.world), col, row) {
+            Some(n) => n,
+            None => vui.words.get(zone_name(loc, row - 1, col - 1) as i32, vui.language).to_string(),
+        };
         const DIRS: [[i32; 3]; 3] = [[1426, 1422, 1427], [1425, 1430, 1424], [1428, 1423, 1429]];
         let third = |v: f32| if v < -333.34 { 0 } else if v <= 333.34 { 1 } else { 2 };
         let dir = vui.words.get(DIRS[third(off[1])][third(off[0])], vui.language).to_string();

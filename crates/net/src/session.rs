@@ -155,6 +155,32 @@ pub const OP_FLY: u16 = 0x7E1B;
 pub const OP_COMBAT_RECORD: u16 = 0x7E20;
 /// The record: this client's ask (a u32 1), the server's rows (`record::read`).
 pub const OP_COMBAT_RECORD_DATA: u16 = 0x7E21;
+/// go-eqoa-server's own, no retail message either: worlds the server has past
+/// the disc's, each made of the disc's own zones (`serverworlds`), a u32 after
+/// the opcode, both ways. The server offers them (1) after the session's first
+/// character list; this client answers 1 when it can build them
+/// ([`set_world_builder`]) and is sent the list ([`OP_SERVER_WORLDS_DATA`]). A
+/// PS2 ignores the offer; a server that never makes one has the disc's worlds
+/// alone, as before.
+pub const OP_SERVER_WORLDS: u16 = 0x7E30;
+/// The list, to a client that answered [`OP_SERVER_WORLDS`]
+/// (`serverworlds::read`); this client's answer once it has built them: the
+/// worlds it holds (`serverworlds::encode_ready`), which are all the server
+/// sends it into.
+pub const OP_SERVER_WORLDS_DATA: u16 = 0x7E31;
+
+/// What builds a server's worlds off the player's disc (the game's
+/// `serverworlds`, set once at its start): handed the list, it answers on the
+/// channel, once, with the ids of those it holds. With none set this client
+/// does not take the offer (a page, a test).
+pub type WorldBuilder = fn(&[crate::serverworlds::World]) -> std::sync::mpsc::Receiver<Vec<u8>>;
+
+static WORLD_BUILDER: std::sync::OnceLock<WorldBuilder> = std::sync::OnceLock::new();
+
+/// Sets what builds a server's worlds ([`WorldBuilder`]).
+pub fn set_world_builder(f: WorldBuilder) {
+    let _ = WORLD_BUILDER.set(f);
+}
 /// go-eqoa-server's own, no retail message either: the whole of a raid group,
 /// where a roster holds four (`m_group`). The offer, from the server once the
 /// player is in the world, a u32 after the opcode (1); a server without it
@@ -446,6 +472,13 @@ pub struct Session {
     /// ([`OP_RAID_ROSTER_OFFER`]), and what it was last told since the offer.
     pub raid_roster_offer: bool,
     raid_roster_asked: Option<bool>,
+    /// The server's worlds past the disc's, as it last listed them
+    /// ([`OP_SERVER_WORLDS_DATA`]); none from a server that never offers them.
+    pub server_worlds: Option<Vec<crate::serverworlds::World>>,
+    /// The builder's answer still to come: the list is in and being built.
+    worlds_building: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
+    /// The offer was taken and the server not yet told what this client holds.
+    worlds_pending: bool,
     /// The server offered the combat record ([`OP_COMBAT_RECORD`]) and this
     /// client took it: Character > Combat Record. Kept for the session.
     pub combat_record: bool,
@@ -579,6 +612,9 @@ impl Session {
             bug_reports: false,
             member_invites: false,
             creation: None,
+            server_worlds: None,
+            worlds_building: None,
+            worlds_pending: false,
             flying: false,
             raid_roster_offer: false,
             raid_roster_asked: None,
@@ -863,8 +899,33 @@ impl Session {
             }
             self.route(m, &mut events);
         }
+        self.worlds_answer();
         self.flush();
         events
+    }
+
+    /// The server told which of its worlds this client holds, once they are
+    /// built (`OP_SERVER_WORLDS_DATA`): the builder's answer, or none when it
+    /// stopped without one.
+    fn worlds_answer(&mut self) {
+        let Some(rx) = &self.worlds_building else { return };
+        let ids = match rx.try_recv() {
+            Ok(ids) => ids,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
+        };
+        self.worlds_building = None;
+        self.worlds_pending = false;
+        let mut w = Writer::op(OP_SERVER_WORLDS_DATA);
+        w.bytes(&crate::serverworlds::encode_ready(&ids));
+        self.send(&w.data);
+    }
+
+    /// Whether the server's worlds were offered and taken and it is not yet
+    /// told which this client holds: a character picked now would be placed
+    /// by a server that does not know yet (`eqoa play` waits).
+    pub fn server_worlds_pending(&self) -> bool {
+        self.worlds_pending
     }
 
     /// The flush `pump` ends with, and the sends: what was sent goes out now
@@ -1083,6 +1144,24 @@ impl Session {
             OP_CREATION_RACES => match crate::creation::read(&m.data[2.min(m.data.len())..]) {
                 Some(c) => self.creation = Some(c),
                 None => debug_line(&format!("[net] creation's races: {} bytes not read", m.data.len())),
+            },
+            // the server's own worlds offered: taken when they can be built
+            // here (`set_world_builder`)
+            OP_SERVER_WORLDS => {
+                if r.u32() != 0 && !r.error && WORLD_BUILDER.get().is_some() {
+                    self.send_op_int(OP_SERVER_WORLDS, 1);
+                    self.worlds_pending = true;
+                }
+            }
+            OP_SERVER_WORLDS_DATA => match crate::serverworlds::read(&m.data[2.min(m.data.len())..]) {
+                Some(w) => {
+                    if let Some(build) = WORLD_BUILDER.get() {
+                        self.worlds_building = Some(build(&w));
+                        self.worlds_pending = true;
+                    }
+                    self.server_worlds = Some(w);
+                }
+                None => debug_line(&format!("[net] the server's worlds: {} bytes not read", m.data.len())),
             },
             // any member invites into its group there (`Play::may_invite`)
             OP_MEMBER_INVITES => {
@@ -2301,6 +2380,55 @@ mod tests {
         assert_eq!((g.like, g.class_mask, g.body_for(1), g.name.as_str(), g.desc.as_str()), (2, 0x7E49, 0x6C13_08E0, "Goblin", "Sly."));
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1F, 0x7E, 1, 0, 1, 13]);
         assert_eq!(s.creation, Some(c), "the control: races cut short leave what was kept");
+    }
+
+    fn ready_builder(w: &[crate::serverworlds::World]) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(w.iter().filter(|w| w.name != "not here").map(|w| w.id).collect()).unwrap();
+        rx
+    }
+
+    // The server's worlds (0x7E30): with no builder the offer is not taken; with
+    // one it is answered with 1, the list (0x7E31) kept and built, and the server
+    // told which are held, once, then nothing more. The controls: no builder, an
+    // offer cut short, an offer of 0, a list cut short (kept as before, nothing
+    // told); a world the builder could not make is left out of the answer.
+    #[test]
+    fn the_server_worlds_are_built_and_the_server_told_which() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.pump();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        if WORLD_BUILDER.get().is_none() {
+            deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x30, 0x7E, 1, 0, 0, 0]);
+            assert_eq!((answers(&mut s), s.server_worlds_pending()), (vec![], false), "the control: no builder, no answer");
+        }
+        set_world_builder(ready_builder);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x30, 0x7E, 1, 0, 0]);
+        assert_eq!(answers(&mut s), [], "the control: an offer cut short");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x30, 0x7E, 0, 0, 0, 0]);
+        assert_eq!(answers(&mut s), [], "the control: an offer of 0");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x30, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x30, 0x7E, 1, 0, 0, 0])]);
+        assert!(s.server_worlds_pending(), "taken, not yet answered");
+        let w = |id: u8, name: &str| crate::serverworlds::World { id, name: name.into(), size: 1, crc: 2, parts: vec![] };
+        let list = crate::serverworlds::encode(&[w(10, "the Homelands"), w(11, "not here")]);
+        let mut cut = vec![0x31, 0x7E];
+        cut.extend(&list[..list.len() - 1]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, cut);
+        assert_eq!((answers(&mut s), s.server_worlds.is_none(), s.server_worlds_pending()), (vec![], true, true), "the control: a list cut short");
+        let mut msg = vec![0x31, 0x7E];
+        msg.extend(&list);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, msg);
+        assert!(ev.is_empty(), "the list is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x31, 0x7E, 1, 10])], "only the world built");
+        assert_eq!((s.server_worlds.as_ref().map(Vec::len), s.server_worlds_pending()), (Some(2), false));
+        assert_eq!(answers(&mut s), [], "told once");
     }
 
     // go-eqoa-server's offer of the live duel's messages (0x7E09) is answered
