@@ -52,13 +52,17 @@ pub struct Admin {
     /// the server's names for the TRIGGER entries (0x7E08, not retail),
     /// shown in their place (`trigger_labels`)
     pub triggers: [Option<crate::admin::Trigger>; crate::admin::TRIGGERS],
+    /// the server's whole list of triggers (0x7E36, not retail), the TRIGGER
+    /// menu a line a trigger in place of its eight (`set_trigger_list`); none
+    /// from a server that sends only the names
+    pub list: Option<Vec<crate::admin::Listed>>,
 }
 
 impl Default for Admin {
     /// `VIClientPart382E8`'s constructor and `VIClient`'s values for the
     /// rest (the creatures walked and glided, the day-night cycle running).
     fn default() -> Self {
-        Admin { part: Part::default(), buffs: BuffPc::default(), goto: Goto::new(), net: NetStat::default(), channels: vec![None; 40], keys: Vec::new(), opening: None, go: None, walks: true, glides: true, held_hour: None, light: 0, fast: false, stats: false, bps: false, position: false, position_lines: Vec::new(), triggers: Default::default() }
+        Admin { part: Part::default(), buffs: BuffPc::default(), goto: Goto::new(), net: NetStat::default(), channels: vec![None; 40], keys: Vec::new(), opening: None, go: None, walks: true, glides: true, held_hour: None, light: 0, fast: false, stats: false, bps: false, position: false, position_lines: Vec::new(), triggers: Default::default(), list: None }
     }
 }
 
@@ -72,6 +76,39 @@ pub fn set_trigger_labels(menus: &mut crate::client_image::Menus, triggers: &[Op
             let label = crate::client_image::Label { text: crate::ui::wide(&t.name), tail: crate::ui::wide(t.tail()), dim: !t.on };
             menus.labels.insert((crate::admin::TRIGGER_ENTRY, i as i32), label);
         }
+    }
+}
+
+/// The TRIGGER menu as the server's whole list makes it (0x7E36, not
+/// retail): a line a trigger that is on, by slot, each the list's message
+/// (`MSG_TRIGGER_SLOT`) with the slot for its id, so it fires its own slot
+/// (0x7E37), labelled with the slot and the name (an unnamed one's slot and
+/// `unnamed`, the game's word), " *" after one running; seven shown at a time,
+/// the rest scrolled to as in any of the game's longer menus. With no list,
+/// or no trigger on, the menu's lines as CLIENT has them, the eight TRIGGERs.
+/// The menu is the one CLIENT's TRIGGER lines are in; those lines are kept
+/// (`Menus::trigger_lines`) to be put back.
+pub fn set_trigger_list(menus: &mut crate::client_image::Menus, list: Option<&[crate::admin::Listed]>, unnamed: &str) {
+    use crate::admin::{MSG_TRIGGER_SLOT, TRIGGER_ENTRY};
+    use crate::client_image::{Label, MenuEntry};
+    menus.labels.retain(|k, _| k.0 != MSG_TRIGGER_SLOT);
+    if menus.trigger_lines.is_none() {
+        let Some(k) = menus.list.iter().position(|m| m.entries.iter().any(|e| e.msg == TRIGGER_ENTRY)) else { return };
+        menus.trigger_lines = Some((k, menus.list[k].entries.clone()));
+    }
+    let Some((k, lines)) = menus.trigger_lines.clone() else { return };
+    let mut on: Vec<&crate::admin::Listed> = list.unwrap_or_default().iter().filter(|t| t.on).collect();
+    on.sort_by_key(|t| t.slot);
+    if on.is_empty() {
+        menus.list[k].entries = lines;
+        return;
+    }
+    let like = lines.first().copied().unwrap_or_default();
+    menus.list[k].entries = on.iter().map(|t| MenuEntry { msg: MSG_TRIGGER_SLOT, id: t.slot as i32, ..like }).collect();
+    for t in on {
+        let name = if t.name.is_empty() { unnamed } else { t.name.as_str() };
+        let label = Label { text: crate::ui::wide(&format!("{} {name}", t.slot)), tail: crate::ui::wide(t.tail()), dim: false };
+        menus.labels.insert((MSG_TRIGGER_SLOT, t.slot as i32), label);
     }
 }
 
@@ -118,8 +155,23 @@ impl Play {
     }
 
     /// The opcodes the GM's channel reads (0x0700, `Recv0700`; and the
-    /// server's trigger names, 0x7E08); true when handled.
+    /// server's trigger names, 0x7E08, and its whole list, 0x7E36); true
+    /// when handled.
     pub(super) fn admin_opcode(&mut self, op: u16, data: &[u8]) -> bool {
+        if op == crate::admin::OP_TRIGGER_LIST {
+            match crate::admin::read_trigger_list(data) {
+                Some(list) => {
+                    let on = list.iter().filter(|t| t.on).count();
+                    let running: Vec<String> = list.iter().filter(|t| t.running).map(|t| t.slot.to_string()).collect();
+                    let slots: Vec<String> = list.iter().filter(|t| t.on).map(|t| t.slot.to_string()).collect();
+                    eprintln!("gm: the trigger list: {} triggers, {on} on (slots {}), running: {}", list.len(), slots.join(" "), if running.is_empty() { "none".into() } else { running.join(" ") });
+                    self.admin.list = Some(list);
+                    self.trigger_labels();
+                }
+                None => eprintln!("gm: 0x7E36 of {} bytes cut short: the trigger list kept", data.len()),
+            }
+            return true;
+        }
         if op == crate::admin::OP_TRIGGER_NAMES {
             match crate::admin::read_triggers(data) {
                 Some(t) => {
@@ -145,11 +197,16 @@ impl Play {
     }
 
     /// The TRIGGER entries' labels as the server named them (an entry it
-    /// left unnamed shows the game's word): set on the start menu's menus,
-    /// now and whenever CLIENT's image makes them anew (`client_data`).
+    /// left unnamed shows the game's word), or the menu a line a trigger as
+    /// its whole list makes it: set on the start menu's menus, now and
+    /// whenever CLIENT's image makes them anew (`client_data`), an open menu's
+    /// selection kept within its lines.
     pub(super) fn trigger_labels(&mut self) {
+        let unnamed = self.words.as_ref().map_or_else(|| "TRIGGER".to_string(), |w| w.get(507, 0).to_string());
         let Some(s) = self.start.as_mut() else { return };
         set_trigger_labels(&mut s.menus, &self.admin.triggers);
+        set_trigger_list(&mut s.menus, self.admin.list.as_deref(), &unnamed);
+        s.menu.main.refit(&s.menus);
     }
 
     /// `PromptWithName(name)`: word 1189, a space and the name (128 at
@@ -239,6 +296,13 @@ impl Play {
             if let Some(m) = crate::admin::do2(id, arg) {
                 self.admin_send(m);
             }
+            return true;
+        }
+        // a line of the server's whole list: its own slot (0x7E37)
+        if id == crate::admin::MSG_TRIGGER_SLOT {
+            let slot = arg as u32;
+            eprintln!("gm: fired trigger {slot} (0x7E37)");
+            self.session.send(&crate::admin::fire_slot(slot));
             return true;
         }
         let word = |p: &Play, n: i32| p.words.as_ref().map_or_else(|| format!("(word {n})"), |w| w.get(n, 0).to_string());
@@ -747,5 +811,220 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The whole list as go-eqoa-server writes it (0x7E36,
+    /// `admin::read_trigger_list`): a u16 count, each row's u32 slot, flags
+    /// and name.
+    fn list(rows: &[(u32, u8, &str)]) -> Vec<u8> {
+        let mut m = (rows.len() as u16).to_le_bytes().to_vec();
+        for (slot, flags, name) in rows {
+            m.extend(slot.to_le_bytes());
+            m.extend([*flags, name.len() as u8]);
+            m.extend(name.as_bytes());
+        }
+        m
+    }
+
+    /// eqoaclassic's 41 triggers' slots as of 2026-11-09 (1 to 14, the
+    /// raids' 101 to 139, and 140 to 142): each "T<slot>" and on, but
+    /// 140, the Marr twins against Mr. Moogie by name; with one more, 50, off.
+    fn classic() -> Vec<crate::admin::Listed> {
+        let on = (1..=14).chain(101..=107).chain(110..=115).chain(120..=122).chain(130..=133).chain(136..=142);
+        let mut v: Vec<_> = on.map(|slot| crate::admin::Listed { slot, name: if slot == 140 { "Marr Twins vs Mr. Moogie".into() } else { format!("T{slot}") }, on: true, running: false }).collect();
+        v.push(crate::admin::Listed { slot: 50, name: "Off".into(), on: false, running: false });
+        v
+    }
+
+    /// The whole list through `Play`: 0x7E36 is the channel's, each list
+    /// replacing the last whole; a line's message fires its own slot, 0x7E37
+    /// with the slot whole (140, and 300 past 0x0702's byte). The controls: a
+    /// list cut short changes nothing; CLIENT's eight lines still fire 0x0702.
+    #[test]
+    fn the_trigger_list_through_play() {
+        use crate::admin::{MSG_TRIGGER_SLOT, TRIGGER_ENTRY};
+        let mut p = play();
+        assert!(p.admin_opcode(0x7E36, &list(&[(1, 1, "Nagafen Attacks Mr. Moogie"), (9, 0, "Off"), (140, 3, "Marr Twins vs Mr. Moogie")])));
+        let slots = |p: &Play| p.admin.list.as_ref().map(|l| l.iter().map(|t| (t.slot, t.on, t.running)).collect::<Vec<_>>());
+        assert_eq!(slots(&p), Some(vec![(1, true, false), (9, false, false), (140, true, true)]));
+        assert!(p.admin_opcode(0x7E36, &list(&[(140, 1, "Marr Twins vs Mr. Moogie")])));
+        assert_eq!(slots(&p), Some(vec![(140, true, false)]), "the whole list each time");
+        assert!(p.admin_opcode(0x7E36, &[2, 0, 140, 0]), "a list cut short is still the channel's");
+        assert_eq!(slots(&p), Some(vec![(140, true, false)]), "the control: it changes nothing");
+        p.session.record.replace(Vec::new());
+        p.do_action(MSG_TRIGGER_SLOT, 140);
+        p.do_action(MSG_TRIGGER_SLOT, 300);
+        p.do_action(TRIGGER_ENTRY, 3);
+        let r = p.session.record.replace(Vec::new()).unwrap_or_default();
+        let fired: Vec<Vec<u8>> = r.into_iter().map(|(_, m)| m).filter(|m| m.len() >= 2 && (m[..2] == [0x37, 0x7E] || m[..2] == [2, 7])).collect();
+        assert_eq!(fired, [vec![0x37, 0x7E, 140, 0, 0, 0], vec![0x37, 0x7E, 0x2C, 0x01, 0, 0], vec![2, 7, 100, 3]]);
+    }
+
+    /// The start menu's look for a test of its bars: SUPPORT's 252 atlas
+    /// entries (the bars' caps 0 wide) and words up to 507, TRIGGER.
+    fn bar_vui() -> vi::ui::Vui {
+        let mut words: Vec<String> = (1..507).map(|n| format!("word {n}")).collect();
+        words.push("TRIGGER".into());
+        let words = vi::strtab::StringTable::parse(words.join("\n").as_bytes()).unwrap();
+        vi::ui::Vui::new(words, Default::default(), vec![vi::ui::UiTexEntry::default(); 252])
+    }
+
+    /// A raster that notes the texts on the start menu's bars (each centred
+    /// on its bar, x 18 + 70), a character 8 pixels wide.
+    #[derive(Default)]
+    struct Bars(Vec<String>);
+
+    impl vi::ui::Raster for Bars {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, at: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+            if at[0] == 18 + 70 {
+                self.0.push(String::from_utf16_lossy(s));
+            }
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 639, 447]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// The whole list on the TEST menu's TRIGGER menu, through the game's own
+    /// `VIWndMainMenu` (Programming's second entry opens it): a line a trigger
+    /// that is on, by slot, labelled with the slot and the name ("140 Marr
+    /// Twins..." cut to its bar), the off one (50) left out; seven bars at
+    /// a time, Down paging on past the eighth line to slot 9, Up from the top
+    /// wrapping to the last (142), whose Enter is its own slot's message. A
+    /// list that loses its last two while the menu is open reaches it at once,
+    /// the selection kept within the lines. The controls: with no list, and
+    /// with a list of none on, CLIENT's eight TRIGGER lines, as they were.
+    #[test]
+    fn the_trigger_list_pages_on_the_test_menu() {
+        use crate::admin::{MSG_TRIGGER_SLOT, TRIGGER_ENTRY};
+        use crate::client_image::{Menu, MenuEntry, Menus};
+        use crate::startmenu::{Location, MainMenu, Stats, Up};
+        let mut menus = Menus::default();
+        let lines: Vec<MenuEntry> = (0..8).map(|i| MenuEntry { word: 507, msg: TRIGGER_ENTRY, id: i, ..Default::default() }).collect();
+        let trigger = menus.push(Menu { x00: -1, x04: -1, entries: lines.clone() });
+        let programming = menus.push(Menu { x00: -1, x04: -1, entries: vec![MenuEntry { word: 100, msg: 0x0B0B_0001, id: 0, ..Default::default() }, MenuEntry { word: 507, sub: Some(trigger), ..Default::default() }] });
+        let retail = |m: &Menus| m.list[trigger].entries.iter().map(|e| (e.word, e.msg, e.id)).collect::<Vec<_>>();
+        let was = retail(&menus);
+        super::set_trigger_list(&mut menus, None, "TRIGGER");
+        assert_eq!(retail(&menus), was, "the control: no list, CLIENT's eight lines");
+
+        let all = classic();
+        super::set_trigger_list(&mut menus, Some(&all), "TRIGGER");
+        let on: Vec<u32> = all.iter().filter(|t| t.on).map(|t| t.slot).collect();
+        assert_eq!(on.len(), 41);
+        let shown: Vec<(u32, i32)> = menus.list[trigger].entries.iter().map(|e| (e.msg, e.id)).collect();
+        assert_eq!(shown, on.iter().map(|&s| (MSG_TRIGGER_SLOT, s as i32)).collect::<Vec<_>>(), "a line a trigger on, by slot");
+        assert!(!menus.labels.contains_key(&(MSG_TRIGGER_SLOT, 50)), "the off one left out");
+
+        let (vui, loc) = (bar_vui(), Location { world: 0, pos: [0.0; 3], cols: 1, rows: 1, cell: 1.0, origin: [0.0; 3], bounds: None });
+        let mut r = Bars::default();
+        let mut m = MainMenu::new(programming, true);
+        m.activate(&vui, &r, true, 0, &loc);
+        // a key pressed for a frame: the menu's KeyFlash steps once as it draws
+        let press = |m: &mut MainMenu, menus: &Menus, r: &mut Bars, key: i32| -> Up {
+            let up = m.key(&vui, &*r, menus, key, true, 0, &loc, &mut Vec::new());
+            m.draw(&vui, r, menus, 16, &Stats::default(), &mut Vec::new());
+            m.key(&vui, &*r, menus, key, false, 0, &loc, &mut Vec::new());
+            r.0.clear();
+            m.draw(&vui, r, menus, 16, &Stats::default(), &mut Vec::new());
+            up
+        };
+        press(&mut m, &menus, &mut r, 139);
+        assert_eq!(press(&mut m, &menus, &mut r, 134), Up::None, "Programming's TRIGGER: the menu opens");
+        let want = |slots: &[u32]| slots.iter().map(|&s| if s == 140 { "140 Marr Twins...".to_string() } else { format!("{s} T{s}") }).collect::<Vec<_>>();
+        assert_eq!(r.0, want(&on[..7]), "seven bars, the first seven triggers");
+        for _ in 0..8 {
+            press(&mut m, &menus, &mut r, 139);
+        }
+        assert_eq!(r.0, want(&on[2..9]), "Down past the eighth line: slot 9 shown");
+        for _ in 0..8 {
+            press(&mut m, &menus, &mut r, 138);
+        }
+        assert_eq!(r.0, want(&on[0..7]), "back at the top");
+        press(&mut m, &menus, &mut r, 138);
+        assert_eq!(r.0, want(&on[34..41]), "Up from the top: the last seven");
+        assert_eq!(*r.0.last().unwrap(), "142 T142");
+        let up = m.key(&vui, &r, &menus, 134, true, 0, &loc, &mut Vec::new());
+        assert_eq!(up, Up::Action(MSG_TRIGGER_SLOT, 142), "Enter: 142's own slot");
+
+        // the list changes under the open menu: 141 and 142 gone
+        let mut m = MainMenu::new(programming, true);
+        m.activate(&vui, &r, true, 0, &loc);
+        press(&mut m, &menus, &mut r, 139);
+        press(&mut m, &menus, &mut r, 134);
+        press(&mut m, &menus, &mut r, 138);
+        let fewer: Vec<_> = all.iter().filter(|t| t.slot < 141).cloned().collect();
+        super::set_trigger_list(&mut menus, Some(&fewer), "TRIGGER");
+        m.refit(&menus);
+        r.0.clear();
+        m.draw(&vui, &mut r, &menus, 16, &Stats::default(), &mut Vec::new());
+        assert_eq!(r.0, want(&on[32..39]), "the last seven of the new list, the last selected");
+        let up = m.key(&vui, &r, &menus, 134, true, 0, &loc, &mut Vec::new());
+        assert_eq!(up, Up::Action(MSG_TRIGGER_SLOT, 140));
+        assert!(!menus.labels.contains_key(&(MSG_TRIGGER_SLOT, 142)), "a line gone loses its label");
+
+        let none: Vec<_> = all.iter().map(|t| crate::admin::Listed { on: false, ..t.clone() }).collect();
+        super::set_trigger_list(&mut menus, Some(&none), "TRIGGER");
+        assert_eq!(retail(&menus), was, "the control: none on, CLIENT's eight lines back");
+        assert!(menus.labels.keys().all(|k| k.0 != MSG_TRIGGER_SLOT), "and no list labels");
+    }
+
+    /// The whole list on the menus out of the player's CLIENT image (SKIPs
+    /// without it): TEST > Programming > TRIGGER becomes a line a trigger that
+    /// is on, reached from TEST, an unnamed one's label the slot and the
+    /// game's word, and no other menu changes; a list of none on puts CLIENT's
+    /// eight lines back as they were.
+    #[test]
+    fn the_trigger_list_meets_the_test_menu() {
+        use crate::admin::{MSG_TRIGGER_SLOT, TRIGGER_ENTRY};
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/client.bin");
+        let Some(img) = std::fs::read(&path).ok().and_then(crate::client_image::ClientImage::from_bytes) else {
+            eprintln!("SKIP: no run/client.bin");
+            return;
+        };
+        let mut d = crate::startmenu::StartData::from_image(&img);
+        let entries = |d: &crate::startmenu::StartData| d.menus.list.iter().map(|m| m.entries.iter().map(|e| (e.icon, e.icon2, e.x08, e.word, e.number, e.sub, e.msg, e.id)).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let before = entries(&d);
+        let k = before.iter().position(|m| m.iter().any(|e| e.6 == TRIGGER_ENTRY)).unwrap();
+        let mut all = classic();
+        all[0].name.clear();
+        super::set_trigger_list(&mut d.menus, Some(&all), "TRIGGER");
+        let after = entries(&d);
+        for (i, (a, b)) in before.iter().zip(&after).enumerate() {
+            if i != k {
+                assert_eq!(a, b, "menu {i} unchanged");
+            }
+        }
+        let ids: Vec<i32> = d.menus.list[k].entries.iter().filter(|e| e.msg == MSG_TRIGGER_SLOT).map(|e| e.id).collect();
+        assert_eq!(ids.len(), 41);
+        assert_eq!(d.menus.list[k].entries.len(), 41, "the eight lines gone");
+        assert_eq!(d.menus.labels.get(&(MSG_TRIGGER_SLOT, 1)).map(|l| String::from_utf16_lossy(&l.text)), Some("1 TRIGGER".into()), "unnamed: the slot and the word");
+        d.pick_test(false, 2, true);
+        fn reach(menus: &crate::client_image::Menus, m: usize, out: &mut Vec<(u32, i32)>, depth: usize) {
+            for e in &menus.list[m].entries {
+                out.push((e.msg, e.id));
+                if let Some(s) = e.sub.filter(|_| depth < 8) {
+                    reach(menus, s, out, depth + 1);
+                }
+            }
+        }
+        let mut reached = Vec::new();
+        reach(&d.menus, d.menu.main.menu, &mut reached, 0);
+        assert!(reached.contains(&(MSG_TRIGGER_SLOT, 142)) && !reached.iter().any(|e| e.0 == TRIGGER_ENTRY), "TEST reaches the list's lines");
+        let none: Vec<_> = all.iter().map(|t| crate::admin::Listed { on: false, ..t.clone() }).collect();
+        super::set_trigger_list(&mut d.menus, Some(&none), "TRIGGER");
+        assert_eq!(entries(&d), before, "the control: CLIENT's eight lines back as they were");
     }
 }

@@ -332,6 +332,19 @@ impl MainMenu {
         true
     }
 
+    /// The menus' entries changed under the open ones (the server's whole
+    /// list of triggers, `adminplay::set_trigger_list`): each open menu's
+    /// selection kept within its entries, and the seven bars from `top` still
+    /// showing it.
+    pub fn refit(&mut self, menus: &Menus) {
+        let count = menus.list.get(self.menu).map_or(0, |m| m.entries.len()) as i32;
+        self.sel = self.sel.clamp(0, (count - 1).max(0));
+        self.top = self.top.clamp((self.sel - 6).max(0), self.sel.min((count - 7).max(0)));
+        if let Some(s) = self.sub.as_mut() {
+            s.refit(menus);
+        }
+    }
+
     /// `Scroll`: the selection moved by `d`, wrapping, seven bars shown.
     fn scroll_by(&mut self, d: i32, count: i32, now: i64, cues: &mut Vec<i32>) {
         let i = self.sel + d;

@@ -76,10 +76,16 @@ pub const GROUP_CHAT: [f32; 4] = [0.5, 0.5, 1.0, 1.0];
 pub const OP_ENTITY_VIEW: u16 = 0x7E00;
 /// go-eqoa-server's own, no retail message either: the GM's trigger names, a
 /// u32 after the opcode, both ways. The server offers them (1) to a GM's
-/// client beside the GM channel's 0x0700 35; this client answers 1 at once
-/// and is then sent the names (0x7E08, `admin::read_triggers`) whenever they
-/// change. A PS2 ignores the offer, as it ignores [`OP_ENTITY_VIEW`]'s.
+/// client beside the GM channel's 0x0700 35; this client answers
+/// [`TRIGGERS_ALL`] at once and is then sent every trigger (0x7E36,
+/// `admin::read_trigger_list`) whenever they change, or, from a server that
+/// takes any answer but 0 as 1 (one from before 2026-11-09), the TEST menu's
+/// eight lines' names (0x7E08, `admin::read_triggers`). A PS2 ignores the
+/// offer, as it ignores [`OP_ENTITY_VIEW`]'s.
 pub const OP_GM_TRIGGERS: u16 = 0x7E07;
+/// The answer to [`OP_GM_TRIGGERS`] that asks for every trigger, by slot (1:
+/// the eight lines' names alone).
+pub const TRIGGERS_ALL: u32 = 2;
 /// go-eqoa-server's own, no retail message either: the live game's duel
 /// messages (0x1501 up, 0x1502 down, the client's `duel` part and its
 /// window), a u32 after the opcode, both ways. The server offers them (1)
@@ -1477,11 +1483,11 @@ impl Session {
                     self.entity_view_offer = Some((slots, view));
                 }
             }
-            // the trigger names offered: taken (the TEST menu shows them), and
-            // this GM's client says it flies
+            // the trigger names offered: taken, every trigger (the TEST menu
+            // lists them), and this GM's client says it flies
             OP_GM_TRIGGERS => {
                 if r.u32() != 0 && !r.error {
-                    self.send_op_int(OP_GM_TRIGGERS, 1);
+                    self.send_op_int(OP_GM_TRIGGERS, TRIGGERS_ALL);
                     self.send_op_int(OP_FLY, 1);
                 }
             }
@@ -2708,7 +2714,7 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 0, 0, 0, 0]);
         assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "the control: nothing said to anything else");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 1, 0, 0, 0]);
-        assert_eq!(ours(&mut s), [vec![0x07, 0x7E, 1, 0, 0, 0], vec![0x1B, 0x7E, 1, 0, 0, 0]], "the offer answered, and that it flies");
+        assert_eq!(ours(&mut s), [vec![0x07, 0x7E, 2, 0, 0, 0], vec![0x1B, 0x7E, 1, 0, 0, 0]], "the offer answered (every trigger), and that it flies");
 
         assert!(!s.flying, "not until the server says so");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 1, 0]);
@@ -3070,9 +3076,10 @@ mod tests {
     }
 
     // go-eqoa-server's offer of the GM's trigger names (0x7E07) is answered
-    // with 1 at once, every time it comes, with this client's word that it flies
-    // (0x7E1B), and its names (0x7E08) are passed on for the TEST menu with nothing
-    // answered. The controls: an offer cut short and an offer of 0 are not answered.
+    // with 2 (every trigger) at once, every time it comes, with this client's word
+    // that it flies (0x7E1B), and its whole list (0x7E36) and an older server's
+    // names (0x7E08) are passed on for the TEST menu with nothing answered. The
+    // controls: an offer cut short and an offer of 0 are not answered.
     #[test]
     fn the_trigger_names_offer_is_answered() {
         let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -3091,7 +3098,7 @@ mod tests {
         assert_eq!(answers(&mut s), [], "the control: an offer of 0");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 1, 0, 0, 0]);
         assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
-        let answer = [(251, vec![0x07, 0x7E, 1, 0, 0, 0]), (251, vec![0x1B, 0x7E, 1, 0, 0, 0])];
+        let answer = [(251, vec![0x07, 0x7E, 2, 0, 0, 0]), (251, vec![0x1B, 0x7E, 1, 0, 0, 0])];
         assert_eq!(answers(&mut s), answer);
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x07, 0x7E, 1, 0, 0, 0]);
         assert_eq!(answers(&mut s), answer, "again for another offer");
@@ -3099,6 +3106,10 @@ mod tests {
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, names);
         assert!(matches!(&ev[..], [Event::Opcode { op: 0x7E08, data }] if data[..] == [1, 2, 1, 3, b'O', b'n', b'e']), "{ev:?}");
         assert_eq!(answers(&mut s), [], "the names answered nothing");
+        let list = vec![0x36, 0x7E, 1, 0, 140, 0, 0, 0, 1, 3, b'O', b'n', b'e'];
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, list);
+        assert!(matches!(&ev[..], [Event::Opcode { op: 0x7E36, data }] if data[..] == [1, 0, 140, 0, 0, 0, 1, 3, b'O', b'n', b'e']), "{ev:?}");
+        assert_eq!(answers(&mut s), [], "the list answered nothing");
     }
 
     // A race's own words (0x7E1C): the offer answered with 1 at once, every time

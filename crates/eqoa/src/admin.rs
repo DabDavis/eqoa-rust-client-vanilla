@@ -24,6 +24,18 @@ pub const OP_ADMIN_IN: u16 = 0x0700;
 /// a client that answered its offer (`net::session::OP_GM_TRIGGERS`) and
 /// again whenever they change ([`read_triggers`]).
 pub const OP_TRIGGER_NAMES: u16 = 0x7E08;
+/// go-eqoa-server's own, no retail message: every GM trigger by slot, sent
+/// in [`OP_TRIGGER_NAMES`]' place to a client that answered the names' offer
+/// 2 (`net::session::TRIGGERS_ALL`) and again whenever they change
+/// ([`read_trigger_list`]); the TRIGGER menu is then a line a trigger.
+pub const OP_TRIGGER_LIST: u16 = 0x7E36;
+/// go-eqoa-server's own: a GM's firing of the trigger in a slot, a u32
+/// ([`fire_slot`]), for a line of the whole list; 0x0702's byte reaches the
+/// first 256 slots alone.
+pub const OP_TRIGGER_FIRE: u16 = 0x7E37;
+/// The message of a TRIGGER line made from the whole list (the client's own,
+/// no CLIENT id; its id is the trigger's slot, fired by [`OP_TRIGGER_FIRE`]).
+pub const MSG_TRIGGER_SLOT: u32 = 0x7E37_0000;
 /// The TRIGGER entries' message (TEST, Programming: eight entries, ids 0 to
 /// 7, each `Do2`'s 0x0702 with its id).
 pub const TRIGGER_ENTRY: u32 = 0xA201_0000;
@@ -66,16 +78,72 @@ pub fn read_triggers(data: &[u8]) -> Option<[Option<Trigger>; TRIGGERS]> {
         if r.error {
             return None;
         }
-        let mut name = String::from_utf8_lossy(bytes).into_owned();
-        if name.len() > TRIGGER_NAME_MAX {
-            let cut = (0..=TRIGGER_NAME_MAX).rev().find(|&i| name.is_char_boundary(i)).unwrap_or(0);
-            name.truncate(cut);
-        }
+        let name = trigger_name(bytes);
         if let Some(slot) = out.get_mut(entry) {
             *slot = Some(Trigger { name, on: flags & 1 != 0, running: flags & 2 != 0 });
         }
     }
     (!r.error).then_some(out)
+}
+
+/// A name the server sent, as text, cut to [`TRIGGER_NAME_MAX`] bytes on a
+/// character's edge.
+fn trigger_name(bytes: &[u8]) -> String {
+    let mut name = String::from_utf8_lossy(bytes).into_owned();
+    if name.len() > TRIGGER_NAME_MAX {
+        let cut = (0..=TRIGGER_NAME_MAX).rev().find(|&i| name.is_char_boundary(i)).unwrap_or(0);
+        name.truncate(cut);
+    }
+    name
+}
+
+/// A trigger of the server's whole list ([`read_trigger_list`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listed {
+    /// its slot: the number `#trigger` fires it by, and its line fires
+    pub slot: u32,
+    /// its name, empty when it has none
+    pub name: String,
+    /// it fires (bit 0 of its flags)
+    pub on: bool,
+    /// a run of it is going on now (bit 1)
+    pub running: bool,
+}
+
+impl Listed {
+    /// What its line shows after the slot and the name: " *" while it runs
+    /// ([`Trigger::tail`]'s).
+    pub fn tail(&self) -> &'static str {
+        if self.running { " *" } else { "" }
+    }
+}
+
+/// 0x7E36's body: a u16 count, then each trigger by slot: a u32 slot, u8
+/// flags (bit 0 on, bit 1 running) and its name (a u8 byte count, then
+/// UTF-8; cut to [`TRIGGER_NAME_MAX`] bytes on a character's edge),
+/// little-endian. The whole table, off triggers too. A message cut short is
+/// `None`, and changes nothing.
+pub fn read_trigger_list(data: &[u8]) -> Option<Vec<Listed>> {
+    let mut r = net::stream::Reader::new(data);
+    let count = r.u16() as usize;
+    let mut out = Vec::new();
+    for _ in 0..count {
+        let (slot, flags) = (r.u32(), r.u8());
+        let n = r.u8() as usize;
+        let bytes = r.bytes(n);
+        if r.error {
+            return None;
+        }
+        out.push(Listed { slot, name: trigger_name(bytes), on: flags & 1 != 0, running: flags & 2 != 0 });
+    }
+    (!r.error).then_some(out)
+}
+
+/// 0x7E37: a GM's firing of the trigger in `slot`.
+pub fn fire_slot(slot: u32) -> Vec<u8> {
+    let mut m = OP_TRIGGER_FIRE.to_le_bytes().to_vec();
+    m.extend(slot.to_le_bytes());
+    m
 }
 
 /// `IsCommand`: a 0xA1xx0000 id.
@@ -664,5 +732,46 @@ mod tests {
         assert_eq!(t(false, true), " *");
         assert_eq!(t(true, false), "", "the control: on and idle, the name alone");
         assert_eq!(t(false, false), "", "the control: off and idle, no tail either");
+    }
+
+    /// 0x7E36's body as go-eqoa-server writes it: a u16 count, then each
+    /// trigger's u32 slot, flags and name (a u8 byte count, UTF-8).
+    fn list(rows: &[(u32, u8, &str)]) -> Vec<u8> {
+        let mut m = (rows.len() as u16).to_le_bytes().to_vec();
+        for (slot, flags, name) in rows {
+            m.extend(slot.to_le_bytes());
+            m.extend([*flags, name.len() as u8]);
+            m.extend(name.as_bytes());
+        }
+        m
+    }
+
+    /// `read_trigger_list`: every trigger in the server's order, its slot
+    /// read whole (140, and one past a byte's reach), its flags, an unnamed
+    /// one's empty name, a name past 32 bytes cut on a character's edge. The
+    /// controls: a message cut short, in a row or before one, reads as
+    /// nothing; a count of 0 is an empty list.
+    #[test]
+    fn the_trigger_list_is_read_whole() {
+        let t = read_trigger_list(&list(&[(1, 1, "Nagafen Attacks Mr. Moogie"), (9, 0, "Off"), (140, 3, "Marr Twins"), (300, 1, "")])).unwrap();
+        let rows: Vec<_> = t.iter().map(|l| (l.slot, l.name.as_str(), l.on, l.running)).collect();
+        assert_eq!(rows, [(1, "Nagafen Attacks Mr. Moogie", true, false), (9, "Off", false, false), (140, "Marr Twins", true, true), (300, "", true, false)]);
+        let t = read_trigger_list(&list(&[(4, 1, &"€".repeat(11))])).unwrap();
+        assert_eq!(t[0].name, "€".repeat(10), "cut on a character's edge");
+        let whole = list(&[(140, 1, "Marr Twins"), (141, 1, "Tunare")]);
+        assert_eq!(read_trigger_list(&whole[..whole.len() - 1]), None, "the control: a name cut short");
+        assert_eq!(read_trigger_list(&whole[..2 + 6 + 10 + 3]), None, "the control: cut short in a slot");
+        assert_eq!(read_trigger_list(&[1]), None, "the control: half a count");
+        assert_eq!(read_trigger_list(&[0, 0]), Some(Vec::new()), "no triggers");
+    }
+
+    /// 0x7E37: the opcode and the slot, a u32 little-endian, whole past a
+    /// byte (0x0702's `Do2` sends the low byte alone: the control).
+    #[test]
+    fn a_slot_is_fired_whole() {
+        assert_eq!(fire_slot(140), vec![0x37, 0x7E, 140, 0, 0, 0]);
+        assert_eq!(fire_slot(300), vec![0x37, 0x7E, 0x2C, 0x01, 0, 0]);
+        assert_eq!(do2(TRIGGER_ENTRY, 299), Some(vec![0x02, 0x07, 100, 0x2B]), "the control: 0x0702 keeps a byte");
+        assert!(!is_command(MSG_TRIGGER_SLOT) && !is_command2(MSG_TRIGGER_SLOT), "the list's message is no CLIENT command's");
     }
 }

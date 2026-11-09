@@ -6,6 +6,15 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · GMs: every trigger in the TEST menu
+- For a GM, TEST > Programming > TRIGGER now lists every trigger that is switched on, each with its number
+  before its name ("140 Marr Twins..."), not only the first eight. Up and Down go through them seven at a time,
+  as the game's other long menus do (Up from the top goes to the last one), and the mouse wheel and a click
+  work there too.
+- Picking one fires that trigger, whatever its number, as `#trigger <number>` does. A trigger made, changed,
+  switched off or started from the GM panel shows in the menu at once, even while it is open.
+- On a server that names only the eight lines, the menu is as it was.
+
 ## 2026-11-09 · Your pet's buffs show under your pet's name
 - The buffs on your pet (its own, and the ones you cast on it) show in a small row under your pet's name and
   health, the same icons as your own buffs at half their size, and each goes away when it wears off. With the
