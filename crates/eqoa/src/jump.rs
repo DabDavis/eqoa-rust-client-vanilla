@@ -20,9 +20,11 @@
 //! (the channel's gait, byte 58, 6) and then standing again; and this client, which
 //! ports both, drew it the same. On a server that offers jumps this client draws a
 //! player in the air (`aloft`: its gait 6) at the height the server sends, carried
-//! along its velocity between updates as `ExtrapolateMove` carries it, and stands it
-//! on a floor only once it comes down to one (`ground`). Anywhere else, and every
-//! NPC, as CLIENT does.
+//! along its velocity between updates as `ExtrapolateMove` carries it, its speed up
+//! or down under the walk's gravity (the 0x40's box tops out at 3 up, and a speed
+//! held for a whole update overshot the top by 0.3), and stands it on a floor only
+//! once it comes down to one (`ground`). Anywhere else, and every NPC, as CLIENT
+//! does.
 
 use vi::fpu::{Ee, F};
 use vi::scene::Scene;
@@ -37,6 +39,15 @@ pub const AIR_GAIT: u8 = 6;
 /// go-eqoa-server shows one).
 pub fn aloft(jumps: bool, c: &net::entity::Creature) -> bool {
     jumps && c.state == AIR_GAIT && matches!(c.p256, 2 | 4)
+}
+
+/// Whether an update of a player `aloft` keeps its blend from where it was drawn
+/// though its speed came unchanged (`was`), where CLIENT drops it
+/// (`ChannelEntity`: an unchanged speed is where its update says): the 0x40's box
+/// stops a jump's speed up at 3, so the report it left the ground in and its first
+/// in the air carry the same speed, and the jumper went 0.6 up in one frame.
+pub fn keeps_its_blend(jumps: bool, c: &net::entity::Creature, was: [f32; 3]) -> bool {
+    aloft(jumps, c) && c.velocity == was
 }
 
 /// `ExtrapolateGround` for a creature (`skel` its skeleton's type); for one
@@ -57,17 +68,24 @@ pub fn ground<S: Scene<Ee>>(scene: &mut S, skel: i32, aloft: bool, pos: &mut Vec
     }
 }
 
+/// The walk's gravity (`VIWalkControl::Gravity`).
+const GRAVITY: f32 = 19.6;
+
 /// `ExtrapolateMove`: `dt` seconds along `vel`, then onto the ground as `ground`
-/// stands it (for one not `aloft`, CLIENT's own, call for call).
+/// stands it. For one aloft, `vy` is its speed up or down (its update's, then
+/// carried), which the walk's gravity slows the while, in place of `vel`'s; with
+/// none, CLIENT's own, call for call.
 #[allow(clippy::too_many_arguments)]
-pub fn extrapolate_move<S: Scene<Ee>>(scene: &mut S, skel: i32, aloft: bool, vel: &Vect3<Ee>, dt: F<Ee>, pos: &mut Vect3<Ee>, hpr: &mut Vect3<Ee>) {
-    if !aloft {
+pub fn extrapolate_move<S: Scene<Ee>>(scene: &mut S, skel: i32, vy: Option<&mut F<Ee>>, vel: &Vect3<Ee>, dt: F<Ee>, pos: &mut Vect3<Ee>, hpr: &mut Vect3<Ee>) {
+    let Some(vy) = vy else {
         vi::creature::extrapolate_move(scene, -1, skel, None, vel, dt, pos, hpr);
         return;
-    }
+    };
+    let g = F::<Ee>::new(GRAVITY);
     pos.x += vel.x * dt;
-    pos.y += vel.y * dt;
+    pos.y += *vy * dt - g * dt * dt * F::new(0.5);
     pos.z += vel.z * dt;
+    *vy -= g * dt;
     ground(scene, skel, true, pos, hpr);
 }
 
@@ -80,7 +98,10 @@ mod tests {
     }
 
     /// Aloft is a player (or a PvP foe) whose gait is the air's, on a server
-    /// with jumps; no NPC, no pet, no other gait, nothing on another server.
+    /// with jumps; no NPC, no pet, no other gait, nothing on another server. One
+    /// aloft keeps its blend when its speed came unchanged, where CLIENT drops
+    /// it; the controls: a speed that changed (the blend kept anyway, by
+    /// CLIENT's own rule), and one not aloft (CLIENT's).
     #[test]
     fn aloft_is_a_player_in_the_air_on_a_server_with_jumps() {
         assert!(aloft(true, &creature(AIR_GAIT, 2)));
@@ -88,6 +109,11 @@ mod tests {
         for (why, jumps, c) in [("an NPC", true, creature(6, 0)), ("a pet", true, creature(6, 3)), ("running", true, creature(3, 2)), ("standing", true, creature(0, 2)), ("no jumps here", false, creature(6, 2))] {
             assert!(!aloft(jumps, &c), "{why}");
         }
+        let up = |state: u8| net::entity::Creature { velocity: [0.0, 2.95, 0.0], ..creature(state, 2) };
+        assert!(keeps_its_blend(true, &up(6), [0.0, 2.95, 0.0]), "aloft, its speed unchanged");
+        assert!(!keeps_its_blend(true, &up(6), [0.0, 1.0, 0.0]), "its speed changed: CLIENT's own keeps it");
+        assert!(!keeps_its_blend(true, &up(0), [0.0, 2.95, 0.0]), "standing: CLIENT's");
+        assert!(!keeps_its_blend(false, &up(6), [0.0, 2.95, 0.0]), "no jumps here: CLIENT's");
     }
 
     /// A player aloft is drawn at the height the server sends, 0.8 over the
@@ -118,16 +144,39 @@ mod tests {
         ground(&mut world, 0, true, &mut p, &mut h);
         assert_eq!(p.y.bits(), on_floor.y.bits(), "sunk under the floor: stood on it");
 
-        let (mut p, mut h) = (Vect3::of(x, floor + 0.8, z), Vect3::default());
-        extrapolate_move(&mut world, 0, true, &Vect3::of(2.0, 0.0, 0.0), F::new(0.1), &mut p, &mut h);
-        assert!((p.x.0 - (x + 0.2)).abs() < 0.01 && p.y.0 == floor + 0.8, "carried across at its height: {:?}", p.to_array());
-        extrapolate_move(&mut world, 0, true, &Vect3::of(0.0, -3.0, 0.0), F::new(0.5), &mut p, &mut h);
+        // carried across, rising at its speed up, which gravity slows: at 2.94 up
+        // (its update's) it tops out 0.22 over where it was, 0.15 s on
+        let (mut p, mut h) = (Vect3::of(x, floor + 0.5, z), Vect3::default());
+        let mut vy = F::new(2.94);
+        let (mut top, mut at) = (p.y.0, 0);
+        for k in 1..=10 {
+            extrapolate_move(&mut world, 0, Some(&mut vy), &Vect3::of(2.0, 2.94, 0.0), F::new(0.03), &mut p, &mut h);
+            if p.y.0 > top {
+                (top, at) = (p.y.0, k);
+            }
+        }
+        // (ten adds of 0.06 at x 22000, each chopped to the float's step, 0.002)
+        assert!((p.x.0 - (x + 0.6)).abs() < 0.03, "carried across: {:?}", p.to_array());
+        assert!((top - (floor + 0.5) - 0.22).abs() < 0.01 && at == 5, "its top {} over where it was, at step {at}", top - floor - 0.5);
+        assert!(vy.0 < -2.9, "its speed after 0.3 s: {:?}", vy);
+        // the control: not aloft, CLIENT's own stands it on the floor
+        let (mut q, mut hq) = (Vect3::of(x, floor + 0.5, z), Vect3::default());
+        for _ in 1..=5 {
+            extrapolate_move(&mut world, 0, None, &Vect3::of(0.0, 2.94, 0.0), F::new(0.03), &mut q, &mut hq);
+        }
+        assert!(q.y.0 < floor + 0.2, "the control: not aloft, on the floor at {:?}", q.y);
+        // falling, a frame at a time (60 a second): past the floor, on it, and
+        // kept there
+        let mut vy = F::new(-3.0);
+        for _ in 0..30 {
+            extrapolate_move(&mut world, 0, Some(&mut vy), &Vect3::of(0.0, -3.0, 0.0), F::new(1.0 / 60.0), &mut p, &mut h);
+        }
         assert!((p.y.0 - floor).abs() < 0.2, "fallen past the floor: on it at {:?}", p.y);
 
         let (vel, dt) = (Vect3::of(1.5, 0.4, -2.0), F::new(0.07));
         let (mut a, mut ha) = (Vect3::of(x, floor + 0.8, z), Vect3::of(0.5, 0.0, 0.0));
         let (mut b, mut hb) = (a, ha);
-        extrapolate_move(&mut world, 0, false, &vel, dt, &mut a, &mut ha);
+        extrapolate_move(&mut world, 0, None, &vel, dt, &mut a, &mut ha);
         vi::creature::extrapolate_move(&mut world, -1, 0, None, &vel, dt, &mut b, &mut hb);
         assert_eq!([a.x.bits(), a.y.bits(), a.z.bits(), ha.y.bits()], [b.x.bits(), b.y.bits(), b.z.bits(), hb.y.bits()], "not aloft: CLIENT's own");
     }
