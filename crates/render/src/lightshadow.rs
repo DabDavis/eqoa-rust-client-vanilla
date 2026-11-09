@@ -250,12 +250,34 @@ const PLANT_LINE: &str = "            light += p.color.rgb * ((1.0 - min(d * abs
 const PLANT_LINE_SHADOWED: &str =
     "            let fall = 1.0 - min(d * abs(p.color.w), 1.0);\n            if (fall > 0.0) {\n                light += p.color.rgb * (fall * k * light_shadow(j, i, vec3<f32>(0.0, 1.0, 0.0)));\n            }\n";
 
+/// lightshadow.wgsl's filter: four bilinear comparisons half a texel either
+/// way; in a page and on Android one ([`ONE_TAP`]), a quarter of the
+/// receivers' texture reads at every fragment a shadowed light reaches (at
+/// 512 a side natively the four cost an RX 580 up to 1.5 ms at 4K where
+/// eight lights overlap; at a page's 256 one bilinear comparison's edge is
+/// as soft as four's at 512).
+const FOUR_TAPS: &str = "    var vis = textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(-e, -e), layer, z);
+    vis += textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(e, -e), layer, z);
+    vis += textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(-e, e), layer, z);
+    vis += textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(e, e), layer, z);
+    return mix(1.0, vis * 0.25, o.w);
+";
+const ONE_TAP: &str = "    let vis = textureSampleCompareLevel(light_maps, light_cmp, uv, layer, z);
+    return mix(1.0, vis, o.w);
+";
+
+/// Whether the receivers take one comparison a light, not four.
+fn one_tap() -> bool {
+    cfg!(any(target_arch = "wasm32", target_os = "android"))
+}
+
 /// The receivers' module: shader.wgsl, lit.wgsl with its point terms taking
 /// the maps' visibility (with `sun`, its sun line taking the sun's map's
 /// too, `sunshadow::shadowed_lit`), then `sunshadow.wgsl` with the sun and
-/// `lightshadow.wgsl`. `None` if lit.wgsl's lines are not there to change
+/// `lightshadow.wgsl` (with one comparison a light where `one`).
+/// `None` if lit.wgsl's lines are not there to change
 /// (tests::the_receivers_take_the_point_lines holds them to it).
-pub(crate) fn receivers_wgsl(sun: bool) -> Option<String> {
+pub(crate) fn receivers_wgsl(sun: bool, one: bool) -> Option<String> {
     let mut lit = include_str!("lit.wgsl").to_string();
     if sun {
         lit = sunshadow::shadowed_lit(&lit)?;
@@ -264,11 +286,16 @@ pub(crate) fn receivers_wgsl(sun: bool) -> Option<String> {
         return None;
     }
     let lit = lit.replace(POINT_LINE, POINT_LINE_SHADOWED).replace(PLANT_LINE, PLANT_LINE_SHADOWED);
+    let shadow = include_str!("lightshadow.wgsl");
+    if shadow.matches(FOUR_TAPS).count() != 1 {
+        return None;
+    }
+    let shadow = if one { shadow.replace(FOUR_TAPS, ONE_TAP) } else { shadow.to_string() };
     let mut parts = vec![include_str!("shader.wgsl"), &lit];
     if sun {
         parts.push(include_str!("sunshadow.wgsl"));
     }
-    parts.push(include_str!("lightshadow.wgsl"));
+    parts.push(&shadow);
     Some(parts.join("\n"))
 }
 
@@ -531,7 +558,7 @@ impl Points {
             wgpu::BindGroupEntry { binding: 6, resource: buf.as_entire_binding() },
         ]);
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("lights and light shadows"), layout: &layout3, entries: &bound });
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("light shadows"), source: wgpu::ShaderSource::Wgsl(receivers_wgsl(sun.is_some())?.into()) });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("light shadows"), source: wgpu::ShaderSource::Wgsl(receivers_wgsl(sun.is_some(), one_tap())?.into()) });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("light shadowed model"),
             bind_group_layouts: &[Some(layouts[0]), Some(layouts[1]), Some(layouts[2]), Some(&layout3)],
@@ -746,6 +773,7 @@ impl Points {
         };
         let mut draws = 0;
         let mut bound: Option<*const GpuGroup> = None;
+        let mut layer_bound = false;
         let mut k = 0;
         while k < near.len() {
             if !here(&near[k]) {
@@ -778,7 +806,11 @@ impl Points {
                         pass.set_pipeline(if p.solid { &self.solid } else { &self.caster });
                         *current = Some(p.solid);
                     }
-                    pass.set_bind_group(1, &p.bg, &[]);
+                    // a solid layer's vertex reads no layer: any bound will do
+                    if !p.solid || !layer_bound {
+                        pass.set_bind_group(1, &p.bg, &[]);
+                        layer_bound = true;
+                    }
                     pass.draw_indexed(indices.clone(), 0, 0..n as u32);
                     draws += 1;
                 }
@@ -803,6 +835,7 @@ impl Points {
             }
         };
         let mut draws = 0;
+        let mut layer_bound = false;
         for m in here {
             match **m {
                 Mover::Model(m) => {
@@ -816,8 +849,12 @@ impl Points {
                         }
                         pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                         for p in passes.iter().take(m.passes_used).filter(|p| p.blend == 0) {
-                            set_pipeline(pass, p.solid());
-                            pass.set_bind_group(1, &p.bg, &[]);
+                            let solid = p.solid();
+                            set_pipeline(pass, solid);
+                            if !solid || !layer_bound {
+                                pass.set_bind_group(1, &p.bg, &[]);
+                                layer_bound = true;
+                            }
                             pass.draw_indexed(0..*count, 0, 0..m.instance_count);
                             draws += 1;
                         }
@@ -833,7 +870,10 @@ impl Points {
                     for (indices, passes) in p.batches.iter().filter(|(_, ps)| opaque(ps)) {
                         for q in passes.iter().filter(|q| q.blend == 0) {
                             set_pipeline(pass, q.solid);
-                            pass.set_bind_group(1, &q.bg, &[]);
+                            if !q.solid || !layer_bound {
+                                pass.set_bind_group(1, &q.bg, &[]);
+                                layer_bound = true;
+                            }
                             pass.draw_indexed(indices.clone(), 0, 0..p.instances);
                             draws += 1;
                         }
@@ -875,8 +915,9 @@ mod tests {
     /// here, not as shadows that never come.
     #[test]
     fn the_receivers_take_the_point_lines() {
-        for sun in [false, true] {
-            let s = receivers_wgsl(sun).expect("lit.wgsl's point lines");
+        for (sun, one) in [(false, false), (true, false), (false, true), (true, true)] {
+            let s = receivers_wgsl(sun, one).expect("lit.wgsl's point lines");
+            assert_eq!(s.contains(FOUR_TAPS), !one, "four comparisons a light, or one");
             assert!(s.contains("light_shadow(j, i, n)") && s.contains("light_shadow(j, i, vec3<f32>(0.0, 1.0, 0.0))"));
             assert!(!s.contains(POINT_LINE) && !s.contains(PLANT_LINE), "the unshadowed lines gone");
             assert!(s.contains("fn light_shadow") && s.contains("fn fs_lit_baked"));
@@ -884,6 +925,23 @@ mod tests {
             assert_eq!(s.contains("min(i.base.w, sun_shadow(i, n))"), sun);
         }
         assert!(CAST_WGSL.contains("fn vs_light_cast") && CAST_WGSL.contains("fn vs_light_cast_solid"));
+    }
+
+    /// Every receivers' module (with the sun's map or not, four comparisons
+    /// a light or one), the casters' and the copy's parse and validate, the
+    /// one-comparison modules too, which only a page and Android make.
+    #[test]
+    fn every_module_validates() {
+        use wgpu::naga;
+        let check = |name: &str, src: &str| {
+            let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        };
+        for (sun, one) in [(false, false), (true, false), (false, true), (true, true)] {
+            check(&format!("receivers sun {sun} one {one}"), &receivers_wgsl(sun, one).unwrap());
+        }
+        check("casters", CAST_WGSL);
+        check("copy", include_str!("lightcopy.wgsl"));
     }
 
     /// Every direction falls in the face its largest axis names, and the
