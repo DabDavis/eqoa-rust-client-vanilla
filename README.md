@@ -73,7 +73,13 @@ or a browser (each described where it lives below):
   zones' placed point lights (none on the disc's worlds), and the spells', glowing
   weapons' and fiery creatures' particles and the spells' bolts while they play; chosen
   as the engine's own emitter query would choose them (`lights.rs`, `render::lit`). A
-  baked actor is not lit by the fires again: its colour buffers carry them.
+  baked actor is not lit by the fires again: its colour buffers carry them. A spell's
+  light is held from frame to frame (`lights::Moment`, petition 1321): it swells in and
+  fades out over about a third of a second and never flashes more than three times a
+  second, the limit photosensitivity guidance (WCAG 2.2) sets, where each frame's own,
+  made of the few particles drawn then, jumped up to 18 times a second; a light that
+  another takes the place of among the 16 dims out, and the other in, over a quarter of
+  a second (`lights::Chooser`).
 - **Ambient Occlusion** (the user's of 2026-11-08, "lets add ambient occlusion";
   Extended > Lighting, off by default, and off the game's picture exactly): the opaque
   scene's creases, corners and contacts darkened, every pixel by how much of the space
