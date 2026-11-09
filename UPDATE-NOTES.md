@@ -6,6 +6,12 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · The camera at posts and low roofs
+- Steering with the right mouse button (or with the camera tilted low), the camera no longer jumps all the way in
+  to your character when something close behind you is in its way, like the posts and roof of the well by the
+  Freeport coach. It comes in only as far as it must, just in front of what is in the way, and goes back out to
+  where you had it once the way is clear.
+
 ## 2026-11-09 · A pack and a bank of 100
 - On a server that has them (the Heirloom Test Server), your inventory holds 100 items and your bank 100, where the
   game holds 40 of each. What you wear counts among the 100, as it counts among the game's 40.

@@ -48,12 +48,23 @@
 //! on a PS2 it takes a wall or broken ground; tilted level with the head, a
 //! slope of 18 to 25 degrees behind a run downhill swung it 45 to 90 degrees
 //! (F3 20261024-100428), and tilted lower, gentler ones did (from 8 degrees,
-//! the camera 11 degrees under the head). Under the game's pitch the swing is
-//! not begun: the camera comes in to its closest instead
-//! (`mouse::come_in_instead`, as the right button's steer does), and the
-//! way back out above brings it out again once the slope is behind. A frame
-//! longer than the camera's 32 ms tick can let a swing move before it is
-//! stopped: under a degree at 30 frames a second.
+//! the camera 11 degrees under the head). Under the game's pitch, and while
+//! the right button steers (the camera kept behind the body), the swing is
+//! not begun: it ends where it is (`mouse::end_swing`) and the camera comes
+//! in instead, only as far as what is in the way needs (`come_in`): `SHORT`
+//! this side of where the game's sweep meets it, at least the game's
+//! closest (1.5), and the way back out above brings it out again once that
+//! is behind. It had come in to its closest every time (F3 2026-11-09, the
+//! user, steering round in Freeport's well: "it hits the poles and zooms all
+//! the way in to char, but shouldnt zoom at all"): from the well's middle
+//! the posts and the roof's eaves meet the sweep 3.3 to 4.7 out, nearer
+//! than the closest collision distance only toward the eaves' middles,
+//! where the game itself swings round to a gable end without coming in at
+//! all; ours now comes in from the game's own 3.38 to about 3.25 there.
+//! The game's own way in to its closest, when no angle of the eight is clear
+//! (flag 2), stays the game's. A frame longer than the camera's 32 ms tick
+//! can let a swing move before it is stopped: under a degree at 30 frames a
+//! second.
 
 use vi::camera::{Eye, WalkCamera};
 use vi::coll::CollSphere;
@@ -90,6 +101,10 @@ pub struct Reach {
     end: Option<(i32, F<Ee>)>,
     /// the way back out's speed now, a second
     speed: f32,
+    /// the mouse steers this frame (`controls::Client::steer`, set by
+    /// `Walker::frame_with`): the camera is kept behind the body, so no
+    /// swing round is begun (`come_in`)
+    pub steered: bool,
 }
 
 impl Reach {
@@ -100,8 +115,10 @@ impl Reach {
     }
 
     /// The camera's frame (`Process`), `dt_s` seconds after the last: the
-    /// choice kept, the way back out before it, and the game's pull held
-    /// short of what is in the way after it.
+    /// choice kept, the way back out before it, and after it a swing round
+    /// ended (steered, or tilted under the game's pitch) with the camera come
+    /// in only as far as it must (`come_in`), or else the game's pull held
+    /// short of what is in the way.
     pub fn process<S: Scene<Ee>>(&mut self, cam: &mut WalkCamera<Ee>, scene: &mut S, dt_s: f32) -> Eye<Ee> {
         let mode = cam.camera_mode;
         if mode == 3 {
@@ -123,19 +140,23 @@ impl Reach {
         // the shake's sample as `Process` found it, for the eye made again
         let sample = cam.effect.sample;
         let mut eye = cam.process(scene);
-        // tilted under the game's pitch, no swing round (the module's doc)
-        if cam.camera_mode == 3 && cam.def_orbit_pitch < F::new(GAME_PITCH) {
-            crate::mouse::come_in_instead(cam);
+        // steered, or tilted under the game's pitch, no swing round: the
+        // camera comes in instead, as far as it must (the module's doc)
+        let came_in = cam.camera_mode == 3 && (self.steered || cam.def_orbit_pitch < F::new(GAME_PITCH)) && come_in(cam, scene);
+        if came_in {
+            cam.effect.sample = sample;
+            eye = cam.set_camera();
         }
         let pull = (f0 | cam.cur.flags) & 6 != 0;
-        // the stick's zoom (the spring) is a choice; a pull (flags 2, 4) is not
-        if mode == 3 && cam.camera_mode == 3 && spring && !pull && cam.cur.dist != d0 {
+        // the stick's zoom (the spring) is a choice; a pull (flags 2, 4) is
+        // not, nor is coming in for what is in the way
+        if mode == 3 && cam.camera_mode == 3 && spring && !pull && !came_in && cam.cur.dist != d0 {
             self.chosen = Some(cam.cur.dist);
         }
         // the game's pull (or one begun and ended inside this frame's ticks:
         // the distance down with no zoom of the stick's) held short of what
         // is in the way, when that is past its closest collision distance
-        if mode == 3 && cam.camera_mode == 3 && (pull || (!spring && cam.cur.dist < d0))
+        if mode == 3 && cam.camera_mode == 3 && !came_in && (pull || (!spring && cam.cur.dist < d0))
             && let Some(d) = hold(cam, scene, d0, self.chosen(cam))
         {
             place(cam, d);
@@ -216,6 +237,23 @@ fn hold<S: Scene<Ee>>(cam: &WalkCamera<Ee>, scene: &mut S, from: F<Ee>, want: F<
     };
     let to = vimin(to, cam.max_orbit_distance);
     (cam.min_collision_dist < to && cam.cur.dist < to).then_some(to)
+}
+
+/// A swing round the game began (`MoveCamera`'s `FindOrbitAngle` found a
+/// clear angle: flag 1) ended where it is (`mouse::end_swing`), and the
+/// camera come in instead, only as far as what is in the way needs: `SHORT`
+/// this side of where the game's own sweep at its default pitch meets it,
+/// at most where it is and at least the game's closest. Nothing in the way
+/// now, it stays. Whether a swing was under way.
+fn come_in<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, scene: &mut S) -> bool {
+    if !crate::mouse::end_swing(cam) {
+        return false;
+    }
+    if let Some(r) = reach(cam, scene, cam.cur.dist) {
+        let d = clamp(r - F::new(SHORT), cam.min_orbit_distance, cam.cur.dist);
+        place(cam, d);
+    }
+    true
 }
 
 /// The camera put `d` out along its orbit as `MoveCamera` places it in the
@@ -609,10 +647,20 @@ mod tests {
     /// The follow orbit at 11 behind a body facing `h0` at `at` on `sc`, its
     /// default pitch `pitch` (the mouse's tilt), then `near` put in the
     /// scene's place (an obstacle moved in once the style has chosen its
-    /// angle behind); `ms` frames for 4 seconds, through the reach (ours)
-    /// or the game's `Process` alone (the control). The most the orbit
-    /// turned off where it began, and the distance at the end.
-    fn swing(sc: &mut super::testing::Planes, near: Option<super::testing::Planes>, at: [f32; 3], h0: f32, pitch: f32, ours: bool, ms: i64) -> (f32, f32) {
+    /// angle behind); `ms` frames for 4 seconds, through the reach (ours,
+    /// `steered` or not) or the game's `Process` alone (the control). The
+    /// most the orbit turned off where it began, the distance at the end,
+    /// and the camera.
+    fn swing(
+        sc: &mut super::testing::Planes,
+        near: Option<super::testing::Planes>,
+        at: [f32; 3],
+        h0: f32,
+        pitch: f32,
+        ours: bool,
+        steered: bool,
+        ms: i64,
+    ) -> (f32, f32, WalkCamera<Ee>) {
         let mut cam = WalkCamera::<Ee>::default();
         cam.init(Vect3::of(at[0], at[1], at[2]), Vect3::of(h0, 0.0, 0.0), sc);
         crate::camstyle::set_style(&mut cam, 3, None, sc);
@@ -621,7 +669,7 @@ mod tests {
         if let Some(n) = near {
             sc.planes = n.planes;
         }
-        let mut reach = Reach::default();
+        let mut reach = Reach { steered, ..Default::default() };
         let start = cam.cur.orbit.x.0;
         let mut most = 0.0f32;
         for _ in 0..4000 / ms {
@@ -634,7 +682,14 @@ mod tests {
             let d = (cam.cur.orbit.x.0 - start).rem_euclid(std::f32::consts::TAU);
             most = most.max(d.min(std::f32::consts::TAU - d));
         }
-        (most, cam.cur.dist.0)
+        (most, cam.cur.dist.0, cam)
+    }
+
+    /// The camera right in front of what is in the way, as `come_in` holds
+    /// it: the game's own sweep at its pitch clear to it, and meeting
+    /// something `SHORT` and a hair farther out.
+    fn in_front(sc: &mut super::testing::Planes, cam: &WalkCamera<Ee>) -> bool {
+        reach(cam, sc, cam.cur.dist).is_none() && reach(cam, sc, cam.cur.dist + F::new(SHORT + 0.01)).is_some()
     }
 
     /// Turned by no more than the rounding of the orbit's re-derivation
@@ -723,18 +778,20 @@ mod tests {
     /// default pitch -0.0094, the report's), a 22-degree slope rising behind
     /// a run downhill. The game's camera swings a quarter turn round (the
     /// control: `Process` alone), and the run would turn with it; ours stays
-    /// behind and comes in to its closest. Lower still (-0.2), a 10-degree
+    /// behind and comes in only as far as the slope needs (it went to its
+    /// closest, 1.5, until 2026-11-09). Lower still (-0.2), a 10-degree
     /// slope did it.
     #[test]
     fn tilted_under_the_games_pitch_a_slope_brings_the_camera_in_not_round() {
         let (at, h0) = ([100.0, 0.0, 100.0], 0.5);
         for (slope, pitch) in [(22.0f32, -0.0094), (10.0, -0.2)] {
             let mut sc = super::testing::Planes::slope(at, behind(h0), slope.to_radians().tan());
-            let (game, _) = swing(&mut sc, None, at, h0, pitch, false, 16);
+            let (game, _, _) = swing(&mut sc, None, at, h0, pitch, false, false, 16);
             assert!(game > 0.7, "the control: the game's swings round ({game} at {slope} degrees)");
             let mut sc = super::testing::Planes::slope(at, behind(h0), slope.to_radians().tan());
-            let (ours, dist) = swing(&mut sc, None, at, h0, pitch, true, 16);
-            assert!(ours < STILL && dist == 1.5, "{slope} degrees, pitch {pitch}: {ours}, {dist}");
+            let (ours, dist, cam) = swing(&mut sc, None, at, h0, pitch, true, false, 16);
+            assert!(ours < STILL, "{slope} degrees, pitch {pitch}: turned {ours}");
+            assert!(dist > 2.5 && in_front(&mut sc, &cam), "{slope} degrees, pitch {pitch}: in front of the slope, not at the closest: {dist}");
         }
     }
 
@@ -748,17 +805,43 @@ mod tests {
         let (at, h0) = ([100.0, 0.0, 100.0], 0.5);
         for slope in [10.0f32, 22.0, 25.0, 30.0] {
             let mut sc = super::testing::Planes::slope(at, behind(h0), slope.to_radians().tan());
-            let (turned, _) = swing(&mut sc, None, at, h0, GAME_PITCH, false, 16);
+            let (turned, _, _) = swing(&mut sc, None, at, h0, GAME_PITCH, false, false, 16);
             assert!(turned < STILL, "{slope} degrees: {turned}");
         }
         let wall = |away| super::testing::Planes::wall(at, behind(h0), away);
         for ours in [false, true] {
-            let (turned, _) = swing(&mut wall(100.0), Some(wall(2.5)), at, h0, GAME_PITCH, ours, 16);
+            let (turned, _, _) = swing(&mut wall(100.0), Some(wall(2.5)), at, h0, GAME_PITCH, ours, false, 16);
             assert!((turned - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "ours {ours}: {turned}");
         }
-        // the control: the same wall with the camera tilted under it comes in
-        let (turned, dist) = swing(&mut wall(100.0), Some(wall(2.5)), at, h0, 0.1, true, 16);
-        assert!(turned < STILL && dist == 1.5, "{turned}, {dist}");
+        // the control: the same wall with the camera tilted under it comes
+        // in, as far as the wall needs
+        let mut sc = wall(100.0);
+        let (turned, dist, cam) = swing(&mut sc, Some(wall(2.5)), at, h0, 0.1, true, false, 16);
+        assert!(turned < STILL && dist > 1.5 && in_front(&mut sc, &cam), "{turned}, {dist}");
+    }
+
+    /// Steered (the camera kept behind the body: the right button), a wall
+    /// close behind does not swing the camera round, where the game swings it
+    /// a quarter turn (the control: unsteered, as above), and it comes in only
+    /// as far as the wall needs: 2.0 out, where it went to its closest (1.5)
+    /// until 2026-11-09 (F3, the user, steering round in Freeport's well: "it
+    /// hits the poles and zooms all the way in to char"). At 30 and 165
+    /// frames a second (at 30 a swing begun in a frame's first tick moves in
+    /// its second before it is ended: under a degree).
+    #[test]
+    fn steered_a_wall_brings_the_camera_in_only_as_far_as_it_not_round() {
+        let (at, h0) = ([100.0, 0.0, 100.0], 0.5);
+        let wall = |away| super::testing::Planes::wall(at, behind(h0), away);
+        for (ms, most) in [(6i64, STILL), (33, 0.0175)] {
+            let (game, _, _) = swing(&mut wall(100.0), Some(wall(2.5)), at, h0, GAME_PITCH, true, false, ms);
+            assert!((game - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "the control: unsteered it swings round, {ms} ms: {game}");
+            let mut sc = wall(100.0);
+            let (turned, dist, cam) = swing(&mut sc, Some(wall(2.5)), at, h0, GAME_PITCH, true, true, ms);
+            assert!(turned < most, "{ms} ms: turned {turned}");
+            // the sweep meets the wall 2.0 across: 2.07 along the 15 degrees
+            let want = 2.0 / GAME_PITCH.cos() - SHORT;
+            assert!((dist - want).abs() < 1e-3 && in_front(&mut sc, &cam), "{ms} ms: {dist}, not {want}");
+        }
     }
 
     /// At 30 frames a second a frame can hold two of the camera's 32 ms
@@ -769,8 +852,8 @@ mod tests {
         let (at, h0) = ([100.0, 0.0, 100.0], 0.5);
         for (ms, most) in [(6i64, STILL), (33, 0.0175)] {
             let mut sc = super::testing::Planes::slope(at, behind(h0), 22f32.to_radians().tan());
-            let (turned, dist) = swing(&mut sc, None, at, h0, -0.2, true, ms);
-            assert!(turned < most && dist == 1.5, "{ms} ms: {turned}, {dist}");
+            let (turned, dist, cam) = swing(&mut sc, None, at, h0, -0.2, true, false, ms);
+            assert!(turned < most && dist > 1.5 && in_front(&mut sc, &cam), "{ms} ms: {turned}, {dist}");
         }
     }
 }
