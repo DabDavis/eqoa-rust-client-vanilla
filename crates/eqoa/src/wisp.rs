@@ -24,9 +24,14 @@ use net::raceopts::{Kind, Look};
 use vi::csprite::CSprite;
 use vi::fpu::Ee;
 
-/// The wisp's size, across its widest: about a human's head (HumanMale's skull is
-/// about 0.3 from ear to ear in its bind pose).
-pub const HEAD: f32 = 0.34;
+/// The wisp's size, across its widest: inside a human's head (HumanMale's skull is
+/// about 0.3 from ear to ear in its bind pose), so a helm closes round it.
+pub const HEAD: f32 = 0.26;
+
+/// How far from the helm's node toward the head's the wisp's middle sits: the
+/// helm's node is the skull's top, the head's its root, and between them the
+/// middle of the head (where a helm's face shows it).
+pub const DOWN: f32 = 0.55;
 
 /// The wisp a server's race look carries: the value of a texture part that names a
 /// body (a CSprite record) rather than a texture; none for any other look.
@@ -103,7 +108,18 @@ pub fn dress(lib: &Library, body: u32, model: &mut esf::Model, cs: &CSprite<Ee>,
     if n < 0 {
         return None;
     }
-    mesh(lib, w).map(|m| (n, m))
+    let mut m = mesh(lib, w)?;
+    // from the helm's node down toward the head's, in the helm node's own space
+    let at = |i: i32| usize::try_from(i).ok().and_then(|i| cs.h.nodes.get(i)).map(|n| glam::Mat4::from_cols_array_2d(&n.inv_bind_world.to_cols()));
+    if n == cs.node_ids[8]
+        && let (Some(helm), Some(head)) = (at(cs.node_ids[8]), at(cs.node_ids[7]))
+    {
+        let off = helm.transform_point3(head.inverse().w_axis.truncate()) * DOWN;
+        for p in &mut m.pos {
+            *p = (glam::Vec3::from(*p) + off).to_array();
+        }
+    }
+    Some((n, m))
 }
 
 #[cfg(test)]
@@ -166,7 +182,9 @@ mod tests {
         assert!(!w.skinned && !w.pos.is_empty());
         let (lo, hi) = w.pos.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| (std::array::from_fn(|k| lo[k].min(p[k])), std::array::from_fn(|k| hi[k].max(p[k]))));
         let across = (0..3).map(|k| hi[k] - lo[k]).fold(0f32, f32::max);
-        assert!((across - HEAD).abs() < 1e-3 && (0..3).all(|k| (lo[k] + hi[k]).abs() < 1e-3), "{across} across, centred {lo:?} {hi:?}");
+        assert!((across - HEAD).abs() < 1e-3, "{across} across");
+        let mid = glam::Vec3::from_array(std::array::from_fn(|k| (lo[k] + hi[k]) * 0.5));
+        assert!(mid.length() > 0.02 && mid.length() < 0.3, "its middle below the helm node, toward the head: {mid}");
         // the control: no wisp in the look, the body as it was
         let mut plain = built.clone();
         assert!(dress(&lib, HUMAN, &mut plain, &cs, &plate, Some(&look(HUMAN, 0x98F8_6489))).is_none());
