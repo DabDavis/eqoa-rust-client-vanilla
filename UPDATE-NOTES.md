@@ -6,6 +6,17 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Every body of the new races
+- The new races' Customize Character page now offers every other body of their creature on the disc, the named
+  ones' too: goblin kings, overseers, priests and bandits; grey, black-and-tan and risen gnolls; Deathfist and
+  hatebone orcs (three of them women's); two more lizardmen, a ratman trickster, three aviaks no one in the world
+  wears, the fire giant reaver and King Daran, the great skeletons, a brown minotaur, and the dryad's erych and
+  haliai kin. Each stands as tall as its race.
+- Hair colour where the body has hair: goblins, orcs, kappas and the dryad's kin, and a kerran's mane.
+- A body you choose waves, bows, points and cheers as its race does, and a great skeleton wears armour round
+  its bones as a skeleton does.
+- Characters made before keep their look.
+
 ## 2026-11-09 · Jump
 - On a server that has jumps (eqoaclassic can turn them on), V jumps: about half your height, straight up when you
   stand and on along your way when you run. You come down as a fall comes down and land where you came down, and

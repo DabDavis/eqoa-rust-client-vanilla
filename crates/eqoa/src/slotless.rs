@@ -113,8 +113,18 @@ fn kept(id: i32) -> &'static [i32] {
 /// on any other skeleton a body listed here is dressed as the others are. The
 /// other three are the skeletons a player of the server's Skeleton race may
 /// choose instead (its options, `raceopts`: old, mossy and frost bone), each on
-/// the same skeleton, two drawn a tenth larger.
-const SHELLED: &[u32] = &[0x6AF98A81, 0x45A8B064, 0x198BAA64, 0x648DFC11];
+/// the same skeleton, two drawn a tenth larger. The last four are the great
+/// skeletons it may choose too (great bone, old bone, mossy and frost; mossy's
+/// copy 0x556EA369, the same mesh, textures and clips, is no option), built on
+/// the troll's skeleton (`SHELL_BODIES`), which wear the troll's.
+const SHELLED: &[u32] = &[0x6AF98A81, 0x45A8B064, 0x198BAA64, 0x648DFC11, 0x6AF98A82, 0x197F51C7, 0x90F16A6F, 0x7D9F41B2];
+
+/// The player bodies other than the human's whose armour a body built on their
+/// skeleton wears (`SHELLED`), in the order tried after the human's: the
+/// troll's two males. The great skeletons are built on it: its forty-three
+/// nodes and parents, every one in the same bind pose but the top of the skull
+/// (0.5 to 1 cm off), which no armour is skinned to.
+const SHELL_BODIES: &[u32] = &[0x4C6F_A532, 0xF41C_4DBA];
 
 /// Whether a material is opaque and textured (not a wing's translucent
 /// membrane, not a painted eye).
@@ -379,13 +389,14 @@ pub struct Corner {
 }
 
 /// The shell of body `id` (`cs` its sprite) wearing `art`, made once per
-/// body, art and look; None when its skeleton is not the human's.
+/// body, art and look: of the first player body whose skeleton its is (the
+/// human's, else one of `SHELL_BODIES`); None when it is none of theirs.
 fn shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<Rc<Shell>> {
     let key = (id, lib.view(), art);
     if let Some(s) = SHELLS.with(|s| s.borrow().get(&key).cloned()) {
         return s;
     }
-    let made = Human::load(lib, cs.sex != 0).and_then(|h| {
+    let made = Human::shell_sources(lib, cs.sex != 0).find_map(|h| {
         let shell = Shell::of(lib, &h, art);
         same_skeleton(&h.cs, cs, shell.tris.iter().flatten().flatten().flat_map(|c| (0..4).filter(|&k| c.weights[k] > 0).map(|k| c.bones[k] as usize))).then(|| Rc::new(shell))
     });
@@ -403,7 +414,7 @@ fn shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<Rc<She
 /// helm on (`SetHelm`'s, the NodeIDList's slot 8; -1 none): the one it names;
 /// else, for a player's character (`player`) in a body that wears a human's
 /// armour (`SHELLED`) on the human's own skeleton (the same nodes, the same
-/// parents), the human's. The 2002 disc's skeleton is built on its HumanMale's
+/// parents), the human's (on the troll's, the troll's). The 2002 disc's skeleton is built on its HumanMale's
 /// skeleton (52 nodes, its head node 6) and names no helm node, where
 /// Frontiers' names the human's own (5): in the 2002 disc's art a skeleton's
 /// helm was not drawn (the user, 2026-11-08: "in char select i see skinny with
@@ -414,7 +425,7 @@ pub fn helm_node(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool) -> i32 
     if own >= 0 || !player || !enabled() || !SHELLED.contains(&id) {
         return own;
     }
-    Human::load(lib, cs.sex != 0).filter(|h| same_skeleton(&h.cs, cs, std::iter::empty())).map_or(own, |h| h.cs.node_ids[8])
+    Human::shell_sources(lib, cs.sex != 0).find(|h| same_skeleton(&h.cs, cs, std::iter::empty())).map_or(own, |h| h.cs.node_ids[8])
 }
 
 /// Whether two sprites' skeletons are one for vertices skinned to `used`:
@@ -637,12 +648,30 @@ struct Human {
 impl Human {
     fn load(lib: &Library, female: bool) -> Option<Human> {
         let names: &[&str] = if female { &["HumanFemale", "HumanMale"] } else { &["HumanMale"] };
-        names.iter().find_map(|n| {
-            let r = lib.lookup(vi::hash::hash_resource_id(n) as i32)?;
-            let model = lib.build_model(r)?;
-            let mut anims = vi::hsprite::AnimScene::<Ee>::default();
-            let cs = vi::character::load_csprite(lib, r, &mut anims, &mut vi::character::AnimCache::new(), &mut Rand(1))?;
-            (0..SLOTS).all(|i| cs.text_slots[i].0 != -1).then_some(Human { model, cs })
+        names.iter().find_map(|n| Human::load_id(lib, vi::hash::hash_resource_id(n)))
+    }
+
+    /// Body `id`, when it has the five worn slots.
+    fn load_id(lib: &Library, id: u32) -> Option<Human> {
+        let r = lib.lookup(id as i32)?;
+        let model = lib.build_model(r)?;
+        let mut anims = vi::hsprite::AnimScene::<Ee>::default();
+        let cs = vi::character::load_csprite(lib, r, &mut anims, &mut vi::character::AnimCache::new(), &mut Rand(1))?;
+        (0..SLOTS).all(|i| cs.text_slots[i].0 != -1).then_some(Human { model, cs })
+    }
+
+    /// The player bodies a `SHELLED` body's armour may come from, in order: the
+    /// human's (`load`), then `SHELL_BODIES`', each loaded only when asked for.
+    fn shell_sources(lib: &Library, female: bool) -> impl Iterator<Item = Human> + '_ {
+        let mut human = Some(female);
+        let mut rest = SHELL_BODIES.iter();
+        std::iter::from_fn(move || {
+            if let Some(f) = human.take()
+                && let Some(h) = Human::load(lib, f)
+            {
+                return Some(h);
+            }
+            rest.by_ref().find_map(|&id| Human::load_id(lib, id))
         })
     }
 }
@@ -1944,6 +1973,47 @@ mod tests {
         assert!(k.batches[..km.batches.len()].iter().zip(&km.batches).all(|(a, b)| a.indices == b.indices), "none of its own hidden");
         let turned = |b: &esf::Batch| b.indices.chunks_exact(6).filter(|t| [t[3], t[4], t[5]].map(|v| k.pos[v as usize]) == [t[0], t[2], t[1]].map(|v| k.pos[v as usize])).count();
         assert_eq!(k.batches[km.batches.len()..].iter().map(turned).sum::<usize>(), 0, "one face a triangle on the kappa");
+    }
+
+    /// A great skeleton (the Skeleton race's larger bodies) wears the troll's
+    /// armour as the skeleton wears the human's: in plate, each slot's batch is
+    /// the troll's slot triangles as they are, each with its inside, and its
+    /// own triangles under them are taken out. Its skeleton is the troll's (the
+    /// same parents and bind poses where armour is skinned), not the human's
+    /// (the control: the human's shell fits it nowhere, so before the troll was
+    /// a shell's source it was painted on its own bones).
+    #[test]
+    fn a_great_skeleton_wears_the_trolls_armour() {
+        let Some(lib) = disc() else { return };
+        let t = Tables::retail();
+        let id = 0x6AF98A82u32 as i32;
+        let r = lib.lookup(id).unwrap();
+        let model = lib.build_model(r).unwrap();
+        let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+        assert!(is_slotless(&cs));
+        let human = Human::load(&lib, false).unwrap();
+        assert!(!same_skeleton(&human.cs, &cs, std::iter::empty()), "the control: not the human's skeleton");
+        let troll = Human::load_id(&lib, SHELL_BODIES[0]).unwrap();
+        assert!(same_skeleton(&troll.cs, &cs, std::iter::empty()));
+        let plate = Look { armor: [4; 6], robe: -1, ..Default::default() };
+        let mut dressed = model.clone();
+        crate::play::dress_look(&lib, id, &mut dressed, &cs, &plate, false, &t, true);
+        let n = model.batches.len();
+        let made = &dressed.batches[n..];
+        assert_eq!(made.iter().map(|b| b.material).collect::<Vec<_>>(), (0..SLOTS as i32).map(|i| ENTRY + i).collect::<Vec<_>>());
+        for (i, b) in made.iter().enumerate() {
+            let entry = troll.cs.text_slots[i].0;
+            let theirs: Vec<[f32; 3]> = near_triangles(&troll.model).filter(|(tb, _)| tb.material == entry).flat_map(|(_, t)| t.map(|v| troll.model.pos[v])).collect();
+            let ours: Vec<[f32; 3]> = b.indices.iter().map(|&v| dressed.pos[v as usize]).collect();
+            assert!(!ours.is_empty() && ours.len() <= 2 * theirs.len(), "slot {i}");
+            assert!(ours.iter().all(|p| theirs.contains(p)), "slot {i}: the troll's own places");
+            assert_eq!(b.indices.len() % 6, 0, "slot {i}: each triangle with its inside");
+        }
+        let own = |m: &esf::Model| m.batches[..n].iter().map(|b| b.indices.len() / 3).sum::<usize>();
+        assert!(own(&model) - own(&dressed) > 300, "{} of its own triangles hidden in plate", own(&model) - own(&dressed));
+        let mut bare = model.clone();
+        crate::play::dress_look(&lib, id, &mut bare, &cs, &Look { robe: -1, ..Default::default() }, false, &t, true);
+        assert!(same(&bare, &model), "bare: as it was");
     }
 
     /// The 2002 disc's copies of the character files standing in for
