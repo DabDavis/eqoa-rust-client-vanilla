@@ -302,16 +302,23 @@ const PLANT_RETURN: &str = "        return min(light, vec3<f32>(1.0));\n";
 const PLANT_RETURN_SHADOWED: &str = "        return min(light - frame.sun.rgb * (0.15 * (1.0 - sun_shadow(i, vec3<f32>(0.0, 1.0, 0.0)))), vec3<f32>(1.0));\n";
 
 /// The receivers' module: shader.wgsl, lit.wgsl with its sun term taking the
-/// map's visibility (the lesser of the two) and a plant's sun the map's,
-/// then `sunshadow.wgsl`. `None` if lit.wgsl's lines are not there to
-/// change (tests::the_receivers_take_the_sun_line holds them to it).
+/// map's visibility (the lesser of the two) and a plant's sun the map's
+/// (`shadowed_lit`), then `sunshadow.wgsl`. `None` if lit.wgsl's lines are
+/// not there to change (tests::the_receivers_take_the_sun_line holds them
+/// to it).
 pub(crate) fn receivers_wgsl() -> Option<String> {
-    let lit = include_str!("lit.wgsl");
+    let lit = shadowed_lit(include_str!("lit.wgsl"))?;
+    Some([include_str!("shader.wgsl"), &lit, include_str!("sunshadow.wgsl")].join("\n"))
+}
+
+/// lit.wgsl's text `lit` with its sun line and a plant's return taking the
+/// map's visibility, as the receivers have them (Light Shadows' with the
+/// sun's too, `lightshadow::receivers_wgsl`, change this further).
+pub(crate) fn shadowed_lit(lit: &str) -> Option<String> {
     if lit.matches(SUN_LINE).count() != 1 || lit.matches(PLANT_RETURN).count() != 1 {
         return None;
     }
-    let lit = lit.replace(SUN_LINE, SUN_LINE_SHADOWED).replace(PLANT_RETURN, PLANT_RETURN_SHADOWED);
-    Some([include_str!("shader.wgsl"), &lit, include_str!("sunshadow.wgsl")].join("\n"))
+    Some(lit.replace(SUN_LINE, SUN_LINE_SHADOWED).replace(PLANT_RETURN, PLANT_RETURN_SHADOWED))
 }
 
 /// The models' vertex buffers as `model_pipeline` lays them out: the
@@ -386,9 +393,12 @@ pub(crate) struct Sun {
     /// lit by every light, `[1]` for a baked one.
     pub(crate) pipelines: [Vec<wgpu::RenderPipeline>; 2],
     /// Group 3 of the receivers: the lights (Dynamic Lighting's buffer), the
-    /// map, its comparison sampler and the uniform.
+    /// map, its comparison sampler and the uniform; and those three, for
+    /// Light Shadows' receivers with the sun's map (`lightshadow`).
     pub(crate) bg: wgpu::BindGroup,
-    buf: wgpu::Buffer,
+    pub(crate) buf: wgpu::Buffer,
+    pub(crate) whole: wgpu::TextureView,
+    pub(crate) cmp: wgpu::Sampler,
     /// The casters: alpha tested, and a solid layer's, depth alone.
     caster: wgpu::RenderPipeline,
     solid: wgpu::RenderPipeline,
@@ -535,7 +545,7 @@ impl Sun {
             })
         };
         let (caster, solid) = (cast_pipeline("vs_cast", Some("fs_cast")), cast_pipeline("vs_cast_solid", None));
-        Some(Sun { pipelines, bg, buf, caster, solid, cascades, cascade_buf, stride, layers, size, drawn: Default::default(), grid: Default::default() })
+        Some(Sun { pipelines, bg, buf, whole, cmp, caster, solid, cascades, cascade_buf, stride, layers, size, drawn: Default::default(), grid: Default::default() })
     }
 
     /// A group's casters, in clusters: its members that draw an opaque
@@ -692,6 +702,16 @@ impl Sun {
         }
         self.drawn.set((runs, draws));
         true
+    }
+
+    /// The receivers' uniform with no shadow in it, for a frame the sun
+    /// casts none in (`draw` false: by night) that Light Shadows' receivers
+    /// with the sun's map still draw through (`lightshadow`): their sun term
+    /// then the strip programs' alone.
+    pub(crate) fn unshadowed(&self, queue: &wgpu::Queue) {
+        let mut u = ShadowUniform::zeroed();
+        u.params = [0.0, FADE_FROM, RANGE, 1.0 / self.size as f32];
+        queue.write_buffer(&self.buf, 0, bytemuck::bytes_of(&u));
     }
 
     /// One model's opaque layers into a cascade (groups 0 and 3 set; the

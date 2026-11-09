@@ -241,7 +241,7 @@ impl Fixed {
                 None => 0.0,
             };
             if k > 0.0 {
-                out.push((key as u64, PointLight { at: l.at, range: l.range, color: l.color * k, fixed: true }));
+                out.push((key as u64, PointLight { at: l.at, range: l.range, color: l.color * k, fixed: true, key: key as u64 }));
             }
         }
     }
@@ -284,7 +284,7 @@ pub fn from_batches(batches: &[Batch], out: &mut Vec<PointLight>) {
         }
         let spread = (b.quads.iter().map(|q| q.color[3].max(0.0) * (4.0 * q.half[0].abs() * q.half[1].abs()) * (Vec3::from(q.center) - at).length_squared()).sum::<f32>() / w).sqrt();
         let strength = 0.9 * (1.0 - (-(w * peak.min(1.0)) / 2.0).exp());
-        out.push(PointLight { at, range: (8.0 + 3.0 * spread).clamp(6.0, 20.0), color: hue / peak * strength, fixed: false });
+        out.push(PointLight { at, range: (8.0 + 3.0 * spread).clamp(6.0, 20.0), color: hue / peak * strength, fixed: false, key: 0 });
     }
 }
 
@@ -309,7 +309,7 @@ pub fn from_strips(strips: &[Strips], out: &mut Vec<PointLight>) {
         if peak < 0.2 {
             continue;
         }
-        out.push(PointLight { at: at / n, range: 15.0, color: hue / peak * 0.8, fixed: false });
+        out.push(PointLight { at: at / n, range: 15.0, color: hue / peak * 0.8, fixed: false, key: 0 });
     }
 }
 
@@ -461,7 +461,7 @@ impl Moment {
         self.tracks.retain(|t| t.target.is_some() || t.color[0].max_element() > MOMENT_GONE || t.color[1].max_element() > MOMENT_GONE);
         for t in &self.tracks {
             if t.color[1].max_element() > MOMENT_GONE {
-                out.push((MOMENT_KEY | t.key as u64, PointLight { at: t.at[1], range: t.range[1], color: t.color[1], fixed: false }));
+                out.push((MOMENT_KEY | t.key as u64, PointLight { at: t.at[1], range: t.range[1], color: t.color[1], fixed: false, key: MOMENT_KEY | t.key as u64 }));
             }
         }
     }
@@ -651,7 +651,7 @@ mod tests {
     }
 
     fn light(at: Vec3, range: f32) -> PointLight {
-        PointLight { at, range, color: Vec3::ONE, fixed: true }
+        PointLight { at, range, color: Vec3::ONE, fixed: true, key: 0 }
     }
 
     /// A camera at the origin looking down -z, far plane 1000.
@@ -969,7 +969,7 @@ mod tests {
     /// do, to nothing over a second or two, then is let go.
     #[test]
     fn a_light_of_the_moment_comes_and_goes_smoothly() {
-        let l = PointLight { at: Vec3::new(1.0, 1.0, 2.0), range: 12.0, color: Vec3::new(0.2, 0.5, 0.9), fixed: false };
+        let l = PointLight { at: Vec3::new(1.0, 1.0, 2.0), range: 12.0, color: Vec3::new(0.2, 0.5, 0.9), fixed: false, key: 0 };
         let at = |hz: i64, secs: f32, on: f32| {
             let mut m = Moment::default();
             let mut out = Vec::new();
@@ -1005,7 +1005,7 @@ mod tests {
     /// stage at 20 a second, its two stages' 0.2 s behind), not made anew.
     #[test]
     fn a_bodys_lights_are_one_and_followed() {
-        let light = |x: f32, z: f32, c: Vec3| PointLight { at: Vec3::new(x, 1.0, z), range: 10.0, color: c, fixed: false };
+        let light = |x: f32, z: f32, c: Vec3| PointLight { at: Vec3::new(x, 1.0, z), range: 10.0, color: c, fixed: false, key: 0 };
         let mut m = Moment::default();
         let mut out = Vec::new();
         for k in 0..120 {
@@ -1050,7 +1050,7 @@ mod tests {
         let mut out = Vec::new();
         for k in 0..120 {
             out.clear();
-            let draws: Vec<PointLight> = (0..12).map(|i| PointLight { at: Vec3::new(0.0, 1.0, 1.0 + i as f32 * 0.3), range: 15.0, color: Vec3::new(0.8, 0.65, 0.0), fixed: false }).collect();
+            let draws: Vec<PointLight> = (0..12).map(|i| PointLight { at: Vec3::new(0.0, 1.0, 1.0 + i as f32 * 0.3), range: 15.0, color: Vec3::new(0.8, 0.65, 0.0), fixed: false, key: 0 }).collect();
             m.frame(&draws, k * 1000 / 60, &mut out);
         }
         assert!(out.len() == 1 && out[0].1.color.max_element() < MOMENT_MOST, "{out:?}");
@@ -1070,10 +1070,10 @@ mod tests {
     fn the_budget_changes_hands_gradually() {
         let (eye, vp) = (Vec3::ZERO, camera());
         let fire = Vec3::new(0.5, 0.34, 0.0);
-        let fires: Vec<(u64, PointLight)> = (0..20).map(|k| (k, PointLight { at: Vec3::new(0.0, 0.0, -5.0 * 1.2f32.powi(k as i32)), range: 18.0, color: fire, fixed: true })).collect();
+        let fires: Vec<(u64, PointLight)> = (0..20).map(|k| (k, PointLight { at: Vec3::new(0.0, 0.0, -5.0 * 1.2f32.powi(k as i32)), range: 18.0, color: fire, fixed: true, key: k })).collect();
         let spell = |k: i64| {
             let up = ((k - 30) as f32 / 20.0).clamp(0.0, 1.0) * ((90 - k) as f32 / 20.0).clamp(0.0, 1.0);
-            (MOMENT_KEY | 1, PointLight { at: Vec3::new(0.0, 0.0, -3.0), range: 12.0, color: Vec3::new(0.2, 0.4, 0.9) * up, fixed: false })
+            (MOMENT_KEY | 1, PointLight { at: Vec3::new(0.0, 0.0, -3.0), range: 12.0, color: Vec3::new(0.2, 0.4, 0.9) * up, fixed: false, key: MOMENT_KEY | 1 })
         };
         let lit = |ls: &[PointLight], at: Vec3| ls.iter().find(|l| l.at == at).map_or(Vec3::ZERO, |l| l.color);
         let mut chooser = Chooser::default();

@@ -644,6 +644,13 @@ pub struct ClientOptions {
     /// shadows that move with the time of day (`render::sunshadow`); off, the
     /// sun lights through everything, as the PS2's. Off by default.
     pub sun_shadows: bool,
+    /// Light Shadows (Extended > Lighting, 2026-11-09, the user's "sun
+    /// shadows lets make all light sources act similar"): on, and with
+    /// Dynamic Lighting on, the fires', the personal light's and the spells'
+    /// light stopped by what stands between a surface and the light, as Sun
+    /// Shadows stop the sun's (`render::lightshadow`); off, those lights
+    /// light through everything. Off by default.
+    pub light_shadows: bool,
     /// Dynamic Lighting (the user's of 2026-11-08, phase 1): off, the
     /// PS2's, the strip programs' light per vertex with the personal light
     /// the one point light; on, the light per fragment and the scene's fires,
@@ -781,6 +788,7 @@ impl Default for ClientOptions {
             ps2_fog: true,
             ambient_occlusion: false,
             sun_shadows: false,
+            light_shadows: false,
             dynamic_lighting: false,
             loading_longer: true,
             render_scale: 1,
@@ -889,6 +897,10 @@ impl ClientOptions {
         if self.sun_shadows {
             s.push_str("sun_shadows=on\n");
         }
+        // Light Shadows only when on
+        if self.light_shadows {
+            s.push_str("light_shadows=on\n");
+        }
         // Dynamic Lighting only when on
         if self.dynamic_lighting {
             s.push_str("dynamic_lighting=on\n");
@@ -984,6 +996,8 @@ impl ClientOptions {
                 ("ambient_occlusion", "off") => c.ambient_occlusion = false,
                 ("sun_shadows", "on") => c.sun_shadows = true,
                 ("sun_shadows", "off") => c.sun_shadows = false,
+                ("light_shadows", "on") => c.light_shadows = true,
+                ("light_shadows", "off") => c.light_shadows = false,
                 ("dynamic_lighting", "on") => c.dynamic_lighting = true,
                 ("dynamic_lighting", "off") => c.dynamic_lighting = false,
                 ("loading", "longer") => c.loading_longer = true,
@@ -1874,6 +1888,27 @@ mod tests {
         assert!(ClientOptions::from_text("sun_shadows=off") == d);
         for bad in ["sun_shadows=1", "sun_shadows=", "sun_shadows=On", "shadows=on"] {
             assert!(!ClientOptions::from_text(bad).sun_shadows, "{bad}: off, the default");
+        }
+    }
+
+    /// Light Shadows, off by default, kept only when on, and apart from
+    /// Dynamic Lighting and Sun Shadows (each may be on without the others);
+    /// anything but on or off leaves them off.
+    #[test]
+    fn light_shadows_kept_only_when_on() {
+        let d = ClientOptions::default();
+        assert!(!d.light_shadows, "off by default");
+        assert!(!d.to_text().contains("light_shadows"), "the default not written");
+        let on = ClientOptions { light_shadows: true, ..Default::default() };
+        assert_eq!(on.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nlight_shadows=on\n");
+        assert_eq!(ClientOptions::from_text(&on.to_text()), on);
+        let all = ClientOptions { light_shadows: true, sun_shadows: true, dynamic_lighting: true, ..Default::default() };
+        assert_eq!(ClientOptions::from_text(&all.to_text()), all);
+        let them = ClientOptions::from_text("light_shadows=on");
+        assert!(!them.dynamic_lighting && !them.sun_shadows, "Dynamic Lighting and Sun Shadows not turned on with them");
+        assert!(ClientOptions::from_text("light_shadows=off") == d);
+        for bad in ["light_shadows=1", "light_shadows=", "light_shadows=On", "shadows=on", "sun_shadows=on"] {
+            assert!(!ClientOptions::from_text(bad).light_shadows, "{bad}: off, the default");
         }
     }
 
