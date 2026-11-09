@@ -188,7 +188,8 @@ impl Fixed {
     }
 
     /// `lights`, each with its key (its place in the list, which a zone
-    /// coming in only adds to): a `Chooser`'s.
+    /// coming in only adds to, from 1: 0 is no key's, `render::PointLight::key`):
+    /// a `Chooser`'s.
     pub fn keyed(&mut self, world: &World<Ee>, lib: &Library, eye: Vec3, now: i64, out: &mut Vec<(u64, PointLight)>) {
         while self.made < self.placed.len() {
             let p = &self.placed[self.made];
@@ -241,7 +242,7 @@ impl Fixed {
                 None => 0.0,
             };
             if k > 0.0 {
-                out.push((key as u64, PointLight { at: l.at, range: l.range, color: l.color * k, fixed: true, key: key as u64 }));
+                out.push((key as u64 + 1, PointLight { at: l.at, range: l.range, color: l.color * k, fixed: true, key: key as u64 + 1 }));
             }
         }
     }

@@ -586,8 +586,9 @@ impl Points {
                 queue.write_buffer(&self.faces, (k * 6 + face) as u64 * self.stride, bytemuck::bytes_of(&f));
             }
             let (at, range) = (s.at, s.range);
-            let near: Vec<&GpuGroup> = groups.iter().copied().filter(|g| g.bounds.is_some_and(|b| meets(b, at, range))).collect();
-            let ids: Vec<u64> = near.iter().map(|g| g.id).collect();
+            let reached: Vec<&GpuGroup> = groups.iter().copied().filter(|g| g.bounds.is_some_and(|b| meets(b, at, range))).collect();
+            let ids: Vec<u64> = reached.iter().map(|g| g.id).collect();
+            let near = near(&reached, at, range);
             let personal = s.key == lit::PERSONAL_KEY;
             let casting: Vec<&Mover> = movers.iter().filter(|m| self.casts(m, at, range, personal)).collect();
             let mover_box = |m: &Mover| match m {
@@ -718,58 +719,52 @@ impl Points {
         })
     }
 
-    /// The groups' members that do not move into face `face` of a map (its
-    /// uniform `layer`): each instance whose box meets the light's sphere and
-    /// the face, in runs of neighbouring instances. Returns the draw calls.
+    /// The instances near a light (`near`) that are in face `face` of its
+    /// map (its uniform `layer`), in runs of neighbouring instances of a
+    /// member. Returns the draw calls.
     #[allow(clippy::too_many_arguments)]
-    fn statics(&self, r: &Renderer, pass: &mut wgpu::RenderPass<'_>, groups: &[&GpuGroup], at: Vec3, range: f32, face: usize, g: f32, layer: usize, current: &mut Option<bool>) -> u32 {
+    fn statics(&self, r: &Renderer, pass: &mut wgpu::RenderPass<'_>, near: &[(&GpuGroup, &Member, usize)], at: Vec3, range: f32, face: usize, g: f32, layer: usize, current: &mut Option<bool>) -> u32 {
+        let here = |&(_, m, i): &(&GpuGroup, &Member, usize)| {
+            let b = m.boxes[i];
+            in_face(face, (b.0 - at, b.1 - at), range, g)
+        };
         let mut draws = 0;
-        let mut bound = false;
-        for gr in groups {
-            let mut buffers = false;
-            for m in &gr.members {
-                if m.moves || m.instances == 0 || !m.batches.iter().any(|(_, p)| opaque(p)) {
-                    continue;
-                }
-                let mut k = 0;
-                while k < m.boxes.len() {
-                    let here = |i: usize| {
-                        let b = m.boxes[i];
-                        meets(b, at, range) && in_face(face, (b.0 - at, b.1 - at), range, g)
-                    };
-                    if !here(k) {
-                        k += 1;
-                        continue;
+        let mut bound: Option<*const GpuGroup> = None;
+        let mut k = 0;
+        while k < near.len() {
+            if !here(&near[k]) {
+                k += 1;
+                continue;
+            }
+            // a run: the same member, instance after instance
+            let (gr, m, first) = near[k];
+            let mut n = 1;
+            while k + n < near.len() && std::ptr::eq(near[k + n].1, m) && near[k + n].2 == first + n && here(&near[k + n]) {
+                n += 1;
+            }
+            k += n;
+            if bound.is_none() {
+                pass.set_bind_group(0, &r.frame_bg, &[]);
+                pass.set_bind_group(2, &r.identity_palette, &[]);
+                pass.set_bind_group(3, &self.face_bg, &[(layer as u64 * self.stride) as u32]);
+            }
+            if bound != Some(gr as *const GpuGroup) {
+                pass.set_vertex_buffer(0, gr.vertices.slice(..));
+                pass.set_index_buffer(gr.indices.slice(..), wgpu::IndexFormat::Uint32);
+                bound = Some(gr as *const GpuGroup);
+            }
+            let (i0, n) = ((m.instance0 as usize + first) as u64, n as u64);
+            pass.set_vertex_buffer(1, gr.instances.slice(i0 * 64..(i0 + n) * 64));
+            pass.set_vertex_buffer(2, gr.statics.slice(i0 * 16..(i0 + n) * 16));
+            for (indices, passes) in m.batches.iter().filter(|(_, p)| opaque(p)) {
+                for p in passes.iter().filter(|p| p.blend == 0) {
+                    if *current != Some(p.solid) {
+                        pass.set_pipeline(if p.solid { &self.solid } else { &self.caster });
+                        *current = Some(p.solid);
                     }
-                    let start = k;
-                    while k < m.boxes.len() && here(k) {
-                        k += 1;
-                    }
-                    if !bound {
-                        pass.set_bind_group(0, &r.frame_bg, &[]);
-                        pass.set_bind_group(2, &r.identity_palette, &[]);
-                        pass.set_bind_group(3, &self.face_bg, &[(layer as u64 * self.stride) as u32]);
-                        bound = true;
-                    }
-                    if !buffers {
-                        pass.set_vertex_buffer(0, gr.vertices.slice(..));
-                        pass.set_index_buffer(gr.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        buffers = true;
-                    }
-                    let (i0, n) = ((m.instance0 as usize + start) as u64, (k - start) as u64);
-                    pass.set_vertex_buffer(1, gr.instances.slice(i0 * 64..(i0 + n) * 64));
-                    pass.set_vertex_buffer(2, gr.statics.slice(i0 * 16..(i0 + n) * 16));
-                    for (indices, passes) in m.batches.iter().filter(|(_, p)| opaque(p)) {
-                        for p in passes.iter().filter(|p| p.blend == 0) {
-                            if *current != Some(p.solid) {
-                                pass.set_pipeline(if p.solid { &self.solid } else { &self.caster });
-                                *current = Some(p.solid);
-                            }
-                            pass.set_bind_group(1, &p.bg, &[]);
-                            pass.draw_indexed(indices.clone(), 0, 0..n as u32);
-                            draws += 1;
-                        }
-                    }
+                    pass.set_bind_group(1, &p.bg, &[]);
+                    pass.draw_indexed(indices.clone(), 0, 0..n as u32);
+                    draws += 1;
                 }
             }
         }
@@ -832,6 +827,22 @@ impl Points {
         }
         draws
     }
+}
+
+/// The instances of the groups' members that do not move whose boxes meet
+/// the light's sphere at `at` reaching `range` (a member's whole box tested
+/// first), member by member, instance by instance.
+fn near<'g>(groups: &[&'g GpuGroup], at: Vec3, range: f32) -> Vec<(&'g GpuGroup, &'g Member, usize)> {
+    let mut out = Vec::new();
+    for gr in groups {
+        for m in &gr.members {
+            if m.moves || m.instances == 0 || m.bounds.is_some_and(|b| !meets(b, at, range)) || !m.batches.iter().any(|(_, p)| opaque(p)) {
+                continue;
+            }
+            out.extend(m.boxes.iter().enumerate().filter(|(_, b)| meets(**b, at, range)).map(|(i, _)| (*gr, m, i)));
+        }
+    }
+    out
 }
 
 /// A group's batch casts when its first layer is opaque.

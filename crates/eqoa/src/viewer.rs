@@ -1124,6 +1124,13 @@ pub fn shot_with(
         eprintln!("hour {shot_hour:.2}{}", if server { " (the server's)" } else { "" });
         let mut frame = lit(proj, v, shot_hour, Some((shot_eye, &walker.scene)), Some(&mut weather));
         frame.0.point = point;
+        // `EQOA_LANTERN`: with no server's session (whose `Play` steps it),
+        // the personal light as it is by night, 3 over the walker at its
+        // full 20 (`vi::tod::PersonalLight`'s), for looking at what it lights
+        if frame.0.point.is_none() && std::env::var_os("EQOA_LANTERN").is_some() {
+            let p = walker.cam.walk.phys.position;
+            frame.0.point = Some((Vec3::new(p.x.0, p.y.0 + 3.0, p.z.0), 20.0, Vec3::new(1.0, 0.69, 0.36)));
+        }
         // Dynamic Lighting's, as the window's frame has them
         if renderer.dynamic_lighting() {
             let mut found = Vec::new();
