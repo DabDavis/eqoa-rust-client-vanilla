@@ -6,6 +6,18 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Torches, lamps and spells cast shadows
+- A new option, Extended > Lighting > Light Shadows (off unless you turn it on; like Sun Shadows it needs Dynamic
+  Lighting on): the light of torches, braziers, candles, lamps, your lantern and spells now stops at whatever stands
+  in its way. A character standing by a brazier casts a shadow away from it, a stool by a torch casts its own, and a
+  torch's light no longer comes through the wall it hangs on into the room behind.
+- Each moment the brightest and nearest lights cast shadows (eight on a computer, four in a browser and on a
+  phone). When another light takes one's place, the old shadow fades out and the new one fades in over a quarter of
+  a second, so no shadow pops in or out.
+- Your own lantern does not shadow the ground round your feet; the people and things near you cast shadows away
+  from you as you walk.
+- With it off, the game looks exactly as it did.
+
 ## 2026-11-09 · Capes sit clear of armour
 - A cape now sits off what you wear: plate, broad shoulders and a robe's skirt show through it far less as you
   stand, walk and run. Over the back and shoulders it moves with the body under it, and under a robe its lower
