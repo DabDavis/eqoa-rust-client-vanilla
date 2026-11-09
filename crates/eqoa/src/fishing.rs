@@ -4,7 +4,7 @@
 //! `fishplay.rs` ties them to play.
 //!
 //! A session: the server's 0x0F02 1 (Start) opens the window ("Let's go
-//! fishing!", state 1). ✕ (Space), or the left stick pulled back, starts a
+//! fishing!", state 1). ✕ (G, or Space), or the left stick pulled back, starts a
 //! cast: the power meter left of the window falls for a second, then rises
 //! for one; ✕ again (or the stick pushed forward) throws it there, else it
 //! is thrown full at the top. The power picks the cast's quality (0 a perfect
