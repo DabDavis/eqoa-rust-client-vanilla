@@ -110,7 +110,7 @@ impl Play {
         }
         self.open_support(31);
         self.support.bug_preset = true;
-        let w: Vec<u16> = words.trim().encode_utf16().take(512).collect();
+        let w: Vec<u16> = words.trim().encode_utf16().take(self.session.petition_text).collect();
         self.support.bug_text = (!w.is_empty()).then_some(w);
         true
     }
@@ -187,6 +187,11 @@ impl Play {
     /// The windows' opening, keys, drawing and what they ask.
     pub(super) fn run_support(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
         let now = vui.time;
+        // the request's and the reply's text as long as the server takes
+        // (its bug report offer), else the disc's
+        let most = self.session.petition_text + 1;
+        self.support.request.most = most;
+        self.support.inbox.read.request.most = most;
         if let Some(mode) = self.support.opening.take() {
             // UpdateMode 19, 31, 32: the chat box fixed, the window shown
             // (Open / Refresh), the focus (295)
@@ -348,6 +353,13 @@ mod tests {
         p.mode = 0;
         assert!(p.open_bug_report());
         assert!(p.support.bug_text.is_none());
+        // the form's text as long as the server's offer said it takes: a PS2's
+        // 511 (the disc's 512 with its end) when it said nothing; the reply
+        // in the inbox's reader the same
+        assert_eq!((p.support.request.most, p.support.inbox.read.request.most), (crate::cs::TEXT_DISC, crate::cs::TEXT_DISC));
+        p.session.petition_text = net::session::PETITION_TEXT_MOST;
+        p.run_support(&vui, &mut r);
+        assert_eq!((p.support.request.most, p.support.inbox.read.request.most), (2048, 2048));
         p.mode = 0;
         p.chat_line("hello there");
         assert!(sent(&mut p).iter().all(|d| d[..2] != [0x0F, 0x7E]), "plain chat: no note");

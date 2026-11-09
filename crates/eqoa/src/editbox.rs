@@ -641,21 +641,32 @@ impl EditBox {
 
     /// `WrapLines`: at a newline, or at the last space once a line passes
     /// 388 pixels (mid-word without one).
+    ///
+    /// The game measures the line so far afresh at each character
+    /// (`GetStringWidth`), which is quadratic in a line's length: 1.6 ms a
+    /// frame for a petition of 2,047 characters (a release build), drawn every
+    /// frame the editor is up. A string's width is its glyphs' widths added
+    /// up (or -1 for a glyph the font lacks, '?' too), so the line's width is
+    /// kept as it grows, the same lines from the same widths.
     fn wrap_lines(&mut self, vui: &Vui, r: &dyn Raster) {
         self.lines.clear();
         let t = &self.text;
         let (mut i, mut start, mut last_space) = (0usize, 0usize, 0usize);
+        // `string_width(&t[start..i])`, as it grows: the sum, and whether a
+        // glyph in it was missing (the whole then -1)
+        let (mut width, mut missing) = (0i32, false);
         while i < t.len() {
             if t[i] == b'\n' as u16 {
                 self.lines.push(Line { start, len: i + 1 - start, brk: true });
                 i += 1;
                 last_space = 0;
                 start = i;
+                (width, missing) = (0, false);
             } else {
                 if t[i] == b' ' as u16 {
                     last_space = i;
                 }
-                if vui.string_width(r, &t[start..i]) > 388 {
+                if !missing && width > 388 {
                     if last_space != 0 {
                         self.lines.push(Line { start, len: last_space + 1 - start, brk: true });
                         i = last_space + 1;
@@ -664,7 +675,12 @@ impl EditBox {
                     }
                     start = i;
                     last_space = 0;
+                    (width, missing) = (0, false);
                 } else {
+                    match vui.string_width(r, &t[i..i + 1]) {
+                        w if w < 0 => missing = true,
+                        w => width += w,
+                    }
                     i += 1;
                 }
             }
@@ -694,8 +710,18 @@ impl EditBox {
         &self.text[l.start..(l.start + n).min(self.text.len())]
     }
 
-    /// `LineUp`: the caret to the line above, at the column it wanted.
+    /// `LineUp`: the caret to the line above, at the column it wanted. The
+    /// lines are wrapped again first: the game's are the last draw's, and
+    /// keys typed since (several between two draws, from a keyboard) left the
+    /// caret where they did not reach, which moved it past the text's end.
     fn line_up(&mut self, vui: &Vui, r: &dyn Raster, now: i64) -> bool {
+        self.wrap_lines(vui, r);
+        let moved = self.line_up_wrapped(vui, r, now);
+        self.cursor = self.cursor.min(self.text.len());
+        moved
+    }
+
+    fn line_up_wrapped(&mut self, vui: &Vui, r: &dyn Raster, now: i64) -> bool {
         self.last_input = now;
         let p = self.cursor_line_col().unwrap_or([0, 0]);
         if p[1] == 0 {
@@ -719,8 +745,15 @@ impl EditBox {
         true
     }
 
-    /// `LineDown`.
+    /// `LineDown`, on the lines as they stand (`line_up`).
     fn line_down(&mut self, vui: &Vui, r: &dyn Raster, now: i64) -> bool {
+        self.wrap_lines(vui, r);
+        let moved = self.line_down_wrapped(vui, r, now);
+        self.cursor = self.cursor.min(self.text.len());
+        moved
+    }
+
+    fn line_down_wrapped(&mut self, vui: &Vui, r: &dyn Raster, now: i64) -> bool {
         self.last_input = now;
         let p = self.cursor_line_col().unwrap_or([0, 0]);
         let cur = self.line(p[1]);
@@ -1115,6 +1148,145 @@ mod tests {
         next.set_max_length(128);
         next.take_asks(0, &mut cues);
         assert!(next.text.is_empty());
+    }
+
+    /// A font's widths, uneven (4 to 10 with the one each), with one character it
+    /// lacks altogether ('?' too): a string holding it is -1 wide.
+    struct Widths;
+    impl Raster for Widths {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+        fn string_width(&self, s: &[u16]) -> i32 {
+            if s.contains(&0x2603) {
+                return -1;
+            }
+            s.iter().map(|&c| 3 + (c as i32 * 7919) % 7 + 1).sum()
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// `WrapLines` as the game writes it, the line measured afresh at each
+    /// character: the reference for the one kept as it grows.
+    fn wrap_as_the_game(t: &[u16], r: &dyn Raster) -> Vec<(usize, usize, bool)> {
+        let mut lines = Vec::new();
+        let (mut i, mut start, mut last_space) = (0usize, 0usize, 0usize);
+        while i < t.len() {
+            if t[i] == b'\n' as u16 {
+                lines.push((start, i + 1 - start, true));
+                i += 1;
+                last_space = 0;
+                start = i;
+            } else {
+                if t[i] == b' ' as u16 {
+                    last_space = i;
+                }
+                if r.string_width(&t[start..i]) > 388 {
+                    if last_space != 0 {
+                        lines.push((start, last_space + 1 - start, true));
+                        i = last_space + 1;
+                    } else {
+                        lines.push((start, i - start, true));
+                    }
+                    start = i;
+                    last_space = 0;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        if i > start {
+            lines.push((start, i - start, false));
+        }
+        lines
+    }
+
+    /// The editor's lines are the game's for any text: words and spaces,
+    /// line ends, runs with no space, a character the font lacks, a petition
+    /// of 2,047 characters; with even widths and uneven ones.
+    #[test]
+    fn the_lines_are_the_games() {
+        let vui = crate::pointer::testing::vui();
+        let mut seed = 0x2545F491u32;
+        let mut rand = move |n: u32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed % n
+        };
+        let mut texts: Vec<Vec<u16>> = vec![
+            Vec::new(),
+            wide(&"The gate guard walks through the wall. ".repeat(60))[..2047].to_vec(),
+            wide(&"x".repeat(2047)),
+            wide(&" leading space, then words\n\nand blank lines\n"),
+        ];
+        for _ in 0..300 {
+            let n = rand(2048) as usize;
+            texts.push(
+                (0..n)
+                    .map(|_| match rand(40) {
+                        0..=5 => b' ' as u16,
+                        6 => b'\n' as u16,
+                        7 if rand(20) == 0 => 0x2603,
+                        _ => b'a' as u16 + rand(26) as u16,
+                    })
+                    .collect(),
+            );
+        }
+        let rasters: [&dyn Raster; 2] = [&crate::pointer::testing::NullRaster, &Widths];
+        for (k, r) in rasters.into_iter().enumerate() {
+            for t in &texts {
+                let mut e = EditBox::default();
+                e.set_max_length(4096);
+                e.text = t.clone();
+                e.wrap_lines(&vui, r);
+                let got: Vec<(usize, usize, bool)> = e.lines.iter().map(|l| (l.start, l.len, l.brk)).collect();
+                assert_eq!(got, wrap_as_the_game(t, r), "raster {k}, a text of {}", t.len());
+            }
+        }
+        // the control: the reference does wrap a long text, and differently
+        // under the two rasters' widths
+        let long = &texts[1];
+        let (a, b) = (wrap_as_the_game(long, &crate::pointer::testing::NullRaster), wrap_as_the_game(long, &Widths));
+        assert!(a.len() > 30 && b.len() > 30 && a != b, "{} and {} lines", a.len(), b.len());
+    }
+
+    /// Keys between two draws (a keyboard's, or a script's, come several a HUD
+    /// frame): the lines are the game's from the last draw, the text longer by
+    /// then, and Down or Up from the end of it worked off a caret those lines
+    /// did not hold, moving it past the text's end, so the next character
+    /// typed went in past it and the game stopped (`Vec::insert`; a PS2's
+    /// fixed buffer drops the character). Now a caret move reads the lines as
+    /// they stand. The control: the same keys with a draw between each.
+    #[test]
+    fn keys_between_draws_keep_the_caret_in_the_text() {
+        let vui = crate::pointer::testing::vui();
+        for draw_between in [false, true] {
+            let mut r = crate::pointer::testing::NullRaster;
+            let mut cues = Vec::new();
+            let mut e = EditBox::default();
+            e.set_multi_line(true);
+            e.set_max_length(2048);
+            e.set_text(&wide(&"The gate guard walks through the wall. ".repeat(40)[..1500]));
+            e.draw(&vui, &mut r, 0, &mut cues);
+            for (k, key) in [b'a' as i32, b'b' as i32, b' ' as i32, 20, b'c' as i32, 19, 20, 20, b'd' as i32].into_iter().enumerate() {
+                e.key(&vui, &r, key, k as i64, &mut cues);
+                assert!(e.cursor <= e.text.len(), "key {k}: the caret at {} of {}", e.cursor, e.text.len());
+                if draw_between {
+                    e.draw(&vui, &mut r, k as i64, &mut cues);
+                }
+            }
+            assert_eq!(e.text.len(), 1505, "every character typed went in");
+        }
     }
 
     #[test]
