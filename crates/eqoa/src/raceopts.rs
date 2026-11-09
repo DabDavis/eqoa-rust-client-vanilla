@@ -459,4 +459,25 @@ pub(crate) mod tests {
         take_looks(&[1, 0, 0]);
         assert!(look_of("Spore").is_none());
     }
+
+    /// A body a race's options offer holds a player's items as the race's own
+    /// does (`racebody`) and stands at its step's size; with no options (a
+    /// server that sent none, the control) it is a creature's body like any
+    /// other, at its own size; a body no step names never is.
+    #[test]
+    fn an_offered_body_holds_items() {
+        set_options(None);
+        assert!(!crate::racebody::worn_by_a_race(0x5874_ACFC, None), "the control: no options");
+        assert_eq!(body_size(0x5874_ACFC), 1.0);
+        let mut o = fungus_options();
+        o.races[0].1[0].male[1].size = 910;
+        set_options(Some(&o));
+        assert!(crate::racebody::worn_by_a_race(0x5874_ACFC, None));
+        assert!(crate::racebody::worn_by_a_race(0x4A4D_88FB, None));
+        assert!(!crate::racebody::worn_by_a_race(0x1234_5678, None), "a body no step names");
+        assert_eq!(body_size(0x5874_ACFC), 0.91);
+        assert_eq!(body_size(0x1234_5678), 1.0);
+        set_options(None);
+        assert!(!crate::racebody::worn_by_a_race(0x5874_ACFC, None));
+    }
 }
