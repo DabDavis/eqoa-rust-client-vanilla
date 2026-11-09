@@ -6,6 +6,13 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Light Shadows: no square under lamps, steady weapon glows
+- With Light Shadows on, the ground under a street lamp is lit again. The lamp's light sits inside its little
+  housing, and the housing's floor was darkening a square of ground under every lamp.
+- A glowing weapon (an epic sword's glow) or a spell's light no longer makes the shadows of the person or weapon
+  carrying it flicker on and off. Those lights still cast the shadows of walls and everything else that stands
+  still, steadily; torches, braziers and your lantern still cast everyone's shadows as before.
+
 ## 2026-11-09 · Torches, lamps and spells cast shadows
 - A new option, Extended > Lighting > Light Shadows (off unless you turn it on; like Sun Shadows it needs Dynamic
   Lighting on): the light of torches, braziers, candles, lamps, your lantern and spells now stops at whatever stands
