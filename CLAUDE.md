@@ -21,7 +21,9 @@ current.
   on 2026-10-27), and the live game's duel window on a server that turns duels on (the user's of
   2026-10-29, "port the duel window to vanilla too": `duel.rs`, `duelwnd.rs`, `duelplay.rs`, read off SOE's
   final CLIENT in the Corsten save state, README "duels"), and a GM's flight on a server that turns it on (the
-  user's of 2026-11-07, "lets add a gm fly command": `walker.rs`, never in `vi`), and the combat record's window on a
+  user's of 2026-11-07, "lets add a gm fly command": `walker.rs`, never in `vi`), and a jump on a server that offers
+  one (the user's of 2026-11-09, "lets add jump to the game": go-eqoa-server's `world.jump`, 0x7E28; `walker.rs` and
+  `jump.rs`, never in `vi`; V, a Controls row; others in the air drawn at their height there), and the combat record's window on a
   server that keeps one (the user's of 2026-11-07, "lets add a combat record for pvp and duels to the menu": Character >
   Combat Record, `record.rs`, `recordplay.rs`, the server's rows by 0x7E20/0x7E21), and PCSX2's texture packs and
   texture dumps natively (the user's of 2026-11-08, "one pack works in both": Extended > Textures, both off unless

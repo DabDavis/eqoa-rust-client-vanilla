@@ -53,6 +53,11 @@
 //! it off (the pad, the keys, the touch screen) every call is the game's.
 //! While it steers, follow paces the player but does not turn it.
 //!
+//! A jump (`Client::jumps`, go-eqoa-server's `world.jump`), the client's own: the
+//! jump key asks `Walker` for one, which takes off between console frames when
+//! `Client::may_jump` and the walk itself allow (on a floor, out of any liquid),
+//! as a control of the frame, never a step of `UpdateControls`.
+//!
 //! A GM's flight (`Client::flying`, go-eqoa-server's `#fly`), also the client's
 //! own: `Walker` takes the moves up and down along the camera's look, an orbit's
 //! default tilt counting as level (the walk is CLIENT's swim path there), and in
@@ -113,6 +118,13 @@ pub struct Client {
     pub modal: bool,
     /// the client's own (the module's doc): a GM's flight is on
     pub flying: bool,
+    /// the client's own (the module's doc): the server offered the jump
+    /// (`Session::jumps`)
+    pub jumps: bool,
+    /// the client's own: the last 0x40 sent stood on a floor, since the last
+    /// move of the server's (`Play::stood_sent`); a jump begins only after one,
+    /// as go-eqoa-server's movement check judges a jump from one
+    pub stood_sent: bool,
     /// One of the game's frames (`frames.rs`): what this counts in frames
     /// (the manual look's step) moves only then. `Walker::frame_with` sets it.
     pub step: bool,
@@ -120,7 +132,19 @@ pub struct Client {
 
 impl Default for Client {
     fn default() -> Self {
-        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0, modal: false, flying: false, step: true }
+        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0, modal: false, flying: false, jumps: false, stood_sent: false, step: true }
+    }
+}
+
+impl Client {
+    /// Whether the client lets the player jump now (the module's doc): the server
+    /// offered it, the player may move (no window's lock, no hold: 0x00FC or no
+    /// speed, as a GM's Freeze, a root or a duel's hold is told), it is not
+    /// casting (a cast walks), nor flying, the connection is alive, and the last
+    /// report it sent stood on a floor. The walk's own state (on a floor, out of
+    /// any liquid) is the walker's to ask.
+    pub fn may_jump(&self) -> bool {
+        self.jumps && self.stood_sent && self.move_ok && !self.rooted && !self.modal && !self.casting && !self.flying && !self.timed_out && Fe::ZERO < Fe::new(self.run_speed)
     }
 }
 

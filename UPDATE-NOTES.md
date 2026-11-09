@@ -6,6 +6,16 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Jump
+- On a server that has jumps (eqoaclassic can turn them on), V jumps: about half your height, straight up when you
+  stand and on along your way when you run. You come down as a fall comes down and land where you came down, and
+  others playing this client see you rise and land.
+- The jump is on the Controls page (F1), where you can move it to another key. Every button of a controller is
+  already one of the game's, so a controller has no jump button until you give it one there.
+- No jump in the water, in the air, while casting, frozen or rooted, or with a window up. A server without jumps
+  (Sandstorm, eqoa.live) never offers one, and there V does nothing. A PlayStation 2 cannot jump: it shows a
+  jumping player on the ground, playing the fall for a moment.
+
 ## 2026-11-09 · Customise the new races
 - On a server with races of its own, the Customize Character page now offers each new race its own choices
   instead of faces and hair it cannot wear: another kind of the same creature (hill, ice, sand and fire giants and

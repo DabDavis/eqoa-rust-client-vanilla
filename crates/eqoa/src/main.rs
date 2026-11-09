@@ -93,6 +93,7 @@ mod bugnote;
 mod gear;
 mod gram;
 mod hideui;
+mod jump;
 mod livewords;
 mod hud;
 mod raidlist;
