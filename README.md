@@ -819,9 +819,9 @@ model; ITEM.ESF, the arena, Arial and the sounds are the same on both discs.
   otherwise. Its zone list is an older format (record 0x8210 version 1, each
   zone's entry followed by its name). F9 swaps it under the walk
   (`viewer::swap_world_art`, `stream::reopen`): the zones round the player read
-  off the other disc and drawn, the collision world, particles, effect volumes
-  and the sound's world made again, the walk where it was (150-260 ms
-  natively).
+  off the other disc and drawn, the collision world, particles, effect volumes,
+  the sound's world and the map's chrome made again, the walk where it was
+  (150-260 ms natively).
 - **With Frontiers' additions**: the 2002 disc's zones place no effect volumes
   (fog, dust, leaves, shafts, flocks) and no streamed audio; Frontiers' Tunaria is
   kept as its twin (`Library::set_twin`, its zones left on the disc), each zone is

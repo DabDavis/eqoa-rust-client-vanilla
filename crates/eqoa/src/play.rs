@@ -8264,8 +8264,10 @@ impl Play {
             camera: walker.eye.position.to_array(),
             time_ms,
             duel: self.duel_patch(),
-            waypoint: self.map.waypoint(self.world_id()),
-            group_waypoint: self.map.group_waypoint(self.world_id()),
+            // the map's waypoints on the compass, none with the Map off (one
+            // put before it was turned off stays the map's, unshown)
+            waypoint: self.map.waypoint(self.world_id()).filter(|_| crate::settings::map()),
+            group_waypoint: self.map.group_waypoint(self.world_id()).filter(|_| crate::settings::map()),
             minimap: self.minimap_up(),
             tracker: self.tracker_quests(),
         };

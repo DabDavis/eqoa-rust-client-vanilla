@@ -46,13 +46,18 @@ pub fn open(key: &str) -> Option<Box<dyn Store>> {
     }
 }
 
-/// Where the map's worlds are kept natively: `$EQOA_MAP_CACHE`, else
-/// `eqoa-rs/map` beside the unpacked modules' `eqoa-rs/dnas`.
+/// Where the map's worlds are kept natively: `$EQOA_MAP_CACHE`, else `map`
+/// in the unpacked modules' `$EQOA_CACHE` when that is set (Android's app
+/// directory, `android`; a test's own), else `eqoa-rs/map` beside the
+/// unpacked modules' `eqoa-rs/dnas`.
 #[cfg(not(target_arch = "wasm32"))]
 fn root() -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
     if let Some(d) = std::env::var_os("EQOA_MAP_CACHE") {
         return Some(PathBuf::from(d));
+    }
+    if let Some(d) = std::env::var_os("EQOA_CACHE") {
+        return Some(PathBuf::from(d).join("map"));
     }
     let home = || std::env::var_os("HOME").map(PathBuf::from);
     let base = if cfg!(windows) {
