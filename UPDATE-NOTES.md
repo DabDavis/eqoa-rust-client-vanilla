@@ -6,6 +6,13 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · Capes sit clear of armour
+- A cape now sits off what you wear: plate, broad shoulders and a robe's skirt show through it far less as you
+  stand, walk and run. Over the back and shoulders it moves with the body under it, and under a robe its lower
+  part swings with the robe's hem.
+- Wherever your race's walk or run would still bring the body through it (a broad back, an arm swung back), it
+  hangs a little further off, only there and never by much; where nothing comes near it, it rests where it did.
+
 ## 2026-11-09 · Customise the new races
 - On a server with races of its own, the Customize Character page now offers each new race its own choices
   instead of faces and hair it cannot wear: another kind of the same creature (hill, ice, sand and fire giants and
