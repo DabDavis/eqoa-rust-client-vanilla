@@ -6,6 +6,16 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · The Red Swarming Death's swarm looks as it does on a PS2
+- A necromancer's Red Swarming Death (and the Swarming Death, the Construct of Sorrows) is a cloud of red puffs
+  round a faint horned skull. Its puffs used to pile up into one dark red blot; now they are drawn as the PS2 draws
+  them, each faint puff stopping short of the next, a speckled red swarm you can see through, as on a console.
+- The same goes for the other faint particles of that kind: the flies and stench round the rotting creatures
+  (flesh fiends, rats of pestilence, the dead riders), smoke, rain and snow, and the dark auras some spells cast,
+  which come out darker and speckled, as on a PS2.
+- It is in Options > Extended > Lighting > Particles: PS2 (the game's look, the default) or Exact (as before,
+  smoother and darker where many overlap). The fires and glows are unchanged.
+
 ## 2026-11-09 · The map and the quest helper are back
 - M opens the map again: the whole world drawn from your own disc, with the towns' names, the coach routes and
   stops, the XP camps and the places players suggested and a GM accepted. Click (or tap) to put a waypoint, which

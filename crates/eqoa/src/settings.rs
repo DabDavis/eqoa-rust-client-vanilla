@@ -727,6 +727,14 @@ pub struct ClientOptions {
     /// at eight bits a channel (a brighter cloud). PS2 by default, the
     /// game's look (the user, 2026-10-30, named no default: flip it here).
     pub ps2_fog: bool,
+    /// Particles: PS2, the particles of blend mode 3 (the Red Swarming
+    /// Death's swarm, the flies and stench round the rotting, smoke) blended
+    /// as the GS blends them into the PS2's 16-bit frame, dithered and cut to
+    /// five bits a channel (`render::Renderer::set_ps2_particles`: many faint
+    /// puffs stop short of their colour, each its own, as the game shows
+    /// them); Exact, blended at eight bits a channel (they pile up into a
+    /// darker mass). PS2 by default, the game's look, as Ground Fog's.
+    pub ps2_particles: bool,
     /// Ambient Occlusion (the user's of 2026-11-08, "lets add ambient
     /// occlusion"): off, the picture as the game draws it; on, the opaque
     /// scene's creases, corners and contacts darkened per pixel
@@ -880,6 +888,7 @@ impl Default for ClientOptions {
             shadows: true,
             environment: true,
             ps2_fog: true,
+            ps2_particles: true,
             ambient_occlusion: false,
             sun_shadows: false,
             dynamic_lighting: false,
@@ -998,6 +1007,10 @@ impl ClientOptions {
         if !self.ps2_fog {
             s.push_str("ground_fog=exact\n");
         }
+        // Particles only when Exact
+        if !self.ps2_particles {
+            s.push_str("particles=exact\n");
+        }
         // Ambient Occlusion only when on
         if self.ambient_occlusion {
             s.push_str("ambient_occlusion=on\n");
@@ -1111,6 +1124,8 @@ impl ClientOptions {
                 ("environment", "off") => c.environment = false,
                 ("ground_fog", "ps2") => c.ps2_fog = true,
                 ("ground_fog", "exact") => c.ps2_fog = false,
+                ("particles", "ps2") => c.ps2_particles = true,
+                ("particles", "exact") => c.ps2_particles = false,
                 ("ambient_occlusion", "on") => c.ambient_occlusion = true,
                 ("ambient_occlusion", "off") => c.ambient_occlusion = false,
                 ("sun_shadows", "on") => c.sun_shadows = true,
@@ -2100,6 +2115,25 @@ mod tests {
         for bad in ["dynamic_lighting=1", "dynamic_lighting=", "dynamic_lighting=On", "lighting=on"] {
             assert!(!ClientOptions::from_text(bad).dynamic_lighting, "{bad}: off, the default");
         }
+    }
+
+    /// Particles, PS2 by default (the game's look), kept only when Exact;
+    /// anything but ps2 or exact leaves it PS2. The control: Ground Fog's
+    /// Exact is not the particles'.
+    #[test]
+    fn particles_kept_only_when_exact() {
+        let d = ClientOptions::default();
+        assert!(d.ps2_particles, "PS2, the game's");
+        assert_eq!(ClientOptions { ps2_particles: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nparticles=exact\n");
+        assert!(!d.to_text().contains("particles"), "the default not written");
+        let c = ClientOptions::from_text("particles=exact");
+        assert!(!c.ps2_particles && c.ps2_fog && c.environment, "Particles alone");
+        assert_eq!(ClientOptions::from_text(&c.to_text()), c);
+        assert!(ClientOptions::from_text("particles=ps2") == d);
+        for bad in ["particles=off", "particles=", "particle=exact", "particles=PS2"] {
+            assert!(ClientOptions::from_text(bad).ps2_particles, "{bad}: PS2, the default");
+        }
+        assert!(ClientOptions::from_text("ground_fog=exact").ps2_particles, "Ground Fog's Exact is not the particles'");
     }
 
     /// Ground Fog, PS2 by default (the game's look), kept only when Exact;

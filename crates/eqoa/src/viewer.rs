@@ -345,6 +345,8 @@ pub fn shot_with(
     renderer.set_sun_shadows(&device, crate::settings::client().sun_shadows);
     renderer.set_ps2_sums(render::fog16::supported(&adapter));
     renderer.set_ps2_sequential(fog_sequential());
+    // the particles' blend (kept only under `$EQOA_CONFIG` for a shot)
+    renderer.set_ps2_particles(crate::settings::client().ps2_particles);
     renderer.scroll_time = Some(script.as_ref().map_or(0, |s| s.ms) as f32 / 1000.0);
     // the options' Texture Packs and Dump Textures (kept only under
     // `$EQOA_CONFIG` for a shot), before a texture is made
@@ -5591,6 +5593,9 @@ impl App {
                             s.relight(&g.renderer, &g.device);
                         }
                     }
+                    // the particles' blend as the options have it (Particles:
+                    // PS2, the 16-bit frame's; Exact, eight bits a channel)
+                    g.renderer.set_ps2_particles(crate::settings::client().ps2_particles);
                     if let Some(s) = streamer.as_mut() {
                         // One zone a frame, as the game's loader takes them;
                         // under the loading screen all at once.

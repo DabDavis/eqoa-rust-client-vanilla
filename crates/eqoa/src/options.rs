@@ -50,7 +50,13 @@
 //!   shadows that move with the sun, `render::sunshadow`; on without it,
 //!   the page says what they need),
 //!   and Ambient Occlusion (Off, the game's picture; On: the opaque scene's
-//!   creases, corners and contacts darkened per pixel, `render::ao`);
+//!   creases, corners and contacts darkened per pixel, `render::ao`), and
+//!   Particles (2026-11-09; PS2, the game's look: the particles of blend
+//!   mode 3, the Red Swarming Death's swarm, the flies and stench of the
+//!   rotting, smoke, blended as the GS blends them into the PS2's 16-bit
+//!   frame, `render::Renderer::set_ps2_particles`, as Ground Fog's fog;
+//!   Exact: at eight bits a channel, where many faint puffs pile up into a
+//!   darker mass; here because World's page is full);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Update Notices (one setting for
 //!   every window: off, the game never asks to restart into a newer build,
@@ -707,6 +713,9 @@ impl WndOptions {
                     // Ambient Occlusion: its passes over the world from the
                     // next frame (`viewer`, `render::ao`)
                     54 => c.ambient_occlusion = !c.ambient_occlusion,
+                    // Particles: their blend from the next frame (`viewer`,
+                    // `render::Renderer::set_ps2_particles`)
+                    58 => c.ps2_particles = !c.ps2_particles,
                     // Dynamic Lighting: the world lit per fragment or the
                     // PS2's way from the next frame (`viewer`, `lights`)
                     52 => c.dynamic_lighting = !c.dynamic_lighting,
@@ -1158,7 +1167,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 41] = [
+const EXTENDED_ITEMS: [(i32, &str); 42] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1200,6 +1209,7 @@ const EXTENDED_ITEMS: [(i32, &str); 41] = [
     (52, "Dynamic Lighting"),
     (53, "Sun Shadows"),
     (54, "Ambient Occlusion"),
+    (58, "Particles"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1243,7 +1253,7 @@ struct Category {
 const ALL_CATEGORIES: [Category; 10] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
-    Category { name: "Lighting", items: &[52, 53, 54], note: Note::Lighting },
+    Category { name: "Lighting", items: &[52, 53, 54, 58], note: Note::Lighting },
     Category { name: "UI", items: &[22, 29, 30, 40, 49], note: Note::None },
     Category { name: "Controller", items: &[16, 19, 48], note: Note::Reads },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None },
@@ -1355,6 +1365,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         47 => wide(if c.ps2_fog { "PS2" } else { "Exact" }),
         53 => on_off(c.sun_shadows),
         54 => on_off(c.ambient_occlusion),
+        58 => wide(if c.ps2_particles { "PS2" } else { "Exact" }),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         39 => wide(&format!("x{}", c.render_scale)),
@@ -1762,8 +1773,18 @@ mod tests {
         assert_eq!(value_text(&vui, 54), Some(wide(vui.words.get(551, vui.language))));
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::client().ambient_occlusion, "and back: two values");
+        // Particles, PS2 (the game's look), then Exact
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (2, Some(&9)), "Lighting's last row");
+        assert_eq!(w.item, 58, "Particles");
+        assert!(settings::client().ps2_particles, "PS2: the game's look");
+        assert_eq!(value_text(&vui, 58), Some(wide("PS2")));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().ps2_particles, settings::client().ps2_fog, cues.last()), (false, true, Some(&11)), "Exact, Ground Fog still PS2");
+        assert_eq!(value_text(&vui, 58), Some(wide("Exact")));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::client().ps2_particles, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (3, Some(&9)), "Lighting's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.cat, w.cat_sel, w.item), (3, None, 2, -1), "back to the categories, Lighting still lit");
         // UI: Ability Bars, Update Notices, Text, HUD, Raid List
