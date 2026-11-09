@@ -563,6 +563,8 @@ impl Points {
         let mut drawn = Drawn::default();
         let g = widen(self.size);
         let mut u = ShadowUniform::zeroed();
+        // every face's uniform, written at once (the maps in use)
+        let mut faces = vec![0u8; self.slots * 6 * self.stride as usize];
         u.params = [g, 1.0 / self.size as f32, 2.0 * g / self.size as f32, 0.0];
         // what moves this frame: the models, and the groups' animated props
         let mut movers = Vec::new();
@@ -592,12 +594,12 @@ impl Points {
             u.depth[k] = [a, b, 0.0, 0.0];
             for face in 0..6 {
                 let f = FaceUniform { m: face_matrix(face, s.range, g).to_cols_array_2d(), origin: (s.at - view.eye).extend(BACK_PUSH).to_array(), layer: [(k * 6 + face) as u32, 0, 0, 0] };
-                queue.write_buffer(&self.faces, (k * 6 + face) as u64 * self.stride, bytemuck::bytes_of(&f));
+                let at = (k * 6 + face) * self.stride as usize;
+                faces[at..at + size_of::<FaceUniform>()].copy_from_slice(bytemuck::bytes_of(&f));
             }
             let (at, range) = (s.at, s.range);
             let reached: Vec<&GpuGroup> = groups.iter().copied().filter(|g| g.bounds.is_some_and(|b| meets(b, at, range))).collect();
             let ids: Vec<u64> = reached.iter().map(|g| g.id).collect();
-            let near = near(&reached, at, range);
             let personal = s.key == lit::PERSONAL_KEY;
             let casting: Vec<&Mover> = movers.iter().filter(|m| self.casts(m, at, range, personal)).collect();
             let mover_box = |m: &Mover| match m {
@@ -607,6 +609,7 @@ impl Points {
             let in_face = |face: usize, b: Option<(Vec3, Vec3)>| b.is_none_or(|(lo, hi)| in_face(face, (lo - at, hi - at), range, g));
             if s.still < SETTLE {
                 // still moving: drawn whole, every face
+                let near = near(&reached, at, range);
                 for face in 0..6 {
                     let here: Vec<&&Mover> = casting.iter().filter(|m| in_face(face, mover_box(m))).collect();
                     let mut pass = self.pass(encoder, &self.live[k * 6 + face]);
@@ -619,6 +622,7 @@ impl Points {
                 continue;
             }
             if s.cache.as_ref() != Some(&ids) {
+                let near = near(&reached, at, range);
                 for face in 0..6 {
                     let mut pass = self.pass(encoder, &self.cache[k * 6 + face]);
                     let mut current = None;
@@ -644,6 +648,9 @@ impl Points {
                 drawn.draws += self.movers(r, &mut pass, &here, k * 6 + face, &mut current);
                 s.dirty[face] = !here.is_empty();
             }
+        }
+        if drawn.maps > 0 {
+            queue.write_buffer(&self.faces, 0, &faces);
         }
         queue.write_buffer(&self.buf, 0, bytemuck::bytes_of(&u));
         self.drawn.set(drawn);
