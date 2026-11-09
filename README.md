@@ -174,11 +174,22 @@ or a browser (each described where it lives below):
   each worn slot go on its bones, drawn from inside too (a hollow shell round thin bones: culled as a
   human's skin is, its far side was seen through), and its bones under them are hidden; where nothing
   is worn they stay bare. Its helm goes on HumanMale's head node where its body names none (the 2002
-  disc's skeleton, on the 2002 HumanMale's skeleton: `slotless::helm_node`). Any body with texture
-  slots is dressed exactly as before (held to every CSprite on the disc).
+  disc's skeleton, on the 2002 HumanMale's skeleton: `slotless::helm_node`), and sits so the skull
+  stays inside it (the owner, 2026-11-09: "the skeleton helm has its head clipping out the back
+  slightly"; `slotless::helm_fit`): that human's node carries none of the stretch SOE gave Frontiers'
+  skeleton's own helm node (a FixScale of 1.1 across and front to back), so the back of the skull came
+  out through every 2002 helm by 4 to 13.5 mm. Each skeleton a player may wear has its helm stretched
+  about its node and moved front to back by a table measured off the meshes (`slotless::SEATS`, printed
+  by `tests::measure_helm_fits`): the least change that holds every vertex of the skull half a
+  millimetre inside each of the eight helms, in every pose (the skull rides the helm's node rigidly in
+  every action); Frontiers' own skeleton needs none, the three its options offer (skulls a tenth larger)
+  a few millimetres for their cheeks. Any body with texture slots is dressed exactly as before (held
+  to every CSprite on the disc), and so is every other body's helm.
   Players' characters only (a creature whose name colour is a player's, 2, and the pregame's figures):
   NPCs keep the look the PS2 gave them (the user: "Players only").
-  `eqoa dress <body> <out.png> [set=N robe=R dye=RRGGBB ...]` draws a body in a look from four sides.
+  `eqoa dress <body> <out.png> [set=N robe=R dye=RRGGBB ...]` draws a body in a look from four sides;
+  `helm=N` with its helm (`helmfit=0` as the node alone seats it), `era=2002` in the 2002 disc's art,
+  `frame=head` framed on the head.
 - **Weapons on a server's race whose body holds none** (petition 1278, a Gargoyle: "gargoyles dont show
   equiped weapons"; `racebody`): a CSprite whose header says `npc` 0 holds no items on a PS2 (`AttachItem`
   returns at once while `m_flags & 1` is clear), and the gargoyles' body (0xB4D2D132) is one, the only one
