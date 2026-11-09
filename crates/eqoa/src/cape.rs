@@ -270,6 +270,9 @@ thread_local! {
     static SOURCES: std::cell::RefCell<HashMap<u8, Option<Rc<Source>>>> = Default::default();
     /// The capes fitted, by style, wearer and the art its skeleton is in.
     static FITTED: std::cell::RefCell<HashMap<(u8, u32, Era), Option<Rc<esf::Model>>>> = Default::default();
+    /// The bodies' skin palettes in the poses a cape is fitted against
+    /// (`palettes`), by wearer and art: one walk and run played a body.
+    static POSED: std::cell::RefCell<HashMap<(u32, Era), Rc<Vec<Vec<glam::Mat4>>>>> = Default::default();
 }
 
 /// A style's cape as cut, in Frontiers' art (capes are the server's, not
@@ -306,8 +309,8 @@ pub fn wears(wearer: u32) -> bool {
 /// its nodes, so the body's skin palette draws it. None for style 0 or one
 /// this client has no art for, a body that wears none or does not stand on
 /// two legs, or a library without the style's body. Kept per style, wearer
-/// and art (a body's mesh is built and its walk and run played here, for its
-/// measures, only when a cape is first fitted to it).
+/// and art (a body's mesh is built here, for its measures, only when a cape
+/// is first fitted to it, and its walk and run played once a body).
 pub fn model(lib: &Library, cape: Cape, wearer: u32, cs: &CSprite<Ee>) -> Option<esf::Model> {
     let s = style(cape.style)?;
     if !wears(wearer) {
@@ -320,7 +323,14 @@ pub fn model(lib: &Library, cape: Cape, wearer: u32, cs: &CSprite<Ee>) -> Option
         None => {
             let src = source(lib, s)?;
             let body = lib.with_view(era, || lib.lookup(wearer as i32).and_then(|r| lib.build_model(r)))?;
-            let poses = lib.with_view(era, || palettes(lib, wearer));
+            let poses = match POSED.with(|c| c.borrow().get(&(wearer, era)).cloned()) {
+                Some(p) => p,
+                None => {
+                    let p = Rc::new(lib.with_view(era, || palettes(lib, wearer)));
+                    POSED.with(|c| c.borrow_mut().insert((wearer, era), p.clone()));
+                    p
+                }
+            };
             let f = fit(&src, &Bones::of(cs), &body, &poses).map(Rc::new);
             FITTED.with(|c| c.borrow_mut().insert(key, f.clone()));
             f
@@ -800,7 +810,9 @@ fn sway(m: &mut esf::Model, weld: &Weld, dir: &[Vec3], pts: &[(Vec3, [u8; 4], [u
         let c: Vec<Vec3> = at.iter().zip(&skin).map(|(&p, &(b, w))| posed(p, b, w)).collect();
         // each place's way out, posed
         let d: Vec<Vec3> = at.iter().zip(&skin).zip(&c).zip(dir).map(|(((&p, &(b, w)), &q), &o)| ((posed(p + o * 0.01, b, w) - q) * 100.0).try_normalize().unwrap_or(o)).collect();
-        let body: Vec<Vec3> = pts.iter().map(|&(p, b, w)| posed(p, b, w)).collect();
+        // by height, so a triangle looks only at the points level with it
+        let mut body: Vec<Vec3> = pts.iter().map(|&(p, b, w)| posed(p, b, w)).collect();
+        body.sort_by(|a, b| a.y.total_cmp(&b.y));
         for t in &weld.tris {
             let k3 = t.map(|k| c[k]);
             let Some(n) = (k3[1] - k3[0]).cross(k3[2] - k3[0]).try_normalize() else { continue };
@@ -813,7 +825,8 @@ fn sway(m: &mut esf::Model, weld: &Weld, dir: &[Vec3], pts: &[(Vec3, [u8; 4], [u
                 continue;
             }
             let mut need = 0.0f32;
-            for &p in body.iter().filter(|p| p.cmpge(lo).all() && p.cmple(hi).all()) {
+            let level = &body[body.partition_point(|p| p.y < lo.y)..body.partition_point(|p| p.y <= hi.y)];
+            for &p in level.iter().filter(|p| p.cmpge(lo).all() && p.cmple(hi).all()) {
                 let h = (p - k3[0]).dot(n);
                 if h <= -gap || h >= reach {
                     continue;
