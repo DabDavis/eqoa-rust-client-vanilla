@@ -852,8 +852,10 @@ pub fn shot_with(
                 {
                     p.fake_quests(&q);
                 }
-                // `EQOA_DAMAGE=<attacker>,<amount>,<defender>@ms;...`: 0x00DBs
-                // then (self, target or a hex id).
+                // `EQOA_DAMAGE=<attacker>,<amount>,<defender>[,<tag>]@ms;...`:
+                // 0x00DBs then (self, target or a hex id), a fourth field the
+                // number's tag in hex (`numcolor`: 05 a proc, 86 the pet's heal),
+                // read as from a server that offered tags.
                 // `EQOA_DIE=ms`: the player dies then, as 0x005E says.
                 if let Ok(v) = std::env::var("EQOA_DIE")
                     && let Ok(ms) = v.parse::<i64>()
@@ -866,10 +868,11 @@ pub fn shot_with(
                         if let Some((hit, ms)) = part.rsplit_once('@')
                             && let Ok(ms) = ms.parse::<i64>()
                             && t == ms / 16 * 16
-                            && let [a, n, d] = hit.split(',').collect::<Vec<_>>()[..]
+                            && let [a, n, d, ref tag @ ..] = hit.split(',').collect::<Vec<_>>()[..]
                             && let Ok(n) = n.parse::<i64>()
                         {
-                            p.fake_damage(a, n, d, walker.cam.camera_mode);
+                            let tag = tag.first().and_then(|t| u8::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok());
+                            p.fake_damage_tagged(a, n, d, tag, walker.cam.camera_mode);
                         }
                     }
                 }

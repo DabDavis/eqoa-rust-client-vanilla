@@ -13,7 +13,7 @@
 //! Save Changes (the menu a row longer), its words the client's (no
 //! WORDS.TXT entry). It opens a menu of its own over the options menu, drawn
 //! as that one is: Video, World, Lighting, UI, Controller, Camera, Characters,
-//! Sound, natively Textures, and Map (`CATEGORIES`), each of which opens a page laid out and driven as
+//! Sound, natively Textures, Map and Number Colors (`CATEGORIES`), each of which opens a page laid out and driven as
 //! the game's pages are, short enough that none scrolls (`PAGE_MOST`):
 //! - Video: Display (natively: Window or Full Screen, the window's own as
 //!   F11 and Alt+Enter toggle it, `display`: it changes at once and stays,
@@ -137,7 +137,14 @@
 //!   none, and no server asked for them) and Quest Tracker (On: the HUD's
 //!   list of the quests under way, each step counted, under the minimap,
 //!   `tracker`). Each defaults to On; the Map and the Quest Helper Off are
-//!   the game as it is without them.
+//!   the game as it is without them;
+//! - Number Colors (2026-11-09, the server owner's "we can add the number
+//!   colors to extended menu"): Your Damage, Your Procs, Your Heals, Pet
+//!   Damage, Pet Procs and Pet Heals, each Default (the game's own colour) or
+//!   one of `numcolor::PALETTE`, its value drawn in it: the floating numbers of
+//!   the player's own figures and its pet's in that colour, by what made them,
+//!   where the server says (go-eqoa-server's tags, asked for while any row is
+//!   not Default: `Session::agree_number_tags`); every row Default by default.
 //! Triangle goes back a step: a page to the categories, the categories to
 //! the options menu. They change as they are moved, Triangle on the options
 //! menu puts them back, and Save Changes keeps them with the game's
@@ -614,8 +621,9 @@ impl WndOptions {
     /// the Quest Helper (44) and Quest Tracker (45) turn over; Texture Folder (55) shows the
     /// folder (`texpack::open_folder`: sound 8, or 9 with none to show);
     /// Output Device (32) goes round the system default and the devices
-    /// listed (`step_output`); Display (33) turns the window over (`display`). A
-    /// slider (`slider_at`) makes its own
+    /// listed (`step_output`); Display (33) turns the window over (`display`);
+    /// the Number Colors rows (64 to 69) go round Default and
+    /// `numcolor::PALETTE`. A slider (`slider_at`) makes its own
     /// sound, as a volume does; every other row sound 11.
     fn change(&mut self, o: &mut GameOptions, d: i32, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>) {
         let tracks = if FEATURES & 0x100 != 0 { 10 } else { 3 };
@@ -761,6 +769,13 @@ impl WndOptions {
                     // Particles: their blend from the next frame (`viewer`,
                     // `render::Renderer::set_ps2_particles`)
                     63 => c.ps2_particles = !c.ps2_particles,
+                    // Number Colors: round Default and the palette, the next
+                    // number drawn in it and the server told from the next
+                    // frame whether to tag them (`Session::agree_number_tags`)
+                    64..=69 => {
+                        let row = (self.item - 64) as usize;
+                        c.number_colors[row] = crate::numcolor::step(c.number_colors[row], d);
+                    }
                     // Dynamic Lighting: the world lit per fragment or the
                     // PS2's way from the next frame (`viewer`, `lights`)
                     52 => c.dynamic_lighting = !c.dynamic_lighting,
@@ -1043,6 +1058,13 @@ impl WndOptions {
     /// (the arrows on the selected one); a value `None` is a slider drawn by
     /// the caller. The pages start a row down.
     fn draw_rows(&mut self, vui: &Vui, r: &mut dyn Raster, labels: &[Vec<u16>], values: &[Option<Vec<u16>>]) {
+        self.draw_rows_painted(vui, r, labels, values, &[]);
+    }
+
+    /// `draw_rows` with a value drawn in its own colour where `paints` gives
+    /// one (a Number Colors row's, `numcolor::swatch`), shadowed so a light
+    /// one reads on the window; every other as the game's pages draw them.
+    fn draw_rows_painted(&mut self, vui: &Vui, r: &mut dyn Raster, labels: &[Vec<u16>], values: &[Option<Vec<u16>>], paints: &[Option<[f32; 4]>]) {
         self.window2.draw(vui, r);
         let width = self.window2.size[0];
         for (k, label) in labels.iter().enumerate() {
@@ -1057,7 +1079,8 @@ impl WndOptions {
             let Some(v) = v else { continue };
             let row = k as i32 + 1;
             self.window2.draw_frame(vui, r, width - 176, row, 132, 1, if self.row == k as i32 { 96 } else { 64 });
-            self.window2.text_box(vui, r, v, width - 176, row, 132, 1, UI_COLORS[0], 8 | 2);
+            let (c, shadow) = paints.get(k).copied().flatten().map_or((UI_COLORS[0], 0), |c| (c, 1));
+            self.window2.text_box(vui, r, v, width - 176, row, 132, 1, c, 8 | 2 | shadow);
             // the frame's two halves (its side arrows are glyphs)
             let at = self.window2.top_left()[0] + width - 176;
             self.halves(rows_rect(&self.window2, vui, r, width - 176, row, 132, 1), at - 4, at + 66, at + 136, k as i32);
@@ -1158,7 +1181,8 @@ impl WndOptions {
         }
         let labels: Vec<Vec<u16>> = cat.items.iter().map(|&i| wide(label_of(i))).collect();
         let values: Vec<Option<Vec<u16>>> = cat.items.iter().map(|&i| value_text(vui, i)).collect();
-        self.draw_rows(vui, r, &labels, &values);
+        let paints: Vec<Option<[f32; 4]>> = cat.items.iter().map(|&i| value_paint(i)).collect();
+        self.draw_rows_painted(vui, r, &labels, &values, &paints);
         let width = self.window2.size[0];
         let knob = vui.entry(166).uv1[0];
         let at = self.window2.top_left()[0] + width - 180;
@@ -1252,7 +1276,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 49] = [
+const EXTENDED_ITEMS: [(i32, &str); 55] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1302,6 +1326,12 @@ const EXTENDED_ITEMS: [(i32, &str); 49] = [
     (61, "Touch Opacity"),
     (62, "Touch Edge"),
     (63, "Particles"),
+    (64, crate::numcolor::LABELS[0]),
+    (65, crate::numcolor::LABELS[1]),
+    (66, crate::numcolor::LABELS[2]),
+    (67, crate::numcolor::LABELS[3]),
+    (68, crate::numcolor::LABELS[4]),
+    (69, crate::numcolor::LABELS[5]),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1345,8 +1375,9 @@ struct Category {
 /// natively Textures (2026-11-08: Texture Packs and Dump Textures, a
 /// folder's files a page cannot reach; 2026-11-09: Texture Folder); Map last
 /// (2026-11-09: the map and the quest helper, the client's own, back from
-/// before 2026-10-27).
-const ALL_CATEGORIES: [Category; 10] = [
+/// before 2026-10-27); Number Colors after it (2026-11-09: the floating
+/// numbers' colours by what made them, `numcolor`).
+const ALL_CATEGORIES: [Category; 11] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting },
@@ -1357,6 +1388,7 @@ const ALL_CATEGORIES: [Category; 10] = [
     Category { name: "Sound", items: SOUND, note: Note::Output },
     Category { name: "Textures", items: TEXTURES, note: Note::Textures },
     Category { name: "Map", items: &[41, 42, 43, 44, 45], note: Note::None },
+    Category { name: "Number Colors", items: &crate::numcolor::ITEMS, note: Note::None },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -1364,7 +1396,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[9]]
+    [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[10]]
 };
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
@@ -1474,6 +1506,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         56 => on_off(c.light_shadows),
         54 => on_off(c.ambient_occlusion),
         63 => wide(if c.ps2_particles { "PS2" } else { "Exact" }),
+        64..=69 => wide(crate::numcolor::name(c.number_colors[(item - 64) as usize])),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         39 => wide(&format!("x{}", c.render_scale)),
@@ -1489,6 +1522,13 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         33 => wide(if crate::display::full() { "Full Screen" } else { "Window" }),
         _ => return None,
     })
+}
+
+/// The colour an Extended row's value is drawn in, none for the windows'
+/// own: a Number Colors row's colour (Default none).
+fn value_paint(item: i32) -> Option<[f32; 4]> {
+    let row = crate::numcolor::ITEMS.iter().position(|&i| i == item)?;
+    crate::numcolor::swatch(crate::settings::client().number_colors[row])
 }
 
 /// What Video's page says beside Back while Render Scale is chosen: the
@@ -2223,7 +2263,33 @@ mod tests {
         assert_eq!((w.row, cues.last()), (4, Some(&9)), "Map's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.cat_sel, cues.last()), (9, Some(&9)), "Map, the last category");
+        // Number Colors: six rows, each Default (the game's colour, drawn as
+        // any value) then round the palette either way, each drawn in its
+        // colour, one moving no other
+        assert_eq!((w.cat_sel, cues.last()), (10, Some(&11)), "Number Colors, after Map");
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(10), 64), "Number Colors, Your Damage");
+        let last = crate::numcolor::PALETTE.len() as u8;
+        for (row, item) in crate::numcolor::ITEMS.into_iter().enumerate() {
+            assert_eq!((w.item, label_of(item)), (item, crate::numcolor::LABELS[row]));
+            assert_eq!(settings::number_colors(), [0; crate::numcolor::ROWS], "{}: every row Default", label_of(item));
+            assert_eq!((value_text(&vui, item), value_paint(item)), (Some(wide("Default")), None), "{}: Default, drawn as any value", label_of(item));
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((settings::number_colors()[row], cues.last()), (1, Some(&11)), "{}: on to the first colour", label_of(item));
+            assert_eq!((value_text(&vui, item), value_paint(item)), (Some(wide("White")), Some([1.0; 4])), "{}: White, in white", label_of(item));
+            assert_eq!(settings::number_colors().iter().filter(|&&c| c != 0).count(), 1, "{}: no other row moved", label_of(item));
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+            assert_eq!(settings::number_colors()[row], last, "{}: left of Default, the last", label_of(item));
+            assert_eq!(value_text(&vui, item), Some(wide("Gray")));
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!(settings::number_colors()[row], 0, "{}: and round to Default", label_of(item));
+            press(&mut w, &mut o, key::DOWN, &mut cues);
+        }
+        assert_eq!((w.row, cues.last()), (5, Some(&9)), "Number Colors' last row");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.cat_sel, cues.last()), (10, Some(&9)), "Number Colors, the last category");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.sel), (-1, 3), "the menu, on Extended");
@@ -2741,6 +2807,73 @@ mod tests {
         let upright = real(60, crate::touch::Opts { buttons: 2.0, ..Default::default() }, (1080, 2400));
         assert!(upright.as_deref().is_some_and(|n| n.starts_with("Buttons drawn at 1") && n.ends_with("% here")), "{upright:?}");
         assert_eq!(real(59, crate::touch::Opts { stick: 2.0, ..Default::default() }, (2400, 1080)), None);
+    }
+
+    /// Number Colors' page draws a chosen row's value in its colour over a
+    /// black shadow (it reads on the window, a light one too), and a Default
+    /// row's as every value is drawn, in the window's black with no shadow
+    /// (the control: every row Default draws no colour at all).
+    #[test]
+    fn number_colors_values_are_drawn_in_their_colour() {
+        use crate::pointer::testing::{NullRaster, vui};
+        #[derive(Default)]
+        struct Texts(Vec<([i32; 2], [f32; 4], String)>);
+        impl Raster for Texts {
+            fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+            fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+            fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+            fn draw_centered_string(&mut self, at: [i32; 2], c: [f32; 4], s: &[u16], _: u32) {
+                self.0.push((at, c, String::from_utf16_lossy(s)));
+            }
+            fn string_width(&self, s: &[u16]) -> i32 {
+                s.len() as i32 * 8
+            }
+            fn point_size(&self) -> i32 {
+                16
+            }
+            fn viewport(&self) -> [i32; 4] {
+                [0, 0, 640, 448]
+            }
+            fn set_viewport(&mut self, _: [i32; 4]) {}
+        }
+        impl crate::ui::Layout for Texts {}
+        let page = |choices: [u8; 6]| -> Vec<([i32; 2], [f32; 4], String)> {
+            crate::settings::testing::reset(false);
+            let mut c = crate::settings::client();
+            c.number_colors = choices;
+            crate::settings::set_client(c);
+            let vui = vui();
+            let mut r = NullRaster;
+            let mut o = GameOptions::default();
+            let mut w = WndOptions::default();
+            let (mut cues, mut ups) = (Vec::new(), Vec::new());
+            w.open(&vui, &r, &o);
+            w.sel = 3;
+            w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+            w.cat_sel = CATEGORIES.iter().position(|c| c.name == "Number Colors").unwrap() as i32;
+            w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+            let mut t = Texts::default();
+            w.draw(&vui, &mut t, &o, &mut ups);
+            t.0
+        };
+        let red = [1.0, 48.0 / 255.0, 48.0 / 255.0, 1.0];
+        let drawn = page([0, crate::numcolor::from_key("red").unwrap(), 0, 0, 0, 0]);
+        let of = |s: &str| drawn.iter().filter(|d| d.2 == s).cloned().collect::<Vec<_>>();
+        let reds = of("Red");
+        assert_eq!(reds.len(), 2, "its shadow and itself: {drawn:?}");
+        assert_eq!((reds[0].1, reds[1].1), ([0.0, 0.0, 0.0, 1.0], red), "a black shadow under it, then it in red");
+        assert_eq!(reds[0].0, [reds[1].0[0] + 2, reds[1].0[1] + 2], "the shadow 2 down and right");
+        let defaults = of("Default");
+        assert_eq!(defaults.len(), 5, "five rows Default, no shadows: {defaults:?}");
+        assert!(defaults.iter().all(|d| d.1 == UI_COLORS[0]), "Default in the window's black");
+        let plain = page([0; 6]);
+        assert!(plain.iter().filter(|d| d.2 == "Default").all(|d| d.1 == UI_COLORS[0]) && plain.iter().filter(|d| d.2 == "Default").count() == 6);
+        for p in crate::numcolor::LABELS {
+            assert!(plain.iter().any(|d| d.2 == p), "{p}'s label on the page");
+        }
+        crate::settings::testing::reset(false);
     }
 
     /// Every Extended row is one item, and each category's rows are rows:

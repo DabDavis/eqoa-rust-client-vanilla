@@ -324,6 +324,39 @@ pub const OP_PET_EFFECTS: u16 = 0x7E32;
 /// its name (a u8 byte count and UTF-8), in the order they went on. Each is the
 /// whole set; none, no pet.
 pub const OP_PET_EFFECTS_DATA: u16 = 0x7E33;
+/// go-eqoa-server's own: what made each figure, for the Extended page's Number
+/// Colors (`Play::damage_indication`; the user, 2026-11-09: "we can add the
+/// number colors to extended menu"). The offer, server to client once the
+/// player is in the world: a u8, 1, the tag's layout. CLIENT has no such case,
+/// so a PS2 ignores it; nothing is asked of a server that made no offer.
+pub const OP_NUMBER_TAGS_OFFER: u16 = 0x7E38;
+/// The answer to [`OP_NUMBER_TAGS_OFFER`], client to server, at once and
+/// whenever it changes (`agree_number_tags`): a u8, 1 to have the figures
+/// tagged (a Number Colors row not Default), 0 to stop. From a 1 on, each 0x00DB
+/// of a figure the player or its pet made carries one byte after its body
+/// ([`number_tag`]); every other is the retail body.
+pub const OP_NUMBER_TAGS_ANSWER: u16 = 0x7E39;
+
+/// What made a figure, the byte after a tagged 0x00DB's body
+/// ([`OP_NUMBER_TAGS_ANSWER`]): its kind and whether the player's pet made it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NumberTag {
+    /// The low 7 bits: 1 a swing, 2 a spell or an ability, 3 a damage over
+    /// time's tick, 4 a damage shield, 5 a proc, 6 a heal, 7 a heal over
+    /// time's tick (and any other a later server may send).
+    pub kind: u8,
+    /// Bit 7: the player's pet made it.
+    pub pet: bool,
+}
+
+/// A 0x00DB's tag: `rest` is what follows its body (u32 attacker, zigzag
+/// amount, u32 defender), read only from a server that offered tags
+/// (`offered`); one byte is the tag, a kind of 0 none, and anything else
+/// (no byte, a server's patch's three colour bytes) none.
+pub fn number_tag(rest: &[u8], offered: bool) -> Option<NumberTag> {
+    let &[b] = rest else { return None };
+    (offered && b & 0x7F != 0).then_some(NumberTag { kind: b & 0x7F, pet: b & 0x80 != 0 })
+}
 
 /// One effect on the pet ([`OP_PET_EFFECTS_DATA`]).
 #[derive(Clone, Debug, PartialEq)]
@@ -768,6 +801,10 @@ pub struct Session {
     pet_effects_asked: Option<bool>,
     pub pet_effects: Vec<PetEffect>,
     pub pet_effects_at: u32,
+    /// Whether the server offered the number tags ([`OP_NUMBER_TAGS_OFFER`])
+    /// on this connection, and what it was last told (none since the offer).
+    pub number_tags_offer: bool,
+    number_tags_asked: Option<bool>,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -922,6 +959,8 @@ impl Session {
             pet_effects_asked: None,
             pet_effects: Vec::new(),
             pet_effects_at: 0,
+            number_tags_offer: false,
+            number_tags_asked: None,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -1160,6 +1199,20 @@ impl Session {
         self.send_op_int(OP_PET_EFFECTS, want as u32);
     }
 
+    /// Number Colors: a server that offered the number tags
+    /// ([`OP_NUMBER_TAGS_OFFER`]) is told whether to send them (`want`: a row
+    /// not Default), at once and whenever that changes, and afresh at another
+    /// offer; one that made no offer is told nothing.
+    pub fn agree_number_tags(&mut self, want: bool) {
+        if !self.number_tags_offer || self.number_tags_asked == Some(want) {
+            return;
+        }
+        self.number_tags_asked = Some(want);
+        let mut w = Writer::op(OP_NUMBER_TAGS_ANSWER);
+        w.u8(want as u8);
+        self.send(&w.data);
+    }
+
     /// The pet's effects the server last sent that are not over at `now`
     /// (`now`'s clock): each its icon and the ms left of it, in their order.
     pub fn pet_effects_left(&self, now: u32) -> Vec<(u32, u32)> {
@@ -1377,6 +1430,8 @@ impl Session {
                 self.pet_effects_offer = false;
                 self.pet_effects_asked = None;
                 self.pet_effects.clear();
+                self.number_tags_offer = false;
+                self.number_tags_asked = None;
                 ev.push(Event::Promoted);
             }
             drdp::TYPE_DISCONNECT => {
@@ -1692,6 +1747,15 @@ impl Session {
                 if let Some(set) = read_pet_effects(&mut r) {
                     self.pet_effects = set;
                     self.pet_effects_at = self.now();
+                }
+            }
+            // the number tags offered (again at every world entry): told
+            // afresh whether the client wants them (`agree_number_tags`)
+            OP_NUMBER_TAGS_OFFER => {
+                r.u8();
+                if !r.error {
+                    self.number_tags_offer = true;
+                    self.number_tags_asked = None;
                 }
             }
             0x0013 => {
@@ -2977,6 +3041,61 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x32, 0x7E, 1, 0, 0, 0]);
         s.agree_pet_effects(true);
         assert_eq!(answers(&mut s), [(251, vec![0x32, 0x7E, 1, 0, 0, 0])], "its offer answered");
+    }
+
+    // The number tags (go-eqoa-server's 0x7E38/0x7E39): nothing asked with no
+    // offer (the control); an offer answered at once with what is wanted (0
+    // too), a u8, and again only when that changes; a new connection asks
+    // nothing until it is offered again.
+    #[test]
+    fn number_tags_offer_and_answer() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x39, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_number_tags(true);
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        assert!(!s.number_tags_offer);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x38, 0x7E]);
+        assert!(!s.number_tags_offer, "a short offer is no offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x38, 0x7E, 1]);
+        assert!(s.number_tags_offer);
+        s.agree_number_tags(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x39, 0x7E, 0])], "every row Default: told at once, 0");
+        s.agree_number_tags(true);
+        s.agree_number_tags(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x39, 0x7E, 1])], "a colour chosen: asked once");
+        s.agree_number_tags(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x39, 0x7E, 0])], "back to Default: stopped");
+        // the offer again (the next world entry): told afresh
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x38, 0x7E, 1]);
+        s.agree_number_tags(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x39, 0x7E, 0])], "a new offer is answered again");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.number_tags_offer, "a new connection: no offer");
+        s.agree_number_tags(true);
+        assert_eq!(answers(&mut s), [], "a new connection: nothing asked before its offer");
+    }
+
+    /// A 0x00DB's tag: one byte after its body from a server that offered
+    /// them, its low 7 bits the kind and bit 7 the pet's; none with no offer
+    /// (the control), no byte, a kind of 0, or three bytes (a server's patch's
+    /// colour).
+    #[test]
+    fn a_number_tag_is_one_byte_from_a_server_that_offered() {
+        assert_eq!(number_tag(&[0x05], true), Some(NumberTag { kind: 5, pet: false }));
+        assert_eq!(number_tag(&[0x86], true), Some(NumberTag { kind: 6, pet: true }));
+        assert_eq!(number_tag(&[0x81], true), Some(NumberTag { kind: 1, pet: true }));
+        assert_eq!(number_tag(&[0x09], true), Some(NumberTag { kind: 9, pet: false }), "a kind a later server sends");
+        assert_eq!(number_tag(&[0x05], false), None, "no offer: a stray byte is no tag");
+        assert_eq!(number_tag(&[], true), None);
+        assert_eq!(number_tag(&[0x00], true), None);
+        assert_eq!(number_tag(&[0x80], true), None, "the pet's bit alone");
+        assert_eq!(number_tag(&[255, 128, 0], true), None, "three bytes are a patch's colour");
     }
 
     /// The quest tracker's offer is answered once, its body read whole (the

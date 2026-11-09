@@ -650,6 +650,13 @@ pub struct ClientOptions {
     /// under its bar, where the server sends them (`Session::agree_pet_effects`);
     /// off, none, as the game shows them nowhere. On by default.
     pub pet_effects: bool,
+    /// Number Colors (`numcolor`; the server owner's of 2026-11-09: "we can add
+    /// the number colors to extended menu"): each row's colour for the floating
+    /// numbers of the player's own figures and its pet's, by what made them, on a
+    /// server that says so (go-eqoa-server's tags), in `numcolor::ROWS`' order:
+    /// 0 Default (the game's own colour), else `numcolor::PALETTE[n - 1]`. Every
+    /// row Default by default, so nothing changes until one is chosen.
+    pub number_colors: [crate::numcolor::Choice; crate::numcolor::ROWS],
     /// Map (the user, 2026-11-09: "also add the map and quest helper we had
     /// in a former update"; on by default): the client's own map (M, the
     /// compass's click, `map`), the minimap, the waypoints on the compass and
@@ -936,6 +943,7 @@ impl Default for ClientOptions {
             overlapping_names: false,
             raid_list: true,
             pet_effects: true,
+            number_colors: [0; crate::numcolor::ROWS],
             map: true,
             minimap: true,
             map_markers: true,
@@ -980,7 +988,8 @@ impl ClientOptions {
     /// it is not Auto, Capture Controller only when on, Sound in Background
     /// only when off, Ability Bars, NPC/PC Display, NPC/PC Distance and
     /// Name Distance only when not the game's, Overlapping Names only when
-    /// Show, the Map, Minimap, Map Markers, the map's town names, the Quest
+    /// Show, each Number Colors row only when not Default
+    /// (`number_color.<row>=<colour>`), the Map, Minimap, Map Markers, the map's town names, the Quest
     /// Helper, Quest Markers and Quest Tracker only when off, Art only when it
     /// is the 2002 disc's, VSync, Shouts and Update
     /// Notices only when off, Text only when Smooth, Render Scale only above
@@ -1032,6 +1041,12 @@ impl ClientOptions {
         }
         if !self.pet_effects {
             s.push_str("pet_effects=off\n");
+        }
+        // Number Colors only where a row is not Default
+        for (key, &c) in crate::numcolor::KEYS.iter().zip(&self.number_colors) {
+            if let Some(p) = crate::numcolor::paint(c) {
+                s.push_str(&format!("number_color.{key}={}\n", p.key));
+            }
         }
         // the map's and the quests' only when off
         for (on, key) in [
@@ -1282,6 +1297,12 @@ impl ClientOptions {
                         c.touch_edge = t;
                     }
                 }
+                (k, v) if k.starts_with("number_color.") => {
+                    let row = crate::numcolor::KEYS.iter().position(|&r| r == &k["number_color.".len()..]);
+                    if let (Some(row), Some(choice)) = (row, crate::numcolor::from_key(v)) {
+                        c.number_colors[row] = choice;
+                    }
+                }
                 (k, v) if k.starts_with("controller.") => {
                     let window = k["controller.".len()..].parse::<usize>().ok().filter(|w| (1..=crate::multibox::PLACES).contains(w));
                     if let (Some(w), Some(f)) = (window, Focus::from_key(v)) {
@@ -1474,6 +1495,11 @@ pub fn raid_list() -> bool {
 /// Pet Effects: the pet's effects under its bar (`hud`).
 pub fn pet_effects() -> bool {
     client().pet_effects
+}
+
+/// Number Colors now: each row's choice (`numcolor`).
+pub fn number_colors() -> [crate::numcolor::Choice; crate::numcolor::ROWS] {
+    client().number_colors
 }
 
 /// What the windows share as another window saved it (Capture Controller,
@@ -2535,6 +2561,28 @@ mod tests {
         assert!(!ClientOptions::from_text("pet_effects=off").pet_effects);
         assert!(ClientOptions::from_text("pet_effects=on").pet_effects);
         assert!(ClientOptions::from_text("pet_effects=maybe").pet_effects, "the default");
+    }
+
+    /// Number Colors: every row Default by default and written not at all; a
+    /// chosen row is one line by its row's and its colour's keys, and reads
+    /// back to itself, the others Default; a row or colour not understood is
+    /// Default (the control: an unknown key changes nothing).
+    #[test]
+    fn number_colors_are_kept_only_when_chosen() {
+        let d = ClientOptions::default();
+        assert_eq!(d.number_colors, [0; crate::numcolor::ROWS], "Default by default");
+        assert!(!d.to_text().contains("number_color"), "nothing written for Default");
+        let mut c = ClientOptions::default();
+        c.number_colors[1] = crate::numcolor::from_key("red").unwrap();
+        c.number_colors[5] = crate::numcolor::from_key("light_blue").unwrap();
+        let text = c.to_text();
+        assert!(text.contains("number_color.procs=red\n") && text.contains("number_color.pet_heals=light_blue\n"), "{text}");
+        assert_eq!(text.matches("number_color.").count(), 2, "{text}");
+        assert_eq!(ClientOptions::from_text(&text).number_colors, c.number_colors, "read back");
+        assert_eq!(ClientOptions::from_text(&text), c, "and nothing else changed");
+        let odd = ClientOptions::from_text("number_color.procs=mauve\nnumber_color.elbows=red\nnumber_color.heals=default");
+        assert_eq!(odd.number_colors, [0; crate::numcolor::ROWS], "not understood: Default");
+        assert_eq!(ClientOptions::from_text("number_color.pet_damage=orange").number_colors, [0, 0, 0, 3, 0, 0]);
     }
 
     #[test]
