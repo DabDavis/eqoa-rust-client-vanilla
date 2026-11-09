@@ -6,6 +6,14 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-09 · A crash in the browser comes with your next bug report
+- If the game stops in the browser ("The client stopped" or "The graphics stopped"), the next bug report you send
+  (F3, or /bug in chat) carries the message it stopped with, once, so the GMs can see what went wrong without you
+  copying anything. Nothing is sent until you send a report yourself.
+- A bug report from the browser now says which build of the page you were on.
+- When chat lines can't go out (the server reset your connection in the world and hasn't sent the world again), the
+  game still sends nothing for them, as the PS2 does, but your next bug report says how many were held back.
+
 ## 2026-11-09 · A pack and a bank of 100
 - On a server that has them (the Heirloom Test Server), your inventory holds 100 items and your bank 100, where the
   game holds 40 of each. What you wear counts among the 100, as it counts among the game's 40.
