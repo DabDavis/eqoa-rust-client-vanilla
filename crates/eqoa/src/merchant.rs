@@ -748,6 +748,33 @@ mod tests {
         assert_eq!(m.focus, Focus::List);
     }
 
+    /// A pack of 100 (a server that holds 100, `inventory::pack_cap`): selling,
+    /// the list holds every record; buying, a merchant's wares stay CLIENT's
+    /// 40 (its 0x00B7 list, `m_merchant`). The control: CLIENT's 40 sells from
+    /// the first 40.
+    #[test]
+    fn selling_lists_the_whole_pack() {
+        let vui = Vui::new(Default::default(), Default::default(), Vec::new());
+        let inv = ItemList { p04: 0, items: (0..100).map(|k| item(10, 0, k)).collect() };
+        let wares = ItemList { p04: 0, items: (0..60).map(|k| item(10, 0, k)).collect() };
+        let shop = Shop { id: Some(7), sell_rate: 100, buy_rate: 100, wares, greeting: wide("Hello"), pending: false };
+        let base = [0; 29];
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let (can_use, icon) = (|_: &NetItem| true, |_: &NetItem| 1);
+        let view = View { info: &info, shop: &shop, coin: 0, can_use: &can_use, inv_icon: &icon };
+        let rows = |mode: i32| {
+            let mut m = Merchant::default();
+            m.mode = mode;
+            m.fill(&view);
+            (m.list.items.len(), m.list.count())
+        };
+        crate::inventory::with_caps([100, 100], || {
+            assert_eq!(rows(1), (100, 100), "selling: the whole pack");
+            assert_eq!(rows(2), (40, 40), "buying: a merchant's 40");
+        });
+        assert_eq!(rows(1), (40, 40), "the control: CLIENT's 40");
+    }
+
     /// The menu's Sell is chosen at once by a click; then the list takes
     /// clicks (a row selected, the selection sold), and while the picker is
     /// up the list behind it takes none.
