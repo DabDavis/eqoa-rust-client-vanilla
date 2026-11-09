@@ -59,7 +59,7 @@ struct Layer {
     flags: vec4<f32>,    // x: textured, y: blended, z: the GS's K (levels), w: flora
     uv0: vec4<f32>,      // m0, m1, m3, m4
     uv1: vec4<f32>,      // m6, m7, scroll rate u, v
-    emissive: vec4<f32>, // the material's, added to the ambient
+    emissive: vec4<f32>, // the material's, added to the ambient; w: 1 dyed White (`tinted`)
 };
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
@@ -169,6 +169,20 @@ fn vs_main(v: VsIn) -> VsOut {
     return o;
 }
 
+// A layer's colour on its texel: the GS's modulate (texel × tint), but for a
+// layer dyed White (emissive.w, lib.rs's `WHITE_DYE`) the texel bleached: its
+// own colour taken out (its luminance) and its darkness kept at half, so the
+// armour's detail shows through a white (the user, 2026-11-08, of a third,
+// half and two thirds: "Medium"; a third flattened it to plain cloth, two
+// thirds read as the dyers' Silver).
+fn tinted(t: vec3<f32>) -> vec3<f32> {
+    if (layer.emissive.w > 0.5) {
+        let l = dot(t, vec3<f32>(0.299, 0.587, 0.114));
+        return vec3<f32>(1.0 - (1.0 - l) * 0.5);
+    }
+    return t * layer.tint.rgb;
+}
+
 @fragment
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     var texel = vec4<f32>(1.0);
@@ -183,7 +197,7 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     if (layer.flags.y < 0.5 && alpha < 0.5) {
         discard;
     }
-    var rgb = texel.rgb * layer.tint.rgb * i.light;
+    var rgb = tinted(texel.rgb) * i.light;
     if (frame.fog_color.w > 0.5) {
         rgb = mix(frame.fog_color.rgb, rgb, i.fog);
     }

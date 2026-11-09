@@ -75,6 +75,16 @@ pub const DEFAULT_LOD_BIAS: f32 = 0.8;
 /// A K that keeps every texel on the base level (the options' Mipmaps off).
 pub const BASE_LEVEL_K: f32 = -16.0;
 
+/// The colour go-eqoa-server sends for a slot dyed White
+/// (`database.WhiteDyeWire`, 0xFFFFFEFF; the user, 2026-11-08: "increase the
+/// whiteness of the white dye option", "only the people selecting white").
+/// A colour multiplies its texture, so white (an undyed slot's tint 0) leaves
+/// the armour's own browns and greys as they are: a layer of this colour is
+/// drawn bleached instead (`LayerUniform::emissive`'s w, shader.wgsl's
+/// `tinted`), and every other colour as ever. A renderer that does not know
+/// it draws it as white: a blue of 254 for 255.
+pub const WHITE_DYE: [u8; 4] = [0xFF, 0xFF, 0xFE, 0xFF];
+
 /// Whether the textures' mip levels are sampled (Options > Extended > Video
 /// > Mipmaps; on, the game's).
 static MIPMAPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -186,7 +196,8 @@ struct LayerUniform {
     uv0: [f32; 4],
     uv1: [f32; 4],
     /// The material's emissive colour, which the light adds to the ambient
-    /// (`VIRaster::UploadPerMaterial`).
+    /// (`VIRaster::UploadPerMaterial`); w (its alpha, which nothing reads):
+    /// 1 for a layer dyed White (`WHITE_DYE`), drawn bleached.
     emissive: [f32; 4],
 }
 
@@ -1694,8 +1705,11 @@ fn layer_state(l: &esf::Layer, textured: bool) -> (usize, LayerUniform, usize) {
         flags: [textured as i32 as f32, (blend != 0) as i32 as f32, gs_lod_k(l.lod_bias), 0.0],
         uv0: [k[0], k[1], k[2], k[3]],
         uv1: [k[4], k[5], l.uv_rate[0], l.uv_rate[1]],
-        // as UploadPerMaterial converts it: c/255
-        emissive: l.emissive.map(|c| c as f32 / 255.0),
+        // as UploadPerMaterial converts it: c/255; w a White dye's flag
+        emissive: {
+            let e = l.emissive.map(|c| c as f32 / 255.0);
+            [e[0], e[1], e[2], (l.color == WHITE_DYE) as i32 as f32]
+        },
     };
     let si = match l.wrap {
         1 | 2 => 1,

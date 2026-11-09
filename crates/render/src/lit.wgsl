@@ -182,7 +182,7 @@ fn lit_fragment(i: LitOut, baked: bool) -> vec4<f32> {
     if (layer.flags.y < 0.5 && alpha < 0.5) {
         discard;
     }
-    var rgb = texel.rgb * layer.tint.rgb * shade(i, baked);
+    var rgb = tinted(texel.rgb) * shade(i, baked);
     if (frame.fog_color.w > 0.5) {
         rgb = mix(frame.fog_color.rgb, rgb, i.misc.x);
     }
