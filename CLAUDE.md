@@ -193,6 +193,11 @@ current.
   real GPU without a presentable display (here: `DISPLAY=:99`, the Xvfb, whose Vulkan has no DRI3);
   `EQOA_QUIT=s`, `EQOA_WALK` script a run. A renderer change is held to `shot` PNGs byte for byte
   (`EQOA_HOUR` pinned; a shot's layers scroll by its script time).
+- Dynamic Lighting's lights of the moment (spells', held items', fiery creatures') are held from frame to
+  frame (`lights::Moment`) and the choice among all the lights is eased (`lights::Chooser`): no light may
+  come, go or change in a frame (petition 1321: each frame's own, out of a few particles, flashed up to 18
+  times a second; photosensitivity guidance, WCAG 2.2's 2.3.1, allows 3). `lights::tests::no_spell_visual_flashes`
+  holds every visual on the disc to it; `survey_spell_flashes` (`--ignored --nocapture`) measures them.
 - The `vi` structs are `#[repr(C)]` in the EE layout because the oracle compares raw bytes; keep it that way while ports are being proven. Later (not urgent): native runtime types beside them, converted at the edges, the layout types kept for oracle tests.
 - `ee`'s adder has the EE's one guard bit (PCSX2's recompiler, `FPU_ADD_SUB`); go-eqoa-vi measured through
   the tracer's `call`, which runs PCSX2's INTERPRETER (every bit kept): that adder is `ee::interp`.

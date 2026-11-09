@@ -39,13 +39,16 @@ pub struct Particles {
     /// The fixed lights Dynamic Lighting finds among the same placements
     /// (`lights::Fixed`: the fires, the placed point lights).
     pub fixed: crate::lights::Fixed,
+    /// And its lights from frame to frame in this world (`lights::Lighting`:
+    /// the lights of the moment held, the choice among them all).
+    pub lighting: crate::lights::Lighting,
 }
 
 impl Particles {
     /// Every particle sprite placed in `world`, directly or as a group's
     /// member.
     pub fn new(world: &World<Ee>, time: i64) -> Particles {
-        let mut p = Particles { sys: System::new(time, 2000), rand: Rand(1), defs: HashMap::new(), instances: Vec::new(), fixed: Default::default() };
+        let mut p = Particles { sys: System::new(time, 2000), rand: Rand(1), defs: HashMap::new(), instances: Vec::new(), fixed: Default::default(), lighting: Default::default() };
         p.add_from(world, 0);
         p
     }
