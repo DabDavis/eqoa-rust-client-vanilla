@@ -323,11 +323,14 @@ or a browser (each described where it lives below):
   byte), keeps it in the cache by its CRC (`worlds/`), and says which it holds. The world table answers past
   its own, the file opens deferred as a disc world does, the start menu's Location and the review's Starting
   City name the server's places. Another disc's zone is refused, and the server keeps that player on the
-  disc's worlds. Not in a page yet (no builder there: a page player of such a race starts in its city).
+  disc's worlds. A page builds it too, in a worker into the browser's private storage (README "In a
+  browser", `web::worlds`); one that cannot keep it does not take the offer, and a character of such a world
+  starts in its city.
   A zone may be given **extras** (the list's version 2): the disc's art placed in it as actors of its own,
   each a ZoneActor after its room's own, the records of art the zone lacks copied in off the player's disc
   with every record they name (`serverworlds::extras`, the server's `internal/worlds/extras.go` byte for
-  byte); the Homelands' open edges are closed with ridges of rocks that way.
+  byte, in `compose_into`'s zone loop, the art read through its `Disc`, so a page builds them too); the
+  Homelands' open edges are closed with ridges of rocks that way.
 - **Armour on bodies made without it** (the user's of 2026-11-08, "Lay armour textures on", a
   prototype; `slotless`): a body with no texture slots (the kappa, brownie, pixie, fairy, minotaur,
   dryad, skeleton, fungusman, gargoyle and hill giant a server's races wear) shows the armour, robe and
@@ -1257,6 +1260,31 @@ the SHA-256 of `UTIL.REL` and the `.AUT`, so a later visit has both at once (a
 page without `crypto.subtle`, plain http to another host, unpacks them every time).
 On a first visit the HUD and the start menu come when they do, a few seconds into
 the world if it was entered quickly.
+
+**A server's own worlds in a page** (README "A server's own worlds", `web::worlds`,
+`web/worlds.js`): the page builds them off the player's disc as the program does, in a
+worker of its own that instantiates the same module, into the origin's private storage
+(OPFS, `worlds/world<id>-<crc>.ESF`). The composer (`serverworlds::compose_into`) reads a
+zone's record off the image at a time (`FileReaderSync`), checks its CRC, moves its
+offsets and writes it to the file as it goes (`FileSystemSyncAccessHandle`); the file's
+CRC is then read back. Neither the worker (17 MB of heap at its end) nor the game (228 MB
+at character select, with the build or without) ever holds the world, 133 MB for the
+Homelands. In headless Chromium with the image in the system's cache the first build
+takes 1.4 s (the worker up and the disc listed 0.26 s, the 19 zones read and written
+0.43 s, the file read back 0.69 s) and a later visit's check of the copy kept 0.4 s; in
+Firefox 1.8-2.4 s and 0.6 s; with the image out of the cache on a busy machine (load
+35) about 3 s in either; end to end at character select on a loaded machine, 3.7-5.4 s.
+A notice at the page's top says how far it has come, and a character played meanwhile
+waits for it (`pregame::client`'s `held_pick`: in a page alone, a minute at most), so the
+server places it by what the page holds. A later visit finds the copy by its size and
+CRC; one damaged since is built again; pages build a world one at a time (a Web Lock
+on its name). The game then reads the file as a disc of that one file
+(`WebDisc::of_file`): at a login there, at a move into it and for its zones as the walk
+nears them, deferred like any world. A page that cannot keep it (no private storage:
+plain http to another host, some private windows) does not take the offer, and a
+character of such a world starts in its city; one whose build fails (another disc, the
+storage full) answers without it and says so in a notice. `web/pagetest.py`'s worlds
+checks hold the page's half to Aviak Village alone.
 
 ```bash
 cargo install wasm-bindgen-cli --version 0.2.129   # once: the version Cargo.lock pins

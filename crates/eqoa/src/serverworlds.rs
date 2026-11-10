@@ -22,6 +22,14 @@
 //! of its own, its art copied in off the disc when the zone lacks it
 //! ([`extras`]). The server's `Compose` is the other copy of this: a change here
 //! is one there, or no world builds.
+//!
+//! The composer reads the disc through a [`Disc`] and writes through a
+//! [`Sink`], a zone's record at a time (read, checked against its CRC, its
+//! offsets moved or its extras added, written), so it never holds the world:
+//! natively the disc image on disk into a `Vec` that is written to the cache
+//! whole, as before (`compose`); in a page the image the player picked, read in
+//! a worker, into a file of the origin's private storage as it is built
+//! (`web::worlds`). The extras' art is read through the same `Disc`.
 
 use net::serverworlds::{Part, World};
 use std::path::{Path, PathBuf};
@@ -56,6 +64,15 @@ pub fn forget() {
 
 fn held() -> Vec<Held> {
     HELD.read().map(|h| h.clone()).unwrap_or_default()
+}
+
+/// `h` held from now on, in place of one of its id (a page's builder,
+/// `web::worlds`, as `build_all` natively).
+pub fn keep(h: Held) {
+    if let Ok(mut g) = HELD.write() {
+        g.retain(|x| x.id != h.id);
+        g.push(h);
+    }
 }
 
 /// The file the world table names for world `world` when it is one of the
@@ -120,10 +137,7 @@ fn build_all(worlds: &[World]) -> std::sync::mpsc::Receiver<Vec<u8>> {
                 Ok(h) => {
                     eprintln!("server worlds: world {} {:?} ({} zones) held at {}", w.id, w.name, w.parts.len(), h.path.display());
                     ids.push(w.id);
-                    if let Ok(mut g) = HELD.write() {
-                        g.retain(|x| x.id != h.id);
-                        g.push(h);
-                    }
+                    keep(h);
                 }
                 Err(e) => eprintln!("server worlds: world {} {:?} not held: {e}", w.id, w.name),
             }
@@ -156,16 +170,60 @@ fn hold(disc: &Path, w: &World) -> Result<Held, String> {
 
 /// CRC-32 (IEEE), as the server's `hash/crc32`.
 pub fn crc32(b: &[u8]) -> u32 {
-    let mut table = [0u32; 256];
-    for (i, t) in table.iter_mut().enumerate() {
-        let mut c = i as u32;
-        for _ in 0..8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
-        }
-        *t = c;
-    }
-    !b.iter().fold(!0u32, |c, &x| table[((c ^ x as u32) & 0xFF) as usize] ^ (c >> 8))
+    crc32_update(0, b)
 }
+
+/// The CRC-32 of what `crc` was the CRC of, then `b`: `crc32_update(crc32(a),
+/// b)` is the CRC of `a` and `b` together, so a file is checked a piece at a
+/// time (a page's 133 MB world, never held). Eight bytes a step (slicing by
+/// eight), bit for bit the byte-at-a-time table's.
+pub fn crc32_update(crc: u32, b: &[u8]) -> u32 {
+    let mut c = !crc;
+    let mut words = b.chunks_exact(8);
+    for w in &mut words {
+        let lo = c ^ u32::from_le_bytes([w[0], w[1], w[2], w[3]]);
+        let hi = u32::from_le_bytes([w[4], w[5], w[6], w[7]]);
+        c = CRC_TABLES[7][(lo & 0xFF) as usize]
+            ^ CRC_TABLES[6][((lo >> 8) & 0xFF) as usize]
+            ^ CRC_TABLES[5][((lo >> 16) & 0xFF) as usize]
+            ^ CRC_TABLES[4][(lo >> 24) as usize]
+            ^ CRC_TABLES[3][(hi & 0xFF) as usize]
+            ^ CRC_TABLES[2][((hi >> 8) & 0xFF) as usize]
+            ^ CRC_TABLES[1][((hi >> 16) & 0xFF) as usize]
+            ^ CRC_TABLES[0][(hi >> 24) as usize];
+    }
+    for &x in words.remainder() {
+        c = CRC_TABLES[0][((c ^ x as u32) & 0xFF) as usize] ^ (c >> 8);
+    }
+    !c
+}
+
+/// The IEEE polynomial's tables: `[0]` the byte-at-a-time one, `[k]` a byte
+/// followed by k zero bytes.
+const CRC_TABLES: [[u32; 256]; 8] = {
+    let mut t = [[0u32; 256]; 8];
+    let mut i = 0;
+    while i < 256 {
+        let mut c = i as u32;
+        let mut k = 0;
+        while k < 8 {
+            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            k += 1;
+        }
+        t[0][i] = c;
+        i += 1;
+    }
+    let mut i = 0;
+    while i < 256 {
+        let mut k = 1;
+        while k < 8 {
+            t[k][i] = (t[k - 1][i] >> 8) ^ t[0][(t[k - 1][i] & 0xFF) as usize];
+            k += 1;
+        }
+        i += 1;
+    }
+    t
+};
 
 const CELL: i32 = 2000;
 const SUBDIV: i32 = 4;
@@ -194,20 +252,172 @@ struct Hdr {
     at: u64,
 }
 
-/// A disc file's bytes, by position.
-struct Src {
+/// What a world is built off: the player's disc, its files found by name and
+/// read by their place in the image. Natively the image on disk ([`compose`]);
+/// in a page the image the player picked, read in a worker (`web::worlds`).
+pub trait Disc {
+    /// Where the file named `name` (its last part, any case) is in the image:
+    /// its offset and length.
+    fn file(&self, name: &str) -> Option<(u64, u64)>;
+    /// `buf.len()` bytes at `off` of the image.
+    fn read_at(&self, off: u64, buf: &mut [u8]) -> std::io::Result<()>;
+}
+
+/// Where a world is built into, as it is built ([`compose_into`]): a `Vec`
+/// natively, in a page a file in the browser's storage.
+pub trait Sink {
+    /// How many bytes have been written.
+    fn len(&self) -> u64;
+    /// `b` written after them.
+    fn put(&mut self, b: &[u8]) -> Result<(), String>;
+    /// `b` written over the bytes at `at` (a record's size, once its body is
+    /// in).
+    fn patch(&mut self, at: u64, b: &[u8]) -> Result<(), String>;
+    /// The CRC-32 ([`crc32`]) of everything written.
+    fn crc(&mut self) -> Result<u32, String>;
+}
+
+impl Sink for Vec<u8> {
+    fn len(&self) -> u64 {
+        Vec::len(self) as u64
+    }
+    fn put(&mut self, b: &[u8]) -> Result<(), String> {
+        self.extend_from_slice(b);
+        Ok(())
+    }
+    fn patch(&mut self, at: u64, b: &[u8]) -> Result<(), String> {
+        let at = usize::try_from(at).map_err(|e| e.to_string())?;
+        self.get_mut(at..at + b.len()).ok_or("a patch past the end")?.copy_from_slice(b);
+        Ok(())
+    }
+    fn crc(&mut self) -> Result<u32, String> {
+        Ok(crc32(self))
+    }
+}
+
+/// A file a world is written into at offsets ([`FileSink`]): a page's file
+/// in the origin's private storage (`web::worlds`, its
+/// `FileSystemSyncAccessHandle`).
+pub trait FileAt {
+    /// `b` written at `at`, the file growing as it must.
+    fn write_at(&mut self, at: u64, b: &[u8]) -> Result<(), String>;
+    /// `b.len()` bytes read at `at`.
+    fn read_at(&mut self, at: u64, b: &mut [u8]) -> Result<(), String>;
+}
+
+/// A [`Sink`] into a [`FileAt`], so a world is built straight into a file and
+/// never held: small writes gathered up to `gather` bytes, larger ones (a
+/// zone's record) written as they come, a patch made in what is gathered or
+/// in the file; the CRC read back off the file [`CHECK_STEP`] bytes at a time,
+/// `step(done, total)` after each.
+pub struct FileSink<F: FileAt> {
+    pub file: F,
+    len: u64,
+    /// what was written after `len - buf.len()`, not yet in the file
+    buf: Vec<u8>,
+    gather: usize,
+    step: Box<dyn FnMut(u64, u64)>,
+}
+
+/// How much of a file is read at a time to check its CRC ([`FileSink`]).
+pub const CHECK_STEP: usize = 8 << 20;
+
+impl<F: FileAt> FileSink<F> {
+    pub fn new(file: F, gather: usize, step: Box<dyn FnMut(u64, u64)>) -> Self {
+        FileSink { file, len: 0, buf: Vec::new(), gather, step }
+    }
+
+    /// What is gathered written to the file.
+    pub fn flush(&mut self) -> Result<(), String> {
+        if !self.buf.is_empty() {
+            self.file.write_at(self.len - self.buf.len() as u64, &self.buf)?;
+            self.buf.clear();
+        }
+        Ok(())
+    }
+}
+
+impl<F: FileAt> Sink for FileSink<F> {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    fn put(&mut self, b: &[u8]) -> Result<(), String> {
+        if self.buf.len() + b.len() > self.gather {
+            self.flush()?;
+        }
+        if b.len() > self.gather {
+            self.file.write_at(self.len, b)?;
+        } else {
+            self.buf.extend_from_slice(b);
+        }
+        self.len += b.len() as u64;
+        Ok(())
+    }
+
+    fn patch(&mut self, at: u64, b: &[u8]) -> Result<(), String> {
+        if at + b.len() as u64 > self.len {
+            return Err("a patch past the end".into());
+        }
+        let gathered = self.len - self.buf.len() as u64;
+        if at >= gathered {
+            let o = (at - gathered) as usize;
+            self.buf[o..o + b.len()].copy_from_slice(b);
+            return Ok(());
+        }
+        // in the file already (a record's size, before its body): what is
+        // gathered goes first when the patch reaches into it
+        if at + b.len() as u64 > gathered {
+            self.flush()?;
+        }
+        self.file.write_at(at, b)
+    }
+
+    fn crc(&mut self) -> Result<u32, String> {
+        self.flush()?;
+        let mut chunk = vec![0u8; CHECK_STEP.min(self.len as usize)];
+        let (mut crc, mut at) = (0u32, 0u64);
+        while at < self.len {
+            let n = CHECK_STEP.min((self.len - at) as usize);
+            self.file.read_at(at, &mut chunk[..n])?;
+            crc = crc32_update(crc, &chunk[..n]);
+            at += n as u64;
+            (self.step)(at, self.len);
+        }
+        Ok(crc)
+    }
+}
+
+/// The disc image on disk, as `iso` lists it.
+struct Image {
     f: std::fs::File,
+    entries: Vec<iso::Entry>,
+}
+
+impl Disc for Image {
+    fn file(&self, name: &str) -> Option<(u64, u64)> {
+        let e = self.entries.iter().find(|e| e.path.rsplit('/').next().is_some_and(|f| f.eq_ignore_ascii_case(name)))?;
+        Some((u64::from(e.lba) * iso::SECTOR, u64::from(e.size)))
+    }
+    fn read_at(&self, off: u64, buf: &mut [u8]) -> std::io::Result<()> {
+        iso::read_exact_at(&self.f, off, buf)
+    }
+}
+
+/// A disc file's bytes, by position.
+struct Src<'a> {
+    d: &'a dyn Disc,
     base: u64,
     len: u64,
 }
 
-impl Src {
+impl Src<'_> {
     fn read(&self, off: u64, n: usize) -> Result<Vec<u8>, String> {
         if off + n as u64 > self.len {
             return Err(format!("a read at {off} of {n} runs past {}", self.len));
         }
         let mut b = vec![0u8; n];
-        iso::read_exact_at(&self.f, self.base + off, &mut b).map_err(|e| e.to_string())?;
+        self.d.read_at(self.base + off, &mut b).map_err(|e| e.to_string())?;
         Ok(b)
     }
 
@@ -241,8 +451,8 @@ fn hdr_of(b: &[u8], at: u64, limit: u64) -> Result<Hdr, String> {
 }
 
 /// A world file of the disc, as far as building needs it.
-struct SrcWorld {
-    src: Src,
+struct SrcWorld<'a> {
+    src: Src<'a>,
     zones: Vec<(u64, u64)>,
     proxies: Vec<Vec<u8>>,
     rows: i32,
@@ -250,8 +460,8 @@ struct SrcWorld {
     regions: Vec<u8>,
 }
 
-impl SrcWorld {
-    fn open(src: Src) -> Result<Self, String> {
+impl<'a> SrcWorld<'a> {
+    fn open(src: Src<'a>) -> Result<Self, String> {
         let head = src.read(0, 32)?;
         if &head[..4] != b"FJBO" {
             return Err("not an OBJF file".into());
@@ -319,31 +529,45 @@ impl SrcWorld {
     }
 }
 
-/// A zone in the making.
+/// A zone in the making: its record stays on the disc until it is written.
 struct Piece {
     world: usize,
     zone: usize,
-    rec: Vec<u8>,
     proxy: Vec<u8>,
     col: i32,
     row: i32,
 }
 
 /// The world `w` names, built off the disc image at `disc`: its zones'
-/// records checked against their CRCs on the server's disc, and the file's.
+/// records checked against their CRCs on the server's disc, and the file's
+/// ([`compose_into`], into memory).
 pub fn compose(disc: &Path, w: &World) -> Result<Vec<u8>, String> {
     let image = iso::Iso::open(disc).map_err(|e| format!("{}: {e}", disc.display()))?;
+    let f = iso::open_file(disc).map_err(|e| e.to_string())?;
+    let image = Image { f, entries: image.entries().to_vec() };
+    let mut out = Vec::with_capacity(w.size as usize);
+    compose_into(&image, w, &mut out)?;
+    Ok(out)
+}
+
+/// The world `w` names, built off `disc` into `out` as it is built: the
+/// zones' places read first (their proxies), then each zone's record read,
+/// checked against its CRC on the server's disc, its offsets moved and
+/// written, one at a time; then the world's base, and the file checked
+/// against the server's size and CRC. A world that is not the server's is an
+/// error, with what was written left in `out`.
+pub fn compose_into(disc: &dyn Disc, w: &World, out: &mut dyn Sink) -> Result<(), String> {
     let mut worlds: Vec<(String, SrcWorld)> = Vec::new();
     let mut pieces: Vec<Piece> = Vec::new();
     let mut cells = std::collections::HashMap::new();
+    let not_the_servers = |name: &str, zi: usize, rec: &[u8]| format!("{name} zone {zi} is not the server's (this disc's: {} bytes, CRC {:08x})", rec.len(), crc32(rec));
     for (i, p) in w.parts.iter().enumerate() {
         let name = p.from.to_uppercase();
         let wi = match worlds.iter().position(|(n, _)| *n == name) {
             Some(k) => k,
             None => {
-                let e = image.entries().iter().find(|e| e.path.rsplit('/').next().is_some_and(|f| f.eq_ignore_ascii_case(&name))).ok_or_else(|| format!("{name} is not on this disc"))?;
-                let f = iso::open_file(disc).map_err(|e| e.to_string())?;
-                let src = Src { f, base: u64::from(e.lba) * iso::SECTOR, len: u64::from(e.size) };
+                let (base, len) = disc.file(&name).ok_or_else(|| format!("{name} is not on this disc"))?;
+                let src = Src { d: disc, base, len };
                 worlds.push((name.clone(), SrcWorld::open(src).map_err(|e| format!("{name}: {e}"))?));
                 worlds.len() - 1
             }
@@ -351,9 +575,9 @@ pub fn compose(disc: &Path, w: &World) -> Result<Vec<u8>, String> {
         let sw = &worlds[wi].1;
         let zi = usize::from(p.zone);
         let &(at, len) = sw.zones.get(zi).ok_or_else(|| format!("{name} has no zone {zi}"))?;
-        let rec = sw.src.read(at, len as usize)?;
-        if rec.len() as u64 != u64::from(p.size) || crc32(&rec) != p.crc {
-            return Err(format!("{name} zone {zi} is not the server's (this disc's: {} bytes, CRC {:08x})", rec.len(), crc32(&rec)));
+        // its record is read when it is written; one of another size is not the server's now
+        if len != u64::from(p.size) {
+            return Err(not_the_servers(&name, zi, &sw.src.read(at, len as usize)?));
         }
         let proxy = sw.proxy_of(zi)?;
         let bx: Vec<f32> = (0..6).map(|k| rdf(&proxy, 32 + 4 * k)).collect();
@@ -365,113 +589,122 @@ pub fn compose(disc: &Path, w: &World) -> Result<Vec<u8>, String> {
         if let Some(j) = cells.insert((col, row), i) {
             return Err(format!("parts {j} and {i} both stand in cell ({col}, {row})"));
         }
-        pieces.push(Piece { world: wi, zone: zi, rec, proxy, col, row });
+        pieces.push(Piece { world: wi, zone: zi, proxy, col, row });
     }
     let cols = pieces.iter().map(|p| p.col + 1).max().unwrap_or(0);
     let rows = pieces.iter().map(|p| p.row + 1).max().unwrap_or(0);
 
-    let mut out: Vec<u8> = Vec::with_capacity(pieces.iter().map(|p| p.rec.len()).sum::<usize>() + 4096);
-    fn begin(out: &mut Vec<u8>, ty: u16, version: i16, count: u32) -> usize {
+    fn begin(out: &mut dyn Sink, ty: u16, version: i16, count: u32) -> Result<u64, String> {
         let at = out.len();
-        out.extend(ty.to_le_bytes());
-        out.extend(version.to_le_bytes());
-        out.extend(0u32.to_le_bytes());
-        out.extend(count.to_le_bytes());
-        at
+        let mut h = Vec::with_capacity(12);
+        h.extend(ty.to_le_bytes());
+        h.extend(version.to_le_bytes());
+        h.extend(0u32.to_le_bytes());
+        h.extend(count.to_le_bytes());
+        out.put(&h)?;
+        Ok(at)
     }
-    fn end(out: &mut [u8], at: usize) {
+    fn end(out: &mut dyn Sink, at: u64) -> Result<(), String> {
         let n = (out.len() - at - 12) as u32;
-        out[at + 4..at + 8].copy_from_slice(&n.to_le_bytes());
+        out.patch(at + 4, &n.to_le_bytes())
     }
-    out.extend(b"FJBO");
-    out.extend(1u32.to_le_bytes());
-    out.extend(43855u32.to_le_bytes());
-    out.extend(0u32.to_le_bytes());
-    out.extend(32u64.to_le_bytes());
-    out.extend((-1i64).to_le_bytes());
-    // the extras' art, read off the disc before anything is written
+    let mut head = Vec::with_capacity(32);
+    head.extend(b"FJBO");
+    head.extend(1u32.to_le_bytes());
+    head.extend(43855u32.to_le_bytes());
+    head.extend(0u32.to_le_bytes());
+    head.extend(32u64.to_le_bytes());
+    head.extend((-1i64).to_le_bytes());
+    // the extras' art, read through the disc before a zone is written
     let mut arts: std::collections::HashMap<(String, u16), extras::Art> = std::collections::HashMap::new();
     for e in w.parts.iter().flat_map(|p| &p.extras).filter(|e| !e.from.is_empty()) {
         let key = (e.from.to_uppercase(), e.zone);
         if !arts.contains_key(&key) {
-            let a = art(&image, disc, &key.0, key.1).map_err(|err| format!("{} zone {}: {err}", key.0, key.1))?;
+            let a = art(disc, &key.0, key.1).map_err(|err| format!("{} zone {}: {err}", key.0, key.1))?;
             arts.insert(key, a);
         }
     }
-    let root = begin(&mut out, 0x8000, 0, 2);
-    let world = begin(&mut out, 0x8100, 0, pieces.len() as u32);
-    for (i, p) in pieces.iter_mut().enumerate() {
-        let at = out.len() as u64;
-        let from = worlds[p.world].1.zones[p.zone].0;
-        let rec = std::mem::take(&mut p.rec);
-        if w.parts[i].extras.is_empty() {
-            let mut rec = rec;
-            let base_at = rebase(&mut rec, at as i64 - from as i64)?;
-            out.extend(&rec);
+    out.put(&head)?;
+    let root = begin(out, 0x8000, 0, 2)?;
+    let world = begin(out, 0x8100, 0, pieces.len() as u32)?;
+    // a piece a part, in the parts' order
+    for (p, part) in pieces.iter_mut().zip(&w.parts) {
+        let (name, sw) = (&worlds[p.world].0, &worlds[p.world].1);
+        let (from, len) = sw.zones[p.zone];
+        let mut rec = sw.src.read(from, len as usize)?;
+        if crc32(&rec) != part.crc {
+            return Err(not_the_servers(name, p.zone, &rec));
+        }
+        let at = out.len();
+        if part.extras.is_empty() {
+            let delta = at as i64 - from as i64;
+            let base_at = rebase(&mut rec, delta)?;
+            out.put(&rec)?;
             p.proxy[0..8].copy_from_slice(&at.to_le_bytes());
             p.proxy[8..16].copy_from_slice(&(at + base_at).to_le_bytes());
         } else {
-            let z = extras::with_extras(&rec, from as i64, at as i64, &w.parts[i].extras, &arts).map_err(|e| format!("{} zone {}: {e}", w.parts[i].from, w.parts[i].zone))?;
-            out.extend(&z.rec);
+            let z = extras::with_extras(&rec, from as i64, at as i64, &part.extras, &arts).map_err(|e| format!("{name} zone {}: {e}", p.zone))?;
+            out.put(&z.rec)?;
             p.proxy[0..8].copy_from_slice(&at.to_le_bytes());
             p.proxy[8..16].copy_from_slice(&(at + z.base_at as u64).to_le_bytes());
             p.proxy[16..20].copy_from_slice(&(z.base_len as u32).to_le_bytes());
         }
     }
-    end(&mut out, world);
-    let base = begin(&mut out, 0x8200, 2, 4);
-    let h = begin(&mut out, 0x8220, 1, 0);
+    end(out, world)?;
+    let base = begin(out, 0x8200, 2, 4)?;
+    let h = begin(out, 0x8220, 1, 0)?;
+    let mut b = Vec::new();
     let f = |o: &mut Vec<u8>, v: f32| o.extend(v.to_bits().to_le_bytes());
-    out.extend((pieces.len() as u32).to_le_bytes());
-    f(&mut out, 0.0);
-    f(&mut out, -1000.0);
-    f(&mut out, 0.0);
-    f(&mut out, (cols * CELL) as f32);
-    f(&mut out, 1000.0);
-    f(&mut out, (rows * CELL) as f32);
-    out.extend((rows as u32).to_le_bytes());
-    out.extend((cols as u32).to_le_bytes());
-    out.extend((SUBDIV as u32).to_le_bytes());
-    f(&mut out, CELL as f32);
-    f(&mut out, 1000.0);
-    f(&mut out, 0.0);
-    f(&mut out, 1000.0);
-    end(&mut out, h);
-    let px = begin(&mut out, 0x8210, 2, 0);
-    out.extend((pieces.len() as u32).to_le_bytes());
+    b.extend((pieces.len() as u32).to_le_bytes());
+    f(&mut b, 0.0);
+    f(&mut b, -1000.0);
+    f(&mut b, 0.0);
+    f(&mut b, (cols * CELL) as f32);
+    f(&mut b, 1000.0);
+    f(&mut b, (rows * CELL) as f32);
+    b.extend((rows as u32).to_le_bytes());
+    b.extend((cols as u32).to_le_bytes());
+    b.extend((SUBDIV as u32).to_le_bytes());
+    f(&mut b, CELL as f32);
+    f(&mut b, 1000.0);
+    f(&mut b, 0.0);
+    f(&mut b, 1000.0);
+    out.put(&std::mem::take(&mut b))?;
+    end(out, h)?;
+    let px = begin(out, 0x8210, 2, 0)?;
+    b.extend((pieces.len() as u32).to_le_bytes());
     for p in &pieces {
-        out.extend(&p.proxy);
+        b.extend(&p.proxy);
     }
-    end(&mut out, px);
-    let t = begin(&mut out, 0x8230, 0, 0);
-    out.extend(world_tree(&pieces));
-    end(&mut out, t);
-    let g = begin(&mut out, 0x8240, 0, 0);
-    out.extend(regions(&pieces, &worlds, rows, cols));
-    end(&mut out, g);
-    end(&mut out, base);
-    end(&mut out, root);
-    if out.len() as u64 != u64::from(w.size) || crc32(&out) != w.crc {
-        return Err(format!("built {} bytes, CRC {:08x}: not the server's {} bytes, CRC {:08x}", out.len(), crc32(&out), w.size, w.crc));
+    out.put(&std::mem::take(&mut b))?;
+    end(out, px)?;
+    let t = begin(out, 0x8230, 0, 0)?;
+    out.put(&world_tree(&pieces))?;
+    end(out, t)?;
+    let g = begin(out, 0x8240, 0, 0)?;
+    out.put(&regions(&pieces, &worlds, rows, cols))?;
+    end(out, g)?;
+    end(out, base)?;
+    end(out, root)?;
+    let crc = out.crc()?;
+    if out.len() != u64::from(w.size) || crc != w.crc {
+        return Err(format!("built {} bytes, CRC {:08x}: not the server's {} bytes, CRC {:08x}", out.len(), crc, w.size, w.crc));
     }
-    Ok(out)
+    Ok(())
 }
 
-/// The records an extra's art is taken from: zone `zone` of the disc's world
-/// file `name`, or the whole of any other file (`extras::Art`).
-fn art(image: &iso::Iso, disc: &Path, name: &str, zone: u16) -> Result<extras::Art, String> {
-    let e = image.entries().iter().find(|e| e.path.rsplit('/').next().is_some_and(|f| f.eq_ignore_ascii_case(name))).ok_or_else(|| format!("{name} is not on this disc"))?;
-    let open = || -> Result<Src, String> { Ok(Src { f: iso::open_file(disc).map_err(|e| e.to_string())?, base: u64::from(e.lba) * iso::SECTOR, len: u64::from(e.size) }) };
-    match SrcWorld::open(open()?) {
+/// The records an extra's art is taken from, read through `disc`: zone
+/// `zone` of the disc's world file `name`, or the whole of any other file
+/// (`extras::Art`).
+fn art(disc: &dyn Disc, name: &str, zone: u16) -> Result<extras::Art, String> {
+    let (base, len) = disc.file(name).ok_or_else(|| format!("{name} is not on this disc"))?;
+    match SrcWorld::open(Src { d: disc, base, len }) {
         Ok(sw) => {
-            let &(at, len) = sw.zones.get(usize::from(zone)).ok_or_else(|| format!("{name} has {} zones, not {}", sw.zones.len(), usize::from(zone) + 1))?;
-            let rec = sw.src.read(at, len as usize)?;
+            let &(at, n) = sw.zones.get(usize::from(zone)).ok_or_else(|| format!("{name} has {} zones, not {}", sw.zones.len(), usize::from(zone) + 1))?;
+            let rec = sw.src.read(at, n as usize)?;
             Ok(extras::Art::new(extras::parse_nodes(&rec, 0, rec.len() as i64)?))
         }
-        Err(_) => {
-            let src = open()?;
-            extras::Art::whole(src.read(0, src.len as usize)?)
-        }
+        Err(_) => extras::Art::whole(Src { d: disc, base, len }.read(0, len as usize)?),
     }
 }
 
@@ -610,7 +843,7 @@ fn world_tree(pieces: &[Piece]) -> Vec<u8> {
 
 /// The terrain profiles: each zone's own world's over its cell and the
 /// sub-cell round it, a cell's own over any neighbour's margin; 0 elsewhere.
-fn regions(pieces: &[Piece], worlds: &[(String, SrcWorld)], rows: i32, cols: i32) -> Vec<u8> {
+fn regions(pieces: &[Piece], worlds: &[(String, SrcWorld<'_>)], rows: i32, cols: i32) -> Vec<u8> {
     let (wide, high) = (cols * SUBDIV, rows * SUBDIV);
     let mut out = vec![0u8; (wide * high).max(0) as usize];
     let mut put = |p: &Piece, margin: i32| {
@@ -648,6 +881,116 @@ mod tests {
         assert_eq!(crc32(b""), 0);
     }
 
+    /// The bytes of a test, the same every run (xorshift).
+    fn noise(n: usize, seed: u32) -> Vec<u8> {
+        let mut x = seed | 1;
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                x as u8
+            })
+            .collect()
+    }
+
+    /// Eight bytes a step is the byte-at-a-time table's CRC (the one this
+    /// file had, the server's) for every length up to 300 and every split of
+    /// it in two: a file checked a piece at a time is checked as a whole.
+    /// The control: one bit flipped is another CRC.
+    #[test]
+    fn crc32_in_pieces_is_crc32_whole() {
+        fn bytewise(b: &[u8]) -> u32 {
+            let mut table = [0u32; 256];
+            for (i, t) in table.iter_mut().enumerate() {
+                let mut c = i as u32;
+                for _ in 0..8 {
+                    c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+                }
+                *t = c;
+            }
+            !b.iter().fold(!0u32, |c, &x| table[((c ^ x as u32) & 0xFF) as usize] ^ (c >> 8))
+        }
+        let b = noise(300, 7);
+        for n in 0..=b.len() {
+            let whole = bytewise(&b[..n]);
+            assert_eq!(crc32(&b[..n]), whole, "{n} bytes");
+            for k in 0..=n {
+                assert_eq!(crc32_update(crc32(&b[..k]), &b[k..n]), whole, "{n} bytes split at {k}");
+            }
+        }
+        let mut flipped = b.clone();
+        flipped[123] ^= 4;
+        assert_ne!(crc32(&flipped), crc32(&b), "the control: a bit flipped");
+    }
+
+    /// A file a test writes into (`FileAt`), counting its writes.
+    #[derive(Default)]
+    struct VecFile {
+        b: Vec<u8>,
+        writes: usize,
+    }
+
+    impl FileAt for VecFile {
+        fn write_at(&mut self, at: u64, b: &[u8]) -> Result<(), String> {
+            let at = at as usize;
+            if self.b.len() < at + b.len() {
+                self.b.resize(at + b.len(), 0);
+            }
+            self.b[at..at + b.len()].copy_from_slice(b);
+            self.writes += 1;
+            Ok(())
+        }
+        fn read_at(&mut self, at: u64, b: &mut [u8]) -> Result<(), String> {
+            let at = at as usize;
+            b.copy_from_slice(self.b.get(at..at + b.len()).ok_or("past the end")?);
+            Ok(())
+        }
+    }
+
+    /// Writes and patches as the composer makes them (small heads, a record
+    /// bigger than what is gathered, sizes patched once their bodies are in,
+    /// some still gathered, some in the file, one reaching across both) leave
+    /// a `FileSink`'s file the bytes a `Vec` holds, and its CRC, read back, is
+    /// theirs; a record goes to the file as it comes, never gathered. The
+    /// control: the same writes with one patch left out are another file.
+    #[test]
+    fn a_file_sink_is_a_vec_written_into_a_file() {
+        fn script(out: &mut dyn Sink, skip: bool) {
+            out.put(b"FJBOhead").unwrap();
+            let root = out.len();
+            out.put(&[0u8; 12]).unwrap();
+            for k in 0..3u8 {
+                out.put(&noise(5000 + 300 * usize::from(k), u32::from(k) + 1)).unwrap();
+                out.put(&[k; 7]).unwrap();
+            }
+            let tail = out.len();
+            out.put(&[0u8; 12]).unwrap();
+            out.put(&noise(40, 9)).unwrap();
+            // in what is gathered, then in the file, then across both
+            out.patch(tail + 4, &44u32.to_le_bytes()).unwrap();
+            if !skip {
+                out.patch(root + 4, &123u32.to_le_bytes()).unwrap();
+            }
+            // the last record's end and the 7 bytes gathered after it
+            out.patch(tail - 10, &noise(10, 3)).unwrap();
+        }
+        let mut v = Vec::new();
+        script(&mut v, false);
+        let steps = std::rc::Rc::new(std::cell::Cell::new(0));
+        let s2 = steps.clone();
+        let mut f = FileSink::new(VecFile::default(), 64, Box::new(move |_, _| s2.set(s2.get() + 1)));
+        script(&mut f, false);
+        assert_eq!(f.crc().unwrap(), crc32(&v));
+        assert_eq!(f.file.b, v);
+        assert!(steps.get() >= 1, "the read-back said how far it came");
+        assert!(f.file.writes < 20, "{} writes: small ones gathered", f.file.writes);
+        assert!(f.patch(v.len() as u64 - 2, &[0; 4]).is_err(), "a patch past the end");
+        let mut g = FileSink::new(VecFile::default(), 64, Box::new(|_, _| {}));
+        script(&mut g, true);
+        assert_ne!(g.crc().unwrap(), crc32(&v), "the control: a patch left out");
+    }
+
     /// A one-zone world (Tunaria's zone 115, Aviak Village) built here is the
     /// server's build of the same recipe byte for byte: its size and CRC are
     /// go-eqoa-server's `cmd/worldbuild` output's (2026-11-08). A zone whose CRC
@@ -670,6 +1013,15 @@ mod tests {
         let mut twice = one.clone();
         twice.parts.push(aviak);
         assert!(compose(&disc, &twice).unwrap_err().contains("both stand in cell"), "one zone a cell");
+        // built straight into a file, as a page builds it (`web::worlds`):
+        // the same bytes, a zone's record written as it came
+        let image = iso::Iso::open(&disc).unwrap();
+        let src = Image { f: iso::open_file(&disc).unwrap(), entries: image.entries().to_vec() };
+        let mut f = FileSink::new(VecFile::default(), 1 << 20, Box::new(|_, _| {}));
+        compose_into(&src, &one, &mut f).expect("the server's world, into a file");
+        assert_eq!(f.file.b, b);
+        let mut g = FileSink::new(VecFile::default(), 1 << 20, Box::new(|_, _| {}));
+        assert!(compose_into(&src, &wrong, &mut g).unwrap_err().contains("not the server's"), "the control: into a file too");
     }
 
     /// A zone given extras built here is the server's build of the same

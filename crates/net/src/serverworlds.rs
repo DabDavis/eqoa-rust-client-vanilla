@@ -154,8 +154,9 @@ pub fn encode_ready(ids: &[u8]) -> Vec<u8> {
     b
 }
 
-#[cfg(test)]
-pub(crate) fn encode(worlds: &[World]) -> Vec<u8> {
+/// The server's list as it sends it ([`read`] reads it back): a page hands
+/// its worker the world to build this way.
+pub fn encode(worlds: &[World]) -> Vec<u8> {
     let s8 = |b: &mut Vec<u8>, s: &str| {
         let s = &s.as_bytes()[..s.len().min(255)];
         b.push(s.len() as u8);
