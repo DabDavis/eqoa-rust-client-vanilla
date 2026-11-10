@@ -50,6 +50,21 @@ pub struct Figure {
     /// the cape it wears (`cape`, `wear_cape`) and its model, none where no
     /// art or body fits; None while it wears none
     cape: Option<(net::cape::Cape, Option<GpuModel>)>,
+    /// what it was built of: every question its build asked of the library
+    /// and the answers it got, and its cape's (`refresh`)
+    asked: Vec<esf::Asked>,
+    cape_asked: Vec<esf::Asked>,
+}
+
+/// The body a figure of `model` is built of: the model when the library has
+/// it, else (a server's race's body not read yet, `res::Res::want_bodies`)
+/// its `like` race's of the body's sex, where the game draws a human.
+fn body_of(lib: &Library, model: u32) -> u32 {
+    if lib.lookup(model as i32).is_some() {
+        model
+    } else {
+        crate::pregame::client::create::tables::stand_in(model).filter(|&m| lib.lookup(m as i32).is_some()).unwrap_or_else(|| vi::hash::hash_resource_id("HumanMale"))
+    }
 }
 
 /// `CreateActor`'s sprite: a copy of the parsed one (`VICSprite::Copy`,
@@ -112,7 +127,10 @@ impl Figure {
     #[allow(clippy::too_many_arguments)]
     pub fn new_dressed(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, race_look: Option<net::raceopts::Look>, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
         let took = super::bodytrace::watch();
-        let f = lib.with_view(lib.view_for(model as i32), || Figure::new_in_view(lib, g, model, look, race_look, items, at, hpr, now));
+        // what it asks of the library is kept: it is made again only when an
+        // answer changes (`refresh`)
+        let (f, asked) = lib.record(|| lib.with_view(lib.view_for(model as i32), || Figure::new_in_view(lib, g, model, look, race_look, items, at, hpr, now)));
+        let f = f.map(|f| Figure { asked, ..f });
         super::bodytrace::note(|| match &f {
             Some(f) if f.body == model => format!("figure {model:08X} built of its own body in {:.1} ms", took()),
             Some(f) => format!("figure {model:08X} built of {:08X} standing in, in {:.1} ms", f.body, took()),
@@ -132,15 +150,32 @@ impl Figure {
         }
     }
 
+    /// Whether the library would build it otherwise now than it did: the
+    /// body it stands in is another's (its own has come, or its race's
+    /// stand-in is known now), or something its build or its cape's asked of
+    /// the library is answered differently (a body or a cape's body that was
+    /// not there, the 2002 disc's copy standing in).
+    pub fn stale(&self, lib: &Library) -> bool {
+        body_of(lib, self.model) != self.body || !lib.answers_still(&self.asked) || !lib.answers_still(&self.cape_asked)
+    }
+
+    /// Bodies came into the library (`res::Res::take_bodies_in`): made again
+    /// (`remake`) if it is `stale`, else left as it is, its animation going
+    /// on: a figure nothing changed for is not rebuilt. Whether it was made
+    /// again.
+    pub fn refresh(&mut self, lib: &Library, g: &mut Gpu, now: i64) -> bool {
+        let stale = self.stale(lib);
+        if stale {
+            self.remake(lib, g, now);
+        }
+        stale
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new_in_view(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, race_look: Option<net::raceopts::Look>, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
         // a server's race's body not read yet (`res::Res::want_bodies`): its
         // `like` race's of the body's sex stands in, where the game draws a human
-        let id = if lib.lookup(model as i32).is_some() {
-            model
-        } else {
-            crate::pregame::client::create::tables::stand_in(model).filter(|&m| lib.lookup(m as i32).is_some()).unwrap_or_else(|| vi::hash::hash_resource_id("HumanMale"))
-        };
+        let id = body_of(lib, model);
         let r = lib.lookup(id as i32)?;
         let textures = render::library_textures(lib);
         let phase = super::bodytrace::watch();
@@ -190,7 +225,7 @@ impl Figure {
         let gpu = g.renderer.upload(g.device, g.queue, &built, &[render::IDENTITY], &textures);
         super::bodytrace::note(|| format!("figure {model:08X}: its model built in {t_model:.1} ms, its sprite in {:.1}, its items and look in {:.1}, its body put up in {:.1}", t_sprite - t_model, t_dress - t_sprite, phase() - t_dress));
         let scale = crate::raceopts::body_size(id);
-        Some(Figure { model, look, race_look, scale, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new(), body: id, cape: None })
+        Some(Figure { model, look, race_look, scale, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new(), body: id, cape: None, asked: Vec::new(), cape_asked: Vec::new() })
     }
 
     /// Puts on the cape `want` (`cape`: a character's on a server with capes),
@@ -201,11 +236,15 @@ impl Figure {
         if self.cape.as_ref().map(|(c, _)| *c) == want {
             return;
         }
-        self.cape = want.map(|c| {
-            let m = self.sprite.as_ref().and_then(|cs| crate::cape::model(lib, c, self.body, cs));
-            let gpu = m.map(|m| lib.with_view(esf::Era::Frontiers, || g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &render::library_textures(lib))));
-            (c, gpu)
+        let (cape, asked) = lib.record(|| {
+            want.map(|c| {
+                let m = self.sprite.as_ref().and_then(|cs| crate::cape::model(lib, c, self.body, cs));
+                let gpu = m.map(|m| lib.with_view(esf::Era::Frontiers, || g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &render::library_textures(lib))));
+                (c, gpu)
+            })
         });
+        self.cape = cape;
+        self.cape_asked = asked;
     }
 
     /// The cape it wears as asked for (none: none).

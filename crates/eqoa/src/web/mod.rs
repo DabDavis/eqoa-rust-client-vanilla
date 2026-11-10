@@ -406,6 +406,55 @@ fn hooks_2002() {
     }));
 }
 
+/// How many of a cut's reads are under way at once (`cut_page`): the
+/// browser reads them together, and at most this many records wait in its
+/// memory to be taken.
+const CUT_READS: usize = 6;
+
+/// `pregame::files::cut` in a page: the bodies `ask` names cut out of its
+/// disc's resource file by the file's own directory, a slice of the image a
+/// body (a few of them read at once, each record parsed as it is taken: a
+/// fraction of a millisecond between frames, never the 148 MB file in the
+/// page's memory); a file with no directory is read whole and cut as it
+/// always was. The 2002 disc's file is found by its last part, and a 2002
+/// disc without it has none of the bodies.
+async fn cut_page(mut d: WebDisc, ask: &crate::pregame::files::CutAsk) -> crate::pregame::files::CutResult {
+    use crate::pregame::files::{Cut, Cutter, Found};
+    let name = match ask.era {
+        esf::Era::Y2002 => crate::pregame::res::name_of(&ask.path),
+        esf::Era::Frontiers => ask.path.as_str(),
+    };
+    let Some(e) = d.find(name).cloned() else {
+        return match ask.era {
+            esf::Era::Y2002 => Ok(Cut { groups: ask.groups.iter().map(|_| None).collect(), found: Found::Directory, reads: 0, bytes: 0 }),
+            esf::Era::Frontiers => Err(format!("{name}: not on the disc")),
+        };
+    };
+    let base = e.lba as u64 * iso::SECTOR;
+    if let Some(dir) = d.resource_dir(&e).await? {
+        let mut c = Cutter::new(&dir, &ask.groups);
+        let reads: Vec<(usize, u64, usize)> = c.plan().collect();
+        let mut under_way = std::collections::VecDeque::new();
+        let (mut next, mut sound) = (0, true);
+        while sound && (next < reads.len() || !under_way.is_empty()) {
+            while next < reads.len() && under_way.len() < CUT_READS {
+                let (k, off, len) = reads[next];
+                under_way.push_back((k, d.start_read(base + off, len)?));
+                next += 1;
+            }
+            if let Some((k, read)) = under_way.pop_front() {
+                let buf = read.await.map_err(err)?;
+                sound = c.put(k, js_sys::Uint8Array::new(&buf).to_vec()).is_ok();
+            }
+        }
+        if sound {
+            return Ok(c.finish());
+        }
+    }
+    let whole = d.read_at(base, e.size as usize).await?;
+    crate::pregame::files::cut_whole(whole, &ask.groups)
+}
+
 /// A test server's port from the page's address, as natively its
 /// environment variable (`pregame::port`): `?auth_port=29735` for
 /// `EQOA_AUTH_PORT`, `?game_port=`, `?patch_port=`, `?news_port=`.
@@ -796,6 +845,24 @@ pub async fn boot(file: web_sys::File, opts: JsValue) -> Result<(), JsValue> {
                     }
                 }
                 *out.borrow_mut() = Some(r.map(|_| files));
+            });
+            slot
+        }));
+        // the bodies of a server's races, out of CHAR.ESF by its directory
+        // (`cut_page`); the 2002 disc's off the one in hand
+        let d = disc.copy();
+        crate::pregame::files::set_cutter(Box::new(move |ask| {
+            let slot: crate::pregame::files::CutSlot = Default::default();
+            let (out, d) = (slot.clone(), d.copy());
+            wasm_bindgen_futures::spawn_local(async move {
+                let r = match ask.era {
+                    esf::Era::Frontiers => cut_page(d, &ask).await,
+                    esf::Era::Y2002 => match disc_2002_copy() {
+                        Some(d2) => cut_page(d2, &ask).await,
+                        None => Err("no 2002 disc image (F9 asks for it)".to_string()),
+                    },
+                };
+                *out.borrow_mut() = Some(r);
             });
             slot
         }));

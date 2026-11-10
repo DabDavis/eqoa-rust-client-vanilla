@@ -198,6 +198,16 @@ impl CharSelect {
         self.cust.remake(lib, g, now);
     }
 
+    /// Bodies came into the library (a server's races', `res::Res::want_bodies`):
+    /// the character shown, and customise's, made again where what they were
+    /// built of changed (`Figure::refresh`), else left as they stand.
+    pub fn refresh(&mut self, lib: &esf::Library, g: &mut crate::play::Gpu, now: i64) {
+        if let Some(f) = self.figure.as_mut() {
+            f.refresh(lib, g, now);
+        }
+        self.cust.refresh(lib, g, now);
+    }
+
     /// The server's race looks changed (`raceopts`): the character shown is
     /// made again in its own at the next frame.
     pub fn relook(&mut self) {

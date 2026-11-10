@@ -43,6 +43,17 @@ pub struct Ref {
     pub node: NodeId,
 }
 
+/// A question a build asked of a library and what it was answered
+/// ([`Library::record`]): a lookup in a view's dictionary (the record, and its
+/// file's stamp: a file put in place of another is another file), or whether
+/// the 2002 disc has an id. What was built is as it would be built now while
+/// every answer is still the same ([`Library::answers_still`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Asked {
+    Lookup(Era, i32, Option<(Ref, u64)>),
+    In2002(i32, bool),
+}
+
 /// A registration's place in the 2002 dictionary's order: the file it ranks
 /// as and the offset in that file (as `Library::rank`), then 0 for a 2002 file
 /// standing in for that file and 1 for the file itself.
@@ -102,6 +113,12 @@ pub struct Library {
     extras: HashMap<(usize, usize), (usize, Vec<crate::zone::Actor>)>,
     /// The dictionary lookups answer from.
     view: Cell<Era>,
+    /// Each file's stamp: a number no other file of this library has had,
+    /// given anew when a file's container is put in place of another's.
+    stamps: Vec<u64>,
+    stamped: u64,
+    /// The questions asked since `record` began, while one is under way.
+    asked: std::cell::RefCell<Option<std::collections::HashSet<Asked>>>,
 }
 
 /// Whether record `n` of `a` and record `m` of `b` are the same bytes: type,
@@ -136,7 +153,56 @@ impl Library {
         self.rank.push(rank);
         self.eras.push(era);
         self.stands_for.push(stands_for);
+        self.stamps.push(0);
+        self.stamp(file);
         file
+    }
+
+    /// File `file` holds another container from now on: a stamp of its own.
+    fn stamp(&mut self, file: usize) {
+        self.stamped += 1;
+        self.stamps[file] = self.stamped;
+    }
+
+    /// Runs `f` and hands back with its result every question it asked of the
+    /// dictionary and the answers it got ([`Asked`]), each once: what a thing
+    /// built in `f` was built of, for knowing later whether it would be built
+    /// the same (`answers_still`). One inside another: both hear the inner
+    /// one's questions.
+    pub fn record<R>(&self, f: impl FnOnce() -> R) -> (R, Vec<Asked>) {
+        let outer = self.asked.replace(Some(Default::default()));
+        let r = f();
+        let mine = self.asked.replace(outer).unwrap_or_default();
+        if let Some(o) = self.asked.borrow_mut().as_mut() {
+            o.extend(mine.iter().copied());
+        }
+        (r, mine.into_iter().collect())
+    }
+
+    /// Whether every question of `asked` is answered now as it was when it
+    /// was recorded: what was built of those answers would be built the same.
+    pub fn answers_still(&self, asked: &[Asked]) -> bool {
+        asked.iter().all(|a| match *a {
+            Asked::Lookup(era, id, was) => self.answer(era, id) == was,
+            Asked::In2002(id, was) => self.has_2002_id(id) == was,
+        })
+    }
+
+    /// `lookup_in`'s answer with its file's stamp.
+    fn answer(&self, era: Era, dict_id: i32) -> Option<(Ref, u64)> {
+        let r = match (era, &self.dict_2002) {
+            (Era::Y2002, Some(d)) => d.get(&dict_id).map(|e| e.r),
+            _ => self.dict.get(&dict_id).copied(),
+        };
+        r.map(|r| (r, self.stamps[r.file]))
+    }
+
+    /// `in_2002`'s answer.
+    fn has_2002_id(&self, dict_id: i32) -> bool {
+        match &self.dict_2002 {
+            Some(d) => d.get(&dict_id).is_some_and(|e| self.era_of(e.by) == Era::Y2002),
+            None => self.dict.get(&dict_id).is_some_and(|r| self.era_of(r.file) == Era::Y2002),
+        }
     }
 
     /// Adds `c`, the 2002 disc's copy of file `file`, standing in for it in
@@ -146,6 +212,7 @@ impl Library {
     pub fn stand_in(&mut self, file: usize, c: Container) -> usize {
         if let Some(s) = self.stand_in_of(file) {
             self.files[s].1 = c;
+            self.stamp(s);
             self.same_as_namesake(s);
             self.reregister();
             return s;
@@ -241,10 +308,11 @@ impl Library {
     /// Whether a file off the 2002 disc registered `dict_id` in the 2002
     /// dictionary.
     pub fn in_2002(&self, dict_id: i32) -> bool {
-        match &self.dict_2002 {
-            Some(d) => d.get(&dict_id).is_some_and(|e| self.era_of(e.by) == Era::Y2002),
-            None => self.dict.get(&dict_id).is_some_and(|r| self.era_of(r.file) == Era::Y2002),
+        let has = self.has_2002_id(dict_id);
+        if let Some(a) = self.asked.borrow_mut().as_mut() {
+            a.insert(Asked::In2002(dict_id, has));
         }
+        has
     }
 
     /// The rank a file registers at in the 2002 dictionary.
@@ -339,6 +407,7 @@ impl Library {
     pub fn replace_from(&mut self, i: usize, name: impl Into<String>, c: Container, era: Era) {
         self.files[i] = (name.into(), c);
         self.eras[i] = era;
+        self.stamp(i);
         if let Some(s) = self.stand_in_of(i) {
             self.same_as_namesake(s);
         }
@@ -346,6 +415,7 @@ impl Library {
         for k in gone {
             if let Some(f) = self.zone_files.remove(&k) {
                 self.files[f].1 = Container::empty();
+                self.stamp(f);
             }
         }
         // the old world's twin and its zones' additions go with it
@@ -353,10 +423,12 @@ impl Library {
         for k in gone {
             if let Some((f, _)) = self.extras.remove(&k) {
                 self.files[f].1 = Container::empty();
+                self.stamp(f);
             }
         }
         if let Some(t) = self.twins.remove(&i) {
             self.files[t].1 = Container::empty();
+            self.stamp(t);
         }
         self.reregister();
     }
@@ -370,12 +442,14 @@ impl Library {
         let Some(c) = c else {
             if let Some(t) = self.twins.remove(&world) {
                 self.files[t].1 = Container::empty();
+                self.stamp(t);
             }
             return None;
         };
         if let Some(&t) = self.twins.get(&world) {
             self.files[t].1 = c;
             self.eras[t] = era;
+            self.stamp(t);
             return Some(t);
         }
         let name = self.files[world].0.clone();
@@ -466,10 +540,11 @@ impl Library {
 
     /// `lookup` in `era`'s dictionary, whatever the view.
     pub fn lookup_in(&self, era: Era, dict_id: i32) -> Option<Ref> {
-        match (era, &self.dict_2002) {
-            (Era::Y2002, Some(d)) => d.get(&dict_id).map(|e| e.r),
-            _ => self.dict.get(&dict_id).copied(),
+        let got = self.answer(era, dict_id);
+        if let Some(a) = self.asked.borrow_mut().as_mut() {
+            a.insert(Asked::Lookup(era, dict_id, got));
         }
+        got.map(|g| g.0)
     }
 
     /// What a texture cache keys the surface `dict_id` names now by: the id,

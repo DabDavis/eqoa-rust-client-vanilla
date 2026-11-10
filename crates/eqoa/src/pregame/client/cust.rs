@@ -82,6 +82,14 @@ impl Cust {
         }
     }
 
+    /// Bodies came into the library: the figure made again if what it was
+    /// built of changed (`Figure::refresh`).
+    pub fn refresh(&mut self, lib: &esf::Library, g: &mut crate::play::Gpu, now: i64) {
+        if let Some(f) = self.figure.as_mut() {
+            f.refresh(lib, g, now);
+        }
+    }
+
     /// `Release`: the model let go.
     pub fn release(&mut self) {
         self.figure = None;

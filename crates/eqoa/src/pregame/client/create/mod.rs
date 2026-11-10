@@ -436,6 +436,16 @@ impl Create {
         }
     }
 
+    /// Bodies came into the library (a server's races', `res::Res::want_bodies`):
+    /// the page's model made again if what it was built of changed
+    /// (`Figure::refresh`: its race's body where another stood in), else
+    /// left as it stands.
+    pub fn refresh(&mut self, lib: &esf::Library, g: &mut crate::play::Gpu, now: i64) {
+        if let Some(f) = self.env.figure.as_mut() {
+            f.refresh(lib, g, now);
+        }
+    }
+
     /// The page's 3D: its model in its race's set, through the stage's view,
     /// with the personal light the page set.
     pub fn scene<'a>(&'a self, stage: &'a Stage) -> Option<Scene<'a>> {

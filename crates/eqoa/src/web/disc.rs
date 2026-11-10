@@ -132,6 +132,39 @@ impl WebDisc {
         }
     }
 
+    /// The directory of the resource file `e` (`esf::ResourceDir`: CHAR.ESF's
+    /// table of its bodies), read as the synchronous walks are, against the
+    /// cache: the file's header and its table's chunks are fetched, never its
+    /// objects. None when the file has no directory to go by.
+    pub async fn resource_dir(&mut self, e: &Entry) -> Result<Option<esf::ResourceDir>, String> {
+        let (base, len) = (e.lba as u64 * iso::SECTOR, e.size as u64);
+        loop {
+            match esf::ResourceDir::read(&mut Window { sparse: &mut self.sparse, base, len }) {
+                Ok(dir) => {
+                    // what the walk fetched is not needed again
+                    self.sparse = Sparse::new(self.len);
+                    return Ok(Some(dir));
+                }
+                Err(esf::Error::Io(x)) if x.kind() == std::io::ErrorKind::WouldBlock => {
+                    for (off, n) in std::mem::take(&mut self.sparse.missing) {
+                        let b = self.read_at(off, n as usize).await?;
+                        self.sparse.fill(off, &b);
+                    }
+                }
+                Err(esf::Error::Io(x)) => return Err(format!("{}: {x}", e.path)),
+                Err(_) => return Ok(None),
+            }
+        }
+    }
+
+    /// `len` bytes at `off` of the image, begun now: several begun together
+    /// are read together (`read_blob` awaits one).
+    pub fn start_read(&self, off: u64, len: usize) -> Result<JsFuture, String> {
+        let end = (off + len as u64).min(self.len);
+        let blob = self.file.slice_with_f64_and_f64(off as f64, end as f64).map_err(err)?;
+        Ok(JsFuture::from(blob.array_buffer()))
+    }
+
     /// A container off the disc: a world (an OBJF whose first record is
     /// 0x8000) with its zones left there (`Container::open_deferred`, as
     /// `stream::open_file` opens one natively), anything else whole.

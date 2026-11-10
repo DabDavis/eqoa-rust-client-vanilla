@@ -454,7 +454,8 @@ impl Client {
 
     /// A server's races' bodies came in (`res::Res::want_bodies`): character
     /// select's figure and creation's made again at the next frame, where their
-    /// `like` races stood in.
+    /// `like` races stood in (`Figure::refresh`: one they change nothing for
+    /// is left as it stands).
     pub fn bodies_in(&mut self) {
         self.refigure = true;
     }
@@ -594,8 +595,8 @@ impl Client {
             && let Some(g) = cx.gpu.as_mut()
         {
             self.refigure = false;
-            self.select.remake(&cx.res.lib, g, cx.now);
-            self.create.remake(&cx.res.lib, g, cx.now);
+            self.select.refresh(&cx.res.lib, g, cx.now);
+            self.create.refresh(&cx.res.lib, g, cx.now);
         }
         // the server's race looks changed (`raceopts`): character select's
         // figure made again in its own

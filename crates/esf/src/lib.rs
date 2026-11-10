@@ -24,10 +24,12 @@ pub(crate) mod mesh;
 mod surface;
 pub mod font;
 pub mod pcsx2;
+pub mod resdir;
 pub mod sound;
 pub mod zone;
-pub use library::{Era, Library, Ref};
+pub use library::{Asked, Era, Library, Ref};
 pub use mesh::{Batch, Layer, Model, ModelRef, PrimBuffer, VertexList};
+pub use resdir::{ResourceDir, ResourceElem};
 pub use surface::{Image, Surface};
 
 pub mod types {
@@ -317,6 +319,24 @@ impl Container {
         let end = c.data.len();
         c.walk_range(0, end, None);
         c
+    }
+
+    /// Adds records with no OBJF header after the ones already here, their
+    /// roots after its roots: a container made a record at a time is what
+    /// [`Container::parse_records`] makes of all their bytes together (an
+    /// object read out of a resource file by its directory,
+    /// [`ResourceDir`]). `records` is whole records.
+    pub fn append_records(&mut self, records: &[u8]) {
+        let from = self.data.len();
+        self.data.extend_from_slice(records);
+        let end = self.data.len();
+        self.walk_range(from, end, None);
+    }
+
+    /// A container of no records yet, with room for `bytes` of them
+    /// (`append_records`).
+    pub fn with_capacity(bytes: usize) -> Self {
+        Container::with_data(Vec::with_capacity(bytes))
     }
 
     /// Opens an OBJF file through `src` with its zones left on the disc: the
