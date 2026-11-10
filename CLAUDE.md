@@ -245,6 +245,11 @@ current.
   in a page; `EQOA_PAD_TRACE=1` / `?padtrace`; `EQOA_GLYPHS=1` prints the button glyphs a frame drew.
   A button pressed and let go between two frames reaches the game (`input::Latch`, every source but XInput):
   a new source keeps its presses through it.
+  A d-pad that is a hat (third-party PS3 pads) comes from gilrs three ways, OR'd (`input::GilrsRead`: its d-pad
+  buttons, its DPadX/DPadY axes, the hat's own codes where a mapping names it not), and in a page on one axis or two
+  (`padmap::Dpad`, learned per pad); a controller no mapping knows reads by number (`bit::NUMBERED`). Test a pad
+  natively with a uinput clone and `SDL_GAMECONTROLLERCONFIG` for gilrs's mapping cases; a bug report's note says
+  each controller and how it is read (`input::note`).
   A DualSense is plugged in here and gilrs drives its motors: rumble is as real as the speakers. `eqoa rumble` runs each controller's motors through the game's path;
   `EQOA_RUMBLE_TEST=<ms>` casts a vibrating spell effect on the player in a scripted run.
   The local server spawns a character at a random heading each login, so click by name, not pixel.

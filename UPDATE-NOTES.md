@@ -6,6 +6,27 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · Third-party PS3 controllers: the d-pad works
+- A controller whose d-pad is a "hat", as on most third-party PS3 controllers and many other PC controllers,
+  now works wherever the d-pad does (the menus, the quick menus, every window): in Firefox on Windows, in
+  Chrome, Edge and Firefox on Linux and Chromebooks, in Firefox on a Mac, and in the downloaded game however
+  the system hands the d-pad over. A diagonal presses both of its directions. Controllers that worked before
+  work as they did.
+- In the downloaded game on Linux, a controller the game knows no layout for has all its buttons now (before,
+  only its d-pad and left stick worked), numbered as most PlayStation-style controllers number them: □ ✕ ○ △,
+  L1, R1, L2, R2, Select, Start, L3, R3; its right stick turns the camera. On Android the same for a controller
+  Android has no layout for. A button in the wrong place can be moved on the Controls page.
+- In the downloaded game on Windows, such a controller (two sticks, no analog triggers) no longer seems to
+  hold L2 while its right stick rests: L2 and R2 are its own L2 and R2 buttons, and its right stick moves the
+  camera up and down again.
+- In Firefox on Windows such a controller's right stick moves the camera up and down again too.
+- In Chrome on Linux, a third-party PS3 controller's right stick pushed left while pressing up on the d-pad
+  no longer mixes up its buttons (L2 and R2 held, the d-pad gone) for the rest of the session.
+- A bug report (F3, or /bug) now tells the GMs which controllers you have and how the game reads each one, so
+  one that misbehaves can be put right.
+- Safari does not show a page such a controller's d-pad at all: play in another browser, or the downloaded
+  game.
+
 ## 2026-11-10 · Macros on a page of their own, as PCSX2 has them
 - Macros have their own page: Options > Macros, after Controls (in the title's Options and in play). The
   sixteen macros are listed on the left with what each presses; choose one and set it on the right, laid

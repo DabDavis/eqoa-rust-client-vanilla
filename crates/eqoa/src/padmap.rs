@@ -420,14 +420,15 @@ impl PadMap {
             }
         }
         let pair = Self::trigger_pair(pad, layout, b);
-        // not where the second is a hat's (a PS3 pad through joydev, X Y Z
-        // Rz and its hat: the right stick left with the d-pad up turned it
-        // into xpad's order for the rest of the session, its d-pad read
-        // where it has none and L2 and R2 held)
+        // not, positionally, where the second is a hat's (a PS3 pad through
+        // joydev, X Y Z Rz and its hat: the right stick left with the d-pad
+        // up turned it into xpad's order for the rest of the session, its
+        // d-pad read where it has none and L2 and R2 held); Firefox's evdev
+        // layout has its hat on buttons 12 to 15
         if let Some((l, r)) = pair
             && ax(l) <= -0.9
             && ax(r) <= -0.9
-            && !self.hat_axis(pad, r)
+            && (layout != Layout::Raw || !self.hat_axis(pad, r))
         {
             self.triggers = true;
         }
