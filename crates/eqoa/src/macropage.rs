@@ -445,7 +445,7 @@ impl MacrosPage {
                 cues.push(9);
             }
             Err(MacroKey::Row(k, r)) => {
-                self.note = Some(format!("{} is {}'s: choose a free key, or move that row on the Controls page first.", binds::display(&k), bindpage::label(vui, r)));
+                self.note = Some(format!("{} is {}'s: choose a free key, or move that row on the Controls page.", binds::display(&k), bindpage::label(vui, r)));
                 cues.push(9);
             }
             _ => self.hold(Input::Key(name.to_string()), cues),
@@ -625,7 +625,7 @@ impl MacrosPage {
         let now = vui.time;
         if self.capture.as_ref().is_some_and(|c| now - c.since >= CAPTURE_MS) {
             self.capture = None;
-            self.note = Some("Nothing was bound: hold the trigger's keys and buttons, then let one go.".into());
+            self.note = Some("Nothing was bound: hold its keys or buttons, then let one go.".into());
             cues.push(8);
         }
         let b = crate::settings::binds();
@@ -793,15 +793,15 @@ impl MacrosPage {
         if let Some(c) = &self.capture {
             let left = (CAPTURE_MS - (now - c.since)).max(0) / 1000 + 1;
             return format!(
-                "Hold the trigger: keys, the controller's buttons, a stick pushed (four at most, together for a chord); it is kept when one is let go. Esc gives up{} ({left}).",
-                if c.slot.is_some() { ", Backspace takes it off" } else { "" }
+                "Hold its keys, buttons or sticks (four at most, together for a chord), then let one go. Esc gives up{}. {left}",
+                if c.slot.is_some() { "; Backspace takes it off" } else { "" }
             );
         }
         if let Some(n) = &self.note {
             return n.clone();
         }
         let Some(m) = self.macro_at() else {
-            return "Clears every macro: no triggers, nothing pressed, every setting as PCSX2 starts one.".into();
+            return "Clears every macro: no triggers, nothing pressed, PCSX2's settings.".into();
         };
         let mac = &b.macros[m];
         if !self.editing {
@@ -809,19 +809,16 @@ impl MacrosPage {
         }
         match self.line(b) {
             Some(Line::Trigger(t)) if t < mac.triggers.len() => {
-                format!("What runs Macro {}, wholly held: {}. |x binds it again (hold its keys and buttons, let one go); |s takes it off.", m + 1, binds::chord_text(&mac.triggers[t]))
+                format!("Runs Macro {} while held: {}. |x binds it again, |s takes it off.", m + 1, binds::chord_text(&mac.triggers[t]))
             }
-            Some(Line::Trigger(_)) => format!(
-                "Nothing runs Macro {} yet. |x, then hold its trigger: a key, a controller's button or a stick pushed, or several together (a chord); it is kept as one is let go.",
-                m + 1
-            ),
+            Some(Line::Trigger(_)) => format!("Nothing runs Macro {} yet: |x, then hold a key, a button or a stick (several for a chord) and let one go.", m + 1),
             Some(Line::Add) => "Another trigger: any one of them runs the macro (PCSX2's Shift+click).".into(),
-            Some(Line::Clear) => "Takes every trigger off (PCSX2's right click): their keys free, their buttons the game's again.".into(),
-            Some(Line::Toggle) => "On: a press of a trigger starts the macro and the next stops it. Off: it runs while a trigger is held.".into(),
-            Some(Line::Frequency) => "Off: what it presses is held while it runs. N: let go and pressed again every N frames (PCSX2's, 60 a second); the game reads its pad 30 times a second, so 2 is 15 presses a second, 4 is 7.5, 1 is held.".into(),
-            Some(Line::Pressure) => "How far it pushes the sticks' ways it presses: under 24% the game reads the stick at rest, from 24% it walks, from 60% it runs. The game reads every button as pressed or not.".into(),
-            Some(Line::Deadzone) => "How far a stick pushed, or L2 or R2 pulled, in a trigger must go before it counts: past this. A key or a button counts unless it is 100%.".into(),
-            Some(Line::Binds(_)) => "What the macro presses, all at once (PCSX2's Binds): |x ticks the button or the stick's way under the cursor.".into(),
+            Some(Line::Clear) => "Every trigger off: their keys free, their buttons the game's again.".into(),
+            Some(Line::Toggle) => "On: a press starts the macro and the next stops it. Off: it runs while a trigger is held.".into(),
+            Some(Line::Frequency) => "Off: held while it runs. N: let go and pressed every N frames, 60 a second; the game, at 30, sees 2 as 15 presses a second, 4 as 7.5.".into(),
+            Some(Line::Pressure) => "How far it pushes a stick: under 24% the game reads it at rest, from 24% a walk, from 60% a run. A button is pressed at any.".into(),
+            Some(Line::Deadzone) => "How far a stick, or L2 or R2, in a trigger must go to count. A key or a button counts unless it is 100%.".into(),
+            Some(Line::Binds(_)) => "What it presses, all at once: |x ticks the button or the stick's way under the cursor.".into(),
             None => String::new(),
         }
     }

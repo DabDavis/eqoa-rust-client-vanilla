@@ -1109,13 +1109,10 @@ impl Binds {
                 return false;
             }
             match self.row_on(k).or_else(|| default_row(k).filter(|&r| !self.moved(r))) {
-                None => {}
                 Some(r) if self.moved(r) => return false,
-                Some(r) => {
-                    if ROWS[r].keys.first() == Some(&k.as_str()) {
-                        clear.push(r);
-                    }
-                }
+                // its first key: the row is left with none; its other: kept
+                Some(r) if ROWS[r].keys.first() == Some(&k.as_str()) => clear.push(r),
+                _ => {}
             }
         }
         for r in clear {
