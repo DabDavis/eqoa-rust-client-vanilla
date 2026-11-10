@@ -18,6 +18,13 @@ open page by writing new builds and version.json under it:
             worker's timer, which a hidden page's own are not), a shown one's
             not at all
   disc      the disc is named when picked (with a second image in --other-iso)
+  worlds    a server's own world (go-eqoa-server's one-zone Aviak Village,
+            its sizes and CRCs) is built off the disc picked in the page's
+            worker into the origin's private storage, saying how far it came,
+            the worker's heap under 64 MB; the next time
+            found kept; a copy damaged since is built again; another disc's
+            zone is refused and nothing kept under its name; a page without
+            the storage (a stand-in: none) cannot keep one
   2002      the 2002 disc (--iso-2002) is taken in the second input, the
             Frontiers disc there refused; F9's ask opens its picker inside
             the key's activation (not without one) and puts up its notice,
@@ -423,6 +430,49 @@ async def tests(a, site, base, page):
         await page.pick(a.other_iso)
         line = await page.until("document.getElementById('iso-what').className.includes('warn') && document.getElementById('iso-what').textContent", 10)
         check("another disc is named, and what it lacks", bool(line) and "Frontiers" in line, str(line))
+
+    # ---- worlds: a server's own world built off the disc picked, in the
+    # page's worker into the origin's private storage (main.js eqoaWorlds,
+    # worlds.js, crates/eqoa/src/web/worlds.rs): Aviak Village alone, as
+    # go-eqoa-server's cmd/worldbuild built it (serverworlds.rs's test)
+    def world_list(zone_crc):
+        s8 = lambda t: bytes([len(t)]) + t.encode()
+        b = bytes([1, 1, 10]) + s8("the Homelands") + (5880303).to_bytes(4, "little") + (0xB6D94C34).to_bytes(4, "little") + bytes([1])
+        return list(b + s8("TUNARIA.ESF") + (115).to_bytes(2, "little") + (5879151).to_bytes(4, "little") + zone_crc.to_bytes(4, "little")
+                    + bytes([4, 10]) + s8("Aviak Village") + bytes([14]))
+    def build_js(lst, name="world10-b6d94c34.ESF"):
+        return f"""(async () => {{
+            const disc = document.getElementById('iso').files[0], phases = new Set();
+            try {{
+                const r = await window.eqoaWorlds.build(disc, new Uint8Array({json.dumps(lst)}), '{name}', 5880303, (p) => phases.add(p));
+                return JSON.stringify({{ how: r.how, size: r.file.size, heap: r.heap, phases: [...phases] }});
+            }} catch (e) {{
+                return JSON.stringify({{ error: String(e.message), quiet: !!e.quiet }});
+            }}
+        }})()"""
+    kept_size = """(async () => { try { const d = await (await navigator.storage.getDirectory()).getDirectoryHandle('worlds');
+        return (await (await d.getFileHandle('%s')).getFile()).size; } catch { return -1; } })()"""
+    await page.open(base + q)
+    await page.js("navigator.storage.getDirectory().then((r) => r.removeEntry('worlds', { recursive: true })).catch(() => {})")
+    await page.pick(a.iso)
+    await page.until("document.getElementById('iso-what').className.includes('ok')", 10)
+    check("the page can keep a server's world here", await page.js("window.eqoaWorlds.usable()") is True)
+    r = json.loads(await page.js(build_js(world_list(0x7257AE33))) or "{}")
+    check("a world is built off the disc into the page's storage, saying how far it came",
+          r.get("how") == "built" and r.get("size") == 5880303 and {"build", "verify"} <= set(r.get("phases", [])) and 0 < r.get("heap", 0) < 64 << 20, str(r))
+    r = json.loads(await page.js(build_js(world_list(0x7257AE33))) or "{}")
+    check("the next time it is found kept", r.get("how") == "found kept" and r.get("size") == 5880303, str(r))
+    await page.js("""(async () => { const d = await (await navigator.storage.getDirectory()).getDirectoryHandle('worlds');
+        const w = await (await d.getFileHandle('world10-b6d94c34.ESF')).createWritable({ keepExistingData: true });
+        await w.write({ type: 'write', position: 4096, data: new Uint8Array([1, 2, 3]) }); await w.close(); })()""")
+    r = json.loads(await page.js(build_js(world_list(0x7257AE33))) or "{}")
+    check("a copy damaged since is built again", r.get("how") == "built", str(r))
+    r = json.loads(await page.js(build_js(world_list(0x7257AE33 ^ 1), "world10-0000dead.ESF")) or "{}")
+    check("another disc's zone is refused, nothing kept under its name (control)",
+          "not the server's" in r.get("error", "") and not r.get("quiet") and await page.js(kept_size % "world10-0000dead.ESF") == -1, str(r))
+    await page.open(base + q)
+    await page.js("Object.defineProperty(navigator.storage, 'getDirectory', { value: undefined, configurable: true })")
+    check("a page without the storage cannot keep one (control)", await page.js("window.eqoaWorlds.usable()") is False)
 
     # ---- 2002: the second disc, judged by the client's rules (era.rs)
     if a.iso_2002:

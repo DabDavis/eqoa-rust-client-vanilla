@@ -309,6 +309,24 @@ pub struct Client {
     /// the race looks' generation character select's figure was made under
     /// (`raceopts::generation`)
     looks_seen: u64,
+    /// A character played while the server's own worlds are still being
+    /// built (`net::session::Session::server_worlds_pending`), and when: sent
+    /// once the server is told which are held (`pick_goes`). In a page alone
+    /// (`hold_picks`): its first visit builds them off the disc in seconds
+    /// (`web::worlds`), and the server places the character by what it is
+    /// told, its homeland or its city; natively the pick goes at once.
+    held_pick: Option<(net::session::Character, i64)>,
+    hold_picks: bool,
+}
+
+/// How long a character played waits for the server's worlds (`held_pick`)
+/// before it goes anyway: `eqoa play`'s wait.
+const PICK_WAIT_MS: i64 = 60_000;
+
+/// Whether a character played at `at` goes now (`held_pick`): once the
+/// server's worlds are no longer pending, or after [`PICK_WAIT_MS`].
+fn pick_goes(pending: bool, at: i64, now: i64) -> bool {
+    !pending || now - at >= PICK_WAIT_MS
 }
 
 impl Default for Client {
@@ -341,6 +359,8 @@ impl Default for Client {
             remake: false,
             refigure: false,
             looks_seen: 0,
+            held_pick: None,
+            hold_picks: cfg!(target_arch = "wasm32"),
         }
     }
 }
@@ -369,6 +389,7 @@ impl Client {
         self.login = shared.login.clone();
         self.session = None;
         self.making = None;
+        self.held_pick = None;
         self.state = 20;
         self.code = -1;
         self.phase = -1;
@@ -401,6 +422,7 @@ impl Client {
         self.login = shared.login.clone();
         self.session = None;
         self.making = None;
+        self.held_pick = None;
         self.next = None;
         self.entered = None;
         self.code = -1;
@@ -444,6 +466,7 @@ impl Client {
         }
         self.session = None;
         self.making = None;
+        self.held_pick = None;
         self.top = Wnd::None;
         self.active = Wnd::None;
     }
@@ -513,6 +536,7 @@ impl Client {
         }
         self.session = None;
         self.making = None;
+        self.held_pick = None;
     }
 
     /// `Msg0777Done(mode)`.
@@ -725,6 +749,15 @@ impl Client {
         }
         let Some(s) = self.session.as_mut() else { return };
         let events = s.pump();
+        // a character played while the server's worlds were being built goes
+        // once the server is told which are held (the pump told it)
+        if let Some((c, at)) = &self.held_pick
+            && pick_goes(s.server_worlds_pending(), *at, self.now)
+        {
+            crate::say(&format!("{} goes in after {} ms", c.name, self.now - at));
+            s.select_character(c);
+            self.held_pick = None;
+        }
         // what the server said creation takes past the game's (`net::creation`),
         // for the create pages and character select's stand-ins
         create::tables::set_offer(s.creation.as_ref());
@@ -801,6 +834,7 @@ impl Client {
                     self.phase = 0;
                     self.state = 20;
                     self.session = None;
+                    self.held_pick = None;
                     if let (Some(server), Some(login)) = (self.server.clone(), self.login.clone()) {
                         self.making = Some(connect(&server, &login));
                     } else {
@@ -871,7 +905,14 @@ impl Client {
             self.phase = 4;
             let c = c.character();
             if let Some(s) = self.session.as_mut() {
-                s.select_character(&c);
+                // the server's own worlds still being built (a page's first
+                // visit): the character waits for them (`held_pick`)
+                if self.hold_picks && s.server_worlds_pending() {
+                    crate::say(&format!("{} waits for the server's worlds to be built", c.name));
+                    self.held_pick = Some((c, self.now));
+                } else {
+                    s.select_character(&c);
+                }
             }
         }
     }
@@ -985,6 +1026,19 @@ mod tests {
         assert_eq!((look.armor_color, look.robe_color), (Some(l.armor), Some(l.robe)));
         let disc = CharRecord::of(&character("Plain", 8, vec![0; net::session::DISC_GEAR_SIZE]));
         assert!(disc.colors.is_none() && select::look_of(&disc, true).armor_color.is_none(), "the control: the disc's record");
+    }
+
+    /// A character played while the server's worlds are still being built (a
+    /// page's first visit, `web::worlds`) waits until the server is told
+    /// which are held, or a minute at most; natively one never waits (the
+    /// control: `hold_picks` is a page's alone, so nothing changes there).
+    #[test]
+    fn a_pick_waits_for_the_servers_worlds_in_a_page() {
+        assert!(!pick_goes(true, 1000, 1000), "pending: it waits");
+        assert!(!pick_goes(true, 1000, 1000 + PICK_WAIT_MS - 1), "still pending: it waits");
+        assert!(pick_goes(false, 1000, 1001), "the server told: it goes");
+        assert!(pick_goes(true, 1000, 1000 + PICK_WAIT_MS), "a minute: it goes anyway");
+        assert!(!Client::new().hold_picks, "natively a pick goes at once");
     }
 
     /// Where a box of the client's own may stand (`update`'s question): the

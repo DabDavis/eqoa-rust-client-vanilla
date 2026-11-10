@@ -26,6 +26,9 @@
 
 mod bgm;
 mod disc;
+// a server's own worlds, built off the disc into the origin's storage
+// (`crate::serverworlds`, web/worlds.js)
+mod worlds;
 // the GM panel's spell-visual preview (`crate::fxview`, web/fxview.html)
 mod fxview;
 pub mod pad;
@@ -595,7 +598,7 @@ pub async fn view(file: web_sys::File, args: String) -> Result<(), JsValue> {
                 if list.is_empty() {
                     return Err(format!("{name} has no models"));
                 }
-                viewer::Source::Models { list, index }
+                viewer::Source::Models { list, index, tint: None }
             }
             _ => return Err("expected [model], zone <n> or walk <n>".into()),
         };
@@ -713,6 +716,15 @@ pub async fn boot(file: web_sys::File, opts: JsValue) -> Result<(), JsValue> {
         crate::stream::set_world_opener(disc.world_opener());
         // the 2002 disc's art (`era`, F9): its reader and its ask
         hooks_2002();
+        // a server's own worlds, built off this disc into the origin's
+        // storage (`worlds`) where this browser can keep them; elsewhere the
+        // server's offer is not taken, and a character of such a world starts
+        // in its home city
+        if worlds::usable().await {
+            worlds::install(disc.file());
+        } else {
+            log("server worlds: this browser cannot keep them (no private storage for the page): a server's own world is not built here");
+        }
         let (frontiers, which) = crate::discs::describe(disc.boot().await.as_deref());
         if !frontiers {
             problem("disc", &which);
@@ -812,10 +824,19 @@ fn world_loader(disc: &WebDisc) -> crate::pregame::host::WorldLoader {
                         twin_zones = crate::stream::fill_set(&lib, main, x, z).iter().map(|w| w.0).collect();
                         (main, d2.fill(&mut lib, main, x, z).await?)
                     }
-                    None => {
-                        let main = add(&mut lib, &mut d, &world).await?;
-                        (main, d.fill(&mut lib, main, x, z).await?)
-                    }
+                    // a server's own world (`worlds`): its file in the
+                    // origin's storage, read as a disc of that one file
+                    None => match worlds::disc_of(&world) {
+                        Some(mut w) => {
+                            status(&format!("reading {world} (built from the disc, kept in this browser)"));
+                            let main = add(&mut lib, &mut w, &world).await?;
+                            (main, w.fill(&mut lib, main, x, z).await?)
+                        }
+                        None => {
+                            let main = add(&mut lib, &mut d, &world).await?;
+                            (main, d.fill(&mut lib, main, x, z).await?)
+                        }
+                    },
                 };
                 log(&format!("{n} zones read round the spawn"));
                 for name in SHARED.iter().copied().chain(["CHAR.ESF", "ITEM.ESF", "ARIAL.CSF", "UI.CSF", "ARIALUI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF", "ADDART.CSF"]) {

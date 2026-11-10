@@ -101,8 +101,9 @@ or a browser (each described where it lives below):
   Overlapping Names, Shadows), Sound (Sound in Background, Output Device: the system's
   default, followed when it changes, or a device by its name), natively Textures
   (Texture Packs, Dump Textures, and on a computer Texture Folder), Map (Map,
-  Minimap, Map Markers, Quest Helper, Quest Tracker) and Number Colors (Your Damage,
-  Your Procs, Your Heals, Pet Damage, Pet Procs, Pet Heals), and the rows below.
+  Minimap, Map Markers, Quest Helper, Quest Tracker), Number Colors (Your Damage,
+  Your Procs, Your Heals, Pet Damage, Pet Procs, Pet Heals) and Combat (DPS Meter, DPS
+  Meter Shows, Reset DPS Meter), and the rows below.
 - **The map and the quest helper** (the user's of 2026-11-09: "also add the map and
   quest helper we had in a former update"; they were taken out on 2026-10-27 with the
   others below that are not the game's, and only these two came back): Extended > Map,
@@ -291,6 +292,26 @@ or a browser (each described where it lives below):
   the pet's three. Extended > Number Colors, each row Default (the game's own colour) or one
   of `numcolor::PALETTE`, every row Default by default; an untagged number, a number taken,
   a heal received and a server's patch's own colours (Sandstorm's S2) are the game's as ever.
+- **A DPS meter** (the server owner's of 2026-11-10, "lets add dps meters, will work solo,
+  group, raid"; `dpsmeter.rs`): the game has none, so on a server that keeps one
+  (go-eqoa-server's 0x7E3A offers, 0x7E3B answers 1 while the row is on, 0x7E3C is the
+  fight, 0x7E3D a reset; `net::session::DpsMeter`) a panel on the HUD's right, under the
+  quest tracker and above the chat box (out at a wide window's right, up a tall one's
+  top), lists who in the player's group did how much damage and how fast: alone the
+  player and its pet, in a group or a raid group every member, the most first, at most
+  ten rows at once and the player's own always among them at its place (the server
+  sends a raid's top 24), the wheel and a click on the rows stepping through the rest.
+  A row is its place and name, its damage, its DPS (over the fight's length, the same
+  for every row) and its share, over a bar as long as its damage against the top's in
+  its class's colour, its pet's part dimmer, and under the player's own a row for its
+  pet. The server counts what each player is told it did (its own and its pet's floating
+  numbers of damage), and a fight ends ten seconds after the group's last; the panel
+  keeps the last fight until the next, and Overall sums every fight since the login. A
+  click or a tap on its title shows the other (Fight or Overall), on Reset clears it all;
+  `/dps` (`/dps fight`, `overall`, `reset`, `on`, `off`) does the same from the
+  keyboard. Extended > Combat: DPS Meter (off by default), DPS Meter Shows and Reset DPS
+  Meter, for a controller. Off, or on a server that keeps none (Sandstorm, eqoa.live),
+  nothing is drawn or asked, as on a PS2.
 - **A render scale and a sharp HUD**: Render Scale (off unless chosen) x2 or
   x4 draws the whole picture, the world and everything over it, two or
   four times the window's size each way and averages it down, which smooths
@@ -340,6 +361,22 @@ or a browser (each described where it lives below):
   server's word for it (the user, 2026-11-07: "my race says ogre, but lets make
   it Hill Giant, Titan as MC"). Its camera and what it may wear stay the race it
   passes as.
+- **A server's own worlds, built off the player's disc**, on a server that has them (go-eqoa-server's
+  offer, 0x7E30; `serverworlds`, `net::serverworlds`; the owner's of 2026-11-08: "new world with a zone for
+  each new race"): a world made of the disc's own zones where they stand on the disc, the Homelands where a
+  server's races start. The server sends each zone's disc file, index and CRC and the file's CRC (0x7E31),
+  never the zones; the client builds the same file off its own disc (the server's `Compose` in Rust, byte for
+  byte), keeps it in the cache by its CRC (`worlds/`), and says which it holds. The world table answers past
+  its own, the file opens deferred as a disc world does, the start menu's Location and the review's Starting
+  City name the server's places. Another disc's zone is refused, and the server keeps that player on the
+  disc's worlds. A page builds it too, in a worker into the browser's private storage (README "In a
+  browser", `web::worlds`); one that cannot keep it does not take the offer, and a character of such a world
+  starts in its city.
+  A zone may be given **extras** (the list's version 2): the disc's art placed in it as actors of its own,
+  each a ZoneActor after its room's own, the records of art the zone lacks copied in off the player's disc
+  with every record they name (`serverworlds::extras`, the server's `internal/worlds/extras.go` byte for
+  byte, in `compose_into`'s zone loop, the art read through its `Disc`, so a page builds them too); the
+  Homelands' open edges are closed with ridges of rocks that way.
 - **Armour on bodies made without it** (the user's of 2026-11-08, "Lay armour textures on", a
   prototype; `slotless`): a body with no texture slots (the kappa, brownie, pixie, fairy, minotaur,
   dryad, skeleton, fungusman, gargoyle and hill giant a server's races wear) shows the armour, robe and
@@ -421,14 +458,28 @@ or a browser (each described where it lives below):
   bodies only the brownie's, dryad's, orc's and skeleton's have their own (every player race's body has), the
   rest stood in the air; on a server with jumps a player's character in one of them takes the human's fall
   (looping) and landing (once) carried onto it, or its own nearest (`AIR_OWN`: the pixie's, fairy's and
-  fungusman's), in its own view and every other player's, a jump and a fall off a ledge alike.
+  fungusman's), in its own view and every other player's, a jump and a fall off a ledge alike; so does one in
+  another body its race's options offer (the shadow gargoyle, a goblin king), by the body worn
+  (`raceemote::race_of`, 2026-11-10: it was looked up as itself, not listed, and stood in the air). The swim too
+  (2026-11-10, petition 1456: "gargs fly in the water instead of swim"; `raceemote::grant_swim`): a body in
+  water plays its entry 12 (swimming) or 13 (treading), and of every body the races wear only the gargoyles' six,
+  the Jal'Raeth's three, the pixie's and the fairy's have neither, so they played the idle (a gargoyle stood
+  upright, its wings out, as if it flew; a Jal'Raeth sat cross-legged); a player's character in a gargoyle's or a
+  Jal'Raeth's body on a server with races of its own takes the human's swim carried onto it (one clip, looping,
+  for both; a gargoyle's wings held as its idle holds them, standing up off its back as it lies along the water),
+  the pixie and the fairy keep their hover (`SWIM_NONE`: all they have flies, and the human's would not carry);
+  `EQOA_SWIM` in a walk shot (`EQOA_BODY`).
 - **The Wisp** (a race of go-eqoa-server's own, 31; the owner, 2026-11-09: "the armor will form like a human and also
   the weapons swing like humans. like when humans are invis, but the wisp is inside the helm"; `wisp`): a human's body
   of its sex, marked by a race option the server lays always (a texture row of one step, `wisp`, whose value is the
   will o' wisp's body, CHAR.ESF 0x8143DC70, no texture: an older client lays nothing). Drawn as its worn slots' triangles
   alone (where `ApplyLook` lays armour or a robe; no skin, face or hair), the wisp a head across on the helm's node
   inside any helm, hung with the held items and the helm (`play::attach`): the player's own, others', character select
-  and the create pages. A PS2 shows a human in its armour. **The Jal'Raeth** (30): their three bodies wear a helm on
+  and the create pages. A PS2 shows a human in its armour. It casts no shadow (petition 1449, the GM Jibrish: "people can
+  tell its just an invisible human"; `wisp::is`): no blob shadow (its caster keeps its place in the queue and draws none,
+  `shadows::Caster::casts`, so every other's is as it was), and nothing of it, its armour, what it holds, its helm, the
+  wisp or its cape, in Sun Shadows' or Light Shadows' maps (`render::GpuModel::casts`, set on each of its puppet's
+  models as they are made); the player's own by its entity, from its first frame. **The Jal'Raeth** (30): their three bodies wear a helm on
   the head node they name (`slotless::HEAD_HELMS`: they name no helm node), the human's chest, bracers and gloves
   carried onto their skeleton by bone names (`slotless::named_shell_of`: their hands and feet hang off the root, so
   the fit by limbs finds none), and the human's emotes on their upper body (`raceemote::TABLE`).
@@ -452,8 +503,11 @@ or a browser (each described where it lives below):
   body. A goblin (race 13's own body and every one its options offer, `cape::CROUCHED`; the
   owner, 2026-11-10: "on goblins they are too big") is bound standing and rests in a crouch,
   its shoulders at 0.70 of their bind height, so a cape sized on its bind pose hung to the
-  ground: its cape is sized as it stands, its height by that share (`cape::standing`), every
-  other body's exactly as before. It names the wearer's nodes in its bind pose and is drawn on the body's own palette,
+  ground: its cape is sized as it stands, its height by that share (`cape::standing`), and across by its shoulders'
+  joints, not by what it wears over them (`cape::shouldered`; the owner, 2026-11-10, of a player in the goblin
+  chieftain's body: "it isnt sitting well": the chieftain's spiked harness, skinned to its chest, measured its torso
+  past its shoulders, and its cape went on two and a half times a goblin's width and depth, standing out from its
+  back like a board; the mystic's pads a little), every other body's exactly as before. It names the wearer's nodes in its bind pose and is drawn on the body's own palette,
   swaying with the robe-tail bones every player skeleton's walk swings. Players' characters
   only, in the world, on the player and at character select (the bodies a list's capes are
   cut from read out of CHAR.ESF there, `res::Res::want_bodies`); bodies with wings (the
@@ -492,6 +546,19 @@ or a browser (each described where it lives below):
   theirs. The first step of every row is the body as it is, byte for byte; NPCs, bodies with slots, the retail
   races and a server that sends nothing are drawn as before. `eqoa dress <body> <out.png> opts=R:a,b,c`
   (`$EQOA_RACE_OPTIONS`, a file of 0x7E23's body) draws a race in its steps.
+- **An NPC's body in a server's tint**, on a server that names one (the server owner, 2026-11-10: Yhafiran, "the
+  black and green oriental dragon", wears the disc's only green oriental dragon, 0xB5C8A651, the Plane of Disease
+  twins' body, and "vanilla draws Yhafiran tinted toward black and green"; go-eqoa-server's table `npctint`, its
+  offer 0x7E3E, this client's answer 0x7E3F and the set 0x7E40; `net::npctint`, `npctint.rs`): the server names a
+  colour 0xRRGGBBAA for an NPC name, the whole set at once after the answer and again when a GM changes it, and every
+  creature whose channel name keys the same (trimmed, any case, a trailing $ off, as the server keys a name), a
+  player's character never, is built with each layer colour of its body times the tint's red, green and blue (as much
+  of it as its alpha says): the colour the strip programs modulate each texel by, where a live look's dye goes, so the
+  light, the time of day and the fog fall on it as on any body. Every spawn of the name, a respawn under a new id and
+  its corpse alike; its held items and helm keep their colours; a tint that comes, changes or goes makes it anew
+  (`play::apply`). No tint, a white one or alpha 0 draws the body byte for byte as before, and so does every server
+  that sends none; a PS2 draws the green dragon. `eqoa shot <file> <model> <out.png> [camera] tint=RRGGBBAA` (and
+  `eqoa view ... tint=`) draws a model in one: Yhafiran's 0x2A7333FF (red 0.16, green 0.45, blue 0.20).
 - **The combat record**, on a server that keeps one (go-eqoa-server's offer, 0x7E20,
   and its record, 0x7E21; Sandstorm and eqoa.live have none, and show no entry): the
   start menu's Character > Combat Record, the client's own window (`record.rs`,
@@ -1293,6 +1360,31 @@ the SHA-256 of `UTIL.REL` and the `.AUT`, so a later visit has both at once (a
 page without `crypto.subtle`, plain http to another host, unpacks them every time).
 On a first visit the HUD and the start menu come when they do, a few seconds into
 the world if it was entered quickly.
+
+**A server's own worlds in a page** (README "A server's own worlds", `web::worlds`,
+`web/worlds.js`): the page builds them off the player's disc as the program does, in a
+worker of its own that instantiates the same module, into the origin's private storage
+(OPFS, `worlds/world<id>-<crc>.ESF`). The composer (`serverworlds::compose_into`) reads a
+zone's record off the image at a time (`FileReaderSync`), checks its CRC, moves its
+offsets and writes it to the file as it goes (`FileSystemSyncAccessHandle`); the file's
+CRC is then read back. Neither the worker (17 MB of heap at its end) nor the game (228 MB
+at character select, with the build or without) ever holds the world, 133 MB for the
+Homelands. In headless Chromium with the image in the system's cache the first build
+takes 1.4 s (the worker up and the disc listed 0.26 s, the 19 zones read and written
+0.43 s, the file read back 0.69 s) and a later visit's check of the copy kept 0.4 s; in
+Firefox 1.8-2.4 s and 0.6 s; with the image out of the cache on a busy machine (load
+35) about 3 s in either; end to end at character select on a loaded machine, 3.7-5.4 s.
+A notice at the page's top says how far it has come, and a character played meanwhile
+waits for it (`pregame::client`'s `held_pick`: in a page alone, a minute at most), so the
+server places it by what the page holds. A later visit finds the copy by its size and
+CRC; one damaged since is built again; pages build a world one at a time (a Web Lock
+on its name). The game then reads the file as a disc of that one file
+(`WebDisc::of_file`): at a login there, at a move into it and for its zones as the walk
+nears them, deferred like any world. A page that cannot keep it (no private storage:
+plain http to another host, some private windows) does not take the offer, and a
+character of such a world starts in its city; one whose build fails (another disc, the
+storage full) answers without it and says so in a notice. `web/pagetest.py`'s worlds
+checks hold the page's half to Aviak Village alone.
 
 ```bash
 cargo install wasm-bindgen-cli --version 0.2.129   # once: the version Cargo.lock pins

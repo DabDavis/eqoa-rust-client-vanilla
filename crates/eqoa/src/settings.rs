@@ -657,6 +657,15 @@ pub struct ClientOptions {
     /// 0 Default (the game's own colour), else `numcolor::PALETTE[n - 1]`. Every
     /// row Default by default, so nothing changes until one is chosen.
     pub number_colors: [crate::numcolor::Choice; crate::numcolor::ROWS],
+    /// DPS Meter (`dpsmeter`; the server owner's of 2026-11-10: "lets add dps
+    /// meters, will work solo, group, raid"): the HUD's damage meter of the
+    /// player's group, where the server keeps one (go-eqoa-server's offer,
+    /// `Session::agree_dps_meter`); off, none, and the server asked for none, as
+    /// the game has none. Off by default: a panel over the world's right side.
+    pub dps_meter: bool,
+    /// DPS Meter Shows: the fight (under way, or the last) or Overall, every
+    /// fight since the login; a click on the panel's title or `/dps` turns it.
+    pub dps_view: crate::dpsmeter::View,
     /// Map (the user, 2026-11-09: "also add the map and quest helper we had
     /// in a former update"; on by default): the client's own map (M, the
     /// compass's click, `map`), the minimap, the waypoints on the compass and
@@ -944,6 +953,8 @@ impl Default for ClientOptions {
             raid_list: true,
             pet_effects: true,
             number_colors: [0; crate::numcolor::ROWS],
+            dps_meter: false,
+            dps_view: crate::dpsmeter::View::Fight,
             map: true,
             minimap: true,
             map_markers: true,
@@ -989,7 +1000,8 @@ impl ClientOptions {
     /// only when off, Ability Bars, NPC/PC Display, NPC/PC Distance and
     /// Name Distance only when not the game's, Overlapping Names only when
     /// Show, each Number Colors row only when not Default
-    /// (`number_color.<row>=<colour>`), the Map, Minimap, Map Markers, the map's town names, the Quest
+    /// (`number_color.<row>=<colour>`), the DPS Meter only when on and what it
+    /// shows only when Overall, the Map, Minimap, Map Markers, the map's town names, the Quest
     /// Helper, Quest Markers and Quest Tracker only when off, Art only when it
     /// is the 2002 disc's, VSync, Shouts and Update
     /// Notices only when off, Text only when Smooth, Render Scale only above
@@ -1047,6 +1059,13 @@ impl ClientOptions {
             if let Some(p) = crate::numcolor::paint(c) {
                 s.push_str(&format!("number_color.{key}={}\n", p.key));
             }
+        }
+        // the DPS Meter only when on, what it shows only when Overall
+        if self.dps_meter {
+            s.push_str("dps_meter=on\n");
+        }
+        if self.dps_view != crate::dpsmeter::View::Fight {
+            s.push_str(&format!("dps_meter_shows={}\n", self.dps_view.key()));
         }
         // the map's and the quests' only when off
         for (on, key) in [
@@ -1207,6 +1226,10 @@ impl ClientOptions {
                 ("raid_list", "off") => c.raid_list = false,
                 ("pet_effects", "on") => c.pet_effects = true,
                 ("pet_effects", "off") => c.pet_effects = false,
+                ("dps_meter", "on") => c.dps_meter = true,
+                ("dps_meter", "off") => c.dps_meter = false,
+                ("dps_meter_shows", "fight") => c.dps_view = crate::dpsmeter::View::Fight,
+                ("dps_meter_shows", "overall") => c.dps_view = crate::dpsmeter::View::Overall,
                 ("map", "on") => c.map = true,
                 ("map", "off") => c.map = false,
                 ("minimap", "on") => c.minimap = true,
@@ -1500,6 +1523,16 @@ pub fn pet_effects() -> bool {
 /// Number Colors now: each row's choice (`numcolor`).
 pub fn number_colors() -> [crate::numcolor::Choice; crate::numcolor::ROWS] {
     client().number_colors
+}
+
+/// The DPS Meter (`dpsmeter`).
+pub fn dps_meter() -> bool {
+    client().dps_meter
+}
+
+/// What the DPS Meter shows (`dpsmeter::View`).
+pub fn dps_view() -> crate::dpsmeter::View {
+    client().dps_view
 }
 
 /// What the windows share as another window saved it (Capture Controller,
@@ -2583,6 +2616,23 @@ mod tests {
         let odd = ClientOptions::from_text("number_color.procs=mauve\nnumber_color.elbows=red\nnumber_color.heals=default");
         assert_eq!(odd.number_colors, [0; crate::numcolor::ROWS], "not understood: Default");
         assert_eq!(ClientOptions::from_text("number_color.pet_damage=orange").number_colors, [0, 0, 0, 3, 0, 0]);
+    }
+
+    #[test]
+    fn the_dps_meter_is_kept_only_when_on_and_overall() {
+        use crate::dpsmeter::View;
+        let d = ClientOptions::default();
+        assert!(!d.dps_meter && d.dps_view == View::Fight, "off by default, on the fight");
+        assert!(!d.to_text().contains("dps_meter"), "the defaults write nothing");
+        let c = ClientOptions { dps_meter: true, dps_view: View::Overall, ..Default::default() };
+        let t = c.to_text();
+        assert!(t.contains("dps_meter=on\n") && t.contains("dps_meter_shows=overall\n"), "{t}");
+        let back = ClientOptions::from_text(&t);
+        assert!(back.dps_meter && back.dps_view == View::Overall, "round trip");
+        assert!(!ClientOptions::from_text("dps_meter=off").dps_meter);
+        assert_eq!(ClientOptions::from_text("dps_meter_shows=fight").dps_view, View::Fight);
+        let odd = ClientOptions::from_text("dps_meter=maybe\ndps_meter_shows=sideways");
+        assert!(!odd.dps_meter && odd.dps_view == View::Fight, "anything else: the defaults");
     }
 
     #[test]

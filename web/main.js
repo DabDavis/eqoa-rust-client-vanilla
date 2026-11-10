@@ -481,6 +481,54 @@ window.eqoaUnpack = async (name, util, aut, fresh) => {
   return out;
 };
 
+// ---- a server's own worlds (crates/eqoa/src/web/worlds.rs): each built off
+// the player's disc in a worker of its own (worlds.js) into this origin's
+// private storage, worlds/<name>, or found kept there from a visit before by
+// its size and CRC; the game then reads its zones out of that file.
+
+window.eqoaWorlds = {
+  // whether this page can keep one: its private storage answers (none on plain
+  // http to another host, none in some private windows) and workers run
+  usable: async () => {
+    if (typeof Worker === 'undefined' || !navigator.storage || !navigator.storage.getDirectory) return false;
+    try {
+      await navigator.storage.getDirectory();
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  // (the disc image, the world as the server lists it, its file's name, its
+  // size, progress(phase, done, total)) -> { file, how, heap }: the file kept,
+  // 'built' or 'found kept', and the worker's heap at its end
+  build: (disc, list, name, size, progress) => new Promise((resolve, reject) => {
+    const w = new Worker(new URL('worlds.js', import.meta.url), { type: 'module' });
+    w.onmessage = async ({ data }) => {
+      if (data.progress) {
+        progress(...data.progress);
+        return;
+      }
+      w.terminate();
+      if (data.error) {
+        // quiet: this browser cannot do it at all (not a failure to tell)
+        reject(Object.assign(new Error(data.error), { quiet: !!data.quiet }));
+        return;
+      }
+      try {
+        const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('worlds');
+        resolve({ file: await (await dir.getFileHandle(name)).getFile(), how: data.done, heap: data.heap });
+      } catch (e) {
+        reject(e);
+      }
+    };
+    w.onerror = (e) => {
+      w.terminate();
+      reject(new Error(e.message || "the world's worker failed"));
+    };
+    wasmModule.then((module) => w.postMessage({ module, disc, list, name, size }), reject);
+  }),
+};
+
 // ---- the map's pictures (the client's map, M: map/store.rs): each zone's
 // tile and overview cell, kept in this origin's private storage under
 // map/<the world's key>, so a world's map is drawn once. A write commits

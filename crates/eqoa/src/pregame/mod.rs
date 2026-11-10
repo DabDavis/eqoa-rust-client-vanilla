@@ -426,6 +426,7 @@ impl Pregame {
                 // until a server's patch
                 self.res.set_server_words(None);
                 crate::s2::set(crate::s2::Rules::retail());
+                crate::serverworlds::forget();
                 self.enter(Stage::Setup, cx_now);
             }
             Next::Station => {

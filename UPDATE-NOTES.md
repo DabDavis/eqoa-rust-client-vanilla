@@ -27,6 +27,50 @@ is put on the page by `.github/workflows/notes.yml`.
 - Safari does not show a page such a controller's d-pad at all: play in another browser, or the downloaded
   game.
 
+## 2026-11-10 · Wisps cast no shadow, gargoyles swim, the goblin chieftain's cape
+- A Wisp no longer casts a shadow: there is no round shadow under it, and with Sun Shadows or Light Shadows on,
+  nothing of it casts one, not its armour, its weapons, its helm, its cape or the wisp itself. Its shadow was a
+  human's, and showed what stands inside the armour. Everyone else's shadows are exactly as they were.
+- A Gargoyle swims in water now. Its body has no swimming of its own, so in the water it hung upright with its
+  wings spread, as if flying; it now swims the way a human does, lying along the water and stroking, moving or
+  still. The Jal'Raeth, who sat cross-legged in the water, swim the same way. A pixie or a fairy still hovers in
+  the water: everything they do is flying. Other players with this client see them swim; a PlayStation 2 still
+  shows them as before.
+- On a server with jumps, a character in one of a race's other bodies (a shadow or fire gargoyle, a goblin king,
+  any body the race's appearance choices offer) now falls and lands as its race's own body does. Through a
+  jump or a fall off a ledge it stood in the air as if on the ground.
+- A goblin in the chieftain's body wears its cape the way the other goblins do. The chieftain's spiked shoulder
+  harness made its cape more than twice a goblin's width and depth, so it stood out from its back like a board and
+  hung wider than its arms; it is now sized to the goblin's shoulders and hangs down its back over the harness. The
+  goblin mystic's cape is a little narrower too (its spiked shoulder pads did the same, a little); every other
+  goblin's cape is exactly as before.
+
+## 2026-11-10 · A DPS meter
+- A damage meter for your fights, alone, in a group or in a raid: who did how much damage and how fast. Turn it
+  on in Options > Extended > Combat > DPS Meter (it starts off). It sits on the right of the screen above the
+  chat box, under the quest tracker.
+- Each row is a player: their place, name, damage, damage per second and share of the whole, over a bar in
+  their class's colour. Alone you see yourself and, under your row, your pet. In a group or a raid group you see
+  every member; in a big raid the top rows show, your own row always among them at your place, and the mouse
+  wheel or a click on the rows goes through the rest.
+- A fight starts with your group's first hit and ends ten seconds after its last; the meter keeps the last fight
+  on screen until the next one. Click or tap its title to switch between the fight and Overall (every fight since
+  you logged in), and Reset to clear it. Or type /dps (and /dps fight, /dps overall, /dps reset, /dps on,
+  /dps off). With a controller: Options > Extended > Combat has DPS Meter Shows and Reset DPS Meter.
+- It counts the damage numbers you are shown, your pet's included (and a necromancer's zombie, mummy and
+  spectre, whose hits show no numbers), training dummies and duels too; heals do not count.
+- It needs a server that keeps a meter (eqoaclassic's, once it is updated for it). On any other server nothing
+  is shown.
+
+## 2026-11-10 · Creatures in a server's own colours
+- A server can now give a creature a colour of its own, laid over its whole body, where the game has no body in
+  that colour: eqoaclassic's raid dragon Yhafiran, the black and green oriental dragon, is drawn nearly black,
+  the green of his scales showing, though he wears the same green dragon as the Plane of Disease's twins. Each
+  creature of the name is coloured, whichever spawn it is, a respawn too; what it holds keeps its own colours,
+  and the light, the time of day and the fog fall on it as on any other.
+- Every other creature and character looks exactly as before. On a server that colours none (Sandstorm, or one
+  not updated) nothing changes, and a PS2 on the same server sees the plain green dragon.
+
 ## 2026-11-10 · Macros on a page of their own, as PCSX2 has them
 - Macros have their own page: Options > Macros, after Controls (in the title's Options and in play). The
   sixteen macros are listed on the left with what each presses; choose one and set it on the right, laid
@@ -80,6 +124,36 @@ is put on the page by `.github/workflows/notes.yml`.
 - A goblin's cape fits it: a goblin stands crouched, and its cape hung down to the ground; it now ends above its
   feet. Every other race's cape is exactly as before.
 - Only players' characters are dressed this way: creatures and NPCs look as they always have.
+
+## 2026-11-10 · The Homelands end in rocks, not a fall
+- The Homelands' lands no longer end at a drop into nothing: every edge of a homeland that does not lead into
+  another one is closed by a ridge of the game's own rocks (Odus's mossy boulders), on land and out in the
+  water alike, so you cannot walk or swim off a homeland any more.
+  Where two homelands touch (Odus's homes, the coast by the Warrens) you still walk from one into the next.
+- A server's world can now be decorated with the game's own art, placed where the server says: your client
+  (or the web page) copies the pieces off your own disc into the world it builds, as it builds the rest, and
+  draws and collides them like everything else there.
+- An older client cannot build the Homelands any more: its characters of the new races start in their mainland
+  cities until it updates (which it does at its next start).
+
+## 2026-11-10 · The Homelands in the browser
+- The web page now builds a server's own worlds from your disc as the program does. The first time you reach
+  character select on a server that has them (the Homelands, where a server's new races start), the page builds
+  the world into your browser's own storage, a part of your disc at a time, and says how far it has come at the
+  top of the page (a few seconds; nothing of the game is downloaded). Your next visits find it kept and only
+  check it.
+- So in the browser too a new Aviak hatches in Aviak Village, and every race with a homeland starts there,
+  instead of in its home city. A character you play while the world is still being built waits for it.
+- It takes about 130 MB of the browser's storage. A browser that cannot keep it (a page without its storage,
+  some private windows) plays as before: a character from the Homelands starts in its home city.
+
+## 2026-11-09 · A server's own worlds, built from your disc
+- A server can now have worlds of its own made of the game's own lands: the Homelands, where a server's new races
+  start (an Aviak hatches in Aviak Village). The client builds such a world from your own disc the first time you
+  reach character select on that server (a few seconds; nothing of the game is downloaded), keeps it, and then
+  plays it like any other world. The start menu names its places, and the create page's review shows a new
+  race's home as its Starting City.
+- Nothing changes on a server without such worlds.
 
 ## 2026-11-09 · Damage numbers in your colours
 - The numbers that float up in a fight can be coloured by what made them, so you can see at a glance that a

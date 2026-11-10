@@ -9,6 +9,8 @@ pub mod cape;
 pub mod creation;
 pub mod dump;
 pub mod entity;
+pub mod npctint;
 pub mod raceopts;
+pub mod serverworlds;
 pub mod session;
 pub mod stream;

@@ -111,8 +111,10 @@ pub fn style(id: u8) -> Option<&'static Style> {
 /// 2026-11-10: "on goblins they are too big"). A goblin is bound standing up
 /// (its shoulders 1.11 over the ground) and rests in a crouch (0.79), its
 /// pelvis, which the cape's lower half hangs from, a third lower, so its cape
-/// is sized as it stands (`standing`). The kobold and the froglok crouch too
-/// and are left as they are (their capes were not asked about).
+/// is sized as it stands (`standing`), and across by its shoulders, not by the
+/// harness or pads some wear over them (`shouldered`: the chieftain's). The
+/// kobold and the froglok crouch too and are left as they are (their capes
+/// were not asked about).
 const CROUCHED: &[u32] = crate::slotless::GOBLINS;
 
 /// The bodies of a server's races that wear no cape: wings where it would
@@ -393,12 +395,14 @@ fn fit(src: &Source, to: &Bones, body: &esf::Model, poses: &[Vec<glam::Mat4>], c
     let debug = std::env::var_os("EQOA_CAPE_DEBUG").is_some();
     let into = Frame::of(to, body);
     // a body that stands crouched (`CROUCHED`): sized as it stands, not as it
-    // is bound
+    // is bound, and across by its shoulders, not by what it wears over them
+    // (`shouldered`); settled on the body as it is
     let stand = into.as_ref().filter(|_| crouched).and_then(|f| standing(f, to, poses)).unwrap_or(Vec3::ONE);
+    let sized = into.as_ref().filter(|_| crouched).map(|f| shouldered(f, to));
     if debug && crouched {
-        eprintln!("cape: crouched, sized as it stands: {stand:?}");
+        eprintln!("cape: crouched, sized as it stands: {stand:?}, across by its shoulders: {:?}", sized.as_ref().map(|f| f.half_width));
     }
-    let mut m = placed(src, to, into.as_ref(), stand, debug)?;
+    let mut m = placed(src, to, sized.as_ref().or(into.as_ref()), stand, debug)?;
     if let Some(f) = into.as_ref().filter(|_| std::env::var_os("EQOA_CAPE_PLAIN").is_none()) {
         settle(&mut m, to, f, body, poses, debug);
     }
@@ -460,6 +464,24 @@ fn standing(f: &Frame, to: &Bones, poses: &[Vec<glam::Mat4>]) -> Option<Vec3> {
     let posed = (at(upper(0)).y + at(upper(1)).y) * 0.5;
     let k = ((posed - f.ground) / (f.shoulder_y - f.ground).max(1e-3)).clamp(0.5, 1.0);
     Some(Vec3::new(1.0, k, 1.0))
+}
+
+/// A crouched body's frame as its cape is sized by (`CROUCHED`): its torso no
+/// wider than its shoulders' joints (its upper arms' binds), so what it wears
+/// over its shoulders, skinned to its chest and so taken in by the torso's
+/// measure, neither widens nor deepens the cape (`spread` sizes both by the
+/// torso's width). The goblin chieftain's spiked shoulder harness measured its
+/// torso 0.25 across each way, past its shoulders' 0.14 (the bare goblin's
+/// torso 0.10): its cape went on two and a half times as wide and as deep as
+/// a goblin's at a goblin's height, broad and short, and stood out from its
+/// back like a board (the owner, 2026-11-10: "mad the goblin's model has cape
+/// issues, it isnt sitting well"). The goblin mystic's spiked pads (0.16) a
+/// little; every other goblin's torso lies within its shoulders, its cape as it
+/// was. Only the size: the cape is settled on the body as it is (`settle`).
+fn shouldered(f: &Frame, to: &Bones) -> Frame {
+    let upper = |s: usize| f.arms[s][f.arms[s].len() - 3];
+    let joints = (0..2).map(|s| (to.bind[upper(s)].x - f.mid_x).abs()).sum::<f32>() * 0.5;
+    Frame { half_width: f.half_width.min(joints), ..f.clone() }
 }
 
 /// `src` on the skeleton `to` (frame `into`), before it is settled on the
@@ -1667,6 +1689,100 @@ mod tests {
             others += !CROUCHED.contains(&id) as usize;
         }
         assert!(others >= 30, "{others} bodies checked");
+    }
+
+    /// The bounds of `m` (skinned to a body's nodes) posed by the palette
+    /// `pal`.
+    fn posed_bounds(m: &esf::Model, pal: &[glam::Mat4]) -> (Vec3, Vec3) {
+        let mut b = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for v in 0..m.pos.len() {
+            let (bones, w) = (m.bones[v], m.weights[v]);
+            let (mut q, mut sum) = (Vec3::ZERO, 0.0);
+            for k in (0..4).filter(|&k| bones[k] != 255 && w[k] > 0 && (bones[k] as usize) < pal.len()) {
+                q += pal[bones[k] as usize].transform_point3(Vec3::from(m.pos[v])) * w[k] as f32;
+                sum += w[k] as f32;
+            }
+            if sum > 0.0 {
+                b = (b.0.min(q / sum), b.1.max(q / sum));
+            }
+        }
+        b
+    }
+
+    /// The goblin chieftain's cape sits on it as the other goblins' do (the
+    /// owner, 2026-11-10: "mad the goblin's model has cape issues, it isnt
+    /// sitting well"): its spiked shoulder harness, skinned to its chest, made
+    /// its torso measure 0.25 across each way, past its shoulders' joints
+    /// (0.14), and its cape went on as if for a body two and a half times a
+    /// goblin's breadth, at a goblin's height: standing as it rests, the
+    /// knight's covered 2.8 times the ground the bare goblin's (race 13's own
+    /// body) does, 1.9 times as wide and 1.5 as deep, standing out from its back
+    /// like a board. Sized by its shoulders (`shouldered`), in every style its
+    /// cape covers at most half as much again as the bare goblin's (it wears
+    /// the harness under it) and is no narrower, and the body shows through it
+    /// in the frames of the walk and the run it was not fitted in no more than
+    /// through the capes of the goblins the owner saw sit (the bare goblin's,
+    /// the king's, the warlord's). The control: sized by its torso as before,
+    /// it covered nearly twice the bare goblin's or more in every style. Every
+    /// other goblin's torso but the mystic's (its spiked pads past its
+    /// shoulders too, a little) lies within its shoulders, so its cape is the
+    /// one it wore before, to the bit.
+    #[test]
+    fn the_goblin_chieftains_cape_is_sized_by_its_shoulders() {
+        let Some(lib) = char_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        const GOBLIN: u32 = 0x6C13_08E0;
+        const CHIEFTAIN: u32 = 0x507C_4A52;
+        const MYSTIC: u32 = 0x5937_EA22;
+        // the goblin king's and the warlord's, beside the bare goblin's
+        const SEEN: &[u32] = &[GOBLIN, 0x2F34_B867, 0x3AB9_6672];
+        let bare = vi::cust::Look { robe: -1, ..Default::default() };
+        let worst = |m: &esf::Model, id: u32| checked().into_iter().map(|(_, a, ms)| poke(&lib, m, id, &bare, a, ms).0).fold(0.0f32, f32::max);
+        let size = |m: &esf::Model, pal: &[glam::Mat4]| {
+            let (lo, hi) = posed_bounds(m, pal);
+            hi - lo
+        };
+        let worn = |id: u32| {
+            let (cs, body) = sprite(&lib, id);
+            let b = Bones::of(&cs);
+            let f = Frame::of(&b, &body).unwrap();
+            (b, body, palettes(&lib, id), f)
+        };
+        let (gb, gbody, gposes, _) = worn(GOBLIN);
+        let (b, body, poses, f) = worn(CHIEFTAIN);
+        let stand = standing(&f, &b, &poses).unwrap();
+        for s in STYLES {
+            let src = source(&lib, s).unwrap();
+            let goblin = size(&fit(&src, &gb, &gbody, &gposes, true).unwrap(), &gposes[0]);
+            let after = fit(&src, &b, &body, &poses, true).unwrap();
+            // the cape it wore before: sized by its torso, as `fit` did
+            let mut before = placed(&src, &b, Some(&f), stand, false).unwrap();
+            settle(&mut before, &b, &f, &body, &poses, false);
+            // its width and depth standing, and the ground they cover, of the
+            // bare goblin's
+            let (a, was) = (size(&after, &poses[0]) / goblin, size(&before, &poses[0]) / goblin);
+            let (covers, covered) = (a.x * a.z, was.x * was.z);
+            let through = worst(&after, CHIEFTAIN);
+            let seen = SEEN
+                .iter()
+                .map(|&id| {
+                    let (gb, gbody, gposes, _) = worn(id);
+                    worst(&fit(&src, &gb, &gbody, &gposes, true).unwrap(), id)
+                })
+                .fold(0.0f32, f32::max);
+            eprintln!("style {}: {covers:.2} of the bare goblin's ground, {:.2} across and {:.2} deep (before {covered:.2}: {:.2}, {:.2}); the body through it by {through:.3} (the goblins seen, at most {seen:.3}; before {:.3})", s.id, a.x, a.z, was.x, was.z, worst(&before, CHIEFTAIN));
+            assert!(covers <= 1.5 && a.x >= 1.0, "style {}: the chieftain's cape {covers:.2} of the bare goblin's ground, {:.2} across", s.id, a.x);
+            assert!(covered >= 1.85, "the control, style {}: before, {covered:.2} of the bare goblin's ground", s.id);
+            assert!(through <= seen, "style {}: the body through it by {through:.3}, at most {seen:.3} through the goblins' seen", s.id);
+        }
+        // every other goblin's cape as it was
+        for &id in CROUCHED {
+            let (b, _, _, f) = worn(id);
+            let narrowed = shouldered(&f, &b).half_width.to_bits() != f.half_width.to_bits();
+            assert_eq!(narrowed, [CHIEFTAIN, MYSTIC].contains(&id), "{id:08X}: its torso {:.3} across each way, narrowed only past its shoulders", f.half_width);
+        }
     }
 
     /// The same cape fitted twice is the same (it is kept), and a colour

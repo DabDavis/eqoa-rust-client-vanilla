@@ -14,6 +14,7 @@
 //! eqoa view <world> zone <n>     a zone: terrain and every placed actor
 //! eqoa view <world> walk <n>     the character, walking in a zone
 //! eqoa shot <file> [model | zone <n>] <out.png> [camera]   one view, offscreen
+//!                               (`tint=RRGGBBAA`: a model in a server's body tint, `npctint`)
 //! eqoa listen <world> <x> <z> <seconds> <out.wav> [hour] [walk]   the world's sound there, offline
 //! eqoa mapshot <world> <out.png> [x z [heading [scale [secs]]]]   the map (M) built as in play, drawn
 //! eqoa fxview [visual [secs]]   a human casting a spell visual at another, again and again, as
@@ -64,6 +65,7 @@ mod client_image;
 mod playersearch;
 mod searchwnd;
 mod s2;
+mod serverworlds;
 mod controls;
 mod arrival;
 mod craft;
@@ -100,6 +102,8 @@ mod hud;
 mod raidlist;
 mod damage;
 mod numcolor;
+mod dpsmeter;
+mod npctint;
 mod display;
 mod hudmenu;
 mod influence;
@@ -423,6 +427,9 @@ fn volumes(file: &str) -> Result<()> {
 }
 
 fn run(args: &[String]) -> Result<()> {
+    // a server's own worlds are built off the player's disc (`serverworlds`)
+    #[cfg(not(target_arch = "wasm32"))]
+    serverworlds::install();
     match args.first().map(String::as_str) {
         // `eqoa` alone, or `eqoa boot [server]`: the game from the disc's
         // boot (`boot`)
@@ -473,15 +480,19 @@ fn run(args: &[String]) -> Result<()> {
         Some("rumble") => input::check_motors(10_000)?,
         Some("view") | Some("shot") => {
             let shot = args[0] == "shot";
-            let usage = "usage: eqoa view <file> [model] | eqoa view <world> zone <n> | eqoa shot <same> <out.png> [camera...]";
+            let usage = "usage: eqoa view <file> [model] [tint=RRGGBBAA] | eqoa view <world> zone <n> | eqoa shot <same> <out.png> [camera...]";
             let file = args.get(1).ok_or(usage)?;
-            let mut rest = &args[2..];
+            // `tint=RRGGBBAA`: the model in a server's body tint, as an NPC of
+            // a tinted name is drawn (`npctint`)
+            let (tint, rest) = npctint::take_arg(&args[2..])?;
+            let mut rest = &rest[..];
             if shot {
                 // The PNG is the first argument ending in .png.
                 let at = rest.iter().position(|a| a.ends_with(".png")).ok_or(usage)?;
                 let (out, nums) = (&rest[at], &rest[at + 1..]);
                 rest = &rest[..at];
                 let (mut lib, src) = source(file, rest)?;
+                let src = tinted(src, tint)?;
                 let (cam, script) = match src {
                     viewer::Source::Walk { .. } => (None, script_args(nums)?),
                     _ => (camera_args(&src, nums)?, None),
@@ -489,7 +500,7 @@ fn run(args: &[String]) -> Result<()> {
                 viewer::shot(&mut lib, &src, cam, script, (960, 540), out)?;
             } else {
                 let (lib, src) = source(file, rest)?;
-                viewer::run(lib, src)?;
+                viewer::run(lib, tinted(src, tint)?)?;
             }
         }
         // `eqoa icon <size> <out.png>`: the program's own icon, the drawn disc
@@ -686,6 +697,8 @@ fn run(args: &[String]) -> Result<()> {
 /// (`discs::settle`, in the window's event loop).
 fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
     settings::keep_in_user_dir();
+    #[cfg(not(target_arch = "wasm32"))]
+    serverworlds::install();
     // the log (`logfile`); the program as it starts, for a start again
     // after a lost graphics device
     #[cfg(not(target_arch = "wasm32"))]
@@ -821,10 +834,13 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
     // made the game's session is acked on the new connection, which then never
     // forms (go-eqoa-server's promotion spends its new-instance flag on that ack)
     let mut picked: Option<(net::session::Character, std::time::Instant)> = None;
+    // and once asked for, a list sent again (the live look's) picks nothing more
+    let mut selected = false;
     while t.elapsed() < std::time::Duration::from_secs(30) {
         if let Some((c, at)) = picked.take() {
             if at.elapsed() >= std::time::Duration::from_secs(1) {
                 s.select_character(&c);
+                selected = true;
             } else {
                 picked = Some((c, at));
             }
@@ -844,16 +860,27 @@ fn login(host: &str, user: &str, pass: &str) -> Result<(net::session::Session, n
                         s.connect_shard(ep, crate::s2::get().shard_hello().as_deref());
                     }
                 }
+                Event::Characters(_) if selected || picked.is_some() => {}
                 Event::Characters(list) => {
                     for c in list {
                         eprintln!("character: {} (id {}, race {}, class {}, level {})", c.name, c.server_id, c.race, c.class, c.level);
                     }
+                    // the server's own worlds, offered after the list, are
+                    // built and the server told which are held before a
+                    // character is picked: it places the character by them
+                    // (`serverworlds`); a player at character select is slower
+                    let wait = std::time::Instant::now();
+                    while wait.elapsed() < std::time::Duration::from_millis(400) || s.server_worlds_pending() && wait.elapsed() < std::time::Duration::from_secs(60) {
+                        let more = s.pump();
+                        if !more.is_empty() {
+                            s.held.extend(more);
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(16));
+                    }
                     // `EQOA_CHAR=<name>` picks one; else the first.
                     let want = std::env::var("EQOA_CHAR").ok();
                     let pick = list.iter().find(|c| want.as_deref() == Some(c.name.as_str())).or(list.first());
-                    if let Some(c) = pick
-                        && picked.is_none()
-                    {
+                    if let Some(c) = pick {
                         picked = Some((c.clone(), std::time::Instant::now()));
                     }
                 }
@@ -969,10 +996,20 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
                     None => m.parse::<usize>().ok().filter(|&i| i < list.len()).ok_or("no such model")?,
                 },
             };
-            Ok((lib, viewer::Source::Models { list, index }))
+            Ok((lib, viewer::Source::Models { list, index, tint: None }))
         }
         _ => Err("expected [model] or zone <n>".into()),
     }
+}
+
+/// A model in a tint (`tint=`, `npctint`); a zone or a walk takes none.
+fn tinted(mut src: viewer::Source, tint: Option<u32>) -> Result<viewer::Source> {
+    match (&mut src, tint) {
+        (_, None) => {}
+        (viewer::Source::Models { tint: t, .. }, Some(c)) => *t = Some(c),
+        _ => return Err("tint= is a model's: eqoa shot <file> <model> <out.png> tint=RRGGBBAA".into()),
+    }
+    Ok(src)
 }
 
 /// `shot` for a walk: `ms [fwd strafe orbit pitch]`, held throughout.

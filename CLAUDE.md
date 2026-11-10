@@ -22,6 +22,9 @@ current.
   that tags them (the server owner's of 2026-11-09, "we can add the number colors to extended menu": `numcolor`,
   go-eqoa-server's 0x7E38/0x7E39 and one byte after 0x00DB's body, Extended > Number Colors; every row Default, the
   game's own colour, until chosen),
+  a DPS meter of the player's group on a server that keeps one (the server owner's of 2026-11-10, "lets add dps meters,
+  will work solo, group, raid": `dpsmeter`, go-eqoa-server's 0x7E3A-0x7E3D, a HUD panel under the quest tracker,
+  `/dps`, Extended > Combat, off by default; off, or on any other server, nothing is drawn or asked),
   Ignore Shouts kept, Update Notices, Text Sharp or Smooth, Loading Screens Longer or Instant, Render
   Scale x1, x2 or x4 (off unless chosen), HUD Nearest or Sharp (Nearest, the game's, by default: the
   user's of 2026-10-28, "make nearest the default ... since there is a cost"; Sharp was the default
@@ -63,7 +66,10 @@ current.
   there is no pass at all, the picture byte for byte the game's), and a server's own races' customisation on a server
   that sends it (the user's of 2026-11-08, "lets add char customization to the new races": `raceopts.rs`,
   `net::raceopts`, `render::recolor`, README "A server's race's own customisation"; the options are the server's,
-  the parts' triangles too; every row's first step is the body as it is, byte for byte)).
+  the parts' triangles too; every row's first step is the body as it is, byte for byte), and an NPC's body in a
+  server's tint on a server that names one (the server owner's of 2026-11-10, Yhafiran "the black and green oriental
+  dragon" on the disc's green one: `npctint.rs`, `net::npctint`, go-eqoa-server's 0x7E3E-0x7E40; untinted, the body
+  byte for byte as before)).
   A new client-side addition is the user's call: ask first. Sharp filtering is for the 2D layer and
   the text only: the world's textures are drawn smooth, as the game filters them (the user,
   2026-10-27, after a Crisp row for them: "world textures cant render proper without smooth. so
@@ -289,6 +295,10 @@ current.
   reads a server's files reads them there (`servers::file`, `servers::words`), never another server's. Test it
   against a patch port of one's own (go-eqoa-server's 7000, `EQOA_PATCH_PORT`) with `EQOA_CONFIG` under a scratch
   directory; Sandstorm's port only read, and never its login.
+- A server's own worlds (`serverworlds`, README "A server's own worlds"): one composer for both builds,
+  reading through a `Disc` and writing through a `Sink` a zone's record at a time (`compose_into`); natively
+  into a `Vec` written to the cache, in a page in a worker into OPFS (`web::worlds`, `web/worlds.js`), never
+  the whole world in memory. A change to the composer is one to go-eqoa-server's `Compose` too (the CRC).
 - The browser build (`web/`, README "In a browser"): `web/build.sh`, then `web/drive.py` (headless
   Chromium over the DevTools protocol, the disc image handed to the page's file input). Platform
   code goes behind `net::session::Datagrams`, `net::auth::Exchange`, `iso::Source`/`iso::Sparse`
