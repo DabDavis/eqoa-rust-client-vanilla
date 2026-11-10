@@ -44,8 +44,13 @@
 //! The receivers are Dynamic Lighting's pipelines with the point term
 //! taking the light's visibility (`lightshadow.wgsl`), with the sun's map too
 //! while Sun Shadows are on (one module for every frame: by night the sun's
-//! strength is 0 there). Off (or with Dynamic Lighting off) nothing here is
-//! made or run, and every frame is the build's before it, byte for byte.
+//! strength is 0 there). The visibility is a tent of the map's texels round
+//! the point ([`REACH`]), wide enough that a shadow's edge is soft and glides
+//! as its light or its caster moves rather than stepping a texel at a time;
+//! and a light of the moment's map stays where it was drawn while the light
+//! sways about it ([`MOMENT_HOLD`]). Off (or with Dynamic Lighting off)
+//! nothing here is made or run, and every frame is the build's before it,
+//! byte for byte.
 
 use crate::{Draw, GpuGroup, GpuModel, Material, Member, Renderer, View, lit, sunshadow};
 use bytemuck::{Pod, Zeroable};
@@ -93,9 +98,25 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth16Unorm;
 /// face's axis casts nothing (a torch's stick, a lamp's housing).
 pub const NEAR: f32 = 0.5;
 
-/// The texels each side of a face past its 90°: the receivers' four taps
-/// half a texel out and their bilinear texels stay inside the face.
-pub const GUARD: f32 = 2.0;
+/// The receivers' filter (`lightshadow.wgsl`): a tent of the map's texels
+/// this many texels each way round the point, every texel within it by its
+/// weight, two texels a bilinear comparison (natively 3: nine comparisons; in
+/// a page and on Android 2: four), looked up from a point moved this many
+/// texels off the surface along its normal (times the sine of the angle to
+/// the light), so no texel of the tent finds the surface itself in front of
+/// it. The shadow's edge is soft over about the reach, and moves as smoothly
+/// as a light or a caster does: the four comparisons half a texel apart
+/// before it (a reach of 1.5) let each texel that flipped as a light moved by
+/// a hair change the shadow up to half its depth at once (a page's one
+/// comparison, all of it), so every edge crawled a texel at a time under a
+/// moving light and showed the texels' steps up close (the owner's "blocky
+/// and also jittery").
+pub const REACH: f32 = if cfg!(any(target_arch = "wasm32", target_os = "android")) { 2.0 } else { 3.0 };
+
+/// The texels each side of a face past its 90°: the filter's texels
+/// ([`REACH`] round the point, half a texel more to their edges) stay
+/// inside the face the point is looked up in.
+pub const GUARD: f32 = REACH + 1.0;
 
 /// How far a caster's vertex whose normal is turned from the light is put
 /// back along its ray (as Sun Shadows' `BACK_PUSH`): the underside of a thin
@@ -122,6 +143,58 @@ pub const HOLD: f32 = 1.5;
 /// How far a light may move between frames and keep its map (its origin
 /// stays where the map was drawn).
 pub const STILL: f32 = 1e-3;
+
+/// How far a light of the moment (`eqoa`'s `lights::Moment`: a held item's
+/// glow, a spell's particles, at its particles' middle eased from frame to
+/// frame) may wander from where its map was drawn before the map follows it,
+/// on a leash this long: a glowing weapon swaying in an idle stance moved
+/// its map by a few millimetres a frame, every edge it cast crawling a texel
+/// at a time (a sway of 3 cm at 0.7 a second: 2,107 pixels of a 960x540
+/// frame going back and forth three times or more in two seconds); held,
+/// none. Its light is drawn where it is; its shadow is cast from no more
+/// than this far off, and its particles' middle lags 0.2 s behind them as it
+/// is.
+pub const MOMENT_HOLD: f32 = 0.15;
+
+/// The personal light's leash (`MOMENT_HOLD`'s): it rides the walk's place
+/// 3 over the feet, which is still while the player stands; walking, its map
+/// follows a centimetre behind.
+pub const PERSONAL_HOLD: f32 = 0.01;
+
+/// A light of the moment (its reach eased from frame to frame as its
+/// particles spread and gather) has its map drawn this much past its reach,
+/// and drawn again only when its reach passes the map's or falls under it by
+/// this twice: not every frame its reach moves.
+pub const ROOM: f32 = 1.1;
+
+/// Where a map stays drawn from as its light moves: where it was while the
+/// light is within `hold` of it, else `hold` behind the light on the way it
+/// went.
+fn leash(map: Vec3, light: Vec3, hold: f32) -> Vec3 {
+    let off = light - map;
+    let d = off.length();
+    if d <= hold { map } else { light - off * (hold / d) }
+}
+
+/// How far `l`'s map is drawn: a light of the moment's, the map's own `kept`
+/// while it covers the light's reach ([`ROOM`]); a fixed light's and the
+/// personal light's, exactly its reach.
+fn map_range(l: &lit::PointLight, kept: Option<f32>) -> f32 {
+    match kept {
+        _ if l.fixed || l.key == lit::PERSONAL_KEY => l.range,
+        Some(r) if l.range <= r && l.range * ROOM * ROOM >= r => r,
+        _ => l.range * ROOM,
+    }
+}
+
+/// How far `l`'s map may stay from it (`leash`).
+fn hold(l: &lit::PointLight) -> f32 {
+    match l.key {
+        _ if l.fixed => 0.0,
+        lit::PERSONAL_KEY => PERSONAL_HOLD,
+        _ => MOMENT_HOLD,
+    }
+}
 
 /// How long, in seconds, a light stands still before what does not move is
 /// drawn into its cache: the personal light moves on the game's frames (30 a
@@ -253,7 +326,7 @@ struct ShadowUniform {
     /// Each map's depth mapping (a, b: `depth_map`).
     depth: [[f32; 4]; MAX_SLOTS],
     /// The faces' width (`widen`), 1 / the size, a texel's world size per
-    /// unit of distance along a face's axis.
+    /// unit of distance along a face's axis, the filter's reach ([`REACH`]).
     params: [f32; 4],
 }
 
@@ -275,34 +348,55 @@ const PLANT_LINE: &str = "            light += p.color.rgb * ((1.0 - min(d * abs
 const PLANT_LINE_SHADOWED: &str =
     "            let fall = 1.0 - min(d * abs(p.color.w), 1.0);\n            if (fall > 0.0) {\n                light += p.color.rgb * (fall * k * light_shadow(j, i, vec3<f32>(0.0, 1.0, 0.0)));\n            }\n";
 
-/// lightshadow.wgsl's filter: four bilinear comparisons half a texel either
-/// way; in a page and on Android one ([`ONE_TAP`]), a quarter of the
-/// receivers' texture reads at every fragment a shadowed light reaches (at
-/// 512 a side natively the four cost an RX 580 up to 1.5 ms at 4K where
-/// eight lights overlap; at a page's 256 one bilinear comparison's edge is
-/// as soft as four's at 512).
-const FOUR_TAPS: &str = "    var vis = textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(-e, -e), layer, z);
-    vis += textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(e, -e), layer, z);
-    vis += textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(-e, e), layer, z);
-    vis += textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(e, e), layer, z);
-    return mix(1.0, vis * 0.25, o.w);
+/// lightshadow.wgsl's filter: the tent of radius 3 ([`REACH`]), nine
+/// bilinear comparisons; in a page and on Android the tent of radius 2
+/// ([`NARROW`]), four, at a page's 256 a side as wide in the world as the
+/// nine at 512 and under half their texture reads at every fragment a
+/// shadowed light reaches.
+const WIDE: &str = "    // the tent of radius 3: texels −2 to 3 from b weigh (1 − |k − fr| / 3) / 3,
+    // paired (−2, −1) (0, 1) (2, 3): weights (3 − 2fr, 5, 1 + 2fr) / 9
+    let w0 = 3.0 - 2.0 * fr;
+    let w2 = 1.0 + 2.0 * fr;
+    let a0 = (b - 1.5 + (2.0 - fr) / w0) * e;
+    let a1 = (b + 0.5 + (2.0 + fr) / 5.0) * e;
+    let a2 = (b + 2.5 + fr / w2) * e;
+    var row = w0.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a0.x, a0.y), layer, z);
+    row += 5.0 * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a1.x, a0.y), layer, z);
+    row += w2.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a2.x, a0.y), layer, z);
+    var vis = w0.y * row;
+    row = w0.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a0.x, a1.y), layer, z);
+    row += 5.0 * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a1.x, a1.y), layer, z);
+    row += w2.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a2.x, a1.y), layer, z);
+    vis += 5.0 * row;
+    row = w0.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a0.x, a2.y), layer, z);
+    row += 5.0 * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a1.x, a2.y), layer, z);
+    row += w2.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a2.x, a2.y), layer, z);
+    vis += w2.y * row;
+    return mix(1.0, vis / 81.0, o.w);
 ";
-const ONE_TAP: &str = "    let vis = textureSampleCompareLevel(light_maps, light_cmp, uv, layer, z);
-    return mix(1.0, vis, o.w);
+const NARROW: &str = "    // the tent of radius 2: texels −1 to 2 from b weigh (1 − |k − fr| / 2) / 2,
+    // paired (−1, 0) (1, 2): weights (3 − 2fr, 1 + 2fr) / 4
+    let w0 = 3.0 - 2.0 * fr;
+    let w1 = 1.0 + 2.0 * fr;
+    let a0 = (b - 0.5 + (2.0 - fr) / w0) * e;
+    let a1 = (b + 1.5 + fr / w1) * e;
+    var vis = w0.y * (w0.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a0.x, a0.y), layer, z) + w1.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a1.x, a0.y), layer, z));
+    vis += w1.y * (w0.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a0.x, a1.y), layer, z) + w1.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a1.x, a1.y), layer, z));
+    return mix(1.0, vis / 16.0, o.w);
 ";
 
-/// Whether the receivers take one comparison a light, not four.
-fn one_tap() -> bool {
-    cfg!(any(target_arch = "wasm32", target_os = "android"))
+/// Whether the receivers take the narrow filter ([`NARROW`], [`REACH`] 2).
+fn narrow() -> bool {
+    REACH < 3.0
 }
 
 /// The receivers' module: shader.wgsl, lit.wgsl with its point terms taking
 /// the maps' visibility (with `sun`, its sun line taking the sun's map's
 /// too, `sunshadow::shadowed_lit`), then `sunshadow.wgsl` with the sun and
-/// `lightshadow.wgsl` (with one comparison a light where `one`).
+/// `lightshadow.wgsl` (with the narrow filter where `narrow`).
 /// `None` if lit.wgsl's lines are not there to change
 /// (tests::the_receivers_take_the_point_lines holds them to it).
-pub(crate) fn receivers_wgsl(sun: bool, one: bool) -> Option<String> {
+pub(crate) fn receivers_wgsl(sun: bool, narrow: bool) -> Option<String> {
     let mut lit = include_str!("lit.wgsl").to_string();
     if sun {
         lit = sunshadow::shadowed_lit(&lit)?;
@@ -312,10 +406,10 @@ pub(crate) fn receivers_wgsl(sun: bool, one: bool) -> Option<String> {
     }
     let lit = lit.replace(POINT_LINE, POINT_LINE_SHADOWED).replace(PLANT_LINE, PLANT_LINE_SHADOWED);
     let shadow = include_str!("lightshadow.wgsl");
-    if shadow.matches(FOUR_TAPS).count() != 1 {
+    if shadow.matches(WIDE).count() != 1 {
         return None;
     }
-    let shadow = if one { shadow.replace(FOUR_TAPS, ONE_TAP) } else { shadow.to_string() };
+    let shadow = if narrow { shadow.replace(WIDE, NARROW) } else { shadow.to_string() };
     let mut parts = vec![include_str!("shader.wgsl"), &lit];
     if sun {
         parts.push(include_str!("sunshadow.wgsl"));
@@ -583,7 +677,7 @@ impl Points {
             wgpu::BindGroupEntry { binding: 6, resource: buf.as_entire_binding() },
         ]);
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("lights and light shadows"), layout: &layout3, entries: &bound });
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("light shadows"), source: wgpu::ShaderSource::Wgsl(receivers_wgsl(sun.is_some(), one_tap())?.into()) });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("light shadows"), source: wgpu::ShaderSource::Wgsl(receivers_wgsl(sun.is_some(), narrow())?.into()) });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("light shadowed model"),
             bind_group_layouts: &[Some(layouts[0]), Some(layouts[1]), Some(layouts[2]), Some(&layout3)],
@@ -617,7 +711,7 @@ impl Points {
         let mut u = ShadowUniform::zeroed();
         // every face's uniform, written at once (the maps in use)
         let mut faces = vec![0u8; self.slots * 6 * self.stride as usize];
-        u.params = [g, 1.0 / self.size as f32, 2.0 * g / self.size as f32, 0.0];
+        u.params = [g, 1.0 / self.size as f32, 2.0 * g / self.size as f32, REACH];
         // what moves this frame: the models, and the groups' animated props
         let mut movers = Vec::new();
         let mut groups = Vec::new();
@@ -634,8 +728,11 @@ impl Points {
         for (k, slot) in st.slots.iter_mut().enumerate() {
             let Some(s) = slot else { continue };
             let l = lights[s.j];
-            if (l.at - s.at).length() > STILL || (l.range - s.range).abs() > STILL {
-                (s.at, s.range, s.still, s.cache) = (l.at, l.range, 0.0, None);
+            // drawn again from where the light is (on its leash) and as far
+            // as it reaches, when either has moved
+            let (at, range) = (leash(s.at, l.at, hold(&l)), map_range(&l, Some(s.range)));
+            if (at - s.at).length() > STILL || (range - s.range).abs() > STILL {
+                (s.at, s.range, s.still, s.cache) = (at, range, 0.0, None);
             } else {
                 s.still += dt;
             }
@@ -754,7 +851,7 @@ impl Points {
             let Some(free) = st.slots[..budget].iter().position(Option::is_none) else { break };
             let l = lights[j];
             let new = l.key == 0 || !st.seen.contains(&l.key);
-            st.slots[free] = Some(Slot { key: l.key, at: l.at, range: l.range, strength: if new { 1.0 } else { approach(0.0, 1.0, step) }, wanted: true, still: 0.0, cache: None, dirty: [true; 6], j });
+            st.slots[free] = Some(Slot { key: l.key, at: l.at, range: map_range(&l, None), strength: if new { 1.0 } else { approach(0.0, 1.0, step) }, wanted: true, still: 0.0, cache: None, dirty: [true; 6], j });
         }
         st.seen = lights.iter().map(|l| l.key).filter(|&k| k != 0).collect();
     }
@@ -954,9 +1051,9 @@ mod tests {
     /// here, not as shadows that never come.
     #[test]
     fn the_receivers_take_the_point_lines() {
-        for (sun, one) in [(false, false), (true, false), (false, true), (true, true)] {
-            let s = receivers_wgsl(sun, one).expect("lit.wgsl's point lines");
-            assert_eq!(s.contains(FOUR_TAPS), !one, "four comparisons a light, or one");
+        for (sun, narrow) in [(false, false), (true, false), (false, true), (true, true)] {
+            let s = receivers_wgsl(sun, narrow).expect("lit.wgsl's point lines");
+            assert_eq!((s.contains(WIDE), s.contains(NARROW)), (!narrow, narrow), "the wide filter or the narrow");
             assert!(s.contains("light_shadow(j, i, n)") && s.contains("light_shadow(j, i, vec3<f32>(0.0, 1.0, 0.0))"));
             assert!(!s.contains(POINT_LINE) && !s.contains(PLANT_LINE), "the unshadowed lines gone");
             assert!(s.contains("fn light_shadow") && s.contains("fn fs_lit_baked"));
@@ -966,9 +1063,9 @@ mod tests {
         assert!(CAST_WGSL.contains("fn vs_light_cast") && CAST_WGSL.contains("fn vs_light_cast_solid"));
     }
 
-    /// Every receivers' module (with the sun's map or not, four comparisons
-    /// a light or one), the casters' and the copy's parse and validate, the
-    /// one-comparison modules too, which only a page and Android make.
+    /// Every receivers' module (with the sun's map or not, the wide filter
+    /// or the narrow), the casters' and the copy's parse and validate, the
+    /// narrow filter's modules too, which only a page and Android make.
     #[test]
     fn every_module_validates() {
         use wgpu::naga;
@@ -976,8 +1073,8 @@ mod tests {
             let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
             naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         };
-        for (sun, one) in [(false, false), (true, false), (false, true), (true, true)] {
-            check(&format!("receivers sun {sun} one {one}"), &receivers_wgsl(sun, one).unwrap());
+        for (sun, narrow) in [(false, false), (true, false), (false, true), (true, true)] {
+            check(&format!("receivers sun {sun} narrow {narrow}"), &receivers_wgsl(sun, narrow).unwrap());
         }
         check("casters", CAST_WGSL);
         check("copy", include_str!("lightcopy.wgsl"));
@@ -990,7 +1087,7 @@ mod tests {
     #[test]
     fn a_point_lands_in_its_face_at_its_depth() {
         let g = widen(512);
-        assert!(g > 1.0 && g < 1.01, "{g}");
+        assert!(g > 1.0 && g < 1.02, "{g}");
         let far = 19.2;
         let (a, b) = depth_map(far);
         let mut n = 0;

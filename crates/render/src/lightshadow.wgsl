@@ -14,9 +14,13 @@
 // A face's depth is a − b / m for a point m along its axis
 // (`lightshadow::depth_map`), the reference the same of the fragment's,
 // looked up from a point moved off the surface along its normal (more as
-// the light grazes it) and a little nearer the light; four bilinear
-// comparisons a texel apart. A map's strength fades its shadow in and out
-// as the budget hands maps between lights.
+// the light grazes it: as far as the filter reaches, so that no texel of it
+// finds the surface itself nearer the light) and a little nearer the light,
+// through a tent of the map's texels round it (`lightshadow::REACH` texels
+// each way: its shadow's edge soft, and gliding as a light or a caster
+// moves where a narrower filter's stepped a texel at a time). A map's
+// strength fades its shadow in and out as the budget hands maps between
+// lights.
 
 struct LightShadows {
     // each light of `lights.l` its map's place + 1 (0: none), four a vec4
@@ -26,7 +30,8 @@ struct LightShadows {
     // each map's depth mapping: x a, y b
     depth: array<vec4<f32>, 16>,
     // x: the faces' half width (a little over 1), y: 1 / the size, z: a
-    // texel's world size per unit of distance along a face's axis
+    // texel's world size per unit of distance along a face's axis, w: the
+    // filter's reach in texels (`lightshadow::REACH`)
     params: vec4<f32>,
 };
 @group(3) @binding(4) var light_maps: texture_depth_2d_array;
@@ -34,9 +39,11 @@ struct LightShadows {
 @group(3) @binding(6) var<uniform> light_shadows: LightShadows;
 
 // How far off the surface a fragment looks its light's map up, in the
-// map's texels there: along the normal, times the sine of the angle to the
-// light; and toward the light.
-const LIGHT_NORMAL_OFFSET: f32 = 1.5;
+// map's texels there: along the normal, the filter's reach (params.w) times
+// the sine of the angle to the light (a surface sloping from the light
+// stays clear of its own texels across the tent: half a texel less left
+// lines of acne along the map's texels where the tent's last texels
+// reached); and toward the light, this many.
 const LIGHT_DEPTH_BIAS: f32 = 1.5;
 
 // The face a point less the light falls in: its largest axis's, the
@@ -91,7 +98,7 @@ fn light_shadow(j: u32, i: LitOut, n: vec3<f32>) -> f32 {
     let t = max(max(abs(v.x), abs(v.y)), abs(v.z)) * light_shadows.params.z;
     let cosl = clamp(-dot(n, v) / len, 0.0, 1.0);
     let sinl = sqrt(1.0 - cosl * cosl);
-    v += n * (t * LIGHT_NORMAL_OFFSET * sinl);
+    v += n * (t * light_shadows.params.w * sinl);
     let face = light_face(v);
     let f = light_face_forward(face);
     let u = light_face_up(face);
@@ -102,10 +109,31 @@ fn light_shadow(j: u32, i: LitOut, n: vec3<f32>) -> f32 {
     let dm = light_shadows.depth[k];
     let z = dm.x - dm.y / max(m - t * LIGHT_DEPTH_BIAS, 1e-4);
     let layer = k * 6u + face;
-    let e = 0.5 * light_shadows.params.y;
-    var vis = textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(-e, -e), layer, z);
-    vis += textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(e, -e), layer, z);
-    vis += textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(-e, e), layer, z);
-    vis += textureSampleCompareLevel(light_maps, light_cmp, uv + vec2<f32>(e, e), layer, z);
-    return mix(1.0, vis * 0.25, o.w);
+    // the texels round the point, their centres at whole numbers: the
+    // tent's weights for each, paired, each pair one bilinear comparison
+    // placed between its two texels at their weights' ratio
+    let e = light_shadows.params.y;
+    let p = uv / e - 0.5;
+    let b = floor(p);
+    let fr = p - b;
+    // the tent of radius 3: texels −2 to 3 from b weigh (1 − |k − fr| / 3) / 3,
+    // paired (−2, −1) (0, 1) (2, 3): weights (3 − 2fr, 5, 1 + 2fr) / 9
+    let w0 = 3.0 - 2.0 * fr;
+    let w2 = 1.0 + 2.0 * fr;
+    let a0 = (b - 1.5 + (2.0 - fr) / w0) * e;
+    let a1 = (b + 0.5 + (2.0 + fr) / 5.0) * e;
+    let a2 = (b + 2.5 + fr / w2) * e;
+    var row = w0.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a0.x, a0.y), layer, z);
+    row += 5.0 * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a1.x, a0.y), layer, z);
+    row += w2.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a2.x, a0.y), layer, z);
+    var vis = w0.y * row;
+    row = w0.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a0.x, a1.y), layer, z);
+    row += 5.0 * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a1.x, a1.y), layer, z);
+    row += w2.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a2.x, a1.y), layer, z);
+    vis += 5.0 * row;
+    row = w0.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a0.x, a2.y), layer, z);
+    row += 5.0 * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a1.x, a2.y), layer, z);
+    row += w2.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a2.x, a2.y), layer, z);
+    vis += w2.y * row;
+    return mix(1.0, vis / 81.0, o.w);
 }
