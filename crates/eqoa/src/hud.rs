@@ -89,6 +89,9 @@ pub struct MemberState {
     pub name: String,
     pub is_target: bool,
     pub hp: Option<(u8, bool, bool)>,
+    /// The client's own: the raid's marks on its bar (`raidlist::draw_marks`),
+    /// none outside a raid or on a server that sends no raid state.
+    pub marks: u8,
 }
 
 /// What `DrawPet` reads: `GetPetName`, whether the pet is the target, and
@@ -393,6 +396,9 @@ impl Hud {
             w.init(vui, ui, [p[0] + 87, p[1] + 12], 160, 1, 0);
             w.open(true);
             w.text_box(vui, ui, &wide(&m.name), 0, 0, 160, 1, [0.0, 0.0, 0.0, glow], 10);
+            if m.marks != 0 {
+                crate::raidlist::draw_marks(ui, p[0] + 168, p[1] + 5, m.marks);
+            }
             if let Some((hp, f4, f8)) = m.hp {
                 p = [p[0] + 10, p[1] + 25];
                 draw_gauge(vui, ui, 7, 136, p, m.is_target, hp as f32 / 255.0);

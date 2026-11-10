@@ -11,6 +11,11 @@
 //! where the bars start and above the chat box, the pet's bar under it. Past what
 //! four columns hold the wheel steps through them. A click targets a member the
 //! client can see (`hud::Pick::Raid`); one out of sight is greyed.
+//!
+//! On a server that sends the raid's state (go-eqoa-server's 0x7E44, `net::raid`;
+//! the GM Jibrish's petition 1448: "A small icon denoting who is raid leader") a
+//! row carries its member's marks at the right of its name: a gold crown the
+//! leader, a blue cross its helper, a red diamond its main assist (petition 1451).
 
 use crate::ui::{Layout, UiRaster, Vui, wide};
 
@@ -27,6 +32,67 @@ pub struct Row {
     /// The client has its entity (`Play::sees_entity`).
     pub seen: bool,
     pub me: bool,
+    /// Its marks: [`LEADER`], [`HELPER`], [`ASSIST`] (none on a server that
+    /// sends no raid state).
+    pub marks: u8,
+}
+
+/// A row's marks ([`Row::marks`]).
+pub const LEADER: u8 = 1;
+pub const HELPER: u8 = 2;
+pub const ASSIST: u8 = 4;
+
+/// A mark's size and the space after it, and its colours.
+const MARK_W: i32 = 9;
+const MARK_GAP: i32 = 2;
+const CROWN: [f32; 4] = [1.0, 0.8, 0.2, 1.0];
+const CROSS: [f32; 4] = [0.45, 0.75, 1.0, 1.0];
+const DIAMOND: [f32; 4] = [1.0, 0.33, 0.28, 1.0];
+
+/// The width the marks of `marks` take at a row's right.
+pub fn marks_width(marks: u8) -> i32 {
+    let n = (marks & (LEADER | HELPER | ASSIST)).count_ones() as i32;
+    if n == 0 { 0 } else { n * (MARK_W + MARK_GAP) }
+}
+
+/// The marks of `marks` drawn leftwards from `right` (x) at the name's line `y`,
+/// each over its shadow: the crown's band and three points, the cross's bars,
+/// the diamond. The quads each mark was drawn with, for a test.
+pub fn draw_marks(ui: &mut dyn crate::ui::Layout, right: i32, y: i32, marks: u8) -> Vec<([f32; 4], [[f32; 2]; 4])> {
+    let mut quads = Vec::new();
+    let mut x = right as f32;
+    for (bit, colour) in [(ASSIST, DIAMOND), (HELPER, CROSS), (LEADER, CROWN)] {
+        if marks & bit == 0 {
+            continue;
+        }
+        x -= (MARK_W + MARK_GAP) as f32;
+        let (x0, y0) = (x, y as f32 + 2.0);
+        let w = MARK_W as f32;
+        let shape: Vec<[[f32; 2]; 4]> = match bit {
+            LEADER => {
+                let band = y0 + 5.0;
+                vec![
+                    [[x0, band], [x0 + w, band], [x0 + w, band + 3.0], [x0, band + 3.0]],
+                    [[x0, band], [x0 + 3.0, band], [x0, y0], [x0, y0]],
+                    [[x0 + 3.0, band], [x0 + 6.0, band], [x0 + 4.5, y0 + 0.5], [x0 + 4.5, y0 + 0.5]],
+                    [[x0 + 6.0, band], [x0 + w, band], [x0 + w, y0], [x0 + w, y0]],
+                ]
+            }
+            HELPER => vec![
+                [[x0 + 3.5, y0], [x0 + 5.5, y0], [x0 + 5.5, y0 + 8.0], [x0 + 3.5, y0 + 8.0]],
+                [[x0 + 0.5, y0 + 3.0], [x0 + 8.5, y0 + 3.0], [x0 + 8.5, y0 + 5.0], [x0 + 0.5, y0 + 5.0]],
+            ],
+            _ => vec![[[x0 + 4.5, y0], [x0 + w, y0 + 4.0], [x0 + 4.5, y0 + 8.0], [x0, y0 + 4.0]]],
+        };
+        for q in &shape {
+            ui.solid(3, SHADOW, q.map(|p| [p[0] + 1.0, p[1] + 1.0]));
+        }
+        for q in shape {
+            ui.solid(3, colour, q);
+            quads.push((colour, q));
+        }
+    }
+    quads
 }
 
 /// A row, a column and the line over them, in the HUD's frame.
@@ -141,15 +207,19 @@ pub fn draw(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], fit: &Fit, rows: &[Row],
     for (k, row) in rows.iter().skip(first).take(fit.shown).enumerate() {
         let r = fit.row(at, k);
         let (x, y) = (r[0] + 2, r[1]);
-        // the name cut to its column
+        // the name cut to its column, less its marks
+        let marks = marks_width(row.marks);
         let mut name = wide(&row.name);
         while let Some(f) = font
             && !name.is_empty()
-            && ui.ui.fonts[f].string_width(&name) as f32 * scale > (COL_W - 4) as f32
+            && ui.ui.fonts[f].string_width(&name) as f32 * scale > (COL_W - 4 - marks) as f32
         {
             name.pop();
         }
         text(ui, x, y, name_colour(row), &name);
+        if marks > 0 {
+            draw_marks(ui, r[2] - 2, y, row.marks);
+        }
         let bar = [x, y + ROW_H - BAR_H - POWER_H - 1, r[2] - 2, y + ROW_H - 1];
         ui.solid(3, BAR_BACK, corners(bar));
         // health in the HUD's own gauge (7), and under it power in its blue (9)
@@ -171,6 +241,25 @@ mod tests {
     /// The frame's left side the HUD leaves it: from the group's bars' place down to
     /// above the chat box, and short of the frame's far side.
     const AT: [i32; 2] = [20, 93];
+
+    /// The marks at a row's right, leftwards from its edge: none without a raid's
+    /// state (the control), the crown's four quads in gold, and all three in a row
+    /// each in its colour, never past the edge; their room is what a name loses.
+    #[test]
+    fn the_marks_are_drawn_from_the_right() {
+        use crate::pointer::testing::NullRaster;
+        assert!(draw_marks(&mut NullRaster, 100, 50, 0).is_empty());
+        assert_eq!(marks_width(0), 0);
+        let crown = draw_marks(&mut NullRaster, 100, 50, LEADER);
+        assert_eq!(crown.len(), 4);
+        assert!(crown.iter().all(|(c, _)| *c == CROWN));
+        let all = draw_marks(&mut NullRaster, 100, 50, LEADER | HELPER | ASSIST);
+        assert_eq!(all.iter().map(|(c, _)| *c).collect::<Vec<_>>(), [vec![DIAMOND], vec![CROSS; 2], vec![CROWN; 4]].concat());
+        let xs = all.iter().flat_map(|(_, q)| q.iter().map(|p| p[0]));
+        let (lo, hi) = xs.fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));
+        assert!(hi <= 100.0 && lo >= 100.0 - marks_width(LEADER | HELPER | ASSIST) as f32, "{lo}..{hi}");
+        assert_eq!(marks_width(LEADER | ASSIST), 2 * (MARK_W + MARK_GAP));
+    }
 
     #[test]
     fn it_fits_any_number_above_the_chat_box() {
