@@ -381,6 +381,23 @@ fn read_pet_effects(r: &mut Reader) -> Option<Vec<PetEffect>> {
     (!r.error).then_some(out)
 }
 
+/// go-eqoa-server's own: a tint on the bodies of the NPCs of a name (the server
+/// owner, 2026-11-10: Yhafiran, "the black and green oriental dragon", drawn as
+/// the disc's green one tinted; `crate::npctint`, the game's `npctint`). The
+/// offer, server to client once the player is in the world: a u8, 1, the layout
+/// of [`OP_NPC_TINTS`]. CLIENT has no such case, so a PS2 ignores it and draws
+/// every body in its own colours.
+pub const OP_NPC_TINTS_OFFER: u16 = 0x7E3E;
+/// The answer to [`OP_NPC_TINTS_OFFER`], client to server, at once: a u8, 1 to
+/// be sent the tints (this client drops what it held and is sent the set there
+/// is), 0 to stop.
+pub const OP_NPC_TINTS_ANSWER: u16 = 0x7E3F;
+/// The tints, from a server the client answered ([`OP_NPC_TINTS_ANSWER`]), at
+/// once and whenever a GM changes them: a u16 count, then each its NPC name (a
+/// u8 byte count and UTF-8, keyed as `crate::npctint::key` keys one) and its u32
+/// colour 0xRRGGBBAA (`crate::npctint::read`). Each is the whole set.
+pub const OP_NPC_TINTS: u16 = 0x7E40;
+
 /// One quest on the tracker ([`OP_QUEST_PROGRESS_DATA`]): its name and its
 /// step's objectives.
 #[derive(Clone, Debug, PartialEq)]
@@ -749,6 +766,11 @@ pub struct Session {
     /// until the game takes it (`raceopts`), whatever screen is up: the
     /// pregame's, the world's, a script's straight login.
     pub race_looks: Option<Vec<u8>>,
+    /// The NPCs' body tints the server last sent ([`OP_NPC_TINTS`], by name as
+    /// `crate::npctint::key` keys one), until the game takes them (`npctint`):
+    /// the empty set at its offer and at a new connection, this client holding
+    /// none then.
+    pub npc_tints: Option<Vec<(String, u32)>>,
     /// The server has this client's character flying ([`OP_FLY`]); gone with
     /// the connection, as the server's goes with its login. A dump (a respawn,
     /// a restart of the server's) leaves it.
@@ -938,6 +960,7 @@ impl Session {
             creation: None,
             race_options: None,
             race_looks: None,
+            npc_tints: None,
             flying: false,
             raid_roster_offer: false,
             raid_roster_asked: None,
@@ -1419,6 +1442,8 @@ impl Session {
                 self.flying = false;
                 self.jumps = false;
                 self.map_travel = false;
+                // the NPCs' body tints too (the next world entry offers them)
+                self.npc_tints = Some(Vec::new());
                 // the old connection's channels go with it
                 self.early_states.clear();
                 self.quest_marks_offer = false;
@@ -1671,6 +1696,21 @@ impl Session {
                 None => debug_line(&format!("[net] race options: {} bytes not read", m.data.len())),
             },
             OP_RACE_LOOKS => self.race_looks = Some(m.data[2.min(m.data.len())..].to_vec()),
+            // the NPCs' body tints offered: taken (`npctint`), what was held
+            // dropped, the server sending the set there is
+            OP_NPC_TINTS_OFFER => {
+                r.u8();
+                if !r.error {
+                    self.npc_tints = Some(Vec::new());
+                    let mut w = Writer::op(OP_NPC_TINTS_ANSWER);
+                    w.u8(1);
+                    self.send(&w.data);
+                }
+            }
+            OP_NPC_TINTS => match crate::npctint::read(&m.data[2.min(m.data.len())..]) {
+                Some(t) => self.npc_tints = Some(t),
+                None => debug_line(&format!("[net] NPC tints: {} bytes not read", m.data.len())),
+            },
             // any member invites into its group there (`Play::may_invite`)
             OP_MEMBER_INVITES => {
                 if r.u32() != 0 && !r.error {
@@ -3079,6 +3119,41 @@ mod tests {
         assert!(!s.number_tags_offer, "a new connection: no offer");
         s.agree_number_tags(true);
         assert_eq!(answers(&mut s), [], "a new connection: nothing asked before its offer");
+    }
+
+    // The NPCs' body tints (go-eqoa-server's 0x7E3E-0x7E40): an offer is
+    // answered at once with a u8 1, each time it comes, and leaves the game the
+    // empty set (this client holds none until the server sends them); a set is
+    // the session's until the game takes it, and answered with nothing; a new
+    // connection leaves the empty set. The controls: an offer cut short is not
+    // answered, and a set cut short leaves nothing new.
+    #[test]
+    fn npc_tints_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x3F, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3E, 0x7E]);
+        assert_eq!((answers(&mut s), s.npc_tints.take()), (vec![], None), "a short offer is no offer");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3E, 0x7E, 1]);
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x3F, 0x7E, 1])], "answered at once, a u8 1");
+        assert_eq!(s.npc_tints.take(), Some(vec![]), "what was held dropped");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x40, 0x7E, 1, 0, 8, b'y', b'h', b'a', b'f', b'i', b'r', b'a', b'n', 0xFF, 0x50, 0x8C, 0x55]);
+        assert!(ev.is_empty(), "the set is the session's until taken: {ev:?}");
+        assert_eq!(s.npc_tints.take(), Some(vec![("yhafiran".to_string(), 0x558C_50FF)]));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x40, 0x7E, 1, 0, 8, b'y', b'h']);
+        assert_eq!(s.npc_tints, None, "the control: a set cut short is nothing new");
+        assert_eq!(answers(&mut s), [], "the set answered nothing");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3E, 0x7E, 1]);
+        assert_eq!(answers(&mut s), [(251, vec![0x3F, 0x7E, 1])], "a new offer is answered again");
+        s.npc_tints = None;
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(s.npc_tints.take(), Some(vec![]), "a new connection: none held");
     }
 
     /// A 0x00DB's tag: one byte after its body from a server that offered

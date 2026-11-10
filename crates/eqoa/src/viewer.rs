@@ -123,7 +123,9 @@ pub fn lit(
 
 /// What is on screen.
 pub enum Source {
-    Models { list: Vec<(i32, Ref)>, index: usize },
+    /// The models listed and the one shown, in a server's body tint when
+    /// given one (`npctint`: `eqoa shot ... tint=RRGGBBAA`).
+    Models { list: Vec<(i32, Ref)>, index: usize, tint: Option<u32> },
     Zone { file: usize, zone: esf::NodeId, index: usize },
     /// A zone with the character in it, walking: at `spawn` when a server
     /// gave the place.
@@ -139,10 +141,13 @@ impl Source {
             // the model as the library's view has it now (`era`: F9 turns a
             // listed model to the 2002 disc's record of its DictID), built
             // whole in that view
-            Source::Models { list, index, .. } => {
+            Source::Models { list, index, tint } => {
                 let (id, r) = list[*index];
-                let m = lib.with_view(lib.view_for(id), || lib.build_model(lib.lookup(id).unwrap_or(r)));
-                scene::model(id, m.unwrap_or_default())
+                let mut m = lib.with_view(lib.view_for(id), || lib.build_model(lib.lookup(id).unwrap_or(r))).unwrap_or_default();
+                if let Some(t) = tint {
+                    crate::npctint::apply(&mut m, *t);
+                }
+                scene::model(id, m)
             }
             Source::Zone { file, zone, index } => scene::zone(lib, *file, *zone, *index),
             // Only for the spawn point: a walk's zones are streamed. (A world
@@ -2175,7 +2180,7 @@ pub fn run_boot(server: Option<String>) -> Result<(), Error> {
 /// `run_boot` on a surface made beforehand (a page's).
 pub fn run_boot_gfx(server: Option<String>, pending: Option<PendingGfx>) -> Result<(), Error> {
     let host = crate::pregame::host::Host::new(crate::pregame::Pregame::new(server), 0);
-    run_app(Library::new(), Source::Models { list: Vec::new(), index: 0 }, None, pending, Some(host))
+    run_app(Library::new(), Source::Models { list: Vec::new(), index: 0, tint: None }, None, pending, Some(host))
 }
 
 /// `run_with` on a surface made beforehand. In a browser the loop is handed
@@ -3454,7 +3459,7 @@ impl App {
         self.lib = Library::new();
         // the pregame's own art, applied at the next frame (`poll_era`)
         self.art_drawn = self.lib.view();
-        self.source = Source::Models { list: Vec::new(), index: 0 };
+        self.source = Source::Models { list: Vec::new(), index: 0, tint: None };
         self.grab_pointer(false);
         let now = self.clock.elapsed().as_millis() as i64;
         self.host = Some(crate::pregame::host::Host::new(crate::pregame::Pregame::back(shared, disconnect, now), now));
@@ -6097,7 +6102,7 @@ mod tests {
         let list = crate::scene::list_models(&lib, f);
         lib.stand_in(f, esf::Container::open(iso::Iso::open(&y2002).unwrap().read("CHAR.ESF").unwrap()).unwrap());
         let index = list.iter().position(|(id, _)| *id == HUMAN).unwrap();
-        let src = Source::Models { list, index };
+        let src = Source::Models { list, index, tint: None };
         let verts = |lib: &Library| src.scene(lib).parts.iter().map(|(m, _)| m.pos.len()).sum::<usize>();
         assert_eq!(verts(&lib), 3644, "Frontiers' human");
         lib.set_view(esf::Era::Y2002);

@@ -97,6 +97,9 @@ struct Puppet {
     /// A server's race's look its body took (`raceopts`: a player's, by its
     /// name): another, or one gone, rebuilds it.
     race_look: Option<std::rc::Rc<net::raceopts::Look>>,
+    /// The tint the server names for its body (`npctint`: an NPC's, by its
+    /// name): another, or one gone, rebuilds it.
+    tint: Option<u32>,
 }
 
 /// An entity's actor in the walker's collision world (`VIEntity::m_actor`):
@@ -962,6 +965,12 @@ fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Lo
     e.creature.as_ref().filter(|_| a_player(e)).and_then(|c| crate::raceopts::look_of(&c.name))
 }
 
+/// The tint the server names for an NPC's body (`npctint`), by the name its
+/// channel carries; none for a player's character.
+fn tint_of(e: &net::entity::Entity) -> Option<u32> {
+    e.creature.as_ref().filter(|_| !a_player(e)).and_then(|c| crate::npctint::of(&c.name))
+}
+
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
 /// items and helm on their nodes (a player's in a body one of the server's
 /// `races` wears holding items as a race's body does: `racebody`).
@@ -1011,8 +1020,13 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if let (Some(cs), Some(lk)) = (&sprite, &look) {
                         crate::wisp::dress(lib, e.drawn_model, &mut model, cs, lk, race_look.as_deref(), &cust);
                     }
+                    // the server's tint on an NPC's body, over all of it (`npctint`)
+                    let tint = tint_of(e);
+                    if let Some(t) = tint {
+                        crate::npctint::apply(&mut model, t);
+                    }
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look })
+                    Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look, tint })
                 })
 }
 
@@ -1175,6 +1189,11 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
     // a server's race's look come, changed or gone (`raceopts`): made anew
     let r = match p.as_ref() {
         Some(p) if r != Redo::Build && p.race_look != race_look_of(e) => Redo::Build,
+        _ => r,
+    };
+    // a tint on its body come, changed or gone (`npctint`): made anew
+    let r = match p.as_ref() {
+        Some(p) if r != Redo::Build && p.tint != tint_of(e) => Redo::Build,
         _ => r,
     };
     // the art swapped (F9), or a texture pack turned on or off (`texpack`),
@@ -2384,6 +2403,57 @@ mod held {
         assert_eq!(by_looks(body(100412), body(100437)), Redo::Keep, "the control: by its looks alone the corpse's sprite stays");
     }
 
+    /// The server's body tint (`npctint`, go-eqoa-server's 0x7E40) is on the
+    /// NPC of its name alone: Yhafiran's puppet, his name in any case on his
+    /// channel, is made in his tint, and Uzrathixius beside him in the same
+    /// green dragon is not (the control), nor is a player's character of
+    /// Yhafiran's name; a new tint makes his puppet anew in it, the same set
+    /// again keeps it, and the set gone makes it anew in the art's own colours.
+    /// Needs `run/eqoa.iso` and a graphics adapter.
+    #[test]
+    fn a_body_tint_is_on_the_npc_of_its_name_alone() {
+        const DRAGON: u32 = 0xB5C8_A651;
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let instance = render::wgpu::Instance::new(render::wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&render::wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let mut g = Gpu { renderer: &mut renderer, device: &device, queue: &queue };
+        let mut lib = Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
+        let entity = |id: u32, name: &str, p256: u8| net::entity::Entity {
+            id,
+            model: DRAGON,
+            drawn_model: DRAGON,
+            creature: Some(net::entity::Creature { name: name.into(), p256, ..Default::default() }),
+            ..Default::default()
+        };
+        let (yhafiran, twin, player) = (entity(7001, "YHAFIRAN", 0), entity(7002, "Uzrathixius", 0), entity(7003, "Yhafiran", 2));
+        crate::npctint::set(vec![("yhafiran".into(), 0x2A73_33FF)]);
+        let tint = |p: &Option<Puppet>| p.as_ref().expect("a puppet").tint;
+        let (mut him, mut beside, mut them) = (None, None, None);
+        for (p, e) in [(&mut him, &yhafiran), (&mut beside, &twin), (&mut them, &player)] {
+            apply(&lib, &mut g, p, e, None, 0, 0, None, false);
+        }
+        assert_eq!((tint(&him), tint(&beside), tint(&them)), (Some(0x2A73_33FF), None, None));
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 33, None, false).is_none(), "the same tint: kept");
+        crate::npctint::set(vec![("yhafiran".into(), 0x4D80_4DFF)]);
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 66, None, false).is_some(), "a new tint: made anew");
+        assert!(apply(&lib, &mut g, &mut beside, &twin, None, 0, 66, None, false).is_none(), "the twin kept");
+        assert_eq!(tint(&him), Some(0x4D80_4DFF));
+        crate::npctint::set(Vec::new());
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 99, None, false).is_some(), "the tint gone: made anew");
+        assert_eq!(tint(&him), None);
+    }
+
     /// A player of a server's race in the gargoyles' body (go-eqoa-server's
     /// Gargoyle, petition 1278: "gargoyles dont show equiped weapons") holds
     /// what its channel names as `apply` makes its puppet (`racebody`): the
@@ -2661,6 +2731,11 @@ impl Play {
         crate::raceopts::set_options(self.session.race_options.as_ref());
         if let Some(b) = self.session.race_looks.take() {
             crate::raceopts::take_looks(&b);
+        }
+        // the NPCs' body tints the server names (`npctint`): the creatures
+        // whose tint changed made again in it (`apply`)
+        if let Some(t) = self.session.npc_tints.take() {
+            crate::npctint::set(t);
         }
         for e in events {
             match e {
@@ -3444,7 +3519,7 @@ impl Play {
                         if watching(&c.name) {
                             let w = self.walks[slot].as_ref().map(|(_, w)| w);
                             eprintln!(
-                                "[watch] {game_ms} {} pos {:.2?} drawn {:.2?} state {} p255 {} walk {:?} vel {:.2?} anim {:?} stamp {} pose {} frame {} blend {:.2} air {:?}",
+                                "[watch] {game_ms} {} pos {:.2?} drawn {:.2?} state {} p255 {} walk {:?} vel {:.2?} anim {:?} stamp {} pose {} frame {} blend {:.2} air {:?} tint {}",
                                 c.name,
                                 e.pos,
                                 e.actor_pos,
@@ -3457,7 +3532,8 @@ impl Play {
                                 pose,
                                 if cs.cur[0].play >= 0 { cs.h.plays.get(cs.cur[0].play).frame_a } else { -1 },
                                 crate::jump::blended(cs, &p.anims),
-                                self.airs[slot]
+                                self.airs[slot],
+                                p.tint.map_or_else(|| "none".to_string(), |t| format!("{t:08X}"))
                             );
                         }
                     }

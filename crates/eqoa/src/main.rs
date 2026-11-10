@@ -14,6 +14,7 @@
 //! eqoa view <world> zone <n>     a zone: terrain and every placed actor
 //! eqoa view <world> walk <n>     the character, walking in a zone
 //! eqoa shot <file> [model | zone <n>] <out.png> [camera]   one view, offscreen
+//!                               (`tint=RRGGBBAA`: a model in a server's body tint, `npctint`)
 //! eqoa listen <world> <x> <z> <seconds> <out.wav> [hour] [walk]   the world's sound there, offline
 //! eqoa mapshot <world> <out.png> [x z [heading [scale [secs]]]]   the map (M) built as in play, drawn
 //! eqoa fxview [visual [secs]]   a human casting a spell visual at another, again and again, as
@@ -100,6 +101,7 @@ mod hud;
 mod raidlist;
 mod damage;
 mod numcolor;
+mod npctint;
 mod display;
 mod hudmenu;
 mod influence;
@@ -472,15 +474,19 @@ fn run(args: &[String]) -> Result<()> {
         Some("rumble") => input::check_motors(10_000)?,
         Some("view") | Some("shot") => {
             let shot = args[0] == "shot";
-            let usage = "usage: eqoa view <file> [model] | eqoa view <world> zone <n> | eqoa shot <same> <out.png> [camera...]";
+            let usage = "usage: eqoa view <file> [model] [tint=RRGGBBAA] | eqoa view <world> zone <n> | eqoa shot <same> <out.png> [camera...]";
             let file = args.get(1).ok_or(usage)?;
-            let mut rest = &args[2..];
+            // `tint=RRGGBBAA`: the model in a server's body tint, as an NPC of
+            // a tinted name is drawn (`npctint`)
+            let (tint, rest) = npctint::take_arg(&args[2..])?;
+            let mut rest = &rest[..];
             if shot {
                 // The PNG is the first argument ending in .png.
                 let at = rest.iter().position(|a| a.ends_with(".png")).ok_or(usage)?;
                 let (out, nums) = (&rest[at], &rest[at + 1..]);
                 rest = &rest[..at];
                 let (mut lib, src) = source(file, rest)?;
+                let src = tinted(src, tint)?;
                 let (cam, script) = match src {
                     viewer::Source::Walk { .. } => (None, script_args(nums)?),
                     _ => (camera_args(&src, nums)?, None),
@@ -488,7 +494,7 @@ fn run(args: &[String]) -> Result<()> {
                 viewer::shot(&mut lib, &src, cam, script, (960, 540), out)?;
             } else {
                 let (lib, src) = source(file, rest)?;
-                viewer::run(lib, src)?;
+                viewer::run(lib, tinted(src, tint)?)?;
             }
         }
         // `eqoa icon <size> <out.png>`: the program's own icon, the drawn disc
@@ -968,10 +974,20 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
                     None => m.parse::<usize>().ok().filter(|&i| i < list.len()).ok_or("no such model")?,
                 },
             };
-            Ok((lib, viewer::Source::Models { list, index }))
+            Ok((lib, viewer::Source::Models { list, index, tint: None }))
         }
         _ => Err("expected [model] or zone <n>".into()),
     }
+}
+
+/// A model in a tint (`tint=`, `npctint`); a zone or a walk takes none.
+fn tinted(mut src: viewer::Source, tint: Option<u32>) -> Result<viewer::Source> {
+    match (&mut src, tint) {
+        (_, None) => {}
+        (viewer::Source::Models { tint: t, .. }, Some(c)) => *t = Some(c),
+        _ => return Err("tint= is a model's: eqoa shot <file> <model> <out.png> tint=RRGGBBAA".into()),
+    }
+    Ok(src)
 }
 
 /// `shot` for a walk: `ms [fwd strafe orbit pitch]`, held throughout.

@@ -6,6 +6,15 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · Creatures in a server's own colours
+- A server can now give a creature a colour of its own, laid over its whole body, where the game has no body in
+  that colour: eqoaclassic's raid dragon Yhafiran, the black and green oriental dragon, is drawn nearly black,
+  the green of his scales showing, though he wears the same green dragon as the Plane of Disease's twins. Each
+  creature of the name is coloured, whichever spawn it is, a respawn too; what it holds keeps its own colours,
+  and the light, the time of day and the fog fall on it as on any other.
+- Every other creature and character looks exactly as before. On a server that colours none (Sandstorm, or one
+  not updated) nothing changes, and a PS2 on the same server sees the plain green dragon.
+
 ## 2026-11-10 · Light Shadows: soft, steady edges
 - With Light Shadows on, the shadows of your lantern and of torches, braziers and lamps have soft edges now.
   Up close they showed little steps along every edge, and while your lantern moved (or anything walked past a
