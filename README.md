@@ -437,8 +437,11 @@ or a browser (each described where it lives below):
   body. A goblin (race 13's own body and every one its options offer, `cape::CROUCHED`; the
   owner, 2026-11-10: "on goblins they are too big") is bound standing and rests in a crouch,
   its shoulders at 0.70 of their bind height, so a cape sized on its bind pose hung to the
-  ground: its cape is sized as it stands, its height by that share (`cape::standing`), every
-  other body's exactly as before. It names the wearer's nodes in its bind pose and is drawn on the body's own palette,
+  ground: its cape is sized as it stands, its height by that share (`cape::standing`), and across by its shoulders'
+  joints, not by what it wears over them (`cape::shouldered`; the owner, 2026-11-10, of a player in the goblin
+  chieftain's body: "it isnt sitting well": the chieftain's spiked harness, skinned to its chest, measured its torso
+  past its shoulders, and its cape went on two and a half times a goblin's width and depth, standing out from its
+  back like a board; the mystic's pads a little), every other body's exactly as before. It names the wearer's nodes in its bind pose and is drawn on the body's own palette,
   swaying with the robe-tail bones every player skeleton's walk swings. Players' characters
   only, in the world, on the player and at character select (the bodies a list's capes are
   cut from read out of CHAR.ESF there, `res::Res::want_bodies`); bodies with wings (the
