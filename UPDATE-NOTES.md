@@ -6,6 +6,33 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · Macros on a page of their own, as PCSX2 has them
+- Macros have their own page: Options > Macros, after Controls (in the title's Options and in play). The
+  sixteen macros are listed on the left with what each presses; choose one and set it on the right, laid
+  out as PCSX2's macro editor is.
+- A macro's trigger is any key, controller button, stick pushed one way or L2 or R2 pulled, or several of
+  them held together (a chord, up to four: L1 and ✕, say). Choose Trigger, hold them and let one go: it is
+  kept. Add a Trigger gives it another (up to four, any one of which runs it), □ (or Q) takes the one
+  you are on off, and Clear Triggers takes them all off. A key a row of the Controls page uses is refused;
+  a controller button you put in a trigger no longer does what it did in the game, until you give it back
+  on the Controls page or take the trigger off.
+- What it presses, all at once: tick any of the game's buttons and the sticks' eight directions on the grid.
+- Press To Toggle: on, one press of its trigger starts the macro and the next stops it; off, it runs while
+  you hold its trigger.
+- Frequency: Off holds what it presses; N lets go and presses again every N frames as PCSX2 counts them
+  (60 a second). The game reads its pad 30 times a second, so 2 is fifteen presses a second, 4 seven and a
+  half, 30 one; the same at any frame rate.
+- Pressure: how far it pushes a stick (under 24% the game reads the stick at rest, from 24% you walk, from
+  60% you run). Deadzone: how far a stick or trigger in its trigger has to go before it counts.
+- As in PCSX2, your controller and the macros press one pad, and whichever changed a button last has it:
+  a macro letting go of ✕ lets go of a ✕ you are holding too, until you press it again.
+- A macro runs at the game's own frames, so it can come up to a thirtieth of a second after its trigger,
+  as on a PS2.
+- Macros now work with no controller plugged in (from the keyboard alone they pressed nothing).
+- Macros you made before keep working: a key and a button become two triggers, and a turbo keeps its speed.
+  The macro rows have left the Controls page, and its Defaults now leave your macros alone (but for the keys
+  and buttons it gives back to the game).
+
 ## 2026-11-10 · Light Shadows: soft, steady edges
 - With Light Shadows on, the shadows of your lantern and of torches, braziers and lamps have soft edges now.
   Up close they showed little steps along every edge, and while your lantern moved (or anything walked past a
