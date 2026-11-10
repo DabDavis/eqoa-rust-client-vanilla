@@ -82,8 +82,9 @@ or a browser (each described where it lives below):
   Overlapping Names, Shadows), Sound (Sound in Background, Output Device: the system's
   default, followed when it changes, or a device by its name), natively Textures
   (Texture Packs, Dump Textures, and on a computer Texture Folder), Map (Map,
-  Minimap, Map Markers, Quest Helper, Quest Tracker) and Number Colors (Your Damage,
-  Your Procs, Your Heals, Pet Damage, Pet Procs, Pet Heals), and the rows below.
+  Minimap, Map Markers, Quest Helper, Quest Tracker), Number Colors (Your Damage,
+  Your Procs, Your Heals, Pet Damage, Pet Procs, Pet Heals) and Combat (DPS Meter, DPS
+  Meter Shows, Reset DPS Meter), and the rows below.
 - **The map and the quest helper** (the user's of 2026-11-09: "also add the map and
   quest helper we had in a former update"; they were taken out on 2026-10-27 with the
   others below that are not the game's, and only these two came back): Extended > Map,
@@ -272,6 +273,26 @@ or a browser (each described where it lives below):
   the pet's three. Extended > Number Colors, each row Default (the game's own colour) or one
   of `numcolor::PALETTE`, every row Default by default; an untagged number, a number taken,
   a heal received and a server's patch's own colours (Sandstorm's S2) are the game's as ever.
+- **A DPS meter** (the server owner's of 2026-11-10, "lets add dps meters, will work solo,
+  group, raid"; `dpsmeter.rs`): the game has none, so on a server that keeps one
+  (go-eqoa-server's 0x7E3A offers, 0x7E3B answers 1 while the row is on, 0x7E3C is the
+  fight, 0x7E3D a reset; `net::session::DpsMeter`) a panel on the HUD's right, under the
+  quest tracker and above the chat box (out at a wide window's right, up a tall one's
+  top), lists who in the player's group did how much damage and how fast: alone the
+  player and its pet, in a group or a raid group every member, the most first, at most
+  ten rows at once and the player's own always among them at its place (the server
+  sends a raid's top 24), the wheel and a click on the rows stepping through the rest.
+  A row is its place and name, its damage, its DPS (over the fight's length, the same
+  for every row) and its share, over a bar as long as its damage against the top's in
+  its class's colour, its pet's part dimmer, and under the player's own a row for its
+  pet. The server counts what each player is told it did (its own and its pet's floating
+  numbers of damage), and a fight ends ten seconds after the group's last; the panel
+  keeps the last fight until the next, and Overall sums every fight since the login. A
+  click or a tap on its title shows the other (Fight or Overall), on Reset clears it all;
+  `/dps` (`/dps fight`, `overall`, `reset`, `on`, `off`) does the same from the
+  keyboard. Extended > Combat: DPS Meter (off by default), DPS Meter Shows and Reset DPS
+  Meter, for a controller. Off, or on a server that keeps none (Sandstorm, eqoa.live),
+  nothing is drawn or asked, as on a PS2.
 - **A render scale and a sharp HUD**: Render Scale (off unless chosen) x2 or
   x4 draws the whole picture, the world and everything over it, two or
   four times the window's size each way and averages it down, which smooths

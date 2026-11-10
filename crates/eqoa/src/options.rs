@@ -13,7 +13,7 @@
 //! Save Changes (the menu a row longer), its words the client's (no
 //! WORDS.TXT entry). It opens a menu of its own over the options menu, drawn
 //! as that one is: Video, World, Lighting, UI, Controller, Camera, Characters,
-//! Sound, natively Textures, Map and Number Colors (`CATEGORIES`), each of which opens a page laid out and driven as
+//! Sound, natively Textures, Map, Number Colors and Combat (`CATEGORIES`), each of which opens a page laid out and driven as
 //! the game's pages are, short enough that none scrolls (`PAGE_MOST`):
 //! - Video: Display (natively: Window or Full Screen, the window's own as
 //!   F11 and Alt+Enter toggle it, `display`: it changes at once and stays,
@@ -144,7 +144,16 @@
 //!   one of `numcolor::PALETTE`, its value drawn in it: the floating numbers of
 //!   the player's own figures and its pet's in that colour, by what made them,
 //!   where the server says (go-eqoa-server's tags, asked for while any row is
-//!   not Default: `Session::agree_number_tags`); every row Default by default.
+//!   not Default: `Session::agree_number_tags`); every row Default by default;
+//! - Combat (2026-11-10, the server owner's "lets add dps meters, will work
+//!   solo, group, raid"): DPS Meter (Off by default; On: the HUD's damage meter
+//!   of the player's group under the quest tracker, where the server keeps one,
+//!   `dpsmeter`, the server asked for it: `Session::agree_dps_meter`), DPS Meter
+//!   Shows (Fight: the fight under way, or the last; Overall: every fight since
+//!   the login; the panel's title and `/dps` turn it too) and Reset DPS Meter
+//!   (Reset: the meter cleared and the server's fight under way dropped, by ✕,
+//!   left or right, as Texture Folder opens; `dpsmeter::ask_reset`), the page
+//!   saying when this server keeps no meter.
 //! Triangle goes back a step: a page to the categories, the categories to
 //! the options menu. They change as they are moved, Triangle on the options
 //! menu puts them back, and Save Changes keeps them with the game's
@@ -363,6 +372,9 @@ pub struct WndOptions {
     /// it), the Characters page's legend's while NPC/PC Display or View
     /// Distance is chosen; none on the title
     pub server_note: Option<String>,
+    /// In the world on a server that keeps no damage meter, that it keeps
+    /// none (`Play::agree_dps_meter` sets it), the Combat page's legend's
+    pub meter_note: Option<String>,
     /// `m_item`: what the page's row changes (set as the page is drawn)
     item: i32,
     /// the values as the window opened, put back by Triangle
@@ -776,6 +788,16 @@ impl WndOptions {
                         let row = (self.item - 64) as usize;
                         c.number_colors[row] = crate::numcolor::step(c.number_colors[row], d);
                     }
+                    // DPS Meter: the server told from the next frame
+                    // (`Session::agree_dps_meter`), the panel drawn or not
+                    70 => c.dps_meter = !c.dps_meter,
+                    // DPS Meter Shows: the panel's view from the next frame
+                    71 => c.dps_view = c.dps_view.other(),
+                    // Reset DPS Meter: done either way, as ✕ does it (`select`)
+                    72 => {
+                        crate::dpsmeter::ask_reset();
+                        cues.push(8);
+                    }
                     // Dynamic Lighting: the world lit per fragment or the
                     // PS2's way from the next frame (`viewer`, `lights`)
                     52 => c.dynamic_lighting = !c.dynamic_lighting,
@@ -842,8 +864,8 @@ impl WndOptions {
             }
             _ => {}
         }
-        // (Texture Folder makes its own sound)
-        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == 55;
+        // (Texture Folder and Reset DPS Meter make their own sound)
+        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == 55 || self.item == 72;
         let slides = matches!(self.item, 3 | 4) || slider_at(self.item).is_some();
         if !slides && !inert && ((0..=11).contains(&self.item) || extended(self.item)) {
             cues.push(11);
@@ -884,6 +906,12 @@ impl WndOptions {
         // any other row of a page it does nothing, as on the game's
         if self.page == 3 && self.cat.is_some() && self.item == 55 {
             cues.push(if crate::texpack::open_folder() { 8 } else { 9 });
+            return false;
+        }
+        // and on Reset DPS Meter it resets, as left and right do
+        if self.page == 3 && self.cat.is_some() && self.item == 72 {
+            crate::dpsmeter::ask_reset();
+            cues.push(8);
             return false;
         }
         if self.page != -1 {
@@ -1229,6 +1257,7 @@ impl WndOptions {
                 56 => light_note(&crate::settings::client()),
                 _ => None,
             },
+            Note::Meter => self.meter_note.clone().filter(|_| matches!(self.item, 70..=72)),
             Note::None => None,
         }
     }
@@ -1276,7 +1305,7 @@ const CONTROLS: &str = "Controls";
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 55] = [
+const EXTENDED_ITEMS: [(i32, &str); 58] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1332,6 +1361,9 @@ const EXTENDED_ITEMS: [(i32, &str); 55] = [
     (67, crate::numcolor::LABELS[3]),
     (68, crate::numcolor::LABELS[4]),
     (69, crate::numcolor::LABELS[5]),
+    (70, "DPS Meter"),
+    (71, "DPS Meter Shows"),
+    (72, "Reset DPS Meter"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1357,6 +1389,9 @@ enum Note {
     /// that Sun Shadows or Light Shadows need Dynamic Lighting, while they
     /// are chosen and on and it is off (`sun_note`, `light_note`)
     Lighting,
+    /// that this server keeps no meter, while a DPS Meter row is chosen
+    /// (`WndOptions::meter_note`, which play sets)
+    Meter,
 }
 
 /// One of Extended's categories: its name, its rows (their items, in the
@@ -1376,8 +1411,9 @@ struct Category {
 /// folder's files a page cannot reach; 2026-11-09: Texture Folder); Map last
 /// (2026-11-09: the map and the quest helper, the client's own, back from
 /// before 2026-10-27); Number Colors after it (2026-11-09: the floating
-/// numbers' colours by what made them, `numcolor`).
-const ALL_CATEGORIES: [Category; 11] = [
+/// numbers' colours by what made them, `numcolor`); Combat last (2026-11-10:
+/// the DPS meter, `dpsmeter`).
+const ALL_CATEGORIES: [Category; 12] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting },
@@ -1389,6 +1425,7 @@ const ALL_CATEGORIES: [Category; 11] = [
     Category { name: "Textures", items: TEXTURES, note: Note::Textures },
     Category { name: "Map", items: &[41, 42, 43, 44, 45], note: Note::None },
     Category { name: "Number Colors", items: &crate::numcolor::ITEMS, note: Note::None },
+    Category { name: "Combat", items: &[70, 71, 72], note: Note::Meter },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -1396,7 +1433,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[10]]
+    [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[10], a[11]]
 };
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
@@ -1507,6 +1544,9 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         54 => on_off(c.ambient_occlusion),
         63 => wide(if c.ps2_particles { "PS2" } else { "Exact" }),
         64..=69 => wide(crate::numcolor::name(c.number_colors[(item - 64) as usize])),
+        70 => on_off(c.dps_meter),
+        71 => wide(c.dps_view.name()),
+        72 => wide("Reset"),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         39 => wide(&format!("x{}", c.render_scale)),
@@ -2289,7 +2329,40 @@ mod tests {
         assert_eq!((w.row, cues.last()), (5, Some(&9)), "Number Colors' last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.cat_sel, cues.last()), (10, Some(&9)), "Number Colors, the last category");
+        // Combat: the DPS Meter Off then On, what it shows Fight then Overall,
+        // and Reset DPS Meter asking the meter's reset either way, as ✕ does
+        assert_eq!((w.cat_sel, cues.last()), (11, Some(&11)), "Combat, after Number Colors");
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(11), 70), "Combat, the DPS Meter");
+        assert!(!settings::dps_meter(), "off by default");
+        assert_eq!(value_text(&vui, 70), Some(wide(vui.words.get(552, vui.language))), "Off, the game's word");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::dps_meter(), cues.last()), (true, Some(&11)), "on");
+        assert_eq!(value_text(&vui, 70), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::dps_meter(), "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 71, "DPS Meter Shows");
+        assert_eq!((settings::dps_view(), value_text(&vui, 71)), (crate::dpsmeter::View::Fight, Some(wide("Fight"))), "the fight by default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::dps_view(), value_text(&vui, 71), cues.last()), (crate::dpsmeter::View::Overall, Some(wide("Overall")), Some(&11)), "Overall");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::dps_view(), crate::dpsmeter::View::Fight, "and back: two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, 72)), (72, Some(wide("Reset"))), "Reset DPS Meter");
+        assert!(!crate::dpsmeter::take_reset(), "none asked yet");
+        for k in [key::RIGHT, key::LEFT, key::CROSS] {
+            press(&mut w, &mut o, k, &mut cues);
+            assert_eq!((crate::dpsmeter::take_reset(), cues.last()), (true, Some(&8)), "a reset asked ({k}), its sound");
+        }
+        assert_eq!(w.page_note(11), None, "no note off a server");
+        w.meter_note = Some("This server keeps no meter".into());
+        assert_eq!(w.page_note(11).as_deref(), Some("This server keeps no meter"), "a server that keeps none said");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (2, Some(&9)), "Combat's last row");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.cat_sel, cues.last()), (11, Some(&9)), "Combat, the last category");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.sel), (-1, 3), "the menu, on Extended");
@@ -2682,7 +2755,8 @@ mod tests {
         assert_eq!(CATEGORIES[by_name("Sound")].note, Note::Output);
         assert_eq!(CATEGORIES[by_name("Video")].note, Note::Scale);
         assert_eq!(CATEGORIES[by_name("Lighting")].note, Note::Lighting);
-        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 5 } else { 6 }, "the notes only");
+        assert_eq!(CATEGORIES[by_name("Combat")].note, Note::Meter);
+        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 6 } else { 7 }, "the notes only");
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Textures: nothing to say while both are off (a test keeps no

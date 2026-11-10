@@ -6,7 +6,9 @@
 //! The group's and the pet's bars and the group's patches on the compass are
 //! here; the breath gauge, the target's details box and the quick menus are
 //! drawn by `play`. So is the client's own row of the pet's effects under its
-//! bar (`pet_effects_pieces`), which the game has nowhere.
+//! bar (`pet_effects_pieces`), which the game has nowhere. The client's own
+//! quest tracker (`tracker`) and DPS meter (`dpsmeter`) share a column under
+//! the minimap, the meter on its bottom and the tracker over what it leaves.
 
 use crate::ui::{Raster, UiRaster, Vui, icon_id, wide};
 use render::ui::{Anchor, Quad, Vertical};
@@ -61,6 +63,10 @@ pub struct HudState {
     /// The quest tracker's quests (`tracker`), none while it is not up: drawn
     /// under the minimap, a pointer on it opens the quest journal.
     pub tracker: Vec<net::session::TrackedQuest>,
+    /// The DPS meter (`dpsmeter`), while it is up: drawn under the quest
+    /// tracker, above the chat box; a pointer on its title shows its other
+    /// view or resets it, on its rows pages through them.
+    pub meter: Option<crate::dpsmeter::Shown>,
     /// `m_selfId` and `m_target`.
     pub self_id: Option<u32>,
     pub target: u32,
@@ -218,6 +224,9 @@ pub struct Hud {
     /// (`Hud::raid_wheel`).
     raid_first: usize,
     raid_panel: Option<([f32; 4], usize)>,
+    /// Where the DPS meter's panel lay at the last frame, how many items it
+    /// showed and how far its list steps (`Hud::meter_wheel`, `meter_page`).
+    meter_panel: Option<([f32; 4], usize, usize)>,
 }
 
 /// What a pointer finds on the HUD's left side (`Hud::pick`): the player's
@@ -234,6 +243,8 @@ pub enum Pick {
     Minimap,
     /// the quest tracker (`tracker`): the quest journal opened
     Quests,
+    /// the DPS meter (`dpsmeter`): its title's view or Reset, or its rows
+    Meter(crate::dpsmeter::Hit),
 }
 
 /// Where `DrawGroup` starts the group's bars and `DrawTarget` the target's.
@@ -256,7 +267,25 @@ impl Hud {
             picks: Vec::new(),
             raid_first: 0,
             raid_panel: None,
+            meter_panel: None,
         }
+    }
+
+    /// The wheel's `lines` (up positive) over the DPS meter at frame point `p`,
+    /// its list from `first`: where it goes, an item a notch, while it holds
+    /// more than it shows. None when it is not there.
+    pub fn meter_wheel(&self, p: [f32; 2], lines: f32, first: usize) -> Option<usize> {
+        let (r, _, room) = self.meter_panel?;
+        if p[0] < r[0] || p[0] > r[2] || p[1] < r[1] || p[1] > r[3] || room == 0 {
+            return None;
+        }
+        Some((first as i64 - lines.round() as i64).clamp(0, room as i64) as usize)
+    }
+
+    /// Where a click on the DPS meter's rows takes its list from `first`: a page
+    /// on, back to the top past the last (`dpsmeter::page`).
+    pub fn meter_page(&self, first: usize) -> usize {
+        self.meter_panel.map_or(0, |(_, shown, room)| crate::dpsmeter::page(first.min(room), shown, room))
     }
 
     /// The wheel's `lines` (up positive) over the raid list, at frame point `p`:
@@ -372,9 +401,26 @@ impl Hud {
             ui.ui.vertical = Vertical::Top;
             self.note(ui, crate::map::mini::FRAME, Pick::Minimap);
         }
-        // the quest tracker under it, placed the same way (`tracker`)
-        if let Some(r) = crate::tracker::draw(ui, &s.tracker) {
+        // the DPS meter (`dpsmeter`) on the column's bottom, above the chat
+        // box, at most half of it under the quest tracker's quests; the
+        // tracker over what is left, both placed the same way
+        let col = crate::tracker::COLUMN;
+        let meter = s.meter.as_ref().map(|m| {
+            let room = if s.tracker.is_empty() { col[3] - col[1] } else { (col[3] - col[1]) / 2 };
+            (m, crate::dpsmeter::panel(m, room))
+        });
+        let bottom = meter.as_ref().map_or(col[3], |(_, p)| p.rect[1] - crate::dpsmeter::GAP);
+        if let Some(r) = crate::tracker::draw(ui, &s.tracker, bottom) {
             self.note(ui, r, Pick::Quests);
+        }
+        self.meter_panel = None;
+        if let Some((m, p)) = meter {
+            crate::dpsmeter::draw(ui, m, &p);
+            self.note(ui, p.view, Pick::Meter(crate::dpsmeter::Hit::View));
+            self.note(ui, p.reset, Pick::Meter(crate::dpsmeter::Hit::Reset));
+            self.note(ui, p.rows, Pick::Meter(crate::dpsmeter::Hit::Rows));
+            let (a, b) = (ui.ui.placed([p.rect[0] as f32, p.rect[1] as f32]), ui.ui.placed([p.rect[2] as f32, p.rect[3] as f32]));
+            self.meter_panel = Some(([a[0], a[1], b[0], b[1]], p.shown.len(), p.room));
         }
     }
 
@@ -822,6 +868,60 @@ mod tests {
             hud.draw(&vui, &mut assets.raster(&mut ui), &s);
             assert_eq!(hud.pick([third[0] - side, 100.0]), Some(Pick::Member(99)), "{size:?}: the control");
             assert!(hud.raid_panel.is_none() && !hud.raid_wheel([third[0] - side, third[1]], -1.0));
+        }
+    }
+
+    /// The DPS meter's panel sits on the quest tracker's column's bottom, out at
+    /// a wide window's right (106 frame pixels) and up a tall one's top (85):
+    /// a pointer finds its title's view, its Reset and its rows there; the
+    /// wheel steps a list longer than it shows, and a click a page on. The
+    /// controls: no meter, nothing there; every line showing, the wheel is the
+    /// camera's. Needs a graphics adapter; without one it says so and passes.
+    #[test]
+    fn a_pointer_finds_the_dps_meter() {
+        use crate::dpsmeter::Hit;
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut ui) = crate::ui::tests::layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let vui = crate::ui::Vui::new(Default::default(), Default::default(), vec![vi::ui::UiTexEntry::default(); 27]);
+        let assets = crate::ui::UiAssets::default();
+        let fight = |n: u32| {
+            let mut m = crate::dpsmeter::Meter::default();
+            let lines = (0..n).map(|i| net::session::DpsLine { own: i == 0, class: 1, damage: 1000 - i, name: format!("N{i}"), ..Default::default() }).collect();
+            m.take(net::session::DpsMeter { fight: 1, over: false, length_ms: 5000, total: 3000, count: n as u16, place: 1, lines });
+            m.shown(crate::dpsmeter::View::Fight, "")
+        };
+        // three lines: the panel 14 + 3 x 13 + 2 high on the column's bottom (336)
+        let (view, reset, row) = ([400.0, 288.0], [570.0, 288.0], [450.0, 310.0]);
+        for (size, side, up) in [((640, 480), 0.0, 0.0), ((1280, 720), 106.0, 0.0), ((798, 828), 0.0, 85.0)] {
+            let at = |p: [f32; 2]| [p[0] + side, p[1] - up];
+            ui.begin(size);
+            let mut hud = Hud::new();
+            hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { meter: Some(fight(3)), ..Default::default() });
+            assert_eq!(hud.pick(at(view)), Some(Pick::Meter(Hit::View)), "{size:?}");
+            assert_eq!(hud.pick(at(reset)), Some(Pick::Meter(Hit::Reset)), "{size:?}");
+            assert_eq!(hud.pick(at(row)), Some(Pick::Meter(Hit::Rows)), "{size:?}");
+            assert_eq!(hud.meter_wheel(at(row), -1.0, 0), None, "{size:?}: every line showing, the wheel is the camera's");
+            if side + up > 0.0 {
+                assert_eq!(hud.pick(view), None, "{size:?}: not at the frame's own place");
+            }
+            // twenty lines: ten show, the wheel and a click step them
+            ui.begin(size);
+            hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { meter: Some(fight(20)), ..Default::default() });
+            let r = at([450.0, 300.0]);
+            assert_eq!(hud.pick(r), Some(Pick::Meter(Hit::Rows)), "{size:?}");
+            assert_eq!(hud.meter_wheel(r, -3.0, 0), Some(3), "{size:?}");
+            assert_eq!(hud.meter_wheel(r, 9.0, 3), Some(0), "{size:?}: no farther than the top");
+            assert_eq!(hud.meter_wheel(r, -99.0, 0), Some(10), "{size:?}: nor the last");
+            assert_eq!(hud.meter_wheel(at([100.0, 300.0]), -1.0, 0), None, "{size:?}: off it");
+            assert_eq!((hud.meter_page(0), hud.meter_page(9), hud.meter_page(10)), (9, 10, 0), "{size:?}: a page on, back to the top");
+            // the control: no meter
+            ui.begin(size);
+            hud.draw(&vui, &mut assets.raster(&mut ui), &HudState::default());
+            assert_eq!(hud.pick(at(row)), None, "{size:?}: no meter");
+            assert_eq!(hud.meter_wheel(at(row), -1.0, 0), None);
         }
     }
 

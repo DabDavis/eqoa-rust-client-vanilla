@@ -100,6 +100,7 @@ mod hud;
 mod raidlist;
 mod damage;
 mod numcolor;
+mod dpsmeter;
 mod display;
 mod hudmenu;
 mod influence;

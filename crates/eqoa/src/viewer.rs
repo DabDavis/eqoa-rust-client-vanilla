@@ -5265,7 +5265,7 @@ impl App {
                     let took = match (self.play.as_mut(), self.gfx.as_ref()) {
                         (Some(p), Some(g)) => {
                             let size = (g.config.width, g.config.height);
-                            p.chat_wheel(self.cursor, size, d) || p.raid_wheel(self.cursor, size, d) || p.book_wheel(self.cursor, size, d)
+                            p.chat_wheel(self.cursor, size, d) || p.raid_wheel(self.cursor, size, d) || p.meter_wheel(self.cursor, size, d) || p.book_wheel(self.cursor, size, d)
                         }
                         _ => false,
                     };

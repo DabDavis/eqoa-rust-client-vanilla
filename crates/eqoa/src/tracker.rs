@@ -150,9 +150,10 @@ pub fn lines(quests: &[TrackedQuest], rows: usize, most: f32, width: impl Fn(&st
     out
 }
 
-/// Draws the tracker in the HUD's frame; the frame rectangle its lines
-/// cover (for the pointer), or None when nothing was drawn.
-pub fn draw(ui: &mut UiRaster, quests: &[TrackedQuest]) -> Option<[i32; 4]> {
+/// Draws the tracker in the HUD's frame, its column down to `bottom` (its own,
+/// `COLUMN`'s, or above the DPS meter's panel, `dpsmeter`); the frame
+/// rectangle its lines cover (for the pointer), or None when nothing was drawn.
+pub fn draw(ui: &mut UiRaster, quests: &[TrackedQuest], bottom: i32) -> Option<[i32; 4]> {
     let font = ui.assets.font?;
     if quests.is_empty() {
         return None;
@@ -161,7 +162,7 @@ pub fn draw(ui: &mut UiRaster, quests: &[TrackedQuest]) -> Option<[i32; 4]> {
     ui.ui.vertical = Vertical::Top;
     let h = ui.ui.fonts[font].height as f32 * SCALE;
     let step = h + 1.0;
-    let rows = ((COLUMN[3] - COLUMN[1]) as f32 / step).floor() as usize;
+    let rows = ((bottom.min(COLUMN[3]) - COLUMN[1]).max(0) as f32 / step).floor() as usize;
     let most = (COLUMN[2] - COLUMN[0]) as f32;
     let shown = {
         let f = &ui.ui.fonts[font];

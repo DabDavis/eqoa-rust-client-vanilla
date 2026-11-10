@@ -357,8 +357,9 @@ pub const OP_DPS_METER_RESET: u16 = 0x7E3D;
 /// A fight on the meter ([`OP_DPS_METER_DATA`]): u8 layout (1), u32 its number
 /// (another number, another fight), u8 1 when it is over (its last message), u32
 /// its length in ms (from its first damage to its latest), u32 the damage of all
-/// its lines, u16 how many lines it has, u8 how many this message holds, then
-/// each [`DpsLine`].
+/// its lines, u16 how many lines it has, u16 the player's own line's place among
+/// them (1 the most damage), u8 how many this message holds, then each
+/// [`DpsLine`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DpsMeter {
     pub fight: u32,
@@ -367,8 +368,11 @@ pub struct DpsMeter {
     /// The damage of every line, those not sent too: what a line's share is of.
     pub total: u32,
     /// The fight's lines in all; at most the server's 24 are sent, the most
-    /// damage first, the player's own always among them.
+    /// damage first, the player's own always among them (in the last place
+    /// when its own place is past them).
     pub count: u16,
+    /// The player's own line's place among all of them, 1 the most damage.
+    pub place: u16,
     pub lines: Vec<DpsLine>,
 }
 
@@ -390,7 +394,7 @@ fn read_dps_meter(r: &mut Reader) -> Option<DpsMeter> {
     if r.u8() != 1 {
         return None;
     }
-    let (fight, over, length_ms, total, count) = (r.u32(), r.u8() == 1, r.u32(), r.u32(), r.u16());
+    let (fight, over, length_ms, total, count, place) = (r.u32(), r.u8() == 1, r.u32(), r.u32(), r.u16(), r.u16());
     let n = r.u8() as usize;
     let mut lines = Vec::with_capacity(n);
     for _ in 0..n {
@@ -399,7 +403,7 @@ fn read_dps_meter(r: &mut Reader) -> Option<DpsMeter> {
         let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
         lines.push(DpsLine { own: flags & 1 != 0, left: flags & 2 != 0, class, damage, pet, name });
     }
-    (!r.error).then_some(DpsMeter { fight, over, length_ms, total, count, lines })
+    (!r.error).then_some(DpsMeter { fight, over, length_ms, total, count, place, lines })
 }
 
 /// What made a figure, the byte after a tagged 0x00DB's body
@@ -3231,7 +3235,7 @@ mod tests {
         // a fight of two lines: Dab's own 1000, Jib's 300 (120 its pet's), gone
         // from the group; over, 1.5 s long, number 0x01020304
         let body = [
-            1, 4, 3, 2, 1, 1, 0xDC, 5, 0, 0, 0x14, 5, 0, 0, 2, 0, 2, 1, 3, 0xE8, 3, 0, 0, 0, 0, 0, 0, 3, b'D', b'a', b'b', 2, 10, 0x2C, 1, 0, 0, 0x78, 0, 0, 0, 3, b'J', b'i', b'b',
+            1, 4, 3, 2, 1, 1, 0xDC, 5, 0, 0, 0x14, 5, 0, 0, 2, 0, 1, 0, 2, 1, 3, 0xE8, 3, 0, 0, 0, 0, 0, 0, 3, b'D', b'a', b'b', 2, 10, 0x2C, 1, 0, 0, 0x78, 0, 0, 0, 3, b'J', b'i', b'b',
         ];
         let mut m = vec![0x3C, 0x7E];
         m.extend_from_slice(&body);
@@ -3242,6 +3246,7 @@ mod tests {
             length_ms: 1500,
             total: 1300,
             count: 2,
+            place: 1,
             lines: vec![
                 DpsLine { own: true, left: false, class: 3, damage: 1000, pet: 0, name: "Dab".into() },
                 DpsLine { own: false, left: true, class: 10, damage: 300, pet: 120, name: "Jib".into() },

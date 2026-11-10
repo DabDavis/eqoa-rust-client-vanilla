@@ -6,6 +6,23 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · A DPS meter
+- A damage meter for your fights, alone, in a group or in a raid: who did how much damage and how fast. Turn it
+  on in Options > Extended > Combat > DPS Meter (it starts off). It sits on the right of the screen above the
+  chat box, under the quest tracker.
+- Each row is a player: their place, name, damage, damage per second and share of the whole, over a bar in
+  their class's colour. Alone you see yourself and, under your row, your pet. In a group or a raid group you see
+  every member; in a big raid the top rows show, your own row always among them at your place, and the mouse
+  wheel or a click on the rows goes through the rest.
+- A fight starts with your group's first hit and ends ten seconds after its last; the meter keeps the last fight
+  on screen until the next one. Click or tap its title to switch between the fight and Overall (every fight since
+  you logged in), and Reset to clear it. Or type /dps (and /dps fight, /dps overall, /dps reset, /dps on,
+  /dps off). With a controller: Options > Extended > Combat has DPS Meter Shows and Reset DPS Meter.
+- It counts the damage numbers you are shown, your pet's included (and a necromancer's zombie, mummy and
+  spectre, whose hits show no numbers), training dummies and duels too; heals do not count.
+- It needs a server that keeps a meter (eqoaclassic's, once it is updated for it). On any other server nothing
+  is shown.
+
 ## 2026-11-10 · Light Shadows: soft, steady edges
 - With Light Shadows on, the shadows of your lantern and of torches, braziers and lamps have soft edges now.
   Up close they showed little steps along every edge, and while your lantern moved (or anything walked past a
