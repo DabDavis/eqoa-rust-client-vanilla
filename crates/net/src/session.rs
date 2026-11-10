@@ -520,6 +520,25 @@ pub const OP_NPC_TINTS_ANSWER: u16 = 0x7E3F;
 /// colour 0xRRGGBBAA (`crate::npctint::read`). Each is the whole set.
 pub const OP_NPC_TINTS: u16 = 0x7E40;
 
+/// go-eqoa-server's own: a monster's name and level, shown when the player
+/// talks to it (□, Q) and it has nothing to say (the GM Jibrish's petition 1459,
+/// 2026-11-10: "press the mob information button on monster ... This should
+/// ONLY show the monsters name and level, nothing else"; the server's
+/// `world.mob_info`). The offer, server to client once the player is in the
+/// world: a u8, 1, the layout of [`OP_MOB_INFO`]. CLIENT has no such case, so a
+/// PS2 ignores it and is shown the two lines in a dialogue box (0x0046).
+pub const OP_MOB_INFO_OFFER: u16 = 0x7E4C;
+/// The answer to [`OP_MOB_INFO_OFFER`], client to server, at once: a u8, 1 to be
+/// sent [`OP_MOB_INFO`] in place of the dialogue box.
+pub const OP_MOB_INFO_ANSWER: u16 = 0x7E4D;
+/// A monster's name and level, from a server the client answered, in answer to
+/// its 0x0004 on a living monster with nothing to say (or out of the talk's
+/// reach): a u8 layout (1), the u32 id the 0x0004 named, a u8 its level and its
+/// name (a u8 byte count and the bytes). Shown in the target's details box as
+/// CLIENT's `DrawTargetInfo` shows a pet's (`Play::target_info_text`), while □
+/// is held.
+pub const OP_MOB_INFO: u16 = 0x7E4E;
+
 /// One quest on the tracker ([`OP_QUEST_PROGRESS_DATA`]): its name and its
 /// step's objectives.
 #[derive(Clone, Debug, PartialEq)]
@@ -736,6 +755,9 @@ pub enum Event {
     DpsMeter(DpsMeter),
     /// [`OP_RAID_STATE`]: the raid as it is now.
     RaidState(crate::raid::State),
+    /// [`OP_MOB_INFO`]: the monster the client knows by `id` has nothing to say;
+    /// its name and level, for the target's details box.
+    MobInfo { id: u32, level: u8, name: String },
     /// [`OP_RAID_ROLL`]: a loot roll offered, or over (0 seconds left).
     RaidRoll(crate::raid::Roll),
     /// [`OP_RAID_MASTER_LOOT`]: the master looter's list for the corpse it
@@ -1976,6 +1998,26 @@ impl Session {
                 Some(t) => self.npc_tints = Some(t),
                 None => debug_line(&format!("[net] NPC tints: {} bytes not read", m.data.len())),
             },
+            // a monster's name and level offered (each world entry): taken at
+            // once, in the layout this client reads, for the target's details
+            // box (`Play::mob_info`); another layout is left to the box
+            OP_MOB_INFO_OFFER => {
+                let layout = r.u8();
+                if !r.error && layout == 1 {
+                    let mut w = Writer::op(OP_MOB_INFO_ANSWER);
+                    w.u8(1);
+                    self.send(&w.data);
+                }
+            }
+            OP_MOB_INFO => {
+                let (layout, id, level, len) = (r.u8(), r.u32(), r.u8(), r.u8() as usize);
+                let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
+                if !r.error && layout == 1 {
+                    ev.push(Event::MobInfo { id, level, name });
+                } else {
+                    debug_line(&format!("[net] a monster's name and level: {} bytes not read", m.data.len()));
+                }
+            }
             // any member invites into its group there (`Play::may_invite`)
             OP_MEMBER_INVITES => {
                 if r.u32() != 0 && !r.error {
@@ -3505,6 +3547,44 @@ mod tests {
         s.npc_tints = None;
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert_eq!(s.npc_tints.take(), Some(vec![]), "a new connection: none held");
+    }
+
+    // A monster's name and level (go-eqoa-server's 0x7E4C-0x7E4E): an offer of
+    // layout 1 is answered at once with a u8 1, each time it comes, and passed
+    // on as nothing; the message read as the server writes it (go-eqoa-server's
+    // TestMobInfoOnTheWire's bytes) is its event, answered with nothing. The
+    // controls: an offer cut short or of another layout is not answered (the
+    // server's dialogue box stays), and a message cut short or of another layout
+    // is no event.
+    #[test]
+    fn mob_info_offer_answer_and_show() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x4D, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4C, 0x7E]);
+        assert_eq!(answers(&mut s), [], "a short offer is no offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4C, 0x7E, 2]);
+        assert_eq!(answers(&mut s), [], "another layout is left to the box");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4C, 0x7E, 1]);
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x4D, 0x7E, 1])], "answered at once, a u8 1");
+        let wire = vec![0x4E, 0x7E, 1, 0xA1, 0x86, 0x01, 0x00, 3, 10, b'm', b'o', b's', b's', b' ', b's', b'n', b'a', b'k', b'e'];
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, wire.clone());
+        assert!(matches!(&ev[..], [Event::MobInfo { id: 0x186A1, level: 3, name }] if name == "moss snake"), "{ev:?}");
+        assert_eq!(answers(&mut s), [], "the message answered nothing");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, wire[..wire.len() - 1].to_vec());
+        assert!(ev.is_empty(), "the control: one cut short is nothing: {ev:?}");
+        let mut other = wire.clone();
+        other[2] = 2;
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, other);
+        assert!(ev.is_empty(), "the control: another layout is nothing: {ev:?}");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4C, 0x7E, 1]);
+        assert_eq!(answers(&mut s), [(251, vec![0x4D, 0x7E, 1])], "a new offer is answered again");
     }
 
     // The damage meter (go-eqoa-server's 0x7E3A-0x7E3D): nothing asked with no

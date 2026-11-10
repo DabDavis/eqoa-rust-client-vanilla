@@ -4409,7 +4409,7 @@ impl App {
             && c.eq_ignore_ascii_case("q")
             && event.state == ElementState::Released
         {
-            p.info_up = false;
+            p.info_let_go();
             return;
         }
         // G: attack, held (`ToggleAutoAttack` / `MaybeStopAutoAttack`), the

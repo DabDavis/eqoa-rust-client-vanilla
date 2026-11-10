@@ -328,6 +328,13 @@ pub struct Play {
     target_guild: String,
     /// `m_p678`: the target's info window wanted (Q held on a player).
     pub info_up: bool,
+    /// A server's own (go-eqoa-server's `world.mob_info`, `net::session::OP_MOB_INFO`):
+    /// the last monster it said has nothing to say, by the id this client knows
+    /// it by, its level and name, for the info window as a pet's; and
+    /// `talk_held`, a talk (0x0004) pressed and not yet let go, so an answer
+    /// that comes after the release opens nothing.
+    mob_info: Option<(u32, u8, String)>,
+    talk_held: bool,
     /// `m_petId` and `m_petName` (filled from the entity once it is seen).
     pet_id: u32,
     pet_name: String,
@@ -958,6 +965,10 @@ impl Play {
             self.info_up = true;
             return;
         } else {
+            // a server with `world.mob_info` answers a monster with nothing to
+            // say with its name and level, for the info window while this
+            // press is held (`mob_info_shown`)
+            self.talk_held = true;
             0x0004
         };
         let mut w = net::stream::Writer::op(op);
@@ -2746,7 +2757,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2925,6 +2936,9 @@ impl Play {
                     self.meter.take(m);
                 }
                 Event::RaidState(st) => self.raid_state(st),
+                // a server's word on a monster with nothing to say
+                // (`world.mob_info`): its name and level, for the info window
+                Event::MobInfo { id, level, name } => self.mob_info_shown(id, level, name),
                 Event::RaidRoll(r) => self.raid_roll(r),
                 Event::MasterLoot(m) => self.master_loot(m),
                 Event::GroupInvite { id, name, .. } => {
@@ -3462,6 +3476,7 @@ impl Play {
         self.agree_raid();
         self.raid_menu(); // Community > Group > Raid once the server offers it
         self.drop_dead_target_info();
+        self.drop_stale_mob_info();
         if self.has_self() {
             self.auto_attack_tick(walker, now);
             self.self_visibility(walker);
@@ -4112,7 +4127,7 @@ impl Play {
                 self.mode = 0;
             }
             134 => self.attack_release(),
-            133 => self.info_up = false,
+            133 => self.info_let_go(),
             _ => {}
         }
     }
@@ -5807,7 +5822,7 @@ impl Play {
         if !down {
             match key {
                 134 => self.attack_release(),
-                133 => self.info_up = false,
+                133 => self.info_let_go(),
                 // L1, R1: the manual camera ended, or the hold given up
                 140 | 142 => self.target_key_up(walker),
                 _ => {}
@@ -7524,7 +7539,7 @@ impl Play {
                 },
                 Out::Key(k, false) => match k {
                     134 => self.attack_release(),
-                    133 => self.info_up = false,
+                    133 => self.info_let_go(),
                     _ => {}
                 },
             }
@@ -9189,6 +9204,35 @@ impl Play {
         }
     }
 
+    /// The server's word on a monster (`mob_info`) is for the target it came
+    /// for, alive: gone once the target moves on, or the monster leaves (its id
+    /// may come back on another) or dies.
+    fn drop_stale_mob_info(&mut self) {
+        if self.mob_info.as_ref().is_some_and(|m| m.0 != self.target || !self.entities.slots.iter().flatten().any(|e| e.id == m.0 && e.p19 != 0)) {
+            self.mob_info = None;
+        }
+    }
+
+    /// □ (or Q) let go: the info window closes (`OnKeyUp` 81, 113, 133), and a
+    /// monster's name and level the server sends after it opens nothing.
+    pub fn info_let_go(&mut self) {
+        self.info_up = false;
+        self.talk_held = false;
+    }
+
+    /// The server's answer to a talk to a monster with nothing to say
+    /// (go-eqoa-server's `world.mob_info`, `net::session::OP_MOB_INFO`; the GM
+    /// Jibrish's petition 1459, 2026-11-10: "This should ONLY show the monsters
+    /// name and level, nothing else"): kept for the info window, which opens as
+    /// it does on a player (`m_p678`) when the talk's press is still held and
+    /// the monster still the target; let go, nothing opens.
+    pub fn mob_info_shown(&mut self, id: u32, level: u8, name: String) {
+        if self.talk_held && self.target == id {
+            self.info_up = true;
+        }
+        self.mob_info = Some((id, level, name));
+    }
+
     /// `DrawTargetInfo`'s text: a player's name, guild, race, title or
     /// class and level (the guild and title with 0x0010's answer), a
     /// creature's name and level; `None` closes the window.
@@ -9210,7 +9254,9 @@ impl Play {
                 Some(if guild.is_empty() { format!("{}\n{race}\n{rank}\n{level}", c.name) } else { format!("{}\n{guild}\n{race}\n{rank}\n{level}", c.name) })
             }
             3 => Some(format!("{}\n{level}", c.name)),
-            _ => None,
+            // a monster the server said has nothing to say (`mob_info`): its
+            // name and level as the server holds them, as a pet's are drawn
+            _ => self.mob_info.as_ref().filter(|m| m.0 == e.id).map(|(_, lv, name)| format!("{name}\n{} {lv}", word(503))),
         }
     }
 
@@ -11613,6 +11659,67 @@ mod commands {
         p.target = 0x11;
         assert_eq!(p.target_info_text().as_deref(), Some("Plainogre\nw190\nw174\nw503 60"), "a name not on the list");
         crate::racelabel::clear();
+    }
+
+    /// A monster the server says has nothing to say (go-eqoa-server's
+    /// `world.mob_info`, petition 1459): its name and the server's level alone in
+    /// the info window, as a pet's are drawn, while the talk's press is held; let
+    /// go, closed. The controls: no answer yet, nothing (a creature's window
+    /// closes, as CLIENT's); an answer after the press was let go, or for another
+    /// than the target, opens nothing; the answer is gone once the target moves
+    /// on (and back) or the monster dies; a player's window is as it was.
+    #[test]
+    fn the_info_window_shows_a_monsters_name_and_level() {
+        let mut p = play();
+        p.words = Some(crate::groupsearch::tests::numbered());
+        let creature = |id: u32, name: &str, p256: u8| net::entity::Entity {
+            id,
+            p19: 255,
+            creature: Some(net::entity::Creature { name: name.into(), level: 9, p256, ..Default::default() }),
+            ..Default::default()
+        };
+        p.entities.slots[0] = Some(creature(0x20, "moss snake", 0));
+        p.entities.slots[1] = Some(creature(0x21, "fruit bat", 0));
+        p.entities.slots[2] = Some(creature(0x22, "Plainogre", 2));
+        p.target = 0x20;
+        p.interact_with_target(); // Q down: a talk sent
+        assert!(!p.info_up && p.target_info_text().is_none(), "the control: no answer yet, nothing");
+        p.mob_info_shown(0x20, 3, "moss snake".into());
+        p.drop_stale_mob_info();
+        assert!(p.info_up, "the answer with the press held: the window up");
+        assert_eq!(p.target_info_text().as_deref(), Some("moss snake\nw503 3"), "the name and the server's level, nothing else");
+        p.info_let_go(); // Q up
+        assert!(!p.info_up, "let go: closed");
+
+        p.interact_with_target();
+        p.info_let_go(); // a tap, let go before the answer came
+        p.mob_info_shown(0x20, 3, "moss snake".into());
+        assert!(!p.info_up, "an answer after the press was let go opens nothing");
+
+        p.interact_with_target();
+        p.mob_info_shown(0x21, 2, "fruit bat".into());
+        p.drop_stale_mob_info();
+        assert!(!p.info_up && p.target_info_text().is_none(), "an answer for another than the target opens nothing");
+
+        p.mob_info_shown(0x20, 3, "moss snake".into());
+        assert!(p.info_up);
+        p.target = 0x21; // Tab with Q still held
+        p.drop_stale_mob_info();
+        assert_eq!(p.target_info_text(), None, "another monster: the window closes, as CLIENT's");
+        p.target = 0x20;
+        assert_eq!(p.target_info_text(), None, "and back: the answer was gone with its target");
+
+        p.mob_info_shown(0x20, 3, "moss snake".into());
+        p.entities.slots[0].as_mut().unwrap().p19 = 0; // it died
+        p.drop_stale_mob_info();
+        assert_eq!(p.target_info_text(), None, "a dead monster: nothing");
+        p.info_let_go();
+
+        p.target = 0x22;
+        p.interact_with_target();
+        assert!(p.info_up, "a player: the window up at the press, as ever");
+        assert_eq!(p.target_info_text().as_deref(), Some("Plainogre\nw183\nw165\nw503 9"));
+        p.info_let_go();
     }
 
     /// 0x7E1D reaches the list through the frame's events, and a world entry starts
