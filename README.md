@@ -409,7 +409,11 @@ or a browser (each described where it lives below):
   will o' wisp's body, CHAR.ESF 0x8143DC70, no texture: an older client lays nothing). Drawn as its worn slots' triangles
   alone (where `ApplyLook` lays armour or a robe; no skin, face or hair), the wisp a head across on the helm's node
   inside any helm, hung with the held items and the helm (`play::attach`): the player's own, others', character select
-  and the create pages. A PS2 shows a human in its armour. **The Jal'Raeth** (30): their three bodies wear a helm on
+  and the create pages. A PS2 shows a human in its armour. It casts no shadow (petition 1449, the GM Jibrish: "people can
+  tell its just an invisible human"; `wisp::is`): no blob shadow (its caster keeps its place in the queue and draws none,
+  `shadows::Caster::casts`, so every other's is as it was), and nothing of it, its armour, what it holds, its helm, the
+  wisp or its cape, in Sun Shadows' or Light Shadows' maps (`render::GpuModel::casts`, set on each of its puppet's
+  models as they are made); the player's own by its entity, from its first frame. **The Jal'Raeth** (30): their three bodies wear a helm on
   the head node they name (`slotless::HEAD_HELMS`: they name no helm node), the human's chest, bracers and gloves
   carried onto their skeleton by bone names (`slotless::named_shell_of`: their hands and feet hang off the root, so
   the fit by limbs finds none), and the human's emotes on their upper body (`raceemote::TABLE`).

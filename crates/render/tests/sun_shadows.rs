@@ -17,6 +17,8 @@
 //!   with Sun Shadows off (or Dynamic Lighting off) byte for byte a
 //!   renderer's that never had them.
 //! - A group casts once relit, and at once when uploaded with them on.
+//! - A model cleared of casting (`GpuModel::casts`: a Wisp's) casts nothing
+//!   and is drawn into no cascade; the control, the same box casting.
 //! Needs a graphics adapter (any backend); without one it says so and passes.
 
 use glam::{Mat4, Vec3};
@@ -170,6 +172,34 @@ fn a_box_shadows_the_floor_beside_it_and_nothing_else() {
         }
         assert!(worst <= 1, "at {origin}: the open floor off Dynamic Lighting's by {worst}");
     }
+}
+
+/// A box cleared of casting (`GpuModel::casts` false, as a Wisp's body and
+/// all it wears and holds are: petition 1449) shadows nothing: every pixel,
+/// the floor beside it and the box itself, within a level of Dynamic
+/// Lighting alone, and the cascades drawn without it (the floor alone, once
+/// each). The control: the same box casting shadows the floor beside it, and
+/// is drawn into every cascade.
+#[test]
+fn a_model_cleared_of_casting_casts_nothing() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    let lit = 0.1 + std::f32::consts::FRAC_1_SQRT_2;
+    let frame = |sun: bool, casts: bool| {
+        let mut r = renderer(&g, sun);
+        let f = r.upload(&g.device, &g.queue, &floor(HALF, 1.0), &[at(Vec3::ZERO, Mat4::IDENTITY)], &none);
+        let mut b = r.upload(&g.device, &g.queue, &cube(Vec3::new(0.0, 3.0, 0.0), 1.0, layer(0, 0)), &[at(Vec3::ZERO, Mat4::IDENTITY)], &none);
+        b.casts = casts;
+        let px = shot(&g, &mut r, &view(Vec3::ZERO, SUN45), &[Draw::Model(&f), Draw::Model(&b)]);
+        (px, r.sun_shadow_drawn())
+    };
+    let ((cleared, drawn), (casting, cast), (alone, _)) = (frame(true, false), frame(true, true), frame(false, true));
+    let worst = cleared.iter().zip(&alone).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    assert!(worst <= 1, "cleared of casting: every pixel within {worst} of Dynamic Lighting alone");
+    assert!(close(red(&cleared, pixel(SHADE.0, SHADE.1)), lit), "its shadow's place lit: {}", red(&cleared, pixel(SHADE.0, SHADE.1)));
+    assert!(close(red(&casting, pixel(SHADE.0, SHADE.1)), 0.1), "the control: the box casting shadows it: {}", red(&casting, pixel(SHADE.0, SHADE.1)));
+    let ((_, cleared_draws), (_, casting_draws)) = (drawn.expect("drawn"), cast.expect("drawn"));
+    assert_eq!(casting_draws - cleared_draws, 4, "the box once a cascade, only while it casts ({cleared_draws} draws cleared, {casting_draws} casting)");
 }
 
 /// A sun ten degrees up over an open floor out at Freeport (the grazing

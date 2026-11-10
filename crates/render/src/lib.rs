@@ -287,6 +287,11 @@ pub struct GpuModel {
     /// Its instances' vertex colours are a zone's baked lighting (colour
     /// buffers): Dynamic Lighting adds no fixed light on it (`lit`).
     pub baked: bool,
+    /// Casts into Sun Shadows' and Light Shadows' maps while it is drawn
+    /// (`sunshadow`, `lightshadow`); true unless cleared: `eqoa` clears it on
+    /// a Wisp's body and everything it wears and holds (`wisp`), whose shadow
+    /// would give away the human under its armour.
+    pub casts: bool,
     /// The world box its instances cover as last set (`set_instances`), for
     /// Sun Shadows' casters (`sunshadow::world_box`).
     world: std::cell::Cell<Option<(Vec3, Vec3)>>,
@@ -1107,6 +1112,7 @@ impl Renderer {
             level: Some(0),
             lod_dists: m.lod_dists.clone(),
             baked: false,
+            casts: true,
             world: std::cell::Cell::new(sunshadow::world_box((lo, hi), m.skinned, instances)),
             core: std::cell::Cell::new(sunshadow::world_box((lo, hi), false, instances)),
         }

@@ -19,6 +19,8 @@
 //!   the strip programs' (the map's last day not left in it).
 //! - Every frame with Light Shadows off (or Dynamic Lighting off) byte for
 //!   byte a renderer's that never had them.
+//! - A model cleared of casting (`GpuModel::casts`: a Wisp's) casts nothing
+//!   for a fire or the personal light; the control, the same box casting.
 //! Needs a graphics adapter (any backend); without one it says so and passes.
 
 use glam::{Mat4, Vec3};
@@ -191,6 +193,37 @@ fn a_box_shadows_the_floor_away_from_a_light() {
         assert!(worst <= 1, "at {origin}: the open floor off Dynamic Lighting's by {worst}");
         let d = drawn.expect("the maps made");
         assert_eq!((d.maps, d.whole), (1, 6), "at {origin}: one map, drawn whole: {d:?}");
+    }
+}
+
+/// A box beside a fire and one beside the personal light, cleared of
+/// casting (`GpuModel::casts` false, as a Wisp's body and all it wears and
+/// holds are: petition 1449), shadow nothing: every pixel within a level of
+/// Light Shadows off, and the maps drawn without them (the floor alone). The
+/// control: the same boxes casting shadow the floor beyond them.
+#[test]
+fn a_model_cleared_of_casting_casts_nothing() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    let (h, range) = (3.0, 20.0);
+    let lamp = Vec3::new(0.0, h, 0.0);
+    for (what, lights, point) in [("a fire", vec![fire(lamp, range, 1)], None), ("the personal light", Vec::new(), Some((lamp, range, Vec3::X)))] {
+        let frame = |light: bool, casts: bool| {
+            let mut r = renderer(&g, true, false, light);
+            let f = r.upload(&g.device, &g.queue, &floor(HALF), &[at(Vec3::ZERO)], &none);
+            // a character's armour is skinned, and stands beside the lantern
+            let mut b = r.upload(&g.device, &g.queue, &esf::Model { skinned: true, ..cuboid(Vec3::new(1.5, 0.5, -0.5), Vec3::new(2.5, 1.5, 0.5), layer(0, 0)) }, &[at(Vec3::ZERO)], &none);
+            b.casts = casts;
+            let px = shot(&g, &mut r, &view(Vec3::ZERO, &lights, point), &[Draw::Model(&f), Draw::Model(&b)]);
+            (px, r.light_shadow_drawn())
+        };
+        let ((cleared, drawn), (casting, cast), (off, _)) = (frame(true, false), frame(true, true), frame(false, true));
+        let worst = cleared.iter().zip(&off).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(worst <= 1, "{what}: cleared of casting, every pixel within {worst} of Light Shadows off");
+        assert!(red(&cleared, pixel(3.5, 0.0)) > 0.1 + 20.0 / 255.0, "{what}: its shadow's place lit: {}", red(&cleared, pixel(3.5, 0.0)));
+        assert!((red(&casting, pixel(3.5, 0.0)) - 0.1).abs() <= 2.5 / 255.0, "the control, {what}: the box casting shadows it: {}", red(&casting, pixel(3.5, 0.0)));
+        let (cleared, casting) = (drawn.expect("the maps made"), cast.expect("the maps made"));
+        assert!(cleared.maps == 1 && cleared.draws < casting.draws, "{what}: the box drawn into the map only while it casts ({cleared:?} cleared, {casting:?} casting)");
     }
 }
 

@@ -20,7 +20,8 @@
 //! head ([`mesh`]), an attachment beside the held items and the helm ([`attachment`]:
 //! `play::attach` hangs it with them, so a weapon swapped keeps it). With nothing
 //! worn it is the wisp floating where a human's head would be, its hands' weapons
-//! still swinging.
+//! still swinging. It casts no shadow ([`is`]): the human's would show under the
+//! armour.
 
 use esf::Library;
 use net::raceopts::{Kind, Look};
@@ -106,6 +107,17 @@ pub fn mesh(lib: &Library, id: u32) -> Option<esf::Model> {
 /// The wisp of `race_look` when it is on `body` (the drawn one) and has one.
 fn wisp_on(lib: &Library, body: u32, race_look: Option<&Look>) -> Option<u32> {
     race_look.filter(|l| l.body == body).and_then(|l| of(lib, l))
+}
+
+/// Whether a character drawn as `body` with `race_look` is a Wisp, which casts
+/// no shadow at all (petition 1449, the GM Jibrish: "The wisp player model should
+/// not project a shadow, because people can tell its just an invisible human"):
+/// no blob shadow (`shadows::Caster::casts`), and nothing of it in Sun Shadows'
+/// or Light Shadows' maps (`render::GpuModel::casts`), neither its armour nor
+/// what it holds, its helm, its cape or the wisp. A Wisp under an illusion is
+/// drawn as the illusion's body, which casts as any body does.
+pub fn is(lib: &Library, body: u32, race_look: Option<&Look>) -> bool {
+    wisp_on(lib, body, race_look).is_some()
 }
 
 /// A Wisp's body dressed: `model` (the human's, its look laid by the tables `t`)

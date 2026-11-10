@@ -24,7 +24,8 @@
 //! opaque layer of a material whose first layer is opaque, both faces, a
 //! vertex turned from the light put back [`BACK_PUSH`] along its ray; not the
 //! radial flora, the sky, nor any blended layer, particle, billboard, fan,
-//! plate or the HUD. What does not move (the zones' groups, but their
+//! plate or the HUD, nor a model cleared of casting (`GpuModel::casts`: a
+//! Wisp's). What does not move (the zones' groups, but their
 //! animated props) is drawn once into a cache of each map ([`Points`]'s
 //! `cache` array) once its light has stood still a moment ([`SETTLE`]), and
 //! again only when a zone within its reach comes or goes; each frame a face
@@ -714,12 +715,13 @@ impl Points {
         // every face's uniform, written at once (the maps in use)
         let mut faces = vec![0u8; self.slots * 6 * self.stride as usize];
         u.params = [g, 1.0 / self.size as f32, 2.0 * g / self.size as f32, REACH];
-        // what moves this frame: the models, and the groups' animated props
+        // what moves this frame: the models (not one cleared of casting,
+        // `GpuModel::casts`: a Wisp's), and the groups' animated props
         let mut movers = Vec::new();
         let mut groups = Vec::new();
         for item in items {
             match item {
-                Draw::Model(m) if Renderer::draws_anything(m) => movers.push(Mover::Model(m)),
+                Draw::Model(m) if Renderer::draws_anything(m) && m.casts => movers.push(Mover::Model(m)),
                 Draw::Group(g) => {
                     groups.push(*g);
                     movers.extend(g.members.iter().filter(|m| m.moves && m.instances > 0).map(|m| Mover::Prop(g, m)));
