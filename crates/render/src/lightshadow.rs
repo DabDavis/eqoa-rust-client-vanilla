@@ -1112,6 +1112,31 @@ mod tests {
         assert!(depth_map(far).0 - depth_map(far).1 / NEAR == 0.0 && (a - b / far - 1.0).abs() < 1e-6, "0 at the near plane, 1 at the light's reach");
     }
 
+    /// A map stays where it was drawn while its light is within its hold
+    /// and follows that far behind it past it; a light of the moment's
+    /// reach is drawn with room and drawn again only past it either way,
+    /// a fire's and the personal light's exactly theirs.
+    #[test]
+    fn a_map_holds_its_place_and_reach() {
+        let map = Vec3::new(1.0, 2.0, 3.0);
+        assert_eq!(leash(map, map + Vec3::new(0.1, 0.0, 0.05), MOMENT_HOLD), map, "within the hold: where it was");
+        let light = map + Vec3::new(0.0, 0.0, 1.0);
+        let held = leash(map, light, MOMENT_HOLD);
+        assert!((held - Vec3::new(1.0, 2.0, 3.0 + 1.0 - MOMENT_HOLD)).length() < 1e-6, "past it: the hold behind the light, {held}");
+        assert_eq!(leash(map, light, 0.0), light, "no hold: where the light is");
+        let moment = |range: f32| lit::PointLight { at: map, range, color: Vec3::ONE, fixed: false, key: (1 << 40) | 3 };
+        let drawn = map_range(&moment(10.0), None);
+        assert_eq!(drawn, 10.0 * ROOM, "drawn with room");
+        assert_eq!(map_range(&moment(10.5), Some(drawn)), drawn, "a reach eased a little: the map's");
+        assert_eq!(map_range(&moment(9.5), Some(drawn)), drawn, "and a little down");
+        assert_eq!(map_range(&moment(11.5), Some(drawn)), 11.5 * ROOM, "past the map's: drawn again");
+        assert_eq!(map_range(&moment(8.0), Some(drawn)), 8.0 * ROOM, "well under it: drawn again");
+        let fire = lit::PointLight { fixed: true, ..moment(10.0) };
+        let personal = lit::PointLight { key: lit::PERSONAL_KEY, ..moment(10.0) };
+        assert_eq!((map_range(&fire, Some(11.0)), map_range(&personal, Some(11.0))), (10.0, 10.0), "a fire's and the lantern's exactly");
+        assert_eq!((hold(&fire), hold(&personal), hold(&moment(10.0))), (0.0, PERSONAL_HOLD, MOMENT_HOLD));
+    }
+
     /// A box is in a face where any of it is in the face's view: a box
     /// straight down the face's axis, one off to its side past the guard
     /// band out of it, one behind the near plane out of it, one past the
