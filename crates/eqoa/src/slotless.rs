@@ -184,8 +184,9 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     // the Deathfist orcs, on HumanMale's and HumanFemale's skeletons (the fire
     // weaver names a helm node of its own)
     HeadSeat { bodies: &[0x37FD_13F9, 0x3198_F5B1, 0x0205_D208, 0xC76F_1FA8, 0xE144_942F], anchor: Anchor::Named, scale: [1.05; 3], offset: [0.0, 0.0, 0.0] },
-    // the brownies, on HumanMale's skeleton, a head half again a human's
-    HeadSeat { bodies: &[0x4376_EB52, 0x4946_8331], anchor: Anchor::Named, scale: [1.9; 3], offset: [0.0, 0.19, -0.03] },
+    // the brownies, on HumanMale's skeleton (the 2002 disc's on its own 2002
+    // HumanMale's), a head more than half again a human's
+    HeadSeat { bodies: &[0x4376_EB52, 0x4946_8331], anchor: Anchor::Named, scale: [1.7; 3], offset: [0.0, 0.16, -0.02] },
     // the dryads, on HumanFemale's
     HeadSeat { bodies: &[0x70EF_CE05, 0x21F3_11BB, 0xACE7_1E26, 0xB90A_DDD2], anchor: Anchor::Named, scale: [1.0; 3], offset: [0.0, 0.0, 0.0] },
     // the lizardmen, gnolls and minotaurs, one skeleton
