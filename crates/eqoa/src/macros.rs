@@ -528,8 +528,8 @@ mod tests {
     /// 15 a second; 4: 7.5; 3: on two, off one, 10; 60: one a second), each
     /// press N fields of 16.7 ms on the frames drawn; 1, two turns a frame,
     /// is held when the trigger came in the first half of a frame and never
-    /// pressed in the second, as on a PS2. The control: a field counted at
-    /// every frame drawn, 4 at 165 Hz pressed 20 times in a second.
+    /// pressed in the second, as on a PS2. The control: the fields counted at
+    /// every frame drawn, 4 at 165 Hz pressed some forty times in a second.
     #[test]
     fn a_frequency_counts_fields_at_any_rate() {
         for hz in [30.0, 60.0, 165.0] {
