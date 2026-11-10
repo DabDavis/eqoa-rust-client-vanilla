@@ -284,6 +284,10 @@ current.
   reads a server's files reads them there (`servers::file`, `servers::words`), never another server's. Test it
   against a patch port of one's own (go-eqoa-server's 7000, `EQOA_PATCH_PORT`) with `EQOA_CONFIG` under a scratch
   directory; Sandstorm's port only read, and never its login.
+- A server's own worlds (`serverworlds`, README "A server's own worlds"): one composer for both builds,
+  reading through a `Disc` and writing through a `Sink` a zone's record at a time (`compose_into`); natively
+  into a `Vec` written to the cache, in a page in a worker into OPFS (`web::worlds`, `web/worlds.js`), never
+  the whole world in memory. A change to the composer is one to go-eqoa-server's `Compose` too (the CRC).
 - The browser build (`web/`, README "In a browser"): `web/build.sh`, then `web/drive.py` (headless
   Chromium over the DevTools protocol, the disc image handed to the page's file input). Platform
   code goes behind `net::session::Datagrams`, `net::auth::Exchange`, `iso::Source`/`iso::Sparse`
