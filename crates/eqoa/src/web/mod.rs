@@ -519,6 +519,9 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
             crash("The graphics stopped", &format!("the graphics device was lost ({reason:?}): {message}"));
         }
     });
+    if info.backend == wgpu::Backend::Gl {
+        watch_webgl(&canvas);
+    }
     let mut config = surface.get_default_config(&adapter, w, h).ok_or("the surface cannot be configured")?;
     // The bytes go out as the GS's do: no sRGB encode (render::TARGET_FORMAT).
     config.format = config.format.remove_srgb_suffix();
@@ -526,6 +529,47 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
     let attrs = winit::window::Window::default_attributes().with_canvas(Some(canvas)).with_title("EQOA");
     let ps2_sums = render::fog16::supported(&adapter);
     Ok(viewer::PendingGfx { attrs, surface, config, device, queue, ps2_sums })
+}
+
+thread_local! {
+    /// The browser took the page's WebGL2 context away (`watch_webgl`).
+    static WEBGL_LOST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the browser took the page's WebGL2 context away: nothing drawn
+/// after it shows, and the client stops (`viewer`'s `window_event`).
+pub fn graphics_lost() -> bool {
+    WEBGL_LOST.with(std::cell::Cell::get)
+}
+
+/// A WebGL2 context the browser takes away (its graphics process restarted,
+/// a driver reset or hang, the graphics memory run out: Firefox does it
+/// where Chromium's WebGPU loses its device) draws nothing more, and wgpu's
+/// GL backend is never told: its fences never signal, so every frame's
+/// uploads were held for good, about 60 MB of the heap a second, until its
+/// 4 GB ran out a minute later and the client stopped on an `unreachable`
+/// with nothing to say why (in Firefox, `WEBGL_lose_context`: a black canvas
+/// at 30 fps, 259 MB to 4,095 MB in 70 s). The page's `webglcontextlost`
+/// says so at once and the client stops there, as a lost WebGPU device does.
+fn watch_webgl(canvas: &web_sys::HtmlCanvasElement) {
+    let lost = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
+        if WEBGL_LOST.with(|l| l.replace(true)) {
+            return;
+        }
+        let lighting = crate::settings::client();
+        let heavy = if lighting.dynamic_lighting && (lighting.light_shadows || lighting.sun_shadows) {
+            " If it happens again, turn off Light Shadows and Sun Shadows (Options, Extended, Lighting): they ask the most of the graphics card."
+        } else {
+            ""
+        };
+        crash(
+            "The graphics stopped",
+            &format!("the browser took the game's WebGL2 context away (its graphics process restarted, the graphics driver reset, or the graphics memory ran out).{heavy}"),
+        );
+    });
+    if canvas.add_event_listener_with_callback("webglcontextlost", lost.as_ref().unchecked_ref()).is_ok() {
+        lost.forget();
+    }
 }
 
 /// Files every scene loads after its own (main.rs's `SHARED`).

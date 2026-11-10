@@ -120,6 +120,54 @@ pub const REACH: f32 = if cfg!(any(target_arch = "wasm32", target_os = "android"
 /// inside the face the point is looked up in.
 pub const GUARD: f32 = REACH + 1.0;
 
+/// Which filter the receivers take (`lightshadow.wgsl`, [`receivers_wgsl`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Filter {
+    /// The tent of radius 3, nine bilinear comparisons ([`WIDE`]): natively.
+    Wide,
+    /// The tent of radius 2, four ([`NARROW`]): a page on WebGPU, Android.
+    Narrow,
+    /// One bilinear comparison at the point ([`ONE`]), looked up from 1.5
+    /// texels off the surface: a page on WebGL2, as every page drew them
+    /// until the tent came (2026-11-10). WebGL2 is a browser with no WebGPU
+    /// (Firefox off Windows, older Safari, a phone's Firefox), the slowest
+    /// path the game has and often the weakest graphics; the morning the
+    /// tent came its players' games stopped (the owner's "players say
+    /// firefox webgl2 is crashing them"), and WebGL2 is given back the
+    /// shader it ran before while the tent stays on WebGPU and natively.
+    One,
+}
+
+impl Filter {
+    /// The filter for a renderer on `device`: natively the wide tent, in a
+    /// page and on Android the narrow one, and in a page on WebGL2 one
+    /// comparison.
+    pub fn for_device(device: &wgpu::Device) -> Filter {
+        Self::of(cfg!(target_arch = "wasm32"), REACH < 3.0, device.adapter_info().backend)
+    }
+
+    /// The filter in a page (`page`) or not, where the platform's tent is
+    /// narrow (`narrow`: a page, Android), on `backend`.
+    pub fn of(page: bool, narrow: bool, backend: wgpu::Backend) -> Filter {
+        match (page && backend == wgpu::Backend::Gl, narrow) {
+            (true, _) => Filter::One,
+            (false, true) => Filter::Narrow,
+            (false, false) => Filter::Wide,
+        }
+    }
+
+    /// How many of the map's texels off the surface along its normal (times
+    /// the sine of the angle to the light) a fragment looks its map up: the
+    /// tent's reach ([`REACH`]), one comparison's 1.5.
+    pub fn reach(self) -> f32 {
+        match self {
+            Filter::Wide => 3.0,
+            Filter::Narrow => 2.0,
+            Filter::One => 1.5,
+        }
+    }
+}
+
 /// How far a caster's vertex whose normal is turned from the light is put
 /// back along its ray (as Sun Shadows' `BACK_PUSH`): the underside of a thin
 /// thing does not shadow its own top, and a closed body still casts.
@@ -387,19 +435,29 @@ const NARROW: &str = "    // the tent of radius 2: texels −1 to 2 from b weigh
     vis += w1.y * (w0.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a0.x, a1.y), layer, z) + w1.x * textureSampleCompareLevel(light_maps, light_cmp, vec2<f32>(a1.x, a1.y), layer, z));
     return mix(1.0, vis / 16.0, o.w);
 ";
-
-/// Whether the receivers take the narrow filter ([`NARROW`], [`REACH`] 2).
-fn narrow() -> bool {
-    REACH < 3.0
-}
+/// A page on WebGL2's ([`Filter::One`]): one bilinear comparison at the
+/// point, as a page drew them before the tent (138a5a8).
+const ONE: &str = "    let vis = textureSampleCompareLevel(light_maps, light_cmp, uv, layer, z);
+    return mix(1.0, vis, o.w);
+";
+/// lightshadow.wgsl's tent before its weights: what one comparison has no
+/// use for.
+const TENT: &str = "    // the texels round the point, their centres at whole numbers: the
+    // tent's weights for each, paired, each pair one bilinear comparison
+    // placed between its two texels at their weights' ratio
+    let e = light_shadows.params.y;
+    let p = uv / e - 0.5;
+    let b = floor(p);
+    let fr = p - b;
+";
 
 /// The receivers' module: shader.wgsl, lit.wgsl with its point terms taking
 /// the maps' visibility (with `sun`, its sun line taking the sun's map's
 /// too, `sunshadow::shadowed_lit`), then `sunshadow.wgsl` with the sun and
-/// `lightshadow.wgsl` (with the narrow filter where `narrow`).
+/// `lightshadow.wgsl` with `filter`'s comparisons.
 /// `None` if lit.wgsl's lines are not there to change
 /// (tests::the_receivers_take_the_point_lines holds them to it).
-pub(crate) fn receivers_wgsl(sun: bool, narrow: bool) -> Option<String> {
+pub(crate) fn receivers_wgsl(sun: bool, filter: Filter) -> Option<String> {
     let mut lit = include_str!("lit.wgsl").to_string();
     if sun {
         lit = sunshadow::shadowed_lit(&lit)?;
@@ -409,10 +467,15 @@ pub(crate) fn receivers_wgsl(sun: bool, narrow: bool) -> Option<String> {
     }
     let lit = lit.replace(POINT_LINE, POINT_LINE_SHADOWED).replace(PLANT_LINE, PLANT_LINE_SHADOWED);
     let shadow = include_str!("lightshadow.wgsl");
-    if shadow.matches(WIDE).count() != 1 {
+    let tent = format!("{TENT}{WIDE}");
+    if shadow.matches(&tent).count() != 1 {
         return None;
     }
-    let shadow = if narrow { shadow.replace(WIDE, NARROW) } else { shadow.to_string() };
+    let shadow = match filter {
+        Filter::Wide => shadow.to_string(),
+        Filter::Narrow => shadow.replace(WIDE, NARROW),
+        Filter::One => shadow.replace(&tent, ONE),
+    };
     let mut parts = vec![include_str!("shader.wgsl"), &lit];
     if sun {
         parts.push(include_str!("sunshadow.wgsl"));
@@ -479,6 +542,8 @@ pub(crate) struct Points {
     stride: u64,
     size: u32,
     slots: usize,
+    /// The receivers' comparisons (`Filter::for_device`).
+    filter: Filter,
     state: std::cell::RefCell<State>,
     pub(crate) drawn: std::cell::Cell<Drawn>,
 }
@@ -487,6 +552,7 @@ impl Points {
     pub(crate) fn new(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3], lit: &lit::Lit, sun: Option<&sunshadow::Sun>, format: wgpu::TextureFormat) -> Option<Points> {
         let size = map_size(device);
         let slots = most_slots();
+        let filter = Filter::for_device(device);
         // a layer more than the maps use: wgpu's GL backend makes a square 2D
         // texture of a multiple of six layers a cube map array (its "cube
         // compatible" guess), which then samples as nothing through a 2D
@@ -530,7 +596,7 @@ impl Points {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let receivers = Self::receivers(device, layouts, lit, None, &live_view, &cmp, &buf, format)?;
+        let receivers = Self::receivers(device, layouts, lit, None, &live_view, &cmp, &buf, format, filter)?;
         // the faces' uniforms, at the device's uniform alignment
         let stride = (size_of::<FaceUniform>() as u64).next_multiple_of(device.limits().min_uniform_buffer_offset_alignment as u64);
         let faces = device.create_buffer(&wgpu::BufferDescriptor {
@@ -638,6 +704,7 @@ impl Points {
             stride,
             size,
             slots,
+            filter,
             state: Default::default(),
             drawn: Default::default(),
         };
@@ -651,7 +718,7 @@ impl Points {
     /// buffer), with `sun` its map, sampler and uniform, then the maps, their
     /// comparison sampler and uniform.
     #[allow(clippy::too_many_arguments)]
-    fn receivers(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3], lit: &lit::Lit, sun: Option<&sunshadow::Sun>, maps: &wgpu::TextureView, cmp: &wgpu::Sampler, buf: &wgpu::Buffer, format: wgpu::TextureFormat) -> Option<Receivers> {
+    fn receivers(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3], lit: &lit::Lit, sun: Option<&sunshadow::Sun>, maps: &wgpu::TextureView, cmp: &wgpu::Sampler, buf: &wgpu::Buffer, format: wgpu::TextureFormat, filter: Filter) -> Option<Receivers> {
         let fs = wgpu::ShaderStages::FRAGMENT;
         let depth = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -680,7 +747,7 @@ impl Points {
             wgpu::BindGroupEntry { binding: 6, resource: buf.as_entire_binding() },
         ]);
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("lights and light shadows"), layout: &layout3, entries: &bound });
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("light shadows"), source: wgpu::ShaderSource::Wgsl(receivers_wgsl(sun.is_some(), narrow())?.into()) });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("light shadows"), source: wgpu::ShaderSource::Wgsl(receivers_wgsl(sun.is_some(), filter)?.into()) });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("light shadowed model"),
             bind_group_layouts: &[Some(layouts[0]), Some(layouts[1]), Some(layouts[2]), Some(&layout3)],
@@ -690,10 +757,15 @@ impl Points {
         Some(Receivers { pipelines: [make("fs_lit"), make("fs_lit_baked")], bg })
     }
 
+    /// The receivers' comparisons.
+    pub(crate) fn filter(&self) -> Filter {
+        self.filter
+    }
+
     /// The receivers with the sun's map too, once Sun Shadows are made.
     pub(crate) fn attach_sun(&mut self, device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3], lit: &lit::Lit, sun: &sunshadow::Sun, format: wgpu::TextureFormat) {
         if self.with_sun.is_none() {
-            self.with_sun = Self::receivers(device, layouts, lit, Some(sun), &self.live_view, &self.cmp, &self.buf, format);
+            self.with_sun = Self::receivers(device, layouts, lit, Some(sun), &self.live_view, &self.cmp, &self.buf, format, self.filter);
         }
     }
 
@@ -714,7 +786,7 @@ impl Points {
         let mut u = ShadowUniform::zeroed();
         // every face's uniform, written at once (the maps in use)
         let mut faces = vec![0u8; self.slots * 6 * self.stride as usize];
-        u.params = [g, 1.0 / self.size as f32, 2.0 * g / self.size as f32, REACH];
+        u.params = [g, 1.0 / self.size as f32, 2.0 * g / self.size as f32, self.filter.reach()];
         // what moves this frame: the models (not one cleared of casting,
         // `GpuModel::casts`: a Wisp's), and the groups' animated props
         let mut movers = Vec::new();
@@ -1050,14 +1122,20 @@ fn opaque(passes: &[Material]) -> bool {
 mod tests {
     use super::*;
 
+    /// Every filter, alone and with the sun.
+    const FILTERS: [(bool, Filter); 6] =
+        [(false, Filter::Wide), (true, Filter::Wide), (false, Filter::Narrow), (true, Filter::Narrow), (false, Filter::One), (true, Filter::One)];
+
     /// lit.wgsl's point lines are there to change, once each, alone and
     /// after the sun's change: a change to either (another branch's) fails
     /// here, not as shadows that never come.
     #[test]
     fn the_receivers_take_the_point_lines() {
-        for (sun, narrow) in [(false, false), (true, false), (false, true), (true, true)] {
-            let s = receivers_wgsl(sun, narrow).expect("lit.wgsl's point lines");
-            assert_eq!((s.contains(WIDE), s.contains(NARROW)), (!narrow, narrow), "the wide filter or the narrow");
+        for (sun, filter) in FILTERS {
+            let s = receivers_wgsl(sun, filter).expect("lit.wgsl's point lines");
+            let tent = s.contains(TENT);
+            assert_eq!((s.contains(WIDE), s.contains(NARROW), s.contains(ONE)), (filter == Filter::Wide, filter == Filter::Narrow, filter == Filter::One), "{filter:?}'s comparisons alone");
+            assert_eq!(tent, filter != Filter::One, "the tent's texels only for a tent");
             assert!(s.contains("light_shadow(j, i, n)") && s.contains("light_shadow(j, i, vec3<f32>(0.0, 1.0, 0.0))"));
             assert!(!s.contains(POINT_LINE) && !s.contains(PLANT_LINE), "the unshadowed lines gone");
             assert!(s.contains("fn light_shadow") && s.contains("fn fs_lit_baked"));
@@ -1067,9 +1145,28 @@ mod tests {
         assert!(CAST_WGSL.contains("fn vs_light_cast") && CAST_WGSL.contains("fn vs_light_cast_solid"));
     }
 
-    /// Every receivers' module (with the sun's map or not, the wide filter
-    /// or the narrow), the casters' and the copy's parse and validate, the
-    /// narrow filter's modules too, which only a page and Android make.
+    /// Natively the wide tent, in a page and on Android the narrow one, and
+    /// in a page on WebGL2 one comparison looked up 1.5 texels off the
+    /// surface, as a page drew them before the tent; the control: a native
+    /// renderer on GL (Linux's fallback, the tests' second backend) keeps the
+    /// tent, and so does a page on WebGPU.
+    #[test]
+    fn webgl2_takes_one_comparison() {
+        use wgpu::Backend;
+        assert_eq!(Filter::of(true, true, Backend::Gl), Filter::One, "a page on WebGL2");
+        assert_eq!(Filter::of(true, true, Backend::BrowserWebGpu), Filter::Narrow, "a page on WebGPU");
+        assert_eq!(Filter::of(false, true, Backend::Vulkan), Filter::Narrow, "Android");
+        assert_eq!(Filter::of(false, true, Backend::Gl), Filter::Narrow, "Android on GL");
+        assert_eq!(Filter::of(false, false, Backend::Gl), Filter::Wide, "natively on GL");
+        assert_eq!(Filter::of(false, false, Backend::Vulkan), Filter::Wide);
+        assert_eq!((Filter::Wide.reach(), Filter::Narrow.reach(), Filter::One.reach()), (3.0, 2.0, 1.5));
+        assert_eq!(Filter::of(false, REACH < 3.0, Backend::Vulkan).reach(), REACH, "the platform's tent reaches REACH");
+        assert!(GUARD >= Filter::One.reach() + 0.5, "one comparison's texels stay inside its face");
+    }
+
+    /// Every receivers' module (with the sun's map or not, each filter), the
+    /// casters' and the copy's parse and validate, the narrow and the one
+    /// comparison's modules too, which only a page and Android make.
     #[test]
     fn every_module_validates() {
         use wgpu::naga;
@@ -1077,11 +1174,81 @@ mod tests {
             let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
             naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         };
-        for (sun, narrow) in [(false, false), (true, false), (false, true), (true, true)] {
-            check(&format!("receivers sun {sun} narrow {narrow}"), &receivers_wgsl(sun, narrow).unwrap());
+        for (sun, filter) in FILTERS {
+            check(&format!("receivers sun {sun} {filter:?}"), &receivers_wgsl(sun, filter).unwrap());
         }
         check("casters", CAST_WGSL);
         check("copy", include_str!("lightcopy.wgsl"));
+    }
+
+    /// `src`'s entry points as a page's WebGL2 is handed them: GLSL ES 3.00
+    /// out of naga as wgpu's GL backend writes it in a browser (no
+    /// `GL_EXT_texture_shadow_lod`, so a shadow array's level-0 comparison
+    /// is a `textureGrad`), each (name, text); or what refused.
+    fn webgl2_glsl(src: &str) -> Result<Vec<(String, String)>, String> {
+        use wgpu::naga::{self, back::glsl};
+        let module = naga::front::wgsl::parse_str(src).map_err(|e| e.emit_to_string(src))?;
+        let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).map_err(|e| format!("{e:?}"))?;
+        let options = glsl::Options {
+            version: glsl::Version::Embedded { version: 300, is_webgl: true },
+            writer_flags: glsl::WriterFlags::ADJUST_COORDINATE_SPACE | glsl::WriterFlags::FORCE_POINT_SIZE,
+            binding_map: Default::default(),
+            zero_initialize_workgroup_memory: true,
+        };
+        let mut out = Vec::new();
+        for ep in &module.entry_points {
+            let pipeline = glsl::PipelineOptions { shader_stage: ep.stage, entry_point: ep.name.clone(), multiview: None };
+            let mut text = String::new();
+            glsl::Writer::new(&mut text, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
+                .and_then(|mut w| w.write().map(|_| ()))
+                .map_err(|e| format!("{}: {e:?}", ep.name))?;
+            out.push((ep.name.clone(), text));
+        }
+        Ok(out)
+    }
+
+    /// Every module a page's WebGL2 compiles comes out as GLSL ES 3.00
+    /// (checked by glslang too where `glslangValidator` is installed), and
+    /// a page on WebGL2 samples each shadowed light's map once where the
+    /// narrow tent samples it four times; the control: a compute shader,
+    /// which GLSL ES 3.00 has no stage for, is refused.
+    #[test]
+    fn webgl2_compiles_every_module() {
+        let glslang = std::process::Command::new("glslangValidator").arg("--version").output().is_ok_and(|o| o.status.success());
+        let dir = std::env::temp_dir().join(format!("lightshadow-glsl-{}", std::process::id()));
+        if glslang {
+            std::fs::create_dir_all(&dir).unwrap();
+        }
+        let mut sources: Vec<(String, String)> = FILTERS.iter().map(|&(sun, f)| (format!("receivers-sun{}-{f:?}", sun as u8), receivers_wgsl(sun, f).unwrap())).collect();
+        sources.push(("casters".into(), CAST_WGSL.into()));
+        sources.push(("copy".into(), include_str!("lightcopy.wgsl").into()));
+        for (name, src) in &sources {
+            let glsl = webgl2_glsl(src).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(!glsl.is_empty(), "{name}: no entry points");
+            for (entry, text) in &glsl {
+                assert!(text.starts_with("#version 300 es"), "{name} {entry}: GLSL ES 3.00");
+                if glslang {
+                    let stage = if text.contains("gl_Position") { "vert" } else { "frag" };
+                    let file = dir.join(format!("{name}.{entry}.{stage}"));
+                    std::fs::write(&file, text).unwrap();
+                    let o = std::process::Command::new("glslangValidator").arg(&file).output().unwrap();
+                    assert!(o.status.success(), "{name} {entry}: glslang refused it:\n{}", String::from_utf8_lossy(&o.stdout));
+                }
+            }
+            if let Some(receiver) = name.strip_prefix("receivers-") {
+                let (_, fs) = glsl.iter().find(|(e, _)| e == "fs_lit").expect("fs_lit");
+                let at = fs.find("float light_shadow(").expect("light_shadow");
+                let body = &fs[at..at + fs[at..].find("\n}\n").unwrap()];
+                let taps = body.matches("textureGrad(").count();
+                let want = if receiver.ends_with("One") { 1 } else if receiver.ends_with("Narrow") { 4 } else { 9 };
+                assert_eq!(taps, want, "{name}: the light maps sampled {taps} times a light");
+            }
+        }
+        if glslang {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        let refused = webgl2_glsl("@compute @workgroup_size(1) fn main() {}");
+        assert!(refused.is_err(), "the control: a compute shader is no WebGL2 stage: {refused:?}");
     }
 
     /// Every direction falls in the face its largest axis names, and the

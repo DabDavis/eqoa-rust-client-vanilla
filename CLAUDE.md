@@ -303,6 +303,12 @@ current.
   Chromium over the DevTools protocol, the disc image handed to the page's file input). Platform
   code goes behind `net::session::Datagrams`, `net::auth::Exchange`, `iso::Source`/`iso::Sparse`
   and `crates/eqoa/src/web/`; std's `Instant` panics in a browser, so clocks are `web_time`'s.
+  wgpu's GL backend is never told the browser took its WebGL2 context away: `web::watch_webgl`
+  raises the notice and each event loop ends on `web::graphics_lost` in its window events (a new
+  loop does the same), else every frame's uploads are held until the heap runs out. What WebGL2
+  compiles (naga's GLSL ES 3.00, no `GL_EXT_texture_shadow_lod`) no native test runs:
+  `lightshadow::tests::webgl2_compiles_every_module` writes it; a lighting feature a WebGL2 refuses
+  is left off (`render`'s `guarded`), never a panic.
 - A build is `web/dist/v/<build>/`, never changed under its name (the host serves it immutable);
   only the page and `version.json` are revalidated, and `web/deploy.sh` publishes them in that
   order, after the build. Every file a page loads must be in its build (a new one goes into

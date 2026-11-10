@@ -254,11 +254,16 @@ or a browser (each described where it lives below):
   (its carrier's shadow flickered as it went in and out of the carrier's box), from
   where its map was drawn while it sways within 15 cm of it (an idle weapon's glow
   crawled every edge it cast). Each shadow's edge is a tent of the map's texels three
-  each way (two in a page and on Android), soft and gliding as a light or a caster
-  moves: four comparisons half a texel apart before it let each texel that flipped
-  under a moving light move the shadow up to half its depth at once, every edge crawling
-  a texel at a time and showing the texels' steps up close (the owner's "blocky and
-  also jittery", 2026-11-10) (`render::lightshadow`).
+  each way (two in a page on WebGPU and on Android), soft and gliding as a light or a
+  caster moves: four comparisons half a texel apart before it let each texel that
+  flipped under a moving light move the shadow up to half its depth at once, every edge
+  crawling a texel at a time and showing the texels' steps up close (the owner's
+  "blocky and also jittery", 2026-11-10) (`render::lightshadow`). A page on WebGL2
+  (Firefox off Windows, a phone's Firefox, older Safari) keeps the one bilinear
+  comparison a light it had before the tent (`Filter::One`, the same morning: "players
+  say firefox webgl2 is crashing them"), and there Dynamic Lighting, Sun Shadows and
+  Light Shadows are made under error scopes: one the browser's GL driver refuses is
+  left off with a notice, where it was a panic at every world entry.
   **Shadow Distance** (the user's "the light shadows need a slider to raise to a
   greater distance"; a slider, the game's 250 to 1000 in 125s): the sun's far two
   cascades stretched (the third by the scale's square root, the last to the distance,
@@ -1410,7 +1415,13 @@ place one at a time: a page loaded during one could mix two builds (a tester's d
 the second), and a tab left open never heard of a new build.
 
 What goes wrong in the page is a notice at its top (`web/notices.js`). A panic, a wasm
-trap or a lost graphics device stops the client: a notice says so, with Reload. What only
+trap or a lost graphics device stops the client: a notice says so, with Reload. On
+WebGL2 the device is the canvas's context, and wgpu is never told the browser took it
+away (its graphics process restarted, a driver reset, the graphics memory run out): the
+game ran on, unseen, its frames' uploads held until the heap's 4 GB ran out a minute
+later and it stopped on a bare `unreachable` (Firefox, 2026-11-10); the canvas's
+`webglcontextlost` now stops it at once with "The graphics stopped" (`web::watch_webgl`;
+checked with `WEBGL_lose_context`: the heap held, the notice up). What only
 takes a part away is a notice to dismiss: a disc other than Frontiers, named by the program it starts as soon as it is picked (`web/disc.rs`;
 with the European discs and the Frontiers beta there is no HUD and no start menu, with
 the first USA disc and the 2002 betas no world: each measured through the page), a

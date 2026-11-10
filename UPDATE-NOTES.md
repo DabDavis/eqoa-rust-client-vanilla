@@ -6,6 +6,17 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · Firefox and WebGL2: no more long crashes
+- In a browser drawing with WebGL2 (Firefox on Linux, Mac or a phone, older Safari), when the browser's
+  graphics stopped (its graphics process restarting, the driver resetting) the game went black and ran
+  on unseen for about a minute, using more and more memory, until it stopped with an unreadable error.
+  Now it stops at once and says what happened, with Reload.
+- With Light Shadows on in WebGL2, the shadows are drawn the way they were before today's soft edges,
+  which ask less of the graphics card. A browser drawing with WebGPU (Chrome, Edge) and the game you
+  download keep the soft edges.
+- If a browser's graphics refuse Dynamic Lighting, Sun Shadows or Light Shadows, that option is left off
+  with a notice saying so, instead of the game stopping every time you enter the world.
+
 ## 2026-11-10 · Third-party PS3 controllers: the d-pad works
 - A controller whose d-pad is a "hat", as on most third-party PS3 controllers and many other PC controllers,
   now works wherever the d-pad does (the menus, the quick menus, every window): in Firefox on Windows, in
