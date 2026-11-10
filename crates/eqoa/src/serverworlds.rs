@@ -1128,10 +1128,14 @@ mod tests {
     }
 
     /// The Homelands as go-eqoa-server's recipe has them (tools/worlds/
-    /// homelands.json, built 2026-11-08): nineteen zones of two worlds, each
-    /// in its own cell, so the BSP's every split and both worlds' profiles;
-    /// built here, it is the server's file byte for byte. Skipped without the
-    /// disc.
+    /// homelands.json, merged 2026-11-10): twenty-one zones of three worlds,
+    /// each in its own cell, so the BSP's every split and all three worlds'
+    /// profiles; built here without the ridge of rocks along their edges (the
+    /// recipe's extraFiles), it is the server's file of the same zones byte
+    /// for byte. With `$EQOA_WORLDS_DIR` holding the server's `world10.json`
+    /// of these zones, the world as served, its 1,861 rocks too, is pinned as
+    /// well (the server's `worldbuild`: 147,041,330 bytes, CRC 5fa4f6a2).
+    /// Skipped without the disc.
     #[test]
     fn the_homelands_build_as_the_server_built_them() {
         let Some(disc) = disc() else {
@@ -1141,6 +1145,7 @@ mod tests {
         let parts = [
             ("ODUS.ESF", 8, 4236947, 0x8354D60F, 3, 1),
             ("ODUS.ESF", 19, 8409752, 0x91047E6F, 2, 3),
+            ("RATHE.ESF", 15, 6521318, 0xABD0428A, 2, 4),
             ("TUNARIA.ESF", 68, 7417256, 0x9330B29B, 9, 6),
             ("TUNARIA.ESF", 115, 5879151, 0x7257AE33, 4, 10),
             ("TUNARIA.ESF", 160, 6574889, 0x18B97D99, 7, 15),
@@ -1157,11 +1162,28 @@ mod tests {
             ("ODUS.ESF", 13, 8099924, 0x60531D03, 2, 2),
             ("TUNARIA.ESF", 82, 6426546, 0x422D8CC6, 10, 7),
             ("TUNARIA.ESF", 157, 8968801, 0x4E29CED4, 12, 14),
+            ("RATHE.ESF", 16, 5808555, 0x39C43319, 3, 4),
             ("ODUS.ESF", 28, 7848248, 0x4454CF3C, 5, 4),
         ];
-        let parts = parts.iter().map(|&(from, zone, size, crc, col, row)| Part { from: from.into(), zone, size, crc, col, row, name: String::new(), race: 0, extras: vec![] }).collect();
-        let w = World { id: 10, name: "the Homelands".into(), size: 133406681, crc: 0xBC6C27E3, parts };
+        let parts: Vec<Part> = parts.iter().map(|&(from, zone, size, crc, col, row)| Part { from: from.into(), zone, size, crc, col, row, name: String::new(), race: 0, extras: vec![] }).collect();
+        let w = World { id: 10, name: "the Homelands".into(), size: 145736722, crc: 0x776848A5, parts: parts.clone() };
         let b = compose(&disc, &w).expect("the server's world");
-        assert_eq!((b.len(), crc32(&b)), (133406681, 0xBC6C27E3));
+        assert_eq!((b.len(), crc32(&b)), (145736722, 0x776848A5));
+        drop(b);
+        // the world as served, rocks and all, when the server's build of
+        // these zones is beside us
+        let Some(j) = std::env::var_os("EQOA_WORLDS_DIR").and_then(|d| std::fs::read(Path::new(&d).join("world10.json")).ok()) else {
+            eprintln!("SKIP (the rocks): no world10.json in EQOA_WORLDS_DIR");
+            return;
+        };
+        let served = built_world(10, &serde_json::from_slice(&j).unwrap());
+        let same = |a: &Part, b: &Part| (&a.from, a.zone, a.size, a.crc, a.col, a.row) == (&b.from, b.zone, b.size, b.crc, b.col, b.row);
+        if served.parts.len() != parts.len() || !served.parts.iter().zip(&parts).all(|(a, b)| same(a, b)) {
+            eprintln!("SKIP (the rocks): EQOA_WORLDS_DIR's world10.json is of other zones");
+            return;
+        }
+        assert_eq!(served.parts.iter().map(|p| p.extras.len()).sum::<usize>(), 1861, "the ridge's rocks");
+        let b = compose(&disc, &served).expect("the server's world, rocks and all");
+        assert_eq!((b.len(), crc32(&b)), (147041330, 0x5FA4F6A2));
     }
 }
