@@ -416,6 +416,22 @@ or a browser (each described where it lives below):
   disc's worlds. A page builds it too, in a worker into the browser's private storage (README "In a
   browser", `web::worlds`); one that cannot keep it does not take the offer, and a character of such a world
   starts in its city.
+  **Which characters wait for them** (petition 1468, 2026-11-10): the server places a login by what the
+  client holds when its character is played, so a character of a server's world played before the worlds are
+  answered would start in its mainland city, for good. The server says which characters those are (0x7E54,
+  `net::serverworlds::read_chars`, `Session::pick_needs_worlds`: the whole set, before the list and after
+  every later character list), and `pregame::client` holds one it names until the worlds are answered
+  (`pick_waits`, `held_pick`, a minute at most), natively as in a page; every other goes in at once. With a
+  server that never says, a page holds every character and a native client none, as both did before (a page
+  held every one for 10 to 36 s a login on eqoaclassic, nearly all of it the list's way there; natively a
+  homeland character played early started in its city). A character that goes in before the worlds' list is
+  in loses the rest of it with the lobby connection (the server empties that queue at the promotion): the
+  session asks for the list again on the game connection (0x7E30 1 at `TYPE_CONNECT`, when the offer was
+  taken and no list is being built), so the worlds are built while the game is played and the server can
+  still send the player into them (its arena, a GM's move). The answer itself can fall in the same gap: one
+  sent after the character was played and before the game connection opened went on a connection the server
+  had already left (a page's kept worlds checked 60 ms after its pick: the session held none for the visit),
+  so such an answer is told again on the game connection (`Session`'s `picked`, `worlds_retell`).
   A zone may be given **extras** (the list's version 2): the disc's art placed in it as actors of its own,
   each a ZoneActor after its room's own, the records of art the zone lacks copied in off the player's disc
   with every record they name (`serverworlds::extras`, the server's `internal/worlds/extras.go` byte for
@@ -1453,8 +1469,10 @@ takes 1.4 s (the worker up and the disc listed 0.26 s, the 19 zones read and wri
 Firefox 1.8-2.4 s and 0.6 s; with the image out of the cache on a busy machine (load
 35) about 3 s in either; end to end at character select on a loaded machine, 3.7-5.4 s.
 A notice at the page's top says how far it has come, and a character played meanwhile
-waits for it (`pregame::client`'s `held_pick`: in a page alone, a minute at most), so the
-server places it by what the page holds. A later visit finds the copy by its size and
+whose login needs the world (the server says which: README "A server's own worlds") waits
+for it (`pregame::client`'s `held_pick`, a minute at most), so the server places it by
+what the page holds; any other goes in at once, and the build goes on while it plays. A
+later visit finds the copy by its size and
 CRC; one damaged since is built again; pages build a world one at a time (a Web Lock
 on its name). The game then reads the file as a disc of that one file
 (`WebDisc::of_file`): at a login there, at a move into it and for its zones as the walk

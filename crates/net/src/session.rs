@@ -197,6 +197,16 @@ pub const OP_SERVER_WORLDS: u16 = 0x7E30;
 /// sends it into.
 pub const OP_SERVER_WORLDS_DATA: u16 = 0x7E31;
 
+/// Which of the session's characters a login needs the server's worlds for,
+/// from a server that says (go-eqoa-server's since 2026-11-10, petition 1468),
+/// to a client that answered [`OP_SERVER_WORLDS`] 1, before the list and
+/// after every later character list (`serverworlds::read_chars`, kept as
+/// [`Session::pick_needs_worlds`]): a character played while the worlds are
+/// still being built waits for them only when it is one of these, natively
+/// as in a page. A server that never sends it (an older one) leaves a page
+/// holding every character, as before, and a native client none.
+pub const OP_SERVER_WORLDS_CHARS: u16 = 0x7E54;
+
 /// What builds a server's worlds off the player's disc (the game's
 /// `serverworlds`, set once at its start): handed the list, it answers on the
 /// channel, once, with the ids of those it holds. With none set this client
@@ -962,6 +972,17 @@ pub struct Session {
     worlds_building: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
     /// The offer was taken and the server not yet told what this client holds.
     worlds_pending: bool,
+    /// The characters a login needs the server's worlds for, as the server
+    /// last said ([`OP_SERVER_WORLDS_CHARS`]); none from a server that never
+    /// says.
+    worlds_chars: Option<Vec<u32>>,
+    /// A character was played and the game connection has not opened yet
+    /// (`select_character` to `TYPE_CONNECT`): what is sent now goes on a
+    /// connection the server may already have left.
+    picked: bool,
+    /// The worlds held, as the server was told while `picked`: told again on
+    /// the game connection (`worlds_answer`).
+    worlds_retell: Option<Vec<u8>>,
     /// The server offered the combat record ([`OP_COMBAT_RECORD`]) and this
     /// client took it: Character > Combat Record. Kept for the session.
     pub combat_record: bool,
@@ -1155,6 +1176,9 @@ impl Session {
             server_worlds: None,
             worlds_building: None,
             worlds_pending: false,
+            worlds_chars: None,
+            picked: false,
+            worlds_retell: None,
 
             race_options: None,
             race_looks: None,
@@ -1627,6 +1651,7 @@ impl Session {
     /// `SelectCharacter`: 0x002A with the server id and the face and hair.
     pub fn select_character(&mut self, c: &Character) {
         self.state = State::Selecting;
+        self.picked = true;
         let mut w = Writer::op(0x002A);
         for v in [c.server_id, c.face, c.hair_style, c.hair_length, c.hair_color] {
             w.u32(v as u32);
@@ -1706,7 +1731,14 @@ impl Session {
 
     /// The server told which of its worlds this client holds, once they are
     /// built (`OP_SERVER_WORLDS_DATA`): the builder's answer, or none when it
-    /// stopped without one.
+    /// stopped without one. One that goes after a character was played and
+    /// before the game connection opened (`picked`) is told again on that
+    /// connection: the server promotes the session when it takes the pick and
+    /// leaves the lobby connection's later packets alone, so an answer a
+    /// moment behind the pick never reached it and the session held none of
+    /// the server's worlds for the visit (no arena, no GM's move there; seen
+    /// in a page whose kept worlds were checked 60 ms after its pick). Told
+    /// twice is the same set twice.
     fn worlds_answer(&mut self) {
         let Some(rx) = &self.worlds_building else { return };
         let ids = match rx.try_recv() {
@@ -1716,8 +1748,16 @@ impl Session {
         };
         self.worlds_building = None;
         self.worlds_pending = false;
+        self.tell_worlds(&ids);
+        if self.picked {
+            self.worlds_retell = Some(ids);
+        }
+    }
+
+    /// `OP_SERVER_WORLDS_DATA` to the server: the worlds this client holds.
+    fn tell_worlds(&mut self, ids: &[u8]) {
         let mut w = Writer::op(OP_SERVER_WORLDS_DATA);
-        w.bytes(&crate::serverworlds::encode_ready(&ids));
+        w.bytes(&crate::serverworlds::encode_ready(ids));
         self.send(&w.data);
     }
 
@@ -1726,6 +1766,16 @@ impl Session {
     /// by a server that does not know yet (`eqoa play` waits).
     pub fn server_worlds_pending(&self) -> bool {
         self.worlds_pending
+    }
+
+    /// Whether a login of the character `server_id` needs the server's
+    /// worlds, as the server last said ([`OP_SERVER_WORLDS_CHARS`]): it
+    /// starts in one of them for a client that holds it, and in its mainland
+    /// city, for good, for one that does not, so its pick waits while they
+    /// are pending. `Some(false)`: the server placed it the same either way.
+    /// `None`: the server never said (an older one, or its word not yet in).
+    pub fn pick_needs_worlds(&self, server_id: i64) -> Option<bool> {
+        self.worlds_chars.as_ref().map(|c| u32::try_from(server_id).is_ok_and(|id| c.contains(&id)))
     }
 
     /// The flush `pump` ends with, and the sends: what was sent goes out now
@@ -1776,6 +1826,21 @@ impl Session {
                 self.conn = m.connection;
                 self.conn_gone = false;
                 self.self_id = None;
+                // the server's worlds, taken and their list never in whole:
+                // the character went in before it (one the worlds were not
+                // waited for), and what the server still had to send of it
+                // went with the old connection. Asked for again here, so
+                // they are built while the game is played and the server can
+                // send the player into them (its arena, a GM's move).
+                if self.worlds_pending && self.worlds_building.is_none() {
+                    self.send_op_int(OP_SERVER_WORLDS, 1);
+                }
+                // and the worlds held, told while the pick was on its way:
+                // told again, on the connection the server now reads
+                self.picked = false;
+                if let Some(ids) = self.worlds_retell.take() {
+                    self.tell_worlds(&ids);
+                }
                 self.entity_view_offer = None;
                 self.flying = false;
                 self.jumps = false;
@@ -2043,6 +2108,12 @@ impl Session {
                     self.server_worlds = Some(w);
                 }
                 None => debug_line(&format!("[net] the server's worlds: {} bytes not read", m.data.len())),
+            },
+            // which characters a login needs them for: the whole set each
+            // time; one not read leaves what was known
+            OP_SERVER_WORLDS_CHARS => match crate::serverworlds::read_chars(&m.data[2.min(m.data.len())..]) {
+                Some(c) => self.worlds_chars = Some(c),
+                None => debug_line(&format!("[net] the characters that need the server's worlds: {} bytes not read", m.data.len())),
             },
 
             // a custom race's own options offered: taken (the create pages and
@@ -4078,6 +4149,110 @@ mod tests {
         assert_eq!(answers(&mut s), [(251, vec![0x31, 0x7E, 1, 10])], "only the world built");
         assert_eq!((s.server_worlds.as_ref().map(Vec::len), s.server_worlds_pending()), (Some(2), false));
         assert_eq!(answers(&mut s), [], "told once");
+    }
+
+    // Which characters a login needs the server's worlds for (0x7E54): kept
+    // whole each time, a character it names waits and one it does not need
+    // not, and nothing is answered. The controls: a server that never said
+    // (None, not "none of them"); a message cut short or of another version
+    // leaves what was known.
+    #[test]
+    fn the_server_says_which_characters_need_its_worlds() {
+        let mut s = session();
+        s.record = Some(Vec::new());
+        assert_eq!(s.pick_needs_worlds(630), None, "the control: never said");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x54, 0x7E, 1, 2, 0x76, 0x02, 0, 0, 4, 3, 2, 1]);
+        assert!(ev.is_empty(), "the set is the session's: {ev:?}");
+        let needs = |s: &Session| [630, 0x0102_0304, 558, -1, 1 << 40].map(|id| s.pick_needs_worlds(id));
+        assert_eq!(needs(&s), [Some(true), Some(true), Some(false), Some(false), Some(false)]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x54, 0x7E, 1, 2, 0x76, 0x02, 0, 0, 4]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x54, 0x7E, 2, 0]);
+        assert_eq!(needs(&s)[..3], [Some(true), Some(true), Some(false)], "the controls: cut short, another version");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x54, 0x7E, 1, 1, 0x2E, 0x02, 0, 0]);
+        assert_eq!(needs(&s)[..3], [Some(false), Some(false), Some(true)], "the whole set each time");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x54, 0x7E, 1, 0]);
+        assert_eq!(needs(&s)[..3], [Some(false); 3], "none of them: said, and no character waits");
+        assert_eq!(s.record.as_deref(), Some(&[][..]), "nothing answered");
+    }
+
+    // The server's worlds taken and a character gone in before their list
+    // was in (one that did not wait for them: the promotion empties the queue
+    // the list waited in): the new game connection asks for them again (0x7E30
+    // 1), and the list that then comes is built and answered as ever. The
+    // controls: a session never offered them asks nothing at a promotion; one
+    // whose list was in and being built is not sent it twice; one that
+    // answered asks nothing more.
+    #[test]
+    fn the_worlds_are_asked_for_again_when_a_character_went_in_before_their_list() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.pump();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        set_world_builder(ready_builder);
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(answers(&mut s), [], "the control: never offered, nothing asked");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x30, 0x7E, 1, 0, 0, 0]);
+        assert_eq!(answers(&mut s), [(251, vec![0x30, 0x7E, 1, 0, 0, 0])], "the offer taken");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(answers(&mut s), [(251, vec![0x30, 0x7E, 1, 0, 0, 0])], "in the world before the list: asked again");
+        assert!(s.server_worlds_pending());
+        let w = crate::serverworlds::World { id: 10, name: "the Homelands".into(), size: 1, crc: 2, parts: vec![] };
+        let mut list = vec![0x31, 0x7E];
+        list.extend(crate::serverworlds::encode(std::slice::from_ref(&w)));
+        // the list in and its build not yet answered: a promotion now asks nothing
+        deliver(&mut s, drdp::TYPE_GUARANTEED, list.clone());
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(answers(&mut s), [(251, vec![0x31, 0x7E, 1, 10])], "the control: the list was in; built and answered, not asked for twice");
+        assert!(!s.server_worlds_pending());
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(answers(&mut s), [], "the control: answered, nothing more asked");
+    }
+
+    // The worlds held, told the server after a character was played and before
+    // the game connection opened (their check ended a moment after the pick):
+    // the server has left the lobby connection by then and never reads it, so
+    // the new connection tells it again, once. The controls: told before the
+    // pick, nothing is told again at the promotion; a later promotion tells
+    // nothing more.
+    #[test]
+    fn the_worlds_held_are_told_again_when_the_answer_went_behind_the_pick() {
+        let mut s = session();
+        s.record = Some(Vec::new());
+        // what the session sent of ours since the last look (its record: the
+        // wire holds a message back while those before it are unacknowledged)
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.pump();
+            s.record.replace(Vec::new()).unwrap().into_iter().filter(|(_, d)| d.get(1) == Some(&0x7E)).collect()
+        };
+        let c = Character { server_id: 558, ..Default::default() };
+        let building = |s: &mut Session| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            s.worlds_building = Some(rx);
+            s.worlds_pending = true;
+            tx
+        };
+        // the control: answered, then the pick, then the promotion
+        let tx = building(&mut s);
+        tx.send(vec![10, 11]).unwrap();
+        assert_eq!(answers(&mut s), [(251, vec![0x31, 0x7E, 2, 10, 11])]);
+        s.select_character(&c);
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(answers(&mut s), [], "the control: told before the pick, not told again");
+        // the pick, then the answer, then the promotion
+        let tx = building(&mut s);
+        s.select_character(&c);
+        assert_eq!(answers(&mut s), [], "still being checked");
+        tx.send(vec![10, 11]).unwrap();
+        assert_eq!(answers(&mut s), [(251, vec![0x31, 0x7E, 2, 10, 11])], "told on the lobby connection");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(answers(&mut s), [(251, vec![0x31, 0x7E, 2, 10, 11])], "told again on the game connection");
+        assert!(!s.server_worlds_pending());
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(answers(&mut s), [], "the control: once");
     }
 
     // A custom race's own options (0x7E22): the offer answered with 1 at once,

@@ -7,6 +7,19 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-10 · No more long wait after Enter Game World
+- In the browser, your character no longer sits at the spinning figure for 10 to 30 seconds after Enter Game World
+  on a server with worlds of its own (the Homelands). The page used to hold every character until it had built or
+  checked those worlds, on every visit. Now only a character who is in one of those worlds waits for them, a few
+  seconds; every other goes straight in, and the worlds finish building while you play (the notice at the top of
+  the page still says how far the build has come).
+- The program now waits those few seconds too for a character who is in a homeland. Before, a new Aviak or Kerran
+  played right away from the program started in its mainland city instead of its homeland, and stayed there.
+- Going in before the worlds are built no longer leaves you without them until you log in again: once they are
+  built you can be sent into them (the Canyon of Banners' matches, for one). Before, the program often told you
+  "Your game cannot see the arena" for the rest of that visit.
+- All of this needs the server's own update too; on a server without it everything is as it was.
+
 ## 2026-11-10 · A server's own races load faster at character select
 - On a server with races of its own (hill giants, fungusmen, kerrans, wisps...), character select and character
   creation used to stutter while those races' bodies were read off your disc: the whole 148 MB creature file was

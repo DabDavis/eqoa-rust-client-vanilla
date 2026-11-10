@@ -22,8 +22,11 @@
 //! page on plain http to another host, a private window without the storage)
 //! it answers as before, and a character of a server's world starts in its
 //! mainland city. While a world is being built a notice at the page's top says
-//! how far it has come, and a character played meanwhile waits for it
-//! (`pregame::client`), so the server places it by what the page holds.
+//! how far it has come, and a character played meanwhile whose login needs it
+//! (the server says which: `net::session::Session::pick_needs_worlds`) waits
+//! for it (`pregame::client`), so the server places it by what the page holds;
+//! any other goes in at once, and the build goes on while it plays (the
+//! session asks for the list again in the world when it went in before it).
 
 use super::disc::WebDisc;
 use crate::serverworlds::{self, Disc, Held};
@@ -170,7 +173,7 @@ async fn hold(disc: &web_sys::File, w: &World) -> Result<(web_sys::File, String,
     let progress = Closure::<dyn FnMut(String, f64, f64)>::new(move |phase: String, done: f64, total: f64| {
         let pc = if total > 0.0 { (done / total * 100.0).floor() as i32 } else { 0 };
         let text = match phase.as_str() {
-            "build" => format!("Building {what} from your disc: {pc}% ({:.0} of {mb:.0} MB). A character you play waits for it.", done / 1048576.0),
+            "build" => format!("Building {what} from your disc: {pc}% ({:.0} of {mb:.0} MB). A character who is there waits for it; any other can play now.", done / 1048576.0),
             "verify" => format!("Checking {what}, built from your disc: {pc}%."),
             _ if started.elapsed().as_millis() < 1500 => return,
             _ => format!("Checking {what} kept in this browser: {pc}%."),
