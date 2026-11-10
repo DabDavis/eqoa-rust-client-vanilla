@@ -614,6 +614,29 @@ or a browser (each described where it lives below):
   is a tap. Another press of □ or Q, a change of target, a menu or the map opened, or the monster's death or leaving
   view closes it sooner. A monster that talks still talks, any other server is as before, and a PS2 on the same server
   is shown the two lines in a dialogue box.
+- **Item links in chat**, on a server that offers them (the GM Jibrish's petition 1463, 2026-11-10: "In other games,
+  like EQ1, you can shift click an item and if your chat is open it puts a link to that item. If people click it, they
+  can view the items stats, name, icon"; go-eqoa-server's offer 0x7E4F (both ways: this client's answer is Extended >
+  Chat > Item Links), a typed line with links 0x7E50, a relayed line with links 0x7E51, a link asked for 0x7E52 and its
+  record 0x7E53; `net::itemlink`, `itemlink.rs`, `linkplay.rs`): the item menu's Link Item (after Inspect, every tab),
+  a Shift+click on an item there or on either list of the bank's item page, closes the window and opens the chat line
+  with the item's name in it at the caret, drawn in the links' purple and kept one unit (`editbox::TextLink`: the
+  caret steps over it, typing never lands inside it, Backspace at its end takes it whole), at most four a line and
+  the names counted in its 127; a line given up with a link in it is kept until it is sent or emptied (a plain open
+  and the next link bring it back). It goes as 0x7E50 in place of its retail message (0x000B, a shout's 0x0C01 2,
+  the guild's 0x0578 12; a slash command's own word off, its links counted from what is sent; a command such as /bug
+  goes plain), each link its record's list and key, and the server makes a snapshot of the record as the player holds
+  it. A line the server relays with links comes as 0x7E51, the retail message whole after the links' places, read as
+  that message always is (`Event::ChatLinks`, then the line's own event); the chat box keeps each link's place through
+  its wrap (`chat::RowLink`) and draws it purple, a click on one (`chat::Let::Link`) opens it, and with the history
+  held (R2, or C: mode 33) left walks up through the links (the view following), right back down, ✕ or Enter opens the
+  lit one, and the history let go forgets the walk; the wheel scrolls the history wherever the pointer is while it is
+  held. A link opened asks for its record once (`itemlink::Links`): at most two windows at the top middle, in the band
+  between the gauges and the minimap (wider than 4:3, widened by what the window shows beyond each side), a third
+  replacing the oldest, each the item's icon, name and `infotext`'s `link_item` lines (Inspect's, the stat bonuses as
+  many to a row as fit, cut over the chat box), and its own x; Escape or △ close the newest. Item Links off (or any
+  other server): no Link Item, no links drawn or opened, and the server, told so, sends the plain names a PS2 is sent.
+  `EQOA_MOUSE`'s `linkclick [k]` clicks the newest link drawn, or the kth before it.
 - **The combat record**, on a server that keeps one (go-eqoa-server's offer, 0x7E20,
   and its record, 0x7E21; Sandstorm and eqoa.live have none, and show no entry): the
   start menu's Character > Combat Record, the client's own window (`record.rs`,

@@ -76,7 +76,11 @@ current.
   byte for byte as before), and a monster's name and level in the target's details box on a server that offers it (the GM
   Jibrish's petition 1459, 2026-11-10, "This should ONLY show the monsters name and level, nothing else": Q's talk sent
   as ever, the server's answer 0x7E4E drawn as CLIENT draws a pet's for 3 s or while Q is held, `Play::mob_info_shown`,
-  go-eqoa-server's `world.mob_info`, 0x7E4C-0x7E4E; on any other server, or a monster that talks, the game's)).
+  go-eqoa-server's `world.mob_info`, 0x7E4C-0x7E4E; on any other server, or a monster that talks, the game's), and
+  item links in chat on a server that offers them (the GM Jibrish's petition 1463, 2026-11-10: the item menu's Link Item
+  and a Shift+click put an item in the chat line as a purple unit, a link in the chat box opens a window of the item at
+  the top middle, two at most, R2 held walks the links: `itemlink.rs`, `linkplay.rs`, `net::itemlink`, go-eqoa-server's
+  0x7E4F-0x7E53; Extended > Chat > Item Links, on by default; off, or on any other server, plain names, the game's)).
   A new client-side addition is the user's call: ask first. Sharp filtering is for the 2D layer and
   the text only: the world's textures are drawn smooth, as the game filters them (the user,
   2026-10-27, after a Crisp row for them: "world textures cant render proper without smooth. so

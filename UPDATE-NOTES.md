@@ -6,6 +6,22 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · Item links in chat
+- On a server that offers them, you can link your items in chat. In your inventory, choose an item and pick
+  Link Item, or Shift+click it (in the bank too): the chat line opens with the item's name in it in purple. Type
+  around it as you like and send; the name stays one piece (Backspace takes it whole). Up to four in a line. If
+  you back out of the line with a link in it, it waits for you: link another item, or open chat again, and it is
+  still there until you send it or clear it.
+- Links in the chat box are purple. Click one to open a small window at the top middle of the screen with the
+  item's icon, name and stats, as the player had it when they linked it (its condition and charges too). Two can
+  be open at once; a third replaces the oldest. Close one with its x, or the newest with Escape or Triangle.
+- On a controller, hold R2 (the chat history) and press left to step up through the links in the chat, right to
+  step back down, and X to open the one lit. Let go of R2 and you are back in the game; next time you hold it you
+  start at the bottom again. With a keyboard, hold C and use the arrow keys and Enter.
+- While you hold R2 (or C), the mouse wheel scrolls the chat history wherever the pointer is.
+- Extended > Chat > Item Links turns it all off (it is on by default): then links show as plain item names, as
+  they do for PlayStation 2 players and older clients.
+
 ## 2026-11-10 · A monster's name and level on Q
 - On a server that turns it on, pressing Q (□ on a controller) on a monster that has nothing to say shows its name
   and level, and nothing else, in the same small window a player's details open in, for about 3 seconds (or for as
