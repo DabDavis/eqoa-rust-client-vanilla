@@ -63,7 +63,10 @@ current.
   there is no pass at all, the picture byte for byte the game's), and a server's own races' customisation on a server
   that sends it (the user's of 2026-11-08, "lets add char customization to the new races": `raceopts.rs`,
   `net::raceopts`, `render::recolor`, README "A server's race's own customisation"; the options are the server's,
-  the parts' triangles too; every row's first step is the body as it is, byte for byte)).
+  the parts' triangles too; every row's first step is the body as it is, byte for byte), and an NPC's body in a
+  server's tint on a server that names one (the server owner's of 2026-11-10, Yhafiran "the black and green oriental
+  dragon" on the disc's green one: `npctint.rs`, `net::npctint`, go-eqoa-server's 0x7E3E-0x7E40; untinted, the body
+  byte for byte as before)).
   A new client-side addition is the user's call: ask first. Sharp filtering is for the 2D layer and
   the text only: the world's textures are drawn smooth, as the game filters them (the user,
   2026-10-27, after a Crisp row for them: "world textures cant render proper without smooth. so

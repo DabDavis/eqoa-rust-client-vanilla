@@ -492,6 +492,19 @@ or a browser (each described where it lives below):
   theirs. The first step of every row is the body as it is, byte for byte; NPCs, bodies with slots, the retail
   races and a server that sends nothing are drawn as before. `eqoa dress <body> <out.png> opts=R:a,b,c`
   (`$EQOA_RACE_OPTIONS`, a file of 0x7E23's body) draws a race in its steps.
+- **An NPC's body in a server's tint**, on a server that names one (the server owner, 2026-11-10: Yhafiran, "the
+  black and green oriental dragon", wears the disc's only green oriental dragon, 0xB5C8A651, the Plane of Disease
+  twins' body, and "vanilla draws Yhafiran tinted toward black and green"; go-eqoa-server's table `npctint`, its
+  offer 0x7E3E, this client's answer 0x7E3F and the set 0x7E40; `net::npctint`, `npctint.rs`): the server names a
+  colour 0xRRGGBBAA for an NPC name, the whole set at once after the answer and again when a GM changes it, and every
+  creature whose channel name keys the same (trimmed, any case, a trailing $ off, as the server keys a name), a
+  player's character never, is built with each layer colour of its body times the tint's red, green and blue (as much
+  of it as its alpha says): the colour the strip programs modulate each texel by, where a live look's dye goes, so the
+  light, the time of day and the fog fall on it as on any body. Every spawn of the name, a respawn under a new id and
+  its corpse alike; its held items and helm keep their colours; a tint that comes, changes or goes makes it anew
+  (`play::apply`). No tint, a white one or alpha 0 draws the body byte for byte as before, and so does every server
+  that sends none; a PS2 draws the green dragon. `eqoa shot <file> <model> <out.png> [camera] tint=RRGGBBAA` (and
+  `eqoa view ... tint=`) draws a model in one: Yhafiran's 0x2A7333FF (red 0.16, green 0.45, blue 0.20).
 - **The combat record**, on a server that keeps one (go-eqoa-server's offer, 0x7E20,
   and its record, 0x7E21; Sandstorm and eqoa.live have none, and show no entry): the
   start menu's Character > Combat Record, the client's own window (`record.rs`,

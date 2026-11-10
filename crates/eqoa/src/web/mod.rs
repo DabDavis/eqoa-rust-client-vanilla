@@ -595,7 +595,7 @@ pub async fn view(file: web_sys::File, args: String) -> Result<(), JsValue> {
                 if list.is_empty() {
                     return Err(format!("{name} has no models"));
                 }
-                viewer::Source::Models { list, index }
+                viewer::Source::Models { list, index, tint: None }
             }
             _ => return Err("expected [model], zone <n> or walk <n>".into()),
         };
