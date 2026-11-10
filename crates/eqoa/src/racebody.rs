@@ -198,6 +198,60 @@ mod tests {
         assert_eq!([human.item_node(0), human.item_node(1), human.item_node(2)], [Some(18), Some(27), Some(28)], "the human as before");
     }
 
+    /// The fairy's shield, as a player of the Fairy race holds it, at its hands'
+    /// size: on the disc its animations draw its two hands' item nodes at 0.3
+    /// and leave its shield node, 16, at 1.0, three and a third times larger;
+    /// `grant` gives that node a FixScale of 0.3, so posed in its idle and its
+    /// walk the shield node is drawn at the off hand's size. The controls: an
+    /// NPC fairy's node keeps the art's 1.0, and the pixie, whose animations
+    /// already draw its shield node at 0.3, is left as it is. Needs
+    /// `run/eqoa.iso`.
+    #[test]
+    fn the_fairys_shield_at_its_hands_size() {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no disc at run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
+        const FAIRY: u32 = 0x7A85_646C;
+        const PIXIE: u32 = 0x94BA_77CD;
+        let listed = races(&[[FAIRY, FAIRY], [PIXIE, PIXIE]]);
+        // the world scale of item nodes `nodes` posed in action (None: standing)
+        let scales = |id: u32, player: bool, action: Option<i32>| {
+            let (mut sc, mut cache, mut rand) = (AnimScene::<Ee>::default(), AnimCache::new(), Rand(1));
+            let mut cs = load_csprite(&lib, lib.lookup(id as i32).unwrap(), &mut sc, &mut cache, &mut rand).unwrap();
+            grant(&mut cs, id, player, Some(&listed));
+            let mut t = 0;
+            while t <= 900 {
+                sc.time = t;
+                match action {
+                    Some(a) if t == 0 => {
+                        cs.set_action(a, &sc, &mut rand);
+                    }
+                    Some(_) => {}
+                    None => cs.set_locomotion(0, &sc, &mut rand),
+                }
+                cs.h.process(0, &sc);
+                t += 16;
+            }
+            let s = |n: i32| {
+                let m = cs.h.nodes[n as usize].world.to_cols();
+                (m[0][0] * m[0][0] + m[0][1] * m[0][1] + m[0][2] * m[0][2]).sqrt()
+            };
+            (s(cs.item_nodes[1]), s(cs.item_nodes[2]))
+        };
+        for action in [None, Some(1)] {
+            let (off, shield) = scales(FAIRY, true, action);
+            assert!((off - 0.3).abs() < 0.01 && (shield - off).abs() < 0.01, "{action:?}: the fairy's shield at its off hand's size ({shield:.3} against {off:.3})");
+            let (_, npc) = scales(FAIRY, false, action);
+            assert!((npc - 1.0).abs() < 0.01, "{action:?}: the control, an NPC's at the art's {npc:.3}");
+            let (off, shield) = scales(PIXIE, true, action);
+            assert!((off - 0.3).abs() < 0.01 && (shield - 0.3).abs() < 0.01, "{action:?}: the pixie's as its art has them");
+        }
+    }
+
     /// Every CSprite on the disc, with the bodies go-eqoa-server's races
     /// wore on 2026-11-08 listed (racedefs 11 to 29 and the froglok): for an
     /// NPC, and on a server that lists none, `grant` changes no sprite's

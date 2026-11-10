@@ -1598,6 +1598,77 @@ mod tests {
         }
     }
 
+    /// The lowest point of `m` (skinned to a body's nodes) posed by the palette
+    /// `pal`.
+    fn lowest(m: &esf::Model, pal: &[glam::Mat4]) -> f32 {
+        (0..m.pos.len())
+            .filter_map(|v| {
+                let (b, w) = (m.bones[v], m.weights[v]);
+                let (mut q, mut sum) = (Vec3::ZERO, 0.0);
+                for k in (0..4).filter(|&k| b[k] != 255 && w[k] > 0 && (b[k] as usize) < pal.len()) {
+                    q += pal[b[k] as usize].transform_point3(Vec3::from(m.pos[v])) * w[k] as f32;
+                    sum += w[k] as f32;
+                }
+                (sum > 0.0).then(|| q.y / sum)
+            })
+            .fold(f32::MAX, f32::min)
+    }
+
+    /// A goblin rests in a crouch, its shoulders at 0.70 of their bind height
+    /// (`standing`), and a cape sized on its bind pose hung to the ground (the
+    /// owner, 2026-11-10: "on goblins they are too big"): now, on every goblin
+    /// body (`CROUCHED`: race 13's own and every one its options offer) in
+    /// every style, the cape posed as the goblin stands ends above the ground
+    /// under its feet and no lower than before, the knight's long cape higher by more
+    /// than a sixth of the goblin's standing height to the shoulders (it came
+    /// to within 3 cm of the ground under the grey and green goblins, now 21 cm
+    /// over it). The control: every other body a cape is drawn on, every player
+    /// race's and every server's race's own, is fitted exactly as before (its
+    /// cape the same to the bit as fitted on its bind pose, `crouched` false),
+    /// the goblins' alone changed.
+    #[test]
+    fn a_goblins_cape_hangs_clear_of_the_ground() {
+        let Some(lib) = char_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        for &id in CROUCHED {
+            let (cs, body) = sprite(&lib, id);
+            let bones = Bones::of(&cs);
+            let poses = palettes(&lib, id);
+            let f = Frame::of(&bones, &body).unwrap();
+            let k = standing(&f, &bones, &poses).unwrap().y;
+            assert!((0.65..0.75).contains(&k), "{id:08X}: stands at {k:.2} of its bind height");
+            let ground = lowest(&body, &poses[0]);
+            let tall = (f.shoulder_y - f.ground) * k;
+            for s in STYLES {
+                let src = source(&lib, s).unwrap();
+                let hem = lowest(&fit(&src, &bones, &body, &poses, true).unwrap(), &poses[0]);
+                let before = lowest(&fit(&src, &bones, &body, &poses, false).unwrap(), &poses[0]);
+                eprintln!("{id:08X} style {}: hem {:+.3} over the ground (before {:+.3}), of its height {:.2}", s.id, hem - ground, before - ground, tall);
+                assert!(hem > ground, "{id:08X} style {}: its hem {:.3} over the ground", s.id, hem - ground);
+                // (the goblin chieftain's high collar, style 2, comes down off its
+                // pauldrons, and its lowest point, riding its legs, stays put)
+                assert!(hem > before - 0.01, "{id:08X} style {}: no lower than before", s.id);
+                if s.id == 1 {
+                    assert!(hem - before > 0.15 * tall, "{id:08X}: the knight's cape shorter by {:.3}", hem - before);
+                }
+            }
+        }
+        // every other body as it was: its cape is the one fitted on its bind pose
+        let mut others = 0;
+        for &id in PLAYERS.iter().chain(RACES).chain(crate::slotless::GOBLINS) {
+            let (cs, body) = sprite(&lib, id);
+            let src = source(&lib, &STYLES[0]).unwrap();
+            let Some(drawn) = model(&lib, Cape { style: 1, color: 0 }, id, &cs) else { continue };
+            let as_before = fit(&src, &Bones::of(&cs), &body, &palettes(&lib, id), false).unwrap();
+            let same = drawn.pos.iter().flatten().map(|f| f.to_bits()).eq(as_before.pos.iter().flatten().map(|f| f.to_bits())) && drawn.bones == as_before.bones && drawn.weights == as_before.weights;
+            assert_eq!(same, !CROUCHED.contains(&id), "{id:08X}: changed only if a goblin's");
+            others += !CROUCHED.contains(&id) as usize;
+        }
+        assert!(others >= 30, "{others} bodies checked");
+    }
+
     /// The same cape fitted twice is the same (it is kept), and a colour
     /// multiplies its layers but their alpha; the control: colour 0 leaves the
     /// art as it is.
@@ -1662,7 +1733,7 @@ mod tests {
             let to = Bones::of(&cs);
             let f = Frame::of(&to, &body).unwrap();
             let tall = f.shoulder_y - f.ground;
-            let placed = placed(&source(&lib, style(st).unwrap()).unwrap(), &to, Some(&f), false).unwrap();
+            let placed = placed(&source(&lib, style(st).unwrap()).unwrap(), &to, Some(&f), Vec3::ONE, false).unwrap();
             let settled = model(&lib, Cape { style: st, color: 0 }, id, &cs).unwrap();
             let worst = |m: &esf::Model| checked().into_iter().map(|(p, a, ms)| { let (d, at) = poke(&lib, m, id, look, a, ms); (d, format!("{p}{ms} {at}")) }).fold((0.0f32, String::new()), |w, x| if x.0 > w.0 { x } else { w });
             let (before, after) = (worst(&placed), worst(&settled));
@@ -1693,7 +1764,7 @@ mod tests {
             upper[k] = true;
         }
         let plate = vi::cust::Look { armor: [4; 6], robe: -1, ..Default::default() };
-        let placed_m = placed(&source(&lib, style(1).unwrap()).unwrap(), &to, Some(&f), false).unwrap();
+        let placed_m = placed(&source(&lib, style(1).unwrap()).unwrap(), &to, Some(&f), Vec3::ONE, false).unwrap();
         let settled = model(&lib, Cape { style: 1, color: 0 }, id, &cs).unwrap();
         let worst = |m: &esf::Model| [(None, 1500), (Some(1), 500), (Some(17), 500)].into_iter().map(|(a, ms)| poke_of(&lib, m, id, &plate, a, ms, Some(&upper)).0).fold(0.0f32, f32::max);
         let (before, after) = (worst(&placed_m), worst(&settled));
@@ -1704,7 +1775,7 @@ mod tests {
         let to = Bones::of(&cs);
         let f = Frame::of(&to, &body).unwrap();
         let tall = f.shoulder_y - f.ground;
-        let placed_m = placed(&source(&lib, style(2).unwrap()).unwrap(), &to, Some(&f), false).unwrap();
+        let placed_m = placed(&source(&lib, style(2).unwrap()).unwrap(), &to, Some(&f), Vec3::ONE, false).unwrap();
         let settled = model(&lib, Cape { style: 2, color: 0 }, id, &cs).unwrap();
         let (mut top, mut low) = (0.0f32, 0.0f32);
         for (a, b) in placed_m.pos.iter().zip(&settled.pos) {
@@ -1734,7 +1805,7 @@ mod tests {
             let to = Bones::of(&cs);
             let f = Frame::of(&to, &body).unwrap();
             let tall = f.shoulder_y - f.ground;
-            let placed_m = placed(&source(&lib, style(1).unwrap()).unwrap(), &to, Some(&f), false).unwrap();
+            let placed_m = placed(&source(&lib, style(1).unwrap()).unwrap(), &to, Some(&f), Vec3::ONE, false).unwrap();
             let settled = model(&lib, Cape { style: 1, color: 0 }, id, &cs).unwrap();
             let worst = |m: &esf::Model| checked().into_iter().map(|(_, a, ms)| poke(&lib, m, id, &plate, a, ms).0).fold(0.0f32, f32::max);
             let (before, after) = (worst(&placed_m), worst(&settled));
@@ -1759,7 +1830,7 @@ mod tests {
             let to = Bones::of(&cs);
             let Some(f) = Frame::of(&to, &body) else { continue };
             for s in STYLES {
-                let Some(placed) = placed(&source(&lib, s).unwrap(), &to, Some(&f), false) else { continue };
+                let Some(placed) = placed(&source(&lib, s).unwrap(), &to, Some(&f), Vec3::ONE, false) else { continue };
                 let Some(settled) = model(&lib, Cape { style: s.id, color: 0 }, id, &cs) else { continue };
                 let moved = placed.pos.iter().zip(&settled.pos).map(|(a, b)| Vec3::from(*a).distance(Vec3::from(*b))).fold(0.0f32, f32::max);
                 let mut line = format!("{id:08X} c{} moved {moved:.3} of {:.2}", s.id, f.shoulder_y - f.ground);

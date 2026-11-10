@@ -548,6 +548,14 @@ mod tests {
         assert_eq!((helmed.look.armor, helmed.helm_fit, helmed.y2002, helmed.head), ([3, 3, 3, 3, 3, 4], false, true, true));
         assert_eq!((bare.look.armor[5], bare.helm_fit, bare.y2002, bare.head), (0, true, false, false), "no helm, the fit on, Frontiers' art and the body framed unless asked");
         assert!(parse(&words("frame=feet")).is_err());
+        let seated = parse(&words("helm=4 helmseat=head,1.4,0,0.36,0.1")).unwrap();
+        assert_eq!(seated.seat, Some((SeatNode::Anchor(crate::slotless::Anchor::Head), crate::slotless::HelmFit { scale: glam::Vec3::splat(1.4), offset: glam::Vec3::new(0.0, 0.36, 0.1) })));
+        let stretched = parse(&words("helmseat=6,2.4,1.6,2.0,0,0.48,0.12")).unwrap();
+        assert_eq!(stretched.seat, Some((SeatNode::Node(6), crate::slotless::HelmFit { scale: glam::Vec3::new(2.4, 1.6, 2.0), offset: glam::Vec3::new(0.0, 0.48, 0.12) })));
+        assert_eq!(parse(&words("helmseat=named,1,0,0,0")).unwrap().seat.map(|s| s.0), Some(SeatNode::Anchor(crate::slotless::Anchor::Named)));
+        assert_eq!(bare.seat, None, "the body's own seat unless asked");
+        assert!(parse(&words("helmseat=head,1,2")).is_err());
+        assert!(parse(&words("helmseat=chin,1,0,0,0")).is_err());
         assert!(parse(&words("sett=3")).is_err());
         assert!(parse(&words("main=sword")).is_err());
         assert!(parse(&words("era=1999")).is_err());

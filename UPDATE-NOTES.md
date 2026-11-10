@@ -6,6 +6,23 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · Helms, gloves and boots on every body of the new races
+- On a server with races of its own, a helm now shows on every body those races can choose: giants, goblins,
+  orcs, gnolls, lizardmen, minotaurs, kobolds, ratmen, kerrans, aviaks, frogloks, kappas, satyrs, brownies,
+  dryads, gargoyles, the pixie and the fairy, each kind of body in every colouring and outfit. It sits on the
+  head the way it sits on a human, the face showing, with a snout, beak or muzzle through the front and ears,
+  horns and crests through the top. The fungusmen still wear none: their cap is their head.
+- The bodies that showed only part of their armour (a chest, bracers and legs, but bare hands and feet: the
+  frogloks, kerrans, aviaks, lizardmen, gnolls, orcs, kobolds, ratmen, satyrs, and the goblin warlord's and
+  warmaster's arms) now show gloves, boots and bracers too, laid on the way they are on the races that showed
+  nothing. Whatever these bodies already showed looks exactly as before.
+- The hooded ratman shows its armour and robe (only its bracers showed), and the ratman trickster its gloves
+  and boots.
+- A fairy's shield is the size of its hands (it was more than three times as big as the fairy).
+- A goblin's cape fits it: a goblin stands crouched, and its cape hung down to the ground; it now ends above its
+  feet. Every other race's cape is exactly as before.
+- Only players' characters are dressed this way: creatures and NPCs look as they always have.
+
 ## 2026-11-09 · Damage numbers in your colours
 - The numbers that float up in a fight can be coloured by what made them, so you can see at a glance that a
   proc fired or a heal over time ticked. It is in Options > Extended > Number Colors: Your Damage, Your Procs,
