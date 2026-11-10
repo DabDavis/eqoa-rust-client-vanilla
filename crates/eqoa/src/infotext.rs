@@ -503,6 +503,29 @@ impl Info<'_> {
         self.list_item(it, 0, false)
     }
 
+    /// The client's own, for a record no list of the game's holds (a loot roll's
+    /// item, a corpse's under its master looter's Inspect: `rollwnd`,
+    /// `masterloot`): `DescribeBankItem`'s lines, then every stat bonus as
+    /// `DescribeInvStats` writes them (no "what it would be worn": the item is
+    /// not the player's), then its text.
+    pub fn inspect_item(&self, it: &NetItem) -> String {
+        let mut d = self.list_item(it, 0, false);
+        if !it.item.stats.is_empty() {
+            d += "\n";
+        }
+        for s in &it.item.stats {
+            match find(&STAT_WORDS, s.id) {
+                Some(w) => d += &format!("{}: {}\n", self.w(w), s.value),
+                None => d += &format!("{}: {}\n", s.id, s.value),
+            }
+        }
+        if !it.item.desc.is_empty() {
+            d += " \n";
+            d += &it.item.desc;
+        }
+        d
+    }
+
     /// `DescribeMerchantItem`.
     pub fn merchant_item(&self, it: &NetItem) -> String {
         self.list_item(it, 0, true)
@@ -924,6 +947,23 @@ mod tests {
         // none of the four (a negative count): nothing
         let odd = Item { name: "Odd".into(), wear_slot: -1, p54: -1, ..Default::default() };
         assert_eq!(info.auction_item(&lot(odd)), "");
+    }
+
+    /// The client's own Inspect of a record (a loot roll's, a master looter's
+    /// corpse item): the bank's lines, every stat by its word (one no word names
+    /// by its number), then the text; the control: a record with no stats and no
+    /// text is the bank's lines alone.
+    #[test]
+    fn a_record_is_inspected_with_its_stats() {
+        let words = numbered();
+        let (inv, base) = (ItemList::default(), [0; 29]);
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 0, attack_words: &[(500, 1)] };
+        let stats = vec![ItemStat { id: 0, value: 5 }, ItemStat { id: 99, value: 7 }];
+        let sword = Item { name: "Sword".into(), damage: 12, wear_slot: 14, race_mask: 0x3FF, class_mask: 0b101, level_req: 30, no_trade: 1, rent: 1, stats, desc: "A blade.".into(), ..Default::default() };
+        let it = NetItem { quantity: 1, item: sword.clone(), ..Default::default() };
+        assert_eq!(info.inspect_item(&it), format!("{}\nw226: 5\n99: 7\n \nA blade.", info.bank_item(&it)));
+        let plain = NetItem { quantity: 1, item: Item { stats: Vec::new(), desc: String::new(), ..sword }, ..Default::default() };
+        assert_eq!(info.inspect_item(&plain), info.bank_item(&plain));
     }
 
     /// `AddRaceMask`/`AddClassMask` on a server that sends the live client's

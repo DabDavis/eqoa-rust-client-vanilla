@@ -53,6 +53,18 @@ impl Play {
         }
     }
 
+    /// The server's word on the corpse open (0x7E47): this player its master
+    /// looter, with whom it may give its items to, or no longer (`masterloot`).
+    /// None while no corpse is open.
+    pub(super) fn master_loot(&mut self, m: Option<net::raid::MasterLoot>) {
+        if self.npcw.corpse.is_none() && m.is_some() {
+            eprintln!("play: a master looter's list with no corpse open, not kept");
+            return;
+        }
+        eprintln!("play: master looter of the corpse open: {}", m.as_ref().map_or("no longer".to_string(), |m| format!("{} players, {} s", m.members.len(), m.seconds)));
+        self.npcw.loot.ml.set(m);
+    }
+
     /// The mode is one of these windows'.
     pub fn npcw_owns(&self) -> bool {
         owns(self.mode)
@@ -106,8 +118,10 @@ impl Play {
                 }
             }
             0x0018 => {
-                // the corpse: the window when in play, else LootNoWindow
+                // the corpse: the window when in play, else LootNoWindow; a
+                // master looter's list comes after it again (0x7E47)
                 self.npcw.corpse = Some(net::dump::read_item_list(&mut r));
+                self.npcw.loot.ml.set(None);
                 if self.mode == 0 {
                     self.npcw.loot_open = true;
                     self.mode = 1;
@@ -122,6 +136,7 @@ impl Play {
                 }
                 self.npcw.loot.visible = false;
                 self.npcw.corpse = None;
+                self.npcw.loot.ml.set(None);
             }
             0x001A => {
                 // Msg001A: every corpse item into the inventory, as far as
@@ -400,7 +415,10 @@ impl Play {
             let empty = ItemList::default();
             for (k, down) in std::mem::take(&mut w.keys) {
                 match self.mode {
-                    1 => loot_out.extend(w.loot.key(k, down, w.corpse.as_ref().unwrap_or(&empty), &mut cues)),
+                    1 => {
+                        let describe = |it: &net::dump::NetItem| info.inspect_item(it);
+                        loot_out.extend(w.loot.key(k, down, w.corpse.as_ref().unwrap_or(&empty), &describe, now, &mut cues));
+                    }
                     10 => {
                         let view = crate::merchant::View { info: &info, shop: &w.shop, coin: self.dump.player.p34 as i32, can_use: &can_use, inv_icon: &icon };
                         w.merchant.key(vui, r, &view, k, down, &mut cues, &mut merch_out);
@@ -435,6 +453,14 @@ impl Play {
                     self.session.send(&w.data);
                 }
                 LootOut::All => self.session.send_opcode(0x001A),
+                // the master looter's (`masterloot`): to the server, which says
+                // what it did in raid chat and sends the corpse again
+                LootOut::Assign { key, id } => {
+                    self.session.send_raid_command(net::raid::Command::Assign { key, id });
+                }
+                LootOut::Abandon => {
+                    self.session.send_raid_command(net::raid::Command::Abandon);
+                }
             }
         }
         for o in merch_out {

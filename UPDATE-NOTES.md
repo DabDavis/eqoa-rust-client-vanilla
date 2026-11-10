@@ -6,6 +6,33 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · Raids: the leader's crown, loot rolls, a master looter and new commands
+- In a raid the raid list shows who leads it with a gold crown by their name, its helper with a blue cross and
+  its main assist with a red diamond.
+- When your raid's leader sets the loot rules to Need Before Greed, each item a raid boss drops, each no-trade
+  item and each item with stats (never a stack or vendor trash) pops up in a small window at the right of the
+  screen, under the minimap: Need, Greed or Pass, with 120 seconds to choose. Need is greyed out if you cannot wear or use the item.
+  It never stops you moving: click a choice, or on a controller hold R2 and press right to reach it, then left
+  and right to pick and X to choose (up and down for another item); let go of R2 to go back. With a keyboard,
+  hold C and use the arrow keys and Enter. Your roll (0 to 100) is made the moment you choose, and every roll and
+  the winner show in raid chat: any Need beats any Greed. The winner's item goes straight into their pack; with a
+  full pack it waits on the corpse for them alone for 5 minutes (open the corpse to take it).
+- The raid's leader can set the loot rules in Community > Group > Raid > Loot Rules: Free for All, Need Before
+  Greed or Master Looter. They cannot be changed while the raid is in combat, and the raid cannot be disbanded
+  then either.
+- With Master Looter, a raid kill that drops such an item is the leader's alone to open for 5 minutes (anyone else
+  is told whose it is; then it is anyone's). Choosing an item gives the leader a menu: Take, Inspect, Assign (pick a
+  raid member from a list, then confirm) and Abandon (after a confirmation, anyone may loot anything on the corpse).
+- A member kicked from the raid during a fight still gets its rolls (or can be assigned an item) for what the raid
+  was fighting, so no one can be kicked out of their loot just before a boss dies.
+- Community > Group > Raid also has Invite (your target), Raid Flag (everyone near), Kick, Make Leader, Make
+  Helper, Make Main Assist, Assist Main Assist and Leave Raid, each shown to whoever may use it.
+- New commands, typed in chat (on a PS2 put /t in front: /t raidinvite Bob): /raidinvite [name] (your target
+  without a name), /raidaoe (or /raid), /raidleave, /rsay to talk to the raid, /raidloot, /raidleader, /raidhelper,
+  /raidkick, /raidassist (set the main assist, or with no name target what your main assist is fighting: put it
+  in a quick chat line to fire it in a few presses), /invite <name> to invite anyone to your group, and /target <name> (or /tar) to target the nearest player
+  or creature whose name starts that way, within 100. /help lists them all.
+
 ## 2026-11-10 · Third-party PS3 controllers: the d-pad works
 - A controller whose d-pad is a "hat", as on most third-party PS3 controllers and many other PC controllers,
   now works wherever the d-pad does (the menus, the quick menus, every window): in Firefox on Windows, in

@@ -100,6 +100,8 @@ mod jump;
 mod livewords;
 mod hud;
 mod raidlist;
+mod rollwnd;
+mod masterloot;
 mod damage;
 mod numcolor;
 mod dpsmeter;
