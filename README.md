@@ -402,7 +402,15 @@ or a browser (each described where it lives below):
   bodies only the brownie's, dryad's, orc's and skeleton's have their own (every player race's body has), the
   rest stood in the air; on a server with jumps a player's character in one of them takes the human's fall
   (looping) and landing (once) carried onto it, or its own nearest (`AIR_OWN`: the pixie's, fairy's and
-  fungusman's), in its own view and every other player's, a jump and a fall off a ledge alike.
+  fungusman's), in its own view and every other player's, a jump and a fall off a ledge alike. The swim too
+  (2026-11-10, petition 1456: "gargs fly in the water instead of swim"; `raceemote::grant_swim`): a body in
+  water plays its entry 12 (swimming) or 13 (treading), and of every body the races wear only the gargoyles' six,
+  the Jal'Raeth's three, the pixie's and the fairy's have neither, so they played the idle (a gargoyle stood
+  upright, its wings out, as if it flew; a Jal'Raeth sat cross-legged); a player's character in a gargoyle's or a
+  Jal'Raeth's body on a server with races of its own takes the human's swim carried onto it (one clip, looping,
+  for both; a gargoyle's wings held as its idle holds them, standing up off its back as it lies along the water),
+  the pixie and the fairy keep their hover (`SWIM_NONE`: all they have flies, and the human's would not carry);
+  `EQOA_SWIM` in a walk shot (`EQOA_BODY`).
 - **The Wisp** (a race of go-eqoa-server's own, 31; the owner, 2026-11-09: "the armor will form like a human and also
   the weapons swing like humans. like when humans are invis, but the wisp is inside the helm"; `wisp`): a human's body
   of its sex, marked by a race option the server lays always (a texture row of one step, `wisp`, whose value is the
