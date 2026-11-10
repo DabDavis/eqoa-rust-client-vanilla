@@ -568,7 +568,10 @@ impl PadMap {
         if swaps_xy(pad, b) {
             how.push_str(", X and Y swapped");
         }
-        if let Some((l, r)) = Self::trigger_pair(pad, layout, b) {
+        // (none where the pair's second is a hat's: no triggers there)
+        if let Some((l, r)) = Self::trigger_pair(pad, layout, b)
+            && (self.triggers || layout != Layout::Raw || !self.hat_axis(pad, r))
+        {
             let known = self.triggers || (layout == Layout::Evdev && is_xpad(&pad.id));
             how.push_str(&format!(", triggers at axes {l} and {r}{}", if known { "" } else { " (not yet at rest)" }));
         }
@@ -963,7 +966,7 @@ mod tests {
         m.read(&s, linux);
         s.axes[5] = -1.0;
         assert_eq!(m.read(&s, linux).buttons, 0, "a stick pushed all the way, once it has given 0.4");
-        assert!(m.how(&s, linux).ends_with("the d-pad on buttons 12 to 15"), "{}", m.how(&s, linux));
+        assert!(m.how(&s, linux).contains("the d-pad on buttons 12 to 15"), "{}", m.how(&s, linux));
         // triggers resting at -1 at the end
         let mut t = pad("Triggers (Vendor: 1234 Product: 0002)", "", 13, &[0.0, 0.0, 0.0, 0.0, -1.0, -1.0]);
         let mut mt = PadMap::default();

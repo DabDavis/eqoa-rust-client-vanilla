@@ -1719,7 +1719,12 @@ const WGI_AXIS_5: u32 = 0x0001_0004;
 fn short_raw(g: &mut GilrsRead, buttons: &[(u32, bool, f32)], five: bool) {
     let held = |code: u32| buttons.iter().any(|&(c, on, _)| c == code && on);
     let (l2, r2) = (held(WGI_BUTTON_7), held(WGI_BUTTON_8));
-    g.named = g.named & !(bit::L2 | bit::R2) | if l2 { bit::L2 } else { 0 } | if r2 { bit::R2 } else { 0 };
+    g.named &= !(bit::L2 | bit::R2);
+    for (on, k) in [(l2, bit::L2), (r2, bit::R2)] {
+        if on {
+            g.named |= k;
+        }
+    }
     g.triggers = [f32::from(u8::from(l2)), f32::from(u8::from(r2))];
     if !five && let Some(&(_, _, v)) = buttons.iter().find(|&&(c, ..)| c == WGI_AXIS_4) {
         g.sticks[1] = (v * 2.0 - 1.0).clamp(-1.0, 1.0);
