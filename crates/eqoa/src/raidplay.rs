@@ -83,10 +83,17 @@ impl Play {
         self.session.agree_raid(true);
     }
 
-    /// 0x7E44: the raid as it is now.
+    /// 0x7E44: the raid as it is now. In a raid the client leads as the server
+    /// says (its flags' bit 1): `Msg0772` only ever sets the game's leader flag
+    /// (`m_p2BD78`, from member 0), so after `/raidleader` handed the lead on,
+    /// the old leader's client still took itself for the leader (its Boot,
+    /// Disband and the leader's rows); out of one the game's rule stands.
     pub(super) fn raid_state(&mut self, st: State) {
         if st != self.raid.state {
             eprintln!("play: raid {:?}", st);
+        }
+        if st.in_raid() && self.group.in_group {
+            self.group.leader = st.leads();
         }
         self.raid.state = st;
     }
@@ -451,6 +458,25 @@ mod tests {
         p.msg_007b(u32::MAX);
         assert!(taken(&mut p).iter().all(|m| m[..2] != [0x10, 0x00]), "the control: none asked");
         assert_eq!(p.target, 0x0012_3456);
+    }
+
+    /// The lead handed on (`/raidleader`): the old leader's client stops taking
+    /// itself for the leader, its Disband the game's word 639 and nothing sent;
+    /// the new one's leads. The control: out of a raid the game's flag stands.
+    #[test]
+    fn the_lead_is_the_raid_states() {
+        let mut p = play();
+        p.group.in_group = true;
+        p.group.leader = true;
+        p.group.members = vec![Default::default(); 2];
+        p.raid_state(state(0, 0, 0));
+        assert!(p.group.leader, "no raid: the game's own leader flag");
+        p.raid_state(state(5, 0, 0));
+        assert!(!p.group.leader, "the lead handed on");
+        p.group_action(0x0705_0000);
+        assert!(p.group.in_group && taken(&mut p).iter().all(|m| m[..2] != [0x27, 0x06]), "no disband sent");
+        p.raid_state(state(5, 2, 0));
+        assert!(p.group.leader, "led again");
     }
 
     #[test]
