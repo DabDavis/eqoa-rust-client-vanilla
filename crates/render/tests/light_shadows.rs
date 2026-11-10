@@ -478,6 +478,82 @@ fn a_light_riding_a_body_does_not_flicker() {
     assert!(spread > 0.1 && flips > 20, "the control, a fire moved so: the body's shadow flips ({spread}, {flips})");
 }
 
+/// The floor round a post 1.5 to 2.3 out from a light 3 up, seen from 3
+/// over x 4 (60°, a texel of its map 1.5 to 2.5 pixels there), each frame
+/// with the light at `light(k)`, 60 frames a second: the frames, and the most
+/// any pixel changed from one frame to the next.
+fn moving_light_frames(g: &Gpu, light: impl Fn(usize) -> PointLight, frames: usize) -> (Vec<Vec<u8>>, u8) {
+    let none = |_: i32| None;
+    let mut r = renderer(g, true, false, true);
+    let part = |m| GroupPart { model: m, instances: &[render::IDENTITY], statics: &[], moves: false, baked: false };
+    let (flat, post) = (floor(HALF), cuboid(Vec3::new(1.5, 0.0, -0.4), Vec3::new(2.3, 2.0, 0.4), layer(0, 0)));
+    let gr = r.upload_group(&g.device, &g.queue, &[part(&flat), part(&post)], &none);
+    let eye = Vec3::new(4.0, 3.0, 0.0);
+    let vp = glam::camera::rh::proj::directx::perspective(60f32.to_radians(), 1.0, 0.1, 100.0) * glam::camera::rh::view::look_at_mat4(eye, Vec3::new(4.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0));
+    let (mut out, mut worst): (Vec<Vec<u8>>, u8) = (Vec::new(), 0);
+    for k in 0..frames {
+        r.scroll_time = Some(k as f32 / 60.0);
+        let v = View { view_proj: vp, eye, ..view(Vec3::ZERO, &[light(k)], None) };
+        let px = render::capture(&g.device, &g.queue, &mut r, 256, 256, &v, &[Draw::Group(&gr)], None);
+        if let Some(l) = out.last() {
+            worst = worst.max(px.iter().zip(l).map(|(a, b)| a.abs_diff(*b)).max().unwrap());
+        }
+        out.push(px);
+    }
+    (out, worst)
+}
+
+/// A light moving a millimetre a frame beside a post (a walking lantern's
+/// map is drawn again from where it is every frame): the post's shadow on the
+/// floor follows it, and as the light moves the map's texels flip one by one
+/// along the edge, a row of them at a time where the edge lies along the
+/// map's grid. Through the tent of radius 3 a row is a third of the filter's
+/// weight: no pixel changes by 48 levels of the shadow's 112 in a frame (42
+/// at most). Through the four comparisons half a texel apart before it a row
+/// was half: 3,351 changes of 48 or more in the second, up to 64, every edge
+/// crawling a texel at a time (the owner's "jittery"). The control, the light
+/// 2.5 cm a frame, changes pixels by more than a flip: the measure sees a
+/// move.
+#[test]
+fn a_moving_lights_shadow_glides() {
+    let Some(g) = gpu() else { return };
+    let at = |dz: f32| fire(Vec3::new(0.0, 3.0, dz), 20.0, 4);
+    let (frames, worst) = moving_light_frames(&g, |k| at(k as f32 * 0.001), 60);
+    assert!(worst < 48, "a frame changed a pixel by {worst} (of the shadow's 112) as the light moved a millimetre");
+    // and the shadow moved: its edge 7 cm on, some pixels lit that were dark
+    let moved = frames[0].iter().zip(&frames[59]).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    assert!(moved > 40, "the shadow moved with the light: {moved}");
+    let (_, jumps) = moving_light_frames(&g, |k| at(k as f32 * 0.025), 12);
+    assert!(jumps >= 48, "the control, 2.5 cm a frame: {jumps}");
+}
+
+/// A light of the moment swaying 3 cm about its place (a glowing weapon in
+/// an idle stance, its particles' middle following the hand): its map stays
+/// where it was drawn (`MOMENT_HOLD`), so the post's shadow does not move at
+/// all, only the light's own falloff by under a level; drawn again from each
+/// frame's place, the shadow's edges crawled back and forth. The control: a
+/// fire swayed the same way (a fixed light's map goes where it is) changes
+/// its shadow's edge pixels by more.
+#[test]
+fn a_swaying_light_of_the_moment_holds_its_shadow() {
+    let Some(g) = gpu() else { return };
+    let sway = |k: usize, fixed: bool| {
+        let t = k as f32 / 60.0 * 0.7 * std::f32::consts::TAU;
+        let at = Vec3::new(0.0, 3.0, 0.0) + Vec3::new(t.sin(), 0.6 * (2.0 * t).sin(), t.cos()) * 0.03;
+        PointLight { at, range: 20.0, color: Vec3::X, fixed, key: if fixed { 6 } else { (1 << 40) | 6 } }
+    };
+    let (frames, worst) = moving_light_frames(&g, |k| sway(k, false), 60);
+    assert!(worst <= 2, "a frame changed a pixel by {worst} as a light of the moment swayed");
+    assert!(red_at(&frames[30], 128, 128) < 0.15, "the post's shadow there: {}", red_at(&frames[30], 128, 128));
+    let (_, crawl) = moving_light_frames(&g, |k| sway(k, true), 60);
+    assert!(crawl > 2, "the control, a fire swayed so: {crawl}");
+}
+
+/// The red of pixel (x, y) of a 256-wide frame.
+fn red_at(px: &[u8], x: usize, y: usize) -> f32 {
+    px[(y * 256 + x) * 4] as f32 / 255.0
+}
+
 /// With Sun Shadows on too: at noon the box casts the sun's shadow and the
 /// light's; by night (the game's sun under the ground, its light travelling
 /// up, a ceiling lit) the sun's term is the strip programs' alone, the last

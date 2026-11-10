@@ -6,6 +6,16 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · Light Shadows: soft, steady edges
+- With Light Shadows on, the shadows of your lantern and of torches, braziers and lamps have soft edges now.
+  Up close they showed little steps along every edge, and while your lantern moved (or anything walked past a
+  fire) their edges crawled and flickered a step at a time; now they glide.
+- A glowing weapon or a spell no longer makes the shadows of what is round it shimmer while you stand still: they
+  hold still until the glow itself moves away.
+- In a page and on Android the shadows are softer and steadier too.
+- It costs the graphics card a little more where many lights overlap (on an RX 580 about 0.4 ms a frame at
+  1080p in Freeport's torch-lit courtyard).
+
 ## 2026-11-10 · Helms, gloves and boots on every body of the new races
 - On a server with races of its own, a helm now shows on every body those races can choose: giants, goblins,
   orcs, gnolls, lizardmen, minotaurs, kobolds, ratmen, kerrans, aviaks, frogloks, kappas, satyrs, brownies,
