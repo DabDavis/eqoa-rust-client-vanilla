@@ -63,6 +63,8 @@ pub struct Res {
     /// being read for some; some just put in the library (`take_bodies_in`).
     bodies_asked: HashSet<u32>,
     bodies_reading: Option<(Vec<u32>, files::Pending)>,
+    /// when the read under way was asked for (`bodytrace`)
+    bodies_since: Option<web_time::Instant>,
     bodies_in: bool,
     /// Each bodies' file in the library and the bodies cut into it; in the
     /// 2002 art the 2002 disc's copies of them (`want_bodies_2002`): the files
@@ -270,6 +272,8 @@ impl Res {
         }
         let new: Vec<u32> = ids.iter().copied().filter(|&id| id != 0 && self.lib.lookup(id as i32).is_none() && self.bodies_asked.insert(id)).collect();
         if !new.is_empty() {
+            super::bodytrace::note(|| format!("{} bodies asked for: CHAR.ESF read whole", new.len()));
+            self.bodies_since = Some(web_time::Instant::now());
             self.bodies_reading = Some((new, files::read(&["DATA/CHAR.ESF"])));
         }
     }
@@ -288,7 +292,12 @@ impl Res {
         match r {
             Ok(list) => {
                 for (_, bytes) in list {
-                    match cut_bodies(bytes, &ids) {
+                    let since = self.bodies_since.map_or(0.0, |t| t.elapsed().as_secs_f64() * 1e3);
+                    super::bodytrace::note(|| format!("CHAR.ESF read whole, {:.1} MB, {since:.1} ms after it was asked for", bytes.len() as f64 / 1048576.0));
+                    let took = super::bodytrace::watch();
+                    let cut = cut_bodies(bytes, &ids);
+                    super::bodytrace::note(|| format!("{} bodies cut out of it in {:.1} ms on the frame's thread ({:.1} MB kept)", ids.len(), took(), cut.as_ref().map_or(0.0, |c| c.data.len() as f64 / 1048576.0)));
+                    match cut {
                         Some(c) => {
                             let f = self.lib.add(BODIES, c);
                             self.bodies_files.push((f, ids.clone()));
@@ -327,7 +336,10 @@ impl Res {
             Ok(list) => {
                 let files: Vec<(usize, Vec<u32>)> = self.bodies_files.iter().filter(|(f, _)| asked.contains(f)).cloned().collect();
                 for (_, bytes) in list {
-                    if stand_in_bodies(&mut self.lib, &files, bytes) > 0 {
+                    let (took, mb) = (super::bodytrace::watch(), bytes.len() as f64 / 1048576.0);
+                    let n = stand_in_bodies(&mut self.lib, &files, bytes);
+                    super::bodytrace::note(|| format!("the 2002 disc's CHAR.ESF ({mb:.1} MB): {n} of {} bodies' files stood in for, in {:.1} ms on the frame's thread", files.len(), took()));
+                    if n > 0 {
                         self.bodies_in = true;
                     }
                 }

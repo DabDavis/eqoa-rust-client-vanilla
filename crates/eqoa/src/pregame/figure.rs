@@ -111,7 +111,14 @@ impl Figure {
     /// textures, laid only on the body they were chosen on).
     #[allow(clippy::too_many_arguments)]
     pub fn new_dressed(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, race_look: Option<net::raceopts::Look>, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
-        lib.with_view(lib.view_for(model as i32), || Figure::new_in_view(lib, g, model, look, race_look, items, at, hpr, now))
+        let took = super::bodytrace::watch();
+        let f = lib.with_view(lib.view_for(model as i32), || Figure::new_in_view(lib, g, model, look, race_look, items, at, hpr, now));
+        super::bodytrace::note(|| match &f {
+            Some(f) if f.body == model => format!("figure {model:08X} built of its own body in {:.1} ms", took()),
+            Some(f) => format!("figure {model:08X} built of {:08X} standing in, in {:.1} ms", f.body, took()),
+            None => format!("figure {model:08X}: none ({:.1} ms)", took()),
+        });
+        f
     }
 
     /// Made again as it stands, in the art drawn now (F9): its model, look and

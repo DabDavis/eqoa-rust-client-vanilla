@@ -33,6 +33,7 @@
 //! itself) and plays its sounds as `Cue`s. What the game counts in frames
 //! steps on `frames.rs`'s clock (`Ctx::game_frame`).
 
+pub mod bodytrace;
 pub mod boot;
 pub mod figure;
 pub mod client;
@@ -321,6 +322,9 @@ impl Pregame {
     /// moves on if its files are in.
     pub fn update(&mut self, now: i64) {
         self.res.poll();
+        if bodytrace::on() {
+            bodytrace::characters(&self.client.chars.iter().map(|c| (c.name.as_str(), c.model)).collect::<Vec<_>>());
+        }
         // a server's races' bodies (CHARSEL's files hold the game's alone):
         // read once it tells of them, and the figures made again when they come
         // and the bodies the characters' capes are cut from (`cape`)
@@ -401,6 +405,14 @@ impl Pregame {
     /// what it asks for next.
     #[allow(clippy::too_many_arguments)]
     pub fn frame(&mut self, cx_now: i64, game_frame: bool, r: &mut dyn crate::ui::Layout, cues: &mut Vec<crate::sound::Cue>, music: &mut Vec<Music>, gpu: Option<crate::play::Gpu>) {
+        bodytrace::frame_begin();
+        self.frame_work(cx_now, game_frame, r, cues, music, gpu);
+        bodytrace::frame_end();
+    }
+
+    /// `frame`'s work.
+    #[allow(clippy::too_many_arguments)]
+    fn frame_work(&mut self, cx_now: i64, game_frame: bool, r: &mut dyn crate::ui::Layout, cues: &mut Vec<crate::sound::Cue>, music: &mut Vec<Music>, gpu: Option<crate::play::Gpu>) {
         self.update(cx_now);
         // the keyboard's next event, read once a frame of the game's
         if game_frame && let Some((k, down)) = self.keyboard.pop_front() {
