@@ -60,6 +60,28 @@ is put on the page by `.github/workflows/notes.yml`.
   feet. Every other race's cape is exactly as before.
 - Only players' characters are dressed this way: creatures and NPCs look as they always have.
 
+## 2026-11-10 · The Homelands end in rocks, not a fall
+- The Homelands' lands no longer end at a drop into nothing: every edge of a homeland that does not lead into
+  another one is closed by a ridge of the game's own rocks (Odus's mossy boulders), on land and out in the
+  water alike, so you cannot walk or swim off a homeland any more.
+  Where two homelands touch (Odus's homes, the coast by the Warrens) you still walk from one into the next.
+- A server's world can now be decorated with the game's own art, placed where the server says: your client
+  (or the web page) copies the pieces off your own disc into the world it builds, as it builds the rest, and
+  draws and collides them like everything else there.
+- An older client cannot build the Homelands any more: its characters of the new races start in their mainland
+  cities until it updates (which it does at its next start).
+
+## 2026-11-10 · The Homelands in the browser
+- The web page now builds a server's own worlds from your disc as the program does. The first time you reach
+  character select on a server that has them (the Homelands, where a server's new races start), the page builds
+  the world into your browser's own storage, a part of your disc at a time, and says how far it has come at the
+  top of the page (a few seconds; nothing of the game is downloaded). Your next visits find it kept and only
+  check it.
+- So in the browser too a new Aviak hatches in Aviak Village, and every race with a homeland starts there,
+  instead of in its home city. A character you play while the world is still being built waits for it.
+- It takes about 130 MB of the browser's storage. A browser that cannot keep it (a page without its storage,
+  some private windows) plays as before: a character from the Homelands starts in its home city.
+
 ## 2026-11-09 · A server's own worlds, built from your disc
 - A server can now have worlds of its own made of the game's own lands: the Homelands, where a server's new races
   start (an Aviak hatches in Aviak Village). The client builds such a world from your own disc the first time you
