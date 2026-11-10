@@ -402,7 +402,9 @@ or a browser (each described where it lives below):
   bodies only the brownie's, dryad's, orc's and skeleton's have their own (every player race's body has), the
   rest stood in the air; on a server with jumps a player's character in one of them takes the human's fall
   (looping) and landing (once) carried onto it, or its own nearest (`AIR_OWN`: the pixie's, fairy's and
-  fungusman's), in its own view and every other player's, a jump and a fall off a ledge alike. The swim too
+  fungusman's), in its own view and every other player's, a jump and a fall off a ledge alike; so does one in
+  another body its race's options offer (the shadow gargoyle, a goblin king), by the body worn
+  (`raceemote::race_of`, 2026-11-10: it was looked up as itself, not listed, and stood in the air). The swim too
   (2026-11-10, petition 1456: "gargs fly in the water instead of swim"; `raceemote::grant_swim`): a body in
   water plays its entry 12 (swimming) or 13 (treading), and of every body the races wear only the gargoyles' six,
   the Jal'Raeth's three, the pixie's and the fairy's have neither, so they played the idle (a gargoyle stood

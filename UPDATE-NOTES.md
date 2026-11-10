@@ -15,6 +15,9 @@ is put on the page by `.github/workflows/notes.yml`.
   still. The Jal'Raeth, who sat cross-legged in the water, swim the same way. A pixie or a fairy still hovers in
   the water: everything they do is flying. Other players with this client see them swim; a PlayStation 2 still
   shows them as before.
+- On a server with jumps, a character in one of a race's other bodies (a shadow or fire gargoyle, a goblin king,
+  any body the race's appearance choices offer) now falls and lands as its race's own body does. Through a
+  jump or a fall off a ledge it stood in the air as if on the ground.
 - A goblin in the chieftain's body wears its cape the way the other goblins do. The chieftain's spiked shoulder
   harness made its cape more than twice a goblin's width and depth, so it stood out from its back like a board and
   hung wider than its arms; it is now sized to the goblin's shoulders and hangs down its back over the harness. The
