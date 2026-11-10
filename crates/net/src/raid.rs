@@ -131,11 +131,7 @@ pub fn read_master_loot(data: &[u8]) -> Option<Option<MasterLoot>> {
     for _ in 0..n {
         let id = r.u32();
         let len = r.u8() as usize;
-        let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
-        if r.error {
-            return None;
-        }
-        members.push((id, name));
+        members.push((id, String::from_utf8_lossy(r.bytes(len)).into_owned()));
     }
     (!r.error).then_some(Some(MasterLoot { seconds, members }))
 }
