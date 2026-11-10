@@ -6,6 +6,11 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+
+## 2026-11-10 · The PS2 loader linked from the browser page
+- Playing on PCSX2 or a real PS2? The browser page's start screen now links eqoaclassic's loader (EQOABOOT.ELF and how
+  to use it: your own unmodified disc, no patched ISO). On a server that offers no loader nothing new is shown.
+
 ## 2026-11-10 · Item links in chat
 - On a server that offers them, you can link your items in chat. In your inventory, choose an item and pick
   Link Item, or Shift+click it (in the bank too): the chat line opens with the item's name in it in purple. Type

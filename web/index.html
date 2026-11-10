@@ -105,6 +105,7 @@
       <div class="note" id="install-what"></div>
     </div>
     <div class="row end"><a class="link" href="./spellfx.html" target="_blank" rel="noopener">Help match spell visuals</a></div>
+    <div class="row end" id="ps2-row" hidden><a class="link" href="/ps2/" target="_blank" rel="noopener">Playing on PCSX2 or a PS2? Get the loader</a></div>
   </form>
 
 </div>
@@ -119,6 +120,11 @@
       document.getElementById('status').textContent = 'The client\u2019s files did not load (' + t.src + '). Reload the page; if it happens again, the site may be in the middle of an update: wait a minute.';
     }
   }, true);
+  // a site that offers the PS2/PCSX2 loader at /ps2/ (eqoaclassic.com's EQOABOOT.ELF) is
+  // linked from here; any other host shows nothing
+  fetch('/ps2/', { method: 'HEAD', cache: 'no-store' }).then((r) => {
+    if (r.ok) document.getElementById('ps2-row').hidden = false;
+  }).catch(() => {});
 </script>
 <script type="module" src="./notices.js"></script>
 <script type="module" src="./main.js"></script>
