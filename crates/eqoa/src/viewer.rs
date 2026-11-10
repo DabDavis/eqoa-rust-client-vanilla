@@ -2045,7 +2045,7 @@ struct App {
     keys_edge: crate::binds::KeyEdge,
     pad_edge: crate::binds::PadEdge,
     /// the player's macros running (`macros`), and whether this frame drawn
-    /// is one of the game's (their turbo counts those)
+    /// is one of the game's (they act at those, two fields each)
     macro_run: crate::macros::Run,
     macro_frame: bool,
     /// The left stick held past the walk's run threshold once past it
@@ -2796,7 +2796,10 @@ impl App {
                         p.set_key(k, false, w, aspect);
                     }
                 }
-                Sent::Macro(m) => crate::settings::with_binds(|b| self.macro_run.key(m, false, b)),
+                Sent::Macro(name) => {
+                    let now = self.clock.elapsed().as_secs_f64() * 1000.0;
+                    crate::settings::with_binds(|b| self.macro_run.key(&name, false, now, b));
+                }
             }
         }
         // a toggled macro does not run on behind a window that lost the keys
@@ -2856,36 +2859,47 @@ impl App {
         }
         // the player's own buttons (`binds`, the client's): the controllers'
         // (and a script's, which stands for one) on the game's fields; while
-        // the Controls page waits for a button the one pressed is its, and
-        // the game sees nothing of it. The touch screen's pad draws the
-        // game's glyphs, and stays as it is.
-        let capturing = self.play.as_ref().is_some_and(|p| p.capturing().is_some());
+        // the Controls or Macros page waits for a button the ones pressed
+        // are its, and the game sees nothing of them. The touch screen's
+        // pad draws the game's glyphs, and stays as it is.
+        let capture = self.play.as_ref().and_then(|p| p.capturing());
+        let capturing = capture.is_some();
         let f = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
+        // the macros' triggers read the controllers as they hold them
+        let held = crate::macros::Held { buttons: f.held, sticks: report.sticks, triggers: report.triggers };
         report.buttons = f.fields;
-        // every button a capture took, in order (a macro's buttons take them
-        // all; any other capture the first, and is done)
+        // a stick's way in a macro's trigger is the trigger's, not the game's
+        report.sticks = crate::settings::with_binds(|b| b.mask_ways(report.sticks));
+        // every button a capture took, in order (a trigger takes them all;
+        // any other capture the first, and is done), those it took let go
+        // (a trigger is kept at the first), and the sticks for a trigger
         if let Some(p) = self.play.as_mut() {
             for i in (0..16u8).filter(|i| f.caught & (1 << i) != 0) {
                 p.capture_button(i);
             }
-        }
-        // the player's macros (`macros`, the client's): the buttons they
-        // press join the controllers', as the game sees a pad's; none while
-        // the Controls page waits for a key or a button
-        if capturing {
-            self.macro_run.let_go();
-        } else {
-            let game_frame = self.macro_frame;
-            let pressed = crate::settings::with_binds(|b| self.macro_run.frame(f.macros, game_frame, b));
-            if pressed != 0 && crate::input::trace() && report.buttons & pressed != pressed {
-                crate::say(&format!("[pad] macros press {}", crate::input::bit::name(pressed)));
+            if capture == Some(crate::bindpage::Column::Trigger) {
+                for i in (0..16u8).filter(|i| f.let_go & (1 << i) != 0) {
+                    p.capture_button_up(i);
+                }
+                p.capture_axes(held.sticks);
             }
-            report.buttons |= pressed;
         }
         if self.touch.used {
             report.merge(&self.touch.report());
             connected = true;
         }
+        // the player's macros (`macros`, the client's): the pad as they and
+        // every source set it (PCSX2's), the game's frames their clock;
+        // none while a page waits for a key, a button or a trigger
+        let now = self.clock.elapsed().as_secs_f64() * 1000.0;
+        let game_frame = self.macro_frame;
+        let before = report.buttons;
+        report = crate::settings::with_binds(|b| self.macro_run.frame(now, game_frame, capturing, &held, &report, b));
+        if report.buttons != before && crate::input::trace() {
+            crate::say(&format!("[pad] macros: {:#06x} (the sources {before:#06x})", report.buttons));
+        }
+        // a macro set up: the pad is there from then on, controller or none
+        connected |= self.macro_run.connects();
         let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
         let keys = self.console.poll(report, connected, motors, dead);
         #[cfg(not(target_arch = "wasm32"))]
@@ -3269,13 +3283,24 @@ impl App {
             report.merge(&s.at(self.clock.elapsed().as_millis() as i64));
             connected = true;
         }
-        // the player's own buttons, and a capture's for the title's Controls page
-        let capturing = self.host.as_ref().is_some_and(|h| h.pre.setup.capturing().is_some());
-        let f = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capturing, b));
-        report.buttons = f.fields;
-        if let (Some(i), Some(h)) = (f.took, self.host.as_mut()) {
-            h.pre.setup.capture_button(i);
+        // the player's own buttons, and a capture's for the title's Controls
+        // and Macros pages (a trigger's: every button pressed, those let go,
+        // the sticks)
+        let capture = self.host.as_ref().and_then(|h| h.pre.setup.capturing());
+        let f = crate::settings::with_binds(|b| self.pad_edge.frame(report.buttons, capture.is_some(), b));
+        if let Some(h) = self.host.as_mut() {
+            for i in (0..16u8).filter(|i| f.caught & (1 << i) != 0) {
+                h.pre.setup.capture_button(i);
+            }
+            if capture == Some(crate::bindpage::Column::Trigger) {
+                for i in (0..16u8).filter(|i| f.let_go & (1 << i) != 0) {
+                    h.pre.setup.capture_button_up(i);
+                }
+                h.pre.setup.capture_axes(report.sticks);
+            }
         }
+        report.buttons = f.fields;
+        report.sticks = crate::settings::with_binds(|b| b.mask_ways(report.sticks));
         // a button on F9's row: the art swapped, as F9 does before the world
         // (the other rows of the client's keys are play's)
         if f.rows.iter().any(|&(row, down)| down && crate::binds::ROWS[row].id == "art") {
@@ -4115,7 +4140,9 @@ impl App {
             }
             // the options, buddy and ignore lists and the guild's
             // roster (modes 34, 17/18, 26, 20/21): arrows, Enter or
-            // E, Escape; C (the windows' ○) the roster's sort
+            // E, Escape; C (the windows' ○) the roster's sort; Q (□),
+            // ` (L1) and Tab (R1) the Macros page's (a trigger off, a
+            // slider by ten)
             if p.panel_up() {
                 let k = match &event.logical_key {
                     Key::Named(NamedKey::ArrowUp) => Some(K::UP),
@@ -4125,6 +4152,9 @@ impl App {
                     Key::Named(NamedKey::Enter) => Some(K::CROSS),
                     Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
                     Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(135),
+                    Key::Character(c) if c.eq_ignore_ascii_case("q") => Some(133),
+                    Key::Character(c) if c == "`" => Some(140),
+                    Key::Named(NamedKey::Tab) => Some(142),
                     Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
                     _ => None,
                 };
@@ -4932,14 +4962,18 @@ impl App {
             // the title's Options' Controls page waiting for a key: it is
             // the page's, as play's is
             let host = self.host.as_mut().unwrap();
-            if host.pre.setup.capturing().is_some()
-                && event.state == ElementState::Pressed
+            if let Some(c) = host.pre.setup.capturing()
                 && !event.repeat
                 && let Some(name) = crate::binds::name_of(&event.logical_key)
             {
-                host.pre.setup.capture_key(&name);
-                self.keys_edge.hold_back(&name);
-                return;
+                if event.state == ElementState::Pressed {
+                    host.pre.setup.capture_key(&name);
+                    self.keys_edge.hold_back(&name);
+                    return;
+                }
+                if c == crate::bindpage::Column::Trigger {
+                    host.pre.setup.capture_key_up(&name);
+                }
             }
             if let Some(k) = pregame_key(&event.logical_key) {
                 let down = event.state == ElementState::Pressed;
@@ -4979,18 +5013,23 @@ impl App {
                 p.keyboard = true;
             }
         }
-        // The Controls page waiting for a key (`bindpage`): the key
-        // pressed is its, as it is, and nothing else sees it or its
-        // release.
+        // The Controls or Macros page waiting for a key (`bindpage`,
+        // `macropage`): the key pressed is its, as it is, and nothing else
+        // sees it or its release; a trigger awaited takes the release too
+        // (it is kept at the first)
         if let Some(p) = self.play.as_mut()
-            && p.capturing().is_some()
-            && event.state == ElementState::Pressed
+            && let Some(c) = p.capturing()
             && !event.repeat
             && let Some(name) = crate::binds::name_of(&event.logical_key)
         {
-            p.capture_key(&name);
-            self.keys_edge.hold_back(&name);
-            return;
+            if event.state == ElementState::Pressed {
+                p.capture_key(&name);
+                self.keys_edge.hold_back(&name);
+                return;
+            }
+            if c == crate::bindpage::Column::Trigger {
+                p.capture_key_up(&name);
+            }
         }
         // The player's own keys (`binds`, the client's, at the edge):
         // a key a row was moved onto is that row's default key to all
@@ -5022,10 +5061,11 @@ impl App {
                         return;
                     }
                     // a macro's key: its buttons pressed as the pad's
-                    // (`macros`), from the next pad poll
-                    Some(Sent::Macro(m)) => {
+                    // (`macros`), from the game's next frame
+                    Some(Sent::Macro(name)) => {
                         if !event.repeat {
-                            crate::settings::with_binds(|b| self.macro_run.key(m, down, b));
+                            let now = self.clock.elapsed().as_secs_f64() * 1000.0;
+                            crate::settings::with_binds(|b| self.macro_run.key(&name, down, now, b));
                             if let Some(p) = self.play.as_mut() {
                                 p.keyboard = true;
                             }

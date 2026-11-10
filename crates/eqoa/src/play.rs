@@ -7890,8 +7890,10 @@ impl Play {
         }
     }
 
-    /// What the Controls page waits for, if anything: a key pressed then is
-    /// its (`capture_key`), a controller's button too (`capture_button`).
+    /// What the Controls or Macros page waits for, if anything: a key
+    /// pressed then is its (`capture_key`), a controller's button too
+    /// (`capture_button`), and for a trigger their releases and the sticks
+    /// (`capture_key_up`, `capture_button_up`, `capture_axes`).
     pub fn capturing(&self) -> Option<crate::bindpage::Column> {
         if self.mode == 34 { self.options_wnd.capturing() } else { None }
     }
@@ -7913,6 +7915,36 @@ impl Play {
             self.options_wnd.capture_button(&h.0, phys, &mut cues);
         }
         self.keyboard = false;
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+    }
+
+    /// A key let go while the Macros page waits for a trigger, by its name:
+    /// one of the trigger's, and it is kept.
+    pub fn capture_key_up(&mut self, name: &str) {
+        let mut cues = Vec::new();
+        if let Some(h) = self.hud.as_ref() {
+            self.options_wnd.capture_key_up(&h.0, name, &mut cues);
+        }
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+    }
+
+    /// A controller's button let go while the Macros page waits for a
+    /// trigger.
+    pub fn capture_button_up(&mut self, phys: u8) {
+        let mut cues = Vec::new();
+        if let Some(h) = self.hud.as_ref() {
+            self.options_wnd.capture_button_up(&h.0, phys, &mut cues);
+        }
+        self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+    }
+
+    /// The controllers' sticks while the Macros page waits for a trigger
+    /// (a stick pushed past half is one of it).
+    pub fn capture_axes(&mut self, sticks: [f32; 4]) {
+        let mut cues = Vec::new();
+        if let Some(h) = self.hud.as_ref() {
+            self.options_wnd.capture_axes(&h.0, sticks, &mut cues);
+        }
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
     }
 

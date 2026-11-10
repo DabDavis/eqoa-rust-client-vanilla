@@ -67,6 +67,7 @@ impl XPad {
         }
         let axis = |v: i16| (v as f32 / 32767.0).clamp(-1.0, 1.0);
         r.sticks = [axis(self.rx), -axis(self.ry), axis(self.lx), -axis(self.ly)];
+        r.triggers = [self.lt as f32 / 255.0, self.rt as f32 / 255.0];
         r
     }
 }

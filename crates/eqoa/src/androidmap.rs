@@ -60,7 +60,7 @@ pub fn report(keys: u16, a: &Axes) -> Report {
             buttons |= b;
         }
     }
-    Report { buttons, sticks: [a.rx, a.ry, a.lx, a.ly] }
+    Report { buttons, sticks: [a.rx, a.ry, a.lx, a.ly], triggers: [a.lt.clamp(0.0, 1.0), a.rt.clamp(0.0, 1.0)] }
 }
 
 /// A key's code (Android's `KEYCODE_*`) and the character it types (0 for
@@ -126,7 +126,7 @@ mod tests {
         let a = Axes { lx: 0.5, ly: -1.0, rx: 0.25, ry: 0.0, hat_x: 1.0, hat_y: 0.0, lt: 0.2, rt: 0.9 };
         let r = report(bit::CROSS, &a);
         assert_eq!(r.buttons, bit::CROSS | bit::RIGHT | bit::R2);
-        assert_eq!(r.sticks, [0.25, 0.0, 0.5, -1.0]);
+        assert_eq!((r.sticks, r.triggers), ([0.25, 0.0, 0.5, -1.0], [0.2, 0.9]));
         // the control: nothing held reads as nothing
         assert_eq!(report(0, &Axes::default()), Report::default());
     }

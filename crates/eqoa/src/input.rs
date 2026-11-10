@@ -80,11 +80,15 @@ pub mod bit {
 }
 
 /// One source's state: the buttons (`bit`) and the sticks rx, ry, lx, ly in
-/// -1..1, +y down (libpad's way up).
+/// -1..1, +y down (libpad's way up); and the triggers' pull, L2 and R2 in
+/// 0..1, where the source says it (0 where not): the game reads L2 and R2
+/// as buttons (past a third), and a macro's trigger reads the pull against
+/// its deadzone (`macros::Held`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Report {
     pub buttons: u16,
     pub sticks: [f32; 4],
+    pub triggers: [f32; 2],
 }
 
 /// A stick axis as a DualShock 2's byte: 0 left or up, 255 right or down,
@@ -224,12 +228,17 @@ impl Report {
     }
 
     /// Another source on the same port: the buttons OR'd, each stick axis
-    /// the one further from rest.
+    /// the one further from rest, each trigger the one pulled further.
     pub fn merge(&mut self, o: &Report) {
         self.buttons |= o.buttons;
         for (s, v) in self.sticks.iter_mut().zip(o.sticks) {
             if v * v > *s * *s {
                 *s = v;
+            }
+        }
+        for (t, v) in self.triggers.iter_mut().zip(o.triggers) {
+            if v > *t {
+                *t = v;
             }
         }
     }
@@ -1459,6 +1468,8 @@ fn report_of(p: &gilrs::Gamepad<'_>) -> Report {
     }
     // gilrs reports y up; libpad's runs down
     r.sticks = [p.value(Axis::RightStickX), -p.value(Axis::RightStickY), p.value(Axis::LeftStickX), -p.value(Axis::LeftStickY)];
+    let pull = |b: Button| p.button_data(b).map_or(0.0, |d| d.value().clamp(0.0, 1.0));
+    r.triggers = [pull(Button::LeftTrigger2), pull(Button::RightTrigger2)];
     r
 }
 
@@ -1568,7 +1579,7 @@ mod tests {
         let keys = |reads: &[&[u16]], latched: bool| -> Vec<(i32, bool)> {
             let mut c = Console::new();
             c.poll(Report::default(), true, false, false);
-            read_after_read(reads, latched).into_iter().flat_map(|b| c.poll(Report { buttons: b, sticks: [0.0; 4] }, true, false, false)).collect()
+            read_after_read(reads, latched).into_iter().flat_map(|b| c.poll(Report { buttons: b, ..Report::default() }, true, false, false)).collect()
         };
         // cross is key 134 (`key_name`)
         assert_eq!(key_name(134), "cross");
@@ -1656,7 +1667,7 @@ mod tests {
             std::array::from_fn(|i| vi::pad::scale_stick::<Ee>(d[4 + i]).0)
         };
         for v in [0.24, 0.265, -0.29] {
-            let mut r = Report { buttons: 0, sticks: [v, 0.0, 0.0, v] };
+            let mut r = Report { sticks: [v, 0.0, 0.0, v], ..Report::default() };
             // the negative control: as it came, the game reads both pushed
             assert!(game(&r)[0] != 0.0 && game(&r)[3] != 0.0, "{v} with no dead zone is a push: {:?}", game(&r));
             r.rest(STICK_DEAD_ZONE);
@@ -1664,7 +1675,7 @@ mod tests {
         }
         // past it, as it was: the walk's push and the run's
         for v in [0.35, 0.8] {
-            let mut r = Report { buttons: 0, sticks: [0.0, v, -v, 0.0] };
+            let mut r = Report { sticks: [0.0, v, -v, 0.0], ..Report::default() };
             let before = game(&r);
             r.rest(STICK_DEAD_ZONE);
             assert_eq!(game(&r), before, "{v}");
@@ -1678,7 +1689,7 @@ mod tests {
         let names = ["triangle", "square", "cross", "circle", "left", "right", "up", "down", "l1", "l2", "r1", "r2", "start", "select", "l3", "r3"];
         for (k, n) in names.iter().enumerate() {
             let mut c = Console::new();
-            let r = Report { buttons: bit::named(n).unwrap(), sticks: [0.0; 4] };
+            let r = Report { buttons: bit::named(n).unwrap(), ..Report::default() };
             assert!(c.poll(r, true, false, false).is_empty(), "the first read finds the pad");
             let keys = c.poll(r, true, false, false);
             assert_eq!(keys, vec![(132 + k as i32, true)], "{n}");
@@ -1688,7 +1699,7 @@ mod tests {
     #[test]
     fn pad_keys_sends_each_change_once_and_a_lost_pad_lets_go() {
         let mut c = Console::new();
-        let mut r = Report { buttons: bit::CROSS | bit::R1, sticks: [0.0, 0.0, 0.9, -0.2] };
+        let mut r = Report { buttons: bit::CROSS | bit::R1, sticks: [0.0, 0.0, 0.9, -0.2], ..Report::default() };
         c.poll(r, true, false, false);
         assert_eq!(c.poll(r, true, false, false), vec![(130, true), (134, true), (142, true)]);
         assert!(c.poll(r, true, false, false).is_empty(), "held: nothing new");

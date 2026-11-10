@@ -120,6 +120,7 @@ impl PsPad {
         let axis = |v: u8| ((v as i32 * 257 - 32768) as f32 / 32767.0).clamp(-1.0, 1.0);
         let [lx, ly, rx, ry] = self.sticks;
         r.sticks = [axis(rx), axis(ry), axis(lx), axis(ly)];
+        r.triggers = [self.triggers[0] as f32 / 255.0, self.triggers[1] as f32 / 255.0];
         r
     }
 }

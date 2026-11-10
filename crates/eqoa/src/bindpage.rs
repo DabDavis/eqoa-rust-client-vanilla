@@ -15,13 +15,14 @@
 //! A pointer: a row's words select it, a cell its column too, and the
 //! selection already there is ✕; while a key is awaited any click gives up.
 //!
-//! The macros (`binds::Macro`, `macros`; the user's PCSX2-like macros) follow
-//! the rows, two each: its trigger (a key, a controller's button, as a row's
-//! are taken) and what it presses (✕ on the left cell takes the buttons
-//! pressed, kept a second after the last, Backspace none; ✕ on the right one
-//! steps the mode: Hold, Toggle, each turbo). Defaults clears them too.
+//! The macros (`binds::Macro`, `macros`) have a page of their own, Macros,
+//! on the Options window's menu (`macropage`; the user, 2026-11-10: "lets
+//! also add it as its own menu entry"): a key or button put on a row here
+//! that was in a macro's trigger takes it back, the trigger with it, and
+//! says so; Defaults keeps the macros but for their triggers of a row's key
+//! or of a button, which are the game's again.
 
-use crate::binds::{self, Dir, MACROS, Moved, Pad, ROWS};
+use crate::binds::{self, Dir, Input, Moved, Pad, ROWS};
 use crate::pointer::{Hits, key, rows_rect};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -30,8 +31,9 @@ use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 pub enum Column {
     Keyboard,
     Pad,
-    /// a macro's buttons, as many as are pressed
-    Chord,
+    /// the Macros page's: a trigger, keys, buttons and sticks' ways held
+    /// together, kept as the first is let go (`macropage`)
+    Trigger,
 }
 
 /// What an entry of the page is.
@@ -39,34 +41,17 @@ pub enum Column {
 enum Entry {
     /// a row of `ROWS`
     Row(usize),
-    /// a macro's trigger: its key, its button
-    Trigger(usize),
-    /// a macro's buttons and its mode
-    Chord(usize),
     Defaults,
 }
 
 fn entry(e: i32) -> Entry {
-    let n = ROWS.len() as i32;
-    match e {
-        e if e < n => Entry::Row(e.max(0) as usize),
-        e if e < defaults() => {
-            let m = ((e - n) / 2) as usize;
-            if (e - n) % 2 == 0 { Entry::Trigger(m) } else { Entry::Chord(m) }
-        }
-        _ => Entry::Defaults,
-    }
+    if e < ROWS.len() as i32 { Entry::Row(e.max(0) as usize) } else { Entry::Defaults }
 }
 
-/// Defaults' entry: after the rows and the macros' two each.
+/// Defaults' entry: after the rows.
 pub fn defaults() -> i32 {
-    ROWS.len() as i32 + 2 * MACROS as i32
+    ROWS.len() as i32
 }
-
-/// A macro's buttons are kept once nothing new was pressed for this long
-/// (ms); with none pressed for this long the wait gives up.
-const CHORD_SETTLE: i64 = 1000;
-const CHORD_WAIT: i64 = 8000;
 
 /// The page's own rows besides the list: the header, a gap, the help (two),
 /// the windows' keys (two) and the legend.
@@ -99,11 +84,6 @@ pub struct ControlsPage {
     /// up or down held (-1, 1), since when, and when it last stepped
     held: Option<(i32, i64, i64)>,
     hits: Hits,
-    /// a macro's buttons being taken: those pressed so far (the game's
-    /// fields), when the last came and when the wait began
-    chord: u16,
-    chord_at: i64,
-    chord_from: i64,
 }
 
 impl ControlsPage {
@@ -113,15 +93,14 @@ impl ControlsPage {
         *self = ControlsPage::default();
     }
 
-    /// The entries: the rows, the macros' two each, then Defaults.
+    /// The entries: the rows, then Defaults.
     fn entries() -> i32 {
         defaults() + 1
     }
 
     /// Whether entry `row`'s column `col` can be moved: a key (△'s row,
     /// which the game gives none, can be given one), or a button (a row of
-    /// the client's keys can be given one; the sticks stay sticks); every
-    /// macro cell.
+    /// the client's keys can be given one; the sticks stay sticks).
     fn bindable(row: i32, col: i32) -> bool {
         match entry(row) {
             Entry::Row(r) => {
@@ -129,7 +108,6 @@ impl ControlsPage {
                 let button = matches!(r.pad, Pad::Button(_));
                 if col == 0 { !r.keys.is_empty() || button } else { !matches!(r.pad, Pad::Stick(..)) }
             }
-            Entry::Trigger(_) | Entry::Chord(_) => true,
             Entry::Defaults => false,
         }
     }
@@ -173,7 +151,7 @@ impl ControlsPage {
                 self.col = col;
                 self.note = None;
             }
-            13 | 134 => self.select(now, cues),
+            13 | 134 => self.select(cues),
             27 | 132 => {
                 self.held = None;
                 return true;
@@ -195,34 +173,18 @@ impl ControlsPage {
         }
     }
 
-    /// ✕: Defaults puts every key and button back and clears the macros; a
-    /// row's key or button is awaited, or a macro's, or its buttons; a
-    /// macro's mode steps on; what cannot be moved says why.
-    fn select(&mut self, now: i64, cues: &mut Vec<i32>) {
-        match entry(self.row) {
-            Entry::Defaults => {
-                crate::settings::set_binds(binds::Binds::default());
-                self.note = Some("Every key, button and macro is back where it began.".into());
-                cues.push(13);
-                return;
-            }
-            Entry::Chord(m) if self.col == 1 => {
-                let mut b = crate::settings::binds();
-                b.macros[m].next_mode();
-                let said = format!("Macro {}: {}.", m + 1, b.macros[m].mode_text());
-                crate::settings::set_binds(b);
-                self.note = Some(said);
-                cues.push(13);
-                return;
-            }
-            Entry::Chord(_) => {
-                self.capture = Some(Column::Chord);
-                (self.chord, self.chord_at, self.chord_from) = (0, now, now);
-                self.note = None;
-                cues.push(8);
-                return;
-            }
-            _ => {}
+    /// ✕: Defaults puts every key and button back (the macros keep what
+    /// is their own, `Binds::controls_defaults`); a row's key or button is
+    /// awaited; what cannot be moved says why.
+    fn select(&mut self, cues: &mut Vec<i32>) {
+        if entry(self.row) == Entry::Defaults {
+            let b = crate::settings::binds();
+            let d = b.controls_defaults();
+            let lost = (0..binds::MACROS).filter(|&m| d.macros[m].triggers.len() != b.macros[m].triggers.len()).count();
+            crate::settings::set_binds(d);
+            self.note = Some(if lost == 0 { "Every key and button is back where it began.".into() } else { "Every key and button is back where it began, and out of the macros' triggers.".into() });
+            cues.push(13);
+            return;
         }
         if Self::bindable(self.row, self.col) {
             self.capture = Some(if self.col == 0 { Column::Keyboard } else { Column::Pad });
@@ -245,15 +207,7 @@ impl ControlsPage {
             cues.push(8);
             return;
         }
-        if c == Column::Chord {
-            self.chord_key(vui, name, cues);
-            return;
-        }
         if c != Column::Keyboard {
-            return;
-        }
-        if let Entry::Trigger(m) = entry(self.row) {
-            self.macro_key(m, name, vui, cues);
             return;
         }
         if binds::reserved(name) {
@@ -263,7 +217,7 @@ impl ControlsPage {
         }
         let row = self.row as usize;
         let mut b = crate::settings::binds();
-        let had = b.macro_on_key(name);
+        let had = b.macros_with(&Input::Key(name.to_string()));
         let moved = b.bind_key(row, name);
         crate::settings::set_binds(b.clone());
         self.capture = None;
@@ -274,9 +228,10 @@ impl ControlsPage {
             Moved::Freed(Some(old)) if !old.is_empty() => format!("{me} {} does nothing now.", binds::display(&old)),
             _ => me,
         };
-        // a macro the key was on gave it up (`bind_key`): said, as a row is
-        if let Some(m) = had.filter(|&m| b.macros[m].key.is_none()) {
-            note.push_str(&format!(" Macro {} has no key now.", m + 1));
+        // the macros' triggers the key was in went with it (`bind_key`):
+        // said, as a row is
+        if !had.is_empty() {
+            note.push_str(&format!(" {} is no longer in a trigger of {}.", binds::display(name), macro_names(&had)));
         }
         self.note = Some(note);
         cues.push(13);
@@ -291,50 +246,12 @@ impl ControlsPage {
     pub fn capture_button(&mut self, vui: &Vui, phys: u8, cues: &mut Vec<i32>) {
         let Some(c) = self.capture else { return };
         let mut b = crate::settings::binds();
-        // a macro's buttons take △ too (Escape or a click gives up)
-        if c == Column::Chord {
-            match b.field_of(phys) {
-                Some(f) => {
-                    self.chord |= 1 << f;
-                    self.chord_at = vui.time;
-                    cues.push(11);
-                }
-                None => self.note = Some("That button is a macro's or a key's now: it presses nothing of the game's.".into()),
-            }
-            return;
-        }
         if b.field_of(phys) == binds::bit_index(crate::input::bit::TRIANGLE) {
             self.capture = None;
             cues.push(8);
             return;
         }
         if c != Column::Pad {
-            return;
-        }
-        if let Entry::Trigger(m) = entry(self.row) {
-            let moved = b.bind_macro_button(m, phys);
-            crate::settings::set_binds(b.clone());
-            self.capture = None;
-            let me = format!("Macro {}: {}.", m + 1, binds::glyph(phys));
-            self.note = Some(match moved {
-                Moved::Swapped(f) => match ROWS.iter().position(|r| r.pad == Pad::Button(1 << f)) {
-                    Some(or) => match Some(b.button(f as u8)).filter(|&g| g != binds::NO_BUTTON) {
-                        Some(g) => format!("{me} {}: {}.", label(vui, or), binds::glyph(g)),
-                        None => format!("{me} {} has no button now.", label(vui, or)),
-                    },
-                    None => me,
-                },
-                Moved::SwappedRow(r) => match b.row_button(r) {
-                    Some(g) => format!("{me} {}: {}.", label(vui, r), binds::glyph(g)),
-                    None => format!("{me} {} has no button now.", label(vui, r)),
-                },
-                Moved::SwappedMacro(o) => match b.macros[o].button {
-                    Some(g) => format!("{me} Macro {}: {}.", o + 1, binds::glyph(g)),
-                    None => format!("{me} Macro {} has no button now.", o + 1),
-                },
-                _ => me,
-            });
-            cues.push(13);
             return;
         }
         let row = self.row as usize;
@@ -360,96 +277,10 @@ impl ControlsPage {
                 None => me,
             },
             Moved::SwappedRow(r) => other(r, b.row_button(r)),
-            Moved::SwappedMacro(o) => match b.macros[o].button {
-                Some(g) => format!("{me} Macro {}: {}.", o + 1, binds::glyph(g)),
-                None => format!("{me} Macro {} has no button now.", o + 1),
-            },
+            Moved::FromMacros(ms) => format!("{me} {} is no longer in a trigger of {}.", binds::glyph(phys), macro_names(&ms)),
             _ => me,
         });
         cues.push(13);
-    }
-
-    /// A key while a macro's key is awaited: Backspace takes the macro's
-    /// away; a key of the page's own, or one a row is on, is refused (the
-    /// wait goes on); any other goes on the macro (another macro on it
-    /// giving it up).
-    fn macro_key(&mut self, m: usize, name: &str, vui: &Vui, cues: &mut Vec<i32>) {
-        let mut b = crate::settings::binds();
-        if name == "backspace" {
-            b.bind_macro_key(m, None).ok();
-            crate::settings::set_binds(b);
-            self.capture = None;
-            self.note = Some(format!("Macro {} has no key now.", m + 1));
-            cues.push(13);
-            return;
-        }
-        match b.bind_macro_key(m, Some(name)) {
-            Ok(()) => {
-                crate::settings::set_binds(b);
-                self.capture = None;
-                self.note = Some(format!("Macro {}: {}.", m + 1, binds::display(name)));
-                cues.push(13);
-            }
-            Err(binds::MacroKey::Reserved) => {
-                self.note = Some(format!("{} is not for binding: choose another key.", binds::display(name)));
-                cues.push(9);
-            }
-            Err(binds::MacroKey::Row(r)) => {
-                self.note = Some(format!("{} is {}'s: choose a free key, or move that row first.", binds::display(name), label(vui, r)));
-                cues.push(9);
-            }
-        }
-    }
-
-    /// A key while a macro's buttons are awaited: Backspace leaves it none;
-    /// a key a row with a button is on adds that button (✕ for G, □ for
-    /// Q...); any other presses nothing.
-    fn chord_key(&mut self, vui: &Vui, name: &str, cues: &mut Vec<i32>) {
-        let Entry::Chord(m) = entry(self.row) else { return };
-        let mut b = crate::settings::binds();
-        if name == "backspace" {
-            b.macros[m].chord = 0;
-            crate::settings::set_binds(b);
-            self.capture = None;
-            self.note = Some(format!("Macro {} presses nothing now.", m + 1));
-            cues.push(13);
-            return;
-        }
-        match b.row_on(name).map(|r| ROWS[r].pad) {
-            Some(Pad::Button(bit)) => {
-                self.chord |= bit;
-                self.chord_at = vui.time;
-                cues.push(11);
-            }
-            _ => {
-                self.note = Some(format!("{} presses no button of the game's.", binds::display(name)));
-                cues.push(9);
-            }
-        }
-    }
-
-    /// The macro's buttons kept once none came for a second (or the wait
-    /// given up after eight with none).
-    fn settle_chord(&mut self, now: i64, cues: &mut Vec<i32>) {
-        if self.capture != Some(Column::Chord) {
-            return;
-        }
-        let Entry::Chord(m) = entry(self.row) else {
-            self.capture = None;
-            return;
-        };
-        if self.chord != 0 && now - self.chord_at >= CHORD_SETTLE {
-            let mut b = crate::settings::binds();
-            b.macros[m].chord = self.chord;
-            let said = format!("Macro {} presses {}.", m + 1, b.macros[m].chord_glyphs());
-            crate::settings::set_binds(b);
-            self.capture = None;
-            self.note = Some(said);
-            cues.push(13);
-        } else if self.chord == 0 && now - self.chord_from >= CHORD_WAIT {
-            self.capture = None;
-            cues.push(8);
-        }
     }
 
     /// A pointer at frame point `p`: the keys to press. While a key is
@@ -479,7 +310,6 @@ impl ControlsPage {
     /// windows' keys, the legend. A direction held steps on.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, w: &mut Window, cues: &mut Vec<i32>) {
         let now = vui.time;
-        self.settle_chord(now, cues);
         if let Some((d, since, last)) = self.held
             && now - since >= REPEAT_AFTER
             && now - last >= REPEAT_EVERY
@@ -512,35 +342,6 @@ impl ControlsPage {
             if entry == defaults() {
                 w.text_box(vui, r, &wide("Defaults"), 40, at, width - KEY_X - 48, 1, c, 0);
                 self.hits.push(rows_rect(w, vui, r, 40, at, width - KEY_X - 48, 1), entry * 4);
-                continue;
-            }
-            if let kind @ (Entry::Trigger(m) | Entry::Chord(m)) = self::entry(entry) {
-                let waiting = |col: Column| on && self.capture == Some(col);
-                let mac = &b.macros[m];
-                let (name, kt, pt) = match kind {
-                    Entry::Trigger(_) => (
-                        format!("Macro {}", m + 1),
-                        if waiting(Column::Keyboard) { "Press a key".into() } else { mac.key.as_deref().map_or_else(|| "-".into(), binds::display) },
-                        if waiting(Column::Pad) { "Press".into() } else { mac.button.map_or_else(|| "-".into(), |g| binds::glyph(g).to_string()) },
-                    ),
-                    _ => (
-                        format!("Macro {}: presses", m + 1),
-                        if waiting(Column::Chord) {
-                            binds::Macro { chord: self.chord, ..binds::Macro::default() }.chord_glyphs().replace('-', "Press")
-                        } else {
-                            mac.chord_glyphs()
-                        },
-                        mac.mode_text(),
-                    ),
-                };
-                w.text_box(vui, r, &wide(&name), 40, at, width - KEY_X - 48, 1, c, 2);
-                self.hits.push(rows_rect(w, vui, r, 40, at, width - KEY_X - 48, 1), entry * 4);
-                for (col, x, cw, t) in [(0, kx, KEY_W, kt), (1, px, PAD_W, pt)] {
-                    let sel = on && self.col == col;
-                    w.draw_frame(vui, r, x, at, cw, 1, if sel { 0x60 } else { 0x40 });
-                    w.text_box(vui, r, &wide(&t), x, at, cw, 1, UI_COLORS[0], 8);
-                    self.hits.push(rows_rect(w, vui, r, x + 20, at, cw - 20, 1), entry * 4 + 1 + col);
-                }
                 continue;
             }
             let row = &ROWS[entry as usize];
@@ -584,34 +385,13 @@ impl ControlsPage {
         // the help: what is awaited, the last change, or the row's help
         let list_end = self.shown + 3;
         let help = if let Some(c) = self.capture {
-            let what = match entry(self.row) {
-                Entry::Trigger(m) | Entry::Chord(m) => format!("Macro {}", m + 1),
-                _ => label(vui, self.row as usize),
-            };
+            let what = label(vui, self.row as usize);
             match c {
-                Column::Keyboard if matches!(entry(self.row), Entry::Trigger(_)) => {
-                    format!("Press the key for {what}. Backspace takes its key away; Esc gives up.")
-                }
-                Column::Keyboard => format!("Press the key for {what}. Esc gives up."),
                 Column::Pad => format!("Press the controller's button for {what}. |t gives up."),
-                Column::Chord => format!(
-                    "Press the buttons {what} presses (the controller's, or the keys for them), together or one by one: kept a second after the last. Backspace: none. Esc gives up."
-                ),
+                _ => format!("Press the key for {what}. Esc gives up."),
             }
         } else if let Some(n) = &self.note {
             n.clone()
-        } else if let Entry::Trigger(m) = entry(self.row) {
-            if self.col == 0 {
-                format!("A key for Macro {}: held, the macro presses its buttons below (Toggle: from one press to the next). A key a row is on is refused.", m + 1)
-            } else {
-                format!("A controller's button for Macro {}: it does the macro, and no longer what it did in the game.", m + 1)
-            }
-        } else if let Entry::Chord(m) = entry(self.row) {
-            if self.col == 0 {
-                format!("The buttons Macro {} presses together, as the controller would: |x, then press them.", m + 1)
-            } else {
-                "How it presses: Hold (while held), Toggle (from one press to the next), Turbo N (pressed and let go every N of the game's frames, 30 a second).".to_string()
-            }
         } else if let Some(row) = ROWS.get(self.row as usize) {
             // a row of the client's keys, its button's cell: what a button
             // there does
@@ -621,7 +401,7 @@ impl ControlsPage {
                 expand(vui, row.help)
             }
         } else {
-            "Puts every key and button back as the game began, and clears the macros.".into()
+            "Puts every key and button back as the game began. The macros (Options, Macros) keep what they press, and their triggers of keys no row has.".into()
         };
         w.text_box(vui, r, &wide(&help), 40, list_end, width - 80, 2, UI_COLORS[0], 2);
         w.text_box(vui, r, &wide(&window_keys(&b)), 40, list_end + 2, width - 80, 2, UI_COLORS[1], 0);
@@ -640,6 +420,17 @@ fn arrow(d: Dir) -> char {
         Dir::Down => '\u{2193}',
         Dir::Left => '\u{2190}',
         Dir::Right => '\u{2192}',
+    }
+}
+
+/// Macros by number, as a note says them: "Macro 3", "Macros 1 and 4",
+/// "Macros 1, 2 and 5".
+pub fn macro_names(ms: &[usize]) -> String {
+    let n: Vec<String> = ms.iter().map(|m| (m + 1).to_string()).collect();
+    match n.as_slice() {
+        [] => String::new(),
+        [one] => format!("Macro {one}"),
+        [rest @ .., last] => format!("Macros {} and {last}", rest.join(", ")),
     }
 }
 
@@ -784,80 +575,49 @@ mod tests {
         testing::reset(false);
     }
 
-    /// The macros' rows: Macro 1's key (a row's refused, a free one taken),
-    /// its button (taken off its field, said), its buttons by the keyboard's
-    /// key for ✕ and the controller's ○, kept a second after the last, and
-    /// its mode stepped; Defaults clears it. The control: a wait for its
-    /// buttons with nothing pressed gives up after eight seconds, the macro
-    /// unchanged.
+    /// The macros are not on this page any more (their own page has them),
+    /// but a row moved onto a key in a macro's trigger takes it, the trigger
+    /// with it, and says so; a field given a button in a trigger likewise;
+    /// Defaults keeps a macro's trigger of a key no row has. The controls: a
+    /// row moved onto a free key says nothing of a macro, and the page's
+    /// entries are the rows and Defaults.
     #[test]
-    fn a_macro_is_set_on_the_page() {
+    fn a_row_takes_its_key_and_button_back_from_a_macro() {
         testing::reset(false);
-        let mut vui = vui();
-        let mut page = ControlsPage::default();
-        let mut w = window();
+        let vui = vui();
         let mut cues = Vec::new();
-        let trigger = ROWS.len() as i32;
-        page.row = trigger;
-        page.key(key::CROSS, true, 0, &mut cues);
-        assert_eq!(page.capture, Some(Column::Keyboard));
-        page.capture_key(&vui, "q", &mut cues);
-        assert_eq!(page.capture, Some(Column::Keyboard), "Q is Talk's");
-        page.capture_key(&vui, "g", &mut cues);
-        assert_eq!(page.capture, Some(Column::Keyboard), "G is the attack's");
-        page.capture_key(&vui, "y", &mut cues);
-        assert_eq!((page.capture, settings::binds().macros[0].key.as_deref()), (None, Some("y")));
-        // its button: L3, off Autorun's field
-        page.col = 1;
-        page.key(key::CROSS, true, 0, &mut cues);
+        assert_eq!(ControlsPage::entries(), ROWS.len() as i32 + 1, "the rows and Defaults alone");
+        let mut b = binds::Binds::default();
         let l3 = binds::bit_index(crate::input::bit::L3).unwrap();
-        page.capture_button(&vui, l3, &mut cues);
-        assert_eq!(settings::binds().macros[0].button, Some(l3));
-        assert!(page.note.as_deref().is_some_and(|n| n.contains("has no button now")), "{:?}", page.note);
-        // its buttons: G (Attack's, ✕) and the controller's ○
-        page.row = trigger + 1;
-        page.col = 0;
-        vui.time = 1000;
-        page.key(key::CROSS, true, 1000, &mut cues);
-        assert_eq!(page.capture, Some(Column::Chord));
-        page.capture_key(&vui, "g", &mut cues);
-        vui.time = 1400;
-        page.capture_button(&vui, binds::bit_index(crate::input::bit::CIRCLE).unwrap(), &mut cues);
-        vui.time = 2000;
-        page.draw(&vui, &mut NullRaster, &mut w, &mut cues);
-        assert_eq!(page.capture, Some(Column::Chord), "not yet a second after the last");
-        vui.time = 2500;
-        page.draw(&vui, &mut NullRaster, &mut w, &mut cues);
-        assert_eq!(page.capture, None);
-        assert_eq!(settings::binds().macros[0].chord, crate::input::bit::CROSS | crate::input::bit::CIRCLE);
-        // the mode: Hold, Toggle, Turbo 1
-        page.col = 1;
-        page.key(key::CROSS, true, 2500, &mut cues);
-        page.key(key::CROSS, true, 2500, &mut cues);
-        assert_eq!(settings::binds().macros[0].mode_text(), "Turbo 1");
-        // a row put on the macro's key takes it, and says the macro lost it;
-        // the control: a row put on a free key says nothing of a macro
-        page.row = 0;
-        page.col = 0;
-        page.key(key::CROSS, true, 2500, &mut cues);
+        b.set_trigger(0, None, vec![Input::Key("y".into())]).unwrap();
+        b.set_trigger(2, None, vec![Input::Key("y".into()), Input::Button(l3)]).unwrap();
+        b.set_trigger(3, None, vec![Input::Key("u".into())]).unwrap();
+        b.set_trigger(4, None, vec![Input::Button(binds::bit_index(crate::input::bit::R3).unwrap())]).unwrap();
+        settings::set_binds(b);
+        let mut page = ControlsPage::default();
+        page.key(key::CROSS, true, 0, &mut cues);
         page.capture_key(&vui, "y", &mut cues);
-        assert_eq!(settings::binds().macros[0].key, None);
-        assert!(page.note.as_deref().is_some_and(|n| n.ends_with("Macro 1 has no key now.")), "{:?}", page.note);
-        page.key(key::CROSS, true, 2500, &mut cues);
-        page.capture_key(&vui, "u", &mut cues);
-        assert_eq!(page.note.as_deref(), Some("Walk forward: U. Y does nothing now."));
-        page.row = trigger + 1;
-        // the control: nothing pressed for eight seconds gives up, unchanged
-        page.col = 0;
-        page.key(key::CROSS, true, 3000, &mut cues);
-        vui.time = 11_500;
-        page.draw(&vui, &mut NullRaster, &mut w, &mut cues);
-        assert_eq!(page.capture, None);
-        assert_eq!(settings::binds().macros[0].chord, crate::input::bit::CROSS | crate::input::bit::CIRCLE);
-        // Defaults clears it
+        assert_eq!(page.note.as_deref(), Some("Walk forward: Y. W does nothing now. Y is no longer in a trigger of Macros 1 and 3."));
+        let b = settings::binds();
+        assert!(b.macros[0].triggers.is_empty() && b.macros[2].triggers.is_empty());
+        assert_eq!(b.remap(crate::input::bit::L3), crate::input::bit::L3, "the trigger's L3 the game's again");
+        // the control: a free key
+        page.key(key::CROSS, true, 0, &mut cues);
+        page.capture_key(&vui, "f2", &mut cues);
+        assert_eq!(page.note.as_deref(), Some("Walk forward: F2. Y does nothing now."));
+        // R3 put back on the chat line's field: macro 5's trigger goes
+        page.row = binds::row_named("chat").unwrap() as i32;
+        page.col = 1;
+        page.key(key::CROSS, true, 0, &mut cues);
+        page.capture_button(&vui, binds::bit_index(crate::input::bit::R3).unwrap(), &mut cues);
+        assert_eq!(page.note.as_deref(), Some("(null): |(. |( is no longer in a trigger of Macro 5."));
+        assert!(settings::binds().macros[4].triggers.is_empty());
+        // Defaults: U, no row's, stays macro 4's
         page.row = defaults();
-        page.key(key::CROSS, true, 12_000, &mut cues);
-        assert!(settings::binds().is_default());
+        page.key(key::CROSS, true, 0, &mut cues);
+        let b = settings::binds();
+        assert_eq!(b.macros[3].triggers, vec![vec![Input::Key("u".into())]]);
+        assert_eq!(b.controls_defaults(), b, "every key and button back");
         testing::reset(false);
     }
 

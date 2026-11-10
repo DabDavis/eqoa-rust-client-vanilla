@@ -314,11 +314,16 @@ impl PadMap {
             set(ax(6) < -0.5, bit::LEFT);
             set(ax(6) > 0.5, bit::RIGHT);
             r.sticks = [ax(3), ax(4), ax(0), ax(1)];
+            // the triggers' axes rest at -1: their pull
+            r.triggers = [((ax(2) + 1.0) / 2.0).clamp(0.0, 1.0), ((ax(5) + 1.0) / 2.0).clamp(0.0, 1.0)];
             return r;
         }
         let trig = |i: usize, axis: usize| value(i) > 1.0 / 3.0 || (layout == Layout::Evdev && pair.is_some() && live(axis) && trigger_axis(ax(axis)));
         set(trig(6, 4), bit::L2);
         set(trig(7, 5), bit::R2);
+        // the triggers' pull: their buttons' travel (an evdev pad's axes
+        // say none here, and its buttons then stand for it)
+        r.triggers = [value(6).clamp(0.0, 1.0), value(7).clamp(0.0, 1.0)];
         set(pressed(8), bit::SELECT);
         set(pressed(9), bit::START);
         set(pressed(10), bit::L3);
@@ -364,6 +369,12 @@ impl PadMap {
                 bit::L2 | bit::R2 => pressed(i) || value(i) > 1.0 / 3.0,
                 _ => pressed(i),
             };
+            // the triggers' pull, their buttons' travel
+            match k {
+                bit::L2 => r.triggers[0] = value(i).clamp(0.0, 1.0),
+                bit::R2 => r.triggers[1] = value(i).clamp(0.0, 1.0),
+                _ => {}
+            }
             let k = match k {
                 bit::SQUARE if swap => bit::TRIANGLE,
                 bit::TRIANGLE if swap => bit::SQUARE,

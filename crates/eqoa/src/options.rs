@@ -153,6 +153,12 @@
 //! The client's own Controls page after it (`bindpage`): every key and
 //! button of the default layout, moved by pressing the one to put there,
 //! kept by Save Changes (`keys.opt`) and put back by Triangle as the rest.
+//! Then its Macros page (`macropage`; the user, 2026-11-10: "lets also add
+//! it as its own menu entry"): PCSX2's sixteen macros, kept and put back
+//! with the keys. The menu's window has a row for each of the three (the
+//! game's has seven rows; this one ten), its bottom where a nine-row one's
+//! was, so the title's menu under it stays in view; the pages open where
+//! the game's open, round the game's middle (`CENTER`).
 //!
 //! A pointer (`pointer`): a menu row is chosen at once; a page's row is
 //! reached with up and down (a page knows which setting its row is only as
@@ -163,6 +169,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::bindpage::ControlsPage;
+use crate::macropage::MacrosPage;
 use crate::pointer::{Hits, key, rows_rect};
 use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, SHADOW_DISTANCE_GAME, SHADOW_DISTANCE_MAX, SHADOW_DISTANCE_STEP, TOUCH_EDGE_MAX, TOUCH_EDGE_STEP, TOUCH_OPACITY_MAX, TOUCH_OPACITY_MIN, TOUCH_OPACITY_STEP, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
 use vi::fpu::{Ee, F};
@@ -348,10 +355,10 @@ impl Message {
 #[derive(Default)]
 pub struct WndOptions {
     /// `m_sel`: the menu's row (3 is the client's Extended, 4 its Controls,
-    /// 5 Save Changes)
+    /// 5 its Macros, 6 Save Changes)
     sel: i32,
     /// `m_page`: -1 the menu, 0 Game, 1 Interface, 2 Sound, 3 Extended, 4
-    /// Controls
+    /// Controls, 5 Macros
     page: i32,
     /// `m_row`: the page's row
     row: i32,
@@ -371,8 +378,10 @@ pub struct WndOptions {
     saved_client: ClientOptions,
     /// the keys and buttons as it opened, put back with them
     saved_binds: crate::binds::Binds,
-    /// the Controls page, and the sounds it made drawing (a held key's steps)
+    /// the Controls page and the Macros page, and the sounds they made
+    /// drawing (a held key's steps)
     controls: ControlsPage,
+    macros: MacrosPage,
     controls_cues: Vec<i32>,
     /// `m_edit93` .. `m_edit97`: the four settings only Save commits, held
     /// the way the window holds them (faction and loot ON while set)
@@ -410,6 +419,9 @@ impl WndOptions {
         if self.page == 4 {
             return self.controls.point(p);
         }
+        if self.page == 5 {
+            return self.macros.point(p);
+        }
         let Some(h) = self.hits.at(p) else { return Vec::new() };
         let k = h % HIT_ROWS;
         if h < LABEL {
@@ -432,11 +444,16 @@ impl WndOptions {
         keys
     }
     /// `OnMessage` 295 with the focus coming from outside: the window (300
-    /// wide, seven rows and one each for Extended and Controls, titled 788)
-    /// opening, the values kept, the menu.
+    /// wide, seven rows and one each for Extended, Controls and Macros,
+    /// titled 788) opening, the values kept, the menu. Its bottom is where
+    /// the nine-row window's was before Macros came (the rows past it grow
+    /// upward, clear of the title's menu under it).
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster, o: &GameOptions) {
         self.window.close(true);
-        self.window.init(vui, r, [320, 246], 300, 9, 0);
+        self.window.init(vui, r, CENTER, 300, MENU_ROWS, 0);
+        let mut nine = Window::default();
+        nine.init(vui, r, CENTER, 300, 9, 0);
+        self.window.center[1] -= self.window.bottom_right()[1] - nine.bottom_right()[1];
         self.window.open(false);
         self.window.set_title(Some(&wide(vui.words.get(788, vui.language))));
         self.message.visible = false;
@@ -462,30 +479,68 @@ impl WndOptions {
         self.select(vui, r, &mut Vec::new());
     }
 
-    /// A key let go: the Controls page's held up or down ends.
+    /// A key let go: the Controls or Macros page's held direction ends.
     pub fn release(&mut self, key: i32) {
-        if self.page == 4 {
-            self.controls.key(key, false, self.now, &mut Vec::new());
+        match self.page {
+            4 => {
+                self.controls.key(key, false, self.now, &mut Vec::new());
+            }
+            5 => {
+                self.macros.key(key, false, self.now, &mut Vec::new());
+            }
+            _ => {}
         }
     }
 
-    /// What the Controls page waits for, if anything.
+    /// What the Controls or Macros page waits for, if anything: a key, a
+    /// button, or (Macros') a trigger.
     pub fn capturing(&self) -> Option<crate::bindpage::Column> {
-        if self.page == 4 && !self.message.visible { self.controls.capture } else { None }
-    }
-
-    /// A key pressed while the Controls page waits (`binds::name_of`).
-    pub fn capture_key(&mut self, vui: &Vui, name: &str, cues: &mut Vec<i32>) {
-        if self.capturing().is_some() {
-            self.controls.capture_key(vui, name, cues);
+        match self.page {
+            _ if self.message.visible => None,
+            4 => self.controls.capture,
+            5 => self.macros.capturing(),
+            _ => None,
         }
     }
 
-    /// A controller's button pressed while the Controls page waits (its bit
-    /// index, before any remap).
+    /// A key pressed while a page waits (`binds::name_of`).
+    pub fn capture_key(&mut self, vui: &Vui, name: &str, cues: &mut Vec<i32>) {
+        match self.capturing().map(|_| self.page) {
+            Some(4) => self.controls.capture_key(vui, name, cues),
+            Some(5) => self.macros.capture_key(vui, name, cues),
+            _ => {}
+        }
+    }
+
+    /// A key let go while the Macros page waits for a trigger: one of the
+    /// trigger's, and it is kept.
+    pub fn capture_key_up(&mut self, vui: &Vui, name: &str, cues: &mut Vec<i32>) {
+        if self.capturing().is_some() && self.page == 5 {
+            self.macros.capture_key_up(vui, name, cues);
+        }
+    }
+
+    /// A controller's button pressed while a page waits (its bit index,
+    /// before any remap).
     pub fn capture_button(&mut self, vui: &Vui, phys: u8, cues: &mut Vec<i32>) {
-        if self.capturing().is_some() {
-            self.controls.capture_button(vui, phys, cues);
+        match self.capturing().map(|_| self.page) {
+            Some(4) => self.controls.capture_button(vui, phys, cues),
+            Some(5) => self.macros.capture_button(phys, cues),
+            _ => {}
+        }
+    }
+
+    /// A controller's button let go while the Macros page waits.
+    pub fn capture_button_up(&mut self, vui: &Vui, phys: u8, cues: &mut Vec<i32>) {
+        if self.capturing().is_some() && self.page == 5 {
+            self.macros.capture_button_up(vui, phys, cues);
+        }
+    }
+
+    /// The controllers' sticks while the Macros page waits for a trigger.
+    pub fn capture_axes(&mut self, vui: &Vui, sticks: [f32; 4], cues: &mut Vec<i32>) {
+        if self.capturing().is_some() && self.page == 5 {
+            self.macros.capture_axes(vui, sticks, cues);
         }
     }
 
@@ -516,6 +571,12 @@ impl WndOptions {
             }
             return;
         }
+        if self.page == 5 {
+            if self.macros.key(key, true, now, cues) {
+                self.back(cues);
+            }
+            return;
+        }
         match key {
             19 | 138 => self.prev(now, cues),
             20 | 139 => self.next(now, cues),
@@ -524,7 +585,7 @@ impl WndOptions {
             13 | 134 => {
                 if self.select(vui, r, cues) {
                     let w = |id: i32| wide(vui.words.get(id, vui.language));
-                    self.message.setup(vui, r, w(1633), w(1634), 2, self.window.center, 300);
+                    self.message.setup(vui, r, w(1633), w(1634), 2, CENTER, 300);
                     self.message.visible = true;
                     self.message.focus(vui, r);
                 }
@@ -577,7 +638,7 @@ impl WndOptions {
     /// categories and their pages.
     fn next(&mut self, now: i64, cues: &mut Vec<i32>) {
         let last = match (self.page, self.cat) {
-            (-1, _) => 5,
+            (-1, _) => MENU.len() as i32 - 1,
             (3, None) => CATEGORIES.len() as i32 - 1,
             (3, Some(c)) => CATEGORIES[c].items.len() as i32 - 1,
             (page, _) => {
@@ -866,11 +927,11 @@ impl WndOptions {
     }
 
     /// `Select`: X on the menu opens a page (its window 440 wide, six to
-    /// eight rows, an empty title; the client's Controls 600 wide over the
-    /// middle of the frame, as many rows as fit), the client's Extended its
-    /// menu of categories (a window as the menu's, titled Extended, over it)
-    /// and X there a category's page (`page_window`), or on Save Changes
-    /// asks (true).
+    /// eight rows, an empty title; the client's Controls and Macros 600 wide
+    /// over the middle of the frame, as many rows as fit), the client's
+    /// Extended its menu of categories (a window as the menu's, titled
+    /// Extended, over it) and X there a category's page (`page_window`), or
+    /// on Save Changes asks (true).
     fn select(&mut self, vui: &Vui, r: &dyn Raster, cues: &mut Vec<i32>) -> bool {
         if self.page == 3 && self.cat.is_none() {
             cues.push(8);
@@ -911,20 +972,24 @@ impl WndOptions {
                 // menu's is: the rows past the menu's nine go up, clear of
                 // the title's own menu under it
                 self.window4.close(true);
-                self.window4.init(vui, r, self.window.center, 300, CATEGORY_ROWS, 0);
+                self.window4.init(vui, r, CENTER, 300, CATEGORY_ROWS, 0);
                 self.window4.open(false);
                 self.window4.set_title(Some(&wide(EXTENDED)));
                 let bottom = |w: &Window| w.top_left()[1] + w.size[1];
                 self.window4.center[1] -= bottom(&self.window4) - bottom(&self.window);
                 return false;
             }
-            4 => {
-                self.page = 4;
-                self.controls.reset();
+            4 | 5 => {
+                self.page = self.sel;
+                if self.sel == 4 {
+                    self.controls.reset();
+                } else {
+                    self.macros.reset();
+                }
                 self.window2.close(true);
                 self.window2.init(vui, r, [320, 224], 600, ControlsPage::window_rows(vui.font_height(r)), 0);
                 self.window2.open(false);
-                self.window2.set_title(Some(&wide(CONTROLS)));
+                self.window2.set_title(Some(&wide(if self.sel == 4 { CONTROLS } else { MACROS_PAGE })));
                 return false;
             }
             _ => return true,
@@ -942,12 +1007,12 @@ impl WndOptions {
     /// title's menu under it.
     fn page_window(&mut self, vui: &Vui, r: &dyn Raster, rows: i32) {
         self.window2.close(true);
-        self.window2.init(vui, r, self.window.center, 440, rows, 0);
+        self.window2.init(vui, r, CENTER, 440, rows, 0);
         self.window2.open(false);
         if rows > 8 {
             self.window2.set_title(None);
             let mut eight = Window::default();
-            eight.init(vui, r, self.window.center, 440, 8, 0);
+            eight.init(vui, r, CENTER, 440, 8, 0);
             eight.set_title(Some(&[]));
             self.window2.center[1] += eight.top_left()[1] - self.window2.top_left()[1];
         } else {
@@ -1009,12 +1074,13 @@ impl WndOptions {
                 }
             }
             4 => self.controls.draw(vui, r, &mut self.window2, &mut self.controls_cues),
+            5 => self.macros.draw(vui, r, &mut self.window2, &mut self.controls_cues),
             _ => {}
         }
         let w = |id: i32| wide(vui.words.get(id, vui.language));
         if self.save_count != 0 {
             self.save_count -= 1;
-            self.window3.init(vui, r, self.window.center, 400, 3, 0);
+            self.window3.init(vui, r, CENTER, 400, 3, 0);
             self.window3.open(true);
             self.window3.draw(vui, r);
             let width = self.window3.size[0];
@@ -1031,18 +1097,20 @@ impl WndOptions {
         }
     }
 
-    /// `DrawMenu`: Game, Interface, Sound, the client's Extended and
-    /// Controls, Save Changes, the selected one lit, and the legend.
+    /// `DrawMenu`: Game, Interface, Sound, the client's Extended, Controls
+    /// and Macros, Save Changes, the selected one lit, and the legend two
+    /// rows under the last.
     fn draw_menu(&mut self, vui: &Vui, r: &mut dyn Raster) {
         self.item = -1;
         self.window.draw(vui, r);
         let w = |id: i32| match id {
             -1 => EXTENDED.to_string(),
             -2 => CONTROLS.to_string(),
+            -3 => MACROS_PAGE.to_string(),
             id => vui.words.get(id, vui.language).to_string(),
         };
         let width = self.window.size[0];
-        for (k, id) in [773, 778, 800, -1, -2, 482].into_iter().enumerate() {
+        for (k, id) in MENU.into_iter().enumerate() {
             let on = self.sel == k as i32;
             let s = if on { format!("|q{}|w", w(id)) } else { w(id) };
             self.window.text_box(vui, r, &wide(&s), 40, k as i32 + 1, width - 80, 1, UI_COLORS[on as usize], 8);
@@ -1051,7 +1119,7 @@ impl WndOptions {
             }
         }
         let legend = wide(&format!("|x {}   |t {}", w(212), w(753)));
-        self.window.text(vui, r, &legend, 40, 8, UI_COLORS[0], 0);
+        self.window.text(vui, r, &legend, 40, MENU_ROWS - 1, UI_COLORS[0], 0);
     }
 
     /// A page's rows: its labels, the tick, and each value in its frame
@@ -1272,6 +1340,19 @@ fn light_note(c: &ClientOptions) -> Option<String> {
 /// "CONTROLS", 1039, is in capitals and used by none of the game's modules.)
 const EXTENDED: &str = "Extended";
 const CONTROLS: &str = "Controls";
+const MACROS_PAGE: &str = "Macros";
+
+/// The options menu's rows, by their words: Game, Interface, Sound (773,
+/// 778, 800), the client's Extended, Controls and Macros, Save Changes
+/// (482).
+const MENU: [i32; 7] = [773, 778, 800, -1, -2, -3, 482];
+
+/// The menu's window: a row down, its rows, a row clear, the legend.
+const MENU_ROWS: i32 = MENU.len() as i32 + 3;
+
+/// The game's middle for the options' windows (`VIWndOptions`' 320, 246):
+/// the pages, the box and "Saving..." open round it.
+const CENTER: [i32; 2] = [320, 246];
 
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
@@ -1719,10 +1800,10 @@ mod tests {
         o.music_volume = F::ZERO;
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!(w.point([slider + 20.0, y(&w, 2)]), vec![key::DOWN, key::DOWN, key::RIGHT], "volume 0: the knob at the left end");
-        // back to the menu, Save Changes (past the client's Extended and
-        // Controls): the box's choices
+        // back to the menu, Save Changes (past the client's Extended,
+        // Controls and Macros): the box's choices
         w.key(&vui, &mut r, &mut o, 132, 0, &mut cues, &mut ups);
-        w.sel = 5;
+        w.sel = 6;
         w.key(&vui, &mut r, &mut o, 134, 0, &mut cues, &mut ups);
         assert!(w.message.visible);
         w.draw(&vui, &mut r, &o, &mut ups);
@@ -2326,7 +2407,8 @@ mod tests {
             key::RIGHT,
             key::TRIANGLE,
             key::TRIANGLE,
-            // Save Changes, Yes
+            // Save Changes (past Controls and Macros), Yes
+            key::DOWN,
             key::DOWN,
             key::DOWN,
             key::CROSS,
@@ -2488,7 +2570,7 @@ mod tests {
         assert!((0..d).contains(&(h9 - h8)), "less than a row lower at the bottom: {} of {d}", h9 - h8);
         // the control: nine rows laid out as the game's pages are, centred
         let mut game = Window::default();
-        game.init(&vui, &r, w.window.center, 440, 9, 0);
+        game.init(&vui, &r, CENTER, 440, 9, 0);
         game.set_title(Some(&[]));
         assert!(game.top_left()[1] < top8, "centred, it reaches over the tab: {} vs {top8}", game.top_left()[1]);
     }
@@ -2534,13 +2616,92 @@ mod tests {
         assert_eq!((w.sel, w.page), (4, 4), "F1's way: on the page");
         press(&mut w, &mut o, key::CROSS);
         w.capture_key(&vui, "up", &mut Vec::new());
-        for k in [key::TRIANGLE, key::DOWN, key::CROSS, key::LEFT, key::CROSS] {
+        // down past Macros to Save Changes, Yes
+        for k in [key::TRIANGLE, key::DOWN, key::DOWN, key::CROSS, key::LEFT, key::CROSS] {
             press(&mut w, &mut o, k);
         }
         for _ in 0..3 {
             w.draw(&vui, &mut NullRaster, &o, &mut ups);
         }
         assert_eq!(String::from_utf8(testing::kept("keys.opt").unwrap()).unwrap(), "key.walk_forward=up\nkey.menu_up=w\n");
+        settings::set_binds(Default::default());
+        testing::reset(false);
+    }
+
+    /// The client's Macros page, the menu's sixth row (the user,
+    /// 2026-11-10: "lets also add it as its own menu entry"): ✕ opens it on
+    /// Macro 1, ✕ goes into the macro, ✕ on its trigger waits for one (the
+    /// window says so: `capturing`), Y held and let go is kept at once, the
+    /// grid's ✕ ticks the cursor's button; Triangle backs out a step at a
+    /// time and on the menu puts them back; Save Changes keeps them in
+    /// keys.opt beside the keys. The menu's ten rows end where its nine did
+    /// (the title's menu under it); the controls: the Controls page, a row
+    /// up, is still the fifth row, and Save Changes the last.
+    #[test]
+    fn the_macros_page() {
+        use crate::bindpage::Column;
+        use crate::binds::Input;
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::settings::{self, testing};
+        testing::reset(false);
+        let vui = vui();
+        let mut o = GameOptions::default();
+        let mut w = WndOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        let mut press = |w: &mut WndOptions, o: &mut GameOptions, k: i32| {
+            w.key(&vui, &mut NullRaster, o, k, 0, &mut cues, &mut ups);
+            w.release(k);
+            w.draw(&vui, &mut NullRaster, o, &mut ups);
+        };
+        w.open(&vui, &NullRaster, &o);
+        let mut nine = Window::default();
+        nine.init(&vui, &NullRaster, CENTER, 300, 9, 0);
+        nine.set_title(Some(&[1]));
+        assert_eq!((w.window.rows, w.window.bottom_right()[1]), (10, nine.bottom_right()[1]), "a row more, grown upward");
+        for _ in 0..5 {
+            press(&mut w, &mut o, key::DOWN);
+        }
+        assert_eq!(w.sel, 5);
+        press(&mut w, &mut o, key::CROSS);
+        assert_eq!((w.page, w.window2.title.chars()), (5, wide("Macros")), "Macros");
+        press(&mut w, &mut o, key::CROSS);
+        assert!(w.macros.editing, "into Macro 1");
+        press(&mut w, &mut o, key::CROSS);
+        assert_eq!(w.capturing(), Some(Column::Trigger), "its trigger awaited");
+        w.capture_key(&vui, "y", &mut Vec::new());
+        w.capture_key_up(&vui, "y", &mut Vec::new());
+        assert_eq!((w.capturing(), settings::binds().macros[0].triggers.clone()), (None, vec![vec![Input::Key("y".into())]]), "kept as it was let go");
+        // down to the grid (Add, Clear, the four settings), ✕ ticks ↑
+        for _ in 0..7 {
+            press(&mut w, &mut o, key::DOWN);
+        }
+        press(&mut w, &mut o, key::CROSS);
+        assert_eq!(settings::binds().macros[0].buttons, crate::input::bit::UP);
+        // Triangle: the list, the menu, then closed and put back
+        press(&mut w, &mut o, key::TRIANGLE);
+        assert!(!w.macros.editing && w.page == 5);
+        press(&mut w, &mut o, key::TRIANGLE);
+        assert_eq!((w.page, w.sel), (-1, 5));
+        press(&mut w, &mut o, key::TRIANGLE);
+        assert!(settings::binds().is_default(), "put back");
+        // again, kept with Save Changes
+        w.open(&vui, &NullRaster, &o);
+        w.sel = 5;
+        for k in [key::CROSS, key::CROSS, key::CROSS] {
+            press(&mut w, &mut o, k);
+        }
+        w.capture_button(&vui, crate::binds::bit_index(crate::input::bit::L3).unwrap(), &mut Vec::new());
+        w.capture_button_up(&vui, crate::binds::bit_index(crate::input::bit::L3).unwrap(), &mut Vec::new());
+        for k in [key::TRIANGLE, key::TRIANGLE, key::DOWN, key::CROSS, key::LEFT, key::CROSS] {
+            press(&mut w, &mut o, k);
+        }
+        for _ in 0..3 {
+            w.draw(&vui, &mut NullRaster, &o, &mut ups);
+        }
+        assert_eq!(String::from_utf8(testing::kept("keys.opt").unwrap()).unwrap(), "macro.1.trigger=pad:l3\n");
+        // the controls: Controls is the fifth row, Save Changes the seventh
+        assert_eq!(MENU[4], -2);
+        assert_eq!(MENU.last(), Some(&482));
         settings::set_binds(Default::default());
         testing::reset(false);
     }

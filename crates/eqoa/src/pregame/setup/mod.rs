@@ -128,6 +128,9 @@ pub struct Setup {
 enum Capture {
     Key(String),
     Button(u8),
+    KeyUp(String),
+    ButtonUp(u8),
+    Axes([f32; 4]),
 }
 
 impl Default for Setup {
@@ -221,9 +224,10 @@ impl Setup {
         self.net_visible && self.net.editing
     }
 
-    /// What the Options window's Controls page waits for, if anything: the
-    /// window then wants the next key's name (`capture_key`) or button's
-    /// bit (`capture_button`), as play's does.
+    /// What the Options window's Controls or Macros page waits for, if
+    /// anything: the window then wants the next key's name (`capture_key`)
+    /// or button's bit (`capture_button`), and for a trigger their releases
+    /// and the sticks, as play's does.
     pub fn capturing(&self) -> Option<crate::bindpage::Column> {
         if self.focus == Some(Focus::Options) { self.options_wnd.capturing() } else { None }
     }
@@ -234,6 +238,20 @@ impl Setup {
 
     pub fn capture_button(&mut self, phys: u8) {
         self.captures.push(Capture::Button(phys));
+    }
+
+    /// A key or a button let go, and the sticks, while the Macros page
+    /// waits for a trigger.
+    pub fn capture_key_up(&mut self, name: &str) {
+        self.captures.push(Capture::KeyUp(name.to_string()));
+    }
+
+    pub fn capture_button_up(&mut self, phys: u8) {
+        self.captures.push(Capture::ButtonUp(phys));
+    }
+
+    pub fn capture_axes(&mut self, sticks: [f32; 4]) {
+        self.captures.push(Capture::Axes(sticks));
     }
 
     /// The sound device's requests besides cues and music, as play's
@@ -407,6 +425,9 @@ impl Setup {
             match c {
                 Capture::Key(name) => self.options_wnd.capture_key(cx.vui, &name, &mut cues),
                 Capture::Button(b) => self.options_wnd.capture_button(cx.vui, b, &mut cues),
+                Capture::KeyUp(name) => self.options_wnd.capture_key_up(cx.vui, &name, &mut cues),
+                Capture::ButtonUp(b) => self.options_wnd.capture_button_up(cx.vui, b, &mut cues),
+                Capture::Axes(sticks) => self.options_wnd.capture_axes(cx.vui, sticks, &mut cues),
             }
             cx.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
         }
