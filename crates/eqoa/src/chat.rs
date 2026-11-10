@@ -13,6 +13,13 @@
 //! goes over them (`draw_selection`). A selection is by the lines' own numbers,
 //! so it holds while the ring moves on under it, and it keeps the view it was
 //! made in until it is cleared: Esc or a click anywhere else.
+//!
+//! Item links are the client's own too (`itemlink`): a line the server relayed
+//! with links keeps where each lies through the wrap (`RowLink`), and the box
+//! draws them in the links' purple (`show_links`), a click on one opening it
+//! (`Let::Link`); with the history held (mode 33) left walks up through them and
+//! right back down (`walk_older`, `walk_newer`), the one lit washed, and the
+//! history let go forgets the walk.
 
 use std::cell::RefCell;
 use vi::ui::{Raster, Vui, Window};
@@ -33,6 +40,19 @@ pub struct ChatLine {
     /// Its number, counting every line the box has been given (the client's: a
     /// selection's hold on it, where the ring's places get used again).
     seq: u64,
+    /// The item links on this row (the client's, `itemlink`).
+    pub links: Vec<RowLink>,
+}
+
+/// An item link's part of a row: where it lies in the row's text (UTF-16 units),
+/// the server's link id, and which link of all the box was given it is (one that
+/// wrapped is on two rows, under one number).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowLink {
+    pub start: u16,
+    pub len: u16,
+    pub id: u32,
+    pub inst: u64,
 }
 
 impl ChatLine {
@@ -74,18 +94,25 @@ pub struct ChatText {
     tail: usize,
     /// The number the next line finished takes (`ChatLine::seq`).
     seq: u64,
+    /// While a line with links is added (`add_text_linked`): where in the
+    /// line each character of the tail's row came from (`usize::MAX` for a
+    /// continuation's space), and the links (start, end, id, number) in the
+    /// line's units; the number the next link takes.
+    src: Vec<usize>,
+    spans: Vec<(usize, usize, u32, u64)>,
+    link_inst: u64,
 }
 
 impl ChatText {
     /// `Init(app, width)`: lines wrap at `width - 30`.
     pub fn new(width: i32) -> Self {
-        let mut t = ChatText { width: width - 30, lines: Vec::new(), head: 0, tail: 0, seq: 0 };
+        let mut t = ChatText { width: width - 30, lines: Vec::new(), head: 0, tail: 0, seq: 0, src: Vec::new(), spans: Vec::new(), link_inst: 0 };
         t.reset();
         t
     }
 
     pub fn reset(&mut self) {
-        self.lines = (0..LINES).map(|_| ChatLine { text: Vec::new(), color: [1.0; 4], kind: 0, time: 0, seq: 0 }).collect();
+        self.lines = (0..LINES).map(|_| ChatLine { text: Vec::new(), color: [1.0; 4], kind: 0, time: 0, seq: 0, links: Vec::new() }).collect();
         self.head = 0;
         self.tail = 0;
     }
@@ -125,8 +152,26 @@ impl ChatText {
 
     /// `AddText`: wraps at the width, at most 63 characters a line, at the
     /// last space when there is one; a continuation line starts with a
-    /// space. `width` measures a run of text in the font.
+    /// space. `width` measures a run of text in the font. (The game's lines
+    /// all come through `add_text_linked`, links or none.)
+    #[cfg(test)]
     pub fn add_text(&mut self, s: &[u16], c: [f32; 4], now: u32, width: impl Fn(&[u16]) -> i32) {
+        self.add_text_linked(s, c, now, width, &[]);
+    }
+
+    /// `add_text` for a line with item links (the client's, `itemlink`): each
+    /// link's place in `s` (UTF-16 units) and the server's id. The rows are
+    /// `AddText`'s, character for character; each row keeps the part of each
+    /// link it holds (`ChatLine::links`).
+    pub fn add_text_linked(&mut self, s: &[u16], c: [f32; 4], now: u32, width: impl Fn(&[u16]) -> i32, links: &[net::itemlink::ChatLink]) {
+        self.src.clear();
+        self.spans = links
+            .iter()
+            .map(|l| {
+                self.link_inst += 1;
+                (l.start as usize, l.start as usize + l.len as usize, l.id, self.link_inst)
+            })
+            .collect();
         let at = |s: &[u16], i: usize| s.get(i).copied().unwrap_or(0);
         let (mut w, mut space, mut pos, mut n) = (0, 0usize, 0usize, 0usize);
         while at(s, pos) != 0 {
@@ -141,11 +186,14 @@ impl ChatText {
                     w = 0;
                     n = 1;
                     self.lines[self.tail].text = vec![b' ' as u16];
+                    self.src = vec![usize::MAX];
                 }
                 if at(s, pos) != 0 {
                     let t = &mut self.lines[self.tail].text;
                     t.truncate(n);
                     t.push(at(s, pos));
+                    self.src.truncate(n);
+                    self.src.push(pos);
                     n += 1;
                     pos += 1;
                     w = width(&self.lines[self.tail].text);
@@ -156,24 +204,29 @@ impl ChatText {
             }
             if self.lines[self.tail].text.get(n - 1) != Some(&(b' ' as u16)) && space > 0 {
                 self.lines[self.tail].text.truncate(space);
+                self.src.truncate(space);
                 pos -= n - space - 1;
             }
             self.add_line(c, now);
             space = 0;
             n = 1;
             self.lines[self.tail].text = vec![b' ' as u16];
+            self.src = vec![usize::MAX];
             w = 0;
         }
         self.add_line(c, now);
+        self.spans.clear();
     }
 
     /// `AddLine`: the line at the tail is finished; the ring moves on.
     fn add_line(&mut self, c: [f32; 4], now: u32) {
+        let links = self.row_links();
         let l = &mut self.lines[self.tail];
         l.color = c;
         l.kind = 1;
         l.time = now;
         l.seq = self.seq;
+        l.links = links;
         self.seq += 1;
         if self.head == 0 && self.tail < LINES - 1 {
             self.tail += 1;
@@ -183,6 +236,23 @@ impl ChatText {
         }
         // The new tail line starts empty (it is overwritten as it fills).
         self.lines[self.tail].text.clear();
+        self.lines[self.tail].links.clear();
+        self.src.clear();
+    }
+
+    /// The links' parts on the tail's row as it is finished: for each link, the
+    /// row's characters that came from it (the row's characters come from the
+    /// line in order, so they are one run).
+    fn row_links(&self) -> Vec<RowLink> {
+        let mut out = Vec::new();
+        for &(a, b, id, inst) in &self.spans {
+            let mut run = self.src.iter().enumerate().filter(|&(_, &p)| p != usize::MAX && (a..b).contains(&p)).map(|(i, _)| i);
+            if let Some(first) = run.next() {
+                let last = run.last().unwrap_or(first);
+                out.push(RowLink { start: first as u16, len: (last + 1 - first) as u16, id, inst });
+            }
+        }
+        out
     }
 
     /// The lines numbered `from..=to` still held, a row a line, oldest first.
@@ -275,10 +345,21 @@ struct Drag {
     at: [f32; 2],
     /// the lines owed to the scroll past the box's edge
     owed: f32,
+    /// where it came down, as `contains` takes a point (a link there opens)
+    p0: [f32; 2],
+}
+
+/// An item link as the last frame drew it (`itemlink`): its place (as
+/// `contains` takes a point, x0 y0 x1 y1), the server's id and which link it is.
+#[derive(Clone, Debug)]
+struct LinkHit {
+    rect: [i32; 4],
+    id: u32,
+    inst: u64,
 }
 
 /// The button let go (`WndChat::release`).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Let {
     /// no press of the box's: the button is the game's
     NotHeld,
@@ -286,6 +367,8 @@ pub enum Let {
     Done,
     /// a click on a line with no selection up, as it is on the box: at this place
     Click(f64, f64),
+    /// a click on an item link (`itemlink`): its id and its name as drawn
+    Link(u32, String),
 }
 
 /// The highlight, over the rows: a wash the words read through.
@@ -343,6 +426,12 @@ pub struct WndChat {
     /// The history's view is on the newest lines, nothing having taken it back
     /// (`follow`).
     following: bool,
+    /// The item links the last frame drew (`itemlink`), whether they are drawn as
+    /// links (the Extended row Item Links: off, the line's plain words), and the
+    /// one the history's walk has lit (its number).
+    link_hits: Vec<LinkHit>,
+    pub show_links: bool,
+    walk: Option<u64>,
 }
 
 impl WndChat {
@@ -355,7 +444,7 @@ impl WndChat {
 
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
-        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(462 - 45), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false }
+        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(462 - 45), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None }
     }
 
     /// `CountLines`: the fresh lines (every line while scrolling; five in a
@@ -378,6 +467,8 @@ impl WndChat {
     /// `SetScroll`: 1 opens the view on the last five lines, 0 ends it. (A
     /// selection, the client's, keeps the view it was made in until it is cleared.)
     pub fn set_scroll(&mut self, on: i32) {
+        // the walk through the links is the hold's: opened or let go, none lit
+        self.walk = None;
         if self.sel.is_some() && self.scroll == 1 {
             return;
         }
@@ -496,6 +587,7 @@ impl WndChat {
             self.window.draw(vui, ui);
         }
         self.shown.clear();
+        self.link_hits.clear();
         let mut row = (self.lines - 1).max(0);
         let mut i = ChatText::prev(it);
         let stop = ChatText::prev(self.text.first());
@@ -506,8 +598,13 @@ impl WndChat {
                 && (self.scroll == 1 || (self.scroll == 0 && l.kind == 1) || self.mode != 0)
             {
                 let (text, color, seq) = (l.text.clone(), l.color, l.seq);
-                self.window.text_box(vui, ui, &text, 25, row, self.window.size[0] - 45, 1, color, 0);
+                let links = if self.show_links { l.links.clone() } else { Vec::new() };
                 let (mid, step) = (self.window.row_center(vui, ui, row)[1], h - 4);
+                if links.is_empty() {
+                    self.window.text_box(vui, ui, &text, 25, row, self.window.size[0] - 45, 1, color, 0);
+                } else {
+                    self.draw_linked_row(vui, ui, &text, &links, row, color, [mid - step / 2, mid - step / 2 + step]);
+                }
                 self.shown.push(Shown { seq, top: mid - step / 2, bottom: mid - step / 2 + step });
                 row -= 1;
             }
@@ -555,7 +652,7 @@ impl WndChat {
     /// is on a line.
     pub fn press(&mut self, p: [f32; 2], at: (f64, f64)) -> bool {
         let Some(from) = self.row_at(p) else { return false };
-        self.drag = Some(Drag { from, press: at, had: self.sel.is_some(), moved: false, at: p, owed: 0.0 });
+        self.drag = Some(Drag { from, press: at, had: self.sel.is_some(), moved: false, at: p, owed: 0.0, p0: p });
         true
     }
 
@@ -623,6 +720,9 @@ impl WndChat {
             self.clear_selection(scrolling);
             return Let::Done;
         }
+        if let Some((id, name)) = self.link_at(d.p0) {
+            return Let::Link(id, name);
+        }
         Let::Click(d.press.0, d.press.1)
     }
 
@@ -647,10 +747,12 @@ impl WndChat {
     }
 
     /// The wheel's `lines` (up positive) with the history in view and the pointer
-    /// on the box, or a drag on: a line a notch through the history. False when it
-    /// is not the box's.
-    pub fn wheel(&mut self, p: [f32; 2], lines: f32) -> bool {
-        if self.scroll != 1 || !(self.contains(p) || self.drag.is_some()) {
+    /// on the box, or a drag on, or the history held (`held`: R2 or C, mode 33,
+    /// wherever the pointer is: the petition 1463's "mouse scrolling up and down
+    /// on the chat log when holding the chat expand button"): a line a notch
+    /// through the history. False when it is not the box's.
+    pub fn wheel(&mut self, p: [f32; 2], lines: f32, held: bool) -> bool {
+        if self.scroll != 1 || !(held || self.contains(p) || self.drag.is_some()) {
             return false;
         }
         self.wheel += lines;
@@ -707,6 +809,152 @@ impl WndChat {
         for (top, bottom) in self.selected() {
             ui.fill_blended(SELECTED, [[x0, top], [x1, top], [x1, bottom], [x0, bottom]]);
         }
+        // and the link the history's walk has lit (`itemlink`)
+        for h in self.link_hits.iter().filter(|h| Some(h.inst) == self.walk) {
+            let [a, b, c, d] = h.rect;
+            ui.fill_blended(crate::itemlink::LIT, [[a - 2, b], [c + 2, b], [c + 2, d], [a - 2, d]]);
+        }
+    }
+
+    /// A row with item links (`itemlink`): its runs drawn one after another as
+    /// `DrawTextInternal` draws its runs, each link's in the links' purple, and
+    /// each link's place noted (`link_hits`). `y` is the row's top and bottom.
+    fn draw_linked_row(&mut self, vui: &Vui, ui: &mut dyn Raster, text: &[u16], links: &[RowLink], row: i32, color: [f32; 4], y: [i32; 2]) {
+        let x0 = self.window.top_left()[0];
+        let (mut x, mut at) = (25, 0usize);
+        for l in links {
+            let a = (l.start as usize).min(text.len());
+            let b = (a + l.len as usize).min(text.len());
+            if a < at || a >= b {
+                continue;
+            }
+            if a > at {
+                let run = &text[at..a];
+                self.window.text(vui, ui, run, x, row, color, 0);
+                x += self.window.text_width(vui, ui, run);
+            }
+            let run = &text[a..b];
+            self.window.text(vui, ui, run, x, row, crate::itemlink::COLOR, 0);
+            let w = self.window.text_width(vui, ui, run);
+            self.link_hits.push(LinkHit { rect: [x0 + x, y[0], x0 + x + w, y[1]], id: l.id, inst: l.inst });
+            x += w;
+            at = b;
+        }
+        if at < text.len() {
+            self.window.text(vui, ui, &text[at..], x, row, color, 0);
+        }
+    }
+
+    /// The item link drawn at point `p` (as `contains` takes one): its id and its
+    /// name, its parts on other rows joined.
+    pub fn link_at(&self, p: [f32; 2]) -> Option<(u32, String)> {
+        let h = self.link_hits.iter().find(|h| p[0] >= h.rect[0] as f32 && p[0] < h.rect[2] as f32 && p[1] >= h.rect[1] as f32 && p[1] < h.rect[3] as f32)?;
+        Some((h.id, self.link_name(h.inst)))
+    }
+
+    /// Link `inst`'s name: its parts on every row that holds it, in order (a
+    /// continuation row's own space left out).
+    fn link_name(&self, inst: u64) -> String {
+        let mut out = Vec::new();
+        let mut i = self.text.first();
+        while i != self.text.end() {
+            if let Some(l) = self.text.line(i) {
+                for k in l.links.iter().filter(|k| k.inst == inst) {
+                    let a = (k.start as usize).min(l.text.len());
+                    let b = (a + k.len as usize).min(l.text.len());
+                    out.extend_from_slice(&l.text[a..b]);
+                }
+            }
+            i = ChatText::next(i);
+        }
+        plain(&out)
+    }
+
+    /// The links in the history, oldest first: each one's number, id, and the
+    /// line it starts on.
+    fn walk_list(&self) -> Vec<(u64, u32, u64)> {
+        let mut out: Vec<(u64, u32, u64)> = Vec::new();
+        let mut i = self.text.first();
+        while i != self.text.end() {
+            if let Some(l) = self.text.line(i).filter(|l| l.drawn()) {
+                for k in &l.links {
+                    if !out.iter().any(|o| o.0 == k.inst) {
+                        out.push((k.inst, k.id, l.seq));
+                    }
+                }
+            }
+            i = ChatText::next(i);
+        }
+        out
+    }
+
+    /// With the history held (mode 33) and links shown: left, the next link up
+    /// the history lit (from none, the newest), the view moved to hold it. False
+    /// (sound 9) at the oldest, or with none.
+    pub fn walk_older(&mut self) -> bool {
+        let list = self.walk_list();
+        if self.scroll != 1 || !self.show_links || list.is_empty() {
+            self.cues.push(9);
+            return false;
+        }
+        let to = match list.iter().position(|o| Some(o.0) == self.walk) {
+            None => list.len() - 1,
+            Some(0) => {
+                self.cues.push(9);
+                return false;
+            }
+            Some(k) => k - 1,
+        };
+        self.walk_to(list[to].0, list[to].2);
+        true
+    }
+
+    /// Right: the next link down lit; past the newest none, and the view back on
+    /// the newest lines. False with none lit.
+    pub fn walk_newer(&mut self) -> bool {
+        let list = self.walk_list();
+        let Some(k) = list.iter().position(|o| Some(o.0) == self.walk) else {
+            self.walk = None;
+            return false;
+        };
+        if k + 1 < list.len() {
+            self.walk_to(list[k + 1].0, list[k + 1].2);
+        } else {
+            self.walk = None;
+            let cues = self.cues.len();
+            while self.bottom != self.text.end() {
+                self.scroll_down();
+            }
+            self.cues.truncate(cues);
+            self.cues.push(11);
+        }
+        true
+    }
+
+    /// Link `inst` lit, the view moved to hold line `seq`, sound 11.
+    fn walk_to(&mut self, inst: u64, seq: u64) {
+        self.walk = Some(inst);
+        let cues = self.cues.len();
+        while self.top != self.text.first() && self.text.line(self.top).is_some_and(|l| l.seq > seq) {
+            self.scroll_up();
+        }
+        while self.bottom != self.text.end() && self.text.line(ChatText::prev(self.bottom)).is_some_and(|l| l.seq < seq) {
+            self.scroll_down();
+        }
+        self.cues.truncate(cues);
+        self.cues.push(11);
+    }
+
+    /// A link is lit by the history's walk.
+    pub fn walking(&self) -> bool {
+        self.walk.is_some()
+    }
+
+    /// The link the walk has lit: its id and its name.
+    pub fn walked(&self) -> Option<(u32, String)> {
+        let inst = self.walk?;
+        let id = self.walk_list().into_iter().find(|o| o.0 == inst)?.1;
+        Some((id, self.link_name(inst)))
     }
 }
 
@@ -972,7 +1220,7 @@ mod tests {
         let mut c = with_lines(20);
         c.set_scroll(1);
         frame(&mut c, 0.016);
-        assert!(c.wheel(on(&c, 19), 3.0));
+        assert!(c.wheel(on(&c, 19), 3.0, false));
         frame(&mut c, 0.016);
         begin(&mut c, 14);
         c.release(false);
@@ -1054,19 +1302,168 @@ mod tests {
     #[test]
     fn the_wheel_steps_the_history_in_view() {
         let mut c = with_lines(20);
-        assert!(!c.wheel(on(&c, 19), 1.0), "no history in view: the game's");
+        assert!(!c.wheel(on(&c, 19), 1.0, false), "no history in view: the game's");
         c.set_scroll(1);
         frame(&mut c, 0.016);
         let p = on(&c, 19);
-        assert!(!c.wheel([-300.0, p[1]], 1.0), "off the box: the game's");
-        assert!(c.wheel(p, 2.5));
+        assert!(!c.wheel([-300.0, p[1]], 1.0, false), "off the box: the game's");
+        assert!(c.wheel(p, 2.5, false));
         frame(&mut c, 0.016);
         assert_eq!(c.shown.first().unwrap().seq, 17, "two lines back, the half kept");
-        assert!(c.wheel(p, -0.5));
+        assert!(c.wheel(p, -0.5, false));
         frame(&mut c, 0.016);
         assert_eq!(c.shown.first().unwrap().seq, 17);
-        assert!(c.wheel(p, -1.0));
+        assert!(c.wheel(p, -1.0, false));
         frame(&mut c, 0.016);
         assert_eq!(c.shown.first().unwrap().seq, 18);
+    }
+
+    /// What a row's runs were drawn as: the words and the colour, in order.
+    struct Runs(Vec<(String, [f32; 4])>);
+
+    impl Raster for Runs {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], c: [f32; 4], s: &[u16]) {
+            self.0.push((String::from_utf16_lossy(s), c));
+        }
+        fn draw_centered_string(&mut self, _: [i32; 2], c: [f32; 4], s: &[u16], _: u32) {
+            self.0.push((String::from_utf16_lossy(s), c));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            21
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    fn link(start: usize, len: usize, id: u32) -> net::itemlink::ChatLink {
+        net::itemlink::ChatLink { start: start as u16, len: len as u16, id }
+    }
+
+    /// A line's links keep their place through `AddText`'s wrap: each row holds
+    /// its part of a link that wrapped, under one number, and the rows' words are
+    /// the plain line's character for character. The control: the same line
+    /// added plain has the same rows and no links.
+    #[test]
+    fn links_keep_their_place_through_the_wrap() {
+        let line = "Bob tells the group: see Heartsblood Seralite Scale Leggings and the Rusty Sword now";
+        let at = |w: &str| line.find(w).unwrap();
+        let links = [link(at("Heartsblood"), "Heartsblood Seralite Scale Leggings".len(), 7), link(at("Rusty"), "Rusty Sword".len(), 9)];
+        let (mut a, mut b) = (ChatText::new(462 - 45), ChatText::new(462 - 45));
+        a.add_text_linked(&crate::ui::wide(line), [1.0; 4], 0, width, &links);
+        b.add_text(&crate::ui::wide(line), [1.0; 4], 0, width);
+        assert!(a.count() >= 2, "it wrapped");
+        let rows = |t: &ChatText| (0..t.count()).map(|k| t.lines[k].text.clone()).collect::<Vec<_>>();
+        assert_eq!(rows(&a), rows(&b), "the rows are the plain line's");
+        assert!((0..b.count()).all(|k| b.lines[k].links.is_empty()), "the control: no links");
+        let mut parts: Vec<(u32, u64, String)> = Vec::new();
+        for k in 0..a.count() {
+            let l = &a.lines[k];
+            for r in &l.links {
+                parts.push((r.id, r.inst, String::from_utf16_lossy(&l.text[r.start as usize..(r.start + r.len) as usize])));
+            }
+        }
+        let leggings: Vec<&(u32, u64, String)> = parts.iter().filter(|p| p.0 == 7).collect();
+        assert!(leggings.len() == 2 && leggings[0].1 == leggings[1].1, "one link on two rows: {parts:?}");
+        assert_eq!(leggings.iter().map(|p| p.2.trim()).collect::<Vec<_>>().join(" "), "Heartsblood Seralite Scale Leggings");
+        assert!(parts.iter().any(|p| p.0 == 9 && p.2 == "Rusty Sword"), "{parts:?}");
+    }
+
+    /// A box with a line holding a link, drawn: the link's run in the links'
+    /// purple between the line's own; a click on it is the link, beside it the
+    /// line. The control: with Item Links off the row is one run, and a click on
+    /// the same place is the line's.
+    #[test]
+    fn a_link_is_drawn_purple_and_a_click_opens_it() {
+        let mut c = WndChat::new();
+        let line = "Ann: see Rusty Sword ok";
+        c.text.add_text_linked(&crate::ui::wide(line), [1.0; 4], 0, width, &[link(9, 11, 42)]);
+        let (v, mut r) = (vui(), Runs(Vec::new()));
+        for _ in 0..30 {
+            r.0.clear();
+            c.draw(&v, &mut r, 0, 0.1);
+        }
+        assert_eq!(r.0, vec![("Ann: see ".to_string(), [1.0; 4]), ("Rusty Sword".to_string(), crate::itemlink::COLOR), (" ok".to_string(), [1.0; 4])]);
+        let h = c.link_hits[0].clone();
+        let on = [(h.rect[0] + h.rect[2]) as f32 / 2.0, (h.rect[1] + h.rect[3]) as f32 / 2.0];
+        assert!(c.press(on, (1.0, 1.0)));
+        assert_eq!(c.release(false), Let::Link(42, "Rusty Sword".into()));
+        let beside = [h.rect[0] as f32 - 20.0, on[1]];
+        assert!(c.press(beside, (2.0, 2.0)));
+        assert_eq!(c.release(false), Let::Click(2.0, 2.0), "the line beside it");
+        c.show_links = false;
+        r.0.clear();
+        c.draw(&v, &mut r, 0, 0.1);
+        assert_eq!(r.0, vec![(line.to_string(), [1.0; 4])], "off: the plain line");
+        assert!(c.press(on, (3.0, 3.0)));
+        assert_eq!(c.release(false), Let::Click(3.0, 3.0), "off: the line's click");
+    }
+
+    /// With the history held, left walks up through the links (the newest first,
+    /// the view following one scrolled out of it) and right back down; past the
+    /// newest none is lit and the view is on the newest lines again. Let go and
+    /// opened again, none is lit: the walk is not kept. The controls: with no
+    /// history held, or links off, nothing is lit.
+    #[test]
+    fn the_walk_goes_up_and_down_and_is_forgotten() {
+        let mut c = WndChat::new();
+        c.text.add_text_linked(&crate::ui::wide("Ann: Sword"), [1.0; 4], 0, width, &[link(5, 5, 1)]);
+        for k in 0..8 {
+            c.text.add_text(&crate::ui::wide(&format!("line {k}")), [1.0; 4], 0, width);
+        }
+        c.text.add_text_linked(&crate::ui::wide("Bo: Shield and Helm"), [1.0; 4], 0, width, &[link(4, 6, 2), link(15, 4, 3)]);
+        let frame = |c: &mut WndChat| c.draw(&vui(), &mut Rows, 0, 0.016);
+        frame(&mut c);
+        assert!(!c.walk_older(), "no history held");
+        c.set_scroll(1);
+        frame(&mut c);
+        c.show_links = false;
+        assert!(!c.walk_older(), "links off");
+        c.show_links = true;
+        assert!(c.walk_older());
+        assert_eq!(c.walked(), Some((3, "Helm".into())), "the newest first");
+        assert!(c.walk_older());
+        assert_eq!(c.walked(), Some((2, "Shield".into())));
+        assert!(c.walk_older());
+        assert_eq!(c.walked(), Some((1, "Sword".into())), "up the history");
+        frame(&mut c);
+        assert!(c.shown.iter().any(|r| r.seq == 0), "the view moved to hold it");
+        assert!(c.link_hits.iter().any(|h| h.id == 1), "drawn where the view now is");
+        c.cues.clear();
+        assert!(!c.walk_older(), "the oldest");
+        assert_eq!(c.cues, vec![9]);
+        assert!(c.walk_newer() && c.walk_newer());
+        assert_eq!(c.walked().map(|w| w.0), Some(3));
+        assert!(c.walk_newer());
+        assert!(!c.walking(), "past the newest: none");
+        assert_eq!(c.bottom, c.text.end(), "the view on the newest lines");
+        assert!(c.walk_older());
+        c.set_scroll(0);
+        assert!(!c.walking(), "let go: forgotten");
+        c.set_scroll(1);
+        assert!(!c.walking() && c.walked().is_none(), "opened again: none lit, the newest lines");
+        assert_eq!(c.bottom, c.text.end());
+    }
+
+    /// The wheel steps the history wherever the pointer is while it is held
+    /// (R2 or C); the control: not held, off the box it is the game's.
+    #[test]
+    fn the_wheel_steps_the_history_anywhere_while_held() {
+        let mut c = with_lines(20);
+        c.set_scroll(1);
+        frame(&mut c, 0.016);
+        let off = [-300.0, -300.0];
+        assert!(!c.wheel(off, 1.0, false), "not held: the game's");
+        assert!(c.wheel(off, 2.0, true), "held: anywhere");
+        frame(&mut c, 0.016);
+        assert_eq!(c.shown.first().unwrap().seq, 17, "two lines back");
     }
 }

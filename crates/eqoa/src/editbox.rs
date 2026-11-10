@@ -11,6 +11,11 @@
 //! screen in use shows the soft keyboard, driven by the d-pad, X, square
 //! (back) and circle (space) (on a keyboard: the arrows, E, Backspace and
 //! Space).
+//!
+//! The client's own: the chat line's item links (`itemlink`, `TextLink`), each
+//! an item's name drawn in the links' purple and kept one unit: the caret
+//! steps over it, typing never lands inside it, and Backspace at its end takes
+//! it whole (`insert_link`).
 
 use vi::ui::{FrameParam, Raster, Vui, wide};
 
@@ -153,8 +158,22 @@ struct Line {
     brk: bool,
 }
 
+/// An item link in the text (the chat line's, `itemlink`): where its name lies
+/// (in characters) and the player's record it names: its list (0 the pack, 1
+/// the bank) and its key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextLink {
+    pub start: usize,
+    pub len: usize,
+    pub list: u8,
+    pub key: u32,
+}
+
 pub struct EditBox {
     pub text: Vec<u16>,
+    /// The item links in the text, in order (`insert_link`; none but in the chat
+    /// line).
+    pub links: Vec<TextLink>,
     max_len: usize,
     lines: Vec<Line>,
     cursor: usize,
@@ -191,6 +210,7 @@ impl Default for EditBox {
     fn default() -> Self {
         let mut e = EditBox {
             text: Vec::new(),
+            links: Vec::new(),
             max_len: 64,
             lines: Vec::new(),
             cursor: 0,
@@ -228,6 +248,7 @@ impl EditBox {
     pub fn set_max_length(&mut self, n: usize) {
         self.max_len = n.max(1);
         self.text.clear();
+        self.links.clear();
         self.top = 0;
         self.set_cursor(0);
     }
@@ -273,13 +294,64 @@ impl EditBox {
     /// `Clear`.
     pub fn clear(&mut self) {
         self.text.clear();
+        self.links.clear();
         self.set_cursor(0);
     }
 
     /// `SetText`.
     pub fn set_text(&mut self, s: &[u16]) {
         self.text = s.iter().copied().take_while(|&c| c != 0).take(self.max_len - 1).collect();
+        self.links.clear();
         self.set_cursor(self.text.len() as isize);
+    }
+
+    /// The text and its links put back (a chat line kept with its links,
+    /// `Play::link_draft`): the links that fit in it, the caret at its end.
+    pub fn set_linked(&mut self, s: &[u16], links: &[TextLink]) {
+        self.set_text(s);
+        let n = self.text.len();
+        self.links = links.iter().copied().filter(|l| l.len > 0 && l.start + l.len <= n).collect();
+        self.links.sort_by_key(|l| l.start);
+        self.links.dedup_by(|b, a| b.start < a.start + a.len);
+    }
+
+    /// The link the caret is inside, if any (never one it is at either end of).
+    fn link_round(&self, at: usize) -> Option<TextLink> {
+        self.links.iter().copied().find(|l| l.start < at && at < l.start + l.len)
+    }
+
+    /// An item's name in at the caret as a link (`itemlink`): one unit, drawn
+    /// in the links' purple, a space before it when the caret follows a word.
+    /// False, and nothing in, past `itemlink`'s most links a line or the box's
+    /// length.
+    pub fn insert_link(&mut self, name: &[u16], list: u8, key: u32, now: i64) -> bool {
+        if name.is_empty() || self.links.len() >= net::itemlink::LINKS_MOST {
+            return false;
+        }
+        if let Some(l) = self.link_round(self.cursor) {
+            self.cursor = l.start + l.len;
+        }
+        let space = self.cursor > 0 && self.text[self.cursor - 1] != b' ' as u16;
+        let need = name.len() + space as usize;
+        if self.text.len() + need >= self.max_len {
+            return false;
+        }
+        self.last_input = now;
+        let at = self.cursor + space as usize;
+        for l in &mut self.links {
+            if l.start >= self.cursor {
+                l.start += need;
+            }
+        }
+        if space {
+            self.text.insert(self.cursor, b' ' as u16);
+        }
+        self.text = [&self.text[..at], name, &self.text[at..]].concat();
+        self.links.push(TextLink { start: at, len: name.len(), list, key });
+        self.links.sort_by_key(|l| l.start);
+        self.cursor = at + name.len();
+        self.want_x = -1;
+        true
     }
 
     /// `OnMessage` 295: the focus starts a fresh session.
@@ -297,9 +369,13 @@ impl EditBox {
         self.shift = false;
     }
 
-    /// `SetCursor`: clamped to the text; forgets the column.
+    /// `SetCursor`: clamped to the text; forgets the column. A place inside an
+    /// item link is that link's end going right, its start going left.
     fn set_cursor(&mut self, pos: isize) -> bool {
-        let c = pos.clamp(0, self.text.len() as isize) as usize;
+        let mut c = pos.clamp(0, self.text.len() as isize) as usize;
+        if let Some(l) = self.link_round(c) {
+            c = if c < self.cursor { l.start } else { l.start + l.len };
+        }
         self.want_x = -1;
         let moved = c != self.cursor;
         self.cursor = c;
@@ -312,9 +388,17 @@ impl EditBox {
         if !self.allow_spaces && c == b' ' as u16 {
             return false;
         }
+        if let Some(l) = self.link_round(self.cursor) {
+            self.cursor = l.start + l.len;
+        }
         if self.cursor + 1 < self.max_len && self.text.len() + 1 < self.max_len {
             self.last_input = now;
             self.text.insert(self.cursor, c);
+            for l in &mut self.links {
+                if l.start >= self.cursor {
+                    l.start += 1;
+                }
+            }
             self.set_cursor(self.cursor as isize + 1);
             return true;
         }
@@ -355,10 +439,28 @@ impl EditBox {
         FIELD.with_borrow_mut(|f| f.text = text);
     }
 
-    fn backspace(&mut self, now: i64) -> bool {
+    pub(crate) fn backspace(&mut self, now: i64) -> bool {
         self.last_input = now;
         if self.cursor > 0 {
+            // at an item link's end it goes whole
+            if let Some(k) = self.links.iter().position(|l| l.start + l.len == self.cursor) {
+                let l = self.links.remove(k);
+                self.text.drain(l.start..l.start + l.len);
+                for o in &mut self.links {
+                    if o.start > l.start {
+                        o.start -= l.len;
+                    }
+                }
+                self.cursor = l.start;
+                self.want_x = -1;
+                return true;
+            }
             self.text.remove(self.cursor - 1);
+            for o in &mut self.links {
+                if o.start >= self.cursor {
+                    o.start -= 1;
+                }
+            }
             self.set_cursor(self.cursor as isize - 1);
             return true;
         }
@@ -718,6 +820,9 @@ impl EditBox {
         self.wrap_lines(vui, r);
         let moved = self.line_up_wrapped(vui, r, now);
         self.cursor = self.cursor.min(self.text.len());
+        if let Some(l) = self.link_round(self.cursor) {
+            self.cursor = l.start;
+        }
         moved
     }
 
@@ -750,6 +855,9 @@ impl EditBox {
         self.wrap_lines(vui, r);
         let moved = self.line_down_wrapped(vui, r, now);
         self.cursor = self.cursor.min(self.text.len());
+        if let Some(l) = self.link_round(self.cursor) {
+            self.cursor = l.start + l.len;
+        }
         moved
     }
 
@@ -776,6 +884,30 @@ impl EditBox {
         }
         self.cursor += cur.len - p[0] + below.len - 1;
         true
+    }
+
+    /// The text from `from` to `to` as runs (start, end, an item link's), in
+    /// order: the whole of it one run where it holds no link.
+    fn runs(&self, from: usize, to: usize) -> Vec<(usize, usize, bool)> {
+        let mut out = Vec::new();
+        let mut at = from;
+        if !self.password {
+            for l in &self.links {
+                let (a, b) = (l.start.max(from), (l.start + l.len).min(to));
+                if a >= b || a < at {
+                    continue;
+                }
+                if a > at {
+                    out.push((at, a, false));
+                }
+                out.push((a, b, true));
+                at = b;
+            }
+        }
+        if at < to || out.is_empty() {
+            out.push((at, to, false));
+        }
+        out
     }
 
     /// `OnDrawSelf`.
@@ -935,8 +1067,16 @@ impl EditBox {
                     .iter()
                     .map(|&c| if c == b'\n' as u16 { b' ' as u16 } else if self.password { b'*' as u16 } else { c })
                     .collect();
-                r.draw_string([self.pos[0] + 23, y + 1], shadow, &buf);
-                r.draw_string([self.pos[0] + 22, y], text_c, &buf);
+                // the line's runs, an item link's in the links' purple (one
+                // run, the line itself, where it holds none)
+                let mut x = 0;
+                for (a, b, link) in self.runs(l.start, l.start + l.len) {
+                    let run = &buf[a - l.start..b - l.start];
+                    let c = if link { [crate::itemlink::COLOR[0], crate::itemlink::COLOR[1], crate::itemlink::COLOR[2], text_c[3]] } else { text_c };
+                    r.draw_string([self.pos[0] + 23 + x, y + 1], shadow, run);
+                    r.draw_string([self.pos[0] + 22 + x, y], c, run);
+                    x += vui.string_width(r, run).max(0);
+                }
             }
             if lc[1] == iu {
                 let l = self.line(iu);
@@ -1303,5 +1443,127 @@ mod tests {
         assert!(e.insert(b'x' as u16, 0));
         e.backspace(0);
         assert!(e.text.is_empty() && e.cursor == 0);
+    }
+
+    /// The links of `e` as (the words they cover, list, key).
+    fn linked(e: &EditBox) -> Vec<(String, u8, u32)> {
+        e.links.iter().map(|l| (String::from_utf16_lossy(&e.text[l.start..l.start + l.len]), l.list, l.key)).collect()
+    }
+
+    /// An item link is one unit: in at the caret (a space before it after a
+    /// word), the caret stepping over it either way, typing beside it moving it
+    /// along, never landing in it, and Backspace at its end taking it whole. The
+    /// controls: a character's Backspace takes one; set_text and clear drop links.
+    #[test]
+    fn a_link_is_one_unit() {
+        let mut e = EditBox::default();
+        e.set_max_length(128);
+        e.set_text(&wide("see"));
+        assert!(e.insert_link(&wide("Rusty Sword"), 0, 7, 0));
+        assert_eq!(e.text, wide("see Rusty Sword"));
+        assert_eq!(linked(&e), vec![("Rusty Sword".into(), 0, 7)]);
+        assert_eq!(e.cursor, 15, "after it");
+        for c in " ok".chars() {
+            e.insert(c as u16, 0);
+        }
+        // left from the end: three characters, then the whole link at once
+        for _ in 0..3 {
+            e.set_cursor(e.cursor as isize - 1);
+        }
+        assert_eq!(e.cursor, 15);
+        e.set_cursor(e.cursor as isize - 1);
+        assert_eq!(e.cursor, 4, "over the link to its start");
+        e.set_cursor(e.cursor as isize + 1);
+        assert_eq!(e.cursor, 15, "and back over it");
+        // typing before it moves it along
+        e.set_cursor(0);
+        e.insert(b'I' as u16, 0);
+        e.insert(b' ' as u16, 0);
+        assert_eq!(e.text, wide("I see Rusty Sword ok"));
+        assert_eq!(linked(&e), vec![("Rusty Sword".into(), 0, 7)]);
+        // a second link, from the bank, between
+        e.set_cursor(17);
+        assert!(e.insert_link(&wide("Helm"), 1, 3, 0));
+        assert_eq!(e.text, wide("I see Rusty Sword Helm ok"));
+        assert_eq!(linked(&e), vec![("Rusty Sword".into(), 0, 7), ("Helm".into(), 1, 3)]);
+        // Backspace at the first link's end takes it whole; the second moves back
+        e.set_cursor(17);
+        assert!(e.backspace(0));
+        assert_eq!(e.text, wide("I see  Helm ok"));
+        assert_eq!(linked(&e), vec![("Helm".into(), 1, 3)]);
+        assert_eq!(e.cursor, 6);
+        // the control: a character's Backspace takes one, the link moving back by it
+        assert!(e.backspace(0));
+        assert_eq!(e.text, wide("I see Helm ok"));
+        assert_eq!(linked(&e), vec![("Helm".into(), 1, 3)]);
+        e.set_text(&wide("new"));
+        assert!(e.links.is_empty(), "set_text drops the links");
+        assert!(e.insert_link(&wide("Helm"), 1, 3, 0));
+        e.clear();
+        assert!(e.links.is_empty() && e.text.is_empty(), "and clear");
+    }
+
+    /// Four links at most a line, and none past the box's length (the name
+    /// counts); the controls: the fourth and one that just fits go in.
+    #[test]
+    fn links_keep_to_the_line() {
+        let mut e = EditBox::default();
+        e.set_max_length(128);
+        for k in 0..4 {
+            assert!(e.insert_link(&wide("Sword"), 0, k, 0), "link {k}");
+        }
+        assert!(!e.insert_link(&wide("Sword"), 0, 9, 0), "a fifth");
+        let mut e = EditBox::default();
+        e.set_max_length(12);
+        e.set_text(&wide("abc"));
+        assert!(!e.insert_link(&wide("Long Sword"), 0, 1, 0), "3, a space and 10 is no room in 11");
+        assert!(e.insert_link(&wide("Daggers"), 0, 1, 0), "3, a space and 7 fits");
+        assert_eq!(e.text, wide("abc Daggers"));
+    }
+
+    /// A line holding a link is drawn as its runs, the link's in the links'
+    /// purple; the control: a line with none is the one run it always was.
+    #[test]
+    fn a_link_is_drawn_in_its_colour() {
+        struct Runs(Vec<(String, [f32; 4])>);
+        impl Raster for Runs {
+            fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+            fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+            fn draw_string(&mut self, _: [i32; 2], c: [f32; 4], s: &[u16]) {
+                if c[0] + c[1] + c[2] > 0.0 {
+                    self.0.push((String::from_utf16_lossy(s), c));
+                }
+            }
+            fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+            fn string_width(&self, s: &[u16]) -> i32 {
+                s.len() as i32 * 8
+            }
+            fn point_size(&self) -> i32 {
+                21
+            }
+            fn viewport(&self) -> [i32; 4] {
+                [0, 0, 640, 448]
+            }
+            fn set_viewport(&mut self, _: [i32; 4]) {}
+        }
+        let vui = crate::pointer::testing::vui();
+        let mut cues = Vec::new();
+        let mut e = EditBox::default();
+        e.set_max_length(128);
+        e.set_text(&wide("see"));
+        e.insert_link(&wide("Rusty Sword"), 0, 7, 0);
+        e.insert(b'!' as u16, 0);
+        let mut r = Runs(Vec::new());
+        e.draw(&vui, &mut r, 1000, &mut cues);
+        let lines: Vec<(String, bool)> = r.0.iter().filter(|(t, _)| ["see ", "Rusty Sword", "!"].contains(&t.as_str())).map(|(t, c)| (t.clone(), c[0] == crate::itemlink::COLOR[0] && c[1] == crate::itemlink::COLOR[1])).collect();
+        assert_eq!(lines, vec![("see ".into(), false), ("Rusty Sword".into(), true), ("!".into(), false)]);
+        let mut e = EditBox::default();
+        e.set_max_length(128);
+        e.set_text(&wide("see Rusty Sword!"));
+        let mut r = Runs(Vec::new());
+        e.draw(&vui, &mut r, 1000, &mut cues);
+        assert!(r.0.iter().any(|(t, _)| t == "see Rusty Sword!"), "the control: one run");
     }
 }

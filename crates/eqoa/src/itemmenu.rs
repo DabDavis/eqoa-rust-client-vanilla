@@ -50,6 +50,8 @@ pub enum ItemOut {
     QuickSlot(i32, i32),
     /// The live client's `RequestGearSet(set, name)` (0x012C33E8): 0x0021
     GearSet(i32, String),
+    /// The client's own Link Item (`itemlink`): the item linked in the chat line
+    Link(i32),
     /// 260 to the start menu: back to its main menu
     Back,
 }
@@ -58,7 +60,18 @@ pub enum ItemOut {
 /// `UpdateQuickBars` leaves them: (menus, [A usable, B equipment, C
 /// charged, D misc]). `counts` are the definitions' slot counts (gItemMenu4,
 /// gItemMenu3, gInvMenu, gEquipMenu, out of CLIENT).
+#[cfg(test)]
 pub fn build(inv: &ItemList, counts: [i32; 4], icon: &dyn Fn(usize) -> i32, can_use: &dyn Fn(usize) -> bool) -> (Menus, [usize; 4]) {
+    build_linked(inv, counts, icon, can_use, false)
+}
+
+/// The client's own Link Item message (`itemlink`): the item put in the chat
+/// line as a link.
+pub const MSG_LINK_ITEM: u32 = 0x020F_0000;
+
+/// `build`, each item's sub-menu with Link Item after Inspect where `link`
+/// (`itemlink`: a server that offers item links, the Extended row on).
+pub fn build_linked(inv: &ItemList, counts: [i32; 4], icon: &dyn Fn(usize) -> i32, can_use: &dyn Fn(usize) -> bool, link: bool) -> (Menus, [usize; 4]) {
     let mut menus = Menus::default();
     let entry = |word: i32, msg: u32, id: i32| MenuEntry { word, msg, id, icon: -1, icon2: -1, number: -1, ..Default::default() };
     let x08 = |k: usize, none_flagged: bool| {
@@ -125,6 +138,10 @@ pub fn build(inv: &ItemList, counts: [i32; 4], icon: &dyn Fn(usize) -> i32, can_
                     vec![entry(122, 0x2020000, id), entry(200, 0x2050000, id), entry(281, 0x2060000, id)]
                 }
             };
+            let mut sub = sub;
+            if link && let Some(k) = sub.iter().position(|e| e.msg == 0x2020000) {
+                sub.insert(k + 1, entry(crate::wndlist::WORD_LINK_ITEM, MSG_LINK_ITEM, id));
+            }
             e.sub = Some(menus.push(Menu { x00: -1, x04: -1, entries: sub }));
             entries[slot] = e;
             slot += 1;
@@ -351,6 +368,21 @@ impl ItemMenu {
             Focus::Menu => Vec::new(),
         }
     }
+    /// The item a row of the tab shown is under frame point `p` (a Shift+click's,
+    /// `itemlink`): its index in the inventory; none with a popup or another
+    /// window of the menu's up.
+    pub fn item_at(&self, p: [f32; 2]) -> Option<i32> {
+        if !self.visible || self.focus != Focus::Menu || self.menu < 0 {
+            return None;
+        }
+        let m = &self.menus[self.menu as usize];
+        if m.sub.as_ref().is_some_and(|s| s.visible) {
+            return None;
+        }
+        let id = m.id(&self.built.0, m.list.row_at(p)?);
+        (id >= 0).then_some(id)
+    }
+
     /// The live client's weapon sets this frame (`gear::Gear::view`): with
     /// them on, the quick slots and Prepare are the live client's.
     pub fn set_gear(&mut self, v: crate::gear::View) {
@@ -782,6 +814,13 @@ impl ItemMenu {
                 }
                 0x0207_0000 => {
                     if (tab == 0 || tab == 1) && !self.assign_slot(tab, id, inv, out) {
+                        sound = 10;
+                    }
+                }
+                MSG_LINK_ITEM => {
+                    if valid {
+                        out.push(ItemOut::Link(id));
+                    } else {
                         sound = 10;
                     }
                 }
@@ -1398,4 +1437,62 @@ mod tests {
         assert!(m.point(row(4)).is_empty(), "bare hands is not a set to name");
     }
 
+
+    /// Link Item (`itemlink`): with links made, every item's popup has it right
+    /// after Inspect, in every tab, and choosing it asks for that item's link
+    /// (none while a reply is awaited); a Shift+click finds the item under the
+    /// pointer on the tab shown. The control: built without links, no popup has it.
+    #[test]
+    fn link_item_follows_inspect_where_links_are_made() {
+        let vui = crate::pointer::testing::vui();
+        let named = |name: &str, wear: i64| {
+            let mut x = NetItem::default();
+            x.item.name = name.into();
+            x.item.wear_slot = wear;
+            x
+        };
+        let inv = ItemList { p04: 0, items: vec![named("Sword", 14), named("Gem", -1)] };
+        let (menus, tabs) = build_linked(&inv, [30, 30, 30, 40], &|_| -1, &|_| true, true);
+        let mut seen = 0;
+        for t in tabs {
+            for e in menus.list[t].entries.iter().filter(|e| e.sub.is_some()) {
+                let sub = &menus.list[e.sub.unwrap()].entries;
+                let k = sub.iter().position(|x| x.msg == 0x2020000).expect("Inspect");
+                assert_eq!((sub[k + 1].msg, sub[k + 1].word, sub[k + 1].id), (MSG_LINK_ITEM, crate::wndlist::WORD_LINK_ITEM, e.id));
+                seen += 1;
+            }
+        }
+        assert_eq!(seen, 2, "both items, each in its tab");
+        let (plain, tabs) = build(&inv, [30, 30, 30, 40], &|_| -1, &|_| true);
+        for t in tabs {
+            for e in plain.list[t].entries.iter().filter(|e| e.sub.is_some()) {
+                assert!(plain.list[e.sub.unwrap()].entries.iter().all(|x| x.msg != MSG_LINK_ITEM), "the control: none");
+            }
+        }
+        let words = vui.words.clone();
+        let base = [0; 29];
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let mut m = ItemMenu::default();
+        m.set_built(build_linked(&inv, [30, 30, 30, 40], &|_| -1, &|_| true, true));
+        let (mut out, mut cues) = (Vec::new(), Vec::new());
+        m.action(1, MSG_LINK_ITEM, 0, &inv, &info, &vui, &mut crate::pointer::testing::NullRaster, false, &mut cues, &mut out);
+        assert_eq!(out, vec![ItemOut::Link(0)]);
+        out.clear();
+        m.action(1, MSG_LINK_ITEM, 0, &inv, &info, &vui, &mut crate::pointer::testing::NullRaster, true, &mut cues, &mut out);
+        assert!(out.is_empty(), "a reply awaited: nothing");
+        // the rows drawn, a Shift+click's item is found under the pointer
+        m.open(&vui, &crate::pointer::testing::NullRaster);
+        m.change_tab(1, vui.time, &mut cues);
+        m.draw(&vui, &mut crate::pointer::testing::NullRaster, &info, &mut cues);
+        let mut found = None;
+        'scan: for y in (0..448).step_by(4) {
+            for x in (0..640).step_by(4) {
+                if let Some(i) = m.item_at([x as f32, y as f32]) {
+                    found = Some(i);
+                    break 'scan;
+                }
+            }
+        }
+        assert_eq!(found, Some(0), "the sword's row, on the Equipment tab");
+    }
 }

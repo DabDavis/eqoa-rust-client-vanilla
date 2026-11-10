@@ -3204,7 +3204,8 @@ impl App {
         }
         match p.chat_release() {
             crate::chat::Let::NotHeld => false,
-            crate::chat::Let::Done => true,
+            // a link's click was opened by the play (`itemlink`)
+            crate::chat::Let::Done | crate::chat::Let::Link(..) => true,
             crate::chat::Let::Click(x, y) => {
                 self.click(crate::mouse::Click::Target(x, y), false);
                 true

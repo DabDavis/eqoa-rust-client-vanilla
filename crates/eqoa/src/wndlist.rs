@@ -428,11 +428,14 @@ pub fn draw_icon(vui: &Vui, r: &mut dyn Raster, icon: i32, pos: [i32; 2], mode: 
 /// (the user, 2026-11-08: "lets allow players unmemorize one spell not just
 /// all"; the game has only 1800, Unmemorize All).
 pub const WORD_UNMEMORIZE: i32 = -2;
+/// The item menu's Link Item (`itemlink`), vanilla's own.
+pub const WORD_LINK_ITEM: i32 = -3;
 
 /// A popup row's text: vanilla's own word (`WORD_UNMEMORIZE`) or the game's.
 fn row_word(vui: &Vui, word: i32) -> String {
     match word {
         WORD_UNMEMORIZE => "Unmemorize".to_string(),
+        WORD_LINK_ITEM => "Link Item".to_string(),
         _ => vui.words.get(word as u16 as i32, vui.language).to_string(),
     }
 }

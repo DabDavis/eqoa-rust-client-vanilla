@@ -32,6 +32,8 @@ mod raidplay;
 mod mapsuggest;
 #[path = "groupmark.rs"]
 mod groupmark;
+#[path = "linkplay.rs"]
+mod linkplay;
 
 use crate::walker::{Placing, Spawn, Walker};
 use esf::Library;
@@ -342,8 +344,19 @@ pub struct Play {
     pet_id: u32,
     pet_name: String,
     info_window: vi::ui::Window,
-    /// Chat lines waiting for the chat box, with when they came.
-    chat_pending: Vec<(String, [f32; 4], u32)>,
+    /// Chat lines waiting for the chat box, with when they came and their item
+    /// links (`itemlink`).
+    chat_pending: Vec<(String, [f32; 4], u32, Vec<net::itemlink::ChatLink>)>,
+    /// Item links (`itemlink`): the windows open; the chat line kept with its
+    /// links (cancelled with a link in it: until it is sent or emptied); the
+    /// events read this frame counted, and the links of the line the next one
+    /// carries (`Event::ChatLinks`, by the event it came as); Shift held (a
+    /// click on an item links it).
+    pub links: crate::itemlink::Links,
+    link_draft: Option<(Vec<u16>, Vec<crate::editbox::TextLink>)>,
+    event_no: u64,
+    next_links: Option<(u64, Vec<net::itemlink::ChatLink>)>,
+    pub shift: bool,
     /// The chat box (`VIWndChat`), with the HUD.
     wnd_chat: Option<crate::chat::WndChat>,
     /// When the HUD was last drawn (its frame time).
@@ -2769,7 +2782,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2891,7 +2904,12 @@ impl Play {
             crate::npctint::set(t);
         }
         for e in events {
+            self.event_no += 1;
             match e {
+                // a chat line's links, for the line the next event carries
+                // (`add_chat`; `itemlink`)
+                Event::ChatLinks(links) => self.next_links = Some((self.event_no, links)),
+                Event::ItemLinkRecord { id, item } => self.links.record(id, item.map(|b| *b)),
                 Event::TargetInfo { disposition, b, title, guild, .. } => {
                     self.target_info = Some(disposition);
                     self.rings.con = Some(b);
@@ -3487,6 +3505,7 @@ impl Play {
         self.record_menu(); // Character > Combat Record once the server offers it
         self.agree_raid();
         self.raid_menu(); // Community > Group > Raid once the server offers it
+        self.agree_item_links();
         self.drop_dead_target_info();
         self.drop_stale_mob_info(now);
         if self.has_self() {
@@ -4115,6 +4134,11 @@ impl Play {
     /// ends the scroll, L3 toggles autorun (33 is a chat mode), and the
     /// attack and the target's details are let go as in play.
     fn chat_scroll_key(&mut self, key: i32, down: bool) {
+        // the walk through the item links (`itemlink`), unless a loot roll's
+        // strips have the d-pad
+        if down && !self.rolls_focused() && self.link_key(key) {
+            return;
+        }
         // a loot roll's strips up: right gives them the d-pad (`raidplay`)
         if self.roll_key(key, down) {
             return;
@@ -4844,6 +4868,14 @@ impl Play {
         if matches!(c, Click::Target(..) | Click::Interact(..)) && matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.roll_point(f) {
             return true;
         }
+        // the item links' windows (`itemlink`): a click on one is theirs, on
+        // its X it closes
+        if matches!(c, Click::Target(..) | Click::Interact(..)) && matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.links.covers(f) {
+            if self.links.point(f) {
+                self.cues.push(crate::sound::Cue::Ui(8));
+            }
+            return true;
+        }
         // in play; a server's player search over it is a window
         if self.mode == 0 && !self.search.open {
             // Hide UI (`hideui`): none of the HUD's buttons is there to press
@@ -4870,8 +4902,7 @@ impl Play {
             }
             // the chat box: the chat line, as R3 opens it
             if self.wnd_chat.as_ref().is_some_and(|w| w.contains([f[0] - side, f[1] - up])) {
-                self.open_edit(0xB0F0000, 128, -1, false);
-                self.edit.title = self.chat_title();
+                self.open_chat_line();
                 return true;
             }
             // the player's frame, a member's bar, the pet's: targeted, as
@@ -4956,7 +4987,13 @@ impl Play {
     /// The left button let go (`chat::Let`).
     pub fn chat_release(&mut self) -> crate::chat::Let {
         let scrolling = self.mode == 33;
-        self.wnd_chat.as_mut().map_or(crate::chat::Let::NotHeld, |c| c.release(scrolling))
+        let got = self.wnd_chat.as_mut().map_or(crate::chat::Let::NotHeld, |c| c.release(scrolling));
+        // a click on an item link opens it (`itemlink`)
+        if let crate::chat::Let::Link(id, name) = &got {
+            self.open_link(*id, name);
+            return crate::chat::Let::Done;
+        }
+        got
     }
 
     /// A press of the chat box's that is down (the other button's are nothing
@@ -4983,7 +5020,8 @@ impl Play {
 
     /// The wheel's `lines` over the chat box's history (`WndChat::wheel`).
     pub fn chat_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
-        self.wnd_chat.as_mut().is_some_and(|c| c.wheel(Self::chat_point(at, size), lines))
+        let held = self.mode == 33;
+        self.wnd_chat.as_mut().is_some_and(|c| c.wheel(Self::chat_point(at, size), lines, held))
     }
 
     /// The wheel's `lines` (up positive; a finger's drag down) on the window
@@ -5047,6 +5085,17 @@ impl Play {
         }
         if self.record_owns() {
             return self.record_point(f);
+        }
+        // Shift+click on an item in the inventory: linked in the chat line
+        // (`itemlink`)
+        if self.mode == 13
+            && self.items.visible
+            && self.shift
+            && self.links_made()
+            && let Some(i) = self.items.item_at(f)
+        {
+            self.link_item(0, i);
+            return Vec::new();
         }
         if let Some(s) = self.start.as_mut() {
             match self.mode {
@@ -5179,6 +5228,18 @@ impl Play {
     /// Plain text goes to the current channel. Not here: the crafting
     /// commands.
     pub fn chat_line(&mut self, text: &str) {
+        self.chat_line_linked(text, &[]);
+    }
+
+    /// `chat_line` for a typed line with item links (`itemlink`, the chat
+    /// line's `editbox::TextLink`s): where the server offered links and the
+    /// Extended row is on, a line that goes with any of them goes as
+    /// `net::itemlink::say` in place of its retail message (0x000B, 0x0C01 2,
+    /// 0x0578 12), each link's place counted in the text that goes (a slash
+    /// command's own word off; `/r`'s tell put before it); everywhere else, and
+    /// for a command, the plain line, the items' names in it.
+    pub fn chat_line_linked(&mut self, text: &str, links: &[crate::editbox::TextLink]) {
+        use net::itemlink::Route;
         let wide: Vec<u16> = text.encode_utf16().collect();
         if self.session.self_id.is_none() {
             self.chat_unsent += 1;
@@ -5196,9 +5257,13 @@ impl Play {
             if text.split(' ').next().is_some_and(|w| w.eq_ignore_ascii_case("#bug")) {
                 self.send_bug_note();
             }
+            let l = Self::wire_links(&wide, links, 0, 0);
             match self.channel {
+                4 if self.session.say_linked(Route::Guild, text, target, &l) => {}
                 4 => self.session.send_op_sub_wide(0x0578, 12, text),
+                3 if self.session.say_linked(Route::Shout, text, target, &l) => {}
                 3 => self.session.send_op_sub_wide(0x0C01, 2, text),
+                _ if self.session.say_linked(Route::Say, text, target, &l) => {}
                 _ => self.session.say(text, target),
             }
             return;
@@ -5221,28 +5286,44 @@ impl Play {
             return;
         }
         let back = self.channel;
+        // the links in what goes after the command's word, counted from there
+        let in_rest = Self::wire_links(&wide, links, rest_at, 0);
         match cmd.as_str() {
             "/sa" | "/say" => {
                 self.session.send_op_byte(0x000E, 0);
-                self.session.say(&rest, target);
+                if !self.session.say_linked(Route::Say, &rest, target, &in_rest) {
+                    self.session.say(&rest, target);
+                }
                 self.session.send_op_byte(0x000E, back);
             }
             "/g" | "/group" => {
                 self.session.send_op_byte(0x000E, 2);
-                self.session.say(&rest, target);
+                if !self.session.say_linked(Route::Say, &rest, target, &in_rest) {
+                    self.session.say(&rest, target);
+                }
                 self.session.send_op_byte(0x000E, back);
             }
             "/gu" | "/guild" => {
                 self.session.send_op_byte(0x000E, 4);
-                self.session.send_op_sub_wide(0x0578, 12, &rest);
+                if !self.session.say_linked(Route::Guild, &rest, target, &in_rest) {
+                    self.session.send_op_sub_wide(0x0578, 12, &rest);
+                }
                 self.session.send_op_byte(0x000E, back);
             }
             "/s" | "/shout" => {
                 self.session.send_op_byte(0x000E, 3);
-                self.session.send_op_sub_wide(0x0C01, 2, &rest);
+                if !self.session.say_linked(Route::Shout, &rest, target, &in_rest) {
+                    self.session.send_op_sub_wide(0x0C01, 2, &rest);
+                }
                 self.session.send_op_byte(0x000E, back);
             }
-            "/t" | "/tell" => self.session.say(text, target),
+            // a tell goes whole (the server parses it), its links where typed
+            "/t" | "/tell" => {
+                let l = Self::wire_links(&wide, links, 0, 0);
+                if !self.session.say_linked(Route::Say, text, target, &l) {
+                    self.session.say(text, target);
+                }
+            }
             "/alarm" => self.alarm_command(&rest),
             // the DPS meter's (`dpsmeter`), the client's own
             "/dps" => self.dps_command(&rest),
@@ -5261,7 +5342,12 @@ impl Play {
             "/r" | "/reply" => {
                 if !self.reply_name.is_empty() {
                     let line = format!("/t {} {}", self.reply_name, rest);
-                    self.session.say(&line, target);
+                    // the links after the tell's words put before them
+                    let at = line.encode_utf16().count() - (wide.len() - rest_at.min(wide.len()));
+                    let l = Self::wire_links(&wide, links, rest_at, at);
+                    if !self.session.say_linked(Route::Say, &line, target, &l) {
+                        self.session.say(&line, target);
+                    }
                 }
             }
             // go-eqoa-server's bug report: F3's form with the words typed after
@@ -5372,7 +5458,21 @@ impl Play {
         if std::env::var_os("EQOA_CHAT_LOG").is_some() {
             eprintln!("chat: {text}");
         }
-        self.chat_pending.push((text.clone(), color, self.session.now()));
+        // the links of a line the server sent with them: the event before this
+        // line's (`Event::ChatLinks`), else none
+        let links = match self.next_links.take() {
+            Some((n, l)) if n + 1 == self.event_no => l,
+            _ => Vec::new(),
+        };
+        if !links.is_empty() && std::env::var_os("EQOA_CHAT_LOG").is_some() {
+            let w: Vec<u16> = text.encode_utf16().collect();
+            for l in &links {
+                let a = (l.start as usize).min(w.len());
+                let b = (a + l.len as usize).min(w.len());
+                eprintln!("chat: link {} {:?}", l.id, String::from_utf16_lossy(&w[a..b]));
+            }
+        }
+        self.chat_pending.push((text.clone(), color, self.session.now(), links));
         self.chat.push_back((text, color));
         while self.chat.len() > 8 {
             self.chat.pop_front();
@@ -5858,8 +5958,7 @@ impl Play {
                 135 => self.hud_key(H::Use),
                 147 => {
                     self.reset_view(walker);
-                    self.open_edit(0xB0F0000, 128, -1, false);
-                    self.edit.title = self.chat_title();
+                    self.open_chat_line();
                 }
                 _ => {}
             }
@@ -5870,7 +5969,12 @@ impl Play {
             145 => self.camera_style_key(walker),
             134 => self.attack_press(),
             133 => self.interact_with_target(),
-            132 => self.clear_target(),
+            // ○: the newest item link's window closed first (`itemlink`)
+            132 => {
+                if !self.close_link_window() {
+                    self.clear_target();
+                }
+            }
             140 | 142 => self.target_key(key == 140, walker, aspect),
             136 => self.hud_key(H::Left),
             137 => self.hud_key(H::Right),
@@ -5878,10 +5982,7 @@ impl Play {
             139 => self.hud_key(H::Down),
             135 => self.hud_key(H::Use),
             // R3: the chat line, the edit box with the channel's title
-            147 => {
-                self.open_edit(0xB0F0000, 128, -1, false);
-                self.edit.title = self.chat_title();
-            }
+            147 => self.open_chat_line(),
             146 => self.toggle_autorun(),
             // R2 held: the chat box's history (mode 33), movement and the
             // camera allowed (`SetP06DC0(1, 1)`)
@@ -6120,6 +6221,10 @@ impl Play {
                         self.session.send(&w.data);
                     }
                 }
+                // Link Item (`itemlink`)
+                ItemOut::Link(i) => {
+                    self.link_item(0, i);
+                }
                 ItemOut::Back => {}
             }
         }
@@ -6219,11 +6324,14 @@ impl Play {
         // each tab holds the definition's 40, or every record of a pack past
         // them (`inventory::pack_cap`)
         let counts = s.item_counts.map(|c| c.max(crate::inventory::pack_cap() as i32));
-        self.items.set_built(crate::itemmenu::build(
+        // Link Item in every item's popup where links are made (`itemlink`)
+        let link = crate::settings::item_links() && self.session.item_links_offer;
+        self.items.set_built(crate::itemmenu::build_linked(
             inv,
             counts,
             &|k| crate::inventory::item_icon(&inv.items[k], flags) as i32,
             &|k| crate::inventory::can_use(&inv.items[k], pl.class, pl.race, pl.level),
+            link,
         ));
         self.items.set_gear(self.gear.view(inv, &vui.words, vui.language));
         let info = crate::infotext::Info {
@@ -6891,6 +6999,12 @@ impl Play {
             self.edit.title = self.chat_title();
         }
         self.edit.set_text(&crate::ui::wide(text));
+        // a plain open (Enter) holds the line kept with its links (`itemlink`)
+        if text.is_empty()
+            && let Some((t, l)) = self.link_draft.clone()
+        {
+            self.edit.set_linked(&t, &l);
+        }
     }
 
     /// Whether a server's player search is up (`searchwnd`): it has the
@@ -6987,6 +7101,10 @@ impl Play {
                 crate::editbox::EditUp::Done(purpose) => self.edit_done(purpose),
                 crate::editbox::EditUp::Cancel => {
                     let purpose = self.edit.purpose;
+                    // the chat line given up with a link in it is kept (`itemlink`)
+                    if purpose == 0x0B0F_0000 {
+                        self.keep_link_draft();
+                    }
                     if !self.map_edit_done(purpose, false) {
                         self.mode = if self.who_tell.take().is_some() { 35 } else { 0 };
                     }
@@ -7004,6 +7122,14 @@ impl Play {
             return;
         }
         let text = String::from_utf16_lossy(&self.edit.text);
+        // the chat line sent (or emptied): no line kept with its links
+        // (`itemlink`)
+        let links = if purpose == 0x0B0F_0000 {
+            self.link_draft = None;
+            std::mem::take(&mut self.edit.links)
+        } else {
+            Vec::new()
+        };
         // VIWndWhoList::SendTell, back to the list
         if let Some(name) = self.who_tell.take() {
             if !text.is_empty() {
@@ -7016,7 +7142,7 @@ impl Play {
         if !text.is_empty() {
             match purpose {
                 0x0B0F_0000 => {
-                    self.chat_line(&text);
+                    self.chat_line_linked(&text, &links);
                     // /bug opened F3's form (support.rs): it keeps its mode
                     if self.mode == 31 {
                         self.edit.title.clear();
@@ -7546,10 +7672,7 @@ impl Play {
                 Out::Send(m) => self.session.send(&m),
                 Out::Key(k, true) => match k {
                     27 | 132 | 141 | 90 | 122 if self.mode == 30 => self.mode = 0,
-                    13 | 147 => {
-                        self.open_edit(0xB0F0000, 128, -1, false);
-                        self.edit.title = self.chat_title();
-                    }
+                    13 | 147 => self.open_chat_line(),
                     _ => {}
                 },
                 Out::Key(k, false) => match k {
@@ -8829,9 +8952,11 @@ impl Play {
                 if !in_play {
                     c.clear_selection(false);
                 }
-                for (text, color, at) in self.chat_pending.drain(..) {
+                // item links drawn as links, or the line's plain words (`itemlink`)
+                c.show_links = crate::settings::item_links();
+                for (text, color, at, links) in self.chat_pending.drain(..) {
                     let rr = &r;
-                    c.text.add_text(&crate::ui::wide(&text), color, at, |s| vi::ui::Raster::string_width(rr, s));
+                    c.text.add_text_linked(&crate::ui::wide(&text), color, at, |s| vi::ui::Raster::string_width(rr, s), &links);
                 }
                 c.draw(vui, &mut r, now, dt);
                 c.draw_selection(&mut r);
@@ -8841,6 +8966,8 @@ impl Play {
             r.ui.vertical = Vertical::Middle;
             // a raid's loot rolls (`raidplay`), under every window
             self.run_rolls(vui, &mut r);
+            // the item links' windows (`itemlink`), at the top middle
+            self.run_links(vui, &mut r);
             if self.mode == 9 {
                 self.priv_chat.draw(vui, &mut r);
             }

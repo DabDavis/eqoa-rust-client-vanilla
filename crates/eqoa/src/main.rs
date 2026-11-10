@@ -121,6 +121,7 @@ mod live;
 mod listbox;
 mod groupsearch;
 mod inventory;
+mod itemlink;
 mod itemmenu;
 mod classmastery;
 mod cs;
