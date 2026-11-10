@@ -18,12 +18,16 @@
 //! v2: its header 0x8220 v1, the zones' proxies 0x8210 v2 (the disc's, their
 //! offsets moved), the BSP 0x8230 v0 over the zones' cells, and the terrain
 //! profiles 0x8240 v0 (each zone's own world's over its cell and the sub-cell
-//! round it). The server's `Compose` is the other copy of this: a change here is
-//! one there, or no world builds.
+//! round it). A zone may be given extras, the disc's art placed in it as actors
+//! of its own, its art copied in off the disc when the zone lacks it
+//! ([`extras`]). The server's `Compose` is the other copy of this: a change here
+//! is one there, or no world builds.
 
 use net::serverworlds::{Part, World};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
+
+mod extras;
 
 /// A server's world held here, ready to load.
 #[derive(Clone, Debug)]
@@ -385,17 +389,34 @@ pub fn compose(disc: &Path, w: &World) -> Result<Vec<u8>, String> {
     out.extend(0u32.to_le_bytes());
     out.extend(32u64.to_le_bytes());
     out.extend((-1i64).to_le_bytes());
+    // the extras' art, read off the disc before anything is written
+    let mut arts: std::collections::HashMap<(String, u16), extras::Art> = std::collections::HashMap::new();
+    for e in w.parts.iter().flat_map(|p| &p.extras).filter(|e| !e.from.is_empty()) {
+        let key = (e.from.to_uppercase(), e.zone);
+        if !arts.contains_key(&key) {
+            let a = art(&image, disc, &key.0, key.1).map_err(|err| format!("{} zone {}: {err}", key.0, key.1))?;
+            arts.insert(key, a);
+        }
+    }
     let root = begin(&mut out, 0x8000, 0, 2);
     let world = begin(&mut out, 0x8100, 0, pieces.len() as u32);
-    for p in &mut pieces {
+    for (i, p) in pieces.iter_mut().enumerate() {
         let at = out.len() as u64;
         let from = worlds[p.world].1.zones[p.zone].0;
-        let delta = at as i64 - from as i64;
-        let mut rec = std::mem::take(&mut p.rec);
-        let base_at = rebase(&mut rec, delta)?;
-        out.extend(&rec);
-        p.proxy[0..8].copy_from_slice(&at.to_le_bytes());
-        p.proxy[8..16].copy_from_slice(&(at + base_at).to_le_bytes());
+        let rec = std::mem::take(&mut p.rec);
+        if w.parts[i].extras.is_empty() {
+            let mut rec = rec;
+            let base_at = rebase(&mut rec, at as i64 - from as i64)?;
+            out.extend(&rec);
+            p.proxy[0..8].copy_from_slice(&at.to_le_bytes());
+            p.proxy[8..16].copy_from_slice(&(at + base_at).to_le_bytes());
+        } else {
+            let z = extras::with_extras(&rec, from as i64, at as i64, &w.parts[i].extras, &arts).map_err(|e| format!("{} zone {}: {e}", w.parts[i].from, w.parts[i].zone))?;
+            out.extend(&z.rec);
+            p.proxy[0..8].copy_from_slice(&at.to_le_bytes());
+            p.proxy[8..16].copy_from_slice(&(at + z.base_at as u64).to_le_bytes());
+            p.proxy[16..20].copy_from_slice(&(z.base_len as u32).to_le_bytes());
+        }
     }
     end(&mut out, world);
     let base = begin(&mut out, 0x8200, 2, 4);
@@ -434,6 +455,24 @@ pub fn compose(disc: &Path, w: &World) -> Result<Vec<u8>, String> {
         return Err(format!("built {} bytes, CRC {:08x}: not the server's {} bytes, CRC {:08x}", out.len(), crc32(&out), w.size, w.crc));
     }
     Ok(out)
+}
+
+/// The records an extra's art is taken from: zone `zone` of the disc's world
+/// file `name`, or the whole of any other file (`extras::Art`).
+fn art(image: &iso::Iso, disc: &Path, name: &str, zone: u16) -> Result<extras::Art, String> {
+    let e = image.entries().iter().find(|e| e.path.rsplit('/').next().is_some_and(|f| f.eq_ignore_ascii_case(name))).ok_or_else(|| format!("{name} is not on this disc"))?;
+    let open = || -> Result<Src, String> { Ok(Src { f: iso::open_file(disc).map_err(|e| e.to_string())?, base: u64::from(e.lba) * iso::SECTOR, len: u64::from(e.size) }) };
+    match SrcWorld::open(open()?) {
+        Ok(sw) => {
+            let &(at, len) = sw.zones.get(usize::from(zone)).ok_or_else(|| format!("{name} has {} zones, not {}", sw.zones.len(), usize::from(zone) + 1))?;
+            let rec = sw.src.read(at, len as usize)?;
+            Ok(extras::Art::new(extras::parse_nodes(&rec, 0, rec.len() as i64)?))
+        }
+        Err(_) => {
+            let src = open()?;
+            extras::Art::whole(src.read(0, src.len as usize)?)
+        }
+    }
 }
 
 /// The zone record's file offsets moved by `delta` (ResourceTable's,
@@ -620,7 +659,7 @@ mod tests {
             eprintln!("SKIP: no run/eqoa.iso");
             return;
         };
-        let part = |from: &str, zone: u16, size: u32, crc: u32, col: u8, row: u8| Part { from: from.into(), zone, size, crc, col, row, name: String::new(), race: 0 };
+        let part = |from: &str, zone: u16, size: u32, crc: u32, col: u8, row: u8| Part { from: from.into(), zone, size, crc, col, row, name: String::new(), race: 0, extras: vec![] };
         let aviak = part("TUNARIA.ESF", 115, 5_879_151, 0x7257_AE33, 4, 10);
         let one = World { id: 10, name: "the Homelands".into(), size: 5_880_303, crc: 0xB6D9_4C34, parts: vec![aviak.clone()] };
         let b = compose(&disc, &one).expect("the server's world");
@@ -631,6 +670,109 @@ mod tests {
         let mut twice = one.clone();
         twice.parts.push(aviak);
         assert!(compose(&disc, &twice).unwrap_err().contains("both stand in cell"), "one zone a cell");
+    }
+
+    /// A zone given extras built here is the server's build of the same
+    /// recipe byte for byte (go-eqoa-server's TestComposeExtrasOffTheDisc,
+    /// 2026-11-10: Aviak Village given its own tree, nothing copied, and two
+    /// of The Vastly Deep's trees off Odus, copied in, one scaled and turned,
+    /// one of a light of its own). The control: an extra whose art is not
+    /// where it is said to be is refused. Skipped without the disc.
+    #[test]
+    fn a_zone_with_extras_builds_as_the_server_built_it() {
+        let Some(disc) = disc() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let e = |sprite: u32, from: &str, zone: u16, at: [f32; 3], hpr: [f32; 3], scale: f32, color: [u8; 4]| net::serverworlds::Extra { sprite, from: from.into(), zone, at, hpr, scale, color };
+        let extras = vec![
+            e(0x194F_A7CB, "", 0, [9300.0, 84.0, 21300.0], [0.5, 0.0, 0.0], 1.0, [0, 0, 0, 255]),
+            e(0xF017_8AAC, "ODUS.ESF", 22, [9250.0, 84.0, 21350.0], [1.25, 0.1, 0.0], 2.5, [0, 0, 0, 255]),
+            e(0x5698_614C, "ODUS.ESF", 22, [8100.0, 90.0, 20100.0], [0.0; 3], 1.0, [10, 20, 30, 200]),
+        ];
+        let aviak = Part { from: "TUNARIA.ESF".into(), zone: 115, size: 5_879_151, crc: 0x7257_AE33, col: 4, row: 10, name: String::new(), race: 0, extras };
+        let w = World { id: 10, name: "the Homelands".into(), size: 6_139_437, crc: 0x25A4_139A, parts: vec![aviak] };
+        let b = compose(&disc, &w).expect("the server's world");
+        assert_eq!((b.len(), crc32(&b)), (6_139_437, 0x25A4_139A));
+        let mut wrong = w.clone();
+        wrong.parts[0].extras[1].sprite = 0x1234_5678;
+        assert!(compose(&disc, &wrong).err().is_some_and(|e| e.contains("not in its art")), "the control: art not where it is said to be");
+    }
+
+    /// Every world built beside a server in `$EQOA_WORLDS_DIR` (its
+    /// `worldN.json`, as `cmd/worldbuild` writes it: the recipe, extras and
+    /// all, and the file's size and CRC) built here off the disc is the
+    /// server's file byte for byte: the check that the two composers agree on
+    /// whatever recipe the server builds. Skipped without both.
+    #[test]
+    fn the_server_worlds_beside_us_build_here() {
+        let (Some(disc), Some(dir)) = (disc(), std::env::var_os("EQOA_WORLDS_DIR")) else {
+            eprintln!("SKIP: no run/eqoa.iso or EQOA_WORLDS_DIR");
+            return;
+        };
+        let mut seen = 0;
+        for entry in std::fs::read_dir(&dir).expect("the worlds folder").flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Some(w) = name.strip_prefix("world").and_then(|r| r.strip_suffix(".json")).and_then(|n| n.parse::<u8>().ok()) else { continue };
+            let j: serde_json::Value = serde_json::from_slice(&std::fs::read(entry.path()).unwrap()).unwrap();
+            let world = built_world(w, &j);
+            let b = compose(&disc, &world).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!((b.len() as u32, crc32(&b)), (world.size, world.crc), "{name}");
+            seen += 1;
+        }
+        eprintln!("{seen} server worlds built as the server built them");
+    }
+
+    /// A world as the server's `worldN.json` has it, as the list it is sent.
+    fn built_world(id: u8, j: &serde_json::Value) -> World {
+        let u = |v: &serde_json::Value| v.as_u64().unwrap_or(0);
+        // a float as the server's (Go's) JSON wrote a float32: its text read
+        // as an f32 (through an f64 it could round twice)
+        let f = |v: &serde_json::Value| v.as_number().and_then(|n| n.to_string().parse::<f32>().ok()).unwrap_or(0.0);
+        let zones = j["zones"].as_array().cloned().unwrap_or_default();
+        let parts = j["parts"].as_array().unwrap();
+        World {
+            id,
+            name: j["name"].as_str().unwrap_or("").into(),
+            size: u(&j["size"]) as u32,
+            crc: u(&j["crc"]) as u32,
+            parts: parts
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let z = zones.get(i).cloned().unwrap_or_default();
+                    let extras = z["extras"]
+                        .as_array()
+                        .map(|list| {
+                            list.iter()
+                                .map(|e| {
+                                    let sprite = match &e["sprite"] {
+                                        serde_json::Value::String(s) => u32::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16).unwrap(),
+                                        v => u(v) as u32,
+                                    };
+                                    let v3 = |k: &str| [f(&e[k][0]), f(&e[k][1]), f(&e[k][2])];
+                                    let scale = if e["scale"].is_null() || f(&e["scale"]) == 0.0 { 1.0 } else { f(&e["scale"]) };
+                                    let color = e["color"].as_array().map_or([0, 0, 0, 255], |c| [0, 1, 2, 3].map(|k| u(&c[k]) as u8));
+                                    let from = e["from"].as_str().unwrap_or("").to_string();
+                                    net::serverworlds::Extra { sprite, zone: if from.is_empty() { 0 } else { u(&e["zone"]) as u16 }, from, at: v3("at"), hpr: v3("hpr"), scale, color }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Part {
+                        from: p["from"].as_str().unwrap().into(),
+                        zone: u(&p["zone"]) as u16,
+                        size: u(&p["size"]) as u32,
+                        crc: u(&p["crc"]) as u32,
+                        col: u(&p["col"]) as u8,
+                        row: u(&p["row"]) as u8,
+                        name: z["name"].as_str().unwrap_or("").into(),
+                        race: u(&z["race"]) as u8,
+                        extras,
+                    }
+                })
+                .collect(),
+        }
     }
 
     /// The Homelands as go-eqoa-server's recipe has them (tools/worlds/
@@ -665,7 +807,7 @@ mod tests {
             ("TUNARIA.ESF", 157, 8968801, 0x4E29CED4, 12, 14),
             ("ODUS.ESF", 28, 7848248, 0x4454CF3C, 5, 4),
         ];
-        let parts = parts.iter().map(|&(from, zone, size, crc, col, row)| Part { from: from.into(), zone, size, crc, col, row, name: String::new(), race: 0 }).collect();
+        let parts = parts.iter().map(|&(from, zone, size, crc, col, row)| Part { from: from.into(), zone, size, crc, col, row, name: String::new(), race: 0, extras: vec![] }).collect();
         let w = World { id: 10, name: "the Homelands".into(), size: 133406681, crc: 0xBC6C27E3, parts };
         let b = compose(&disc, &w).expect("the server's world");
         assert_eq!((b.len(), crc32(&b)), (133406681, 0xBC6C27E3));

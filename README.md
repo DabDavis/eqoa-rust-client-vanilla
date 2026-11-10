@@ -324,6 +324,10 @@ or a browser (each described where it lives below):
   its own, the file opens deferred as a disc world does, the start menu's Location and the review's Starting
   City name the server's places. Another disc's zone is refused, and the server keeps that player on the
   disc's worlds. Not in a page yet (no builder there: a page player of such a race starts in its city).
+  A zone may be given **extras** (the list's version 2): the disc's art placed in it as actors of its own,
+  each a ZoneActor after its room's own, the records of art the zone lacks copied in off the player's disc
+  with every record they name (`serverworlds::extras`, the server's `internal/worlds/extras.go` byte for
+  byte); the Homelands' open edges are closed with ridges of rocks that way.
 - **Armour on bodies made without it** (the user's of 2026-11-08, "Lay armour textures on", a
   prototype; `slotless`): a body with no texture slots (the kappa, brownie, pixie, fairy, minotaur,
   dryad, skeleton, fungusman, gargoyle and hill giant a server's races wear) shows the armour, robe and
