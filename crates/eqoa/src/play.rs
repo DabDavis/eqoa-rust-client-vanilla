@@ -8770,7 +8770,10 @@ impl Play {
         if crate::dpsmeter::take_reset() {
             self.dps_reset();
         }
-        self.options_wnd.meter_note = (!self.session.dps_meter_offer).then(|| "This server keeps no meter".to_string());
+        let note = (!self.session.dps_meter_offer).then_some("This server keeps no meter");
+        if self.options_wnd.meter_note.as_deref() != note {
+            self.options_wnd.meter_note = note.map(str::to_string);
+        }
     }
 
     /// The meter cleared, and the server told to drop the fight under way.

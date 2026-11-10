@@ -266,11 +266,15 @@ pub fn items(s: &Shown) -> Vec<Item> {
 }
 
 /// The items `slots` show from `first` (kept so the last slot can still be
-/// reached): the player's own line, when it is not among them, in the last
+/// reached, and never on the pet's row apart from its owner's line, which it
+/// follows): the player's own line, when it is not among them, in the last
 /// slot (its place said by its rank).
 pub fn window(s: &Shown, all: &[Item], first: usize, slots: usize) -> Vec<Item> {
     let slots = slots.max(1).min(all.len());
-    let first = first.min(all.len() - slots);
+    let mut first = first.min(all.len() - slots);
+    if first > 0 && all[first] == Item::Pet {
+        first -= 1;
+    }
     let mut out: Vec<Item> = all[first..first + slots].to_vec();
     let own = s.rows.iter().position(|r| r.own);
     if let Some(o) = own
@@ -706,6 +710,15 @@ mod tests {
         m2.first = 21;
         let end = panel(&m2.shown(View::Fight, ""), HEAD_H + 2 + 3 * ROW_H);
         assert_eq!(end.shown, [Item::Line(21), Item::Line(22), Item::Line(23)], "its own among them: none taken");
+        // a window from the pet's row starts at its owner's line
+        let mut pets = Meter::default();
+        pets.take(fight(3, false, 1000, (0..4).map(|i| line(&format!("P{i}"), 10, 900 - i, if i == 0 { 300 } else { 0 }, i == 0)).collect()));
+        pets.first = 1;
+        let s = pets.shown(View::Fight, "Spectre");
+        assert_eq!(items(&s)[1], Item::Pet);
+        assert_eq!(panel(&s, HEAD_H + 2 + 2 * ROW_H).shown, [Item::Line(0), Item::Pet], "its owner first");
+        pets.first = 2;
+        assert_eq!(panel(&pets.shown(View::Fight, ""), HEAD_H + 2 + 2 * ROW_H).shown, [Item::Line(1), Item::Line(0)], "the control: past it");
         let few = panel(&fight_shown(3), 1000);
         assert_eq!((few.shown.len(), few.room), (3, 0), "the control");
         // the panel sits on the column's bottom, never above its top
