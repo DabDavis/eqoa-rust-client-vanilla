@@ -48,20 +48,33 @@ pub struct LivePlay {
 /// The Group menu as the live client has it, on a server that sends its
 /// feature word: the disc's eight entries, then Search, Register and
 /// Unregister (in the place a server's patch puts its own: the live menu's).
-/// With no word, the menu as CLIENT's image (and a patch) made it.
+/// With no word, the menu as CLIENT's image (and a patch) made it. The
+/// client's own entries (`startmenu::own_entry`: Raid, after Leave) are kept
+/// where they are, whenever they were put in: cut to the image's eight as a
+/// count, Raid went at every opening of the start menu (petition 1460).
 pub(super) fn group_menu(menus: &mut Menus) {
     if !crate::live::features().live() {
         return;
     }
     let Some(k) = menus.index_of(GROUP_MENU) else { return };
     let entries = &mut menus.list[k].entries;
-    if entries.len() == 11 && entries[8..].iter().map(|e| (e.word, e.msg)).eq(LIVE_GROUP) {
+    let own = crate::startmenu::own_entry;
+    let image: Vec<(i32, u32)> = entries.iter().filter(|e| !own(e)).map(|e| (e.word, e.msg)).collect();
+    if image.len() == 11 && image[8..].iter().copied().eq(LIVE_GROUP) {
         return;
     }
-    let like = entries.first().cloned().unwrap_or_default();
-    entries.truncate(8);
-    for (word, msg) in LIVE_GROUP {
-        entries.push(MenuEntry { word, msg, id: 0, sub: None, ..like.clone() });
+    let like = entries.iter().find(|e| !own(e)).cloned().unwrap_or_default();
+    // the image's past its eighth go (a patch's own three), the live three after it
+    let mut seen = 0;
+    entries.retain(|e| {
+        own(e) || {
+            seen += 1;
+            seen <= 8
+        }
+    });
+    let at = entries.iter().enumerate().filter(|(_, e)| !own(e)).nth(7).map_or(entries.len(), |(i, _)| i + 1);
+    for (j, (word, msg)) in LIVE_GROUP.into_iter().enumerate() {
+        entries.insert(at + j, MenuEntry { word, msg, id: 0, sub: None, ..like });
     }
 }
 
@@ -401,6 +414,75 @@ pub(super) mod tests {
         let live = entries(Some(0x1B));
         assert_eq!(&live[..8], &disc[..]);
         assert_eq!(&live[8..], &LIVE_GROUP[..]);
+    }
+
+    /// Petition 1460 (the GM Jibrish: "I see no raid button under community >
+    /// group"): on a server that sends the feature word, Start > Community >
+    /// Group shows Raid on its seventh bar, after Leave (the disc's eight round
+    /// it in their order, the live three after Follow), whether the raid's offer
+    /// came before the start menu was first opened or after, however often it
+    /// is opened, from the GM's table (TEST first) or a player's; a click on
+    /// that bar opens the raid's menu. The controls: before the offer the
+    /// seventh bar is Roll (737), and the entry put last, as 5d54c0c put it, is
+    /// on no bar. Skipped without CLIENT's image (`run/client.bin`).
+    #[test]
+    fn group_shows_raid_on_its_seventh_bar() {
+        use crate::startmenu::tests::{click_bar, raid_menu_of, shown};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let Ok(img) = std::fs::read(root.join("run/client.bin")) else {
+            eprintln!("SKIP: no run/client.bin");
+            return;
+        };
+        let img = crate::client_image::ClientImage::from_bytes(img).unwrap();
+        // Invite, Show Chat, Hide Chat, Boot, Disband, Leave
+        let six = ["word 86", "word 643", "word 644", "word 158", "word 529", "word 87"];
+        crate::live::with_features(Some(0x1B), || {
+            for test in [false, true] {
+                for opened_first in [true, false] {
+                    let mut p = play();
+                    p.start = Some(crate::startmenu::StartData::from_image(&img));
+                    p.live_opcode(0x07F5, &0x1Bu32.to_le_bytes()); // a new session has no word
+                    // the start menu opened as `Play`'s HUD frame opens it: its table
+                    // picked, then the live client's Group menu
+                    let open = |p: &mut Play| {
+                        let s = p.start.as_mut().unwrap();
+                        group_menu(&mut s.menus);
+                        shown(s, test, &[420, 107])
+                    };
+                    if opened_first {
+                        let bars = open(&mut p);
+                        assert_eq!(bars[..6], six);
+                        assert_eq!(bars[6], "word 737", "the control: before the offer, Roll on the seventh bar");
+                    }
+                    p.session.raid_offer = true;
+                    p.raid_menu();
+                    for k in 0..3 {
+                        let bars = open(&mut p);
+                        assert_eq!(bars[..6], six, "opening {k}, TEST {test}, opened first {opened_first}");
+                        assert_eq!(bars[6], "Raid", "opening {k}, TEST {test}, opened first {opened_first}");
+                    }
+                    let s = p.start.as_mut().unwrap();
+                    let k = s.menus.index_of(GROUP_MENU).unwrap();
+                    let words: Vec<i32> = s.menus.list[k].entries.iter().map(|e| e.word).collect();
+                    assert_eq!(words, [86, 643, 644, 158, 529, 87, -1, 737, 68, 1673, 1851, 1852], "TEST {test}, opened first {opened_first}");
+                    assert_eq!(click_bar(s, 6), raid_menu_of(s), "a click on the seventh bar opens the raid's menu");
+                }
+            }
+            // the control: put last, as 5d54c0c put it, Raid is on no bar
+            let mut p = play();
+            p.start = Some(crate::startmenu::StartData::from_image(&img));
+            p.live_opcode(0x07F5, &0x1Bu32.to_le_bytes());
+            p.session.raid_offer = true;
+            p.raid_menu();
+            let s = p.start.as_mut().unwrap();
+            group_menu(&mut s.menus);
+            let k = s.menus.index_of(GROUP_MENU).unwrap();
+            let raid = s.menus.list[k].entries.remove(6);
+            s.menus.list[k].entries.push(raid);
+            let bars = shown(s, false, &[420, 107]);
+            assert_eq!(bars.len(), 7, "seven bars drawn: {bars:?}");
+            assert!(!bars.iter().any(|b| b == "Raid"), "the control: put last it is on no bar: {bars:?}");
+        });
     }
 
     /// Search's refusals as the live client's Open: in a group one does not

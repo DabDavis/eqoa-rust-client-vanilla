@@ -294,7 +294,9 @@ or a browser (each described where it lives below):
   down the roll, ✕ makes it, △ or R2 let go hands the d-pad back; on a keyboard C held and the
   arrows and Enter, the same. A choice closes its strip at once; the server rolls 0-100 for a Need
   or a Greed and says every roll and the winner in raid chat. While R2 holds a strip, the item's
-  description (its stats too) shows beside them. **Community > Group > Raid** in the start menu:
+  description (its stats too) shows beside them. **Community > Group > Raid** in the start menu
+  (after Leave, on the seventh bar, the last the menu shows without scrolling; the live game's
+  Group menu, made again at every opening of the start menu, keeps it: petition 1460):
   in no raid, Invite (the target) and Raid Flag (everyone near, the server's `/raidaoe`); in one,
   Assist Main Assist and Leave Raid; the helper's Invite, Raid Flag and Kick (the target) too; the
   leader's Loot Rules (Free for All, Need Before Greed, Master Looter: the one in force marked

@@ -191,6 +191,9 @@ impl Play {
         }
         let Some(s) = self.start.as_mut() else { return };
         s.set_raid(want.as_ref().map(|(main, loot)| (&main[..], &loot[..])));
+        // the open menus' selections kept within their entries: the Raid menu's
+        // rows change with the raid's state while it may be up
+        s.menu.main.refit(&s.menus);
         self.raid.menu = Some(want);
     }
 

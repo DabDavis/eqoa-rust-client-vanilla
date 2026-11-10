@@ -951,6 +951,16 @@ const RAID_ENTRY: i32 = 0x7E48;
 const RAID_LOOT_ENTRY: i32 = 0x7E49;
 /// The Raid entries' messages' high half (`raidplay::MSG_RAID`).
 const RAID_MSGS: u32 = 0x7E48_0000;
+/// The Group menu's Leave (word 87), the sixth of the disc's eight: the Raid
+/// entry goes after it, on the seventh bar (`set_raid`).
+const GROUP_LEAVE: i32 = 87;
+
+/// Whether `e` is an entry the client puts in one of the game's menus itself
+/// (Community > Group > Raid, `set_raid`): a rebuild of that menu
+/// (`liveplay::group_menu`) keeps it where it is.
+pub fn own_entry(e: &crate::client_image::MenuEntry) -> bool {
+    e.msg == 0 && e.id == RAID_ENTRY
+}
 
 impl StartData {
     pub fn from_image(img: &crate::client_image::ClientImage) -> Self {
@@ -1021,11 +1031,16 @@ impl StartData {
     }
 
     /// Community > Group > Raid (the client's own; the GM Jibrish's petitions 1448
-    /// and 1451, `raidplay`): an entry put last in every Group menu (title word
-    /// 107: Community's, reached from every start table) while the server offers
-    /// the raid's windows, opening a menu of `rows`' entries (a row of message 0
-    /// opens the second list's, the leader's Loot Rules), or taken out (`None`).
-    /// Every word is set at run time (`Menus::labels`): the game has no raid.
+    /// and 1451, `raidplay`): an entry put after Leave in every Group menu (title
+    /// word 107: Community's, reached from every start table) while the server
+    /// offers the raid's windows, opening a menu of `rows`' entries (a row of
+    /// message 0 opens the second list's, the leader's Loot Rules), or taken out
+    /// (`None`). Every word is set at run time (`Menus::labels`): the game has no
+    /// raid. After Leave is the seventh bar, the last the menu shows at once
+    /// (`MainMenu` draws seven): put last, it was the ninth of the disc's Group and
+    /// the twelfth of the live client's, below them, and the live client's rebuild
+    /// (`liveplay::group_menu`, which keeps it now: `own_entry`) cut it out
+    /// (petition 1460).
     pub fn set_raid(&mut self, rows: Option<(&[LabelRow], &[LabelRow])>) {
         use crate::client_image::{Label, MenuEntry};
         let (raid, loot) = *self.raid_menu.get_or_insert_with(|| {
@@ -1057,8 +1072,10 @@ impl StartData {
         labels.extend(loot_rows.iter().map(|r| ((r.msg, 0), label(r))));
         self.menus.labels.extend(labels);
         for g in groups(&self.menus) {
-            if !self.menus.list[g].entries.iter().any(|e| e.sub == Some(raid)) {
-                self.menus.list[g].entries.push(MenuEntry { sub: Some(raid), msg: 0, id: RAID_ENTRY, ..Default::default() });
+            let entries = &mut self.menus.list[g].entries;
+            if !entries.iter().any(|e| e.sub == Some(raid)) {
+                let at = entries.iter().position(|e| e.word == GROUP_LEAVE).map_or(entries.len().min(6), |k| k + 1);
+                entries.insert(at, MenuEntry { sub: Some(raid), msg: 0, id: RAID_ENTRY, ..Default::default() });
             }
         }
     }
@@ -1082,7 +1099,7 @@ impl StartData {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::client_image::Menu;
 
@@ -1295,6 +1312,65 @@ mod tests {
         r.0.into_iter().filter(|(at, ..)| at[0] == 18 + BAR_WIDTH / 2).map(|(_, c, s)| (s, c)).collect()
     }
 
+    /// A `Vui` whose word n is "word n" (to 1,900: the live client's words
+    /// too) and whose bars' caps are 0 wide.
+    fn numbered_vui() -> Vui {
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 252];
+        for id in [141, 142] {
+            atlas[id] = vi::ui::UiTexEntry { x00: id as i32, row: 1, uv1: [0, 26], ..Default::default() };
+        }
+        let words: Vec<String> = (1..=1900).map(|n| format!("word {n}")).collect();
+        Vui::new(vi::strtab::StringTable::parse(words.join("\n").as_bytes()).unwrap(), Default::default(), atlas)
+    }
+
+    fn nowhere() -> Location {
+        Location { world: 0, pos: [0.0; 3], cols: 1, rows: 1, cell: 1.0, origin: [0.0; 3], bounds: None }
+    }
+
+    /// The start menu as the player sees it opened: its table as `pick_test`
+    /// picks it (the GM's TEST first when `test`), reset as the start button
+    /// opens it, `path`'s entries opened in turn (each found by its word and
+    /// opened as ✕ opens it), and the menu that leaves drawn once as
+    /// `MainMenu` draws it: its bars' texts, top to bottom (seven at most), the
+    /// game's words "word n" and the client's own by their labels.
+    pub(crate) fn shown(d: &mut StartData, test: bool, path: &[i32]) -> Vec<String> {
+        let (vui, loc) = (numbered_vui(), nowhere());
+        let mut r = Texts::default();
+        d.pick_test(false, 2, test);
+        d.menu.visible = true;
+        d.menu.show_main(&vui, &r, true, 0, &loc);
+        let mut m = &mut d.menu.main;
+        for word in path {
+            let k = d.menus.list[m.menu].entries.iter().position(|e| e.word == *word).expect("an entry on the path") as i32;
+            (m.sel, m.top) = (k, (k - 6).max(0));
+            m.select(&vui, &r, &d.menus, 0, &loc);
+            m = m.sub.as_mut().expect("a sub-menu opened");
+        }
+        d.menu.draw(&vui, &mut r, &d.menus, 16, &Stats::default(), &mut Vec::new());
+        r.0.into_iter().filter(|(at, ..)| at[0] == 18 + BAR_WIDTH / 2).map(|(_, _, s)| s).collect()
+    }
+
+    /// The pointer on bar `bar` of the menu `shown` left up, then ✕: the
+    /// menu that has the focus then (an entry's sub-menu opened), by index.
+    pub(crate) fn click_bar(d: &mut StartData, bar: i32) -> Option<usize> {
+        let (vui, loc) = (numbered_vui(), nowhere());
+        let r = Texts::default();
+        if !d.menu.point([18.0 + 40.0, (56 + 27 * bar + 10) as f32], &d.menus) {
+            return None;
+        }
+        d.menu.key(&vui, &r, &d.menus, 13, true, 0, &loc, &mut Vec::new());
+        let mut m = &d.menu.main;
+        while let Some(s) = m.sub.as_ref().filter(|s| s.visible && s.focused()) {
+            m = s;
+        }
+        m.x48.then_some(m.menu)
+    }
+
+    /// The Raid menu (`set_raid`), once made.
+    pub(crate) fn raid_menu_of(d: &StartData) -> Option<usize> {
+        d.raid_menu.map(|(raid, _)| raid)
+    }
+
     /// The bars' colours as `OnDrawSelf` gives them: the selected teal, and
     /// black.
     const LIT: [f32; 4] = [10.0 / 255.0, 50.0 / 255.0, 70.0 / 255.0, 1.0];
@@ -1475,11 +1551,12 @@ mod tests {
         assert_eq!(character(&d), disc, "taken out");
     }
 
-    /// Community > Group > Raid: put last in the Group menu (title word 107) on
-    /// every table, once however often it is set, its entries and Loot Rules as
-    /// given with their words set at run time, changed in place, and taken out
-    /// again (the control: the disc's Group menu). Needs `run/client.bin` (SKIPs
-    /// without).
+    /// Community > Group > Raid: put after Leave in the Group menu (title word
+    /// 107) on every table, the seventh bar (`liveplay`'s
+    /// `group_shows_raid_on_its_seventh_bar` draws it), once however often it
+    /// is set, its entries and Loot Rules as given with their words set at run
+    /// time, changed in place, and taken out again (the control: the disc's
+    /// Group menu). Needs `run/client.bin` (SKIPs without).
     #[test]
     fn the_raid_entry_goes_in_group() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/client.bin");
@@ -1501,8 +1578,8 @@ mod tests {
         d.set_raid(Some((&main, &loot)));
         let g = group(&d);
         assert_eq!(g[0].len(), disc[0].len() + 1, "once");
-        assert_eq!(g[0][..disc[0].len()], disc[0][..]);
-        assert_eq!(*g[0].last().unwrap(), (-1, 0, RAID_ENTRY), "last, a sub-menu");
+        assert_eq!(g[0][6], (-1, 0, RAID_ENTRY), "after Leave, a sub-menu");
+        assert_eq!([&g[0][..6], &g[0][7..]].concat(), disc[0], "the disc's round it in their order");
         let text = |d: &StartData, k: (u32, i32)| d.menus.labels.get(&k).map(|l| (String::from_utf16_lossy(&l.text), String::from_utf16_lossy(&l.tail), l.dim));
         assert_eq!(text(&d, (0, RAID_ENTRY)), Some(("Raid".into(), String::new(), false)));
         let (raid, lr) = d.raid_menu.unwrap();
@@ -1514,7 +1591,7 @@ mod tests {
             let root = &d.menus.list[d.menu.main.menu];
             let community = root.entries.iter().find(|e| e.word == 420).and_then(|e| e.sub).expect("Community in the root");
             let grp = d.menus.list[community].entries.iter().find(|e| e.word == 107).and_then(|e| e.sub).expect("Group in Community");
-            assert_eq!(d.menus.list[grp].entries.last().map(|e| e.sub), Some(Some(raid)), "reached from table {bank} {x}");
+            assert_eq!(d.menus.list[grp].entries.get(6).map(|e| e.sub), Some(Some(raid)), "reached from table {bank} {x}");
         }
         // a member's rows: the menu's changed in place, the old labels gone
         d.set_raid(Some((&[row(0x7E48_0200, "Leave Raid")], &[])));

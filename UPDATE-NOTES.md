@@ -6,6 +6,10 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · Community > Group > Raid is there
+- On a server with raids, Community > Group now shows Raid, right after Leave, where you see it without
+  scrolling: the start menu dropped it each time it opened. Roll and Follow are now below it (scroll down).
+
 ## 2026-11-10 · Raids: the leader's crown, loot rolls, a master looter and new commands
 - In a raid the raid list shows who leads it with a gold crown by their name, its helper with a blue cross and
   its main assist with a red diamond.
