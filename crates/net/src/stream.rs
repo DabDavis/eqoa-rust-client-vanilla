@@ -96,6 +96,10 @@ impl Writer {
         self.data.push(v);
         self
     }
+    pub fn u16(&mut self, v: u16) -> &mut Self {
+        self.data.extend(v.to_le_bytes());
+        self
+    }
     pub fn u32(&mut self, v: u32) -> &mut Self {
         self.data.extend(v.to_le_bytes());
         self

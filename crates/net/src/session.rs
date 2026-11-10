@@ -539,6 +539,23 @@ pub const OP_MOB_INFO_ANSWER: u16 = 0x7E4D;
 /// is held.
 pub const OP_MOB_INFO: u16 = 0x7E4E;
 
+/// go-eqoa-server's own: item links in chat (the GM Jibrish's petition 1463,
+/// `crate::itemlink`). Both ways: the server's offer at every world entry (a
+/// u8, the layout, `itemlink::LAYOUT`), and the client's answer (a u8, 1 to be
+/// sent [`OP_ITEM_LINK_LINE`] lines and to send [`OP_ITEM_LINK_SAY`], 0 for the
+/// plain lines a PS2 gets). CLIENT has no case for it: a PS2 ignores the offer.
+pub const OP_ITEM_LINKS: u16 = 0x7E4F;
+/// A typed line with links, client to server, in place of its retail message
+/// (`itemlink::say`).
+pub const OP_ITEM_LINK_SAY: u16 = 0x7E50;
+/// A retail chat line with its links, server to client (`itemlink::read_line`).
+pub const OP_ITEM_LINK_LINE: u16 = 0x7E51;
+/// A link opened, client to server: the u32 link id (`itemlink::ask`).
+pub const OP_ITEM_LINK_ASK: u16 = 0x7E52;
+/// The answer to [`OP_ITEM_LINK_ASK`]: the link id, and its item's snapshot as
+/// an inventory record or none (`itemlink::read_record`).
+pub const OP_ITEM_LINK_RECORD: u16 = 0x7E53;
+
 /// One quest on the tracker ([`OP_QUEST_PROGRESS_DATA`]): its name and its
 /// step's objectives.
 #[derive(Clone, Debug, PartialEq)]
@@ -758,6 +775,12 @@ pub enum Event {
     /// [`OP_MOB_INFO`]: the monster the client knows by `id` has nothing to say;
     /// its name and level, for the target's details box.
     MobInfo { id: u32, level: u8, name: String },
+    /// [`OP_ITEM_LINK_LINE`]: the links of the chat line the next event carries
+    /// (the line's own message, read as ever, comes right after it).
+    ChatLinks(Vec<crate::itemlink::ChatLink>),
+    /// [`OP_ITEM_LINK_RECORD`]: a link's item as the server snapshotted it, or
+    /// none (expired, or never made).
+    ItemLinkRecord { id: u32, item: Option<Box<crate::dump::NetItem>> },
     /// [`OP_RAID_ROLL`]: a loot roll offered, or over (0 seconds left).
     RaidRoll(crate::raid::Roll),
     /// [`OP_RAID_MASTER_LOOT`]: the master looter's list for the corpse it
@@ -994,6 +1017,10 @@ pub struct Session {
     /// this connection, and what it was last told (none since the offer).
     pub raid_offer: bool,
     raid_asked: Option<bool>,
+    /// Whether the server offered item links ([`OP_ITEM_LINKS`]) on this
+    /// connection, and what it was last told (none since the offer).
+    pub item_links_offer: bool,
+    item_links_asked: Option<bool>,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -1159,6 +1186,8 @@ impl Session {
             dps_meter_asked: None,
             raid_offer: false,
             raid_asked: None,
+            item_links_offer: false,
+            item_links_asked: None,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -1436,6 +1465,49 @@ impl Session {
         let mut w = Writer::op(OP_RAID_ANSWER);
         w.u8(want as u8);
         self.send(&w.data);
+    }
+
+    /// Item Links: a server that offered item links ([`OP_ITEM_LINKS`]) is told
+    /// whether this client takes them (`want`, the Extended row), at once and
+    /// whenever that changes, and afresh at another offer; one that made no
+    /// offer is told nothing.
+    pub fn agree_item_links(&mut self, want: bool) {
+        if !self.item_links_offer || self.item_links_asked == Some(want) {
+            return;
+        }
+        self.item_links_asked = Some(want);
+        let mut w = Writer::op(OP_ITEM_LINKS);
+        w.u8(want as u8);
+        self.send(&w.data);
+    }
+
+    /// Links are in force on this connection: the server offered them and was
+    /// told this client takes them. Only then does a typed line carry links
+    /// ([`say_linked`](Self::say_linked)) or a link open.
+    pub fn item_links(&self) -> bool {
+        self.item_links_offer && self.item_links_asked == Some(true)
+    }
+
+    /// A typed line with links ([`OP_ITEM_LINK_SAY`]) in place of its retail
+    /// message, where links are in force; false, and nothing sent, elsewhere
+    /// (the caller sends the plain line).
+    pub fn say_linked(&mut self, route: crate::itemlink::Route, text: &str, target: u32, links: &[crate::itemlink::Linked]) -> bool {
+        if !self.item_links() || links.is_empty() {
+            return false;
+        }
+        let m = crate::itemlink::say(route, text, target, links);
+        self.send(&m);
+        true
+    }
+
+    /// A link opened ([`OP_ITEM_LINK_ASK`]), where links are in force.
+    pub fn ask_item_link(&mut self, id: u32) -> bool {
+        if !self.item_links() {
+            return false;
+        }
+        let m = crate::itemlink::ask(id);
+        self.send(&m);
+        true
     }
 
     /// The meter's reset: a server that offered a meter and was asked for it
@@ -1725,6 +1797,8 @@ impl Session {
                 self.number_tags_asked = None;
                 self.dps_meter_offer = false;
                 self.dps_meter_asked = None;
+                self.item_links_offer = false;
+                self.item_links_asked = None;
                 ev.push(Event::Promoted);
             }
             drdp::TYPE_DISCONNECT => {
@@ -2009,6 +2083,31 @@ impl Session {
                     self.send(&w.data);
                 }
             }
+            // item links offered (again at every world entry), in the layout
+            // this client reads: told afresh whether it takes them
+            // (`agree_item_links`); another layout is left alone
+            OP_ITEM_LINKS => {
+                let layout = r.u8();
+                if !r.error && layout == crate::itemlink::LAYOUT {
+                    self.item_links_offer = true;
+                    self.item_links_asked = None;
+                }
+            }
+            // a chat line with its links: the links, then the line's own
+            // message read as it always is (a line that wraps another of
+            // these, or none, is the plain message alone)
+            OP_ITEM_LINK_LINE => match crate::itemlink::read_line(&m.data[2.min(m.data.len())..]) {
+                Some((links, inner)) => {
+                    let inner = drdp::Message { data: inner.to_vec(), ..m.clone() };
+                    ev.push(Event::ChatLinks(links));
+                    self.dispatch(&inner, ev);
+                }
+                None => debug_line(&format!("[net] a linked chat line: {} bytes not read", m.data.len())),
+            },
+            OP_ITEM_LINK_RECORD => match crate::itemlink::read_record(&m.data[2.min(m.data.len())..]) {
+                Some((id, item)) => ev.push(Event::ItemLinkRecord { id, item: item.map(Box::new) }),
+                None => debug_line(&format!("[net] an item link's record: {} bytes not read", m.data.len())),
+            },
             OP_MOB_INFO => {
                 let (layout, id, level, len) = (r.u8(), r.u32(), r.u8(), r.u8() as usize);
                 let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
@@ -2684,6 +2783,64 @@ mod tests {
         assert_eq!(s.record.as_deref(), Some(&[][..]), "nothing sent on receipt");
         s.answer_teleport(7);
         assert_eq!(s.record.unwrap(), [(drdp::TYPE_GUARANTEED, vec![0x49, 0x00, 14])]);
+    }
+
+    /// Item links (`itemlink`): nothing is said to a server that made no offer
+    /// and no link goes there (the line goes plain: `say_linked` false); an
+    /// offer in this layout is told the Extended row at once and again only as
+    /// it changes, and links are in force only while it is on. The controls: an
+    /// offer of another layout is not taken; a promotion forgets the offer.
+    #[test]
+    fn item_links_are_told_only_to_a_server_that_offered_them() {
+        use crate::itemlink::{Linked, Route};
+        let l = Linked { start: 0, len: 5, list: 0, key: 3 };
+        let mut s = session();
+        s.record = Some(Vec::new());
+        s.agree_item_links(true);
+        assert!(!s.item_links() && !s.say_linked(Route::Say, "Sword", u32::MAX, &[l]) && !s.ask_item_link(9));
+        assert_eq!(s.record.as_ref().unwrap().len(), 0, "nothing to a server that made no offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4F, 0x7E, 2]);
+        s.agree_item_links(true);
+        assert!(!s.item_links_offer, "another layout is not taken");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4F, 0x7E, 1]);
+        s.agree_item_links(true);
+        s.agree_item_links(true);
+        assert!(s.item_links());
+        assert_eq!(s.record.as_ref().unwrap()[..], [(drdp::TYPE_GUARANTEED, vec![0x4F, 0x7E, 1])], "told once");
+        assert!(s.say_linked(Route::Say, "Sword", u32::MAX, &[l]));
+        assert!(!s.say_linked(Route::Say, "Sword", u32::MAX, &[]), "a line with no link goes plain");
+        assert!(s.ask_item_link(9));
+        s.agree_item_links(false);
+        assert!(!s.item_links() && !s.ask_item_link(9), "the row off: none");
+        let sent: Vec<Vec<u8>> = s.record.take().unwrap().into_iter().map(|(_, d)| d).collect();
+        assert_eq!(sent.len(), 4);
+        assert_eq!(&sent[1][..3], &[0x50, 0x7E, 0], "the line in place of 0x000B");
+        assert_eq!(sent[2], vec![0x52, 0x7E, 9, 0, 0, 0]);
+        assert_eq!(sent[3], vec![0x4F, 0x7E, 0]);
+        // a new connection: the offer is the next world entry's
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.item_links_offer);
+    }
+
+    /// A linked line is its links' event, then the line's own message read as
+    /// ever (a group line, a white one); a link's record is the item or none.
+    /// The control: the same message unwrapped has no links' event.
+    #[test]
+    fn a_linked_line_is_read_as_its_own_message() {
+        let mut s = session();
+        let mut inner = Writer::op(0x069E);
+        inner.u32(0x14F51).wide("Bob tells the group: see Rusty Sword");
+        let mut w = Writer::op(OP_ITEM_LINK_LINE);
+        w.u8(1).u16(25).u16(11).u32(4242).bytes(&inner.data);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, w.data);
+        assert!(
+            matches!(&ev[..], [Event::ChatLinks(l), Event::GroupChat { from: 0x14F51, text }] if l.len() == 1 && l[0].id == 4242 && l[0].start == 25 && text.ends_with("Rusty Sword")),
+            "{ev:?}"
+        );
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, inner.data);
+        assert!(matches!(&ev[..], [Event::GroupChat { .. }]), "the control: {ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x53, 0x7E, 7, 0, 0, 0, 0]);
+        assert!(matches!(&ev[..], [Event::ItemLinkRecord { id: 7, item: None }]), "{ev:?}");
     }
 
     /// The net library's lines, as a test reads them (`set_debug_sink`: once
