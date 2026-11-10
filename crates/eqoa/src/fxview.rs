@@ -907,6 +907,13 @@ impl winit::application::ApplicationHandler for App {
     fn window_event(&mut self, el: &winit::event_loop::ActiveEventLoop, _id: winit::window::WindowId, event: winit::event::WindowEvent) {
         use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
         use winit::keyboard::{Key, NamedKey};
+        // the page's WebGL2 context taken away: nothing drawn shows, and the
+        // frames' uploads would pile up (`web::graphics_lost`)
+        #[cfg(target_arch = "wasm32")]
+        if crate::web::graphics_lost() {
+            el.exit();
+            return;
+        }
         match event {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::Resized(size) => {

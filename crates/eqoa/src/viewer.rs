@@ -4726,6 +4726,14 @@ impl ApplicationHandler for App {
     /// Each window event, its time the client's own when it draws no frame
     /// (`stall`).
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        // a page whose WebGL2 context the browser took away draws nothing
+        // more, and its frames' uploads would be held until the heap ran out
+        // (`web::graphics_lost`, said on the page): the client stops here
+        #[cfg(target_arch = "wasm32")]
+        if crate::web::graphics_lost() {
+            el.exit();
+            return;
+        }
         let what = crate::stall::event_name(&event);
         self.stall.enter(Instant::now());
         self.handle_window_event(el, id, event);
@@ -5695,6 +5703,22 @@ impl App {
                         g.renderer.set_dynamic_lighting(&g.device, dynamic);
                         if let Some(s) = streamer.as_mut() {
                             s.relight(&g.renderer, &g.device);
+                        }
+                        // what a page's WebGL2 refused of them: said, and
+                        // left off (`Renderer::refusals`)
+                        for r in g.renderer.refusals() {
+                            crate::say(&format!("lighting refused by the browser's WebGL2: {r}"));
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                let (what, why) = r.split_once(": ").unwrap_or((r.as_str(), ""));
+                                crate::web::problem(
+                                    "lighting",
+                                    &format!("{what} left off: this browser's graphics (WebGL2) would not take it ({why}). The rest of the game draws as before."),
+                                );
+                            }
+                        }
+                        if let Some(f) = g.renderer.light_shadow_filter().filter(|_| light_shadows && dynamic) {
+                            crate::say(&format!("light shadows' filter: {f:?}"));
                         }
                     }
                     // the particles' blend as the options have it (Particles:
