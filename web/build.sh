@@ -1,7 +1,7 @@
 #!/bin/sh
 # The browser client: web/dist/ gets the page (index.html, and beside it the
 # GM panel's preview fxview.html and the community page spellfx.html) and its build,
-# v/<build>/: main.js and notices.js, the workers (unpack.js, tick.js), the AudioWorklet
+# v/<build>/: main.js and notices.js, the workers (unpack.js, worlds.js, tick.js), the AudioWorklet
 # (sound.js), the update notes (update-notes.md), the pages' icon (disc.svg), the app's
 # manifest (manifest.json) and icons (tools/webicons: the program's drawn disc as PNGs),
 # eqoa.js and eqoa_bg.wasm (wasm-bindgen 0.2.129, the version
@@ -32,7 +32,7 @@ if [ -n "$OPT" ]; then
     "$OPT" -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
         --enable-reference-types --enable-multivalue --enable-simd "$STAGE/eqoa_bg.wasm" -o "$STAGE/eqoa_bg.wasm"
 fi
-cp web/main.js web/notices.js web/unpack.js web/sound.js web/tick.js web/fxview.js web/discstore.js web/spellfx.js "$STAGE/"
+cp web/main.js web/notices.js web/unpack.js web/worlds.js web/sound.js web/tick.js web/fxview.js web/discstore.js web/spellfx.js "$STAGE/"
 # the pages' icon: the program's own drawn disc (crates/eqoa/src/icon_art.rs)
 cp web/disc.svg "$STAGE/"
 # the page as an installed app (main.js "installing"): its manifest, whose start_url and

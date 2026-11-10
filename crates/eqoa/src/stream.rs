@@ -142,9 +142,14 @@ pub struct FileZones {
 }
 
 impl FileZones {
-    /// The file `name` inside the image at `iso_path`.
+    /// The file `name` inside the image at `iso_path`, or one of the server's
+    /// own worlds of that name (`serverworlds`), built off it.
     pub fn open(iso_path: &std::path::Path, name: &str) -> Option<Self> {
-        let e = iso::Iso::open(iso_path).ok()?.find(name)?.clone();
+        let Some(e) = iso::Iso::open(iso_path).ok()?.find(name).cloned() else {
+            let f = std::fs::File::open(crate::serverworlds::path_of(name)?).ok()?;
+            let len = f.metadata().ok()?.len();
+            return Some(FileZones { src: esf::Window::new(f, 0, len), done: VecDeque::new() });
+        };
         let f = iso::open_file(iso_path).ok()?;
         Some(FileZones { src: esf::Window::new(f, e.lba as u64 * iso::SECTOR, e.size as u64), done: VecDeque::new() })
     }
@@ -278,6 +283,15 @@ pub fn open_world(name: &str, x: f32, z: f32) -> Arrival {
 /// reads every file whole.
 pub fn open_file(iso_path: &std::path::Path, name: &str) -> Result<Container, Box<dyn std::error::Error>> {
     let Some(e) = iso::Iso::open(iso_path)?.find(name).cloned() else {
+        // one of the server's own worlds, built off the disc
+        // (`serverworlds`): its zones left in its file, as a disc world's
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = crate::serverworlds::path_of(name) {
+            let f = std::fs::File::open(&path)?;
+            let len = f.metadata()?.len();
+            let mut src = esf::Window::new(f, 0, len);
+            return Ok(Container::open_deferred(&mut src)?);
+        }
         // a world a server's patch adds that no disc carries (`s2`:
         // Sandstorm's world 6), out of the server's folder, whole
         if let Some(path) = crate::s2::get().folder_file(name) {
