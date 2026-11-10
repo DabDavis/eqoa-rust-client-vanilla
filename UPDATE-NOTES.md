@@ -20,9 +20,11 @@ is put on the page by `.github/workflows/notes.yml`.
 - The raid's leader can set the loot rules in Community > Group > Raid > Loot Rules: Free for All, Need Before
   Greed or Master Looter. They cannot be changed while the raid is in combat, and the raid cannot be disbanded
   then either.
-- With Master Looter, the raid's kills are the leader's to open. Choosing an item gives the leader a menu: Take,
-  Inspect, Assign (pick a raid member from a list, then confirm) and Abandon (after a confirmation, anyone may loot
-  anything on the corpse).
+- With Master Looter, a raid kill that drops such an item is the leader's alone to open for 5 minutes (anyone else
+  is told whose it is; then it is anyone's). Choosing an item gives the leader a menu: Take, Inspect, Assign (pick a
+  raid member from a list, then confirm) and Abandon (after a confirmation, anyone may loot anything on the corpse).
+- A member kicked from the raid during a fight still gets its rolls (or can be assigned an item) for what the raid
+  was fighting, so no one can be kicked out of their loot just before a boss dies.
 - Community > Group > Raid also has Invite (your target), Raid Flag (everyone near), Kick, Make Leader, Make
   Helper, Make Main Assist, Assist Main Assist and Leave Raid, each shown to whoever may use it.
 - New commands, typed in chat (on a PS2 put /t in front: /t raidinvite Bob): /raidinvite [name] (your target
