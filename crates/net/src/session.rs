@@ -336,6 +336,75 @@ pub const OP_NUMBER_TAGS_OFFER: u16 = 0x7E38;
 /// of a figure the player or its pet made carries one byte after its body
 /// ([`number_tag`]); every other is the retail body.
 pub const OP_NUMBER_TAGS_ANSWER: u16 = 0x7E39;
+/// go-eqoa-server's own: a damage meter, who in the player's group did how much
+/// damage in the fight and how fast (`dpsmeter`, the Extended page's DPS Meter;
+/// the server owner, 2026-11-10: "lets add dps meters, will work solo, group,
+/// raid"). The offer, server to client once the player is in the world: a u8, 1,
+/// [`OP_DPS_METER_DATA`]'s layout. CLIENT has no such case, so a PS2 ignores it;
+/// nothing is asked of a server that made no offer.
+pub const OP_DPS_METER_OFFER: u16 = 0x7E3A;
+/// The answer to [`OP_DPS_METER_OFFER`], client to server, at once and whenever
+/// it changes (`agree_dps_meter`): a u8, 1 to be sent the meter, 0 to stop.
+pub const OP_DPS_METER_ANSWER: u16 = 0x7E3B;
+/// The meter, from a server the client asked: the fight of the player's group
+/// at most once a second while it changes, and once more as it ends (the server
+/// ends it 10 s after the group's last damage). [`DpsMeter`] has the layout.
+pub const OP_DPS_METER_DATA: u16 = 0x7E3C;
+/// A reset, client to server (`reset_dps_meter`): a u8, 1. The server drops the
+/// fight under way (nothing more is sent of it) and numbers its next another.
+pub const OP_DPS_METER_RESET: u16 = 0x7E3D;
+
+/// A fight on the meter ([`OP_DPS_METER_DATA`]): u8 layout (1), u32 its number
+/// (another number, another fight), u8 1 when it is over (its last message), u32
+/// its length in ms (from its first damage to its latest), u32 the damage of all
+/// its lines, u16 how many lines it has, u16 the player's own line's place among
+/// them (1 the most damage), u8 how many this message holds, then each
+/// [`DpsLine`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DpsMeter {
+    pub fight: u32,
+    pub over: bool,
+    pub length_ms: u32,
+    /// The damage of every line, those not sent too: what a line's share is of.
+    pub total: u32,
+    /// The fight's lines in all; at most the server's 24 are sent, the most
+    /// damage first, the player's own always among them (in the last place
+    /// when its own place is past them).
+    pub count: u16,
+    /// The player's own line's place among all of them, 1 the most damage.
+    pub place: u16,
+    pub lines: Vec<DpsLine>,
+}
+
+/// A line of the meter: u8 flags (1 the player's own, 2 no longer in its group),
+/// u8 class, u32 damage (its pet's included), u32 its pet's share of that, and
+/// its name (a u8 byte count and UTF-8).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DpsLine {
+    pub own: bool,
+    pub left: bool,
+    pub class: u8,
+    pub damage: u32,
+    pub pet: u32,
+    pub name: String,
+}
+
+/// [`OP_DPS_METER_DATA`]'s body, or None when it is short or of another layout.
+fn read_dps_meter(r: &mut Reader) -> Option<DpsMeter> {
+    if r.u8() != 1 {
+        return None;
+    }
+    let (fight, over, length_ms, total, count, place) = (r.u32(), r.u8() == 1, r.u32(), r.u32(), r.u16(), r.u16());
+    let n = r.u8() as usize;
+    let mut lines = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (flags, class, damage, pet) = (r.u8(), r.u8(), r.u32(), r.u32());
+        let len = r.u8() as usize;
+        let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
+        lines.push(DpsLine { own: flags & 1 != 0, left: flags & 2 != 0, class, damage, pet, name });
+    }
+    (!r.error).then_some(DpsMeter { fight, over, length_ms, total, count, place, lines })
+}
 
 /// What made a figure, the byte after a tagged 0x00DB's body
 /// ([`OP_NUMBER_TAGS_ANSWER`]): its kind and whether the player's pet made it.
@@ -610,6 +679,8 @@ pub enum Event {
     GroupRoster { ids: Vec<u32>, names: Vec<String> },
     /// [`OP_RAID_ROSTER`]: a message's part of the whole raid group.
     RaidRoster { total: usize, first: usize, rows: Vec<RaidMember> },
+    /// [`OP_DPS_METER_DATA`]: the meter's fight as it stands.
+    DpsMeter(DpsMeter),
     /// 0x0773 (`Msg0773`): an invitation from `id`.
     GroupInvite { id: u32, x: i32, name: String },
     /// 0x0774 (`Msg0774`): the invitation from `id` withdrawn.
@@ -827,6 +898,9 @@ pub struct Session {
     /// on this connection, and what it was last told (none since the offer).
     pub number_tags_offer: bool,
     number_tags_asked: Option<bool>,
+    /// The same for the damage meter ([`OP_DPS_METER_OFFER`]).
+    pub dps_meter_offer: bool,
+    dps_meter_asked: Option<bool>,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -984,6 +1058,8 @@ impl Session {
             pet_effects_at: 0,
             number_tags_offer: false,
             number_tags_asked: None,
+            dps_meter_offer: false,
+            dps_meter_asked: None,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -1236,6 +1312,33 @@ impl Session {
         self.send(&w.data);
     }
 
+    /// The DPS Meter: a server that offered a damage meter
+    /// ([`OP_DPS_METER_OFFER`]) is told whether to send it (`want`), at once and
+    /// whenever that changes, and afresh at another offer; one that made no offer
+    /// is told nothing.
+    pub fn agree_dps_meter(&mut self, want: bool) {
+        if !self.dps_meter_offer || self.dps_meter_asked == Some(want) {
+            return;
+        }
+        self.dps_meter_asked = Some(want);
+        let mut w = Writer::op(OP_DPS_METER_ANSWER);
+        w.u8(want as u8);
+        self.send(&w.data);
+    }
+
+    /// The meter's reset: a server that offered a meter and was asked for it
+    /// drops the fight under way ([`OP_DPS_METER_RESET`]); false (nothing sent)
+    /// otherwise.
+    pub fn reset_dps_meter(&mut self) -> bool {
+        if !self.dps_meter_offer || self.dps_meter_asked != Some(true) {
+            return false;
+        }
+        let mut w = Writer::op(OP_DPS_METER_RESET);
+        w.u8(1);
+        self.send(&w.data);
+        true
+    }
+
     /// The pet's effects the server last sent that are not over at `now`
     /// (`now`'s clock): each its icon and the ms left of it, in their order.
     pub fn pet_effects_left(&self, now: u32) -> Vec<(u32, u32)> {
@@ -1457,6 +1560,8 @@ impl Session {
                 self.pet_effects.clear();
                 self.number_tags_offer = false;
                 self.number_tags_asked = None;
+                self.dps_meter_offer = false;
+                self.dps_meter_asked = None;
                 ev.push(Event::Promoted);
             }
             drdp::TYPE_DISCONNECT => {
@@ -1796,6 +1901,20 @@ impl Session {
                 if !r.error {
                     self.number_tags_offer = true;
                     self.number_tags_asked = None;
+                }
+            }
+            // the damage meter offered (again at every world entry): told
+            // afresh whether the client wants it (`agree_dps_meter`)
+            OP_DPS_METER_OFFER => {
+                r.u8();
+                if !r.error {
+                    self.dps_meter_offer = true;
+                    self.dps_meter_asked = None;
+                }
+            }
+            OP_DPS_METER_DATA => {
+                if let Some(m) = read_dps_meter(&mut r) {
+                    ev.push(Event::DpsMeter(m));
                 }
             }
             0x0013 => {
@@ -3154,6 +3273,77 @@ mod tests {
         s.npc_tints = None;
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert_eq!(s.npc_tints.take(), Some(vec![]), "a new connection: none held");
+    }
+
+    // The damage meter (go-eqoa-server's 0x7E3A-0x7E3D): nothing asked with no
+    // offer (the control); an offer answered at once with what is wanted (0
+    // too), a u8, and again only when that changes; the fight read as the server
+    // writes it (go-eqoa-server's TestDPSMeterOnTheWire's bytes), one of another
+    // layout or cut short not taken; a reset sent only to a server that was asked
+    // for the meter; a new connection asks nothing until it is offered again.
+    #[test]
+    fn dps_meter_offer_answer_fight_and_reset() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.len() >= 2 && d[1] == 0x7E && matches!(d[0], 0x3B | 0x3D)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_dps_meter(true);
+        assert!(!s.reset_dps_meter());
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3A, 0x7E]);
+        assert!(!s.dps_meter_offer, "a short offer is no offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3A, 0x7E, 1]);
+        assert!(s.dps_meter_offer);
+        s.agree_dps_meter(false);
+        assert!(!s.reset_dps_meter(), "not asked for: no reset");
+        assert_eq!(answers(&mut s), [(251, vec![0x3B, 0x7E, 0])], "off: told at once, 0");
+        s.agree_dps_meter(true);
+        s.agree_dps_meter(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x3B, 0x7E, 1])], "on: asked once");
+        assert!(s.reset_dps_meter());
+        assert_eq!(answers(&mut s), [(251, vec![0x3D, 0x7E, 1])], "the reset");
+
+        // a fight of two lines: Dab's own 1000, Jib's 300 (120 its pet's), gone
+        // from the group; over, 1.5 s long, number 0x01020304
+        let body = [
+            1, 4, 3, 2, 1, 1, 0xDC, 5, 0, 0, 0x14, 5, 0, 0, 2, 0, 1, 0, 2, 1, 3, 0xE8, 3, 0, 0, 0, 0, 0, 0, 3, b'D', b'a', b'b', 2, 10, 0x2C, 1, 0, 0, 0x78, 0, 0, 0, 3, b'J', b'i', b'b',
+        ];
+        let mut m = vec![0x3C, 0x7E];
+        m.extend_from_slice(&body);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        let want = DpsMeter {
+            fight: 0x0102_0304,
+            over: true,
+            length_ms: 1500,
+            total: 1300,
+            count: 2,
+            place: 1,
+            lines: vec![
+                DpsLine { own: true, left: false, class: 3, damage: 1000, pet: 0, name: "Dab".into() },
+                DpsLine { own: false, left: true, class: 10, damage: 300, pet: 120, name: "Jib".into() },
+            ],
+        };
+        assert!(matches!(&ev[..], [Event::DpsMeter(got)] if *got == want), "{ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 1].to_vec());
+        assert!(!ev.iter().any(|e| matches!(e, Event::DpsMeter(_))), "cut short: {ev:?}");
+        let mut other = m.clone();
+        other[2] = 2;
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, other);
+        assert!(!ev.iter().any(|e| matches!(e, Event::DpsMeter(_))), "another layout: {ev:?}");
+
+        // the offer again (the next world entry): told afresh
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3A, 0x7E, 1]);
+        s.agree_dps_meter(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x3B, 0x7E, 1])], "a new offer is answered again");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.dps_meter_offer, "a new connection: no offer");
+        s.agree_dps_meter(true);
+        assert!(!s.reset_dps_meter());
+        assert_eq!(answers(&mut s), [], "a new connection: nothing asked before its offer");
     }
 
     /// A 0x00DB's tag: one byte after its body from a server that offered

@@ -341,6 +341,8 @@ pub struct Play {
     arrival: Vec<u32>,
     /// The group and the invitations.
     pub group: crate::group::Group,
+    /// The DPS meter's fights (`dpsmeter`), from a server that keeps one.
+    pub meter: crate::dpsmeter::Meter,
     /// `VIWndMBox` (mode 14).
     mbox: crate::dialog::MBox,
     /// The player's death camera (`m_pC1B0`) and the screen's fade; the
@@ -2619,7 +2621,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), meter: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2785,6 +2787,15 @@ impl Play {
                     self.group.roster(&ids, &names, me);
                 }
                 Event::RaidRoster { total, first, rows } => self.group.raid_page(total, first, rows),
+                // the DPS meter's fight as it stands (`dpsmeter`);
+                // `EQOA_DPS_TRACE`: each as read, on stderr
+                Event::DpsMeter(m) => {
+                    if std::env::var_os("EQOA_DPS_TRACE").is_some() {
+                        let lines: Vec<String> = m.lines.iter().map(|l| format!("{}{} {} (pet {}){}", l.name, if l.own { "*" } else { "" }, l.damage, l.pet, if l.left { " left" } else { "" })).collect();
+                        eprintln!("dps: fight {} {} {} ms, {} of {} lines (own place {}), whole {}: {}", m.fight, if m.over { "over" } else { "on" }, m.length_ms, m.lines.len(), m.count, m.place, m.total, lines.join(", "));
+                    }
+                    self.meter.take(m);
+                }
                 Event::GroupInvite { id, name, .. } => {
                     // Msg0773: refused at once while in a group
                     if self.group.in_group {
@@ -3313,6 +3324,7 @@ impl Play {
         // sent forgotten)
         self.session.agree_pet_effects(crate::settings::pet_effects());
         self.agree_number_tags();
+        self.agree_dps_meter();
         self.agree_quests();
         self.guide_wait(now);
         self.record_menu(); // Character > Combat Record once the server offers it
@@ -4715,6 +4727,11 @@ impl Play {
                     self.mode = 22;
                     return true;
                 }
+                // the DPS meter: its other view, Reset, a page on (`dpsmeter`)
+                Some(crate::hud::Pick::Meter(hit)) => {
+                    self.meter_point(hit);
+                    return true;
+                }
                 None => return false,
             };
             if let Some(id) = id.filter(|&id| id != self.target) {
@@ -5054,6 +5071,8 @@ impl Play {
             }
             "/t" | "/tell" => self.session.say(text, target),
             "/alarm" => self.alarm_command(&rest),
+            // the DPS meter's (`dpsmeter`), the client's own
+            "/dps" => self.dps_command(&rest),
             "/time" => self.do_action(0x0B0E_0008, 0),
             "/follow" => self.do_action(0x0B0E_0007, 0),
             // DoText while the GM's channel is on, else nothing (`adminplay`)
@@ -8550,6 +8569,7 @@ impl Play {
             group_waypoint: self.map.group_waypoint(self.world_id()).filter(|_| crate::settings::map()),
             minimap: self.minimap_up(),
             tracker: self.tracker_quests(),
+            meter: self.meter_shown(),
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
@@ -8844,6 +8864,110 @@ impl Play {
     /// Default, and to stop when every one is (`numcolor::wanted`).
     fn agree_number_tags(&mut self) {
         self.session.agree_number_tags(crate::numcolor::wanted(&crate::settings::number_colors()));
+    }
+
+    /// The DPS Meter: the server told what the Extended row says (off, the
+    /// fights kept forgotten); a reset Extended asked done; and the Combat
+    /// page's note while this server keeps no meter.
+    fn agree_dps_meter(&mut self) {
+        let want = crate::settings::dps_meter();
+        self.session.agree_dps_meter(want);
+        if !want {
+            self.meter = Default::default();
+        }
+        if crate::dpsmeter::take_reset() {
+            self.dps_reset();
+        }
+        let note = (!self.session.dps_meter_offer).then_some("This server keeps no meter");
+        if self.options_wnd.meter_note.as_deref() != note {
+            self.options_wnd.meter_note = note.map(str::to_string);
+        }
+    }
+
+    /// The meter cleared, and the server told to drop the fight under way.
+    fn dps_reset(&mut self) {
+        self.meter.reset();
+        self.session.reset_dps_meter();
+    }
+
+    /// What the DPS meter's panel shows while it is up: the DPS Meter on, a
+    /// server that keeps one, the HUD's right side up (`right_hud_up`).
+    fn meter_shown(&self) -> Option<crate::dpsmeter::Shown> {
+        (crate::settings::dps_meter() && self.session.dps_meter_offer && self.right_hud_up()).then(|| self.meter.shown(crate::settings::dps_view(), &self.pet_name))
+    }
+
+    /// The meter's other view (Fight or Overall), from its list's top.
+    fn dps_toggle_view(&mut self) {
+        let mut c = crate::settings::client();
+        c.dps_view = c.dps_view.other();
+        crate::settings::set_client(c);
+        self.meter.first = 0;
+    }
+
+    /// A click or a tap on the DPS meter (`hud::Pick::Meter`): its title's view
+    /// the other, Reset, or a page on through its rows.
+    fn meter_point(&mut self, hit: crate::dpsmeter::Hit) {
+        use crate::dpsmeter::Hit;
+        match hit {
+            Hit::View => self.dps_toggle_view(),
+            Hit::Reset => self.dps_reset(),
+            Hit::Rows => {
+                let first = self.meter.first;
+                self.meter.first = self.hud.as_ref().map_or(0, |h| h.2.meter_page(first));
+            }
+        }
+        self.cues.push(crate::sound::Cue::Ui(8));
+    }
+
+    /// The wheel's `lines` over the DPS meter (`Hud::meter_wheel`): true when
+    /// it took it.
+    pub fn meter_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
+        let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        let first = self.meter.first;
+        match self.hud.as_ref().filter(|_| self.mode == 0).and_then(|h| h.2.meter_wheel(f, lines, first)) {
+            Some(to) => {
+                self.meter.first = to;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `/dps` (`dpsmeter::command`): the meter's other view, a view named, a
+    /// reset, the meter on or off (as the Extended row, kept by Save Changes),
+    /// or how to type it; each said in the chat box, and that the meter is off
+    /// when a view or a reset was asked of it off.
+    fn dps_command(&mut self, arg: &str) {
+        use crate::dpsmeter::{Command, View};
+        let offer = self.session.dps_meter_offer;
+        let cmd = crate::dpsmeter::command(arg);
+        let line = match cmd {
+            Command::On(on) => {
+                crate::settings::set_client(crate::settings::ClientOptions { dps_meter: on, ..crate::settings::client() });
+                match (on, offer) {
+                    (false, _) => "The DPS meter is off.",
+                    (true, true) => "The DPS meter is on.",
+                    (true, false) => "The DPS meter is on, but this server keeps no meter.",
+                }
+            }
+            Command::Help => crate::dpsmeter::HELP,
+            _ if !offer => "This server keeps no DPS meter.",
+            Command::Reset => {
+                self.dps_reset();
+                "The DPS meter is reset."
+            }
+            Command::Toggle | Command::Show(_) => {
+                let mut c = crate::settings::client();
+                c.dps_view = if let Command::Show(v) = cmd { v } else { c.dps_view.other() };
+                crate::settings::set_client(c);
+                self.meter.first = 0;
+                if c.dps_view == View::Fight { "The DPS meter shows the fight." } else { "The DPS meter shows every fight since the login." }
+            }
+        };
+        self.add_chat(line.to_string(), [1.0; 4]);
+        if offer && !crate::settings::dps_meter() && matches!(cmd, Command::Toggle | Command::Show(_) | Command::Reset) {
+            self.add_chat("The DPS meter is off: Extended > Combat, or /dps on.".to_string(), [1.0; 4]);
+        }
     }
 
     /// The Raid List: the server told what the Extended row says, and off, what it
@@ -10998,6 +11122,89 @@ mod commands {
         set(0, "default");
         p.agree_number_tags();
         assert_eq!(answers(&mut p), vec![vec![0x39, 0x7E, 0]], "every row Default: stopped");
+        crate::settings::testing::reset(false);
+    }
+
+    /// The DPS Meter asks a server that offered a meter (0x7E3A) for it while
+    /// the Extended row is on (0x7E3B 1, once) and stops it off (0, the fights
+    /// kept forgotten); Extended's Reset and `/dps reset` clear it and tell the
+    /// server (0x7E3D); `/dps` turns its view and says so; the Combat page says
+    /// when this server keeps none. The controls: no offer, nothing asked, no
+    /// reset sent, and `/dps` says the server keeps none.
+    #[test]
+    fn the_dps_meter_asks_resets_and_answers_dps() {
+        struct Rec(std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>);
+        impl net::session::Datagrams for Rec {
+            fn send_to(&mut self, d: &[u8], _: [u8; 4], _: u16) {
+                self.0.borrow_mut().push(d.to_vec());
+            }
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        use crate::dpsmeter::View;
+        crate::settings::testing::reset(false);
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.self_id = Some(0x100);
+        let mut p = Play::new(s, Player::default(), Box::default());
+        let ours = |p: &mut Play| -> Vec<Vec<u8>> {
+            p.session.flush();
+            let m = guaranteed(&sent.borrow()).into_iter().filter(|m| m.len() >= 2 && m[1] == 0x7E && matches!(m[0], 0x3B | 0x3D)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        let fight = |n: u32, over: bool| net::session::DpsMeter {
+            fight: n,
+            over,
+            length_ms: 4000,
+            total: 400,
+            count: 1,
+            place: 1,
+            lines: vec![net::session::DpsLine { own: true, class: 3, damage: 400, name: "Dab".into(), ..Default::default() }],
+        };
+        let said = |p: &Play| p.chat.back().map(|(t, _)| t.clone()).unwrap_or_default();
+        // off by default: nothing asked, offer or none
+        p.agree_dps_meter();
+        assert!(ours(&mut p).is_empty());
+        assert_eq!(p.options_wnd.meter_note.as_deref(), Some("This server keeps no meter"));
+        crate::settings::set_client(crate::settings::ClientOptions { dps_meter: true, ..crate::settings::client() });
+        p.agree_dps_meter();
+        assert!(ours(&mut p).is_empty(), "no offer: nothing asked");
+        p.chat_line("/dps reset");
+        assert_eq!((said(&p), ours(&mut p)), ("This server keeps no DPS meter.".to_string(), vec![]), "no offer: no reset sent");
+        p.session.dps_meter_offer = true;
+        p.agree_dps_meter();
+        p.agree_dps_meter();
+        assert_eq!(ours(&mut p), vec![vec![0x3B, 0x7E, 1]], "on: asked once");
+        assert_eq!(p.options_wnd.meter_note, None);
+        // a fight, then Extended's Reset: cleared and the server told
+        p.meter.take(fight(5, false));
+        assert_eq!(p.meter.shown(View::Fight, "").rows.len(), 1);
+        crate::dpsmeter::ask_reset();
+        p.agree_dps_meter();
+        assert_eq!(ours(&mut p), vec![vec![0x3D, 0x7E, 1]], "Extended's Reset: the server told");
+        assert!(p.meter.shown(View::Fight, "").rows.is_empty() && !crate::dpsmeter::take_reset(), "cleared, the ask taken");
+        // /dps: the views, a reset, off and on
+        p.meter.take(fight(6, true));
+        p.chat_line("/dps");
+        assert_eq!((crate::settings::dps_view(), said(&p)), (View::Overall, "The DPS meter shows every fight since the login.".to_string()));
+        assert_eq!(p.meter.shown(View::Overall, "").rows[0].damage, 400, "the ended fight in Overall");
+        p.chat_line("/dps fight");
+        assert_eq!(crate::settings::dps_view(), View::Fight);
+        p.chat_line("/dps reset");
+        assert_eq!((said(&p), ours(&mut p)), ("The DPS meter is reset.".to_string(), vec![vec![0x3D, 0x7E, 1]]));
+        assert!(p.meter.shown(View::Overall, "").rows.is_empty());
+        p.chat_line("/dps what");
+        assert_eq!(said(&p), crate::dpsmeter::HELP);
+        p.chat_line("/dps off");
+        assert!(!crate::settings::dps_meter());
+        p.meter.take(fight(7, false));
+        p.agree_dps_meter();
+        assert_eq!(ours(&mut p), vec![vec![0x3B, 0x7E, 0]], "off: stopped");
+        assert!(p.meter.shown(View::Fight, "").rows.is_empty(), "off: its fights forgotten");
+        p.chat_line("/dps overall");
+        assert_eq!(said(&p), "The DPS meter is off: Extended > Combat, or /dps on.");
         crate::settings::testing::reset(false);
     }
 

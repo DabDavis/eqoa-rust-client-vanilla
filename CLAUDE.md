@@ -22,6 +22,9 @@ current.
   that tags them (the server owner's of 2026-11-09, "we can add the number colors to extended menu": `numcolor`,
   go-eqoa-server's 0x7E38/0x7E39 and one byte after 0x00DB's body, Extended > Number Colors; every row Default, the
   game's own colour, until chosen),
+  a DPS meter of the player's group on a server that keeps one (the server owner's of 2026-11-10, "lets add dps meters,
+  will work solo, group, raid": `dpsmeter`, go-eqoa-server's 0x7E3A-0x7E3D, a HUD panel under the quest tracker,
+  `/dps`, Extended > Combat, off by default; off, or on any other server, nothing is drawn or asked),
   Ignore Shouts kept, Update Notices, Text Sharp or Smooth, Loading Screens Longer or Instant, Render
   Scale x1, x2 or x4 (off unless chosen), HUD Nearest or Sharp (Nearest, the game's, by default: the
   user's of 2026-10-28, "make nearest the default ... since there is a cost"; Sharp was the default
