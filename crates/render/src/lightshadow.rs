@@ -105,12 +105,13 @@ pub const NEAR: f32 = 0.5;
 /// texels off the surface along its normal (times the sine of the angle to
 /// the light), so no texel of the tent finds the surface itself in front of
 /// it. The shadow's edge is soft over about the reach, and moves as smoothly
-/// as a light or a caster does: the four comparisons half a texel apart
-/// before it (a reach of 1.5) let each texel that flipped as a light moved by
-/// a hair change the shadow up to half its depth at once (a page's one
-/// comparison, all of it), so every edge crawled a texel at a time under a
-/// moving light and showed the texels' steps up close (the owner's "blocky
-/// and also jittery").
+/// as a light or a caster does: through the four comparisons half a texel
+/// apart before it (a reach of 1.5) each texel that flipped as a light moved
+/// by a hair moved the shadow a quarter of its depth at once, a row of them
+/// along the map's grid half (a page's one comparison, all of it), so every
+/// edge crawled a texel at a time under a moving light and showed the
+/// texels' steps up close (the owner's "blocky and also jittery"); through
+/// the tent a texel is at most a ninth, a row a third.
 pub const REACH: f32 = if cfg!(any(target_arch = "wasm32", target_os = "android")) { 2.0 } else { 3.0 };
 
 /// The texels each side of a face past its 90°: the filter's texels
@@ -350,9 +351,10 @@ const PLANT_LINE_SHADOWED: &str =
 
 /// lightshadow.wgsl's filter: the tent of radius 3 ([`REACH`]), nine
 /// bilinear comparisons; in a page and on Android the tent of radius 2
-/// ([`NARROW`]), four, at a page's 256 a side as wide in the world as the
-/// nine at 512 and under half their texture reads at every fragment a
-/// shadowed light reaches.
+/// ([`NARROW`]), four: at a page's 256 a side a little wider in the world
+/// than the nine at 512 (four of 512's texels each way to their three), and
+/// under half their texture reads at every fragment a shadowed light
+/// reaches.
 const WIDE: &str = "    // the tent of radius 3: texels −2 to 3 from b weigh (1 − |k − fr| / 3) / 3,
     // paired (−2, −1) (0, 1) (2, 3): weights (3 − 2fr, 5, 1 + 2fr) / 9
     let w0 = 3.0 - 2.0 * fr;
