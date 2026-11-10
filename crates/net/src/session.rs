@@ -336,6 +336,32 @@ pub const OP_NUMBER_TAGS_OFFER: u16 = 0x7E38;
 /// of a figure the player or its pet made carries one byte after its body
 /// ([`number_tag`]); every other is the retail body.
 pub const OP_NUMBER_TAGS_ANSWER: u16 = 0x7E39;
+/// go-eqoa-server's own, no retail message: a raid's windows (`raid`; the GM
+/// Jibrish's petitions 1448 and 1451: the leader's mark, the loot rolls' pop-up,
+/// the master looter's Assign and Abandon). The offer, server to client once the
+/// player is in the world: a u8, 1. CLIENT has no such case, so a PS2 ignores it
+/// and is told the same in chat lines; nothing is asked of a server that made no
+/// offer.
+pub const OP_RAID_OFFER: u16 = 0x7E42;
+/// The answer to [`OP_RAID_OFFER`], client to server, at once and whenever it
+/// changes (`agree_raid`): a u8, 1 to be sent the raid's state, its rolls and
+/// the master looter's list, 0 for the chat lines a PS2 gets.
+pub const OP_RAID_ANSWER: u16 = 0x7E43;
+/// The raid as it is, to a client that answered 1, on a change and once all
+/// zero when it is in no raid: `raid::read_state`.
+pub const OP_RAID_STATE: u16 = 0x7E44;
+/// A loot roll offered, or over for this client (0 seconds left):
+/// `raid::read_roll`.
+pub const OP_RAID_ROLL: u16 = 0x7E45;
+/// A roll's answer, client to server: `raid::roll_choice`. The server answers
+/// with the roll over ([`OP_RAID_ROLL`], 0 seconds).
+pub const OP_RAID_ROLL_CHOICE: u16 = 0x7E46;
+/// To the master looter, after the corpse it opened (0x0018): whom it may give
+/// the corpse's items to, and for how long; 0 when that is over:
+/// `raid::read_master_loot`.
+pub const OP_RAID_MASTER_LOOT: u16 = 0x7E47;
+/// The raid menu's commands, client to server: `raid::Command`.
+pub const OP_RAID_COMMAND: u16 = 0x7E48;
 
 /// What made a figure, the byte after a tagged 0x00DB's body
 /// ([`OP_NUMBER_TAGS_ANSWER`]): its kind and whether the player's pet made it.
@@ -593,6 +619,13 @@ pub enum Event {
     GroupRoster { ids: Vec<u32>, names: Vec<String> },
     /// [`OP_RAID_ROSTER`]: a message's part of the whole raid group.
     RaidRoster { total: usize, first: usize, rows: Vec<RaidMember> },
+    /// [`OP_RAID_STATE`]: the raid as it is now.
+    RaidState(crate::raid::State),
+    /// [`OP_RAID_ROLL`]: a loot roll offered, or over (0 seconds left).
+    RaidRoll(crate::raid::Roll),
+    /// [`OP_RAID_MASTER_LOOT`]: the master looter's list for the corpse it
+    /// opened, or none (over).
+    MasterLoot(Option<crate::raid::MasterLoot>),
     /// 0x0773 (`Msg0773`): an invitation from `id`.
     GroupInvite { id: u32, x: i32, name: String },
     /// 0x0774 (`Msg0774`): the invitation from `id` withdrawn.
@@ -805,6 +838,10 @@ pub struct Session {
     /// on this connection, and what it was last told (none since the offer).
     pub number_tags_offer: bool,
     number_tags_asked: Option<bool>,
+    /// Whether the server offered the raid's windows ([`OP_RAID_OFFER`]) on
+    /// this connection, and what it was last told (none since the offer).
+    pub raid_offer: bool,
+    raid_asked: Option<bool>,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -961,6 +998,8 @@ impl Session {
             pet_effects_at: 0,
             number_tags_offer: false,
             number_tags_asked: None,
+            raid_offer: false,
+            raid_asked: None,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -1211,6 +1250,45 @@ impl Session {
         let mut w = Writer::op(OP_NUMBER_TAGS_ANSWER);
         w.u8(want as u8);
         self.send(&w.data);
+    }
+
+    /// The raid's windows: a server that offered them ([`OP_RAID_OFFER`]) is
+    /// told whether to send them (`want`), at once and whenever that changes,
+    /// and afresh at another offer; one that made no offer is told nothing.
+    pub fn agree_raid(&mut self, want: bool) {
+        if !self.raid_offer || self.raid_asked == Some(want) {
+            return;
+        }
+        self.raid_asked = Some(want);
+        let mut w = Writer::op(OP_RAID_ANSWER);
+        w.u8(want as u8);
+        self.send(&w.data);
+    }
+
+    /// Whether the server is sending the raid's windows: it offered them and
+    /// was told yes.
+    pub fn raid_windows(&self) -> bool {
+        self.raid_offer && self.raid_asked == Some(true)
+    }
+
+    /// A roll's answer ([`OP_RAID_ROLL_CHOICE`]) to a server that offered the
+    /// raid's windows; false, and nothing sent, to any other.
+    pub fn send_roll_choice(&mut self, id: u32, c: crate::raid::Choice) -> bool {
+        if !self.raid_offer {
+            return false;
+        }
+        self.send(&crate::raid::roll_choice(id, c));
+        true
+    }
+
+    /// A raid command ([`OP_RAID_COMMAND`]) to a server that offered the
+    /// raid's windows; false, and nothing sent, to any other.
+    pub fn send_raid_command(&mut self, c: crate::raid::Command) -> bool {
+        if !self.raid_offer {
+            return false;
+        }
+        self.send(&c.bytes());
+        true
     }
 
     /// The pet's effects the server last sent that are not over at `now`
@@ -1758,6 +1836,27 @@ impl Session {
                     self.number_tags_asked = None;
                 }
             }
+            // the raid's windows offered (again at every world entry): told
+            // afresh whether the client wants them (`agree_raid`)
+            OP_RAID_OFFER => {
+                r.u8();
+                if !r.error {
+                    self.raid_offer = true;
+                    self.raid_asked = None;
+                }
+            }
+            OP_RAID_STATE => match crate::raid::read_state(&m.data[2.min(m.data.len())..]) {
+                Some(st) => ev.push(Event::RaidState(st)),
+                None => eprintln!("net: a raid state of {} bytes not read", m.data.len()),
+            },
+            OP_RAID_ROLL => match crate::raid::read_roll(&m.data[2.min(m.data.len())..]) {
+                Some(roll) => ev.push(Event::RaidRoll(roll)),
+                None => eprintln!("net: a loot roll of {} bytes not read", m.data.len()),
+            },
+            OP_RAID_MASTER_LOOT => match crate::raid::read_master_loot(&m.data[2.min(m.data.len())..]) {
+                Some(ml) => ev.push(Event::MasterLoot(ml)),
+                None => eprintln!("net: a master looter's list of {} bytes not read", m.data.len()),
+            },
             0x0013 => {
                 // SetTime: each clock moved to the server's reading at the
                 // local timer's now
@@ -2868,6 +2967,57 @@ mod tests {
         m.pop();
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m);
         assert!(!ev.iter().any(|e| matches!(e, Event::RaidRoster { .. })), "a short one: {ev:?}");
+    }
+
+    /// The raid's windows (0x7E42-0x7E48): answered only after an offer, once,
+    /// when the answer changes and afresh at another offer; the state, a roll,
+    /// its end and the master looter's list read into events, and a short one
+    /// not; a roll's choice and a command sent only to a server that offered.
+    #[test]
+    fn the_raid_windows_are_agreed_read_and_sent() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let ours = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        ours(&mut s);
+        s.agree_raid(true);
+        assert!(!s.send_roll_choice(3, crate::raid::Choice::Need) && !s.send_raid_command(crate::raid::Command::Leave));
+        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "no offer: nothing (the control)");
+        assert!(!s.raid_windows());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x42, 0x7E, 1]);
+        s.agree_raid(true);
+        s.agree_raid(true);
+        assert_eq!(ours(&mut s), [vec![0x43, 0x7E, 1]], "once");
+        assert!(s.raid_windows());
+        s.agree_raid(false);
+        assert_eq!(ours(&mut s), [vec![0x43, 0x7E, 0]], "when it changes");
+        assert!(!s.raid_windows());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x42, 0x7E, 1]);
+        s.agree_raid(false);
+        assert_eq!(ours(&mut s), [vec![0x43, 0x7E, 0]], "afresh at another offer");
+        assert!(s.send_roll_choice(3, crate::raid::Choice::Need));
+        assert!(s.send_raid_command(crate::raid::Command::Kick(0x1234)));
+        assert_eq!(ours(&mut s), [vec![0x46, 0x7E, 3, 0, 0, 0, 1], vec![0x48, 0x7E, 11, 0x34, 0x12, 0, 0]]);
+
+        let mut st = vec![0x44, 0x7E];
+        st.extend([1, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 2, 3]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, st.clone());
+        assert!(matches!(&ev[..], [Event::RaidState(x)] if x.leader == 1 && x.helper == 2 && x.rule == 2 && x.leads()), "{ev:?}");
+        st.pop();
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, st);
+        assert!(!ev.iter().any(|e| matches!(e, Event::RaidState(_))), "a short one: {ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x45, 0x7E, 9, 0, 0, 0, 0, 0]);
+        assert!(matches!(&ev[..], [Event::RaidRoll(r)] if r.id == 9 && r.seconds == 0 && r.item.is_none()), "{ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x45, 0x7E, 9, 0, 0, 0, 120, 0, 1]);
+        assert!(!ev.iter().any(|e| matches!(e, Event::RaidRoll(_))), "a roll without its item: {ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x47, 0x7E, 0]);
+        assert!(matches!(&ev[..], [Event::MasterLoot(None)]), "{ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x47, 0x7E, 1, 44, 1, 1, 5, 0, 0, 0, 2, b'B', b'o']);
+        assert!(matches!(&ev[..], [Event::MasterLoot(Some(m))] if m.seconds == 300 && m.members == [(5, "Bo".to_string())]), "{ev:?}");
     }
 
     // go-eqoa-server's others' power (0x7E01, 0x7E02: mana bars, which this
