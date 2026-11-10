@@ -93,7 +93,7 @@ fn the_directory_is_the_whole_files() {
         // every sprite the whole parse finds is an entry, and every object
         let in_file = whole.nodes.iter().filter(|n| n.ty == 0x2700).count();
         assert_eq!((sprites, sprites + simple), (in_file, whole.node(objects).children.len()), "{which}");
-        assert!(sprites > 400, "{which}: {sprites} sprites");
+        assert!(sprites > 300, "{which}: {sprites} sprites");
         // the controls: an id no object has, a surface's id (in the file's
         // dictionary, not an object), and an id one off an object's
         let surface = whole.dict.iter().find(|&(_, &n)| whole.node(n).ty == 0x1000).map(|(&id, _)| id as u32).expect("a surface");

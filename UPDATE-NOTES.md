@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-10 · No more hitch when a server's own races load at character select
+- On a server with races of its own (hill giants, fungusmen, kerrans, wisps...), character select and character
+  creation used to stutter for a moment while those races' bodies were read off your disc: the whole 148 MB creature
+  file was read for a handful of bodies, and in the browser it was held in the page's memory. Now only the bodies
+  themselves are read (a few MB), in the background. Everything looks the same; the bodies just arrive sooner
+  and without the pause, and the browser page uses about 280 MB less memory there.
+
 ## 2026-11-10 · The PS2 loader linked from the browser page
 - Playing on PCSX2 or a real PS2? The browser page's start screen now links eqoaclassic's loader (EQOABOOT.ELF and how
   to use it: your own unmodified disc, no patched ISO). On a server that offers no loader nothing new is shown.
