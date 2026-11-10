@@ -6,6 +6,17 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · Firefox and WebGL2: no more long crashes
+- In a browser drawing with WebGL2 (Firefox on Linux, Mac or a phone, older Safari), when the browser's
+  graphics stopped (its graphics process restarting, the driver resetting) the game went black and ran
+  on unseen for about a minute, using more and more memory, until it stopped with an unreadable error.
+  Now it stops at once and says what happened, with Reload.
+- With Light Shadows on in WebGL2, the shadows are drawn the way they were before today's soft edges,
+  which ask less of the graphics card. A browser drawing with WebGPU (Chrome, Edge) and the game you
+  download keep the soft edges.
+- If a browser's graphics refuse Dynamic Lighting, Sun Shadows or Light Shadows, that option is left off
+  with a notice saying so, instead of the game stopping every time you enter the world.
+
 ## 2026-11-10 · Wisps cast no shadow, gargoyles swim, the goblin chieftain's cape
 - A Wisp no longer casts a shadow: there is no round shadow under it, and with Sun Shadows or Light Shadows on,
   nothing of it casts one, not its armour, its weapons, its helm, its cape or the wisp itself. Its shadow was a
