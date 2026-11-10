@@ -54,12 +54,27 @@ pub fn worn_by_a_race(model: u32, races: Option<&Creation>) -> bool {
     model != 0 && (races.is_some_and(|c| c.races.iter().any(|r| r.body.contains(&model))) || crate::raceopts::offered_body(model))
 }
 
+/// Bodies whose shield node their own animations leave at another size than
+/// their other item nodes, and the FixScale that puts it right: the fairy's
+/// (go-eqoa-server's race 19, 0x7A85646C, on both discs). The pixie and the
+/// fairy are a hand high on a skeleton two metres tall, and their animations
+/// draw what they hold at 0.3 by scaling the item nodes; the pixie's do so on
+/// all three, the fairy's on its two hands' and not on its shield's, node 16
+/// (no vertex is skinned to it), so a shield hung there was drawn three and a
+/// third times the size of the fairy (`eqoa dress 7A85646C ... shield=...`).
+const SHIELD_FIX: &[(u32, f32)] = &[(0x7A85_646C, 0.3)];
+
 /// `cs`, made of `model`, holds items when it is a player's character
 /// (`player`) in a body one of the server's races wears (`races`), its shield
-/// on the off hand's hand when it names no node for one; otherwise it keeps
-/// its header's word and its nodes. Whether it holds items after.
+/// on the off hand's hand when it names no node for one, and its shield node
+/// at its hands' size where its animations leave it at another
+/// (`SHIELD_FIX`); otherwise it keeps its header's word and its nodes.
+/// Whether it holds items after.
 pub fn grant(cs: &mut CSprite<Ee>, model: u32, player: bool, races: Option<&Creation>) -> bool {
-    if !cs.holds_items && player && worn_by_a_race(model, races) {
+    if !player || !worn_by_a_race(model, races) {
+        return cs.holds_items;
+    }
+    if !cs.holds_items {
         cs.holds_items = true;
         if cs.item_nodes[2] < 0
             && let Some(off) = usize::try_from(cs.item_nodes[1]).ok().and_then(|i| cs.h.nodes.get(i))
@@ -69,6 +84,11 @@ pub fn grant(cs: &mut CSprite<Ee>, model: u32, player: bool, races: Option<&Crea
             // the shield itself
             cs.item_nodes[2] = if off.parent > 0 { off.parent } else { cs.item_nodes[1] };
         }
+    }
+    if let Some(&(_, fix)) = SHIELD_FIX.iter().find(|(b, _)| *b == model)
+        && let Some(n) = usize::try_from(cs.item_nodes[2]).ok().and_then(|i| cs.h.nodes.get_mut(i))
+    {
+        n.fix_scale = vi::vect::Vect3::of(fix, fix, fix);
     }
     cs.holds_items
 }

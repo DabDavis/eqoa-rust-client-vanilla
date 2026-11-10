@@ -126,9 +126,136 @@ const SHELLED: &[u32] = &[0x6AF98A81, 0x45A8B064, 0x198BAA64, 0x648DFC11, 0x6AF9
 /// player's only; an NPC keeps none, as a PS2 draws it.
 const HEAD_HELMS: &[u32] = &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347];
 
+/// The node a seat's helm hangs on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Anchor {
+    /// The body's node of the human's helm node's name (`named_helm_node`): a
+    /// child of its head at the top of it, where SOE's 2002 goblins and orcs
+    /// named their helm node (Frontiers' bodies keep the node and name none).
+    Named,
+    /// The node the body names for its head (NodeIDList slot 7).
+    Head,
+}
+
+/// How a player's helm sits on a body one of the server's races may wear that
+/// names no helm node of its own: the node it hangs on, and the seat past it
+/// (`HelmFit`: the helm, as it sits on a human's helm node, stretched about the
+/// node and moved, in the node's frame; every head node and named node of these
+/// bodies has the model's axes in the bind pose, as the human's helm node has,
+/// so the seat is a stretch and a move alone). A family's bodies share a
+/// skeleton and a head.
+#[derive(Clone, Copy, Debug)]
+pub struct HeadSeat {
+    pub bodies: &'static [u32],
+    pub anchor: Anchor,
+    pub scale: [f32; 3],
+    pub offset: [f32; 3],
+}
+
+/// The seats (`HeadSeat`), by family, judged by eye with `eqoa dress <body> ...
+/// helm=4 frame=head helmseat=...` (the contact sheets in the lane's notes):
+/// the head inside the helm as a human's is, the face out of its opening, a
+/// snout, a beak or a muzzle through the front, ears, horns and crests through
+/// the sides and top. Where a body has a node of the human's helm node's name
+/// at the top of its head (a goblin, an orc, a gargoyle, a giant, a brownie, a
+/// dryad) it hangs there; the goblins' and the orcs' at SOE's own 2002 scale. On
+/// the lizardman's skeleton (the gnolls and minotaurs share it), the kobold's
+/// and the ratman's that node is at the neck or under the jaw, and the
+/// froglok's, kerran's, aviak's, kappa's, pixie's, fairy's and satyr's have
+/// none: those hang on the head node, moved up to the top of the head. The
+/// fungusmen have none here: their cap is their head, and a helm either hides
+/// under it or swallows the body (`HEADLESS`).
+pub const HEAD_SEATS: &[HeadSeat] = &[
+    // the giants (hill, ice, sand, fire, cyclops, the reaver and the king; the
+    // women): the head four times a human's, the named node at the crown
+    HeadSeat { bodies: &[0xFFB1_EA2C, 0x8117_C627, 0xE617_303B, 0x72A8_FDBB, 0x7F26_04DF, 0x05F5_9B65, 0x2D68_6972, 0xBF6A_DFDB, 0xF345_01CB, 0x286C_6E9E, 0x8E2A_6552, 0xE308_27CC], anchor: Anchor::Named, scale: [4.2; 3], offset: [0.0, 0.30, -0.05] },
+    // the goblins: SOE's own seat, as the 2002 disc's goblins name their helm
+    // node (the named node) and scale it 0.9
+    HeadSeat { bodies: GOBLINS, anchor: Anchor::Named, scale: [0.9; 3], offset: [0.0, 0.0, 0.0] },
+    // the gargoyles, their heads on the goblin's skeleton's
+    HeadSeat { bodies: &[0xB4D2_D132, 0x4E2A_945C, 0xAEC5_D9F6, 0x0013_55C8, 0x6D95_9FD9, 0x9304_BAB5], anchor: Anchor::Named, scale: [1.1; 3], offset: [0.0, 0.04, 0.0] },
+    // the orcs on the orc's skeleton: SOE's 2002 orc's (its helm node the named
+    // node, scaled 1.19)
+    HeadSeat { bodies: &[0x8214_A32D, 0x84F4_7767, 0x656D_D4C5, 0xB2FB_D7EF, 0x0A03_EB92, 0xDA51_5962], anchor: Anchor::Named, scale: [1.19; 3], offset: [0.0, 0.0, 0.0] },
+    // the Deathfist orcs, on HumanMale's and HumanFemale's skeletons (the fire
+    // weaver names a helm node of its own)
+    HeadSeat { bodies: &[0x37FD_13F9, 0x3198_F5B1, 0x0205_D208, 0xC76F_1FA8, 0xE144_942F], anchor: Anchor::Named, scale: [1.05; 3], offset: [0.0, 0.0, 0.0] },
+    // the brownies, on HumanMale's skeleton, a head half again a human's
+    HeadSeat { bodies: &[0x4376_EB52, 0x4946_8331], anchor: Anchor::Named, scale: [1.9; 3], offset: [0.0, 0.19, -0.03] },
+    // the dryads, on HumanFemale's
+    HeadSeat { bodies: &[0x70EF_CE05, 0x21F3_11BB, 0xACE7_1E26, 0xB90A_DDD2], anchor: Anchor::Named, scale: [1.0; 3], offset: [0.0, 0.0, 0.0] },
+    // the lizardmen, gnolls and minotaurs, one skeleton
+    HeadSeat { bodies: &[0x9112_20E2, 0xD45B_9F1F, 0x2C1D_8724, 0x7468_EAE7, 0x16BB_9E24, 0xEEBF_6DA5], anchor: Anchor::Head, scale: [1.4; 3], offset: [0.0, 0.36, 0.10] },
+    HeadSeat {
+        bodies: &[
+            0xCF41_5561, 0x223F_D6BC, 0xF5F3_A450, 0x097B_FC70, 0xB7B2_1DFC, 0x4A9B_AB9E, 0x17DA_0FEB, 0x7492_678E, 0x585E_5ED9, 0x16BA_0BD3, 0x3C6D_3677, 0xC2D7_DD2F, 0x71F1_63CA, 0xC3B9_4FA5, 0x147A_C3EE, 0x09E0_AE7D, 0xB156_28DA, 0xCE06_735E, 0x2EDA_50DC,
+            0x16E3_20F7,
+        ],
+        anchor: Anchor::Head,
+        scale: [1.45; 3],
+        offset: [0.0, 0.35, 0.10],
+    },
+    HeadSeat { bodies: &[0xC5CB_F4CF, 0x0AE7_1D02], anchor: Anchor::Head, scale: [1.7; 3], offset: [0.0, 0.40, 0.14] },
+    // the kobolds and the ratmen
+    HeadSeat { bodies: &[0xCFC4_78EE, 0x6B9B_7016, 0x5973_25B5, 0x9CDF_3C2D], anchor: Anchor::Head, scale: [1.75; 3], offset: [0.0, 0.30, 0.05] },
+    HeadSeat { bodies: &[0xBADC_25C9, 0x0ECC_836A, 0x133A_79CA, 0x46BA_26A9], anchor: Anchor::Head, scale: [1.2; 3], offset: [0.0, 0.22, 0.04] },
+    // the frogloks: a head three times a human's across and half again as tall
+    HeadSeat { bodies: &[0x141B_FE0C, 0x429A_04AB, 0x063C_5D97, 0x0F23_9012, 0x6F17_325E, 0x1663_EC1C], anchor: Anchor::Head, scale: [2.4, 1.6, 2.0], offset: [0.0, 0.48, 0.12] },
+    HeadSeat {
+        bodies: &[0x2217_6258, 0x4D9C_53EF, 0x77A7_E7B8, 0x78FA_8F20, 0x0DDD_4087, 0x5D40_C8AB, 0xB749_BF57, 0xB620_92E4, 0xE700_DE53, 0x39FE_AA5F, 0x7654_AC3C, 0xD8E0_F980],
+        anchor: Anchor::Head,
+        scale: [1.05; 3],
+        offset: [0.0, 0.23, 0.05],
+    },
+    // the aviaks: the hens' heads (the hawk's and the green robe's) smaller
+    HeadSeat { bodies: &[0x3151_DF13, 0x262C_572A, 0xDC64_1055, 0x41EF_F500, 0x3C3D_E6CA, 0xC04C_EC07, 0xB1EE_B204, 0x8B33_2785, 0x246B_5FED, 0x5585_143C], anchor: Anchor::Head, scale: [1.6; 3], offset: [0.0, 0.24, 0.08] },
+    HeadSeat { bodies: &[0x8EFD_12EA, 0xF83B_D167], anchor: Anchor::Head, scale: [1.4; 3], offset: [0.0, 0.20, 0.04] },
+    HeadSeat { bodies: &[0x31A1_5F17, 0xC3EC_4F58, 0xF674_7024, 0xF0FA_B933], anchor: Anchor::Head, scale: [1.0; 3], offset: [0.0, 0.19, 0.04] },
+    HeadSeat { bodies: &[0x94BA_77CD, 0x7A85_646C], anchor: Anchor::Head, scale: [0.3; 3], offset: [0.0, 0.10, 0.007] },
+    HeadSeat { bodies: &[0xBE10_226F, 0x097A_DB18], anchor: Anchor::Head, scale: [1.1; 3], offset: [0.0, 0.28, 0.03] },
+];
+
+/// The bodies a server's race may wear that have no head a helm can sit on:
+/// the fungusmen's three, whose head is their cap (a helm hangs under it, out
+/// of sight, or swallows the body to the waist). They wear none, as before.
+#[cfg(test)]
+pub const HEADLESS: &[u32] = &[0x4A4D_88FB, 0x5874_ACFC, 0xE8B0_ADC8];
+
+/// The goblins' bodies: go-eqoa-server's race 13's own (0x6C1308E0) and every
+/// one its options offer (its tribes, robed and not, and their chiefs).
+pub const GOBLINS: &[u32] = &[
+    0x6C13_08E0, 0x581B_6A80, 0x9637_1804, 0xBCDF_0C04, 0xE961_79D4, 0xA5F9_2F43, 0x6C7C_07ED, 0xBE92_7B85, 0xCEF5_874A, 0xEDB4_E0AD, 0x687E_7645, 0x2ECB_B95A, 0xB656_DFEA, 0xEC08_85EB, 0x1F8E_11D3, 0x3AB9_6672, 0xF54C_2142, 0x1245_E56B, 0x27A4_E554, 0x5937_EA22, 0x507C_4A52,
+    0xEE1D_DFBA, 0x1CCD_F0EF, 0x2F34_B867,
+];
+
+/// Body `id`'s helm seat, when a server's race may wear it (`HEAD_SEATS`).
+pub fn head_seat(id: u32) -> Option<&'static HeadSeat> {
+    HEAD_SEATS.iter().find(|s| s.bodies.contains(&id))
+}
+
+/// The node a seat's helm hangs on, on body `id` (`cs` its sprite): its named node
+/// or its head's; none when it has no such node.
+fn seat_node(lib: &Library, id: u32, cs: &CSprite<Ee>, seat: &HeadSeat) -> Option<i32> {
+    match seat.anchor {
+        Anchor::Named => named_helm_node(lib, id, cs.sex != 0),
+        Anchor::Head => Some(cs.node_ids[7]).filter(|&n| n >= 0),
+    }
+}
+
+/// How body `id`'s helm is seated past the node `seat_node` names: a player's
+/// in a body of `HEAD_SEATS` that names no helm node of its own, in the art it
+/// is drawn in (the 2002 disc's goblins and some of its orcs name one, SOE's);
+/// none for any other body, an NPC, or with the dressing turned off.
+pub fn head_fit(id: u32, cs: &CSprite<Ee>, player: bool) -> Option<HelmFit> {
+    if !player || !enabled() || cs.node_ids[8] >= 0 {
+        return None;
+    }
+    head_seat(id).map(|s| HelmFit { scale: Vec3::from(s.scale), offset: Vec3::from(s.offset) })
+}
+
 /// Body `id`'s node of the same ref id as the human's helm node (HumanFemale's for
 /// `female`).
-fn named_helm_node(lib: &Library, id: u32, female: bool) -> Option<i32> {
+pub(crate) fn named_helm_node(lib: &Library, id: u32, female: bool) -> Option<i32> {
     let h = Human::load(lib, female)?;
     let hid = if female { vi::hash::hash_resource_id("HumanFemale") } else { vi::hash::hash_resource_id("HumanMale") };
     let (hr, br) = (crate::raceemote::Rig::load(lib, hid)?, crate::raceemote::Rig::load(lib, id)?);
@@ -281,17 +408,40 @@ fn worn(changes: &[LayerChange]) -> [(Option<u32>, Option<[u8; 4]>); SLOTS] {
     out
 }
 
+/// The worn slots (chest, bracer, gloves, legs, boots) body `cs` draws nothing
+/// for (`model` built from it): its TSlotList names no palette entry for the
+/// slot, or the entry it names has no triangle with the layer it names. All
+/// five on a slotless body, none on a player race's.
+pub fn lacking(model: &esf::Model, cs: &CSprite<Ee>) -> [bool; SLOTS] {
+    std::array::from_fn(|i| {
+        let (entry, layer) = cs.text_slots[i];
+        entry == -1 || !model.batches.iter().any(|b| b.material == entry && usize::try_from(layer).is_ok_and(|l| l < b.layers.len()) && !b.indices.is_empty())
+    })
+}
+
 /// Where the look puts the armour on a slotless body: `model` (the body as
 /// `build_model` made it, `id` its DictID) gains a batch for each slot the
 /// look gives art to, drawn over the body's own triangles there; a body that
 /// wears a human's armour (`SHELLED`) gains the human's surfaces there
-/// instead, and loses its own triangles under them. False when nothing was
-/// added (no art worn, a body this cannot fit, or turned off).
+/// instead, and loses its own triangles under them. A body whose TSlotList
+/// names some of the five worn slots and not the others (`lacking`: most of
+/// the creatures' bodies the server's races may choose, the froglok's, the
+/// kerran's, the aviak's, the gnoll's, the orc's ...: a chest, bracers and
+/// legs, no gloves or boots) keeps its own as `vi::cust` dresses them, as a
+/// PS2 does, and gains the ones it lacks as a slotless body would, over the
+/// triangles none of its own worn slots' entries draw (`bare_part`). False
+/// when nothing was added (no art worn, a body this cannot fit, one with all
+/// five slots of its own, or turned off).
 /// The look's textures resolve as `has` says, by the tables `t`, as
 /// `vi::cust::apply_look_with` dresses a body with slots.
 #[allow(clippy::too_many_arguments)]
 pub fn dress(lib: &Library, id: i32, model: &mut esf::Model, cs: &CSprite<Ee>, look: &Look, helm_worn: bool, has: impl Fn(u32) -> bool, t: &Tables) -> bool {
-    if !enabled() || !is_slotless(cs) {
+    if !enabled() {
+        return false;
+    }
+    let slotless = is_slotless(cs);
+    let lacks = lacking(model, cs);
+    if !slotless && !lacks.contains(&true) {
         return false;
     }
     let changes = vi::cust::apply_look_slots(&slots(), cs.race, cs.sex, look, helm_worn, &has, t);
@@ -304,6 +454,10 @@ pub fn dress(lib: &Library, id: i32, model: &mut esf::Model, cs: &CSprite<Ee>, l
     let unrobed = vi::cust::apply_look_slots(&slots(), cs.race, cs.sex, &Look { robe: -1, ..*look }, helm_worn, &has, t);
     let robed = art[3].is_some() && worn(&unrobed)[3].0 != art[3];
     let fit = fit_of(lib, id, model, cs, art, robed);
+    if !slotless {
+        let Some(fit) = fit else { return false };
+        return apply(model, &bare_part(model, cs, &fit, lacks), &changes);
+    }
     if SHELLED.contains(&(id as u32))
         && let Some(shell) = shell_of(lib, id, cs, art)
     {
@@ -463,6 +617,22 @@ pub fn apply(model: &mut esf::Model, fit: &Fit, changes: &[LayerChange]) -> bool
     added
 }
 
+/// The part of `fit` (body `cs`'s, `model` built from it, fitted whole as a
+/// slotless body is: its rig, girths and slots read off all its skin) that a
+/// body with some worn slots of its own wears: the slots it lacks (`lacks`),
+/// on the triangles of no palette entry its own worn slots name. A triangle
+/// its own slot dresses keeps that slot's art, as on a PS2, even where a
+/// human would wear another piece there (a froglok's feet in its legs' entry
+/// wear its legs); one on its skin takes the piece the slot it lacks puts
+/// there (its hands the gloves, its feet the boots), and one the fit gives a
+/// slot it has stays its own.
+fn bare_part(model: &esf::Model, cs: &CSprite<Ee>, fit: &Fit, lacks: [bool; SLOTS]) -> Fit {
+    let own: Vec<i32> = (0..SLOTS).filter(|&i| !lacks[i]).map(|i| cs.text_slots[i].0).collect();
+    let owned: std::collections::HashSet<([u32; 3], Option<u8>)> =
+        model.batches.iter().filter(|b| own.contains(&b.material)).flat_map(|b| b.indices.chunks_exact(3).map(move |t| ([t[0], t[1], t[2]], b.lod))).collect();
+    Fit { tris: std::array::from_fn(|i| if lacks[i] { fit.tris[i].iter().filter(|t| !owned.contains(&(t.v, t.lod))).cloned().collect() } else { Vec::new() }), layers: fit.layers.clone() }
+}
+
 /// A human's armour for one look, to put on a body whose skeleton is the
 /// human's (`SHELLED`): per slot with art, the triangles of the human's slot
 /// material that show in it (any of their points on an opaque texel: the
@@ -525,6 +695,14 @@ pub fn helm_node(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool) -> i32 
     if own < 0 && player && enabled() && HEAD_HELMS.contains(&id) {
         return named_helm_node(lib, id, cs.sex != 0).unwrap_or(cs.node_ids[7]);
     }
+    // a body a server's race may wear (`HEAD_SEATS`): its seat's node
+    if own < 0
+        && player
+        && enabled()
+        && let Some(n) = head_seat(id).and_then(|s| seat_node(lib, id, cs, s))
+    {
+        return n;
+    }
     if own >= 0 || !player || !enabled() || !SHELLED.contains(&id) {
         return own;
     }
@@ -549,7 +727,7 @@ pub fn helm_on(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, set: u8, 
             l.color = tint;
         }
     }
-    if fit && let Some(f) = helm_fit(lib, id, player) {
+    if fit && let Some(f) = helm_fit(lib, id, player).or_else(|| head_fit(id, cs, player)) {
         f.apply(&mut m);
     }
     Some((node, m))
@@ -2869,5 +3047,115 @@ mod tests {
                 });
             }
         }
+    }
+
+    /// Every body go-eqoa-server's races may wear (its race's own and every one its
+    /// options offer, `entity/raceoptions.go`, with the hill giant's armour bodies),
+    /// each a label for the survey.
+    const SURVEY: &[(u32, &str)] = &[
+        (0x141BFE0C, "froglok"), (0x429A04AB, "froglok robed"), (0x063C5D97, "froglok spiked"), (0x0F239012, "ghoul"), (0x6F17325E, "ghoul robed"), (0x1663EC1C, "ghoul spiked"),
+        (0xFFB1EA2C, "hill giant"), (0x8117C627, "ice giant"), (0xE617303B, "sand giant"), (0x72A8FDBB, "fire giant"), (0x7F2604DF, "fire giant vest"), (0x05F59B65, "cyclops"), (0x2D686972, "fire giant reaver"), (0xBF6ADFDB, "fire giant king"),
+        (0xF34501CB, "hill giant F"), (0x286C6E9E, "ice giant F"), (0x8E2A6552, "sand giant F"), (0xE30827CC, "cyclops F"),
+        (0x22176258, "kerran tiger"), (0x4D9C53EF, "kerran tiger robed"), (0x77A7E7B8, "kerran white tiger"), (0x78FA8F20, "kerran lion"), (0x0DDD4087, "kerran lion clothed"), (0x5D40C8AB, "kerran maned lion"),
+        (0xB749BF57, "kerran tiger F"), (0xB62092E4, "kerran robed F"), (0xE700DE53, "kerran red tiger F"), (0x39FEAA5F, "kerran lioness F"), (0x7654AC3C, "kerran lioness robed F"), (0xD8E0F980, "kerran lioness warrior F"),
+        (0x6C1308E0, "goblin grey"), (0x581B6A80, "goblin grey robed"), (0x96371804, "goblin green"), (0xBCDF0C04, "goblin green robed"), (0xE96179D4, "goblin ice"), (0xA5F92F43, "goblin ice robed"), (0x6C7C07ED, "goblin fire"), (0xBE927B85, "goblin fire robed"), (0xCEF5874A, "goblin fire shaman"),
+        (0xEDB4E0AD, "goblin gladiator"), (0x687E7645, "goblin purple robe"), (0x2ECBB95A, "goblin overseer"), (0xB656DFEA, "goblin skull mask"), (0xEC0885EB, "goblin bandit"), (0x1F8E11D3, "goblin high priest"), (0x3AB96672, "goblin warlord"), (0xF54C2142, "goblin warmaster"),
+        (0x1245E56B, "goblin soothsayer"), (0x27A4E554, "goblin wizard"), (0x5937EA22, "goblin mystic"), (0x507C4A52, "goblin chieftain"), (0xEE1DDFBA, "goblin poacher"), (0x1CCDF0EF, "goblin inquisitor"), (0x2F34B867, "goblin king"),
+        (0x3151DF13, "aviak hawk"), (0x8EFD12EA, "aviak hawk F"), (0x262C572A, "aviak hawk robed"), (0xDC641055, "aviak raven"), (0x41EFF500, "aviak raven robed"), (0x3C3DE6CA, "aviak vulture"), (0xC04CEC07, "aviak vulture robed"), (0xB1EEB204, "aviak owl"), (0x8B332785, "aviak owl robed"),
+        (0x246B5FED, "aviak raven gown"), (0x5585143C, "aviak raven black"), (0xF83BD167, "aviak hawk green robe"),
+        (0x911220E2, "lizardman strapped"), (0xD45B9F1F, "lizardman pauldrons"), (0x2C1D8724, "lizardman bare"), (0x7468EAE7, "lizardman robed"), (0x16BB9E24, "lizardman hierophant"), (0xEEBF6DA5, "lizardman grey"),
+        (0x31A15F17, "kappa brown"), (0xC3EC4F58, "kappa marked"), (0xF6747024, "kappa banded"), (0xF0FAB933, "kappa straw hat"),
+        (0x4376EB52, "brownie"), (0x49468331, "brownie elder"), (0x94BA77CD, "pixie"), (0x7A85646C, "fairy"),
+        (0xCF415561, "gnoll black"), (0x223FD6BC, "gnoll captain"), (0xF5F3A450, "gnoll blue-pawed"), (0x097BFC70, "gnoll black robed"), (0xB7B21DFC, "gnoll elder"), (0x4A9BAB9E, "gnoll black and tan"), (0x17DA0FEB, "gnoll scout"), (0x7492678E, "gnoll bt robed"),
+        (0x585E5ED9, "gnoll teal robe"), (0x16BA0BD3, "gnoll green robe"), (0x3C6D3677, "gnoll packlord"), (0xC2D7DD2F, "gnoll bt armour"), (0x71F163CA, "gnoll grey"), (0xC3B94FA5, "gnoll grey armour"), (0x147AC3EE, "gnoll red scarf"), (0x09E0AE7D, "gnoll grey robed"),
+        (0xB15628DA, "gnoll grey gown"), (0xCE06735E, "gnoll grey red robe"), (0x2EDA50DC, "gnoll reanimated"), (0x16E320F7, "gnoll reanimated robed"),
+        (0x8214A32D, "orc"), (0x84F47767, "orc long hair"), (0x656DD4C5, "orc grey mail"), (0x37FD13F9, "orc deathfist"), (0x3198F5B1, "orc deathfist kilt"), (0xB2FBD7EF, "orc hatebone elder"), (0xB086ADA7, "orc fire weaver"),
+        (0x0A03EB92, "orc F"), (0xDA515962, "orc grey mail F"), (0x0205D208, "orc healer F"), (0xC76F1FA8, "orc slayer F"), (0xE144942F, "orc chieftain F"),
+        (0xCFC478EE, "kobold"), (0x6B9B7016, "kobold augur"), (0x597325B5, "kobold patched"), (0x9CDF3C2D, "kobold pauldrons"),
+        (0xC5CBF4CF, "minotaur black"), (0x0AE71D02, "minotaur brown"),
+        (0xBADC25C9, "ratman"), (0x0ECC836A, "ratman hooded"), (0x133A79CA, "ratman hooded pauldrons"), (0x46BA26A9, "ratman trickster"),
+        (0xBE10226F, "satyr"), (0x097ADB18, "faun F"),
+        (0x70EFCE05, "dryad"), (0x21F311BB, "erych guardian"), (0xACE71E26, "haliai"), (0xB90ADDD2, "erych arbiter"),
+        (0x6AF98A81, "skeleton"), (0x45A8B064, "skeleton old"), (0x198BAA64, "skeleton mossy"), (0x648DFC11, "skeleton frost"), (0x6AF98A82, "great bone"), (0x197F51C7, "great old bone"), (0x90F16A6F, "great mossy"), (0x7D9F41B2, "great frost"),
+        (0x4A4D88FB, "fungus blue"), (0x5874ACFC, "fungus red"), (0xE8B0ADC8, "fungus pale"),
+        (0xB4D2D132, "gargoyle granite"), (0x4E2A945C, "gargoyle moss"), (0xAEC5D9F6, "gargoyle ice"), (0x001355C8, "gargoyle obsidian"), (0x6D959FD9, "gargoyle shadow"), (0x9304BAB5, "gargoyle fire"),
+        (0xF51BAB09, "jalraeth robes"), (0x4B24FF7E, "jalraeth channeler"), (0x491F6347, "jalraeth knight"),
+    ];
+
+    /// What each body a server's race may wear draws of a full set, as a player's
+    /// character (run with `--ignored --nocapture`): its text slots, the made-up
+    /// batches in plate and in a robe, the helm's node and the items' nodes.
+    #[test]
+    #[ignore]
+    fn survey_race_bodies() {
+        let Some(lib) = disc() else { return };
+        let t = Tables::retail();
+        let hm = crate::raceemote::Rig::load(&lib, vi::hash::hash_resource_id("HumanMale")).unwrap();
+        let human_refs: std::collections::HashSet<i32> = hm.refs.iter().flatten().copied().collect();
+        let races = net::creation::Creation { all_classes: true, races: SURVEY.iter().map(|&(b, _)| net::creation::Race { id: 11, like: 0, city: 0, bonus: [0; 7], class_mask: 0, body: [b, b], name: String::new(), short: String::new(), desc: String::new() }).collect() };
+        for &(id, label) in SURVEY {
+            let Some(r) = lib.lookup(id as i32) else {
+                eprintln!("{id:08X} {label}: NOT ON THE DISC");
+                continue;
+            };
+            let model = lib.build_model(r).unwrap();
+            let mut cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+            let hdr = cs.holds_items;
+            crate::racebody::grant(&mut cs, id, true, Some(&races));
+            let tris = |m: &esf::Model, e: i32, l: i32| m.batches.iter().filter(|b| b.material == e && (l as usize) < b.layers.len()).map(|b| b.indices.len() / 3).sum::<usize>();
+            let own: Vec<String> = (0..5).map(|i| { let (e, l) = cs.text_slots[i]; if e == -1 { "-".into() } else { format!("{e}/{l}:{}", tris(&model, e, l)) } }).collect();
+            let made = |look: &Look| {
+                let mut m = model.clone();
+                crate::play::dress_look(&lib, id as i32, &mut m, &cs, look, false, &t, true);
+                (0..5).map(|i| tris(&m, ENTRY + i as i32, 0)).collect::<Vec<_>>()
+            };
+            let plate = made(&Look { armor: [4; 6], robe: -1, ..Default::default() });
+            let robe = made(&Look { armor: [4; 6], robe: 1, ..Default::default() });
+            let helm = helm_on(&lib, id, &cs, true, 4, [255; 4], &t, true).map(|(n, _)| n);
+            let rig = Rig::of_sprite(&cs).is_some();
+            let br = crate::raceemote::Rig::load(&lib, id).unwrap();
+            let shared = br.refs.iter().flatten().filter(|r| human_refs.contains(r)).count();
+            eprintln!(
+                "{id:08X} {label:28} nodes {:2} shared {:2} sex {} hdr {} | own {:?} | slotless {} rig {} plate {:?} robe {:?} | n7 {} n8 {} helm {:?} named {:?} | items {:?} | head {}",
+                cs.h.nodes.len(), shared, cs.sex, hdr as u8, own, is_slotless(&cs) as u8, rig as u8, plate, robe, cs.node_ids[7], cs.node_ids[8], helm,
+                named_helm_node(&lib, id, cs.sex != 0),
+                [cs.item_node(0), cs.item_node(1), cs.item_node(2)],
+                head_info(&model, &cs)
+            );
+        }
+        for name in ["HumanMale", "HumanFemale"] {
+            let id = vi::hash::hash_resource_id(name);
+            let r = lib.lookup(id as i32).unwrap();
+            let model = lib.build_model(r).unwrap();
+            let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+            let h = cs.node_ids[8] as usize;
+            let w = glam::Mat4::from_cols_array_2d(&cs.h.nodes[h].inv_bind_world.to_cols()).inverse();
+            let helm = helm_on(&lib, id, &cs, true, 4, [255; 4], &t, true).unwrap().1;
+            let (lo, hi) = helm.pos.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| { let q = w.transform_point3(Vec3::from(*p)); (lo.min(q), hi.max(q)) });
+            eprintln!("{name}: n7 {} n8 {} fix {:?} | head {} | helm 4 in the model {lo:.3} .. {hi:.3}", cs.node_ids[7], cs.node_ids[8], cs.h.nodes[h].fix_scale.to_array(), head_info(&model, &cs));
+        }
+    }
+
+    /// A body's head as the survey prints it: the head node's place in the bind
+    /// pose, the vertices on it or under it and their bounds (model space).
+    fn head_info(model: &esf::Model, cs: &CSprite<Ee>) -> String {
+        let head = cs.node_ids[7];
+        if head < 0 {
+            return "none".into();
+        }
+        let under = |mut n: i32| {
+            while n >= 0 && (n as usize) < cs.h.nodes.len() {
+                if n == head {
+                    return true;
+                }
+                n = cs.h.nodes[n as usize].parent;
+            }
+            false
+        };
+        let at = glam::Mat4::from_cols_array_2d(&cs.h.nodes[head as usize].inv_bind_world.to_cols()).inverse().transform_point3(Vec3::ZERO);
+        let pts: Vec<Vec3> = (0..model.pos.len()).filter(|&v| bone_of(model, v).is_some_and(|b| under(b as i32))).map(|v| Vec3::from(model.pos[v])).collect();
+        let (lo, hi) = pts.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+        let top = cs.h.nodes.iter().map(|n| glam::Mat4::from_cols_array_2d(&n.inv_bind_world.to_cols()).inverse().transform_point3(Vec3::ZERO).y).fold(f32::MIN, f32::max);
+        format!("node at {at:.3}, {} verts {lo:.3} .. {hi:.3}, skeleton top {top:.3}", pts.len())
     }
 }

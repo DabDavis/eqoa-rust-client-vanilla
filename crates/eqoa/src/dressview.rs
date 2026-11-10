@@ -33,6 +33,11 @@
 //! disc's art (`$EQOA_2002_ISO`), as the world draws them with F9.
 //! `frame=head` frames the views on the head (the node the body names for
 //! it and the nodes under it) instead of the body.
+//! `helmseat=A,sx,sy,sz,ox,oy,oz` (or `A,s,ox,oy,oz`) seats the helm on node
+//! `A` (`named`: the body's node of the human's helm node's name; `head`: its
+//! head's; or a node's number) stretched and moved as given in that node's
+//! frame, in place of the seat the body has (`slotless::HEAD_SEATS`): to
+//! judge a seat by before writing it down.
 
 use esf::Library;
 use glam::{Mat4, Vec3};
@@ -77,6 +82,16 @@ pub struct Words {
     pub y2002: bool,
     /// Framed on the head alone.
     pub head: bool,
+    /// A helm seat tried in place of the body's (`helmseat=`): the node (by
+    /// `slotless::Anchor`, or a node's number) and the fit.
+    pub seat: Option<(SeatNode, crate::slotless::HelmFit)>,
+}
+
+/// The node a tried helm seat hangs on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SeatNode {
+    Anchor(crate::slotless::Anchor),
+    Node(i32),
 }
 
 /// What a list of words names: the look, the items held, the idle's time and
@@ -88,6 +103,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
     let mut cape = net::cape::Cape::default();
     let (mut opts, mut sex) = (None, 0);
     let (mut helm_fit, mut y2002, mut head) = (true, false, false);
+    let mut seat = None;
     let nums = |v: &str| v.split(',').map(|n| n.trim().parse::<u8>().map_err(|e| format!("{v}: {e}"))).collect::<Result<Vec<u8>, String>>();
     let hex = |w: &str, v: &str| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|e| format!("{w}: {e}"));
     for w in words {
@@ -133,6 +149,21 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             "sex" => sex = v.parse().map_err(|e| format!("{w}: {e}"))?,
             "helm" => look.armor[5] = nums(v)?[0],
             "helmfit" => helm_fit = v != "0",
+            "helmseat" => {
+                let parts: Vec<&str> = v.split(',').collect();
+                let node = match parts[0] {
+                    "named" => SeatNode::Anchor(crate::slotless::Anchor::Named),
+                    "head" => SeatNode::Anchor(crate::slotless::Anchor::Head),
+                    n => SeatNode::Node(n.parse().map_err(|e| format!("{w}: {e}"))?),
+                };
+                let f: Vec<f32> = parts[1..].iter().map(|n| n.trim().parse::<f32>().map_err(|e| format!("{w}: {e}"))).collect::<Result<_, _>>()?;
+                let (scale, offset) = match f.len() {
+                    4 => (glam::Vec3::splat(f[0]), glam::Vec3::new(f[1], f[2], f[3])),
+                    6 => (glam::Vec3::new(f[0], f[1], f[2]), glam::Vec3::new(f[3], f[4], f[5])),
+                    _ => return Err(format!("{w}: helmseat=A,s,ox,oy,oz or A,sx,sy,sz,ox,oy,oz")),
+                };
+                seat = Some((node, crate::slotless::HelmFit { scale, offset }));
+            }
             "frame" => match v {
                 "head" => head = true,
                 "body" => head = false,
@@ -152,7 +183,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             _ => return Err(format!("{w}: not a word of a look")),
         }
     }
-    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex, helm_fit, y2002, head })
+    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex, helm_fit, y2002, head, seat })
 }
 
 /// The body drawn in the look, holding what `words` say, from four sides
@@ -197,10 +228,41 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     let before = mesh.batches.len();
     // the helm, on its node and seated as a player's character wears it
     let t = vi::cust::Tables::retail();
-    let helm = crate::slotless::helm_on(lib, model as u32, &cs, true, look.armor[5], look.helm_color(&t), &t, words.helm_fit);
+    let mut helm = crate::slotless::helm_on(lib, model as u32, &cs, true, look.armor[5], look.helm_color(&t), &t, words.helm_fit);
+    // a seat tried in place of the body's (`helmseat=`)
+    if let Some((at, fit)) = words.seat {
+        let node = match at {
+            SeatNode::Anchor(crate::slotless::Anchor::Named) => crate::slotless::named_helm_node(lib, model as u32, cs.sex != 0).unwrap_or(-1),
+            SeatNode::Anchor(crate::slotless::Anchor::Head) => cs.node_ids[7],
+            SeatNode::Node(n) => n,
+        };
+        helm = (node >= 0)
+            .then(|| vi::cust::helm_with(look.armor[5], &t))
+            .flatten()
+            .and_then(|h| lib.lookup(h as i32))
+            .and_then(|r| lib.build_model(r))
+            .map(|mut m| {
+                let tint = look.helm_color(&t);
+                m.batches.iter_mut().flat_map(|b| b.layers.iter_mut()).for_each(|l| l.color = tint);
+                fit.apply(&mut m);
+                (node, m)
+            });
+    }
     if look.armor[5] != 0 {
         match &helm {
-            Some((node, _)) => eprintln!("helm {} on node {node}{}", look.armor[5], if !words.helm_fit { " (no fit)" } else if crate::slotless::helm_fit(lib, model as u32, true).is_some() { " (fitted)" } else { "" }),
+            Some((node, _)) => eprintln!(
+                "helm {} on node {node}{}",
+                look.armor[5],
+                if words.seat.is_some() {
+                    " (seat tried)"
+                } else if !words.helm_fit {
+                    " (no fit)"
+                } else if crate::slotless::helm_fit(lib, model as u32, true).or_else(|| crate::slotless::head_fit(model as u32, &cs, true)).is_some() {
+                    " (fitted)"
+                } else {
+                    ""
+                }
+            ),
             None => eprintln!("helm {}: none on this body", look.armor[5]),
         }
     }

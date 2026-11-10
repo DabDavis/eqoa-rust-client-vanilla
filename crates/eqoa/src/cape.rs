@@ -105,6 +105,16 @@ pub fn style(id: u8) -> Option<&'static Style> {
     STYLES.iter().find(|s| s.id == id)
 }
 
+/// The bodies of a server's races that stand crouched, so a cape sized on
+/// their bind pose hung to the ground and past it: the goblins' (race 13's own
+/// body and every one its options offer, `slotless::GOBLINS`; the owner,
+/// 2026-11-10: "on goblins they are too big"). A goblin is bound standing up
+/// (its shoulders 1.11 over the ground) and rests in a crouch (0.79), its
+/// pelvis, which the cape's lower half hangs from, a third lower, so its cape
+/// is sized as it stands (`standing`). The kobold and the froglok crouch too
+/// and are left as they are (their capes were not asked about).
+const CROUCHED: &[u32] = crate::slotless::GOBLINS;
+
 /// The bodies of a server's races that wear no cape: wings where it would
 /// hang (the pixie's and the fairy's, 0x94BA77CD and 0x7A85646C, and the
 /// gargoyle's, 0xB4D2D132), which it would cut through.
@@ -344,7 +354,7 @@ pub fn model(lib: &Library, cape: Cape, wearer: u32, cs: &CSprite<Ee>) -> Option
                     p
                 }
             };
-            let f = fit(&src, &Bones::of(cs), &body, &poses).map(Rc::new);
+            let f = fit(&src, &Bones::of(cs), &body, &poses, CROUCHED.contains(&wearer)).map(Rc::new);
             FITTED.with(|c| c.borrow_mut().insert(key, f.clone()));
             f
         }
@@ -379,10 +389,16 @@ fn tint(m: &mut esf::Model, color: u32) {
 /// then settled on the body, posed as `poses` (skin palettes: `palettes`), so
 /// no part of it shows through (`settle`). `EQOA_CAPE_DEBUG=1` says which way
 /// and by what measures; `EQOA_CAPE_PLAIN=1` leaves it unsettled, to compare.
-fn fit(src: &Source, to: &Bones, body: &esf::Model, poses: &[Vec<glam::Mat4>]) -> Option<esf::Model> {
+fn fit(src: &Source, to: &Bones, body: &esf::Model, poses: &[Vec<glam::Mat4>], crouched: bool) -> Option<esf::Model> {
     let debug = std::env::var_os("EQOA_CAPE_DEBUG").is_some();
     let into = Frame::of(to, body);
-    let mut m = placed(src, to, into.as_ref(), debug)?;
+    // a body that stands crouched (`CROUCHED`): sized as it stands, not as it
+    // is bound
+    let stand = into.as_ref().filter(|_| crouched).and_then(|f| standing(f, to, poses)).unwrap_or(Vec3::ONE);
+    if debug && crouched {
+        eprintln!("cape: crouched, sized as it stands: {stand:?}");
+    }
+    let mut m = placed(src, to, into.as_ref(), stand, debug)?;
     if let Some(f) = into.as_ref().filter(|_| std::env::var_os("EQOA_CAPE_PLAIN").is_none()) {
         settle(&mut m, to, f, body, poses, debug);
     }
@@ -431,9 +447,24 @@ fn palettes(lib: &Library, wearer: u32) -> Vec<Vec<glam::Mat4>> {
     out
 }
 
+/// How much lower a body stands than it is bound, as a cape's size goes
+/// (`CROUCHED`): its shoulders' height over the ground in the pose it rests in
+/// (`palettes`' first) over their height in the bind pose, as a scale on the
+/// cape's height alone (its width is the torso's, which a crouch does not
+/// narrow: a cape narrowed with it let a goblin's back and knees through); None
+/// when the body has no rest pose. A goblin's 0.70.
+fn standing(f: &Frame, to: &Bones, poses: &[Vec<glam::Mat4>]) -> Option<Vec3> {
+    let rest = poses.first()?;
+    let upper = |s: usize| f.arms[s][f.arms[s].len() - 3];
+    let at = |i: usize| rest.get(i).map_or(to.bind[i], |m| m.transform_point3(to.bind[i]));
+    let posed = (at(upper(0)).y + at(upper(1)).y) * 0.5;
+    let k = ((posed - f.ground) / (f.shoulder_y - f.ground).max(1e-3)).clamp(0.5, 1.0);
+    Some(Vec3::new(1.0, k, 1.0))
+}
+
 /// `src` on the skeleton `to` (frame `into`), before it is settled on the
-/// body (`fit`).
-fn placed(src: &Source, to: &Bones, into: Option<&Frame>, debug: bool) -> Option<esf::Model> {
+/// body (`fit`); `stand` the share of its size the body stands at (`standing`).
+fn placed(src: &Source, to: &Bones, into: Option<&Frame>, stand: Vec3, debug: bool) -> Option<esf::Model> {
     if src.bones.same(to) {
         if debug {
             eprintln!("cape: on its own skeleton");
@@ -464,7 +495,7 @@ fn placed(src: &Source, to: &Bones, into: Option<&Frame>, debug: bool) -> Option
             let (f, i) = (from?, into?);
             let (map, anchor) = Frame::roles(f, &src.bones, i, to);
             let (scale, dz) = spread(f, i, &src.bones, to, &map, false);
-            (map, anchor, scale, dz)
+            (map, anchor, scale * stand, dz)
         }
     };
     if debug {
