@@ -73,7 +73,10 @@ current.
   the parts' triangles too; every row's first step is the body as it is, byte for byte), and an NPC's body in a
   server's tint on a server that names one (the server owner's of 2026-11-10, Yhafiran "the black and green oriental
   dragon" on the disc's green one: `npctint.rs`, `net::npctint`, go-eqoa-server's 0x7E3E-0x7E40; untinted, the body
-  byte for byte as before)).
+  byte for byte as before), and a monster's name and level in the target's details box on a server that offers it (the GM
+  Jibrish's petition 1459, 2026-11-10, "This should ONLY show the monsters name and level, nothing else": Q's talk sent
+  as ever, the server's answer 0x7E4E drawn as CLIENT draws a pet's for 3 s or while Q is held, `Play::mob_info_shown`,
+  go-eqoa-server's `world.mob_info`, 0x7E4C-0x7E4E; on any other server, or a monster that talks, the game's)).
   A new client-side addition is the user's call: ask first. Sharp filtering is for the 2D layer and
   the text only: the world's textures are drawn smooth, as the game filters them (the user,
   2026-10-27, after a Crisp row for them: "world textures cant render proper without smooth. so

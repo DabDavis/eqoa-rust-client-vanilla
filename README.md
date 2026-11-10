@@ -603,6 +603,17 @@ or a browser (each described where it lives below):
   (`play::apply`). No tint, a white one or alpha 0 draws the body byte for byte as before, and so does every server
   that sends none; a PS2 draws the green dragon. `eqoa shot <file> <model> <out.png> [camera] tint=RRGGBBAA` (and
   `eqoa view ... tint=`) draws a model in one: Yhafiran's 0x2A7333FF (red 0.16, green 0.45, blue 0.20).
+- **A monster's name and level on Q**, on a server that offers it (the GM Jibrish's petition 1459, 2026-11-10:
+  "press the mob information button on monster (Q by default on keyboard). This should ONLY show the monsters name
+  and level, nothing else"; go-eqoa-server's `world.mob_info`, its offer 0x7E4C, this client's answer 0x7E4D and its
+  answer to a talk 0x7E4E; `Play::mob_info_shown`): Q (□) on a monster sends the game's talk (0x0004) as ever, and
+  when the server answers that the monster has nothing to say (or stands out of the talk's reach), its name and the
+  server's level are drawn in the target's details box as CLIENT's `DrawTargetInfo` draws a pet's (the name, then word
+  503 and the level), for `MOB_INFO_MS` (3 s) from the answer however short the press (a tap is let go before the
+  answer comes; the petition asks for a press) and as long as the press is held, as a player's details are; a click
+  is a tap. Another press of □ or Q, a change of target, a menu or the map opened, or the monster's death or leaving
+  view closes it sooner. A monster that talks still talks, any other server is as before, and a PS2 on the same server
+  is shown the two lines in a dialogue box.
 - **The combat record**, on a server that keeps one (go-eqoa-server's offer, 0x7E20,
   and its record, 0x7E21; Sandstorm and eqoa.live have none, and show no entry): the
   start menu's Character > Combat Record, the client's own window (`record.rs`,

@@ -6,6 +6,13 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · A monster's name and level on Q
+- On a server that turns it on, pressing Q (□ on a controller) on a monster that has nothing to say shows its name
+  and level, and nothing else, in the same small window a player's details open in, for about 3 seconds (or for as
+  long as you hold Q). Pressing Q again, another target or opening a menu closes it sooner.
+- It works from any distance, as a player's details do. A monster you can talk to still talks, and Q on everything
+  else is as it was.
+
 ## 2026-11-10 · Community > Group > Raid is there
 - On a server with raids, Community > Group now shows Raid, right after Leave, where you see it without
   scrolling: the start menu dropped it each time it opened. Roll and Follow are now below it (scroll down).
