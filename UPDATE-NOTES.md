@@ -7,8 +7,9 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 ## 2026-11-10 · A monster's name and level on Q
-- On a server that turns it on, holding Q (□ on a controller) on a monster that has nothing to say shows its name
-  and level, and nothing else, in the same small window a player's details open in. Let go of Q and it closes.
+- On a server that turns it on, pressing Q (□ on a controller) on a monster that has nothing to say shows its name
+  and level, and nothing else, in the same small window a player's details open in, for about 3 seconds (or for as
+  long as you hold Q). Pressing Q again, another target or opening a menu closes it sooner.
 - It works from any distance, as a player's details do. A monster you can talk to still talks, and Q on everything
   else is as it was.
 

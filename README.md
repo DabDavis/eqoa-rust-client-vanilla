@@ -607,9 +607,11 @@ or a browser (each described where it lives below):
   answer to a talk 0x7E4E; `Play::mob_info_shown`): Q (□) on a monster sends the game's talk (0x0004) as ever, and
   when the server answers that the monster has nothing to say (or stands out of the talk's reach), its name and the
   server's level are drawn in the target's details box as CLIENT's `DrawTargetInfo` draws a pet's (the name, then word
-  503 and the level), while the press is held, as a player's details are; let go before the answer came, nothing
-  opens. The answer is its target's while it stays the target and alive. A monster that talks still talks, any
-  other server is as before, and a PS2 on the same server is shown the two lines in a dialogue box.
+  503 and the level), for `MOB_INFO_MS` (3 s) from the answer however short the press (a tap is let go before the
+  answer comes; the petition asks for a press) and as long as the press is held, as a player's details are; a click
+  is a tap. Another press of □ or Q, a change of target, a menu or the map opened, or the monster's death or leaving
+  view closes it sooner. A monster that talks still talks, any other server is as before, and a PS2 on the same server
+  is shown the two lines in a dialogue box.
 - **The combat record**, on a server that keeps one (go-eqoa-server's offer, 0x7E20,
   and its record, 0x7E21; Sandstorm and eqoa.live have none, and show no entry): the
   start menu's Character > Combat Record, the client's own window (`record.rs`,
