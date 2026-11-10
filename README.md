@@ -1267,7 +1267,8 @@ at character select, with the build or without) ever holds the world, 133 MB for
 Homelands. In headless Chromium with the image in the system's cache the first build
 takes 1.4 s (the worker up and the disc listed 0.26 s, the 19 zones read and written
 0.43 s, the file read back 0.69 s) and a later visit's check of the copy kept 0.4 s; in
-Firefox 1.8-2.4 s and 0.6 s; end to end at character select on a loaded machine, 5.4 s.
+Firefox 1.8-2.4 s and 0.6 s; with the image out of the cache on a busy machine (load
+35) about 3 s in either; end to end at character select on a loaded machine, 3.7-5.4 s.
 A notice at the page's top says how far it has come, and a character played meanwhile
 waits for it (`pregame::client`'s `held_pick`: in a page alone, a minute at most), so the
 server places it by what the page holds. A later visit finds the copy by its size and
