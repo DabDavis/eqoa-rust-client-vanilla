@@ -927,7 +927,9 @@ impl Client {
                     self.held_pick = Some((c, self.now));
                 } else {
                     if pending {
-                        crate::say(&format!("{} goes in at once: the server's worlds are still being built, and its login needs none of them", c.name));
+                        // (a server that never said, natively: as it always went)
+                        let why = if needs.is_some() { "its login needs none of them" } else { "the server does not say which logins need them" };
+                        crate::say(&format!("{} goes in at once: the server's worlds are still being built, and {why}", c.name));
                     }
                     s.select_character(&c);
                 }

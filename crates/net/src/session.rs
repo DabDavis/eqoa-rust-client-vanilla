@@ -976,6 +976,13 @@ pub struct Session {
     /// last said ([`OP_SERVER_WORLDS_CHARS`]); none from a server that never
     /// says.
     worlds_chars: Option<Vec<u32>>,
+    /// A character was played and the game connection has not opened yet
+    /// (`select_character` to `TYPE_CONNECT`): what is sent now goes on a
+    /// connection the server may already have left.
+    picked: bool,
+    /// The worlds held, as the server was told while `picked`: told again on
+    /// the game connection (`worlds_answer`).
+    worlds_retell: Option<Vec<u8>>,
     /// The server offered the combat record ([`OP_COMBAT_RECORD`]) and this
     /// client took it: Character > Combat Record. Kept for the session.
     pub combat_record: bool,
@@ -1170,6 +1177,8 @@ impl Session {
             worlds_building: None,
             worlds_pending: false,
             worlds_chars: None,
+            picked: false,
+            worlds_retell: None,
 
             race_options: None,
             race_looks: None,
@@ -1642,6 +1651,7 @@ impl Session {
     /// `SelectCharacter`: 0x002A with the server id and the face and hair.
     pub fn select_character(&mut self, c: &Character) {
         self.state = State::Selecting;
+        self.picked = true;
         let mut w = Writer::op(0x002A);
         for v in [c.server_id, c.face, c.hair_style, c.hair_length, c.hair_color] {
             w.u32(v as u32);
@@ -1721,7 +1731,14 @@ impl Session {
 
     /// The server told which of its worlds this client holds, once they are
     /// built (`OP_SERVER_WORLDS_DATA`): the builder's answer, or none when it
-    /// stopped without one.
+    /// stopped without one. One that goes after a character was played and
+    /// before the game connection opened (`picked`) is told again on that
+    /// connection: the server promotes the session when it takes the pick and
+    /// leaves the lobby connection's later packets alone, so an answer a
+    /// moment behind the pick never reached it and the session held none of
+    /// the server's worlds for the visit (no arena, no GM's move there; seen
+    /// in a page whose kept worlds were checked 60 ms after its pick). Told
+    /// twice is the same set twice.
     fn worlds_answer(&mut self) {
         let Some(rx) = &self.worlds_building else { return };
         let ids = match rx.try_recv() {
@@ -1731,8 +1748,16 @@ impl Session {
         };
         self.worlds_building = None;
         self.worlds_pending = false;
+        self.tell_worlds(&ids);
+        if self.picked {
+            self.worlds_retell = Some(ids);
+        }
+    }
+
+    /// `OP_SERVER_WORLDS_DATA` to the server: the worlds this client holds.
+    fn tell_worlds(&mut self, ids: &[u8]) {
         let mut w = Writer::op(OP_SERVER_WORLDS_DATA);
-        w.bytes(&crate::serverworlds::encode_ready(&ids));
+        w.bytes(&crate::serverworlds::encode_ready(ids));
         self.send(&w.data);
     }
 
@@ -1809,6 +1834,12 @@ impl Session {
                 // send the player into them (its arena, a GM's move).
                 if self.worlds_pending && self.worlds_building.is_none() {
                     self.send_op_int(OP_SERVER_WORLDS, 1);
+                }
+                // and the worlds held, told while the pick was on its way:
+                // told again, on the connection the server now reads
+                self.picked = false;
+                if let Some(ids) = self.worlds_retell.take() {
+                    self.tell_worlds(&ids);
                 }
                 self.entity_view_offer = None;
                 self.flying = false;
@@ -4179,6 +4210,49 @@ mod tests {
         assert!(!s.server_worlds_pending());
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert_eq!(answers(&mut s), [], "the control: answered, nothing more asked");
+    }
+
+    // The worlds held, told the server after a character was played and before
+    // the game connection opened (their check ended a moment after the pick):
+    // the server has left the lobby connection by then and never reads it, so
+    // the new connection tells it again, once. The controls: told before the
+    // pick, nothing is told again at the promotion; a later promotion tells
+    // nothing more.
+    #[test]
+    fn the_worlds_held_are_told_again_when_the_answer_went_behind_the_pick() {
+        let mut s = session();
+        s.record = Some(Vec::new());
+        // what the session sent of ours since the last look (its record: the
+        // wire holds a message back while those before it are unacknowledged)
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.pump();
+            s.record.replace(Vec::new()).unwrap().into_iter().filter(|(_, d)| d.get(1) == Some(&0x7E)).collect()
+        };
+        let c = Character { server_id: 558, ..Default::default() };
+        let building = |s: &mut Session| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            s.worlds_building = Some(rx);
+            s.worlds_pending = true;
+            tx
+        };
+        // the control: answered, then the pick, then the promotion
+        let tx = building(&mut s);
+        tx.send(vec![10, 11]).unwrap();
+        assert_eq!(answers(&mut s), [(251, vec![0x31, 0x7E, 2, 10, 11])]);
+        s.select_character(&c);
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(answers(&mut s), [], "the control: told before the pick, not told again");
+        // the pick, then the answer, then the promotion
+        let tx = building(&mut s);
+        s.select_character(&c);
+        assert_eq!(answers(&mut s), [], "still being checked");
+        tx.send(vec![10, 11]).unwrap();
+        assert_eq!(answers(&mut s), [(251, vec![0x31, 0x7E, 2, 10, 11])], "told on the lobby connection");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(answers(&mut s), [(251, vec![0x31, 0x7E, 2, 10, 11])], "told again on the game connection");
+        assert!(!s.server_worlds_pending());
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(answers(&mut s), [], "the control: once");
     }
 
     // A custom race's own options (0x7E22): the offer answered with 1 at once,

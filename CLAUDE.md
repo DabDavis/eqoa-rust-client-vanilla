@@ -310,6 +310,13 @@ current.
   reading through a `Disc` and writing through a `Sink` a zone's record at a time (`compose_into`); natively
   into a `Vec` written to the cache, in a page in a worker into OPFS (`web::worlds`, `web/worlds.js`), never
   the whole world in memory. A change to the composer is one to go-eqoa-server's `Compose` too (the CRC).
+  A character played while they are being built waits for them only when the server names it (0x7E54,
+  `Session::pick_needs_worlds`, `pregame::client`'s `pick_waits`: its login is placed by what the client
+  holds), natively as in a page; a page holds every character only for a server that never says. One that
+  goes in before the worlds' list is in loses the rest with the lobby connection: the session asks for it
+  again at the promotion, and the worlds are built while the game is played. An answer (0x7E31) sent between
+  the pick and the promotion is told again on the game connection (`worlds_retell`): the server leaves the
+  lobby connection's packets alone once it has promoted.
 - The browser build (`web/`, README "In a browser"): `web/build.sh`, then `web/drive.py` (headless
   Chromium over the DevTools protocol, the disc image handed to the page's file input). Platform
   code goes behind `net::session::Datagrams`, `net::auth::Exchange`, `iso::Source`/`iso::Sparse`
