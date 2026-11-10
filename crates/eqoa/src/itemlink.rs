@@ -24,7 +24,8 @@
 //! - The windows ([`Links`]): at most [`WINDOWS`], side by side at the top
 //!   middle in the band between the gauges and the minimap, a third replacing
 //!   the oldest; each its item's icon, name and its lines (`infotext`'s
-//!   `link_item`), and its own X; Escape or ○ close the newest.
+//!   `link_item`), and its own X; Escape or △ (the game's Exit) close the
+//!   newest.
 
 use net::dump::NetItem;
 use vi::ui::{FrameParam, Raster, Vui, Window, icon_id, wide};
@@ -38,17 +39,23 @@ pub const LIT: [f32; 4] = [0.74, 0.5, 1.0, 0.4];
 /// The most windows open at once.
 pub const WINDOWS: usize = 2;
 
-/// A window's width, and the band at the top of the 640 by 448 frame the
-/// windows keep to: right of the gauges (x 130), left of the minimap (472),
-/// under the effects' strip (y 15 to 49).
-const W: i32 = 166;
+/// A window's width at most, and the band at the top of the 640 by 448 frame
+/// the windows keep to: right of the gauges (x 130), left of the minimap (472),
+/// under the effects' strip (y 15 to 49); a window wider than 4:3 widens the
+/// band by what it shows beyond each side (the gauges and the minimap keep to
+/// the sides). Two windows share the band, each as wide as half of it allows.
+const W: i32 = 220;
 const BAND: [i32; 2] = [134, 470];
 const TOP: i32 = 52;
 const GAP: i32 = 4;
 
-/// The head (the icon and the name) and the text's rows at most.
-const HEAD: i32 = 30;
-const ROWS_MOST: i32 = 12;
+/// The windows' foot at most: over the chat box's top (y 355 with its five
+/// rows), where they cut their text.
+const BOTTOM: i32 = 350;
+
+/// The name's rows at most (beside the icon), and the text's.
+const NAME_ROWS: i32 = 2;
+const ROWS_MOST: i32 = 14;
 
 /// The records the server sent kept, newest last (a link opened again is
 /// shown at once).
@@ -114,7 +121,7 @@ impl Links {
         !self.windows.is_empty()
     }
 
-    /// Escape or ○: the newest closed; false with none open.
+    /// Escape or △: the newest closed; false with none open.
     pub fn close_newest(&mut self) -> bool {
         self.windows.pop().is_some()
     }
@@ -141,65 +148,81 @@ impl Links {
         }
     }
 
-    /// Where window `k` of `n` goes: one in the band's middle, two side by side.
-    fn at(k: usize, n: usize) -> [i32; 2] {
-        if n <= 1 {
-            return [(BAND[0] + BAND[1]) / 2 - W / 2, TOP];
-        }
-        [BAND[0] + k as i32 * (W + GAP), TOP]
+    /// The windows' width and where each goes when `n` are open, the band
+    /// widened by `side` (the frame pixels shown beyond each side): one in its
+    /// middle, two side by side.
+    fn places(n: usize, side: i32) -> (i32, Vec<[i32; 2]>) {
+        let band = [BAND[0] - side.max(0), BAND[1] + side.max(0)];
+        let n = n as i32;
+        let w = if n <= 1 { W } else { W.min((band[1] - band[0] - GAP * (n - 1)) / n) };
+        let total = n * w + GAP * (n - 1).max(0);
+        let x0 = (band[0] + band[1]) / 2 - total / 2;
+        (w, (0..n).map(|k| [x0 + k * (w + GAP), TOP]).collect())
     }
 
-    /// The windows, each where `at` puts it: `describe` is an item's lines,
-    /// `icon` its surface (`inventory::item_icon`). Each one's place and its X
-    /// are noted for a pointer.
-    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, describe: &dyn Fn(&NetItem) -> String, icon: &dyn Fn(&NetItem) -> i32) {
-        let n = self.windows.len();
+    /// The windows, each where `places` puts it (`side` as there): `describe` is
+    /// an item's lines, told what fits on one of its rows (`fits`), `icon` its
+    /// surface (`inventory::item_icon`). Each one's place and its X are noted
+    /// for a pointer.
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, side: i32, describe: &dyn Fn(&NetItem, &dyn Fn(&str) -> bool) -> String, icon: &dyn Fn(&NetItem) -> i32) {
+        let (ww, at_of) = Self::places(self.windows.len(), side);
         let (white, yellow) = ([1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 0.0, 1.0]);
-        let fh = vui.font_height(r);
+        let step = vui.font_height(r) - 4;
         let fp = FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 1), br: (106, 0), bottom: (102, 2), bl: (105, 0), left: (104, 0) };
-        for k in 0..n {
-            let at = Self::at(k, n);
-            let w = &mut self.windows[k];
+        // a row's room (`TextBox` wraps a row reaching its width less 8)
+        let room = ww - 20 - 8;
+        for (w, at) in self.windows.iter_mut().zip(at_of) {
             let text = match (&w.item, w.gone) {
-                (Some(it), _) => describe(it),
+                (Some(it), _) => {
+                    let rr: &dyn Raster = r;
+                    describe(it, &|row: &str| Window::default().text_width(vui, rr, &wide(row)) < room)
+                }
                 (None, true) => "This link has expired.".to_string(),
                 (None, false) => "...".to_string(),
             };
             let text = wide(&text);
-            let mut tw = Window::default();
-            let rows = tw.count_lines(vui, r, &text, W - 20).clamp(1, ROWS_MOST);
-            let h = HEAD + rows * (fh - 4) + 10;
-            w.rect = [at[0], at[1], at[0] + W, at[1] + h];
-            r.blit(icon_id("black"), 0, at, [0, 0], [W, h], 3, 0.8);
-            vui.blit_frame(r, at, [W, h], &fp, 3, 1.0, true);
-            // the item's icon at half size, its name cut to what is left of the
-            // head beside the X
-            let mut name_x = at[0] + 8;
-            if let Some(it) = &w.item {
-                let id = icon(it);
-                if r.has(id as u32) {
-                    r.stretch_blit(id as u32, 0, [at[0] + 6, at[1] + 5], [52, 20], [0, 0], [114, 44], 3, 1.0);
-                    name_x = at[0] + 62;
-                }
-            }
+            // the head: the item's icon at half size and the X at the right,
+            // the name beside the icon where it fits on one row, else under
+            // them across the window (two rows at most, then cut)
+            let icon_id_of = w.item.as_ref().map(icon).filter(|&id| r.has(id as u32));
             let shown = w.item.as_ref().map_or(w.name.as_str(), |it| it.item.name.as_str());
-            let mut name = wide(shown);
-            let room = at[0] + W - 22 - name_x;
-            while !name.is_empty() && vui.string_width(r, &name) > room {
-                name.pop();
+            let name = wide(shown);
+            let beside = icon_id_of.is_none() || vui.string_width(r, &name) < ww - 64 - 22 - 8;
+            let (name_x, name_w, name_top) = match (icon_id_of.is_some(), beside) {
+                (true, true) => (64, ww - 64 - 22, 6),
+                (true, false) => (10, ww - 20, 30),
+                (false, _) => (10, ww - 32, 6),
+            };
+            let name_rows = Window::default().count_lines(vui, r, &name, name_w).clamp(1, NAME_ROWS);
+            let head = (name_top + name_rows * step + 4).max(32);
+            let room_rows = ((BOTTOM - TOP - head - 8) / step).clamp(1, ROWS_MOST);
+            let rows = Window::default().count_lines(vui, r, &text, ww - 20).clamp(1, room_rows);
+            let h = head + rows * step + 8;
+            w.rect = [at[0], at[1], at[0] + ww, at[1] + h];
+            r.blit(icon_id("black"), 0, at, [0, 0], [ww, h], 3, 0.8);
+            vui.blit_frame(r, at, [ww, h], &fp, 3, 1.0, true);
+            if let Some(id) = icon_id_of {
+                r.stretch_blit(id as u32, 0, [at[0] + 6, at[1] + 6], [52, 20], [0, 0], [114, 44], 3, 1.0);
             }
-            vui.draw_string_ex(r, &name, name_x, at[1] + 7, yellow, true);
-            let x = wide("x");
-            let xx = at[0] + W - 16;
-            vui.draw_string_ex(r, &x, xx, at[1] + 5, white, true);
-            w.x_hit = [xx - 6, at[1], at[0] + W, at[1] + 24];
-            // the lines: a window of the text's rows, its first row under the head
-            let top = at[1] + HEAD - 15;
-            let size = rows * (fh - 4) + 36;
-            tw.init(vui, r, [at[0] + W / 2, top + size / 2], W, rows, 1);
-            tw.text_box(vui, r, &text, 10, 0, W - 20, rows, white, 3);
+            rows_at(vui, r, at, ww, at[1] + name_top + step / 2, name_rows).text_box(vui, r, &name, name_x, 0, name_w, name_rows, yellow, 3);
+            let xx = at[0] + ww - 16;
+            vui.draw_string_ex(r, &wide("x"), xx, at[1] + 5, white, true);
+            w.x_hit = [xx - 6, at[1], at[0] + ww, at[1] + 24];
+            // the lines under the head
+            rows_at(vui, r, at, ww, at[1] + head + step / 2, rows).text_box(vui, r, &text, 10, 0, ww - 20, rows, white, 3);
         }
     }
+}
+
+/// A window `w` wide from `at`'s x whose row 0 is centred on frame line `y`,
+/// `rows` rows: what `Window::text_box` lays text out in (its rows are
+/// `font_height - 4` apart, from its top past an 18-pixel title and 5 more).
+fn rows_at(vui: &Vui, r: &dyn Raster, at: [i32; 2], w: i32, y: i32, rows: i32) -> Window {
+    let mut win = Window::default();
+    win.init(vui, r, [0, 0], w, rows, 1);
+    let top = y - 23;
+    win.center = [at[0] + w / 2, top + win.size[1] / 2];
+    win
 }
 
 fn inside(r: [i32; 4], p: [f32; 2]) -> bool {
@@ -248,7 +271,7 @@ mod tests {
         l.open(7, "Sword");
         l.open(8, "Shield");
         assert!(!l.covers([200.0, 60.0]), "not drawn yet");
-        l.draw(&v, &mut r, &|it| it.item.name.clone(), &|_| -1);
+        l.draw(&v, &mut r, 0, &|it, _| it.item.name.clone(), &|_| -1);
         let (a, b) = (l.windows[0].rect, l.windows[1].rect);
         assert!(a[0] >= BAND[0] && b[2] <= BAND[1] && a[2] < b[0], "side by side in the band: {a:?} {b:?}");
         assert_eq!((a[1], b[1]), (TOP, TOP));
@@ -258,8 +281,23 @@ mod tests {
         let x = l.windows[0].x_hit;
         assert!(l.point([(x[0] + x[2]) as f32 / 2.0, (x[1] + x[3]) as f32 / 2.0]));
         assert_eq!(l.windows.iter().map(|w| w.id).collect::<Vec<_>>(), [8], "its own window closed");
-        l.draw(&v, &mut r, &|it| it.item.name.clone(), &|_| -1);
+        l.draw(&v, &mut r, 0, &|it, _| it.item.name.clone(), &|_| -1);
         let one = l.windows[0].rect;
         assert_eq!((one[0] + one[2]) / 2, (BAND[0] + BAND[1]) / 2, "one alone in the band's middle");
+        assert_eq!(one[2] - one[0], W, "and its whole width");
+        // a window wider than 4:3: the band widened, two at their whole width
+        l.open(9, "Helm");
+        l.draw(&v, &mut r, 60, &|it, _| it.item.name.clone(), &|_| -1);
+        let (a, b) = (l.windows[0].rect, l.windows[1].rect);
+        assert!(a[2] - a[0] == W && b[2] - b[0] == W && a[0] >= BAND[0] - 60 && b[2] <= BAND[1] + 60, "{a:?} {b:?}");
+        // a long text is cut over the chat box (the control: a short one is
+        // its own height)
+        let long = "a line\n".repeat(40);
+        l.record(8, Some(item("Shield")));
+        l.record(9, Some(item("Helm")));
+        l.draw(&v, &mut r, 0, &|_, _| long.clone(), &|_| -1);
+        let tall = l.windows[0].rect;
+        l.draw(&v, &mut r, 0, &|it, _| it.item.name.clone(), &|_| -1);
+        assert!(tall[3] <= BOTTOM && tall[3] > l.windows[0].rect[3], "{tall:?}");
     }
 }

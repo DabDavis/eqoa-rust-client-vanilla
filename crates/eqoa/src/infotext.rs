@@ -528,9 +528,9 @@ impl Info<'_> {
 
     /// The client's own, for an item link's window (`itemlink`, the petition
     /// 1463's "succint but show all relevant stats"): `inspect_item`'s lines
-    /// without the name (the window's head has it), the stat bonuses two to a
-    /// row, then the item's text.
-    pub fn link_item(&self, it: &NetItem) -> String {
+    /// without the name (the window's head has it), the stat bonuses as many
+    /// to a row as fit on it (`fits`), then the item's text.
+    pub fn link_item(&self, it: &NetItem, fits: &dyn Fn(&str) -> bool) -> String {
         let full = self.list_item(it, 0, false);
         let mut d = full.split_once('\n').map_or(String::new(), |(_, rest)| rest.to_string());
         let stats: Vec<String> = it
@@ -542,9 +542,21 @@ impl Info<'_> {
                 None => format!("{}: {}", s.id, s.value),
             })
             .collect();
-        for pair in stats.chunks(2) {
+        let mut row = String::new();
+        for st in stats {
+            let more = format!("{row}  {st}");
+            if row.is_empty() {
+                row = st;
+            } else if fits(&more) {
+                row = more;
+            } else {
+                d += "\n";
+                d += &std::mem::replace(&mut row, st);
+            }
+        }
+        if !row.is_empty() {
             d += "\n";
-            d += &pair.join("  ");
+            d += &row;
         }
         if !it.item.desc.is_empty() {
             d += "\n \n";
@@ -994,8 +1006,9 @@ mod tests {
     }
 
     /// An item link's window (`itemlink`): the record's lines as Inspect has them
-    /// but its name (the window's head), the stats two to a row, then the text.
-    /// The control: Inspect of the same record holds the name and a stat a row.
+    /// but its name (the window's head), the stats as many to a row as fit, then
+    /// the text. The controls: Inspect of the same record holds the name and a
+    /// stat a row; a row that fits one stat holds one.
     #[test]
     fn a_links_window_is_the_record_two_stats_a_row() {
         let words = numbered();
@@ -1004,10 +1017,14 @@ mod tests {
         let stats = vec![ItemStat { id: 0, value: 5 }, ItemStat { id: 1, value: 3 }, ItemStat { id: 14, value: 20 }];
         let sword = Item { name: "Sword".into(), damage: 12, wear_slot: 14, race_mask: 0x3FF, class_mask: 0b101, level_req: 30, no_trade: 1, rent: 1, stats, desc: "A blade.".into(), ..Default::default() };
         let it = NetItem { quantity: 1, cur_hp: 0, item: sword, ..Default::default() };
-        let d = info.link_item(&it);
+        let d = info.link_item(&it, &|row| row.len() <= 16);
         assert!(!d.contains("Sword"), "the name is the head's: {d:?}");
         assert!(d.starts_with("w493: 12 w490: w340\n"), "{d:?}");
-        assert!(d.ends_with("\nw226: 5  w227: 3\nw242: 20\n \nA blade."), "{d:?}");
+        assert!(d.ends_with("\nw226: 5  w227: 3\nw242: 20\n \nA blade."), "two fit, then one: {d:?}");
+        let wide_row = info.link_item(&it, &|_| true);
+        assert!(wide_row.ends_with("\nw226: 5  w227: 3  w242: 20\n \nA blade."), "all on one: {wide_row:?}");
+        let narrow = info.link_item(&it, &|_| false);
+        assert!(narrow.ends_with("\nw226: 5\nw227: 3\nw242: 20\n \nA blade."), "one a row: {narrow:?}");
         let i = info.inspect_item(&it);
         assert!(i.starts_with("Sword\n") && i.contains("\nw226: 5\nw227: 3\n"), "the control: {i:?}");
     }

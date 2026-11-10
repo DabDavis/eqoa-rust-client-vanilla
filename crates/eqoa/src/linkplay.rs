@@ -42,7 +42,8 @@ impl Play {
         self.cues.push(crate::sound::Cue::Ui(13));
     }
 
-    /// Escape or ○: the newest link window closed; false with none open.
+    /// Escape or △ (the game's Exit; ○ in play is the HUD's Use): the newest
+    /// link window closed; false with none open.
     pub fn close_link_window(&mut self) -> bool {
         let closed = self.links.close_newest();
         if closed {
@@ -53,7 +54,7 @@ impl Play {
 
     /// A key while the chat box's history is held (mode 33): left (the
     /// keyboard's too) walks up through its links, right back down while one is
-    /// lit, ✕ (Enter) opens the lit one, ○ (Escape) closes the newest window.
+    /// lit, ✕ (Enter) opens the lit one, △ (Escape) closes the newest window.
     /// True when it was the walk's.
     pub(super) fn link_key(&mut self, key: i32) -> bool {
         if !crate::settings::item_links() {
@@ -156,7 +157,9 @@ impl Play {
     /// The link windows, over the world in play and the chat box's history
     /// (none with the UI hidden): each its item's lines (`infotext`'s
     /// `link_item`) and icon.
-    pub(super) fn run_links(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
+    /// `side` is the frame pixels the window shows beyond each side (the
+    /// windows' band widens by it).
+    pub(super) fn run_links(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, side: i32) {
         if !self.links.is_open() || !matches!(self.mode, 0 | 33 | 38) || crate::hideui::hidden() {
             return;
         }
@@ -172,7 +175,7 @@ impl Play {
             attack_words: &attack_words,
         };
         let flags = net::session::EXPANSION_FLAGS;
-        self.links.draw(vui, r, &|it| info.link_item(it), &|it| crate::inventory::item_icon(it, flags) as i32);
+        self.links.draw(vui, r, side, &|it, fits| info.link_item(it, fits), &|it| crate::inventory::item_icon(it, flags) as i32);
     }
 }
 
@@ -360,7 +363,41 @@ mod tests {
         crate::settings::set_client(crate::settings::ClientOptions { item_links: true, ..crate::settings::client() });
     }
 
-    /// With the history held, ✕ on the walk's lit link opens it; ○ closes the
+    /// A click on a link in the chat box (the window's press and release on
+    /// it) opens it: its window, the server asked for its item, and the click
+    /// is the box's (Done). The control: a click beside it on the line is the
+    /// line's, as ever.
+    #[test]
+    fn a_click_on_a_link_opens_it() {
+        let mut p = play(true);
+        let mut c = crate::chat::WndChat::new();
+        c.text.add_text_linked(&crate::ui::wide("Ann: see Sword ok"), [1.0; 4], 0, |s| s.len() as i32 * 8, &[net::itemlink::ChatLink { start: 9, len: 5, id: 31 }]);
+        let v = crate::pointer::testing::vui();
+        for _ in 0..30 {
+            c.draw(&v, &mut crate::pointer::testing::NullRaster, 0, 0.1);
+        }
+        // the link's place, found as a pointer would find it
+        let mut on = None;
+        'scan: for y in (300..448).step_by(2) {
+            for x in (0..640).step_by(2) {
+                if c.link_at([x as f32, y as f32]).is_some() {
+                    on = Some([x as f32 + 2.0, y as f32 + 2.0]);
+                    break 'scan;
+                }
+            }
+        }
+        let on = on.expect("the link drawn");
+        p.wnd_chat = Some(c);
+        taken(&mut p);
+        assert!(p.wnd_chat.as_mut().unwrap().press(on, (1.0, 1.0)));
+        assert_eq!(p.chat_release(), crate::chat::Let::Done, "the box's");
+        assert_eq!(p.links.windows.iter().map(|w| w.id).collect::<Vec<_>>(), [31]);
+        assert_eq!(taken(&mut p), vec![vec![0x52, 0x7E, 31, 0, 0, 0]]);
+        assert!(p.wnd_chat.as_mut().unwrap().press([on[0] - 60.0, on[1]], (2.0, 2.0)));
+        assert_eq!(p.chat_release(), crate::chat::Let::Click(2.0, 2.0), "the control: the line's");
+    }
+
+    /// With the history held, ✕ on the walk's lit link opens it; △ closes the
     /// newest window. The control: with no link lit, ✕ is not the walk's.
     #[test]
     fn the_walk_opens_a_link() {
@@ -376,6 +413,6 @@ mod tests {
         assert!(p.link_key(134));
         assert_eq!(p.links.windows.iter().map(|w| w.id).collect::<Vec<_>>(), [9]);
         assert_eq!(taken(&mut p), vec![vec![0x52, 0x7E, 9, 0, 0, 0]]);
-        assert!(p.link_key(132) && !p.links.is_open(), "○ closes it");
+        assert!(p.link_key(132) && !p.links.is_open(), "△ closes it");
     }
 }

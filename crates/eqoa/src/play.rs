@@ -5979,7 +5979,7 @@ impl Play {
             145 => self.camera_style_key(walker),
             134 => self.attack_press(),
             133 => self.interact_with_target(),
-            // ○: the newest item link's window closed first (`itemlink`)
+            // △: the newest item link's window closed first (`itemlink`)
             132 => {
                 if !self.close_link_window() {
                     self.clear_target();
@@ -8977,7 +8977,8 @@ impl Play {
             // a raid's loot rolls (`raidplay`), under every window
             self.run_rolls(vui, &mut r);
             // the item links' windows (`itemlink`), at the top middle
-            self.run_links(vui, &mut r);
+            let side = crate::ui::Layout::side(&r);
+            self.run_links(vui, &mut r, side);
             if self.mode == 9 {
                 self.priv_chat.draw(vui, &mut r);
             }

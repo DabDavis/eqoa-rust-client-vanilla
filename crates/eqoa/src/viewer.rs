@@ -575,6 +575,27 @@ pub fn shot_with(
                     eprintln!("mouse {step}: the minimap's zoom, {} units a frame pixel", p.map.mini.scale);
                     continue;
                 }
+                // a click and the wheel go to the chat box first, as the window's
+                // own do (`chat_button`, `MouseWheel`): a click on an item link
+                // opens it (`itemlink`), the wheel steps the history it holds
+                if let Some(p) = play.as_mut() {
+                    let words: Vec<&str> = step.split_whitespace().collect();
+                    let num = |i: usize| words.get(i).and_then(|v| v.parse::<f64>().ok());
+                    match (words.first().copied(), num(1), num(2)) {
+                        (Some("click"), Some(x), Some(y)) if p.chat_press((x, y), (w, h), true) => match p.chat_release() {
+                            crate::chat::Let::Click(..) | crate::chat::Let::NotHeld => {}
+                            got => {
+                                eprintln!("mouse {step}: the chat box's ({got:?}; a link opened, or a selection)");
+                                continue;
+                            }
+                        },
+                        (Some("wheel"), Some(n), _) if p.chat_wheel(mouse.cursor, (w, h), n as f32) => {
+                            eprintln!("mouse {step}: the chat box's history");
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
                 let click = mouse.play(&step, (w, h), Instant::now());
                 // the map up: the script's cursor is its pointer too (a hover's tooltip)
                 if let Some(p) = play.as_mut().filter(|p| p.map.open) {
