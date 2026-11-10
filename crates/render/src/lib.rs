@@ -566,6 +566,11 @@ pub struct Renderer {
     /// they are first on with Dynamic Lighting, and whether they are on.
     points: Option<lightshadow::Points>,
     points_on: bool,
+    /// Which of Dynamic Lighting, Sun Shadows and Light Shadows a page's
+    /// WebGL2 refused (`guarded`): not made again while the page lives.
+    refused: Vec<&'static str>,
+    /// What each refusal said, until the client takes it (`refusals`).
+    refusals: Vec<String>,
     /// The options' Shadow Distance, times the game's (1 to 4,
     /// `set_shadow_distance`): the sun's cascades' far edge, and how many
     /// lights cast.
@@ -887,6 +892,8 @@ impl Renderer {
             sun_on: false,
             points: None,
             points_on: false,
+            refused: Vec::new(),
+            refusals: Vec::new(),
             shadow_scale: 1.0,
             samplers,
             white,
@@ -1739,8 +1746,8 @@ impl Renderer {
     /// first time, a view's lights drawn, and a group uploaded from now on
     /// recorded for it as well; the groups uploaded before need `relight`.
     pub fn set_dynamic_lighting(&mut self, device: &wgpu::Device, on: bool) {
-        if on && self.lit.is_none() {
-            self.lit = Some(lit::Lit::new(device, [&self.frame_layout, &self.material_layout, &self.palette_layout], self.format));
+        if on && self.lit.is_none() && !self.refused.contains(&LIT) {
+            self.lit = guarded(device, &mut self.refused, &mut self.refusals, LIT, || Some(lit::Lit::new(device, [&self.frame_layout, &self.material_layout, &self.palette_layout], self.format)));
         }
         self.lit_on = on;
         self.make_sun(device);
@@ -1786,6 +1793,20 @@ impl Renderer {
         self.points.as_ref().map(|p| p.drawn.get())
     }
 
+    /// What a page's WebGL2 refused of Dynamic Lighting, Sun Shadows and
+    /// Light Shadows since the last call, each "<name>: <what it said>"
+    /// (`guarded`): the client's to tell the player, the option left as
+    /// they set it and the feature not drawn.
+    pub fn refusals(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.refusals)
+    }
+
+    /// The comparisons Light Shadows' receivers take (`Filter::for_device`);
+    /// `None` before they were first made.
+    pub fn light_shadow_filter(&self) -> Option<lightshadow::Filter> {
+        self.points.as_ref().map(lightshadow::Points::filter)
+    }
+
     /// The maps and their pipelines, the first time Light Shadows and
     /// Dynamic Lighting are both on; and their receivers with the sun's map
     /// once Sun Shadows' are made.
@@ -1793,12 +1814,22 @@ impl Renderer {
         let layouts = [&self.frame_layout, &self.material_layout, &self.palette_layout];
         if self.points_on
             && self.points.is_none()
+            && !self.refused.contains(&POINTS)
             && let Some(l) = self.lit.as_ref().filter(|_| self.lit_on)
         {
-            self.points = lightshadow::Points::new(device, layouts, l, self.sun.as_ref(), self.format);
+            self.points = guarded(device, &mut self.refused, &mut self.refusals, POINTS, || lightshadow::Points::new(device, layouts, l, self.sun.as_ref(), self.format));
         }
-        if let (Some(p), Some(l), Some(s)) = (self.points.as_mut(), self.lit.as_ref(), self.sun.as_ref()) {
-            p.attach_sun(device, layouts, l, s, self.format);
+        if let (Some(p), Some(l), Some(s)) = (self.points.as_mut(), self.lit.as_ref(), self.sun.as_ref())
+            && p.with_sun.is_none()
+            && guarded(device, &mut self.refused, &mut self.refusals, POINTS, || {
+                p.attach_sun(device, layouts, l, s, self.format);
+                Some(())
+            })
+            .is_none()
+        {
+            // refused with the sun's map: none at all, not maps whose
+            // receivers would leave the sun's shadow out
+            self.points = None;
         }
     }
 
@@ -1836,9 +1867,10 @@ impl Renderer {
     fn make_sun(&mut self, device: &wgpu::Device) {
         if self.sun_on
             && self.sun.is_none()
+            && !self.refused.contains(&SUN)
             && let Some(l) = self.lit.as_ref().filter(|_| self.lit_on)
         {
-            self.sun = sunshadow::Sun::new(device, [&self.frame_layout, &self.material_layout, &self.palette_layout], l, self.format);
+            self.sun = guarded(device, &mut self.refused, &mut self.refusals, SUN, || sunshadow::Sun::new(device, [&self.frame_layout, &self.material_layout, &self.palette_layout], l, self.format));
         }
     }
 
@@ -2014,6 +2046,52 @@ fn layer_state(l: &esf::Layer, textured: bool) -> (usize, LayerUniform, usize) {
         _ => 0,
     };
     (blend, base, si)
+}
+
+/// The lighting features' names, as `Renderer::refusals` says them.
+const LIT: &str = "Dynamic Lighting";
+const SUN: &str = "Sun Shadows";
+const POINTS: &str = "Light Shadows";
+
+/// What `make` makes (a lighting feature's maps, samplers and pipelines),
+/// unless a page's WebGL2 refuses it. A browser's GL driver may refuse a
+/// shader every other takes (its compiler's own limits and bugs), and a
+/// refusal was an error nothing caught: a panic, the client stopped at every
+/// world entry for as long as the option stayed on. On WebGL2 `make` runs
+/// under error scopes (`caught`): refused, nothing is made, and `what` is
+/// kept in `refused` and what it said in `said`. Elsewhere (natively, and a
+/// page on WebGPU, whose scopes answer only later) `make` alone.
+fn guarded<T>(device: &wgpu::Device, refused: &mut Vec<&'static str>, said: &mut Vec<String>, what: &'static str, make: impl FnOnce() -> Option<T>) -> Option<T> {
+    if !(cfg!(target_arch = "wasm32") && device.adapter_info().backend == wgpu::Backend::Gl) {
+        return make();
+    }
+    caught(device, refused, said, what, make)
+}
+
+/// `make` under error scopes (`guarded`): what it made, or `None` with
+/// `what` kept in `refused` and its first error in `said` when it raised
+/// any. wgpu's own backends (GL among them) answer a scope at once.
+fn caught<T>(device: &wgpu::Device, refused: &mut Vec<&'static str>, said: &mut Vec<String>, what: &'static str, make: impl FnOnce() -> Option<T>) -> Option<T> {
+    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let made = make();
+    // innermost first
+    let errors = [ready(validation.pop()), ready(internal.pop()), ready(memory.pop())];
+    let Some(e) = errors.into_iter().flatten().flatten().next() else { return made };
+    let text: String = e.to_string().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(400).collect();
+    refused.push(what);
+    said.push(format!("{what}: {text}"));
+    None
+}
+
+/// A future's output if it has one now, without waiting.
+fn ready<F: std::future::Future>(f: F) -> Option<F::Output> {
+    let mut f = std::pin::pin!(f);
+    match f.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
+        std::task::Poll::Ready(v) => Some(v),
+        std::task::Poll::Pending => None,
+    }
 }
 
 pub(crate) fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
@@ -2306,5 +2384,43 @@ mod tests {
         assert!(!level_drawn(Some(0), None) && !level_drawn(Some(1), None));
         let every = |_: Option<u8>, _: Option<u8>| true;
         assert_ne!(every(Some(1), Some(0)), level_drawn(Some(1), Some(0)));
+    }
+
+    /// What a page's WebGL2 refuses of a lighting feature is caught
+    /// (`super::caught`): nothing made, the feature's name kept and what was
+    /// said, the device's uncaught-error handler (a panic, by default) never
+    /// reached; what it takes is made with nothing kept. The control: the
+    /// same refusal made without the scopes reaches the handler. Needs a
+    /// graphics adapter (any backend); without one it says so and passes.
+    #[test]
+    fn a_refused_feature_is_caught_not_raised() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let raised = Arc::new(AtomicUsize::new(0));
+        let r = raised.clone();
+        device.on_uncaptured_error(Arc::new(move |_: wgpu::Error| {
+            r.fetch_add(1, Ordering::SeqCst);
+        }));
+        // a buffer both mapped for reading and written to: refused without
+        // the device feature that allows it
+        let refused_buffer = || device.create_buffer(&wgpu::BufferDescriptor { label: Some("refused"), size: 16, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::MAP_WRITE, mapped_at_creation: false });
+        let taken = || device.create_buffer(&wgpu::BufferDescriptor { label: Some("taken"), size: 16, usage: wgpu::BufferUsages::UNIFORM, mapped_at_creation: false });
+        let (mut refused, mut said) = (Vec::new(), Vec::new());
+        assert!(super::caught(&device, &mut refused, &mut said, super::POINTS, || Some(taken())).is_some(), "taken: made");
+        assert!(refused.is_empty() && said.is_empty());
+        assert!(super::caught(&device, &mut refused, &mut said, super::POINTS, || Some(refused_buffer())).is_none(), "refused: nothing made");
+        assert_eq!(refused, [super::POINTS]);
+        assert!(said.len() == 1 && said[0].starts_with("Light Shadows: ") && said[0].contains("MAP_WRITE"), "{said:?}");
+        assert_eq!(raised.load(Ordering::SeqCst), 0, "caught, not raised");
+        // natively `guarded` is `make` alone, its refusals as raised as ever
+        let (mut r2, mut s2) = (Vec::new(), Vec::new());
+        assert!(super::guarded(&device, &mut r2, &mut s2, super::SUN, || Some(refused_buffer())).is_some() && r2.is_empty());
+        assert_eq!(raised.load(Ordering::SeqCst), 1, "the control: without the scopes the refusal is raised");
     }
 }
