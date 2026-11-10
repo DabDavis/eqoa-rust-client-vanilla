@@ -55,6 +55,18 @@ pub mod bit {
         NAMES.get(b.trailing_zeros() as usize).copied().unwrap_or("?")
     }
 
+    /// The d-pad's four.
+    pub const DPAD: u16 = UP | RIGHT | DOWN | LEFT;
+
+    /// A controller no mapping knows, by its buttons' numbers (button 1
+    /// first): as most PlayStation-style pads with a hat number them over
+    /// HID (96 of the 133 PS3 and PlayStation pads with a hat in SDL's
+    /// database, Afterglow's, PDP's, Hori's, Mad Catz's, PowerA's; gilrs's
+    /// own layout of such a pad on Windows): □ ✕ ○ △, the shoulders, the
+    /// triggers, Select and Start, the sticks' clicks. The 13th, the PS
+    /// button, is none of the game's.
+    pub const NUMBERED: [u16; 12] = [SQUARE, CROSS, CIRCLE, TRIANGLE, L1, R1, L2, R2, SELECT, START, L3, R3];
+
     /// By name, as eqoa-port's pad scripts spell them.
     pub fn named(s: &str) -> Option<u16> {
         Some(match s {
@@ -89,6 +101,12 @@ pub struct Report {
     pub buttons: u16,
     pub sticks: [f32; 4],
     pub triggers: [f32; 2],
+}
+
+/// The d-pad from a hat on two axes, x and y, -1 left and up, 1 right and
+/// down: each way past half of its travel (a diagonal both of its sides).
+pub fn hat_ways(x: f32, y: f32) -> u16 {
+    [(y < -0.5, bit::UP), (y > 0.5, bit::DOWN), (x < -0.5, bit::LEFT), (x > 0.5, bit::RIGHT)].iter().filter(|p| p.0).fold(0, |a, p| a | p.1)
 }
 
 /// A stick axis as a DualShock 2's byte: 0 left or up, 255 right or down,
@@ -630,6 +648,9 @@ pub struct Controller {
     pub between: u16,
     pub rumbles: bool,
     pub label: String,
+    /// how it is read, in a few words: its layout and where its d-pad comes
+    /// from (a bug report's note, `note`)
+    pub how: String,
     source: Source,
     /// its place in the controllers' order: the first controller first
     order: (u8, u64),
@@ -852,6 +873,10 @@ pub struct Gamepads {
     /// (gilrs keeps only the last state)
     #[cfg(not(target_arch = "wasm32"))]
     gilrs_seen: std::collections::HashMap<gilrs::GamepadId, Latch>,
+    /// the ways each gilrs controller's d-pad has come
+    /// (`GilrsRead::dpad_ways`), each said once
+    #[cfg(not(target_arch = "wasm32"))]
+    gilrs_dpad: std::collections::HashMap<gilrs::GamepadId, u8>,
     /// a gilrs fault stepped over has been said (the log says it once)
     #[cfg(not(target_arch = "wasm32"))]
     gilrs_fault_said: bool,
@@ -914,6 +939,8 @@ impl Gamepads {
             between: 0,
             #[cfg(not(target_arch = "wasm32"))]
             gilrs_seen: std::collections::HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            gilrs_dpad: std::collections::HashMap::new(),
             #[cfg(not(target_arch = "wasm32"))]
             gilrs_fault_said: false,
         }
@@ -993,6 +1020,12 @@ impl Gamepads {
                 *r.borrow_mut() = says;
             }
         });
+        let note = note_text(pads.iter().map(|c| (c.name.as_str(), c.label.as_str(), c.how.as_str())), &pick);
+        if let Ok(mut n) = NOTE.lock()
+            && *n != note
+        {
+            *n = note;
+        }
         if self.picked.as_ref() != Some(&pick) {
             crate::say(&describe(&pick, &pads, &seat, focus, capture && shares_pad(focus, &seat)));
             // a controller this window no longer reads is not its to shake
@@ -1075,7 +1108,7 @@ impl Gamepads {
                 // XInput says the state at the moment asked, no more (its packet
                 // number says only that something changed): a press let go
                 // between two frames is not seen
-                out.push(Controller { name, report, between: 0, rumbles: true, label: format!("Xbox controller {}", i + 1), source: Source::XInput(i), order: (0, i as u64) });
+                out.push(Controller { name, report, between: 0, rumbles: true, label: format!("Xbox controller {}", i + 1), how: "XInput".into(), source: Source::XInput(i), order: (0, i as u64) });
             }
         }
         // the PlayStation controllers read over HID, each with its USB ids:
@@ -1092,7 +1125,8 @@ impl Gamepads {
                     crate::say(&format!("gamepad: a {}{}, read over HID ({})", f.model.label(), if f.bluetooth { " on Bluetooth" } else { "" }, f.name));
                     self.seen.push(f.name.clone());
                 }
-                let c = Controller { name: f.name, report, between: f.between, rumbles: true, label: f.model.label().to_string(), source: Source::Hid(k as u32, None), order: (1, k as u64) };
+                let how = format!("read over HID{}", if f.bluetooth { " on Bluetooth" } else { "" });
+                let c = Controller { name: f.name, report, between: f.between, rumbles: true, label: f.model.label().to_string(), how, source: Source::Hid(k as u32, None), order: (1, k as u64) };
                 hid.push((c, f.ids));
             }
         }
@@ -1168,8 +1202,9 @@ impl Gamepads {
                     continue;
                 }
                 let label = pad.name().to_string();
+                let layout = gilrs_layout(&pad);
                 if !self.seen.contains(&label) {
-                    crate::say(&format!("gamepad: {label}{}", if pad.is_ff_supported() { " (rumble)" } else { "" }));
+                    crate::say(&format!("gamepad: {label} ({layout}){}", if pad.is_ff_supported() { " (rumble)" } else { "" }));
                     self.seen.push(label.clone());
                 }
                 let slot = usize::from(id) as u64;
@@ -1185,7 +1220,16 @@ impl Gamepads {
                 let (name, order) = (format!("pad{slot}"), (2, slot));
                 #[cfg(not(any(target_os = "linux", windows)))]
                 let (name, order) = (format!("pad{slot}"), (1, slot));
-                let mut report = report_of(&pad);
+                let read = read_gilrs(&pad);
+                let mut report = report_from(&read);
+                // the ways its d-pad came (a hat gilrs left as axes among
+                // them), each said once
+                let ways = self.gilrs_dpad.entry(id).or_default();
+                if read.dpad_ways() & !*ways != 0 {
+                    crate::say(&format!("gamepad: {label}: {}", dpad_ways_text(read.dpad_ways() & !*ways)));
+                    *ways |= read.dpad_ways();
+                }
+                let how = format!("{layout}, {}", dpad_ways_text(*ways));
                 let between = self.gilrs_seen.get_mut(&id).map_or(0, |l| l.take(report.buttons));
                 report.rest(self.dead_zone);
                 // a Mac's PlayStation controller rumbles through IOKit
@@ -1194,7 +1238,7 @@ impl Gamepads {
                 let rumbles = pad.is_ff_supported() || pad.vendor_id().zip(pad.product_id()).is_some_and(|(v, p)| crate::hidpad::Model::of(v, p).is_some());
                 #[cfg(not(target_os = "macos"))]
                 let rumbles = GILRS_FF && pad.is_ff_supported();
-                out.push(Controller { name, report, between, rumbles, label, source: Source::Gilrs(id), order });
+                out.push(Controller { name, report, between, rumbles, label, how, source: Source::Gilrs(id), order });
             }
             // what the ones passed over pressed (read through XInput or HID
             // instead) is not kept for later; a controller gone, forgotten
@@ -1202,6 +1246,7 @@ impl Gamepads {
                 l.take(0);
             }
             self.gilrs_seen.retain(|id, _| g.connected_gamepad(*id).is_some());
+            self.gilrs_dpad.retain(|id, _| g.connected_gamepad(*id).is_some());
         }
         #[cfg(windows)]
         {
@@ -1223,7 +1268,7 @@ impl Gamepads {
                 }
                 let mut report = f.report;
                 report.rest(self.dead_zone);
-                out.push(Controller { name: f.name, report, between: f.between, rumbles: false, label: f.label, source: Source::Android(f.device), order: (1, k as u64) });
+                out.push(Controller { name: f.name, report, between: f.between, rumbles: false, label: f.label, how: "Android's".into(), source: Source::Android(f.device), order: (1, k as u64) });
             }
         }
         out.sort_by_key(|c| c.order);
@@ -1252,10 +1297,17 @@ impl Gamepads {
             };
             let map = &mut self.web[k].2;
             let mut r = map.read(p, self.browser);
-            if !self.seen.contains(&p.id) {
-                crate::say(&format!("gamepad: {} (mapping {:?}, {})", p.id, p.mapping, map.how(p, self.browser)));
-                self.seen.push(p.id.clone());
+            // how it is read, and again once a read has learned more of it
+            // (its hat, its triggers)
+            if let Some(how) = map.changed(p, self.browser) {
+                if !self.seen.contains(&p.id) {
+                    crate::say(&format!("gamepad: {} (mapping {:?}, {how})", p.id, p.mapping));
+                    self.seen.push(p.id.clone());
+                } else {
+                    crate::say(&format!("gamepad: {} now read as {how}", p.id));
+                }
             }
+            let how = format!("mapping {:?}, {}", p.mapping, map.how(p, self.browser));
             if self.trace {
                 // `?padtrace`: a pad as it changes, its axes to 0.05
                 let coarse = format!("{} {:?} {:?}", p.index, p.buttons.iter().map(|b| b.0).collect::<Vec<_>>(), p.axes.iter().map(|v| (v * 20.0).round() as i32).collect::<Vec<_>>());
@@ -1265,7 +1317,7 @@ impl Gamepads {
                 traced.push(coarse);
             }
             r.rest(self.dead_zone);
-            out.push(Controller { name: format!("pad{}", p.index), report: r, between: 0, rumbles, label: p.id.clone(), source: Source::Page(p.index), order: (1, p.index as u64) });
+            out.push(Controller { name: format!("pad{}", p.index), report: r, between: 0, rumbles, label: p.id.clone(), how, source: Source::Page(p.index), order: (1, p.index as u64) });
         }
         self.traced = traced;
         out.sort_by_key(|c| c.order);
@@ -1399,6 +1451,35 @@ pub fn reads() -> String {
     READS.with(|r| r.borrow().clone())
 }
 
+/// The controllers connected, as the last frame found them (`note`).
+static NOTE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// The controllers connected and how each is read, for a bug report's
+/// note (`bugnote`): what a player's controller sends, which the GMs (and
+/// we) cannot ask its hardware. Empty with none connected.
+pub fn note() -> String {
+    NOTE.lock().map(|n| n.clone()).unwrap_or_default()
+}
+
+/// `note`'s words, of each controller's name, label and how it is read (in
+/// their order): its place, what it calls itself (never its name, which on
+/// Linux is a device's path) and how it is read, and whether this window
+/// reads it.
+fn note_text<'a>(pads: impl Iterator<Item = (&'a str, &'a str, &'a str)>, pick: &Pick) -> String {
+    let lines: Vec<String> = pads
+        .enumerate()
+        .map(|(k, (name, label, how))| {
+            let read = match pick {
+                Pick::All => true,
+                Pick::One(n) => n == name,
+                Pick::Idle | Pick::Nothing => false,
+            };
+            format!("{} {label:?} ({how}){}", k + 1, if read { "" } else { ", not read by this window" })
+        })
+        .collect();
+    lines.join("; ")
+}
+
 /// `reads`' words: the window's number among others, and the controller by
 /// its place in the order; `captured` a Pad shared under Capture Controller,
 /// read while the window is in front. Short enough for the page's legend row.
@@ -1455,22 +1536,242 @@ pub fn focus_name(f: Focus) -> String {
 /// One gamepad as libpad's report: positional face buttons, the shoulders,
 /// the triggers past a third of their travel (the game reads L2 and R2 as
 /// buttons), the d-pad, and the sticks with +y down. Natively: SDL's layout
-/// through gilrs.
+/// through gilrs (`read_gilrs`, `report_from`).
 #[cfg(not(target_arch = "wasm32"))]
 fn report_of(p: &gilrs::Gamepad<'_>) -> Report {
-    use gilrs::{Axis, Button};
-    let pressed = |b: Button| p.is_pressed(b) || p.button_data(b).is_some_and(|d| d.value() > TRIGGER && matches!(b, Button::LeftTrigger2 | Button::RightTrigger2));
-    let mut r = Report::default();
-    for (b, k) in GILRS_BUTTONS {
-        if pressed(b) {
+    report_from(&read_gilrs(p))
+}
+
+/// What `report_of` reads of a gilrs controller, laid out by `report_from`:
+/// apart, so that a test can give it what each kind of controller sends.
+///
+/// A controller's d-pad comes from gilrs three ways. Its own d-pad buttons
+/// are gilrs's DPad buttons (`named`), and so is a hat (most third-party
+/// PlayStation pads have one: a HID hat switch, which evdev makes ABS_HAT0X
+/// and ABS_HAT0Y, Windows.Gaming.Input a switch, IOKit its usage 0x39) when
+/// gilrs's filter `axis_dpad_to_button` turns it into them: only when its
+/// mapping maps every way of it (SDL's h0.1, h0.2, h0.4 and h0.8) or none
+/// and no d-pad button either. Else the hat stays gilrs's DPadX and DPadY
+/// axes (`dpad`), which the client did not read: a mapping that maps a part
+/// of a hat, or a controller with both a hat and d-pad buttons. And where
+/// its mapping (one of SDL's for the same USB ids, made for a controller
+/// whose d-pad is buttons) names neither of the hat's axes, they are only
+/// in gilrs's state, by their codes (`hat`, `HAT_CODES`). The three are
+/// OR'd: gilrs's filter never updates the axes it turns into buttons, so a
+/// hat it turned is read once, and a d-pad sent two ways at once is one
+/// press (2026-11-10, "some third party ps3 controllers dpads arent being
+/// registered").
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct GilrsRead {
+    /// libpad's buttons by gilrs's names for them (`GILRS_BUTTONS`), the
+    /// d-pad's among them where gilrs has them as buttons
+    named: u16,
+    /// gilrs's DPadX and DPadY, -1..1, y up: a hat it mapped and left as
+    /// axes
+    dpad: [f32; 2],
+    /// the hat's own two axes (`HAT_CODES`), -1..1, y down, where gilrs's
+    /// mapping names neither
+    hat: [f32; 2],
+    /// the sticks (rx, ry, lx, ly, +y down) and the triggers' pull
+    sticks: [f32; 4],
+    triggers: [f32; 2],
+    /// the buttons gilrs's own layout (a controller no mapping knows) names
+    /// none of, held, by number: bit n for button n + 1 (`bit::NUMBERED`;
+    /// Linux's BTN_TRIGGER on, a HID joystick's, `numbered`)
+    numbered: u16,
+    /// Z and Rz, where gilrs's own layout has them and no Rx and Ry: the
+    /// right stick of such a controller (X Y Z Rz, a PS3 pad's), +y down
+    z_stick: Option<[f32; 2]>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl GilrsRead {
+    /// The ways its d-pad came this read, as bits: 1 gilrs's d-pad
+    /// buttons, 2 gilrs's d-pad axes, 4 the hat's own axes.
+    fn dpad_ways(&self) -> u8 {
+        u8::from(self.named & bit::DPAD != 0) | u8::from(hat_ways(self.dpad[0], -self.dpad[1]) != 0) << 1 | u8::from(hat_ways(self.hat[0], self.hat[1]) != 0) << 2
+    }
+}
+
+/// The ways a d-pad came (`GilrsRead::dpad_ways`), in words.
+#[cfg(not(target_arch = "wasm32"))]
+fn dpad_ways_text(ways: u8) -> String {
+    let words: Vec<&str> = ["gilrs's d-pad buttons", "gilrs's d-pad axes", "its hat's own axes"].iter().enumerate().filter(|(i, _)| ways & (1 << i) != 0).map(|(_, w)| *w).collect();
+    if words.is_empty() { "its d-pad not pressed yet".to_string() } else { format!("its d-pad as {}", words.join(" and ")) }
+}
+
+/// The report `read_gilrs`'s reading makes: the buttons gilrs names, the
+/// d-pad from a hat it left as axes, its own or its codes' (gilrs's y runs
+/// up), a controller no mapping knows by its buttons' numbers and its right
+/// stick on Z and Rz.
+#[cfg(not(target_arch = "wasm32"))]
+fn report_from(g: &GilrsRead) -> Report {
+    let mut r = Report { buttons: g.named, sticks: g.sticks, triggers: g.triggers };
+    r.buttons |= hat_ways(g.dpad[0], -g.dpad[1]) | hat_ways(g.hat[0], g.hat[1]);
+    for (i, k) in bit::NUMBERED.iter().enumerate() {
+        if g.numbered & (1 << i) != 0 {
             r.buttons |= k;
         }
     }
-    // gilrs reports y up; libpad's runs down
-    r.sticks = [p.value(Axis::RightStickX), -p.value(Axis::RightStickY), p.value(Axis::LeftStickX), -p.value(Axis::LeftStickY)];
-    let pull = |b: Button| p.button_data(b).map_or(0.0, |d| d.value().clamp(0.0, 1.0));
-    r.triggers = [pull(Button::LeftTrigger2), pull(Button::RightTrigger2)];
+    if let Some([x, y]) = g.z_stick {
+        (r.sticks[0], r.sticks[1]) = (x, y);
+    }
     r
+}
+
+/// gilrs's codes (`Code::into_u32`) for a controller's first hat, the two
+/// axes each of its back ends makes of it: evdev's ABS_HAT0X and ABS_HAT0Y
+/// (EV_ABS's), Windows.Gaming.Input's first switch (gilrs-core's kind 2,
+/// index 0 its x, 1 its y), IOKit's hat switch (usage 0x39 on the Generic
+/// Desktop page, and the 0x3A gilrs-core gives its y). Each is -1..1 with
+/// its y down where no mapping names it (gilrs turns over only the y of an
+/// axis it calls DPadY: evdev's hat sends its up as -1, gilrs-core sends a
+/// switch's up as -1, and IOKit's as -1).
+#[cfg(not(target_arch = "wasm32"))]
+const HAT_CODES_EVDEV: [u32; 2] = [0x0003_0010, 0x0003_0011];
+#[cfg(not(target_arch = "wasm32"))]
+const HAT_CODES_WGI: [u32; 2] = [0x0002_0000, 0x0002_0001];
+#[cfg(not(target_arch = "wasm32"))]
+const HAT_CODES_IOKIT: [u32; 2] = [0x0001_0039, 0x0001_003A];
+
+/// This platform's (`HAT_CODES_EVDEV` and the rest); none where gilrs does
+/// not read the controllers.
+#[cfg(not(target_arch = "wasm32"))]
+const HAT_CODES: [u32; 2] = if cfg!(target_os = "linux") {
+    HAT_CODES_EVDEV
+} else if cfg!(windows) {
+    HAT_CODES_WGI
+} else if cfg!(target_os = "macos") {
+    HAT_CODES_IOKIT
+} else {
+    [u32::MAX; 2]
+};
+
+/// A button's number less one (`GilrsRead::numbered`) by its gilrs code
+/// (`Code::into_u32`) on Linux: a HID joystick's buttons are BTN_TRIGGER
+/// (0x120) on, button 1 first (hid-input's `BTN_JOYSTICK + n - 1`), none
+/// of which gilrs's own layout names; a third-party PS3 pad is often one
+/// (a DragonRise's "Generic USB Joystick"). Gilrs's own layout names every
+/// button of such a controller elsewhere, by number (Windows.Gaming.Input's
+/// button n - 1 as `bit::NUMBERED` has it) or as an Xbox pad's (IOKit's).
+#[cfg(not(target_arch = "wasm32"))]
+fn numbered_evdev(code: u32) -> Option<usize> {
+    const EV_KEY: u32 = 1;
+    const BTN_TRIGGER: u32 = 0x120;
+    let (kind, c) = (code >> 16, code & 0xFFFF);
+    (kind == EV_KEY && (BTN_TRIGGER..BTN_TRIGGER + bit::NUMBERED.len() as u32).contains(&c)).then(|| (c - BTN_TRIGGER) as usize)
+}
+
+/// The hat's own axes out of gilrs's state (`GilrsRead::hat`): of the axes
+/// it holds, each by its code (`Code::into_u32`) with its value and whether
+/// a mapping names it, those that are `codes`' (`HAT_CODES`) and named by
+/// none.
+#[cfg(not(target_arch = "wasm32"))]
+fn hat_of(axes: impl IntoIterator<Item = (u32, f32, bool)>, codes: [u32; 2]) -> [f32; 2] {
+    let mut hat = [0.0; 2];
+    for (code, v, named) in axes {
+        if let Some(k) = codes.iter().position(|&c| c == code)
+            && !named
+        {
+            hat[k] = v;
+        }
+    }
+    hat
+}
+
+/// The numbered buttons held out of gilrs's state (`GilrsRead::numbered`):
+/// of the buttons it holds, each by its code, whether it is held and whether
+/// a mapping names it, those `number` numbers and none names.
+#[cfg(not(target_arch = "wasm32"))]
+fn numbered_of(buttons: impl IntoIterator<Item = (u32, bool, bool)>, number: fn(u32) -> Option<usize>) -> u16 {
+    buttons.into_iter().filter(|&(_, held, named)| held && !named).filter_map(|(code, ..)| number(code)).fold(0, |a, n| a | 1 << n)
+}
+
+/// gilrs-core's codes (`Code::into_u32`) on Windows.Gaming.Input for a
+/// controller that is no Gamepad: its 7th and 8th buttons (kind 0) and its
+/// 4th and 5th axes (kind 1).
+#[cfg(not(target_arch = "wasm32"))]
+const WGI_BUTTON_7: u32 = 6;
+#[cfg(not(target_arch = "wasm32"))]
+const WGI_BUTTON_8: u32 = 7;
+#[cfg(not(target_arch = "wasm32"))]
+const WGI_AXIS_4: u32 = 0x0001_0003;
+#[cfg(not(target_arch = "wasm32"))]
+const WGI_AXIS_5: u32 = 0x0001_0004;
+
+/// gilrs's own layout of a Windows.Gaming.Input controller that is no
+/// Gamepad (a DirectInput pad: a PS3 one with no mapping of SDL's, a
+/// DragonRise's "Generic USB Joystick") is a DualShock 4's over
+/// DirectInput: six axes, X Y Z Rx Ry Rz, the triggers on the 4th and 5th
+/// (Rx, Ry), the right stick on Z and the 6th. A pad with fewer (a PS3
+/// pad's X Y Z Rz) has its right stick's up and down on the 4th, which that
+/// layout makes L2, and which gilrs then reads for L2 before the 7th
+/// button (by the order its table keeps them in, `map_rev`): its L2 held
+/// whenever the stick rests (half of its travel), its own L2 button none,
+/// and no up and down for the stick; a 5th axis is R2 the same way. Here
+/// such a pad's L2 and R2 are its 7th and 8th buttons, and with four axes
+/// its 4th is the right stick's y. `buttons` is gilrs's state of its
+/// buttons (an axis it makes a button among them), each by its code, held
+/// or not, and its value (an axis's, 0..1); `five` whether it has a 5th
+/// axis.
+#[cfg(not(target_arch = "wasm32"))]
+fn short_raw(g: &mut GilrsRead, buttons: &[(u32, bool, f32)], five: bool) {
+    let held = |code: u32| buttons.iter().any(|&(c, on, _)| c == code && on);
+    let (l2, r2) = (held(WGI_BUTTON_7), held(WGI_BUTTON_8));
+    g.named = g.named & !(bit::L2 | bit::R2) | if l2 { bit::L2 } else { 0 } | if r2 { bit::R2 } else { 0 };
+    g.triggers = [f32::from(u8::from(l2)), f32::from(u8::from(r2))];
+    if !five && let Some(&(_, _, v)) = buttons.iter().find(|&&(c, ..)| c == WGI_AXIS_4) {
+        g.sticks[1] = (v * 2.0 - 1.0).clamp(-1.0, 1.0);
+    }
+}
+
+/// What `report_of` reads of a gilrs controller (`GilrsRead`).
+#[cfg(not(target_arch = "wasm32"))]
+fn read_gilrs(p: &gilrs::Gamepad<'_>) -> GilrsRead {
+    use gilrs::{Axis, Button, MappingSource};
+    let pressed = |b: Button| p.is_pressed(b) || p.button_data(b).is_some_and(|d| d.value() > TRIGGER && matches!(b, Button::LeftTrigger2 | Button::RightTrigger2));
+    let mut g = GilrsRead::default();
+    for (b, k) in GILRS_BUTTONS {
+        if pressed(b) {
+            g.named |= k;
+        }
+    }
+    // gilrs reports y up; libpad's runs down
+    g.sticks = [p.value(Axis::RightStickX), -p.value(Axis::RightStickY), p.value(Axis::LeftStickX), -p.value(Axis::LeftStickY)];
+    let pull = |b: Button| p.button_data(b).map_or(0.0, |d| d.value().clamp(0.0, 1.0));
+    g.triggers = [pull(Button::LeftTrigger2), pull(Button::RightTrigger2)];
+    // a hat gilrs mapped and did not turn into buttons
+    g.dpad = [p.value(Axis::DPadX), p.value(Axis::DPadY)];
+    // a hat its mapping names neither axis of
+    g.hat = hat_of(p.state().axes().map(|(c, d)| (c.into_u32(), d.value(), p.axis_or_btn_name(c).is_some())), HAT_CODES);
+    // gilrs's own layout: no mapping knows it
+    if p.mapping_source() == MappingSource::Driver {
+        if cfg!(target_os = "linux") {
+            g.numbered = numbered_of(p.state().buttons().map(|(c, d)| (c.into_u32(), d.is_pressed(), p.axis_or_btn_name(c).is_some())), numbered_evdev);
+        }
+        if p.axis_code(Axis::RightStickX).is_none() && p.axis_code(Axis::RightStickY).is_none() && p.axis_code(Axis::LeftZ).is_some() && p.axis_code(Axis::RightZ).is_some() {
+            g.z_stick = Some([p.value(Axis::LeftZ), p.value(Axis::RightZ)]);
+        }
+        // a Windows.Gaming.Input controller that is no Gamepad (gilrs gives
+        // a Gamepad no uuid) with fewer than six axes
+        if cfg!(windows) && p.uuid() != [0; 16] && p.axis_code(Axis::RightStickY).is_none() {
+            let buttons: Vec<(u32, bool, f32)> = p.state().buttons().map(|(c, d)| (c.into_u32(), d.is_pressed(), d.value())).collect();
+            let five = p.button_code(Button::RightTrigger2).is_some_and(|c| c.into_u32() == WGI_AXIS_5) || buttons.iter().any(|b| b.0 == WGI_AXIS_5);
+            short_raw(&mut g, &buttons, five);
+        }
+    }
+    g
+}
+
+/// How gilrs lays a controller out, in words: SDL's mapping by its name,
+/// or gilrs's own.
+#[cfg(not(target_arch = "wasm32"))]
+fn gilrs_layout(p: &gilrs::Gamepad<'_>) -> String {
+    match p.map_name() {
+        Some(n) => format!("SDL's mapping {n:?}"),
+        None => "gilrs's own layout".to_string(),
+    }
 }
 
 /// How far a trigger goes (of its travel) before it counts as L2 or R2.
@@ -1502,11 +1803,18 @@ const GILRS_BUTTONS: [(gilrs::Button, u16); 16] = {
 };
 
 /// Whether a gilrs event can change libpad's buttons (`report_of`): a
-/// button pressed, let go or moved (a trigger's travel).
+/// button pressed, let go or moved (a trigger's travel), or a hat gilrs
+/// left as axes moved (its DPadX and DPadY, or its own axes where its
+/// mapping names them not: `GilrsRead`).
 #[cfg(not(target_arch = "wasm32"))]
 fn gilrs_event_buttons(e: &gilrs::EventType) -> bool {
-    use gilrs::EventType;
-    matches!(e, EventType::ButtonPressed(..) | EventType::ButtonReleased(..) | EventType::ButtonChanged(..))
+    use gilrs::{Axis, EventType};
+    match e {
+        EventType::ButtonPressed(..) | EventType::ButtonReleased(..) | EventType::ButtonChanged(..) => true,
+        EventType::AxisChanged(Axis::DPadX | Axis::DPadY, ..) => true,
+        EventType::AxisChanged(Axis::Unknown, _, code) => HAT_CODES.contains(&code.into_u32()),
+        _ => false,
+    }
 }
 
 /// In a page: whether a connected gamepad has a vibration actuator (the
@@ -1586,6 +1894,196 @@ mod tests {
         assert_eq!(keys(&[&[bit::CROSS, 0], &[], &[]], true), [(134, true), (134, false)]);
         assert_eq!(keys(&[&[bit::CROSS], &[bit::CROSS], &[bit::CROSS], &[0], &[]], true), [(134, true), (134, false)], "held: once");
         assert!(keys(&[&[bit::CROSS, 0], &[], &[]], false).is_empty(), "the control: lost");
+    }
+
+    /// A hat's two axes as the d-pad: each way past half of its travel, a
+    /// diagonal both of its sides; nothing at rest, or under half.
+    #[test]
+    fn a_hat_on_two_axes_is_the_d_pad() {
+        for (x, y, k) in WAYS {
+            assert_eq!(hat_ways(x as f32, y as f32), k, "({x}, {y})");
+        }
+        assert_eq!(hat_ways(0.0, 0.0), 0);
+        assert_eq!(hat_ways(0.45, -0.45), 0, "under half its travel");
+    }
+
+    /// The eight ways a hat goes, up first and on clockwise, as x and y (-1
+    /// left and up), and libpad's d-pad for each.
+    const WAYS: [(i32, i32, u16); 8] = [
+        (0, -1, bit::UP),
+        (1, -1, bit::UP | bit::RIGHT),
+        (1, 0, bit::RIGHT),
+        (1, 1, bit::RIGHT | bit::DOWN),
+        (0, 1, bit::DOWN),
+        (-1, 1, bit::DOWN | bit::LEFT),
+        (-1, 0, bit::LEFT),
+        (-1, -1, bit::LEFT | bit::UP),
+    ];
+
+    /// evdev's hat (ABS_HAT0X and ABS_HAT0Y, -1 left and up) where the
+    /// controller's mapping names neither (one of SDL's that puts the d-pad
+    /// on buttons, for a controller with the same USB ids): read out of
+    /// gilrs's state by its codes, each of its eight ways. The controls:
+    /// another axis's code (ABS_X, ABS_HAT1X), the same codes named by a
+    /// mapping (gilrs reads them as it names them), another platform's codes.
+    #[test]
+    fn evdevs_hat_is_read_by_its_codes_where_no_mapping_names_it() {
+        for (x, y, k) in WAYS {
+            let hat = hat_of([(HAT_CODES_EVDEV[0], x as f32, false), (HAT_CODES_EVDEV[1], y as f32, false), (0x0003_0000, 0.5, false)], HAT_CODES_EVDEV);
+            assert_eq!(report_from(&GilrsRead { hat, ..GilrsRead::default() }).buttons, k, "({x}, {y})");
+        }
+        assert_eq!(hat_of([(0x0003_0012, 1.0, false), (0x0003_0000, -1.0, false)], HAT_CODES_EVDEV), [0.0; 2], "ABS_HAT1X, ABS_X");
+        assert_eq!(hat_of([(HAT_CODES_EVDEV[0], 1.0, true)], HAT_CODES_EVDEV), [0.0; 2], "named by a mapping");
+        assert_eq!(hat_of([(HAT_CODES_WGI[0], 1.0, false), (HAT_CODES_IOKIT[1], 1.0, false)], HAT_CODES_EVDEV), [0.0; 2], "other platforms' codes");
+    }
+
+    /// gilrs's DPadX and DPadY (its y up): a hat it mapped but did not turn
+    /// into buttons (a mapping with a part of it, or a controller with both
+    /// a hat and d-pad buttons), each of its eight ways.
+    #[test]
+    fn gilrs_d_pad_axes_are_the_d_pad() {
+        for (x, y, k) in WAYS {
+            assert_eq!(report_from(&GilrsRead { dpad: [x as f32, -y as f32], ..GilrsRead::default() }).buttons, k, "({x}, {y})");
+        }
+        assert_eq!(report_from(&GilrsRead::default()), Report::default());
+    }
+
+    /// Windows.Gaming.Input's switch (a DirectInput pad's hat) as gilrs-core
+    /// makes it two axes (`direction_from_switch`, y up, its y sent turned
+    /// over): each position, and Center nothing; read by its codes where no
+    /// mapping names them, and as gilrs's DPadX and DPadY where one does
+    /// (gilrs turns DPadY's y over again).
+    #[test]
+    fn windows_gaming_inputs_switch_positions_are_the_d_pad() {
+        let positions = [
+            ("Up", (0, 1), bit::UP),
+            ("UpRight", (1, 1), bit::UP | bit::RIGHT),
+            ("Right", (1, 0), bit::RIGHT),
+            ("DownRight", (1, -1), bit::DOWN | bit::RIGHT),
+            ("Down", (0, -1), bit::DOWN),
+            ("DownLeft", (-1, -1), bit::DOWN | bit::LEFT),
+            ("Left", (-1, 0), bit::LEFT),
+            ("UpLeft", (-1, 1), bit::UP | bit::LEFT),
+            ("Center", (0, 0), 0),
+        ];
+        for (name, (x, y), k) in positions {
+            let hat = hat_of([(HAT_CODES_WGI[0], x as f32, false), (HAT_CODES_WGI[1], -y as f32, false)], HAT_CODES_WGI);
+            assert_eq!(report_from(&GilrsRead { hat, ..GilrsRead::default() }).buttons, k, "{name}, by its codes");
+            assert_eq!(report_from(&GilrsRead { dpad: [x as f32, y as f32], ..GilrsRead::default() }).buttons, k, "{name}, as DPadX and DPadY");
+        }
+    }
+
+    /// IOKit's hat switch as gilrs-core makes it two axes (each of its eight
+    /// values, 0 up and on clockwise, its y down; past them at rest), read
+    /// by its codes where no mapping names them.
+    #[test]
+    fn iokits_hat_switch_is_the_d_pad() {
+        let xy = |v: usize| {
+            let x = match v {
+                5..=7 => -1.0,
+                1..=3 => 1.0,
+                _ => 0.0,
+            };
+            let y = match v {
+                3..=5 => 1.0,
+                0 | 1 | 7 => -1.0,
+                _ => 0.0,
+            };
+            (x, y)
+        };
+        for v in 0..9 {
+            let (x, y) = xy(v);
+            let hat = hat_of([(HAT_CODES_IOKIT[0], x, false), (HAT_CODES_IOKIT[1], y, false)], HAT_CODES_IOKIT);
+            let want = WAYS.get(v).map_or(0, |w| w.2);
+            assert_eq!(report_from(&GilrsRead { hat, ..GilrsRead::default() }).buttons, want, "value {v}");
+        }
+    }
+
+    /// A controller with d-pad buttons reads as it did (its named buttons,
+    /// sticks and triggers, nothing more), and so does a hat gilrs turned
+    /// into its d-pad buttons (gilrs's filter leaves its axes at rest). A
+    /// d-pad sent two or three ways at once is one press through `VIPad`
+    /// and `PadKeys`, held while any way holds it, let go once; and the ways
+    /// it came are said.
+    #[test]
+    fn a_d_pad_sent_several_ways_is_one_press() {
+        let plain = GilrsRead { named: bit::CROSS | bit::UP, sticks: [0.5, 0.0, 0.0, -0.25], triggers: [0.0, 0.7], ..GilrsRead::default() };
+        assert_eq!(report_from(&plain), Report { buttons: bit::CROSS | bit::UP, sticks: [0.5, 0.0, 0.0, -0.25], triggers: [0.0, 0.7] });
+        assert_eq!(plain.dpad_ways(), 1);
+        let all = GilrsRead { named: bit::UP, dpad: [0.0, 1.0], hat: [0.0, -1.0], ..GilrsRead::default() };
+        assert_eq!(report_from(&all).buttons, bit::UP);
+        assert_eq!(key_name(138), "up");
+        let mut c = Console::new();
+        c.poll(Report::default(), true, false, false);
+        assert_eq!(c.poll(report_from(&all), true, false, false), vec![(138, true)]);
+        assert!(c.poll(report_from(&all), true, false, false).is_empty(), "held: nothing new");
+        // the buttons let go a read before the axes: still held
+        assert!(c.poll(report_from(&GilrsRead { dpad: [0.0, 1.0], ..GilrsRead::default() }), true, false, false).is_empty());
+        assert_eq!(c.poll(Report::default(), true, false, false), vec![(138, false)], "let go once");
+        assert_eq!(all.dpad_ways(), 7);
+        assert_eq!(dpad_ways_text(0), "its d-pad not pressed yet");
+        assert_eq!(dpad_ways_text(1), "its d-pad as gilrs's d-pad buttons");
+        assert_eq!(dpad_ways_text(6), "its d-pad as gilrs's d-pad axes and its hat's own axes");
+    }
+
+    /// A HID joystick no mapping knows (a third-party PS3 pad through
+    /// hid-generic: BTN_TRIGGER on, its sticks on X Y and Z Rz) on Linux,
+    /// where gilrs's own layout names none of its buttons and has no right
+    /// stick for it: its buttons by number (□ ✕ ○ △, the shoulders, the
+    /// triggers, Select, Start, the sticks' clicks), its right stick on Z and
+    /// Rz. The controls: the 13th (PS) on, a gamepad's BTN_SOUTH (gilrs names
+    /// it), a button let go or named by a mapping.
+    #[test]
+    fn a_hid_joystick_no_mapping_knows_reads_by_number() {
+        let want = [bit::SQUARE, bit::CROSS, bit::CIRCLE, bit::TRIANGLE, bit::L1, bit::R1, bit::L2, bit::R2, bit::SELECT, bit::START, bit::L3, bit::R3];
+        for (n, k) in want.iter().enumerate() {
+            let code = 0x0001_0120 + n as u32;
+            assert_eq!(numbered_evdev(code), Some(n));
+            let numbered = numbered_of([(code, true, false)], numbered_evdev);
+            assert_eq!(report_from(&GilrsRead { numbered, ..GilrsRead::default() }).buttons, *k, "button {}", n + 1);
+        }
+        assert_eq!((numbered_evdev(0x0001_012C), numbered_evdev(0x0001_0130), numbered_evdev(0x0003_0120)), (None, None, None), "the 13th, BTN_SOUTH, an axis");
+        assert_eq!(numbered_of([(0x0001_0120, false, false), (0x0001_0121, true, true)], numbered_evdev), 0, "let go, named");
+        let r = report_from(&GilrsRead { sticks: [0.0, 0.0, 0.25, 0.5], z_stick: Some([-0.75, 1.0]), ..GilrsRead::default() });
+        assert_eq!(r.sticks, [-0.75, 1.0, 0.25, 0.5], "rx, ry from Z and Rz");
+    }
+
+    /// A DirectInput pad with four axes (X Y Z Rz, a PS3 pad's) that no
+    /// mapping knows, as gilrs's own layout reads it on Windows: its 4th
+    /// axis (the right stick's up and down) made L2, half of its travel at
+    /// rest, which read as L2 held (the control, gilrs's reading). Here L2
+    /// and R2 are its 7th and 8th buttons and the 4th axis the right stick's
+    /// y; with a 5th axis (which may be any) the 4th is left alone, the
+    /// triggers still the buttons.
+    #[test]
+    fn a_short_directinput_pad_has_its_triggers_on_its_buttons() {
+        let gilrs = GilrsRead { named: bit::L2, sticks: [0.25, 0.0, 0.0, 0.0], triggers: [0.5, 0.0], ..GilrsRead::default() };
+        assert_eq!(report_from(&gilrs).buttons, bit::L2, "the control: L2 held at rest");
+        let mut g = gilrs;
+        short_raw(&mut g, &[(WGI_AXIS_4, false, 0.5)], false);
+        assert_eq!(report_from(&g), Report { buttons: 0, sticks: [0.25, 0.0, 0.0, 0.0], triggers: [0.0, 0.0] }, "at rest");
+        let mut g = gilrs;
+        short_raw(&mut g, &[(WGI_AXIS_4, false, 0.0), (WGI_BUTTON_7, true, 1.0)], false);
+        assert_eq!((report_from(&g).buttons, g.sticks[1], g.triggers), (bit::L2, -1.0, [1.0, 0.0]), "the stick up, L2 pressed");
+        let mut g = GilrsRead::default();
+        short_raw(&mut g, &[(WGI_AXIS_4, false, 1.0), (WGI_AXIS_5, true, 0.9), (WGI_BUTTON_8, true, 1.0)], true);
+        assert_eq!((report_from(&g).buttons, g.sticks[1]), (bit::R2, 0.0), "five axes: R2 its button, the 4th left alone");
+    }
+
+    /// The bug report's note: each controller by its place, what it calls
+    /// itself and how it is read, and those this window does not read; none
+    /// connected, nothing.
+    #[test]
+    fn the_note_says_each_controller_and_how_it_is_read() {
+        let pads = [("/dev/input/event7", "USB Gamepad", "gilrs's own layout, its d-pad as its hat's own axes"), ("xinput0", "Xbox controller 1", "XInput")];
+        assert_eq!(
+            note_text(pads.iter().copied(), &Pick::All),
+            "1 \"USB Gamepad\" (gilrs's own layout, its d-pad as its hat's own axes); 2 \"Xbox controller 1\" (XInput)"
+        );
+        let one = note_text(pads.iter().copied(), &Pick::One("xinput0".into()));
+        assert!(one.starts_with("1 \"USB Gamepad\" (gilrs's own layout, its d-pad as its hat's own axes), not read by this window; 2"), "{one}");
+        assert!(!one.contains("/dev/"), "never a device's path");
+        assert_eq!(note_text(std::iter::empty(), &Pick::Nothing), "");
     }
 
     /// A button's name is the one scripts give it (`named`), the first of

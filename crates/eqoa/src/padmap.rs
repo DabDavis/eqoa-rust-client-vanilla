@@ -25,17 +25,38 @@
 //!   read as the standard layout, except the order xpad's devices have through
 //!   joydev (Chrome on Linux, for a pad it has no mapping for: A B X Y LB RB
 //!   Back Start Guide LS RS, axes LX LY LT RX RY RT and the hat), told by its
-//!   triggers resting at -1 at axes 2 and 5. Joydev is Linux's alone, so
-//!   nowhere else is a pair of axes taken for triggers.
+//!   triggers resting at -1 at axes 2 and 5 (not a hat's, below). Joydev is
+//!   Linux's alone, so nowhere else is a pair of axes taken for triggers. Its d-pad
+//!   is a hat where it has one (`PadMap::raw_dpad`): a third-party PS3 pad
+//!   (twelve or thirteen buttons and a hat switch, a DragonRise, a ShanWan)
+//!   has no buttons 12 to 15 for one, and read there its d-pad did nothing
+//!   (2026-11-10, "some third party ps3 controllers dpads arent being
+//!   registered"). Through joydev (Chrome on Linux) and Firefox's evdev
+//!   (Firefox on Linux, for a pad with no BTN_GAMEPAD, which it does not
+//!   call "standard") a pad's axes come in the order of their codes, so
+//!   the hat switch's ABS_HAT0X and ABS_HAT0Y are its last two, -1, 0 or 1;
+//!   Firefox on macOS lists them in its report's order, a hat switch on one
+//!   axis as Chromium scales it (below), its rest past 1. Either is the
+//!   d-pad once it is told from a stick: the pair at the end once it has
+//!   rested at 0 together and given nothing but -1, 0 and 1 (a stick's or a
+//!   trigger's axis gives the values between), the one axis once it has
+//!   rested past ±1 and given nothing a hat switch does not. Safari leaves
+//!   such a pad's hat out altogether (WebKit's `GenericHIDGamepad`), and a
+//!   pad passed off as Sony's DualShock 3 (054c:0268) is "standard" with
+//!   its d-pad on the buttons that DualShock 3 has, in Chromium and Firefox
+//!   alike: neither can be read here.
 //! - No mapping in Chromium outside Linux (Chrome and Edge on Windows and
-//!   macOS, which map few DirectInput pads and none of 8BitDo's) is the HID
-//!   report as it comes (raw_input_gamepad_device_win.cc): the report's
+//!   macOS, which map few DirectInput pads and none of 8BitDo's), and in
+//!   Firefox on Windows, is the HID report as it comes
+//!   (raw_input_gamepad_device_win.cc, WindowsGamepad.cpp): the report's
 //!   button n at index n - 1, and each axis at its usage less X's (X 0, Y 1,
 //!   Z 2, Rx 3, Ry 4, Rz 5, the hat switch 9). The right stick is Z and Rz, 2
 //!   and 5, as Chromium's own DirectInput mappers read it, and the d-pad is
 //!   the hat: -1 up, on clockwise in eighths to 1 (up and left), past 1 at
 //!   rest, 0 before its first report (`DpadFromAxis`, whose bands `hat`
-//!   keeps). Read as the standard layout, an 8BitDo Pro 2 in its D-input mode
+//!   keeps). Firefox on Windows was read as the standard layout until
+//!   2026-11-10: such a pad's d-pad did nothing, and its right stick's up and
+//!   down was Rx's. Read as the standard layout, an 8BitDo Pro 2 in its D-input mode
 //!   had ✕ on its right face button and ○ on the bottom one, Select and
 //!   Start on ZL and ZR, the right stick's up and down on axis 3 (no stick's),
 //!   no d-pad (so no way down the Options window to Save Changes but the
@@ -69,7 +90,7 @@
 //! at 0, and read as a trigger it would hold L2 down for good. An axis a
 //! browser gives as no number reads as 0.
 
-use crate::input::{Report, bit};
+use crate::input::{Report, bit, hat_ways};
 
 /// One pad as the Gamepad API gives it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -102,6 +123,9 @@ pub enum Layout {
 pub struct Browser {
     /// Firefox reading evdev itself (on Linux; not Android's)
     pub firefox_linux: bool,
+    /// Firefox on Windows, which reads a pad it has no mapping for by its
+    /// HID usages as Chromium does (`WindowsGamepad.cpp`)
+    pub firefox_windows: bool,
     /// on Linux or ChromeOS (not Android): a pad with no mapping comes
     /// through joydev
     pub linux: bool,
@@ -115,7 +139,9 @@ impl Browser {
     /// From `navigator.userAgent` and the page's `?padxy=`.
     pub fn new(user_agent: &str, padxy: Option<&str>) -> Browser {
         let android = user_agent.contains("Android");
-        let firefox_linux = user_agent.contains("Firefox/") && user_agent.contains("Linux") && !android;
+        let firefox = user_agent.contains("Firefox/");
+        let firefox_linux = firefox && user_agent.contains("Linux") && !android;
+        let firefox_windows = firefox && user_agent.contains("Windows");
         let linux = (user_agent.contains("Linux") || user_agent.contains("CrOS")) && !android;
         let chromium = user_agent.contains("Chrome/") || user_agent.contains("Chromium/");
         let xy = match padxy {
@@ -123,7 +149,7 @@ impl Browser {
             Some("keep") => Some(false),
             _ => None,
         };
-        Browser { firefox_linux, linux, chromium, xy }
+        Browser { firefox_linux, firefox_windows, linux, chromium, xy }
     }
 }
 
@@ -222,10 +248,39 @@ pub fn layout(pad: &WebPad, b: Browser) -> Layout {
     match pad.mapping.as_str() {
         "standard" if b.firefox_linux => Layout::Evdev,
         "standard" => Layout::Standard,
-        _ if b.chromium && !b.linux => Layout::Usage,
+        _ if (b.chromium && !b.linux) || b.firefox_windows => Layout::Usage,
         _ => Layout::Raw,
     }
 }
+
+/// Where a pad's d-pad is read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dpad {
+    /// buttons 12 to 15, the standard layout's places
+    Buttons,
+    /// a hat switch on one axis, as Chromium and Firefox scale it (`hat`)
+    Pov(usize),
+    /// a hat on two axes, its x at this one and its y at the next, -1 left
+    /// and up, 0 at rest (joydev's and evdev's ABS_HAT0X and ABS_HAT0Y)
+    Axes(usize),
+}
+
+/// Whether an axis's value is one a hat on two axes gives: -1, 0 or 1.
+fn hat_value(v: f32) -> bool {
+    [-1.0, 0.0, 1.0].iter().any(|h| (v - h).abs() < 1e-4)
+}
+
+/// Whether an axis's value is one a hat switch on one axis gives (`hat`):
+/// one of its eight ways, 0 before its first report, or its rest past ±1.
+fn pov_value(v: f32) -> bool {
+    v.abs() > POV_REST || v == 0.0 || (0..8).any(|k| (v - (k as f32 * 2.0 / 7.0 - 1.0)).abs() < 1e-3)
+}
+
+/// Past this an axis is a hat switch at rest: its null state, which the
+/// browsers scale past the end of its eight ways (Chromium's and Firefox's
+/// 9/7 for a hat of 0 to 7 and a null of 8; a stick's axis never goes
+/// past ±1 by more than a step of its own).
+const POV_REST: f32 = 1.1;
 
 /// Whether the pad's X and Y come swapped: Firefox's evdev layout on a pad
 /// xpad drives, unless the page says otherwise.
@@ -246,7 +301,24 @@ pub struct PadMap {
     /// the axes as first seen, and which have moved from it since
     first: Option<Vec<f32>>,
     moved: Vec<bool>,
+    /// each axis has read a value no hat on two axes gives (`hat_value`)
+    analog: Vec<bool>,
+    /// each axis has read a value no hat switch on one axis gives
+    /// (`pov_value`)
+    not_pov: Vec<bool>,
+    /// the axis that has read a hat switch's rest (`POV_REST`), and nothing
+    /// such a hat does not give since
+    pov: Option<usize>,
+    /// the pair of axes that has rested at 0 together, as a hat does: its
+    /// first
+    rested: Option<usize>,
+    /// how it was last said to be read (`changed`)
+    said: String,
 }
+
+/// The fewest axes a pad with a hat on two axes and two sticks has (the
+/// sticks' four, then the hat's two).
+const HAT_PAD_AXES: usize = 6;
 
 impl PadMap {
     /// The axes the triggers are at, for this layout, if it has them:
@@ -260,9 +332,79 @@ impl PadMap {
         }
     }
 
+    /// Whether axis `i` is one of a hat's two at the end of the pad's axes:
+    /// they have rested at 0 together and given nothing but -1, 0 and 1
+    /// (`raw_dpad`'s test, whatever its buttons).
+    fn hat_axis(&self, pad: &WebPad, i: usize) -> bool {
+        let n = pad.axes.len();
+        let digital = |i: usize| !self.analog.get(i).copied().unwrap_or(true);
+        n >= HAT_PAD_AXES && self.rested == Some(n - 2) && digital(n - 2) && digital(n - 1) && (i == n - 2 || i == n - 1)
+    }
+
+    /// What a read learns of the pad's axes: which give values no hat
+    /// gives, which one has read a hat switch's rest, and which pair has
+    /// rested at 0 together.
+    fn learn(&mut self, pad: &WebPad) {
+        let n = pad.axes.len();
+        let ax = |i: usize| pad.axes.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0);
+        self.analog.resize(n, false);
+        self.not_pov.resize(n, false);
+        for i in 0..n {
+            self.analog[i] |= !hat_value(ax(i));
+            self.not_pov[i] |= !pov_value(ax(i));
+        }
+        if self.pov.is_none_or(|k| self.not_pov.get(k).copied().unwrap_or(true)) {
+            self.pov = (0..n).find(|&i| !self.not_pov[i] && ax(i).abs() > POV_REST);
+        }
+        if n >= 2 && ax(n - 2) == 0.0 && ax(n - 1) == 0.0 {
+            self.rested = Some(n - 2);
+        }
+    }
+
+    /// Where a pad read positionally in its own order (`Layout::Raw`, no
+    /// order of its own known) has its d-pad. Its hat, where it has one,
+    /// on any axis that has read a hat switch's rest (Firefox on macOS puts
+    /// a pad's axes in the order its report lists them, a hat switch among
+    /// them on one axis); else, for a pad with too few buttons for a d-pad
+    /// at 12 to 15 (a PS3 pad's twelve or thirteen), on its last two axes
+    /// when they have rested at 0 together and read nothing but -1, 0 and
+    /// 1 (joydev and Firefox's evdev give a pad's axes in the order of
+    /// their codes, ABS_HAT0X and ABS_HAT0Y after the sticks); else buttons
+    /// 12 to 15.
+    fn raw_dpad(&self, pad: &WebPad) -> Dpad {
+        if let Some(k) = self.pov.filter(|&k| !self.not_pov.get(k).copied().unwrap_or(true)) {
+            return Dpad::Pov(k);
+        }
+        let n = pad.axes.len();
+        if pad.buttons.len() < 16 && n >= HAT_PAD_AXES && self.hat_axis(pad, n - 2) {
+            return Dpad::Axes(n - 2);
+        }
+        Dpad::Buttons
+    }
+
+    /// The d-pad's bits, read where `dpad` says.
+    fn dpad_bits(pad: &WebPad, dpad: Dpad) -> u16 {
+        let ax = |i: usize| pad.axes.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0);
+        match dpad {
+            Dpad::Buttons => [(12, bit::UP), (13, bit::DOWN), (14, bit::LEFT), (15, bit::RIGHT)].iter().filter(|p| pad.buttons.get(p.0).is_some_and(|b| b.0)).fold(0, |a, p| a | p.1),
+            Dpad::Pov(k) => hat(ax(k)),
+            Dpad::Axes(k) => hat_ways(ax(k), ax(k + 1)),
+        }
+    }
+
+    /// The d-pad in words, for `how`.
+    fn dpad_words(dpad: Dpad) -> String {
+        match dpad {
+            Dpad::Buttons => ", the d-pad on buttons 12 to 15".to_string(),
+            Dpad::Pov(k) => format!(", the d-pad on the hat at axis {k}"),
+            Dpad::Axes(k) => format!(", the d-pad on the hat at axes {k} and {}", k + 1),
+        }
+    }
+
     /// The pad as libpad's report, its sticks as they came (no dead zone).
     pub fn read(&mut self, pad: &WebPad, b: Browser) -> Report {
         let layout = layout(pad, b);
+        self.learn(pad);
         if let Some(r) = Self::read_own(pad, layout, b) {
             return r;
         }
@@ -278,9 +420,14 @@ impl PadMap {
             }
         }
         let pair = Self::trigger_pair(pad, layout, b);
+        // not where the second is a hat's (a PS3 pad through joydev, X Y Z
+        // Rz and its hat: the right stick left with the d-pad up turned it
+        // into xpad's order for the rest of the session, its d-pad read
+        // where it has none and L2 and R2 held)
         if let Some((l, r)) = pair
             && ax(l) <= -0.9
             && ax(r) <= -0.9
+            && !self.hat_axis(pad, r)
         {
             self.triggers = true;
         }
@@ -328,23 +475,27 @@ impl PadMap {
         set(pressed(9), bit::START);
         set(pressed(10), bit::L3);
         set(pressed(11), bit::R3);
-        set(pressed(12), bit::UP);
-        set(pressed(13), bit::DOWN);
-        set(pressed(14), bit::LEFT);
-        set(pressed(15), bit::RIGHT);
-        r.sticks = [ax(2), ax(3), ax(0), ax(1)];
+        // the d-pad: buttons 12 to 15, or a positional pad's hat
+        let dpad = if layout == Layout::Raw { self.raw_dpad(pad) } else { Dpad::Buttons };
+        r.buttons |= Self::dpad_bits(pad, dpad);
+        // the sticks on the first four axes that are not a hat switch's
+        let mut sticks = (0..pad.axes.len().max(4)).filter(|&i| dpad != Dpad::Pov(i));
+        let mut next = || sticks.next().map_or(0.0, ax);
+        let (lx, ly, rx, ry) = (next(), next(), next(), next());
+        r.sticks = [rx, ry, lx, ly];
         r
     }
 
     /// Where the d-pad and the right stick's up and down are, for a pad read
     /// in its own order or by its usages (`read_own`): the hat's axis (or
-    /// joydev's pair from it), else none (buttons 12 to 15), and the axis.
-    fn own_axes(pad: &WebPad, layout: Layout) -> (Option<usize>, usize) {
+    /// joydev's pair from it), else buttons 12 to 15, and the axis.
+    fn own_axes(pad: &WebPad, layout: Layout) -> (Dpad, usize) {
+        let n = pad.axes.len();
         match layout {
             // by their usages: the hat switch at 9, Rz at 5
-            Layout::Usage => ((pad.axes.len() > 9).then_some(9), if pad.axes.len() > 5 { 5 } else { 3 }),
+            Layout::Usage => (if n > 9 { Dpad::Pov(9) } else { Dpad::Buttons }, if n > 5 { 5 } else { 3 }),
             // joydev's order of a HID pad: X Y Z Rz Gas Brake Hat0X Hat0Y
-            _ => ((pad.axes.len() > 7).then_some(6), 3),
+            _ => (if n > 7 { Dpad::Axes(6) } else { Dpad::Buttons }, 3),
         }
     }
 
@@ -385,19 +536,13 @@ impl PadMap {
             }
         }
         let (dpad, ry) = Self::own_axes(pad, layout);
-        r.buttons |= match (layout, dpad) {
-            (Layout::Usage, Some(h)) => hat(ax(h)),
-            (_, Some(x)) => {
-                let (hx, hy) = (ax(x), ax(x + 1));
-                [(hy < -0.5, bit::UP), (hy > 0.5, bit::DOWN), (hx < -0.5, bit::LEFT), (hx > 0.5, bit::RIGHT)].iter().filter(|p| p.0).fold(0, |a, p| a | p.1)
-            }
-            (_, None) => [(12, bit::UP), (13, bit::DOWN), (14, bit::LEFT), (15, bit::RIGHT)].iter().filter(|p| pressed(p.0)).fold(0, |a, p| a | p.1),
-        };
+        r.buttons |= Self::dpad_bits(pad, dpad);
         r.sticks = [ax(2), ax(ry), ax(0), ax(1)];
         Some(r)
     }
 
-    /// How the pad is read: its layout, X and Y swapped, its triggers.
+    /// How the pad is read: its layout, its d-pad where it is not on buttons
+    /// 12 to 15 by the layout's own rule, X and Y swapped, its triggers.
     pub fn how(&self, pad: &WebPad, b: Browser) -> String {
         let layout = layout(pad, b);
         let own = matches!(layout, Layout::Raw | Layout::Usage) && own_order(pad).is_some();
@@ -413,11 +558,12 @@ impl PadMap {
         if own || layout == Layout::Usage {
             let (dpad, ry) = Self::own_axes(pad, layout);
             how.push_str(&match dpad {
-                Some(h) if layout == Layout::Usage => format!(", the d-pad on the hat at axis {h}"),
-                Some(x) => format!(", the d-pad on axes {x} and {}", x + 1),
-                None => ", the d-pad on buttons 12 to 15".to_string(),
+                Dpad::Axes(x) => format!(", the d-pad on axes {x} and {}", x + 1),
+                d => Self::dpad_words(d),
             });
             how.push_str(&format!(", the right stick at axes 2 and {ry}"));
+        } else if layout == Layout::Raw && !self.triggers {
+            how.push_str(&Self::dpad_words(self.raw_dpad(pad)));
         }
         if swaps_xy(pad, b) {
             how.push_str(", X and Y swapped");
@@ -443,6 +589,17 @@ impl PadMap {
             .map(|(i, b)| if b.1 > 0.0 && b.1 < 1.0 { format!("{i}={:.2}", b.1) } else { i.to_string() })
             .collect();
         format!("pad {}: {:?}, mapping {:?} ({how}), {} buttons: axes [{}], pressed [{}]", pad.index, pad.id, pad.mapping, pad.buttons.len(), axes.join(", "), held.join(", "))
+    }
+
+    /// How the pad is read (`how`) when that changed since it was last
+    /// asked (the first time it is asked too): what a read learned of it,
+    /// its hat or its triggers found, for the log to say once.
+    pub fn changed(&mut self, pad: &WebPad, b: Browser) -> Option<String> {
+        let how = self.how(pad, b);
+        (how != self.said).then(|| {
+            self.said = how.clone();
+            how
+        })
     }
 }
 
@@ -671,6 +828,211 @@ mod tests {
         let r = PadMap::default().read(&four, chrome);
         assert_eq!((r.buttons, r.sticks), (bit::UP, [0.3, 0.4, 0.1, 0.2]));
         assert!(PadMap::default().how(&four, chrome).contains("the d-pad on buttons 12 to 15, the right stick at axes 2 and 3"));
+    }
+
+    const FIREFOX_WINDOWS: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0";
+    const FIREFOX_MAC: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.5; rv:140.0) Gecko/20100101 Firefox/140.0";
+
+    /// The d-pad's eight ways in `HAT`'s order (up first, on clockwise), and
+    /// the same ways as a hat on two axes gives them (x, y; -1 left and up).
+    const WAYS: [u16; 8] = [bit::UP, bit::UP | bit::RIGHT, bit::RIGHT, bit::RIGHT | bit::DOWN, bit::DOWN, bit::DOWN | bit::LEFT, bit::LEFT, bit::LEFT | bit::UP];
+    const WAYS_XY: [(f32, f32); 8] = [(0.0, -1.0), (1.0, -1.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (-1.0, 1.0), (-1.0, 0.0), (-1.0, -1.0)];
+
+    /// Firefox on Windows reads a pad it has no mapping for by its HID
+    /// usages (WindowsGamepad.cpp: button n at n - 1, an axis at its usage
+    /// less X's, the hat switch at 9, scaled as Chromium scales it): a
+    /// third-party PS3 pad's d-pad is its hat at 9, each of its eight ways
+    /// (a diagonal both of its sides), at rest past 1 (or, for a hat whose
+    /// ways are 1 to 8, Firefox's unsigned sum far past it), nothing at 0
+    /// before its first report; its right stick is Z and Rz. Read as the
+    /// standard layout until now (the control: its buttons 12 to 15, which
+    /// it does not have, and Rx for the stick's up and down), the d-pad did
+    /// nothing. The same pad in Firefox on Linux is not read by its usages.
+    #[test]
+    fn firefox_on_windows_reads_an_unmapped_pads_hat_by_its_usages() {
+        let ff = Browser::new(FIREFOX_WINDOWS, None);
+        assert!(ff.firefox_windows && !ff.firefox_linux && !ff.chromium);
+        let mut p = pad("0079-0006-Generic   USB  Joystick  ", "", 13, &[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, HAT_REST]);
+        let mut m = PadMap::default();
+        assert_eq!(layout(&p, ff), Layout::Usage);
+        assert_eq!(m.read(&p, ff), Report::default(), "at rest");
+        for (v, k) in HAT.iter().zip(WAYS) {
+            p.axes[9] = *v;
+            assert_eq!(m.read(&p, ff).buttons, k, "the hat at {v}");
+        }
+        for rest in [HAT_REST, 2.0 * 4_294_967_295.0 / 7.0 - 1.0, 0.0] {
+            p.axes[9] = rest;
+            assert_eq!(m.read(&p, ff).buttons, 0, "at rest: {rest}");
+        }
+        // the 13th button (PS) is none of the game's, and no d-pad
+        press(&mut p, 12, 1.0);
+        assert_eq!(m.read(&p, ff).buttons, 0);
+        press(&mut p, 12, 0.0);
+        p.axes = vec![0.25, -0.5, 0.75, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, HAT_REST];
+        assert_eq!(m.read(&p, ff).sticks, [0.75, -1.0, 0.25, -0.5], "the right stick on Z and Rz");
+        assert!(m.how(&p, ff).contains("the d-pad on the hat at axis 9, the right stick at axes 2 and 5"), "{}", m.how(&p, ff));
+        // the control: the same pad on Linux is in its own order
+        assert_eq!(layout(&p, Browser::new(FIREFOX_LINUX, None)), Layout::Raw);
+        assert!(!Browser::new(FIREFOX_LINUX, None).firefox_windows);
+    }
+
+    /// A third-party PS3 pad (13 buttons, sticks on X Y and Z Rz, a hat)
+    /// through joydev, as Chrome on Linux gives a pad it has no mapping for:
+    /// its axes in the order of their codes, the hat's ABS_HAT0X and
+    /// ABS_HAT0Y last (4 and 5), -1, 0 or 1. Its d-pad is the hat, each of
+    /// its eight ways; its 13th button (PS) is no d-pad's up. The right stick
+    /// left with the d-pad up (-1 at 2 and 5) no longer turns it into xpad's
+    /// order (5 is its hat's): the d-pad stays, and nothing holds L2 or R2
+    /// after. Its buttons 12 to 15 were the d-pad before, which it has not.
+    #[test]
+    fn chrome_on_linux_reads_a_ps3_pads_hat_on_its_last_two_axes() {
+        let linux = Browser::new(CHROME_LINUX, None);
+        let mut p = pad("PS3 GamePad (Vendor: 2563 Product: 0575)", "", 13, &[0.0; 6]);
+        let mut m = PadMap::default();
+        assert_eq!(layout(&p, linux), Layout::Raw);
+        assert_eq!(m.read(&p, linux), Report::default(), "at rest");
+        assert!(m.how(&p, linux).ends_with("the d-pad on the hat at axes 4 and 5"), "{}", m.how(&p, linux));
+        for ((x, y), k) in WAYS_XY.iter().zip(WAYS) {
+            (p.axes[4], p.axes[5]) = (*x, *y);
+            assert_eq!(m.read(&p, linux).buttons, k, "the hat at ({x}, {y})");
+        }
+        (p.axes[4], p.axes[5]) = (0.0, 0.0);
+        assert_eq!(m.read(&p, linux).buttons, 0, "let go");
+        press(&mut p, 12, 1.0);
+        assert_eq!(m.read(&p, linux).buttons, 0, "PS is no d-pad's up");
+        press(&mut p, 12, 0.0);
+        press(&mut p, 0, 1.0);
+        assert_eq!(m.read(&p, linux).buttons, bit::CROSS, "its buttons by their places, as before");
+        press(&mut p, 0, 0.0);
+        // the right stick left (joydev's -1 at its end) with the d-pad up
+        p.axes = vec![0.0, 0.0, -1.0, 0.0, 0.0, -1.0];
+        assert_eq!(m.read(&p, linux).buttons, bit::UP);
+        assert!(!m.triggers, "not xpad's order");
+        p.axes = vec![0.0; 6];
+        assert_eq!(m.read(&p, linux), Report::default(), "nothing held after");
+        // the sticks where they were
+        p.axes = vec![0.5, -0.25, 0.75, -0.5, 0.0, 0.0];
+        assert_eq!(m.read(&p, linux).sticks, [0.75, -0.5, 0.5, -0.25]);
+        // the controls: a joydev xpad pad still turns into xpad's order, its
+        // eight axes, and its six with xpad's dpad_to_buttons (the triggers
+        // last, resting at -1: no hat's)
+        let mut x = pad("Generic X-Box pad (Vendor: 20d6 Product: 2005)", "", 11, &[0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0]);
+        let mut mx = PadMap::default();
+        mx.read(&x, linux);
+        assert!(mx.triggers);
+        x.axes[7] = -1.0;
+        assert_eq!(mx.read(&x, linux).buttons, bit::UP);
+        let mut six = PadMap::default();
+        six.read(&pad("Generic X-Box pad (Vendor: 20d6 Product: 2005)", "", 15, &[0.0, 0.0, -1.0, 0.0, 0.0, -1.0]), linux);
+        assert!(six.triggers, "six axes, dpad_to_buttons");
+    }
+
+    /// Firefox on Linux reads a pad with no BTN_GAMEPAD (a PS3 pad through
+    /// hid-generic: BTN_TRIGGER and on) through evdev with no mapping, its
+    /// axes in the order of their codes and every one 0 until it first
+    /// moves: the hat at its last two (6 and 7 of eight) is the d-pad from
+    /// the start.
+    #[test]
+    fn firefox_on_linux_reads_a_ps3_pads_hat_on_its_last_two_axes() {
+        let ff = Browser::new(FIREFOX_LINUX, None);
+        let mut p = pad("2563-0575-SHANWAN PS3 GamePad", "", 13, &[0.0; 8]);
+        let mut m = PadMap::default();
+        assert_eq!(layout(&p, ff), Layout::Raw);
+        assert_eq!(m.read(&p, ff), Report::default());
+        p.axes[7] = 1.0;
+        assert_eq!(m.read(&p, ff).buttons, bit::DOWN, "its first press");
+        p.axes[6] = -1.0;
+        assert_eq!(m.read(&p, ff).buttons, bit::DOWN | bit::LEFT);
+        assert!(m.how(&p, ff).contains("the d-pad on the hat at axes 6 and 7"), "{}", m.how(&p, ff));
+    }
+
+    /// The last two axes are a hat only while they give what a hat gives
+    /// and have rested at 0 together. A stick's axes there (a pad with the
+    /// d-pad on its buttons) give the values between: once they have, they
+    /// are never the d-pad again, a full push (-1) included, and the d-pad
+    /// is on buttons 12 to 15. Triggers there resting at -1 never rested at
+    /// 0: no d-pad held at rest. A pad with buttons 12 to 15 is read there,
+    /// whatever its axes (the control).
+    #[test]
+    fn axes_that_give_what_no_hat_gives_are_no_d_pad() {
+        let linux = Browser::new(CHROME_LINUX, None);
+        let mut s = pad("Sticks (Vendor: 1234 Product: 0001)", "", 13, &[0.0; 6]);
+        let mut m = PadMap::default();
+        m.read(&s, linux);
+        s.axes[5] = 0.4;
+        m.read(&s, linux);
+        s.axes[5] = -1.0;
+        assert_eq!(m.read(&s, linux).buttons, 0, "a stick pushed all the way, once it has given 0.4");
+        assert!(m.how(&s, linux).ends_with("the d-pad on buttons 12 to 15"), "{}", m.how(&s, linux));
+        // triggers resting at -1 at the end
+        let mut t = pad("Triggers (Vendor: 1234 Product: 0002)", "", 13, &[0.0, 0.0, 0.0, 0.0, -1.0, -1.0]);
+        let mut mt = PadMap::default();
+        assert_eq!(mt.read(&t, linux).buttons, 0, "at rest: nothing held");
+        t.axes[4] = 1.0;
+        assert_eq!(mt.read(&t, linux).buttons, 0, "pulled all the way at once");
+        // sixteen buttons: the d-pad on 12 to 15, the axes left alone
+        let mut b = pad("Sixteen (Vendor: 1234 Product: 0003)", "", 16, &[0.0; 6]);
+        let mut mb = PadMap::default();
+        b.axes[4] = 1.0;
+        assert_eq!(mb.read(&b, linux).buttons, 0);
+        press(&mut b, 13, 1.0);
+        assert_eq!(mb.read(&b, linux).buttons, bit::DOWN);
+        // four axes are two sticks: no hat
+        let mut f = pad("Four (Vendor: 1234 Product: 0004)", "", 12, &[0.0; 4]);
+        f.axes[3] = 1.0;
+        assert_eq!(PadMap::default().read(&f, linux).buttons, 0);
+    }
+
+    /// Firefox on macOS lists an unmapped pad's axes in its report's order, a
+    /// hat switch on one axis among them (here between the sticks), 0 until
+    /// it first reports. Once it has rested past 1 it is the d-pad, each of
+    /// its eight ways, and the sticks are the four axes that are not it. Its
+    /// first press, before any rest was seen, is not the d-pad's (it could be
+    /// a stick's). An axis that has given a stick's value is never a hat
+    /// switch, past 1 or not (the control).
+    #[test]
+    fn firefox_on_macos_finds_a_hat_switch_among_the_axes() {
+        let ff = Browser::new(FIREFOX_MAC, None);
+        let mut p = pad("0079-0006-Generic   USB  Joystick  ", "", 12, &[0.0; 5]);
+        let mut m = PadMap::default();
+        assert_eq!(layout(&p, ff), Layout::Raw);
+        p.axes[2] = HAT[0];
+        assert_eq!(m.read(&p, ff).buttons, 0, "a press before its rest was seen");
+        p.axes[2] = HAT_REST;
+        assert_eq!(m.read(&p, ff).buttons, 0, "at rest");
+        for (v, k) in HAT.iter().zip(WAYS) {
+            p.axes[2] = *v;
+            assert_eq!(m.read(&p, ff).buttons, k, "the hat at {v}");
+        }
+        p.axes = vec![0.25, -0.5, HAT_REST, 0.75, -1.0];
+        assert_eq!(m.read(&p, ff).sticks, [0.75, -1.0, 0.25, -0.5], "the sticks round the hat");
+        assert!(m.how(&p, ff).ends_with("the d-pad on the hat at axis 2"), "{}", m.how(&p, ff));
+        // the control: a stick's value, then past 1: no hat switch
+        let mut q = pad("Other (Vendor: 1234 Product: 0005)", "", 12, &[0.0; 5]);
+        let mut n = PadMap::default();
+        q.axes[3] = 0.5;
+        n.read(&q, ff);
+        q.axes[3] = 1.3;
+        n.read(&q, ff);
+        q.axes[3] = -1.0;
+        assert_eq!(n.read(&q, ff).buttons, 0);
+    }
+
+    /// `changed` says how a pad is read the first time, and again once a
+    /// read has found its hat; not otherwise.
+    #[test]
+    fn how_a_pad_is_read_is_said_when_it_changes() {
+        let ff = Browser::new(FIREFOX_MAC, None);
+        let mut p = pad("0079-0006-Generic   USB  Joystick  ", "", 12, &[0.0; 5]);
+        let mut m = PadMap::default();
+        m.read(&p, ff);
+        assert!(m.changed(&p, ff).is_some_and(|h| h.ends_with("the d-pad on buttons 12 to 15")));
+        m.read(&p, ff);
+        assert_eq!(m.changed(&p, ff), None, "nothing new");
+        p.axes[2] = HAT_REST;
+        m.read(&p, ff);
+        assert!(m.changed(&p, ff).is_some_and(|h| h.ends_with("the d-pad on the hat at axis 2")));
+        assert_eq!(m.changed(&p, ff), None);
     }
 
     #[test]

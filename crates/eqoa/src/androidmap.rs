@@ -27,8 +27,16 @@ const TRIGGER: f32 = 0.33;
 
 /// A controller's key as libpad's button (`input::bit`), by position:
 /// Android names a controller's buttons as an Xbox controller's are laid
-/// out (A the bottom one, ✕), as SDL's layout does.
+/// out (A the bottom one, ✕), as SDL's layout does. A controller with no key
+/// layout of its own (a HID joystick: a third-party PS3 pad, its buttons
+/// BTN_TRIGGER on) has them by number, Android's Generic.kl's BUTTON_1 to
+/// BUTTON_16, which no name places: read as such pads number them
+/// (`bit::NUMBERED`, as the client reads one on Linux and gilrs on Windows).
 pub fn key_bit(code: i32) -> u16 {
+    // KEYCODE_BUTTON_1 (188) to KEYCODE_BUTTON_12
+    if let Some(&k) = usize::try_from(code - 188).ok().and_then(|n| bit::NUMBERED.get(n)) {
+        return k;
+    }
     match code {
         96 => bit::CROSS,     // KEYCODE_BUTTON_A
         97 => bit::CIRCLE,    // KEYCODE_BUTTON_B
@@ -129,6 +137,25 @@ mod tests {
         assert_eq!((r.sticks, r.triggers), ([0.25, 0.0, 0.5, -1.0], [0.2, 0.9]));
         // the control: nothing held reads as nothing
         assert_eq!(report(0, &Axes::default()), Report::default());
+    }
+
+    /// A HID joystick's buttons (a third-party PS3 pad with no key layout of
+    /// its own) are Generic.kl's BUTTON_1 on: read by number, □ ✕ ○ △ first,
+    /// the 13th (PS) none of the game's; its hat is the d-pad, each of its
+    /// eight ways, as AXIS_HAT_X and AXIS_HAT_Y give them (-1 left and up).
+    /// The named buttons are as they were (the control).
+    #[test]
+    fn a_hid_joysticks_buttons_by_number_and_its_hat() {
+        let want = [bit::SQUARE, bit::CROSS, bit::CIRCLE, bit::TRIANGLE, bit::L1, bit::R1, bit::L2, bit::R2, bit::SELECT, bit::START, bit::L3, bit::R3];
+        for (n, k) in want.iter().enumerate() {
+            assert_eq!(key_bit(188 + n as i32), *k, "BUTTON_{}", n + 1);
+        }
+        assert_eq!((key_bit(200), key_bit(203)), (0, 0), "BUTTON_13 (PS) and BUTTON_16");
+        assert_eq!((key_bit(96), key_bit(97), key_bit(99), key_bit(100)), (bit::CROSS, bit::CIRCLE, bit::SQUARE, bit::TRIANGLE), "the control");
+        let ways = [(0.0, -1.0, bit::UP), (1.0, -1.0, bit::UP | bit::RIGHT), (1.0, 0.0, bit::RIGHT), (1.0, 1.0, bit::RIGHT | bit::DOWN), (0.0, 1.0, bit::DOWN), (-1.0, 1.0, bit::DOWN | bit::LEFT), (-1.0, 0.0, bit::LEFT), (-1.0, -1.0, bit::LEFT | bit::UP)];
+        for (x, y, k) in ways {
+            assert_eq!(report(0, &Axes { hat_x: x, hat_y: y, ..Axes::default() }).buttons, k, "the hat at ({x}, {y})");
+        }
     }
 
     /// A key as the dispatch takes it: named keys by name, a character as

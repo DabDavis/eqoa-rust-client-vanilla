@@ -2,8 +2,10 @@
 //! `net::session::OP_BUG_NOTE`), sent just before a petition goes to a server
 //! that offered bug reports (`Session::bug_reports`): what the server cannot
 //! know of this client. Its build, the platform, the graphics adapter, the
-//! frame rate it draws at, and what it shows of the player and its target
-//! (`Play::bug_note`). The GMs read it beside the petition; the player never
+//! frame rate it draws at, the controllers connected and how each is read
+//! (`input::note`: its layout and where its d-pad comes from), and what it
+//! shows of the player and its target (`Play::bug_note`). The GMs read it
+//! beside the petition; the player never
 //! does, and nothing goes to a server that did not ask. No account name, no
 //! address, no file path is in it.
 
@@ -126,6 +128,12 @@ pub fn compose(play: &[(&str, String)]) -> String {
     }
     if let Some(r) = frame_rate() {
         lines.push(format!("frame rate: {r:.0} a second"));
+    }
+    // the controllers and how each is read (its layout, where its d-pad
+    // comes from): what a player's controller sends
+    let pads = crate::input::note();
+    if !pads.is_empty() {
+        lines.push(format!("controllers: {pads}"));
     }
     for (k, v) in play {
         lines.push(format!("{k}: {v}"));
