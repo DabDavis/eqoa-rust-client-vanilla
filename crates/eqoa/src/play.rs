@@ -100,6 +100,27 @@ struct Puppet {
     /// The tint the server names for its body (`npctint`: an NPC's, by its
     /// name): another, or one gone, rebuilds it.
     tint: Option<u32>,
+    /// A Wisp's (`wisp::is`): it casts no shadow, neither its blob shadow
+    /// (`shadow_casters`) nor any of its models into the shadow maps
+    /// (`set_casts`).
+    wisp: bool,
+}
+
+impl Puppet {
+    /// Every model of it casts into Sun Shadows' and Light Shadows' maps
+    /// (`render::GpuModel::casts`) but a Wisp's (`wisp`): its body (the armour
+    /// alone), what it holds, its helm, the wisp and its cape. Set as each is
+    /// made: the puppet, its items attached again, its cape put on.
+    fn set_casts(&mut self) {
+        let casts = !self.wisp;
+        self.gpu.casts = casts;
+        for (_, a) in &mut self.attached {
+            a.casts = casts;
+        }
+        if let Some((_, Some(c))) = &mut self.cape {
+            c.casts = casts;
+        }
+    }
 }
 
 /// An entity's actor in the walker's collision world (`VIEntity::m_actor`):
@@ -979,7 +1000,9 @@ fn tint_of(e: &net::entity::Entity) -> Option<u32> {
 /// Built in the art its model is drawn in (`esf::Library::view_for`): the
 /// 2002 disc's, whole, for a model that disc has while its art is drawn. On a
 /// server with `jumps`, a player's in a body with no fall or landing of its
-/// own falls and lands as the table has it (`raceemote::grant_air`).
+/// own falls and lands as the table has it (`raceemote::grant_air`); on one
+/// with races of its own, one in a body with no swim swims as it has it
+/// (`raceemote::grant_swim`).
 #[allow(clippy::too_many_arguments)]
 fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Puppet> {
     let era = lib.view_for(e.drawn_model as i32);
@@ -999,6 +1022,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                         crate::racebody::grant(cs, e.drawn_model, player, races);
                         crate::raceemote::grant(lib, cs, &mut anims, e.drawn_model, player, races);
                         crate::raceemote::grant_air(lib, cs, &mut anims, e.drawn_model, player, jumps);
+                        crate::raceemote::grant_swim(lib, cs, &mut anims, e.drawn_model, player, races);
                     }
                     let held = held_by(sprite.as_ref(), e.creature.as_ref());
                     let (attached, weapons, helm_worn) = match (&sprite, &e.creature) {
@@ -1027,8 +1051,11 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if let Some(t) = tint {
                         crate::npctint::apply(&mut model, t);
                     }
+                    let wisp = crate::wisp::is(lib, e.drawn_model, race_look.as_deref());
                     let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    Some(Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look, tint })
+                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look, tint, wisp };
+                    p.set_casts();
+                    Some(p)
                 })
 }
 
@@ -1046,6 +1073,7 @@ fn wear_cape(lib: &Library, g: &mut Gpu, p: &mut Puppet, want: Option<net::cape:
         let gpu = m.map(|m| lib.with_view(esf::Era::Frontiers, || g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &render::library_textures(lib))));
         (c, gpu)
     });
+    p.set_casts();
 }
 
 /// The cape `e` wears by what the server sent (`capes_in_view`): only a
@@ -1184,6 +1212,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
         let anims = &mut p.anims;
         lib.with_view(p.era, || {
             crate::raceemote::grant(lib, cs, anims, p.model, a_player(e), races);
+            crate::raceemote::grant_swim(lib, cs, anims, p.model, a_player(e), races);
             crate::raceemote::grant_air(lib, cs, anims, p.model, a_player(e), jumps)
         });
     }
@@ -1211,6 +1240,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
                 p.held = held_items(cs, c);
                 p.projectile = crate::spells::hand_projectiles(c, cs.holds_items);
                 (p.attached, p.weapons, _) = lib.with_view(p.era, || attach(lib, g, cs, c, p.held, p.model, a_player(e)));
+                p.set_casts();
             }
             None
         }
@@ -2384,6 +2414,97 @@ mod held {
         crate::raceopts::set_looks(Default::default());
     }
 
+    /// A Wisp casts no shadow (petition 1449, the GM Jibrish: "people can tell
+    /// its just an invisible human"): every model of its puppet (its armour,
+    /// the wisp in its helm, the sword in its hand, its helm, its cape) is
+    /// cleared of casting into Sun Shadows' and Light Shadows' maps as the
+    /// puppet is made, as it puts a cape on and as its items are attached
+    /// again, and its blob shadow's caster casts none: another player's, and
+    /// the player's own (by its entity, before its puppet is made too). The
+    /// control: a human player in the same armour, sword and cape, whose name
+    /// has no race look, casts with every model and its caster. Needs
+    /// `run/eqoa.iso` and a graphics adapter.
+    #[test]
+    fn a_wisp_casts_no_shadow() {
+        const HUMAN: u32 = 0x70D8_98C6;
+        const WISP: u32 = 0x8143_DC70;
+        // Steelwind, the Akessan Longbow
+        let (sword, bow) = (0x17F9_870Bu32, 0xEF8C_8A36u32);
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some(world) = crate::walker::tests::tunaria_round(x, z) else { return };
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let mut iso = iso::Iso::open(&path).unwrap();
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let instance = render::wgpu::Instance::new(render::wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&render::wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let mut g = Gpu { renderer: &mut renderer, device: &device, queue: &queue };
+        let mut lib = Library::new();
+        for f in crate::dressview::FILES {
+            lib.add(*f, esf::Container::open(iso.read(f).unwrap()).unwrap());
+        }
+        let wisp_look = || std::rc::Rc::new(net::raceopts::Look { body: HUMAN, parts: vec![(net::raceopts::Kind::Texture, WISP, net::raceopts::Part { entries: vec![2], rects: vec![] })] });
+        crate::raceopts::set_looks(std::collections::HashMap::from([("Glim".to_string(), wisp_look()), ("Wil".to_string(), wisp_look())]));
+        let entity = |id: u32, name: &str, hand: u32| net::entity::Entity {
+            id,
+            model: HUMAN,
+            drawn_model: HUMAN,
+            creature: Some(net::entity::Creature { name: name.into(), p256: 2, items: [hand, 0, 0], item_types: [1, 11], armor: [4; 6], ..Default::default() }),
+            ..Default::default()
+        };
+        let look = |e: &net::entity::Entity| e.creature.as_ref().map(look_of);
+        let mut p = super::commands::play();
+        p.session.self_id = Some(100_001);
+        p.self_model = Some(HUMAN);
+        let (me, wil, dab) = (entity(100_001, "Glim", sword), entity(100_002, "Wil", sword), entity(100_003, "Dab", sword));
+        apply(&lib, &mut g, &mut p.self_puppet, &me, look(&me), 0, 0, None, false);
+        for (slot, e) in [(1, &wil), (2, &dab)] {
+            apply(&lib, &mut g, &mut p.puppets[slot], e, look(e), slot, 0, None, false);
+        }
+        p.entities.slots[..3].clone_from_slice(&[Some(me.clone()), Some(wil.clone()), Some(dab.clone())]);
+        for pp in p.puppets.iter_mut().flatten().chain(p.self_puppet.as_mut()) {
+            wear_cape(&lib, &mut g, pp, Some(net::cape::Cape { style: 1, color: 0 }));
+            pp.shown = true;
+        }
+        // each puppet's models: its body, what it holds and wears, its cape
+        let casts = |pp: &Puppet| -> Vec<bool> { std::iter::once(&pp.gpu).chain(pp.attached.iter().map(|a| &a.1)).chain(pp.cape.iter().filter_map(|(_, c)| c.as_ref())).map(|m| m.casts).collect() };
+        fn puppet(p: &Play, slot: usize) -> &Puppet {
+            (if slot == 0 { p.self_puppet.as_ref() } else { p.puppets[slot].as_ref() }).expect("a puppet")
+        }
+        let wisp_models = |p: &Play, slot: usize| {
+            let pp = puppet(p, slot);
+            // the body, the sword, the helm, the wisp and the cape
+            assert!(pp.wisp && pp.attached.len() == 3 && pp.cape.as_ref().is_some_and(|c| c.1.is_some()), "slot {slot}: a Wisp in its sword, helm and cape");
+            casts(pp)
+        };
+        for slot in [0, 1] {
+            assert_eq!(wisp_models(&p, slot), [false; 5], "slot {slot}: a Wisp's models cast nothing");
+        }
+        let human = puppet(&p, 2);
+        assert!(!human.wisp && human.attached.len() == 2 && human.cape.as_ref().is_some_and(|c| c.1.is_some()), "the control: a human in its sword, helm and cape");
+        assert_eq!(casts(human), [true; 4], "the control: a human's models cast");
+        // the blob shadow: the slots' casters, in their order
+        let mut walker = Walker::new(world, x, z, 0.0);
+        walker.set_character(&lib, lib.lookup(HUMAN as i32).unwrap());
+        let casters = |p: &Play, w: &mut Walker| p.shadow_casters(w, &lib).iter().map(|c| c.casts).collect::<Vec<bool>>();
+        assert_eq!(casters(&p, &mut walker), [false, false, true], "the player's Wisp, Wil's, and the control Dab's");
+        // the items attached again (a sword swapped for a bow: `Redo::Items`)
+        for (slot, e) in [(1, entity(100_002, "Wil", bow)), (2, entity(100_003, "Dab", bow))] {
+            assert!(apply(&lib, &mut g, &mut p.puppets[slot], &e, look(&e), slot, 33, None, false).is_none(), "slot {slot}: the puppet kept");
+            assert!(puppet(&p, slot).held[0].is_some_and(|h| h.0 == bow), "slot {slot}: the bow in hand");
+        }
+        assert_eq!(wisp_models(&p, 1), [false; 5], "a Wisp's bow casts nothing either");
+        assert_eq!(casts(puppet(&p, 2)), [true; 4], "the control: a human's bow casts");
+        // the player's own Wisp before its puppet is made: by its entity
+        p.self_puppet = None;
+        assert_eq!(casters(&p, &mut walker), [false, false, true], "the player's own Wisp by its entity");
+        crate::raceopts::set_looks(Default::default());
+    }
+
     /// Another entity in a slot is made anew though it looks just like the
     /// one before it, as `ChannelEntity` makes a new `VIEntity` for a new id:
     /// a corpse's slot taken by a creature of its body (a camp's next spawn,
@@ -2707,6 +2828,8 @@ impl Play {
             let anims = &mut walker.anims;
             lib.with_view(lib.view_for(model as i32), || {
                 crate::raceemote::grant(lib, cs, anims, model, true, self.session.creation.as_ref());
+                // a body with no swim of its own swims as the table has it
+                crate::raceemote::grant_swim(lib, cs, anims, model, true, self.session.creation.as_ref());
                 // on a server with jumps, its fall and landing the table's
                 crate::raceemote::grant_air(lib, cs, anims, model, true, self.session.jumps)
             });
@@ -9164,7 +9287,9 @@ impl Play {
     /// `RenderShadow` reads them (`shadows`), in their slots' order: each
     /// creature drawn (`Puppet::shown`, its actor's bound off the walker's
     /// world), and the player in its slot while its own actor is shown
-    /// (`self_shown`: not in first person), on its walker's pose.
+    /// (`self_shown`: not in first person), on its walker's pose. A Wisp's
+    /// (`wisp::is`: the player's by its entity's race look, so from its first
+    /// frame) casts none.
     pub fn shadow_casters(&self, walker: &mut Walker, lib: &Library) -> Vec<crate::shadows::Caster> {
         let me = self.self_id32();
         let mut out = Vec::new();
@@ -9174,7 +9299,8 @@ impl Play {
                 if self.self_shown {
                     let actor = self.self_actor.map(|a| a.actor).filter(|&a| a < walker.scene.actors.len());
                     let off = self.self_puppet.as_ref().map_or(crate::lod::OFF_DIST, |p| crate::lod::off_dist(&p.gpu.lod_dists));
-                    out.extend(crate::shadows::walker_caster(walker, lib, self.self_model).map(|c| c.on(actor, off)));
+                    let wisp = crate::wisp::is(lib, e.drawn_model, race_look_of(e).as_deref());
+                    out.extend(crate::shadows::walker_caster(walker, lib, self.self_model).map(|c| c.on(actor, off).casting(!wisp)));
                 }
                 continue;
             }
@@ -9182,7 +9308,7 @@ impl Play {
             let Some(cs) = p.sprite.as_ref() else { continue };
             let actor = self.actors[slot].filter(|a| a.id == e.id).map(|a| a.actor).filter(|&a| a < walker.scene.actors.len());
             let bound = actor.map(|a| walker.scene.actors[a].bound);
-            out.push(crate::shadows::Caster::of(p.actor_m, cs, &p.centre, bound).on(actor, crate::lod::off_dist(&p.gpu.lod_dists)));
+            out.push(crate::shadows::Caster::of(p.actor_m, cs, &p.centre, bound).on(actor, crate::lod::off_dist(&p.gpu.lod_dists)).casting(!p.wisp));
         }
         out
     }

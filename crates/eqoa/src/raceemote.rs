@@ -52,9 +52,26 @@
 //! but the pixie, the fairy and the fungusman, which share one bone with the
 //! human (carried, they only lean), whose are their own nearest, as their
 //! emotes are (`AIR_OWN`). Only a player's character in a body `TABLE`
-//! lists, on a server with jumps (`grant_air`): the jumper's own and every
-//! other player's on this client, a jump and a fall off a ledge alike; a PS2
-//! still stands them in the air, as every body is elsewhere.
+//! lists, or another its race's options offer (the shadow gargoyle, a goblin
+//! king: `race_of`, the body worn), on a server with jumps (`grant_air`): the
+//! jumper's own and every other player's on this client, a jump and a fall off
+//! a ledge alike; a PS2 still stands them in the air, as every body is
+//! elsewhere.
+//!
+//! The swim, the same way (petition 1456, a gargoyle player's: "gargs fly in
+//! the water instead of swim"). A body in liquid plays its play list's entry
+//! 12 moving and 13 still (`UpdateLocomotion`), and of the races' bodies the
+//! gargoyles' six and the Jal'Raeth's three have neither: `SetDefaultEntries`
+//! fills them with the idle, so a gargoyle stood upright in the water, its
+//! wings out, as if it flew, and a Jal'Raeth sat in it cross-legged. Here they
+//! take the human's swim carried onto their skeletons, looping (`grant_swim`:
+//! a gargoyle's wings, which the human lacks, held as its idle holds them, so
+//! they stand up off its back as it lies along the water); the pixie and
+//! the fairy, which have none either, keep their hover (`SWIM_NONE`: nothing
+//! of theirs but flies, and the human's would not carry). Only a player's
+//! character in such a body, on a server with races of its own, as the
+//! emotes: the swimmer's own and every other player's on this client; a PS2
+//! still shows them as before.
 
 use esf::Library;
 use glam::{Quat as GQuat, Vec3};
@@ -161,11 +178,22 @@ pub const AIR_OWN: &[(u32, [Pose; 2])] = &[
     (0x4A4D_88FB, [Pose::Own(37), Pose::Own(42)]), // fungusman
 ];
 
-/// What `model` plays for the fall and the landing, if `TABLE` lists it: its
-/// own nearest (`AIR_OWN`), else the human's.
+/// What `model` plays for the fall and the landing, if it is one of a race's
+/// bodies (`race_of`: `TABLE`'s, or another its race's options offer): its
+/// race's own nearest (`AIR_OWN`), else the human's. An offered body was
+/// looked up as itself, in `TABLE` alone, so a player in one (the shadow
+/// gargoyle, a goblin king) stood in the air: its fall and landing the idle.
 pub fn air_poses(model: u32) -> Option<[Pose; 2]> {
-    let own = AIR_OWN.iter().find(|(b, _)| *b == model).map(|(_, p)| *p);
-    own.or_else(|| poses(model).map(|_| [Pose::Human; 2]))
+    let race = race_of(model)?;
+    Some(AIR_OWN.iter().find(|(b, _)| *b == race).map_or([Pose::Human; 2], |(_, p)| *p))
+}
+
+/// The body `TABLE` lists that `model`, the body worn, is or stands for: itself,
+/// or, for another body of a race's creature its options offer a player, its
+/// race's own (`raceopts::race_body_of`: the shadow gargoyle's the granite one,
+/// a goblin king's the grey goblin); none for any other body.
+fn race_of(model: u32) -> Option<u32> {
+    poses(model).map(|_| model).or_else(|| crate::raceopts::race_body_of(model).filter(|&b| poses(b).is_some()))
 }
 
 /// What `model` plays for each emote on this server: `TABLE`'s, else, for
@@ -175,7 +203,7 @@ pub fn air_poses(model: u32) -> Option<[Pose; 2]> {
 /// or one of its bone names (the great skeletons' the troll's, 37 of the
 /// human's), and the fungusmen's three share the slots `Own` names.
 pub fn poses_of(model: u32) -> Option<[Pose; 4]> {
-    poses(model).or_else(|| crate::raceopts::race_body_of(model).and_then(poses))
+    race_of(model).and_then(poses)
 }
 
 /// One body's skeleton as its 0x2700 record has it: each node's parent,
@@ -592,15 +620,26 @@ pub fn put(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, poses: [
 /// has a fall or a landing that is no longer `SetDefaultEntries`' idle (its
 /// own, or put already).
 pub fn put_air(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, poses: [Pose; 2]) -> bool {
-    if AIR.iter().any(|&e| cs.entries[e as usize].animation != cs.entries[0].animation) {
+    // the fall loops while the body is in the air; the landing plays once
+    put_over(lib, cs, sc, &AIR, &poses, &[0, ONCE])
+}
+
+/// Puts `poses` over `cs`'s `entries` (its clips in `sc`), each entry's
+/// `syncs` its own (0 looping, `ONCE`): an own slot's clips and speed, or the
+/// human's for that entry carried onto it (its clips added to `sc`, once for
+/// entries whose human rows are the same clips), silent, at each entry's own
+/// priority and channel. Whether it did: not when one of `entries` is no
+/// longer `SetDefaultEntries`' idle (the body's own, or put already).
+fn put_over(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, entries: &[i32], poses: &[Pose], syncs: &[i32]) -> bool {
+    if entries.iter().any(|&e| cs.entries[e as usize].animation != cs.entries[0].animation) {
         return false;
     }
     let mut human: Option<Option<Human>> = None;
-    for (k, &e) in AIR.iter().enumerate() {
+    // the human's rows carried so far (their clips), to what they made
+    let mut carried: Vec<([i32; 2], [i32; 2], F<Ee>)> = Vec::new();
+    for ((&e, &pose), &sync) in entries.iter().zip(poses).zip(syncs) {
         let e = e as usize;
-        // the fall loops while the body is in the air; the landing plays once
-        let sync = if k == 0 { 0 } else { ONCE };
-        match poses[k] {
+        match pose {
             Pose::Own(s) => {
                 let src = cs.entries[s as usize];
                 let dst = &mut cs.entries[e];
@@ -610,18 +649,28 @@ pub fn put_air(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, pose
                 dst.sync = sync;
             }
             Pose::Human => {
-                let human = human.get_or_insert_with(|| Human::load(lib));
-                let Some(([a, b], weight)) = human.as_ref().and_then(|h| h.carry(lib, e as i32, cs, sc, BASE)) else { continue };
-                sc.anims.push(a);
-                let ia = sc.anims.len() as i32 - 1;
-                let ib = if cs.skel_type == 1 {
-                    sc.anims.push(b);
-                    sc.anims.len() as i32 - 1
-                } else {
-                    -1
+                let clips = row(lib, HUMAN, e as i32).map(|r| r.clips);
+                let (animation, weight) = match carried.iter().find(|c| Some(c.0) == clips) {
+                    Some(&(_, animation, weight)) => (animation, weight),
+                    None => {
+                        let human = human.get_or_insert_with(|| Human::load(lib));
+                        let Some(([a, b], weight)) = human.as_ref().and_then(|h| h.carry(lib, e as i32, cs, sc, BASE)) else { continue };
+                        sc.anims.push(a);
+                        let ia = sc.anims.len() as i32 - 1;
+                        let ib = if cs.skel_type == 1 {
+                            sc.anims.push(b);
+                            sc.anims.len() as i32 - 1
+                        } else {
+                            -1
+                        };
+                        if let Some(c) = clips {
+                            carried.push((c, [ia, ib], weight));
+                        }
+                        ([ia, ib], weight)
+                    }
                 };
                 let dst = &mut cs.entries[e];
-                dst.animation = [ia, ib];
+                dst.animation = animation;
                 dst.weight = weight;
                 dst.sound = [0, 0];
                 dst.sync = sync;
@@ -631,10 +680,56 @@ pub fn put_air(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, pose
     true
 }
 
+/// The swim's entries: the gait `UpdateLocomotion` gives a body in liquid
+/// moving or turning (12), and still (13, treading water).
+pub const SWIM: [i32; 2] = [12, 13];
+
+/// What `model` plays swimming and treading water, if it is one of a race's
+/// bodies (`TABLE`'s, or another its race's options offer, `poses_of`): the
+/// human's swim carried onto it (`retarget`), as its emotes are. Of the bodies
+/// the races wear, only the gargoyles' six (25 of the human's bone names) and
+/// the Jal'Raeth's three (22) have no swim of their own (`put_swim` leaves
+/// every other's as it is); the pixie's and the fairy's have none either, and
+/// share one bone with the human, so a carried swim would only nod its head,
+/// and every motion of their own flies (their walk and run the same flight):
+/// they are left hovering, as a PS2 draws them (`SWIM_NONE`).
+pub fn swim_poses(model: u32) -> Option<[Pose; 2]> {
+    let race = race_of(model)?;
+    (!SWIM_NONE.contains(&race)).then_some([Pose::Human; 2])
+}
+
+/// The bodies `TABLE` lists that keep the game's swim, the idle (they have no
+/// swim, the human's would not carry, and nothing of their own but flight):
+/// the pixie's and the fairy's.
+pub const SWIM_NONE: &[u32] = &[0x94BA_77CD, 0x7A85_646C];
+
+/// Puts `poses` on `cs`'s swim (`SWIM`; its clips in `sc`), both looping, at
+/// their entries' own priority and channel (`put_over`). Whether it did: not
+/// when the body swims of its own (its 12 and 13 no longer `SetDefaultEntries`'
+/// idle), or it was put already.
+pub fn put_swim(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, poses: [Pose; 2]) -> bool {
+    put_over(lib, cs, sc, &SWIM, &poses, &[0, 0])
+}
+
+/// The swim (`swim_poses`) on `cs` (made of `model`, its clips in `sc`) when
+/// it is a player's character (`player`) on a server with races of its own
+/// (`races`, `server_has_races`) in a body that has none (petition 1456,
+/// a gargoyle's: "gargs fly in the water instead of swim": `SetDefaultEntries`
+/// fills an empty swim with the idle, which stands a gargoyle upright in the
+/// water, its wings out); anything else is left as the game made it. Whether
+/// its swim is the table's.
+pub fn grant_swim(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, model: u32, player: bool, races: Option<&net::creation::Creation>) -> bool {
+    let Some(p) = swim_poses(model).filter(|_| player && server_has_races(races)) else { return false };
+    put_swim(lib, cs, sc, p);
+    true
+}
+
 /// The fall and the landing (`air_poses`) on `cs` (made of `model`, its clips
 /// in `sc`) when it is a player's character (`player`) on a server with jumps
-/// (`jumps`) in a body `TABLE` lists; anything else is left as the game made
-/// it. Whether its fall and landing are the table's.
+/// (`jumps`) in a body `TABLE` lists or another its race's options offer
+/// (`race_of`); anything else is left as the game made it, and a body with a
+/// fall and a landing of its own keeps them (`put_air`). Whether its fall and
+/// landing are the table's.
 pub fn grant_air(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, model: u32, player: bool, jumps: bool) -> bool {
     let Some(p) = air_poses(model).filter(|_| player && jumps) else { return false };
     put_air(lib, cs, sc, p);
@@ -1189,5 +1284,204 @@ mod tests {
         assert_eq!(changed(true, Some(&listed), false), want, "a player's: the listed bodies with no emote of their own");
         let every = changed(true, None, true);
         assert!(every.len() > want.len() + 100, "the control: {} bodies change with the human's emotes on all", every.len());
+    }
+
+    /// The gargoyles' six bodies (the granite one the race's own, the shadow
+    /// one petition 1456's) and the Jal'Raeth's three.
+    const GARGOYLES: [u32; 6] = [0xB4D2_D132, 0x4E2A_945C, 0xAEC5_D9F6, 0x0013_55C8, 0x6D95_9FD9, 0x9304_BAB5];
+    const JALRAETH: [u32; 3] = [0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347];
+
+    /// Every body a server's race wears (each one the table lists and every
+    /// other its options offer, the helm seats' families with the fungusmen's
+    /// and the Jal'Raeth's), on the disc, through `put_swim`: 129 have a swim
+    /// and a treading of their own (entries 12 and 13), left as they are; the
+    /// gargoyles' six, the Jal'Raeth's three, the pixie's and the fairy's have
+    /// neither (each is the idle), and but the last two (`SWIM_NONE`) take the
+    /// human's carried, one clip looping for both, the human's swim. The
+    /// control: the human's play list has the two, the same clip. Needs
+    /// `run/eqoa.iso`.
+    #[test]
+    fn the_bodies_with_no_swim_take_the_humans() {
+        let Some(lib) = disc() else { return };
+        let mut bodies: Vec<u32> = TABLE.iter().map(|(b, _)| *b).collect();
+        for s in crate::slotless::HEAD_SEATS {
+            bodies.extend_from_slice(s.bodies);
+        }
+        bodies.extend(crate::slotless::HEADLESS.iter().chain(&JALRAETH));
+        bodies.sort_unstable();
+        bodies.dedup();
+        let (mut own, mut none) = (0, Vec::new());
+        for id in bodies {
+            let (mut cs, mut sc) = load(&lib, id);
+            if row(&lib, id, 12).is_some() {
+                assert!(row(&lib, id, 13).is_some(), "{id:#010x}: a swim but no treading");
+                let had = entries(&cs);
+                assert!(!put_swim(&lib, &mut cs, &mut sc, [Pose::Human; 2]), "{id:#010x}: its own, left as it is");
+                assert_eq!(entries(&cs), had);
+                own += 1;
+                continue;
+            }
+            none.push(id);
+            for e in SWIM {
+                assert!(row(&lib, id, e).is_none() && cs.entries[e as usize].animation == cs.entries[0].animation, "{id:#010x}: {e} is the idle");
+            }
+            if SWIM_NONE.contains(&id) {
+                assert!(swim_poses(id).is_none(), "{id:#010x}: left hovering");
+                continue;
+            }
+            let anims = sc.anims.len();
+            assert!(put_swim(&lib, &mut cs, &mut sc, [Pose::Human; 2]), "{id:#010x}");
+            let (swim, tread) = (cs.entries[12], cs.entries[13]);
+            assert!(swim.animation != cs.entries[0].animation && swim.animation == tread.animation, "{id:#010x}: the human's swim, both");
+            assert_eq!((swim.sync, tread.sync, swim.sound, sc.anims.len()), (0, 0, [0, 0], anims + 1), "{id:#010x}: looping, silent, one clip (one layer)");
+        }
+        let mut want: Vec<u32> = GARGOYLES.iter().chain(&JALRAETH).chain(SWIM_NONE).copied().collect();
+        want.sort_unstable();
+        assert_eq!(none, want, "the bodies with no swim");
+        assert_eq!(own, 129, "the bodies with their own");
+        let (h12, h13) = (row(&lib, HUMAN, 12).unwrap(), row(&lib, HUMAN, 13).unwrap());
+        assert_eq!(h12.clips, h13.clips, "the control: the human's swim and treading, one clip");
+    }
+
+    /// The model-space places of the human's head (4) and pelvis (0) on
+    /// `cs`, by their ref ids, `ms` into gait `loco` from the idle.
+    fn head_and_hips(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, loco: i32, ms: i64) -> (Vec3, Vec3) {
+        let human = Rig::load(lib, HUMAN).unwrap();
+        let map = sc.ref_maps[cs.h.ref_map].clone();
+        let mut rand = Rand(1);
+        sc.time = 0;
+        cs.set_locomotion(0, sc, &mut rand);
+        cs.h.process(0, sc);
+        let mut t = 0;
+        while t < ms {
+            t += 16;
+            sc.time = t;
+            cs.set_locomotion(loco, sc, &mut rand);
+            cs.h.process(0, sc);
+        }
+        let at = |n: usize| {
+            let m = &cs.h.nodes[map[&human.refs[n].unwrap()] as usize].world.m[3];
+            Vec3::new(m.x.0, m.y.0, m.z.0)
+        };
+        (at(4), at(0))
+    }
+
+    /// A gargoyle swims as the human does (petition 1456: "gargs fly in the
+    /// water instead of swim"): through the swim and the treading, its body
+    /// lies along the water, its head as far forward of its hips as the
+    /// human's is (within a fifth) and no higher over them than a third of
+    /// that; the granite gargoyle (the race's own) and the shadow one alike.
+    /// The control: as the game has it (its swim the idle), it hangs upright
+    /// in the water, its head over its hips, as it hovers.
+    #[test]
+    fn a_gargoyle_swims() {
+        let Some(lib) = disc() else { return };
+        let lying = |id: u32, put: bool, loco: i32| {
+            let (mut cs, mut sc) = load(&lib, id);
+            if put {
+                assert!(put_swim(&lib, &mut cs, &mut sc, [Pose::Human; 2]), "{id:#010x}");
+            }
+            let mut worst = (f32::MAX, 0.0f32);
+            for ms in [300, 600, 900, 1200] {
+                let (head, hips) = head_and_hips(&lib, &mut cs, &mut sc, loco, ms);
+                let d = head - hips;
+                worst = (worst.0.min(d.with_y(0.0).length() / d.length()), worst.1.max(d.y.abs() / d.length()));
+            }
+            worst
+        };
+        let human = lying(HUMAN, false, 12);
+        assert!(human.0 > 0.9, "the human's swim lies along the water: {human:?}");
+        for id in [0xB4D2_D132u32, 0x6D95_9FD9] {
+            for loco in [12, 13] {
+                let swims = lying(id, true, loco);
+                assert!(swims.0 > 0.9 && swims.1 < 0.35, "{id:#010x} gait {loco}: lying along the water, {swims:?} (the human's {human:?})");
+                let hovers = lying(id, false, loco);
+                assert!(hovers.1 > 0.9, "the control, {id:#010x} gait {loco}: upright, its head over its hips, {hovers:?}");
+            }
+        }
+    }
+
+    /// The swim goes on a player's character in a body the table lists or
+    /// another its race's options offer (the shadow gargoyle, petition 1456's
+    /// Ghastly's, its race's own the granite one), on a server with races of
+    /// its own, and on nothing else: not on an NPC in it, not with no races,
+    /// not on the shadow gargoyle with no options to say whose body it is, not
+    /// on a body with a swim of its own (the hill giant's, left as it is) nor
+    /// on the pixie (`SWIM_NONE`). The control: the shadow gargoyle's swim
+    /// changed only through `grant_swim`'s first case. Needs `run/eqoa.iso`.
+    #[test]
+    fn the_swim_goes_on_a_races_players() {
+        let Some(lib) = disc() else { return };
+        const SHADOW: u32 = 0x6D95_9FD9;
+        let step = |value: u32| net::raceopts::Step { name: format!("{value:08X}"), value, size: 1000 };
+        let options = net::raceopts::Options {
+            races: vec![(29, vec![net::raceopts::Row { key: "body".into(), label: "BODY".into(), kind: net::raceopts::Kind::Body, parts: vec![], male: GARGOYLES.iter().map(|&b| step(b)).collect(), female: vec![] }])],
+        };
+        let listed = races(&[GARGOYLES[0], HILL_GIANT, PIXIE]);
+        crate::racelabel::clear();
+        let swims = |id: u32, player: bool, list: Option<&Creation>| {
+            let (mut cs, mut sc) = load(&lib, id);
+            let had = cs.entries[12].animation;
+            let granted = grant_swim(&lib, &mut cs, &mut sc, id, player, list);
+            (granted, cs.entries[12].animation != had)
+        };
+        crate::raceopts::set_options(Some(&options));
+        assert_eq!(swims(SHADOW, true, Some(&listed)), (true, true), "a player's shadow gargoyle swims");
+        assert_eq!(swims(GARGOYLES[0], true, Some(&listed)), (true, true), "a player's granite gargoyle swims");
+        assert_eq!(swims(SHADOW, false, Some(&listed)), (false, false), "an NPC's: as the game has it");
+        assert_eq!(swims(SHADOW, true, None), (false, false), "a server with no races: as the game has it");
+        assert_eq!(swims(HILL_GIANT, true, Some(&listed)), (true, false), "a body with its own swim, left as it is");
+        assert_eq!(swims(PIXIE, true, Some(&listed)), (false, false), "the pixie keeps its hover");
+        crate::raceopts::set_options(None);
+        assert_eq!(swims(SHADOW, true, Some(&listed)), (false, false), "the control: with no options the shadow gargoyle is no race's body");
+    }
+
+    /// Another body a race's options offer falls and lands as its race's own
+    /// body does, on a server with jumps (`air_poses` by `race_of`, the body
+    /// worn): the shadow gargoyle (the gargoyles', petition 1456's Ghastly's)
+    /// and a goblin king (the goblins'), whose fall and landing are their idle,
+    /// take the human's carried, the fall looping and the landing once; the
+    /// brownie elder (the brownies'), which falls and lands of its own, is
+    /// granted and left as it is; an NPC in either keeps the game's, as does
+    /// each with no options to say whose body it is. The control: by the body
+    /// worn alone, in `TABLE` (the lookup before), neither is listed, and each
+    /// stands in the air, its fall and landing the idle. Needs `run/eqoa.iso`.
+    #[test]
+    fn an_offered_body_falls_and_lands_as_its_race() {
+        let Some(lib) = disc() else { return };
+        const SHADOW: u32 = 0x6D95_9FD9;
+        const KING: u32 = 0x2F34_B867;
+        const ELDER: u32 = 0x4946_8331;
+        let step = |value: u32| net::raceopts::Step { name: format!("{value:08X}"), value, size: 1000 };
+        let body_row = |bodies: &[u32]| net::raceopts::Row { key: "body".into(), label: "BODY".into(), kind: net::raceopts::Kind::Body, parts: vec![], male: bodies.iter().map(|&b| step(b)).collect(), female: vec![] };
+        let options = net::raceopts::Options { races: vec![(29, vec![body_row(&GARGOYLES)]), (13, vec![body_row(&[0x6C13_08E0, KING])]), (21, vec![body_row(&[BROWNIE, ELDER])])] };
+        // granted, the fall and landing the idle as loaded, changed, their syncs
+        let falls = |id: u32, player: bool| {
+            let (mut cs, mut sc) = load(&lib, id);
+            let idle = cs.entries[0].animation;
+            let was = (cs.entries[6].animation, cs.entries[7].animation);
+            let granted = grant_air(&lib, &mut cs, &mut sc, id, player, true);
+            let now = (cs.entries[6].animation, cs.entries[7].animation);
+            (granted, was == (idle, idle), now != was, (cs.entries[6].sync, cs.entries[7].sync))
+        };
+        crate::raceopts::set_options(None);
+        for id in [SHADOW, KING] {
+            assert!(poses(id).is_none(), "the control, {id:#010x}: by the body worn alone, not in the table");
+            let (granted, idle, changed, _) = falls(id, true);
+            assert!(!granted && idle && !changed, "the control, {id:#010x}: standing in the air, its fall and landing the idle");
+        }
+        crate::raceopts::set_options(Some(&options));
+        for id in [SHADOW, KING] {
+            assert_eq!(air_poses(id), Some([Pose::Human; 2]), "{id:#010x}: as its race's own body");
+            let (granted, idle, changed, sync) = falls(id, true);
+            assert!(granted && idle && changed, "{id:#010x}: the human's fall and landing over its idle");
+            assert_eq!(sync, (0, ONCE), "{id:#010x}: the fall looping, the landing once");
+            let (granted, _, changed, _) = falls(id, false);
+            assert!(!granted && !changed, "{id:#010x}: an NPC in it keeps the game's");
+        }
+        assert!(row(&lib, ELDER, 6).is_some() && row(&lib, ELDER, 7).is_some(), "the brownie elder's own fall and landing");
+        let (granted, idle, changed, _) = falls(ELDER, true);
+        assert!(granted && !idle && !changed, "the brownie elder: its own fall and landing, left as they are");
+        crate::raceopts::set_options(None);
     }
 }

@@ -442,14 +442,28 @@ or a browser (each described where it lives below):
   bodies only the brownie's, dryad's, orc's and skeleton's have their own (every player race's body has), the
   rest stood in the air; on a server with jumps a player's character in one of them takes the human's fall
   (looping) and landing (once) carried onto it, or its own nearest (`AIR_OWN`: the pixie's, fairy's and
-  fungusman's), in its own view and every other player's, a jump and a fall off a ledge alike.
+  fungusman's), in its own view and every other player's, a jump and a fall off a ledge alike; so does one in
+  another body its race's options offer (the shadow gargoyle, a goblin king), by the body worn
+  (`raceemote::race_of`, 2026-11-10: it was looked up as itself, not listed, and stood in the air). The swim too
+  (2026-11-10, petition 1456: "gargs fly in the water instead of swim"; `raceemote::grant_swim`): a body in
+  water plays its entry 12 (swimming) or 13 (treading), and of every body the races wear only the gargoyles' six,
+  the Jal'Raeth's three, the pixie's and the fairy's have neither, so they played the idle (a gargoyle stood
+  upright, its wings out, as if it flew; a Jal'Raeth sat cross-legged); a player's character in a gargoyle's or a
+  Jal'Raeth's body on a server with races of its own takes the human's swim carried onto it (one clip, looping,
+  for both; a gargoyle's wings held as its idle holds them, standing up off its back as it lies along the water),
+  the pixie and the fairy keep their hover (`SWIM_NONE`: all they have flies, and the human's would not carry);
+  `EQOA_SWIM` in a walk shot (`EQOA_BODY`).
 - **The Wisp** (a race of go-eqoa-server's own, 31; the owner, 2026-11-09: "the armor will form like a human and also
   the weapons swing like humans. like when humans are invis, but the wisp is inside the helm"; `wisp`): a human's body
   of its sex, marked by a race option the server lays always (a texture row of one step, `wisp`, whose value is the
   will o' wisp's body, CHAR.ESF 0x8143DC70, no texture: an older client lays nothing). Drawn as its worn slots' triangles
   alone (where `ApplyLook` lays armour or a robe; no skin, face or hair), the wisp a head across on the helm's node
   inside any helm, hung with the held items and the helm (`play::attach`): the player's own, others', character select
-  and the create pages. A PS2 shows a human in its armour. **The Jal'Raeth** (30): their three bodies wear a helm on
+  and the create pages. A PS2 shows a human in its armour. It casts no shadow (petition 1449, the GM Jibrish: "people can
+  tell its just an invisible human"; `wisp::is`): no blob shadow (its caster keeps its place in the queue and draws none,
+  `shadows::Caster::casts`, so every other's is as it was), and nothing of it, its armour, what it holds, its helm, the
+  wisp or its cape, in Sun Shadows' or Light Shadows' maps (`render::GpuModel::casts`, set on each of its puppet's
+  models as they are made); the player's own by its entity, from its first frame. **The Jal'Raeth** (30): their three bodies wear a helm on
   the head node they name (`slotless::HEAD_HELMS`: they name no helm node), the human's chest, bracers and gloves
   carried onto their skeleton by bone names (`slotless::named_shell_of`: their hands and feet hang off the root, so
   the fit by limbs finds none), and the human's emotes on their upper body (`raceemote::TABLE`).
@@ -473,8 +487,11 @@ or a browser (each described where it lives below):
   body. A goblin (race 13's own body and every one its options offer, `cape::CROUCHED`; the
   owner, 2026-11-10: "on goblins they are too big") is bound standing and rests in a crouch,
   its shoulders at 0.70 of their bind height, so a cape sized on its bind pose hung to the
-  ground: its cape is sized as it stands, its height by that share (`cape::standing`), every
-  other body's exactly as before. It names the wearer's nodes in its bind pose and is drawn on the body's own palette,
+  ground: its cape is sized as it stands, its height by that share (`cape::standing`), and across by its shoulders'
+  joints, not by what it wears over them (`cape::shouldered`; the owner, 2026-11-10, of a player in the goblin
+  chieftain's body: "it isnt sitting well": the chieftain's spiked harness, skinned to its chest, measured its torso
+  past its shoulders, and its cape went on two and a half times a goblin's width and depth, standing out from its
+  back like a board; the mystic's pads a little), every other body's exactly as before. It names the wearer's nodes in its bind pose and is drawn on the body's own palette,
   swaying with the robe-tail bones every player skeleton's walk swings. Players' characters
   only, in the world, on the player and at character select (the bodies a list's capes are
   cut from read out of CHAR.ESF there, `res::Res::want_bodies`); bodies with wings (the

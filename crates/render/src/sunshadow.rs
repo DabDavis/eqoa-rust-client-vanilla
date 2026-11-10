@@ -11,8 +11,9 @@
 //! frame the sun is up (`Sun::draw`), from what the frame draws
 //! (`suncast.wgsl`): the zones' groups from bundles recorded at their upload
 //! in clusters of members near one another (`GroupSun`, each culled against
-//! a cascade's box) and the models (characters, what they hold, the boids)
-//! by their world box, every opaque layer of a material whose first layer is
+//! a cascade's box) and the models (characters, what they hold, the boids;
+//! not one cleared of casting, `GpuModel::casts`: a Wisp's) by their world
+//! box, every opaque layer of a material whose first layer is
 //! opaque, both faces, a vertex turned from the sun put back a little
 //! ([`BACK_PUSH`]), a solid layer as depth alone and any other alpha tested
 //! as it is drawn (leaves cut out); not the radial flora
@@ -704,7 +705,9 @@ impl Sun {
                         }
                     }
                     Draw::Model(m) => {
-                        if m.world.get().is_some_and(|b| !cascade.reaches(b)) {
+                        // a model cleared of casting (`GpuModel::casts`: a
+                        // Wisp's) is drawn into no cascade
+                        if !m.casts || m.world.get().is_some_and(|b| !cascade.reaches(b)) {
                             continue;
                         }
                         if !bound {

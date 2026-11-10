@@ -6,6 +6,24 @@ in the same push as the changes it describes. The dev release's page shows them
 is put on the page by `.github/workflows/notes.yml`.
 
 
+## 2026-11-10 · Wisps cast no shadow, gargoyles swim, the goblin chieftain's cape
+- A Wisp no longer casts a shadow: there is no round shadow under it, and with Sun Shadows or Light Shadows on,
+  nothing of it casts one, not its armour, its weapons, its helm, its cape or the wisp itself. Its shadow was a
+  human's, and showed what stands inside the armour. Everyone else's shadows are exactly as they were.
+- A Gargoyle swims in water now. Its body has no swimming of its own, so in the water it hung upright with its
+  wings spread, as if flying; it now swims the way a human does, lying along the water and stroking, moving or
+  still. The Jal'Raeth, who sat cross-legged in the water, swim the same way. A pixie or a fairy still hovers in
+  the water: everything they do is flying. Other players with this client see them swim; a PlayStation 2 still
+  shows them as before.
+- On a server with jumps, a character in one of a race's other bodies (a shadow or fire gargoyle, a goblin king,
+  any body the race's appearance choices offer) now falls and lands as its race's own body does. Through a
+  jump or a fall off a ledge it stood in the air as if on the ground.
+- A goblin in the chieftain's body wears its cape the way the other goblins do. The chieftain's spiked shoulder
+  harness made its cape more than twice a goblin's width and depth, so it stood out from its back like a board and
+  hung wider than its arms; it is now sized to the goblin's shoulders and hangs down its back over the harness. The
+  goblin mystic's cape is a little narrower too (its spiked shoulder pads did the same, a little); every other
+  goblin's cape is exactly as before.
+
 ## 2026-11-10 · A DPS meter
 - A damage meter for your fights, alone, in a group or in a raid: who did how much damage and how fast. Turn it
   on in Options > Extended > Combat > DPS Meter (it starts off). It sits on the right of the screen above the

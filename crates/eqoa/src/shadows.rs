@@ -19,7 +19,9 @@
 //! camera ceiling), so zoomed out past the game's camera the player's own
 //! shadow stays. A caster with no actor (the viewer's own body, out of play)
 //! goes by the frustum alone, after them. No shadow.tga in the library (FX.CSF's), no material
-//! (`m_p1880` -1), no shadows.
+//! (`m_p1880` -1), no shadows. A Wisp (`wisp`, a server's race) takes its place in
+//! the queue, its actor rastered, and casts none: its shadow is the human's under its
+//! armour (`Caster::casts`).
 //!
 //! Drawn after the particle system's billboards and before the weather's, as
 //! `VIScene::Render` draws `RenderShadows` after `VIParticleSystem::Render`
@@ -53,6 +55,9 @@ pub struct Caster {
     /// rooms), and its sprite's off distance (`lod::off_dist`).
     pub actor: Option<usize>,
     pub off: f32,
+    /// Whether its shadow is drawn: not a Wisp's (`wisp::is`), which keeps
+    /// its place in the queue all the same, so every other's is as it was.
+    pub casts: bool,
 }
 
 impl Caster {
@@ -64,7 +69,7 @@ impl Caster {
             let node = usize::try_from(cs.node_ids[k]).ok().and_then(|n| cs.h.nodes.get(n));
             *s = node.map(|n| Matrix44::mul(&n.world, centre));
         }
-        Caster { transform, location: transform.m[3].xyz(), slots, bound, actor: None, off: crate::lod::OFF_DIST }
+        Caster { transform, location: transform.m[3].xyz(), slots, bound, actor: None, off: crate::lod::OFF_DIST, casts: true }
     }
 
     /// The caster as its actor `actor` in the walker's world, its body's off
@@ -72,6 +77,13 @@ impl Caster {
     pub fn on(mut self, actor: Option<usize>, off: f32) -> Self {
         self.actor = actor;
         self.off = off;
+        self
+    }
+
+    /// The caster casting its shadow or, `casts` false (a Wisp's), queued
+    /// with none drawn.
+    pub fn casting(mut self, casts: bool) -> Self {
+        self.casts = casts;
         self
     }
 
@@ -195,9 +207,10 @@ impl Shadows {
     }
 
     /// `RenderShadows` over this frame's `casters`: the queue (`queue`, from
-    /// the eye `eye`, in `view_proj`'s view), each shadow made over `world`,
-    /// its vertices relative to `rel` (the view's eye, as the frame draws
-    /// them). Nothing when the library has no shadow.tga.
+    /// the eye `eye`, in `view_proj`'s view), each shadow made over `world`
+    /// (but a caster's that casts none, `Caster::casts`), its vertices
+    /// relative to `rel` (the view's eye, as the frame draws them). Nothing
+    /// when the library has no shadow.tga.
     pub fn frame(&mut self, world: &mut World<Ee>, lib: &Library, casters: &[Caster], eye: &Vect3<Ee>, view_proj: Mat4, rel: Vec3) {
         self.verts.clear();
         self.eye = rel;
@@ -214,7 +227,7 @@ impl Shadows {
         }
         let mut sc = Scene { world, casters };
         let r = rel.as_dvec3();
-        for k in q {
+        for k in q.into_iter().filter(|&k| casters[k].casts) {
             let Some(s) = render_shadow(&mut sc, 0, k as i32) else { continue };
             self.drawn += 1;
             self.tris += s.tris.len();
@@ -262,7 +275,7 @@ mod tests {
 
     fn caster(at: [f32; 3], r: f32) -> Caster {
         let m = Matrix44::transform(&Vect3::of(0.0, 0.0, 0.0), F::ONE, &Vect3::of(at[0], at[1], at[2]));
-        Caster { transform: m, location: m.m[3].xyz(), slots: [None; 9], bound: Some(Sphere { c: Vect3::of(at[0], at[1] + 1.0, at[2]), r: F::new(r) }), actor: None, off: crate::lod::OFF_DIST }
+        Caster { transform: m, location: m.m[3].xyz(), slots: [None; 9], bound: Some(Sphere { c: Vect3::of(at[0], at[1] + 1.0, at[2]), r: F::new(r) }), actor: None, off: crate::lod::OFF_DIST, casts: true }
     }
 
     /// `RasterActor`'s queue: within 50 of the eye (the distance squared
@@ -349,7 +362,7 @@ mod tests {
                 let at = |a: usize| {
                     let l = w.actors[a].location;
                     let m = Matrix44::transform(&Vect3::of(0.0, 0.0, 0.0), F::ONE, &l);
-                    Caster { transform: m, location: l, slots: [None; 9], bound: Some(w.actors[a].bound), actor: Some(a), off: 500.0 }
+                    Caster { transform: m, location: l, slots: [None; 9], bound: Some(w.actors[a].bound), actor: Some(a), off: 500.0, casts: true }
                 };
                 (vec![at(hidden), at(seen)], vec![at(hidden).on(None, 500.0)])
             };
@@ -358,6 +371,39 @@ mod tests {
             hidden_checked += 1;
         }
         assert!(hidden_checked >= 8, "views with an actor behind a wall: {hidden_checked}");
+    }
+
+    /// A Wisp's caster (`casts` false, petition 1449: its shadow is the
+    /// human's under its armour) keeps its place in `RasterActor`'s queue and
+    /// draws no shadow, and the shadow of the character beside it is byte for
+    /// byte what it is with no Wisp there. The control: the same caster
+    /// casting draws its own. Two characters a step and a half apart on
+    /// Freeport's street, seen from 9 off.
+    #[test]
+    fn a_caster_that_casts_none_draws_no_shadow() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some(mut w) = crate::walker::tests::tunaria_round(x, z) else { return };
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let mut iso = iso::Iso::open(&path).unwrap();
+        let mut lib = Library::new();
+        lib.add("FX.CSF", esf::Container::open(iso.read("FX.CSF").unwrap()).unwrap());
+        let y = crate::walker::ground(&mut w, x, z).expect("the street");
+        let (human, wisp) = (caster([x, y, z], 1.0), caster([x + 1.5, y, z], 1.0).casting(false));
+        let eye_g = Vec3::new(x + 0.75, y + 4.0, z + 8.0);
+        let vp = crate::walker::projection_to(4.0 / 3.0, 300.0) * glam::camera::rh::view::look_at_mat4(eye_g, Vec3::new(x + 0.75, y, z), Vec3::Y);
+        let eye = Vect3::of(eye_g.x, eye_g.y, eye_g.z);
+        let mut frame = |cs: &[Caster]| {
+            let mut sh = Shadows::new();
+            sh.frame(&mut w, &lib, cs, &eye, vp, eye_g);
+            (sh.queued, sh.drawn, sh.verts)
+        };
+        let (alone, with_wisp, casting) = (frame(&[human.clone()]), frame(&[human.clone(), wisp.clone()]), frame(&[human.clone(), wisp.clone().casting(true)]));
+        assert!(alone.1 == 1 && !alone.2.is_empty(), "the human's shadow on the street: {} triangles", alone.2.len() / 3);
+        assert_eq!((with_wisp.0, with_wisp.1), (2, 1), "the Wisp queued, its shadow not drawn");
+        let bits = |v: &[render::shadow::Vertex]| v.iter().flat_map(|v| v.at.into_iter().chain(v.uv).chain([v.alpha])).map(f32::to_bits).collect::<Vec<u32>>();
+        assert_eq!(bits(&with_wisp.2), bits(&alone.2), "the human's shadow byte for byte as with no Wisp there");
+        assert_eq!((casting.0, casting.1), (2, 2), "the control: casting, both drawn");
+        assert!(casting.2.len() > alone.2.len(), "the control: its shadow's triangles too ({} against {})", casting.2.len() / 3, alone.2.len() / 3);
     }
 
     /// A slot the sprite lacks is the actor's own transform

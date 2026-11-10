@@ -387,6 +387,17 @@ pub fn shot_with(
         {
             crate::raceemote::grant_air(lib, cs, &mut walker.anims, shot_body(), true, true);
         }
+        // a race's body swimming as on a server with races of its own
+        // (`EQOA_SWIM`): the human's swim on a body with none of its own
+        // (`raceemote::put_swim`), but the pixie's and the fairy's
+        // (`SWIM_NONE`), whatever the race table says of the body (a shot has
+        // no race options to map another body of a race to its own)
+        if std::env::var_os("EQOA_SWIM").is_some()
+            && !crate::raceemote::SWIM_NONE.contains(&shot_body())
+            && let Some(cs) = walker.sprite.as_mut()
+        {
+            crate::raceemote::put_swim(lib, cs, &mut walker.anims, [crate::raceemote::Pose::Human; 2]);
+        }
         // 60 frames a second of game time, the controls held throughout.
         let script = script.unwrap_or(Script { ms: 0, controls: Controls::default() });
         let mut t = 0;
@@ -1557,7 +1568,8 @@ fn held_name(k: &Key) -> Option<String> {
 /// `EQOA_BODY=<DictID>` (hex, 0x optional): the body a walk shot plays,
 /// the human's (`HUMAN`) unless said. With `EQOA_JUMP`, as on a server with
 /// jumps: a body the race table lists falls and lands as it has it
-/// (`raceemote::grant_air`).
+/// (`raceemote::grant_air`); with `EQOA_SWIM`, as on a server with races of
+/// its own: one with no swim of its own swims as the human (`raceemote::put_swim`).
 pub fn shot_body() -> u32 {
     std::env::var("EQOA_BODY").ok().and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok()).unwrap_or(HUMAN as u32)
 }
