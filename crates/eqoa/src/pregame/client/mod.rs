@@ -310,11 +310,14 @@ pub struct Client {
     /// (`raceopts::generation`)
     looks_seen: u64,
     /// A character played while the server's own worlds are still being
-    /// built (`net::session::Session::server_worlds_pending`), and when: sent
-    /// once the server is told which are held (`pick_goes`). In a page alone
-    /// (`hold_picks`): its first visit builds them off the disc in seconds
-    /// (`web::worlds`), and the server places the character by what it is
-    /// told, its homeland or its city; natively the pick goes at once.
+    /// built (`net::session::Session::server_worlds_pending`) whose login
+    /// needs them (`pick_waits`), and when: sent once the server is told
+    /// which are held (`pick_goes`), so the server places it by them, its
+    /// homeland and not its city. The server says which characters those are
+    /// (`Session::pick_needs_worlds`), and every other goes at once. With a
+    /// server that does not say (an older one) a page holds every character
+    /// (`hold_picks`: it could not know) and a native client none, as both
+    /// did before the server said.
     held_pick: Option<(net::session::Character, i64)>,
     hold_picks: bool,
 }
@@ -323,10 +326,20 @@ pub struct Client {
 /// before it goes anyway: `eqoa play`'s wait.
 const PICK_WAIT_MS: i64 = 60_000;
 
-/// Whether a character played at `at` goes now (`held_pick`): once the
-/// server's worlds are no longer pending, or after [`PICK_WAIT_MS`].
-fn pick_goes(pending: bool, at: i64, now: i64) -> bool {
-    !pending || now - at >= PICK_WAIT_MS
+/// Whether a character played now waits for the server's worlds
+/// (`held_pick`): only while they are still to be answered (`pending`), and
+/// then when the server said its login needs them (`needs`), or, the server
+/// not having said, when this client holds every character (`hold_unsaid`:
+/// a page).
+fn pick_waits(pending: bool, needs: Option<bool>, hold_unsaid: bool) -> bool {
+    pending && needs.unwrap_or(hold_unsaid)
+}
+
+/// Whether a character held since `at` goes now (`held_pick`): once it no
+/// longer waits (`pick_waits`: the worlds answered, or the server's word come
+/// that it needs none), or after [`PICK_WAIT_MS`].
+fn pick_goes(waits: bool, at: i64, now: i64) -> bool {
+    !waits || now - at >= PICK_WAIT_MS
 }
 
 impl Default for Client {
@@ -750,9 +763,10 @@ impl Client {
         let Some(s) = self.session.as_mut() else { return };
         let events = s.pump();
         // a character played while the server's worlds were being built goes
-        // once the server is told which are held (the pump told it)
+        // once the server is told which are held (the pump told it), or once
+        // the server's word comes that its login needs none of them
         if let Some((c, at)) = &self.held_pick
-            && pick_goes(s.server_worlds_pending(), *at, self.now)
+            && pick_goes(pick_waits(s.server_worlds_pending(), s.pick_needs_worlds(c.server_id), self.hold_picks), *at, self.now)
         {
             crate::say(&format!("{} goes in after {} ms", c.name, self.now - at));
             s.select_character(c);
@@ -905,12 +919,16 @@ impl Client {
             self.phase = 4;
             let c = c.character();
             if let Some(s) = self.session.as_mut() {
-                // the server's own worlds still being built (a page's first
-                // visit): the character waits for them (`held_pick`)
-                if self.hold_picks && s.server_worlds_pending() {
+                // the server's own worlds still being built, and this
+                // character's login needs them: it waits (`held_pick`)
+                let (pending, needs) = (s.server_worlds_pending(), s.pick_needs_worlds(c.server_id));
+                if pick_waits(pending, needs, self.hold_picks) {
                     crate::say(&format!("{} waits for the server's worlds to be built", c.name));
                     self.held_pick = Some((c, self.now));
                 } else {
+                    if pending {
+                        crate::say(&format!("{} goes in at once: the server's worlds are still being built, and its login needs none of them", c.name));
+                    }
                     s.select_character(&c);
                 }
             }
@@ -1028,17 +1046,31 @@ mod tests {
         assert!(disc.colors.is_none() && select::look_of(&disc, true).armor_color.is_none(), "the control: the disc's record");
     }
 
-    /// A character played while the server's worlds are still being built (a
-    /// page's first visit, `web::worlds`) waits until the server is told
-    /// which are held, or a minute at most; natively one never waits (the
-    /// control: `hold_picks` is a page's alone, so nothing changes there).
+    /// A character played while the server's worlds are still being built
+    /// waits for them only when its login needs them: the server says which
+    /// characters those are, and then one it names waits, natively as in a
+    /// page, and one it does not goes at once, in a page too (petition 1468:
+    /// a page held every character, 10 to 36 s a login). The server not having
+    /// said (an older one), a page holds every character and a native client
+    /// none, as before. Nothing waits once the worlds are answered, and a
+    /// held one goes after a minute at most. The control: natively
+    /// `hold_picks` is off.
     #[test]
-    fn a_pick_waits_for_the_servers_worlds_in_a_page() {
-        assert!(!pick_goes(true, 1000, 1000), "pending: it waits");
-        assert!(!pick_goes(true, 1000, 1000 + PICK_WAIT_MS - 1), "still pending: it waits");
-        assert!(pick_goes(false, 1000, 1001), "the server told: it goes");
+    fn a_pick_waits_for_the_servers_worlds_only_when_its_login_needs_them() {
+        for page in [false, true] {
+            assert!(pick_waits(true, Some(true), page), "the server named it: it waits (page {page})");
+            assert!(!pick_waits(true, Some(false), page), "the server did not name it: it goes at once (page {page})");
+            for needs in [None, Some(false), Some(true)] {
+                assert!(!pick_waits(false, needs, page), "the worlds answered: nothing waits ({needs:?}, page {page})");
+            }
+        }
+        assert!(pick_waits(true, None, true), "the server never said: a page holds every character");
+        assert!(!pick_waits(true, None, false), "the server never said: natively a character goes at once");
+        assert!(!pick_goes(true, 1000, 1000), "it waits");
+        assert!(!pick_goes(true, 1000, 1000 + PICK_WAIT_MS - 1), "it still waits");
+        assert!(pick_goes(false, 1000, 1001), "it waits no longer: it goes");
         assert!(pick_goes(true, 1000, 1000 + PICK_WAIT_MS), "a minute: it goes anyway");
-        assert!(!Client::new().hold_picks, "natively a pick goes at once");
+        assert!(!Client::new().hold_picks, "natively nothing is held on a server that does not say");
     }
 
     /// Where a box of the client's own may stand (`update`'s question): the

@@ -145,6 +145,25 @@ fn read_extras(r: &mut Reader) -> Vec<Extra> {
     out
 }
 
+/// The version of [`read_chars`]'s list this client reads.
+pub const CHARS_VERSION: u8 = 1;
+
+/// Which of the session's characters a login needs the server's worlds for
+/// ([`crate::session::OP_SERVER_WORLDS_CHARS`]'s body after its opcode): a u8
+/// version (1), a u8 count, then each character's server id (a u32, as the
+/// character list carries it), the whole set each time. `None` when it is not
+/// one this client reads (another version, cut short): the session then keeps
+/// what it knew, nothing from a server that never said.
+pub fn read_chars(b: &[u8]) -> Option<Vec<u32>> {
+    let mut r = Reader::new(b);
+    if r.u8() != CHARS_VERSION || r.error {
+        return None;
+    }
+    let n = r.u8();
+    let ids: Vec<u32> = (0..n).map(|_| r.u32()).collect();
+    (!r.error).then_some(ids)
+}
+
 /// The answer: the worlds this client holds now, by id (a u8 count, then each).
 pub fn encode_ready(ids: &[u8]) -> Vec<u8> {
     let n = ids.len().min(255);
@@ -235,6 +254,23 @@ mod tests {
         assert_eq!(read(&v2), None);
         assert_eq!(encode_ready(&[10, 12]), vec![2, 10, 12]);
         assert_eq!(encode_ready(&[]), vec![0]);
+    }
+
+    /// Which characters need the server's worlds, as go-eqoa-server writes it
+    /// (its TestServerWorldsCharsFormat: 630 and 0x01020304): read whole or
+    /// not at all, and none is a set too (no character waits), which is not
+    /// "never said". The controls: every cut, and another version.
+    #[test]
+    fn the_characters_read_whole_or_not_at_all() {
+        let b = [1, 2, 0x76, 0x02, 0, 0, 4, 3, 2, 1];
+        assert_eq!(read_chars(&b), Some(vec![630, 0x0102_0304]));
+        assert_eq!(read_chars(&[1, 0]), Some(vec![]));
+        for cut in 0..b.len() {
+            assert_eq!(read_chars(&b[..cut]), None, "cut at {cut}");
+        }
+        let mut v2 = b;
+        v2[0] = 2;
+        assert_eq!(read_chars(&v2), None);
     }
 
     /// A list with extras (version 2) read back whole, each zone's extras with
