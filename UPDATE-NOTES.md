@@ -60,6 +60,14 @@ is put on the page by `.github/workflows/notes.yml`.
   feet. Every other race's cape is exactly as before.
 - Only players' characters are dressed this way: creatures and NPCs look as they always have.
 
+## 2026-11-09 · A server's own worlds, built from your disc
+- A server can now have worlds of its own made of the game's own lands: the Homelands, where a server's new races
+  start (an Aviak hatches in Aviak Village). The client builds such a world from your own disc the first time you
+  reach character select on that server (a few seconds; nothing of the game is downloaded), keeps it, and then
+  plays it like any other world. The start menu names its places, and the create page's review shows a new
+  race's home as its Starting City.
+- Nothing changes on a server without such worlds.
+
 ## 2026-11-09 · Damage numbers in your colours
 - The numbers that float up in a fight can be coloured by what made them, so you can see at a glance that a
   proc fired or a heal over time ticked. It is in Options > Extended > Number Colors: Your Damage, Your Procs,

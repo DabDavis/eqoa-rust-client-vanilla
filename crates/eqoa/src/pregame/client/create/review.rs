@@ -166,9 +166,12 @@ impl ReviewPage {
         let mut label = word(vui, 406);
         label.extend(vi::ui::wide(": "));
         vui.draw_centered_string_ex(r, &label, 490, 350, white, 0, true);
-        if let Some(w) = home_word(form) {
+        // a server's race with a home of its own in a server's world starts
+        // there (`serverworlds`), else in its `like` race's city
+        let home = crate::serverworlds::home_of(form.race).map(|n| vi::ui::wide(&n)).or_else(|| home_word(form).map(|w| word(vui, w)));
+        if let Some(h) = home {
             let y = r.point_size() + 345;
-            vui.draw_centered_string_ex(r, &word(vui, w), 490, y, white, 0, true);
+            vui.draw_centered_string_ex(r, &h, 490, y, white, 0, true);
         }
     }
 

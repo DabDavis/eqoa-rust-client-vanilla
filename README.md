@@ -340,6 +340,15 @@ or a browser (each described where it lives below):
   server's word for it (the user, 2026-11-07: "my race says ogre, but lets make
   it Hill Giant, Titan as MC"). Its camera and what it may wear stay the race it
   passes as.
+- **A server's own worlds, built off the player's disc**, on a server that has them (go-eqoa-server's
+  offer, 0x7E30; `serverworlds`, `net::serverworlds`; the owner's of 2026-11-08: "new world with a zone for
+  each new race"): a world made of the disc's own zones where they stand on the disc, the Homelands where a
+  server's races start. The server sends each zone's disc file, index and CRC and the file's CRC (0x7E31),
+  never the zones; the client builds the same file off its own disc (the server's `Compose` in Rust, byte for
+  byte), keeps it in the cache by its CRC (`worlds/`), and says which it holds. The world table answers past
+  its own, the file opens deferred as a disc world does, the start menu's Location and the review's Starting
+  City name the server's places. Another disc's zone is refused, and the server keeps that player on the
+  disc's worlds. Not in a page yet (no builder there: a page player of such a race starts in its city).
 - **Armour on bodies made without it** (the user's of 2026-11-08, "Lay armour textures on", a
   prototype; `slotless`): a body with no texture slots (the kappa, brownie, pixie, fairy, minotaur,
   dryad, skeleton, fungusman, gargoyle and hill giant a server's races wear) shows the armour, robe and
