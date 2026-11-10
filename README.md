@@ -323,7 +323,9 @@ or a browser (each described where it lives below):
   byte), keeps it in the cache by its CRC (`worlds/`), and says which it holds. The world table answers past
   its own, the file opens deferred as a disc world does, the start menu's Location and the review's Starting
   City name the server's places. Another disc's zone is refused, and the server keeps that player on the
-  disc's worlds. Not in a page yet (no builder there: a page player of such a race starts in its city).
+  disc's worlds. A page builds it too, in a worker into the browser's private storage (README "In a
+  browser", `web::worlds`); one that cannot keep it does not take the offer, and a character of such a world
+  starts in its city.
 - **Armour on bodies made without it** (the user's of 2026-11-08, "Lay armour textures on", a
   prototype; `slotless`): a body with no texture slots (the kappa, brownie, pixie, fairy, minotaur,
   dryad, skeleton, fungusman, gargoyle and hill giant a server's races wear) shows the armour, robe and
