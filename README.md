@@ -276,6 +276,43 @@ or a browser (each described where it lives below):
   by the wheel. A click targets a member the client can see, and L1's cycle reaches
   them. Extended > UI's Raid List, on by default; a client that does not ask gets the
   game's bars, as a PS2 does.
+- **A raid's windows** (the GM Jibrish's petitions 1448 and 1451, 2026-11-10; `net::raid`,
+  `raidplay.rs`, `rollwnd.rs`, `masterloot.rs`): on a server that offers them (go-eqoa-server's
+  0x7E42; its answer 0x7E43 is always yes) the client is sent the raid's state (0x7E44: who leads,
+  its helper, its main assist, its loot rule, whether it is in combat), each loot roll it is
+  offered (0x7E45) and, as a master looter, whom it may give a corpse's items to (0x7E47); it sends
+  a roll's choice (0x7E46) and the raid menu's commands (0x7E48). Every rule is the server's.
+  **Marks**: in the raid list a gold crown by the leader's name, a blue cross by its helper's, a
+  red diamond by its main assist's (on the group's bars too while the raid list is off).
+  **Rolls**: a strip a roll at the frame's right between the minimap and the chat box (over the quest
+  tracker's place, clear of the raid list's columns and the effects along the top), the oldest on
+  top, three at once: the item's icon and name, Need, Greed and Pass under them (Need dimmed where
+  the server says the player can neither wear nor use it), and its time on a bar, red in its last
+  15 seconds. It is never in the way: the walk, the camera and every key of play go on; a click on
+  a choice makes it; with R2 held (the chat box's
+  history, where the walk goes on) right gives it the d-pad: left and right the choice, up and
+  down the roll, ✕ makes it, △ or R2 let go hands the d-pad back; on a keyboard C held and the
+  arrows and Enter, the same. A choice closes its strip at once; the server rolls 0-100 for a Need
+  or a Greed and says every roll and the winner in raid chat. While R2 holds a strip, the item's
+  description (its stats too) shows beside them. **Community > Group > Raid** in the start menu:
+  in no raid, Invite (the target) and Raid Flag (everyone near, the server's `/raidaoe`); in one,
+  Assist Main Assist and Leave Raid; the helper's Invite, Raid Flag and Kick (the target) too; the
+  leader's Loot Rules (Free for All, Need Before Greed, Master Looter: the one in force marked
+  with a star, all three dimmed and refused while the raid is in combat), Make Leader, Make Helper
+  and Make Main Assist (the target) too. The group's own Disband is refused while the raid is in
+  combat (a line says so), so its leader stays in it; and in a raid the client leads as the state
+  says (the game sets its leader flag from the roster's first member alone and never clears it, so
+  a leader who handed the lead on with `/raidleader` went on taking itself for one). **Master looter**: on a corpse the server
+  makes the player the master looter of, the choice of an item opens a menu beside the corpse
+  list instead of taking it: Take (the game's), Inspect (its whole description), Assign (one
+  rectangle beside it listing the raid, ten at a time, up and down through the rest; ✕ or a
+  click asks "Assign <item> to <name>?" in the game's Yes/No box) and Abandon (asks first, saying
+  that anyone may then loot anything on the corpse). Every other corpse is the game's window. The
+  raid's typed commands (`/raidinvite`, `/rsay`, `/raidloot` and the rest, `/help` lists them)
+  are the server's: the client sends them on as typed, as it sends every command it does not
+  know, and a quick chat line's (L2's, the game's own: a `/raidassist` there assists the main
+  assist in a few presses; the macros press buttons and type nothing). On any other server none of
+  it is drawn or sent.
 - **The pet's effects under its bar** (the server owner's of 2026-11-09, "jibcro is
   showing pets buffs as if on him, put the buff icons under the pet name plate";
   `hud::pet_effects_pieces`): CLIENT shows a pet's effects nowhere, so on a server

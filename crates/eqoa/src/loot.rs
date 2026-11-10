@@ -15,6 +15,11 @@
 //!
 //! A pointer (`pointer`) takes the corpse list's rows, as its keys do; the
 //! inventory list beside it takes no keys, so no pointer either.
+//!
+//! The client's own: on a server that makes this player a raid's master looter
+//! of the corpse (go-eqoa-server's 0x7E47), the choice of an item opens the
+//! master looter's menu in place of taking it (`masterloot`: Take, Inspect,
+//! Assign, Abandon); on any other corpse the window is the game's.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -32,6 +37,11 @@ pub enum LootOut {
     One(i32, i32),
     /// `RequestLootAll`: 0x001A (26)
     All,
+    /// the master looter's Assign (`masterloot`): the item of that key to the
+    /// player of that id (0x7E48 op 3)
+    Assign { key: u32, id: u32 },
+    /// the master looter's Abandon (0x7E48 op 4)
+    Abandon,
 }
 
 pub struct Loot {
@@ -40,6 +50,9 @@ pub struct Loot {
     desc: String,
     window: Window,
     pub visible: bool,
+    /// the master looter's menu and its windows, while the server says this
+    /// player is the corpse's master looter (`masterloot`)
+    pub ml: crate::masterloot::MasterLooter,
 }
 
 impl Default for Loot {
@@ -47,7 +60,7 @@ impl Default for Loot {
         // Init: the two lists and their rows
         let inv = WndList::with_rows([5, 10], 0, 40);
         let loot = WndList::with_rows([144, 10], 0, 42);
-        Loot { inv, loot, desc: String::new(), window: Window::default(), visible: false }
+        Loot { inv, loot, desc: String::new(), window: Window::default(), visible: false, ml: Default::default() }
     }
 }
 
@@ -115,12 +128,24 @@ impl Loot {
     /// A pointer at frame point `p`: a row of the corpse list selected, the
     /// selection taken (Enter: take it, all, or close). The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        if self.ml.busy() {
+            return self.ml.point(p);
+        }
         self.loot.row_at(p).map(|row| self.loot.pick(row)).into_iter().collect()
     }
 
     /// The corpse list's keys (`VIWndList::OnKeyDown`, Enter as 256 to
-    /// `VIWndLoot::OnMessage`) and the window's own (Escape).
-    pub fn key(&mut self, key: i32, down: bool, corpse: &ItemList, cues: &mut Vec<i32>) -> Option<LootOut> {
+    /// `VIWndLoot::OnMessage`) and the window's own (Escape); the master
+    /// looter's windows' while one is up (`describe`: Inspect's text of an item,
+    /// `now`: the session's clock).
+    pub fn key(&mut self, key: i32, down: bool, corpse: &ItemList, describe: &dyn Fn(&net::dump::NetItem) -> String, now: i64, cues: &mut Vec<i32>) -> Option<LootOut> {
+        if self.ml.busy() {
+            return self.ml.key(key, down, corpse, describe, now, cues).map(|o| match o {
+                crate::masterloot::MlOut::Take(k, n) => LootOut::One(k, n),
+                crate::masterloot::MlOut::Assign { key, id } => LootOut::Assign { key, id },
+                crate::masterloot::MlOut::Abandon => LootOut::Abandon,
+            });
+        }
         if !down {
             self.loot.key_up_down(key, false);
             return None;
@@ -136,6 +161,10 @@ impl Loot {
                 let n = corpse.items.len() as i32;
                 if p1 == 0 {
                     Some(LootOut::Close)
+                } else if p1 < n + 1 && self.ml.on() {
+                    // the master looter's: its menu for the item
+                    self.ml.open((p1 - 1) as usize);
+                    None
                 } else if p1 < n + 1 {
                     let it = &corpse.items[(p1 - 1) as usize];
                     Some(LootOut::One(it.inv_index as i32, it.quantity as i32))
@@ -176,6 +205,7 @@ impl Loot {
         }
         self.inv.draw(vui, r, now, cues);
         self.loot.draw(vui, r, now, cues);
+        self.ml.draw(vui, r, corpse, now, cues);
     }
 }
 
@@ -208,15 +238,38 @@ mod tests {
         let mut cues = Vec::new();
         let mut at = |sel: i32| {
             w.loot.sel = sel;
-            w.key(134, true, &c, &mut cues)
+            w.key(134, true, &c, &|_| String::new(), 0, &mut cues)
         };
         assert_eq!(at(0), Some(LootOut::Close));
         assert_eq!(at(1), Some(LootOut::One(10, 1)), "the key, not the row");
         assert_eq!(at(2), Some(LootOut::One(11, 2)));
         assert_eq!(at(3), Some(LootOut::All));
         assert_eq!(at(4), None);
-        assert_eq!(w.key(27, true, &c, &mut cues), Some(LootOut::Close));
+        assert_eq!(w.key(27, true, &c, &|_| String::new(), 0, &mut cues), Some(LootOut::Close));
         assert_eq!(cues, vec![13, 13, 13, 13, 13, 8]);
+    }
+
+    /// The master looter's corpse (0x7E47): ✕ on an item opens its menu in
+    /// place of taking it, and the menu's Take is the game's take of it, its
+    /// Abandon asked first; the server's word that it is over puts the game's
+    /// window back (the control: every other corpse takes at once).
+    #[test]
+    fn a_master_looters_item_opens_its_menu() {
+        let mut w = Loot::default();
+        let c = corpse(2);
+        let mut cues = Vec::new();
+        let none = |_: &net::dump::NetItem| String::new();
+        w.loot.sel = 2;
+        assert_eq!(w.key(134, true, &c, &none, 0, &mut cues), Some(LootOut::One(11, 2)), "the control");
+        w.ml.set(Some(net::raid::MasterLoot { seconds: 300, members: vec![(5, "Bo".into())] }));
+        assert_eq!(w.key(134, true, &c, &none, 0, &mut cues), None);
+        assert!(w.ml.busy(), "the menu, the item kept");
+        assert_eq!(w.key(134, true, &c, &none, 0, &mut cues), Some(LootOut::One(11, 2)), "Take: the game's");
+        let outs: Vec<LootOut> = [134, 139, 139, 139, 134, 136, 134].iter().filter_map(|&k| w.key(k, true, &c, &none, 0, &mut cues)).collect();
+        assert_eq!(outs, [LootOut::Abandon], "the menu again, Abandon, the box's Yes");
+        assert!(!w.ml.busy());
+        w.ml.set(None);
+        assert_eq!(w.key(134, true, &c, &none, 0, &mut cues), Some(LootOut::One(11, 2)), "over: the game's window again");
     }
 
     /// A click selects a row of the corpse list where it was drawn, a second
@@ -240,7 +293,7 @@ mod tests {
         assert_eq!(w.point(row(144.0, 2)), vec![MOVED]);
         assert_eq!(w.loot.sel, 2);
         assert_eq!(w.point(row(144.0, 2)), vec![key::CROSS], "the selection: Enter");
-        assert_eq!(w.key(134, true, &c, &mut cues), Some(LootOut::One(11, 2)), "the row the pointer chose");
+        assert_eq!(w.key(134, true, &c, &|_| String::new(), 0, &mut cues), Some(LootOut::One(11, 2)), "the row the pointer chose");
         assert!(w.point(row(144.0, 4)).is_empty(), "past \"done\": no row");
         assert!(w.point(row(5.0, 0)).is_empty(), "the inventory list takes no pointer");
         assert_eq!(w.loot.sel, 2);
