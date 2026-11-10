@@ -143,10 +143,13 @@ impl Figure {
         };
         let r = lib.lookup(id as i32)?;
         let textures = render::library_textures(lib);
+        let phase = super::bodytrace::watch();
         let mut built = lib.build_model(r)?;
+        let t_model = phase();
         let mut anims = AnimScene { time: now, ..Default::default() };
         let mut rand = Rand(1);
         let mut sprite = actor_sprite(lib, r, &mut anims, &mut rand);
+        let t_sprite = phase();
         // a player's character: in a body one of the server's races wears it
         // holds items as a race's body does (`racebody`)
         if let Some(cs) = sprite.as_mut() {
@@ -183,7 +186,9 @@ impl Figure {
                 attached.push((node, g.renderer.upload(g.device, g.queue, &w, &[render::IDENTITY], &textures)));
             }
         }
+        let t_dress = phase();
         let gpu = g.renderer.upload(g.device, g.queue, &built, &[render::IDENTITY], &textures);
+        super::bodytrace::note(|| format!("figure {model:08X}: its model built in {t_model:.1} ms, its sprite in {:.1}, its items and look in {:.1}, its body put up in {:.1}", t_sprite - t_model, t_dress - t_sprite, phase() - t_dress));
         let scale = crate::raceopts::body_size(id);
         Some(Figure { model, look, race_look, scale, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new(), body: id, cape: None })
     }
