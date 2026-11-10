@@ -165,6 +165,14 @@ impl Figure {
     /// again.
     pub fn refresh(&mut self, lib: &Library, g: &mut Gpu, now: i64) -> bool {
         let stale = self.stale(lib);
+        super::bodytrace::note(|| {
+            let changed = self.asked.iter().chain(&self.cape_asked).find(|a| !lib.answers_still(std::slice::from_ref(a)));
+            format!("figure {:08X} after the bodies came: {}", self.model, match (stale, changed) {
+                (false, _) => "left as it stands".to_string(),
+                (true, Some(a)) => format!("made again, for {a:X?}"),
+                (true, None) => "made again, in its own body".to_string(),
+            })
+        });
         if stale {
             self.remake(lib, g, now);
         }
