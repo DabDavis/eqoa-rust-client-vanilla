@@ -258,13 +258,19 @@ pub fn head_fit(id: u32, cs: &CSprite<Ee>, player: bool) -> Option<HelmFit> {
 }
 
 /// Body `id`'s node of the same ref id as the human's helm node (HumanFemale's for
-/// `female`).
+/// `female`, else HumanMale's: both name their helm node alike, and the pregame's
+/// library, which holds the bodies it cuts out of CHAR.ESF and the game's own
+/// races', may have no HumanFemale).
 pub(crate) fn named_helm_node(lib: &Library, id: u32, female: bool) -> Option<i32> {
-    let h = Human::load(lib, female)?;
-    let hid = if female { vi::hash::hash_resource_id("HumanFemale") } else { vi::hash::hash_resource_id("HumanMale") };
-    let (hr, br) = (crate::raceemote::Rig::load(lib, hid)?, crate::raceemote::Rig::load(lib, id)?);
-    let r = hr.refs.get(usize::try_from(h.cs.node_ids[8]).ok()?).copied().flatten()?;
-    br.by_ref.get(&r).map(|&n| n as i32)
+    let br = crate::raceemote::Rig::load(lib, id)?;
+    let names: &[&str] = if female { &["HumanFemale", "HumanMale"] } else { &["HumanMale"] };
+    names.iter().find_map(|name| {
+        let hid = vi::hash::hash_resource_id(name);
+        let h = Human::load_id(lib, hid)?;
+        let hr = crate::raceemote::Rig::load(lib, hid)?;
+        let r = hr.refs.get(usize::try_from(h.cs.node_ids[8]).ok()?).copied().flatten()?;
+        br.by_ref.get(&r).map(|&n| n as i32)
+    })
 }
 
 /// The player bodies other than the human's whose armour a body built on their

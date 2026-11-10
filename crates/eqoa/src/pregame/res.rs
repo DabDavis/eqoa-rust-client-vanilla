@@ -691,8 +691,12 @@ mod tests {
     /// disc's. The control: without the stand-in (the pregame until
     /// 2026-11-08) only the 2002 art differed, on the bodies the 2002 disc has
     /// its own of, and with them the helm nodes of the four skeletons
-    /// (Frontiers' each name node 5, the 2002 disc's none), the goblin and the
-    /// orc (the 2002 disc's name one, Frontiers' none). A cut that is its
+    /// (Frontiers' each name node 5, the 2002 disc's none) and the brownie's
+    /// (seated on its node of the human's helm node's name, `slotless::
+    /// HEAD_SEATS`: 5 on Frontiers' skeleton, 6 on the 2002 disc's); the
+    /// goblin's and the orc's are the same in both (the 2002 disc's name a helm
+    /// node, and a player's helm on Frontiers' hangs on the node of that name).
+    /// A cut that is its
     /// file's bytes (the hill giant is the same on both discs) or has none of
     /// the bodies (no kerran on the 2002 disc) stands in for nothing. Needs
     /// both discs (`run/eqoa.iso`, and `$EQOA_2002_ISO` or the USA disc under
@@ -757,10 +761,15 @@ mod tests {
         // the control: the pregame as it was
         assert!(differed.iter().all(|d| d.0 == Era::Y2002), "{differed:08X?}");
         assert_eq!(differed.len(), 10, "the seven race bodies the 2002 disc has its own of, and the three options: {differed:08X?}");
+        // (a player's helm on the goblin's and the orc's Frontiers bodies hangs on
+        // their node of the human's helm node's name, `slotless::HEAD_SEATS`, the
+        // node the 2002 disc's own name for it: the same in both)
         let helms: Vec<(u32, i32, i32)> = differed.iter().filter(|d| d.2 != d.3).map(|d| (d.1, d.2, d.3)).collect();
-        let mut want = vec![(goblin, -1, 5), (orc, -1, 6), (skeleton, 5, 6)];
+        let brownie = 0x4376_EB52u32;
+        let mut want = vec![(brownie, 5, 6), (skeleton, 5, 6)];
         want.extend(options.map(|o| (o, 5, 6)));
         assert_eq!(helms, want);
+        assert!(differed.iter().any(|d| d.1 == goblin) && differed.iter().any(|d| d.1 == orc), "the goblin's and orc's bodies are the 2002 disc's own");
         // a cut of its file's bytes, and one of none of them
         for one in [hill_giant, kerran] {
             let mut lib = esf::Library::new();
