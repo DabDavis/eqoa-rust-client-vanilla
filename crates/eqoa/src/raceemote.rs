@@ -38,6 +38,23 @@
 //! creation's races, or sent race labels), changes; an NPC in the same body,
 //! a body not listed, and every body on a server with none (Sandstorm,
 //! eqoa.live) is the game as it was.
+//!
+//! The fall and the landing, the same way (the user, 2026-11-09, asked if
+//! the new races' bodies should borrow the human's: "Yes, borrow the
+//! human's"). A body in the air plays its play list's entry 6 (the fall,
+//! `UpdateLocomotion`'s gait 6) and coming down entry 7 (the landing,
+//! `UpdateSprite`'s), and of the bodies `TABLE` lists only the brownie's,
+//! the dryad's, the orc's and the skeleton's have them; the others' are
+//! `SetDefaultEntries`' idle (the fall the idle looping, the landing the idle
+//! once), so a jump or a fall off a ledge stood them in the air. Here they
+//! take the human's fall and landing carried onto their skeletons (`retarget`),
+//! the fall looping and the landing once, at their entries' own priority:
+//! but the pixie, the fairy and the fungusman, which share one bone with the
+//! human (carried, they only lean), whose are their own nearest, as their
+//! emotes are (`AIR_OWN`). Only a player's character in a body `TABLE`
+//! lists, on a server with jumps (`grant_air`): the jumper's own and every
+//! other player's on this client, a jump and a fall off a ledge alike; a PS2
+//! still stands them in the air, as every body is elsewhere.
 
 use esf::Library;
 use glam::{Quat as GQuat, Vec3};
@@ -116,11 +133,49 @@ pub const TABLE: &[(u32, [Pose; 4])] = &[
     // thrust forward; arms flung wide
     (0x4A4D_88FB, [Pose::Own(15), Pose::Own(42), Pose::Own(30), Pose::Own(37)]), // fungusman
     (0xB4D2_D132, H), // gargoyle
+    // the Jal'Raeth (2026-11-09: race 30), floating cross-legged: 22 of the
+    // human's bone names (the spine, arms and head), so the human's emote moves
+    // its upper body and its crossed legs keep their float (the channeler's and
+    // knight's bodies take these by `poses_of`)
+    (0xF51B_AB09, H),
 ];
 
 /// What `model` plays for each emote, if `TABLE` lists it.
 pub fn poses(model: u32) -> Option<[Pose; 4]> {
     TABLE.iter().find(|(b, _)| *b == model).map(|(_, p)| *p)
+}
+
+/// The fall's and the landing's entries: the gait `UpdateLocomotion` gives a
+/// body in the air, and the one `UpdateSprite` gives it coming down.
+pub const AIR: [i32; 2] = [6, 7];
+
+/// The bodies `TABLE` lists whose fall and landing are their own nearest,
+/// as their emotes are (they share one bone with the human): chosen by sight
+/// (`eqoa emotes <body> <out.png> 22 23 37 42`). The pixie's and the fairy's
+/// fall both arms flung overhead (their cheers), the landing arms spread and
+/// the knees drawn up (their points); the fungusman's fall arms flung wide (its
+/// cheer), the landing the cap tipped forward (its bow).
+pub const AIR_OWN: &[(u32, [Pose; 2])] = &[
+    (0x94BA_77CD, [Pose::Own(37), Pose::Own(22)]), // pixie
+    (0x7A85_646C, [Pose::Own(37), Pose::Own(22)]), // fairy
+    (0x4A4D_88FB, [Pose::Own(37), Pose::Own(42)]), // fungusman
+];
+
+/// What `model` plays for the fall and the landing, if `TABLE` lists it: its
+/// own nearest (`AIR_OWN`), else the human's.
+pub fn air_poses(model: u32) -> Option<[Pose; 2]> {
+    let own = AIR_OWN.iter().find(|(b, _)| *b == model).map(|(_, p)| *p);
+    own.or_else(|| poses(model).map(|_| [Pose::Human; 2]))
+}
+
+/// What `model` plays for each emote on this server: `TABLE`'s, else, for
+/// another body of a race's creature its options offer a player (the ice
+/// giant's, a goblin king's, the faun's: `raceopts::race_body_of`), its race's
+/// own body's. Every such body is its race's creature on its race's skeleton
+/// or one of its bone names (the great skeletons' the troll's, 37 of the
+/// human's), and the fungusmen's three share the slots `Own` names.
+pub fn poses_of(model: u32) -> Option<[Pose; 4]> {
+    poses(model).or_else(|| crate::raceopts::race_body_of(model).and_then(poses))
 }
 
 /// One body's skeleton as its 0x2700 record has it: each node's parent,
@@ -530,6 +585,62 @@ pub fn put(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, poses: [
     true
 }
 
+/// Puts `poses` on `cs`'s fall and landing (`AIR`; its clips in `sc`): an
+/// own slot's clips and speed, or the human's carried onto it (its clips
+/// added to `sc`), silent, the fall looping and the landing played once, at
+/// their entries' own priority and channel. Whether it did: not when the body
+/// has a fall or a landing that is no longer `SetDefaultEntries`' idle (its
+/// own, or put already).
+pub fn put_air(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, poses: [Pose; 2]) -> bool {
+    if AIR.iter().any(|&e| cs.entries[e as usize].animation != cs.entries[0].animation) {
+        return false;
+    }
+    let mut human: Option<Option<Human>> = None;
+    for (k, &e) in AIR.iter().enumerate() {
+        let e = e as usize;
+        // the fall loops while the body is in the air; the landing plays once
+        let sync = if k == 0 { 0 } else { ONCE };
+        match poses[k] {
+            Pose::Own(s) => {
+                let src = cs.entries[s as usize];
+                let dst = &mut cs.entries[e];
+                dst.animation = src.animation;
+                dst.weight = src.weight;
+                dst.sound = [0, 0];
+                dst.sync = sync;
+            }
+            Pose::Human => {
+                let human = human.get_or_insert_with(|| Human::load(lib));
+                let Some(([a, b], weight)) = human.as_ref().and_then(|h| h.carry(lib, e as i32, cs, sc, BASE)) else { continue };
+                sc.anims.push(a);
+                let ia = sc.anims.len() as i32 - 1;
+                let ib = if cs.skel_type == 1 {
+                    sc.anims.push(b);
+                    sc.anims.len() as i32 - 1
+                } else {
+                    -1
+                };
+                let dst = &mut cs.entries[e];
+                dst.animation = [ia, ib];
+                dst.weight = weight;
+                dst.sound = [0, 0];
+                dst.sync = sync;
+            }
+        }
+    }
+    true
+}
+
+/// The fall and the landing (`air_poses`) on `cs` (made of `model`, its clips
+/// in `sc`) when it is a player's character (`player`) on a server with jumps
+/// (`jumps`) in a body `TABLE` lists; anything else is left as the game made
+/// it. Whether its fall and landing are the table's.
+pub fn grant_air(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, model: u32, player: bool, jumps: bool) -> bool {
+    let Some(p) = air_poses(model).filter(|_| player && jumps) else { return false };
+    put_air(lib, cs, sc, p);
+    true
+}
+
 /// Whether the server has races of its own: it listed creation's races
 /// (`net::creation`), or sent race labels (`racelabel`). Sandstorm and
 /// eqoa.live do neither.
@@ -539,10 +650,11 @@ pub fn server_has_races(races: Option<&net::creation::Creation>) -> bool {
 
 /// `TABLE`'s emotes on `cs` (made of `model`, its clips in `sc`) when it is
 /// a player's character (`player`) on a server with races of its own
-/// (`races`, `server_has_races`) in a body the table lists; anything else is
+/// (`races`, `server_has_races`) in a body the table lists, or another body a
+/// race's options offer (`poses_of`: its race's own body's); anything else is
 /// left as the game made it. Whether its emotes are the table's.
 pub fn grant(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, model: u32, player: bool, races: Option<&net::creation::Creation>) -> bool {
-    let Some(p) = poses(model).filter(|_| player && server_has_races(races)) else { return false };
+    let Some(p) = poses_of(model).filter(|_| player && server_has_races(races)) else { return false };
     put(lib, cs, sc, p);
     true
 }
@@ -586,6 +698,31 @@ mod tests {
 
     fn entries(cs: &CSprite<Ee>) -> Vec<String> {
         cs.entries.iter().map(|e| format!("{:?} {:?} {} {:?} {:?} {}", e.animation, e.weight.0.to_bits(), e.sync, e.sound, e.priority, e.channel)).collect()
+    }
+
+    /// Another body a race's options offer plays its race's own body's emotes
+    /// (the fungusman's red body its own slots, as the blue one; a goblin
+    /// king's the human's carried, as the grey goblin), granted on a player's
+    /// character; with no options (the control) such a body is not listed and
+    /// keeps the game's, as does a body no row offers.
+    #[test]
+    fn an_offered_body_plays_its_races_emotes() {
+        crate::raceopts::set_options(None);
+        let red = 0x5874_ACFCu32;
+        assert_eq!(poses_of(red), None, "the control: no options");
+        crate::raceopts::set_options(Some(&crate::raceopts::tests::fungus_options()));
+        assert_eq!(poses_of(red), poses(0x4A4D_88FB));
+        assert!(matches!(poses_of(red), Some([Pose::Own(15), ..])));
+        assert_eq!(poses_of(0x1234_5678), None);
+        let listed = races(&[0x4A4D_88FB]);
+        let mut cs = creature();
+        assert!(grant(&Library::new(), &mut cs, &mut AnimScene::default(), red, true, Some(&listed)));
+        assert_ne!(cs.entries[56].animation, cs.entries[0].animation, "the wave is the body's own slot now");
+        let mut npc = creature();
+        assert!(!grant(&Library::new(), &mut npc, &mut AnimScene::default(), red, false, Some(&listed)), "an NPC keeps the game's");
+        crate::raceopts::set_options(None);
+        let mut cs = creature();
+        assert!(!grant(&Library::new(), &mut cs, &mut AnimScene::default(), red, true, Some(&listed)), "the control: no options");
     }
 
     /// An own slot goes over the emote's entry: its clips and speed, played
@@ -646,6 +783,52 @@ mod tests {
         let mut npc = creature();
         put(&lib, &mut npc, &mut AnimScene::default(), poses(PIXIE).unwrap());
         assert_ne!(npc.entries[56].animation, creature().entries[56].animation, "the control");
+    }
+
+    /// An own slot goes over the fall and the landing (`put_air`): its clips
+    /// and speed, silent, the fall looping and the landing played once, at
+    /// their entries' own priority and channel; put again, nothing changes;
+    /// a body with a fall of its own is left as it is. The control: the
+    /// entries were the idle's before.
+    #[test]
+    fn an_own_slot_over_the_fall_and_landing() {
+        let mut cs = creature();
+        assert_eq!((cs.entries[6].animation, cs.entries[7].animation), (cs.entries[0].animation, cs.entries[0].animation), "the control: the idle's");
+        assert!(put_air(&Library::new(), &mut cs, &mut AnimScene::default(), [Pose::Own(37), Pose::Own(22)]));
+        for (e, s, sync) in [(6, 37, 0), (7, 22, ONCE)] {
+            let (got, src) = (cs.entries[e], cs.entries[s]);
+            assert_eq!((got.animation, got.weight, got.sync, got.sound), (src.animation, src.weight, sync, [0, 0]), "entry {e} from {s}");
+        }
+        assert_eq!((cs.entries[6].priority, cs.entries[7].priority), ([2, 6], [3, 7]), "the fall's and the landing's own priority");
+        let done = entries(&cs);
+        assert!(!put_air(&Library::new(), &mut cs, &mut AnimScene::default(), [Pose::Own(23); 2]), "put already");
+        assert_eq!(entries(&cs), done);
+        let mut own = creature();
+        own.entries[6].animation = [40, 41];
+        let had = entries(&own);
+        assert!(!put_air(&Library::new(), &mut own, &mut AnimScene::default(), [Pose::Own(25); 2]), "a fall of its own");
+        assert_eq!(entries(&own), had);
+    }
+
+    /// The fall and the landing go on a player's character in a body the
+    /// table lists, on a server with jumps; an NPC in it, a body not listed
+    /// and a server without jumps are as the game made them. The control: by
+    /// the body alone, the NPC's would have changed.
+    #[test]
+    fn the_fall_and_landing_on_players_on_servers_with_jumps() {
+        let lib = Library::new();
+        let mut cs = creature();
+        assert!(grant_air(&lib, &mut cs, &mut AnimScene::default(), PIXIE, true, true));
+        assert_eq!((cs.entries[6].animation, cs.entries[7].animation), (cs.entries[37].animation, cs.entries[22].animation), "the pixie's own nearest");
+        for (model, player, jumps, why) in [(PIXIE, false, true, "an NPC in the body"), (0x1234_5678, true, true, "a body not listed"), (PIXIE, true, false, "a server without jumps")] {
+            let mut cs = creature();
+            let had = entries(&cs);
+            assert!(!grant_air(&lib, &mut cs, &mut AnimScene::default(), model, player, jumps), "{why}");
+            assert_eq!(entries(&cs), had, "{why}: as the game made it");
+        }
+        let mut npc = creature();
+        put_air(&lib, &mut npc, &mut AnimScene::default(), air_poses(PIXIE).unwrap());
+        assert_ne!(npc.entries[6].animation, creature().entries[6].animation, "the control");
     }
 
     fn disc() -> Option<Library> {
@@ -862,6 +1045,108 @@ mod tests {
         let (mut cs, mut sc) = load(&lib, HILL_GIANT);
         let (h, top) = heights(&mut cs, &mut sc, 56, 700, hand, head);
         assert!(h < top, "the control: without the table the idle ({h} vs {top})");
+    }
+
+    /// Every body the table lists, on the disc, through `put_air`: the four
+    /// with a fall and a landing of their own (the brownie's, the dryad's,
+    /// the orc's and the skeleton's) are left as they are; each of the others
+    /// had neither (its entries the idle's) and takes both, the human's carried
+    /// onto a body with the human's arms, or its own nearest (each one of its
+    /// own slots, not a fill). No player race's body is listed, and each has
+    /// its own. The control: the human's play list has the two. Needs
+    /// `run/eqoa.iso`.
+    #[test]
+    fn the_bodies_with_no_fall_take_the_humans() {
+        let Some(lib) = disc() else { return };
+        let human = Rig::load(&lib, HUMAN).unwrap();
+        let arms: Vec<i32> = [12, 13, 21, 22].iter().map(|&n| human.refs[n].unwrap()).collect();
+        let (mut own, mut took) = (Vec::new(), Vec::new());
+        for &(id, _) in TABLE {
+            let (mut cs, mut sc) = load(&lib, id);
+            let p = air_poses(id).unwrap();
+            if row(&lib, id, 6).is_some() {
+                assert!(row(&lib, id, 7).is_some(), "{id:#010x}: a fall but no landing");
+                let had = entries(&cs);
+                assert!(!put_air(&lib, &mut cs, &mut sc, p), "{id:#010x}: its own, left as they are");
+                assert_eq!(entries(&cs), had);
+                own.push(id);
+                continue;
+            }
+            for e in AIR {
+                assert!(row(&lib, id, e).is_none(), "{id:#010x} has {e} but not 6");
+                assert_eq!(cs.entries[e as usize].animation, cs.entries[0].animation, "{id:#010x}: {e} is the idle");
+            }
+            for pose in p {
+                match pose {
+                    Pose::Own(s) => assert!(row(&lib, id, s).is_some(), "{id:#010x} has no slot {s} of its own"),
+                    Pose::Human => assert!(arms.iter().all(|r| sc.ref_maps[cs.h.ref_map].contains_key(r)), "{id:#010x}: the human's arms"),
+                }
+            }
+            assert!(put_air(&lib, &mut cs, &mut sc, p), "{id:#010x}");
+            for e in AIR {
+                assert_ne!(cs.entries[e as usize].animation, cs.entries[0].animation, "{id:#010x}: {e} now the table's");
+            }
+            assert_eq!((cs.entries[6].sync, cs.entries[7].sync), (0, ONCE), "{id:#010x}");
+            took.push(id);
+        }
+        own.sort_unstable();
+        assert_eq!(own, vec![BROWNIE, SKELETON, DRYAD, 0x8214_A32D], "the bodies with a fall of their own (the orc's last)");
+        assert_eq!(took.len(), TABLE.len() - 4);
+        for r in 0..10 {
+            for sex in 0..2 {
+                let id = crate::pregame::client::races::get_race(r).model_id(sex);
+                assert!(air_poses(id).is_none(), "race {r} sex {sex}: not listed");
+                assert!(row(&lib, id, 6).is_some() && row(&lib, id, 7).is_some(), "race {r} sex {sex}: its own");
+            }
+        }
+        assert!(AIR.iter().all(|&e| row(&lib, HUMAN, e).is_some()), "the control: the human's");
+    }
+
+    /// The arms' spread (the most two of the human's four arm bones are apart
+    /// across) and the head's height, `ms` into gait `loco` from the idle.
+    fn spread_and_head(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, loco: i32, ms: i64) -> (f32, f32) {
+        let human = Rig::load(lib, HUMAN).unwrap();
+        let map = sc.ref_maps[cs.h.ref_map].clone();
+        let mut rand = Rand(1);
+        sc.time = 0;
+        cs.set_locomotion(0, sc, &mut rand);
+        cs.h.process(0, sc);
+        let mut t = 0;
+        while t < ms {
+            t += 16;
+            sc.time = t;
+            cs.set_locomotion(loco, sc, &mut rand);
+            cs.h.process(0, sc);
+        }
+        let at = |n: usize| {
+            let m = &cs.h.nodes[map[&human.refs[n].unwrap()] as usize].world.m[3];
+            (m.x.0, m.y.0, m.z.0)
+        };
+        let arms: Vec<(f32, f32, f32)> = [12, 13, 21, 22].iter().map(|&n| at(n)).collect();
+        let spread = arms.iter().flat_map(|a| arms.iter().map(move |b| (a.0 - b.0).hypot(a.2 - b.2))).fold(0.0, f32::max);
+        (spread, at(4).1)
+    }
+
+    /// The hill giant (`TABLE`'s, its fall and landing the idle's) falls and
+    /// lands as the human does: falling, its arms spread out from its sides;
+    /// landing, its head comes down (a crouch). The control: without the table
+    /// the giant falls and lands as it stands, its idle.
+    #[test]
+    fn the_hill_giant_falls_and_lands() {
+        let Some(lib) = disc() else { return };
+        let measure = |put: bool, loco: i32| {
+            let (mut cs, mut sc) = load(&lib, HILL_GIANT);
+            if put {
+                assert!(put_air(&lib, &mut cs, &mut sc, air_poses(HILL_GIANT).unwrap()));
+            }
+            spread_and_head(&lib, &mut cs, &mut sc, loco, 300)
+        };
+        let idle = measure(true, 0);
+        let (fall, land) = (measure(true, 6), measure(true, 7));
+        assert!(fall.0 > idle.0 * 1.3, "falling, the arms out: {fall:?} against the idle's {idle:?}");
+        assert!(land.1 < idle.1 * 0.92, "landing, the head down: {land:?} against the idle's {idle:?}");
+        let (fall0, land0) = (measure(false, 6), measure(false, 7));
+        assert!(fall0.0 < idle.0 * 1.1 && land0.1 > idle.1 * 0.97, "the control: as it stands, {fall0:?} {land0:?} against {idle:?}");
     }
 
     /// Every CSprite on the disc through `grant`: for an NPC, and on a

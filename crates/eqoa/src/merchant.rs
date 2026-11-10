@@ -529,12 +529,18 @@ impl Merchant {
         vui.blit_bar(r, &s, [1.0; 4], [(640 - w) / 2, 8], 33, 34, w, 0, 1.0, 0, true);
     }
 
-    /// `FillInvList` / `FillMerchantList`.
+    /// `FillInvList` / `FillMerchantList`: the list's 40 rows (the selling
+    /// side's as many as the pack holds, `inventory::pack_cap`; the wares'
+    /// always CLIENT's 40, a merchant's list).
     fn fill(&mut self, view: &View) {
         let n;
+        let rows = if self.mode == 1 { crate::inventory::pack_cap() } else { crate::inventory::CAPACITY };
+        if self.list.items.len() != rows {
+            self.list.init(rows);
+        }
         if self.mode == 1 {
             let inv = &view.info.inv.items;
-            n = inv.len().min(40);
+            n = inv.len().min(rows);
             for (i, it) in inv.iter().take(n).enumerate() {
                 let mut flags = if it.quantity >= 2 { 5 } else { 1 };
                 let mut arrow = -1;
@@ -550,7 +556,7 @@ impl Merchant {
             }
         } else {
             let wares = &view.shop.wares.items;
-            n = wares.len().min(40);
+            n = wares.len().min(rows);
             for (i, it) in wares.iter().take(n).enumerate() {
                 let mut flags = 1;
                 let mut arrow = -1;
@@ -561,7 +567,7 @@ impl Merchant {
                 self.list.set_item(i, flags, (view.inv_icon)(it), arrow, -1, 1);
             }
         }
-        for i in n..40 {
+        for i in n..rows {
             self.list.set_item(i, 0, -1, -1, -1, 0);
         }
     }
@@ -740,6 +746,33 @@ mod tests {
         m.sell(&view, 0, 1, 0, &mut out);
         assert_eq!(out, [MerchantOut::Sell(0, 1)], "loot: at once");
         assert_eq!(m.focus, Focus::List);
+    }
+
+    /// A pack of 100 (a server that holds 100, `inventory::pack_cap`): selling,
+    /// the list holds every record; buying, a merchant's wares stay CLIENT's
+    /// 40 (its 0x00B7 list, `m_merchant`). The control: CLIENT's 40 sells from
+    /// the first 40.
+    #[test]
+    fn selling_lists_the_whole_pack() {
+        let vui = Vui::new(Default::default(), Default::default(), Vec::new());
+        let inv = ItemList { p04: 0, items: (0..100).map(|k| item(10, 0, k)).collect() };
+        let wares = ItemList { p04: 0, items: (0..60).map(|k| item(10, 0, k)).collect() };
+        let shop = Shop { id: Some(7), sell_rate: 100, buy_rate: 100, wares, greeting: wide("Hello"), pending: false };
+        let base = [0; 29];
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let (can_use, icon) = (|_: &NetItem| true, |_: &NetItem| 1);
+        let view = View { info: &info, shop: &shop, coin: 0, can_use: &can_use, inv_icon: &icon };
+        let rows = |mode: i32| {
+            let mut m = Merchant::default();
+            m.mode = mode;
+            m.fill(&view);
+            (m.list.items.len(), m.list.count())
+        };
+        crate::inventory::with_caps([100, 100], || {
+            assert_eq!(rows(1), (100, 100), "selling: the whole pack");
+            assert_eq!(rows(2), (40, 40), "buying: a merchant's 40");
+        });
+        assert_eq!(rows(1), (40, 40), "the control: CLIENT's 40");
     }
 
     /// The menu's Sell is chosen at once by a click; then the list takes

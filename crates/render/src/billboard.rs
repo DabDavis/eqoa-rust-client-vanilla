@@ -4,6 +4,15 @@
 //! sprite-sheet layouts, its colour the particle's, the material's GS state
 //! (blend mode, Z test and write) per emitter. Drawn after everything else,
 //! as `VIParticleSystem::Render` runs at the end of the scene.
+//!
+//! With the options' Particles at PS2 (`Renderer::set_ps2_particles`), the
+//! world's runs of blend mode 3 that do not write Z are blended as the GS
+//! blends them into the PS2's 16-bit frame (`fog16`, as the ground fog's
+//! fans): a particle's material is `SetDither(0)`'s, so each blend adds the
+//! pixel's DIMX entry (0 to 3) and cuts the low three bits, and many faint
+//! particles stop short of their colour, each its own, where eight bits a
+//! channel pile them up into a darker mass (the Red Swarming Death's swarm:
+//! some fifty puffs of a tenth to a quarter on a pixel).
 
 use crate::{DEPTH_FORMAT, Renderer, Textures};
 use bytemuck::{Pod, Zeroable};
@@ -78,8 +87,13 @@ pub struct Strips {
 }
 
 /// A run of vertices to draw: the pipeline (blend, Z test, Z write), the
-/// texture, the first vertex and the end.
-type Run = ((usize, bool, bool), i32, u32, u32);
+/// texture, the first vertex and the end, and whether it is blended as the
+/// PS2's 16-bit frame keeps a blend (`fog16`).
+type Run = ((usize, bool, bool), i32, u32, u32, bool);
+
+/// A run as `draw_verts` draws it: its key as the GS takes it (`gs_key`),
+/// its vertices, its texture's key and view, and whether it is a PS2 run.
+type Draw = ((usize, bool, bool), u32, u32, Option<u64>, Option<wgpu::TextureView>, bool);
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -110,6 +124,11 @@ pub(crate) struct Billboards {
     /// a texture's bind group by its key (`Textures::key`; none: white),
     /// made once: the renderer's textures are never let go
     groups: std::collections::HashMap<Option<u64>, wgpu::BindGroup>,
+    /// the PS2 particles' sums (`fs_sums`, into `fog16`'s two targets) and
+    /// their colours' spread over those sums (`fs_spread`), by whether they
+    /// are Z tested, made at the first
+    sums: std::collections::HashMap<bool, wgpu::RenderPipeline>,
+    spread: std::collections::HashMap<bool, wgpu::RenderPipeline>,
 }
 
 /// A frame's draws through the billboard program, each with buffers of its
@@ -180,7 +199,75 @@ impl Billboards {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
-        Billboards { shader, frame_layout, tex_layout, layout, pipelines: Default::default(), sampler, slots: [None, None, None, None], groups: Default::default() }
+        Billboards {
+            shader,
+            frame_layout,
+            tex_layout,
+            layout,
+            pipelines: Default::default(),
+            sampler,
+            slots: [None, None, None, None],
+            groups: Default::default(),
+            sums: Default::default(),
+            spread: Default::default(),
+        }
+    }
+
+    /// A PS2 particle's sums pipeline (`second` false: `fs_sums`, adding into
+    /// `fog16`'s two targets) or its spread's (`fs_spread`, into its third,
+    /// the sums read through `sums_layout`): the particles as they are
+    /// drawn, Z tested as their material says and never written.
+    fn ps2_pipeline(&mut self, device: &wgpu::Device, ztest: bool, second: bool, sums_layout: &wgpu::BindGroupLayout) {
+        let (shader, frame_layout, tex_layout, layout) = (&self.shader, &self.frame_layout, &self.tex_layout, &self.layout);
+        let made = if second { &mut self.spread } else { &mut self.sums };
+        made.entry(ztest).or_insert_with(|| {
+            let spread_layout;
+            let layout = if second {
+                spread_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("billboards spread"),
+                    bind_group_layouts: &[Some(frame_layout), Some(tex_layout), Some(sums_layout)],
+                    immediate_size: 0,
+                });
+                &spread_layout
+            } else {
+                layout
+            };
+            let attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x2, 3 => Float32x4];
+            let add = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+            let blend = Some(wgpu::BlendState { color: add, alpha: add });
+            let sums_targets = [
+                Some(wgpu::ColorTargetState { format: crate::fog16::SUMS_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL }),
+                Some(wgpu::ColorTargetState { format: crate::fog16::SQUARES_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL }),
+            ];
+            let spread_targets = [Some(wgpu::ColorTargetState { format: crate::fog16::COLOURS_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL })];
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(if second { "billboards spread" } else { "billboards sums" }),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Vert>() as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attrs })],
+                },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(if ztest { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Always }),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some(if second { "fs_spread" } else { "fs_sums" }),
+                    compilation_options: Default::default(),
+                    targets: if second { &spread_targets } else { &sums_targets },
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        });
     }
 
     fn pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, key: (usize, bool, bool)) -> &wgpu::RenderPipeline {
@@ -221,6 +308,17 @@ impl Billboards {
 }
 
 impl Renderer {
+    /// Whether the world's particles of blend mode 3 that do not write Z are
+    /// blended as the GS blends them into the PS2's 16-bit frame (`fog16`:
+    /// the frame as five bits a channel, DTHE on, a particle's material
+    /// under the DIMX matrix of `SetDither(0)`), where the renderer can add
+    /// their sums up (`set_ps2_sums`): the options' Particles at PS2. The
+    /// other blend modes, and every particle while it is off, are drawn as
+    /// they are.
+    pub fn set_ps2_particles(&mut self, on: bool) {
+        self.ps2_particles = on;
+    }
+
     /// The particles, over what `draw` drew (`view` and `proj` are the frame's
     /// own, not composed), in the order given; `strips` first.
     #[allow(clippy::too_many_arguments)]
@@ -321,10 +419,18 @@ impl Renderer {
         rect: Option<[u32; 4]>,
     ) {
         let far = matches!(slot, Slot::Sky);
+        // the world's particles of mode 3 that do not write Z, blended as the
+        // PS2's 16-bit frame keeps them (`fog16`, the options' Particles at
+        // PS2), where the renderer can add their sums up; never a window's
+        let ps2_on = self.ps2_particles && self.ps2_sums && rect.is_none() && matches!(slot, Slot::World | Slot::Late);
         let mut verts: Vec<Vert> = Vec::new();
         let mut draws = Vec::new();
+        // the PS2 particles' corners in view space, four a particle in their
+        // order: the rectangle `fog16` copies and draws over
+        let mut ps2_corners: Vec<[f32; 3]> = Vec::new();
         for b in batches.iter().filter(|b| !b.quads.is_empty()) {
             let start = verts.len() as u32;
+            let ps2 = ps2_on && b.blend == 3 && !b.zwrite;
             for q in &b.quads {
                 let k = (q.frame.clamp(0, 24) as usize) & !3;
                 let [w, h] = q.half;
@@ -332,11 +438,15 @@ impl Renderer {
                 let corners = [[-w, -h], [-w, h], [w, -h], [w, h]];
                 let v = |i: usize| Vert { center: q.center, corner: corners[i], uv: UVS[k + i], color: q.color };
                 verts.extend([v(0), v(1), v(2), v(2), v(1), v(3)]);
+                if ps2 {
+                    let c = view * glam::Vec4::new(q.center[0], q.center[1], q.center[2], 1.0);
+                    ps2_corners.extend(corners.iter().map(|o| [c.x + o[0], c.y + o[1], c.z]));
+                }
             }
             let key = if far { (b.blend.min(4), true, false) } else { (b.blend.min(4), b.ztest, b.zwrite) };
-            draws.push((key, b.texture, start, verts.len() as u32));
+            draws.push((key, b.texture, start, verts.len() as u32, ps2));
         }
-        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures, slot, rect);
+        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, &ps2_corners, textures, slot, rect);
     }
 
     /// The strips queued for this frame (`strips`: the spell lightning, then
@@ -384,15 +494,20 @@ impl Renderer {
                 }
             }
             if verts.len() as u32 > start {
-                draws.push(((s.blend.min(4), s.ztest, s.zwrite), s.texture, start, verts.len() as u32));
+                draws.push(((s.blend.min(4), s.ztest, s.zwrite), s.texture, start, verts.len() as u32, false));
             }
         }
-        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, textures, Slot::Strips, None);
+        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, &[], textures, Slot::Strips, None);
     }
 
     /// The billboard program over `verts`, a run of them per (pipeline key,
     /// texture), through `slot`'s kept buffers; the sky's at the far plane;
-    /// into `rect` of the target when one is given.
+    /// into `rect` of the target when one is given. A run marked for the
+    /// PS2's frame (`fog16`, four of `ps2_corners` a particle, in view space)
+    /// is blended as the GS blends it into the 16-bit frame, where the target
+    /// can be copied: the runs before the first drawn as they are, then the
+    /// PS2 runs' sums and the GS's steps over them, then the other runs after
+    /// it, as `draw_fans` draws the ground fog.
     #[allow(clippy::too_many_arguments)]
     fn draw_verts(
         &mut self,
@@ -405,6 +520,7 @@ impl Renderer {
         proj: Mat4,
         verts: &[Vert],
         runs: &[Run],
+        ps2_corners: &[[f32; 3]],
         textures: &Textures,
         slot: Slot,
         rect: Option<[u32; 4]>,
@@ -414,13 +530,15 @@ impl Renderer {
         }
         let far = matches!(slot, Slot::Sky);
         let mut draws = Vec::new();
-        for &(key, texture, start, end) in runs {
+        for &(key, texture, start, end, ps2) in runs {
             let tex = self.texture(device, queue, texture, textures);
             let key = gs_key(key, tex.is_some());
-            draws.push((key, start, end, tex.is_some().then(|| textures.key(texture)), tex));
+            draws.push((key, start, end, tex.is_some().then(|| textures.key(texture)), tex, ps2));
         }
-        let format = self.format;
+        let (format, sequential) = (self.format, self.ps2_sequential);
         let white = self.white.clone();
+        // the renderer's one copy and sums (the fans' too, `draw_fans`)
+        let fog16 = &mut self.fog16;
         let bb = self.billboards.get_or_insert_with(|| Billboards::new(device));
         let bytes: &[u8] = bytemuck::cast_slice(verts);
         let size = bytes.len() as u64;
@@ -447,7 +565,7 @@ impl Renderer {
                 queue.write_buffer(&kept.frames[i].0, 0, bytemuck::bytes_of(&u));
             }
         }
-        for (_, _, _, id, tex) in &draws {
+        for (_, _, _, id, tex, _) in &draws {
             if !bb.groups.contains_key(id) {
                 let tbg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: None,
@@ -460,37 +578,94 @@ impl Renderer {
                 bb.groups.insert(*id, tbg);
             }
         }
-        for (key, _, _, _, _) in &draws {
+        for (key, _, _, _, _, _) in &draws {
             bb.pipeline(device, format, *key);
         }
-        let kept = bb.slots[slot as usize].as_ref().expect("made above");
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("billboards"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        if let Some([x, y, w, h]) = rect {
-            pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
-            pass.set_scissor_rect(x, y, w, h);
+        // The PS2 runs where the target can be copied (`fog16`); elsewhere
+        // every run is drawn as it is.
+        let t = target.texture();
+        let copyable = t.usage().contains(wgpu::TextureUsages::COPY_SRC) && t.format() == format && u64::from(t.width()) * u64::from(t.height()) <= crate::fog16::MAX_PIXELS;
+        let first = if copyable { draws.iter().position(|d| d.5) } else { None };
+        let frame_size = (t.width(), t.height());
+        let ps2_rect = first.and_then(|_| crate::fog16::rect(ps2_corners, proj, frame_size));
+        if ps2_rect.is_some() {
+            let layout = fog16.get_or_insert_with(|| crate::fog16::Fog16::new(device, format)).sums_layout().clone();
+            for d in draws.iter().filter(|d| d.5) {
+                bb.ps2_pipeline(device, d.0.1, false, &layout);
+                bb.ps2_pipeline(device, d.0.1, true, &layout);
+            }
         }
-        pass.set_vertex_buffer(0, kept.verts.slice(..size));
-        for (key, start, end, id, _) in &draws {
-            pass.set_pipeline(&bb.pipelines[key]);
-            pass.set_bind_group(0, &kept.frames[(key.0 != 0) as usize].1, &[]);
-            pass.set_bind_group(1, &bb.groups[id], &[]);
-            pass.draw(*start..*end, 0..1);
+        let bb = &*bb;
+        let Some(kept) = bb.slots[slot as usize].as_ref() else { return };
+        let (before, after) = draws.split_at(first.unwrap_or(draws.len()));
+        let ps2 = first.is_some();
+        // runs drawn as they are, in one pass, each by its own pipeline
+        let plain = |encoder: &mut wgpu::CommandEncoder, runs: &[&Draw]| {
+            if runs.is_empty() {
+                return;
+            }
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("billboards"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if let Some([x, y, w, h]) = rect {
+                pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+                pass.set_scissor_rect(x, y, w, h);
+            }
+            pass.set_vertex_buffer(0, kept.verts.slice(..size));
+            for (key, start, end, id, _, _) in runs.iter().copied() {
+                pass.set_pipeline(&bb.pipelines[key]);
+                pass.set_bind_group(0, &kept.frames[(key.0 != 0) as usize].1, &[]);
+                pass.set_bind_group(1, &bb.groups[id], &[]);
+                pass.draw(*start..*end, 0..1);
+            }
+        };
+        plain(encoder, &before.iter().collect::<Vec<_>>());
+        if let Some(r) = ps2_rect {
+            let fog = fog16.as_mut().expect("made above");
+            // the PS2 runs' particles twice: their sums, then their colours'
+            // spread over them (`range` a run's vertices, or one particle's)
+            let draw = |pass: &mut wgpu::RenderPass<'_>, second: bool, d: &Draw, range: std::ops::Range<u32>| {
+                let (key, _, _, id, _, _) = d;
+                pass.set_pipeline(if second { &bb.spread[&key.1] } else { &bb.sums[&key.1] });
+                pass.set_bind_group(0, &kept.frames[1].1, &[]);
+                pass.set_bind_group(1, &bb.groups[id], &[]);
+                pass.set_vertex_buffer(0, kept.verts.slice(..size));
+                pass.draw(range, 0..1);
+            };
+            let runs: Vec<&Draw> = after.iter().filter(|d| d.5).collect();
+            if sequential {
+                // each particle alone, over the frame as the last left it
+                let mut j = 0;
+                for d in &runs {
+                    for start in (d.1..d.2).step_by(6) {
+                        if let Some(r) = ps2_corners.get(4 * j..4 * j + 4).and_then(|c| crate::fog16::rect(c, proj, frame_size)) {
+                            fog.draw(device, encoder, target, depth, r, true, |pass, second| draw(pass, second, d, start..start + 6));
+                        }
+                        j += 1;
+                    }
+                }
+            } else {
+                fog.draw(device, encoder, target, depth, r, false, |pass, second| {
+                    for d in &runs {
+                        draw(pass, second, d, d.1..d.2);
+                    }
+                });
+            }
         }
+        plain(encoder, &after.iter().filter(|d| !(ps2 && d.5)).collect::<Vec<_>>());
     }
 }

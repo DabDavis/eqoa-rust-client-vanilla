@@ -22,12 +22,18 @@ pub struct Figure {
     /// the model's DictID, as asked for
     pub model: u32,
     pub look: vi::cust::Look,
+    /// a server's race's look on its parts (`raceopts`), drawn when the body
+    /// is the one it was chosen on
+    pub race_look: Option<net::raceopts::Look>,
+    /// the actor's scale: 1, or a body a race's options offer at its size
+    /// against the race's own (`raceopts::body_size`), as the world draws it
     pub sprite: Option<CSprite<Ee>>,
     pub anims: AnimScene<Ee>,
     pub rand: Rand,
     pub gpu: GpuModel,
     /// items (and the helm) on their nodes
     pub attached: Vec<(i32, GpuModel)>,
+    pub scale: f32,
     /// the items asked for (DictIDs, 0 none), in the item slots 0..3
     pub items: [u32; 3],
     /// the actor's place and heading, pitch and roll (`CreateActor(at, hpr, 1.0)`)
@@ -39,6 +45,11 @@ pub struct Figure {
     held: Option<crate::particles::Held>,
     /// their billboards this frame (`particles_frame`)
     pub fx: Vec<render::billboard::Batch>,
+    /// the body it was built of: the model, or what stood in for it
+    body: u32,
+    /// the cape it wears (`cape`, `wear_cape`) and its model, none where no
+    /// art or body fits; None while it wears none
+    cape: Option<(net::cape::Cape, Option<GpuModel>)>,
 }
 
 /// `CreateActor`'s sprite: a copy of the parsed one (`VICSprite::Copy`,
@@ -93,20 +104,29 @@ impl Figure {
     /// whole in the art its model is drawn in (`esf::Library::view_for`):
     /// the 2002 disc's while its art is drawn and that disc has the model.
     pub fn new(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
-        lib.with_view(lib.view_for(model as i32), || Figure::new_in_view(lib, g, model, look, items, at, hpr, now))
+        Figure::new_dressed(lib, g, model, look, None, items, at, hpr, now)
+    }
+
+    /// `new` in a server's race's look too (`raceopts`: its parts' colours and
+    /// textures, laid only on the body they were chosen on).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_dressed(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, race_look: Option<net::raceopts::Look>, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
+        lib.with_view(lib.view_for(model as i32), || Figure::new_in_view(lib, g, model, look, race_look, items, at, hpr, now))
     }
 
     /// Made again as it stands, in the art drawn now (F9): its model, look and
     /// items at its place; its animation starts over (the 2002 disc's bodies
     /// are other skeletons).
     pub fn remake(&mut self, lib: &Library, g: &mut Gpu, now: i64) {
-        if let Some(f) = Figure::new(lib, g, self.model, self.look, self.items, self.at, self.hpr, now) {
+        let cape = self.cape();
+        if let Some(mut f) = Figure::new_dressed(lib, g, self.model, self.look, self.race_look.clone(), self.items, self.at, self.hpr, now) {
+            f.wear_cape(lib, g, cape);
             *self = f;
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn new_in_view(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
+    fn new_in_view(lib: &Library, g: &mut Gpu, model: u32, look: vi::cust::Look, race_look: Option<net::raceopts::Look>, items: [u32; 3], at: [f32; 3], hpr: [f32; 3], now: i64) -> Option<Figure> {
         // a server's race's body not read yet (`res::Res::want_bodies`): its
         // `like` race's of the body's sex stands in, where the game draws a human
         let id = if lib.lookup(model as i32).is_some() {
@@ -140,23 +160,45 @@ impl Figure {
             }
             // the server's patch's tables (`s2`), retail's without one
             let t = crate::s2::get().cust();
-            if cs.node_ids[8] >= 0
-                && let Some(h) = vi::cust::helm_with(look.armor[5], &t)
-                && let Some(mut m) = lib.lookup(h as i32).and_then(|r| lib.build_model(r))
-            {
-                let tint = look.helm_color(&t);
-                for b in &mut m.batches {
-                    for l in &mut b.layers {
-                        l.color = tint;
-                    }
-                }
+            // on the node the world puts it on, seated as there (`play::attach`)
+            if let Some((node, m)) = crate::slotless::helm_on(lib, id, cs, true, look.armor[5], look.helm_color(&t), &t, true) {
                 helm_worn = true;
-                attached.push((cs.node_ids[8], g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+                attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
             }
             crate::play::dress_look(lib, id as i32, &mut built, cs, &look, helm_worn, &t, true);
+            // a server's race's own look, on the body it was chosen on
+            if let Some(rl) = &race_look {
+                crate::raceopts::dress(lib, id, &mut built, rl);
+            }
+            // a Wisp: its armour alone, the wisp in the helm (`wisp`)
+            crate::wisp::dress(lib, id, &mut built, cs, &look, race_look.as_ref(), &t);
+            if let Some((node, w)) = crate::wisp::attachment(lib, id, cs, race_look.as_ref()) {
+                attached.push((node, g.renderer.upload(g.device, g.queue, &w, &[render::IDENTITY], &textures)));
+            }
         }
         let gpu = g.renderer.upload(g.device, g.queue, &built, &[render::IDENTITY], &textures);
-        Some(Figure { model, look, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new() })
+        let scale = crate::raceopts::body_size(id);
+        Some(Figure { model, look, race_look, scale, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new(), body: id, cape: None })
+    }
+
+    /// Puts on the cape `want` (`cape`: a character's on a server with capes),
+    /// or takes it off, when it changes: fitted to the figure's skeleton, in
+    /// Frontiers' art, drawn on its palette. A cape no art or body fits is kept
+    /// as asked for, with no model.
+    pub fn wear_cape(&mut self, lib: &Library, g: &mut Gpu, want: Option<net::cape::Cape>) {
+        if self.cape.as_ref().map(|(c, _)| *c) == want {
+            return;
+        }
+        self.cape = want.map(|c| {
+            let m = self.sprite.as_ref().and_then(|cs| crate::cape::model(lib, c, self.body, cs));
+            let gpu = m.map(|m| lib.with_view(esf::Era::Frontiers, || g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &render::library_textures(lib))));
+            (c, gpu)
+        });
+    }
+
+    /// The cape it wears as asked for (none: none).
+    pub fn cape(&self) -> Option<net::cape::Cape> {
+        self.cape.as_ref().map(|(c, _)| *c)
     }
 
     /// `VICSprite::SetAction(id)` (23 the select screen's flourish, 0 back
@@ -167,10 +209,12 @@ impl Figure {
         }
     }
 
-    /// The actor's matrix (`CreateActor`'s place, heading and scale 1).
+    /// The actor's matrix (`CreateActor`'s place, heading and scale 1; a
+    /// body a race's options offer at its size, `scale`).
     pub fn actor(&self) -> Matrix44<Ee> {
         let f = F::<Ee>::new;
-        Matrix44::transform(&Vect3::new(f(self.hpr[0]), f(self.hpr[1]), f(self.hpr[2])), F::ONE, &Vect3::new(f(self.at[0]), f(self.at[1]), f(self.at[2])))
+        let scale = if self.scale == 1.0 { F::ONE } else { f(self.scale) };
+        Matrix44::transform(&Vect3::new(f(self.hpr[0]), f(self.hpr[1]), f(self.hpr[2])), scale, &Vect3::new(f(self.at[0]), f(self.at[1]), f(self.at[2])))
     }
 
     /// One frame at `now` (the scene's clock, ms): the sprite processed, its
@@ -197,6 +241,12 @@ impl Figure {
         if !palette.is_empty() {
             g.renderer.set_palette(g.queue, &self.gpu, &palette);
         }
+        if let Some((_, Some(cape))) = &self.cape {
+            g.renderer.set_instances(g.queue, cape, &[matrix]);
+            if !palette.is_empty() {
+                g.renderer.set_palette(g.queue, cape, &palette);
+            }
+        }
     }
 
     /// The particles of the items in its hands one frame at `now`, for a
@@ -221,9 +271,9 @@ impl Figure {
         self.fx = held.frame(lib, &hands, eye, now);
     }
 
-    /// What to draw: the body and what it carries.
+    /// What to draw: the body, what it carries and its cape.
     pub fn models(&self) -> impl Iterator<Item = &GpuModel> {
-        std::iter::once(&self.gpu).chain(self.attached.iter().map(|(_, m)| m))
+        std::iter::once(&self.gpu).chain(self.attached.iter().map(|(_, m)| m)).chain(self.cape.iter().filter_map(|(_, m)| m.as_ref()))
     }
 }
 
@@ -366,6 +416,53 @@ mod tests {
         }));
         assert_eq!(nodes(&mut g), [11, 20], "the sword on node 11, the shield on 20");
         tables::set_offer(None);
+    }
+
+    /// A figure at character select wears its character's cape (`cape`) out
+    /// of the pregame's own files and the cape's body cut out of CHAR.ESF, as
+    /// `res::Res::want_bodies` reads it: one model more, on the body's palette,
+    /// none for a style with no art; taken off, the figure draws as it did.
+    /// The control: a figure asked for no cape draws exactly its body and what
+    /// it carries. Needs `run/eqoa.iso` and a graphics adapter.
+    #[test]
+    fn a_figure_wears_its_cape_and_none_adds_nothing() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let instance = render::wgpu::Instance::new(render::wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&render::wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let mut g = Gpu { renderer: &mut renderer, device: &device, queue: &queue };
+        let mut lib = Library::new();
+        for f in crate::pregame::client::FILES {
+            if let Some(c) = iso.read(f).ok().and_then(|b| esf::Container::open(b).ok()) {
+                lib.add(*f, c);
+            }
+        }
+        let cape = net::cape::Cape { style: 1, color: 0 };
+        let bodies = crate::cape::bodies([&cape]);
+        assert_eq!(bodies, [0xD130_0BD3], "the knight's body");
+        lib.add(crate::pregame::res::BODIES, crate::pregame::res::cut_bodies(iso.read("CHAR.ESF").unwrap(), &bodies).expect("the knight's body"));
+        let human = vi::hash::hash_resource_id("HumanMale");
+        let look = vi::cust::Look { hair: [1, 2, 3], face: 1, robe: -1, ..Default::default() };
+        let mut fig = Figure::new(&lib, &mut g, human, look, [0; 3], [0.0; 3], [0.0; 3], 0).unwrap();
+        let bare = fig.models().count();
+        fig.wear_cape(&lib, &mut g, None);
+        assert_eq!(fig.models().count(), bare, "the control: no cape asked, none drawn");
+        fig.wear_cape(&lib, &mut g, Some(cape));
+        assert_eq!((fig.models().count(), fig.cape()), (bare + 1, Some(cape)), "the cape drawn with the body");
+        fig.pose(&g, 33);
+        fig.wear_cape(&lib, &mut g, Some(net::cape::Cape { style: 200, color: 0 }));
+        assert_eq!(fig.models().count(), bare, "a style with no art: none drawn");
+        fig.wear_cape(&lib, &mut g, None);
+        assert_eq!((fig.models().count(), fig.cape()), (bare, None), "taken off");
     }
 
     /// A figure is its model as the art drawn has it (`era`): with the 2002

@@ -213,7 +213,12 @@ impl Blacksmith {
         // the rows: a stack's count; something that cannot be worn barred
         // (arrows 140), a worn-down item marked
         let inv = &view.info.inv.items;
-        let n = inv.len().min(40);
+        // as many rows as the pack holds (`inventory::pack_cap`)
+        let rows = crate::inventory::pack_cap();
+        if self.list.items.len() != rows {
+            self.list.init(rows);
+        }
+        let n = inv.len().min(rows);
         for (i, it) in inv.iter().take(n).enumerate() {
             let mut flags = if it.quantity >= 2 { 5 } else { 1 };
             let mut color = -1;
@@ -227,7 +232,7 @@ impl Blacksmith {
             }
             self.list.set_item(i, flags, (view.inv_icon)(it), color, x, it.quantity as i32);
         }
-        for i in n..40 {
+        for i in n..rows {
             self.list.set_item(i, 0, -1, -1, -1, 0);
         }
         self.list.draw(vui, r, now, cues);

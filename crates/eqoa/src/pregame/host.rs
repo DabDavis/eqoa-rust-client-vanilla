@@ -128,6 +128,10 @@ impl Host {
         }
         let fresh = self.pre.res.take_fresh();
         self.upload(renderer, device, queue, fresh);
+        // the texture pack's stand-ins read since (`UiAssets::poll`)
+        if let (Some(ui), Some(assets)) = (renderer.ui.as_mut(), self.assets.as_mut()) {
+            assets.poll(ui, device, queue);
+        }
     }
 
     fn upload(&mut self, renderer: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, files: Vec<usize>) {

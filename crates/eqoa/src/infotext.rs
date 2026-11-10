@@ -82,10 +82,12 @@ impl Info<'_> {
         *d += &format!("{}: {v}", self.w(503));
     }
 
-    /// `AddEquipSlot`.
+    /// `AddEquipSlot`; a cape's slot by its own word where capes are offered
+    /// (`cape`: WORDS.TXT has none).
     fn equip_slot(&self, d: &mut String, v: i64) {
         match wear_slot_word(v) {
             Some(w) => *d += &format!("{}: {}", self.w(490), self.w(w)),
+            None if v == crate::cape::WEAR_SLOT && crate::cape::offered() => *d += &format!("{}: {}", self.w(490), crate::cape::SLOT_WORD),
             None => *d += &format!("{}: {v}", self.w(490)),
         }
     }
@@ -693,9 +695,9 @@ impl Info<'_> {
     pub fn stat_with_merchant_item(&self, src: &NetItem, stat: i64) -> (i64, bool) {
         let mut list = ItemList::default();
         for it in self.inv.items.iter().filter(|it| it.equip_slot != -1) {
-            merge(&mut list, it, it.item.max_stack, inventory::CAPACITY);
+            merge(&mut list, it, it.item.max_stack, inventory::pack_cap());
         }
-        let (n, mut key) = add_item_key(&mut list, src, src.item.max_stack, inventory::CAPACITY);
+        let (n, mut key) = add_item_key(&mut list, src, src.item.max_stack, inventory::pack_cap());
         if n == 0 {
             // FindFullStack
             match list.items.iter().find(|it| src.item.id == it.item.id && src.item.max_stack == it.quantity && src.item.max_stack > 1) {
@@ -865,6 +867,8 @@ pub fn equip_slot_for(l: &ItemList, it: &NetItem, class: i64, level: i64) -> i64
         12 | 20 => 14,
         21 => 15,
         22..=27 => 19,
+        // a cape, where capes are offered (`cape`)
+        w if w == crate::cape::WEAR_SLOT && crate::cape::offered() => crate::cape::EQUIP_SLOT,
         _ => -1,
     }
 }
@@ -988,5 +992,30 @@ mod tests {
         assert_eq!(equip_slot_for(&inv, &inv.items[1], 0, 20), 15);
         assert_eq!(equip_slot_for(&inv, &inv.items[1], 9, 20), 14);
         assert_eq!(equip_slot_for(&inv, &inv.items[1], 0, 19), 14);
+    }
+
+    /// A cape (wear 28, go-eqoa-server's own) is worn in the cape's slot and
+    /// its description names its slot where capes are offered (`cape`); the
+    /// controls: with no offer it is worn nowhere and its slot reads as a
+    /// number, as the game reads any slot it has no word for.
+    #[test]
+    fn a_capes_slot_where_capes_are_offered() {
+        let words = numbered();
+        let inv = ItemList { p04: 0, items: vec![it(28, 0, 0)] };
+        let base = [10; 29];
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let slot = |info: &Info| {
+            let mut d = String::new();
+            info.equip_slot(&mut d, 28);
+            d
+        };
+        crate::cape::with_offered(true, || {
+            assert_eq!(equip_slot_for(&inv, &inv.items[0], 0, 1), 22);
+            assert_eq!(slot(&info), "w490: Cape");
+        });
+        crate::cape::with_offered(false, || {
+            assert_eq!(equip_slot_for(&inv, &inv.items[0], 0, 1), -1, "the control: no offer");
+            assert_eq!(slot(&info), "w490: 28");
+        });
     }
 }

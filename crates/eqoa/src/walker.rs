@@ -27,6 +27,20 @@
 //! walk's, never a swim's (`fly_gait`), and the flags the world's at its place
 //! (`flags_at`), so its 0x40 runs no breath down but under real water. Off, the
 //! flags are the world's again and the walk goes on from where it is.
+//!
+//! A jump (`ask_jump`, on a server that offers it: go-eqoa-server's `world.jump`,
+//! `jump.rs`; the user, 2026-11-09: "lets add jump to the game"; no such thing in
+//! the game either) is CLIENT's walk too, given one thing between console frames,
+//! as a control: a body on a floor, out of any liquid, gets `JUMP_SPEED` upward,
+//! and the floor it remembers (`m_floor`, which `Move` sticks a body to when one
+//! is within its step-down tolerance, `m_parm28` 0.6, under its feet) is lifted
+//! over the jump's top, so `Move` lets it leave the ground and takes it as a body
+//! in the air: its own gravity and air damping, no push (Walk and Run push only on
+//! a floor), its own landing (the feet come down to a floor, which sets `m_floor`
+//! again), the fall's gait (6) on the way and the landing's (7) after, as a body
+//! stepping off a ledge has them. The first tick of it goes at the ground's
+//! damping, as it leaves from one, so the run's speed across is kept whole. With
+//! no jump asked nothing of it runs: every frame of the walk is as it was.
 
 use glam::{Mat4, Vec3};
 use vi::camera::{Eye, WalkCamera};
@@ -131,7 +145,29 @@ pub struct Walker {
     fly_tilt: Option<(i32, F<Ee>)>,
     /// This frame's length (s), as the camera's `Process` is told it.
     frame_s: f32,
+    /// A jump asked (`ask_jump`): when, on the walk's clock.
+    jump_asked: Option<i64>,
+    /// In a jump, from its take-off until the body is on a floor again: its
+    /// fall wholly in by its top (`jump::fall_by_top`), which a jump that
+    /// reaches its top has already.
+    in_jump: bool,
 }
+
+/// A jump's start speed upward (units a second): with the walk's own integrator,
+/// its first tick at the ground's damping (0.02 a second) and the rest at the
+/// air's (0.8), the feet rise `JUMP_TOP` (0.896) over the floor, at the top 0.29 s
+/// in and back on flat ground 0.62 s after leaving it.
+pub const JUMP_SPEED: f32 = 7.1;
+
+/// The highest a jump takes the feet over the floor it left: half the walk's
+/// body (`m_parm30`, 1.8). go-eqoa-server's movement check takes a jump to this
+/// (its `JumpTop`), and no further.
+pub const JUMP_TOP: f32 = 0.9;
+
+/// How long a jump asked waits for the walk and the client to allow one (ms on
+/// the walk's clock): a press as the body comes down, or before the report of
+/// its landing has gone out, jumps once it may.
+const JUMP_WAIT_MS: i64 = 250;
 
 /// The console's frame: two fields of NTSC video (59.94 Hz), 33.37 ms. The
 /// walk keeps only these, at any display rate (`Kept`).
@@ -425,7 +461,7 @@ impl Walker {
         cam.set_orbit_distance(dist);
         cam.set_orbit_angle_behind();
         let eye = cam.process(&mut scene);
-        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None, scale: F::ONE, flying: false, fly_tilt: None, frame_s: 0.0 }
+        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None, scale: F::ONE, flying: false, fly_tilt: None, frame_s: 0.0, jump_asked: None, in_jump: false }
     }
 
     /// `Respawn`'s placing: the character stood at `pos` (on the ground
@@ -512,6 +548,13 @@ impl Walker {
             w.update_sprite(cs, &self.anims, &mut self.rand);
         } else {
             self.cam.walk.update_sprite(cs, &self.anims, &mut self.rand);
+            // a jump's fall in by its top, till the feet are on a floor
+            let p = &self.cam.walk.phys;
+            if p.flags & ON_FLOOR != 0 && p.velocity.y <= F::ZERO {
+                self.in_jump = false;
+            } else if self.in_jump {
+                crate::jump::fall_by_top(cs, p.velocity.y, &self.anims);
+            }
         }
         if sound.is_some() {
             let at = self.cam.walk.phys.smooth_location();
@@ -572,6 +615,7 @@ impl Walker {
         if self.flying {
             self.fly_on_the_floor();
         }
+        self.jump_if_asked(&c, now_ms);
         self.step_kept(now_ms);
         let ahead = self.ahead();
         self.scene.time = now_ms;
@@ -581,7 +625,10 @@ impl Walker {
         if !game_frame {
             self.cam.effect.sample = self.shake;
         }
-        self.eye = self.reach.process(&mut self.cam, &mut self.scene, dt_s);
+        // steered, the camera kept behind the body: no swing round; and the
+        // camera's sweeps go on past what is thin (`camreach`)
+        self.reach.steered = c.steer;
+        self.eye = self.reach.process(&mut self.cam, &mut crate::camreach::PastThin { scene: &mut self.scene }, dt_s);
         if game_frame {
             self.shake = next;
         } else {
@@ -713,6 +760,46 @@ impl Walker {
         }
         let w = &mut self.cam.walk;
         (w.phys, w.committed) = (p, p);
+    }
+
+    /// The jump key (`Play::jump_key`): a jump asked of the walk, taken at its
+    /// next frame that allows one (`jump_if_asked`), within `JUMP_WAIT_MS`.
+    pub fn ask_jump(&mut self) {
+        self.jump_asked = Some(self.scene.time);
+    }
+
+    /// The jump asked, taken now if the client allows one
+    /// (`controls::Client::may_jump`) and the walk does: on the walk put back
+    /// (the console frame kept, given the jump as a control, as `UpdateControls`
+    /// gives its forces), on a floor, out of any liquid, not flying, not already
+    /// on its way up. Let go once taken, or `JUMP_WAIT_MS` after it was asked.
+    fn jump_if_asked(&mut self, c: &crate::controls::Client, now: i64) {
+        let Some(at) = self.jump_asked else { return };
+        if now - at > JUMP_WAIT_MS {
+            self.jump_asked = None;
+            return;
+        }
+        let p = &self.cam.walk.phys;
+        let stands = p.flags & ON_FLOOR != 0 && p.flags & flags::LIQUID == 0 && p.velocity.y <= F::ZERO;
+        if self.flying || !stands || !c.may_jump() {
+            return;
+        }
+        self.jump_asked = None;
+        self.take_off();
+    }
+
+    /// The jump (the module's doc): `JUMP_SPEED` up, and the floor the walk
+    /// remembers lifted over the jump's top by the step-down tolerance and a
+    /// little, so no floor under the feet on the way up or down holds the body
+    /// before its feet come down to one.
+    fn take_off(&mut self) {
+        let w = &mut self.cam.walk;
+        let lift = w.phys.position.y + F::new(JUMP_TOP) + w.parm28 + F::new(0.1);
+        w.phys.floor = lift;
+        w.committed.floor = lift;
+        w.phys.velocity.y = F::new(JUMP_SPEED);
+        self.in_jump = true;
+        eprintln!("walker: jump from {:?}", w.phys.position.to_array());
     }
 
     /// A GM's flight on or off (the module's doc). Off, on the walk put back: the
@@ -2698,5 +2785,318 @@ pub(crate) mod tests {
             assert_eq!(w.cam.def_orbit_pitch.0, was, "{hz} Hz: the control keeps the tilt");
             assert!((w.cam.cur.dist.0 - dist).abs() > 0.1, "{hz} Hz: the control zooms: {dist} to {:?}", w.cam.cur.dist);
         }
+    }
+
+    // A jump (the module's doc), on Tunaria's flat at (22000, 18000), the ground
+    // at 54.1, in camera mode 2 (`open_ground`).
+
+    /// A client that may jump: the server offered it, a report standing sent.
+    fn jumper() -> crate::controls::Client {
+        crate::controls::Client { jumps: true, stood_sent: true, ..Default::default() }
+    }
+
+    /// `secs` of frames drawn at `hz` at the sticks `go` for `client`, a jump
+    /// asked on the frame drawn at or after `ask_ms` from the walk's clock on
+    /// (none for -1): each frame's walk as drawn, and the console frames kept
+    /// (their number and the walk as each left it).
+    fn jumping(w: &mut Walker, go: Controls, client: &crate::controls::Client, hz: f64, secs: f64, ask_ms: i64) -> (Vec<WalkPhysics<Ee>>, Vec<(i64, WalkPhysics<Ee>)>) {
+        let t0 = w.scene.time;
+        let (mut drawn, mut kept) = (Vec::new(), Vec::new());
+        let mut asked = ask_ms < 0;
+        for k in 1..=(hz * secs) as u64 {
+            let now = drawn_at(t0, hz, 0.0, k);
+            if !asked && now - t0 >= ask_ms {
+                w.ask_jump();
+                asked = true;
+            }
+            w.frame_with(go.axes(), now, client, true);
+            drawn.push(w.cam.walk.phys);
+            let k = w.kept.unwrap();
+            if kept.last().is_none_or(|l: &(i64, WalkPhysics<Ee>)| l.0 != k.frames) {
+                kept.push((k.frames, k.at.0));
+            }
+        }
+        (drawn, kept)
+    }
+
+    /// The highest the feet went over `floor`, and how long the walk was off a
+    /// floor (ms, between the first frame drawn in the air and the first on a
+    /// floor again).
+    fn arc(drawn: &[WalkPhysics<Ee>], floor: f32) -> (f32, i64) {
+        let top = drawn.iter().map(|p| p.position.y.0 - floor).fold(f32::MIN, f32::max);
+        let off = drawn.iter().position(|p| p.flags & ON_FLOOR == 0);
+        let on = off.and_then(|o| drawn[o..].iter().position(|p| p.flags & ON_FLOOR != 0).map(|n| o + n));
+        let air = match (off, on) {
+            (Some(a), Some(b)) => drawn[b].time - drawn[a].time,
+            _ => 0,
+        };
+        (top, air)
+    }
+
+    /// A jump in place rises to `JUMP_TOP` (0.896 with the walk's integrator) and
+    /// comes down onto the floor it left through `Move`'s own floor test, at the
+    /// console's 30 frames a second and drawn at 60 and 165: in the air for 0.6
+    /// s, the air's gait (6, the fall's clip) all the way, the landing told once
+    /// (`parm118` 16, the landing's clip) and standing (0) after, at the very
+    /// height it left. The controls: the same start speed given with the floor
+    /// left alone, `Move`'s step-down holds the body on the ground (it never
+    /// leaves it, the reason for the lift); and with no offer the key does
+    /// nothing.
+    #[test]
+    fn a_jump_rises_to_its_top_and_lands_on_the_floor_it_left() {
+        for hz in [1000.0 / CONSOLE_FRAME_MS, 60.0, 165.0] {
+            let Some(mut w) = open_ground() else { return };
+            hold(&mut w, Controls::default(), &jumper(), hz, 0.5);
+            let (floor, bits) = (w.cam.walk.phys.position.y.0, w.cam.walk.phys.position.y.bits());
+            let t0 = w.scene.time;
+            let mut told = 0;
+            let mut drawn = Vec::new();
+            for k in 1..=(hz * 1.5) as u64 {
+                if k == 1 {
+                    w.ask_jump();
+                }
+                w.frame_with(Controls::default().axes(), drawn_at(t0, hz, 0.0, k), &jumper(), true);
+                told += (w.cam.walk.parm118 == 16) as u32;
+                drawn.push(w.cam.walk.phys);
+            }
+            let (top, air) = arc(&drawn, floor);
+            eprintln!("{hz:.2} Hz: top {top:.4}, {air} ms in the air");
+            assert!((top - 0.896).abs() < 0.01 && top <= JUMP_TOP + 0.005, "{hz} Hz: the top {top}");
+            assert!((560..=680).contains(&air), "{hz} Hz: {air} ms in the air");
+            for p in drawn.iter().filter(|p| p.flags & ON_FLOOR == 0) {
+                assert_eq!(p.loco_state, 6, "{hz} Hz: in the air the air's gait");
+            }
+            assert_eq!(told, 1, "{hz} Hz: the landing told once");
+            let last = drawn.last().unwrap();
+            assert!(last.flags & ON_FLOOR != 0 && last.loco_state == 0, "{hz} Hz: standing after");
+            assert_eq!(last.position.y.bits(), bits, "{hz} Hz: at the height it left ({} for {floor})", last.position.y.0);
+            assert_eq!(w.jump_asked, None, "{hz} Hz: the jump taken");
+        }
+
+        // the controls: the start speed with the floor left alone; no offer
+        let Some(mut w) = open_ground() else { return };
+        hold(&mut w, Controls::default(), &jumper(), 60.0, 0.5);
+        let floor = w.cam.walk.phys.position.y.0;
+        w.rewind();
+        w.cam.walk.phys.velocity.y = F::new(JUMP_SPEED);
+        let (drawn, _) = jumping(&mut w, Controls::default(), &jumper(), 60.0, 1.0, -1);
+        let (top, air) = arc(&drawn, floor);
+        assert!(air == 0 && top < 0.05, "the control: the speed alone, off the floor for {air} ms, {top} up");
+        let Some(mut w) = open_ground() else { return };
+        hold(&mut w, Controls::default(), &crate::controls::Client::default(), 60.0, 0.5);
+        let (drawn, _) = jumping(&mut w, Controls::default(), &crate::controls::Client { stood_sent: true, ..Default::default() }, 60.0, 1.0, 0);
+        assert_eq!(arc(&drawn, floor), (0.0, 0), "the control: no offer, no jump");
+    }
+
+    /// A jump keeps the console's frames at any display rate: drawn at 60, 165
+    /// and 240 frames a second, a jump that takes off in the same console frame
+    /// is that frame on bit for bit (its height, its speed up or down, its
+    /// flags, the frame it lands in), standing and at a run. The frame it takes
+    /// off in is the next one stepped after the press, as for any control given
+    /// between frames, so a press can land a frame apart at two rates (one in a
+    /// frame of 32 of VITimer's counts, the other in one of 34, whose arcs differ
+    /// in their last bits, as a PS2's would): never more than one. The control:
+    /// the same jump stepped once a frame drawn at 165 (the walk's stepping until
+    /// 2026-10-27) goes higher, as its first step at the ground's damping is
+    /// shorter.
+    #[test]
+    fn a_jump_keeps_the_consoles_frames_at_any_display_rate() {
+        type Arc = Vec<[u32; 3]>;
+        for go in [Controls::default(), Controls { fwd: 1.0, ..Default::default() }] {
+            let frames = |hz: f64, ask: i64| -> Option<(i64, Arc)> {
+                let mut w = open_ground()?;
+                hold(&mut w, go, &jumper(), 165.0, 1.0);
+                let (_, kept) = jumping(&mut w, go, &jumper(), hz, 1.5, ask);
+                let up = kept.iter().position(|(_, p)| p.velocity.y.0 > 0.0)?;
+                Some((kept[up].0, kept[up..].iter().map(|(_, p)| [p.position.y.bits(), p.velocity.y.bits(), p.flags]).collect()))
+            };
+            let mut all_one = 0;
+            for ask in (500..=600).step_by(10) {
+                let Some((n60, at60)) = frames(60.0, ask) else { return };
+                assert!(at60.len() > 25 && at60.last().unwrap()[2] & ON_FLOOR != 0, "landed within the frames");
+                let mut same = true;
+                for hz in [165.0, 240.0] {
+                    let (n, at) = frames(hz, ask).unwrap();
+                    assert!((n - n60).abs() <= 1, "asked at {ask}, {hz} Hz took off in frame {n}, 60 Hz in {n60}");
+                    if n == n60 {
+                        let k = at60.len().min(at.len());
+                        assert_eq!(at60[..k], at[..k], "asked at {ask}, {hz} Hz: the jump's console frames");
+                    }
+                    same &= n == n60;
+                }
+                all_one += same as u32;
+            }
+            assert!(all_one >= 3, "a press in the same frame at every rate, {all_one} times in 11");
+        }
+
+        // the control: stepped once a frame drawn at 165
+        let Some(mut w) = open_ground() else { return };
+        hold(&mut w, Controls::default(), &jumper(), 165.0, 0.5);
+        let floor = w.cam.walk.phys.position.y.0;
+        w.rewind();
+        w.take_off();
+        let t0 = w.scene.time;
+        let mut top = 0.0f32;
+        for k in 1..=165u64 {
+            frame_drawn(&mut w, Controls::default(), drawn_at(t0, 165.0, 0.0, k));
+            top = top.max(w.cam.walk.phys.position.y.0 - floor);
+        }
+        assert!(top > JUMP_TOP + 0.05, "the control: stepped a frame drawn at 165, the top {top}");
+    }
+
+    /// A running jump carries the run across: its take-off goes at the ground's
+    /// damping, so the frame it leaves covers the ground as the run's frames do
+    /// (each by VITimer's count of it, 32 or 34), and in the air nothing pushes it
+    /// (Walk and Run need a floor), so it slows as the air's damping slows it
+    /// alone, and lands about 5 ahead.
+    #[test]
+    fn a_running_jump_keeps_the_runs_speed_across() {
+        let go = Controls { fwd: 1.0, ..Default::default() };
+        let Some(mut w) = open_ground() else { return };
+        hold(&mut w, go, &jumper(), 60.0, 1.5);
+        let (_, kept) = jumping(&mut w, go, &jumper(), 60.0, 1.5, 300);
+        let across = |i: usize| {
+            let (a, b) = (&kept[i - 1].1, &kept[i].1);
+            assert_eq!(kept[i].0, kept[i - 1].0 + 1, "kept frames one after another");
+            ((b.position.x.0 - a.position.x.0).powi(2) + (b.position.z.0 - a.position.z.0).powi(2)).sqrt() / console_step(kept[i].0) as f32
+        };
+        let off = kept.iter().position(|(_, p)| p.flags & ON_FLOOR == 0).expect("it leaves the ground");
+        let on = off + kept[off..].iter().position(|(_, p)| p.flags & ON_FLOOR != 0).expect("it lands");
+        assert!(off >= 3, "run frames before the take-off");
+        let (run, leave) = ((across(off - 1) + across(off - 2)) / 2.0, across(off));
+        let far = ((kept[on].1.position.x.0 - kept[off - 1].1.position.x.0).powi(2) + (kept[on].1.position.z.0 - kept[off - 1].1.position.z.0).powi(2)).sqrt();
+        eprintln!("a run's frame {run:.6} a count, the take-off's {leave:.6}, {far:.2} across in the air");
+        assert!((leave / run - 1.0).abs() < 0.03, "the take-off's {leave} against the run's {run}");
+        let mut was = leave;
+        for i in off + 1..on {
+            let d = across(i);
+            assert!(d <= was * 1.03 && d > was * 0.96, "frame {i} in the air: {d} after {was}");
+            was = d;
+        }
+        assert!((4.5..5.8).contains(&far), "landed {far} ahead");
+    }
+
+    /// No jump where the client or the walk says no: not offered, held in place
+    /// (0x00FC, or no speed: a GM's Freeze, a root), casting, a window's lock,
+    /// no report standing sent since the last move, flying, already in the air
+    /// (a second ask on the way up adds nothing: the top is one jump's), and in
+    /// the water. The control: the same frames from a client that may jump take
+    /// off.
+    #[test]
+    fn no_jump_where_the_client_or_the_walk_says_no() {
+        let off_ground = |client: &crate::controls::Client| {
+            let mut w = open_ground()?;
+            hold(&mut w, Controls::default(), client, 60.0, 0.3);
+            let floor = w.cam.walk.phys.position.y.0;
+            let (drawn, _) = jumping(&mut w, Controls::default(), client, 60.0, 0.6, 0);
+            Some(arc(&drawn, floor).0)
+        };
+        let Some(control) = off_ground(&jumper()) else { return };
+        assert!(control > 0.85, "the control: {control}");
+        let j = jumper();
+        for (why, c) in [
+            ("not offered", crate::controls::Client { jumps: false, ..j }),
+            ("held (0x00FC)", crate::controls::Client { rooted: true, ..j }),
+            ("no speed", crate::controls::Client { run_speed: 0.0, ..j }),
+            ("casting", crate::controls::Client { casting: true, ..j }),
+            ("a window's lock", crate::controls::Client { move_ok: false, ..j }),
+            ("the manual camera", crate::controls::Client { modal: true, ..j }),
+            ("no report standing", crate::controls::Client { stood_sent: false, ..j }),
+            ("timed out", crate::controls::Client { timed_out: true, ..j }),
+        ] {
+            let top = off_ground(&c).unwrap();
+            assert!(top < 0.01, "{why}: up {top}");
+        }
+
+        // flying: the ask does nothing, and is let go
+        let Some(mut w) = open_ground() else { return };
+        let fly = crate::controls::Client { flying: true, ..j };
+        hold(&mut w, Controls::default(), &fly, 60.0, 0.3);
+        let y = w.cam.walk.phys.position.y.0;
+        jumping(&mut w, Controls::default(), &fly, 60.0, 0.6, 0);
+        assert!((w.cam.walk.phys.position.y.0 - y).abs() < 0.01 && w.jump_asked.is_none(), "flying");
+
+        // in the air already: asked again on the way up, the top is one jump's
+        let Some(mut w) = open_ground() else { return };
+        hold(&mut w, Controls::default(), &j, 60.0, 0.3);
+        let floor = w.cam.walk.phys.position.y.0;
+        let t0 = w.scene.time;
+        let mut drawn = Vec::new();
+        for k in 1..=60u64 {
+            if k == 1 || k == 8 || k == 14 {
+                w.ask_jump();
+            }
+            w.frame_with(Controls::default().axes(), drawn_at(t0, 60.0, 0.0, k), &j, true);
+            drawn.push(w.cam.walk.phys);
+        }
+        let (top, _) = arc(&drawn, floor);
+        assert!((top - control).abs() < 0.001, "asked again in the air: {top} against one jump's {control}");
+
+        // in the bay: swimming, no jump
+        let (x, z) = (25390.0f32, 15860.0f32);
+        let Some(world) = tunaria_round(x, z) else { return };
+        let mut w = Walker::arrive(world, Spawn { pos: [x, 51.32 - 2.5, z], heading: 0.0, placing: Placing::AsGiven });
+        w.cam.set_camera_mode(2);
+        hold(&mut w, Controls::default(), &j, 60.0, 1.0);
+        assert!(w.cam.walk.phys.flags & flags::LIQUID != 0, "in the water: {:#x}", w.cam.walk.phys.flags);
+        let y = w.cam.walk.phys.position.y.0;
+        jumping(&mut w, Controls::default(), &j, 60.0, 0.5, 0);
+        assert!(w.cam.walk.phys.velocity.y.0 < 1.0 && w.cam.walk.phys.position.y.0 < y + 0.3, "swimming: up to {:?}", w.cam.walk.phys.position.y);
+    }
+
+    /// The key pressed as the body comes down (or before the report of its
+    /// landing has gone out) jumps once it may, within `JUMP_WAIT_MS`: asked
+    /// 150 ms before the landing, it takes off again as soon as it stands; asked
+    /// 400 ms before, it is let go (the control) and the body stays down.
+    #[test]
+    fn a_jump_asked_as_the_body_comes_down_is_taken_once_it_stands() {
+        let run = |second: Option<i64>| {
+            let mut w = open_ground()?;
+            hold(&mut w, Controls::default(), &jumper(), 60.0, 0.3);
+            let t0 = w.scene.time;
+            let (mut drawn, mut asked) = (Vec::new(), false);
+            for k in 1..=120u64 {
+                let now = drawn_at(t0, 60.0, 0.0, k);
+                if k == 1 {
+                    w.ask_jump();
+                }
+                if let Some(at) = second
+                    && !asked
+                    && now - t0 >= at
+                {
+                    w.ask_jump();
+                    asked = true;
+                }
+                w.frame_with(Controls::default().axes(), now, &jumper(), true);
+                drawn.push((now - t0, w.cam.walk.phys));
+            }
+            Some(drawn)
+        };
+        let leaves = |d: &[(i64, WalkPhysics<Ee>)]| d.windows(2).filter(|p| p[0].1.flags & ON_FLOOR != 0 && p[1].1.flags & ON_FLOOR == 0).count();
+        let Some(once) = run(None) else { return };
+        assert_eq!(leaves(&once), 1);
+        let landed = once.windows(2).find(|p| p[0].1.flags & ON_FLOOR == 0 && p[1].1.flags & ON_FLOOR != 0).unwrap()[1].0;
+        for (before, again) in [(150, true), (400, false)] {
+            let d = run(Some(landed - before)).unwrap();
+            assert_eq!(leaves(&d) == 2, again, "asked {before} ms before the landing at {landed}: left the ground {} times", leaves(&d));
+        }
+    }
+
+    /// With nobody jumping the walk is as it was: a run with a turn, drawn at
+    /// 165, from a client that may jump keeps every console frame bit for bit as
+    /// one that may not (the game's walk, untouched). The control: a jump asked
+    /// in the middle changes them.
+    #[test]
+    fn with_nobody_jumping_the_walk_is_as_it_was() {
+        let go = Controls { fwd: 1.0, orbit: -0.25, ..Default::default() };
+        let frames = |client: &crate::controls::Client, ask: i64| {
+            let mut w = open_ground()?;
+            let (drawn, kept) = jumping(&mut w, go, client, 165.0, 3.0, ask);
+            let bits = |p: &WalkPhysics<Ee>| (p.time, [p.position.x.bits(), p.position.y.bits(), p.position.z.bits(), p.angles.x.bits(), p.velocity.x.bits(), p.velocity.y.bits(), p.floor.bits(), p.flags, p.loco_state as u32]);
+            Some((drawn.iter().map(bits).collect::<Vec<_>>(), kept.iter().map(|(n, p)| (*n, bits(p))).collect::<Vec<_>>()))
+        };
+        let Some(plain) = frames(&crate::controls::Client::default(), -1) else { return };
+        assert_eq!(frames(&jumper(), -1).unwrap(), plain, "a client that may jump, not jumping");
+        assert_ne!(frames(&jumper(), 1500).unwrap().1, plain.1, "the control: a jump asked");
     }
 }

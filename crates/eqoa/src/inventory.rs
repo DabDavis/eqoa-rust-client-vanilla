@@ -8,12 +8,69 @@
 
 use net::dump::{ItemList, NetItem};
 
-/// The inventory's capacity (`AddItem`'s 40).
+/// CLIENT's capacity of a list (`AddItem`'s 40, `VIItemList::ItemInternal[40]`):
+/// the pack's and the bank's on every server that does not say more, and the
+/// merchant's, the corpse's and the trade's on every server.
 pub const CAPACITY: usize = 40;
 
+#[cfg(not(test))]
+static PACK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(CAPACITY);
+#[cfg(not(test))]
+static BANK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(CAPACITY);
+#[cfg(test)]
+thread_local! {
+    static CAPS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((CAPACITY, CAPACITY)) };
+}
+
+/// The records the pack holds, worn items among them: CLIENT's 40, or what a
+/// server that holds more said is in force (the session's `item_lists`,
+/// go-eqoa-server's 0x7E2A before each MemoryDump). One session a program.
+pub fn pack_cap() -> usize {
+    #[cfg(not(test))]
+    return PACK.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    return CAPS.with(|c| c.get().0);
+}
+
+/// The records the bank holds, as `pack_cap`.
+pub fn bank_cap() -> usize {
+    #[cfg(not(test))]
+    return BANK.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    return CAPS.with(|c| c.get().1);
+}
+
+/// Set from the session as it stands (`Play`, each frame; the pregame's).
+pub fn set_caps(caps: [u32; 2]) {
+    let (pack, bank) = (caps[0].max(CAPACITY as u32) as usize, caps[1].max(CAPACITY as u32) as usize);
+    #[cfg(not(test))]
+    {
+        PACK.store(pack, std::sync::atomic::Ordering::Relaxed);
+        BANK.store(bank, std::sync::atomic::Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    CAPS.with(|c| c.set((pack, bank)));
+}
+
+/// `f` run with the lists' sizes `caps` on this thread (a test's), put back
+/// after.
+#[cfg(test)]
+pub fn with_caps<T>(caps: [u32; 2], f: impl FnOnce() -> T) -> T {
+    let old = (pack_cap(), bank_cap());
+    set_caps(caps);
+    let out = f();
+    set_caps([old.0 as u32, old.1 as u32]);
+    out
+}
+
 /// `CanWearIn(wear, slot)` (`viclientutil.cpp`): whether an item of wear
-/// slot `wear` goes into equip slot `slot`.
+/// slot `wear` goes into equip slot `slot`; and a cape in the cape's slot
+/// while the server's offer of capes is taken (`cape`: no retail table has
+/// either).
 pub fn can_wear_in(wear: i64, slot: i64) -> bool {
+    if wear == crate::cape::WEAR_SLOT {
+        return slot == crate::cape::EQUIP_SLOT && crate::cape::offered();
+    }
     match wear {
         1 => slot == 0,
         3 => slot == 2 || slot == 3,
@@ -250,6 +307,26 @@ mod tests {
         assert_eq!(find(&l, 11), Some(0));
     }
 
+    /// A server that holds 100 (`set_caps`, the session's word before a dump):
+    /// the pack and the bank take 100 records; the controls: CLIENT's 40
+    /// where none was said, and a word under 40 is CLIENT's 40.
+    #[test]
+    fn a_pack_takes_what_the_server_said() {
+        let fill = |cap: usize| {
+            let mut l = ItemList::default();
+            (0..120).map(|k| add_item(&mut l, &item(k, -1, 0, 1, 0), 1, cap)).sum::<i64>()
+        };
+        assert_eq!((pack_cap(), bank_cap()), (40, 40), "the control: none said, CLIENT's");
+        assert_eq!(fill(pack_cap()), 40);
+        with_caps([100, 120], || {
+            assert_eq!((pack_cap(), bank_cap()), (100, 120));
+            assert_eq!(fill(pack_cap()), 100);
+            assert_eq!(fill(bank_cap()), 120);
+        });
+        with_caps([12, 0], || assert_eq!((pack_cap(), bank_cap()), (40, 40), "never under CLIENT's"));
+        assert_eq!(pack_cap(), 40, "put back");
+    }
+
     #[test]
     fn moving_an_item() {
         let mut l = ItemList { p04: 0, items: (0..5).map(|k| item(k, -1, 0, 1, k as u32)).collect() };
@@ -270,6 +347,29 @@ mod tests {
         assert_eq!(equip(&mut l, 2, 3), None, "wear 1 does not go in 3");
         assert_eq!(take_off(&mut l, 16), Some(5));
         assert_eq!(l.items[1].equip_slot, -1);
+    }
+
+    /// A cape (wear 28) goes in the cape's slot (22) while capes are offered,
+    /// takes nothing else off, and comes off by its slot; the controls: with
+    /// no offer it goes nowhere (as on a PS2, which is never sent one), and
+    /// in the offer no other slot takes it nor it another wear's.
+    #[test]
+    fn a_cape_is_worn_only_where_capes_are_offered() {
+        let mut l = ItemList { p04: 0, items: vec![item(1, 28, 0, 1, 0), item(2, 5, 0, 1, 1), item(3, 2, 0, 1, 2)] };
+        l.items[1].equip_slot = 5;
+        l.items[2].equip_slot = 21;
+        crate::cape::with_offered(false, || {
+            assert!(!can_wear_in(28, 22), "the control: no offer");
+            assert_eq!(equip(&mut l.clone(), 0, 22), None);
+        });
+        crate::cape::with_offered(true, || {
+            assert!(can_wear_in(28, 22));
+            assert!(!can_wear_in(28, 21) && !can_wear_in(28, 5) && !can_wear_in(2, 22) && !can_wear_in(5, 22), "the controls: no other slot, no other wear");
+            assert_eq!(equip(&mut l, 0, 22), Some(5));
+            assert_eq!((l.items[0].equip_slot, l.items[1].equip_slot, l.items[2].equip_slot), (22, 5, 21), "the chest and the robe stay on");
+            assert_eq!(take_off(&mut l, 22), Some(5));
+            assert_eq!(l.items[0].equip_slot, -1);
+        });
     }
 
     #[test]

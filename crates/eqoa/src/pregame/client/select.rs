@@ -198,6 +198,12 @@ impl CharSelect {
         self.cust.remake(lib, g, now);
     }
 
+    /// The server's race looks changed (`raceopts`): the character shown is
+    /// made again in its own at the next frame.
+    pub fn relook(&mut self) {
+        self.figure = None;
+    }
+
     /// The focus going to another window (not the box or customise): the
     /// character let go.
     pub fn lost_focus(&mut self) {
@@ -375,6 +381,11 @@ impl CharSelect {
             }
             st.cam.orbit_right(F::new(0.3));
             st.process(cx.now);
+            // the cape its record wears now (the server's list of them comes
+            // after the characters', `cape`)
+            if let (Some(f), Some(g), Some(lib), Some(c)) = (self.figure.as_mut(), cx.gpu.as_mut(), cx.lib, chars.get(self.sel as usize)) {
+                f.wear_cape(lib, g, c.cape);
+            }
             if let (Some(f), Some(g)) = (self.figure.as_mut(), cx.gpu.as_ref()) {
                 f.pose(g, cx.now);
             }
@@ -464,7 +475,12 @@ impl CharSelect {
         let race = super::create::tables::like(c.race);
         let at = select_place(race, c.class, c.level, expansion);
         let hpr = st.cam.walk.committed.angles.to_array();
-        self.figure = Figure::new(lib, g, c.model, look_of(c, true), c.weapons, at, hpr, now);
+        // a server's race's look on its parts, by the character's name (`raceopts`)
+        let race_look = crate::raceopts::look_of(&c.name).map(|l| (*l).clone());
+        self.figure = Figure::new_dressed(lib, g, c.model, look_of(c, true), race_look, c.weapons, at, hpr, now);
+        if let Some(f) = self.figure.as_mut() {
+            f.wear_cape(lib, g, c.cape);
+        }
         self.show_time = now + 5000;
         self.attack_slot = -1;
         if let Some(f) = self.figure.as_mut() {

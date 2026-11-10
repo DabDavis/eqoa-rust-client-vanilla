@@ -48,9 +48,10 @@ use vi::csprite::CSprite;
 use vi::fpu::Ee;
 
 /// Whether `model` is a body one of the server's races wears, by what it
-/// listed (`races`; none: no race of its own).
+/// listed (`races`; none: no race of its own), or one its races' options offer
+/// a player (another body of the same creature, `raceopts`: the gargoyles' six).
 pub fn worn_by_a_race(model: u32, races: Option<&Creation>) -> bool {
-    model != 0 && races.is_some_and(|c| c.races.iter().any(|r| r.body.contains(&model)))
+    model != 0 && (races.is_some_and(|c| c.races.iter().any(|r| r.body.contains(&model))) || crate::raceopts::offered_body(model))
 }
 
 /// `cs`, made of `model`, holds items when it is a player's character
@@ -63,7 +64,10 @@ pub fn grant(cs: &mut CSprite<Ee>, model: u32, player: bool, races: Option<&Crea
         if cs.item_nodes[2] < 0
             && let Some(off) = usize::try_from(cs.item_nodes[1]).ok().and_then(|i| cs.h.nodes.get(i))
         {
-            cs.item_nodes[2] = if off.parent >= 0 { off.parent } else { cs.item_nodes[1] };
+            // the root is no hand: an off hand's node hung off it (the Jal'Raeth's,
+            // whose item nodes float beside them as their knights' blades do) takes
+            // the shield itself
+            cs.item_nodes[2] = if off.parent > 0 { off.parent } else { cs.item_nodes[1] };
         }
     }
     cs.holds_items

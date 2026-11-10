@@ -402,7 +402,7 @@ impl ControlsPage {
     }
 
     /// A key while a macro's buttons are awaited: Backspace leaves it none;
-    /// a key a row with a button is on adds that button (✕ for Space, □ for
+    /// a key a row with a button is on adds that button (✕ for G, □ for
     /// Q...); any other presses nothing.
     fn chord_key(&mut self, vui: &Vui, name: &str, cues: &mut Vec<i32>) {
         let Entry::Chord(m) = entry(self.row) else { return };
@@ -671,11 +671,16 @@ pub fn expand(vui: &Vui, s: &str) -> String {
 }
 
 /// The keys that are the windows' buttons now, by the glyph their legends
-/// draw: ✕ Enter and E, △ Escape and Backspace, □ Q, ○ C, R1 Tab, R3 Space
-/// (wherever the player moved those rows), on two lines.
+/// draw: ✕ Enter and E, △ Escape and Backspace, □ Q, ○ C, R1 Tab, R3 G and
+/// Space (the attack's, and Space while the jump's row has it: in a window
+/// it is the attack's, `binds::KeyEdge::space_attacks`), wherever the player
+/// moved those rows, on two lines.
 pub fn window_keys(b: &binds::Binds) -> String {
     let keys = |ids: &[&str]| -> String {
-        let v: Vec<String> = ids.iter().filter_map(|id| binds::row_named(id)).filter_map(|r| b.key(r)).filter(|k| !k.is_empty()).map(binds::display).collect();
+        let mut v: Vec<String> = ids.iter().filter_map(|id| binds::row_named(id)).filter_map(|r| b.key(r)).filter(|k| !k.is_empty()).map(binds::display).collect();
+        if ids.contains(&"attack") && binds::space_is_jumps(b) {
+            v.push(binds::display("space"));
+        }
         if v.is_empty() { "-".into() } else { v.join(", ") }
     };
     format!(
@@ -713,7 +718,7 @@ mod tests {
     #[test]
     fn the_windows_keys_say_which_key_is_which_glyph() {
         let mut b = binds::Binds::default();
-        assert_eq!(window_keys(&b), "In a window:  |x Enter, E   |t Esc, Backspace   |s Q\n|c C   |8 Tab   |( Space");
+        assert_eq!(window_keys(&b), "In a window:  |x Enter, E   |t Esc, Backspace   |s Q\n|c C   |8 Tab   |( G, Space");
         b.bind_key(binds::row_named("talk").unwrap(), "7");
         assert!(window_keys(&b).contains("|s 7\n"), "{}", window_keys(&b));
         b.bind_key(binds::row_named("use").unwrap(), "q");
@@ -749,8 +754,8 @@ mod tests {
         page.capture_key(&vui, "q", &mut cues);
         assert_eq!(page.capture, None);
         let b = settings::binds();
-        assert_eq!((b.key(attack as usize), b.key(binds::row_named("talk").unwrap())), (Some("q"), Some("space")));
-        assert_eq!(page.note.as_deref(), Some("(null) (hold): Q. Talk (hold: (null)): Space."));
+        assert_eq!((b.key(attack as usize), b.key(binds::row_named("talk").unwrap())), (Some("q"), Some("g")));
+        assert_eq!(page.note.as_deref(), Some("(null) (hold): Q. Talk (hold: (null)): G."));
         // F11 is refused and the capture waits on; Escape gives up
         page.key(key::CROSS, true, 0, &mut cues);
         page.capture_key(&vui, "f11", &mut cues);
@@ -799,7 +804,9 @@ mod tests {
         page.capture_key(&vui, "q", &mut cues);
         assert_eq!(page.capture, Some(Column::Keyboard), "Q is Talk's");
         page.capture_key(&vui, "g", &mut cues);
-        assert_eq!((page.capture, settings::binds().macros[0].key.as_deref()), (None, Some("g")));
+        assert_eq!(page.capture, Some(Column::Keyboard), "G is the attack's");
+        page.capture_key(&vui, "y", &mut cues);
+        assert_eq!((page.capture, settings::binds().macros[0].key.as_deref()), (None, Some("y")));
         // its button: L3, off Autorun's field
         page.col = 1;
         page.key(key::CROSS, true, 0, &mut cues);
@@ -807,13 +814,13 @@ mod tests {
         page.capture_button(&vui, l3, &mut cues);
         assert_eq!(settings::binds().macros[0].button, Some(l3));
         assert!(page.note.as_deref().is_some_and(|n| n.contains("has no button now")), "{:?}", page.note);
-        // its buttons: Space (Attack's, ✕) and the controller's ○
+        // its buttons: G (Attack's, ✕) and the controller's ○
         page.row = trigger + 1;
         page.col = 0;
         vui.time = 1000;
         page.key(key::CROSS, true, 1000, &mut cues);
         assert_eq!(page.capture, Some(Column::Chord));
-        page.capture_key(&vui, "space", &mut cues);
+        page.capture_key(&vui, "g", &mut cues);
         vui.time = 1400;
         page.capture_button(&vui, binds::bit_index(crate::input::bit::CIRCLE).unwrap(), &mut cues);
         vui.time = 2000;
@@ -833,12 +840,12 @@ mod tests {
         page.row = 0;
         page.col = 0;
         page.key(key::CROSS, true, 2500, &mut cues);
-        page.capture_key(&vui, "g", &mut cues);
+        page.capture_key(&vui, "y", &mut cues);
         assert_eq!(settings::binds().macros[0].key, None);
         assert!(page.note.as_deref().is_some_and(|n| n.ends_with("Macro 1 has no key now.")), "{:?}", page.note);
         page.key(key::CROSS, true, 2500, &mut cues);
         page.capture_key(&vui, "u", &mut cues);
-        assert_eq!(page.note.as_deref(), Some("Walk forward: U. G does nothing now."));
+        assert_eq!(page.note.as_deref(), Some("Walk forward: U. Y does nothing now."));
         page.row = trigger + 1;
         // the control: nothing pressed for eight seconds gives up, unchanged
         page.col = 0;

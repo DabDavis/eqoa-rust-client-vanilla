@@ -113,6 +113,10 @@ pub struct Menus {
     /// id, set at run time (the server's names for the TRIGGER entries,
     /// `adminplay`).
     pub labels: HashMap<(u32, i32), Label>,
+    /// The TRIGGER menu (its index) and its entries as CLIENT has them, kept
+    /// while the server's whole list of triggers stands in their place
+    /// (`adminplay::set_trigger_list`).
+    pub trigger_lines: Option<(usize, Vec<MenuEntry>)>,
 }
 
 /// An entry's text set at run time (`Menus::labels`).
@@ -180,6 +184,16 @@ pub fn world_bounds(img: &ClientImage, world: i32) -> Option<[i32; 4]> {
     }
     let va = 0x00CF3738 + 0x20 * world as u32;
     Some([img.i32_at(va + 0x0C), img.i32_at(va + 0x10), img.i32_at(va + 0x14), img.i32_at(va + 0x18)])
+}
+
+/// `gWorldInfo[i].m_nameWord` (+0x08, a halfword): the world's name, a
+/// WORDS.TXT word (`VIWndGoto` draws it).
+pub fn world_name_word(img: &ClientImage, world: i32) -> Option<u16> {
+    if !(0..6).contains(&world) {
+        return None;
+    }
+    let w = (img.i32_at(0x00CF3738 + 0x20 * world as u32 + 8) & 0xFFFF) as u16;
+    (w != 0).then_some(w)
 }
 
 #[cfg(test)]

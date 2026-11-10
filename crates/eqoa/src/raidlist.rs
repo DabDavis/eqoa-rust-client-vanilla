@@ -42,9 +42,9 @@ const POWER_H: i32 = 2;
 /// The most columns: past them the wheel steps through the rows.
 const MOST_COLUMNS: usize = 4;
 /// The height from where the bars start to above the chat box, and what the pet's
-/// bar takes of it.
+/// bar takes of it (its effects' row more: `hud::pet_effects_height`).
 const ROOM_H: i32 = 235;
-const PET_H: i32 = 48;
+pub const PET_H: i32 = 48;
 
 const BACK: [f32; 4] = [0.0, 0.0, 0.0, 0.32];
 const BAR_BACK: [f32; 4] = [0.0, 0.0, 0.0, 0.7];
@@ -69,10 +69,11 @@ pub struct Fit {
 }
 
 impl Fit {
-    /// The fewest columns that hold `n` (four at most), evened out; the pet's bar
-    /// under it, when the player has one.
-    pub fn of(n: usize, pet: bool) -> Fit {
-        let room = ROOM_H - HEAD_H - if pet { PET_H } else { 0 };
+    /// The fewest columns that hold `n` (four at most), evened out, with `below`
+    /// left under it: the pet's bar when the player has one (`PET_H`) and, when
+    /// its pet has effects, their row (`hud::pet_effects_height`).
+    pub fn under(n: usize, below: i32) -> Fit {
+        let room = ROOM_H - HEAD_H - below;
         let most = (room / ROW_H).max(1) as usize;
         let columns = n.div_ceil(most).clamp(1, MOST_COLUMNS);
         let rows = n.div_ceil(columns).min(most);
@@ -173,13 +174,16 @@ mod tests {
 
     #[test]
     fn it_fits_any_number_above_the_chat_box() {
-        for pet in [false, true] {
+        // none under it, the pet's bar, the bar and its effects' rows
+        let fx = crate::hud::pet_effects_height(crate::hud::PET_FX_MOST);
+        assert!(fx > crate::hud::pet_effects_height(1), "two rows for the most");
+        for below in [0, PET_H, PET_H + crate::hud::pet_effects_height(1), PET_H + fx] {
             for n in 1..=300 {
-                let f = Fit::of(n, pet);
+                let f = Fit::under(n, below);
                 assert_eq!(f.shown + f.more, n, "{n}");
                 let b = f.bounds(AT);
-                let bottom = AT[1] + ROOM_H - if pet { PET_H } else { 0 };
-                assert!(b[3] <= bottom, "{n} (pet {pet}): down to {} past {bottom}", b[3]);
+                let bottom = AT[1] + ROOM_H - below;
+                assert!(b[3] <= bottom, "{n} ({below} under it): down to {} past {bottom}", b[3]);
                 assert!(b[2] < 640, "{n}: out to {}", b[2]);
                 // no column is empty, and every row showing lies in the list
                 assert!(f.columns <= MOST_COLUMNS && (f.columns - 1) * f.rows < f.shown, "{n}: {f:?}");
@@ -193,7 +197,7 @@ mod tests {
 
     #[test]
     fn one_column_for_a_small_raid_more_as_it_grows() {
-        let f = |n| Fit::of(n, false);
+        let f = |n| Fit::under(n, 0);
         assert_eq!((f(5).columns, f(5).rows, f(5).more), (1, 5, 0));
         assert_eq!((f(6).columns, f(6).rows), (1, 6));
         // a row 18 high (the name, health and power): 12 to a column
@@ -204,7 +208,7 @@ mod tests {
         assert_eq!((f(48).columns, f(48).rows, f(48).more), (4, 12, 0));
         assert_eq!((f(49).columns, f(49).rows, f(49).shown, f(49).more), (4, 12, 48, 1), "past that the wheel");
         // the pet's bar takes rows
-        assert_eq!((Fit::of(12, true).columns, Fit::of(12, true).rows), (2, 6));
+        assert_eq!((Fit::under(12, PET_H).columns, Fit::under(12, PET_H).rows), (2, 6));
     }
 
     #[test]
@@ -219,7 +223,7 @@ mod tests {
 
     #[test]
     fn the_head_says_how_many_and_which() {
-        assert_eq!(head(&Fit::of(6, false), 0), "Raid (6)");
-        assert_eq!(head(&Fit::of(60, false), 3), "Raid (60) 4-51");
+        assert_eq!(head(&Fit::under(6, 0), 0), "Raid (6)");
+        assert_eq!(head(&Fit::under(60, 0), 3), "Raid (60) 4-51");
     }
 }

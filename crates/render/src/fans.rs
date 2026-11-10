@@ -92,7 +92,6 @@ pub(crate) struct Fans {
     /// first PS2 run, and their colours' spread over those sums (`fs_spread`)
     sums: Option<wgpu::RenderPipeline>,
     spread: Option<wgpu::RenderPipeline>,
-    fog16: Option<crate::fog16::Fog16>,
 }
 
 impl Fans {
@@ -159,7 +158,6 @@ impl Fans {
             ps2_corners: Vec::new(),
             sums: None,
             spread: None,
-            fog16: None,
         }
     }
 
@@ -383,9 +381,11 @@ impl Renderer {
     /// Draws the fans `set_fans` set, over what is already in `target` and
     /// `depth`, under `view`'s lights and fog, if `view` is the one they were
     /// made for (its eye theirs): a fan faces the camera it was made for, so
-    /// another view of the same frame does not draw them.
+    /// another view of the same frame (a map's, say) does not draw them.
     pub fn draw_fans(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, view: &View) {
         let (format, sequential) = (self.format, self.ps2_sequential);
+        // the renderer's one copy and sums (the particles' too, `billboard`)
+        let fog16 = &mut self.fog16;
         let Some(f) = self.fans.as_mut().filter(|f| !f.pending.is_empty() && f.eye == view.eye) else { return };
         if f.instances.is_none() {
             return;
@@ -417,7 +417,7 @@ impl Renderer {
         let size = (t.width(), t.height());
         let rect = first.and_then(|_| crate::fog16::rect(&f.ps2_corners, rel, size));
         if rect.is_some() && f.spread.is_none() {
-            let layout = f.fog16.get_or_insert_with(|| crate::fog16::Fog16::new(device, format)).sums_layout().clone();
+            let layout = fog16.get_or_insert_with(|| crate::fog16::Fog16::new(device, format)).sums_layout().clone();
             f.spread_pipeline(device, &layout);
         }
         let (before, after) = f.pending.split_at(first.unwrap_or(f.pending.len()));
@@ -427,7 +427,7 @@ impl Renderer {
             let runs: Vec<_> = after.iter().filter(|p| p.3).cloned().collect();
             let (sums, spread, groups, frame_bg) = (f.sums.as_ref().expect("made with the run"), f.spread.as_ref().expect("made above"), &f.groups, &f.frame_bg);
             let Some((fans_buf, _)) = &f.instances else { return };
-            let fog = f.fog16.as_mut().expect("made above");
+            let fog = fog16.as_mut().expect("made above");
             // the fans twice: their sums, then their colours' spread over them
             let draw = |pass: &mut wgpu::RenderPass<'_>, second: bool, texture: i32, range: std::ops::Range<u32>| {
                 pass.set_pipeline(if second { spread } else { sums });

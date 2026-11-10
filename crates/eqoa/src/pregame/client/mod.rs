@@ -94,6 +94,9 @@ pub struct CharRecord {
     /// held items', armour slots' and robe's, and the slots' ArmorGroup
     /// variants where the disc's has tints; then no tint is sent.
     pub colors: Option<net::entity::LiveColors>,
+    /// The cape it wears, on a server with capes (`cape`: the session's
+    /// `cape_list` by its server id, which comes after the list).
+    pub cape: Option<net::cape::Cape>,
 }
 
 impl CharRecord {
@@ -124,6 +127,7 @@ impl CharRecord {
             armor: std::array::from_fn(|k| g(20 + k)),
             tints: std::array::from_fn(|k| g(26 + k)),
             colors: None,
+            cape: None,
         }
     }
 
@@ -158,6 +162,7 @@ impl CharRecord {
                 armor: std::array::from_fn(|k| rgba(43 + 4 * k)),
                 robe: rgba(67),
             }),
+            cape: None,
         }
     }
 
@@ -301,6 +306,9 @@ pub struct Client {
     remake: bool,
     /// Bodies came in: the figures to be made again (`bodies_in`).
     refigure: bool,
+    /// the race looks' generation character select's figure was made under
+    /// (`raceopts::generation`)
+    looks_seen: u64,
 }
 
 impl Default for Client {
@@ -332,6 +340,7 @@ impl Default for Client {
             entered: None,
             remake: false,
             refigure: false,
+            looks_seen: 0,
         }
     }
 }
@@ -413,6 +422,12 @@ impl Client {
     /// the next frame.
     pub fn art_changed(&mut self) {
         self.remake = true;
+    }
+
+    /// The bodies the characters' capes are cut from (`cape::bodies`), which
+    /// CHARSEL's files do not hold.
+    pub fn cape_bodies(&self) -> Vec<u32> {
+        crate::cape::bodies(self.chars.iter().filter_map(|c| c.cape.as_ref()))
     }
 
     /// A server's races' bodies came in (`res::Res::want_bodies`): character
@@ -558,6 +573,12 @@ impl Client {
             self.select.remake(&cx.res.lib, g, cx.now);
             self.create.remake(&cx.res.lib, g, cx.now);
         }
+        // the server's race looks changed (`raceopts`): character select's
+        // figure made again in its own
+        if crate::raceopts::generation() != self.looks_seen {
+            self.looks_seen = crate::raceopts::generation();
+            self.select.relook();
+        }
         // the stage, once ARENA.CSF and the GPU are here (`LoadWorld`'s
         // walk camera limits set as it sets them)
         if self.stage.is_none()
@@ -653,13 +674,16 @@ impl Client {
 
     /// `CreateCharacter`, once creation has sent the form (0x002B): the form
     /// becomes the next entry with no server id yet (its race's model by
-    /// sex, no robe, level 1, the rest zero), selected and shown, and
-    /// `ShowWord(413)` (empty: the pending states end). The server's list
-    /// replaces it; a refusal takes it away.
+    /// sex, or the body its race's options chose: `tables::chosen`; no robe,
+    /// level 1, the rest zero), selected and shown, and `ShowWord(413)`
+    /// (empty: the pending states end). The server's list replaces it; a
+    /// refusal takes it away. (The figure made of it stays until something
+    /// makes it again: a look a server's race chose, a change of selection;
+    /// a body chosen with no look showed its race's own until then.)
     fn create_character(&mut self, f: &net::session::NewChar) {
         let rec = CharRecord {
             server_id: -1,
-            model: create::tables::model_of(f.race, f.sex),
+            model: create::tables::chosen(f).0,
             class: f.class,
             // a server's race as the list will have it: its `like` race's place
             race: create::tables::like(f.race),
@@ -704,6 +728,19 @@ impl Client {
         // what the server said creation takes past the game's (`net::creation`),
         // for the create pages and character select's stand-ins
         create::tables::set_offer(s.creation.as_ref());
+        // the characters' capes, on a server with capes (`cape`); they come
+        // after the list, and with every list
+        crate::cape::set_offered(s.capes);
+        // and the lists' sizes, as that server last said (`inventory`)
+        crate::inventory::set_caps(s.item_lists);
+        for c in &mut self.chars {
+            c.cape = if s.capes { s.cape_list.get(&c.server_id).copied() } else { None };
+        }
+        // and its races' own options and the looks chosen (`raceopts`)
+        crate::raceopts::set_options(s.race_options.as_ref());
+        if let Some(b) = s.race_looks.take() {
+            crate::raceopts::take_looks(&b);
+        }
         for (k, e) in events.iter().enumerate() {
             match e {
                 Event::ShardList(list) if matches!(self.phase, 0 | 1) => {
@@ -1102,7 +1139,7 @@ mod tests {
         c.chars = vec![CharRecord::of(&character("A", 1, vec![7; 32]))];
         (c.top, c.active) = (Wnd::Create, Wnd::Create);
         c.select.set_pending();
-        let form = net::session::NewChar { name: "Brakk".into(), race: 4, class: 9, sex: 1, hair_color: 2, hair_length: 1, hair_style: 3, face: 2, city: 0, stats: [0; 7] };
+        let form = net::session::NewChar { name: "Brakk".into(), race: 4, class: 9, sex: 1, hair_color: 2, hair_length: 1, hair_style: 3, face: 2, city: 0, stats: [0; 7], options: vec![] };
         c.create_character(&form);
         assert_eq!(c.chars.len(), 2);
         let n = &c.chars[1];
@@ -1121,6 +1158,26 @@ mod tests {
         (c.top, c.active) = (Wnd::Create, Wnd::Create);
         c.create_out(create::Out::Back);
         assert_eq!((c.chars.len(), c.top), (1, Wnd::Select));
+    }
+
+    /// A server's race's character waits in the list in the body its options
+    /// chose (the fungusman's red body), as the list will have it, so
+    /// character select shows that body before the list comes, not its race's
+    /// own; with no body chosen (the control) its race's own.
+    #[test]
+    fn a_created_character_waits_in_its_chosen_body() {
+        let race = net::creation::Race { id: 28, like: 1, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [0x4A4D_88FB; 2], name: "Fungusman".into(), short: "FNG".into(), desc: String::new() };
+        create::tables::set_offer(Some(&net::creation::Creation { all_classes: true, races: vec![race] }));
+        crate::raceopts::set_options(Some(&crate::raceopts::tests::fungus_options()));
+        let mut form = net::session::NewChar { name: "Spore".into(), race: 28, class: 9, sex: 0, hair_color: 0, hair_length: 0, hair_style: 0, face: 0, city: 0, stats: [0; 7], options: vec![("body".into(), 1)] };
+        let mut c = Client::new();
+        c.create_character(&form);
+        assert_eq!(c.chars[0].model, 0x5874_ACFC, "the red body chosen");
+        form.options.clear();
+        c.create_character(&form);
+        assert_eq!(c.chars[1].model, 0x4A4D_88FB, "the control: none chosen, its race's own");
+        crate::raceopts::set_options(None);
+        create::tables::set_offer(None);
     }
 
     /// The server's list resets creation's form (`CharacterList`'s `Reset`)

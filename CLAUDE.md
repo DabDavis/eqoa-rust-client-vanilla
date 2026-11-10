@@ -15,13 +15,23 @@ current.
   Extended options, the updater, the 2002 disc's art on F9, Hide UI
   on H, names from farther and smaller zoomed out (and every one in a crowd, Overlapping Names Show),
   the raid list on a server that has raid groups (the user's of 2026-11-07: `raidlist`, an Extended row, on by default),
+  the pet's effects in a row under its bar on a server that sends them (the server owner's of 2026-11-09, "put the
+  buff icons under the pet name plate": `hud::pet_effects_pieces`, go-eqoa-server's 0x7E32/0x7E33, Extended > UI's
+  Pet Effects, on by default; off, or on any other server, nothing is drawn),
+  the floating numbers of the player's own figures and its pet's in a colour chosen for what made them on a server
+  that tags them (the server owner's of 2026-11-09, "we can add the number colors to extended menu": `numcolor`,
+  go-eqoa-server's 0x7E38/0x7E39 and one byte after 0x00DB's body, Extended > Number Colors; every row Default, the
+  game's own colour, until chosen),
   Ignore Shouts kept, Update Notices, Text Sharp or Smooth, Loading Screens Longer or Instant, Render
   Scale x1, x2 or x4 (off unless chosen), HUD Nearest or Sharp (Nearest, the game's, by default: the
   user's of 2026-10-28, "make nearest the default ... since there is a cost"; Sharp was the default
   on 2026-10-27), and the live game's duel window on a server that turns duels on (the user's of
   2026-10-29, "port the duel window to vanilla too": `duel.rs`, `duelwnd.rs`, `duelplay.rs`, read off SOE's
   final CLIENT in the Corsten save state, README "duels"), and a GM's flight on a server that turns it on (the
-  user's of 2026-11-07, "lets add a gm fly command": `walker.rs`, never in `vi`), and the combat record's window on a
+  user's of 2026-11-07, "lets add a gm fly command": `walker.rs`, never in `vi`), and a jump on a server that offers
+  one (the user's of 2026-11-09, "lets add jump to the game": go-eqoa-server's `world.jump`, 0x7E28; `walker.rs` and
+  `jump.rs`, never in `vi`; Space (and V), a Controls row, the attack on G with Space still the attack's where it makes no
+  jump; others in the air drawn at their height there, their fall in by the top and their landing played), and the combat record's window on a
   server that keeps one (the user's of 2026-11-07, "lets add a combat record for pvp and duels to the menu": Character >
   Combat Record, `record.rs`, `recordplay.rs`, the server's rows by 0x7E20/0x7E21), and PCSX2's texture packs and
   texture dumps natively (the user's of 2026-11-08, "one pack works in both": Extended > Textures, both off unless
@@ -29,10 +39,31 @@ current.
   `render::lit`, `lights.rs`; off it is the PS2's light exactly, every test and oracle unchanged, and `vi` untouched), and
   Ambient Occlusion (the user's of 2026-11-08, "lets add ambient occlusion": Extended > Lighting, off unless chosen;
   `render::ao`, screen-space between `draw`'s opaque and blended passes, run only in the draw `prepare` readied; off
-  there is no pass at all, the picture byte for byte the game's)).
+  there is no pass at all, the picture byte for byte the game's), and capes on a server that has them
+  (the server owner's of 2026-11-08: "lets add a new equip slot for heirloom server only. capes for all. there
+  are many capes we can borrow from for various styles": `cape.rs`, go-eqoa-server's offer 0x7E25 and its lists
+  0x7E26/0x7E27; the disc's own capes cut out of their bodies and fitted to the wearer's skeleton; with none
+  worn, or on any other server, nothing is made or drawn), and a pack and a bank of 100 on a server that offers them (the
+  server owner's of 2026-11-09: "lets increase inventory and bank space to 100": go-eqoa-server's offer 0x7E29 and the sizes
+  in force before each dump 0x7E2A, `inventory::pack_cap`/`bank_cap`; every list's window takes them, CLIENT's 40 everywhere
+  else; a merchant's wares, a corpse and the trade's offers stay the game's), and the map and the quest helper (the user's of
+  2026-11-09, "also add the map and quest helper we had in a former update", back from before the
+  2026-10-27 strip: Extended > Map, every row on by default; the map on M with its XP camps, coaches, routes,
+  town names and the community's markers (suggested from the map, accepted by a GM, the list asked of
+  eqoaclassic.com on any server), the waypoints and the group's waypoint, the minimap on N; the quest marks on
+  the map and the minimap and the quest tracker from a server that sends them, else the client's own quest
+  guide's, labelled "(guide)"; the Map and the Quest Helper off are the game without them, exactly. The Stats
+  Box, others' mana bars and Target of Target stay out; the owner's "they are everywhere" the same day: the
+  minimap's rim keeps only the player's own steps' "?", a "!" only where it lies, and the server marks a quest's
+  name once near the player's level; and a GM's Ctrl+click on the map travels there, offered by go-eqoa-server
+  to a GM's client alone, 0x7E34/0x7E35)).
   `render::lit`, `lights.rs`; off it is the PS2's light exactly, every test and oracle unchanged, and `vi` untouched), and Sun
   Shadows (2026-11-08: Extended > Lighting, off unless chosen, drawn only with Dynamic Lighting; `render::sunshadow`; off, every
   frame byte for byte as before, on Vulkan and GL)).
+  there is no pass at all, the picture byte for byte the game's), and a server's own races' customisation on a server
+  that sends it (the user's of 2026-11-08, "lets add char customization to the new races": `raceopts.rs`,
+  `net::raceopts`, `render::recolor`, README "A server's race's own customisation"; the options are the server's,
+  the parts' triangles too; every row's first step is the body as it is, byte for byte)).
   A new client-side addition is the user's call: ask first. Sharp filtering is for the 2D layer and
   the text only: the world's textures are drawn smooth, as the game filters them (the user,
   2026-10-27, after a Crisp row for them: "world textures cant render proper without smooth. so
@@ -180,6 +211,11 @@ current.
   real GPU without a presentable display (here: `DISPLAY=:99`, the Xvfb, whose Vulkan has no DRI3);
   `EQOA_QUIT=s`, `EQOA_WALK` script a run. A renderer change is held to `shot` PNGs byte for byte
   (`EQOA_HOUR` pinned; a shot's layers scroll by its script time).
+- Dynamic Lighting's lights of the moment (spells', held items', fiery creatures') are held from frame to
+  frame (`lights::Moment`) and the choice among all the lights is eased (`lights::Chooser`): no light may
+  come, go or change in a frame (petition 1321: each frame's own, out of a few particles, flashed up to 18
+  times a second; photosensitivity guidance, WCAG 2.2's 2.3.1, allows 3). `lights::tests::no_spell_visual_flashes`
+  holds every visual on the disc to it; `survey_spell_flashes` (`--ignored --nocapture`) measures them.
 - The `vi` structs are `#[repr(C)]` in the EE layout because the oracle compares raw bytes; keep it that way while ports are being proven. Later (not urgent): native runtime types beside them, converted at the edges, the layout types kept for oracle tests.
 - `ee`'s adder has the EE's one guard bit (PCSX2's recompiler, `FPU_ADD_SUB`); go-eqoa-vi measured through
   the tracer's `call`, which runs PCSX2's INTERPRETER (every bit kept): that adder is `ee::interp`.

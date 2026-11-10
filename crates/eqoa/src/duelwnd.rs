@@ -14,7 +14,7 @@
 //! opponent's, both sums of tunar; ✕ stakes the item under the cursor (a
 //! stack asks how many), takes an offered one back or opens the tunar
 //! (`VIWndDeposit` in mode 4, the purse its limit); □ accepts; △ takes the
-//! accept back, or asks "Cancel duel?"; R3 (Space) the chat line. Every
+//! accept back, or asks "Cancel duel?"; R3 (G, or Space) the chat line. Every
 //! choice is a request to the server (0x1501, `duel.rs`), which answers with
 //! what both sides now stake; an accepted side glows with the window's
 //! pulse.

@@ -110,7 +110,7 @@ fn a_light_pool_lands_between_the_vertices() {
     }
     // lit: the personal light per fragment, then the same light from the list
     let personal = View { lights: Some(Lights::default()), ..ps2 };
-    let listed = View { point: None, lights: Some(Lights::new(&[PointLight { at: lamp, range, color: red_light, fixed: true }])), ..ps2 };
+    let listed = View { point: None, lights: Some(Lights::new(&[PointLight { at: lamp, range, color: red_light, fixed: true, key: 0 }])), ..ps2 };
     for (what, v) in [("the personal light", &personal), ("a listed light", &listed)] {
         let px = shot(&g, &mut r, v, &[Draw::Model(&m)]);
         for (x, y) in PROBES {
@@ -137,7 +137,7 @@ fn the_tiles_cull_no_light_a_pixel_takes() {
     let m = r.upload(&g.device, &g.queue, &floor(UP, 1.0), &[render::IDENTITY], &none);
     let lamp = Vec3::new(-9.0, 1.5, 6.0);
     let behind = Vec3::new(0.0, 25.0, 0.0);
-    let v = View { lights: Some(Lights::new(&[PointLight { at: lamp, range: 8.0, color: Vec3::X, fixed: false }, PointLight { at: behind, range: 4.0, color: Vec3::Y, fixed: false }])), ..view(0.1) };
+    let v = View { lights: Some(Lights::new(&[PointLight { at: lamp, range: 8.0, color: Vec3::X, fixed: false, key: 0 }, PointLight { at: behind, range: 4.0, color: Vec3::Y, fixed: false, key: 0 }])), ..view(0.1) };
     let px = shot(&g, &mut r, &v, &[Draw::Model(&m)]);
     let (mut lit, mut worst) = (0, 0.0f32);
     for y in 0..SIZE {
@@ -205,7 +205,7 @@ fn a_baked_instance_takes_no_fixed_light() {
     let mut m = r.upload(&g.device, &g.queue, &floor(UP, 1.0), &[render::IDENTITY], &none);
     m.baked = true;
     let lamp = Vec3::new(0.0, 2.0, 0.0);
-    let light = |fixed| View { lights: Some(Lights::new(&[PointLight { at: lamp, range: 10.0, color: Vec3::X, fixed }])), ..view(0.1) };
+    let light = |fixed| View { lights: Some(Lights::new(&[PointLight { at: lamp, range: 10.0, color: Vec3::X, fixed, key: 0 }])), ..view(0.1) };
     let px = shot(&g, &mut r, &light(true), &[Draw::Model(&m)]);
     assert!(close(red(&px, 32, 32), 0.1), "a fixed light on a baked instance: {}", red(&px, 32, 32));
     let pool = 0.1 + point_term(at(32, 32), lamp, 10.0);
@@ -231,7 +231,7 @@ fn a_group_draws_lit_once_relit() {
     // uploaded while Dynamic Lighting is off: the PS2's bundles alone
     let mut plain = r.upload_group(&g.device, &g.queue, &[part(false)], &none);
     r.set_dynamic_lighting(&g.device, true);
-    let lit = View { lights: Some(Lights::new(&[PointLight { at: Vec3::new(0.0, 2.0, 0.0), range: 10.0, color: Vec3::X, fixed: true }])), ..view(0.1) };
+    let lit = View { lights: Some(Lights::new(&[PointLight { at: Vec3::new(0.0, 2.0, 0.0), range: 10.0, color: Vec3::X, fixed: true, key: 0 }])), ..view(0.1) };
     let px = shot(&g, &mut r, &lit, &[Draw::Group(&plain)]);
     assert!(close(red(&px, 32, 32), 0.1), "before relight: the PS2's way: {}", red(&px, 32, 32));
     r.relight(&g.device, &mut plain);
@@ -297,7 +297,7 @@ fn a_plant_takes_its_lights_as_strip6() {
     r.set_instances(&g.queue, &plant, &[Mat4::from_scale_rotation_translation(Vec3::splat(2.0), glam::Quat::IDENTITY, Vec3::new(0.0, 0.0, -1.0)).to_cols_array_2d()]);
     r.set_static_lights(&g.queue, &plant, &[[0.0, 0.0, 0.0, 1.0]]);
     let proj = glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1.0, 0.1, 1000.0);
-    let lamp = PointLight { at: Vec3::new(0.0, 0.0, 9.0), range: 20.0, color: Vec3::ONE, fixed: true };
+    let lamp = PointLight { at: Vec3::new(0.0, 0.0, 9.0), range: 20.0, color: Vec3::ONE, fixed: true, key: 0 };
     let v = View { sun: Vec3::new(1.0, 0.5, 0.25), ambient: Vec3::new(0.1, 0.2, 0.3), sun_dir: Vec3::new(0.0, 0.0, 1.0), clear: Vec3::ZERO, lights: Some(Lights::new(&[lamp])), ..View::daylight(proj) };
     let px = render::capture(&g.device, &g.queue, &mut r, 4, 4, &v, &[Draw::Instances(&plant, 0..1)], None);
     let got = [0, 1, 2].map(|c| px[(2 * 4 + 2) * 4 + c] as f32 / 255.0);
@@ -311,7 +311,7 @@ fn a_plant_takes_its_lights_as_strip6() {
 
 #[test]
 fn a_frame_takes_sixteen_lights() {
-    let many: Vec<PointLight> = (0..20).map(|k| PointLight { at: Vec3::splat(k as f32), range: 1.0, color: Vec3::ONE, fixed: false }).collect();
+    let many: Vec<PointLight> = (0..20).map(|k| PointLight { at: Vec3::splat(k as f32), range: 1.0, color: Vec3::ONE, fixed: false, key: 0 }).collect();
     let l = Lights::new(&many);
     assert_eq!(l.len(), render::MAX_LIGHTS);
     assert_eq!(l.as_slice(), &many[..16], "the first sixteen, in order");

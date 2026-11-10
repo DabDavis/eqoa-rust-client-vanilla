@@ -79,23 +79,57 @@ pub fn model_of(race: i32, sex: i32) -> u32 {
     server_race(race).map_or_else(|| get_race(race).model_id(sex), |r| r.body_for(sex))
 }
 
-/// Every body of the server's races (male and female), for the pregame to read
-/// (`res::Res::want_bodies`: CHARSEL's files hold the game's races alone).
+/// Every body of the server's races (male and female), and every body their
+/// options offer (`raceopts`), for the pregame to read (`res::Res::want_bodies`:
+/// CHARSEL's files hold the game's races alone).
 pub fn bodies() -> Vec<u32> {
     let mut out: Vec<u32> = offer().races.iter().flat_map(|r| r.body).filter(|&b| b != 0).collect();
+    if let Some(o) = crate::raceopts::options() {
+        out.extend(o.races.iter().flat_map(|(_, rows)| rows).filter(|r| r.kind == net::raceopts::Kind::Body).flat_map(|r| r.male.iter().chain(&r.female)).map(|s| s.value).filter(|&b| b != 0));
+        // a texture row of one step, laid always, names a body (the Wisp's wisp:
+        // `wisp`), which the pregame must have to draw it
+        let always = |r: &&net::raceopts::Row| r.kind == net::raceopts::Kind::Texture && r.male.len() == 1 && r.female.len() <= 1;
+        out.extend(o.races.iter().flat_map(|(_, rows)| rows).filter(always).flat_map(|r| r.male.iter().chain(&r.female)).map(|s| s.value).filter(|&b| b != 0));
+    }
     out.sort_unstable();
     out.dedup();
     out
 }
 
 /// The game's own body for `model` where it is a server's race's (its `like`
-/// race's of the body's sex): the stand-in a screen whose library lacks the
-/// body draws. None for any other model.
+/// race's of the body's sex), or another body of one its options offer: the
+/// stand-in a screen whose library lacks the body draws. None for any other
+/// model.
 pub fn stand_in(model: u32) -> Option<u32> {
     let o = offer();
-    let r = o.races.iter().find(|r| r.body[0] == model || r.body[1] == model)?;
-    let sex = if r.body[1] == model && r.body[0] != model { 1 } else { 0 };
-    Some(get_race(r.like).model_id(sex))
+    if let Some(r) = o.races.iter().find(|r| r.body[0] == model || r.body[1] == model) {
+        let sex = if r.body[1] == model && r.body[0] != model { 1 } else { 0 };
+        return Some(get_race(r.like).model_id(sex));
+    }
+    // a body a race's options offer: its race's like race's, of the sex whose
+    // steps hold it
+    let opts = crate::raceopts::options()?;
+    opts.races.iter().find_map(|(id, rows)| {
+        let r = o.race(*id)?;
+        let row = rows.iter().find(|row| row.kind == net::raceopts::Kind::Body && row.male.iter().chain(&row.female).any(|s| s.value == model))?;
+        let sex = if row.male.iter().any(|s| s.value == model) { 0 } else { 1 };
+        Some(get_race(r.like).model_id(sex))
+    })
+}
+
+/// The body a form's character wears and the look its parts take: its race's
+/// options' steps as the form holds them (`raceopts`), else its race's own body
+/// and no look.
+pub fn chosen(form: &net::session::NewChar) -> (u32, Option<net::raceopts::Look>) {
+    let own = model_of(form.race, form.sex);
+    let Some(o) = crate::raceopts::options() else { return (own, None) };
+    let rows = o.rows(form.race);
+    if rows.is_empty() {
+        return (own, None);
+    }
+    let steps: Vec<usize> = rows.iter().map(|r| form.options.iter().find(|(k, _)| *k == r.key).map_or(0, |(_, s)| *s as usize)).collect();
+    let model = crate::raceopts::body_of_steps(rows, form.sex, &steps).unwrap_or(own);
+    (model, Some(crate::raceopts::look_of_steps(rows, form.sex, &steps, model)))
 }
 
 /// `IsStatHighlighted`.
@@ -245,6 +279,26 @@ pub fn capitalize_name(name: &str) -> String {
 
 #[cfg(test)]
 pub(crate) mod tests {
+
+    /// The pregame reads the body a texture row of one step names (the Wisp's
+    /// wisp) beside the options' bodies; with no options (the control), neither.
+    #[test]
+    fn the_pregame_reads_the_wisps_body() {
+        use net::raceopts::{Kind, Options, Part, Row, Step};
+        let step = |v: u32| Step { name: "s".into(), value: v, size: 1000 };
+        let rows = vec![
+            Row { key: "body".into(), label: "Body".into(), kind: Kind::Body, parts: vec![], male: vec![step(0x70D8_98C6)], female: vec![step(0x0D53_7335)] },
+            Row { key: "wisp".into(), label: "Wisp".into(), kind: Kind::Texture, parts: vec![(0x70D8_98C6, Part { entries: vec![2], rects: vec![] })], male: vec![Step { size: 0, ..step(0x8143_DC70) }], female: vec![] },
+            Row { key: "hair".into(), label: "Hair".into(), kind: Kind::Texture, parts: vec![], male: vec![step(0), step(0x98F8_6489)], female: vec![] },
+        ];
+        crate::raceopts::set_options(None);
+        assert!(!bodies().contains(&0x8143_DC70), "the control: no options");
+        crate::raceopts::set_options(Some(&Options { races: vec![(31, rows)] }));
+        let b = bodies();
+        assert!(b.contains(&0x8143_DC70) && b.contains(&0x70D8_98C6) && b.contains(&0x0D53_7335));
+        assert!(!b.contains(&0x98F8_6489), "a hair row's textures are no bodies");
+        crate::raceopts::set_options(None);
+    }
     use super::*;
 
     #[test]

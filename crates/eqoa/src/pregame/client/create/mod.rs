@@ -187,7 +187,7 @@ impl Default for Create {
 /// `VIWndCharCreateBlank::Reset`'s form: no name, city 0, and every choice
 /// -1 (the pages then take the race's defaults), no points spent.
 pub fn blank_form() -> NewChar {
-    NewChar { name: String::new(), race: -1, class: -1, sex: -1, hair_color: -1, hair_length: -1, hair_style: -1, face: -1, city: 0, stats: [0; 7] }
+    NewChar { name: String::new(), race: -1, class: -1, sex: -1, hair_color: -1, hair_length: -1, hair_style: -1, face: -1, city: 0, stats: [0; 7], options: Vec::new() }
 }
 
 impl Create {
@@ -261,6 +261,8 @@ impl Create {
         if tables::set_offer(session.creation.as_ref()) && self.page == Page::Race {
             self.activate = Some(Page::Race);
         }
+        // and its races' own options (`raceopts`)
+        crate::raceopts::set_options(session.race_options.as_ref());
         let mut stage = stage;
         let mut sounds = Vec::new();
         let mut out = Out::Stay;
@@ -343,6 +345,9 @@ impl Create {
                 }
             },
             Msg::Race { race, sex, city } => {
+                if (race, sex) != (self.form.race, self.form.sex) {
+                    self.form.options.clear();
+                }
                 self.form.race = race;
                 self.form.sex = sex;
                 self.form.city = city;
@@ -365,6 +370,8 @@ impl Create {
                 self.form.hair_style = style;
                 self.form.hair_color = color;
                 self.form.hair_length = length;
+                // a server's race's options chosen with them (`raceopts`)
+                self.form.options = self.misc.take_options();
                 self.show(Page::Review);
             }
             Msg::Create => {
@@ -446,22 +453,34 @@ impl Create {
 /// look, at `at` facing `hpr` (a server's race's body until it is read: its
 /// `like` race's, `Figure::new`).
 pub(crate) fn create_model(cx: &mut Ctx, model: u32, look: [i32; 4], at: [f32; 3], hpr: [f32; 3]) -> Option<Figure> {
-    let [face, style, length, color] = look;
-    let l = vi::cust::Look { hair: [color.clamp(0, 255) as u8, length.clamp(0, 255) as u8, style.clamp(0, 255) as u8], face: face.clamp(0, 255) as u8, robe: -1, ..Default::default() };
-    let g = cx.gpu.as_mut()?;
-    Figure::new(&cx.res.lib, g, model, l, [0; 3], at, hpr, cx.now)
+    create_model_dressed(cx, model, look, None, at, hpr)
 }
 
-/// The model's look changed (`SetHair`, `SetFace` on the actor): built again
-/// in the new look, its sprite, its place and its clock kept.
-pub(crate) fn redress(cx: &mut Ctx, f: &mut Figure, look: [i32; 4]) {
-    let Some(g) = cx.gpu.as_mut() else { return };
+/// `create_model` in a server's race's look too (`raceopts`: its parts'
+/// colours and textures, on the body they were chosen on).
+pub(crate) fn create_model_dressed(cx: &mut Ctx, model: u32, look: [i32; 4], race_look: Option<&net::raceopts::Look>, at: [f32; 3], hpr: [f32; 3]) -> Option<Figure> {
+    let l = cust_look(look);
+    let g = cx.gpu.as_mut()?;
+    Figure::new_dressed(&cx.res.lib, g, model, l, race_look.cloned(), [0; 3], at, hpr, cx.now)
+}
+
+/// The page's four as the game's look (`SetHair`, `SetFace`).
+fn cust_look(look: [i32; 4]) -> vi::cust::Look {
     let [face, style, length, color] = look;
-    let l = vi::cust::Look { hair: [color.clamp(0, 255) as u8, length.clamp(0, 255) as u8, style.clamp(0, 255) as u8], face: face.clamp(0, 255) as u8, robe: -1, ..Default::default() };
-    if let Some(mut n) = Figure::new(&cx.res.lib, g, f.model, l, [0; 3], f.at, f.hpr, cx.now) {
+    vi::cust::Look { hair: [color.clamp(0, 255) as u8, length.clamp(0, 255) as u8, style.clamp(0, 255) as u8], face: face.clamp(0, 255) as u8, robe: -1, ..Default::default() }
+}
+
+/// The model's look changed (`SetHair`, `SetFace` on the actor, and a server's
+/// race's own look, `raceopts`): built again in the new look, its sprite, its
+/// place and its clock kept.
+pub(crate) fn redress_dressed(cx: &mut Ctx, f: &mut Figure, look: [i32; 4], race_look: Option<&net::raceopts::Look>) {
+    let Some(g) = cx.gpu.as_mut() else { return };
+    let l = cust_look(look);
+    if let Some(mut n) = Figure::new_dressed(&cx.res.lib, g, f.model, l, race_look.cloned(), [0; 3], f.at, f.hpr, cx.now) {
         // the new body, the old sprite: its animation goes on
         std::mem::swap(&mut n.gpu, &mut f.gpu);
         f.look = l;
+        f.race_look = n.race_look.take();
     }
 }
 
@@ -489,6 +508,8 @@ pub(crate) fn body_framing(lib: &esf::Library, framing: [f32; 4], model: u32, li
         return framing;
     }
     let (Some(h), Some(like)) = (sprite_height(lib, model), sprite_height(lib, like_model)) else { return framing };
+    // a body a race's options offer stands at its size against the race's own
+    let h = h * crate::raceopts::body_size(model);
     let k = (h / like).clamp(0.4, 3.0);
     [framing[0] * k, framing[1] * k, framing[2], framing[3] * k]
 }

@@ -53,12 +53,56 @@ fn vs_main(i: VsIn) -> VsOut {
     return o;
 }
 
+// The particle's colour and alpha at a pixel, as the GS takes them to its
+// blend.
+fn shade(i: VsOut) -> vec4<f32> {
+    let t = textureSampleLevel(tex, samp, i.uv, log2(max(i.depth, 1e-6)) + frame.flags.z);
+    return vec4<f32>(min(t.rgb * i.color.rgb, vec3<f32>(1.0)), t.a * i.color.a);
+}
+
 @fragment
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
-    let t = textureSampleLevel(tex, samp, i.uv, log2(max(i.depth, 1e-6)) + frame.flags.z);
-    let a = t.a * i.color.a;
-    if (frame.flags.x > 0.5 && a < 0.5) {
+    let c = shade(i);
+    if (frame.flags.x > 0.5 && c.a < 0.5) {
         discard;
     }
-    return vec4<f32>(min(t.rgb * i.color.rgb, vec3<f32>(1.0)), a);
+    return c;
+}
+
+// The particles a PS2 frame keeps (`fog16.wgsl`, as the fans' in
+// `fans.wgsl`): each adds its alpha a, a times its colour, a squared and one
+// (itself); then, over those sums, a times its colour's distance from their
+// mean squared (`fs_spread`), which `fog16.wgsl` makes into the particles it
+// blends as the GS does.
+struct Sums {
+    @location(0) sums: vec4<f32>,
+    @location(1) squares: vec4<f32>,
+};
+
+@fragment
+fn fs_sums(i: VsOut) -> Sums {
+    let c = shade(i);
+    // a particle whose As is 0 changes nothing on a PS2: not counted
+    if (c.a * 128.0 < 1.0) {
+        discard;
+    }
+    var o: Sums;
+    o.sums = vec4<f32>(c.rgb * c.a, c.a);
+    o.squares = vec4<f32>(c.a * c.a, 1.0, 0.0, 0.0);
+    return o;
+}
+
+// The sums `fs_sums` made: the mean colour each particle's spread is taken
+// from.
+@group(2) @binding(0) var sums_made: texture_2d<f32>;
+
+@fragment
+fn fs_spread(i: VsOut) -> @location(0) vec4<f32> {
+    let c = shade(i);
+    if (c.a * 128.0 < 1.0) {
+        discard;
+    }
+    let w = textureLoad(sums_made, vec2<i32>(i.pos.xy), 0);
+    let off = c.rgb - w.rgb / max(w.a, 1e-6);
+    return vec4<f32>(off * off * c.a, 0.0);
 }
