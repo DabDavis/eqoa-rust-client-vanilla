@@ -343,13 +343,31 @@ or a browser (each described where it lives below):
   troll's skeleton (its 43 nodes, every bind pose but the skull's top) and wear the troll's armour so
   (`slotless::SHELL_BODIES`); their helms, on their own node in Frontiers (SOE's FixScale 1.4, 1.2, 1.2)
   and on the 2002 HumanMale's in the 2002 art (whose skeleton the 2002 disc builds them on), take a few
-  millimetres for their cheeks too (`SEATS`). Any body with texture slots is dressed exactly as before (held to every
-  CSprite on the disc), and so is every other body's helm.
+  millimetres for their cheeks too (`SEATS`). A body whose texture slots name some of the five worn
+  slots and not the others (2026-11-10, the owner: "some of the new playable races variant models dont
+  support visual equipment yet": 79 of the 148 bodies the server's races may wear, every creature's with
+  slots of its own, the froglok's, kerran's, aviak's, lizardman's, gnoll's, orc's, kobold's, ratman's and
+  satyr's: a chest, bracers and legs, no gloves or boots) keeps its own slots as a PS2 dresses them and
+  gains the ones it lacks as a slotless body does, over the triangles its own slots' entries do not draw
+  (`slotless::lacking`, `bare_part`); a body with all five (every player race's) is dressed exactly as
+  before (held to every CSprite on the disc). A NodeIDList naming one foot for both footstep slots (the
+  ratman trickster's) is read with the other foot the node mirrored across the root.
+  **Helms** on those bodies (the owner, the same day: "the helmets are not showing for many races"): no
+  creature's body names a helm node in Frontiers (the 2002 disc's goblins and some of its orcs do, SOE's
+  own seat: their node of the human's helm node's name, scaled 0.9 and 1.19), so a player's helm hung
+  nowhere on 136 of them. Each family's bodies now hang it on that named node at the top of the head, or,
+  where it is low on the head (the lizardman's skeleton, the gnolls' and minotaurs' too, the kobold's and
+  the ratman's) or missing (the froglok's, kerran's, aviak's, kappa's, pixie's, fairy's and satyr's), on the
+  head node moved to the top of it, stretched to the head (`slotless::HEAD_SEATS`, judged by eye: the head
+  inside the helm as a human's is, a snout, beak or muzzle through the face, ears, horns and crests through
+  the top). The fungusmen wear none (`HEADLESS`: their cap is their head; a helm hides under it or swallows
+  the body). A body naming a helm node of its own (the fire-weaver orc's) keeps it; NPCs keep none.
   Players' characters only (a creature whose name colour is a player's, 2, and the pregame's figures):
   NPCs keep the look the PS2 gave them (the user: "Players only").
   `eqoa dress <body> <out.png> [set=N robe=R dye=RRGGBB ...]` draws a body in a look from four sides;
   `helm=N` with its helm (`helmfit=0` as the node alone seats it), `era=2002` in the 2002 disc's art,
-  `frame=head` framed on the head.
+  `frame=head` framed on the head, `helmseat=A,s,ox,oy,oz` (or `A,sx,sy,sz,ox,oy,oz`; `A` `named`,
+  `head` or a node's number) a helm seat tried in place of the body's.
 - **Weapons on a server's race whose body holds none** (petition 1278, a Gargoyle: "gargoyles dont show
   equiped weapons"; `racebody`): a CSprite whose header says `npc` 0 holds no items on a PS2 (`AttachItem`
   returns at once while `m_flags & 1` is clear), and the gargoyles' body (0xB4D2D132) is one, the only one
@@ -358,8 +376,10 @@ or a browser (each described where it lives below):
   gargoyle's two hands), its shield, where the body names no node for one, on the off hand's hand; its hands
   take their weapons' types and projectiles (its swings stay its own two claw attacks). NPCs, forms and
   illusions keep the PS2's look, and every body that held items before holds them on the same nodes (held to
-  every CSprite on the disc). `eqoa dress <body> <out.png> main=ID off=ID shield=ID [race=1] [action=N]`
-  draws what it holds.
+  every CSprite on the disc). The fairy's shield node (16), which its animations leave at its art's size while
+  they draw both its hands' at 0.3 (the pixie's draw all three so), is given a FixScale of 0.3 for such a player
+  (`racebody::SHIELD_FIX`): its shield was three and a third times the fairy's size. `eqoa dress <body> <out.png>
+  main=ID off=ID shield=ID [race=1] [action=N]` draws what it holds.
 - **Emotes on a server's own races** (the user's of 2026-11-08, "lets add emotes to the new playable races";
   `raceemote`): a wave, bow, point or cheer is an action every client looks up in the body's own play list
   (`PlayEmote` on the player's sprite, 0x0775 on another's), and eighteen of the bodies go-eqoa-server's races
@@ -404,7 +424,11 @@ or a browser (each described where it lives below):
   one it was made on as it is, on the other bone for bone by role, and on a server's races'
   bodies by their parts (spine by height, head, arms from the hands, legs from the thighs), so
   a cape whose corners ride the arms folds with them; wider and further back on a broader
-  body. It names the wearer's nodes in its bind pose and is drawn on the body's own palette,
+  body. A goblin (race 13's own body and every one its options offer, `cape::CROUCHED`; the
+  owner, 2026-11-10: "on goblins they are too big") is bound standing and rests in a crouch,
+  its shoulders at 0.70 of their bind height, so a cape sized on its bind pose hung to the
+  ground: its cape is sized as it stands, its height by that share (`cape::standing`), every
+  other body's exactly as before. It names the wearer's nodes in its bind pose and is drawn on the body's own palette,
   swaying with the robe-tail bones every player skeleton's walk swings. Players' characters
   only, in the world, on the player and at character select (the bodies a list's capes are
   cut from read out of CHAR.ESF there, `res::Res::want_bodies`); bodies with wings (the

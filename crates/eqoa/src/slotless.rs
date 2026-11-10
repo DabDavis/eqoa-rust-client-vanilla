@@ -49,9 +49,13 @@
 //! and its own bones under them are hidden; where nothing is worn they stay
 //! bare.
 //!
-//! Only a body with no text slot at all changes; one with a TSlotList is
-//! dressed by `vi::cust` exactly as before. `set_enabled(false)` turns it off
-//! (for an Extended row: a puppet is made anew when its look is applied).
+//! A body whose TSlotList names all five worn slots (every player race's) is
+//! dressed by `vi::cust` exactly as before; one that names some keeps those as
+//! `vi::cust` dresses them and is fitted for the ones it lacks alone
+//! (`lacking`, `bare_part`). A player's helm hangs on the head of every body a
+//! server's races wear that names no helm node of its own (`HEAD_SEATS`).
+//! `set_enabled(false)` turns it off (for an Extended row: a puppet is made
+//! anew when its look is applied).
 
 use esf::{Era, Library};
 use glam::Vec3;
