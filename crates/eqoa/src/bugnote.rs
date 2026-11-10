@@ -5,9 +5,8 @@
 //! frame rate it draws at, the controllers connected and how each is read
 //! (`input::note`: its layout and where its d-pad comes from), and what it
 //! shows of the player and its target (`Play::bug_note`). The GMs read it
-//! beside the petition; the player never
-//! does, and nothing goes to a server that did not ask. No account name, no
-//! address, no file path is in it.
+//! beside the petition; the player never does, and nothing goes to a server
+//! that did not ask. No account name, no address, no file path is in it.
 
 use std::sync::Mutex;
 
