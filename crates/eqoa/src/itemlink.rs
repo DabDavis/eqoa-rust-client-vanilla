@@ -49,9 +49,9 @@ const BAND: [i32; 2] = [134, 470];
 const TOP: i32 = 52;
 const GAP: i32 = 4;
 
-/// The windows' foot at most: over the chat box's top (y 355 with its five
+/// The windows' foot at most: over the chat box's top (y 321 with its five
 /// rows), where they cut their text.
-const BOTTOM: i32 = 350;
+const BOTTOM: i32 = 318;
 
 /// The name's rows at most (beside the icon), and the text's.
 const NAME_ROWS: i32 = 2;

@@ -92,6 +92,15 @@ impl Play {
         self.mode == 33 && self.wnd_chat.as_ref().is_some_and(|c| c.walking())
     }
 
+    /// Where in a `size` window the `k`th newest item link the chat box drew is
+    /// (its middle, in the window's pixels): `chat_point` undone. For a
+    /// headless run's `linkclick`.
+    pub fn link_on_screen(&self, size: (u32, u32), k: usize) -> Option<(f64, f64)> {
+        let p = self.wnd_chat.as_ref()?.newest_link_at(k)?;
+        let w = render::ui::window_from_frame(size, [p[0] + render::ui::side(size), p[1] + render::ui::top(size)]);
+        Some((w[0] as f64, w[1] as f64))
+    }
+
     /// The chat line as R3 and Enter open it (the channel's title), holding the
     /// line kept with its links where there is one.
     pub(super) fn open_chat_line(&mut self) {

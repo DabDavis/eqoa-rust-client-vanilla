@@ -845,6 +845,18 @@ impl WndChat {
         }
     }
 
+    /// The middle of the `k`th newest item link the last frame drew (0 the
+    /// newest; as `contains` takes a point): what a headless run's `linkclick`
+    /// clicks.
+    pub fn newest_link_at(&self, k: usize) -> Option<[f32; 2]> {
+        let mut insts: Vec<u64> = self.link_hits.iter().map(|h| h.inst).collect();
+        insts.sort_unstable_by(|a, b| b.cmp(a));
+        insts.dedup();
+        let inst = *insts.get(k)?;
+        let h = self.link_hits.iter().find(|h| h.inst == inst)?;
+        Some([(h.rect[0] + h.rect[2]) as f32 / 2.0, (h.rect[1] + h.rect[3]) as f32 / 2.0])
+    }
+
     /// The item link drawn at point `p` (as `contains` takes one): its id and its
     /// name, its parts on other rows joined.
     pub fn link_at(&self, p: [f32; 2]) -> Option<(u32, String)> {

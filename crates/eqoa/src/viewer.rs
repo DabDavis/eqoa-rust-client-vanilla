@@ -558,6 +558,14 @@ pub fn shot_with(
                 }
                 // `click @<name>`: at the creature called that, where it is drawn
                 let mut step = step.clone();
+                // `linkclick [k]`: at the newest item link the chat box drew, or
+                // the `k`th before it (`itemlink`)
+                if let Some(k) = step.trim().strip_prefix("linkclick").map(|k| k.trim().parse::<usize>().unwrap_or(0)) {
+                    match play.as_ref().and_then(|p| p.link_on_screen((w, h), k)) {
+                        Some((x, y)) => step = format!("click {x:.0} {y:.0}"),
+                        None => eprintln!("mouse {step}: no link drawn"),
+                    }
+                }
                 if let Some((verb, name)) = step.split_once(" @")
                     && let (Some(p), Some(vp)) = (play.as_ref(), last_view)
                 {
