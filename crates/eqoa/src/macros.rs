@@ -44,6 +44,12 @@ use crate::input::{Report, bit};
 /// thirtieth, so a field is 16.7 ms, 60 a second).
 pub const FIELDS_PER_FRAME: u32 = 2;
 
+/// A trigger pulled less than this is at rest to the macros (the host's,
+/// as its sticks have one: `input::STICK_DEAD_ZONE`): Microsoft's
+/// `XINPUT_GAMEPAD_TRIGGER_THRESHOLD`, 30 of 255. PCSX2 reads a trigger raw,
+/// so a pad resting a hair off its end would run a macro of deadzone 0.
+pub const TRIGGER_REST: f32 = 30.0 / 255.0;
+
 /// The controllers' inputs the triggers read this frame: their buttons as
 /// they hold them (physical, before any binding, but those a capture
 /// holds back: `PadFrame::held`), their sticks (rx, ry, lx, ly, +y down,
@@ -240,7 +246,7 @@ impl Run {
                     bit::R2 => self.held_in.triggers[1],
                     _ => 0.0,
                 };
-                if pull > 0.0 { pull.min(1.0) } else { pressed }
+                if pull >= TRIGGER_REST { pull.min(1.0) } else { pressed }
             }
             Input::Stick(w) => ways(self.held_in.sticks)[(w & 7) as usize],
         }
@@ -462,6 +468,12 @@ mod tests {
         assert_eq!(frame(&mut r, pull(bit::L2, 0.45), &b), bit::R1);
         assert_eq!(frame(&mut r, pull(0, 0.0), &b), 0);
         assert_eq!(frame(&mut r, pull(bit::L2, 0.0), &b), bit::R1, "a controller that says no pull: its button");
+        // at deadzone 0 a trigger counts once pulled past its rest, a
+        // twelfth of the way (the control: just over it)
+        b.macros[0].deadzone = 0;
+        assert_eq!(frame(&mut r, pull(0, 0.0), &b), 0);
+        assert_eq!(frame(&mut r, pull(0, 0.1), &b), 0, "resting a hair off its end");
+        assert_eq!(frame(&mut r, pull(0, 0.13), &b), bit::R1, "the control: past its rest");
         // a key at any deadzone under 100, never at 100
         for (dz, runs) in [(0, true), (99, true), (100, false)] {
             let k = macros(Macro { triggers: vec![vec![key("y")]], buttons: bit::R1, deadzone: dz, ..Macro::default() });
