@@ -163,7 +163,7 @@ async fn hold(disc: &web_sys::File, w: &World) -> Result<(web_sys::File, String,
     let page = page_worlds().ok_or_else(|| plain("the page has no eqoaWorlds"))?;
     let build = js_sys::Reflect::get(&page, &"build".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok()).ok_or_else(|| plain("the page has no eqoaWorlds.build"))?;
     let list = js_sys::Uint8Array::from(&net::serverworlds::encode(std::slice::from_ref(w))[..]);
-    let (what, mb) = (title_name(&w.name), f64::from(w.size) / 1048576.0);
+    let (what, mb) = (w.name.clone(), f64::from(w.size) / 1048576.0);
     // the notice goes up for a build (seconds) at once, for a check of the
     // kept copy (a fraction of one) only once it has taken a while
     let started = web_time::Instant::now();
