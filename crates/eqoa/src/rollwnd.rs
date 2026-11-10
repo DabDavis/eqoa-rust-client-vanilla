@@ -286,7 +286,8 @@ impl Rolls {
         if self.open.len() > SHOWN {
             let s = wide(&format!("+{} more", self.open.len() - SHOWN));
             let y = AT[1] + (SHOWN as i32 - 1) * (H + GAP) + H / 2 - fh / 2;
-            vui.draw_string_ex(r, &s, AT[0] - 6 - vui.string_width(r, &s), y, white, true);
+            let w = vui.string_width(r, &s);
+            vui.draw_string_ex(r, &s, AT[0] - 6 - w, y, white, true);
         }
     }
 }
