@@ -5060,6 +5060,16 @@ impl Play {
             return one(self.edit.point(f).flatten());
         }
         if self.bank_owns() {
+            // Shift+click on an item of either list: linked in the chat line
+            // (`itemlink`)
+            if self.mode == 11
+                && self.shift
+                && self.links_made()
+                && let Some((list, i)) = self.bank_item_at(f)
+            {
+                self.link_item(list, i);
+                return Vec::new();
+            }
             return self.bank_point(f);
         }
         if self.npcw_owns() {

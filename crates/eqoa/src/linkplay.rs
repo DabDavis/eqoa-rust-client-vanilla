@@ -124,6 +124,14 @@ impl Play {
         let name: String = it.item.name.chars().filter(|&c| crate::editbox::typable(c)).collect();
         let (name, key) = (crate::ui::wide(name.trim()), it.inv_index);
         if self.mode != 2 || self.edit.purpose != 0x0B0F_0000 {
+            // out of the bank's window as its Done takes it out, the chat box
+            // let go of the bank's fixed place
+            if self.mode == 11 {
+                self.bank_close();
+                if let Some(c) = self.wnd_chat.as_mut() {
+                    c.mode = 0;
+                }
+            }
             self.set_mode_zero();
             self.open_chat_line();
         }

@@ -4396,6 +4396,11 @@ impl App {
                 Key::Named(NamedKey::ArrowRight) if p.mode == 33 && p.rolls_up() => Some(18),
                 Key::Named(NamedKey::ArrowLeft) if p.mode == 33 && p.rolls_focused() => Some(17),
                 Key::Named(NamedKey::Enter) if p.mode == 33 && p.rolls_focused() => Some(13),
+                // the item links (`itemlink`): left walks up through them, right
+                // back down and Enter opens the one lit while one is
+                Key::Named(NamedKey::ArrowLeft) if p.links_walkable() => Some(17),
+                Key::Named(NamedKey::ArrowRight) if p.link_walking() => Some(18),
+                Key::Named(NamedKey::Enter) if p.link_walking() => Some(13),
                 _ => None,
             };
             if let Some(k) = k
@@ -5035,6 +5040,14 @@ impl App {
             self.grab_pointer(false);
             return;
         }
+        // Escape with an item link's window up (`itemlink`), in play or the
+        // chat box's history: the newest closes, and nothing more
+        if event.state == ElementState::Pressed
+            && event.logical_key == Key::Named(NamedKey::Escape)
+            && self.play.as_mut().is_some_and(|p| matches!(p.mode, 0 | 33 | 38) && p.typing.is_none() && p.close_link_window())
+        {
+            return;
+        }
         // a keyboard in use (`gKeyboardAttached`): the edit boxes'
         // compact face, with the options' Soft Keyboard on; the
         // touch screen's pad goes
@@ -5185,6 +5198,8 @@ impl App {
                 if let Some(p) = self.play.as_mut() {
                     p.map.shift = m.state().shift_key();
                     p.map.ctrl = m.state().control_key() || m.state().super_key();
+                    // and a Shift+click on an item links it (`itemlink`)
+                    p.shift = m.state().shift_key();
                 }
                 #[cfg(target_os = "macos")]
                 {

@@ -366,6 +366,20 @@ impl Bank {
         }
     }
 
+    /// The item a row of the item page is under frame point `p` (a
+    /// Shift+click's, `itemlink`): its list (0 the inventory, 1 the bank) and
+    /// its index there (a row is its list's item of that place); none off the
+    /// item page.
+    pub fn item_at(&self, p: [f32; 2]) -> Option<(u8, i32)> {
+        if !self.visible || self.page != Page::Items {
+            return None;
+        }
+        let side = self.item.hits.at(p)?;
+        let list = if side == 0 { &self.item.inv } else { &self.item.bank };
+        let row = list.row_at(p)?;
+        list.items.get(row as usize).filter(|r| r.flags != 0).map(|_| (side.min(1) as u8, row))
+    }
+
     /// A pointer at frame point `p`, to the page with the keys: a row of
     /// the bank's menu or the money menu chosen at once; on the item page a
     /// row of the active list selected, or its selection moved (Enter), and
@@ -805,5 +819,13 @@ mod tests {
         assert!(b.point([320.0, 150.0]).is_empty(), "the text between the lists");
         assert_eq!(b.point(row(16.0, 0)), vec![key::LEFT]);
         assert_eq!(b.item.inv.sel, 0);
+        // a Shift+click's item (`itemlink`): each list's row, its list and place;
+        // an empty row and the text between the lists none
+        assert_eq!(b.item_at(row(16.0, 2)), Some((0, 2)));
+        assert_eq!(b.item_at(row(475.0, 1)), Some((1, 1)));
+        assert_eq!(b.item_at(row(475.0, 2)), None, "two items, two rows");
+        assert_eq!(b.item_at([320.0, 150.0]), None);
+        b.page = Page::Menu;
+        assert_eq!(b.item_at(row(16.0, 2)), None, "the control: off the item page");
     }
 }

@@ -35,6 +35,15 @@ impl Play {
         self.mode == 11 || self.mode == 39
     }
 
+    /// The item under frame point `p` on the bank's item page (a Shift+click's,
+    /// `itemlink`): its list (0 the inventory, 1 the bank) and its index.
+    pub(super) fn bank_item_at(&self, p: [f32; 2]) -> Option<(u8, i32)> {
+        if self.mode != 11 {
+            return None;
+        }
+        self.bank.wnd.item_at(p)
+    }
+
     /// `VIBankControl::Do` (0xA8010000..0xA8030000 from the start menu):
     /// `VIWndGame::OpenAuctionSearch`, mode 39.
     pub(super) fn open_auction_search(&mut self, kind: u32) {
@@ -146,7 +155,7 @@ impl Play {
     }
 
     /// `ClosePanel6AC`: `CloseBank`, mode 0.
-    fn bank_close(&mut self) {
+    pub(super) fn bank_close(&mut self) {
         if self.mode == 11 {
             self.mode = 0;
         }
