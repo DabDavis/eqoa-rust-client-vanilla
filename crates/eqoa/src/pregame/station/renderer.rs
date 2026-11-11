@@ -1465,6 +1465,7 @@ impl Renderer {
             match o {
                 Out::Sound(s) => cues.push(s),
                 Out::Back => self.page_back(),
+                Out::LoadPage(p) if p.eq_ignore_ascii_case("data/ui/FrgtPass.xml") && crate::openurl::password_url(&self.server).is_some() => self.forgot_page(),
                 Out::LoadPage(p) => self.load_page(&p),
                 Out::Action(a) => self.on_action(&a, now),
                 Out::Edit { text, password, max_len, title } => {
@@ -1479,6 +1480,22 @@ impl Renderer {
                 }
             }
         }
+    }
+
+    /// Forgot Password on eqoaclassic (the owner's of 2026-11-11): its
+    /// password page (`openurl::password_url`) opened outside the game in
+    /// place of the disc's FrgtPass page, whose Station request no server of
+    /// ours answers; a dialog saying where, for a browser that did not come
+    /// up. Every other server's Forgot Password is the game's.
+    fn forgot_page(&mut self) {
+        let Some(url) = crate::openurl::password_url(&self.server) else { return };
+        let opened = crate::openurl::open(url);
+        self.dialog.open8("Forgot Password", None);
+        self.dialog.set_text8(&if opened {
+            format!("The password page is opening in your web browser: {url}  Ask for a new password there; a GM sends it to you. A password you know is changed there too.")
+        } else {
+            format!("Visit the password page in a web browser: {url}  Ask for a new password there; a GM sends it to you. A password you know is changed there too.")
+        });
     }
 
     /// The editor's answer to its parent, the renderer (`OnMessage`: 259
@@ -1545,6 +1562,10 @@ mod tests {
 
     impl T {
         fn new(d: &Disc, saved: (&str, &str, bool)) -> T {
+            T::at(d, saved, "192.0.2.1")
+        }
+
+        fn at(d: &Disc, saved: (&str, &str, bool), server: &str) -> T {
             let f = Fake::default();
             let mut r = Renderer::new(0, d.words.clone(), 0);
             r.api = Api::with_connector(f.connector(), 0);
@@ -1555,7 +1576,7 @@ mod tests {
                 n.borrow_mut().push((h.to_string(), p, path.to_string()));
                 Box::new(FakeNews(nr.clone())) as Box<dyn NewsFetch>
             });
-            r.load(&d.pak, (saved.0.to_string(), saved.1.to_string(), saved.2), "192.0.2.1", 9735);
+            r.load(&d.pak, (saved.0.to_string(), saved.1.to_string(), saved.2), server, 9735);
             let vui = Vui::new(d.words.clone(), Default::default(), Vec::new());
             let mut t = T { r, f, vui, now: 0, cues: Vec::new(), news, news_reply };
             // past the sixth frame the API connects; the server's hello
@@ -1895,6 +1916,39 @@ mod tests {
         assert_eq!(t.r.result, 0);
         t.key(134);
         assert_eq!(t.r.result, 2);
+        crate::settings::testing::reset(false);
+    }
+
+    /// Forgot Password on eqoaclassic (by name or address) opens its
+    /// password page and says where, the login page kept; X closes the
+    /// dialog. On any other server it is the disc's FrgtPass page, nothing
+    /// opened.
+    #[test]
+    fn forgot_password_opens_our_page_on_our_server() {
+        let Some(d) = disc() else { return };
+        crate::settings::testing::reset(false);
+        for server in ["eqoaclassic.com", "104.238.144.159"] {
+            crate::openurl::testing::take();
+            let mut t = T::at(&d, ("", "", false), server);
+            t.down(5);
+            t.key(134);
+            assert_eq!(t.page(), "data/ui/login.xml", "{server}: no FrgtPass page");
+            assert_eq!(crate::openurl::testing::take(), vec![crate::openurl::PASSWORD_URL.to_string()], "{server}");
+            assert!(t.r.dialog.is_open());
+            assert!(t.r.dialog.text().contains(crate::openurl::PASSWORD_URL), "{}", t.r.dialog.text());
+            t.key(134);
+            t.frames(20);
+            assert!(!t.r.dialog.is_open(), "X closes it");
+            assert_eq!(t.r.result, 0, "still at the login");
+        }
+        for server in ["192.0.2.1", "203.0.113.7", "localhost"] {
+            crate::openurl::testing::take();
+            let mut t = T::at(&d, ("", "", false), server);
+            t.down(5);
+            t.key(134);
+            assert_eq!(t.page(), "data/ui/FrgtPass.xml", "{server}: the game's own page");
+            assert!(crate::openurl::testing::take().is_empty(), "{server}: nothing opened");
+        }
         crate::settings::testing::reset(false);
     }
 }

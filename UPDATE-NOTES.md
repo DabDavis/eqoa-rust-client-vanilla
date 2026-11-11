@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Forgot your password?
+- On eqoaclassic, the login screen's **Forgot Password** button now opens the server's password page in your web
+  browser (a new tab in the browser version), where you can ask for a new password or change the one you have. A
+  box on the login screen shows the page's address too, in case your browser does not come up. On other servers
+  the button is the game's own, as before.
+- The play page has a **Forgot password?** link under its Start button as well.
+
 ## 2026-11-11 · A moved quick bar stays put with a long spell name
 - If you moved your quick bar with **Move HUD**, selecting a spell with a long name (one that scrolls in the bar's
   title, like "Quil'Eyne's Unspeakable Hunger") made the whole bar slide across the screen as the name scrolled. The

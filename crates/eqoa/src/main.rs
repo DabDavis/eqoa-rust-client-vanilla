@@ -162,6 +162,9 @@ mod trade;
 mod trainer;
 mod trails;
 mod options;
+// a web page opened from the game (Station's Forgot Password on our server):
+// the system's browser, a page's new tab, Android's intent
+mod openurl;
 mod settings;
 mod texpack;
 mod social;
