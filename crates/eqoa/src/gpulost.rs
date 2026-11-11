@@ -292,6 +292,25 @@ pub fn test(device: &wgpu::Device, now: i64) {
 mod tests {
     use super::*;
 
+    /// A loss is taken, recovered from, and a loss soon after is too soon
+    /// (`again_soon`, the fallback); before any recovery none is too soon (the
+    /// control). The only test that touches the statics.
+    #[test]
+    fn a_loss_soon_after_a_recovery_falls_back() {
+        assert!(!lost() && !again_soon(), "nothing lost, nothing recovered yet");
+        mark("one");
+        assert!(lost() && why() == "one");
+        mark("two");
+        assert_eq!(why(), "one", "the first reason is kept");
+        assert!(!again_soon(), "the control: the first loss is recovered from");
+        recovered();
+        assert!(!lost() && why().is_empty() && recoveries() == 1);
+        mark("three");
+        assert!(lost() && again_soon(), "lost again within REPEAT: no second recovery");
+        *RECOVERED.lock().unwrap() = Instant::now().checked_sub(REPEAT + Duration::from_secs(1));
+        assert!(!again_soon(), "past REPEAT, recovered from again");
+    }
+
     #[test]
     fn test_specs() {
         assert_eq!(TestSpec::parse("4000"), Some(TestSpec { at: 4000, frame: false, again: false }));

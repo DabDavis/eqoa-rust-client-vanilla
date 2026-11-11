@@ -3470,9 +3470,10 @@ impl App {
         self.gfx = Some(g);
         self.textures_drawn = crate::texpack::generation();
         self.retexture();
-        crate::gpulost::recovered();
+        // said on the page with the loss's reason, before `recovered` lets it go
         #[cfg(target_arch = "wasm32")]
         crate::web::recovered();
+        crate::gpulost::recovered();
     }
 
     /// The pad before the world: every source as libpad's one port, its keys

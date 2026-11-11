@@ -7,6 +7,17 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · The game survives the graphics card stopping
+- When the graphics card or its driver stops for a moment (Windows resets a driver that hangs, a computer wakes
+  from sleep, the browser restarts its graphics: in the browser this read "The graphics stopped: the graphics
+  device was lost"), the game no longer stops. The screen goes still for a moment while the game makes its
+  graphics again, and then you play on where you were: you stay logged in, in your group and in your fight. In
+  the browser a note at the top says it happened. This goes for every window or tab you have open, which all
+  lose their graphics together when it happens.
+- If the graphics card stops again within a minute, the game gives up as before: the program starts again by
+  itself, and the browser page says so and from then on uses WebGL2 on that computer, which can hold where
+  WebGPU keeps failing (the start card says so and has a **Try WebGPU again** button).
+
 ## 2026-11-11 · Hide the look of a worn item
 - In the start menu's Inventory, Equipment tab, a worn helm, chest piece, bracers, gloves, leggings, boots, robe,
   weapon, shield, held item or cape now has **Hide Look** in its menu, right under Unequip. The item stays worn
