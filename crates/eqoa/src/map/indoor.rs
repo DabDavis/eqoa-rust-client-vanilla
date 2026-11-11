@@ -59,6 +59,10 @@ pub const COVER: f32 = 1.6;
 /// and the wheel's limits there.
 pub const SCALE: f32 = 1.2;
 pub const SCALE_LIMITS: (f32, f32) = (0.5, 6.0);
+/// The picture's light: the ambient high, the art nearly as it is (the
+/// strip programs' light is clamped at 1), a little of the map's sun.
+pub const INSIDE_AMBIENT: f32 = 0.75;
+pub const INSIDE_SUN: f32 = 0.3;
 /// What the picture clears to, and fades into below (the map's void).
 pub const DARK: [f32; 3] = super::build::VOID;
 
@@ -147,9 +151,12 @@ pub fn slice_view(rect: [f32; 4], cut: f32, y: f32) -> render::View {
     render::View {
         view_proj: proj * view,
         eye: c,
+        // the art nearly unlit (FrontiersForge's `world_lighting` off): a
+        // dungeon's baked light is dark, by night most of all; slopes still
+        // a little shaded
         sun_dir: Vec3::from(super::build::SUN_DIR),
-        sun: Vec3::splat(super::build::SUN),
-        ambient: Vec3::splat(super::build::AMBIENT),
+        sun: Vec3::splat(INSIDE_SUN),
+        ambient: Vec3::splat(INSIDE_AMBIENT),
         fog: Some(((cut - y) + 6.0, deep, Vec3::from(DARK))),
         point: None,
         clear: Vec3::from(DARK),
@@ -199,7 +206,20 @@ impl Indoor {
         self.clock += dt.clamp(0.0, 0.25);
         let stale = self.probed.is_none_or(|(q, t, _)| (p[0] - q[0]).hypot(p[2] - q[2]) > 2.0 || (p[1] - q[1]).abs() > 2.0 || self.clock - t > 0.5);
         if stale {
-            self.probed = Some((p, self.clock, ceiling(w, p)));
+            let c = ceiling(w, p);
+            if super::build::trace() {
+                let each: Vec<String> = [(0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)]
+                    .iter()
+                    .map(|(dx, dz)| {
+                        let (x, z) = (p[0] + dx * PROBE_R, p[2] + dz * PROBE_R);
+                        let up = ray(w, [x, p[1] + CLEARANCE, z], [x, p[1] + SEARCH, z]);
+                        let down = ray(w, [x, p[1] + SEARCH, z], [x, p[1] + CLEARANCE, z]);
+                        format!("{up:?}/{down:?}")
+                    })
+                    .collect();
+                crate::say(&format!("minimap: probe at ({:.1}, {:.1}, {:.1}): {c:?} (up/down first hits {})", p[0], p[1], p[2], each.join(" ")));
+            }
+            self.probed = Some((p, self.clock, c));
         }
         let found = self.probed.and_then(|x| x.2);
         self.take(found);
