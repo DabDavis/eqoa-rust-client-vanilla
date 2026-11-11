@@ -211,22 +211,36 @@ pub fn write_page(text: &str) {
     }
 }
 
+/// The page's report: the one its hook kept, else the line a page kept before
+/// this build (web/notices.js's `eqoa.lastCrash`, which a page has written as
+/// the client stopped since 2026-11-09), so a crash of an older page reaches
+/// the server too.
 #[cfg(target_arch = "wasm32")]
 pub fn pending() -> Vec<Kept> {
-    storage()
-        .and_then(|s| s.get_item(PAGE_KEY).ok().flatten())
-        .filter(|t| !t.trim().is_empty())
-        .map(|text| vec![Kept { number: number_of(&text), text }])
-        .unwrap_or_default()
+    let Some(s) = storage() else { return Vec::new() };
+    let text = s.get_item(PAGE_KEY).ok().flatten().filter(|t| !t.trim().is_empty()).or_else(|| crate::bugnote::last_crash().map(|l| from_last_crash(&l)));
+    text.map(|text| vec![Kept { number: number_of(&text), text }]).unwrap_or_default()
 }
 
+/// A report made of a page's kept line (`bugnote::last_crash`): all it says.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn from_last_crash(line: &str) -> String {
+    format!("EQOA client crash report\nkept by: an older page (its one line)\npanic: {}\n", scrub(line))
+}
+
+/// The page's report answered: let go, and the page's line of the same
+/// crash with it (web/notices.js keeps one as the hook keeps the report), so
+/// neither goes again, in a report or in a bug report's note.
 #[cfg(target_arch = "wasm32")]
 pub fn answered(number: u32) -> bool {
-    let Some(s) = storage() else { return false };
-    match s.get_item(PAGE_KEY).ok().flatten() {
-        Some(t) if number_of(&t) == number => s.remove_item(PAGE_KEY).is_ok(),
-        _ => false,
+    if !pending().iter().any(|k| k.number == number) {
+        return false;
     }
+    if let Some(s) = storage() {
+        let _ = s.remove_item(PAGE_KEY);
+    }
+    crate::bugnote::crash_sent();
+    true
 }
 
 // ---- both: the session --------------------------------------------------
@@ -289,6 +303,14 @@ mod tests {
         assert_eq!(scrub("index out of bounds: the len is 4 but the index is 7"), "index out of bounds: the len is 4 but the index is 7");
         let r = compose(&[("build", "local".into())], "panicked at crates/a.rs:1:2:\nboom", "  0: x\n      at /opt/x/crates/a.rs:1:2\n");
         assert_eq!(r, "EQOA client crash report\nbuild: local\npanic: panicked at crates/a.rs:1:2: boom\nstack backtrace:\n  0: x\n      at crates/a.rs:1:2\n");
+    }
+
+    /// An older page's kept line becomes a report the server reads as any:
+    /// its panic line is the line.
+    #[test]
+    fn an_older_pages_line_is_a_report() {
+        let r = from_last_crash("2026-11-11T04:52:13Z, page 54bb79225fde: The client stopped: panicked at crates/eqoa/src/play.rs:1:2: boom");
+        assert_eq!(r, "EQOA client crash report\nkept by: an older page (its one line)\npanic: 2026-11-11T04:52:13Z, page 54bb79225fde: The client stopped: panicked at crates/eqoa/src/play.rs:1:2: boom\n");
     }
 
     /// Natively a report is a file in the config directory's crashes/, the
