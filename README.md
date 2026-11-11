@@ -584,7 +584,11 @@ or a browser (each described where it lives below):
   models as they are made); the player's own by its entity, from its first frame. **The Jal'Raeth** (30): their three bodies wear a helm on
   the head node they name (`slotless::HEAD_HELMS`: they name no helm node), the human's chest, bracers and gloves
   carried onto their skeleton by bone names (`slotless::named_shell_of`: their hands and feet hang off the root, so
-  the fit by limbs finds none), and the human's emotes on their upper body (`raceemote::TABLE`).
+  the fit by limbs finds none; the human's chest node, which they lack, carried by its parent's, and the shell put
+  outside their deeper chest and the knight's own plate, `slotless::wrap`), no legs or boots (their crossed legs have
+  no human names), what they hold in their hands (`racebody::HAND_SEATS`: a node under each hand and the left forearm
+  as the human's item nodes sit, in place of their own item nodes at the knee, where the knights' blade discs float),
+  and the human's emotes on their upper body (`raceemote::TABLE`).
 - **Capes**, on a server that has them (go-eqoa-server's `world.capes`, the Heirloom Test
   Server's; the server owner, 2026-11-08: "lets add a new equip slot for heirloom server only.
   capes for all. there are many capes we can borrow from for various styles."; `cape`): the

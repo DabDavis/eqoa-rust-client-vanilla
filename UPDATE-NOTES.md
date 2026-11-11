@@ -29,6 +29,13 @@ is put on the page by `.github/workflows/notes.yml`.
 - This needs the server to say which numbers are your mercenary's; on a server that does not, they look as they
   always did.
 
+## 2026-11-11 · The Jal'Raeth hold their weapons and show their armour
+- A Jal'Raeth now holds its weapons in its hands: a sword or staff in the right hand, a bow or an off-hand weapon in
+  the left, and a shield on the left forearm, and they swing with its arms. Before, they floated beside its knees.
+- A Jal'Raeth's chest armour now shows from the front too. Its chest is deeper than a human's, so the front of the
+  armour (and on the knight's body, all of it) was hidden inside it; robes, chest pieces, bracers and gloves now sit
+  over the body. Leggings and boots still do not show: the Jal'Raeth's crossed legs have no place for them.
+
 ## 2026-11-11 · Smaller mercenary tags, whole shadows under the lantern
 - A mercenary's "<Owner's Mercenary>" line over its name is now drawn a little smaller than the name, so the name
   stands out. The name itself is the same size as before.

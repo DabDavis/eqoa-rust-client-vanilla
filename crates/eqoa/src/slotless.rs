@@ -518,10 +518,20 @@ fn named_shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<
         let (hr, br) = (crate::raceemote::Rig::load(lib, hid)?, crate::raceemote::Rig::load(lib, id as u32)?);
         let bind = |n: &vi::hsprite::Node<Ee>| glam::Mat4::from_cols_array_2d(&n.inv_bind_world.to_cols());
         // human node -> (body node, body bind times human inverse bind)
+        // a human node the body has no namesake of (the human's chest node 10, under
+        // the pectorals, which the Jal'Raeth lack) is carried as its nearest
+        // ancestor that has one: its corners go with that node as they lie
+        let namesake = |i: usize| hr.refs.get(i).copied().flatten().and_then(|r| br.by_ref.get(&r).copied());
         let map: Vec<Option<(u8, glam::Mat4)>> = (0..h.cs.h.nodes.len())
             .map(|i| {
-                let j = hr.refs.get(i).copied().flatten().and_then(|r| br.by_ref.get(&r).copied())?;
-                let (hn, bn) = (h.cs.h.nodes.get(i)?, cs.h.nodes.get(j)?);
+                let mut a = i;
+                let j = loop {
+                    if let Some(j) = namesake(a) {
+                        break j;
+                    }
+                    a = usize::try_from(h.cs.h.nodes.get(a)?.parent).ok()?;
+                };
+                let (hn, bn) = (h.cs.h.nodes.get(a)?, cs.h.nodes.get(j)?);
                 Some((u8::try_from(j).ok()?, bind(bn).inverse() * bind(hn)))
             })
             .collect();
@@ -552,6 +562,10 @@ fn named_shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<
                 out.push(c3);
             }
         }
+        if let Some(body) = lib.lookup(id).and_then(|r| lib.build_model(r)) {
+            let parents: Vec<i32> = cs.h.nodes.iter().map(|n| n.parent).collect();
+            wrap(&mut tris, &body, &parents);
+        }
         tris.iter().any(|t| !t.is_empty()).then(|| Rc::new(Shell { tris, layers: full.layers }))
     })();
     NAMED.with(|s| {
@@ -562,6 +576,113 @@ fn named_shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<
         s.insert(key, made.clone());
     });
     made
+}
+
+/// How far out (in the body's bind pose) `wrap` looks for the body's own surface
+/// over a shell's corner, and how far past it the corner is put.
+const WRAP_REACH: f32 = 0.12;
+const WRAP_GAP: f32 = 0.02;
+
+/// Puts each corner of a shell carried onto a body (`named_shell_of`) outside the
+/// body's own surface where that surface stands over it: the human's chest is
+/// shallower than a Jal'Raeth's, whose own chest (and the knight's own plate) hid
+/// the front of a human's chest armour, and whose long fingers came through its
+/// gloves. Along each corner's normal, within `WRAP_REACH`, among the body's
+/// triangles skinned to the corner's nodes or their parents or children (an arm's
+/// sleeve is not pushed out to the chest beside it): the last surface the corner
+/// lies under (one the ray leaves without having entered it, facing the way it
+/// goes), which the corner goes `WRAP_GAP` past; a part the ray enters and leaves
+/// (the channeler's armbands, beyond a forearm's sleeve) is passed over, or the
+/// sleeves balloon out to it. So are each triangle's middle and its edges' middles
+/// (a bulge of the body between corners: the knight's own plate), which push the
+/// corners they lie between; every copy of a corner (the same place on the same
+/// nodes) moves as far as the farthest push, so the shell keeps its seams.
+fn wrap(tris: &mut [Vec<[Corner; 3]>; SLOTS], body: &esf::Model, parents: &[i32]) {
+    let main = |v: usize| {
+        let (b, w) = (body.bones.get(v).copied().unwrap_or_default(), body.weights.get(v).copied().unwrap_or_default());
+        (0..4).max_by_key(|&k| w[k]).map_or(0, |k| b[k])
+    };
+    // each face with its outward way (its corners' normals)
+    let faces: Vec<([Vec3; 3], [u8; 3], Vec3)> = near_triangles(body).map(|(_, t)| (t.map(|v| pos(body, v)), t.map(main), t.iter().map(|&v| Vec3::from(body.normal.get(v).copied().unwrap_or_default())).sum::<Vec3>())).collect();
+    let near = |a: u8, b: u8| a == b || parents.get(a as usize) == Some(&(b as i32)) || parents.get(b as usize) == Some(&(a as i32));
+    // how far out of the body's surface a point of the shell must go along `n`:
+    // the hits along it in order, each a surface left (facing the way the ray
+    // goes) or entered; one left without having been entered on the way is one
+    // the point lies under (its skin, the knight's own plate over it), one entered
+    // and then left is a part apart that the ray passes through (the channeler's
+    // armbands over the upper arm, beyond a forearm's sleeve), not one to cover
+    let out = |p: Vec3, n: Vec3, ours: &[u8]| {
+        if n == Vec3::ZERO {
+            return 0.0;
+        }
+        let mut hits: Vec<(f32, bool)> = faces
+            .iter()
+            .filter(|(_, nodes, _)| nodes.iter().any(|&a| ours.iter().any(|&b| near(a, b))))
+            .filter_map(|(f, _, way)| ray_hits(p, n, f).filter(|&t| t > 0.0 && t <= WRAP_REACH).map(|t| (t, way.dot(n) > 0.0)))
+            .collect();
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (mut far, mut inside) = (0.0f32, 0u32);
+        for (t, leaving) in hits {
+            if !leaving {
+                inside += 1;
+            } else if inside > 0 {
+                inside -= 1;
+            } else {
+                far = t + WRAP_GAP;
+            }
+        }
+        far
+    };
+    let key = |c: &Corner| (c.pos.map(f32::to_bits), c.bones);
+    let mut push: HashMap<([u32; 3], [u8; 4]), f32> = HashMap::new();
+    for t in tris.iter().flatten() {
+        let ours: Vec<u8> = t.iter().flat_map(|c| (0..4).filter(|&k| c.weights[k] != 0).map(|k| c.bones[k])).collect();
+        let (p, n) = (t.map(|c| Vec3::from(c.pos)), t.map(|c| Vec3::from(c.normal)));
+        // its corners, and its middle and its edges' middles (a bulge of the body
+        // between the corners), each pushing the corners it lies between
+        for k in 0..3 {
+            push.entry(key(&t[k])).or_insert_with(|| out(p[k], n[k].normalize_or_zero(), &ours));
+        }
+        let mids = [([0usize, 1, 2], (p[0] + p[1] + p[2]) / 3.0, (n[0] + n[1] + n[2]).normalize_or_zero()), ([0, 1, 1], (p[0] + p[1]) / 2.0, (n[0] + n[1]).normalize_or_zero()), ([1, 2, 2], (p[1] + p[2]) / 2.0, (n[1] + n[2]).normalize_or_zero()), ([2, 0, 0], (p[2] + p[0]) / 2.0, (n[2] + n[0]).normalize_or_zero())];
+        for (at, q, m) in mids {
+            let d = out(q, m, &ours);
+            if d > 0.0 {
+                for k in at {
+                    let e = push.entry(key(&t[k])).or_insert(0.0);
+                    *e = e.max(d);
+                }
+            }
+        }
+    }
+    for c in tris.iter_mut().flatten().flatten() {
+        let d = push.get(&key(c)).copied().unwrap_or(0.0);
+        if d > 0.0 {
+            c.pos = (Vec3::from(c.pos) + Vec3::from(c.normal) * d).to_array();
+        }
+    }
+}
+
+/// Where the ray from `o` along `d` meets triangle `t` (both faces), as the
+/// distance along `d` (a unit vector); None when it misses.
+fn ray_hits(o: Vec3, d: Vec3, t: &[Vec3; 3]) -> Option<f32> {
+    let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
+    let h = d.cross(e2);
+    let a = e1.dot(h);
+    if a.abs() < 1e-9 {
+        return None;
+    }
+    let f = 1.0 / a;
+    let s = o - t[0];
+    let u = f * s.dot(h);
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(e1);
+    let v = f * d.dot(q);
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    Some(f * e2.dot(q))
 }
 
 /// Takes out of `model`'s own batches its triangles under the shell's
@@ -2467,6 +2588,49 @@ mod tests {
             let mut bare = model.clone();
             crate::play::dress_look(&lib, id, &mut bare, &cs, &Look { robe: -1, ..Default::default() }, false, &t, true);
             assert!(same(&bare, &model), "{id:#010x}: bare, as it was");
+        }
+    }
+
+    /// A Jal'Raeth's chest armour is seen from the front (the owner, 2026-11-11:
+    /// "Gear doesnt really show on Jal race"): rays from in front of the body onto
+    /// its chest and belly (a grid over the torso, between the shoulders and the
+    /// waist), in the bind pose, first meet the armour, not the body. Two things had
+    /// hidden it: the human's chest triangles skinned to its chest node 10, which the
+    /// Jal'Raeth have no namesake of, were left out (the pectorals were bare), and the
+    /// rest lay inside their deeper chest and, on the knight, its own plate
+    /// (`wrap`). Measured before: the robes 14%, the channeler 21%, the knight 10% of
+    /// the rays; now every one of the three at 95% or more.
+    #[test]
+    fn a_jalraeths_chest_armour_is_seen_from_the_front() {
+        let Some(lib) = disc() else { return };
+        let t = Tables::retail();
+        for id in NAMED_SHELLS.iter().map(|&b| b as i32) {
+            let r = lib.lookup(id).unwrap();
+            let model = lib.build_model(r).unwrap();
+            let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+            let mut dressed = model.clone();
+            crate::play::dress_look(&lib, id, &mut dressed, &cs, &Look { armor: [4; 6], robe: -1, ..Default::default() }, false, &t, true);
+            let tris: Vec<([Vec3; 3], bool)> = dressed
+                .batches
+                .iter()
+                .filter(|b| b.lod.is_none_or(|l| l == 0))
+                .flat_map(|b| b.indices.chunks_exact(3).map(move |i| (b, i)))
+                .map(|(b, i)| ([0, 1, 2].map(|k| pos(&dressed, i[k] as usize)), b.material == ENTRY))
+                .collect();
+            let (mut rays, mut armour) = (0, 0);
+            for gy in 0..12 {
+                for gx in 0..9 {
+                    let o = Vec3::new(-0.16 + 0.04 * gx as f32, 1.25 + 0.025 * gy as f32, 2.0);
+                    let first = tris.iter().filter_map(|(f, a)| ray_hits(o, Vec3::NEG_Z, f).filter(|&d| d > 0.0).map(|d| (d, *a))).min_by(|a, b| a.0.total_cmp(&b.0));
+                    if let Some((_, a)) = first {
+                        rays += 1;
+                        armour += a as usize;
+                    }
+                }
+            }
+            let share = armour as f32 / rays.max(1) as f32;
+            eprintln!("{id:#010x}: {armour} of {rays} rays meet the chest armour first ({:.0}%)", share * 100.0);
+            assert!(rays >= 100 && share >= 0.95, "{id:#010x}: the chest armour seen from the front ({:.0}%)", share * 100.0);
         }
     }
 
