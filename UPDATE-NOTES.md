@@ -8,7 +8,7 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 ## 2026-11-11 · Dismiss your mercenary from the menu, mercenaries' names, the group search's register
-- On a server with mercenaries (the Heirloom Test Server), Community > Group now has Dismiss Mercenary while your
+- On a server with mercenaries (the Heirloom Test Server), Community > Group now has Dismiss Merc while your
   mercenary is out: it sends it away as /merc dismiss does.
 - A mercenary's name over its head (and its dot on the minimap) is now the pets' blue with a slight red tint, so you
   can tell a mercenary from a pet at a glance.

@@ -11,8 +11,9 @@ use super::Play;
 
 /// The entry's message (none of the game's: its high half our opcode).
 pub const MSG_DISMISS_MERC: u32 = 0x7E5C_0001;
-/// The entry's words (the game has none).
-pub const ENTRY: &str = "Dismiss Mercenary";
+/// The entry's words (the game has none): "Dismiss Mercenary" is cut short on the
+/// menu's bar ("Dismiss Merc...").
+pub const ENTRY: &str = "Dismiss Merc";
 
 /// The start menu's entry as last set.
 #[derive(Default)]
