@@ -883,6 +883,12 @@ pub struct ClientOptions {
     pub screen_shake: bool,
     /// Controller Focus, each window's by its place (`focus`)
     pub controller: [Focus; crate::multibox::PLACES],
+    /// Slow When Not Focused (the GM Jibrish's petition 1634), each window's
+    /// by its place as Controller Focus is: on, a window the system reports
+    /// covered or minimised takes its frames at the game's 30 a second
+    /// (`viewer`'s `HIDDEN_GAP`); off, the default, at its Frame Rate as in
+    /// front, so a box in the back keeps its pace
+    pub slow_unfocused: [bool; crate::multibox::PLACES],
     /// Capture Controller, one setting for every window: a Pad that several
     /// windows open share is read only by the one in front (`input::captured`)
     pub capture: bool,
@@ -1244,6 +1250,7 @@ impl Default for ClientOptions {
             camera_turn: TURN_GAME,
             screen_shake: true,
             controller: [Focus::Auto; crate::multibox::PLACES],
+            slow_unfocused: [false; crate::multibox::PLACES],
             capture: false,
             background_sound: true,
             ability_bars: ABILITY_BARS_GAME,
@@ -1301,7 +1308,8 @@ impl ClientOptions {
     /// `client.opt`: a line a setting, `name=value`; Camera Turn Speed and
     /// Fog only when they are not the game's, Screen Shake only when off, a
     /// window's Controller Focus as `controller.<window>` (from 1) only when
-    /// it is not Auto, Capture Controller only when on, Sound in Background
+    /// it is not Auto, a window's Slow When Not Focused as
+    /// `slow_unfocused.<window>=on` only when on, Capture Controller only when on, Sound in Background
     /// only when off, Ability Bars, NPC/PC Display, NPC/PC Distance and
     /// Name Distance only when not the game's, Overlapping Names only when
     /// Show, each Number Colors row only when not Default
@@ -1331,6 +1339,9 @@ impl ClientOptions {
         }
         for (k, f) in self.controller.iter().enumerate().filter(|(_, f)| **f != Focus::Auto) {
             s.push_str(&format!("controller.{}={}\n", k + 1, f.key()));
+        }
+        for (k, _) in self.slow_unfocused.iter().enumerate().filter(|(_, on)| **on) {
+            s.push_str(&format!("slow_unfocused.{}=on\n", k + 1));
         }
         if self.capture {
             s.push_str("capture_controller=on\n");
@@ -1665,6 +1676,12 @@ impl ClientOptions {
                         c.controller[w - 1] = f;
                     }
                 }
+                (k, v) if k.starts_with("slow_unfocused.") => {
+                    let window = k["slow_unfocused.".len()..].parse::<usize>().ok().filter(|w| (1..=crate::multibox::PLACES).contains(w));
+                    if let (Some(w), "on" | "off") = (window, v) {
+                        c.slow_unfocused[w - 1] = v == "on";
+                    }
+                }
                 _ => {}
             }
         }
@@ -1679,7 +1696,7 @@ impl ClientOptions {
     /// the lines the windows share (Controller Focus, Capture Controller,
     /// Sound in Background, Update Notices) left to client.opt.
     fn rows_text(self) -> String {
-        ClientOptions { controller: [Focus::Auto; crate::multibox::PLACES], capture: false, background_sound: true, update_notices: true, ..self }.to_text()
+        ClientOptions { controller: [Focus::Auto; crate::multibox::PLACES], slow_unfocused: [false; crate::multibox::PLACES], capture: false, background_sound: true, update_notices: true, ..self }.to_text()
     }
 }
 
@@ -1695,7 +1712,7 @@ fn read_client() -> ClientOptions {
     let shared = read_shared();
     let me = place();
     match account_read("client").or_else(|| store::read(&own_file("client", me)).filter(|_| me > 0)) {
-        Some(b) => ClientOptions { controller: shared.controller, capture: shared.capture, background_sound: shared.background_sound, update_notices: shared.update_notices, ..ClientOptions::from_text(&String::from_utf8_lossy(&b)) },
+        Some(b) => ClientOptions { controller: shared.controller, slow_unfocused: shared.slow_unfocused, capture: shared.capture, background_sound: shared.background_sound, update_notices: shared.update_notices, ..ClientOptions::from_text(&String::from_utf8_lossy(&b)) },
         None => shared,
     }
 }
@@ -1711,11 +1728,12 @@ fn save_client() -> Result<(), String> {
     let mine = client();
     let mut shared = read_shared();
     shared.controller[me] = mine.controller[me];
+    shared.slow_unfocused[me] = mine.slow_unfocused[me];
     shared.capture = mine.capture;
     shared.background_sound = mine.background_sound;
     shared.update_notices = mine.update_notices;
     if me == 0 {
-        store::write(CLIENT_FILE, ClientOptions { controller: shared.controller, ..mine }.to_text().as_bytes())?;
+        store::write(CLIENT_FILE, ClientOptions { controller: shared.controller, slow_unfocused: shared.slow_unfocused, ..mine }.to_text().as_bytes())?;
     } else {
         store::write(&own_file("client", me), mine.rows_text().as_bytes())?;
         store::write(CLIENT_FILE, shared.to_text().as_bytes())?;
@@ -2035,6 +2053,28 @@ pub fn update_notices() -> bool {
 /// Screens: Longer), or it comes down at once (Instant).
 pub fn loading_longer() -> bool {
     client().loading_longer
+}
+
+/// This window's Slow When Not Focused (petition 1634): its place's, off
+/// unless chosen.
+pub fn slow_unfocused() -> bool {
+    client().slow_unfocused[place()]
+}
+
+/// Changes it (the Extended page); kept only by Save Changes, beside the
+/// other windows' own.
+pub fn set_slow_unfocused(on: bool) {
+    let mut c = client();
+    c.slow_unfocused[place()] = on;
+    set_client(c);
+}
+
+/// The gap a covered or minimised window's frames keep with Slow When Not
+/// Focused off: its Frame Rate's, else the display's refresh, so a window
+/// with nothing to draw on never spins.
+pub fn awake_gap() -> std::time::Duration {
+    let g = frame_gap();
+    std::time::Duration::from_secs_f64(if g > 0.0 { g } else { DISPLAY_GAP.with(|d| d.get()) } / 1000.0)
 }
 
 /// This window's Controller Focus: its place's (`multibox::place`).
@@ -3128,6 +3168,33 @@ mod tests {
     /// (here the first: no place taken) and keeps another window's as the
     /// file has it, though this one read the file before that window saved
     /// (its own copy says Auto there: written as it is, it would be lost).
+    /// Slow When Not Focused (petition 1634) is each window's, as Controller
+    /// Focus is: off by default and no line, `slow_unfocused.<window>=on` in
+    /// client.opt beside the other windows' own (one saved meanwhile kept),
+    /// never in a window's own file or the account's (the control: a
+    /// window's rows are). A line that is not on or off reads as off.
+    #[test]
+    fn each_window_keeps_its_own_slow_when_not_focused() {
+        testing::reset(false);
+        assert!(!slow_unfocused(), "off by default");
+        assert!(!ClientOptions::default().to_text().contains("slow_unfocused"), "no line while off");
+        set_slow_unfocused(true);
+        store::write(CLIENT_FILE, b"lod=on\nbrightness=5\ncamera_distance=11\nslow_unfocused.3=on\n").unwrap();
+        assert!(save(&GameOptions::default()));
+        let kept = String::from_utf8(testing::kept(CLIENT_FILE).unwrap()).unwrap();
+        assert_eq!(kept, "lod=on\nbrightness=5\ncamera_distance=11\nslow_unfocused.1=on\nslow_unfocused.3=on\n");
+        let both = ClientOptions::from_text(&kept);
+        assert_eq!((both.slow_unfocused[0], both.slow_unfocused[1], both.slow_unfocused[2]), (true, false, true));
+        assert!(!both.rows_text().contains("slow_unfocused"), "a window's own file and the account's: never");
+        assert!(both.rows_text().contains("brightness=5"), "the control: its rows are");
+        assert!(!ClientOptions::from_text("slow_unfocused.1=yes\nslow_unfocused.0=on\nslow_unfocused.99=on").slow_unfocused.iter().any(|&on| on), "odd lines: off");
+        set_slow_unfocused(false);
+        assert!(save(&GameOptions::default()));
+        let kept = String::from_utf8(testing::kept(CLIENT_FILE).unwrap()).unwrap();
+        assert_eq!(kept, "lod=on\nbrightness=5\ncamera_distance=11\nslow_unfocused.3=on\n", "this window's line gone, the other's kept");
+        testing::reset(false);
+    }
+
     #[test]
     fn each_window_keeps_its_own_controller_focus() {
         testing::reset(false);

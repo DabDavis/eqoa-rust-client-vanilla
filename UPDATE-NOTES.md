@@ -7,6 +7,22 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Extended is tidier, boxes keep their pace, Compact keyboard from a controller
+- **Options > Extended** now opens on four entries: **Graphics** (Video, World, Lighting, Characters, Textures),
+  **UI** (HUD, HUD Layout, Name Plates, Map, Number Colors, Merc Colors, DPS Meter, Chat), **Other** (General,
+  Combat, Camera, Touch, Sound) and **Multi-boxing settings**. Every setting is still there, set as you left it;
+  some moved to the page of their kind: Name Distance and Overlapping Names are under UI > Name Plates, the DPS
+  meter's rows under UI > DPS Meter, Update Notices and Loading Screens under Other > General, the touch pad's
+  sizes under Other > Touch.
+- **Multi-boxing settings**: Controller Focus, Capture Controller and Sound in Background are here now, with a new
+  **Slow When Not Focused**, **Off** by default: a window that is covered or minimised keeps its normal frame rate,
+  so a box in the back keeps following and playing as it should. Turn it **On** in a window to have that window
+  slow down to 30 frames a second while it is hidden, as before. Each window keeps its own.
+- With **Options > Interface > Keyboard** on the compact setting, opening a chat or text box with the controller
+  (R3) now shows the compact box too, as Enter does, whenever you have a keyboard; before, the controller always
+  opened the on-screen keyboard. On a touch screen, or with the other setting, you still get the on-screen
+  keyboard.
+
 ## 2026-11-11 · A moved quick bar stays put with a long spell name
 - If you moved your quick bar with **Move HUD**, selecting a spell with a long name (one that scrolls in the bar's
   title, like "Quil'Eyne's Unspeakable Hunger") made the whole bar slide across the screen as the name scrolled. The

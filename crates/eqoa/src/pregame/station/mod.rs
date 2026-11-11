@@ -198,7 +198,7 @@ impl Run {
             }
         }
         // the windows: the renderer, the editor (its child) over it
-        crate::editbox::set_pad_only(self.keyboard && self.compact);
+        crate::editbox::set_pad_only(crate::editbox::compact_face(self.keyboard, self.compact));
         r.anchor(Anchor::Middle);
         self.r.draw(vui, r, now);
         if self.r.editor_visible {

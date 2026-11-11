@@ -1914,11 +1914,15 @@ impl Gfx {
 /// be skipped.
 const HIDDEN_GAP: std::time::Duration = std::time::Duration::from_millis(33);
 
-/// When a window that gave nothing to draw on takes its next frame
-/// (`HIDDEN_GAP`); a hidden page's come from its ticker at that rate
-/// (`web::hidden_tick`), none held back.
+/// When a window that gave nothing to draw on takes its next frame: at
+/// `HIDDEN_GAP` with this window's Slow When Not Focused on (the GM
+/// Jibrish's petition 1634: a box in the back slowed so far its follow
+/// went wrong), else at its Frame Rate as in front (`settings::awake_gap`);
+/// a hidden page's come from its ticker at `HIDDEN_GAP` (`web::hidden_tick`),
+/// none held back.
 fn hidden_gap() -> Option<Instant> {
-    (!page_hidden()).then(|| Instant::now() + HIDDEN_GAP)
+    let gap = if crate::settings::slow_unfocused() { HIDDEN_GAP } else { crate::settings::awake_gap() };
+    (!page_hidden()).then(|| Instant::now() + gap)
 }
 
 /// Whether the window is a page that is hidden (`web::page_hidden`), or an
@@ -3147,6 +3151,8 @@ impl App {
         let p = render::ui::frame_from_window(size, at);
         let whose = match phase {
             Phase::Started => {
+                // a touch screen's: no keyboard at hand until a key is pressed
+                crate::editbox::screen_touched();
                 // Move HUD: a finger on a piece takes it (`hudlayout`)
                 let hud = self.play.as_mut().is_some_and(|pl| pl.hud_press(at, size));
                 let w = if hud { Some(Finger::Hud) } else { self.finger_on(p) };
@@ -5177,6 +5183,11 @@ impl App {
             } else if let Some(line) = self.arrival.press(Instant::now(), &name) {
                 crate::say(&line);
             }
+        }
+        // a keyboard at hand from now on (`editbox::compact_face`: the
+        // options' Keyboard Compact holds for a controller's R3 too)
+        if pressed && !is_synthetic {
+            crate::editbox::keyboard_pressed();
         }
         if self.leaving() {
             self.leave_play(el);
