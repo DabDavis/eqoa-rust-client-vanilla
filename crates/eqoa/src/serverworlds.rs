@@ -45,6 +45,8 @@ pub struct Held {
     pub file: String,
     pub path: PathBuf,
     pub parts: Vec<Part>,
+    /// What players are told it is (the server's `World::name`).
+    pub name: String,
 }
 
 static HELD: RwLock<Vec<Held>> = RwLock::new(Vec::new());
@@ -73,6 +75,14 @@ pub fn keep(h: Held) {
         g.retain(|x| x.id != h.id);
         g.push(h);
     }
+}
+
+/// The server's worlds held here, by id: (id, its name), the map's places
+/// (`map::places`).
+pub fn held_worlds() -> Vec<(u8, String)> {
+    let mut v: Vec<(u8, String)> = held().into_iter().map(|h| (h.id, h.name)).collect();
+    v.sort();
+    v
 }
 
 /// The file the world table names for world `world` when it is one of the
@@ -153,7 +163,7 @@ fn hold(disc: &Path, w: &World) -> Result<Held, String> {
     let dir = cache_dir().ok_or("no cache directory")?;
     let file = format!("WORLD{}.ESF", w.id);
     let path = dir.join(format!("world{}-{:08x}.ESF", w.id, w.crc));
-    let held = || Held { id: w.id, file: file.clone(), path: path.clone(), parts: w.parts.clone() };
+    let held = || Held { id: w.id, file: file.clone(), path: path.clone(), parts: w.parts.clone(), name: w.name.clone() };
     if let Ok(b) = std::fs::read(&path)
         && b.len() as u64 == u64::from(w.size)
         && crc32(&b) == w.crc
