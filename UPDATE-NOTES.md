@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Smaller mercenary tags, whole shadows under the lantern
+- A mercenary's "<Owner's Mercenary>" line over its name is now drawn a little smaller than the name, so the name
+  stands out. The name itself is the same size as before.
+- With Light Shadows on (Extended > Lighting), something that comes very close to a light no longer has a piece cut
+  out of its shadow. A Jal'Raeth's helm floating up to the lantern over its head lost a large square from the middle
+  of its shadow near the top of the float; the shadow now stays whole as it grows and shrinks.
+
 ## 2026-11-11 · Auto-cast and auto targeting
 - An ability on your quick bars can now be set to **auto**: it is used by itself whenever it is ready. Right-click its
   slot (on a phone or tablet, press and hold it; on a controller or the keyboard, hold ○ or E for a second on it) and

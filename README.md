@@ -267,7 +267,10 @@ or a browser (each described where it lives below):
   line in an idle stance and cast nothing standing still), nor a body round a light,
   nor a placed thing no more than 6 across whose box holds it (a street lamp's
   housing round its light, whose floor darkened a square under every lamp); nothing
-  nearer a light than 0.5 does; and a light of the moment (a held item's glow, a
+  that does not move nearer a light than 0.5 does (a character, what it wears and holds
+  and a moving prop are held on that near plane, not cut by it: a Jal'Raeth's helm
+  floating up to the lantern over it lost a square from its shadow's middle, the GM
+  Jibmonk's petition 1591); and a light of the moment (a held item's glow, a
   spell's), which rides the body or weapon carrying it, casts what does not move alone
   (its carrier's shadow flickered as it went in and out of the carrier's box), from
   where its map was drawn while it sways within 15 cm of it (an idle weapon's glow

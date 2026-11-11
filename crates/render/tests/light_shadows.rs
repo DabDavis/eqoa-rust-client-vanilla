@@ -661,3 +661,54 @@ fn off_draws_as_before() {
         }
     }
 }
+
+/// A helm floating up to the lantern over its wearer (a Jal'Raeth's, its
+/// head 2.7 to 2.9 up in its idle's float, the lantern 3 over its feet): its
+/// shadow on the ground grows as it rises, and once its top came within
+/// `NEAR` (0.5) of the light the faces' near plane cut that part away, and the
+/// part of a helm nearest the light is its crown, which shadows the middle
+/// (the GM Jibmonk's petition 1591: "a large square goes missing in the
+/// middle"). A mover is held on the near plane, not cut: the ground round the
+/// helm's foot, where the square was, is in its shadow at every height of the
+/// float, as it is below the near plane. The control: the same helm placed as
+/// a thing that does not move (a torch's stick, a lamp's housing: still cut)
+/// leaves the square lit.
+#[test]
+fn a_helm_floating_up_to_its_lantern_casts_whole() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    let lamp = (Vec3::new(0.0, 3.0, 0.0), 20.0, Vec3::X);
+    // where the square was: past the body's and the helm's own pixels, under
+    // the helm's crown as the lantern throws it
+    let probes = [pixel(0.95, 0.0), pixel(-0.75, 0.0), pixel(0.0, 0.8), pixel(0.0, -0.8)];
+    let run = |top: f32, moves: bool| {
+        let mut r = renderer(&g, true, false, true);
+        let f = r.upload(&g.device, &g.queue, &floor(HALF), &[at(Vec3::ZERO)], &none);
+        let body = r.upload(&g.device, &g.queue, &esf::Model { skinned: true, ..cuboid(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 2.0, 0.5), layer(0, 0)) }, &[at(Vec3::ZERO)], &none);
+        let helm = cap(Vec3::new(-0.2, top - 0.3, -0.25), Vec3::new(0.3, top, 0.25));
+        let px = if moves {
+            let h = r.upload(&g.device, &g.queue, &helm, &[at(Vec3::ZERO)], &none);
+            shot(&g, &mut r, &view(Vec3::ZERO, &[], Some(lamp)), &[Draw::Model(&f), Draw::Model(&body), Draw::Model(&h)])
+        } else {
+            let part = |m| GroupPart { model: m, instances: &[render::IDENTITY], statics: &[], moves: false, baked: false };
+            let gr = r.upload_group(&g.device, &g.queue, &[part(&helm)], &none);
+            shot(&g, &mut r, &view(Vec3::ZERO, &[], Some(lamp)), &[Draw::Model(&f), Draw::Model(&body), Draw::Group(&gr)])
+        };
+        probes.iter().map(|&p| red(&px, p)).collect::<Vec<f32>>()
+    };
+    for top in [2.3, 2.6, 2.7, 2.8] {
+        let seen = run(top, true);
+        assert!(seen.iter().all(|&v| v < 0.15), "the helm's crown {:.2} under the lantern: the ground under it {seen:?}", 3.0 - top);
+    }
+    let fixed = run(2.7, false);
+    assert!(fixed.iter().all(|&v| v > 0.5), "the control, the same helm placed (cut by the near plane): {fixed:?}");
+}
+
+/// A helm: a box from `lo` to `hi` open underneath (its top and four sides),
+/// as a helm's shell is.
+fn cap(lo: Vec3, hi: Vec3) -> esf::Model {
+    let mut m = cuboid(lo, hi, layer(0, 0));
+    // cuboid's faces in order -x, +x, -y, +y, -z, +z: the third, -y, gone
+    m.batches[0].indices.drain(12..18);
+    m
+}

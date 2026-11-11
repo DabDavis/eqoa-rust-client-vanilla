@@ -74,6 +74,10 @@ fn light_cast_clip(p: Placed) -> vec4<f32> {
 
 @vertex
 fn vs_light_cast(v: VsIn) -> LightCastOut {
+    return light_cast_vertex(v);
+}
+
+fn light_cast_vertex(v: VsIn) -> LightCastOut {
     var o: LightCastOut;
     let p = light_cast_place(v);
     o.clip = light_cast_clip(p);
@@ -107,4 +111,30 @@ fn fs_light_cast(i: LightCastOut) {
 @vertex
 fn vs_light_cast_solid(v: VsIn) -> @builtin(position) vec4<f32> {
     return light_cast_clip(light_cast_place(v));
+}
+
+// A mover (a character, what it wears and holds, a prop that moves) as the
+// casters above, but never cut by the face's near plane: a vertex nearer the
+// light than NEAR is held on the plane (its depth the nearest), so a helm
+// floating up within NEAR of the lantern over its wearer still casts its
+// whole shadow (the GM Jibmonk's petition 1591: the Jal'Raeth's shadow lost a
+// square from its middle near the top of their float, where the near plane
+// cut the part of it nearest the light). The near plane stays for what does
+// not move: a torch's own stick, a lamp's housing.
+fn light_cast_clip_held(p: Placed) -> vec4<f32> {
+    var c = light_cast_clip(p);
+    c.z = max(c.z, 0.0);
+    return c;
+}
+
+@vertex
+fn vs_light_cast_mover(v: VsIn) -> LightCastOut {
+    var o = light_cast_vertex(v);
+    o.clip.z = max(o.clip.z, 0.0);
+    return o;
+}
+
+@vertex
+fn vs_light_cast_solid_mover(v: VsIn) -> @builtin(position) vec4<f32> {
+    return light_cast_clip_held(light_cast_place(v));
 }
