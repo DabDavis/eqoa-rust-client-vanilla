@@ -2585,7 +2585,7 @@ mod tests {
     /// hidden it: the human's chest triangles skinned to its chest node 10, which the
     /// Jal'Raeth have no namesake of, were left out (the pectorals were bare), and the
     /// rest lay inside their deeper chest and, on the knight, its own plate
-    /// (`wrap`). Measured before: the channeler 31%, the robes 32%, the knight 0% of
+    /// (`wrap`). Measured before: the robes 14%, the channeler 21%, the knight 10% of
     /// the rays; now every one of the three at 95% or more.
     #[test]
     fn a_jalraeths_chest_armour_is_seen_from_the_front() {

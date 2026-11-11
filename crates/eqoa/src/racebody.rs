@@ -141,9 +141,9 @@ pub fn grant(cs: &mut CSprite<Ee>, model: u32, player: bool, races: Option<&Crea
         if cs.item_nodes[2] < 0
             && let Some(off) = usize::try_from(cs.item_nodes[1]).ok().and_then(|i| cs.h.nodes.get(i))
         {
-            // the root is no hand: an off hand's node hung off it (the Jal'Raeth's,
-            // whose item nodes float beside them as their knights' blades do) takes
-            // the shield itself
+            // the root is no hand: an off hand's node hung off it takes the shield
+            // itself (the Jal'Raeth's, whose item nodes float beside them as their
+            // knights' blades do, are given nodes in their hands below instead)
             cs.item_nodes[2] = if off.parent > 0 { off.parent } else { cs.item_nodes[1] };
         }
     }
@@ -315,6 +315,78 @@ mod tests {
             assert!((npc - 1.0).abs() < 0.01, "{action:?}: the control, an NPC's at the art's {npc:.3}");
             let (off, shield) = scales(PIXIE, true, action);
             assert!((off - 0.3).abs() < 0.01 && (shield - 0.3).abs() < 0.01, "{action:?}: the pixie's as its art has them");
+        }
+    }
+
+    /// The Jal'Raeth (go-eqoa-server's race 30) hold a player's items in their
+    /// hands: on each of their three bodies `grant` makes three nodes, under the
+    /// namesakes of the nodes HumanMale's item nodes hang from (its hands 13 and 22,
+    /// its left forearm 21), once only, and names them the item nodes; posed in the
+    /// idle and in the first attack each sits at its hand (within a hand's length
+    /// of it), where the body's own item nodes (the control) float at the knee,
+    /// half a metre and more away in the swing (in the idle the hands rest on the
+    /// knees). An NPC in the body keeps its own nodes. Needs
+    /// `run/eqoa.iso`.
+    #[test]
+    fn a_jalraeth_holds_its_items_in_its_hands() {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no disc at run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
+        let human = crate::raceemote::Rig::load(&lib, 0x70D8_98C6).unwrap();
+        for &id in HAND_SEATS[0].bodies {
+            let listed = races(&[[id, id]]);
+            let rig = crate::raceemote::Rig::load(&lib, id).unwrap();
+            let (mut sc, mut cache, mut rand) = (AnimScene::<Ee>::default(), AnimCache::new(), Rand(1));
+            let mut cs = load_csprite(&lib, lib.lookup(id as i32).unwrap(), &mut sc, &mut cache, &mut rand).unwrap();
+            let own = cs.item_nodes;
+            assert_eq!(cs.h.nodes.len(), 42);
+            let mut npc = load_csprite(&lib, lib.lookup(id as i32).unwrap(), &mut AnimScene::<Ee>::default(), &mut AnimCache::new(), &mut Rand(1)).unwrap();
+            grant(&mut npc, id, false, Some(&listed));
+            assert_eq!((npc.h.nodes.len(), npc.item_nodes), (42, own), "{id:#010x}: an NPC's as it was");
+            assert!(grant(&mut cs, id, true, Some(&listed)));
+            let made = cs.item_nodes;
+            assert_eq!(&made[..3], &[42, 43, 44], "{id:#010x}");
+            assert!(grant(&mut cs, id, true, Some(&listed)));
+            assert_eq!((cs.h.nodes.len(), cs.item_nodes), (45, made), "{id:#010x}: again, as it was");
+            for (slot, humans) in [18usize, 27, 28].into_iter().enumerate() {
+                let parent = cs.h.nodes[made[slot] as usize].parent as usize;
+                let hp = human.parent[humans] as usize;
+                assert_eq!(rig.refs[parent], human.refs[hp], "{id:#010x} slot {slot}: under the namesake of the human's node {hp}");
+            }
+            for action in [None, Some(23)] {
+                let mut t = 0;
+                while t <= 900 {
+                    sc.time = t;
+                    match action {
+                        Some(a) if t == 0 => {
+                            cs.set_action(a, &sc, &mut rand);
+                        }
+                        Some(_) => {}
+                        None => cs.set_locomotion(0, &sc, &mut rand),
+                    }
+                    cs.h.process(0, &sc);
+                    t += 16;
+                }
+                let at = |n: i32| {
+                    let m = cs.h.nodes[n as usize].world.to_cols();
+                    glam::Vec3::new(m[3][0], m[3][1], m[3][2])
+                };
+                let scale = cs.h.default_scale.0;
+                for slot in 0..3 {
+                    let (item, parent) = (made[slot], cs.h.nodes[made[slot] as usize].parent);
+                    let d = at(item).distance(at(parent));
+                    assert!(d < 0.25 * scale, "{id:#010x} {action:?} slot {slot}: {d:.3} from its hand");
+                }
+                let knee = at(own[0]).distance(at(made[0]));
+                eprintln!("{id:#010x} {action:?}: the body's own item node {knee:.3} from the hand's");
+                if action.is_some() {
+                    assert!(knee > 0.5, "{id:#010x} {action:?}: the control, its own item node {knee:.3} from the hand's");
+                }
+            }
         }
     }
 
