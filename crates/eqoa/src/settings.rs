@@ -587,6 +587,66 @@ impl Focus {
     }
 }
 
+/// The Profanity Filter's tier (Options > Interface; the GM Jibrish's
+/// petition 1625): the server's filter of what the player hears.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Profanity {
+    /// Nothing masked.
+    Off,
+    /// Only racial slurs masked, no swears ("retarded" not either).
+    Medium,
+    /// Every profane word and slur masked: the game's at every login, and
+    /// what On was before the tiers.
+    #[default]
+    High,
+}
+
+impl Profanity {
+    /// The row's order, which left and right step through (and round).
+    pub const ALL: [Profanity; 3] = [Profanity::Off, Profanity::Medium, Profanity::High];
+
+    /// As `client.opt` spells it; "on" (before the tiers) reads as High.
+    pub fn key(self) -> &'static str {
+        match self {
+            Profanity::Off => "off",
+            Profanity::Medium => "medium",
+            Profanity::High => "high",
+        }
+    }
+
+    pub fn from_key(s: &str) -> Option<Profanity> {
+        if s == "on" {
+            return Some(Profanity::High);
+        }
+        Profanity::ALL.into_iter().find(|p| p.key() == s)
+    }
+
+    /// The row's value, the client's words.
+    pub fn label(self) -> &'static str {
+        match self {
+            Profanity::Off => "Off",
+            Profanity::Medium => "Medium",
+            Profanity::High => "High",
+        }
+    }
+
+    /// As go-eqoa-server's 0x7E60 takes it (`net::session::PROFANITY_*`).
+    pub fn wire(self) -> u8 {
+        match self {
+            Profanity::Off => net::session::PROFANITY_OFF,
+            Profanity::Medium => net::session::PROFANITY_MEDIUM,
+            Profanity::High => net::session::PROFANITY_HIGH,
+        }
+    }
+
+    /// The next tier along the row, `d` < 0 back, rounding at the ends.
+    pub fn step(self, d: i32) -> Profanity {
+        let n = Profanity::ALL.len();
+        let at = Profanity::ALL.iter().position(|&p| p == self).unwrap_or(n - 1);
+        Profanity::ALL[(at + if d < 0 { n - 1 } else { 1 }) % n]
+    }
+}
+
 /// The most bytes of an output device's name Output Device keeps.
 pub const DEVICE_NAME_MAX: usize = 200;
 
@@ -730,8 +790,10 @@ pub struct ClientOptions {
     /// interface add an option to turn the profanity filter on or off"): the
     /// server's filter of what this player hears, told to a server that asks
     /// for it (`Session::agree_profanity_filter`, go-eqoa-server's 0x7E60);
-    /// on by default, as the game has it at every login. Options > Interface.
-    pub profanity_filter: bool,
+    /// High by default, as the game has it at every login. Options >
+    /// Interface. Three tiers since the GM Jibrish's petition 1625: Off,
+    /// Medium (only racial slurs) and High (every word, the old On).
+    pub profanity_filter: Profanity,
     /// Map (the user, 2026-11-09: "also add the map and quest helper we had
     /// in a former update"; on by default): the client's own map (M, the
     /// compass's click, `map`), the minimap, the waypoints on the compass and
@@ -1024,7 +1086,7 @@ impl Default for ClientOptions {
             item_links: true,
             auto_cast: true,
             auto_target: false,
-            profanity_filter: true,
+            profanity_filter: Profanity::High,
             map: true,
             minimap: true,
             map_markers: true,
@@ -1150,9 +1212,9 @@ impl ClientOptions {
         if !self.item_links {
             s.push_str("item_links=off\n");
         }
-        // the Profanity Filter only when off
-        if !self.profanity_filter {
-            s.push_str("profanity_filter=off\n");
+        // the Profanity Filter only when not High
+        if self.profanity_filter != Profanity::High {
+            s.push_str(&format!("profanity_filter={}\n", self.profanity_filter.key()));
         }
         // the map's and the quests' only when off
         for (on, key) in [
@@ -1323,8 +1385,11 @@ impl ClientOptions {
                 ("auto_cast", "off") => c.auto_cast = false,
                 ("auto_target", "on") => c.auto_target = true,
                 ("auto_target", "off") => c.auto_target = false,
-                ("profanity_filter", "on") => c.profanity_filter = true,
-                ("profanity_filter", "off") => c.profanity_filter = false,
+                ("profanity_filter", v) => {
+                    if let Some(p) = Profanity::from_key(v) {
+                        c.profanity_filter = p;
+                    }
+                }
                 ("map", "on") => c.map = true,
                 ("map", "off") => c.map = false,
                 ("minimap", "on") => c.minimap = true,
@@ -1641,7 +1706,7 @@ pub fn auto_target() -> bool {
 }
 
 /// Profanity Filter (Options > Interface).
-pub fn profanity_filter() -> bool {
+pub fn profanity_filter() -> Profanity {
     client().profanity_filter
 }
 
@@ -2715,12 +2780,19 @@ mod tests {
     /// written only when off.
     #[test]
     fn the_profanity_filter_is_kept_only_when_off() {
-        assert!(ClientOptions::default().profanity_filter, "on by default");
+        assert_eq!(ClientOptions::default().profanity_filter, Profanity::High, "High by default");
         assert!(!ClientOptions::default().to_text().contains("profanity"));
-        assert!(ClientOptions { profanity_filter: false, ..Default::default() }.to_text().contains("profanity_filter=off\n"));
-        assert!(!ClientOptions::from_text("profanity_filter=off").profanity_filter);
-        assert!(ClientOptions::from_text("profanity_filter=on").profanity_filter);
-        assert!(ClientOptions::from_text("profanity_filter=maybe").profanity_filter, "the default");
+        assert!(ClientOptions { profanity_filter: Profanity::Off, ..Default::default() }.to_text().contains("profanity_filter=off\n"));
+        assert!(ClientOptions { profanity_filter: Profanity::Medium, ..Default::default() }.to_text().contains("profanity_filter=medium\n"));
+        assert_eq!(ClientOptions::from_text("profanity_filter=off").profanity_filter, Profanity::Off);
+        assert_eq!(ClientOptions::from_text("profanity_filter=medium").profanity_filter, Profanity::Medium);
+        assert_eq!(ClientOptions::from_text("profanity_filter=high").profanity_filter, Profanity::High);
+        assert_eq!(ClientOptions::from_text("profanity_filter=on").profanity_filter, Profanity::High, "the old On");
+        assert_eq!(ClientOptions::from_text("profanity_filter=maybe").profanity_filter, Profanity::High, "the default");
+        // the row's steps, round at both ends
+        assert_eq!(Profanity::Off.step(1), Profanity::Medium);
+        assert_eq!(Profanity::High.step(1), Profanity::Off);
+        assert_eq!(Profanity::Off.step(-1), Profanity::High);
     }
 
     /// Item Links: on by default and written only when off.

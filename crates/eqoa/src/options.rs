@@ -10,8 +10,8 @@
 //! every setting back as it was and applies.
 //!
 //! The client's own on the game's Interface page: Profanity Filter under its
-//! rows (the GM Jibrish's petition 1490), On by default as the game is at
-//! every login; it is the server's filter of what the player hears, told to a
+//! rows (the GM Jibrish's petition 1490), Off, Medium (only racial slurs) or
+//! High (petition 1625), High by default as the game is at every login; it is the server's filter of what the player hears, told to a
 //! server that asks for it (go-eqoa-server's 0x7E60,
 //! `Session::agree_profanity_filter`), taken by Save Changes and put back by
 //! Triangle as an Extended row is.
@@ -765,7 +765,7 @@ impl WndOptions {
             // Save Changes as an Extended row is
             PROFANITY => {
                 let mut c = crate::settings::client();
-                c.profanity_filter = !c.profanity_filter;
+                c.profanity_filter = c.profanity_filter.step(d);
                 crate::settings::set_client(c);
             }
             16 => {
@@ -1285,7 +1285,7 @@ impl WndOptions {
             values.push(on_off(self.edit[3]));
         }
         items.push(PROFANITY);
-        values.push(on_off(crate::settings::profanity_filter() as u8));
+        values.push(Some(wide(crate::settings::profanity_filter().label())));
         self.item = items.get(self.row as usize).copied().unwrap_or(self.item);
         let mut labels = words(vui, &labels);
         labels.push(wide(PROFANITY_LABEL));
@@ -1847,9 +1847,10 @@ mod tests {
     }
 
     /// The Interface page's last row is the client's Profanity Filter (petition
-    /// 1490): down to it past the game's five, right turns it off in the
-    /// client's settings (what Play tells the server), Triangle on the menu puts
-    /// it back on. The control: the row above it (Vibration) leaves it alone.
+    /// 1490): down to it past the game's five, right steps it High -> Off ->
+    /// Medium in the client's settings (what Play tells the server; petition
+    /// 1625's tiers), left back, Triangle on the menu puts it back to High. The
+    /// control: the row above it (Vibration) leaves it alone.
     #[test]
     fn the_interface_page_turns_the_profanity_filter() {
         use crate::pointer::key;
@@ -1870,17 +1871,25 @@ mod tests {
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!(w.item, 11, "Vibration");
         w.key(&vui, &mut r, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
-        assert!(crate::settings::profanity_filter(), "the control: Vibration is not it");
+        use crate::settings::Profanity;
+        assert_eq!(crate::settings::profanity_filter(), Profanity::High, "the control: Vibration is not it");
         w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
         w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!((w.row, w.item), (5, PROFANITY), "the last row, and no row past it");
         w.key(&vui, &mut r, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
-        assert!(!crate::settings::profanity_filter(), "turned off");
+        assert_eq!(crate::settings::profanity_filter(), Profanity::Off, "turned off");
+        w.key(&vui, &mut r, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
+        assert_eq!(crate::settings::profanity_filter(), Profanity::Medium, "Medium");
+        w.key(&vui, &mut r, &mut o, key::LEFT, 0, &mut cues, &mut ups);
+        w.key(&vui, &mut r, &mut o, key::LEFT, 0, &mut cues, &mut ups);
+        assert_eq!(crate::settings::profanity_filter(), Profanity::High, "left back round to High");
+        w.key(&vui, &mut r, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
+        w.key(&vui, &mut r, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
         // Triangle to the menu, Triangle there: every setting as it was
         w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
         w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
-        assert!(crate::settings::profanity_filter(), "put back on");
+        assert_eq!(crate::settings::profanity_filter(), Profanity::High, "put back to High");
         crate::settings::testing::reset(false);
     }
 
