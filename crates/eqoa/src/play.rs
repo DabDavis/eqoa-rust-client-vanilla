@@ -1474,7 +1474,7 @@ pub fn chat_labels(play: &Play, text: &render::text::Text, size: (u32, u32)) -> 
     if play.hud.is_none()
         && let Some(name) = play.target_name()
     {
-        out.push(render::text::Label { at: [0.0, 1.0 - (24.0 * k) / size.1 as f32 * 2.0, 0.0], color: [1.0, 1.0, 1.0, 1.0], text: name });
+        out.push(render::text::Label { at: [0.0, 1.0 - (24.0 * k) / size.1 as f32 * 2.0, 0.0], color: [1.0, 1.0, 1.0, 1.0], text: name, size: 1.0 });
     }
     let n = rows.len();
     for (i, (s, c)) in rows.into_iter().enumerate() {
@@ -1482,7 +1482,7 @@ pub fn chat_labels(play: &Play, text: &render::text::Text, size: (u32, u32)) -> 
         let x = 12.0 * k + w / 2.0;
         let y = size.1 as f32 - 12.0 * k - line * (n - i) as f32 + line / 2.0;
         let ndc = [x / size.0 as f32 * 2.0 - 1.0, 1.0 - y / size.1 as f32 * 2.0, 0.0];
-        out.push(render::text::Label { at: ndc, color: c, text: s });
+        out.push(render::text::Label { at: ndc, color: c, text: s, size: 1.0 });
     }
     out
 }
@@ -1578,7 +1578,7 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
         // above it, both clear of the head (the owner, 2026-11-11: under the
         // name it covered the merc's head); the plate's rect takes both in
         if let Some(t) = &p.tag {
-            let tw = (width(t) as f32 * view.scale).round() as i32;
+            let tw = (width(t) as f32 * tag_size(height) * view.scale).round() as i32;
             min.1 -= h;
             if tw > w {
                 (min.0, max.0) = (qx - (tw >> 1), qx - (tw >> 1) + tw);
@@ -1606,13 +1606,24 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
     let mut out = Vec::new();
     for (_, _, ndc, p) in kept {
         let up = if p.tag.is_some() { line } else { 0.0 };
-        out.push(render::text::Label { at: [ndc.x, ndc.y + up, ndc.z], color: p.color, text: p.name.clone() });
+        out.push(render::text::Label { at: [ndc.x, ndc.y + up, ndc.z], color: p.color, text: p.name.clone(), size: 1.0 });
         if let Some(t) = &p.tag {
-            out.push(render::text::Label { at: ndc.to_array(), color: p.color, text: t.clone() });
+            out.push(render::text::Label { at: ndc.to_array(), color: p.color, text: t.clone(), size: tag_size(height) });
         }
     }
     out
 }
+
+/// How much smaller a merc's tag is drawn than its name: two of the font's
+/// pixels off its `height` (the GM Jibrish's petition 1587, 2026-11-11:
+/// "Lower the font size of mercenary display tags by 2"), the name the
+/// font's own size.
+fn tag_size(height: u32) -> f32 {
+    height.saturating_sub(TAG_SMALLER).max(1) as f32 / height.max(1) as f32
+}
+
+/// The font pixels a merc's tag is smaller than its name (petition 1587).
+const TAG_SMALLER: u32 = 2;
 
 /// `CalcSlotWorldTransform(slot)`'s translation: the slot's node under the
 /// centre transform `m`; None when the sprite lacks the slot (the game then
@@ -2179,6 +2190,10 @@ mod name_plates {
         assert!((ls[0].at[1] - 2.0 * 12.0 / 448.0).abs() < 1e-6, "the name a line above it: {:?}", ls[0].at);
         assert!(ls.iter().all(|l| l.at[1] >= -1e-6), "nothing below the name's own place");
         assert_eq!(ls[1].color, ls[0].color);
+        // the tag two of the font's pixels smaller, the name its own size
+        // (petition 1587)
+        assert_eq!(ls[0].size, 1.0, "the name unchanged");
+        assert!((ls[1].size - 10.0 / 12.0).abs() < 1e-6, "the tag 2 pixels smaller: {}", ls[1].size);
         let mut merc = plate([0.0, 0.0, 0.5], "Ralthas");
         merc.tag = Some("<Lonewulf's Mercenary>".into());
         let below = plate([0.0, -step, 0.5], "Kel");

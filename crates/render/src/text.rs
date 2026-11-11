@@ -19,12 +19,14 @@ struct Vertex {
 }
 
 /// One string to draw: centred on `at` (clip space after the divide: x, y
-/// in -1..1, z the depth), in `color`.
+/// in -1..1, z the depth), in `color`, at `size` of the list's scale (1:
+/// the font's own height; a merc's tag under its name is smaller).
 #[derive(Clone, Debug)]
 pub struct Label {
     pub at: [f32; 3],
     pub color: [f32; 4],
     pub text: String,
+    pub size: f32,
 }
 
 struct Glyph {
@@ -163,6 +165,7 @@ impl Text {
         let k = th / SCREEN_H * scale;
         let mut out = Vec::new();
         for l in labels {
+            let k = k * l.size;
             // The centre in target pixels, then the string's left edge.
             let cx = (l.at[0] * 0.5 + 0.5) * tw;
             let cy = (-l.at[1] * 0.5 + 0.5) * th;

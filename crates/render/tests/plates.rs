@@ -91,8 +91,8 @@ fn the_plates_go_under_the_particles_and_the_screens_text_over_them() {
     let t = r.text.as_mut().unwrap();
     // a plate at the middle, behind the particle; a label of the screen's
     // (the chat's, at depth 0) on the left
-    t.plates = vec![Label { at: [0.0, 0.0, 0.5], color: blue, text: "A".into() }];
-    t.labels = vec![Label { at: [-0.5, 0.0, 0.0], color: blue, text: "A".into() }];
+    t.plates = vec![Label { at: [0.0, 0.0, 0.5], color: blue, text: "A".into(), size: 1.0 }];
+    t.labels = vec![Label { at: [-0.5, 0.0, 0.0], color: blue, text: "A".into(), size: 1.0 }];
     // the plate drawn first, the red added over it
     close(pixel(&g, &mut r, size, (224, 224), std::slice::from_ref(&red)), [0.25 * 255.0, 0.0, 255.0], "plate");
     // the screen's text over the particle
@@ -117,8 +117,8 @@ fn the_plates_take_the_zooms_size_and_the_screens_text_its_own() {
     let blue = [0.0, 0.0, 255.0];
     let clear = [CLEAR.x * 255.0, CLEAR.y * 255.0, CLEAR.z * 255.0];
     let t = r.text.as_mut().unwrap();
-    t.plates = vec![Label { at: [0.0, 0.0, 0.5], color: [0.0, 0.0, 1.0, 1.0], text: "A".into() }];
-    t.labels = vec![Label { at: [-0.5, 0.0, 0.0], color: [0.0, 0.0, 1.0, 1.0], text: "A".into() }];
+    t.plates = vec![Label { at: [0.0, 0.0, 0.5], color: [0.0, 0.0, 1.0, 1.0], text: "A".into(), size: 1.0 }];
+    t.labels = vec![Label { at: [-0.5, 0.0, 0.0], color: [0.0, 0.0, 1.0, 1.0], text: "A".into(), size: 1.0 }];
     close(pixel(&g, &mut r, size, (mid + 6, mid), &[]), blue, "the game's size: 16 wide");
     r.text.as_mut().unwrap().plate_scale = 0.5;
     close(pixel(&g, &mut r, size, (mid + 6, mid), &[]), clear, "half: 8 wide");
@@ -155,7 +155,7 @@ fn a_plates_edge_columns_keep_their_width() {
     let centred = w as f32 / 2.0 - 5.0 * k;
     let left = centred.floor() + 0.75;
     let at = (left - centred) * 2.0 / w as f32;
-    r.text.as_mut().unwrap().plates = vec![Label { at: [at, 0.0, 0.5], color: [1.0; 4], text: "A".into() }];
+    r.text.as_mut().unwrap().plates = vec![Label { at: [at, 0.0, 0.5], color: [1.0; 4], text: "A".into(), size: 1.0 }];
     let view = View { clear: Vec3::ZERO, ..View::daylight(Mat4::IDENTITY) };
     let mut columns = |filter| {
         render::ui::set_text_filter(filter);

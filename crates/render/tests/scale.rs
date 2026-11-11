@@ -145,8 +145,8 @@ fn a_shot_at_a_scale_is_the_larger_shot_averaged() {
     let glyph: Vec<u8> = (0..7 * 9).flat_map(|i| if (i % 7 + i / 7) % 3 == 0 { [0, 0, 0, 0] } else { [255; 4] }).collect();
     r.set_font(&device, &queue, &esf::font::Font { id: 1, height: 9, glyphs: vec![esf::font::Glyph { code: b'A' as u16, width: 7, rgba: glyph }] });
     let t = r.text.as_mut().unwrap();
-    t.plates = vec![Label { at: [-0.1, 0.05, 0.5], color: [0.2, 0.9, 0.4, 1.0], text: "AAA".into() }];
-    t.labels = vec![Label { at: [-0.45, -0.6, 0.0], color: [1.0, 1.0, 0.6, 1.0], text: "AA".into() }];
+    t.plates = vec![Label { at: [-0.1, 0.05, 0.5], color: [0.2, 0.9, 0.4, 1.0], text: "AAA".into(), size: 1.0 }];
+    t.labels = vec![Label { at: [-0.45, -0.6, 0.0], color: [1.0, 1.0, 0.6, 1.0], text: "AA".into(), size: 1.0 }];
     // a 2D quad over the triangle's right edge, its texture's texels of four
     // colours by turns, at a frame scale that is not whole
     let mut ui = Ui::new(&device, render::TARGET_FORMAT, render::DEPTH_FORMAT);
