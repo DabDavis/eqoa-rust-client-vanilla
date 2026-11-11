@@ -7,6 +7,15 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Your mercenary's numbers in their own colour
+- The damage your mercenary does now floats up in **light blue** and its heals on you in **purple**, so you can tell
+  them from your own hits (white) and heals (green) at a glance. Its swings, its spells and its damage over time are
+  all light blue; its heals and its heals over time on you are purple.
+- Pick other colours in **Options > Extended > Merc Colors** (Merc Damage and Merc Heals). Set one to **Default** to
+  have it drawn as before: its hits white like yours, its heals green.
+- This needs the server to say which numbers are your mercenary's; on a server that does not, they look as they
+  always did.
+
 ## 2026-11-11 · Smaller mercenary tags, whole shadows under the lantern
 - A mercenary's "<Owner's Mercenary>" line over its name is now drawn a little smaller than the name, so the name
   stands out. The name itself is the same size as before.

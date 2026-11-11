@@ -25,7 +25,8 @@ current.
   the floating numbers of the player's own figures and its pet's in a colour chosen for what made them on a server
   that tags them (the server owner's of 2026-11-09, "we can add the number colors to extended menu": `numcolor`,
   go-eqoa-server's 0x7E38/0x7E39 and one byte after 0x00DB's body, Extended > Number Colors; every row Default, the
-  game's own colour, until chosen),
+  game's own colour, until chosen; the merc's figures too, on a server of the tags' layout 2: Extended > Merc Colors,
+  Light Blue and Purple until chosen, petition 1613),
   a DPS meter of the player's group on a server that keeps one (the server owner's of 2026-11-10, "lets add dps meters,
   will work solo, group, raid": `dpsmeter`, go-eqoa-server's 0x7E3A-0x7E3D, a HUD panel under the quest tracker,
   `/dps`, Extended > Combat, off by default; off, or on any other server, nothing is drawn or asked),

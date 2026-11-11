@@ -473,15 +473,22 @@ pub const OP_PET_EFFECTS_DATA: u16 = 0x7E33;
 /// go-eqoa-server's own: what made each figure, for the Extended page's Number
 /// Colors (`Play::damage_indication`; the user, 2026-11-09: "we can add the
 /// number colors to extended menu"). The offer, server to client once the
-/// player is in the world: a u8, 1, the tag's layout. CLIENT has no such case,
+/// player is in the world: a u8, the newest tag layout it tells (1; 2 from
+/// 2026-11-11, the merc's bit: [`NumberTag::merc`]). CLIENT has no such case,
 /// so a PS2 ignores it; nothing is asked of a server that made no offer.
 pub const OP_NUMBER_TAGS_OFFER: u16 = 0x7E38;
 /// The answer to [`OP_NUMBER_TAGS_OFFER`], client to server, at once and
-/// whenever it changes (`agree_number_tags`): a u8, 1 to have the figures
-/// tagged (a Number Colors row not Default), 0 to stop. From a 1 on, each 0x00DB
-/// of a figure the player or its pet made carries one byte after its body
-/// ([`number_tag`]); every other is the retail body.
+/// whenever it changes (`agree_number_tags`): a u8, the layout read
+/// ([`NUMBER_TAGS_LAYOUT`], at most the offer's) to have the figures tagged (a
+/// Number Colors row not Default), 0 to stop. From then on each 0x00DB of a
+/// figure the player, its pet or its merc made carries one byte after its body
+/// ([`number_tag`]); every other is the retail body. A server that offered 1
+/// reads any answer but 0 as 1 and never sets the merc's bit.
 pub const OP_NUMBER_TAGS_ANSWER: u16 = 0x7E39;
+/// The newest number tag layout this client reads: 2, the merc's bit
+/// (go-eqoa-server, petition 1613: "Is there a way that the text color for
+/// mercs damage be changed to be different than the chars?").
+pub const NUMBER_TAGS_LAYOUT: u8 = 2;
 /// go-eqoa-server's own: a damage meter, who in the player's group did how much
 /// damage in the fight and how fast (`dpsmeter`, the Extended page's DPS Meter;
 /// the server owner, 2026-11-10: "lets add dps meters, will work solo, group,
@@ -579,15 +586,19 @@ pub const OP_RAID_MASTER_LOOT: u16 = 0x7E47;
 pub const OP_RAID_COMMAND: u16 = 0x7E48;
 
 /// What made a figure, the byte after a tagged 0x00DB's body
-/// ([`OP_NUMBER_TAGS_ANSWER`]): its kind and whether the player's pet made it.
+/// ([`OP_NUMBER_TAGS_ANSWER`]): its kind and whether the player's pet or merc
+/// made it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NumberTag {
-    /// The low 7 bits: 1 a swing, 2 a spell or an ability, 3 a damage over
+    /// The low 6 bits: 1 a swing, 2 a spell or an ability, 3 a damage over
     /// time's tick, 4 a damage shield, 5 a proc, 6 a heal, 7 a heal over
     /// time's tick (and any other a later server may send).
     pub kind: u8,
     /// Bit 7: the player's pet made it.
     pub pet: bool,
+    /// Bit 6 (layout 2): the player's merc made it. A server of layout 1 never
+    /// sets it (its kinds end at 7), and tells a merc's hit as the pet's.
+    pub merc: bool,
 }
 
 /// A 0x00DB's tag: `rest` is what follows its body (u32 attacker, zigzag
@@ -596,7 +607,7 @@ pub struct NumberTag {
 /// (no byte, a server's patch's three colour bytes) none.
 pub fn number_tag(rest: &[u8], offered: bool) -> Option<NumberTag> {
     let &[b] = rest else { return None };
-    (offered && b & 0x7F != 0).then_some(NumberTag { kind: b & 0x7F, pet: b & 0x80 != 0 })
+    (offered && b & 0x3F != 0).then_some(NumberTag { kind: b & 0x3F, pet: b & 0x80 != 0, merc: b & 0x40 != 0 })
 }
 
 /// One effect on the pet ([`OP_PET_EFFECTS_DATA`]).
@@ -1161,6 +1172,8 @@ pub struct Session {
     /// Whether the server offered the number tags ([`OP_NUMBER_TAGS_OFFER`])
     /// on this connection, and what it was last told (none since the offer).
     pub number_tags_offer: bool,
+    /// The layout the offer named ([`OP_NUMBER_TAGS_OFFER`]).
+    number_tags_layout: u8,
     number_tags_asked: Option<bool>,
     /// The same for the damage meter ([`OP_DPS_METER_OFFER`]).
     pub dps_meter_offer: bool,
@@ -1348,6 +1361,7 @@ impl Session {
             pet_effects: Vec::new(),
             pet_effects_at: 0,
             number_tags_offer: false,
+            number_tags_layout: 0,
             number_tags_asked: None,
             dps_meter_offer: false,
             dps_meter_asked: None,
@@ -1612,14 +1626,16 @@ impl Session {
     /// Number Colors: a server that offered the number tags
     /// ([`OP_NUMBER_TAGS_OFFER`]) is told whether to send them (`want`: a row
     /// not Default), at once and whenever that changes, and afresh at another
-    /// offer; one that made no offer is told nothing.
+    /// offer; one that made no offer is told nothing. Wanted, the answer is
+    /// the layout read: [`NUMBER_TAGS_LAYOUT`], or the offer's when that is
+    /// older (1 at least).
     pub fn agree_number_tags(&mut self, want: bool) {
         if !self.number_tags_offer || self.number_tags_asked == Some(want) {
             return;
         }
         self.number_tags_asked = Some(want);
         let mut w = Writer::op(OP_NUMBER_TAGS_ANSWER);
-        w.u8(want as u8);
+        w.u8(if want { self.number_tags_layout.clamp(1, NUMBER_TAGS_LAYOUT) } else { 0 });
         self.send(&w.data);
     }
 
@@ -2514,9 +2530,10 @@ impl Session {
             // the number tags offered (again at every world entry): told
             // afresh whether the client wants them (`agree_number_tags`)
             OP_NUMBER_TAGS_OFFER => {
-                r.u8();
+                let layout = r.u8();
                 if !r.error {
                     self.number_tags_offer = true;
+                    self.number_tags_layout = layout;
                     self.number_tags_asked = None;
                 }
             }
@@ -4102,6 +4119,25 @@ mod tests {
         assert_eq!(answers(&mut s), [], "a new connection: nothing asked before its offer");
     }
 
+    // The number tags' layout (go-eqoa-server's layout 2, the merc's bit): a
+    // wanted answer names the layout read, the offer's when older (an offer of
+    // 1, every server before, answered 1 as before), the newest this client
+    // reads when newer; each a fresh session (the control: the u8 is the
+    // offer's, not a constant).
+    #[test]
+    fn number_tags_answer_names_the_layout() {
+        for (offer, want) in [(1u8, 1u8), (2, 2), (9, NUMBER_TAGS_LAYOUT), (0, 1)] {
+            let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+            deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x38, 0x7E, offer]);
+            s.agree_number_tags(true);
+            s.flush();
+            let got: Vec<_> = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x39, 0x7E])).collect();
+            assert_eq!(got, [(251, vec![0x39, 0x7E, want])], "offered {offer}");
+        }
+        assert_eq!(NUMBER_TAGS_LAYOUT, 2);
+    }
+
     // The NPCs' body tints (go-eqoa-server's 0x7E3E-0x7E40): an offer is
     // answered at once with a u8 1, each time it comes, and leaves the game the
     // empty set (this client holds none until the server sends them); a set is
@@ -4247,15 +4283,19 @@ mod tests {
     }
 
     /// A 0x00DB's tag: one byte after its body from a server that offered
-    /// them, its low 7 bits the kind and bit 7 the pet's; none with no offer
+    /// them, its low 6 bits the kind, bit 7 the pet's, bit 6 the merc's; none with no offer
     /// (the control), no byte, a kind of 0, or three bytes (a server's patch's
     /// colour).
     #[test]
     fn a_number_tag_is_one_byte_from_a_server_that_offered() {
-        assert_eq!(number_tag(&[0x05], true), Some(NumberTag { kind: 5, pet: false }));
-        assert_eq!(number_tag(&[0x86], true), Some(NumberTag { kind: 6, pet: true }));
-        assert_eq!(number_tag(&[0x81], true), Some(NumberTag { kind: 1, pet: true }));
-        assert_eq!(number_tag(&[0x09], true), Some(NumberTag { kind: 9, pet: false }), "a kind a later server sends");
+        assert_eq!(number_tag(&[0x05], true), Some(NumberTag { kind: 5, pet: false, merc: false }));
+        assert_eq!(number_tag(&[0x86], true), Some(NumberTag { kind: 6, pet: true, merc: false }));
+        assert_eq!(number_tag(&[0x81], true), Some(NumberTag { kind: 1, pet: true, merc: false }));
+        assert_eq!(number_tag(&[0x09], true), Some(NumberTag { kind: 9, pet: false, merc: false }), "a kind a later server sends");
+        // layout 2: bit 6 the merc's
+        assert_eq!(number_tag(&[0x41], true), Some(NumberTag { kind: 1, pet: false, merc: true }), "the merc's swing");
+        assert_eq!(number_tag(&[0x46], true), Some(NumberTag { kind: 6, pet: false, merc: true }), "the merc's heal");
+        assert_eq!(number_tag(&[0x40], true), None, "the merc's bit alone");
         assert_eq!(number_tag(&[0x05], false), None, "no offer: a stray byte is no tag");
         assert_eq!(number_tag(&[], true), None);
         assert_eq!(number_tag(&[0x00], true), None);

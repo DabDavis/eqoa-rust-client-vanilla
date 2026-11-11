@@ -11700,14 +11700,22 @@ mod commands {
         let red = Some([255, 48, 48]);
         assert_eq!(number_rgb(true, &[255, 128, 0], true, &c), Some([255, 128, 0]), "the patch's");
         assert_eq!(number_rgb(true, &[0x05], true, &c), None, "a patch colours: no tag read");
-        assert_eq!(number_rgb(true, &[], false, &[0; 6]), None, "a patch's number with no colour: the game's");
+        assert_eq!(number_rgb(true, &[], false, &[0; crate::numcolor::ROWS]), None, "a patch's number with no colour: the game's");
         assert_eq!(number_rgb(false, &[0x05], true, &c), red, "a proc: Your Procs");
         assert_eq!(number_rgb(false, &[0x81], true, &c), Some([176, 96, 255]), "its pet's swing: Pet Damage");
         assert_eq!(number_rgb(false, &[0x85], true, &c), None, "Pet Procs Default: the game's");
         assert_eq!(number_rgb(false, &[0x05], false, &c), None, "no offer: no tag");
         assert_eq!(number_rgb(false, &[], true, &c), None, "untagged");
         assert_eq!(number_rgb(false, &[255, 128, 0], true, &c), None, "no patch: three bytes are nothing");
-        assert_eq!(number_rgb(false, &[0x05], true, &[0; 6]), None, "every row Default");
+        assert_eq!(number_rgb(false, &[0x05], true, &[0; crate::numcolor::ROWS]), None, "every row Default");
+        // the merc's (layout 2, bit 6), as the rows come: Light Blue, Purple
+        let d = crate::numcolor::DEFAULTS;
+        assert_eq!(number_rgb(false, &[0x41], true, &d), Some([130, 190, 255]), "its merc's swing: Merc Damage");
+        assert_eq!(number_rgb(false, &[0x42], true, &d), Some([130, 190, 255]), "its merc's spell");
+        assert_eq!(number_rgb(false, &[0x46], true, &d), Some([176, 96, 255]), "its merc's heal: Merc Heals");
+        assert_eq!(number_rgb(false, &[0x01], true, &d), None, "its own swing: the game's");
+        assert_eq!(number_rgb(false, &[0x81], true, &d), None, "the control: a layout 1 server's merc hit (the pet's bit) is Pet Damage, Default");
+        assert_eq!(number_rgb(true, &[0x41], true, &d), None, "a patch colours: no tag read");
     }
 
     /// Number Colors on the screen (`numcolor`, go-eqoa-server's tags): with
@@ -11744,6 +11752,11 @@ mod commands {
         };
         let tagged = [Some(0x01), Some(0x05), Some(0x06), Some(0x86), None];
         // every row Default: the game's colours, tags or none
+        let mut c = crate::settings::client();
+        assert_eq!(c.number_colors, crate::numcolor::DEFAULTS, "as they come");
+        let as_they_came = c.clone();
+        c.number_colors = [0; crate::numcolor::ROWS];
+        crate::settings::set_client(c);
         let mut p = play();
         p.session.number_tags_offer = true;
         let game = run(&mut p, tagged);
@@ -11766,6 +11779,30 @@ mod commands {
         // and tagged numbers from a server that made no offer: the byte is not read
         let mut p = play();
         assert_eq!(run(&mut p, tagged), game);
+        // the merc's (petition 1613), with the rows as they come: its hit from
+        // the player (as the server tells it) Light Blue, its heal on the
+        // player (from the merc) Purple, the player's own hit and heal the
+        // game's white and green
+        crate::settings::set_client(as_they_came);
+        let (light_blue, purple) = ([130.0 / 255.0, 190.0 / 255.0, 1.0, 1.0], [176.0 / 255.0, 96.0 / 255.0, 1.0, 1.0]);
+        let mut p = play();
+        p.session.number_tags_offer = true;
+        let me = p.self_id32().expect("the player's id");
+        let (foe, merc) = (0x200, 0x400);
+        p.damage_indication(&msg(me, -40, foe, Some(0x01)), 1); // its own hit
+        p.damage_indication(&msg(me, -50, foe, Some(0x41)), 1); // its merc's hit
+        p.damage_indication(&msg(merc, 125, me, Some(0x46)), 1); // its merc's heal on it
+        p.damage_indication(&msg(me, 25, me, Some(0x06)), 1); // its own heal
+        assert_eq!(colors(&mut p, me, foe), [white, light_blue, purple, green]);
+        // the control: the same from an older server (layout 1: the merc's hit
+        // with the pet's bit, its heal untagged): the game's
+        let mut p = play();
+        p.session.number_tags_offer = true;
+        p.damage_indication(&msg(me, -40, foe, Some(0x01)), 1);
+        p.damage_indication(&msg(me, -50, foe, Some(0x81)), 1);
+        p.damage_indication(&msg(merc, 125, me, None), 1);
+        p.damage_indication(&msg(me, 25, me, Some(0x06)), 1);
+        assert_eq!(colors(&mut p, me, foe), [white, white, green, green]);
         crate::settings::testing::reset(false);
     }
 
@@ -11798,16 +11835,21 @@ mod commands {
             c.number_colors[row] = crate::numcolor::from_key(key).unwrap();
             crate::settings::set_client(c);
         };
-        set(0, "orange");
+        // as the rows come (the merc's coloured): asked; every row Default:
+        // stopped; one chosen: asked again
         p.agree_number_tags();
         assert!(answers(&mut p).is_empty(), "no offer: nothing asked");
         p.session.number_tags_offer = true;
         p.agree_number_tags();
         p.agree_number_tags();
-        assert_eq!(answers(&mut p), vec![vec![0x39, 0x7E, 1]], "a row chosen: asked once");
-        set(0, "default");
+        assert_eq!(answers(&mut p), vec![vec![0x39, 0x7E, 1]], "as they come (the merc's rows): asked once");
+        set(6, "default");
+        set(7, "default");
         p.agree_number_tags();
         assert_eq!(answers(&mut p), vec![vec![0x39, 0x7E, 0]], "every row Default: stopped");
+        set(0, "orange");
+        p.agree_number_tags();
+        assert_eq!(answers(&mut p), vec![vec![0x39, 0x7E, 1]], "a row chosen: asked");
         crate::settings::testing::reset(false);
     }
 

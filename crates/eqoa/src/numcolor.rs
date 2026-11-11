@@ -19,18 +19,43 @@
 //! a figure on the player that another made, a heal from another) is always the
 //! game's colour, and so is any number while a server's patch colours them
 //! (Sandstorm's S2: `s2::Rules::damage_rgb`, its three bytes, read as before).
+//!
+//! Two rows more, Merc Damage and Merc Heals, on a page of their own (Extended
+//! > Merc Colors: Number Colors' page is full), for the figures the player's
+//! merc made (go-eqoa-server's layout 2, the tag's bit 6; petition 1613,
+//! Thorinoak: "Is there a way that the text color for mercs damage be changed
+//! to be different than the chars?"). Unlike the others they are not Default
+//! until chosen: Light Blue and Purple (`DEFAULTS`), so a merc's numbers stand
+//! apart from the player's own without a pick, and the client asks for the tags
+//! from the first login (`wanted`). Set to Default they are the game's colour:
+//! a merc's hit the white of the player's own, its heal the green of any.
 
 use net::session::NumberTag;
 
 /// The rows, in the page's order: what each is called and its key in
 /// `client.opt`.
-pub const ROWS: usize = 6;
-pub const LABELS: [&str; ROWS] = ["Your Damage", "Your Procs", "Your Heals", "Pet Damage", "Pet Procs", "Pet Heals"];
-pub const KEYS: [&str; ROWS] = ["damage", "procs", "heals", "pet_damage", "pet_procs", "pet_heals"];
+pub const ROWS: usize = 8;
+pub const LABELS: [&str; ROWS] = ["Your Damage", "Your Procs", "Your Heals", "Pet Damage", "Pet Procs", "Pet Heals", "Merc Damage", "Merc Heals"];
+pub const KEYS: [&str; ROWS] = ["damage", "procs", "heals", "pet_damage", "pet_procs", "pet_heals", "merc_damage", "merc_heals"];
 
 /// The Extended page's items for the rows (`options::EXTENDED_ITEMS`), in the
 /// rows' order.
-pub const ITEMS: [i32; ROWS] = [64, 65, 66, 67, 68, 69];
+pub const ITEMS: [i32; ROWS] = [64, 65, 66, 67, 68, 69, 80, 81];
+/// Number Colors' page: the player's and the pet's rows.
+pub const NUMBER_ITEMS: [i32; 6] = [64, 65, 66, 67, 68, 69];
+/// Merc Colors' page: the merc's rows.
+pub const MERC_ITEMS: [i32; 2] = [80, 81];
+
+/// The row of an Extended item, none for another's.
+pub fn row_of_item(item: i32) -> Option<usize> {
+    ITEMS.iter().position(|&i| i == item)
+}
+
+/// Each row's choice until the player picks: Default (the game's colour) but
+/// for the merc's, Light Blue for its damage and Purple for its heals, each
+/// unlike the game's white, yellow and green (the owner, petition 1613: a
+/// merc's numbers distinct from the player's own as they come).
+pub const DEFAULTS: [Choice; ROWS] = [0, 0, 0, 0, 0, 0, 8, 6];
 
 /// One colour a row may take: its name on the page, its key in `client.opt`,
 /// and the number's RGB.
@@ -91,7 +116,9 @@ pub fn from_key(key: &str) -> Option<Choice> {
 
 /// The row a tag colours: Damage for a swing, a spell, a tick and a shield
 /// (kinds 1-4), Procs for a proc (5), Heals for a heal and its ticks (6, 7),
-/// the pet's three for the pet's; none for a kind this client does not know.
+/// the pet's three for the pet's; the merc's (its bit, before the pet's) Merc
+/// Damage for any that hurts (a proc too) and Merc Heals for a heal and its
+/// ticks; none for a kind this client does not know.
 pub fn row(tag: NumberTag) -> Option<usize> {
     let r = match tag.kind {
         1..=4 => 0,
@@ -99,7 +126,13 @@ pub fn row(tag: NumberTag) -> Option<usize> {
         6 | 7 => 2,
         _ => return None,
     };
-    Some(if tag.pet { r + 3 } else { r })
+    Some(if tag.merc {
+        if r == 2 { 7 } else { 6 }
+    } else if tag.pet {
+        r + 3
+    } else {
+        r
+    })
 }
 
 /// The colour a tagged number is drawn in with the rows `choices`: its row's,
@@ -109,7 +142,8 @@ pub fn rgb(tag: Option<NumberTag>, choices: &[Choice; ROWS]) -> Option<[u8; 3]> 
 }
 
 /// Whether the server should tag the numbers: any row not Default
-/// (`Session::agree_number_tags`).
+/// (`Session::agree_number_tags`); with the merc's rows' `DEFAULTS`, from the
+/// first login.
 pub fn wanted(choices: &[Choice; ROWS]) -> bool {
     choices.iter().any(|&c| paint(c).is_some())
 }
@@ -126,7 +160,11 @@ mod tests {
     use super::*;
 
     fn tag(kind: u8, pet: bool) -> Option<NumberTag> {
-        Some(NumberTag { kind, pet })
+        Some(NumberTag { kind, pet, merc: false })
+    }
+
+    fn merc(kind: u8) -> Option<NumberTag> {
+        Some(NumberTag { kind, pet: false, merc: true })
     }
 
     /// Each kind to its row, the pet's three after the player's; a kind not
@@ -135,19 +173,41 @@ mod tests {
     fn kinds_go_to_their_rows() {
         let want = [(1, 0), (2, 0), (3, 0), (4, 0), (5, 1), (6, 2), (7, 2)];
         for (kind, r) in want {
-            assert_eq!(row(NumberTag { kind, pet: false }), Some(r), "kind {kind}");
-            assert_eq!(row(NumberTag { kind, pet: true }), Some(r + 3), "the pet's kind {kind}");
+            assert_eq!(row(NumberTag { kind, pet: false, merc: false }), Some(r), "kind {kind}");
+            assert_eq!(row(NumberTag { kind, pet: true, merc: false }), Some(r + 3), "the pet's kind {kind}");
         }
-        assert_eq!(row(NumberTag { kind: 8, pet: false }), None);
-        assert_eq!(row(NumberTag { kind: 0, pet: true }), None);
+        assert_eq!(row(NumberTag { kind: 8, pet: false, merc: false }), None);
+        assert_eq!(row(NumberTag { kind: 0, pet: true, merc: false }), None);
+        // the merc's: its damage (a proc too) and its heals, before a pet's bit
+        for kind in 1..=5 {
+            assert_eq!(row(NumberTag { kind, pet: false, merc: true }), Some(6), "the merc's kind {kind}");
+        }
+        for kind in [6, 7] {
+            assert_eq!(row(NumberTag { kind, pet: false, merc: true }), Some(7), "the merc's kind {kind}");
+            assert_eq!(row(NumberTag { kind, pet: true, merc: true }), Some(7), "the merc's bit first");
+        }
+        assert_eq!(row(NumberTag { kind: 9, pet: false, merc: true }), None);
         // the control: a table that put procs with damage would fail the above
-        assert_ne!(row(NumberTag { kind: 5, pet: false }), row(NumberTag { kind: 1, pet: false }));
+        assert_ne!(row(NumberTag { kind: 5, pet: false, merc: false }), row(NumberTag { kind: 1, pet: false, merc: false }));
     }
 
     /// Default draws the game's colour (none), a choice its paint, each row
     /// its own; an untagged number is the game's whatever is chosen.
     #[test]
     fn a_rows_colour_is_its_choice() {
+        // the defaults: the merc's numbers coloured, every other the game's
+        let d = DEFAULTS;
+        assert!(wanted(&d), "the merc's rows ask for the tags from the first login");
+        assert_eq!(rgb(merc(1), &d), Some([130, 190, 255]), "Merc Damage: Light Blue");
+        assert_eq!(rgb(merc(3), &d), Some([130, 190, 255]), "its tick too");
+        assert_eq!(rgb(merc(6), &d), Some([176, 96, 255]), "Merc Heals: Purple");
+        assert_eq!(rgb(merc(7), &d), Some([176, 96, 255]), "its heal over time's tick");
+        for k in 1..=7 {
+            assert_eq!(rgb(tag(k, false), &d), None, "the player's own: the game's");
+            assert_eq!(rgb(tag(k, true), &d), None, "the pet's: the game's");
+        }
+        // the control: the same merc tag read as a layout 1 server's pet bit is the pet's row
+        assert_eq!(rgb(tag(1, true), &d), None);
         let mut c = [0; ROWS];
         for k in 1..=7 {
             assert_eq!(rgb(tag(k, false), &c), None, "every row Default: the game's colours");
@@ -164,6 +224,10 @@ mod tests {
         assert_eq!(rgb(tag(5, true), &c), None, "Pet Procs still Default");
         assert_eq!(rgb(None, &c), None, "untagged: the game's");
         assert_eq!(rgb(tag(9, false), &c), None, "a kind not known: the game's");
+        assert_eq!(rgb(merc(1), &c), None, "Merc Damage set to Default: the game's");
+        assert!(LABELS.iter().zip(KEYS).all(|(l, k)| LABELS.iter().filter(|&&m| m == *l).count() == 1 && KEYS.iter().filter(|&&j| j == k).count() == 1));
+        assert_eq!(NUMBER_ITEMS.iter().chain(&MERC_ITEMS).copied().collect::<Vec<_>>(), ITEMS, "the two pages hold every row once");
+        assert_eq!(ITEMS.map(|i| row_of_item(i)), core::array::from_fn(Some));
     }
 
     /// The round: Default, then the palette, then Default again, either way;

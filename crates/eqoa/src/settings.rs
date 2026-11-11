@@ -696,7 +696,9 @@ pub struct ClientOptions {
     /// numbers of the player's own figures and its pet's, by what made them, on a
     /// server that says so (go-eqoa-server's tags), in `numcolor::ROWS`' order:
     /// 0 Default (the game's own colour), else `numcolor::PALETTE[n - 1]`. Every
-    /// row Default by default, so nothing changes until one is chosen.
+    /// row Default by default but the merc's two (Merc Colors, petition 1613:
+    /// `numcolor::DEFAULTS`), so only a merc's numbers change until one is
+    /// chosen.
     pub number_colors: [crate::numcolor::Choice; crate::numcolor::ROWS],
     /// DPS Meter (`dpsmeter`; the server owner's of 2026-11-10: "lets add dps
     /// meters, will work solo, group, raid"): the HUD's damage meter of the
@@ -1016,7 +1018,7 @@ impl Default for ClientOptions {
             overlapping_names: false,
             raid_list: true,
             pet_effects: true,
-            number_colors: [0; crate::numcolor::ROWS],
+            number_colors: crate::numcolor::DEFAULTS,
             dps_meter: false,
             dps_view: crate::dpsmeter::View::Fight,
             item_links: true,
@@ -1122,10 +1124,12 @@ impl ClientOptions {
         if !self.pet_effects {
             s.push_str("pet_effects=off\n");
         }
-        // Number Colors only where a row is not Default
-        for (key, &c) in crate::numcolor::KEYS.iter().zip(&self.number_colors) {
-            if let Some(p) = crate::numcolor::paint(c) {
-                s.push_str(&format!("number_color.{key}={}\n", p.key));
+        // Number Colors only where a row is not as it came (Default, or a
+        // merc row's colour: `numcolor::DEFAULTS`), a row chosen Default as
+        // `default`
+        for ((key, &c), d) in crate::numcolor::KEYS.iter().zip(&self.number_colors).zip(crate::numcolor::DEFAULTS) {
+            if c != d {
+                s.push_str(&format!("number_color.{key}={}\n", crate::numcolor::paint(c).map_or("default", |p| p.key)));
             }
         }
         // the DPS Meter only when on, what it shows only when Overall
@@ -2737,8 +2741,8 @@ mod tests {
     #[test]
     fn number_colors_are_kept_only_when_chosen() {
         let d = ClientOptions::default();
-        assert_eq!(d.number_colors, [0; crate::numcolor::ROWS], "Default by default");
-        assert!(!d.to_text().contains("number_color"), "nothing written for Default");
+        assert_eq!(d.number_colors, [0, 0, 0, 0, 0, 0, 8, 6], "Default by default, the merc's Light Blue and Purple");
+        assert!(!d.to_text().contains("number_color"), "nothing written as they came");
         let mut c = ClientOptions::default();
         c.number_colors[1] = crate::numcolor::from_key("red").unwrap();
         c.number_colors[5] = crate::numcolor::from_key("light_blue").unwrap();
@@ -2748,8 +2752,15 @@ mod tests {
         assert_eq!(ClientOptions::from_text(&text).number_colors, c.number_colors, "read back");
         assert_eq!(ClientOptions::from_text(&text), c, "and nothing else changed");
         let odd = ClientOptions::from_text("number_color.procs=mauve\nnumber_color.elbows=red\nnumber_color.heals=default");
-        assert_eq!(odd.number_colors, [0; crate::numcolor::ROWS], "not understood: Default");
-        assert_eq!(ClientOptions::from_text("number_color.pet_damage=orange").number_colors, [0, 0, 0, 3, 0, 0]);
+        assert_eq!(odd.number_colors, crate::numcolor::DEFAULTS, "not understood: as they came");
+        assert_eq!(ClientOptions::from_text("number_color.pet_damage=orange").number_colors, [0, 0, 0, 3, 0, 0, 8, 6]);
+        // a merc row chosen Default is kept as `default`, another colour as its key
+        let mut m = ClientOptions::default();
+        m.number_colors[6] = 0;
+        m.number_colors[7] = crate::numcolor::from_key("green").unwrap();
+        let text = m.to_text();
+        assert!(text.contains("number_color.merc_damage=default\n") && text.contains("number_color.merc_heals=green\n"), "{text}");
+        assert_eq!(ClientOptions::from_text(&text).number_colors, m.number_colors, "read back");
     }
 
     #[test]

@@ -880,9 +880,10 @@ impl WndOptions {
                     // Number Colors: round Default and the palette, the next
                     // number drawn in it and the server told from the next
                     // frame whether to tag them (`Session::agree_number_tags`)
-                    64..=69 => {
-                        let row = (self.item - 64) as usize;
-                        c.number_colors[row] = crate::numcolor::step(c.number_colors[row], d);
+                    64..=69 | 80 | 81 => {
+                        if let Some(row) = crate::numcolor::row_of_item(self.item) {
+                            c.number_colors[row] = crate::numcolor::step(c.number_colors[row], d);
+                        }
                     }
                     // DPS Meter: the server told from the next frame
                     // (`Session::agree_dps_meter`), the panel drawn or not
@@ -1461,7 +1462,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 63] = [
+const EXTENDED_ITEMS: [(i32, &str); 65] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1525,6 +1526,8 @@ const EXTENDED_ITEMS: [(i32, &str); 63] = [
     (77, "Reset HUD"),
     (78, "Auto-Cast"),
     (79, "Auto Target"),
+    (80, crate::numcolor::LABELS[6]),
+    (81, crate::numcolor::LABELS[7]),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1577,10 +1580,11 @@ struct Category {
 /// folder's files a page cannot reach; 2026-11-09: Texture Folder); Map last
 /// (2026-11-09: the map and the quest helper, the client's own, back from
 /// before 2026-10-27); Number Colors after it (2026-11-09: the floating
-/// numbers' colours by what made them, `numcolor`); Combat last (2026-11-10:
+/// numbers' colours by what made them, `numcolor`); Merc Colors after it
+/// (2026-11-11: the merc's numbers' rows, Number Colors' page full); Combat last (2026-11-10:
 /// the DPS meter, `dpsmeter`); HUD Layout last (2026-11-11: Move HUD and
 /// Reset HUD, `hudlayout`; UI's page was full).
-const ALL_CATEGORIES: [Category; 14] = [
+const ALL_CATEGORIES: [Category; 15] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting },
@@ -1591,7 +1595,8 @@ const ALL_CATEGORIES: [Category; 14] = [
     Category { name: "Sound", items: SOUND, note: Note::Output },
     Category { name: "Textures", items: TEXTURES, note: Note::Textures },
     Category { name: "Map", items: &[41, 42, 43, 44, 45], note: Note::None },
-    Category { name: "Number Colors", items: &crate::numcolor::ITEMS, note: Note::None },
+    Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None },
+    Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None },
     Category { name: "Combat", items: &[70, 71, 72, 78, 79], note: Note::Meter },
     Category { name: "Chat", items: &[73], note: Note::Links },
     Category { name: "HUD Layout", items: &[76, 77], note: Note::Hud },
@@ -1602,7 +1607,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[10], a[11], a[12], a[13]]
+    [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[10], a[11], a[12], a[13], a[14]]
 };
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
@@ -1712,7 +1717,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         56 => on_off(c.light_shadows),
         54 => on_off(c.ambient_occlusion),
         63 => wide(if c.ps2_particles { "PS2" } else { "Exact" }),
-        64..=69 => wide(crate::numcolor::name(c.number_colors[(item - 64) as usize])),
+        64..=69 | 80 | 81 => wide(crate::numcolor::name(c.number_colors[crate::numcolor::row_of_item(item)?])),
         70 => on_off(c.dps_meter),
         71 => wide(c.dps_view.name()),
         72 => wide("Reset"),
@@ -1741,7 +1746,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
 /// The colour an Extended row's value is drawn in, none for the windows'
 /// own: a Number Colors row's colour (Default none).
 fn value_paint(item: i32) -> Option<[f32; 4]> {
-    let row = crate::numcolor::ITEMS.iter().position(|&i| i == item)?;
+    let row = crate::numcolor::row_of_item(item)?;
     crate::numcolor::swatch(crate::settings::client().number_colors[row])
 }
 
@@ -2527,14 +2532,14 @@ mod tests {
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert_eq!((w.cat, w.item), (Some(10), 64), "Number Colors, Your Damage");
         let last = crate::numcolor::PALETTE.len() as u8;
-        for (row, item) in crate::numcolor::ITEMS.into_iter().enumerate() {
+        for (row, item) in crate::numcolor::NUMBER_ITEMS.into_iter().enumerate() {
             assert_eq!((w.item, label_of(item)), (item, crate::numcolor::LABELS[row]));
-            assert_eq!(settings::number_colors(), [0; crate::numcolor::ROWS], "{}: every row Default", label_of(item));
+            assert_eq!(settings::number_colors(), crate::numcolor::DEFAULTS, "{}: every row as it came", label_of(item));
             assert_eq!((value_text(&vui, item), value_paint(item)), (Some(wide("Default")), None), "{}: Default, drawn as any value", label_of(item));
             press(&mut w, &mut o, key::RIGHT, &mut cues);
             assert_eq!((settings::number_colors()[row], cues.last()), (1, Some(&11)), "{}: on to the first colour", label_of(item));
             assert_eq!((value_text(&vui, item), value_paint(item)), (Some(wide("White")), Some([1.0; 4])), "{}: White, in white", label_of(item));
-            assert_eq!(settings::number_colors().iter().filter(|&&c| c != 0).count(), 1, "{}: no other row moved", label_of(item));
+            assert_eq!(settings::number_colors().iter().zip(crate::numcolor::DEFAULTS).filter(|(c, d)| *c != d).count(), 1, "{}: no other row moved", label_of(item));
             press(&mut w, &mut o, key::LEFT, &mut cues);
             press(&mut w, &mut o, key::LEFT, &mut cues);
             assert_eq!(settings::number_colors()[row], last, "{}: left of Default, the last", label_of(item));
@@ -2546,11 +2551,40 @@ mod tests {
         assert_eq!((w.row, cues.last()), (5, Some(&9)), "Number Colors' last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        // Merc Colors: Merc Damage Light Blue and Merc Heals Purple as they
+        // come (the owner, petition 1613: distinct from the player's own
+        // without a pick), each drawn in its colour, then round the palette,
+        // Default the game's
+        assert_eq!((w.cat_sel, cues.last()), (11, Some(&11)), "Merc Colors, after Number Colors");
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(11), 80), "Merc Colors, Merc Damage");
+        for (k, (item, start, next)) in [(80, "Light Blue", "Cyan"), (81, "Purple", "Blue")].into_iter().enumerate() {
+            let row = 6 + k;
+            assert_eq!((w.item, label_of(item)), (item, crate::numcolor::LABELS[row]));
+            assert_eq!(settings::number_colors(), crate::numcolor::DEFAULTS, "{}: as it came", label_of(item));
+            assert_eq!(value_text(&vui, item), Some(wide(start)), "{}: {start} by default", label_of(item));
+            assert!(value_paint(item).is_some(), "{}: drawn in its colour", label_of(item));
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((value_text(&vui, item), cues.last()), (Some(wide(next)), Some(&11)), "{}: on to the next", label_of(item));
+            for _ in 0..crate::numcolor::PALETTE.len() - crate::numcolor::DEFAULTS[row] as usize {
+                press(&mut w, &mut o, key::RIGHT, &mut cues);
+            }
+            assert_eq!((settings::number_colors()[row], value_paint(item)), (0, None), "{}: round to Default, the game's", label_of(item));
+            assert_eq!(value_text(&vui, item), Some(wide("Default")));
+            for _ in 0..crate::numcolor::DEFAULTS[row] {
+                press(&mut w, &mut o, key::RIGHT, &mut cues);
+            }
+            assert_eq!(settings::number_colors()[row], crate::numcolor::DEFAULTS[row], "{}: and back", label_of(item));
+            press(&mut w, &mut o, key::DOWN, &mut cues);
+        }
+        assert_eq!((w.row, cues.last()), (1, Some(&9)), "Merc Colors' last row");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
         // Combat: the DPS Meter Off then On, what it shows Fight then Overall,
         // and Reset DPS Meter asking the meter's reset either way, as ✕ does
-        assert_eq!((w.cat_sel, cues.last()), (11, Some(&11)), "Combat, after Number Colors");
+        assert_eq!((w.cat_sel, cues.last()), (12, Some(&11)), "Combat, after Merc Colors");
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(11), 70), "Combat, the DPS Meter");
+        assert_eq!((w.cat, w.item), (Some(12), 70), "Combat, the DPS Meter");
         assert!(!settings::dps_meter(), "off by default");
         assert_eq!(value_text(&vui, 70), Some(wide(vui.words.get(552, vui.language))), "Off, the game's word");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
@@ -2572,9 +2606,9 @@ mod tests {
             press(&mut w, &mut o, k, &mut cues);
             assert_eq!((crate::dpsmeter::take_reset(), cues.last()), (true, Some(&8)), "a reset asked ({k}), its sound");
         }
-        assert_eq!(w.page_note(11), None, "no note off a server");
+        assert_eq!(w.page_note(12), None, "no note off a server");
         w.meter_note = Some("This server keeps no meter".into());
-        assert_eq!(w.page_note(11).as_deref(), Some("This server keeps no meter"), "a server that keeps none said");
+        assert_eq!(w.page_note(12).as_deref(), Some("This server keeps no meter"), "a server that keeps none said");
         // Auto-Cast On by default (no slot is auto until marked), Auto Target
         // Off by default (`autocast`), each two values
         press(&mut w, &mut o, key::DOWN, &mut cues);
@@ -2598,18 +2632,18 @@ mod tests {
         press(&mut w, &mut o, key::DOWN, &mut cues);
         // Chat: Item Links On by default, then Off and back (the petition 1463's
         // toggle), the page saying where the server has none
-        assert_eq!((w.cat_sel, cues.last()), (12, Some(&11)), "Chat, after Combat");
+        assert_eq!((w.cat_sel, cues.last()), (13, Some(&11)), "Chat, after Combat");
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(12), 73), "Chat, Item Links");
+        assert_eq!((w.cat, w.item), (Some(13), 73), "Chat, Item Links");
         assert!(settings::item_links(), "on by default");
         assert_eq!(value_text(&vui, 73), Some(wide(vui.words.get(551, vui.language))), "On, the game's word");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!((settings::item_links(), cues.last()), (false, Some(&11)), "off");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::item_links(), "and back: two values");
-        assert_eq!(w.page_note(12), None, "no note off a server");
+        assert_eq!(w.page_note(13), None, "no note off a server");
         w.links_note = Some("This server has no item links".into());
-        assert_eq!(w.page_note(12).as_deref(), Some("This server has no item links"));
+        assert_eq!(w.page_note(13).as_deref(), Some("This server has no item links"));
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.row, cues.last()), (0, Some(&9)), "Chat's one row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
@@ -2617,16 +2651,16 @@ mod tests {
         // HUD Layout (`hudlayout`): Move HUD Off, then On and back by left,
         // right and ✕, its note while on; Reset HUD putting every piece back
         // by any of them, kept, with its own sound
-        assert_eq!((w.cat_sel, cues.last()), (13, Some(&11)), "HUD Layout, after Chat");
+        assert_eq!((w.cat_sel, cues.last()), (14, Some(&11)), "HUD Layout, after Chat");
         crate::hudlayout::testing_reset();
         press(&mut w, &mut o, key::CROSS, &mut cues);
-        assert_eq!((w.cat, w.item), (Some(13), 76), "HUD Layout, Move HUD");
+        assert_eq!((w.cat, w.item), (Some(14), 76), "HUD Layout, Move HUD");
         assert!(!crate::hudlayout::unlocked(), "off by default");
         assert_eq!(value_text(&vui, 76), Some(wide(vui.words.get(552, vui.language))));
-        assert_eq!(w.page_note(13), None, "no note while off");
+        assert_eq!(w.page_note(14), None, "no note while off");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!((crate::hudlayout::unlocked(), cues.last()), (true, Some(&11)), "on");
-        assert_eq!(w.page_note(13).as_deref(), Some("Leave the menu and drag the pieces"));
+        assert_eq!(w.page_note(14).as_deref(), Some("Leave the menu and drag the pieces"));
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert!(!crate::hudlayout::unlocked(), "✕ turns it too");
         press(&mut w, &mut o, key::DOWN, &mut cues);
@@ -2643,7 +2677,7 @@ mod tests {
         assert_eq!((w.row, cues.last()), (1, Some(&9)), "HUD Layout's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.cat_sel, cues.last()), (13, Some(&9)), "HUD Layout, the last category");
+        assert_eq!((w.cat_sel, cues.last()), (14, Some(&9)), "HUD Layout, the last category");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.sel), (-1, 3), "the menu, on Extended");
@@ -3277,7 +3311,7 @@ mod tests {
             fn set_viewport(&mut self, _: [i32; 4]) {}
         }
         impl crate::ui::Layout for Texts {}
-        let page = |choices: [u8; 6]| -> Vec<([i32; 2], [f32; 4], String)> {
+        let page = |choices: [u8; crate::numcolor::ROWS]| -> Vec<([i32; 2], [f32; 4], String)> {
             crate::settings::testing::reset(false);
             let mut c = crate::settings::client();
             c.number_colors = choices;
@@ -3297,7 +3331,7 @@ mod tests {
             t.0
         };
         let red = [1.0, 48.0 / 255.0, 48.0 / 255.0, 1.0];
-        let drawn = page([0, crate::numcolor::from_key("red").unwrap(), 0, 0, 0, 0]);
+        let drawn = page([0, crate::numcolor::from_key("red").unwrap(), 0, 0, 0, 0, 0, 0]);
         let of = |s: &str| drawn.iter().filter(|d| d.2 == s).cloned().collect::<Vec<_>>();
         let reds = of("Red");
         assert_eq!(reds.len(), 2, "its shadow and itself: {drawn:?}");
@@ -3306,10 +3340,10 @@ mod tests {
         let defaults = of("Default");
         assert_eq!(defaults.len(), 5, "five rows Default, no shadows: {defaults:?}");
         assert!(defaults.iter().all(|d| d.1 == UI_COLORS[0]), "Default in the window's black");
-        let plain = page([0; 6]);
+        let plain = page([0; crate::numcolor::ROWS]);
         assert!(plain.iter().filter(|d| d.2 == "Default").all(|d| d.1 == UI_COLORS[0]) && plain.iter().filter(|d| d.2 == "Default").count() == 6);
-        for p in crate::numcolor::LABELS {
-            assert!(plain.iter().any(|d| d.2 == p), "{p}'s label on the page");
+        for p in &crate::numcolor::LABELS[..6] {
+            assert!(plain.iter().any(|d| d.2 == *p), "{p}'s label on the page");
         }
         crate::settings::testing::reset(false);
     }
