@@ -35,6 +35,11 @@ is put on the page by `.github/workflows/notes.yml`.
   finishes the text and closes the box, as the "Shift+Enter = End" line under it always said. Enter still starts a
   new line, and Tab, R2 and the on-screen Done still finish it too.
 
+## 2026-11-11 · Notice boards everywhere
+- The papered notice board (Highpass's, used for the Mercenary Recruitment boards in the cities) now shows in every
+  city and every world. It is read from your own disc when you enter the world, so it no longer depends on the
+  server sending its art file.
+
 ## 2026-11-11 · Auto-cast keeps your pet buffed
 - Auto-cast now works with **pet buffs**. A pet buff's effect shows on your pet, not on your own effects, so auto-cast
   used to think it had not landed, cast it again and turned the slot off after three casts. Now it looks for the buff
