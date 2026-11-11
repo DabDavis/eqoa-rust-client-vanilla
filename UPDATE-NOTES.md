@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · The installed page opens another window each time
+- On a computer where the page is installed as an app (Windows 11's Start menu or taskbar), opening it again now
+  starts another game window for multiboxing instead of bringing back (or reloading) the one already open.
+
 ## 2026-11-11 · Move the HUD where you want it
 - You can now move the pieces of the HUD: your character's frame with the compass and bars, the group (or raid)
   bars, the pet's bar, the target's bar, the chat box, your effects, the quick bars, the minimap, the quest
