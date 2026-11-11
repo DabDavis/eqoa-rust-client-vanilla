@@ -724,6 +724,21 @@ or a browser (each described where it lives below):
   pieces, which that server puts back together.
 - **Hide UI** (H): everything drawn over the world hidden until H again or a
   window opens.
+- **Move HUD** (the server owner's of 2026-11-11, "lets add click to drag HUD
+  UI elements and also reset button"; `hudlayout`): Extended > HUD Layout's
+  Move HUD, or `/hud`, outlines every HUD piece drawn (the frame with the
+  compass and gauges, the group or raid, the pet, the target, the minimap, the
+  quest tracker, the DPS meter, the effects, the chat box, the breath gauge,
+  the quick bars) once the menu is left, with a bar at the top (Lock, Reset);
+  the mouse's left button or a finger drags a piece. Locked, every click on
+  the HUD is the game's as ever. A piece is kept per window (`hud.opt`) as a
+  distance from the screen's side nearest it (left, middle, right; top,
+  middle, bottom, by thirds) and drawn on the screen whatever its size
+  (`Ui::shift`; nothing moved, every quad as before). Reset HUD (the row, the
+  bar, `/hud reset`) puts them back. Proof: `hudlayout`'s unit tests (place,
+  clamp, the file, drag and reset, `/hud`, each with a control), the Extended
+  page's, and playshots on go-eqoa-server (`EQOA_MOUSE`'s `hud press|move|
+  release`) and a window on Xvfb driven by xdotool.
 - **Ignore Shouts kept** until Restore Shouts, across logins (the game keeps
   none, and a server forgets it at the next login).
 - **Several windows at once** (multiboxing): each window reads its own
