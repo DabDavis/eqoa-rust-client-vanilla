@@ -69,6 +69,47 @@ pub fn look_of(name: &str) -> Option<Rc<Look>> {
     LOOKS.with_borrow(|l| l.get(name).cloned())
 }
 
+/// The look of the character of this name made `look` here (select's
+/// Customize re-chose its skin): drawn so until the server's next list, which
+/// replaces every look whole. None takes its look away.
+pub fn set_look_of(name: &str, look: Option<Look>) {
+    let changed = LOOKS.with_borrow_mut(|l| match look {
+        Some(look) if l.get(name).map(|o| **o != look).unwrap_or(true) => {
+            l.insert(name.to_string(), Rc::new(look));
+            true
+        }
+        None => l.remove(name).is_some(),
+        _ => false,
+    });
+    if changed {
+        bump();
+    }
+}
+
+/// The look the steps `choices` (each a row's key and step) of race `race`'s
+/// options make on `body` for `sex`: a row not chosen at its first. None with
+/// no options or nothing laid.
+pub fn look_of_choice(race: i32, sex: i32, body: u32, choices: &[(String, u8)]) -> Option<Look> {
+    let o = options()?;
+    let rows = o.rows(race);
+    let steps: Vec<usize> = rows.iter().map(|r| choices.iter().find(|(k, _)| *k == r.key).map_or(0, |(_, s)| *s as usize)).collect();
+    let look = look_of_steps(rows, sex, &steps, body);
+    (!look.parts.is_empty()).then_some(look)
+}
+
+/// The step of each of `rows` that `look` (a character's, as the server told
+/// it) lays on `body` for `sex`: the step whose value one of its parts on the
+/// body has; the first (the body's own) for a row the look has none of.
+pub fn steps_of_look(rows: &[Row], sex: i32, body: u32, look: Option<&Look>) -> Vec<usize> {
+    rows.iter()
+        .map(|r| {
+            let Some(l) = look.filter(|l| l.body == body) else { return 0 };
+            let mine: Vec<&Part> = r.parts_of(body).collect();
+            l.parts.iter().filter(|(k, _, p)| *k == r.kind && mine.contains(&p)).find_map(|(_, v, _)| r.steps(sex).iter().position(|s| s.value == *v)).unwrap_or(0)
+        })
+        .collect()
+}
+
 /// The options the server sent, kept for whatever this thread draws (the
 /// session's `race_options`); a change makes the creatures again.
 pub fn set_options(o: Option<&Options>) {
@@ -111,7 +152,24 @@ pub fn race_body_of(model: u32) -> Option<u32> {
 /// Body `body`'s model in `look`, when the look was chosen on it (on any other
 /// body, nothing). Whether anything changed.
 pub fn dress(lib: &esf::Library, body: u32, model: &mut esf::Model, look: &Look) -> bool {
-    look.body == body && apply(lib, model, &look.parts)
+    if look.body != body {
+        return false;
+    }
+    // a skin shade only on the body's own skin: the first layers the body is
+    // built with, and a face (`skin_layer`); never in the 2002 art, whose
+    // bodies lay their entries out otherwise
+    let built = skin_shades(&look.parts).then(|| {
+        if lib.view_for(body as i32) == esf::Era::Y2002 {
+            return std::collections::HashSet::new();
+        }
+        lib.lookup(body as i32).and_then(|r| lib.build_model(r)).map(|m| m.batches.iter().filter_map(|b| b.layers.first().map(|l| (b.material, l.texture))).collect()).unwrap_or_default()
+    });
+    apply_with(lib, model, &look.parts, &|entry, texture| built.as_ref().is_some_and(|b| b.contains(&(entry, texture)) || vi::cust::is_face(texture as u32)))
+}
+
+/// Whether any of `parts` is a skin shade (`render::recolor::SKIN`).
+fn skin_shades(parts: &[(Kind, u32, Part)]) -> bool {
+    parts.iter().any(|(k, v, _)| *k == Kind::Colour && v >> 24 == render::recolor::SKIN)
 }
 
 /// The look the steps on a create page make (`steps`, one a row of `rows`, a
@@ -146,12 +204,25 @@ pub fn body_of_steps(rows: &[Row], sex: i32, steps: &[usize]) -> Option<u32> {
 /// into a batch of their own, the same palette entry's. Whether anything
 /// changed.
 pub fn apply(lib: &esf::Library, model: &mut esf::Model, parts: &[(Kind, u32, Part)]) -> bool {
+    apply_with(lib, model, parts, &|_, _| true)
+}
+
+/// [`apply`], a skin shade laid only on a batch's first layer whose (palette
+/// entry, texture) `skin_layer` takes: the game race's own skin, never an
+/// armour's or a robe's texture laid over it (on a body's single-layer limbs
+/// and feet `SetArmorSlot` swaps the skin's own texture).
+fn apply_with(lib: &esf::Library, model: &mut esf::Model, parts: &[(Kind, u32, Part)], skin_layer: &dyn Fn(i32, i32) -> bool) -> bool {
     let mut changed = false;
     for (kind, value, part) in parts {
         let Some(change) = Change::of(lib, *kind, *value) else { continue };
         let n = model.batches.len();
         for bi in 0..n {
             if !part.entries.iter().any(|&e| e as i32 == model.batches[bi].material) {
+                continue;
+            }
+            if let Change::Skin(_) = change
+                && !model.batches[bi].layers.first().is_some_and(|l| skin_layer(model.batches[bi].material, l.texture))
+            {
                 continue;
             }
             let picked = picked(model, bi, &part.rects);
@@ -182,6 +253,10 @@ pub fn apply(lib: &esf::Library, model: &mut esf::Model, parts: &[(Kind, u32, Pa
 /// What a part takes.
 enum Change {
     Colour(u32),
+    /// a game race's skin shade (`render::recolor::SKIN`): the first layer's
+    /// texture moved to it, the layer's own colour (an erudite's or a
+    /// barbarian's skin tint) white, as the shade is the skin's whole colour
+    Skin(u32),
     Texture(i32),
 }
 
@@ -189,6 +264,7 @@ impl Change {
     /// A colour that changes something, a texture the library has; else none.
     fn of(lib: &esf::Library, kind: Kind, value: u32) -> Option<Change> {
         match kind {
+            Kind::Colour if value >> 24 == render::recolor::SKIN => Some(Change::Skin(value)),
             Kind::Colour if render::recolor::changes(value) => Some(Change::Colour(value)),
             Kind::Texture if value != 0 && lib.surface(value as i32).is_some() => Some(Change::Texture(value as i32)),
             _ => None,
@@ -208,6 +284,17 @@ impl Change {
                     if l.emissive[..3] != [0, 0, 0] {
                         let c = render::recolor::recolor_rgb([l.emissive[0], l.emissive[1], l.emissive[2]], r);
                         l.emissive = [c[0], c[1], c[2], l.emissive[3]];
+                    }
+                }
+            }
+            Change::Skin(r) => {
+                if let Some(l) = b.layers.first_mut() {
+                    if l.texture != 0 {
+                        l.texture = render::recolor::recolored(l.texture, r, |id| lib.lookup(id).is_some());
+                        l.color = [255, 255, 255, l.color[3]];
+                    } else {
+                        let c = render::recolor::recolor_rgb([l.color[0], l.color[1], l.color[2]], r);
+                        l.color = [c[0], c[1], c[2], l.color[3]];
                     }
                 }
             }
@@ -423,6 +510,99 @@ pub(crate) mod tests {
         let mut m = as_built.clone();
         assert!(!dress(&lib, human, &mut m, &look_of_steps(rows, 0, &[0, 1, 1, 1, 0], body)));
         assert_eq!(format!("{:?}", m.batches), format!("{:?}", as_built.batches), "a human: nothing");
+    }
+
+    /// The human's and the erudite's skin rows as go-eqoa-server sends them
+    /// (`entity/skinshades.go`), cut to three shades: Natural, Light, Dark.
+    pub(crate) fn skin_options() -> Options {
+        let step = |name: &str, value: u32| Step { name: name.into(), value, size: 0 };
+        let shades = vec![step("Natural", 0), step("Light", 0x030C_7AAB), step("Dark", 0x0313_6B3B)];
+        let row = |parts: Vec<(u32, Vec<u8>)>| Row { key: "skin".into(), label: "Skin".into(), kind: Kind::Colour, parts: parts.into_iter().map(|(b, entries)| (b, Part { entries, rects: vec![] })).collect(), male: shades.clone(), female: vec![] };
+        Options {
+            races: vec![
+                (0, vec![row(vec![(0x70D8_98C6, vec![0, 2, 3, 4, 5]), (0x0D53_7335, vec![3, 5, 6, 7, 9])])]),
+                (3, vec![row(vec![(0xA99C_6B15, vec![2, 3, 4, 5, 6]), (0x4C40_84FC, vec![2, 5, 6, 7, 8])])]),
+                (8, vec![row(vec![(0x320C_0B47, vec![0, 6, 8, 9, 10]), (0x4F1A_3CBE, vec![0, 4, 6, 8, 9])])]),
+            ],
+        }
+    }
+
+    /// A skin shade on the disc's bodies: on a human man the first layer of
+    /// each skin entry takes a shaded copy of its texture and a white colour,
+    /// the second (the armour's) is left as it is; an erudite's tint (its
+    /// layer colour) goes white, the shade being the skin's whole colour. On a
+    /// gnome's single-layer hands an armour's texture (gloves) is left as it
+    /// is, its bare hands shaded; a face another face option laid is shaded.
+    /// The controls: Natural changes nothing; a body the look was not chosen
+    /// on, nothing; a colour of another mode on the same parts recolours every
+    /// layer. Needs `run/eqoa.iso`.
+    #[test]
+    fn a_skin_shade_on_the_discs_bodies() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let opts = skin_options();
+        let built = |body: u32| lib.build_model(lib.lookup(body as i32).unwrap()).unwrap();
+        let human = 0x70D8_98C6u32;
+        let plain = built(human);
+        let mut dark = plain.clone();
+        assert!(dress(&lib, human, &mut dark, &look_of_steps(opts.rows(0), 0, &[2], human)));
+        for (a, b) in plain.batches.iter().zip(&dark.batches) {
+            let skin = [0, 2, 3, 4, 5].contains(&a.material);
+            let shaded = render::recolor::source_of(b.layers[0].texture).map(|(s, _)| s);
+            assert_eq!(shaded, skin.then_some(a.layers[0].texture), "entry {}", a.material);
+            if skin {
+                assert_eq!(b.layers[0].color[..3], [255, 255, 255]);
+            }
+            for (la, lb) in a.layers.iter().zip(&b.layers).skip(1) {
+                assert_eq!(la.texture, lb.texture, "entry {}: the armour's layer kept", a.material);
+            }
+        }
+        let mut natural = plain.clone();
+        assert!(!dress(&lib, human, &mut natural, &look_of_steps(opts.rows(0), 0, &[0], human)));
+        assert_eq!(format!("{:?}", natural.batches), format!("{:?}", plain.batches), "the control: Natural");
+        let ogre = built(0x8480_7490);
+        let mut m = ogre.clone();
+        assert!(!dress(&lib, 0x8480_7490, &mut m, &look_of_steps(opts.rows(0), 0, &[2], human)), "the control: another body");
+
+        let erudite = 0x320C_0B47u32;
+        let plain = built(erudite);
+        assert_eq!(plain.batches.iter().find(|b| b.material == 6).unwrap().layers[0].color[..3], [109, 83, 77], "the erudite's tint");
+        let mut light = plain.clone();
+        assert!(dress(&lib, erudite, &mut light, &look_of_steps(opts.rows(8), 0, &[1], erudite)));
+        let chest = light.batches.iter().find(|b| b.material == 6).unwrap();
+        assert_eq!(chest.layers[0].color[..3], [255, 255, 255], "its tint white under the shade");
+        assert!(render::recolor::source_of(chest.layers[0].texture).is_some());
+
+        // a gnome man's hands (entry 6, one layer) in gloves: the gloves kept;
+        // its face (entry 4) as another face option laid it: shaded
+        let gnome = 0xA99C_6B15u32;
+        let mut gloved = built(gnome);
+        let gloves = 0x3857_E856;
+        let other_face = 0xAB3E_7194u32 as i32;
+        for b in gloved.batches.iter_mut() {
+            match b.material {
+                6 => b.layers[0].texture = gloves,
+                4 => b.layers[0].texture = other_face,
+                _ => {}
+            }
+        }
+        assert!(dress(&lib, gnome, &mut gloved, &look_of_steps(opts.rows(3), 0, &[2], gnome)));
+        for b in &gloved.batches {
+            match b.material {
+                6 => assert_eq!(b.layers[0].texture, gloves, "the gloves kept"),
+                4 => assert_eq!(render::recolor::source_of(b.layers[0].texture).map(|(s, _)| s), Some(other_face), "the face shaded"),
+                5 => assert!(render::recolor::source_of(b.layers[0].texture).is_some(), "the bare forearm shaded"),
+                _ => {}
+            }
+        }
+        // the control: a dye on the same parts is laid on every layer
+        let mut dyed = built(human);
+        let red = render::recolor::DYE << 24 | 0x00_C080;
+        assert!(apply(&lib, &mut dyed, &[(Kind::Colour, red, Part { entries: vec![5], rects: vec![] })]));
+        let chest = dyed.batches.iter().find(|b| b.material == 5).unwrap();
+        assert!(chest.layers.iter().all(|l| render::recolor::source_of(l.texture).is_some()), "a dye: both layers");
     }
 
     /// Drawn (`eqoa dress`, the GPU): the fungusman in every row's first step

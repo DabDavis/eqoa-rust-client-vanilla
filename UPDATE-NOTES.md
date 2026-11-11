@@ -20,6 +20,17 @@ is put on the page by `.github/workflows/notes.yml`.
 - A slot is now turned off only when its cast does not go off three times in a row (refused, out of range, no
   pet...). A buff that did go off is never turned off just because you cannot see it on yourself.
 
+## 2026-11-11 · Skin shades for every race
+- On a server that offers them, character creation's appearance page has a **Skin** row under face and hair: every
+  race (human, elf, dark elf, gnome, dwarf, troll, barbarian, halfling, erudite, ogre) can now pick from Natural
+  (the race's own), Porcelain, Fair, Light, Tan, Olive, Bronze, Brown, Dark, Ebony, Ashen or Moss. A human can be as
+  dark as an erudite, an erudite as light as a human. The shade covers the face, arms, hands, chest and legs, under
+  any armour or robe; eyes, brows and the armour itself keep their colours.
+- Already have a character? Choose **Customize Character** at character select: the Skin row is there too, and
+  the new shade is kept when you enter the world.
+- Everyone with this update sees your shade; older clients and the PS2 see your race's own skin.
+- The rows of a server's own races (pixies, fairies) now keep the colours you chose when you press Create.
+
 ## 2026-11-11 · Your mercenary's numbers in their own colour
 - The damage your mercenary does now floats up in **light blue** and its heals on you in **purple**, so you can tell
   them from your own hits (white) and heals (green) at a glance. Its swings, its spells and its damage over time are

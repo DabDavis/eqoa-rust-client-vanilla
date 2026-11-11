@@ -652,6 +652,22 @@ or a browser (each described where it lives below):
   theirs. The first step of every row is the body as it is, byte for byte; NPCs, bodies with slots, the retail
   races and a server that sends nothing are drawn as before. `eqoa dress <body> <out.png> opts=R:a,b,c`
   (`$EQOA_RACE_OPTIONS`, a file of 0x7E23's body) draws a race in its steps.
+- **The game's ten races' skin shades**, on a server that sends them (the server owner, 2026-11-11: "humans, ogres,
+  gnomes, elfs, etc. can have dark skin like erudites, erudites can have light skin like humans"; go-eqoa-server's
+  `world.skin_shades`, the same messages as a server's race's options): this client answers the offer 2 (a game
+  race's rows shown under the four; a server sends a game race's rows only to such a client), and the appearance
+  page and select's Customize Character show a Skin row under face and hair (scrolling, as more than four rows
+  do), Create sending its step after 0x002B's fields and Customize's Accept after 0x002A's five ints. A shade is a
+  colour (`render::recolor::SKIN`, mode 3: an absolute hue, saturation and lightness) laid by `raceopts::dress` on
+  the first layer of each of the body's skin entries only where that layer holds the body's own skin texture or a
+  face (`vi::cust::is_face`): the disc's bodies keep their skin on a layer under the armour's (two-layer limbs, which
+  `SetArmorSlot` never touches) or on a single-layer limb an armour's texture replaces (then left alone), and an
+  erudite's or a barbarian's skin is the human's times a layer colour, which the shade makes white. Each skin
+  texture's own skin (its texels' mean hue and saturation, median lightness: `SkinRef`) is moved to the shade's,
+  texel by texel as far as it is skin (an eye's white, an iris, a troll's brown creases keep their colour), its
+  lightness by a curve that keeps black and white, every mip level from the base's skin; so a human's and an
+  erudite's skin come out the same colour in the same shade. None in the 2002 art (its bodies lay their entries out
+  otherwise). A PS2, an older client and a server that sends none draw the race's own skin.
 - **An NPC's body in a server's tint**, on a server that names one (the server owner, 2026-11-10: Yhafiran, "the
   black and green oriental dragon", wears the disc's only green oriental dragon, 0xB5C8A651, the Plane of Disease
   twins' body, and "vanilla draws Yhafiran tinted toward black and green"; go-eqoa-server's table `npctint`, its

@@ -9,6 +9,11 @@
 //! The model is made again when the look changes (the game re-dresses the
 //! sprite in place: `SetFace`, `SetHair`), which starts its standing loop
 //! over.
+//!
+//! A game race's options from the server (go-eqoa-server's skin shades,
+//! `raceopts`) are rows under the four, four rows in view and scrolling with
+//! the cursor, each starting at the step the character's look has; Accept
+//! hands them up with the four, for the 0x002A (`net::session::Character::options`).
 
 use super::select::{framing, look_of};
 use super::{CharRecord, UiCx};
@@ -62,10 +67,21 @@ pub struct Cust {
     focused: bool,
     shown: bool,
     hits: Hits,
+    /// the race's option rows under the four (a game race's: its skin), the
+    /// step on each, and the first row in view
+    extra: Vec<net::raceopts::Row>,
+    steps: Vec<usize>,
+    top: usize,
+    /// the steps the figure was made in
+    made_steps: Vec<usize>,
 }
 
-const HIT_ACCEPT: i32 = 10;
-const HIT_BACK: i32 = 11;
+/// What Accept hands up: the character, the four, and the extra rows' steps
+/// (none for a race with none).
+pub type Accepted = (usize, [i32; 4], Vec<(String, u8)>);
+
+const HIT_ACCEPT: i32 = 100;
+const HIT_BACK: i32 = 101;
 
 impl Cust {
     /// `SetChar(i, pos, hpr)` and the focus (295): done at the next draw,
@@ -104,7 +120,7 @@ impl Cust {
     /// `OnDrawSelf`: the title bar and the two panels over the dark
     /// background, the rows and their sliders, then the model in its own
     /// viewport. None: still up.
-    pub fn draw(&mut self, cx: &mut UiCx, chars: &[CharRecord], stage: Option<&mut Stage>) -> Option<Option<(usize, [i32; 4])>> {
+    pub fn draw(&mut self, cx: &mut UiCx, chars: &[CharRecord], stage: Option<&mut Stage>) -> Option<Option<Accepted>> {
         let mut stage = stage;
         if let Some(i) = self.pending.take()
             && let Some(c) = chars.get(i)
@@ -114,6 +130,7 @@ impl Cust {
             // place for it with the scenes' limits, orbiting
             self.index = i;
             (self.face, self.style, self.length, self.color) = (c.face, c.hair_style, c.hair_length, c.hair_color);
+            self.set_extra(c);
             self.pos = st.cam.walk.committed.position.to_array();
             self.hpr = st.cam.walk.committed.angles.to_array();
             st.aim(self.pos, [0.0; 3]);
@@ -144,7 +161,7 @@ impl Cust {
         // (`UpdateCamera`), the scene into the viewport
         self.shown = false;
         let c = chars.get(self.index)?;
-        if self.made != Some(self.look()) {
+        if self.made != Some(self.look()) || self.made_steps != self.steps {
             self.figure = None;
         }
         if self.figure.is_none()
@@ -154,8 +171,11 @@ impl Cust {
             (rec.face, rec.hair_style, rec.hair_length, rec.hair_color) = (self.face, self.style, self.length, self.color);
             // turned a little off the camera: the heading plus 5.934119
             let hpr = [(F::<Ee>::new(self.hpr[0]) + F::new(5.934_119)).0, self.hpr[1], self.hpr[2]];
-            self.figure = Figure::new(lib, g, rec.model, look_of(&rec, false), rec.weapons, self.pos, hpr, cx.now);
+            // the race's options as stepped here (none: as Figure::new)
+            let race_look = (!self.extra.is_empty()).then(|| crate::raceopts::look_of_steps(&self.extra, self.sex_of(&rec), &self.steps, rec.model));
+            self.figure = Figure::new_dressed(lib, g, rec.model, look_of(&rec, false), race_look, rec.weapons, self.pos, hpr, cx.now);
             self.made = Some(self.look());
+            self.made_steps = self.steps.clone();
         }
         let fig = self.figure.as_mut()?;
         fig.set_action(0);
@@ -231,7 +251,8 @@ impl Cust {
 
     /// `DrawValues`: the four rows (a bracket pair, the row's icon, its
     /// pulse when selected, its word), the selection's arrows, the four
-    /// sliders.
+    /// sliders; with a race's options, four rows from `top`, its rows' words
+    /// the row's and the step's name.
     fn draw_values(&mut self, cx: &mut UiCx) {
         let (vui, r) = (cx.vui, &mut *cx.r);
         let black = [0.0, 0.0, 0.0, 1.0];
@@ -245,35 +266,66 @@ impl Cust {
             (133, [95, -40], 208, [1, 2], 606, [25, 60]),
             (134, [95, -35], 209, [5, 6], 607, [25, 56]),
         ];
-        for (k, &(icon, off, glow, goff, word, woff)) in rows.iter().enumerate() {
+        // every row: its art, its word, its slider's place
+        let mut all: Vec<(Row, Vec<u16>, f32)> = rows.iter().zip([(self.face, 3.0), (self.style, 3.0), (self.length, 3.0), (self.color, 7.0)]).map(|(&row, (v, top))| (row, wide(vui.words.get(row.4, vui.language)), v as f32 / top)).collect();
+        for (row, &k) in self.extra.iter().zip(&self.steps) {
+            let steps = row.steps(0);
+            let name = steps.get(k).map_or("", |s| s.name.as_str());
+            all.push((rows[3], wide(&format!("{}: {}", row.label, name)), k as f32 / (steps.len().max(2) - 1) as f32));
+        }
+        let top = self.top;
+        for (k, ((icon, off, glow, goff, _, woff), label, _)) in all.iter().enumerate().skip(top).take(4) {
             let mut pos = base;
             vui.blit_ex(r, 135, pos, 0, 1.0, 0);
             pos[0] += 120;
             vui.blit_ex(r, 135, pos, 0, 1.0, 1);
             let mut pos = [base[0] + off[0], base[1] + off[1]];
-            vui.blit_ex(r, icon, pos, 0, 1.0, 0);
+            vui.blit_ex(r, *icon, pos, 0, 1.0, 0);
             if self.sel == k as i32 {
-                vui.blit_ex(r, glow, [pos[0] + goff[0], pos[1] + goff[1]], 3, pulse, 0);
+                vui.blit_ex(r, *glow, [pos[0] + goff[0], pos[1] + goff[1]], 3, pulse, 0);
             }
             self.hits.push([base[0], base[1] - 45, base[0] + 160, base[1] + 30], k as i32);
             pos = [pos[0] + woff[0], pos[1] + woff[1]];
-            r.draw_centered_string(pos, black, &wide(vui.words.get(word, vui.language)), 0);
+            r.draw_centered_string(pos, black, label, 0);
             base[1] += 84;
         }
-        let mut pos = [73, self.sel * 83 + 75];
+        let mut pos = [73, (self.sel - top as i32) * 83 + 75];
         vui.blit_ex(r, 85, pos, 0, 1.0, 0);
         pos[0] += 125;
         vui.blit_ex(r, 85, pos, 0, 1.0, 1);
         self.window.init(vui, r, [142, 240], 280, 16, 1);
         let w = self.window.size[0];
-        for (row, v, top) in [(1, self.face, 3.0), (6, self.style, 3.0), (11, self.length, 3.0), (16, self.color, 7.0)] {
-            self.window.draw_hscroll(vui, r, 30, row, w - 60, v as f32 / top, 0);
+        for (line, (_, _, v)) in [1, 6, 11, 16].into_iter().zip(all.iter().skip(top)) {
+            self.window.draw_hscroll(vui, r, 30, line, w - 60, *v, 0);
         }
+    }
+
+    /// The race's option rows under the four for character `c` (a game
+    /// race's, of more than one step and with a part of its body), each at
+    /// the step its look has (`raceopts`); none for any other.
+    fn set_extra(&mut self, c: &CharRecord) {
+        self.top = 0;
+        self.extra = match crate::raceopts::options() {
+            Some(o) if (0..=9).contains(&c.race) => o.rows(c.race).iter().filter(|r| r.steps(0).len() > 1 && r.parts_of(c.model).next().is_some()).cloned().collect(),
+            _ => Vec::new(),
+        };
+        let look = crate::raceopts::look_of(&c.name);
+        self.steps = crate::raceopts::steps_of_look(&self.extra, self.sex_of(c), c.model, look.as_deref());
+    }
+
+    /// The character's sex, by its body (a record has none of its own).
+    fn sex_of(&self, c: &CharRecord) -> i32 {
+        (super::create::tables::model_of(c.race, 1) == c.model) as i32
+    }
+
+    /// The rows: the four and the race's.
+    fn rows(&self) -> i32 {
+        4 + self.extra.len() as i32
     }
 
     /// `OnKeyDown`: back (260, nothing kept), Accept (the look kept), the
     /// rows and their values. Some when it closes.
-    pub fn key(&mut self, k: i32, now: i64, cues: &mut Vec<i32>) -> Option<Option<(usize, [i32; 4])>> {
+    pub fn key(&mut self, k: i32, now: i64, cues: &mut Vec<i32>) -> Option<Option<Accepted>> {
         match k {
             27 | 132 => {
                 cues.push(8);
@@ -281,7 +333,8 @@ impl Cust {
             }
             13 | 134 => {
                 cues.push(13);
-                return Some(Some((self.index, self.look())));
+                let options = self.extra.iter().zip(&self.steps).map(|(r, &k)| (r.key.clone(), k.min(255) as u8)).collect();
+                return Some(Some((self.index, self.look(), options)));
             }
             17 | 136 => self.change(-1, now, cues),
             18 | 137 => self.change(1, now, cues),
@@ -297,13 +350,17 @@ impl Cust {
     /// draw, where the camera is).
     fn row(&mut self, d: i32, now: i64, cues: &mut Vec<i32>) {
         let s = self.sel + d;
-        if !(0..=3).contains(&s) {
-            self.sel = s.clamp(0, 3);
+        let last = self.rows() - 1;
+        if !(0..=last).contains(&s) {
+            self.sel = s.clamp(0, last);
             cues.push(9);
         } else {
             self.sel = s;
             cues.push(11);
         }
+        // the cursor's row in view, four at a time
+        let sel = self.sel.max(0) as usize;
+        self.top = self.top.min(sel).max(sel.saturating_sub(3));
         self.window.reset_tick_pulse(now);
         self.turn = Some(self.orbit_angle());
     }
@@ -316,7 +373,11 @@ impl Cust {
             1 => self.style = wrap(self.style, d, 3),
             2 => self.length = wrap(self.length, d, 3),
             3 => self.color = wrap(self.color, d, 7),
-            _ => {}
+            k => {
+                if let (Some(row), Some(step)) = (self.extra.get(k as usize - 4), self.steps.get_mut(k as usize - 4)) {
+                    *step = wrap(*step as i32, d, row.steps(0).len() as i32 - 1) as usize;
+                }
+            }
         }
         self.window.reset_tick_pulse(now);
     }
@@ -380,11 +441,49 @@ mod tests {
         assert_eq!((c.sel, c.turn), (1, Some(0.0)), "the face and style rows face it");
         c.key(139, 0, &mut cues);
         c.key(139, 0, &mut cues);
-        assert_eq!(c.key(134, 0, &mut cues), Some(Some((0, [3, 0, 1, 0]))));
+        assert_eq!(c.key(134, 0, &mut cues), Some(Some((0, [3, 0, 1, 0], Vec::new()))));
         assert_eq!(c.key(132, 0, &mut cues), Some(None));
         // the control: up and down do not close it
         assert_eq!(c.key(138, 0, &mut cues), None);
         assert_eq!((wrap(2, 1, 3), wrap(2, -1, 3)), (3, 1));
+    }
+
+    /// A game race's skin is a row under the four, at the step the
+    /// character's look has (the server's list, by its name): the cursor goes
+    /// down to it, its value steps round, and Accept hands it up with the four.
+    /// The control: a race with no options (none from the server) has the four
+    /// alone and hands up none.
+    #[test]
+    fn a_game_races_skin_under_the_four() {
+        crate::raceopts::set_options(Some(&crate::raceopts::tests::skin_options()));
+        let erudite = 0x320C_0B47u32;
+        let look = crate::raceopts::look_of_steps(crate::raceopts::options().unwrap().rows(8), 0, &[2], erudite);
+        crate::raceopts::set_look_of("Annika", Some(look));
+        let rec = CharRecord { name: "Annika".into(), server_id: 3, race: 8, model: erudite, ..Default::default() };
+        let mut c = Cust::default();
+        c.set_extra(&rec);
+        assert_eq!((c.extra.len(), c.steps.clone(), c.rows()), (1, vec![2], 5), "Dark, as its look");
+        let mut cues = Vec::new();
+        for _ in 0..4 {
+            c.key(139, 0, &mut cues);
+        }
+        assert_eq!((c.sel, c.top), (4, 1));
+        c.key(137, 0, &mut cues);
+        assert_eq!(c.steps, vec![0], "past the last: Natural");
+        c.key(136, 0, &mut cues);
+        c.key(136, 0, &mut cues);
+        assert_eq!(c.steps, vec![1]);
+        cues.clear();
+        c.key(139, 0, &mut cues);
+        assert_eq!((c.sel, cues.as_slice()), (4, &[9][..]), "the last row");
+        assert_eq!(c.key(134, 0, &mut cues), Some(Some((0, [0, 0, 0, 0], vec![("skin".to_string(), 1)]))));
+
+        crate::raceopts::set_look_of("Annika", None);
+        crate::raceopts::set_options(None);
+        let mut c = Cust::default();
+        c.set_extra(&rec);
+        assert_eq!(c.rows(), 4, "the control");
+        assert_eq!(c.key(134, 0, &mut cues), Some(Some((0, [0, 0, 0, 0], Vec::new()))));
     }
 
     /// A pointer: a row selects it, the selected row's halves change its

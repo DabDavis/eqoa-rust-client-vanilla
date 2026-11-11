@@ -123,6 +123,12 @@ pub const OP_CREATION_RACES: u16 = 0x7E1F;
 /// whenever they change. A PS2 ignores the offer; a server that never makes one
 /// gets no answer, and its creations carry no choice ([`NewChar::options`]).
 pub const OP_RACE_OPTIONS: u16 = 0x7E22;
+/// The answer to [`OP_RACE_OPTIONS`]: 2, a client that shows a game race's
+/// rows (go-eqoa-server's skin shades) under the four, and re-chooses them at
+/// select's Customize (sent after 0x002A's ints); one that answered 1 (before
+/// 2026-11-11) showed a race's rows instead of the four, so the server sends it
+/// none of a game race's.
+pub const RACE_OPTIONS_ANSWER: u32 = 2;
 /// Each race's options, to a client that answered [`OP_RACE_OPTIONS`]:
 /// `raceopts::read_options`.
 pub const OP_RACE_OPTIONS_DATA: u16 = 0x7E23;
@@ -814,6 +820,12 @@ pub struct Character {
     /// disc's [`DISC_GEAR_SIZE`], or the live game's [`LIVE_GEAR_SIZE`] when
     /// its look is in force.
     pub gear: Vec<u8>,
+    /// Its race's options re-chosen at select's Customize (a game race's skin
+    /// shade, `raceopts`): sent after 0x002A's five ints as a creation's are
+    /// after 0x002B's ([`crate::raceopts::choices_block`]), only when there
+    /// are some, which there are only from a server that sent the race's
+    /// options. Empty: as it was.
+    pub options: Vec<(String, u8)>,
 }
 
 /// The head of the MemoryDump: `VIPlayer::Read`, as far as placing the
@@ -1854,6 +1866,11 @@ impl Session {
         for v in [c.server_id, c.face, c.hair_style, c.hair_length, c.hair_color] {
             w.u32(v as u32);
         }
+        if self.race_options.is_some()
+            && let Some(b) = crate::raceopts::choices_block(&c.options)
+        {
+            w.bytes(&b);
+        }
         self.send(&w.data);
     }
 
@@ -2338,7 +2355,7 @@ impl Session {
             // the bodies drawn, `raceopts`)
             OP_RACE_OPTIONS => {
                 if r.u32() != 0 && !r.error {
-                    self.send_op_int(OP_RACE_OPTIONS, 1);
+                    self.send_op_int(OP_RACE_OPTIONS, RACE_OPTIONS_ANSWER);
                 }
             }
             OP_RACE_OPTIONS_DATA => match crate::raceopts::read_options(&m.data[2.min(m.data.len())..]) {
@@ -2921,6 +2938,7 @@ fn read_characters(r: &mut Reader, live: bool) -> Vec<Character> {
                 hair_style: f[7],
                 face: f[8],
                 gear,
+                options: Vec::new(),
             }
         })
         .collect()
@@ -4612,6 +4630,32 @@ mod tests {
         assert_eq!(answers(&mut s), [], "the control: answered, nothing more asked");
     }
 
+    // 0x002A carries the race's options re-chosen at Customize (a game race's
+    // skin) after its five ints, as 0x002B carries a creation's, to a server
+    // that sent the races' options. The controls: none chosen, the five ints
+    // alone; chosen but no options from the server (a PS2's server, Sandstorm),
+    // the five ints alone.
+    #[test]
+    fn select_carries_the_options_rechosen() {
+        let mut s = session();
+        s.record = Some(Vec::new());
+        let sent = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.pump();
+            s.record.replace(Vec::new()).unwrap().into_iter().map(|(_, d)| d).filter(|d| d.starts_with(&[0x2A, 0x00])).collect()
+        };
+        let mut c = Character { server_id: 558, face: 1, hair_style: 2, hair_length: 3, hair_color: 4, ..Default::default() };
+        let ints = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let five = [vec![0x2A, 0x00], ints(&[558, 1, 2, 3, 4])].concat();
+        c.options = vec![("skin".into(), 8)];
+        s.select_character(&c);
+        assert_eq!(sent(&mut s), [five.clone()], "the control: no options from the server");
+        s.race_options = Some(crate::raceopts::Options::default());
+        s.select_character(&Character { options: Vec::new(), ..c.clone() });
+        assert_eq!(sent(&mut s), [five.clone()], "the control: none chosen");
+        s.select_character(&c);
+        assert_eq!(sent(&mut s), [[five, vec![b'R', 1, 1, 4, b's', b'k', b'i', b'n', 8]].concat()]);
+    }
+
     // The worlds held, told the server after a character was played and before
     // the game connection opened (their check ended a moment after the pick):
     // the server has left the lobby connection by then and never reads it, so
@@ -4677,7 +4721,7 @@ mod tests {
         assert_eq!(answers(&mut s), [], "the control: an offer of 0");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x22, 0x7E, 1, 0, 0, 0]);
         assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
-        assert_eq!(answers(&mut s), [(251, vec![0x22, 0x7E, 1, 0, 0, 0])]);
+        assert_eq!(answers(&mut s), [(251, vec![0x22, 0x7E, 2, 0, 0, 0])], "2: a game race's rows shown under the four");
         // a race of one body row, two steps
         let mut options = vec![0x23, 0x7E, 1, 1, 13, 1, 4, b'b', b'o', b'd', b'y', 5, b'T', b'r', b'i', b'b', b'e', 1, 0, 2];
         options.extend([1, b'G']);

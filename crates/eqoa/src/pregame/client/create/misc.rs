@@ -18,6 +18,12 @@
 //! the cursor. The race's whole body is framed (the review's framing), as a colour
 //! is laid on any of it. Enter hands up the race's defaults for the four, and the
 //! steps chosen with them (`take_options`).
+//!
+//! A game race's options (go-eqoa-server's skin shades, `world.skin_shades`) go
+//! under the four instead: the four first, then the race's rows, scrolling with
+//! the cursor; Enter hands up the four chosen and the steps (the server sends a
+//! game race's rows only to a client that answered its offer 2: one before them
+//! would show them instead of the four).
 
 use super::race::look_for;
 use super::{Env, Msg, create_model_dressed, frame_camera, legend, redress_dressed, word};
@@ -44,6 +50,8 @@ pub struct Opts {
     pub shown: Vec<usize>,
     /// the first row shown on the page (four fit)
     pub top: usize,
+    /// the race's own body for the sex (a body row's steps none: the body)
+    pub own: u32,
 }
 
 impl Opts {
@@ -75,7 +83,7 @@ pub fn opts_for(rows: &[net::raceopts::Row], sex: i32, form: &NewChar, fallback:
         .iter()
         .map(|r| form.options.iter().find(|(k, _)| *k == r.key).map_or(0, |(_, s)| *s as usize).min(r.steps(sex).len().saturating_sub(1)))
         .collect();
-    let mut o = Opts { sex, rows: rows.to_vec(), steps, shown: Vec::new(), top: 0 };
+    let mut o = Opts { sex, rows: rows.to_vec(), steps, shown: Vec::new(), top: 0, own: fallback };
     o.shown = o.showing(o.body(fallback));
     o
 }
@@ -101,12 +109,14 @@ pub struct MiscPage {
     pub opts: Option<Opts>,
     /// the steps Enter handed up, for the form (`take_options`)
     handed: Vec<(String, u8)>,
+    /// the four come first, the options' rows under them (a game race's)
+    four: bool,
 }
 
 impl Default for MiscPage {
     fn default() -> Self {
         // `Init`: 3, 3, 3, 0
-        MiscPage { sel: 0, face: 3, hair_style: 3, hair_length: 3, hair_color: 0, pulse: 1, time: 0, glow: 1.0, window: Window::default(), hits: Hits::default(), dirty: false, rebody: false, pending: None, opts: None, handed: Vec::new() }
+        MiscPage { sel: 0, face: 3, hair_style: 3, hair_length: 3, hair_color: 0, pulse: 1, time: 0, glow: 1.0, window: Window::default(), hits: Hits::default(), dirty: false, rebody: false, pending: None, opts: None, handed: Vec::new(), four: false }
     }
 }
 
@@ -131,9 +141,21 @@ impl MiscPage {
         std::mem::take(&mut self.handed)
     }
 
-    /// How many rows the page has: a server's race's shown, else the four.
+    /// How many rows the page has: a server's race's shown, else the four (a
+    /// game race's options under them).
     fn rows(&self) -> i32 {
-        self.opts.as_ref().map_or(4, |o| o.shown.len() as i32)
+        match &self.opts {
+            None => 4,
+            Some(o) if self.four => 4 + o.shown.len() as i32,
+            Some(o) => o.shown.len() as i32,
+        }
+    }
+
+    /// The options' row at the cursor (an index into `shown`), or none on the
+    /// four.
+    fn opts_row(&self) -> Option<usize> {
+        let first = if self.four { 4 } else { 0 };
+        (self.opts.is_some() && self.sel >= first).then(|| (self.sel - first) as usize)
     }
 
     pub fn look(&self) -> [i32; 4] {
@@ -155,7 +177,9 @@ impl MiscPage {
         [self.face, self.hair_style, self.hair_length, self.hair_color] = look_for(form.race, form.city, form.sex, form, env);
         // a server's race with options: its rows (the race's defaults for the four)
         self.opts = crate::raceopts::options().map(|o| o.rows(form.race).to_vec()).filter(|r| !r.is_empty()).map(|rows| opts_for(&rows, form.sex, form, super::tables::model_of(form.race, form.sex)));
-        if self.opts.is_some() {
+        // a game race's (the skin) under the four, which it keeps
+        self.four = self.opts.is_some() && (0..=9).contains(&form.race);
+        if self.opts.is_some() && !self.four {
             let blank = NewChar { face: -1, hair_style: -1, hair_length: -1, hair_color: -1, ..form.clone() };
             [self.face, self.hair_style, self.hair_length, self.hair_color] = look_for(form.race, form.city, form.sex, &blank, env);
         }
@@ -169,7 +193,10 @@ impl MiscPage {
             13 | key::CROSS => {
                 sounds.push(13);
                 let m = Msg::Look(self.look());
-                self.handed = self.opts.take().map(|o| o.chosen(o.body(0))).unwrap_or_default();
+                // the rows shown on the body chosen, else the race's own (a race
+                // with no body row: the pixie's, a game race's skin; on body 0 no
+                // part showed, and every colour went as its first)
+                self.handed = self.opts.take().map(|o| o.chosen(o.body(o.own))).unwrap_or_default();
                 env.release();
                 self.sel = 0;
                 self.face = 3;
@@ -230,7 +257,9 @@ impl MiscPage {
             // the cursor's row in view, four at a time
             let sel = self.sel.max(0) as usize;
             o.top = o.top.min(sel).max(sel.saturating_sub(3));
-            return;
+            if !self.four {
+                return;
+            }
         }
         if let Some(st) = stage {
             // the game's 0.5235988f, which is pi/6's float
@@ -244,14 +273,14 @@ impl MiscPage {
         self.pulse = 1;
         self.glow = 1.0;
         self.time = now;
-        if let Some(o) = self.opts.as_mut() {
-            let Some(&ri) = o.shown.get(self.sel.max(0) as usize) else { return };
+        if let (Some(at), Some(o)) = (self.opts_row(), self.opts.as_mut()) {
+            let Some(&ri) = o.shown.get(at) else { return };
             let n = o.rows[ri].steps(o.sex).len() as i32;
             let x = o.steps[ri] as i32 + d;
             o.steps[ri] = if x < 0 { n - 1 } else if x >= n { 0 } else { x } as usize;
             if o.rows[ri].kind == net::raceopts::Kind::Body {
                 // another body: the rows its parts show, and the model made anew
-                let body = o.body(0);
+                let body = o.body(o.own);
                 o.shown = o.showing(body);
                 self.sel = self.sel.min((o.shown.len() as i32 - 1).max(0));
                 o.top = o.top.min(self.sel as usize);
@@ -322,19 +351,18 @@ impl MiscPage {
             // and the step's name, the picture by what it changes)
             const RETAIL: [(i32, i32, [i32; 2], [i32; 2], i32); 4] = [(131, 206, [95, -40], [9, 15], 60), (132, 207, [95, -40], [23, 25], 60), (133, 208, [95, -40], [1, 2], 60), (134, 209, [95, -35], [5, 6], 56)];
             // (row index, art, the word, the slider's place)
+            let four: Vec<(i32, (i32, i32, [i32; 2], [i32; 2], i32), Vec<u16>, f32)> = [(self.face, 3.0), (self.hair_style, 3.0), (self.hair_length, 3.0), (self.hair_color, 7.0)]
+                .iter()
+                .enumerate()
+                .map(|(i, &(v, n))| (i as i32, RETAIL[i], word(vui, 604 + i as i32), v as f32 / n))
+                .collect();
+            let first = if self.four { 4 } else { 0 };
             let shown: Vec<(i32, (i32, i32, [i32; 2], [i32; 2], i32), Vec<u16>, f32)> = match &self.opts {
-                None => [(self.face, 3.0), (self.hair_style, 3.0), (self.hair_length, 3.0), (self.hair_color, 7.0)]
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &(v, n))| (i as i32, RETAIL[i], word(vui, 604 + i as i32), v as f32 / n))
-                    .collect(),
-                Some(o) => o
-                    .shown
-                    .iter()
-                    .enumerate()
-                    .skip(o.top)
-                    .take(4)
-                    .map(|(i, &ri)| {
+                None => four,
+                Some(o) => four
+                    .into_iter()
+                    .filter(|_| self.four)
+                    .chain(o.shown.iter().enumerate().map(|(i, &ri)| {
                         let row = &o.rows[ri];
                         let steps = row.steps(o.sex);
                         let k = o.steps[ri].min(steps.len().saturating_sub(1));
@@ -345,8 +373,10 @@ impl MiscPage {
                             net::raceopts::Kind::Colour => RETAIL[3],
                         };
                         let name = steps.get(k).map_or("", |s| s.name.as_str());
-                        (i as i32, art, vi::ui::wide(&format!("{}: {}", row.label, name)), k as f32 / (steps.len().max(2) - 1) as f32)
-                    })
+                        ((first + i) as i32, art, vi::ui::wide(&format!("{}: {}", row.label, name)), k as f32 / (steps.len().max(2) - 1) as f32)
+                    }))
+                    .skip(o.top)
+                    .take(4)
                     .collect(),
             };
             let top = self.opts.as_ref().map_or(0, |o| o.top as i32);
@@ -429,14 +459,14 @@ impl MiscPage {
         let stage_race = super::tables::like(form.race);
         let framing = match env.race_camera(stage_race) {
             // a server's race's options: its whole body, the review's framing
-            Some(c) if self.opts.is_some() => c.review,
+            Some(c) if self.opts.is_some() && (!self.four || self.sel >= 4) => c.review,
             Some(_) if stage_race == 0 && form.sex == 0 && env.expansion & 2 == 0 => [0.9, 1.48, 0.567_232, 1.25],
             Some(c) => c.cust,
             None => super::DEFAULT_FRAMING,
         };
         let framing = super::body_framing(&cx.res.lib, framing, model, super::tables::model_of(stage_race, form.sex));
         // the options' whole body: a little farther, for a cap, wings or horns
-        let framing = if self.opts.is_some() { [framing[0], framing[1], framing[2], framing[3] * 1.15] } else { framing };
+        let framing = if self.opts.is_some() && (!self.four || self.sel >= 4) { [framing[0], framing[1], framing[2], framing[3] * 1.15] } else { framing };
         frame_camera(stage, framing);
         stage.process(now);
         // the arena's particles: its braziers' flames
@@ -536,6 +566,40 @@ mod tests {
         let mut gone = MiscPage::default();
         gone.activate(0, &form, &env);
         assert!(gone.opts.is_none(), "no options from the server: the four");
+    }
+
+    /// A game race's options (the skin shades) go under the four, which it
+    /// keeps (the form's look, not the race's defaults): five rows, the fifth
+    /// in view by scrolling; the four step as ever, the skin round its steps;
+    /// Enter hands up the four chosen and the skin's step. The control: a
+    /// human with no options from the server has the four alone.
+    #[test]
+    fn a_game_race_has_its_skin_under_the_four() {
+        crate::raceopts::set_options(Some(&crate::raceopts::tests::skin_options()));
+        let (mut env, mut s) = (Env::default(), Vec::new());
+        let form = NewChar { race: 0, city: 1, sex: 0, face: 2, hair_style: 1, hair_length: 1, hair_color: 3, ..super::super::blank_form() };
+        let mut p = MiscPage::default();
+        p.activate(0, &form, &env);
+        assert!(p.four && p.opts.is_some());
+        assert_eq!((p.rows(), p.look()), (5, [2, 1, 1, 3]), "the four as the form has them, and the skin");
+        p.key(key::RIGHT, 0, &mut env, None, &mut s);
+        assert_eq!(p.face, 3, "the face row steps as ever");
+        for _ in 0..4 {
+            p.key(key::DOWN, 0, &mut env, None, &mut s);
+        }
+        assert_eq!((p.sel, p.opts.as_ref().unwrap().top), (4, 1), "the skin in view");
+        p.key(key::RIGHT, 0, &mut env, None, &mut s);
+        p.key(key::RIGHT, 0, &mut env, None, &mut s);
+        assert_eq!(p.opts.as_ref().unwrap().steps, vec![2]);
+        assert_eq!(p.look(), [3, 1, 1, 3], "the four untouched by the skin");
+        assert_eq!(p.key(key::CROSS, 0, &mut env, None, &mut s), Some(Msg::Look([3, 1, 1, 3])));
+        assert_eq!(p.take_options(), vec![("skin".to_string(), 2)]);
+
+        crate::raceopts::set_options(None);
+        let mut q = MiscPage::default();
+        q.activate(0, &form, &env);
+        assert!(!q.four && q.opts.is_none());
+        assert_eq!(q.rows(), 4, "the control: the four alone");
     }
 
     /// More rows than four scroll with the cursor, the four in view about it.
