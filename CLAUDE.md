@@ -84,7 +84,11 @@ current.
   item links in chat on a server that offers them (the GM Jibrish's petition 1463, 2026-11-10: the item menu's Link Item
   and a Shift+click put an item in the chat line as a purple unit, a link in the chat box opens a window of the item at
   the top middle, two at most, R2 held walks the links: `itemlink.rs`, `linkplay.rs`, `net::itemlink`, go-eqoa-server's
-  0x7E4F-0x7E53; Extended > Chat > Item Links, on by default; off, or on any other server, plain names, the game's)).
+  0x7E4F-0x7E53; Extended > Chat > Item Links, on by default; off, or on any other server, plain names, the game's), and
+  auto-cast on the quick bars and auto targeting (the server owner's of 2026-11-11, "lets add auto-cast to abilities to
+  fire off cooldown/timer/buff gone/pet's die similar to the mercs, also auto targeting": `autocast`, `autoplay`; a slot
+  marked auto is pressed by the client itself with the press's own 0x0032, its target taken with the game's 0x0010:
+  nothing new on the wire; Extended > Combat's Auto-Cast and Auto Target, `/autocast`, `/autotarget`)).
   A new client-side addition is the user's call: ask first. Sharp filtering is for the 2D layer and
   the text only: the world's textures are drawn smooth, as the game filters them (the user,
   2026-10-27, after a Crisp row for them: "world textures cant render proper without smooth. so

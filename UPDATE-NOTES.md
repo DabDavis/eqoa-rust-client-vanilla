@@ -7,6 +7,26 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Auto-cast and auto targeting
+- An ability on your quick bars can now be set to **auto**: it is used by itself whenever it is ready. Right-click its
+  slot (on a phone or tablet, press and hold it; on a controller or the keyboard, hold ○ or E for a second on it) and
+  a gold **A** shows in its corner. Do the same again to turn it off.
+- What an auto slot waits for depends on the ability: an attack or a combat art fires off its timer while you are in
+  a fight, at your target if it is in range (it never starts a fight for you); a buff is cast again when it wears off
+  you; a pet summoning when you have no pet (it died or you let it go); a heal when you drop below half health. The
+  chat box tells you which it picked. If it picked wrong, type **/autocast <slot number or name> attack**, **buff**,
+  **pet** or **heal** (for example `/autocast 3 buff` or `/autocast Spirit Blast attack`); **/autocast** alone lists
+  your auto slots.
+- It casts one thing at a time, never while you are already casting, dead, invisible, in a menu, merchant or trade
+  window, or short of power (it waits for the power). Heals come first, then your pet, then buffs out of a fight and
+  attacks in one. A buff that never shows on you (or a summoning that brings no pet) is tried less and less often and
+  is turned off after three tries.
+- **Auto Target** (off until you turn it on): when you have no target, or your target died, the nearest creature that
+  is attacking you (or else your pet or group) is targeted for you. It never picks a player or a creature that isn't
+  fighting you. Turn it on in **Options > Extended > Combat > Auto Target** or type **/autotarget**.
+- **Options > Extended > Combat > Auto-Cast** turns every auto slot off at once (or type **/autocast off**). Your auto
+  slots are kept for each character. It works on any server: the game simply presses the ability for you.
+
 ## 2026-11-11 · The installed page opens another window each time
 - On a computer where the page is installed as an app (Windows 11's Start menu or taskbar), opening it again now
   starts another game window for multiboxing instead of bringing back (or reloading) the one already open.

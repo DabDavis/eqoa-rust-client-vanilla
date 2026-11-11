@@ -103,7 +103,7 @@ or a browser (each described where it lives below):
   (Texture Packs, Dump Textures, and on a computer Texture Folder), Map (Map,
   Minimap, Map Markers, Quest Helper, Quest Tracker), Number Colors (Your Damage,
   Your Procs, Your Heals, Pet Damage, Pet Procs, Pet Heals) and Combat (DPS Meter, DPS
-  Meter Shows, Reset DPS Meter), and the rows below.
+  Meter Shows, Reset DPS Meter, Auto-Cast, Auto Target), and the rows below.
 - **The map and the quest helper** (the user's of 2026-11-09: "also add the map and
   quest helper we had in a former update"; they were taken out on 2026-10-27 with the
   others below that are not the game's, and only these two came back): Extended > Map,
@@ -374,6 +374,27 @@ or a browser (each described where it lives below):
   keyboard. Extended > Combat: DPS Meter (off by default), DPS Meter Shows and Reset DPS
   Meter, for a controller. Off, or on a server that keeps none (Sandstorm, eqoa.live),
   nothing is drawn or asked, as on a PS2.
+- **Auto-cast and auto targeting** (the server owner's of 2026-11-11, "lets add auto-cast to
+  abilities to fire off cooldown/timer/buff gone/pet's die similar to the mercs, also auto
+  targeting"; `autocast.rs`, `autoplay.rs`): an ability on a quick bar the player marks
+  auto (a right click on its row, a long press on a touch screen, ○ or E held a second on
+  it, or `/autocast`; a gold "A" in its icon's corner) is used by the client itself when it
+  is off its timer (the server's lockout, 0x00CD) and its slot's condition holds: an attack
+  in a fight (the attack held, or a hit given or taken in the last 10 s) at a living
+  creature targeted within the ability's range; a buff when its effect (by name, channel
+  0x43) is not on the player, or, once its length has been seen, 6 s before its end; a
+  summoning with no pet; a heal below half health. The kind is guessed from the
+  ability's scope and words and named with `/autocast <slot or name> attack|buff|pet|heal|off`.
+  As the server's mercs choose: a heal, the pet, out of a fight the buffs, the attacks; one
+  at a time, 1.5 s apart, never in a cast, dead, invisible, with a window up or short of
+  power; a buff whose effect never shows (or a summoning with no pet after) is tried later
+  and later and taken off auto after three. Auto Target (off by default, `/autotarget`):
+  with no target or a dead one, the nearest creature that hit the player lately, else its
+  pet or group, is targeted (0x0010), never a player, a pet or one that hit none of them.
+  Each is what a press sends, so the server sees ordinary casts and targets and nothing
+  new goes on the wire (any server, a PS2's too). The auto slots are kept per character
+  (`autocast.opt`, by the ability's id); Extended > Combat: Auto-Cast (on: no slot is auto
+  until marked) and Auto Target.
 - **A render scale and a sharp HUD**: Render Scale (off unless chosen) x2 or
   x4 draws the whole picture, the world and everything over it, two or
   four times the window's size each way and averages it down, which smooths

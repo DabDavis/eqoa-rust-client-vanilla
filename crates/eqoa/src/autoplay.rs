@@ -177,7 +177,7 @@ impl Play {
                     .autocast
                     .on
                     .iter()
-                    .filter_map(|(id, k)| self.abilities.get(id).map(|a| (a.slot, format!("  {} {}: {} ({}{})", if (252..256).contains(&a.slot) { "slot".to_string() } else { format!("bar {} slot", a.slot / 5 + 1) }, if (252..256).contains(&a.slot) { a.slot - 251 } else { a.slot % 5 + 1 }, a.name, k.word(), if a.valid == 0 { ", not on a bar" } else { "" }))))
+                    .filter_map(|(id, k)| self.abilities.get(id).map(|a| (a.slot, format!("  {}{} ({}{})", if a.valid != 0 && (0..20).contains(&a.slot) { format!("{}: ", a.slot + 1) } else { String::new() }, a.name, k.word(), if a.valid == 0 { ", not on a bar" } else { "" }))))
                     .collect();
                 v.sort();
                 let mut out = vec![format!("Auto-cast is {}; {} auto slot{}.{}", if crate::settings::auto_cast() { "on" } else { "off" }, v.len(), if v.len() == 1 { "" } else { "s" }, if crate::settings::auto_target() { " Auto target is on." } else { "" })];

@@ -136,7 +136,7 @@ pub fn guess(a: &Ability) -> Option<Kind> {
     if has(&d, &["gate", "teleport", "portal", "invis", "conceal", "hide", "illusion", "assume the form", "form of", "disguise", "resurrect", "ressurect", "revive", "rez ", "an item", "summon item", "creates", "draught", "charm", "lull", "pacify", "calm", "feign", "camouflage", "levitat", "breath", "shrink", "grow", "track", "forage", "bind", "evacuat", "succor", "pickpocket", "stance", "raiment", "experience", "familiar", "eye of"]) {
         return None;
     }
-    let summon = has(&d, &["pet summon"]) || (d.contains("summons") && has(&d, &["to aid you", "by your side", "to fight", "guardian", "golem", "animation", "elemental", "skeleton", "spectre", "zombie", "mummy"]) && !d.contains("aura"));
+    let summon = has(&d, &["pet summon", "summons pet", "summon pet", "summons a pet"]) || (d.contains("summons") && has(&d, &["to aid you", "by your side", "to fight", "guardian", "golem", "animation", "elemental", "skeleton", "spectre", "zombie", "mummy"]) && !d.contains("aura"));
     if summon {
         return Some(Kind::Pet);
     }
@@ -144,7 +144,7 @@ pub fn guess(a: &Ability) -> Option<Kind> {
     if !(0..=2).contains(&a.scope) {
         return None;
     }
-    let harmful = has(&d, &["decrease", "damage", "injur", "strike", "attack", "drain", "steal", "siphon", "resisted by", "debuff", "taunt", "hate", "root", "snare", "stun", "lance", "bolt", "blast", "burn", "shot", "blow", "slash", "pierce", "crush", "melee", "smite", "nuke", "lightning", "fire", "frost", "poison", "disease", "storm"]);
+    let harmful = has(&d, &["decrease", "damage", "injur", "strike", "attack", "drain", "steal", "siphon", "resisted by", "debuff", "taunt", "hate", "root", "snare", "stun", "lance", "bolt", "blast", "burn", "shot", "blow", "slash", "pierce", "crush", "melee", "smite", "nuke", "lightning", "fire", "frost", "poison", "disease", "storm", "shock", "sleet", "spray", "jet", "slam", "malady", "affliction", "fever", "blight", "corrosive", "venom", "gale", "wilting", "sickening", "decaying wind"]);
     // a buff's own words go first: "increases the target's armor", "Defensive
     // Proc" (a proc names damage it does when the player is struck)
     let lasting = has(&d, &["buff", "proc", "increase", "aura", "skin", "shield", "armor", "min", "regenerat", "over time", "per tic", "surround"]);
@@ -602,6 +602,12 @@ mod tests {
         assert_eq!(g("Mend", "Heal some of your wounds. Modified by WIS.", 0), Some(Kind::Heal));
         assert_eq!(g("Fire Elementaling", "MAG Pet Summon - Fire Elemental to fight by your side.", 0), Some(Kind::Pet));
         assert_eq!(g("Decaying Flesh", "Summons a zombie to aid you.", 0), Some(Kind::Pet));
+        assert_eq!(g("Primal Spirit", "Summons Pet", 0), Some(Kind::Pet));
+        // go-eqoa-server's imported spells with no description: the name's words
+        assert_eq!(g("Spirit Blast", "", 1), Some(Kind::Attack));
+        assert_eq!(g("Shock of Spirits", "", 1), Some(Kind::Attack));
+        assert_eq!(g("Group Deftness", "", 2), Some(Kind::Buff));
+        assert_eq!(g("Deftness", "", 1), None, "a target's spell of no telling words: the player says");
         assert_eq!(g("Clay Golem", "Tank: Summons a clay golem that taunts enemies and restores its own health during battle.", 0), Some(Kind::Pet));
         // never guessed: travel, forms, invisibility, an item, a pet's own
         assert_eq!(g("Gate", "Self, Gate to bind point", 0), None);
