@@ -5423,6 +5423,14 @@ impl Play {
             }
             return;
         }
+        // `/autotarget` (`autocast`), the client's own: longer than the
+        // game's ten characters of a command's word
+        if let Some((word, rest)) = text.split_once(' ').or(Some((text, "")))
+            && word.eq_ignore_ascii_case("/autotarget")
+        {
+            self.autotarget_command(rest);
+            return;
+        }
         // The command: up to ten characters, to a space, A-Z lowered.
         let mut n = 0;
         let mut cmd = String::new();
@@ -5484,7 +5492,7 @@ impl Play {
             "/dps" => self.dps_command(&rest),
             // auto-cast and auto targeting (`autocast`), the client's own
             "/autocast" | "/ac" => self.autocast_command(&rest),
-            "/autotarget" | "/at" => self.autotarget_command(&rest),
+            "/at" => self.autotarget_command(&rest),
             // the HUD's layout (`hudlayout`), the client's own
             "/hud" => {
                 let line = crate::hudlayout::command(&rest);

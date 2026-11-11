@@ -382,6 +382,26 @@ mod tests {
         crate::settings::set_client(crate::settings::ClientOptions::default());
     }
 
+    /// The typed commands: `/autotarget` (longer than the game's ten
+    /// characters of a command word) and `/at` turn Auto Target; `/autocast 1
+    /// buff` names a slot's kind, `/autocast 1 off` takes it off.
+    #[test]
+    fn the_typed_commands() {
+        crate::settings::set_client(crate::settings::ClientOptions::default());
+        let (mut p, _sent) = rig(&[ability(3, 0, "Deft Hands", 0)]);
+        p.chat_line("/autotarget on");
+        assert!(crate::settings::auto_target());
+        p.chat_line("/AutoTarget");
+        assert!(!crate::settings::auto_target(), "no word: the other");
+        p.chat_line("/at on");
+        assert!(crate::settings::auto_target());
+        p.chat_line("/autocast 1 buff");
+        assert_eq!(p.autocast.on.get(&3), Some(&Kind::Buff));
+        p.chat_line("/autocast 1 off");
+        assert!(p.autocast.on.is_empty());
+        crate::settings::set_client(crate::settings::ClientOptions::default());
+    }
+
     /// A right click on a bar's ability turns its auto and marks it; on an
     /// empty slot, nothing (the world's click as ever).
     #[test]

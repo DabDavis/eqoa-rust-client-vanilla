@@ -401,7 +401,10 @@ impl AutoCast {
     /// The auto cast to send now, if any (and it is noted as sent).
     pub fn choose(&mut self, abilities: &BTreeMap<i64, Ability>, now: &Now) -> Option<Cast> {
         self.watch(abilities, now);
-        if now.dead || now.casting || now.window || now.invisible || self.on.is_empty() {
+        // no hit points, alive: the stat channel not yet told of a respawn (a
+        // heal went at a full player on the rig, 2026-11-11)
+        let stale = now.hp_max > 0 && now.hp <= 0;
+        if now.dead || stale || now.casting || now.window || now.invisible || self.on.is_empty() {
             return None;
         }
         if self.last.is_some_and(|t| now.ms - t < GAP_MS) {
@@ -738,6 +741,7 @@ mod tests {
             ("a window up", |n| n.window = true),
             ("invisible", |n| n.invisible = true),
             ("no power", |n| n.power = 5),
+            ("no hit points yet after a respawn", |n| n.hp = 0),
         ] {
             let mut n = base.clone();
             f(&mut n);

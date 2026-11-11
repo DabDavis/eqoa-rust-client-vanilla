@@ -158,6 +158,7 @@ impl HudMenu {
     /// and out slowly to 0.3, then the list (the bars: menus 0, 1, 4 and 5),
     /// the stack (2, its slot icons the live client's with `live`) or the
     /// sets (3).
+    #[allow(clippy::too_many_arguments)]
     fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menu: &MenuDef, now: i64, name: &dyn Fn(u32, i64) -> Vec<u16>, live: bool, auto: &[i64]) {
         if self.time < now {
             self.lit = -1;
