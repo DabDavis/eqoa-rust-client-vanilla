@@ -163,11 +163,13 @@ const NAME_COLORS: [[f32; 4]; 3] = [[212.0 / 255.0, 192.0 / 255.0, 111.0 / 255.0
 /// pet's.
 const MERC_COLOR: [f32; 4] = [155.0 / 255.0, 165.0 / 255.0, 210.0 / 255.0, 1.0];
 
-/// A name plate to draw: where, in what colour, what.
+/// A name plate to draw: where, in what colour, what, and a line under it
+/// (a merc's "<Hirer's Mercenary>": `mercplay`).
 pub struct Plate {
     pub at: [f32; 3],
     pub color: [f32; 4],
     pub name: String,
+    pub tag: Option<String>,
 }
 
 pub struct Play {
@@ -1555,8 +1557,17 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
         let (qx, qy) = ((ndc.x * 320.0 + 320.0) as i32, (-ndc.y * 224.0 + 224.0) as i32);
         let w = (width(&p.name) as f32 * view.scale).round() as i32;
         let h = (height as f32 * view.scale).round() as i32;
-        let min = (qx - (w >> 1), qy - (h >> 1));
-        queued.push((clip.w, min, (min.0 + w, min.1 + h), ndc, p));
+        let mut min = (qx - (w >> 1), qy - (h >> 1));
+        let mut max = (min.0 + w, min.1 + h);
+        // a tag's line under the name: the plate's rect takes it in
+        if let Some(t) = &p.tag {
+            let tw = (width(t) as f32 * view.scale).round() as i32;
+            max.1 += h;
+            if tw > w {
+                (min.0, max.0) = (qx - (tw >> 1), qx - (tw >> 1) + tw);
+            }
+        }
+        queued.push((clip.w, min, max, ndc, p));
     }
     queued.sort_by(|a, b| a.0.total_cmp(&b.0));
     /// A kept plate: its rect's corners, where it is drawn, what.
@@ -1571,7 +1582,17 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
     if view.overlap {
         kept.reverse();
     }
-    kept.into_iter().map(|(_, _, ndc, p)| render::text::Label { at: ndc.to_array(), color: p.color, text: p.name.clone() }).collect()
+    // a tag a line below its name, the line the font's height at the plates'
+    // size (`Text::vertices`: a pixel of the PS2's 448 lines is 2 / 448 high)
+    let line = 2.0 * height as f32 * view.scale / render::text::SCREEN_H;
+    let mut out = Vec::new();
+    for (_, _, ndc, p) in kept {
+        out.push(render::text::Label { at: ndc.to_array(), color: p.color, text: p.name.clone() });
+        if let Some(t) = &p.tag {
+            out.push(render::text::Label { at: [ndc.x, ndc.y - line, ndc.z], color: p.color, text: t.clone() });
+        }
+    }
+    out
 }
 
 /// `CalcSlotWorldTransform(slot)`'s translation: the slot's node under the
@@ -2112,11 +2133,31 @@ mod name_plates {
     /// A plate at `at` (the view is the identity, so its x and y are where
     /// it is on the screen, -1 to 1).
     fn plate(at: [f32; 3], name: &str) -> Plate {
-        Plate { at, color: [1.0; 4], name: name.into() }
+        Plate { at, color: [1.0; 4], name: name.into(), tag: None }
     }
 
     fn names(view: &PlateView, plates: &[Plate]) -> Vec<String> {
         labels_by(plates, view, Mat4::IDENTITY, width, 12).into_iter().map(|l| l.text).collect()
+    }
+
+    /// A merc's tag (`mercplay`) is a second label a line under its name, in
+    /// its colour, and its plate's rect takes it in: a plate just under the
+    /// name, where the tag is, is dropped as one meeting it. The control: the
+    /// same plates untagged, both are kept.
+    #[test]
+    fn a_tag_is_a_line_under_its_name() {
+        let eye = Vec3::new(0.0, 0.0, -1.0);
+        let below = -14.0 / 224.0;
+        let mut merc = plate([0.0, 0.0, 0.5], "Ralthas");
+        merc.tag = Some("<Lonewulf's Mercenary>".into());
+        let under = plate([0.0, below, 0.5], "Kel");
+        let ls = labels_by(&[merc, under], &PlateView::game(eye), Mat4::IDENTITY, width, 12);
+        let texts: Vec<_> = ls.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["Ralthas", "<Lonewulf's Mercenary>"], "the plate under the tag is dropped");
+        assert!((ls[1].at[1] - (ls[0].at[1] - 2.0 * 12.0 / 448.0)).abs() < 1e-6 && ls[1].at[0] == ls[0].at[0], "{:?}", ls[1].at);
+        assert_eq!(ls[1].color, ls[0].color);
+        let untagged = [plate([0.0, 0.0, 0.5], "Ralthas"), plate([0.0, below, 0.5], "Kel")];
+        assert_eq!(names(&PlateView::game(eye), &untagged), ["Ralthas", "Kel"], "the control must fail");
     }
 
     /// Zoomed out to 50 the plates round the player stay, measured from the
@@ -4151,7 +4192,7 @@ impl Play {
             if c.name.is_empty() || !p.shown {
                 continue;
             }
-            out.push(Plate { at, color: self.name_color(c), name: c.name.clone() });
+            out.push(Plate { at, color: self.name_color(c), name: c.name.clone(), tag: self.merc_tag(c) });
         }
         out
     }
