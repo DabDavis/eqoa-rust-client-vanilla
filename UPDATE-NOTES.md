@@ -7,6 +7,16 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · More than eight characters
+- On a server that allows it (eqoaclassic: up to **20 characters** an account), character select has a slot for
+  every character and one empty slot to make another, eight in view at a time. Up to eight characters it looks
+  exactly as before.
+- The list scrolls: the d-pad, the stick or the arrow keys walk past the eighth row and the list follows, the mouse
+  wheel scrolls it, and on a phone or tablet drag the screen up or down. A scroll bar at the list's right shows where
+  you are. Delete Character stays under the list.
+- A PlayStation 2 still shows eight: there you see your eight most recently played characters, and the others wait,
+  untouched, for this client.
+
 ## 2026-11-11 · Auto-cast keeps your pet buffed
 - Auto-cast now works with **pet buffs**. A pet buff's effect shows on your pet, not on your own effects, so auto-cast
   used to think it had not landed, cast it again and turned the slot off after three casts. Now it looks for the buff

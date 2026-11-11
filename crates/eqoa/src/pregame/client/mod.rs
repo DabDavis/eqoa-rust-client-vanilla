@@ -572,10 +572,13 @@ impl Client {
         }
     }
 
-    /// `CharacterList`: the characters (eight at most), creation closed,
+    /// `CharacterList`: the characters (eight at most, or as many as the
+    /// server said it lists: `Session::char_slots`), creation closed,
     /// character select up.
     fn character_list(&mut self, list: &[net::session::Character]) {
-        self.chars = list.iter().take(8).map(CharRecord::of).collect();
+        self.chars = list.iter().take(self.char_slots() as usize).map(CharRecord::of).collect();
+        self.select.cap = self.char_slots() as i32;
+        self.select.reveal(self.chars.len() as i32);
         // creation's form and pages start over; the selection stays where
         // it was (`CreateCharacter` left it on the new character's slot)
         self.create.reset();
@@ -669,7 +672,10 @@ impl Client {
         let mut created = None;
         match self.top {
             Wnd::Server => self.server_wnd.draw(&mut ui, &self.shards, &mut reqs),
-            Wnd::Select => self.select.draw(&mut ui, &self.chars, self.stage.as_mut(), &mut reqs),
+            Wnd::Select => {
+                self.select.cap = self.char_slots() as i32;
+                self.select.draw(&mut ui, &self.chars, self.stage.as_mut(), &mut reqs)
+            }
             Wnd::Notice => self.notice.draw(&mut ui),
             Wnd::Create => {
                 created = Some(match self.session.as_mut() {
@@ -735,6 +741,7 @@ impl Client {
         };
         self.select.sel = self.chars.len() as i32;
         self.chars.push(rec);
+        self.select.reveal(self.chars.len() as i32);
         self.top = Wnd::Select;
         self.set_active(Wnd::Select);
         self.select.show_text_none();
@@ -893,7 +900,7 @@ impl Client {
                 }
                 Req::Look(i, [face, style, length, color]) => {
                     // `SetCharLook`: Frontiers only
-                    if self.expansion() & 2 != 0 && i < self.chars.len() && self.chars.len() < 9 {
+                    if self.expansion() & 2 != 0 && i < self.chars.len() && self.chars.len() <= self.char_slots() as usize {
                         let c = &mut self.chars[i];
                         (c.face, c.hair_style, c.hair_length, c.hair_color) = (face, style, length, color);
                     }
@@ -908,10 +915,16 @@ impl Client {
         }
     }
 
-    /// `SelectCharacter(i)`: past the list (fewer than eight), creation;
+    /// The characters character select has slots for: CLIENT's eight, or
+    /// more from a server that said it lists more (`Session::char_slots`).
+    fn char_slots(&self) -> u32 {
+        self.session.as_ref().map_or(net::session::CLIENT_CHAR_SLOTS, |s| s.char_slots).max(net::session::CLIENT_CHAR_SLOTS)
+    }
+
+    /// `SelectCharacter(i)`: past the list (fewer than its slots), creation;
     /// else the character played (0x002A with its look).
     fn select_character(&mut self, i: usize) {
-        if i >= self.chars.len() && self.chars.len() < 8 {
+        if i >= self.chars.len() && self.chars.len() < self.char_slots() as usize {
             self.select.show_text_none();
             self.create.open();
             self.top = Wnd::Create;
@@ -958,6 +971,15 @@ impl Client {
     /// An editor has the keys (creation's name).
     pub fn typing(&self) -> bool {
         self.active == Wnd::Create && self.create.typing()
+    }
+
+    /// The mouse wheel's `lines` (up positive) or a finger's drag (`dy`
+    /// frame pixels, down positive): character select's list scrolls; no
+    /// other window here takes them.
+    pub fn scroll(&mut self, lines: f32, dy: f32) {
+        if self.active == Wnd::Select {
+            self.select.scroll(lines, dy, self.chars.len() as i32);
+        }
     }
 
     /// A pointer at frame point `p`: the keys the window under it asks for.

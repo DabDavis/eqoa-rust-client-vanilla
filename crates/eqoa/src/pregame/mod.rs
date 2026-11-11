@@ -318,6 +318,14 @@ impl Pregame {
         }
     }
 
+    /// The wheel's `lines` or a finger's drag of `dy` frame pixels: the
+    /// window up scrolls (character select's list).
+    pub fn scroll(&mut self, lines: f32, dy: f32) {
+        if self.entering.is_none() && self.stage == Stage::Client {
+            self.client.scroll(lines, dy);
+        }
+    }
+
     /// The files read since the last frame go into `res`; then the stage
     /// moves on if its files are in.
     pub fn update(&mut self, now: i64) {

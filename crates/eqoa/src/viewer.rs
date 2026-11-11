@@ -3578,17 +3578,21 @@ impl App {
         // the touch screen's pad over the game's screens as over a window of
         // the world's: every button the pad's, a stick only inside its ring,
         // and a tap off them a click for the screen (`Host::click`, as the
-        // mouse's); its drags scroll nothing (no screen before the world
-        // takes the wheel)
+        // mouse's); its drags scroll the screen's list (character select's,
+        // `Host::scroll`), in the frame's pixels
         self.touch.window = true;
         self.touch.opts = crate::settings::touch_options();
         let taps = self.touch.take_clicks();
-        let _ = self.touch.take_look();
+        let (_, look_y, _) = self.touch.take_look();
         if let (Some(h), Some(g)) = (self.host.as_mut(), self.gfx.as_ref()) {
             let size = (g.config.width, g.config.height);
             for c in taps {
                 let (x, y) = c.at();
                 h.click(render::ui::frame_from_window(size, [x as f32, y as f32]));
+            }
+            if look_y != 0.0 {
+                let dy = render::ui::frame_from_window(size, [0.0, look_y])[1] - render::ui::frame_from_window(size, [0.0, 0.0])[1];
+                h.scroll(0.0, dy);
             }
         }
         self.poll_pad_host();
@@ -5581,6 +5585,9 @@ impl App {
                 } else if let Some(p) = self.play.as_mut().filter(|p| p.map.mini_contains(at)) {
                     // over the minimap: its zoom, not the camera's
                     p.map.mini_wheel(steps);
+                } else if let Some(h) = self.host.as_mut().filter(|_| self.walker.is_none()) {
+                    // before the world: the screen's list (character select's)
+                    h.scroll(d, 0.0);
                 } else if self.walker.is_some() {
                     // over the chat box's history in view, its lines
                     let took = match (self.play.as_mut(), self.gfx.as_ref()) {

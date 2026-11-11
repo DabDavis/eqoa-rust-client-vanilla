@@ -186,6 +186,12 @@ impl Host {
         }
     }
 
+    /// The mouse wheel's `lines` (up positive) or a finger's drag of `dy`
+    /// frame pixels: the window up scrolls (`Pregame::scroll`).
+    pub fn scroll(&mut self, lines: f32, dy: f32) {
+        self.pre.scroll(lines, dy);
+    }
+
     /// The game's UI as the 2D layer draws it, once it is in (the fonts and
     /// the atlas, the layer's textures): what the update's question draws with.
     pub fn ui_parts(&self) -> Option<(&vi::ui::Vui, &crate::ui::UiAssets)> {
