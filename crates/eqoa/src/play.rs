@@ -8559,6 +8559,27 @@ impl Play {
         }
     }
 
+    /// The minimap inside (`map::indoor`), before the frame's draw: the
+    /// ceiling over the player probed in the collision world while the minimap
+    /// is up (its state let go while it is not).
+    pub fn indoor_probe(&mut self, walker: &mut Walker, dt: f32) {
+        if !(crate::settings::map() && self.minimap_up() && !crate::hideui::hidden()) {
+            self.map.indoor.idle();
+            return;
+        }
+        let p = walker.cam.walk.phys.position;
+        self.map.indoor.probe(&mut walker.scene, [p.x.0, p.y.0, p.z.0], dt);
+    }
+
+    /// The minimap's picture inside drawn again when stale (`map::indoor`):
+    /// the zones `items` through the game's `renderer`, after `map_frame` and
+    /// before the frame's own draw.
+    #[allow(clippy::too_many_arguments)]
+    pub fn indoor_draw(&mut self, walker: &Walker, renderer: &render::Renderer, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, items: &[render::Draw]) {
+        let p = walker.cam.walk.phys.position;
+        self.map.indoor_draw(renderer, device, queue, format, items, [p.x.0, p.y.0, p.z.0]);
+    }
+
     /// The map's travel ask (a GM's Ctrl+click, `Map::take_travel_ask`): the
     /// spot asked of the server (`Session::map_travel_to`), which moves a GM's
     /// character there on the ground's floor and says so in the chat, and the

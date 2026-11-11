@@ -90,6 +90,8 @@ pub mod cells;
 pub mod chrome;
 pub mod community;
 pub mod group_waypoint;
+// the minimap inside: the floors under the ceiling (`indoor`)
+pub mod indoor;
 pub mod markers;
 mod markers_data;
 // the minimap, in play under the quick menus (`mini`)
@@ -352,6 +354,8 @@ pub struct Map {
     pub places: places::Picker,
     shown: Option<Shown>,
     home: Option<World>,
+    /// the minimap inside a building, a cave or a dungeon (`indoor`)
+    pub indoor: indoor::Indoor,
 }
 
 /// O on a keyboard while the map is up (`keyboard`): the group's waypoint at
@@ -416,6 +420,7 @@ impl Map {
         self.world = None;
         self.home = None;
         self.shown = None;
+        self.indoor.forget();
         self.icon.tex = None;
         self.reported = None;
     }
@@ -1473,6 +1478,8 @@ impl Map {
         let looking = self.view;
         if r.layers {
             // their textures go with them, the world's pictures among them
+            // (and the minimap's inside picture)
+            self.indoor.forget();
             self.layers = None;
             self.world = None;
             self.icon.tex = None;
