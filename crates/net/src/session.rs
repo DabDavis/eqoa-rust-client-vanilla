@@ -685,10 +685,15 @@ pub const OP_ITEM_LINKS: u16 = 0x7E4F;
 /// go-eqoa-server's own: the profanity filter set from the client's Options >
 /// Interface row (the GM Jibrish's petition 1490). Both ways: the server's
 /// offer at every world entry (a u8, the layout, 1), and the client's answer
-/// (a u8, 1 the filter on, 0 off), at once and whenever the row changes. The
+/// (a u8: 0 off, 1 High, 2 Medium), at once and whenever the row changes. The
 /// filter is the server's own (retail's 0x0045, on at every login); a PS2
 /// ignores the offer and keeps it on.
 pub const OP_PROFANITY_CHOICE: u16 = 0x7E60;
+/// [`OP_PROFANITY_CHOICE`]'s answers: off, High (every word; before the GM
+/// Jibrish's petition 1625 the only on) and Medium (only racial slurs).
+pub const PROFANITY_OFF: u8 = 0;
+pub const PROFANITY_HIGH: u8 = 1;
+pub const PROFANITY_MEDIUM: u8 = 2;
 /// A typed line with links, client to server, in place of its retail message
 /// (`itemlink::say`).
 pub const OP_ITEM_LINK_SAY: u16 = 0x7E50;
@@ -1202,7 +1207,7 @@ pub struct Session {
     /// ([`OP_PROFANITY_CHOICE`]) on this connection, and what it was last told
     /// (none since the offer).
     pub profanity_offer: bool,
-    profanity_asked: Option<bool>,
+    profanity_asked: Option<u8>,
     /// The worn looks the character hides, as the server told them
     /// (`crate::hidelook`): none offered until it does.
     pub hide_look: crate::hidelook::State,
@@ -1693,16 +1698,18 @@ impl Session {
     }
 
     /// Profanity Filter (Options > Interface): a server that offered to take it
-    /// ([`OP_PROFANITY_CHOICE`]) is told it (`on`), at once and whenever it
+    /// ([`OP_PROFANITY_CHOICE`]) is told it (`tier`: [`PROFANITY_OFF`],
+    /// [`PROFANITY_HIGH`] or [`PROFANITY_MEDIUM`]), at once and whenever it
     /// changes, and afresh at another offer; one that made no offer is told
-    /// nothing (its filter stays as the game's 0x0045 leaves it).
-    pub fn agree_profanity_filter(&mut self, on: bool) {
-        if !self.profanity_offer || self.profanity_asked == Some(on) {
+    /// nothing (its filter stays as the game's 0x0045 leaves it). A server
+    /// from before the tiers reads any nonzero as on: Medium is High there.
+    pub fn agree_profanity_filter(&mut self, tier: u8) {
+        if !self.profanity_offer || self.profanity_asked == Some(tier) {
             return;
         }
-        self.profanity_asked = Some(on);
+        self.profanity_asked = Some(tier);
         let mut w = Writer::op(OP_PROFANITY_CHOICE);
-        w.u8(on as u8);
+        w.u8(tier);
         self.send(&w.data);
     }
 
@@ -3149,19 +3156,24 @@ mod tests {
     fn the_profanity_filter_is_told_only_to_a_server_that_asked() {
         let mut s = session();
         s.record = Some(Vec::new());
-        s.agree_profanity_filter(false);
+        s.agree_profanity_filter(PROFANITY_OFF);
         assert_eq!(s.record.as_ref().unwrap().len(), 0, "nothing to a server that made no offer");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x60, 0x7E, 2]);
-        s.agree_profanity_filter(false);
+        s.agree_profanity_filter(PROFANITY_OFF);
         assert!(!s.profanity_offer, "another layout is not taken");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x60, 0x7E, 1]);
-        s.agree_profanity_filter(false);
-        s.agree_profanity_filter(false);
-        s.agree_profanity_filter(true);
+        s.agree_profanity_filter(PROFANITY_OFF);
+        s.agree_profanity_filter(PROFANITY_OFF);
+        s.agree_profanity_filter(PROFANITY_MEDIUM);
+        s.agree_profanity_filter(PROFANITY_HIGH);
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x60, 0x7E, 1]);
-        s.agree_profanity_filter(true);
+        s.agree_profanity_filter(PROFANITY_HIGH);
         let sent: Vec<Vec<u8>> = s.record.take().unwrap().into_iter().map(|(_, d)| d).collect();
-        assert_eq!(sent, vec![vec![0x60, 0x7E, 0], vec![0x60, 0x7E, 1], vec![0x60, 0x7E, 1]], "off once, on, on again at the second offer");
+        assert_eq!(
+            sent,
+            vec![vec![0x60, 0x7E, 0], vec![0x60, 0x7E, 2], vec![0x60, 0x7E, 1], vec![0x60, 0x7E, 1]],
+            "off once, Medium, High, High again at the second offer"
+        );
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert!(!s.profanity_offer);
     }

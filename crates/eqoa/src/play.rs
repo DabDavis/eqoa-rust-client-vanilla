@@ -3618,7 +3618,7 @@ impl Play {
         self.merc_menu(); // Community > Group > Dismiss Mercenary while one's merc is out
         self.agree_item_links();
         // Options > Interface's Profanity Filter, to a server that asks (0x7E60)
-        self.session.agree_profanity_filter(crate::settings::profanity_filter());
+        self.session.agree_profanity_filter(crate::settings::profanity_filter().wire());
         self.drop_dead_target_info();
         self.drop_stale_mob_info(now);
         if self.has_self() {

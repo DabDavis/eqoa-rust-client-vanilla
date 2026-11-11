@@ -24,6 +24,17 @@ is put on the page by `.github/workflows/notes.yml`.
   rank takes its place in the list and is highlighted.
 
 
+## 2026-11-11 · Profanity Filter: Off, Medium or High
+- **Options > Interface > Profanity Filter** now has three settings instead of On and Off: **Off** shows chat as it
+  was typed, **Medium** hides only racial slurs (swears are left alone), and **High** hides every swear and slur, as
+  On did. High is still the default, and if you had it On it is High now; Off stays Off.
+- This needs a server that knows the new setting; on one that does not, Medium filters as High.
+
+## 2026-11-11 · Shift+Enter finishes a long message
+- In a box where Enter starts a new line (a petition or bug report's text, a mail's body), **Shift+Enter** now
+  finishes the text and closes the box, as the "Shift+Enter = End" line under it always said. Enter still starts a
+  new line, and Tab, R2 and the on-screen Done still finish it too.
+
 ## 2026-11-11 · Auto-cast keeps your pet buffed
 - Auto-cast now works with **pet buffs**. A pet buff's effect shows on your pet, not on your own effects, so auto-cast
   used to think it had not landed, cast it again and turned the slot off after three casts. Now it looks for the buff
