@@ -587,35 +587,48 @@ const WRAP_GAP: f32 = 0.02;
 /// body's own surface where that surface stands over it: the human's chest is
 /// shallower than a Jal'Raeth's, whose own chest (and the knight's own plate) hid
 /// the front of a human's chest armour, and whose long fingers came through its
-/// gloves. Along each corner's normal, the farthest of the body's triangles within
-/// `WRAP_REACH` that are skinned to the corner's nodes or their parents or children
-/// (an arm's sleeve is not pushed out to the chest beside it) is the surface the
-/// corner goes `WRAP_GAP` past, and so is each triangle's middle and its edges'
-/// middles (a bulge of the body between corners: the knight's own plate), which
-/// push the corners they lie between; every copy of a corner (the same place on
-/// the same nodes) moves as far as the farthest push, so the shell keeps its seams.
+/// gloves. Along each corner's normal, within `WRAP_REACH`, among the body's
+/// triangles skinned to the corner's nodes or their parents or children (an arm's
+/// sleeve is not pushed out to the chest beside it): the last surface the corner
+/// lies under (one the ray leaves without having entered it, facing the way it
+/// goes), which the corner goes `WRAP_GAP` past; a part the ray enters and leaves
+/// (the channeler's armbands, beyond a forearm's sleeve) is passed over, or the
+/// sleeves balloon out to it. So are each triangle's middle and its edges' middles
+/// (a bulge of the body between corners: the knight's own plate), which push the
+/// corners they lie between; every copy of a corner (the same place on the same
+/// nodes) moves as far as the farthest push, so the shell keeps its seams.
 fn wrap(tris: &mut [Vec<[Corner; 3]>; SLOTS], body: &esf::Model, parents: &[i32]) {
     let main = |v: usize| {
         let (b, w) = (body.bones.get(v).copied().unwrap_or_default(), body.weights.get(v).copied().unwrap_or_default());
         (0..4).max_by_key(|&k| w[k]).map_or(0, |k| b[k])
     };
-    let faces: Vec<([Vec3; 3], [u8; 3])> = near_triangles(body).map(|(_, t)| (t.map(|v| pos(body, v)), t.map(main))).collect();
+    // each face with its outward way (its corners' normals)
+    let faces: Vec<([Vec3; 3], [u8; 3], Vec3)> = near_triangles(body).map(|(_, t)| (t.map(|v| pos(body, v)), t.map(main), t.iter().map(|&v| Vec3::from(body.normal.get(v).copied().unwrap_or_default())).sum::<Vec3>())).collect();
     let near = |a: u8, b: u8| a == b || parents.get(a as usize) == Some(&(b as i32)) || parents.get(b as usize) == Some(&(a as i32));
-    // how far out of the body's surface a point of the shell must go along `n`
+    // how far out of the body's surface a point of the shell must go along `n`:
+    // the hits along it in order, each a surface left (facing the way the ray
+    // goes) or entered; one left without having been entered on the way is one
+    // the point lies under (its skin, the knight's own plate over it), one entered
+    // and then left is a part apart that the ray passes through (the channeler's
+    // armbands over the upper arm, beyond a forearm's sleeve), not one to cover
     let out = |p: Vec3, n: Vec3, ours: &[u8]| {
-        let mut far = 0.0f32;
         if n == Vec3::ZERO {
-            return far;
+            return 0.0;
         }
-        for (f, nodes) in &faces {
-            if !nodes.iter().any(|&a| ours.iter().any(|&b| near(a, b))) {
-                continue;
-            }
-            if let Some(t) = ray_hits(p, n, f)
-                && t > 0.0
-                && t <= WRAP_REACH
-            {
-                far = far.max(t + WRAP_GAP);
+        let mut hits: Vec<(f32, bool)> = faces
+            .iter()
+            .filter(|(_, nodes, _)| nodes.iter().any(|&a| ours.iter().any(|&b| near(a, b))))
+            .filter_map(|(f, _, way)| ray_hits(p, n, f).filter(|&t| t > 0.0 && t <= WRAP_REACH).map(|t| (t, way.dot(n) > 0.0)))
+            .collect();
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (mut far, mut inside) = (0.0f32, 0u32);
+        for (t, leaving) in hits {
+            if !leaving {
+                inside += 1;
+            } else if inside > 0 {
+                inside -= 1;
+            } else {
+                far = t + WRAP_GAP;
             }
         }
         far
