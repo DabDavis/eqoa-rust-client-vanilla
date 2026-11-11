@@ -436,6 +436,8 @@ fn row_word(vui: &Vui, word: i32) -> String {
     match word {
         WORD_UNMEMORIZE => "Unmemorize".to_string(),
         WORD_LINK_ITEM => "Link Item".to_string(),
+        // Hide Look and Show Look on a worn item (`hidelook`)
+        w if crate::hidelook::word(w).is_some() => crate::hidelook::word(w).unwrap_or_default().to_string(),
         _ => vui.words.get(word as u16 as i32, vui.language).to_string(),
     }
 }

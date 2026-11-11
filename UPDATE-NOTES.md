@@ -7,6 +7,15 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Hide the look of a worn item
+- In the start menu's Inventory, Equipment tab, a worn helm, chest piece, bracers, gloves, leggings, boots, robe,
+  weapon, shield, held item or cape now has **Hide Look** in its menu, right under Unequip. The item stays worn
+  with all its stats and effects, but nothing of it is drawn on your character, for you and for everyone around
+  you (a hidden weapon still swings as that weapon does, with nothing in the hand). Choose **Show Look** on it to
+  see it again. The choice is kept for the slot, so a new helm you put on where the old one was hidden stays
+  hidden until you show it, and it is the same at character select and at your next login.
+- It needs the server's own update; on any other server the menu is as it was.
+
 ## 2026-11-11 · Whose mercenary is that?
 - A mercenary now has a second line under its name over its head saying whose it is, such as
   "<Lonewulf's Mercenary>", so you can tell your mercenary from another player's. A mercenary's pet has no such
