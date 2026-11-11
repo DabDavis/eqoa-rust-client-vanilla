@@ -3748,7 +3748,12 @@ impl Play {
                     // VICSprite::Process: the sounds its triggers fired, for the
                     // 24 heard (`heard_slots`); past them it is quiet
                     if let Some(s) = sound.as_deref_mut() {
-                        if heard[slot] {
+                        if heard[slot] && p.wisp {
+                            // a Wisp's moving makes no sound (`wisp::Hushed`)
+                            let quiet = crate::wisp::step_sounds(cs);
+                            let mut sink = s.sink();
+                            cs.process_sounds(&walker.eye.position, &walker.eye.direction, &at, Some(&mut crate::wisp::Hushed { inner: &mut sink, quiet }));
+                        } else if heard[slot] {
                             cs.process_sounds(&walker.eye.position, &walker.eye.direction, &at, Some(&mut s.sink()));
                         } else {
                             hush(cs, s);
@@ -9596,6 +9601,12 @@ impl Play {
     /// (`self_shown`: not in first person), on its walker's pose. A Wisp's
     /// (`wisp::is`: the player's by its entity's race look, so from its first
     /// frame) casts none.
+    /// Whether the player's own character is drawn as a Wisp (its puppet's
+    /// `wisp`): its moving makes no sound (`wisp::Hushed`, the viewer's walker).
+    pub fn self_wisp(&self) -> bool {
+        self.self_puppet.as_ref().is_some_and(|p| p.wisp)
+    }
+
     pub fn shadow_casters(&self, walker: &mut Walker, lib: &Library) -> Vec<crate::shadows::Caster> {
         let me = self.self_id32();
         let mut out = Vec::new();

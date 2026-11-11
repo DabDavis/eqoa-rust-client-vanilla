@@ -5716,7 +5716,14 @@ impl App {
                             *walker_sounds = ids;
                         }
                     }
+                    // a Wisp's own moving makes no sound (`wisp::Hushed`)
+                    let wisp = play.as_ref().is_some_and(|p| p.self_wisp());
                     let (m, palette) = match sound.as_mut() {
+                        Some(s) if wisp => {
+                            let quiet = w.sprite.as_ref().map(crate::wisp::step_sounds).unwrap_or_default();
+                            let mut sink = s.sink();
+                            w.pose_sounding(Some(&mut crate::wisp::Hushed { inner: &mut sink, quiet }))
+                        }
                         Some(s) => w.pose_sounding(Some(&mut s.sink())),
                         None => w.pose(),
                     };

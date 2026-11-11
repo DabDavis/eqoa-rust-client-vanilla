@@ -22,10 +22,18 @@
 //! worn it is the wisp floating where a human's head would be, its hands' weapons
 //! still swinging. It casts no shadow ([`is`]): the human's would show under the
 //! armour.
+//!
+//! A Wisp makes no footsteps (the owner, 2026-11-11: "wisps shouldnt have footsteps
+//! or the sounds of" walking): the sounds its walk, run, turns, falls, landings,
+//! strides and swims fire ([`step_sounds`], the CPlayList slots [`STEP_SLOTS`]) are
+//! not played ([`Hushed`]), its own and every other player's Wisp, while it is one
+//! (a Wisp in a mortal form, a glamour, is drawn and heard as that body). Its
+//! swings, casts and hits sound as ever. go-eqoa-server sends a Wisp in its own
+//! form with nothing worn (its `entity/wispform.go`): the wisp alone, and its cape.
 
 use esf::Library;
 use net::raceopts::{Kind, Look};
-use vi::csprite::CSprite;
+use vi::csprite::{CSprite, SoundSink};
 use vi::fpu::Ee;
 
 /// The wisp's size, across its widest: inside a human's head (HumanMale's skull is
@@ -154,6 +162,54 @@ pub fn attachment(lib: &Library, body: u32, cs: &CSprite<Ee>, race_look: Option<
     Some((n, m))
 }
 
+/// The CPlayList slots of a body's moving (`anim-slot-semantics`): 1 walk, 2 walk
+/// back, 3 run, 4 and 5 (the turns), 6 fall, 7 landing, 8 and 9, 10 and 11 the
+/// strides, 12 and 13 swims.
+pub const STEP_SLOTS: std::ops::RangeInclusive<usize> = 1..=13;
+
+/// The sounds a body's moving fires, its footsteps: its [`STEP_SLOTS`]' entries'
+/// sounds, wherever else they fire (the human's step, 0x4F6D_B580, is its walk's,
+/// its turns' and strides', and its idle's, special idles' and emotes' shuffles
+/// too; its run's and swim's are theirs alone; none is a swing's).
+pub fn step_sounds(cs: &CSprite<Ee>) -> Vec<u32> {
+    let mut steps: Vec<u32> = STEP_SLOTS.flat_map(|i| cs.entries[i].sound).filter(|&s| s != 0).collect();
+    steps.sort_unstable();
+    steps.dedup();
+    steps
+}
+
+/// A sound device that plays none of `quiet` (a Wisp's [`step_sounds`]): such a
+/// play is refused as a device with no voice free refuses it (below 0), and the
+/// trigger is spent as ever; everything else goes to `inner`.
+pub struct Hushed<'a> {
+    pub inner: &'a mut dyn SoundSink,
+    pub quiet: Vec<u32>,
+}
+
+impl SoundSink for Hushed<'_> {
+    fn play(&mut self, sound: u32) -> i32 {
+        if self.quiet.contains(&sound) { -1 } else { self.inner.play(sound) }
+    }
+    fn stop(&mut self, h: i32) {
+        self.inner.stop(h)
+    }
+    fn is_playing(&mut self, h: i32) -> bool {
+        self.inner.is_playing(h)
+    }
+    fn set_volume(&mut self, h: i32, v: f32) {
+        self.inner.set_volume(h, v)
+    }
+    fn set_pan(&mut self, h: i32, p: f32) {
+        self.inner.set_pan(h, p)
+    }
+    fn set_pitch(&mut self, h: i32, p: i32) {
+        self.inner.set_pitch(h, p)
+    }
+    fn rand(&mut self) -> i32 {
+        self.inner.rand()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +295,56 @@ mod tests {
         assert!(!dress(&lib, HUMAN, &mut plain, &cs, &plate, Some(&look(0x1234, WISP)), &t), "a look on another body");
         assert!(attachment(&lib, HUMAN, &cs, Some(&look(0x1234, WISP))).is_none(), "a look on another body");
         assert_eq!(format!("{:?}", plain.batches), format!("{:?}", built.batches));
+    }
+
+    /// A sound device that records what it was asked to play.
+    #[derive(Default)]
+    struct Heard(Vec<u32>);
+
+    impl SoundSink for Heard {
+        fn play(&mut self, sound: u32) -> i32 {
+            self.0.push(sound);
+            self.0.len() as i32
+        }
+        fn stop(&mut self, _: i32) {}
+        fn is_playing(&mut self, _: i32) -> bool {
+            false
+        }
+        fn set_volume(&mut self, _: i32, _: f32) {}
+        fn set_pan(&mut self, _: i32, _: f32) {}
+        fn set_pitch(&mut self, _: i32, _: i32) {}
+        fn rand(&mut self) -> i32 {
+            7
+        }
+    }
+
+    /// On the disc: the human's walk, run and swim fire their sounds (the step
+    /// also its idle's shuffle), which a Wisp (`Hushed`) does not play, and none is
+    /// an attack's; its swings' sounds it plays, and the rand stream
+    /// goes on as ever. The control: the sink unhushed plays the footsteps.
+    #[test]
+    fn a_wisp_makes_no_footsteps() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let (_, cs) = human(&lib);
+        let steps = step_sounds(&cs);
+        assert!(!steps.is_empty(), "the human's moving has sounds: {:?}", (1..=3).map(|i| cs.entries[i].sound).collect::<Vec<_>>());
+        assert_eq!(steps, vec![0x2AC3_235B, 0x4F6D_B580, 0x6565_6A36], "the human's step, swim and run");
+        for s in &steps {
+            assert!((22..45).all(|i| !cs.entries[i].sound.contains(s)), "{s:#x} is no attack's");
+        }
+        let walk = cs.entries[1].sound.into_iter().chain(cs.entries[3].sound).find(|&s| s != 0).expect("a walk's or run's sound");
+        let swing = (14..66).flat_map(|i| cs.entries[i].sound).find(|s| *s != 0 && !steps.contains(s)).expect("a sound of another slot");
+        let mut heard = Heard::default();
+        let mut hushed = Hushed { inner: &mut heard, quiet: steps.clone() };
+        assert_eq!(hushed.play(walk), -1, "a footstep refused");
+        assert!(hushed.play(swing) >= 0, "a swing played");
+        assert_eq!(hushed.rand(), 7);
+        assert_eq!(heard.0, vec![swing]);
+        // the control
+        let mut plain = Heard::default();
+        assert!(plain.play(walk) >= 0 && plain.0 == vec![walk]);
     }
 }
