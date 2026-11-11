@@ -201,6 +201,24 @@ or a browser (each described where it lives below):
   quests: their tooltips under the mouse); the wheel over it zooms, a click or a
   tap opens the map; shown where the quick menus are, never under Hide UI. N
   shows or hides it, kept as the Minimap row is.
+  **Inside** (petition 1494, as FrontiersForge's minimap: `map::indoor`): under a
+  ceiling (the collision world probed over the player and four points round it,
+  a change held half a second) it shows the floors round the player instead of the
+  roof or the hill over them, the zones drawn by the game's renderer from straight
+  above with the eye just under the ceiling (the near plane cuts the rest away),
+  floors lower down fading to the dark, at a zoom of its own (the wheel's there);
+  drawn again only when the player has moved a fifth of it, changed floor or the
+  ceiling moved, and every two seconds.
+- **The map's places** (petition 1479, `map::places`): Places (P, Start, the
+  button) lists "Where I am", every world the map can draw (CLIENT's six with a
+  name, the server's own held here) and the towns of the world shown; a world or
+  a town is shown in place of the player's, read off the disc into the map's own
+  library and drawn and cached as the player's is; "Where I am", Center or the map
+  closed brings the player's back.
+- **Options > Interface > Profanity Filter** (petition 1490, the GM Jibrish's): On,
+  as the game is at every login, or Off; told to a server that asks for it
+  (go-eqoa-server's 0x7E60), whose filter it is; on any other server nothing is
+  sent.
 - **Dynamic Lighting** (the user's of 2026-11-08, phase 1; Extended > Lighting, off
   by default, and off the PS2's light exactly): the strip programs' light worked out
   for every pixel instead of every vertex (the sun and the personal light, the same

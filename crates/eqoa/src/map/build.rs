@@ -610,7 +610,7 @@ impl Builder {
 
 /// `EQOA_MAP_TRACE=1` (in a page `?maptrace`): each build step over 2 ms
 /// said, with what it was.
-fn trace() -> bool {
+pub(super) fn trace() -> bool {
     #[cfg(target_arch = "wasm32")]
     return crate::web::page_flag("maptrace");
     #[cfg(not(target_arch = "wasm32"))]

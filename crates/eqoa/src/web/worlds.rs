@@ -128,7 +128,7 @@ fn build_all(worlds: &[World]) -> std::sync::mpsc::Receiver<Vec<u8>> {
                         heap / 1048576.0
                     ));
                     FILES.with(|f| f.borrow_mut().insert(path.to_string_lossy().into_owned(), file));
-                    serverworlds::keep(Held { id: w.id, file: format!("WORLD{}.ESF", w.id), path, parts: w.parts.clone() });
+                    serverworlds::keep(Held { id: w.id, file: format!("WORLD{}.ESF", w.id), path, parts: w.parts.clone(), name: w.name.clone() });
                     ids.push(w.id);
                 }
                 Err((e, quiet)) => {

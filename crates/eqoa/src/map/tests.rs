@@ -16,9 +16,83 @@ fn it_opens_on_the_player_and_triangle_closes_it() {
     assert!(m.key(key::TRIANGLE, true));
     assert!(!m.open);
     assert!(!m.key(key::CROSS, true), "the control: not up, not the map's");
+    // Start is the list of places' (`places`): opened and closed again, the
+    // map up through both; △ with the list up closes the list alone
     m.show();
     m.key(key::START, true);
+    assert!(m.open && m.places.open);
+    m.key(key::START, true);
+    assert!(m.open && !m.places.open);
+    m.key(KEY_PLACES, true);
+    assert!(m.places.open);
+    m.key(key::TRIANGLE, true);
+    assert!(m.open && !m.places.open, "△ closes the list, not the map");
+    m.key(key::TRIANGLE, true);
     assert!(!m.open);
+}
+
+/// The list of places (petition 1479): opened on "Where I am"; down moves
+/// it and the arrows no longer pan; a town of the player's world (Freeport)
+/// shows it close in, not following, the list closed; ✕ follows the player
+/// again. The control: without the list, down pans.
+#[test]
+fn a_town_of_the_players_world_is_shown_close_in() {
+    let size = (1280, 720);
+    let mut m = up(size);
+    m.names.names[0] = Some(1);
+    m.names.names[1] = Some(2);
+    m.key(key::START, true);
+    assert_eq!(m.places.sel, 0, "on Where I am");
+    let rows = m.place_rows();
+    assert_eq!(rows[..3], [places::Row::Here, places::Row::World(0), places::Row::Town(rows.iter().find_map(|r| if let places::Row::Town(t) = r { Some(*t) } else { None }).unwrap())]);
+    assert!(rows.contains(&places::Row::World(1)), "Rathe is offered: {rows:?}");
+    m.key(key::DOWN, true);
+    assert_eq!(m.places.sel, 1);
+    assert_eq!(m.held, [false; 6], "the arrows move the list, not the map");
+    let freeport = rows.iter().position(|r| matches!(r, places::Row::Town(t) if places::town_name(*t) == "Freeport")).unwrap();
+    m.key(KEY_PLACE_ROW + freeport as i32, true);
+    let v = m.view.unwrap();
+    assert!(!m.places.open && !m.follow && m.shown.is_none() && m.home.is_none());
+    assert_eq!((v.center, v.scale), ([25270.0, 15710.0], places::TOWN_SCALE));
+    m.key(key::CROSS, true);
+    assert!(m.follow);
+    m.key(key::DOWN, true);
+    assert!(m.held[1], "the control: without the list, down pans");
+}
+
+/// Another world (Rathe, for Oggok) asked for from the list is asked of the
+/// disc and its towns listed under it at once; once its map is made it is
+/// shown in place of the player's (no player drawn there: `home` holds the
+/// player's), and closing the map, or "Where I am", brings the player's back
+/// where it was left. The control: the player's world's own view is kept.
+#[test]
+fn another_world_is_shown_and_the_players_comes_back() {
+    let size = (1280, 720);
+    let mut m = up(size);
+    m.names.names[0] = Some(1);
+    m.names.names[1] = Some(2);
+    let left = m.view.unwrap();
+    m.key(key::START, true);
+    let rows = m.place_rows();
+    let rathe = rows.iter().position(|&r| r == places::Row::World(1)).unwrap();
+    m.key(KEY_PLACE_ROW + rathe as i32, true);
+    assert!(m.places.open, "a world keeps the list up");
+    assert_eq!(m.shown.as_ref().map(|s| s.index), Some(1));
+    let oggok = super::markers_data::TOWNS.iter().position(|t| t.name == "Oggok").unwrap();
+    assert!(m.place_rows().contains(&places::Row::Town(oggok)), "Rathe's towns under it");
+    // its map made (here by hand: `take_shown` makes it off the disc)
+    let rathe_world = World { name: "RATHE.ESF".into(), era: esf::Era::Frontiers, index: 1, builder: Builder::new(WORLD_FILE, &tunaria(), None, None), overview: None, tiles: BTreeMap::new(), made: Instant::now(), view: None };
+    m.show_world(rathe_world, Some(oggok));
+    assert_eq!(m.world.as_ref().unwrap().index, 1);
+    assert_eq!(m.home.as_ref().unwrap().index, 0);
+    assert_eq!(m.view.unwrap().center, [8961.9, 7213.7]);
+    assert!(!m.follow);
+    m.steer(size, 0.0, [0.0; 4], Some(FREEPORT));
+    assert_eq!(m.view.unwrap().center, [8961.9, 7213.7], "not following the player there");
+    m.close();
+    assert!(m.home.is_none() && m.shown.is_none());
+    assert_eq!(m.world.as_ref().unwrap().index, 0);
+    assert_eq!(m.view.unwrap().center, left.center, "the control: the player's view as it was left");
 }
 
 /// R1 zooms in a step and L1 out, from the middle; the steps stop at the

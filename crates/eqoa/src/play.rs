@@ -3521,6 +3521,8 @@ impl Play {
         self.raid_menu(); // Community > Group > Raid once the server offers it
         self.merc_menu(); // Community > Group > Dismiss Mercenary while one's merc is out
         self.agree_item_links();
+        // Options > Interface's Profanity Filter, to a server that asks (0x7E60)
+        self.session.agree_profanity_filter(crate::settings::profanity_filter());
         self.drop_dead_target_info();
         self.drop_stale_mob_info(now);
         if self.has_self() {
@@ -8592,6 +8594,27 @@ impl Play {
         } else {
             self.map.mini_off();
         }
+    }
+
+    /// The minimap inside (`map::indoor`), before the frame's draw: the
+    /// ceiling over the player probed in the collision world while the minimap
+    /// is up (its state let go while it is not).
+    pub fn indoor_probe(&mut self, walker: &mut Walker, dt: f32) {
+        if !(crate::settings::map() && self.minimap_up() && !crate::hideui::hidden()) {
+            self.map.indoor.idle();
+            return;
+        }
+        let p = walker.cam.walk.phys.position;
+        self.map.indoor.probe(&mut walker.scene, [p.x.0, p.y.0, p.z.0], dt);
+    }
+
+    /// The minimap's picture inside drawn again when stale (`map::indoor`):
+    /// the zones `items` through the game's `renderer`, after `map_frame` and
+    /// before the frame's own draw.
+    #[allow(clippy::too_many_arguments)]
+    pub fn indoor_draw(&mut self, walker: &Walker, renderer: &render::Renderer, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, items: &[render::Draw]) {
+        let p = walker.cam.walk.phys.position;
+        self.map.indoor_draw(renderer, device, queue, format, items, [p.x.0, p.y.0, p.z.0]);
     }
 
     /// The map's travel ask (a GM's Ctrl+click, `Map::take_travel_ask`): the

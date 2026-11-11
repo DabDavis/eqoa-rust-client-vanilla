@@ -631,6 +631,14 @@ pub const OP_MOB_INFO: u16 = 0x7E4E;
 /// sent [`OP_ITEM_LINK_LINE`] lines and to send [`OP_ITEM_LINK_SAY`], 0 for the
 /// plain lines a PS2 gets). CLIENT has no case for it: a PS2 ignores the offer.
 pub const OP_ITEM_LINKS: u16 = 0x7E4F;
+
+/// go-eqoa-server's own: the profanity filter set from the client's Options >
+/// Interface row (the GM Jibrish's petition 1490). Both ways: the server's
+/// offer at every world entry (a u8, the layout, 1), and the client's answer
+/// (a u8, 1 the filter on, 0 off), at once and whenever the row changes. The
+/// filter is the server's own (retail's 0x0045, on at every login); a PS2
+/// ignores the offer and keeps it on.
+pub const OP_PROFANITY_CHOICE: u16 = 0x7E60;
 /// A typed line with links, client to server, in place of its retail message
 /// (`itemlink::say`).
 pub const OP_ITEM_LINK_SAY: u16 = 0x7E50;
@@ -1125,6 +1133,11 @@ pub struct Session {
     /// connection, and what it was last told (none since the offer).
     pub item_links_offer: bool,
     item_links_asked: Option<bool>,
+    /// Whether the server offered to take the profanity filter's setting
+    /// ([`OP_PROFANITY_CHOICE`]) on this connection, and what it was last told
+    /// (none since the offer).
+    pub profanity_offer: bool,
+    profanity_asked: Option<bool>,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -1297,6 +1310,8 @@ impl Session {
             raid_asked: None,
             item_links_offer: false,
             item_links_asked: None,
+            profanity_offer: false,
+            profanity_asked: None,
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -1587,6 +1602,20 @@ impl Session {
         self.item_links_asked = Some(want);
         let mut w = Writer::op(OP_ITEM_LINKS);
         w.u8(want as u8);
+        self.send(&w.data);
+    }
+
+    /// Profanity Filter (Options > Interface): a server that offered to take it
+    /// ([`OP_PROFANITY_CHOICE`]) is told it (`on`), at once and whenever it
+    /// changes, and afresh at another offer; one that made no offer is told
+    /// nothing (its filter stays as the game's 0x0045 leaves it).
+    pub fn agree_profanity_filter(&mut self, on: bool) {
+        if !self.profanity_offer || self.profanity_asked == Some(on) {
+            return;
+        }
+        self.profanity_asked = Some(on);
+        let mut w = Writer::op(OP_PROFANITY_CHOICE);
+        w.u8(on as u8);
         self.send(&w.data);
     }
 
@@ -1952,6 +1981,8 @@ impl Session {
                 self.dps_meter_asked = None;
                 self.item_links_offer = false;
                 self.item_links_asked = None;
+                self.profanity_offer = false;
+                self.profanity_asked = None;
                 ev.push(Event::Promoted);
             }
             drdp::TYPE_DISCONNECT => {
@@ -2245,6 +2276,16 @@ impl Session {
             // item links offered (again at every world entry), in the layout
             // this client reads: told afresh whether it takes them
             // (`agree_item_links`); another layout is left alone
+            // the profanity filter's setting asked for (again at every world
+            // entry): told afresh (`agree_profanity_filter`); another layout
+            // is left alone
+            OP_PROFANITY_CHOICE => {
+                let layout = r.u8();
+                if !r.error && layout == 1 {
+                    self.profanity_offer = true;
+                    self.profanity_asked = None;
+                }
+            }
             OP_ITEM_LINKS => {
                 let layout = r.u8();
                 if !r.error && layout == crate::itemlink::LAYOUT {
@@ -2976,6 +3017,31 @@ mod tests {
     /// offer in this layout is told the Extended row at once and again only as
     /// it changes, and links are in force only while it is on. The controls: an
     /// offer of another layout is not taken; a promotion forgets the offer.
+    /// The profanity filter's setting goes only to a server that asked for it
+    /// (0x7E60 in layout 1), once and again only as it changes, and afresh at
+    /// the next offer. The controls: nothing before the offer, an offer of
+    /// another layout is not taken, a new connection forgets the offer.
+    #[test]
+    fn the_profanity_filter_is_told_only_to_a_server_that_asked() {
+        let mut s = session();
+        s.record = Some(Vec::new());
+        s.agree_profanity_filter(false);
+        assert_eq!(s.record.as_ref().unwrap().len(), 0, "nothing to a server that made no offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x60, 0x7E, 2]);
+        s.agree_profanity_filter(false);
+        assert!(!s.profanity_offer, "another layout is not taken");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x60, 0x7E, 1]);
+        s.agree_profanity_filter(false);
+        s.agree_profanity_filter(false);
+        s.agree_profanity_filter(true);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x60, 0x7E, 1]);
+        s.agree_profanity_filter(true);
+        let sent: Vec<Vec<u8>> = s.record.take().unwrap().into_iter().map(|(_, d)| d).collect();
+        assert_eq!(sent, vec![vec![0x60, 0x7E, 0], vec![0x60, 0x7E, 1], vec![0x60, 0x7E, 1]], "off once, on, on again at the second offer");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.profanity_offer);
+    }
+
     #[test]
     fn item_links_are_told_only_to_a_server_that_offered_them() {
         use crate::itemlink::{Linked, Route};

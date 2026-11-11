@@ -5963,6 +5963,11 @@ impl App {
                     None => self.camera.view(self.bounds, g.config.width as f32 / g.config.height as f32),
                 };
                 self.last_view = Some(view.view_proj);
+                // the minimap inside (`map::indoor`): the ceiling over the
+                // player, in the collision world
+                if let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut()) {
+                    p.indoor_probe(w, self.frame_s);
+                }
                 if let (Some(p), Some(w)) = (&mut self.play, &self.walker) {
                     // Hide UI (`hideui`): a window up or the update's question
                     // shows it all again; the loading screen is never hidden
@@ -5999,6 +6004,12 @@ impl App {
                     p.draw_rings(&mut g.renderer, &g.device, &g.queue, w, view.view_proj, &self.lib, game_frame);
                     // the map (`map.rs`): its build behind the game, and its view while up
                     p.map_frame(w, &self.lib, &g.device, &g.queue, g.config.format, (g.config.width, g.config.height), self.frame_s, self.console.sticks());
+                    // and the minimap's picture inside, when it is due: the
+                    // zones in the game's renderer, before the frame's draw
+                    if p.map.indoor.inside() {
+                        let zones: Vec<render::Draw> = self.streamer.iter().flat_map(|s| s.draws()).collect();
+                        p.indoor_draw(w, &g.renderer, &g.device, &g.queue, g.config.format, &zones);
+                    }
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {
                         let pv = crate::play::PlateView::of(&w.cam, &w.eye.position, (g.config.width, g.config.height));

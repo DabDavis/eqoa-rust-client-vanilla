@@ -673,6 +673,12 @@ pub struct ClientOptions {
     /// that offers them (`Session::agree_item_links`); off, none, and the server
     /// sends the plain names a PS2 is sent. On by default.
     pub item_links: bool,
+    /// Profanity Filter (the GM Jibrish's petition 1490: "Under options then
+    /// interface add an option to turn the profanity filter on or off"): the
+    /// server's filter of what this player hears, told to a server that asks
+    /// for it (`Session::agree_profanity_filter`, go-eqoa-server's 0x7E60);
+    /// on by default, as the game has it at every login. Options > Interface.
+    pub profanity_filter: bool,
     /// Map (the user, 2026-11-09: "also add the map and quest helper we had
     /// in a former update"; on by default): the client's own map (M, the
     /// compass's click, `map`), the minimap, the waypoints on the compass and
@@ -963,6 +969,7 @@ impl Default for ClientOptions {
             dps_meter: false,
             dps_view: crate::dpsmeter::View::Fight,
             item_links: true,
+            profanity_filter: true,
             map: true,
             minimap: true,
             map_markers: true,
@@ -1078,6 +1085,10 @@ impl ClientOptions {
         // Item Links only when off
         if !self.item_links {
             s.push_str("item_links=off\n");
+        }
+        // the Profanity Filter only when off
+        if !self.profanity_filter {
+            s.push_str("profanity_filter=off\n");
         }
         // the map's and the quests' only when off
         for (on, key) in [
@@ -1244,6 +1255,8 @@ impl ClientOptions {
                 ("dps_meter_shows", "overall") => c.dps_view = crate::dpsmeter::View::Overall,
                 ("item_links", "on") => c.item_links = true,
                 ("item_links", "off") => c.item_links = false,
+                ("profanity_filter", "on") => c.profanity_filter = true,
+                ("profanity_filter", "off") => c.profanity_filter = false,
                 ("map", "on") => c.map = true,
                 ("map", "off") => c.map = false,
                 ("minimap", "on") => c.minimap = true,
@@ -1547,6 +1560,11 @@ pub fn dps_meter() -> bool {
 /// Item Links (`itemlink`).
 pub fn item_links() -> bool {
     client().item_links
+}
+
+/// Profanity Filter (Options > Interface).
+pub fn profanity_filter() -> bool {
+    client().profanity_filter
 }
 
 /// What the DPS Meter shows (`dpsmeter::View`).
@@ -2613,6 +2631,18 @@ mod tests {
         assert!(!ClientOptions::from_text("pet_effects=off").pet_effects);
         assert!(ClientOptions::from_text("pet_effects=on").pet_effects);
         assert!(ClientOptions::from_text("pet_effects=maybe").pet_effects, "the default");
+    }
+
+    /// Profanity Filter: on by default (the game's at every login) and
+    /// written only when off.
+    #[test]
+    fn the_profanity_filter_is_kept_only_when_off() {
+        assert!(ClientOptions::default().profanity_filter, "on by default");
+        assert!(!ClientOptions::default().to_text().contains("profanity"));
+        assert!(ClientOptions { profanity_filter: false, ..Default::default() }.to_text().contains("profanity_filter=off\n"));
+        assert!(!ClientOptions::from_text("profanity_filter=off").profanity_filter);
+        assert!(ClientOptions::from_text("profanity_filter=on").profanity_filter);
+        assert!(ClientOptions::from_text("profanity_filter=maybe").profanity_filter, "the default");
     }
 
     /// Item Links: on by default and written only when off.

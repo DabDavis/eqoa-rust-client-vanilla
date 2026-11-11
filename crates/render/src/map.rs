@@ -153,14 +153,29 @@ impl MapLayer {
     /// nothing the size of it passes through memory). Its index.
     pub fn texture(&mut self, device: &wgpu::Device, w: u32, h: u32, levels: u32) -> usize {
         let levels = levels.clamp(1, full_chain(w, h));
+        self.make(device, w, h, levels, crate::TEXTURE_FORMAT, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST)
+    }
+
+    /// A `w` x `h` texture of `format` (a `Renderer`'s, which draws into it:
+    /// `target_view`), one level, sampled as the others are. Its index.
+    pub fn target(&mut self, device: &wgpu::Device, w: u32, h: u32, format: wgpu::TextureFormat) -> usize {
+        self.make(device, w, h, 1, format, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT)
+    }
+
+    /// A view of texture `tex` to draw into (one made by `target`).
+    pub fn target_view(&self, tex: usize) -> Option<wgpu::TextureView> {
+        self.textures.get(tex)?.as_ref().map(|t| t.tex.create_view(&Default::default()))
+    }
+
+    fn make(&mut self, device: &wgpu::Device, w: u32, h: u32, levels: u32, format: wgpu::TextureFormat, usage: wgpu::TextureUsages) -> usize {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("map"),
             size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             mip_level_count: levels,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: crate::TEXTURE_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            format,
+            usage,
             view_formats: &[],
         });
         let view = tex.create_view(&Default::default());
