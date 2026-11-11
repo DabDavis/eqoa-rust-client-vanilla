@@ -159,6 +159,24 @@ pub const OP_BUG_REPORTS: u16 = 0x7E0E;
 /// that many bytes of UTF-8 text, "key: value" lines (`bugnote`), at most
 /// [`BUG_NOTE_MAX`]. The server keeps it for the GMs beside that petition.
 pub const OP_BUG_NOTE: u16 = 0x7E0F;
+/// go-eqoa-server's own, no retail message either: crash reports
+/// (`eqoa::crashfile`). The server offers to take them once the player is in
+/// the world: a u32 version (1), then a u32, the most bytes of a report's text
+/// it takes ([`Session::crash_offer`]); this client then sends each it kept
+/// ([`OP_CRASH_REPORT`]). A PS2 ignores the offer; a server that never makes
+/// one (Sandstorm's, eqoa.live's) is sent none.
+pub const OP_CRASH_OFFER: u16 = 0x7E64;
+/// A crash report, client to server: a u32 version (1), a u32 number of this
+/// client's for it, a u32 byte count and that many bytes of UTF-8 text, at
+/// most the offer's most (a report past 1,300 bytes goes in DRDP's pieces,
+/// which a server that offers reports puts back together).
+pub const OP_CRASH_REPORT: u16 = 0x7E65;
+/// The server's answer to [`OP_CRASH_REPORT`]: the report's u32 number and a
+/// u32 ticket, the petition it was filed as (0: not kept, and not to be sent
+/// again) ([`Session::crash_filed`]).
+pub const OP_CRASH_FILED: u16 = 0x7E66;
+/// The most bytes of a crash report this client sends, whatever an offer says.
+pub const CRASH_REPORT_MOST: usize = 12_000;
 /// go-eqoa-server's own, no retail message either: any member of a group may
 /// invite into it there, a u32 after the opcode (1), from the server once the
 /// player is in the world; no answer. CLIENT lets only the leader invite
@@ -1023,6 +1041,13 @@ pub struct Session {
     /// the offer said the server takes, up to [`PETITION_TEXT_MOST`], else
     /// [`PETITION_TEXT_DISC`]. Kept for the session.
     pub petition_text: usize,
+    /// The server offered to take crash reports ([`OP_CRASH_OFFER`]): the
+    /// most bytes of each, for the game to send what it kept
+    /// (`eqoa::crashfile`), which takes it.
+    pub crash_offer: Option<usize>,
+    /// The server's answers to the crash reports sent ([`OP_CRASH_FILED`]):
+    /// each report's number and its ticket (0 not kept), for the game.
+    pub crash_filed: Vec<(u32, u32)>,
     /// The server lets any member of a group invite into it
     /// ([`OP_MEMBER_INVITES`]). Kept for the session.
     pub member_invites: bool,
@@ -1267,6 +1292,8 @@ impl Session {
             live_look: false,
             bug_reports: false,
             petition_text: PETITION_TEXT_DISC,
+            crash_offer: None,
+            crash_filed: Vec::new(),
             member_invites: false,
             mercs: None,
             group_reg: None,
@@ -1486,6 +1513,19 @@ impl Session {
         let b = &note.as_bytes()[..end];
         let mut w = Writer::op(OP_BUG_NOTE);
         w.u32(1).u32(b.len() as u32).bytes(b);
+        self.send(&w.data);
+    }
+
+    /// [`OP_CRASH_REPORT`]: a crash report kept (`number`, its text), cut to
+    /// `most` bytes (and [`CRASH_REPORT_MOST`]) on a character's edge.
+    pub fn send_crash_report(&mut self, number: u32, text: &str, most: usize) {
+        let mut end = text.len().min(most).min(CRASH_REPORT_MOST);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let b = &text.as_bytes()[..end];
+        let mut w = Writer::op(OP_CRASH_REPORT);
+        w.u32(1).u32(number).u32(b.len() as u32).bytes(b);
         self.send(&w.data);
     }
 
@@ -2155,6 +2195,20 @@ impl Session {
                         }
                     }
                     self.send_op_int(OP_BUG_REPORTS, 1);
+                }
+            }
+            // crash reports taken: the game sends what it kept (`crashfile`)
+            OP_CRASH_OFFER => {
+                let (version, most) = (r.u32(), r.u32());
+                if version != 0 && !r.error && most > 0 {
+                    self.crash_offer = Some((most as usize).min(CRASH_REPORT_MOST));
+                }
+            }
+            // a crash report answered: the game lets it go
+            OP_CRASH_FILED => {
+                let (number, ticket) = (r.u32(), r.u32());
+                if !r.error {
+                    self.crash_filed.push((number, ticket));
                 }
             }
             // a race's own words offered: taken (`racelabel`)
@@ -3503,6 +3557,42 @@ mod tests {
         let m = ours(&mut s);
         let n = u32::from_le_bytes(m[0][6..10].try_into().unwrap()) as usize;
         assert!(n <= BUG_NOTE_MAX && n % 2 == 0 && m[0].len() == 10 + n, "cut on a character's edge: {n}");
+    }
+
+    // The crash report offer: taken with its most (this client's at most), a
+    // short one not; a report goes as its number, count and text cut to the
+    // most on a character's edge; an answer is kept for the game. The control:
+    // before an offer nothing is held to send.
+    #[test]
+    fn crash_reports_offer_report_and_answer() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let ours = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        ours(&mut s);
+        assert_eq!(s.crash_offer, None, "the control: no offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x64, 0x7E, 1, 0, 0, 0]);
+        assert_eq!(s.crash_offer, None, "a short offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x64, 0x7E, 1, 0, 0, 0, 0xE0, 0x2E, 0, 0]);
+        assert_eq!(s.crash_offer, Some(12_000));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x64, 0x7E, 1, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0]);
+        assert_eq!(s.crash_offer, Some(CRASH_REPORT_MOST), "at most this client's");
+        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "the offer is not answered");
+        s.send_crash_report(7, "panic: boom", 100);
+        let mut want = vec![0x65, 0x7E, 1, 0, 0, 0, 7, 0, 0, 0, 11, 0, 0, 0];
+        want.extend(b"panic: boom");
+        assert_eq!(ours(&mut s), [want]);
+        s.send_crash_report(8, &"é".repeat(100), 51);
+        let m = ours(&mut s);
+        let n = u32::from_le_bytes(m[0][10..14].try_into().unwrap()) as usize;
+        assert_eq!((n, m[0].len()), (50, 14 + 50), "cut on a character's edge");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x66, 0x7E, 7, 0, 0, 0, 0xE8, 0x03, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x66, 0x7E, 8, 0, 0, 0]);
+        assert_eq!(s.crash_filed, [(7, 1000)], "an answer cut short is not kept");
     }
 
     // The most of a petition's text: a PS2's 511 from an offer that says

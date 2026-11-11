@@ -7,6 +7,15 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Crash reports go to the server you play on
+- If the game ever stops with an error, it now keeps a short **crash report** (what went wrong and where in the
+  game's code, the build, your system and graphics card: never your account, your address or your files). The next
+  time you log in to a server that takes them, it goes to that server's GMs as a ticket marked **Bug Report /
+  Crash**, and you are told its number in chat. You don't have to write anything, and no answer is needed: it
+  helps the developers find and fix the crash. Nothing is sent anywhere else, and a server that doesn't take
+  them is sent nothing.
+
+
 ## 2026-11-11 · Look at any world on the map, the minimap indoors, a profanity filter switch
 - The map has a **Places** button (P on a keyboard, Start on a controller): a list of the worlds (Tunaria, the Rathe
   Mountains, Odus, Lavastorm, the Plane of Sky and the server's own worlds) and, under the world shown, its towns.

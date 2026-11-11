@@ -2917,6 +2917,19 @@ impl Play {
         if let Some(t) = self.session.npc_tints.take() {
             crate::npctint::set(t);
         }
+        // the server takes crash reports: this client's kept ones go, each let
+        // go at its answer (`crashfile`)
+        if let Some(most) = self.session.crash_offer.take() {
+            crate::crashfile::send_pending(&mut self.session, most);
+        }
+        if !self.session.crash_filed.is_empty() {
+            crate::crashfile::take_answers(&mut self.session);
+        }
+        // a debug build's `EQOA_CRASH_TEST=<ms>`: a panic then, for a test of
+        // the reports (never in a release build)
+        if crate::crashfile::test_panic_due(game_ms) {
+            panic!("EQOA_CRASH_TEST: a crash on purpose, {game_ms} ms into play");
+        }
         for e in events {
             self.event_no += 1;
             match e {

@@ -119,6 +119,13 @@ pub fn graphics() -> Option<String> {
     (!g.is_empty()).then_some(g)
 }
 
+/// The graphics line as a panic reads it (`crashfile`): never waiting on
+/// the lock, which the panicking thread may hold.
+pub fn graphics_now() -> Option<String> {
+    let g = GRAPHICS.try_lock().ok()?.clone();
+    (!g.is_empty()).then_some(g)
+}
+
 /// The note's lines, the client's facts first, then what play adds.
 pub fn compose(play: &[(&str, String)]) -> String {
     let mut lines = vec![format!("build: {}", build()), format!("platform: {}", platform())];

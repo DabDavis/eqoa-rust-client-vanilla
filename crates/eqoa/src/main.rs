@@ -93,6 +93,7 @@ mod bindpage;
 mod binds;
 mod blacksmith;
 mod bugnote;
+mod crashfile;
 mod gear;
 mod gram;
 mod hideui;
@@ -656,6 +657,9 @@ fn run(args: &[String]) -> Result<()> {
             // keeps them only in `$EQOA_CONFIG`: `settings`)
             if args[0] == "play" {
                 settings::keep_in_user_dir();
+                // a crash kept for the server, as the game's own run keeps one
+                #[cfg(not(target_arch = "wasm32"))]
+                logfile::keep_crashes();
             }
             // the disc: `$EQOA_ISO`, the one picked last, `run/eqoa.iso`
             discs::boot_disc(None).ok_or("no disc image: start eqoa once to choose it, or set EQOA_ISO")?;

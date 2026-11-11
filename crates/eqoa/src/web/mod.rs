@@ -267,8 +267,20 @@ pub fn start() {
     net::session::set_debug_sink(log);
     std::panic::set_hook(Box::new(|info| {
         console_error_panic_hook::hook(info);
+        keep_crash(info);
         crash("The client stopped", &info.to_string());
     }));
+}
+
+/// A panic kept as a crash report for the server, sent at the next login
+/// (`crashfile`): the page's facts, the panic's place and message, and the
+/// JavaScript stack it was raised on (the wasm functions' names in it).
+fn keep_crash(info: &std::panic::PanicHookInfo) {
+    let stack = js_sys::Reflect::get(&js_sys::Error::new(""), &JsValue::from_str("stack")).ok().and_then(|v| v.as_string()).unwrap_or_default();
+    let when = js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default();
+    let place = info.location().map_or(String::new(), |l| format!("{}:{}:{}: ", l.file(), l.line(), l.column()));
+    let text = crate::crashfile::compose(&crate::crashfile::facts(when), &format!("{place}{}", crate::crashfile::payload_text(info.payload())), &stack);
+    crate::crashfile::write_page(&text);
 }
 
 /// Update Notices (the Extended page, one setting for every window): off,
