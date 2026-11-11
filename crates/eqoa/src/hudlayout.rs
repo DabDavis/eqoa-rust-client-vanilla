@@ -401,16 +401,33 @@ pub fn begin(ui: &mut Ui, piece: Piece) -> Mark {
 /// frame noted of it already) and `ui`'s shift as it was.
 pub fn end(ui: &mut Ui, m: Mark) {
     ui.shift = m.before;
-    let quads = &ui.quads[m.from.min(ui.quads.len())..];
-    let mut r = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
-    for q in quads {
-        for p in &q.pos {
-            r = [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])];
-        }
-    }
-    if r[0] <= r[2] {
+    if let Some(r) = covered(&ui.quads[m.from.min(ui.quads.len())..]) {
         note(m.piece, r, m.shift);
     }
+}
+
+/// The frame rectangle `quads` show: each one's bounds within its cut, a quad
+/// cut to nothing left out. A name scrolled in its box (`TextScroll`: the quick
+/// bar's selected ability, 158 pixels wide) is drawn whole and cut to the box;
+/// its whole length counted, a long name ran the piece off the screen's side
+/// and `clamp` moved the bar with every step of the scroll (the server owner's
+/// skeleton shadow knight, 2026-11-11: "a long spell name is making the spell
+/// bar move from left to right across the screen").
+fn covered(quads: &[render::ui::Quad]) -> Option<[f32; 4]> {
+    let mut r = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for q in quads {
+        let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+        for p in &q.pos {
+            b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])];
+        }
+        if let Some([x0, y0, x1, y1]) = q.clip {
+            b = [b[0].max(x0 as f32), b[1].max(y0 as f32), b[2].min(x1 as f32), b[3].min(y1 as f32)];
+        }
+        if b[0] <= b[2] && b[1] <= b[3] {
+            r = [r[0].min(b[0]), r[1].min(b[1]), r[2].max(b[2]), r[3].max(b[3])];
+        }
+    }
+    (r[0] <= r[2]).then_some(r)
 }
 
 /// `piece` covers frame rectangle `r` as drawn this frame, moved `shift`
@@ -769,6 +786,49 @@ mod tests {
         assert_eq!(crate::settings::hud_layout(), "", "kept so");
         assert_eq!(press([300.0, 8.0], FOUR), Press::Button(Button::Lock));
         assert!(!unlocked());
+    }
+
+    /// The quick bar moved, its selected ability's name scrolled in its box
+    /// (`HudMenu::draw`: 158 wide, centred at 511): the bar stays where it was put, the
+    /// name however long and wherever the scroll has it. The name's quads are
+    /// drawn whole and cut to the box; counted whole, a long name ran the bar
+    /// off the screen's right and `clamp` carried it left and back with the
+    /// scroll (the control: the same quads uncut). A quad cut to nothing is
+    /// not counted.
+    #[test]
+    fn a_long_name_scrolled_in_its_box_leaves_the_quick_bar_where_it_is() {
+        use render::ui::Quad;
+        let quad = |x0: f32, x1: f32, y0: f32, y1: f32, clip: Option<[i32; 4]>| Quad { tex: 0, blend: 3, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[0.0; 2]; 4], color: [1.0; 4], clip };
+        let bar = [430.0, 25.0, 640.0, 120.0];
+        let to = [0.0, 60.0];
+        let frame = |offset: f32, tw: f32, cut: bool| -> [f32; 2] {
+            testing_reset();
+            with(|s| s.layout.set(Piece::QuickMenus, Some(Place::of(Piece::QuickMenus, to, bar, FOUR))));
+            let mut sh = [0.0; 2];
+            for _ in 0..3 {
+                sh = shift(Piece::QuickMenus, FOUR);
+                let mv = |r: [f32; 4]| [r[0] + sh[0], r[1] + sh[1], r[2] + sh[0], r[3] + sh[1]];
+                let b = mv(bar);
+                let clip = [432 + sh[0] as i32, 30 + sh[1] as i32, 591 + sh[0] as i32, 45 + sh[1] as i32];
+                let name = mv([442.0 + offset, 32.0, 442.0 + offset + tw, 44.0]);
+                let quads = [quad(b[0], b[2], b[1], b[3], None), quad(name[0], name[2], name[1], name[3], cut.then_some(clip))];
+                frame_begin();
+                if let Some(r) = covered(&quads) {
+                    note(Piece::QuickMenus, r, sh);
+                }
+                frame_end();
+            }
+            sh
+        };
+        let short = frame(0.0, 80.0, true);
+        assert_eq!(short, to, "the control: a short name, where it was put");
+        for offset in [0.0, -40.0, -142.0] {
+            assert_eq!(frame(offset, 300.0, true), to, "a long name scrolled {offset}: the bar stays");
+        }
+        assert_ne!(frame(0.0, 300.0, false), frame(-142.0, 300.0, false), "the control: counted uncut, the bar moves with the scroll");
+        let gone = quad(700.0, 900.0, 32.0, 44.0, Some([432, 30, 591, 45]));
+        assert_eq!(covered(&[gone]), None, "cut to nothing");
+        assert_eq!(covered(&[quad(400.0, 900.0, 32.0, 44.0, Some([432, 30, 591, 45]))]), Some([432.0, 32.0, 591.0, 44.0]));
     }
 
     /// `/hud`'s words.
