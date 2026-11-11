@@ -1125,6 +1125,9 @@ fn world_loader(disc: &WebDisc) -> crate::pregame::host::WorldLoader {
                         Err(e) => log(&format!("s2: {}: {e:?}", rules.art_file)),
                     }
                 }
+                // the disc's art that draws everywhere (`discart`), as natively
+                let art = d.disc_art(&lib).await;
+                crate::discart::add(&mut lib, &art);
                 // the 2002 disc's art while it is the art drawn (`era`, F9):
                 // its files in place of their namesakes, read with the world's
                 if crate::era::current() == esf::Era::Y2002

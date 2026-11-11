@@ -71,6 +71,7 @@ mod arrival;
 mod craft;
 mod craftwnd;
 mod death;
+mod discart;
 mod discs;
 // the program's icon: the drawn disc it carries, then the game's own save
 // icon off the player's disc (natively; a page has its favicon)
@@ -786,6 +787,9 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
             Err(e) => eprintln!("s2: {}: {e}", path.display()),
         }
     }
+    // the disc's art that draws everywhere (`discart`: Highpass's papered
+    // board), after every file the game reads: it fills only what they lack
+    discart::add(&mut lib, &discart::records(std::path::Path::new(&disc_path(None))));
     // the 2002 disc's art while it is the art drawn (`era`, F9): its files in
     // place of their namesakes, read with the world's
     #[cfg(not(target_arch = "wasm32"))]

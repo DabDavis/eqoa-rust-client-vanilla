@@ -320,6 +320,42 @@ impl WebDisc {
         Ok(want.len())
     }
 
+    /// `discart`'s records off this image, as natively (`discart::read_native`):
+    /// kept once read. A world `lib` already has open off this disc with its
+    /// zones left there (the login's Tunaria) gives its zone's place; another
+    /// is opened for it (its headers walked). A piece that cannot be read is
+    /// said and left out.
+    pub async fn disc_art(&mut self, lib: &esf::Library) -> Vec<Vec<u8>> {
+        if let Some(r) = crate::discart::cached() {
+            return r;
+        }
+        let mut out = Vec::new();
+        for p in crate::discart::PIECES {
+            let r = async {
+                let base = self.find(p.from).ok_or_else(|| format!("{}: not on the disc", p.from))?.lba as u64 * iso::SECTOR;
+                let open = lib.file_named(p.from).filter(|&f| lib.era_of(f) == esf::Era::Frontiers && lib.is_deferred(f));
+                let range = match open {
+                    Some(f) => lib.zone_range(f, p.zone),
+                    None => {
+                        let c = self.container(p.from).await?;
+                        c.zones().get(p.zone).and_then(|&z| c.node(z).deferred)
+                    }
+                };
+                let (off, len) = range.ok_or_else(|| format!("{} has no zone {} on the disc", p.from, p.zone))?;
+                crate::discart::cut(self.read_at(base + off, len).await?, p.sprite)
+            }
+            .await;
+            match r {
+                Ok(b) => out.push(b),
+                Err(e) => super::log(&format!("discart: {:#010x}: {e}", p.sprite)),
+            }
+        }
+        if out.len() == crate::discart::PIECES.len() {
+            crate::discart::keep(out.clone());
+        }
+        out
+    }
+
     pub fn find(&self, path: &str) -> Option<&Entry> {
         let want = path.trim_start_matches(['/', '\\']).replace('\\', "/");
         if let Some(e) = self.entries.iter().find(|e| e.path.eq_ignore_ascii_case(&want)) {
