@@ -157,7 +157,7 @@ impl GameOptions {
 /// (Compact: a keyboard is at hand), which `EQOA_SOFT_KEYBOARD` turns off
 /// whatever was kept (a test's).
 pub fn game_options() -> GameOptions {
-    let mut o = game_card().and_then(|b| GameOptions::from_card(&b)).unwrap_or(GameOptions { compact: 1, ..Default::default() });
+    let mut o = account_read("game").or_else(game_card).and_then(|b| GameOptions::from_card(&b)).unwrap_or(GameOptions { compact: 1, ..Default::default() });
     if std::env::var_os("EQOA_SOFT_KEYBOARD").is_some() {
         o.compact = 0;
     }
@@ -174,7 +174,7 @@ pub fn save(o: &GameOptions) -> bool {
     if let Some(b) = game_card() {
         card[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN].copy_from_slice(&b[HOME_SHARD..HOME_SHARD + HOME_SHARD_LEN]);
     }
-    let game = write_game(&card);
+    let game = write_game(&card).and(account_write("game", &o.to_card()));
     let client = save_client();
     let keys = save_binds();
     for (what, r) in [("the options", &game), ("the client's options", &client), ("the keys and buttons", &keys)] {
@@ -265,12 +265,12 @@ pub fn save_waypoints(w: &[(i32, [f32; 2])]) -> bool {
 /// was moved. The client's own, kept the moment a drag ends or Reset HUD is
 /// chosen, never sent anywhere.
 pub fn hud_layout() -> String {
-    store::read(&own_file("hud", place())).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+    account_read("hud").or_else(|| store::read(&own_file("hud", place()))).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
 }
 
 /// Keeps this window's HUD layout (`hud_layout`): whether it was kept.
 pub fn save_hud_layout(text: &str) -> bool {
-    match store::write(&own_file("hud", place()), text.as_bytes()) {
+    match store::write(&own_file("hud", place()), text.as_bytes()).and(account_write("hud", text.as_bytes())) {
         Ok(()) => true,
         Err(e) => {
             crate::say(&format!("the HUD's layout was not kept: {e}"));
@@ -323,6 +323,179 @@ pub fn save_auto_cast_file(text: &str) -> bool {
         }
     }
 }
+
+// ---- the account's options (petition 1621) --------------------------------------------
+
+/// The options are the ACCOUNT's (the GM Jibrish's petition 1621, "account
+/// bound, not just character bound"): once a login names one
+/// (`set_account`: the server and the login name, the pregame's STATION),
+/// the Options window's settings (game.opt's), the Extended rows (client.opt's
+/// own rows) and the HUD's layout are read from and kept in the account's
+/// files, `acct_<server>+<login>.game.opt`, `.client.opt` and `.hud.opt`, so
+/// every character of the account, in any window, plays with the same.
+/// The window's own files are written as well (the title before a login,
+/// and a build before this one, read them). What stays as it was: the keys,
+/// buttons and macros (`keys.opt`, the computer's: every account's), the
+/// saved login and home shard (game.opt's, the window's), each window's
+/// Controller Focus and the settings every window shares (client.opt), the
+/// window's place and size, the map's waypoints (the window's), and what
+/// is a character's own: its quick bars (the server's), its auto slots and
+/// its quest guide record (a line a character).
+///
+/// A window remembers the account it last logged into (`account.opt`,
+/// window n's `account-<n>.opt`), so the title shows and keeps that
+/// account's options too. The account's first login on a client of this
+/// build makes its files from the window's set most recently kept (`migrate`).
+fn account_key() -> Option<String> {
+    account_now().or_else(|| store::read(&own_file("account", place())).map(|b| String::from_utf8_lossy(&b).trim().to_string()).filter(|k| !k.is_empty()))
+}
+
+/// The account's key, a store name's part: the server and the login,
+/// lower case, anything but letters, digits, `.`, `-` and `_` as `_`.
+pub fn account_name(server: &str, user: &str) -> String {
+    let clean = |t: &str| t.trim().to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect::<String>();
+    format!("{}+{}", clean(server), clean(user))
+}
+
+/// The account's file `what` (`game`, `client`, `hud`).
+fn account_file(key: &str, what: &str) -> String {
+    format!("acct_{key}.{what}.opt")
+}
+
+/// The account's file `what`, when an account is known and it was kept.
+fn account_read(what: &str) -> Option<Vec<u8>> {
+    store::read(&account_file(&account_key()?, what))
+}
+
+/// Keeps the account's file `what` (nothing with no account known).
+fn account_write(what: &str, b: &[u8]) -> Result<(), String> {
+    match account_key() {
+        Some(k) => store::write(&account_file(&k, what), b),
+        None => Ok(()),
+    }
+}
+
+/// A login (`server`, the login name): from now the options are this
+/// account's, the account's files made first if it has none (`migrate`);
+/// the options read again (`client`'s cache, the game's options at the
+/// world's entry, the HUD's layout).
+pub fn set_account(server: &str, user: &str) {
+    if user.trim().is_empty() {
+        return;
+    }
+    let key = account_name(server, user);
+    if account_now().as_deref() == Some(key.as_str()) {
+        return;
+    }
+    let had = ["game", "client", "hud"].iter().any(|w| store::read(&account_file(&key, w)).is_some());
+    set_account_now(Some(key.clone()));
+    let _ = store::write(&own_file("account", place()), format!("{key}\n").as_bytes());
+    if !had {
+        migrate(&key);
+    }
+    bump_generation();
+}
+
+/// The account's files made from the window's set kept most recently (the
+/// newest of each window's game, client and HUD files; in a page, whose
+/// storage keeps no times, this window's own): the settings, never the
+/// login or the home shard.
+fn migrate(key: &str) {
+    let files = |p: usize| ["game", "client", "hud"].map(|w| own_file(w, p));
+    let newest = (0..crate::multibox::PLACES).filter_map(|p| files(p).iter().filter_map(|f| store::modified(f)).max().map(|t| (t, p))).max().map(|(_, p)| p);
+    let from = newest.unwrap_or_else(place);
+    if let Some(o) = store::read(&own_file("game", from)).and_then(|b| GameOptions::from_card(&b)) {
+        let _ = store::write(&account_file(key, "game"), &o.to_card());
+    }
+    if let Some(b) = store::read(&own_file("client", from)) {
+        let _ = store::write(&account_file(key, "client"), ClientOptions::from_text(&String::from_utf8_lossy(&b)).rows_text().as_bytes());
+    }
+    if let Some(b) = store::read(&own_file("hud", from)) {
+        let _ = store::write(&account_file(key, "hud"), &b);
+    }
+    crate::say(&format!("options: kept for the account from now on (from window {}'s)", from + 1));
+}
+
+/// The notice the Save Changes box carries (petition 1621: "warn them this
+/// will now save for all characters on the account") until the player has
+/// said Yes to it once (`account_notice_seen`), when an account is known.
+pub const ACCOUNT_NOTICE: &str = "Options now save for every character on this account.";
+const NOTICE_FILE: &str = "account-notice.opt";
+
+pub fn account_notice_due() -> bool {
+    account_key().is_some() && !noticed() && store::read(NOTICE_FILE).is_none()
+}
+
+/// The notice seen: kept, and not shown again this run even if keeping failed.
+pub fn account_notice_seen() {
+    set_noticed();
+    let _ = store::write(NOTICE_FILE, b"seen\n");
+}
+
+/// `client`'s cache key: the window's place and the account's generation
+/// (a login reads the options again, on every thread that cached them).
+fn cache_key() -> usize {
+    place() + crate::multibox::PLACES * generation()
+}
+
+#[cfg(not(test))]
+mod account_state {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    static ACCOUNT: Mutex<Option<String>> = Mutex::new(None);
+    static GENERATION: AtomicUsize = AtomicUsize::new(0);
+    static NOTICED: AtomicBool = AtomicBool::new(false);
+    pub fn account_now() -> Option<String> {
+        ACCOUNT.lock().map(|a| a.clone()).unwrap_or(None)
+    }
+    pub fn set_account_now(k: Option<String>) {
+        if let Ok(mut a) = ACCOUNT.lock() {
+            *a = k;
+        }
+    }
+    pub fn generation() -> usize {
+        GENERATION.load(Ordering::Relaxed)
+    }
+    pub fn bump_generation() {
+        GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn noticed() -> bool {
+        NOTICED.load(Ordering::Relaxed)
+    }
+    pub fn set_noticed() {
+        NOTICED.store(true, Ordering::Relaxed);
+    }
+}
+
+/// The tests': each thread's own, as their store is.
+#[cfg(test)]
+mod account_state {
+    use std::cell::{Cell, RefCell};
+    thread_local! {
+        pub static ACCOUNT: RefCell<Option<String>> = const { RefCell::new(None) };
+        pub static GENERATION: Cell<usize> = const { Cell::new(0) };
+        pub static NOTICED: Cell<bool> = const { Cell::new(false) };
+    }
+    pub fn account_now() -> Option<String> {
+        ACCOUNT.with(|a| a.borrow().clone())
+    }
+    pub fn set_account_now(k: Option<String>) {
+        ACCOUNT.with(|a| *a.borrow_mut() = k);
+    }
+    pub fn generation() -> usize {
+        GENERATION.with(|g| g.get())
+    }
+    pub fn bump_generation() {
+        GENERATION.with(|g| g.set(g.get() + 1));
+    }
+    pub fn noticed() -> bool {
+        NOTICED.with(|n| n.get())
+    }
+    pub fn set_noticed() {
+        NOTICED.with(|n| n.set(true));
+    }
+}
+use account_state::{account_now, bump_generation, generation, noticed, set_account_now, set_noticed};
 
 // ---- game.opt's home shard (`VIGameOptions::m_homeShard`) ---------------------------
 
@@ -1456,7 +1629,7 @@ fn read_shared() -> ClientOptions {
 fn read_client() -> ClientOptions {
     let shared = read_shared();
     let me = place();
-    match store::read(&own_file("client", me)).filter(|_| me > 0) {
+    match account_read("client").or_else(|| store::read(&own_file("client", me)).filter(|_| me > 0)) {
         Some(b) => ClientOptions { controller: shared.controller, capture: shared.capture, background_sound: shared.background_sound, update_notices: shared.update_notices, ..ClientOptions::from_text(&String::from_utf8_lossy(&b)) },
         None => shared,
     }
@@ -1483,7 +1656,7 @@ fn save_client() -> Result<(), String> {
         store::write(CLIENT_FILE, shared.to_text().as_bytes())?;
     }
     FILE_SHARED.with(|f| f.set(Some((shared.capture, shared.background_sound, shared.update_notices))));
-    Ok(())
+    account_write("client", mine.rows_text().as_bytes())
 }
 
 thread_local! {
@@ -1506,7 +1679,7 @@ thread_local! {
 /// The client's settings now: what this window kept (`read_client`), as the
 /// page changed them since.
 pub fn client() -> ClientOptions {
-    let me = place();
+    let me = cache_key();
     CLIENT.with(|c| match c.get() {
         Some((p, v)) if p == me => v,
         _ => {
@@ -1521,7 +1694,7 @@ pub fn client() -> ClientOptions {
 /// Changes them (the Extended page, as its rows move); kept only by Save
 /// Changes (`save`).
 pub fn set_client(v: ClientOptions) {
-    let me = place();
+    let me = cache_key();
     CLIENT.with(|c| c.set(Some((me, v))));
 }
 
@@ -1938,6 +2111,9 @@ mod store {
         pub static FILES: RefCell<HashMap<String, Vec<u8>>> = RefCell::new(HashMap::new());
         /// a store that refuses (a private window)
         pub static REFUSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        /// each write's turn, for `modified`
+        pub static CLOCK: std::cell::Cell<u128> = const { std::cell::Cell::new(0) };
+        pub static STAMPS: RefCell<HashMap<String, u128>> = RefCell::new(HashMap::new());
     }
     pub static USER_DIR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -1962,7 +2138,17 @@ mod store {
             return Err("refused".into());
         }
         FILES.with(|f| f.borrow_mut().insert(name.to_string(), b.to_vec()));
+        let t = CLOCK.with(|c| {
+            c.set(c.get() + 1);
+            c.get()
+        });
+        STAMPS.with(|s| s.borrow_mut().insert(name.to_string(), t));
         Ok(())
+    }
+
+    /// When `name` was last written (the writes' order).
+    pub fn modified(name: &str) -> Option<u128> {
+        STAMPS.with(|s| s.borrow().get(name).copied())
     }
 
     pub fn available() -> bool {
@@ -2019,6 +2205,12 @@ mod store {
         };
         go().map_err(|e| format!("{}: {e}", d.join(name).display()))
     }
+
+    /// When `name` was last written (ns since 1970).
+    pub fn modified(name: &str) -> Option<u128> {
+        let t = std::fs::metadata(dir()?.join(name)).ok()?.modified().ok()?;
+        Some(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos())
+    }
 }
 
 /// In a page: the origin's localStorage, every access allowed to fail.
@@ -2044,6 +2236,11 @@ mod store {
         let hex: String = b.iter().map(|v| format!("{v:02x}")).collect();
         s.set_item(&format!("eqoa.{name}"), &hex).map_err(|e| format!("{e:?}"))
     }
+
+    /// localStorage keeps no times: `migrate` takes this window's set.
+    pub fn modified(_name: &str) -> Option<u128> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -2053,6 +2250,11 @@ pub mod testing {
         super::store::FILES.with(|f| f.borrow_mut().clear());
         super::store::REFUSE.with(|r| r.set(refuse));
         super::CLIENT.with(|c| c.set(None));
+        super::account_state::ACCOUNT.with(|a| *a.borrow_mut() = None);
+        super::account_state::GENERATION.with(|g| g.set(0));
+        super::account_state::NOTICED.with(|n| n.set(false));
+        super::store::CLOCK.with(|c| c.set(0));
+        super::store::STAMPS.with(|f| f.borrow_mut().clear());
         super::BINDS.with(|c| *c.borrow_mut() = None);
         super::BINDS_KEPT.with(|c| *c.borrow_mut() = None);
         crate::multibox::testing::set_place(None);
@@ -2065,6 +2267,11 @@ pub mod testing {
     /// Writes `name` in the store as another window's save would.
     pub fn put(name: &str, b: &[u8]) {
         super::store::FILES.with(|f| f.borrow_mut().insert(name.to_string(), b.to_vec()));
+        let t = super::store::CLOCK.with(|c| {
+            c.set(c.get() + 1);
+            c.get()
+        });
+        super::store::STAMPS.with(|s| s.borrow_mut().insert(name.to_string(), t));
     }
 
     /// What the store holds under `name`.
@@ -3300,5 +3507,82 @@ mod tests {
         assert_eq!((step_name_distance(22, -1), step_name_distance(200, 1)), (None, None), "its ends");
         let from_22 = |v: u8| v + NAME_DISTANCE_STEP;
         assert_ne!(from_22(NAME_DISTANCE_GAME), up[1], "the control must fail");
+    }
+
+    /// Petition 1621: a login makes the options the account's. Its first
+    /// login takes the window's set kept most recently (here window 2's,
+    /// written after window 1's), never the saved login; a save keeps them
+    /// for the account, so another window (a character of the same account)
+    /// plays with them, and another account keeps its own. What the windows
+    /// share stays client.opt's. The control: before any login, window 1's.
+    #[test]
+    fn options_are_the_accounts() {
+        use crate::multibox::testing::set_place;
+        testing::reset(false);
+        let mut one = GameOptions { battle: 1, ..changed() };
+        let mut card = one.to_card();
+        card[0x10..0x13].copy_from_slice(b"dab");
+        testing::put(GAME_FILE, &card);
+        testing::put(CLIENT_FILE, b"brightness=3\ncapture_controller=on\n");
+        let two = GameOptions { battle: 2, ..changed() };
+        testing::put("game-2.opt", &two.to_card());
+        testing::put("client-2.opt", b"brightness=7\n");
+        set_place(Some(0));
+        assert_eq!((game_options().battle, client().brightness), (1, 3), "the control: no login, window 1's");
+        assert!(!account_notice_due(), "no account, no notice");
+        set_account("eqoaclassic.com", "Dab");
+        assert_eq!(game_options().battle, 2, "window 2's, the newest set");
+        assert_eq!(client().brightness, 7);
+        assert!(client().capture, "what the windows share: client.opt's");
+        let acct = account_file("eqoaclassic.com+dab", "game");
+        assert!(testing::kept(&acct).unwrap()[0x10..0x91].iter().all(|&b| b == 0), "never the login");
+        assert_eq!(saved_login().0, "dab", "the window's saved login stays");
+        // a change saved: the account's
+        one.battle = 5;
+        let mut c = client();
+        c.brightness = 9;
+        set_client(c);
+        assert!(save(&one));
+        // another window, the same account (a second character)
+        set_place(Some(3));
+        set_account_now(None);
+        set_account("eqoaclassic.com", "DAB");
+        assert_eq!((game_options().battle, client().brightness), (5, 9), "the account's, in any window");
+        // another account: its own, from the newest set (the save just made)
+        set_account("eqoaclassic.com", "other");
+        assert_eq!(client().brightness, 9);
+        let mut c = client();
+        c.brightness = 1;
+        set_client(c);
+        assert!(save(&GameOptions { battle: 6, ..one }));
+        set_account("eqoaclassic.com", "dab");
+        assert_eq!((game_options().battle, client().brightness), (5, 9), "the first account's untouched");
+        // a new run of window 4: the title reads the account it last logged into
+        set_account_now(None);
+        bump_generation();
+        assert_eq!((game_options().battle, client().brightness), (5, 9));
+        testing::reset(false);
+    }
+
+    /// The notice: due once an account is known, until a Yes; the Yes is kept.
+    #[test]
+    fn the_account_notice_until_seen() {
+        testing::reset(false);
+        crate::multibox::testing::set_place(Some(0));
+        assert!(!account_notice_due());
+        set_account("s", "u");
+        assert!(account_notice_due());
+        account_notice_seen();
+        assert!(!account_notice_due());
+        account_state::NOTICED.with(|n| n.set(false));
+        assert!(!account_notice_due(), "kept for later runs");
+        testing::reset(false);
+    }
+
+    /// An account's name is a safe store name, case folded.
+    #[test]
+    fn account_names() {
+        assert_eq!(account_name("EQOAclassic.com:9735", " Dab "), "eqoaclassic.com_9735+dab");
+        assert_eq!(account_name("a/b", "..\\x"), "a_b+.._x");
     }
 }

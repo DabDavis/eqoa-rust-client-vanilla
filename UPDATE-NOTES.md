@@ -12,6 +12,18 @@ is put on the page by `.github/workflows/notes.yml`.
   title, like "Quil'Eyne's Unspeakable Hunger") made the whole bar slide across the screen as the name scrolled. The
   bar now stays where you put it, whatever the name's length; the name scrolls inside its box as before.
 
+## 2026-11-11 · Options for the whole account, Class Mastery keeps your place
+- Your options now belong to your **account**, not to a window: the Options menu's settings, every Extended row
+  and where you put the HUD's pieces are the same for every character you log in with on that account, in any
+  window. The first time you log in, the account takes the options you saved most recently, so nothing has to be
+  set up again. Another account keeps its own. Your keys, buttons and macros stay the same for everyone on the
+  computer, and quick bars, auto-cast slots and quest records stay with each character.
+- The Save Changes question says once that options now save for every character on the account.
+- **Class Mastery**: buying or switching a mastery no longer sends the cursor back to the top of the list. It
+  stays where it was, with the list scrolled as it was, and when the mastery you bought has a next rank, that
+  rank takes its place in the list and is highlighted.
+
+
 ## 2026-11-11 · Auto-cast keeps your pet buffed
 - Auto-cast now works with **pet buffs**. A pet buff's effect shows on your pet, not on your own effects, so auto-cast
   used to think it had not landed, cast it again and turned the slot off after three casts. Now it looks for the buff

@@ -123,6 +123,8 @@ impl Station {
             Some(1) => {
                 let r = &run.r;
                 cx.shared.login = Some(Login { user: r.login.clone(), token: net::auth::udp_token(&r.password) });
+                // the options are the account's from now (petition 1621)
+                crate::settings::set_account(cx.shared.server.as_deref().unwrap_or(""), &r.login);
                 Next::Client
             }
             Some(_) => Next::Setup,
