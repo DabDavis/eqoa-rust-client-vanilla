@@ -11,7 +11,7 @@
 use crate::{DEPTH_FORMAT, Renderer, Textures};
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec4};
-use wgpu::util::DeviceExt;
+use crate::BufferInit;
 
 /// A triangle's corner: world position, UV, colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -184,6 +184,6 @@ impl Renderer {
                 (blend, bg, range)
             })
             .collect();
-        o.vertices = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("overlay"), contents: bytemuck::cast_slice(&verts), usage: wgpu::BufferUsages::VERTEX }));
+        o.vertices = Some(device.buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("overlay"), contents: bytemuck::cast_slice(&verts), usage: wgpu::BufferUsages::VERTEX }));
     }
 }

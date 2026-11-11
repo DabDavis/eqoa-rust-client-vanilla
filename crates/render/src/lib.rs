@@ -31,7 +31,40 @@ pub mod ui;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
-use wgpu::util::DeviceExt;
+
+
+/// `create_buffer_init` that does not panic on a lost device: wgpu's maps the
+/// buffer at its creation and panics when it cannot, which on a device the
+/// driver or the browser has just lost it cannot (the native F3 crash
+/// 20261024-001640, an upload in the frame that lost it). Here the buffer is
+/// left as the lost device makes it (invalid, drawn nowhere) and the client
+/// goes on to make a new device (eqoa's `gpulost`).
+pub trait BufferInit {
+    fn buffer_init(&self, d: &wgpu::util::BufferInitDescriptor) -> wgpu::Buffer;
+}
+
+impl BufferInit for wgpu::Device {
+    fn buffer_init(&self, d: &wgpu::util::BufferInitDescriptor) -> wgpu::Buffer {
+        if d.contents.is_empty() {
+            return self.create_buffer(&wgpu::BufferDescriptor { label: d.label, size: 0, usage: d.usage, mapped_at_creation: false });
+        }
+        let n = d.contents.len() as u64;
+        let mask = wgpu::COPY_BUFFER_ALIGNMENT - 1;
+        let size = ((n + mask) & !mask).max(wgpu::COPY_BUFFER_ALIGNMENT);
+        let buffer = self.create_buffer(&wgpu::BufferDescriptor { label: d.label, size, usage: d.usage, mapped_at_creation: true });
+        let mapped = match buffer.get_mapped_range_mut(..) {
+            Ok(mut m) => {
+                m.slice(..n as usize).copy_from_slice(d.contents);
+                true
+            }
+            Err(_) => false,
+        };
+        if mapped {
+            buffer.unmap();
+        }
+        buffer
+    }
+}
 
 pub use lit::{Lights, MAX_LIGHTS, PointLight};
 pub use wgpu;
@@ -866,7 +899,7 @@ impl Renderer {
             sampler(wgpu::AddressMode::MirrorRepeat),
         ];
         let white = upload_rgba(device, queue, 1, 1, &[255; 4]);
-        let identity = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let identity = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("identity palette"),
             contents: bytemuck::cast_slice(&[IDENTITY; MAX_BONES]),
             usage: wgpu::BufferUsages::UNIFORM,
@@ -1036,13 +1069,13 @@ impl Renderer {
         flora: bool,
     ) -> GpuModel {
         let verts = vertices_of(m);
-        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let vertices = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vertices"),
             contents: bytemuck::cast_slice(&verts),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let identity = [IDENTITY; MAX_BONES];
-        let palette = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let palette = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("palette"),
             contents: bytemuck::cast_slice(&identity),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -1063,7 +1096,7 @@ impl Renderer {
                 let (blend, mut base, si) = layer_state(l, view.is_some());
                 base.flags[2] += shift.unwrap_or(0.0);
                 base.flags[3] = flora as i32 as f32;
-                let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                let uniform = device.buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("layer"),
                     contents: bytemuck::bytes_of(&base),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -1084,7 +1117,7 @@ impl Renderer {
                 let alpha_min = if view.is_some() { self.alpha_min(l.texture, textures) } else { 255 };
                 passes.push(Pass { blend, bg, uniform, base, texture: l.texture, sampler: si, made: (base.uv0, base.uv1, si), shift: shift.unwrap_or(0.0), alpha_min });
             }
-            let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            let indices = device.buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("indices"),
                 contents: bytemuck::cast_slice(&b.indices),
                 usage: wgpu::BufferUsages::INDEX,
@@ -1093,12 +1126,12 @@ impl Renderer {
         }
         let lo = m.pos.iter().fold(Vec3::splat(f32::MAX), |a, p| a.min(Vec3::from(*p)));
         let hi = m.pos.iter().fold(Vec3::splat(f32::MIN), |a, p| a.max(Vec3::from(*p)));
-        let instance_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let instance_buf = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("instances"),
             contents: bytemuck::cast_slice(instances),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
-        let statics = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let statics = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("static lights"),
             contents: bytemuck::cast_slice(&vec![[0.0f32, 0.0, 0.0, 1.0]; instances.len().max(1)]),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
@@ -1616,7 +1649,7 @@ impl Renderer {
         if let Some(bg) = self.materials.get(&key) {
             return Material { blend, bg: bg.clone(), solid };
         }
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let uniform = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("material"),
             contents: bytemuck::bytes_of(&base),
             usage: wgpu::BufferUsages::UNIFORM,

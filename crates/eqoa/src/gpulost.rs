@@ -257,7 +257,7 @@ pub fn ask_loss() {
 /// uploaded after it, as the crash's were. With `again`, the first recovered
 /// device is lost too, 5 s after it came.
 pub fn test(device: &wgpu::Device, now: i64) {
-    use wgpu::util::DeviceExt;
+    use render::BufferInit;
     static DONE: AtomicBool = AtomicBool::new(false);
     static AGAIN: AtomicBool = AtomicBool::new(false);
     let asked = ASKED.swap(false, Ordering::SeqCst);
@@ -280,7 +280,7 @@ pub fn test(device: &wgpu::Device, now: i64) {
     device.destroy();
     mark("a test's");
     if spec.is_some_and(|s| s.frame) {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vertices"),
             contents: &[0; 64],
             usage: wgpu::BufferUsages::VERTEX,

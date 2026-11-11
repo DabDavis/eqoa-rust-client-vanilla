@@ -103,7 +103,7 @@ pub fn placeholder(device: &wgpu::Device, queue: &wgpu::Queue, blit: &Blit, own:
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("stand-in") });
     for k in 0..n.max(1) {
         let level = [source_level((base.width, base.height), level_size(w, h, k)).min((own.len() - 1) as f32), 0.0, 0.0, 0.0];
-        let uniform = wgpu::util::DeviceExt::create_buffer_init(device, &wgpu::util::BufferInitDescriptor { label: Some("stand-in"), contents: bytemuck::cast_slice(&level), usage: wgpu::BufferUsages::UNIFORM });
+        let uniform = crate::BufferInit::buffer_init(device, &wgpu::util::BufferInitDescriptor { label: Some("stand-in"), contents: bytemuck::cast_slice(&level), usage: wgpu::BufferUsages::UNIFORM });
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("stand-in"),
             layout: &blit.layout,
