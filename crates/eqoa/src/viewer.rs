@@ -556,6 +556,21 @@ pub fn shot_with(
                     }
                     continue;
                 }
+                // `hud press X Y`, `hud move X Y`, `hud release`: Move HUD's
+                // press, drag and let go at window pixels (`hudlayout`), as
+                // the window's left button gives them
+                if let (Some(rest), Some(p)) = (step.strip_prefix("hud "), play.as_mut()) {
+                    let words: Vec<&str> = rest.split_whitespace().collect();
+                    let at = || Some([words.get(1)?.parse::<f32>().ok()?, words.get(2)?.parse::<f32>().ok()?]);
+                    let took = match (words.first().copied(), at()) {
+                        (Some("press"), Some(a)) => p.hud_press(a, (w, h)),
+                        (Some("move"), Some(a)) => p.hud_drag(a, (w, h)),
+                        (Some("release"), _) => p.hud_release(),
+                        _ => false,
+                    };
+                    eprintln!("mouse {step}: Move HUD's {}", if took { "(taken)" } else { "(not taken)" });
+                    continue;
+                }
                 // `click @<name>`: at the creature called that, where it is drawn
                 let mut step = step.clone();
                 // `linkclick [k]`: at the newest item link the chat box drew, or
