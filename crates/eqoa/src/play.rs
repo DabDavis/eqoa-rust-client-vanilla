@@ -3506,6 +3506,8 @@ impl Play {
         self.agree_raid();
         self.raid_menu(); // Community > Group > Raid once the server offers it
         self.agree_item_links();
+        // Options > Interface's Profanity Filter, to a server that asks (0x7E60)
+        self.session.agree_profanity_filter(crate::settings::profanity_filter());
         self.drop_dead_target_info();
         self.drop_stale_mob_info(now);
         if self.has_self() {

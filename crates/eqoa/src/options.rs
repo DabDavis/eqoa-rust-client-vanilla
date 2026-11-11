@@ -9,6 +9,13 @@
 //! `game.opt`, here `settings::save`) and applies; Triangle on the menu puts
 //! every setting back as it was and applies.
 //!
+//! The client's own on the game's Interface page: Profanity Filter under its
+//! rows (the GM Jibrish's petition 1490), On by default as the game is at
+//! every login; it is the server's filter of what the player hears, told to a
+//! server that asks for it (go-eqoa-server's 0x7E60,
+//! `Session::agree_profanity_filter`), taken by Save Changes and put back by
+//! Triangle as an Extended row is.
+//!
 //! The client's own, beside the game's: an Extended row between Sound and
 //! Save Changes (the menu a row longer), its words the client's (no
 //! WORDS.TXT entry). It opens a menu of its own over the options menu, drawn
@@ -667,6 +674,8 @@ impl WndOptions {
                 if FEATURES & 0x100 != 0 {
                     last[1] = 4;
                 }
+                // the client's Profanity Filter under the game's rows
+                last[1] += 1;
                 last[page as usize]
             }
         };
@@ -742,6 +751,14 @@ impl WndOptions {
             6 => o.compact ^= 1,
             7 => o.no_damage = (o.no_damage == 0) as u8,
             8..=11 => self.edit[self.item as usize - 8] ^= 1,
+            // Profanity Filter (Interface, the client's row): the server told
+            // from the next frame (`Session::agree_profanity_filter`), kept by
+            // Save Changes as an Extended row is
+            PROFANITY => {
+                let mut c = crate::settings::client();
+                c.profanity_filter = !c.profanity_filter;
+                crate::settings::set_client(c);
+            }
             16 => {
                 let all = Focus::ALL;
                 let at = all.iter().position(|&f| f == crate::settings::focus()).unwrap_or(0);
@@ -996,11 +1013,12 @@ impl WndOptions {
         self.row = 0;
         let rows = match self.sel {
             0 => 6,
+            // with the client's Profanity Filter a row more
             1 => {
                 if FEATURES & 0x200 != 0 {
-                    8
+                    9
                 } else {
-                    7
+                    8
                 }
             }
             2 => 7,
@@ -1218,19 +1236,28 @@ impl WndOptions {
     }
 
     /// `DrawInterfacePage`: Auto Attack, 3rd Person Camera, Camera Pitch
-    /// Axis, Soft Keyboard and (feature 0x200) Vibration.
+    /// Axis, Soft Keyboard and (feature 0x200) Vibration; then the client's
+    /// Profanity Filter (the GM Jibrish's petition 1490), its words the
+    /// client's.
     fn draw_interface(&mut self, vui: &Vui, r: &mut dyn Raster, o: &GameOptions) {
-        self.item = [10, 0, 1, 6, 11].get(self.row as usize).copied().unwrap_or(self.item);
+        let mut items = vec![10, 0, 1, 6];
         let word = |id: i32| Some(wide(vui.words.get(id, vui.language)));
         let on_off = |v: u8| word(if v != 0 { 551 } else { 552 });
         let mut labels = vec![1792, 747, 752, 794];
         let mut values = vec![on_off(self.edit[2]), word(if o.follow != 0 { 68 } else { 805 }), word(if o.inverted != 0 { 779 } else { 784 }), word(if o.compact != 0 { 755 } else { 802 })];
         if FEATURES & 0x200 != 0 {
+            items.push(11);
             labels.push(1604);
             values.push(on_off(self.edit[3]));
         }
-        self.draw_rows(vui, r, &words(vui, &labels), &values);
-        self.back_legend(vui, r, if FEATURES & 0x200 != 0 { 7 } else { 6 });
+        items.push(PROFANITY);
+        values.push(on_off(crate::settings::profanity_filter() as u8));
+        self.item = items.get(self.row as usize).copied().unwrap_or(self.item);
+        let mut labels = words(vui, &labels);
+        labels.push(wide(PROFANITY_LABEL));
+        let n = labels.len() as i32;
+        self.draw_rows(vui, r, &labels, &values);
+        self.back_legend(vui, r, n + 2);
     }
 
     /// `DrawSoundPage`: Battle Music, Fx Volume, Music Volume, Sound Output.
@@ -1742,6 +1769,11 @@ fn step_name_distance(c: &mut ClientOptions, d: i32, cues: &mut Vec<i32>) {
 /// 2026-10-23 ten, which the Extended page's eleventh row, Ability Bars,
 /// outgrew: its notes read as the first row's).
 const HIT_ROWS: i32 = 100;
+
+/// The Interface page's client row, Profanity Filter (`draw_interface`), its
+/// item past every Extended one's.
+const PROFANITY: i32 = 74;
+const PROFANITY_LABEL: &str = "Profanity Filter";
 const LABEL: i32 = HIT_ROWS;
 
 /// WORDS.TXT's entries `ids`, wide.
@@ -1761,6 +1793,44 @@ mod tests {
         let o = GameOptions::default();
         assert_eq!(o.auto_attack, 1);
         assert_eq!((o.stereo, o.follow, o.vibration, o.no_loot), (1, 0, 1, 0));
+    }
+
+    /// The Interface page's last row is the client's Profanity Filter (petition
+    /// 1490): down to it past the game's five, right turns it off in the
+    /// client's settings (what Play tells the server), Triangle on the menu puts
+    /// it back on. The control: the row above it (Vibration) leaves it alone.
+    #[test]
+    fn the_interface_page_turns_the_profanity_filter() {
+        use crate::pointer::key;
+        use crate::pointer::testing::{NullRaster, vui};
+        crate::settings::testing::reset(false);
+        let vui = vui();
+        let mut r = NullRaster;
+        let mut o = GameOptions::default();
+        let mut w = WndOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        w.open(&vui, &r, &o);
+        w.sel = 1;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        assert_eq!(w.page, 1);
+        for _ in 0..4 {
+            w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
+        }
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(w.item, 11, "Vibration");
+        w.key(&vui, &mut r, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
+        assert!(crate::settings::profanity_filter(), "the control: Vibration is not it");
+        w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
+        w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!((w.row, w.item), (5, PROFANITY), "the last row, and no row past it");
+        w.key(&vui, &mut r, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
+        assert!(!crate::settings::profanity_filter(), "turned off");
+        // Triangle to the menu, Triangle there: every setting as it was
+        w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
+        w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
+        assert!(crate::settings::profanity_filter(), "put back on");
+        crate::settings::testing::reset(false);
     }
 
     /// once; Triangle on the menu puts the live ones back.
@@ -2671,8 +2741,9 @@ mod tests {
         w.open(&vui, &r, &o);
         w.sel = 1;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        assert_eq!(w.window2.rows, 9, "Interface: nine rows (Vibration, the client's Profanity Filter)");
+        w.page_window(&vui, &r, 8);
         let (top8, h8) = (w.window2.top_left()[1], w.window2.size[1]);
-        assert_eq!(w.window2.rows, 8, "Interface: eight rows (Vibration)");
         w.page_window(&vui, &r, PAGE_MOST as i32 + 3);
         let (top9, h9) = (w.window2.top_left()[1], w.window2.size[1]);
         assert_eq!((w.window2.rows, w.window2.title_h), (9, 18), "a row more, no title bar");
