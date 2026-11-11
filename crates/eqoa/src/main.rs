@@ -108,6 +108,7 @@ mod numcolor;
 mod dpsmeter;
 mod npctint;
 mod display;
+mod hudlayout;
 mod hudmenu;
 mod influence;
 mod input;

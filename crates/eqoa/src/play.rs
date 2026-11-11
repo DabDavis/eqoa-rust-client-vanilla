@@ -4984,13 +4984,16 @@ impl Play {
             // compass and the quick menus up at its top, the chat box down at
             // its bottom (each answers in its own place)
             let (side, up) = (render::ui::side(size), render::ui::top(size));
+            // each where the player put it (`hudlayout`)
+            let moved = |p| crate::hudlayout::shift(p, crate::hudlayout::Beyond::of(size));
+            let (compass, menus) = (moved(crate::hudlayout::Piece::Player), moved(crate::hudlayout::Piece::QuickMenus));
             // the compass opens the map, with the Map on (the touch screen's
             // way to it)
-            if crate::settings::map() && crate::map::on_compass([f[0] + side, f[1] + up]) && self.hud.is_some() {
+            if crate::settings::map() && crate::map::on_compass([f[0] + side - compass[0], f[1] + up - compass[1]]) && self.hud.is_some() {
                 self.map.show();
                 return true;
             }
-            if let Some(k) = self.hud_menus.point([f[0] - side, f[1] + up]) {
+            if let Some(k) = self.hud_menus.point([f[0] - side - menus[0], f[1] + up - menus[1]]) {
                 // the pad key it stands for in S2's record, let go at once
                 self.note_hud_key(k, true);
                 self.hud_key(k);
@@ -4998,7 +5001,8 @@ impl Play {
                 return true;
             }
             // the chat box: the chat line, as R3 opens it
-            if self.wnd_chat.as_ref().is_some_and(|w| w.contains([f[0] - side, f[1] - up])) {
+            let chat = moved(crate::hudlayout::Piece::Chat);
+            if self.wnd_chat.as_ref().is_some_and(|w| w.contains([f[0] - side - chat[0], f[1] - up - chat[1]])) {
                 self.open_chat_line();
                 return true;
             }
@@ -5053,7 +5057,9 @@ impl Play {
     /// takes it, before a wide window's move and a tall one's).
     fn chat_point(at: (f64, f64), size: (u32, u32)) -> [f32; 2] {
         let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
-        [f[0] - render::ui::side(size), f[1] - render::ui::top(size)]
+        // where the player put the box (`hudlayout`)
+        let m = crate::hudlayout::shift(crate::hudlayout::Piece::Chat, crate::hudlayout::Beyond::of(size));
+        [f[0] - render::ui::side(size) - m[0], f[1] - render::ui::top(size) - m[1]]
     }
 
     /// A mouse button down in the world at window pixels `at` (`left`: the left
@@ -5434,6 +5440,11 @@ impl Play {
             "/alarm" => self.alarm_command(&rest),
             // the DPS meter's (`dpsmeter`), the client's own
             "/dps" => self.dps_command(&rest),
+            // the HUD's layout (`hudlayout`), the client's own
+            "/hud" => {
+                let line = crate::hudlayout::command(&rest);
+                self.add_chat(line.to_string(), [1.0; 4]);
+            }
             "/time" => self.do_action(0x0B0E_0008, 0),
             "/follow" => self.do_action(0x0B0E_0007, 0),
             // DoText while the GM's channel is on, else nothing (`adminplay`)
@@ -8930,8 +8941,11 @@ impl Play {
     /// frames).
     fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32)) {
         ui.begin(size);
+        // the pieces this frame draws, where (`hudlayout`)
+        crate::hudlayout::frame_begin();
         // LoadingProgress in place of the game's frame: no HUD, no windows
         if self.loading.up() {
+            crate::hudlayout::frame_end();
             let hud = self.hud.as_ref();
             if let Some(assets) = hud.map(|h| &h.1).or(self.ui_assets.as_ref()) {
                 let mut r = assets.raster(ui);
@@ -9091,7 +9105,9 @@ impl Play {
             r.ui.anchor = Anchor::Left;
             r.ui.vertical = Vertical::Top;
             if crate::influence::shown(self.mode) {
+                let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Effects);
                 crate::influence::draw(vui, &mut r, &self.effects);
+                crate::hudlayout::end(r.ui, m);
             }
             r.ui.anchor = Anchor::Right;
             r.ui.vertical = Vertical::Bottom;
@@ -9107,8 +9123,10 @@ impl Play {
                     let rr = &r;
                     c.text.add_text_linked(&crate::ui::wide(&text), color, at, |s| vi::ui::Raster::string_width(rr, s), &links);
                 }
+                let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Chat);
                 c.draw(vui, &mut r, now, dt);
                 c.draw_selection(&mut r);
+                crate::hudlayout::end(r.ui, m);
                 self.cues.extend(c.cues.drain(..).map(crate::sound::Cue::Ui));
             }
             r.ui.anchor = Anchor::Middle;
@@ -9193,8 +9211,10 @@ impl Play {
             // DrawStatus: under water, the breath gauge
             if under_liquid && (self.mode == 0 || self.mode == 36 || self.mode == 38) {
                 let at = [430, 50];
+                let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Breath);
                 vui.draw_word_ex(&mut r, 911, at[0], at[1], [1.0; 4], true);
                 crate::hud::draw_gauge(vui, &mut r, 9, 136, [at[0], at[1] + 19], true, self.dump.player.p30 as f32 / 255.0);
+                crate::hudlayout::end(r.ui, m);
             }
             // the target's info window, in the middle of a tall window's right
             r.ui.vertical = Vertical::Middle;
@@ -9238,7 +9258,17 @@ impl Play {
                         _ => Vec::new(),
                     }
                 };
+                let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::QuickMenus);
                 self.hud_menus.draw(vui, &mut r, now as i64, &name);
+                crate::hudlayout::end(r.ui, m);
+            }
+            // Move HUD (`hudlayout`): the pieces outlined and named, the bar
+            // at the top with Lock and Reset, over everything but the fade
+            crate::hudlayout::frame_end();
+            if self.hud_moving() {
+                crate::hudlayout::draw_moving(&mut r);
+            } else {
+                crate::hudlayout::set_buttons(Vec::new());
             }
             // `EQOA_GLYPHS=1`: the button glyphs drawn, whenever they change
             if std::env::var_os("EQOA_GLYPHS").is_some() && r.glyphs.list != self.glyphs.list {
@@ -9258,6 +9288,8 @@ impl Play {
             }
             r.ui.end();
             self.hud = Some((vui_o, assets, hud_o));
+        } else {
+            crate::hudlayout::frame_end();
         }
         self.start_actions(actions);
         self.quick_outs(quick_outs);
@@ -9340,6 +9372,49 @@ impl Play {
         if self.options_wnd.meter_note.as_deref() != note {
             self.options_wnd.meter_note = note.map(str::to_string);
         }
+    }
+
+    /// Whether the HUD's pieces move now (`hudlayout`): Move HUD on, in play
+    /// with no window up and the HUD shown.
+    pub fn hud_moving(&self) -> bool {
+        crate::hudlayout::unlocked() && self.mode == 0 && !self.search.open && !self.map.open && !crate::hideui::hidden() && !self.loading.up()
+    }
+
+    /// A press (the mouse's left button, a finger) at window pixels `at`
+    /// while the HUD moves: true when it was Move HUD's (a piece picked up,
+    /// the bar's Lock or Reset), and so nothing else's.
+    pub fn hud_press(&mut self, at: [f32; 2], size: (u32, u32)) -> bool {
+        use crate::hudlayout::{Beyond, Button, Press};
+        if !self.hud_moving() {
+            return false;
+        }
+        let f = render::ui::frame_from_window(size, at);
+        match crate::hudlayout::press(f, Beyond::of(size)) {
+            Press::None => false,
+            Press::Piece(_) => true,
+            Press::Button(b) => {
+                self.cues.push(crate::sound::Cue::Ui(8));
+                if b == Button::Reset {
+                    self.add_chat("The HUD is back where the game puts it.".to_string(), [1.0; 4]);
+                }
+                true
+            }
+        }
+    }
+
+    /// The pointer at window pixels `at` while a piece is dragged: it goes
+    /// with it. False with none dragged.
+    pub fn hud_drag(&mut self, at: [f32; 2], size: (u32, u32)) -> bool {
+        if !crate::hudlayout::dragging() {
+            return false;
+        }
+        crate::hudlayout::drag_to(render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size));
+        true
+    }
+
+    /// The press let go: a dragged piece stays, kept. False with none.
+    pub fn hud_release(&mut self) -> bool {
+        crate::hudlayout::release()
     }
 
     /// The meter cleared, and the server told to drop the fight under way.

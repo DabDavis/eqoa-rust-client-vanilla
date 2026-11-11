@@ -2201,6 +2201,8 @@ enum Finger {
     Pad,
     Pointer,
     OfferList,
+    /// Move HUD's (`hudlayout`): a piece it picked up, dragged, or the bar's button
+    Hud,
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -3097,7 +3099,9 @@ impl App {
         let p = render::ui::frame_from_window(size, at);
         let whose = match phase {
             Phase::Started => {
-                let w = self.finger_on(p);
+                // Move HUD: a finger on a piece takes it (`hudlayout`)
+                let hud = self.play.as_mut().is_some_and(|pl| pl.hud_press(at, size));
+                let w = if hud { Some(Finger::Hud) } else { self.finger_on(p) };
                 self.fingers.retain(|f| f.0 != id);
                 if let Some(w) = w {
                     self.fingers.push((id, w));
@@ -3112,6 +3116,19 @@ impl App {
             self.fingers.retain(|f| f.0 != id);
         }
         match whose {
+            Finger::Hud => {
+                if let Some(pl) = self.play.as_mut() {
+                    match phase {
+                        Phase::Started => {}
+                        Phase::Moved => {
+                            pl.hud_drag(at, size);
+                        }
+                        Phase::Ended | Phase::Cancelled => {
+                            pl.hud_release();
+                        }
+                    }
+                }
+            }
             Finger::Pad => {
                 // as the options have it now (the Extended page's touch rows)
                 self.touch.opts = crate::settings::touch_options();
@@ -5285,6 +5302,7 @@ impl App {
                 self.grab_pointer(false);
                 if let Some(p) = self.play.as_mut() {
                     p.chat_let_go();
+                    p.hud_release();
                     p.map.let_go();
                     p.map.mini_hover(None);
                 }
@@ -5300,6 +5318,15 @@ impl App {
                     return;
                 }
                 if self.walker.is_some() {
+                    // Move HUD (`hudlayout`): the left button on a piece drags
+                    // it, on the bar's buttons presses them; none of it the
+                    // mouse's gesture
+                    if button == MouseButton::Left
+                        && let (Some(p), Some(g)) = (self.play.as_mut(), self.gfx.as_ref())
+                        && (if down { p.hud_press(at, (g.config.width, g.config.height)) } else { p.hud_release() })
+                    {
+                        return;
+                    }
                     // a press on the chat box's lines selects them, and the
                     // mouse's gesture (the look, a click's target) is none of it
                     if self.chat_button(button == MouseButton::Left, down) {
@@ -5329,6 +5356,12 @@ impl App {
                 // the update's question's list dragged (`update`)
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.offer_drag() {
+                    return;
+                }
+                // a HUD piece dragged (`hudlayout`): nothing else's move
+                if let (Some(p), Some(g)) = (self.play.as_mut(), self.gfx.as_ref())
+                    && p.hud_drag([position.x as f32, position.y as f32], (g.config.width, g.config.height))
+                {
                     return;
                 }
                 if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {

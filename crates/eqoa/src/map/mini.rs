@@ -215,9 +215,15 @@ pub fn inner() -> [i32; 4] {
 /// places it (`Anchor::Right`, `Vertical::Top`), in a `size` window's
 /// pixels.
 pub fn window_rect(size: (u32, u32), r: [i32; 4]) -> [f32; 4] {
+    window_rect_moved(size, r, [0.0; 2])
+}
+
+/// `window_rect` moved `shift` frame pixels: the minimap where the player put
+/// it (`hudlayout`).
+pub fn window_rect_moved(size: (u32, u32), r: [i32; 4], shift: [f32; 2]) -> [f32; 4] {
     let (side, top) = (render::ui::side(size), render::ui::top(size));
-    let a = window_from_frame(size, [Anchor::Right.place(r[0] as f32, side), Vertical::Top.place(r[1] as f32, top)]);
-    let b = window_from_frame(size, [Anchor::Right.place(r[2] as f32, side), Vertical::Top.place(r[3] as f32, top)]);
+    let a = window_from_frame(size, [Anchor::Right.place(r[0] as f32, side) + shift[0], Vertical::Top.place(r[1] as f32, top) + shift[1]]);
+    let b = window_from_frame(size, [Anchor::Right.place(r[2] as f32, side) + shift[0], Vertical::Top.place(r[3] as f32, top) + shift[1]]);
     [a[0], a[1], b[0], b[1]]
 }
 
@@ -409,8 +415,10 @@ impl Map {
             return;
         }
         let size = cx.size;
-        let outer = window_rect(size, FRAME);
-        let inside = window_rect(size, inner());
+        // where the player put it (`hudlayout`), the HUD's last frame keeping it on the screen
+        let moved = crate::hudlayout::shift(crate::hudlayout::Piece::Minimap, crate::hudlayout::Beyond::of(size));
+        let outer = window_rect_moved(size, FRAME, moved);
+        let inside = window_rect_moved(size, inner(), moved);
         let across = (inner()[2] - inner()[0]) as f32;
         let k = (inside[2] - inside[0]) / across;
         if k <= 0.0 {
@@ -554,11 +562,13 @@ impl Map {
             // the border, a window's frame round it, placed as the HUD's right side is
             r.ui.anchor = Anchor::Right;
             r.ui.vertical = Vertical::Top;
+            r.ui.shift = moved;
             vui.blit_frame(&mut r, [FRAME[0], FRAME[1]], [FRAME[2] - FRAME[0], FRAME[3] - FRAME[1]], &vi::ui::frame_sets()[0], 3, 1.0, true);
             // north, up: the compass turns with the camera, the minimap does not
             let i = inner();
             let h = vui.font_height(&r);
             vui.draw_centered_string_ex(&mut r, &vi::ui::wide("N"), (i[0] + i[2]) / 2, i[1] + h / 2, [1.0, 1.0, 1.0, 0.85], 3, true);
+            r.ui.shift = [0.0; 2];
             // the quests' "!" and "?" over the other marks, where they were
             // placed in the window (cut to the pictures as the marks are)
             r.ui.anchor = Anchor::Middle;

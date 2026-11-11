@@ -432,6 +432,28 @@ fn rise(q: &mut Quad, anchor: Anchor, vertical: Vertical, top: f32) {
     q.clip = Some([x0, t, x1, b]);
 }
 
+/// `Ui::push`'s last move: the quad and its cut `by` frame pixels (a HUD
+/// piece the player moved). A quad cut to nothing but the frame is cut to
+/// the target instead, so a piece moved past the frame's side in a wider
+/// target is not cut there. Nothing for no move.
+fn shift(q: &mut Quad, by: [f32; 2]) {
+    if by == [0.0; 2] {
+        return;
+    }
+    for p in &mut q.pos {
+        p[0] += by[0];
+        p[1] += by[1];
+    }
+    q.clip = Some(match q.clip {
+        None => WHOLE,
+        Some(c) if c == WHOLE => WHOLE,
+        Some([x0, y0, x1, y1]) => {
+            let (dx, dy) = (by[0].round() as i32, by[1].round() as i32);
+            [x0 + dx, y0 + dy, x1 + dx, y1 + dy]
+        }
+    });
+}
+
 /// A quad with the frame that is the frame's whole width (a window's
 /// backdrop or band: on a TV it runs off both sides) run across the target's
 /// whole width, its texture carried on at its own scale (a blit's texels
@@ -601,6 +623,10 @@ pub struct Ui {
     pub anchor: Anchor,
     /// Where the HUD's pieces made now go up a taller target.
     pub vertical: Vertical,
+    /// How far the quads made now go from where `anchor` and `vertical` put
+    /// them, in frame pixels: a HUD piece the player moved (`eqoa`'s
+    /// `hudlayout`). Nothing by default; `begin` puts it back.
+    pub shift: [f32; 2],
     /// The target's frame pixels beyond each side of the frame, and above
     /// and below it (`begin`).
     side: f32,
@@ -712,7 +738,7 @@ impl Ui {
         let sharp = set("ui sharp text", "fs_sharp_tested", "fs_sharp");
         let smooth = set("ui smooth text", "fs_smooth_tested", "fs_smooth");
         let art_sharp = set("ui sharp", "fs_art_sharp_tested", "fs_art_sharp");
-        Ui { layout, sampler, filtering, pipelines, sharp, smooth, art_sharp, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed) }
+        Ui { layout, sampler, filtering, pipelines, sharp, smooth, art_sharp, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, shift: [0.0; 2], side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed) }
     }
 
     /// A new frame's quads, for a `size` target: none yet, and those made
@@ -727,6 +753,7 @@ impl Ui {
         self.top = top(size);
         self.anchor = Anchor::Middle;
         self.vertical = Vertical::Middle;
+        self.shift = [0.0; 2];
         self.viewport = None;
         self.split = None;
     }
@@ -740,6 +767,12 @@ impl Ui {
     /// frame this frame (`side`): none on a 4:3 target.
     pub fn side(&self) -> f32 {
         self.side
+    }
+
+    /// The whole frame pixels the target shows above and below the frame
+    /// this frame (`top`): none on a target 4:3 or wider.
+    pub fn top(&self) -> f32 {
+        self.top
     }
 
     /// The frame's quads are made: a piece moved to a side (or up or down a
@@ -928,7 +961,7 @@ impl Ui {
         if self.top > 0.0 && self.anchor.hud() {
             y = self.vertical.place(y, self.top);
         }
-        [x, y]
+        [x + self.shift[0], y + self.shift[1]]
     }
 
     /// A quad, placed in and cut to the current viewport, then moved across
@@ -936,6 +969,7 @@ impl Ui {
     pub fn push(&mut self, mut q: Quad) {
         place(&mut q, self.viewport, self.anchor, self.side);
         rise(&mut q, self.anchor, self.vertical, self.top);
+        shift(&mut q, self.shift);
         note(self.quads.len(), &q, self.anchor, self.side, &mut self.sided, &mut self.opaque);
         if let Some(dy) = rose(self.anchor, self.vertical, self.top) {
             self.risen.push((self.quads.len(), dy));
@@ -1018,7 +1052,7 @@ impl Ui {
 
 #[cfg(test)]
 mod tests {
-    use super::{Anchor, Quad, Vertical, note, pack, place, rise, rose, settle, settle_along, side, top, viewport_of};
+    use super::{Anchor, Quad, Vertical, WHOLE, note, pack, place, rise, rose, settle, settle_along, shift, side, top, viewport_of};
 
     /// A glyph `w` wide and 3 tall: every texel ink of colour `c` but its
     /// middle row's first, clear.
@@ -1451,5 +1485,28 @@ mod tests {
         assert_eq!(q[1].pos[0][1], 15.0 - t);
         let kept = (-1.0, 641.0, -1.0, 449.0, 0, Anchor::Frame, Vertical::Middle);
         assert_eq!(risen(t, &[compass, kept])[0].pos[0][1], 15.0 - t);
+    }
+
+    /// A moved HUD piece's quad goes `by` with its cut (a viewport's text
+    /// box stays cut to its own box); one cut to nothing but the frame is cut
+    /// to the target, so a piece moved past a wide target's frame shows
+    /// there. The control: no move leaves the quad as placed.
+    #[test]
+    fn a_moved_piece_takes_its_cut_with_it() {
+        let s = 106.0;
+        let mut l = quad(10.0, 69.0);
+        place(&mut l, Some([20, 30, 80, 50]), Anchor::Left, s);
+        let (pos, clip) = (l.pos, l.clip.unwrap());
+        shift(&mut l, [40.0, -12.0]);
+        assert_eq!([l.pos[0][0], l.pos[0][1]], [pos[0][0] + 40.0, pos[0][1] - 12.0]);
+        assert_eq!(l.clip, Some([clip[0] + 40, clip[1] - 12, clip[2] + 40, clip[3] - 12]));
+        let mut m = quad(300.0, 340.0);
+        place(&mut m, None, Anchor::Middle, 0.0);
+        assert_eq!(m.clip, None);
+        let kept = m;
+        shift(&mut m, [0.0, 0.0]);
+        assert_eq!((m.pos, m.clip), (kept.pos, None), "the control: no move");
+        shift(&mut m, [400.0, 0.0]);
+        assert_eq!((m.pos[0][0], m.clip), (700.0, Some(WHOLE)), "past the frame's side, cut to the target");
     }
 }

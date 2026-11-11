@@ -258,6 +258,27 @@ pub fn save_waypoints(w: &[(i32, [f32; 2])]) -> bool {
     }
 }
 
+// ---- the HUD's pieces where the player put them (`hudlayout`) ---------------------------
+
+/// The HUD's layout as this window keeps it (`hud.opt`, window n's
+/// `hud-<n>.opt`): `hudlayout::Layout::to_text`'s lines, empty when nothing
+/// was moved. The client's own, kept the moment a drag ends or Reset HUD is
+/// chosen, never sent anywhere.
+pub fn hud_layout() -> String {
+    store::read(&own_file("hud", place())).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+}
+
+/// Keeps this window's HUD layout (`hud_layout`): whether it was kept.
+pub fn save_hud_layout(text: &str) -> bool {
+    match store::write(&own_file("hud", place()), text.as_bytes()) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::say(&format!("the HUD's layout was not kept: {e}"));
+            false
+        }
+    }
+}
+
 // ---- the quest guide's record (`questguide`) --------------------------------------------
 
 /// The quest guide's file: what it keeps of each character (the quests it

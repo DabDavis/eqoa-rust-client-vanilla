@@ -10,6 +10,7 @@
 //! quest tracker (`tracker`) and DPS meter (`dpsmeter`) share a column under
 //! the minimap, the meter on its bottom and the tracker over what it leaves.
 
+use crate::hudlayout::Piece;
 use crate::ui::{Raster, UiRaster, Vui, icon_id, wide};
 use render::ui::{Anchor, Quad, Vertical};
 use vi::ui::TextScroll;
@@ -335,6 +336,8 @@ impl Hud {
         ui.ui.vertical = Vertical::Top;
         self.hits.clear();
         self.picks.clear();
+        // each piece where the player put it (`hudlayout`)
+        let m = crate::hudlayout::begin(ui.ui, Piece::Player);
         let mut p = [10, 15];
         self.note(ui, [10, 15, 200, 80], Pick::Me);
         vui.blit(ui, 6, p);
@@ -370,6 +373,8 @@ impl Hud {
         let part = part.clamp(0.0, 1.0);
         draw_gauge(vui, ui, 152, 151, [p[0], p[1] + 10], true, part);
         draw_gauge(vui, ui, 8, 136, p, true, v);
+        crate::hudlayout::end(ui.ui, m);
+        let m = crate::hudlayout::begin(ui.ui, Piece::Group);
         let y = if s.raid.is_empty() {
             self.raid_panel = None;
             self.raid_first = 0;
@@ -389,20 +394,34 @@ impl Hud {
             self.raid_panel = Some(([a[0], a[1], c[0], c[1]], fit.more));
             b[3] + 2
         };
+        crate::hudlayout::end(ui.ui, m);
+        let m = crate::hudlayout::begin(ui.ui, Piece::Pet);
         self.draw_pet(vui, ui, [20, y], s);
+        crate::hudlayout::end(ui.ui, m);
         ui.ui.vertical = Vertical::Bottom;
         let p = [-3, 331];
         if s.chat_open {
-            // the strip's left piece, left out with the strip (`ui::chat_strip`)
+            // the strip's left piece, left out with the strip (`ui::chat_strip`):
+            // the chat box's, and moved with it
+            let m = crate::hudlayout::begin(ui.ui, Piece::Chat);
             crate::ui::chat_strip(vui, ui, [p[0] + 2, p[1]], [203, 125]);
+            crate::hudlayout::end(ui.ui, m);
         }
+        let m = crate::hudlayout::begin(ui.ui, Piece::Target);
         self.draw_target(vui, ui, TARGET_AT, s);
+        crate::hudlayout::end(ui.ui, m);
         // the minimap's place, out at a wide window's right and up a tall
         // one's top with the quick menus (`map::mini::FRAME`)
         if s.minimap {
             ui.ui.anchor = Anchor::Right;
             ui.ui.vertical = Vertical::Top;
+            let m = crate::hudlayout::begin(ui.ui, Piece::Minimap);
             self.note(ui, crate::map::mini::FRAME, Pick::Minimap);
+            // drawn on the map's own layer: noted where it lies
+            let f = crate::map::mini::FRAME;
+            let (a, b) = (ui.ui.placed([f[0] as f32, f[1] as f32]), ui.ui.placed([f[2] as f32, f[3] as f32]));
+            crate::hudlayout::note(Piece::Minimap, [a[0], a[1], b[0], b[1]], ui.ui.shift);
+            crate::hudlayout::end(ui.ui, m);
         }
         // the DPS meter (`dpsmeter`) on the column's bottom, above the chat
         // box, at most half of it under the quest tracker's quests; the
@@ -413,17 +432,21 @@ impl Hud {
             (m, crate::dpsmeter::panel(m, room))
         });
         let bottom = meter.as_ref().map_or(col[3], |(_, p)| p.rect[1] - crate::dpsmeter::GAP);
+        let m = crate::hudlayout::begin(ui.ui, Piece::Quests);
         if let Some(r) = crate::tracker::draw(ui, &s.tracker, bottom) {
             self.note(ui, r, Pick::Quests);
         }
+        crate::hudlayout::end(ui.ui, m);
         self.meter_panel = None;
         if let Some((m, p)) = meter {
+            let mark = crate::hudlayout::begin(ui.ui, Piece::Meter);
             crate::dpsmeter::draw(ui, m, &p);
             self.note(ui, p.view, Pick::Meter(crate::dpsmeter::Hit::View));
             self.note(ui, p.reset, Pick::Meter(crate::dpsmeter::Hit::Reset));
             self.note(ui, p.rows, Pick::Meter(crate::dpsmeter::Hit::Rows));
             let (a, b) = (ui.ui.placed([p.rect[0] as f32, p.rect[1] as f32]), ui.ui.placed([p.rect[2] as f32, p.rect[3] as f32]));
             self.meter_panel = Some(([a[0], a[1], b[0], b[1]], p.shown.len(), p.room));
+            crate::hudlayout::end(ui.ui, mark);
         }
     }
 

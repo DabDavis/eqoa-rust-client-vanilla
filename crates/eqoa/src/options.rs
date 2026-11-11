@@ -83,6 +83,12 @@
 //!   default; or Sharp: the 2D layer's other textures scaled with every texel
 //!   as wide as every other, as Text's Sharp draws a font, at a cost,
 //!   `render::ui::HudFilter`);
+//! - HUD Layout (2026-11-11, the server owner's "lets add click to drag HUD
+//!   UI elements and also reset button"): Move HUD (Off; On: once the menu is
+//!   left, the HUD's pieces outlined and dragged with the mouse or a finger,
+//!   a bar at the top with Lock and Reset, `hudlayout`; not kept, as it is a
+//!   mode, and Triangle leaves it) and Reset HUD (Reset: every piece back
+//!   where the game puts it at once, kept, by ✕, left or right);
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
 //!   the client open, `multibox`; what it reads now is said beside Back),
@@ -884,6 +890,15 @@ impl WndOptions {
                     // (`Session::agree_item_links`), the chat box's links drawn
                     // or plain, the windows closed when off (`itemlink`)
                     73 => c.item_links = !c.item_links,
+                    // Move HUD: the HUD's pieces dragged once the menu is left
+                    // (`hudlayout`); not an option kept, so Triangle leaves it
+                    76 => crate::hudlayout::set_unlocked(!crate::hudlayout::unlocked()),
+                    // Reset HUD: every piece back at once, kept, either way
+                    // as ✕ does it (`select`)
+                    77 => {
+                        crate::hudlayout::reset();
+                        cues.push(8);
+                    }
                     // Reset DPS Meter: done either way, as ✕ does it (`select`)
                     72 => {
                         crate::dpsmeter::ask_reset();
@@ -956,7 +971,7 @@ impl WndOptions {
             _ => {}
         }
         // (Texture Folder and Reset DPS Meter make their own sound)
-        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == 55 || self.item == 72;
+        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == 55 || self.item == 72 || self.item == 77;
         let slides = matches!(self.item, 3 | 4) || slider_at(self.item).is_some();
         if !slides && !inert && ((0..=11).contains(&self.item) || extended(self.item)) {
             cues.push(11);
@@ -1003,6 +1018,17 @@ impl WndOptions {
         if self.page == 3 && self.cat.is_some() && self.item == 72 {
             crate::dpsmeter::ask_reset();
             cues.push(8);
+            return false;
+        }
+        // Reset HUD the same; Move HUD turns, as left and right turn it
+        if self.page == 3 && self.cat.is_some() && self.item == 77 {
+            crate::hudlayout::reset();
+            cues.push(8);
+            return false;
+        }
+        if self.page == 3 && self.cat.is_some() && self.item == 76 {
+            crate::hudlayout::set_unlocked(!crate::hudlayout::unlocked());
+            cues.push(11);
             return false;
         }
         if self.page != -1 {
@@ -1367,6 +1393,7 @@ impl WndOptions {
             },
             Note::Meter => self.meter_note.clone().filter(|_| matches!(self.item, 70..=72)),
             Note::Links => self.links_note.clone().filter(|_| self.item == 73),
+            Note::Hud => (self.item == 76 && crate::hudlayout::unlocked()).then(|| "Leave the menu and drag the pieces".to_string()),
             Note::None => None,
         }
     }
@@ -1427,7 +1454,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 59] = [
+const EXTENDED_ITEMS: [(i32, &str); 61] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1487,6 +1514,8 @@ const EXTENDED_ITEMS: [(i32, &str); 59] = [
     (71, "DPS Meter Shows"),
     (72, "Reset DPS Meter"),
     (73, "Item Links"),
+    (76, "Move HUD"),
+    (77, "Reset HUD"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1518,6 +1547,8 @@ enum Note {
     /// that this server has no item links, while Item Links is chosen
     /// (`WndOptions::links_note`, which play sets)
     Links,
+    /// how the HUD's pieces move while Move HUD is on and chosen (`hudlayout`)
+    Hud,
 }
 
 /// One of Extended's categories: its name, its rows (their items, in the
@@ -1538,8 +1569,9 @@ struct Category {
 /// (2026-11-09: the map and the quest helper, the client's own, back from
 /// before 2026-10-27); Number Colors after it (2026-11-09: the floating
 /// numbers' colours by what made them, `numcolor`); Combat last (2026-11-10:
-/// the DPS meter, `dpsmeter`).
-const ALL_CATEGORIES: [Category; 13] = [
+/// the DPS meter, `dpsmeter`); HUD Layout last (2026-11-11: Move HUD and
+/// Reset HUD, `hudlayout`; UI's page was full).
+const ALL_CATEGORIES: [Category; 14] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting },
@@ -1553,6 +1585,7 @@ const ALL_CATEGORIES: [Category; 13] = [
     Category { name: "Number Colors", items: &crate::numcolor::ITEMS, note: Note::None },
     Category { name: "Combat", items: &[70, 71, 72], note: Note::Meter },
     Category { name: "Chat", items: &[73], note: Note::Links },
+    Category { name: "HUD Layout", items: &[76, 77], note: Note::Hud },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -1560,7 +1593,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[10], a[11], a[12]]
+    [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[9], a[10], a[11], a[12], a[13]]
 };
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
@@ -1674,6 +1707,8 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         70 => on_off(c.dps_meter),
         71 => wide(c.dps_view.name()),
         72 => wide("Reset"),
+        76 => on_off(crate::hudlayout::unlocked()),
+        77 => wide("Reset"),
         73 => on_off(c.item_links),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
@@ -2551,7 +2586,36 @@ mod tests {
         assert_eq!((w.row, cues.last()), (0, Some(&9)), "Chat's one row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.cat_sel, cues.last()), (12, Some(&9)), "Chat, the last category");
+        // HUD Layout (`hudlayout`): Move HUD Off, then On and back by left,
+        // right and ✕, its note while on; Reset HUD putting every piece back
+        // by any of them, kept, with its own sound
+        assert_eq!((w.cat_sel, cues.last()), (13, Some(&11)), "HUD Layout, after Chat");
+        crate::hudlayout::testing_reset();
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!((w.cat, w.item), (Some(13), 76), "HUD Layout, Move HUD");
+        assert!(!crate::hudlayout::unlocked(), "off by default");
+        assert_eq!(value_text(&vui, 76), Some(wide(vui.words.get(552, vui.language))));
+        assert_eq!(w.page_note(13), None, "no note while off");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((crate::hudlayout::unlocked(), cues.last()), (true, Some(&11)), "on");
+        assert_eq!(w.page_note(13).as_deref(), Some("Leave the menu and drag the pieces"));
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert!(!crate::hudlayout::unlocked(), "✕ turns it too");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, 77)), (77, Some(wide("Reset"))), "Reset HUD");
+        for k in [key::RIGHT, key::LEFT, key::CROSS] {
+            testing::put("hud.opt", b"chat l 1 t 1\n");
+            crate::hudlayout::testing_reset();
+            assert!(crate::hudlayout::layout().get(crate::hudlayout::Piece::Chat).is_some(), "the control: moved");
+            press(&mut w, &mut o, k, &mut cues);
+            assert_eq!(crate::hudlayout::layout(), Default::default(), "every piece back ({k})");
+            assert_eq!((testing::kept("hud.opt"), cues.last()), (Some(Vec::new()), Some(&8)), "kept so, its sound ({k})");
+        }
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (1, Some(&9)), "HUD Layout's last row");
+        press(&mut w, &mut o, key::TRIANGLE, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.cat_sel, cues.last()), (13, Some(&9)), "HUD Layout, the last category");
         // Triangle: the menu, then closed with every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         assert_eq!((w.page, w.sel), (-1, 3), "the menu, on Extended");
@@ -3027,7 +3091,8 @@ mod tests {
         assert_eq!(CATEGORIES[by_name("Lighting")].note, Note::Lighting);
         assert_eq!(CATEGORIES[by_name("Combat")].note, Note::Meter);
         assert_eq!(CATEGORIES[by_name("Chat")].note, Note::Links);
-        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 7 } else { 8 }, "the notes only");
+        assert_eq!(CATEGORIES[by_name("HUD Layout")].note, Note::Hud);
+        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 8 } else { 9 }, "the notes only");
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Textures: nothing to say while both are off (a test keeps no
