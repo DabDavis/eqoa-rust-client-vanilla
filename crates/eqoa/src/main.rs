@@ -187,7 +187,6 @@ mod sound;
 mod spells;
 mod stall;
 mod stream;
-#[cfg(not(target_arch = "wasm32"))]
 mod gpulost;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpustart;
@@ -731,12 +730,12 @@ fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
     // place (a device lost again soon after a start: the log says so instead)
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if gpulost::lost() && !gpulost::settled() {
+        if gpulost::gave_up() && !gpulost::settled() {
             eprintln!("graphics: the device was lost ({}) within 30 s of the game's start: the game does not start again, as it would only lose it again", gpulost::why());
         }
         logfile::close();
         update::relaunch_if_requested();
-        if gpulost::lost() && gpulost::settled() {
+        if gpulost::gave_up() && gpulost::settled() {
             gpulost::relaunch();
         }
     }

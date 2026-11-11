@@ -886,6 +886,14 @@ pub fn generation() -> u64 {
     GENERATION.load(Ordering::Relaxed)
 }
 
+/// `generation` moved on with nothing changed in the textures: everything
+/// drawn is made again as a texture pack's change makes it (a new graphics
+/// device in place of a lost one, `gpulost`: nothing made on the old one is
+/// drawn on it).
+pub fn redraw_all() {
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
 /// The pack set, if any.
 pub fn pack() -> Option<Arc<Pack>> {
     STATE.lock().unwrap_or_else(|e| e.into_inner()).pack.clone()

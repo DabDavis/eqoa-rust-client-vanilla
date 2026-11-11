@@ -403,6 +403,18 @@ impl Map {
         }
     }
 
+    /// A new graphics device in place of a lost one (`gpulost`): the layers
+    /// and every picture made on the old one go, made again on the new one
+    /// at the next frame (the world's map out of its cache), the map left
+    /// open or shut as it is.
+    pub fn device_changed(&mut self) {
+        self.indoor.forget();
+        self.layers = None;
+        self.world = None;
+        self.home = None;
+        self.icon.tex = None;
+    }
+
     /// Extended's Map off (`Play::map_frame`, every frame it is): closed, and
     /// what it made let go of (the world's build, its pictures on the GPU,
     /// the minimap's), as a map never made; made again once it is on, out of

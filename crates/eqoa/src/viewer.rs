@@ -2051,6 +2051,12 @@ struct App {
     sky_batches: Vec<render::billboard::Batch>,
     /// Index in `Gfx::models` of the character.
     body_at: usize,
+    /// The character's model as last uploaded there, for a new graphics
+    /// device to take (`recover`).
+    body_model: Option<esf::Model>,
+    /// The instance the window's device was made on, for a new device in
+    /// place of a lost one (`recover`); none in a page (`web::remake`).
+    instance: Option<wgpu::Instance>,
     /// Where the sky's models start in `Gfx::models`.
     sky_at: Option<usize>,
     /// A world change under way: the world's file, the arrival, and its
@@ -2271,6 +2277,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         weather: None,
         sky_batches: Vec::new(),
         body_at: 0,
+        body_model: None,
+        instance: None,
         sky_at: None,
         entering: None,
         swapping: None,
@@ -2392,6 +2400,7 @@ impl App {
                 let (model, _) = w.pose();
                 self.body_at = g.models.len();
                 g.models.push(g.renderer.upload(&g.device, &g.queue, &body, &[model], &textures));
+                self.body_model = Some(body);
                 let at = Vec3::from(w.cam.walk.phys.position.to_array());
                 let gpu = stream::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
                 streamer.update(at, &mut w.scene, &self.lib, gpu, None);
@@ -3289,10 +3298,8 @@ impl App {
         // in front or not as it opens: a window opened behind another (the
         // system can refuse a program the front) has no `Focused` to say so
         self.pads.focused = window.has_focus();
-        // a device lost closes the window for a start again (`gpulost`; a
-        // page's is `web::start`'s)
-        #[cfg(not(target_arch = "wasm32"))]
-        crate::gpulost::watch(&device);
+        // a device lost is made again (`gpulost`, `recover`)
+        crate::gpulost::watch(&device, false);
         let mut renderer = Renderer::new(&device, &queue, config.format);
         renderer.set_ps2_sums(ps2_sums);
         renderer.set_ps2_sequential(fog_sequential());
@@ -3316,6 +3323,156 @@ impl App {
             return;
         }
         self.load();
+    }
+
+    /// The graphics device lost (`gpulost`): a new one made in its place and
+    /// everything drawn made again on it (`reattach`), the game going on;
+    /// natively at once, in a page once the browser gives one (`web::remake`,
+    /// a frame or more later, the frames meanwhile drawing nothing). Where
+    /// none can be had, or the new one is lost again within
+    /// `gpulost::REPEAT`, or it refuses what was made on it: natively the
+    /// window closes for the game to start again (`gpulost::give_up`, logged
+    /// out first as the update's restart is: a login still held would refuse
+    /// the next), a page says so and keeps WebGL2 for its next load
+    /// (`web::give_up`). Whether the frame goes on.
+    fn recover(&mut self, el: &ActiveEventLoop) -> bool {
+        if let Some(r) = crate::gpulost::refused() {
+            self.give_up_gfx(el, &format!("the new graphics device refused what was made on it ({r})"));
+            return false;
+        }
+        if !crate::gpulost::lost() || self.gfx.is_none() {
+            return true;
+        }
+        if crate::gpulost::again_soon() {
+            let why = format!("the graphics device was lost again ({}) within {} s of the last time", crate::gpulost::why(), crate::gpulost::REPEAT.as_secs());
+            self.give_up_gfx(el, &why);
+            return false;
+        }
+        #[cfg(target_arch = "wasm32")]
+        match crate::web::remake() {
+            // the browser's answer to come: the game goes on, drawing nothing
+            None => true,
+            Some(Ok(p)) => {
+                self.reattach(Some(p.surface), p.config, p.device, p.queue, p.ps2_sums, Vec::new());
+                true
+            }
+            Some(Err(e)) => {
+                self.give_up_gfx(el, &e);
+                false
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        match self.remake() {
+            Ok((surface, config, device, queue, ps2_sums, modes)) => {
+                self.reattach(surface, config, device, queue, ps2_sums, modes);
+                true
+            }
+            Err(e) => {
+                self.give_up_gfx(el, &format!("no new graphics device ({e})"));
+                false
+            }
+        }
+    }
+
+    /// `recover` could not: natively the window closes for the game to start
+    /// again (logged out first), a page stops with its notice (`web::give_up`).
+    fn give_up_gfx(&mut self, el: &ActiveEventLoop, why: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::gpulost::give_up(why);
+        #[cfg(target_arch = "wasm32")]
+        crate::web::give_up(why);
+        if let Some(p) = self.play.as_mut() {
+            p.log_out();
+        }
+        el.exit();
+    }
+
+    /// Natively, a new device on the window's surface (or offscreen, under
+    /// `EQOA_OFFSCREEN`) of the instance it was made on, as `resumed` made
+    /// the first.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::type_complexity)]
+    fn remake(&mut self) -> Result<(Option<wgpu::Surface<'static>>, wgpu::SurfaceConfiguration, wgpu::Device, wgpu::Queue, bool, Vec<wgpu::PresentMode>), String> {
+        let g = self.gfx.as_ref().ok_or("no window")?;
+        let instance = self.instance.clone().ok_or("no instance")?;
+        if g.surface.is_none() && g.offscreen.is_some() {
+            let adapter = pollster::block_on(instance.request_adapter(&Default::default())).map_err(|e| format!("adapter: {e}"))?;
+            let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).map_err(|e| format!("device: {e}"))?;
+            let info = adapter.get_info();
+            crate::say(&format!("graphics: a new device on {} ({:?}), offscreen", info.name, info.backend));
+            return Ok((None, g.config.clone(), device, queue, render::fog16::supported(&adapter), Vec::new()));
+        }
+        let surface = instance.create_surface(g.window.clone()).map_err(|e| format!("surface: {e}"))?;
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: Some(&surface), ..Default::default() })).map_err(|e| format!("adapter: {e}"))?;
+        let info = adapter.get_info();
+        crate::bugnote::set_graphics(&info.name, &format!("{:?}", info.backend));
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).map_err(|e| format!("device: {e}"))?;
+        let size = g.window.inner_size();
+        let mut config = surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)).ok_or("the surface cannot be configured")?;
+        config.format = config.format.remove_srgb_suffix();
+        let offered = surface.get_capabilities(&adapter).present_modes;
+        config.present_mode = present_mode(&offered, crate::settings::vsync());
+        crate::say(&format!("graphics: a new device on {} ({:?}, driver {} {})", info.name, info.backend, info.driver, info.driver_info));
+        Ok((Some(surface), config, device, queue, render::fog16::supported(&adapter), offered))
+    }
+
+    /// The window on a new device in place of the lost one (`recover`): the
+    /// old one's every object let go, a new renderer as `attach` makes it,
+    /// and what the client keeps on the CPU made again on it: the character
+    /// and the sky (`Gfx::models`), the HUD's layer (`Play::attach_ui`), the
+    /// map's pictures (`Map::device_changed`); the rest as a texture pack's
+    /// change makes it again (`texpack::redraw_all`, `retexture`): the
+    /// creatures as they are next applied, the spell effects, the rings, the
+    /// gears, the world's zones in place, the flora and the effect volumes,
+    /// before the world the pregame's layer and stages. The session, the
+    /// world, the walk and the windows are not touched.
+    fn reattach(&mut self, surface: Option<wgpu::Surface<'static>>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue, ps2_sums: bool, present_modes: Vec<wgpu::PresentMode>) {
+        let Some(old) = self.gfx.take() else { return };
+        let Gfx { window, title, whole, config: old_config, .. } = old;
+        crate::gpulost::watch(&device, true);
+        crate::texpack::redraw_all();
+        let mut config = config;
+        // the size the window has now (a page's canvas keeps its own)
+        if surface.is_some() && cfg!(not(target_arch = "wasm32")) {
+            config.width = old_config.width;
+            config.height = old_config.height;
+        }
+        let mut renderer = Renderer::new(&device, &queue, config.format);
+        renderer.set_ps2_sums(ps2_sums);
+        renderer.set_ps2_sequential(fog_sequential());
+        if let Some(f) = arial(&self.lib) {
+            renderer.set_font(&device, &queue, &f);
+        }
+        if let Some(p) = self.play.as_mut() {
+            p.map.device_changed();
+            p.attach_ui(&mut renderer, &device, &queue, config.format, &self.lib);
+        }
+        let depth = render::depth_view(&device, config.width, config.height);
+        let offscreen = surface.is_none().then(|| offscreen_target(&device, &config));
+        let mut g = Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title, present_modes, resized: true, whole };
+        // the character and the sky in their places (`load`'s order)
+        if self.walker.is_some() {
+            self.body_at = usize::MAX;
+            // placed by the frame, as every frame places it
+            if let Some(body) = self.body_model.as_ref() {
+                let textures = render::library_textures(&self.lib);
+                self.body_at = g.models.len();
+                g.models.push(g.renderer.upload(&g.device, &g.queue, body, &[render::IDENTITY], &textures));
+            }
+            if self.sky_at.is_some() {
+                self.sky_at = crate::sky::upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &mut g.models);
+            }
+        }
+        if let Some(s) = g.surface.as_ref() {
+            s.configure(&g.device, &g.surface_config());
+        }
+        g.window.request_redraw();
+        self.gfx = Some(g);
+        self.textures_drawn = crate::texpack::generation();
+        self.retexture();
+        crate::gpulost::recovered();
+        #[cfg(target_arch = "wasm32")]
+        crate::web::recovered();
     }
 
     /// The pad before the world: every source as libpad's one port, its keys
@@ -3415,7 +3572,7 @@ impl App {
             crate::update::offer_draw(vui, &mut r, now);
         }
         g.set_title(title(None));
-        let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&now)) || page_hidden();
+        let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&now)) || page_hidden() || crate::gpulost::lost();
         let frame = match g.acquire(covered) {
             Ok(f) => f,
             Err(_) => {
@@ -4628,6 +4785,7 @@ impl ApplicationHandler for App {
             crate::bugnote::set_graphics(&info.name, &format!("{:?}", info.backend));
             let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
             let ps2_sums = render::fog16::supported(&adapter);
+            self.instance = Some(instance);
             let config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: render::TARGET_FORMAT,
@@ -4655,6 +4813,7 @@ impl ApplicationHandler for App {
         #[cfg(not(target_arch = "wasm32"))]
         crate::gpustart::step(&format!("making the instance ({:?})", desc.backends));
         let instance = wgpu::Instance::new(desc);
+        self.instance = Some(instance.clone());
         #[cfg(not(target_arch = "wasm32"))]
         crate::gpustart::step("making the window's surface");
         let surface = instance.create_surface(window.clone()).expect("surface");
@@ -4768,14 +4927,6 @@ impl ApplicationHandler for App {
     /// Each window event, its time the client's own when it draws no frame
     /// (`stall`).
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        // a page whose WebGL2 context the browser took away draws nothing
-        // more, and its frames' uploads would be held until the heap ran out
-        // (`web::graphics_lost`, said on the page): the client stops here
-        #[cfg(target_arch = "wasm32")]
-        if crate::web::graphics_lost() {
-            el.exit();
-            return;
-        }
         let what = crate::stall::event_name(&event);
         self.stall.enter(Instant::now());
         self.handle_window_event(el, id, event);
@@ -5159,22 +5310,14 @@ impl App {
         if let Some(g) = &self.gfx {
             self.winplace.event(&g.window, &event);
         }
-        // the graphics device lost: nothing drawn or uploaded on it again,
-        // the window closes and the game starts again (`gpulost`; its test
-        // loses it here, between two events), logged out first as the
-        // update's restart is (a login still held would refuse the next)
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Some(g) = &self.gfx {
-                crate::gpulost::test(&g.device, self.clock.elapsed().as_millis() as i64);
-            }
-            if crate::gpulost::lost() {
-                if let Some(p) = self.play.as_mut() {
-                    p.log_out();
-                }
-                el.exit();
-                return;
-            }
+        // the graphics device lost: nothing drawn or uploaded on it again
+        // and a new one made in its place, the game going on (`recover`;
+        // the test loses it here, between two events)
+        if let Some(g) = &self.gfx {
+            crate::gpulost::test(&g.device, self.clock.elapsed().as_millis() as i64);
+        }
+        if !self.recover(el) {
+            return;
         }
         // a key: the keyboard's dispatch (`key_input`), which takes the
         // client's own keys too (an Android activity's, `android`)
@@ -5621,6 +5764,7 @@ impl App {
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
                 let body_at = self.body_at;
+                let body_model = &mut self.body_model;
                 let clock = self.clock;
                 let streamer = &mut self.streamer;
                 let sound = &mut self.sound;
@@ -5681,6 +5825,7 @@ impl App {
                                     let (mat, _) = w.pose();
                                     if body_at < g.models.len() {
                                         g.models[body_at] = g.renderer.upload(&g.device, &g.queue, &m, &[mat], &textures);
+                                        *body_model = Some(m);
                                     }
                                 }
                             });
@@ -5937,7 +6082,7 @@ impl App {
                     crate::say(&line);
                 }
                 let ms = self.clock.elapsed().as_millis() as i64;
-                let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&ms)) || page_hidden();
+                let covered = self.covered_script.iter().any(|&(a, b)| (a..b).contains(&ms)) || page_hidden() || crate::gpulost::lost();
                 let frame = match g.acquire(covered) {
                     Ok(f) => f,
                     Err(covered) => {
