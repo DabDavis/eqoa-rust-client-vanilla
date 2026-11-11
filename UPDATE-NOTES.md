@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · A moved quick bar stays put with a long spell name
+- If you moved your quick bar with **Move HUD**, selecting a spell with a long name (one that scrolls in the bar's
+  title, like "Quil'Eyne's Unspeakable Hunger") made the whole bar slide across the screen as the name scrolled. The
+  bar now stays where you put it, whatever the name's length; the name scrolls inside its box as before.
+
 ## 2026-11-11 · Auto-cast keeps your pet buffed
 - Auto-cast now works with **pet buffs**. A pet buff's effect shows on your pet, not on your own effects, so auto-cast
   used to think it had not landed, cast it again and turned the slot off after three casts. Now it looks for the buff
