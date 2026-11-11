@@ -7,6 +7,21 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Dismiss your mercenary from the menu, mercenaries' names, the group search's register
+- On a server with mercenaries (the Heirloom Test Server), Community > Group now has Dismiss Mercenary while your
+  mercenary is out: it sends it away as /merc dismiss does.
+- A mercenary's name over its head (and its dot on the minimap) is now the pets' blue with a slight red tint, so you
+  can tell a mercenary from a pet at a glance.
+- The group search (Community > Group > Search) shows at its foot whether you are registered as looking for a group;
+  select it to register or unregister. Registered players now show up in every player's search, not only in a group
+  leader's, so anyone can find you and invite you or send you a tell.
+- In the search's list, Options > Tell now starts the tell in your chat line ("/tell <name> "), ready for you to type.
+- A new setting at the search's bottom right, "Allow anyone in my group to invite" (Yes or No, kept for each
+  character): when you lead a regular group and set it to No, only you can invite into it; members of your group
+  see it at once. Yes (the default) lets every member invite, as before. Raid groups are not affected.
+- All of this needs the server's own update too; on any other server the menu, the names and the window are as they
+  were.
+
 ## 2026-11-10 · No more long wait after Enter Game World
 - In the browser, your character no longer sits at the spinning figure for 10 to 30 seconds after Enter Game World
   on a server with worlds of its own (the Homelands). The page used to hold every character until it had built or

@@ -172,9 +172,11 @@ impl Play {
                 self.session.send(&w.data);
             }
             // OpenGroupSearch (0x012C7970 -> 0x0135BE08): refused when in a
-            // group and not its leader (1848) or leading a full one (1847)
+            // group and not its leader (1848) or leading a full one (1847);
+            // a member opens it as its leader would where the server lets
+            // its members invite (petition 1476: `Play::members_invite`)
             0x0209_0000 if live => {
-                if self.lfg_not_leader() {
+                if !self.members_invite() && self.lfg_not_leader() {
                     return;
                 }
                 if self.group.in_group && self.group.count() >= 4 {
@@ -236,7 +238,7 @@ impl Play {
         }
         let range = self.lfg_range();
         let bounds = self.start.as_ref().map_or([None; 6], |s| s.bounds);
-        let v = View { now, range, loc, bounds: &bounds };
+        let v = View { now, range, loc, bounds: &bounds, reg: self.session.group_reg };
         let lp = &mut self.live;
         if let Some(leader) = lp.open.take() {
             lp.wnd.open(leader, &mut lp.part, vui, r, &v);
@@ -270,6 +272,20 @@ impl Play {
                 }
                 Out::Invite(id, name) => self.invite_to_group(id, &name),
                 Out::Chat(line) => self.chat_line(&line),
+                // Tell (petition 1476): the window closed, the chat line begun
+                // with the tell, as Sandstorm's player search's (`search_key`)
+                Out::Tell(name) => {
+                    self.live.part.found.clear();
+                    self.mode = 0;
+                    self.chat_key(&format!("/tell {name} "), false);
+                }
+                Out::Register(on) => self.lfg_action(if on { 0x020A_0000 } else { 0x020B_0000 }, 0),
+                Out::InvitesOpen(on) => {
+                    eprintln!("live: Allow anyone in my group to invite: {on} (0x7E5F)");
+                    let mut w = net::stream::Writer::op(net::session::OP_GROUP_INVITES_SETTING);
+                    w.u8(on as u8);
+                    self.session.send(&w.data);
+                }
             }
         }
     }
@@ -511,6 +527,39 @@ pub(super) mod tests {
         crate::live::set_features(Features(None));
         p.do_action(0x0209_0000, 0);
         assert_eq!((p.mode, p.live.open), (0, None), "no word, no search");
+    }
+
+    /// Petition 1476: where the server lets any member invite (0x7E17) and
+    /// its group's leader allows it (0x7E5E's bit 2), a member opens Search as
+    /// a leader would (state 0) and invites; with the leader's setting off, the
+    /// live client's refusal (1848) and CLIENT's (640, nothing sent). The
+    /// window's Tell closes it and begins the tell in the chat line; its
+    /// setting's ✕ sends 0x7E5F. The control: no word from the server, the
+    /// member's invites as before.
+    #[test]
+    fn a_member_searches_and_invites_while_its_leader_allows() {
+        use net::session::GroupReg;
+        let mut p = play();
+        crate::live::set_features(Features(Some(0x1B)));
+        p.words = Some(crate::groupsearch::tests::numbered());
+        grouped(&mut p, false, 2);
+        p.session.member_invites = true;
+        p.session.group_reg = Some(GroupReg { registered: false, invites_open: true, members_invite: false });
+        p.do_action(0x0209_0000, 0);
+        assert_eq!((p.mode, last_line(&p), p.live.open), (0, "w1848".into(), None), "the leader's setting off");
+        p.invite_to_group(0x777, "Zed");
+        assert!(sent(&mut p).is_empty(), "the leader's setting off: no invite sent");
+        p.session.group_reg = Some(GroupReg { registered: false, invites_open: true, members_invite: true });
+        p.do_action(0x0209_0000, 0);
+        assert_eq!((p.mode, p.live.open), (42, Some(true)), "a member's search for players");
+        p.mode = 0;
+        p.live.open = None;
+        p.invite_to_group(0x777, "Zed");
+        assert_eq!(sent(&mut p).first().map(|d| d[..2].to_vec()), Some(vec![0x25, 0x06]), "the invite went");
+        // the control: a server that never told the standing (older, or another)
+        p.session.group_reg = None;
+        p.invite_to_group(0x778, "Amy");
+        assert_eq!(sent(&mut p).first().map(|d| d[..2].to_vec()), Some(vec![0x25, 0x06]), "the control: as before 1476");
     }
 
     /// Register and Unregister (sub 2, 3; refused in a group one does not

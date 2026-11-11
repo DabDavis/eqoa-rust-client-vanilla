@@ -34,6 +34,9 @@ mod mapsuggest;
 mod groupmark;
 #[path = "linkplay.rs"]
 mod linkplay;
+#[path = "mercplay.rs"]
+mod mercplay;
+pub use mercplay::{ENTRY as MERC_ENTRY, MSG_DISMISS_MERC};
 
 use crate::walker::{Placing, Spawn, Walker};
 use esf::Library;
@@ -151,6 +154,14 @@ struct ActorAt {
 
 /// `VICSprite::NameColors`.
 const NAME_COLORS: [[f32; 4]; 3] = [[212.0 / 255.0, 192.0 / 255.0, 111.0 / 255.0, 1.0], [100.0 / 255.0, 175.0 / 255.0, 220.0 / 255.0, 1.0], [90.0 / 255.0, 1.0, 80.0 / 255.0, 1.0]];
+
+/// A mercenary's name (the GM Jibrish's petition 1488, 2026-11-11: "Change
+/// mercenary name colors to match that of pets, with a slight reddish tint"):
+/// `NAME_COLORS[1]`, the pet's (100, 175, 220), with red brought up and the
+/// rest down a little. A server tells which creatures are mercs
+/// (`net::session::Mercs`); on any other, and for a PS2, a merc's name is the
+/// pet's.
+const MERC_COLOR: [f32; 4] = [155.0 / 255.0, 165.0 / 255.0, 210.0 / 255.0, 1.0];
 
 /// A name plate to draw: where, in what colour, what.
 pub struct Plate {
@@ -389,6 +400,8 @@ pub struct Play {
     pub group: crate::group::Group,
     /// The DPS meter's fights (`dpsmeter`), from a server that keeps one.
     pub meter: crate::dpsmeter::Meter,
+    /// A server's mercenaries' entry in the start menu (`mercplay`).
+    merc: mercplay::MercPlay,
     /// `VIWndMBox` (mode 14).
     mbox: crate::dialog::MBox,
     /// The player's death camera (`m_pC1B0`) and the screen's fade; the
@@ -2782,7 +2795,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -2813,6 +2826,7 @@ impl Play {
         // and the combat record's, if its offer did
         self.record_menu_again();
         self.raid_menu_again();
+        self.merc_menu_again();
     }
 
     /// CLIENT's and SUPPORT's data, taken up as each image comes
@@ -3505,6 +3519,7 @@ impl Play {
         self.record_menu(); // Character > Combat Record once the server offers it
         self.agree_raid();
         self.raid_menu(); // Community > Group > Raid once the server offers it
+        self.merc_menu(); // Community > Group > Dismiss Mercenary while one's merc is out
         self.agree_item_links();
         self.drop_dead_target_info();
         self.drop_stale_mob_info(now);
@@ -4108,6 +4123,17 @@ impl Play {
         r.set_overlay(device, queue, view_proj, &tris, &render::library_textures(lib));
     }
 
+    /// A creature's name's colour: `NameColors[ApplyLook's pick]` (an NPC's
+    /// 0, a player's or a pet's 1, one flagged for PvP 2), a merc's
+    /// (`MERC_COLOR`) in 1's place where the server named it one.
+    fn name_color(&self, c: &net::entity::Creature) -> [f32; 4] {
+        let k = if c.p256 < 2 { 0 } else if c.p299 & 1 != 0 { 2 } else { 1 };
+        if k == 1 && self.session.mercs.as_ref().is_some_and(|m| m.is(&c.name)) {
+            return MERC_COLOR;
+        }
+        NAME_COLORS[k]
+    }
+
     /// `SetName`'s plates for every creature drawn: its name, in
     /// `NameColors[ApplyLook's pick]`, at its name node.
     pub fn plates(&self) -> Vec<Plate> {
@@ -4123,8 +4149,7 @@ impl Play {
             if c.name.is_empty() || !p.shown {
                 continue;
             }
-            let color = if c.p256 < 2 { 0 } else if c.p299 & 1 != 0 { 2 } else { 1 };
-            out.push(Plate { at, color: NAME_COLORS[color], name: c.name.clone() });
+            out.push(Plate { at, color: self.name_color(c), name: c.name.clone() });
         }
         out
     }
@@ -6955,9 +6980,17 @@ impl Play {
 
     /// Whether this player may invite into its group: CLIENT's rule, not in
     /// one or its leader (`InviteEntity`, `InviteToGroup`: else word 640), or
-    /// any member on a server that offered it (`Session::member_invites`).
+    /// any member where the server lets one (`members_invite`).
     fn may_invite(&self) -> bool {
-        !self.group.in_group || self.group.leader || self.session.member_invites
+        !self.group.in_group || self.group.leader || self.members_invite()
+    }
+
+    /// Whether a member of this player's group invites into it: on a server
+    /// that offered it (`Session::member_invites`), unless it told that the
+    /// group's leader lets only the leader invite (`Session::group_reg`, the GM
+    /// Jibrish's petition 1476: "Allow anyone in my group to invite").
+    fn members_invite(&self) -> bool {
+        self.session.member_invites && self.session.group_reg.is_none_or(|g| g.members_invite)
     }
 
     /// `InviteToGroup(rec)`: as `InviteEntity`, by the record's id and name.
@@ -7240,6 +7273,10 @@ impl Play {
         }
         // Community > Group > Raid (`raidplay`)
         if self.raid_action(id) {
+            return;
+        }
+        // Community > Group > Dismiss Mercenary (`mercplay`)
+        if self.merc_action(id) {
             return;
         }
         let target = self.target;
@@ -8690,8 +8727,7 @@ impl Play {
             .filter(|e| Some(e.id) != me && !group.contains(&e.id) && e.p18 & 2 == 0 && self.in_scene(e))
             .filter_map(|e| {
                 let c = e.creature.as_ref()?;
-                let color = if c.p256 < 2 { 0 } else if c.p299 & 1 != 0 { 2 } else { 1 };
-                Some(([e.actor_pos[0], e.actor_pos[2]], NAME_COLORS[color]))
+                Some(([e.actor_pos[0], e.actor_pos[2]], self.name_color(c)))
             })
             .collect();
         let target = self.actor_pos(self.target).filter(|_| Some(self.target) != me).map(|p| [p[0], p[2]]);

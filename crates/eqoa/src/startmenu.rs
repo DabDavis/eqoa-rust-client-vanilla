@@ -956,10 +956,10 @@ const RAID_MSGS: u32 = 0x7E48_0000;
 const GROUP_LEAVE: i32 = 87;
 
 /// Whether `e` is an entry the client puts in one of the game's menus itself
-/// (Community > Group > Raid, `set_raid`): a rebuild of that menu
+/// (Community > Group > Raid, `set_raid`; Dismiss Mercenary, `set_merc`): a rebuild of that menu
 /// (`liveplay::group_menu`) keeps it where it is.
 pub fn own_entry(e: &crate::client_image::MenuEntry) -> bool {
-    e.msg == 0 && e.id == RAID_ENTRY
+    (e.msg == 0 && e.id == RAID_ENTRY) || e.msg == crate::play::MSG_DISMISS_MERC
 }
 
 impl StartData {
@@ -1076,6 +1076,32 @@ impl StartData {
             if !entries.iter().any(|e| e.sub == Some(raid)) {
                 let at = entries.iter().position(|e| e.word == GROUP_LEAVE).map_or(entries.len().min(6), |k| k + 1);
                 entries.insert(at, MenuEntry { sub: Some(raid), msg: 0, id: RAID_ENTRY, ..Default::default() });
+            }
+        }
+    }
+
+    /// Community > Group > Dismiss Mercenary (the client's own; the GM Jibrish's
+    /// petition 1475, 2026-11-11: "Put the option under the group options in main
+    /// menu"), put after Leave (and the Raid entry, when it is there) in every
+    /// Group menu while the server says the player's merc is out (`mercplay`), or
+    /// taken out. Its words are set at run time (`Menus::labels`).
+    pub fn set_merc(&mut self, on: bool) {
+        use crate::client_image::{Label, MenuEntry};
+        let msg = crate::play::MSG_DISMISS_MERC;
+        self.menus.labels.insert((msg, 0), Label { text: wide(crate::play::MERC_ENTRY), ..Default::default() });
+        let raid = self.raid_menu.map(|(r, _)| r);
+        for m in self.menus.list.iter_mut().filter(|m| m.x04 == 107) {
+            let at = m.entries.iter().position(|e| e.msg == msg);
+            match (on, at) {
+                (true, None) => {
+                    let after = m.entries.iter().position(|e| raid.is_some() && e.sub == raid).or_else(|| m.entries.iter().position(|e| e.word == GROUP_LEAVE));
+                    let k = after.map_or(m.entries.len().min(6), |k| k + 1);
+                    m.entries.insert(k, MenuEntry { msg, id: 0, ..Default::default() });
+                }
+                (false, Some(k)) => {
+                    m.entries.remove(k);
+                }
+                _ => {}
             }
         }
     }

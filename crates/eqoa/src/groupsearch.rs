@@ -16,9 +16,15 @@
 //! them); ✕ there opens Options: Invite to group, or Tell (a line typed for
 //! them). □ shows the help, △ goes back.
 //!
-//! The one change from the live client: a search no server answers is given
-//! up after `SEARCH_GIVE_UP_MS` (the live client stays "Searching" and refuses
-//! every search after it until it connects again).
+//! The changes from the live client: a search no server answers is given up
+//! after `SEARCH_GIVE_UP_MS` (the live client stays "Searching" and refuses
+//! every search after it until it connects again); and on a server that tells
+//! the standing (go-eqoa-server's 0x7E5D/0x7E5E, `net::session::GroupReg`; the
+//! GM Jibrish's petition 1476, 2026-11-11) two more rows at the foot of the
+//! form, Registered (✕ registers or unregisters, the Group menu's Register and
+//! Unregister) and, at the bottom right, "Allow anyone in my group to invite"
+//! (✕ turns it, 0x7E5F), and Options' Tell puts "/tell <name> " in the chat
+//! line ("It just pretypes the /tell"), as Sandstorm's player search does.
 
 use crate::editbox::{EditBox, EditUp};
 use crate::listbox::ListBox;
@@ -232,7 +238,20 @@ pub enum Out {
     Invite(u32, String),
     /// `ChatLine` (a tell typed in the window)
     Chat(String),
+    /// Tell on a server that tells the standing: the window closed and the
+    /// chat line opened with "/tell <name> " in it
+    Tell(String),
+    /// Registered's ✕: register (true) or unregister
+    Register(bool),
+    /// "Allow anyone in my group to invite"'s ✕: the new setting
+    InvitesOpen(bool),
 }
+
+/// The foot's two rows: the form's rows 5 and 6, on the window's row 12.
+const FOOT_ROW: i32 = 12;
+/// Their words (the game has none).
+const REGISTERED: &str = "Registered";
+const INVITES_OPEN: &str = "Allow anyone in my group to invite";
 
 /// What the window reads besides its own state.
 pub struct View<'a> {
@@ -242,6 +261,8 @@ pub struct View<'a> {
     /// the scene's world grid and every world's bounds (the Location line)
     pub loc: &'a crate::startmenu::Location,
     pub bounds: &'a [Option<[i32; 4]>; 6],
+    /// the standing a server told (none: the live client's window as it was)
+    pub reg: Option<net::session::GroupReg>,
 }
 
 /// `VIWndGroupSearch` (2,784 bytes).
@@ -264,8 +285,12 @@ pub struct GroupSearch {
     /// players came while the list could be made again (0x0840's refresh,
     /// done with the words at the next frame)
     pub stale: bool,
-    /// `+0x6A8`: the form's row 0..4 (races, classes, the two levels, Search)
+    /// `+0x6A8`: the form's row 0..4 (races, classes, the two levels, Search),
+    /// and 5 and 6 (Registered, "Allow anyone in my group to invite") while
+    /// the server tells the standing
     pub row: i32,
+    /// the standing as last read (`View::reg`): the foot's rows are there
+    reg: Option<net::session::GroupReg>,
     /// `+0x6AC`, `+0x6B0`: a dialog's or a picker's cursor, a picker's scroll
     pub cursor: i32,
     scroll: i32,
@@ -309,6 +334,7 @@ impl Default for GroupSearch {
             editing: false,
             stale: false,
             row: 0,
+            reg: None,
             cursor: 0,
             scroll: 0,
             pane: 0,
@@ -414,6 +440,7 @@ impl GroupSearch {
         if self.stale {
             self.refresh(lfg, vui);
         }
+        self.take_reg(v);
         if self.editing {
             if !down {
                 self.edit.key_up(key);
@@ -452,6 +479,19 @@ impl GroupSearch {
         }
     }
 
+    /// The standing the view holds, the form's row kept within its rows.
+    fn take_reg(&mut self, v: &View) {
+        self.reg = v.reg;
+        if self.row > self.last_row() {
+            self.row = 0;
+        }
+    }
+
+    /// The form's last row: Search's 4, or 6 with the foot's.
+    fn last_row(&self) -> i32 {
+        if self.reg.is_some() { 6 } else { 4 }
+    }
+
     fn reset_ticks(&mut self, now: i64) {
         self.main.reset_tick_pulse(now);
         self.dialog.reset_tick_pulse(now);
@@ -477,7 +517,7 @@ impl GroupSearch {
                     self.list.set_cur_sel(s + 1);
                     cues.push(11);
                 } else {
-                    self.row = if self.row > 3 { 0 } else { self.row + 1 };
+                    self.row = if self.row >= self.last_row() { 0 } else { self.row + 1 };
                     cues.push(11);
                 }
             }
@@ -511,7 +551,7 @@ impl GroupSearch {
                     self.list.set_cur_sel(s - 1);
                     cues.push(11);
                 } else {
-                    self.row = if self.row < 1 { 4 } else { self.row - 1 };
+                    self.row = if self.row < 1 { self.last_row() } else { self.row - 1 };
                     cues.push(11);
                 }
             }
@@ -606,6 +646,16 @@ impl GroupSearch {
                             self.dialog.open(false);
                         }
                         2 | 3 => self.edit_open(v.now),
+                        5 => {
+                            if let Some(g) = self.reg {
+                                out.push(Out::Register(!g.registered));
+                            }
+                        }
+                        6 => {
+                            if let Some(g) = self.reg {
+                                out.push(Out::InvitesOpen(!g.invites_open));
+                            }
+                        }
                         _ => {
                             // 0x01365CE0: nothing while a search is out
                             if !lfg.busy {
@@ -623,6 +673,11 @@ impl GroupSearch {
                     // 0x01365D80: the selected player
                     if let Some(p) = usize::try_from(self.list.sel).ok().and_then(|s| lfg.found.get(s)) {
                         out.push(Out::Invite(p.id, p.name.clone()));
+                    }
+                } else if self.reg.is_some() {
+                    // the chat line with the tell begun (petition 1476)
+                    if let Some(p) = usize::try_from(self.list.sel).ok().and_then(|s| lfg.found.get(s)) {
+                        out.push(Out::Tell(p.name.clone()));
                     }
                 } else {
                     self.edit_open(v.now);
@@ -744,6 +799,7 @@ impl GroupSearch {
         if self.stale {
             self.refresh(lfg, vui);
         }
+        self.take_reg(v);
         self.min = self.min.clamp(1, 60);
         self.max = self.max.max(self.min).min(60);
         let wd = |id: i32| wide(vui.words.get(id, vui.language));
@@ -873,6 +929,33 @@ impl GroupSearch {
         for (row, at, rows) in [(0, 1, 2), (1, 4, 2), (2, 7, 1), (3, 8, 1), (4, 9, 1)] {
             self.form_hits.push(rows_rect(&self.main, vui, r, 40, at, x - 40, rows), row);
         }
+        self.draw_foot(vui, r, ticks);
+    }
+
+    /// The foot's rows on a server that tells the standing (`View::reg`):
+    /// Registered and its Yes or No at the left (row 5), "Allow anyone in my
+    /// group to invite" and its Yes or No at the bottom right (row 6), each
+    /// in the selection's colour and ticked as the form's rows are.
+    fn draw_foot(&mut self, vui: &Vui, r: &mut dyn Raster, ticks: bool) {
+        let Some(g) = self.reg else { return };
+        // the game's Yes and No (words 21 and 22, its boxes')
+        let yes_no = |on: bool| vui.words.get(if on { 21 } else { 22 }, vui.language).to_string();
+        let c = |row: i32| UI_COLORS[(self.row == row) as usize];
+        let left = wide(&format!("{REGISTERED}: {}", yes_no(g.registered)));
+        let lw = self.main.text_width(vui, r, &left) + 8;
+        self.main.text_box(vui, r, &left, 40, FOOT_ROW, lw, 1, c(5), 0);
+        let right = wide(&format!("{INVITES_OPEN}: {}", yes_no(g.invites_open)));
+        let rw = self.main.text_width(vui, r, &right) + 8;
+        let rx = self.main.size[0] - 30 - rw;
+        self.main.text_box(vui, r, &right, rx, FOOT_ROW, rw, 1, c(6), 0);
+        if self.pane == 0 && self.row == 5 {
+            self.main.tick_r(vui, r, 40, FOOT_ROW, ticks);
+        }
+        if self.pane == 0 && self.row == 6 {
+            self.main.tick_r(vui, r, rx, FOOT_ROW, ticks);
+        }
+        self.form_hits.push(rows_rect(&self.main, vui, r, 40, FOOT_ROW, lw, 1), 5);
+        self.form_hits.push(rows_rect(&self.main, vui, r, rx, FOOT_ROW, rw, 1), 6);
     }
 
     /// 0x01364570: the help, 400 by 10 titled 201, its text scrolled seven
@@ -1130,6 +1213,8 @@ pub(crate) mod tests {
         out: Vec<Out>,
         loc: crate::startmenu::Location,
         bounds: [Option<[i32; 4]>; 6],
+        /// the standing a server told (`View::reg`)
+        reg: Option<net::session::GroupReg>,
     }
 
     impl Rig {
@@ -1138,20 +1223,20 @@ pub(crate) mod tests {
         fn new(leader: bool) -> Self {
             let vui = Vui::new(numbered(), Default::default(), Vec::new());
             let loc = crate::startmenu::Location { world: 0, pos: [0.0; 3], cols: 50, rows: 50, cell: 1000.0, origin: [0.0; 3], bounds: None };
-            let mut g = Rig { w: GroupSearch::default(), lfg: Lfg::default(), vui, cues: Vec::new(), out: Vec::new(), loc, bounds: [Some([0, 49, 0, 49]), None, None, None, None, None] };
-            let v = View { now: 0, range: (22, 40), loc: &g.loc, bounds: &g.bounds };
+            let mut g = Rig { w: GroupSearch::default(), lfg: Lfg::default(), vui, cues: Vec::new(), out: Vec::new(), loc, bounds: [Some([0, 49, 0, 49]), None, None, None, None, None], reg: None };
+            let v = View { now: 0, range: (22, 40), loc: &g.loc, bounds: &g.bounds, reg: None };
             g.w.open(leader, &mut g.lfg, &g.vui, &NullRaster, &v);
             g
         }
 
         fn key(&mut self, k: i32) {
-            let v = View { now: 0, range: (22, 40), loc: &self.loc, bounds: &self.bounds };
+            let v = View { now: 0, range: (22, 40), loc: &self.loc, bounds: &self.bounds, reg: self.reg };
             self.w.key(&self.vui, &NullRaster, &mut self.lfg, &v, k, true, &mut self.cues, &mut self.out);
             self.w.key(&self.vui, &NullRaster, &mut self.lfg, &v, k, false, &mut self.cues, &mut self.out);
         }
 
         fn draw(&mut self) -> Vec<String> {
-            let v = View { now: 0, range: (22, 40), loc: &self.loc, bounds: &self.bounds };
+            let v = View { now: 0, range: (22, 40), loc: &self.loc, bounds: &self.bounds, reg: self.reg };
             let mut r = Text::default();
             self.w.draw(&self.vui, &mut r, &mut self.lfg, &v, &mut self.cues);
             r.0
@@ -1374,6 +1459,63 @@ pub(crate) mod tests {
         g.lfg.found[1].pos = [5000.0, 0.0, 5000.0];
         let zone = crate::zones::zone(0, 4, 4).unwrap();
         assert!(g.draw().contains(&format!("w18: w{zone}")));
+    }
+
+    /// On a server that tells the standing (petition 1476) the form has two
+    /// more rows at its foot: Registered (its Yes or No; ✕ asks the other)
+    /// and, at the bottom right, "Allow anyone in my group to invite" (✕ the
+    /// other); the d-pad goes round all seven; Options' Tell asks no line but
+    /// begins the tell in the chat line. The control: told nothing, neither row
+    /// is drawn, Up from Race is Search, Tell asks its line.
+    #[test]
+    fn the_foot_registers_and_sets_and_tell_begins_the_line() {
+        let mut g = Rig::new(false);
+        assert!(!g.draw().iter().any(|s| s.starts_with(REGISTERED) || s.starts_with(INVITES_OPEN)), "the control: no rows");
+        g.key(138);
+        g.draw();
+        assert_eq!(g.w.row, 4, "the control: up from Race is Search");
+        g.key(139);
+        g.draw();
+        g.reg = Some(net::session::GroupReg { registered: false, invites_open: true, members_invite: true });
+        let d = g.draw();
+        assert!(d.contains(&format!("{REGISTERED}: w22")) && d.contains(&format!("{INVITES_OPEN}: w21")), "{d:?}");
+        g.key(138);
+        g.draw();
+        assert_eq!(g.w.row, 6, "up from Race is the setting");
+        g.key(134);
+        assert_eq!(g.out, vec![Out::InvitesOpen(false)]);
+        g.out.clear();
+        g.key(138);
+        g.draw();
+        g.key(134);
+        assert_eq!((g.w.row, g.out.clone()), (5, vec![Out::Register(true)]));
+        g.out.clear();
+        g.reg = Some(net::session::GroupReg { registered: true, invites_open: false, members_invite: true });
+        let d = g.draw();
+        assert!(d.contains(&format!("{REGISTERED}: w21")) && d.contains(&format!("{INVITES_OPEN}: w22")), "the new standing: {d:?}");
+        g.key(139);
+        g.draw();
+        g.key(139);
+        g.draw();
+        assert_eq!(g.w.row, 0, "down from the setting round to Race");
+        // Tell: the chat line, no line asked here
+        g.reply(&[found("Zed", 0, 0, 30, 0x10)]);
+        g.draw();
+        g.key(137);
+        g.key(134);
+        g.key(139);
+        g.draw();
+        g.key(134);
+        assert_eq!((g.out.clone(), g.w.typing()), (vec![Out::Tell("Zed".into())], false));
+        // the control: told nothing, Tell asks its line
+        g.reg = None;
+        g.out.clear();
+        g.draw();
+        g.key(134);
+        g.key(139);
+        g.draw();
+        g.key(134);
+        assert!(g.w.typing() && g.out.is_empty(), "the control: the live client's line");
     }
 
     /// △ closes the help when it is up, else the window; a dialog goes

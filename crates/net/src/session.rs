@@ -165,6 +165,82 @@ pub const OP_BUG_NOTE: u16 = 0x7E0F;
 /// (`InviteEntity`, `InviteToGroup`: word 640), and so does this client on a
 /// server that never offers it (Sandstorm's, eqoa.live's).
 pub const OP_MEMBER_INVITES: u16 = 0x7E17;
+/// go-eqoa-server's own: the mercenaries told apart (the GM Jibrish's
+/// petitions 1475 and 1488, 2026-11-11). Both ways: the server's offer once the
+/// player is in the world (a u8, the layout of [`OP_MERCS_DATA`], 1), and this
+/// client's answer at once (a u8, 1). CLIENT has no such case: a PS2 ignores it.
+pub const OP_MERCS_OFFER: u16 = 0x7E5A;
+/// The mercs, from a server the client answered, at once and whenever they
+/// change: a u8 layout (1), a u8 of flags (bit 0: the player's own merc is
+/// out), a u16 count and each merc in the player's world by its name (a u8 byte
+/// count and the bytes). Each is the whole set ([`Mercs`]).
+pub const OP_MERCS_DATA: u16 = 0x7E5B;
+/// The start menu's Group > Dismiss Mercenary, client to server: a u8, 1 (the
+/// server's `/merc dismiss`).
+pub const OP_MERC_DISMISS: u16 = 0x7E5C;
+/// go-eqoa-server's own: the live group search's standing (the GM Jibrish's
+/// petition 1476, 2026-11-11). Both ways, as [`OP_MERCS_OFFER`]: the offer (a u8
+/// layout, 1) and this client's answer (a u8, 1).
+pub const OP_GROUP_REG_OFFER: u16 = 0x7E5D;
+/// The standing, from a server the client answered, at once and whenever it
+/// changes: a u8 layout (1) and a u8 of flags ([`GroupReg`]).
+pub const OP_GROUP_REG_STATE: u16 = 0x7E5E;
+/// "Allow anyone in my group to invite", client to server: a u8, 1 yes, 0 no.
+pub const OP_GROUP_INVITES_SETTING: u16 = 0x7E5F;
+
+/// The mercenaries a server told ([`OP_MERCS_DATA`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Mercs {
+    /// the player's own is out (Group > Dismiss Mercenary)
+    pub own: bool,
+    /// every merc in the player's world, by the name its channel carries
+    pub names: Vec<String>,
+}
+
+impl Mercs {
+    /// [`OP_MERCS_DATA`]'s body past the opcode; none for another layout or a
+    /// short one.
+    pub fn read(b: &[u8]) -> Option<Mercs> {
+        let mut r = Reader::new(b);
+        let (layout, flags, n) = (r.u8(), r.u8(), r.u16() as usize);
+        if r.error || layout != 1 {
+            return None;
+        }
+        let names = (0..n).map(|_| {
+            let len = r.u8() as usize;
+            String::from_utf8_lossy(r.bytes(len)).into_owned()
+        });
+        let names: Vec<String> = names.collect();
+        (!r.error).then_some(Mercs { own: flags & 1 != 0, names })
+    }
+
+    /// Whether a creature of that name is a merc.
+    pub fn is(&self, name: &str) -> bool {
+        !name.is_empty() && self.names.iter().any(|n| n == name)
+    }
+}
+
+/// The live group search's standing a server told ([`OP_GROUP_REG_STATE`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GroupReg {
+    /// registered as looking (0x0801 sub 2)
+    pub registered: bool,
+    /// its own "Allow anyone in my group to invite"
+    pub invites_open: bool,
+    /// its group's members invite now (in none, a raid group, or a regular
+    /// group whose leader has the setting on)
+    pub members_invite: bool,
+}
+
+impl GroupReg {
+    /// [`OP_GROUP_REG_STATE`]'s body past the opcode.
+    pub fn read(b: &[u8]) -> Option<GroupReg> {
+        match b {
+            [1, f, ..] => Some(GroupReg { registered: f & 1 != 0, invites_open: f & 2 != 0, members_invite: f & 4 != 0 }),
+            _ => None,
+        }
+    }
+}
 /// go-eqoa-server's own, no retail message either: a GM's flight (`#fly`), a
 /// u32 after the opcode, both ways. This client says it flies (1) when it is
 /// offered the GM's trigger names ([`OP_GM_TRIGGERS`], a GM's client's alone), so
@@ -942,6 +1018,13 @@ pub struct Session {
     /// The server lets any member of a group invite into it
     /// ([`OP_MEMBER_INVITES`]). Kept for the session.
     pub member_invites: bool,
+    /// The mercenaries the server last told ([`OP_MERCS_DATA`]); none from a
+    /// server that never offered them, and at a new connection.
+    pub mercs: Option<Mercs>,
+    /// The group search's standing the server last told
+    /// ([`OP_GROUP_REG_STATE`]); none from a server that never offered it, and
+    /// at a new connection.
+    pub group_reg: Option<GroupReg>,
     /// What character creation takes past the game's, as the server last told
     /// it ([`OP_CREATION_RACES`]); none from a server that never offers it.
     pub creation: Option<crate::creation::Creation>,
@@ -1172,6 +1255,8 @@ impl Session {
             bug_reports: false,
             petition_text: PETITION_TEXT_DISC,
             member_invites: false,
+            mercs: None,
+            group_reg: None,
             creation: None,
             server_worlds: None,
             worlds_building: None,
@@ -1847,6 +1932,9 @@ impl Session {
                 self.map_travel = false;
                 // the NPCs' body tints too (the next world entry offers them)
                 self.npc_tints = Some(Vec::new());
+                // the mercs and the group search's standing (offered again)
+                self.mercs = None;
+                self.group_reg = None;
                 // the old connection's channels go with it
                 self.early_states.clear();
                 self.quest_marks_offer = false;
@@ -2188,6 +2276,33 @@ impl Session {
                     debug_line(&format!("[net] a monster's name and level: {} bytes not read", m.data.len()));
                 }
             }
+            // the mercs offered (each world entry): taken at once in the layout
+            // this client reads (the names' colour, Dismiss Mercenary)
+            OP_MERCS_OFFER => {
+                let layout = r.u8();
+                if !r.error && layout == 1 {
+                    let mut w = Writer::op(OP_MERCS_OFFER);
+                    w.u8(1);
+                    self.send(&w.data);
+                }
+            }
+            OP_MERCS_DATA => match Mercs::read(&m.data[2.min(m.data.len())..]) {
+                Some(v) => self.mercs = Some(v),
+                None => debug_line(&format!("[net] the mercenaries: {} bytes not read", m.data.len())),
+            },
+            // the group search's standing offered: taken likewise
+            OP_GROUP_REG_OFFER => {
+                let layout = r.u8();
+                if !r.error && layout == 1 {
+                    let mut w = Writer::op(OP_GROUP_REG_OFFER);
+                    w.u8(1);
+                    self.send(&w.data);
+                }
+            }
+            OP_GROUP_REG_STATE => match GroupReg::read(&m.data[2.min(m.data.len())..]) {
+                Some(v) => self.group_reg = Some(v),
+                None => debug_line(&format!("[net] the group search's standing: {} bytes not read", m.data.len())),
+            },
             // any member invites into its group there (`Play::may_invite`)
             OP_MEMBER_INVITES => {
                 if r.u32() != 0 && !r.error {
@@ -3366,6 +3481,44 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x17, 0x7E, 1, 0, 0, 0]);
         assert!(s.member_invites);
         assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "nothing answered");
+    }
+
+    // The mercs (0x7E5A/0x7E5B) and the group search's standing (0x7E5D/
+    // 0x7E5E): each offer answered 1 at once, another layout nothing; the sets
+    // kept as told (own merc, the names; the three flags), a short one not.
+    // The control: never offered, nothing held.
+    #[test]
+    fn mercs_and_group_reg_offered_answered_kept() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let ours = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        ours(&mut s);
+        assert_eq!((s.mercs.clone(), s.group_reg), (None, None), "the control: never offered");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x5A, 0x7E, 2]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x5D, 0x7E, 2]);
+        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "another layout: no answer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x5A, 0x7E, 1]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x5D, 0x7E, 1]);
+        assert_eq!(ours(&mut s), vec![vec![0x5A, 0x7E, 1], vec![0x5D, 0x7E, 1]]);
+        let mut d = vec![0x5B, 0x7E, 1, 1, 2, 0, 7];
+        d.extend_from_slice(b"Ralthas");
+        d.push(3);
+        d.extend_from_slice(b"Kel");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, d.clone());
+        assert_eq!(s.mercs, Some(Mercs { own: true, names: vec!["Ralthas".into(), "Kel".into()] }));
+        assert!(s.mercs.as_ref().unwrap().is("Kel") && !s.mercs.as_ref().unwrap().is("Kelso") && !s.mercs.as_ref().unwrap().is(""));
+        d.pop();
+        deliver(&mut s, drdp::TYPE_GUARANTEED, d);
+        assert_eq!(s.mercs.as_ref().map(|m| m.names.len()), Some(2), "a short set is not taken");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x5E, 0x7E, 1, 0b101]);
+        assert_eq!(s.group_reg, Some(GroupReg { registered: true, invites_open: false, members_invite: true }));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x5E, 0x7E, 1]);
+        assert_eq!(s.group_reg.map(|g| g.registered), Some(true), "a short one is not taken");
     }
 
     // A GM's flight (0x7E1B): this client says it flies when it is offered the
