@@ -1,5 +1,7 @@
 //! `VIWndCharacterSelect` (CLIENT `viwndcharacterselect.cpp`): eight slots
-//! and Delete Character; the highlighted character stands in its race's set
+//! and Delete Character (more slots, eight in view, on a server that keeps
+//! more characters: `slot_count`, the list scrolled by the d-pad, the wheel
+//! and a finger's drag); the highlighted character stands in its race's set
 //! of the arena (`ShowCharacter`), the camera turning round it
 //! (`ApplyCamera`), with a flourish every five seconds; Enter plays it (with
 //! Frontiers, first the Options box: Enter Game World or Customize
@@ -144,6 +146,24 @@ pub struct CharSelect {
     dots: i32,
     ticks: i32,
     hits: Hits,
+    /// the characters the server lists and lets this account make
+    /// (`Session::char_slots`): CLIENT's eight or fewer is the game's list
+    pub cap: i32,
+    /// the first slot in view, of a list longer than `ROWS`
+    top: i32,
+    /// a finger's drag not yet a whole row, in frame pixels
+    drag: f32,
+}
+
+/// The slots in view at once: CLIENT's eight, 30 apart.
+pub const ROWS: i32 = 8;
+
+/// The list's slots: CLIENT's eight where the server keeps eight or fewer
+/// (`cap`), else every character and one empty slot to make another while
+/// under `cap`, never fewer than eight (the game's look up to eight).
+pub fn slot_count(count: i32, cap: i32) -> i32 {
+    let n = if cap <= ROWS { ROWS } else { cap.min(ROWS.max(count + 1)) };
+    n.max(count)
 }
 
 /// A slot's place on the screen, for the pointer: the bars are 320 wide
@@ -160,6 +180,8 @@ impl CharSelect {
     /// `Connecting` (`ConnectShard` calls it): the state from the top, the
     /// character let go.
     pub fn connecting(&mut self) {
+        self.top = 0;
+        self.drag = 0.0;
         self.show_time = -1;
         self.attack_slot = -1;
         self.last_race = -1;
@@ -302,33 +324,47 @@ impl CharSelect {
         crate::startmenu::close_edges(vui, r, PANEL, false, [true, false]);
         self.hits.clear();
         let mut pen = [15, 60];
-        self.making = false;
+        self.making = chars.iter().any(|c| c.server_id == -1);
         let bar = |sel: bool| if sel { (56, 58, 57) } else { (53, 55, 54) };
-        for (slot, c) in chars.iter().enumerate() {
-            let (l, m, rr) = bar(slot as i32 == self.sel);
-            let colour = if slot as i32 == self.sel { yellow } else { white };
-            if c.server_id == -1 {
-                self.making = true;
-                let mut t = word(878);
-                t.extend(std::iter::repeat_n(b'.' as u16, (self.dots + 1) as usize));
-                vui.blit_bar3(r, &t, colour, pen, l, m, rr, 320, 0, 1.0, 1, true);
-            } else {
-                vui.blit_bar3(r, &wide(&c.name), colour, pen, l, m, rr, 320, 0, 1.0, 1, true);
+        // the slots in view (all of the game's eight; of more, from `top`),
+        // only the characters while deleting
+        let slots = self.slots(count);
+        let shown = if self.deleting { count } else { slots };
+        self.top = self.top.clamp(0, (shown - ROWS).max(0));
+        for slot in self.top..shown.min(self.top + ROWS) {
+            let (l, m, rr) = bar(slot == self.sel);
+            match chars.get(slot as usize) {
+                Some(c) => {
+                    let colour = if slot == self.sel { yellow } else { white };
+                    if c.server_id == -1 {
+                        let mut t = word(878);
+                        t.extend(std::iter::repeat_n(b'.' as u16, (self.dots + 1) as usize));
+                        vui.blit_bar3(r, &t, colour, pen, l, m, rr, 320, 0, 1.0, 1, true);
+                    } else {
+                        vui.blit_bar3(r, &wide(&c.name), colour, pen, l, m, rr, 320, 0, 1.0, 1, true);
+                    }
+                }
+                None => vui.blit_bar3(r, &word(219), if slot == self.sel { yellow } else { grey }, pen, l, m, rr, 320, 0, 1.0, 1, true),
             }
-            self.hits.push(slot_rect(slot as i32), slot as i32);
+            self.hits.push(slot_rect(slot - self.top), slot);
             pen[1] += 30;
         }
         if !self.deleting {
-            for slot in count..8 {
-                let (l, m, rr) = bar(slot == self.sel);
-                vui.blit_bar3(r, &word(219), if slot == self.sel { yellow } else { grey }, pen, l, m, rr, 320, 0, 1.0, 1, true);
-                self.hits.push(slot_rect(slot), slot);
-                pen[1] += 30;
-            }
-            let hi = self.sel == 8;
+            // Delete Character under the eight in view, its index past the slots
+            pen[1] = 60 + 30 * ROWS.min(slots);
+            let hi = self.sel == slots;
             let (l, m, rr) = bar(hi);
             vui.blit_bar3(r, &word(220), if hi { yellow } else { black }, pen, l, m, rr, 320, 0, 1.0, 1, hi);
-            self.hits.push(slot_rect(8), 8);
+            self.hits.push(slot_rect(ROWS), slots);
+        }
+        // more slots than are in view: the game's scroll bar at the bars'
+        // right, its thumb at the first in view
+        if shown > ROWS {
+            let t = self.top as f32 / (shown - ROWS) as f32;
+            let e = vui.entry(84);
+            let (at, h) = ([337, 58], 30 * ROWS - 2);
+            vui.blit_vert_bar(r, at, 81, 83, 82, h, 0, 1.0);
+            vui.blit_ex(r, e.x00, [at[0] - 1, at[1] + (t * (h - e.uv1[1]) as f32) as i32], 0, 1.0, 0);
         }
         let frame = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
         vui.blit_fill_frame(r, [15, 358], [320, 35], &frame, 35, 0, 1.0, true);
@@ -579,6 +615,7 @@ impl CharSelect {
                         self.choosing = false;
                     } else {
                         self.sel = 0;
+                        self.top = 0;
                         reqs.push(Req::Msg0777);
                     }
                 }
@@ -615,12 +652,55 @@ impl CharSelect {
         }
     }
 
-    /// `MoveSel(d)`: the delete slot (8) only with no delete pending.
+    /// The list's slots for `count` characters (`slot_count`); the delete
+    /// slot's index is this, past them.
+    fn slots(&self, count: i32) -> i32 {
+        slot_count(count, self.cap)
+    }
+
+    /// The selection in view: the list scrolled to it (the delete slot, under
+    /// the list, needs none).
+    pub fn reveal(&mut self, count: i32) {
+        let slots = self.slots(count);
+        if self.sel < slots {
+            if self.sel < self.top {
+                self.top = self.sel.max(0);
+            } else if self.sel >= self.top + ROWS {
+                self.top = self.sel - ROWS + 1;
+            }
+        }
+        self.top = self.top.clamp(0, (slots - ROWS).max(0));
+    }
+
+    /// The wheel's `lines` (up positive: the list toward its top, a row a
+    /// notch) or a finger's drag of `dy` frame pixels (down: toward the top,
+    /// a row each 30): the slots in view move, the selection stays.
+    pub fn scroll(&mut self, lines: f32, dy: f32, count: i32) {
+        if self.child.is_some() || self.choosing || self.busy {
+            return;
+        }
+        let shown = if self.deleting { count } else { self.slots(count) };
+        let mut rows = -lines.round() as i32;
+        self.drag += dy;
+        while self.drag >= 30.0 {
+            self.drag -= 30.0;
+            rows -= 1;
+        }
+        while self.drag <= -30.0 {
+            self.drag += 30.0;
+            rows += 1;
+        }
+        self.top = (self.top + rows).clamp(0, (shown - ROWS).max(0));
+    }
+
+    /// `MoveSel(d)`: the delete slot (past the slots) only with no delete
+    /// pending; the list scrolled to the selection.
     fn move_sel(&mut self, d: i32, count: i32, cues: &mut Vec<i32>) {
         if self.busy || self.making {
             cues.push(10);
             return;
         }
+        let slots = self.slots(count);
         self.sel += d;
         if self.sel < 0 {
             cues.push(9);
@@ -628,13 +708,14 @@ impl CharSelect {
         } else if self.deleting && self.sel >= count {
             cues.push(9);
             self.sel = count - 1;
-        } else if !self.deleting && self.sel >= 8 {
-            cues.push(if self.sel > 8 { 9 } else { 11 });
-            self.sel = 8;
+        } else if !self.deleting && self.sel >= slots {
+            cues.push(if self.sel > slots { 9 } else { 11 });
+            self.sel = slots;
         } else {
             cues.push(11);
             self.figure = None;
         }
+        self.reveal(count);
     }
 
     /// `Option(on)`: Enter on a slot.
@@ -660,13 +741,14 @@ impl CharSelect {
                 self.cust.set_char(self.sel as usize);
                 self.figure = None;
             }
-        } else if self.sel == 8 {
+        } else if self.sel == self.slots(count) {
             if count > 0 {
                 self.deleting = true;
                 self.sel = 0;
+                self.top = 0;
                 self.figure = None;
             }
-        } else if self.sel >= count && self.sel < 8 {
+        } else if self.sel >= count && self.sel < self.slots(count) {
             reqs.push(Req::Select(self.sel as usize));
             self.figure = None;
         } else if chars.get(self.sel as usize).is_some_and(|c| c.server_id != -1) {
@@ -707,7 +789,14 @@ impl CharSelect {
             _ if self.choosing || self.busy => Vec::new(),
             _ if h == self.sel => vec![key::CROSS],
             _ => {
-                let _ = count;
+                // a selection out of view of a list that scrolls (scrolled by
+                // the wheel or a finger, or on the delete slot under it) steps from the
+                // view's nearest edge, so the list stays where it was pointed at
+                let edge = self.sel.clamp(self.top, self.top + ROWS - 1);
+                if self.slots(count as i32) > ROWS && edge != self.sel && !self.busy && !self.making {
+                    self.sel = edge;
+                    self.figure = None;
+                }
                 crate::pointer::steps(self.sel, h, key::UP, key::DOWN)
             }
         }
@@ -801,6 +890,115 @@ mod tests {
         reqs.clear();
         s.key(132, true, 0, &chars, 3, &mut cues, &mut reqs);
         assert_eq!(reqs, vec![Req::Msg0777], "Exit: back to the list");
+    }
+
+    /// The slots: the game's eight up to eight characters (and on a server
+    /// that keeps eight), else every character and one empty slot under the
+    /// server's number, none at it.
+    #[test]
+    fn the_slots_are_the_games_eight_until_more() {
+        assert_eq!(slot_count(0, 0), 8);
+        assert_eq!(slot_count(5, 8), 8);
+        assert_eq!(slot_count(5, 20), 8, "under eight: the game's look");
+        assert_eq!(slot_count(7, 20), 8);
+        assert_eq!(slot_count(8, 8), 8, "a server of eight: no ninth slot");
+        assert_eq!(slot_count(8, 20), 9, "eight of twenty: a ninth to make one");
+        assert_eq!(slot_count(15, 20), 16);
+        assert_eq!(slot_count(20, 20), 20, "at the cap: no empty slot");
+        assert_eq!(slot_count(12, 8), 12, "more than a server said: all of them");
+    }
+
+    /// Fifteen characters of twenty: the d-pad walks the slots past the
+    /// eighth, the list scrolling with it, to the empty slot (creation) and
+    /// the delete slot under the list; the wheel and a finger's drag move the
+    /// view, not the selection; a click on a row in a scrolled view picks
+    /// that row's character; deleting walks only the characters.
+    #[test]
+    fn fifteen_characters_scroll() {
+        let chars: Vec<CharRecord> = (0..15).map(|i| rec(&format!("C{i}"), 100 + i)).collect();
+        let (vui, mut r) = (crate::pointer::testing::vui(), crate::pointer::testing::NullRaster);
+        let mut s = CharSelect { cap: 20, ..Default::default() };
+        let (mut cues, mut reqs) = (Vec::new(), Vec::new());
+        for _ in 0..10 {
+            s.key(139, true, 0, &chars, 3, &mut cues, &mut reqs);
+        }
+        assert_eq!((s.sel, s.top), (10, 3), "the tenth's row in view, at the bottom");
+        for _ in 0..4 {
+            s.key(139, true, 0, &chars, 3, &mut cues, &mut reqs);
+        }
+        assert_eq!((s.sel, s.top), (14, 7), "the last character");
+        s.key(139, true, 0, &chars, 3, &mut cues, &mut reqs);
+        assert_eq!((s.sel, s.top), (15, 8), "the empty slot");
+        cues.clear();
+        s.key(139, true, 0, &chars, 3, &mut cues, &mut reqs);
+        s.key(139, true, 0, &chars, 3, &mut cues, &mut reqs);
+        assert_eq!((s.sel, s.top), (16, 8), "the delete slot, under the list; the view stays");
+        assert_eq!(cues, vec![11, 9], "into it, then a buzz");
+        // Enter on the empty slot: creation
+        s.key(138, true, 0, &chars, 3, &mut cues, &mut reqs);
+        s.key(134, true, 0, &chars, 3, &mut cues, &mut reqs);
+        assert_eq!(reqs, vec![Req::Select(15)], "the empty slot past the eighth: creation");
+        reqs.clear();
+        // the wheel up three notches and a finger's drag: the view, not the selection
+        s.scroll(3.0, 0.0, 15);
+        assert_eq!((s.sel, s.top), (15, 5));
+        s.scroll(0.0, 75.0, 15);
+        assert_eq!((s.sel, s.top), (15, 3), "75 pixels down: two rows toward the top, 15 kept");
+        s.scroll(0.0, 20.0, 15);
+        assert_eq!(s.top, 2, "with the 15 kept, a third row");
+        s.scroll(-30.0, 0.0, 15);
+        assert_eq!(s.top, 8, "never past the last slot");
+        s.scroll(30.0, 0.0, 15);
+        assert_eq!(s.top, 0, "nor before the first");
+        // drawn at the top: rows 0-7 in view, the delete slot under them
+        let mut cx = UiCx::bare(&vui, &mut r);
+        s.draw(&mut cx, &chars, None, &mut reqs);
+        let mid = |i: i32| {
+            let r = slot_rect(i);
+            [(r[0] + r[2]) as f32 / 2.0, (r[1] + r[3]) as f32 / 2.0]
+        };
+        assert_eq!(s.hits.at(mid(0)), Some(0));
+        assert_eq!(s.hits.at(mid(8)), Some(16), "the delete slot's row");
+        // a click on the third row: from the view's last row up to it
+        let keys = s.point(mid(2), 15);
+        assert_eq!((s.sel, keys.len()), (7, 5));
+        for k in keys {
+            s.key(k, true, 0, &chars, 3, &mut cues, &mut reqs);
+        }
+        assert_eq!((s.sel, s.top), (2, 0));
+        // scrolled to the end and drawn: the rows are 8-15, a click picks 12
+        s.scroll(-10.0, 0.0, 15);
+        let mut cx = UiCx::bare(&vui, &mut r);
+        s.draw(&mut cx, &chars, None, &mut reqs);
+        assert_eq!(s.hits.at(mid(0)), Some(8));
+        assert_eq!(s.hits.at(mid(7)), Some(15), "the empty slot in view");
+        for k in s.point(mid(4), 15) {
+            s.key(k, true, 0, &chars, 3, &mut cues, &mut reqs);
+        }
+        assert_eq!((s.sel, s.top), (12, 8), "C12 picked where it was shown");
+        s.key(134, true, 0, &chars, 3, &mut cues, &mut reqs);
+        s.key(134, true, 0, &chars, 3, &mut cues, &mut reqs);
+        assert_eq!(reqs, vec![Req::Select(12)], "played: the twelfth's slot");
+        // deleting: from the top, no further than the fifteenth
+        let mut d = CharSelect { cap: 20, sel: 16, ..Default::default() };
+        d.key(134, true, 0, &chars, 3, &mut cues, &mut reqs);
+        assert!(d.deleting && d.sel == 0 && d.top == 0);
+        for _ in 0..20 {
+            d.key(139, true, 0, &chars, 3, &mut cues, &mut reqs);
+        }
+        assert_eq!((d.sel, d.top), (14, 7));
+        reqs.clear();
+        d.key(134, true, 0, &chars, 3, &mut cues, &mut reqs);
+        d.key(136, true, 0, &chars, 3, &mut cues, &mut reqs);
+        d.key(134, true, 0, &chars, 3, &mut cues, &mut reqs);
+        assert_eq!(reqs, vec![Req::Delete(14)]);
+        // at twenty of twenty: no empty slot, the delete slot past the twentieth
+        let full: Vec<CharRecord> = (0..20).map(|i| rec(&format!("F{i}"), 200 + i)).collect();
+        let mut f = CharSelect { cap: 20, ..Default::default() };
+        for _ in 0..25 {
+            f.key(139, true, 0, &full, 3, &mut cues, &mut reqs);
+        }
+        assert_eq!((f.sel, f.top), (20, 12));
     }
 
     /// Enter on a character: with Frontiers' bit the Options box first

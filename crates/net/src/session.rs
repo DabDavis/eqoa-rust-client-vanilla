@@ -149,6 +149,16 @@ pub const OP_LIVE_LOOK: u16 = 0x7E0C;
 /// that look (lists are guaranteed messages, in order); a client still
 /// choosing is sent its list again.
 pub const OP_LIVE_LOOK_IN_FORCE: u16 = 0x7E0D;
+/// Bit 1 of this client's answer to [`OP_LIVE_LOOK`]: its character select
+/// lists every character the server keeps and scrolls them; the look in
+/// force then carries a second u32, the characters the account may hold
+/// ([`Session::char_slots`]), and the list comes again, whole. A server that
+/// knows no such bit reads bit 0 alone (go-eqoa-server before 2026-11-11).
+pub const LIVE_LOOK_MANY_CHARS: u32 = 2;
+/// CLIENT's character select: eight (`CharacterList`, `m_chars[8]`).
+pub const CLIENT_CHAR_SLOTS: u32 = 8;
+/// The most characters a list is read of, whatever a server says.
+pub const CHAR_SLOTS_MOST: u32 = 64;
 /// go-eqoa-server's own, no retail message either: bug reports, a u32 after
 /// the opcode, both ways. The server offers them (1) once the player is in
 /// the world; this client answers 1 at once, and then F3 opens Support's
@@ -1077,6 +1087,12 @@ pub struct Session {
     /// of its length too (`entity::Entities::live_look`). Kept for the
     /// session, as the server keeps it, through the world's connection.
     pub live_look: bool,
+    /// The characters this account may hold and character select lists
+    /// (go-eqoa-server's `world.max_characters`), told with the look in
+    /// force ([`OP_LIVE_LOOK_IN_FORCE`]'s second u32) to a client that said
+    /// its select page scrolls; [`CLIENT_CHAR_SLOTS`] (CLIENT's) until then
+    /// and on every other server.
+    pub char_slots: u32,
     /// The server offered bug reports ([`OP_BUG_REPORTS`]) and this client
     /// took them: F3 and the note. Kept for the session.
     pub bug_reports: bool,
@@ -1338,6 +1354,7 @@ impl Session {
             expansion: 0,
             entity_view_offer: None,
             live_look: false,
+            char_slots: CLIENT_CHAR_SLOTS,
             bug_reports: false,
             petition_text: PETITION_TEXT_DISC,
             crash_offer: None,
@@ -2246,10 +2263,11 @@ impl Session {
                 }
             }
             // the live game's look offered: taken (this client reads it),
-            // unless a test's `EQOA_LIVE_LOOK=0` keeps the disc's
+            // unless a test's `EQOA_LIVE_LOOK=0` keeps the disc's; and
+            // every character listed (character select scrolls them)
             OP_LIVE_LOOK => {
-                if r.u32() & 1 != 0 && !r.error && wants_live_look() {
-                    self.send_op_int(OP_LIVE_LOOK, 1);
+                if r.u32() & 1 != 0 && !r.error {
+                    self.send_op_int(OP_LIVE_LOOK, wants_live_look() as u32 | LIVE_LOOK_MANY_CHARS);
                 }
             }
             // bug reports offered: taken (F3 and the note, `bugnote`), with the
@@ -2506,6 +2524,10 @@ impl Session {
                 let v = r.u32();
                 if !r.error {
                     self.live_look = v & 1 != 0;
+                    // the characters listed, from a server that says
+                    if m.data.len() >= r.pos + 4 {
+                        self.char_slots = r.u32().clamp(1, CHAR_SLOTS_MOST);
+                    }
                 }
             }
             // the quest marks and tracker offered (again at every world
@@ -2607,7 +2629,7 @@ impl Session {
             }
             0x002C if matches!(self.state, State::Shard | State::Characters) => {
                 self.state = State::Characters;
-                ev.push(Event::Characters(read_characters(&mut r, self.live_look)));
+                ev.push(Event::Characters(read_characters(&mut r, self.live_look, self.char_slots.max(CLIENT_CHAR_SLOTS))));
             }
             0x0012 if self.state == State::Characters => ev.push(Event::RandomName(String::from_utf8_lossy(&r.string(24)).into_owned())),
             0x002E if self.state == State::Characters => ev.push(Event::CreateRefused(269)),
@@ -2921,10 +2943,11 @@ fn wants_live_look() -> bool {
 }
 
 /// `CharacterList`: the disc's records, or with `live` the live game's
-/// ([`LIVE_GEAR_SIZE`] raw bytes each).
-fn read_characters(r: &mut Reader, live: bool) -> Vec<Character> {
+/// ([`LIVE_GEAR_SIZE`] raw bytes each); at most `most` of them (CLIENT's
+/// eight, or the characters a server said it lists, [`Session::char_slots`]).
+fn read_characters(r: &mut Reader, live: bool, most: u32) -> Vec<Character> {
     let gear = if live { LIVE_GEAR_SIZE } else { DISC_GEAR_SIZE };
-    let n = r.signed().clamp(0, 8) as usize;
+    let n = r.signed().clamp(0, most as i64) as usize;
     (0..n)
         .map(|_| {
             let name = String::from_utf8_lossy(&r.string(24)).into_owned();
@@ -4411,7 +4434,8 @@ mod tests {
         s.state = State::Shard;
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "a first list: the disc's");
         assert!(deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0C, 0x7E, 1, 0, 0, 0]).is_empty());
-        assert_eq!(answers(&mut s), [(251, vec![0x0C, 0x7E, 1, 0, 0, 0])], "the offer answered with 1");
+        let bits = wants_live_look() as u8 | LIVE_LOOK_MANY_CHARS as u8;
+        assert_eq!(answers(&mut s), [(251, vec![0x0C, 0x7E, bits, 0, 0, 0])], "the offer answered with 1, and every character listed (2)");
         assert!(!s.live_look, "not in force until the server says so");
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "the control: a list before the server's answer");
 
@@ -4903,6 +4927,56 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_ITEM_LISTS_IN_FORCE, &[12, 9000]));
         assert_eq!(s.item_lists, [40, 255], "never under CLIENT's, never past a byte's index");
         assert_eq!(answers(&mut s), [], "the sizes answered nothing");
+    }
+
+    // The live look's offer (0x7E0C) answered with bit 1 too: this client's
+    // character select lists every character. The look in force's second u32
+    // is the characters listed (`char_slots`), kept between 1 and 64; a server
+    // that sends the first alone leaves CLIENT's 8, and a list is read to
+    // `char_slots` (at least 8), the rest of a longer one unread.
+    #[test]
+    fn the_live_look_answer_asks_for_every_character() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        let words = |op: u16, w: &[u32]| {
+            let mut m = op.to_le_bytes().to_vec();
+            for v in w {
+                m.extend_from_slice(&v.to_le_bytes());
+            }
+            m
+        };
+        answers(&mut s);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK, &[1]));
+        let want = if wants_live_look() { 3 } else { 2 };
+        assert_eq!(answers(&mut s), [(251, words(OP_LIVE_LOOK, &[want]))]);
+        assert_eq!(s.char_slots, CLIENT_CHAR_SLOTS);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK_IN_FORCE, &[1]));
+        assert_eq!((s.live_look, s.char_slots), (true, 8), "the control: an older server's word");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK_IN_FORCE, &[0, 20]));
+        assert_eq!((s.live_look, s.char_slots), (false, 20));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK_IN_FORCE, &[0, 9000]));
+        assert_eq!(s.char_slots, CHAR_SLOTS_MOST);
+        // a list of twelve: read whole at 20, eight of it at CLIENT's
+        let mut list = Writer::op(0x002C);
+        list.signed(12);
+        for i in 0..12 {
+            list.string(format!("C{i}").as_bytes());
+            for v in [i as i64 + 1, 0, 0, 0, 1, 0, 0, 0, 0] {
+                list.signed(v);
+            }
+            list.bytes(&[0; DISC_GEAR_SIZE]);
+        }
+        for (slots, n) in [(20, 12), (8, 8)] {
+            s.char_slots = slots;
+            let mut r = Reader::new(&list.data[2..]);
+            assert_eq!(read_characters(&mut r, false, s.char_slots.max(CLIENT_CHAR_SLOTS)).len(), n);
+        }
     }
 
     // A state channel's update that comes before the world entry (live, a
