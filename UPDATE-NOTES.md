@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · The mercenary's tag above its name, follow anyone
+- A mercenary's "<Lonewulf's Mercenary>" line no longer covers its head: it now sits where the name used to be,
+  with the name one line above it.
+- You can now follow any player, not only members of your group: target them and use Follow (or type /follow). You
+  stop following when they leave your view or the zone, as with a group member. Creatures, pets and mercenaries
+  outside your group still can't be followed.
+
 ## 2026-11-11 · Hide the look of a worn item
 - In the start menu's Inventory, Equipment tab, a worn helm, chest piece, bracers, gloves, leggings, boots, robe,
   weapon, shield, held item or cape now has **Hide Look** in its menu, right under Unequip. The item stays worn
