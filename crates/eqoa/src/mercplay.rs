@@ -2,8 +2,9 @@
 //! Jibrish's petitions 1475 and 1488, 2026-11-11): Community > Group >
 //! Dismiss Mercenary, the client's own entry, there while the server says the
 //! player's own merc is out (`net::session::Mercs`, 0x7E5B), sending 0x7E5C
-//! (the server's `/merc dismiss`); and a merc's name drawn in the pet's colour
-//! tinted red (`Play::name_color`). On a server that tells nothing (Sandstorm,
+//! (the server's `/merc dismiss`); a merc's name drawn in the pet's colour
+//! tinted red (`Play::name_color`), and under it its hirer's tag (`merc_tag`:
+//! "<Lonewulf's Mercenary>", `play::labels`' second line). On a server that tells nothing (Sandstorm,
 //! a PS2's) neither: the menu is the game's and a merc's name the pet's. A
 //! child of `play`, for `Play`'s fields.
 
@@ -50,6 +51,21 @@ impl Play {
         self.merc.menu = Some(on);
     }
 
+    /// The line under a merc's name plate (the owner, 2026-11-11: "a tag under
+    /// the nameplate above their heads that says <"player's" mercenary>"):
+    /// "<Lonewulf's Mercenary>", its hirer's name as the server tells it
+    /// (`net::session::Mercs::owner`, 0x7E5B's layout 2), for a creature whose
+    /// name is drawn as a merc's (`Play::name_color`); none for any other (a
+    /// merc's pet, an NPC or a player of a merc's name), and none from a server
+    /// that names no hirer.
+    pub(super) fn merc_tag(&self, c: &net::entity::Creature) -> Option<String> {
+        if self.name_color(c) != super::MERC_COLOR {
+            return None;
+        }
+        let owner = self.session.mercs.as_ref()?.owner(&c.name)?;
+        Some(format!("<{owner}'s Mercenary>"))
+    }
+
     /// The menus came again (a CLIENT image read): the entry is put in again.
     pub(super) fn merc_menu_again(&mut self) {
         self.merc.menu = None;
@@ -88,10 +104,10 @@ mod tests {
         let mut p = play();
         assert!(p.merc_action(MSG_DISMISS_MERC));
         assert!(sent(&mut p).is_empty(), "the control: no server's word, nothing sent");
-        p.session.mercs = Some(Mercs { own: false, names: vec!["Ralthas".into()] });
+        p.session.mercs = Some(Mercs { own: false, names: vec!["Ralthas".into()], ..Default::default() });
         p.merc_action(MSG_DISMISS_MERC);
         assert!(sent(&mut p).is_empty(), "no merc of one's own: nothing sent");
-        p.session.mercs = Some(Mercs { own: true, names: vec!["Ralthas".into()] });
+        p.session.mercs = Some(Mercs { own: true, names: vec!["Ralthas".into()], ..Default::default() });
         p.merc_action(MSG_DISMISS_MERC);
         assert_eq!(sent(&mut p), vec![vec![0x5C, 0x7E, 1]]);
         assert!(!p.merc_action(crate::record::MSG_RECORD), "another entry's message is not its");
@@ -119,7 +135,7 @@ mod tests {
         let has = |p: &Play| groups(p).iter().map(|g| g.contains(&MSG_DISMISS_MERC)).collect::<Vec<_>>();
         p.merc_menu();
         assert!(!groups(&p).is_empty() && has(&p).iter().all(|h| !h), "the control: no word, no entry");
-        p.session.mercs = Some(Mercs { own: true, names: vec!["Ralthas".into()] });
+        p.session.mercs = Some(Mercs { own: true, names: vec!["Ralthas".into()], ..Default::default() });
         p.session.raid_offer = true;
         p.raid_menu();
         p.merc_menu();
@@ -138,7 +154,7 @@ mod tests {
             assert_eq!(at, leave + 2, "after Leave and Raid: {:?}", m.entries.iter().map(|e| (e.word, e.msg)).collect::<Vec<_>>());
         }
         assert_eq!(s.menus.labels.get(&(MSG_DISMISS_MERC, 0)).map(|l| String::from_utf16_lossy(&l.text)), Some(ENTRY.to_string()));
-        p.session.mercs = Some(Mercs { own: false, names: Vec::new() });
+        p.session.mercs = Some(Mercs { own: false, names: Vec::new(), ..Default::default() });
         p.merc_menu();
         assert!(has(&p).iter().all(|h| !h), "the merc gone, the entry gone");
     }
@@ -155,12 +171,29 @@ mod tests {
         let pet = net::entity::Creature { p256: 3, name: "Fire Elemental".into(), ..Default::default() };
         let npc = net::entity::Creature { p256: 0, name: "Ralthas".into(), ..Default::default() };
         assert_eq!(p.name_color(&merc), NAME_COLORS[1], "the control: no word from the server");
-        p.session.mercs = Some(Mercs { own: false, names: vec!["Ralthas".into()] });
+        p.session.mercs = Some(Mercs { own: false, names: vec!["Ralthas".into()], ..Default::default() });
         assert_eq!(p.name_color(&merc), MERC_COLOR);
         assert_eq!(p.name_color(&pet), NAME_COLORS[1]);
         assert_eq!(p.name_color(&npc), NAME_COLORS[0]);
         let [r, g, b, _] = MERC_COLOR;
         let [pr, pg, pb, _] = NAME_COLORS[1];
         assert!(r > pr && g <= pg && b <= pb && b > r, "the pet's blue, tinted red: {MERC_COLOR:?}");
+    }
+
+    /// A merc's tag (the owner, 2026-11-11): "<Lonewulf's Mercenary>" under a
+    /// merc the server named with its hirer (layout 2); none for its pet, for
+    /// an NPC of its name, or from a server that named no hirer (layout 1, the
+    /// control).
+    #[test]
+    fn a_merc_is_tagged_with_its_hirer() {
+        let mut p = play();
+        let merc = net::entity::Creature { p256: 3, name: "Ralthas".into(), ..Default::default() };
+        let pet = net::entity::Creature { p256: 3, name: "Fire Elemental".into(), ..Default::default() };
+        let npc = net::entity::Creature { p256: 0, name: "Ralthas".into(), ..Default::default() };
+        p.session.mercs = Some(Mercs { own: false, names: vec!["Ralthas".into()], ..Default::default() });
+        assert_eq!(p.merc_tag(&merc), None, "the control: no hirer named");
+        p.session.mercs = Some(Mercs { own: false, names: vec!["Ralthas".into()], owners: vec!["Lonewulf".into()] });
+        assert_eq!(p.merc_tag(&merc).as_deref(), Some("<Lonewulf's Mercenary>"));
+        assert_eq!((p.merc_tag(&pet), p.merc_tag(&npc)), (None, None));
     }
 }

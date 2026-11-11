@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Whose mercenary is that?
+- A mercenary now has a second line under its name over its head saying whose it is, such as
+  "<Lonewulf's Mercenary>", so you can tell your mercenary from another player's. A mercenary's pet has no such
+  line. It needs the server's own update (the Heirloom Test Server); on any other server the names are as they were.
+
 ## 2026-11-11 · Crash reports go to the server you play on
 - If the game ever stops with an error, it now keeps a short **crash report** (what went wrong and where in the
   game's code, the build, your system and graphics card: never your account, your address or your files). The next

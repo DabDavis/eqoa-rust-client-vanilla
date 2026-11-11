@@ -191,7 +191,10 @@ pub const OP_MERCS_OFFER: u16 = 0x7E5A;
 /// The mercs, from a server the client answered, at once and whenever they
 /// change: a u8 layout (1), a u8 of flags (bit 0: the player's own merc is
 /// out), a u16 count and each merc in the player's world by its name (a u8 byte
-/// count and the bytes). Each is the whole set ([`Mercs`]).
+/// count and the bytes). Each is the whole set ([`Mercs`]). This client answers
+/// the offer 2 (the owner, 2026-11-11): a server that knows it sends layout 2,
+/// each name followed by its hirer's (for the "<Hirer's Mercenary>" tag under a
+/// merc's name plate); one that does not takes the 2 as 1 and sends layout 1.
 pub const OP_MERCS_DATA: u16 = 0x7E5B;
 /// The start menu's Group > Dismiss Mercenary, client to server: a u8, 1 (the
 /// server's `/merc dismiss`).
@@ -213,6 +216,8 @@ pub struct Mercs {
     pub own: bool,
     /// every merc in the player's world, by the name its channel carries
     pub names: Vec<String>,
+    /// each one's hirer's name, as `names` (layout 2); none from layout 1
+    pub owners: Vec<String>,
 }
 
 impl Mercs {
@@ -221,20 +226,30 @@ impl Mercs {
     pub fn read(b: &[u8]) -> Option<Mercs> {
         let mut r = Reader::new(b);
         let (layout, flags, n) = (r.u8(), r.u8(), r.u16() as usize);
-        if r.error || layout != 1 {
+        if r.error || !(1..=2).contains(&layout) {
             return None;
         }
-        let names = (0..n).map(|_| {
+        let (mut names, mut owners) = (Vec::new(), Vec::new());
+        for _ in 0..n {
             let len = r.u8() as usize;
-            String::from_utf8_lossy(r.bytes(len)).into_owned()
-        });
-        let names: Vec<String> = names.collect();
-        (!r.error).then_some(Mercs { own: flags & 1 != 0, names })
+            names.push(String::from_utf8_lossy(r.bytes(len)).into_owned());
+            if layout == 2 {
+                let len = r.u8() as usize;
+                owners.push(String::from_utf8_lossy(r.bytes(len)).into_owned());
+            }
+        }
+        (!r.error).then_some(Mercs { own: flags & 1 != 0, names, owners })
     }
 
     /// Whether a creature of that name is a merc.
     pub fn is(&self, name: &str) -> bool {
         !name.is_empty() && self.names.iter().any(|n| n == name)
+    }
+
+    /// The hirer of the merc of that name, when the server said (layout 2).
+    pub fn owner(&self, name: &str) -> Option<&str> {
+        let k = self.names.iter().position(|n| !name.is_empty() && n == name)?;
+        self.owners.get(k).map(|o| o.as_str()).filter(|o| !o.is_empty())
     }
 }
 
@@ -2371,13 +2386,14 @@ impl Session {
                     debug_line(&format!("[net] a monster's name and level: {} bytes not read", m.data.len()));
                 }
             }
-            // the mercs offered (each world entry): taken at once in the layout
-            // this client reads (the names' colour, Dismiss Mercenary)
+            // the mercs offered (each world entry): taken at once, answered 2
+            // (the names with their hirers': the tag under a merc's name; a
+            // server that knows only 1 sends 1)
             OP_MERCS_OFFER => {
                 let layout = r.u8();
                 if !r.error && layout == 1 {
                     let mut w = Writer::op(OP_MERCS_OFFER);
-                    w.u8(1);
+                    w.u8(2);
                     self.send(&w.data);
                 }
             }
@@ -3660,17 +3676,33 @@ mod tests {
         assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "another layout: no answer");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x5A, 0x7E, 1]);
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x5D, 0x7E, 1]);
-        assert_eq!(ours(&mut s), vec![vec![0x5A, 0x7E, 1], vec![0x5D, 0x7E, 1]]);
+        assert_eq!(ours(&mut s), vec![vec![0x5A, 0x7E, 2], vec![0x5D, 0x7E, 1]], "the mercs' answered 2 (their hirers too)");
         let mut d = vec![0x5B, 0x7E, 1, 1, 2, 0, 7];
         d.extend_from_slice(b"Ralthas");
         d.push(3);
         d.extend_from_slice(b"Kel");
         deliver(&mut s, drdp::TYPE_GUARANTEED, d.clone());
-        assert_eq!(s.mercs, Some(Mercs { own: true, names: vec!["Ralthas".into(), "Kel".into()] }));
+        assert_eq!(s.mercs, Some(Mercs { own: true, names: vec!["Ralthas".into(), "Kel".into()], owners: Vec::new() }));
+        assert_eq!(s.mercs.as_ref().unwrap().owner("Kel"), None, "layout 1 names no hirer");
         assert!(s.mercs.as_ref().unwrap().is("Kel") && !s.mercs.as_ref().unwrap().is("Kelso") && !s.mercs.as_ref().unwrap().is(""));
         d.pop();
         deliver(&mut s, drdp::TYPE_GUARANTEED, d);
         assert_eq!(s.mercs.as_ref().map(|m| m.names.len()), Some(2), "a short set is not taken");
+        // layout 2: each with its hirer's name
+        let mut d = vec![0x5B, 0x7E, 2, 0, 2, 0, 7];
+        d.extend_from_slice(b"Ralthas");
+        d.push(8);
+        d.extend_from_slice(b"Lonewulf");
+        d.push(3);
+        d.extend_from_slice(b"Kel");
+        d.push(4);
+        d.extend_from_slice(b"Abby");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, d.clone());
+        let m = s.mercs.clone().unwrap();
+        assert_eq!((m.own, m.owner("Ralthas"), m.owner("Kel"), m.owner("Lonewulf")), (false, Some("Lonewulf"), Some("Abby"), None));
+        d.pop();
+        deliver(&mut s, drdp::TYPE_GUARANTEED, d);
+        assert_eq!(s.mercs.as_ref().and_then(|m| m.owner("Kel")), Some("Abby"), "a short layout 2 is not taken");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x5E, 0x7E, 1, 0b101]);
         assert_eq!(s.group_reg, Some(GroupReg { registered: true, invites_open: false, members_invite: true }));
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x5E, 0x7E, 1]);
