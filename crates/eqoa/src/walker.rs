@@ -540,14 +540,24 @@ impl Walker {
         let actor = self.actor();
         let Some(cs) = self.sprite.as_mut() else { return (actor.to_cols(), Vec::new()) };
         self.anims.time = self.scene.time;
+        // a sea creature's body treads water and swims for its walk's gait
+        // (`seabody`), on land too, so its swing plays its attack
+        let sea = crate::seabody::swims(cs);
         if self.flying {
             // standing like normal, under real water too: `UpdateSprite` pitches
             // a body under liquid with the walk, and sinks one at a surface
             let mut w = self.cam.walk;
             w.phys.flags &= !flags::LIQUID;
+            if sea {
+                w.committed.loco_state = crate::seabody::gait(w.committed.loco_state);
+            }
             w.update_sprite(cs, &self.anims, &mut self.rand);
         } else {
-            self.cam.walk.update_sprite(cs, &self.anims, &mut self.rand);
+            let mut w = self.cam.walk;
+            if sea {
+                w.committed.loco_state = crate::seabody::gait(w.committed.loco_state);
+            }
+            w.update_sprite(cs, &self.anims, &mut self.rand);
             // a jump's fall in by its top, till the feet are on a floor
             let p = &self.cam.walk.phys;
             if p.flags & ON_FLOOR != 0 && p.velocity.y <= F::ZERO {

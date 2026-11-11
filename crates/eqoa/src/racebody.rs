@@ -87,11 +87,35 @@ struct HandSeats {
     seats: [(i32, [f32; 4], [f32; 3]); 3],
 }
 
-const HAND_SEATS: &[HandSeats] = &[HandSeats {
-    bodies: &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347],
-    nodes: 42,
-    seats: [(10, [0.0, 0.0, 0.0, 1.0], [-0.08, -0.035, 0.0]), (21, [0.0, 0.0, 1.0, 0.0], [0.08, -0.035, 0.0]), (20, [0.0, 0.0, 0.0, 1.0], [0.2, 0.11, 0.0])],
-}];
+/// The hand seats (`HandSeats`), by skeleton.
+///
+/// The merfolk's four (go-eqoa-server's race 32, the Mermaid, petition 1620:
+/// the merman, the mermaid and the two sirens of Odus; one 24-node skeleton)
+/// name the right hand's last node, 18, for both hands and none for the
+/// shield, so a sword and a shield would hang together in the right hand.
+/// Their arms run as the human's do (right arm 14-18 at -x, left 9-13 at +x:
+/// collar, shoulder, elbow, wrist, fingertips; every node with the model's
+/// axes in the bind pose), with no bone name of the human's; each made node is
+/// the human's item node's frame under the namesake of its parent by place
+/// (wrists 17 and 12, as HumanMale's hands 13 and 22, its off hand turned half
+/// round its z; the left forearm 11, as its 21), the hand and the forearm about
+/// the human's lengths (0.09 wrist to fingertip, 0.27 elbow to wrist).
+const HAND_SEATS: &[HandSeats] = &[
+    HandSeats {
+        bodies: &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347],
+        nodes: 42,
+        seats: [(10, [0.0, 0.0, 0.0, 1.0], [-0.08, -0.035, 0.0]), (21, [0.0, 0.0, 1.0, 0.0], [0.08, -0.035, 0.0]), (20, [0.0, 0.0, 0.0, 1.0], [0.2, 0.11, 0.0])],
+    },
+    HandSeats {
+        bodies: MERFOLK,
+        nodes: 24,
+        seats: [(17, [0.0, 0.0, 0.0, 1.0], [-0.045, -0.02, 0.0]), (12, [0.0, 0.0, 1.0, 0.0], [0.045, -0.02, 0.0]), (11, [0.0, 0.0, 0.0, 1.0], [0.15, 0.08, 0.0])],
+    },
+];
+
+/// The merfolk's bodies: go-eqoa-server's race 32's merman (its male's),
+/// mermaid (its female's) and the two sirens its options offer.
+pub const MERFOLK: &[u32] = &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C];
 
 /// The hand seats of body `model` (`HAND_SEATS`).
 fn hand_seats(model: u32) -> Option<&'static HandSeats> {
@@ -385,6 +409,70 @@ mod tests {
                 eprintln!("{id:#010x} {action:?}: the body's own item node {knee:.3} from the hand's");
                 if action.is_some() {
                     assert!(knee > 0.5, "{id:#010x} {action:?}: the control, its own item node {knee:.3} from the hand's");
+                }
+            }
+        }
+    }
+
+    /// The merfolk (go-eqoa-server's race 32, the Mermaid) hold a player's
+    /// items in their hands: on each of their four bodies `grant` makes three
+    /// nodes, under the right wrist (17), the left wrist (12) and the left
+    /// forearm (11), once only; treading water and in their attack (44) each
+    /// sits at its parent, and the off hand's and the shield's are on the left
+    /// of the body (+x in the model), the main hand's on the right. The
+    /// control: the bodies' own nodes put the off hand's item in the right
+    /// hand, with the main hand's. An NPC in the body keeps its own nodes.
+    /// Needs `run/eqoa.iso`.
+    #[test]
+    fn the_merfolk_hold_items_in_both_hands() {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no disc at run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
+        for &id in MERFOLK {
+            let listed = races(&[[0xA316_EB78, 0x74BA_7C3D], [0xBF21_FEF5, 0x1740_427C]]);
+            let (mut sc, mut cache, mut rand) = (AnimScene::<Ee>::default(), AnimCache::new(), Rand(1));
+            let mut cs = load_csprite(&lib, lib.lookup(id as i32).unwrap(), &mut sc, &mut cache, &mut rand).unwrap();
+            let own = cs.item_nodes;
+            assert_eq!((cs.h.nodes.len(), &own[..3]), (24, &[18, 18, -1][..]), "{id:#010x}");
+            let mut npc = load_csprite(&lib, lib.lookup(id as i32).unwrap(), &mut AnimScene::<Ee>::default(), &mut AnimCache::new(), &mut Rand(1)).unwrap();
+            grant(&mut npc, id, false, Some(&listed));
+            assert_eq!((npc.h.nodes.len(), npc.item_nodes), (24, own), "{id:#010x}: an NPC's as it was");
+            assert!(grant(&mut cs, id, true, Some(&listed)), "{id:#010x}: listed or offered");
+            let made = cs.item_nodes;
+            assert_eq!(&made[..3], &[24, 25, 26], "{id:#010x}");
+            assert_eq!([24, 25, 26].map(|n| cs.h.nodes[n].parent), [17, 12, 11], "{id:#010x}");
+            assert!(grant(&mut cs, id, true, Some(&listed)));
+            assert_eq!((cs.h.nodes.len(), cs.item_nodes), (27, made), "{id:#010x}: again, as it was");
+            let bind_x = |n: i32| cs.h.nodes[n as usize].bind.trans.x.0;
+            assert!(bind_x(made[0]) < 0.0 && bind_x(made[1]) > 0.0 && bind_x(made[2]) > 0.0, "{id:#010x}: right, left, left");
+            assert!(bind_x(own[1]) < 0.0, "the control: the body's own off hand is its right");
+            for action in [None, Some(23)] {
+                let mut t = 0;
+                cs.set_locomotion(13, &sc, &mut rand);
+                while t <= 900 {
+                    sc.time = t;
+                    match action {
+                        Some(a) if t == 0 => {
+                            cs.set_action(a, &sc, &mut rand);
+                        }
+                        _ => {}
+                    }
+                    cs.h.process(0, &sc);
+                    t += 16;
+                }
+                let at = |n: i32| {
+                    let m = cs.h.nodes[n as usize].world.to_cols();
+                    glam::Vec3::new(m[3][0], m[3][1], m[3][2])
+                };
+                let scale = cs.h.default_scale.0;
+                for (slot, &item) in made.iter().enumerate().take(3) {
+                    let parent = cs.h.nodes[item as usize].parent;
+                    let d = at(item).distance(at(parent));
+                    assert!(d < 0.25 * scale, "{id:#010x} {action:?} slot {slot}: {d:.3} from its parent");
                 }
             }
         }

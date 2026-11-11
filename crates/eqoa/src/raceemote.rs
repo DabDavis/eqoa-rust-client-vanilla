@@ -155,6 +155,12 @@ pub const TABLE: &[(u32, [Pose; 4])] = &[
     // its upper body and its crossed legs keep their float (the channeler's and
     // knight's bodies take these by `poses_of`)
     (0xF51B_AB09, H),
+    // the merfolk (2026-11-11: race 32, the Mermaid), treading water: the human's
+    // names given their spine and arms (`MERFOLK_NAMES`), so the human's emote
+    // moves their upper body and the tail keeps its tread (the sirens take these
+    // by `poses_of`)
+    (0xA316_EB78, H), // merman
+    (0x74BA_7C3D, H), // mermaid
 ];
 
 /// What `model` plays for each emote, if `TABLE` lists it.
@@ -206,6 +212,42 @@ pub fn poses_of(model: u32) -> Option<[Pose; 4]> {
     race_of(model).and_then(poses)
 }
 
+/// The merfolk's skeleton (go-eqoa-server's race 32, the Mermaid, petition
+/// 1620: the merman's, the mermaid's and the two sirens' bodies, one skeleton
+/// of 24 nodes, `racebody::MERFOLK`) shares four bone names with the human's
+/// (the root, the neck 19, the head 20 and a lock of hair 21): its spine and
+/// arms have names of their own, though they run as a human's do (every node
+/// with the model's axes in the bind pose, the right arm at -x). They are
+/// given the human's names here (`Rig`), node by node by place, so what is
+/// carried onto a skeleton by its bone names (the human's emotes, `retarget`;
+/// the human's chest, bracers and gloves, `slotless::named_shell_of`) moves
+/// and dresses their upper body as the human's; the tail (1-5), the collars
+/// (9, 14) and the top of the spine (8) keep their own. Each is (the merfolk's
+/// node, the ref id of HumanMale's node of that place, HumanFemale's alike):
+/// the spine 6 and 7 the human's 1 and 2, as far under the shoulders as the
+/// human's are (the merfolk's arms and neck hang from 8, a node over 7 the
+/// human lacks: named after the human's 2, its chest armour rose 0.14 and
+/// its collar covered the face); the right shoulder, elbow, wrist and
+/// fingertips 15 to 18 the human's 11 to 14; the left 10 to 13 the human's 20
+/// to 23.
+const MERFOLK_NAMES: &[(usize, i32)] = &[
+    (6, -984_000_983),
+    (7, -984_000_982),
+    (15, -1_594_476_141),
+    (16, 2_004_749_100),
+    (17, -1_270_577_720),
+    (18, -1_005_697_820),
+    (10, 1_541_305_384),
+    (11, 124_337_851),
+    (12, 1_143_978_327),
+    (13, 1_641_120_235),
+];
+
+/// The merfolk's skeleton is told by its node count and its node 6's own ref
+/// id (its spine's).
+const MERFOLK_NODES: usize = 24;
+const MERFOLK_MARK: (usize, i32) = (6, -1_197_703_574);
+
 /// One body's skeleton as its 0x2700 record has it: each node's parent,
 /// its bind pose in its parent's space (`rest`: the hierarchy's frames are
 /// the model's, `SetNodeBindPose`, and `rest` the parent's taken off), and
@@ -216,8 +258,12 @@ pub struct Rig {
     pub rest: Vec<Frame<Ee>>,
     /// The node a ref id names.
     pub by_ref: HashMap<i32, usize>,
-    /// Each node's ref id (the least the map names it by).
+    /// Each node's ref id (the least the map names it by; a merfolk node given
+    /// a human's name, `MERFOLK_NAMES`, that name).
     pub refs: Vec<Option<i32>>,
+    /// Each node's own ref id, as its sprite's clips name it (`refs` before
+    /// `MERFOLK_NAMES`): what a clip made for the body names its nodes by.
+    pub own: Vec<Option<i32>>,
 }
 
 impl Rig {
@@ -232,7 +278,15 @@ impl Rig {
                 by_ref.insert(k, n as usize);
             }
         }
-        Rig { parent: h.nodes.iter().map(|n| n.parent).collect(), rest: h.nodes.iter().map(|n| n.rest).collect(), by_ref, refs }
+        let own = refs.clone();
+        // the merfolk's spine and arms take the human's names (`MERFOLK_NAMES`)
+        if refs.len() == MERFOLK_NODES && refs[MERFOLK_MARK.0] == Some(MERFOLK_MARK.1) {
+            for &(n, r) in MERFOLK_NAMES {
+                refs[n] = Some(r);
+                by_ref.insert(r, n);
+            }
+        }
+        Rig { parent: h.nodes.iter().map(|n| n.parent).collect(), rest: h.nodes.iter().map(|n| n.rest).collect(), by_ref, refs, own }
     }
 
     /// A sprite's, with its ref map.
@@ -509,7 +563,7 @@ pub fn retarget(human: &Rig, human_idle: &[Anim<Ee>], clips: &[Anim<Ee>], body: 
         let mut full = Vec::with_capacity(nodes.len() * n as usize);
         let mut list = Vec::with_capacity(nodes.len());
         for (j, &b) in nodes.iter().enumerate() {
-            list.push((body.refs[b].unwrap_or(0), j as i32 * n));
+            list.push((body.own[b].unwrap_or(0), j as i32 * n));
             full.extend_from_slice(&frames[b]);
         }
         Anim { num_nodes: list.len() as i32, num_frames: n, play_rate: rate, play_speed: F::ONE, playback_type: ONCE, nodes: list, frames: Frames::Full(full), triggers: Vec::new() }
@@ -978,8 +1032,9 @@ mod tests {
                 match pose {
                     Pose::Own(s) => assert!(row(&lib, id, s).is_some(), "{id:#010x} has no slot {s} of its own"),
                     Pose::Human => {
-                        let map = &sc.ref_maps[cs.h.ref_map];
-                        assert!(arms.iter().all(|r| map.contains_key(r)), "{id:#010x}: the human's arms");
+                        // by the names its rig gives it (the merfolk's, `MERFOLK_NAMES`)
+                        let rig = Rig::of(&cs, &sc.ref_maps[cs.h.ref_map]);
+                        assert!(arms.iter().all(|r| rig.by_ref.contains_key(r)), "{id:#010x}: the human's arms");
                     }
                 }
             }
@@ -1174,7 +1229,7 @@ mod tests {
             for pose in p {
                 match pose {
                     Pose::Own(s) => assert!(row(&lib, id, s).is_some(), "{id:#010x} has no slot {s} of its own"),
-                    Pose::Human => assert!(arms.iter().all(|r| sc.ref_maps[cs.h.ref_map].contains_key(r)), "{id:#010x}: the human's arms"),
+                    Pose::Human => assert!(arms.iter().all(|r| Rig::of(&cs, &sc.ref_maps[cs.h.ref_map]).by_ref.contains_key(r)), "{id:#010x}: the human's arms"),
                 }
             }
             assert!(put_air(&lib, &mut cs, &mut sc, p), "{id:#010x}");
@@ -1293,8 +1348,9 @@ mod tests {
 
     /// Every body a server's race wears (each one the table lists and every
     /// other its options offer, the helm seats' families with the fungusmen's
-    /// and the Jal'Raeth's), on the disc, through `put_swim`: 129 have a swim
-    /// and a treading of their own (entries 12 and 13), left as they are; the
+    /// and the Jal'Raeth's), on the disc, through `put_swim`: 133 have a swim
+    /// and a treading of their own (entries 12 and 13), left as they are (the
+    /// merfolk's four among them, sea creatures' bodies); the
     /// gargoyles' six, the Jal'Raeth's three, the pixie's and the fairy's have
     /// neither (each is the idle), and but the last two (`SWIM_NONE`) take the
     /// human's carried, one clip looping for both, the human's swim. The
@@ -1338,7 +1394,7 @@ mod tests {
         let mut want: Vec<u32> = GARGOYLES.iter().chain(&JALRAETH).chain(SWIM_NONE).copied().collect();
         want.sort_unstable();
         assert_eq!(none, want, "the bodies with no swim");
-        assert_eq!(own, 129, "the bodies with their own");
+        assert_eq!(own, 133, "the bodies with their own");
         let (h12, h13) = (row(&lib, HUMAN, 12).unwrap(), row(&lib, HUMAN, 13).unwrap());
         assert_eq!(h12.clips, h13.clips, "the control: the human's swim and treading, one clip");
     }
