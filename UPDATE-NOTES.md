@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Whose mercenary is that?
+- A mercenary now has a second line under its name over its head saying whose it is, such as
+  "<Lonewulf's Mercenary>", so you can tell your mercenary from another player's. A mercenary's pet has no such
+  line. It needs the server's own update (the Heirloom Test Server); on any other server the names are as they were.
+
 ## 2026-11-11 · Look at any world on the map, the minimap indoors, a profanity filter switch
 - The map has a **Places** button (P on a keyboard, Start on a controller): a list of the worlds (Tunaria, the Rathe
   Mountains, Odus, Lavastorm, the Plane of Sky and the server's own worlds) and, under the world shown, its towns.
