@@ -242,7 +242,7 @@ impl Layout {
     }
 
     /// As `hud.opt` keeps it: a line a moved piece, `<piece> <h> <dx> <v> <dy>`.
-    pub fn to_text(&self) -> String {
+    pub fn to_text(self) -> String {
         let mut s = String::new();
         for p in PIECES {
             if let Some(at) = self.get(p) {
