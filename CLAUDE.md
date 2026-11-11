@@ -63,7 +63,11 @@ current.
   Box, others' mana bars and Target of Target stay out; the owner's "they are everywhere" the same day: the
   minimap's rim keeps only the player's own steps' "?", a "!" only where it lies, and the server marks a quest's
   name once near the player's level; and a GM's Ctrl+click on the map travels there, offered by go-eqoa-server
-  to a GM's client alone, 0x7E34/0x7E35)).
+  to a GM's client alone, 0x7E34/0x7E35); the map's list of places, any world or town shown from the player's
+  own disc, and the minimap inside a building, cave or dungeon (players' petitions 1479 and 1494, 2026-11-11:
+  `map::places`, `map::indoor`, the floors under the ceiling as FrontiersForge's minimap drew them), and
+  Options > Interface's Profanity Filter told to a server that asks (the GM Jibrish's petition 1490:
+  go-eqoa-server's 0x7E60; the filter is the server's, on at every login)).
   `render::lit`, `lights.rs`; off it is the PS2's light exactly, every test and oracle unchanged, and `vi` untouched), and Sun
   Shadows (2026-11-08: Extended > Lighting, off unless chosen, drawn only with Dynamic Lighting; `render::sunshadow`; off, every
   frame byte for byte as before, on Vulkan and GL)).

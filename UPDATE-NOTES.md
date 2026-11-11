@@ -7,6 +7,18 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Look at any world on the map, the minimap indoors, a profanity filter switch
+- The map has a **Places** button (P on a keyboard, Start on a controller): a list of the worlds (Tunaria, the Rathe
+  Mountains, Odus, Lavastorm, the Plane of Sky and the server's own worlds) and, under the world shown, its towns.
+  Pick one to look at it from wherever you are: in Tunaria and want to see Oggok? Pick the Rathe Mountains, then
+  Oggok. A world you have never been to is drawn from your disc the first time (it takes a little while, and is kept
+  for next time). "Where I am", Center or closing the map takes you back to your own spot.
+- The **minimap now maps indoors**: inside a building, in a cave or in a dungeon it shows the floors around you
+  instead of the roof or the hillside above you, and zooms in to a room's size (the mouse wheel over it still
+  zooms). Step back outside and it shows the usual map again.
+- **Options > Interface > Profanity Filter**: On (as always) or Off. Off, what other players say reaches you as
+  they said it. It needs the server's own update; on any other server nothing changes.
+
 ## 2026-11-10 · No more long wait after Enter Game World
 - In the browser, your character no longer sits at the spinning figure for 10 to 30 seconds after Enter Game World
   on a server with worlds of its own (the Homelands). The page used to hold every character until it had built or
