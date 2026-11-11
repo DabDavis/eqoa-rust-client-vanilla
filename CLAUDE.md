@@ -355,7 +355,12 @@ current.
   as the offer's second u32 says the server takes (`Session::petition_text`, at most 2,047, petition
   1300; none said, the disc's 511): a longer request goes in DRDP's pieces of 1,300 bytes, which only
   a server that says so puts back together (go-eqoa-server since 2026-11-08). Nothing goes unless the player files
-  one, and nothing to a server that made no offer. The log stays on the player's
+  one, and nothing to a server that made no offer. A crash is the one report made for the player (the server owner,
+  2026-11-11, "we may need to add crash reports back"): `crashfile` keeps a panic as it happens (natively
+  `crashes/` in the config directory, from `logfile`'s hook and `eqoa play`'s; in a page `eqoa.crashReport`, or an
+  older page's `eqoa.lastCrash` line) and sends each kept to a server that offers to take them (go-eqoa-server's
+  0x7E64-0x7E66), which files it as a petition, Bug Report / Crash; it is let go at the answer. No path of the
+  player's goes (`crashfile::scrub`). A debug build's `EQOA_CRASH_TEST=<ms>` panics on purpose. The log stays on the player's
   machine, theirs to hand on: never log a credential. Natively stderr goes through the log's pipe
   (`logfile::start`, `eqoa boot` only): anything that starts another program in this one's place
   puts it back first (`logfile::restore_stderr`), or the new one inherits a pipe nothing reads, and

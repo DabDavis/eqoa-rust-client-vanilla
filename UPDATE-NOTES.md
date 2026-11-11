@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Crash reports go to the server you play on
+- If the game ever stops with an error, it now keeps a short **crash report** (what went wrong and where in the
+  game's code, the build, your system and graphics card: never your account, your address or your files). The next
+  time you log in to a server that takes them, it goes to that server's GMs as a ticket marked **Bug Report /
+  Crash**, and you are told its number in chat. You don't have to write anything, and no answer is needed: it
+  helps the developers find and fix the crash. Nothing is sent anywhere else, and a server that doesn't take
+  them is sent nothing.
+
 ## 2026-11-11 · A Wisp keeps its cape while invisible, the Wisp's Raiment
 - An invisible Wisp keeps its cape: a Wisp already shows as what hangs on an invisible body, so invisibility now leaves
   it as it was, the wisp in its helm and its cape, for you and for everyone who sees you. (Anyone else's cape still
