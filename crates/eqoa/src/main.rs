@@ -789,6 +789,8 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
     }
     // the disc's art that draws everywhere (`discart`: Highpass's papered
     // board), after every file the game reads: it fills only what they lack
+    // (a page reads it in its own world loader, `web::disc`)
+    #[cfg(not(target_arch = "wasm32"))]
     discart::add(&mut lib, &discart::records(std::path::Path::new(&disc_path(None))));
     // the 2002 disc's art while it is the art drawn (`era`, F9): its files in
     // place of their namesakes, read with the world's
