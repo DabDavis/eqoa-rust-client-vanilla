@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · A Wisp keeps its cape while invisible, the Wisp's Raiment
+- An invisible Wisp keeps its cape: a Wisp already shows as what hangs on an invisible body, so invisibility now leaves
+  it as it was, the wisp in its helm and its cape, for you and for everyone who sees you. (Anyone else's cape still
+  vanishes with them.) It needs the server's own update.
+- On the Heirloom server, Trickster Flame now also teaches **Wisp's Raiment**: a Wisp keeps its own look, the wisp
+  burning in its helm, and shows all its gear, armour, robe, weapons and cape, for an hour. Remove Illusion, a glamour
+  or clicking it off ends it. A Wisp who already has Trickster Flame finds it in its spell book.
+
 ## 2026-11-11 · Wisps walk without a sound
 - A Wisp makes no footsteps: its walking, running, turning, falling, landing and swimming are silent, yours and every
   other Wisp you meet. Its swings and spells sound as ever. In a mortal form (a glamour from its racial Trickster Flame)
