@@ -42,6 +42,12 @@ const RACE: [[[u32; 2]; 4]; 11] = [
     [[0; 2]; 4],
     [[0xFD04B372, 0xDAFD61C1], [0x0E9269C3, 0xEC8B1812], [0x20202014, 0xFE18CE63], [0x31ADD665, 0x0FA684B4]],
 ];
+/// Whether `id` is one of `$Race`'s faces, any race's, sex's or option's
+/// (what `SetFace` can lay on a face's layer).
+pub fn is_face(id: u32) -> bool {
+    id != 0 && RACE.iter().flatten().flatten().any(|&f| f == id)
+}
+
 /// `Helm[set]`: the helm sprites.
 const HELM: [u32; 9] = [0, 0x0C6F2FDA, 0x330D43A7, 0x079EAC92, 0x03B8E453, 0x5A51ACC1, 0x7184EC3D, 0x91E411BB, 0x1E25A25F];
 
@@ -263,6 +269,18 @@ pub fn apply_look_slots(slots: &[(i32, i32); 19], race: i32, sex: i32, look: &Lo
 
 #[cfg(test)]
 mod tests {
+    /// `is_face`: every race's every face, either sex (a human's, an
+    /// erudite's, an ogre's); not a body's skin, an armour's or 0.
+    #[test]
+    fn faces_are_faces() {
+        for f in [0x4A7A_B44Eu32, 0x3C79_D7FB, 0x0FA6_84B4, 0xAB3E_7194] {
+            assert!(is_face(f), "{f:#x}");
+        }
+        for f in [0, 0xB037_9A45, ARMOR[1][0], HAIR[0]] {
+            assert!(!is_face(f), "{f:#x}");
+        }
+    }
+
     use super::*;
     use crate::fpu::{Ee, F};
     use crate::hsprite::HSprite;

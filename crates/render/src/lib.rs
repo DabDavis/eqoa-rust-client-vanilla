@@ -2358,8 +2358,10 @@ impl TextureSource for LibraryTextures<'_> {
             return match recolor::source_of(id) {
                 Some((source, r)) => {
                     let mut levels = self.levels(source);
-                    for l in &mut levels {
-                        recolor::recolor_rgba(&mut l.rgba, r);
+                    let mut rgba: Vec<Vec<u8>> = levels.iter_mut().map(|l| std::mem::take(&mut l.rgba)).collect();
+                    recolor::recolor_levels(&mut rgba, r);
+                    for (l, px) in levels.iter_mut().zip(rgba) {
+                        l.rgba = px;
                     }
                     levels
                 }

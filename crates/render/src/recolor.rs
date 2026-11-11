@@ -12,8 +12,15 @@
 //! (256ths of a turn) and the saturation (255ths) as given and scales the
 //! lightness (128ths: 128 keeps it), as an image editor's colourise, one colour
 //! over the part's own shading; [`TONE`] turns the hue and scales the saturation
-//! and the lightness (128ths each), the part's own colours shifted. 0, or a mode
-//! it does not know, is the texture as it is.
+//! and the lightness (128ths each), the part's own colours shifted. [`SKIN`] (a
+//! game race's skin shade, go-eqoa-server's `Shade`) moves a skin texture's
+//! own colour to the shade's (hue in 256ths of a turn, saturation and lightness
+//! in 255ths, all absolute): [`SkinRef`] is the texture's skin (its texels'
+//! mean chroma and median lightness), each texel moved by the difference as far
+//! as it is skin-like (its chroma near the skin's: an eye's white, an iris or
+//! a strap keeps its own), its lightness by a curve through the skin's that
+//! keeps black and white where they are. 0, or a mode it does not know, is the
+//! texture as it is.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -22,10 +29,100 @@ use std::sync::Mutex;
 pub const DYE: u32 = 1;
 /// A part's own colours shifted.
 pub const TONE: u32 = 2;
+/// A skin texture moved to a shade (go-eqoa-server's `Shade`).
+pub const SKIN: u32 = 3;
 
 /// Whether `r` changes anything (a known mode).
 pub fn changes(r: u32) -> bool {
-    matches!(r >> 24, DYE | TONE)
+    matches!(r >> 24, DYE | TONE | SKIN)
+}
+
+/// A texture's skin, as [`SKIN`] moves it: its texels' mean hue (turns, by
+/// their saturation), mean saturation, median lightness and median chroma (an
+/// RGB's largest less its smallest), each 0..1.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SkinRef {
+    pub hue: f32,
+    pub sat: f32,
+    pub light: f32,
+    pub chroma: f32,
+}
+
+impl SkinRef {
+    /// The skin of an RGBA image's texels that show (alpha above 0); a plain
+    /// mid grey for an image with none.
+    pub fn of(rgba: &[u8]) -> SkinRef {
+        let (mut v, mut sat, mut n) = ([0.0f32; 2], 0.0f32, 0usize);
+        let (mut ls, mut cs) = (Vec::with_capacity(rgba.len() / 4), Vec::with_capacity(rgba.len() / 4));
+        for px in rgba.chunks_exact(4).filter(|p| p[3] > 0) {
+            let c = [px[0], px[1], px[2]].map(|v| v as f32 / 255.0);
+            let (h, s, l) = hsl(c);
+            let a = h * std::f32::consts::TAU;
+            v[0] += s * a.cos();
+            v[1] += s * a.sin();
+            sat += s;
+            n += 1;
+            ls.push(l);
+            cs.push(c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2]));
+        }
+        if n == 0 {
+            return SkinRef { hue: 0.0, sat: 0.0, light: 0.5, chroma: 0.0 };
+        }
+        ls.sort_by(f32::total_cmp);
+        cs.sort_by(f32::total_cmp);
+        SkinRef { hue: (v[1].atan2(v[0]) / std::f32::consts::TAU).rem_euclid(1.0), sat: sat / n as f32, light: ls[ls.len() / 2], chroma: cs[cs.len() / 2] }
+    }
+
+    /// One colour's skin: the colour itself (an untextured layer's).
+    fn of_colour(c: [f32; 3]) -> SkinRef {
+        let (hue, sat, light) = hsl(c);
+        SkinRef { hue, sat, light, chroma: c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2]) }
+    }
+}
+
+/// `c` moved from the skin `from` to shade `r` ([`SKIN`]), as far as it is
+/// skin. Its colour (hue and saturation) moves wholly for a hue within 25
+/// degrees of the skin's, not at all past 40 (a troll's brown marks keep
+/// theirs); its lightness wholly within 40, not at all past 90 (the marks
+/// lighten and darken with the skin, an iris does not). A texel of almost no
+/// colour (an eye's white, a brow) moves by how much it has, but on a skin of
+/// almost none itself (a dark elf's) wholly. The hue becomes the shade's plus
+/// a quarter of its own turn from the skin's, the saturation the shade's plus a
+/// third of its own difference from the skin's, the lightness follows a curve
+/// through (the skin's, the shade's) that keeps black and white where they
+/// are.
+fn skin(c: [f32; 3], r: u32, from: &SkinRef) -> [f32; 3] {
+    let (th, ts, tl) = (((r >> 16) & 0xFF) as f32 / 256.0, ((r >> 8) & 0xFF) as f32 / 255.0, (r & 0xFF) as f32 / 255.0);
+    let (h, s, l) = hsl(c);
+    let chroma = c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2]);
+    let turn = |a: f32| (a + 0.5).rem_euclid(1.0) - 0.5;
+    let d = turn(h - from.hue).abs() * 360.0;
+    let within = |near: f32, far: f32| (1.0 - (d - near) / (far - near)).clamp(0.0, 1.0);
+    let grey = if from.chroma < 0.08 && chroma < 0.06 {
+        Some(1.0)
+    } else if chroma < 0.06 {
+        Some(chroma / 0.06)
+    } else {
+        None
+    };
+    let (wc, wl) = match grey {
+        Some(1.0) => (1.0, 1.0),
+        Some(g) => (g * within(25.0, 40.0), g * within(40.0, 90.0)),
+        None => (within(25.0, 40.0), within(40.0, 90.0)),
+    };
+    if wl <= 0.0 {
+        return c;
+    }
+    // the shade's hue, a quarter of the texel's own turn from the skin's kept
+    // (a troll's yellow-brown creases, a turn from its green, would have gone
+    // red at the whole of it), the shade's saturation a third of its own
+    // difference
+    let nh = h + wc * turn(th + turn(h - from.hue) * 0.25 - h);
+    let ns = s + wc * (ts + (s - from.sat) / 3.0 - s);
+    let m = from.light.clamp(0.02, 0.98);
+    let curve = if l <= m { l * tl / m } else { tl + (l - m) * (1.0 - tl) / (1.0 - m) };
+    let nl = l + wl * (curve - l);
+    rgb(nh.rem_euclid(1.0), ns.clamp(0.0, 1.0), nl.clamp(0.0, 1.0))
 }
 
 /// An RGB colour's hue (turns, 0..1), saturation and lightness (HSL).
@@ -75,14 +172,24 @@ pub fn recolor_rgb(c: [u8; 3], r: u32) -> [u8; 3] {
         return c;
     }
     let (a, b, d) = (((r >> 16) & 0xFF) as f32, ((r >> 8) & 0xFF) as f32, (r & 0xFF) as f32);
+    if r >> 24 == SKIN {
+        let f = c.map(|v| v as f32 / 255.0);
+        return skin(f, r, &SkinRef::of_colour(f)).map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8);
+    }
     let (h, s, l) = hsl(c.map(|v| v as f32 / 255.0));
     let (h, s, l) = if r >> 24 == DYE { (a / 256.0, b / 255.0, l * d / 128.0) } else { (h + a / 256.0, s * b / 128.0, l * d / 128.0) };
     rgb(h, s.clamp(0.0, 1.0), l.clamp(0.0, 1.0)).map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8)
 }
 
-/// Every texel of an RGBA image recoloured by `r`, its alpha kept.
+/// Every texel of an RGBA image recoloured by `r`, its alpha kept (a [`SKIN`]
+/// shade from the image's own skin).
 pub fn recolor_rgba(rgba: &mut [u8], r: u32) {
     if !changes(r) {
+        return;
+    }
+    if r >> 24 == SKIN {
+        let from = SkinRef::of(rgba);
+        recolor_skin(rgba, r, &from);
         return;
     }
     // a texture has few distinct colours: each worked out once
@@ -90,6 +197,33 @@ pub fn recolor_rgba(rgba: &mut [u8], r: u32) {
     for px in rgba.chunks_exact_mut(4) {
         let c = [px[0], px[1], px[2]];
         let out = *seen.entry(c).or_insert_with(|| recolor_rgb(c, r));
+        px[..3].copy_from_slice(&out);
+    }
+}
+
+/// Every level of a texture recoloured by `r`, the base first: a [`SKIN`]
+/// shade moves every level from the base's skin, so a far level is the near
+/// one's colour.
+pub fn recolor_levels(levels: &mut [Vec<u8>], r: u32) {
+    if r >> 24 == SKIN {
+        let Some(base) = levels.first() else { return };
+        let from = SkinRef::of(base);
+        for l in levels {
+            recolor_skin(l, r, &from);
+        }
+        return;
+    }
+    for l in levels {
+        recolor_rgba(l, r);
+    }
+}
+
+/// Every texel moved from skin `from` to shade `r`, its alpha kept.
+fn recolor_skin(rgba: &mut [u8], r: u32, from: &SkinRef) {
+    let mut seen: HashMap<[u8; 3], [u8; 3]> = HashMap::new();
+    for px in rgba.chunks_exact_mut(4) {
+        let c = [px[0], px[1], px[2]];
+        let out = *seen.entry(c).or_insert_with(|| skin(c.map(|v| v as f32 / 255.0), r, from).map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8));
         px[..3].copy_from_slice(&out);
     }
 }
@@ -171,6 +305,69 @@ mod tests {
         recolor_rgba(&mut px, red);
         assert_eq!((px[3], px[7]), (77, 0), "alpha kept");
         assert_eq!(&px[..3], &px[4..7]);
+    }
+
+    /// A skin shade moves a texture's skin to the shade's colour whatever the
+    /// skin was (a human's light, an erudite's dark: the same colour comes
+    /// out), its shading kept (a darker texel stays darker); black and white
+    /// stay near where they were, an iris of another hue keeps it (only its
+    /// lightness follows), alpha is kept; every level moves from the base's
+    /// skin. The controls: a first step (0) and a mode it does not know leave
+    /// the texels.
+    #[test]
+    fn skin_shades() {
+        let dark = SKIN << 24 | 19 << 16 | 107 << 8 | 59; // go-eqoa-server's Shade(27, 42, 23)
+        let skin_of = |c: [u8; 3]| -> Vec<u8> {
+            let mut v = Vec::new();
+            for k in 0..64u8 {
+                let d = k as i32 - 32;
+                v.extend([(c[0] as i32 + d / 4).clamp(0, 255) as u8, (c[1] as i32 + d / 4).clamp(0, 255) as u8, (c[2] as i32 + d / 4).clamp(0, 255) as u8, 255]);
+            }
+            v
+        };
+        let mean = |v: &[u8]| -> [f32; 3] {
+            let n = (v.len() / 4) as f32;
+            let mut m = [0.0f32; 3];
+            for p in v.chunks_exact(4) {
+                for k in 0..3 {
+                    m[k] += p[k] as f32 / n;
+                }
+            }
+            m
+        };
+        let mut human = skin_of([214, 156, 135]);
+        let mut erudite = skin_of([91, 51, 41]);
+        recolor_rgba(&mut human, dark);
+        recolor_rgba(&mut erudite, dark);
+        let (h, e) = (mean(&human), mean(&erudite));
+        assert!(h.iter().zip(e).all(|(a, b)| (a - b).abs() < 6.0), "both to the shade: {h:?} {e:?}");
+        let want = rgb(19.0 / 256.0, 107.0 / 255.0, 59.0 / 255.0).map(|v| v * 255.0);
+        assert!(h.iter().zip(want).all(|(a, b)| (a - b).abs() < 8.0), "the shade's colour: {h:?} {want:?}");
+        assert!(human[0] < human[4 * 63], "a darker texel stays darker");
+
+        let from = SkinRef::of(&skin_of([214, 156, 135]));
+        let to = |c: [u8; 3]| skin(c.map(|v| v as f32 / 255.0), dark, &from).map(|v| (v * 255.0).round() as u8);
+        assert!(to([250, 250, 248])[0] > 200, "an eye's white stays light: {:?}", to([250, 250, 248]));
+        assert!(to([8, 8, 8])[0] < 20, "black stays black: {:?}", to([8, 8, 8]));
+        let iris = to([60, 110, 200]);
+        assert!(iris[2] > iris[0], "a blue iris stays blue: {iris:?}");
+
+        let mut px = vec![214, 156, 135, 77, 214, 156, 135, 0];
+        recolor_rgba(&mut px, dark);
+        assert_eq!((px[3], px[7]), (77, 0), "alpha kept");
+        let base = skin_of([214, 156, 135]);
+        let mut levels = vec![base.clone(), base[..32].to_vec()];
+        recolor_levels(&mut levels, dark);
+        let mut alone = base[..32].to_vec();
+        recolor_skin(&mut alone, dark, &SkinRef::of(&base));
+        assert_eq!(levels[1], alone, "a far level from the base's skin");
+
+        for r in [0, 0x0900_0000 | 0x13_6B3B] {
+            let mut v = skin_of([214, 156, 135]);
+            recolor_rgba(&mut v, r);
+            assert_eq!(v, skin_of([214, 156, 135]), "the control {r:#x}");
+        }
+        assert!(changes(dark) && !changes(0x0900_0000));
     }
 
     /// A pair names one id every time, never 0 and never one taken; another

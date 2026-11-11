@@ -526,9 +526,9 @@ impl CharSelect {
     }
 
     /// Customise closed (260): the Options box again; Accept kept the look.
-    fn cust_done(&mut self, look: Option<(usize, [i32; 4])>, reqs: &mut Vec<Req>) {
-        if let Some((i, l)) = look {
-            reqs.push(Req::Look(i, l));
+    fn cust_done(&mut self, look: Option<super::cust::Accepted>, reqs: &mut Vec<Req>) {
+        if let Some((i, l, options)) = look {
+            reqs.push(Req::Look(i, l, options));
         }
         self.choice = 0;
         self.choosing = true;

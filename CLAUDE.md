@@ -75,7 +75,10 @@ current.
   there is no pass at all, the picture byte for byte the game's), and a server's own races' customisation on a server
   that sends it (the user's of 2026-11-08, "lets add char customization to the new races": `raceopts.rs`,
   `net::raceopts`, `render::recolor`, README "A server's race's own customisation"; the options are the server's,
-  the parts' triangles too; every row's first step is the body as it is, byte for byte), and an NPC's body in a
+  the parts' triangles too; every row's first step is the body as it is, byte for byte), and the game's ten races'
+  skin shades on a server that sends them (the server owner's of 2026-11-11: a Skin row under the four on the
+  appearance page and at select's Customize, `render::recolor::SKIN`, README "The game's ten races' skin shades";
+  Natural is the body byte for byte), and an NPC's body in a
   server's tint on a server that names one (the server owner's of 2026-11-10, Yhafiran "the black and green oriental
   dragon" on the disc's green one: `npctint.rs`, `net::npctint`, go-eqoa-server's 0x7E3E-0x7E40; untinted, the body
   byte for byte as before), and a monster's name and level in the target's details box on a server that offers it (the GM

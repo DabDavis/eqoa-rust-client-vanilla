@@ -97,6 +97,9 @@ pub struct CharRecord {
     /// The cape it wears, on a server with capes (`cape`: the session's
     /// `cape_list` by its server id, which comes after the list).
     pub cape: Option<net::cape::Cape>,
+    /// Its race's options re-chosen at Customize (a game race's skin shade,
+    /// `raceopts`), sent with 0x002A when it is played; empty, as it was.
+    pub options: Vec<(String, u8)>,
 }
 
 impl CharRecord {
@@ -128,6 +131,7 @@ impl CharRecord {
             tints: std::array::from_fn(|k| g(26 + k)),
             colors: None,
             cape: None,
+            options: Vec::new(),
         }
     }
 
@@ -163,6 +167,7 @@ impl CharRecord {
                 robe: rgba(67),
             }),
             cape: None,
+            options: Vec::new(),
         }
     }
 
@@ -181,6 +186,7 @@ impl CharRecord {
             hair_style: self.hair_style as i64,
             face: self.face as i64,
             gear: Vec::new(),
+            options: self.options.clone(),
         }
     }
 }
@@ -204,8 +210,9 @@ pub enum Req {
     Select(usize),
     /// `DeleteCharacter(i)`
     Delete(usize),
-    /// `SetCharLook(i, face, hair style, hair length, hair colour)`
-    Look(usize, [i32; 4]),
+    /// `SetCharLook(i, face, hair style, hair length, hair colour)`, and the
+    /// race's options re-chosen with it (a game race's skin: `raceopts`)
+    Look(usize, [i32; 4], Vec<(String, u8)>),
     /// `Msg0777`: back to the list, quietly
     Msg0777,
 }
@@ -891,11 +898,19 @@ impl Client {
                         self.chars.remove(i);
                     }
                 }
-                Req::Look(i, [face, style, length, color]) => {
+                Req::Look(i, [face, style, length, color], options) => {
                     // `SetCharLook`: Frontiers only
                     if self.expansion() & 2 != 0 && i < self.chars.len() && self.chars.len() < 9 {
                         let c = &mut self.chars[i];
                         (c.face, c.hair_style, c.hair_length, c.hair_color) = (face, style, length, color);
+                        // the race's options re-chosen: kept for the 0x002A, and
+                        // the character drawn in them here until the server's
+                        // list says (`raceopts`)
+                        if !options.is_empty() {
+                            let sex = (create::tables::model_of(c.race, 1) == c.model) as i32;
+                            crate::raceopts::set_look_of(&c.name, crate::raceopts::look_of_choice(c.race, sex, c.model, &options));
+                            c.options = options;
+                        }
                     }
                 }
                 Req::Msg0777 => {
@@ -994,7 +1009,7 @@ mod tests {
     use super::*;
 
     fn character(name: &str, id: i64, gear: Vec<u8>) -> net::session::Character {
-        net::session::Character { name: name.into(), server_id: id, model: 0x70D898C6, class: 11, race: 2, level: 7, hair_color: 1, hair_length: 2, hair_style: 3, face: 1, gear }
+        net::session::Character { name: name.into(), server_id: id, model: 0x70D898C6, class: 11, race: 2, level: 7, hair_color: 1, hair_length: 2, hair_style: 3, face: 1, gear, options: Vec::new() }
     }
 
     /// `CharacterList`'s raw 32 bytes: the robe as an int, its tint, three
