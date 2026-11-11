@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Wisps walk without a sound
+- A Wisp makes no footsteps: its walking, running, turning, falling, landing and swimming are silent, yours and every
+  other Wisp you meet. Its swings and spells sound as ever. In a mortal form (a glamour from its racial Trickster Flame)
+  it is heard as the body it shows.
+- On a server that hides a Wisp's gear (the Heirloom server), a Wisp in its own form shows only the wisp and its cape;
+  in a glamour it shows its whole body in its armour and weapons.
+
 ## 2026-11-11 · Look at any world on the map, the minimap indoors, a profanity filter switch
 - The map has a **Places** button (P on a keyboard, Start on a controller): a list of the worlds (Tunaria, the Rathe
   Mountains, Odus, Lavastorm, the Plane of Sky and the server's own worlds) and, under the world shown, its towns.
