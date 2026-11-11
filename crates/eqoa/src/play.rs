@@ -1112,6 +1112,17 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                 })
 }
 
+/// Whether a character's cape is drawn: with its body (`body`: shown, and its
+/// skins not hidden by invisibility, `skins_shown`), but a Wisp's whenever it
+/// is shown at all (`shown`). A Wisp is drawn as what hangs on an invisible
+/// body (`wisp`), so invisibility leaves it as it was, the wisp in its helm and
+/// its cape (the owner, 2026-11-11: "let the capes be visible on wisp players";
+/// an invisible Wisp had shown its wisp alone, and go-eqoa-server sends an
+/// invisible Wisp's cape since: its `entity/capes.go`).
+fn cape_shown(wisp: bool, shown: bool, body: bool) -> bool {
+    if wisp { shown } else { body }
+}
+
 /// A player's character puts on the cape the server says it wears (`cape`:
 /// `want`, the session's `capes_in_view` by its id), or takes it off, when it
 /// changes: fitted to the puppet's own skeleton (in Frontiers' art: capes are
@@ -3805,7 +3816,7 @@ impl Play {
                     g.renderer.set_palette(g.queue, cg, &palette);
                 }
                 crate::lod::place(cg, &p.centre, &eye);
-                cg.visible = p.gpu.visible;
+                cg.visible = cape_shown(p.wisp, shown, p.gpu.visible);
             }
         }
         self.far_last = far;
@@ -9652,7 +9663,7 @@ impl Play {
             if !palette.is_empty() {
                 r.set_palette(queue, cg, palette);
             }
-            cg.visible = p.gpu.visible;
+            cg.visible = cape_shown(p.wisp, shown, p.gpu.visible);
         }
         let Some(cs) = walker.sprite.as_ref() else { return };
         let centre = glam_to_matrix(matrix);
@@ -11794,6 +11805,21 @@ mod commands {
         assert!(!skins_shown(Some(&c(0x1D))));
         assert!(skins_shown(Some(&c(0))) && skins_shown(Some(&c(4))) && skins_shown(Some(&c(8))));
         assert!(skins_shown(None));
+    }
+
+    /// An invisible Wisp keeps its cape (the owner, 2026-11-11: "let the capes
+    /// be visible on wisp players"): its skins hidden, the cape is drawn while
+    /// the Wisp is shown at all, as its wisp and what it holds are. The
+    /// controls: anyone else's cape goes with its hidden skins, and a Wisp out
+    /// of sight (past its off distance) shows none.
+    #[test]
+    fn an_invisible_wisp_keeps_its_cape() {
+        let invisible = net::entity::Creature { flags262: 1, ..Default::default() };
+        let body = |shown: bool| shown && skins_shown(Some(&invisible));
+        assert!(cape_shown(true, true, body(true)), "an invisible Wisp's cape");
+        assert!(!cape_shown(false, true, body(true)), "the control: an invisible human's");
+        assert!(!cape_shown(true, false, body(false)), "the control: a Wisp out of sight");
+        assert!(cape_shown(false, true, true) && cape_shown(true, true, true), "anyone seen");
     }
 
     /// `ToggleFollow`: a targeted member of the group is followed; the
