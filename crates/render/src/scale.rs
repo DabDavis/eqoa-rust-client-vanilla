@@ -214,7 +214,7 @@ impl Frame {
                 view_formats: &[],
             })
             .create_view(&Default::default());
-        let uniform = wgpu::util::DeviceExt::create_buffer_init(
+        let uniform = crate::BufferInit::buffer_init(
             device,
             &wgpu::util::BufferInitDescriptor { label: Some("render scale"), contents: bytemuck::cast_slice(&[k, 0, 0, 0]), usage: wgpu::BufferUsages::UNIFORM },
         );

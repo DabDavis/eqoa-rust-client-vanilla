@@ -5,7 +5,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
-use wgpu::util::DeviceExt;
+use crate::BufferInit;
 
 /// The PS2 frame the game lays text out on.
 pub const SCREEN_H: f32 = 448.0;
@@ -207,7 +207,7 @@ impl Text {
         if v.is_empty() {
             return;
         }
-        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("text"), contents: bytemuck::cast_slice(&v), usage: wgpu::BufferUsages::VERTEX });
+        let buf = device.buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("text"), contents: bytemuck::cast_slice(&v), usage: wgpu::BufferUsages::VERTEX });
         pass.set_pipeline(match crate::ui::text_filter() {
             crate::ui::TextFilter::Sharp => &self.sharp,
             crate::ui::TextFilter::Smooth => &self.smooth,

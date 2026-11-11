@@ -121,4 +121,11 @@ window.eqoaNotices = {
   get dead() { return dead; },
 };
 window.eqoaProblem = ([key, text]) => problem(key, text);
+// The graphics device was lost and made again (the client's web::recovered):
+// said, gone by itself after a minute.
+window.eqoaGraphicsBack = (text) => {
+  console.warn(text);
+  notice('gpu', '', text, [['Dismiss', () => notice('gpu')]]);
+  setTimeout(() => notice('gpu'), 60000);
+};
 window.eqoaCrash = ([title, detail]) => crash(title, detail);

@@ -1205,12 +1205,12 @@ mod bench {
             ),
         });
         let rel = view_proj * Mat4::from_translation(eye);
-        use wgpu::util::DeviceExt;
+        use render::BufferInit;
         let bytes = |f: &[f32]| f.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
-        let ubuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &bytes(&rel.to_cols_array()), usage: wgpu::BufferUsages::UNIFORM });
+        let ubuf = device.buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &bytes(&rel.to_cols_array()), usage: wgpu::BufferUsages::UNIFORM });
         let r = 4000.0f32;
         let plane: Vec<f32> = [[-r, -r], [r, -r], [r, r], [-r, -r], [r, r], [-r, r]].iter().flat_map(|[x, z]| [*x, ground, *z]).collect();
-        let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &bytes(&plane), usage: wgpu::BufferUsages::VERTEX });
+        let vbuf = device.buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &bytes(&plane), usage: wgpu::BufferUsages::VERTEX });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: None,

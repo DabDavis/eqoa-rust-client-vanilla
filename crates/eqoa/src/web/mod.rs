@@ -529,18 +529,56 @@ fn canvas() -> Result<web_sys::HtmlCanvasElement, String> {
     doc.get_element_by_id("eqoa").ok_or("no canvas #eqoa")?.dyn_into().map_err(|_| "#eqoa is not a canvas".into())
 }
 
+/// Whether the page draws on WebGL2 even where WebGPU works: `?webgl` in its
+/// address (a test, and a way round a WebGPU that misbehaves), or WebGL2
+/// kept for this browser after WebGPU's device was lost and could not be made
+/// again (`give_up`; main.js's `eqoaWebglKept`, which `?webgpu` overrides).
+fn webgl_chosen() -> bool {
+    if page_flag("webgl") {
+        return true;
+    }
+    let Some(w) = web_sys::window() else { return false };
+    js_sys::Reflect::get(&w, &"eqoaWebglKept".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        .and_then(|f| f.call0(&JsValue::NULL).ok())
+        .is_some_and(|v| v.is_truthy())
+}
+
+thread_local! {
+    /// The backend the page draws on (`gfx`): what a lost device is made
+    /// again on (`remake`), and what giving up falls back from (`give_up`).
+    static BACKEND: std::cell::Cell<Option<wgpu::Backend>> = const { std::cell::Cell::new(None) };
+    /// A new device in place of a lost one (`remake`): asked for, then its
+    /// answer.
+    static REMAKE: RefCell<Remake> = const { RefCell::new(Remake::Idle) };
+}
+
+enum Remake {
+    Idle,
+    Asking,
+    Done(Result<viewer::PendingGfx, String>),
+}
+
 /// The device on the canvas, made before the event loop: WebGPU where the
 /// browser has a working adapter, else WebGL2 (whose adapter is the canvas's
 /// own context, so the surface comes first).
 async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, String> {
+    gfx_on(canvas, None).await
+}
+
+/// `gfx`, or with `again` a new device on that backend in place of a lost
+/// one (`remake`).
+async fn gfx_on(canvas: web_sys::HtmlCanvasElement, again: Option<wgpu::Backend>) -> Result<viewer::PendingGfx, String> {
     use winit::platform::web::WindowAttributesExtWebSys;
     let dpr = web_sys::window().map_or(1.0, |w| w.device_pixel_ratio());
     let (w, h) = (((canvas.client_width() as f64) * dpr).max(1.0) as u32, ((canvas.client_height() as f64) * dpr).max(1.0) as u32);
     canvas.set_width(w);
     canvas.set_height(h);
-    // `?webgl` in the page's address: WebGL2 even where WebGPU works (a test,
-    // and a way round a WebGPU that misbehaves).
-    let webgl = page_flag("webgl");
+    let webgl = match again {
+        Some(b) => b == wgpu::Backend::Gl,
+        None => webgl_chosen(),
+    };
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
     let instance = if webgl {
         desc.backends = wgpu::Backends::GL;
@@ -554,7 +592,8 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
         .await
         .map_err(|e| format!("no graphics adapter: {e}"))?;
     let info = adapter.get_info();
-    status(&format!("graphics: {} ({:?})", info.name, info.backend));
+    status(&format!("graphics: {} ({:?}){}", info.name, info.backend, if again.is_some() { ", a new device in place of the lost one" } else { "" }));
+    BACKEND.with(|b| b.set(Some(info.backend)));
     crate::bugnote::set_graphics(&info.name, &format!("{:?}", info.backend));
     if let Some(ua) = web_sys::window().and_then(|w| w.navigator().user_agent().ok()) {
         crate::bugnote::set_browser(&ua);
@@ -574,13 +613,10 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
         .await
         .map_err(|e| format!("device: {e}"))?;
     // A device lost (a driver reset, the GPU process gone) draws nothing more:
-    // the client has stopped. `Destroyed` is the page closing.
-    device.set_device_lost_callback(|reason, message| {
-        if !matches!(reason, wgpu::DeviceLostReason::Destroyed) {
-            crash("The graphics stopped", &format!("the graphics device was lost ({reason:?}): {message}"));
-        }
-    });
-    if info.backend == wgpu::Backend::Gl {
+    // a new one is made (`gpulost`, `viewer`'s `recover`). `Destroyed` is the
+    // page closing, or a device let go.
+    crate::gpulost::watch(&device, again.is_some());
+    if info.backend == wgpu::Backend::Gl && again.is_none() {
         watch_webgl(&canvas);
     }
     let mut config = surface.get_default_config(&adapter, w, h).ok_or("the surface cannot be configured")?;
@@ -593,14 +629,16 @@ async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, S
 }
 
 thread_local! {
-    /// The browser took the page's WebGL2 context away (`watch_webgl`).
+    /// The browser took the page's WebGL2 context away (`watch_webgl`), and
+    /// whether it gave it back since.
     static WEBGL_LOST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static WEBGL_BACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Whether the browser took the page's WebGL2 context away: nothing drawn
-/// after it shows, and the client stops (`viewer`'s `window_event`).
+/// Whether the graphics device is lost (the spell-visual preview's, which
+/// is not made again: it stops, `fxview`).
 pub fn graphics_lost() -> bool {
-    WEBGL_LOST.with(std::cell::Cell::get)
+    WEBGL_LOST.with(std::cell::Cell::get) || crate::gpulost::lost()
 }
 
 /// A WebGL2 context the browser takes away (its graphics process restarted,
@@ -611,26 +649,132 @@ pub fn graphics_lost() -> bool {
 /// 4 GB ran out a minute later and the client stopped on an `unreachable`
 /// with nothing to say why (in Firefox, `WEBGL_lose_context`: a black canvas
 /// at 30 fps, 259 MB to 4,095 MB in 70 s). The page's `webglcontextlost`
-/// says so at once and the client stops there, as a lost WebGPU device does.
+/// takes the device as lost at once (`gpulost`), its default prevented so
+/// that the browser gives the context back (`webglcontextrestored`), and a
+/// new device is made on it then (`remake`), the frames between drawing
+/// nothing.
 fn watch_webgl(canvas: &web_sys::HtmlCanvasElement) {
-    let lost = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
+    let lost = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+        e.prevent_default();
+        WEBGL_BACK.with(|b| b.set(false));
         if WEBGL_LOST.with(|l| l.replace(true)) {
             return;
         }
-        let lighting = crate::settings::client();
-        let heavy = if lighting.dynamic_lighting && (lighting.light_shadows || lighting.sun_shadows) {
-            " If it happens again, turn off Light Shadows and Sun Shadows (Options, Extended, Lighting): they ask the most of the graphics card."
-        } else {
-            ""
-        };
-        crash(
-            "The graphics stopped",
-            &format!("the browser took the game's WebGL2 context away (its graphics process restarted, the graphics driver reset, or the graphics memory ran out).{heavy}"),
-        );
+        crate::gpulost::mark("the browser took the game's WebGL2 context away: its graphics process restarted, the graphics driver reset, or the graphics memory ran out");
     });
     if canvas.add_event_listener_with_callback("webglcontextlost", lost.as_ref().unchecked_ref()).is_ok() {
         lost.forget();
     }
+    let back = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
+        log("graphics: the browser gave the WebGL2 context back");
+        WEBGL_BACK.with(|b| b.set(true));
+    });
+    if canvas.add_event_listener_with_callback("webglcontextrestored", back.as_ref().unchecked_ref()).is_ok() {
+        back.forget();
+    }
+}
+
+/// How long a lost device's page waits for a new one in all (each try's
+/// pause first, `remake`): the browser restarts its graphics process
+/// meanwhile, for every page of it at once.
+const REMAKE_PAUSES_MS: [i32; 8] = [100, 250, 500, 1000, 2000, 3000, 4000, 5000];
+/// How long a WebGL2 page waits for its context back.
+const WEBGL_BACK_MS: i32 = 10_000;
+
+/// A new device in place of the lost one (`viewer`'s `recover`, each frame
+/// while it is lost): asked for the first time (on the backend drawn on),
+/// then `None` until the browser's answer, then the device, or why none
+/// could be had after `REMAKE_PAUSES_MS`.
+pub fn remake() -> Option<Result<viewer::PendingGfx, String>> {
+    let asked = REMAKE.with(|r| {
+        let mut r = r.borrow_mut();
+        match std::mem::replace(&mut *r, Remake::Asking) {
+            Remake::Idle => Ok(false),
+            Remake::Asking => Ok(true),
+            Remake::Done(d) => {
+                *r = Remake::Idle;
+                Err(d)
+            }
+        }
+    });
+    match asked {
+        Ok(true) => return None,
+        Err(d) => return Some(d),
+        Ok(false) => {}
+    }
+    let backend = BACKEND.with(std::cell::Cell::get).unwrap_or(wgpu::Backend::BrowserWebGpu);
+    status(&format!("graphics: the device was lost ({}): asking the browser for a new one", crate::gpulost::why()));
+    wasm_bindgen_futures::spawn_local(async move {
+        let r = async {
+            if backend == wgpu::Backend::Gl {
+                let mut waited = 0;
+                while !WEBGL_BACK.with(std::cell::Cell::get) {
+                    if waited >= WEBGL_BACK_MS {
+                        return Err(format!("the browser did not give the WebGL2 context back within {} s", WEBGL_BACK_MS / 1000));
+                    }
+                    sleep(100).await;
+                    waited += 100;
+                }
+                WEBGL_LOST.with(|l| l.set(false));
+            }
+            let mut last = String::new();
+            for (k, pause) in REMAKE_PAUSES_MS.iter().enumerate() {
+                sleep(*pause).await;
+                match gfx_on(canvas()?, Some(backend)).await {
+                    Ok(p) => return Ok(p),
+                    Err(e) => {
+                        log(&format!("graphics: try {} for a new device: {e}", k + 1));
+                        last = e;
+                    }
+                }
+            }
+            Err(format!("the browser gave no new graphics device ({last})"))
+        }
+        .await;
+        REMAKE.with(|s| *s.borrow_mut() = Remake::Done(r));
+    });
+    None
+}
+
+/// A new device is in place of the lost one (`viewer`'s `reattach`): said on
+/// the page, the game having gone on.
+pub fn recovered() {
+    call_page("eqoaGraphicsBack", &JsValue::from_str(&format!("The graphics card stopped for a moment ({}). The game made its graphics again and went on: you are still where you were.", short_why())));
+}
+
+/// The loss's reason, its first line, for a notice.
+fn short_why() -> String {
+    let w = crate::gpulost::why();
+    let w = w.lines().next().unwrap_or("").trim().to_string();
+    if w.is_empty() { "the browser did not say why".into() } else { w }
+}
+
+/// No new device could be had (`why`): the client stops with its notice. On
+/// WebGPU the page keeps WebGL2 for its next load in this browser (main.js's
+/// `eqoaWebglKeep`: its card says so, with a way back), which a graphics
+/// process that keeps losing WebGPU's devices may still draw on.
+pub fn give_up(why: &str) {
+    let backend = BACKEND.with(std::cell::Cell::get);
+    if backend == Some(wgpu::Backend::BrowserWebGpu) {
+        call_page("eqoaWebglKeep", &JsValue::from_str(why));
+        crash("The graphics stopped", &format!("{why}. This page will use WebGL2 from now on in this browser (the start card says so, and can go back to WebGPU)."));
+        return;
+    }
+    let lighting = crate::settings::client();
+    let heavy = if lighting.dynamic_lighting && (lighting.light_shadows || lighting.sun_shadows) {
+        " If it happens again, turn off Light Shadows and Sun Shadows (Options, Extended, Lighting): they ask the most of the graphics card."
+    } else {
+        ""
+    };
+    crash("The graphics stopped", &format!("{why}.{heavy}"));
+}
+
+/// The graphics device lost at the next frame, as a test's
+/// (`window.eqoaLoseDevice()`, `gpulost::test`): the recovery proved in a
+/// browser.
+#[wasm_bindgen]
+pub fn lose_device() {
+    crate::gpulost::ask_loss();
 }
 
 /// Files every scene loads after its own (main.rs's `SHARED`).

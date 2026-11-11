@@ -907,10 +907,12 @@ impl winit::application::ApplicationHandler for App {
     fn window_event(&mut self, el: &winit::event_loop::ActiveEventLoop, _id: winit::window::WindowId, event: winit::event::WindowEvent) {
         use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
         use winit::keyboard::{Key, NamedKey};
-        // the page's WebGL2 context taken away: nothing drawn shows, and the
-        // frames' uploads would pile up (`web::graphics_lost`)
+        // the page's graphics device lost: nothing drawn shows, and the
+        // frames' uploads would pile up (`web::graphics_lost`); the preview
+        // is not made again, it stops with its notice
         #[cfg(target_arch = "wasm32")]
         if crate::web::graphics_lost() {
+            crate::web::crash("The graphics stopped", &format!("the graphics device was lost ({}): reload the page", crate::gpulost::why()));
             el.exit();
             return;
         }

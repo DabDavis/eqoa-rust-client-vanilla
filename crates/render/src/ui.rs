@@ -24,7 +24,7 @@
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
-use wgpu::util::DeviceExt;
+use crate::BufferInit;
 
 pub const SCREEN_W: f32 = 640.0;
 pub const SCREEN_H: f32 = 448.0;
@@ -1014,7 +1014,7 @@ impl Ui {
             };
             v.extend([p(0), p(1), p(2), p(0), p(2), p(3)]);
         }
-        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("ui"), contents: bytemuck::cast_slice(&v), usage: wgpu::BufferUsages::VERTEX });
+        let buf = device.buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("ui"), contents: bytemuck::cast_slice(&v), usage: wgpu::BufferUsages::VERTEX });
         pass.set_vertex_buffer(0, buf.slice(..));
         // Runs of one texture, blend mode and viewport, in order.
         let mut i = 0;
