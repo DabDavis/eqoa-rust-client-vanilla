@@ -42,7 +42,8 @@ pub fn gait(gait: i32) -> i32 {
 }
 
 /// The gait `cs` is shown in for its walk's `g`: `gait` on a sea creature's
-/// body, `g` on any other.
+/// body, `g` on any other (the walker's own, `Walker::pose_sounding`).
+#[cfg(test)]
 pub fn shown(cs: &CSprite<Ee>, g: i32) -> i32 {
     if swims(cs) { gait(g) } else { g }
 }
