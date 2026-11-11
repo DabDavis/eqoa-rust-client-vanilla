@@ -52,6 +52,8 @@ pub enum ItemOut {
     GearSet(i32, String),
     /// The client's own Link Item (`itemlink`): the item linked in the chat line
     Link(i32),
+    /// Hide Look (true) or Show Look on a worn item (`hidelook`)
+    HideLook(i32, bool),
     /// 260 to the start menu: back to its main menu
     Back,
 }
@@ -820,6 +822,13 @@ impl ItemMenu {
                 MSG_LINK_ITEM => {
                     if valid {
                         out.push(ItemOut::Link(id));
+                    } else {
+                        sound = 10;
+                    }
+                }
+                crate::hidelook::MSG_HIDE_LOOK | crate::hidelook::MSG_SHOW_LOOK => {
+                    if valid {
+                        out.push(ItemOut::HideLook(id, msg == crate::hidelook::MSG_HIDE_LOOK));
                     } else {
                         sound = 10;
                     }

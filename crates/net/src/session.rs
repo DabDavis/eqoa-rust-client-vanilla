@@ -1138,6 +1138,9 @@ pub struct Session {
     /// (none since the offer).
     pub profanity_offer: bool,
     profanity_asked: Option<bool>,
+    /// The worn looks the character hides, as the server told them
+    /// (`crate::hidelook`): none offered until it does.
+    pub hide_look: crate::hidelook::State,
     user: String,
     token: [u8; 32],
     start: Instant,
@@ -1312,6 +1315,7 @@ impl Session {
             item_links_asked: None,
             profanity_offer: false,
             profanity_asked: None,
+            hide_look: crate::hidelook::State::default(),
             user: user.to_string(),
             token,
             start: Instant::now(),
@@ -1617,6 +1621,15 @@ impl Session {
         let mut w = Writer::op(OP_PROFANITY_CHOICE);
         w.u8(on as u8);
         self.send(&w.data);
+    }
+
+    /// Hide Look and Show Look on a worn item (`crate::hidelook`): the look of
+    /// what is worn in `equip_slot` hidden or shown, told only to a server that
+    /// offered it; the server answers the slots after it.
+    pub fn hide_look(&mut self, equip_slot: i32, hide: bool) {
+        if self.hide_look.offered && crate::hidelook::shown(equip_slot) {
+            self.send(&crate::hidelook::set(equip_slot, hide));
+        }
     }
 
     /// Links are in force on this connection: the server offered them and was
@@ -1983,6 +1996,7 @@ impl Session {
                 self.item_links_asked = None;
                 self.profanity_offer = false;
                 self.profanity_asked = None;
+                self.hide_look = crate::hidelook::State::default();
                 ev.push(Event::Promoted);
             }
             drdp::TYPE_DISCONNECT => {
@@ -2285,6 +2299,11 @@ impl Session {
                     self.profanity_offer = true;
                     self.profanity_asked = None;
                 }
+            }
+            // the worn looks hidden: offered (with the slots hidden) and
+            // answered (`crate::hidelook`)
+            crate::hidelook::OP_OFFER | crate::hidelook::OP_STATE => {
+                self.hide_look.read(op, &m.data[2.min(m.data.len())..]);
             }
             OP_ITEM_LINKS => {
                 let layout = r.u8();

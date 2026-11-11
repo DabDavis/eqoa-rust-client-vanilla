@@ -6262,6 +6262,14 @@ impl Play {
                 ItemOut::Link(i) => {
                     self.link_item(0, i);
                 }
+                // Hide Look / Show Look (`hidelook`): the worn item's slot
+                ItemOut::HideLook(i, hide) => {
+                    if let Some(it) = self.dump.inventory.items.get(i.max(0) as usize).filter(|_| i >= 0) {
+                        let slot = i32::try_from(it.equip_slot).unwrap_or(-1);
+                        eprintln!("play: {} look of {:?} (equip slot {slot})", if hide { "hide the" } else { "show the" }, it.item.name);
+                        self.session.hide_look(slot, hide);
+                    }
+                }
                 ItemOut::Back => {}
             }
         }
@@ -6363,13 +6371,15 @@ impl Play {
         let counts = s.item_counts.map(|c| c.max(crate::inventory::pack_cap() as i32));
         // Link Item in every item's popup where links are made (`itemlink`)
         let link = crate::settings::item_links() && self.session.item_links_offer;
-        self.items.set_built(crate::itemmenu::build_linked(
+        let built = crate::itemmenu::build_linked(
             inv,
             counts,
             &|k| crate::inventory::item_icon(&inv.items[k], flags) as i32,
             &|k| crate::inventory::can_use(&inv.items[k], pl.class, pl.race, pl.level),
             link,
-        ));
+        );
+        // Hide Look / Show Look on a worn item where the server offers it (`hidelook`)
+        self.items.set_built(crate::hidelook::with_rows(built, inv, &self.session.hide_look));
         self.items.set_gear(self.gear.view(inv, &vui.words, vui.language));
         let info = crate::infotext::Info {
             words: &vui.words,
