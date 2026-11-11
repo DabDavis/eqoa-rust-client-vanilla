@@ -759,7 +759,7 @@ or a browser (each described where it lives below):
   quest tracker, the DPS meter, the effects, the chat box, the breath gauge,
   the quick bars) once the menu is left, with a bar at the top (Lock, Reset);
   the mouse's left button or a finger drags a piece. Locked, every click on
-  the HUD is the game's as ever. A piece is kept per window (`hud.opt`) as a
+  the HUD is the game's as ever. A piece is kept per window (`hud.opt`) and per account (see Options per account) as a
   distance from the screen's side nearest it (left, middle, right; top,
   middle, bottom, by thirds) and drawn on the screen whatever its size
   (`Ui::shift`; nothing moved, every quad as before). Reset HUD (the row, the
@@ -767,6 +767,18 @@ or a browser (each described where it lives below):
   clamp, the file, drag and reset, `/hud`, each with a control), the Extended
   page's, and playshots on go-eqoa-server (`EQOA_MOUSE`'s `hud press|move|
   release`) and a window on Xvfb driven by xdotool.
+- **Options per account** (the GM Jibrish's petition 1621, 2026-11-11, "account bound, not just character
+  bound"; `settings::set_account`): from a login the Options window's settings, the Extended rows and the HUD's
+  layout are read from and kept in the account's files (`acct_<server>+<login>.{game,client,hud}.opt`, a page's
+  `eqoa.acct_...`), the window's own written beside them; the account's first login makes them from the window's
+  set kept most recently (a page: this window's). The keys, buttons and macros stay the computer's; the saved login,
+  home shard, Controller Focus, waypoints and the window's place stay the window's; quick bars, auto slots and the
+  quest guide's record a character's. Save Changes' question carries "Options now save for every character on this
+  account." until a Yes (`account-notice.opt`). Proof: `settings`' unit tests, each with its control.
+- **Class Mastery's cursor kept** (the GM Jibrish's petition 1622): after a buy or a switch the lists are made
+  again (`SelectCategory`, which put the cursor on the first line) keeping each list's line and scroll, and the next
+  rank of a bought rank's chain put in its place and selected (`ClassMastery::refresh_kept`; nothing new on the wire;
+  the game's order otherwise). Proof: `classmastery`'s unit test, the game's refresh its control.
 - **Ignore Shouts kept** until Restore Shouts, across logins (the game keeps
   none, and a server forgets it at the next login).
 - **Several windows at once** (multiboxing): each window reads its own

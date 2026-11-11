@@ -413,6 +413,8 @@ pub struct WndOptions {
     saved: GameOptions,
     /// the client's own as it opened, put back with them
     saved_client: ClientOptions,
+    /// The Save Changes box carries the account's notice (`settings::ACCOUNT_NOTICE`).
+    notice: bool,
     /// the keys and buttons as it opened, put back with them
     saved_binds: crate::binds::Binds,
     /// the Controls page and the Macros page, and the sounds they made
@@ -591,6 +593,9 @@ impl WndOptions {
         if self.message.visible {
             // 307: Yes commits the four held settings and saves
             if self.message.key(key, now, cues) == Some(0) {
+                if std::mem::take(&mut self.notice) {
+                    crate::settings::account_notice_seen();
+                }
                 o.no_faction = (self.edit[0] == 0) as u8;
                 o.no_loot = (self.edit[1] == 0) as u8;
                 o.auto_attack = self.edit[2];
@@ -622,7 +627,13 @@ impl WndOptions {
             13 | 134 => {
                 if self.select(vui, r, cues) {
                     let w = |id: i32| wide(vui.words.get(id, vui.language));
-                    self.message.setup(vui, r, w(1633), w(1634), 2, CENTER, 300);
+                    // the account's options (petition 1621): said in the box until a Yes
+                    let mut text = w(1634);
+                    self.notice = crate::settings::account_notice_due();
+                    if self.notice {
+                        text.extend(wide(&format!(" {}", crate::settings::ACCOUNT_NOTICE)));
+                    }
+                    self.message.setup(vui, r, w(1633), text, 2, CENTER, 300);
                     self.message.visible = true;
                     self.message.focus(vui, r);
                 }
