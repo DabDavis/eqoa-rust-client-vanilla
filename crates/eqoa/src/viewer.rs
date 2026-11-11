@@ -528,10 +528,22 @@ pub fn shot_with(
                     }
                 }
             }
-            touch.holds = play.as_ref().is_some_and(|p| p.map.open);
+            touch.holds = play.as_ref().is_some_and(|p| p.map.open || p.wants_holds());
             for at in touch.take_holds(Instant::now()) {
                 if let Some(p) = play.as_mut().filter(|p| p.map.open) {
                     eprintln!("touch long press at ({:.0}, {:.0}): {}", at[0], at[1], p.map.long_press(at));
+                } else if let Some(p) = play.as_mut() {
+                    // a bar's ability: its auto turned (`autocast`); else the
+                    // tap it would have been
+                    let on_bar = p.hud_hold(at, (w, h));
+                    eprintln!("touch long press at ({:.0}, {:.0}): {}", at[0], at[1], if on_bar { "auto turned" } else { "a tap" });
+                    if !on_bar && let Some(vp) = last_view {
+                        let c = crate::mouse::Click::Target(at[0] as f64, at[1] as f64);
+                        if !p.point(c, (w, h), true) {
+                            let id = p.creature_at(c.at(), (w, h), vp);
+                            p.click(id, false);
+                        }
+                    }
                 }
             }
             for c in touch.take_clicks() {
@@ -5798,9 +5810,15 @@ impl App {
                 for at in self.touch.take_holds(Instant::now()) {
                     if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
                         p.map.long_press(at);
+                    } else if let Some((p, g)) = self.play.as_mut().zip(self.gfx.as_ref()) {
+                        // in play a bar's ability: its auto turned
+                        // (`autocast`); else the tap it would have been
+                        if !p.hud_hold(at, (g.config.width, g.config.height)) {
+                            self.click(crate::mouse::Click::Target(at[0] as f64, at[1] as f64), true);
+                        }
                     }
                 }
-                self.touch.holds = self.play.as_ref().is_some_and(|p| p.map.open);
+                self.touch.holds = self.play.as_ref().is_some_and(|p| p.map.open || p.wants_holds());
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.window_up() || p.map.open);
                 self.touch.opts = crate::settings::touch_options();
                 mark(&mut self.perf, 17);

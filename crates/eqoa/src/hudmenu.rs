@@ -158,7 +158,7 @@ impl HudMenu {
     /// and out slowly to 0.3, then the list (the bars: menus 0, 1, 4 and 5),
     /// the stack (2, its slot icons the live client's with `live`) or the
     /// sets (3).
-    fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menu: &MenuDef, now: i64, name: &dyn Fn(u32, i64) -> Vec<u16>, live: bool) {
+    fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menu: &MenuDef, now: i64, name: &dyn Fn(u32, i64) -> Vec<u16>, live: bool, auto: &[i64]) {
         if self.time < now {
             self.lit = -1;
         }
@@ -170,13 +170,15 @@ impl HudMenu {
         match self.index as usize {
             ITEMS => self.draw_stack(vui, r, menu, name, live),
             GEAR => self.draw_gear(vui, r, menu, name),
-            _ => self.draw_list(vui, r, menu, name),
+            _ => self.draw_list(vui, r, menu, name, auto),
         }
     }
 
     /// `DrawList`: the title bar with the selection's name, then the entries
-    /// down a frame that grows past five, each its icon, badged while locked.
-    fn draw_list(&mut self, vui: &Vui, r: &mut dyn Raster, menu: &MenuDef, name: &dyn Fn(u32, i64) -> Vec<u16>) {
+    /// down a frame that grows past five, each its icon, badged while locked;
+    /// an ability the player made auto (`autocast`, the client's own) marked
+    /// with a gold "A" in its icon's corner.
+    fn draw_list(&mut self, vui: &Vui, r: &mut dyn Raster, menu: &MenuDef, name: &dyn Fn(u32, i64) -> Vec<u16>, auto: &[i64]) {
         let a = self.alpha;
         let at = self.pos;
         let sel = menu.entries.get(self.sel.max(0) as usize).copied().unwrap_or_default();
@@ -203,6 +205,9 @@ impl HudMenu {
             }
             if e.x08 == 61 {
                 vui.blit_ex_size(r, 61, [icon[0] - 2, icon[1] - 2], [26, 26], 3, a * 0.5, 0);
+            }
+            if e.msg == 0x8060000 && e.icon2 != -1 && auto.contains(&e.id) {
+                draw_auto_mark(r, icon, a);
             }
             pos[1] += 31;
             n += 1;
@@ -281,13 +286,23 @@ impl HudMenu {
     }
 }
 
+/// The auto mark (`autocast`): a gold "A" on a dark square at the bottom
+/// right of a 22-pixel icon at `icon`, at the menu's alpha `a`.
+fn draw_auto_mark(r: &mut dyn Raster, icon: [i32; 2], a: f32) {
+    let at = [icon[0] + 13, icon[1] + 11];
+    r.fill_fan([0.0, 0.0, 0.0, 0.7 * a], [at, [at[0] + 11, at[1]], [at[0] + 11, at[1] + 12], [at[0], at[1] + 12]]);
+    r.draw_centered_string([at[0] + 6, at[1] + 6], [1.0, 0.82, 0.25, a], &[b'A' as u16], 0);
+}
+
 /// The menus and which is up (`m_hudSel`), and whether the items' stack
-/// is drawn with the live client's slot icons (the layout `build` saw).
+/// is drawn with the live client's slot icons (the layout `build` saw);
+/// the abilities the player made auto (`autocast`), marked as drawn.
 pub struct HudMenus {
     pub sel: i32,
     pub menus: [HudMenu; MENUS],
     pub defs: [MenuDef; MENUS],
     live: bool,
+    pub auto: Vec<i64>,
 }
 
 impl Default for HudMenus {
@@ -301,6 +316,7 @@ impl Default for HudMenus {
                 _ => MenuDef { count: 5, entries: vec![Entry::default(); 5] },
             }),
             live: false,
+            auto: Vec::new(),
         }
     }
 }
@@ -404,7 +420,7 @@ impl HudMenus {
         let k = self.up();
         let def = self.defs[k].clone();
         let live = self.live;
-        self.menus[k].draw(vui, r, &def, now, name, live);
+        self.menus[k].draw(vui, r, &def, now, name, live, &self.auto);
     }
 
     /// A pointer at frame point `p`, in the menu's own place (before a wide
@@ -414,13 +430,24 @@ impl HudMenus {
     /// on the title bar, the next menu (as the d-pad's right).
     pub fn point(&mut self, p: [f32; 2]) -> Option<Key> {
         let k = self.up();
-        let count = self.defs[k].count;
-        let m = &mut self.menus[k];
-        let at = m.pos;
+        let at = self.menus[k].pos;
         let (x, y) = (p[0] as i32, p[1] as i32);
         if (at[0]..at[0] + 162).contains(&x) && (at[1]..at[1] + 28).contains(&y) {
             return Some(Key::Right);
         }
+        let n = self.row_at(p)?;
+        self.menus[k].sel = n;
+        Some(Key::Use)
+    }
+
+    /// The entry of the menu up under frame point `p` (as `point` reads it),
+    /// its index in the menu; the selection left as it is.
+    fn row_at(&self, p: [f32; 2]) -> Option<i32> {
+        let k = self.up();
+        let count = self.defs[k].count;
+        let m = &self.menus[k];
+        let at = m.pos;
+        let (x, y) = (p[0] as i32, p[1] as i32);
         // the carousel from the selection down: a list's (a bar's) rows 31
         // apart from (+163, -4), the stack's slots and the sets 32 apart from
         // (+169, +3)
@@ -429,8 +456,22 @@ impl HudMenus {
         if count <= 0 || !(x0..x0 + w).contains(&x) || !(0..count).contains(&row) {
             return None;
         }
-        m.sel = (m.sel + row).rem_euclid(count);
-        Some(Key::Use)
+        Some((m.sel + row).rem_euclid(count))
+    }
+
+    /// The ability under frame point `p` on a bar (`point`'s place), its id:
+    /// what a right click or a long press makes auto (`autocast`).
+    pub fn ability_at(&self, p: [f32; 2]) -> Option<i64> {
+        let n = self.row_at(p)?;
+        let e = self.defs[self.up()].entries.get(n as usize).copied()?;
+        (e.msg == 0x8060000 && e.icon2 != -1).then_some(e.id)
+    }
+
+    /// The ability selected on the bar up, its id (○ or E held on it: `autocast`).
+    pub fn selected_ability(&self) -> Option<i64> {
+        let k = self.up();
+        let e = self.defs[k].entries.get(self.menus[k].sel.max(0) as usize).copied()?;
+        (e.msg == 0x8060000 && e.icon2 != -1).then_some(e.id)
     }
 
     /// A key in play: the menu up takes up, down and use (lit for 20 s);
@@ -505,6 +546,58 @@ mod tests {
 
     const DISC: Bars = Bars { abilities: 2, gear: false };
     const LIVE: Bars = Bars { abilities: 2, gear: true };
+
+    /// The auto mark (`autocast`): an "A" drawn on an auto ability's row
+    /// alone, none without the mark; a right click's row read without
+    /// moving the selection.
+    #[test]
+    fn auto_abilities_are_marked_and_found_under_the_pointer() {
+        struct Texts(Vec<Vec<u16>>);
+        impl Raster for Texts {
+            fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+            fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+            fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16]) {
+                self.0.push(s.to_vec());
+            }
+            fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+                self.0.push(s.to_vec());
+            }
+            fn string_width(&self, s: &[u16]) -> i32 {
+                s.len() as i32 * 8
+            }
+            fn point_size(&self) -> i32 {
+                16
+            }
+            fn viewport(&self) -> [i32; 4] {
+                [0, 0, 640, 448]
+            }
+            fn set_viewport(&mut self, _: [i32; 4]) {}
+        }
+        let vui = crate::pointer::testing::vui();
+        let mut h = HudMenus::default();
+        let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id };
+        h.defs[0] = MenuDef { count: 5, entries: vec![ab(11), ab(12), ab(13), Entry::default(), Entry::default()] };
+        let name = |_: u32, _: i64| Vec::new();
+        let marks = |h: &mut HudMenus| {
+            let mut r = Texts(Vec::new());
+            h.draw(&vui, &mut r, 0, &name);
+            r.0.iter().filter(|t| t.as_slice() == [b'A' as u16]).count()
+        };
+        assert_eq!(marks(&mut h), 0, "control: none auto, no mark");
+        h.auto = vec![12, 99];
+        assert_eq!(marks(&mut h), 1, "the one auto on the bar marked");
+        let at = h.menus[0].pos;
+        h.menus[0].sel = 1;
+        let row = |n: i32| [(at[0] + 170) as f32, (at[1] - 4 + 31 * n + 10) as f32];
+        assert_eq!(h.ability_at(row(0)), Some(12), "the selection's row");
+        assert_eq!(h.ability_at(row(1)), Some(13));
+        assert_eq!(h.ability_at(row(2)), None, "an empty slot");
+        assert_eq!(h.ability_at([(at[0] + 50) as f32, (at[1] + 10) as f32]), None, "the title bar");
+        assert_eq!(h.menus[0].sel, 1, "the selection not moved");
+        assert_eq!(h.selected_ability(), Some(12));
+    }
 
     /// A pointer on the quick menu up: the title bar is the next menu, a
     /// row of the carousel (counted from the selection) is selected and

@@ -36,6 +36,8 @@ mod groupmark;
 mod linkplay;
 #[path = "mercplay.rs"]
 mod mercplay;
+#[path = "autoplay.rs"]
+mod autoplay;
 pub use mercplay::{ENTRY as MERC_ENTRY, MSG_DISMISS_MERC};
 
 use crate::walker::{Placing, Spawn, Walker};
@@ -209,6 +211,8 @@ pub struct Play {
     presses: crate::s2::Presses,
     /// The HUD's quick menus.
     pub hud_menus: crate::hudmenu::HudMenus,
+    /// The quick bars' auto slots and auto targeting (`autocast`, `autoplay`).
+    pub autocast: crate::autocast::AutoCast,
     /// A 0x0033 for a slot past the game's ten (the Extended page's Ability
     /// Bars) waiting for its 0x00B4: (display index, slot, the session's
     /// clock when it was sent, in ms). A server that keeps only the game's slots
@@ -2859,7 +2863,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -3948,6 +3952,8 @@ impl Play {
         // S2's pad read at the end of `VIClient::Process`: a frame counted
         if game_frame {
             self.presses.frame_end();
+            // the auto slots and auto targeting (`autoplay`)
+            self.auto_frame(walker);
         }
         // the GM's move (MoveToGrid) and DrawPosition's lines (`adminplay`)
         self.admin_frame(walker);
@@ -4955,6 +4961,25 @@ impl Play {
     /// button glyph drawn there that button, else what the window has there
     /// (its rows, tabs and fields) as the keys it takes. True when a window
     /// took it (one up takes every one), so it targets nothing.
+    /// A finger held still at window pixels `at` on a `size` window (the
+    /// touch pad's long press, `touch::take_holds`) in play: on a bar's
+    /// ability its auto turned (`autocast`), as a right click turns it. True
+    /// when it was one; else the tap it would have been is the caller's.
+    pub fn hud_hold(&mut self, at: [f32; 2], size: (u32, u32)) -> bool {
+        if self.mode != 0 || self.search.open || crate::hideui::hidden() {
+            return false;
+        }
+        let f = render::ui::frame_from_window(size, at);
+        let (side, up) = (render::ui::side(size), render::ui::top(size));
+        let menus = crate::hudlayout::shift(crate::hudlayout::Piece::QuickMenus, crate::hudlayout::Beyond::of(size));
+        self.auto_point([f[0] - side - menus[0], f[1] + up - menus[1]])
+    }
+
+    /// Long presses are wanted in play (`hud_hold`): auto-cast on.
+    pub fn wants_holds(&self) -> bool {
+        self.mode == 0 && crate::settings::auto_cast() && !self.map.open
+    }
+
     pub fn point(&mut self, c: crate::mouse::Click, size: (u32, u32), finger: bool) -> bool {
         use crate::mouse::Click;
         // a mouse means a keyboard beside it (the edit boxes' compact face,
@@ -4988,7 +5013,7 @@ impl Play {
         // in play; a server's player search over it is a window
         if self.mode == 0 && !self.search.open {
             // Hide UI (`hideui`): none of the HUD's buttons is there to press
-            if matches!(c, Click::Right(..)) || crate::hideui::hidden() {
+            if crate::hideui::hidden() {
                 return false;
             }
             // the quick menus and the chat box are drawn out at a wide
@@ -4999,6 +5024,11 @@ impl Play {
             // each where the player put it (`hudlayout`)
             let moved = |p| crate::hudlayout::shift(p, crate::hudlayout::Beyond::of(size));
             let (compass, menus) = (moved(crate::hudlayout::Piece::Player), moved(crate::hudlayout::Piece::QuickMenus));
+            // a right click on a bar's ability: its auto turned (`autocast`);
+            // anywhere else, the world's as ever
+            if matches!(c, Click::Right(..)) {
+                return self.auto_point([f[0] - side - menus[0], f[1] + up - menus[1]]);
+            }
             // the compass opens the map, with the Map on (the touch screen's
             // way to it)
             if crate::settings::map() && crate::map::on_compass([f[0] + side - compass[0], f[1] + up - compass[1]]) && self.hud.is_some() {
@@ -5452,6 +5482,9 @@ impl Play {
             "/alarm" => self.alarm_command(&rest),
             // the DPS meter's (`dpsmeter`), the client's own
             "/dps" => self.dps_command(&rest),
+            // auto-cast and auto targeting (`autocast`), the client's own
+            "/autocast" | "/ac" => self.autocast_command(&rest),
+            "/autotarget" | "/at" => self.autotarget_command(&rest),
             // the HUD's layout (`hudlayout`), the client's own
             "/hud" => {
                 let line = crate::hudlayout::command(&rest);
@@ -6079,6 +6112,10 @@ impl Play {
         if self.typing.is_some() || self.window_key(key, down) {
             return;
         }
+        // ○ held a second on a bar's ability turns its auto (`autoplay`)
+        if key == 135 {
+            self.auto_use_held(down);
+        }
         if !down {
             match key {
                 134 => self.attack_release(),
@@ -6698,6 +6735,8 @@ impl Play {
             let paint = rgb.map_or_else(|| "game".to_string(), |c| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2]));
             eprintln!("damage: {attacker:08x} {amount:+} {defender:08x} after [{after}] colour {paint}");
         }
+        // who fights whom, for auto-cast and auto targeting (`autocast`)
+        self.auto_hit(attacker, defender);
         let me = self.self_id32();
         // the player's or its pet's hit: the guide's kill when it dies
         if amount > 0 && (Some(attacker) == me || (attacker == self.pet_id && self.pet_id != u32::MAX)) {
@@ -7720,6 +7759,10 @@ impl Play {
             H::Right => 137,
             H::Use => 135,
         };
+        // E held a second on a bar's ability turns its auto (`autoplay`)
+        if key == H::Use {
+            self.auto_use_held(down);
+        }
         if !self.is_dead() {
             self.presses.key(code, down, self.session.timer() as u32, crate::input::from_device());
         }
@@ -11193,7 +11236,7 @@ mod commands {
     /// The guaranteed messages in the client's datagrams, each starting
     /// with its opcode (read as `net`'s own tests read them; a state
     /// message ends the datagram's reading, none goes out here).
-    fn guaranteed(datagrams: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    pub(super) fn guaranteed(datagrams: &[Vec<u8>]) -> Vec<Vec<u8>> {
         use drdp::buffer::Buffer;
         let mut out = Vec::new();
         for d in datagrams {

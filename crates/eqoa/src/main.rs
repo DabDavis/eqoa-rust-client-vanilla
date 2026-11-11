@@ -105,6 +105,7 @@ mod rollwnd;
 mod masterloot;
 mod damage;
 mod numcolor;
+mod autocast;
 mod dpsmeter;
 mod npctint;
 mod display;

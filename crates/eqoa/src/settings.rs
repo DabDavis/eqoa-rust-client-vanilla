@@ -304,6 +304,26 @@ pub fn save_quest_guide(text: &str) -> bool {
     }
 }
 
+// ---- the auto slots (`autocast`) --------------------------------------------------
+
+/// The auto slots' file as text (empty when there is none): a line a
+/// character, one file for every window, read again before each write (as
+/// the quest guide's).
+pub fn auto_cast_file() -> String {
+    store::read(crate::autocast::FILE).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+}
+
+/// Keeps the auto slots' file: whether it was kept.
+pub fn save_auto_cast_file(text: &str) -> bool {
+    match store::write(crate::autocast::FILE, text.as_bytes()) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::say(&format!("the auto slots were not kept: {e}"));
+            false
+        }
+    }
+}
+
 // ---- game.opt's home shard (`VIGameOptions::m_homeShard`) ---------------------------
 
 /// `m_homeShard[64]` at +0x98: the server list's last pick, UTF-16.
@@ -694,6 +714,16 @@ pub struct ClientOptions {
     /// that offers them (`Session::agree_item_links`); off, none, and the server
     /// sends the plain names a PS2 is sent. On by default.
     pub item_links: bool,
+    /// Auto-Cast (`autocast`; the server owner's of 2026-11-11: "lets add
+    /// auto-cast to abilities to fire off cooldown/timer/buff gone/pet's die
+    /// similar to the mercs"): the quick bars' slots marked auto used by the
+    /// client itself; off, none is, whatever is marked. On by default: no slot
+    /// is auto until the player marks one.
+    pub auto_cast: bool,
+    /// Auto Target (`autocast`, the same day's "also auto targeting"): with no
+    /// target or a dead one, the nearest creature fighting the player (else
+    /// its pet or group) targeted. Off by default.
+    pub auto_target: bool,
     /// Profanity Filter (the GM Jibrish's petition 1490: "Under options then
     /// interface add an option to turn the profanity filter on or off"): the
     /// server's filter of what this player hears, told to a server that asks
@@ -990,6 +1020,8 @@ impl Default for ClientOptions {
             dps_meter: false,
             dps_view: crate::dpsmeter::View::Fight,
             item_links: true,
+            auto_cast: true,
+            auto_target: false,
             profanity_filter: true,
             map: true,
             minimap: true,
@@ -1104,6 +1136,13 @@ impl ClientOptions {
             s.push_str(&format!("dps_meter_shows={}\n", self.dps_view.key()));
         }
         // Item Links only when off
+        // Auto-Cast only when off, Auto Target only when on
+        if !self.auto_cast {
+            s.push_str("auto_cast=off\n");
+        }
+        if self.auto_target {
+            s.push_str("auto_target=on\n");
+        }
         if !self.item_links {
             s.push_str("item_links=off\n");
         }
@@ -1276,6 +1315,10 @@ impl ClientOptions {
                 ("dps_meter_shows", "overall") => c.dps_view = crate::dpsmeter::View::Overall,
                 ("item_links", "on") => c.item_links = true,
                 ("item_links", "off") => c.item_links = false,
+                ("auto_cast", "on") => c.auto_cast = true,
+                ("auto_cast", "off") => c.auto_cast = false,
+                ("auto_target", "on") => c.auto_target = true,
+                ("auto_target", "off") => c.auto_target = false,
                 ("profanity_filter", "on") => c.profanity_filter = true,
                 ("profanity_filter", "off") => c.profanity_filter = false,
                 ("map", "on") => c.map = true,
@@ -1581,6 +1624,16 @@ pub fn dps_meter() -> bool {
 /// Item Links (`itemlink`).
 pub fn item_links() -> bool {
     client().item_links
+}
+
+/// Auto-Cast (`autocast`).
+pub fn auto_cast() -> bool {
+    client().auto_cast
+}
+
+/// Auto Target (`autocast`).
+pub fn auto_target() -> bool {
+    client().auto_target
 }
 
 /// Profanity Filter (Options > Interface).

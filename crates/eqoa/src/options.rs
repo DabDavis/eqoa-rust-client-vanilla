@@ -166,7 +166,10 @@
 //!   the login; the panel's title and `/dps` turn it too) and Reset DPS Meter
 //!   (Reset: the meter cleared and the server's fight under way dropped, by ✕,
 //!   left or right, as Texture Folder opens; `dpsmeter::ask_reset`), the page
-//!   saying when this server keeps no meter;
+//!   saying when this server keeps no meter; Auto-Cast (2026-11-11: On, the
+//!   quick bars' slots marked auto used by the client itself, `autocast`; Off,
+//!   none) and Auto Target (Off by default; On: with no target or a dead one,
+//!   the nearest creature fighting the player targeted);
 //! - Chat (2026-11-10, the GM Jibrish's petition 1463: "This should be off by
 //!   default for ps2 players and a toggle option"): Item Links (On by default:
 //!   items linked from the inventory into the chat line, drawn purple in the
@@ -890,6 +893,10 @@ impl WndOptions {
                     // (`Session::agree_item_links`), the chat box's links drawn
                     // or plain, the windows closed when off (`itemlink`)
                     73 => c.item_links = !c.item_links,
+                    // Auto-Cast and Auto Target (`autocast`): from the next
+                    // game frame
+                    78 => c.auto_cast = !c.auto_cast,
+                    79 => c.auto_target = !c.auto_target,
                     // Move HUD: the HUD's pieces dragged once the menu is left
                     // (`hudlayout`); not an option kept, so Triangle leaves it
                     76 => crate::hudlayout::set_unlocked(!crate::hudlayout::unlocked()),
@@ -1454,7 +1461,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 61] = [
+const EXTENDED_ITEMS: [(i32, &str); 63] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1516,6 +1523,8 @@ const EXTENDED_ITEMS: [(i32, &str); 61] = [
     (73, "Item Links"),
     (76, "Move HUD"),
     (77, "Reset HUD"),
+    (78, "Auto-Cast"),
+    (79, "Auto Target"),
 ];
 
 /// What a category's page says beside its Back legend.
@@ -1583,7 +1592,7 @@ const ALL_CATEGORIES: [Category; 14] = [
     Category { name: "Textures", items: TEXTURES, note: Note::Textures },
     Category { name: "Map", items: &[41, 42, 43, 44, 45], note: Note::None },
     Category { name: "Number Colors", items: &crate::numcolor::ITEMS, note: Note::None },
-    Category { name: "Combat", items: &[70, 71, 72], note: Note::Meter },
+    Category { name: "Combat", items: &[70, 71, 72, 78, 79], note: Note::Meter },
     Category { name: "Chat", items: &[73], note: Note::Links },
     Category { name: "HUD Layout", items: &[76, 77], note: Note::Hud },
 ];
@@ -1710,6 +1719,8 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         76 => on_off(crate::hudlayout::unlocked()),
         77 => wide("Reset"),
         73 => on_off(c.item_links),
+        78 => on_off(c.auto_cast),
+        79 => on_off(c.auto_target),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         39 => wide(&format!("x{}", c.render_scale)),
@@ -2564,8 +2575,25 @@ mod tests {
         assert_eq!(w.page_note(11), None, "no note off a server");
         w.meter_note = Some("This server keeps no meter".into());
         assert_eq!(w.page_note(11).as_deref(), Some("This server keeps no meter"), "a server that keeps none said");
+        // Auto-Cast On by default (no slot is auto until marked), Auto Target
+        // Off by default (`autocast`), each two values
         press(&mut w, &mut o, key::DOWN, &mut cues);
-        assert_eq!((w.row, cues.last()), (2, Some(&9)), "Combat's last row");
+        assert_eq!(w.item, 78, "Auto-Cast");
+        assert!(settings::auto_cast(), "on by default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::auto_cast(), cues.last()), (false, Some(&11)), "off");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::auto_cast(), "and back");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 79, "Auto Target");
+        assert!(!settings::auto_target(), "off by default");
+        assert_eq!(value_text(&vui, 79), Some(wide(vui.words.get(552, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::auto_target(), cues.last()), (true, Some(&11)), "on");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::auto_target(), "and back");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Combat's last row");
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
         press(&mut w, &mut o, key::DOWN, &mut cues);
         // Chat: Item Links On by default, then Off and back (the petition 1463's
