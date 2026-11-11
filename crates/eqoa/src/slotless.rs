@@ -218,6 +218,13 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     HeadSeat { bodies: &[0x31A1_5F17, 0xC3EC_4F58, 0xF674_7024, 0xF0FA_B933], anchor: Anchor::Head, scale: [1.0; 3], offset: [0.0, 0.19, 0.04] },
     HeadSeat { bodies: &[0x94BA_77CD, 0x7A85_646C], anchor: Anchor::Head, scale: [0.3; 3], offset: [0.0, 0.10, 0.007] },
     HeadSeat { bodies: &[0xBE10_226F, 0x097A_DB18], anchor: Anchor::Head, scale: [1.1; 3], offset: [0.0, 0.28, 0.03] },
+    // the Jal'Raeth (race 30; `HEAD_HELMS`: on their node of the human's helm
+    // node's name), whose heads rise higher above it than a human's (the owner,
+    // 2026-11-11: "the jal raethe helms are sitting too low and their head is
+    // poking through the top"): the robes' and the channeler's 4 cm up; the
+    // knight's helmeted head, crested up and back, stretched round it and 10 cm up
+    HeadSeat { bodies: &[0xF51B_AB09, 0x4B24_FF7E], anchor: Anchor::Named, scale: [1.05; 3], offset: [0.0, 0.04, 0.0] },
+    HeadSeat { bodies: &[0x491F_6347], anchor: Anchor::Named, scale: [1.15, 1.2, 1.35], offset: [0.0, 0.12, -0.02] },
 ];
 
 /// The bodies a server's race may wear that have no head a helm can sit on:
@@ -479,10 +486,15 @@ pub fn dress(lib: &Library, id: i32, model: &mut esf::Model, cs: &CSprite<Ee>, l
         }
         return put_on(model, &shell, &changes);
     }
-    if NAMED_SHELLS.contains(&(id as u32))
-        && let Some(shell) = named_shell_of(lib, id, cs, art)
-    {
-        return put_on(model, &shell, &changes);
+    if NAMED_SHELLS.contains(&(id as u32)) {
+        // the legs and boots on the body's own crossed legs (`crossed_legs`),
+        // fitted before the shell's batches are added
+        let legs = crossed_legs(lib, id, model, cs, art);
+        let mut added = named_shell_of(lib, id, cs, art).is_some_and(|shell| put_on(model, &shell, &changes));
+        if let Some(legs) = legs {
+            added |= apply(model, &legs, &changes);
+        }
+        return added;
     }
     let Some(fit) = fit else { return false };
     apply(model, &fit, &changes)
@@ -493,11 +505,180 @@ pub fn dress(lib: &Library, id: i32, model: &mut esf::Model, cs: &CSprite<Ee>, l
 /// (go-eqoa-server's race 30, 2026-11-09), whose upper body has the human's names
 /// (spine, arms, hands, head) and whose legs float crossed under a robe with names
 /// of their own. Their item and footstep nodes hang off the root, so the fit by limbs
-/// finds no hands on them, and no legs or boots are worn there.
+/// finds no hands on them; their legs and boots go on their own crossed legs (`crossed_legs`).
 const NAMED_SHELLS: &[u32] = &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347];
 
 /// The slots a named shell carries: chest, bracer, gloves.
 const NAMED_SLOTS: usize = 3;
+
+/// Where a Jal'Raeth's ankle is along its lower leg, from the knee to the toe: as
+/// the human's (its shin 0.46 long, its foot 0.17).
+const JAL_ANKLE: f32 = 0.73;
+
+/// The Jal'Raeth's legs as a human's legs wear leggings and boots (the owner,
+/// 2026-11-11: "lets fit the armor onto the jal raethe legs and feet also"): each
+/// of the body's own leg triangles (on a leg's piece of the mesh, `leg_pieces`)
+/// is carried onto the human's leg of the same side along its thigh, shin or foot
+/// (`leg_pieces`' lines: whichever of the three it lies nearest, its place along the
+/// segment and round it in the segment's girth, as a slotless body's limbs are),
+/// and takes the slot and texture coordinates of the human's surface it lands on
+/// (`fit`): drawn over the body's own skin as a slotless body's armour is
+/// (`apply`). Only the legs and boots; None for a body not one of theirs, a look
+/// with neither, or where no human is.
+fn crossed_legs(lib: &Library, id: i32, model: &esf::Model, cs: &CSprite<Ee>, art: Art) -> Option<Fit> {
+    if !NAMED_SHELLS.contains(&(id as u32)) || (art[3].is_none() && art[4].is_none()) {
+        return None;
+    }
+    let r = reference(lib, cs.sex != 0)?;
+    let wear = wearing(model, kept(id), |t| colours_of(lib, t));
+    let (pieces, lines) = leg_pieces(model);
+    let segs = |leg: usize| -> [Frame; 3] { std::array::from_fn(|k| Frame::new(lines[leg][k], lines[leg][k + 1])) };
+    let mut ours = [segs(0), segs(1)];
+    // the human's leg on each side: the one whose hip is on the same side
+    let side = |leg: usize| -> Option<u8> {
+        let want = lines[leg][0].x.signum();
+        (0..2u8).find(|&k| r.frames.get(&Seg::Limb(Limb::Leg(k), 0)).is_some_and(|f| f.a.x.signum() == want))
+    };
+    let sides = [side(0)?, side(1)?];
+    let nearest = |f: &[Frame; 3], p: Vec3| (0..3).min_by(|&a, &b| seg_distance(&f[a], p).total_cmp(&seg_distance(&f[b], p))).unwrap_or(0);
+    // each segment's girth, from the vertices nearest it
+    let mut sums = [[(0.0f32, 0.0f32, 0u32); 3]; 2];
+    for (&v, &leg) in &pieces {
+        let p = pos(model, v);
+        let k = nearest(&ours[leg], p);
+        let f = &ours[leg][k];
+        let q = p - f.a;
+        let e = &mut sums[leg][k];
+        e.0 += q.dot(f.e1).powi(2);
+        e.1 += q.dot(f.e2).powi(2);
+        e.2 += 1;
+    }
+    for (leg, fs) in ours.iter_mut().enumerate() {
+        for (k, f) in fs.iter_mut().enumerate() {
+            let (a, b, n) = sums[leg][k];
+            if n > 0 {
+                f.r = [(a / n as f32).sqrt().max(0.005), (b / n as f32).sqrt().max(0.005)];
+            }
+        }
+    }
+    let mut tris = Vec::new();
+    for ((b, on), lod) in model.batches.iter().zip(&wear).map(|(b, on)| ((b, on), b.lod)) {
+        for (t, &w) in b.indices.chunks_exact(3).zip(on) {
+            let t = [t[0] as usize, t[1] as usize, t[2] as usize];
+            let Some(&leg) = pieces.get(&t[0]) else { continue };
+            if !w || t.iter().any(|v| pieces.get(v) != Some(&leg)) {
+                continue;
+            }
+            let mid = (pos(model, t[0]) + pos(model, t[1]) + pos(model, t[2])) / 3.0;
+            let k = nearest(&ours[leg], mid);
+            let seg = Seg::Limb(Limb::Leg(sides[leg]), k as u8);
+            let Some(h) = r.frames.get(&seg) else { continue };
+            let q = t.map(|v| h.world(ours[leg][k].local(pos(model, v))));
+            tris.push(CarriedTri { v: t, group: Group::Limb(Limb::Leg(sides[leg])), lod, q });
+        }
+    }
+    if tris.is_empty() {
+        return None;
+    }
+    let alpha: [Option<Rc<Alpha>>; SLOTS] = std::array::from_fn(|i| alpha_of(lib, art[i].map_or(r.own[i], |t| t as i32)));
+    let mut f = fit(&r, &Carried { tris }, &alpha, false);
+    // the legs and boots alone (a thigh's top may land on the human's tunic)
+    for slot in 0..NAMED_SLOTS {
+        f.tris[slot].clear();
+    }
+    Some(f)
+}
+
+/// The Jal'Raeth's crossed legs, read off the mesh (the three bodies cross them
+/// differently): of the triangles with a corner on the thigh's node (35) or the
+/// shin's (36), the pieces they make (joined by triangles and by sharing a place)
+/// that reach the shin's node, two, one a leg (93 triangles each on the
+/// channeler); per vertex its leg, and per leg the hip, the knee, the ankle and the
+/// toe in the bind pose, the first leg's hip on the +x side. Both legs are
+/// skinned alike (the thigh to 35, the shin and foot to 36), so the bones say
+/// nothing of where a knee is: a leg's thigh runs along its vertices on 35 (their
+/// main axis, from the end nearer the middle, the hip, to the knee), and its shin
+/// and foot from the knee to the far end of its vertices on 36, the ankle
+/// `JAL_ANKLE` of the way.
+fn leg_pieces(model: &esf::Model) -> (HashMap<usize, usize>, [[Vec3; 4]; 2]) {
+    let n = model.pos.len();
+    let mut up: Vec<usize> = (0..n).collect();
+    fn find(up: &mut [usize], mut i: usize) -> usize {
+        while up[i] != i {
+            up[i] = up[up[i]];
+            i = up[i];
+        }
+        i
+    }
+    let on_legs: Vec<[usize; 3]> = near_triangles(model).map(|(_, t)| t).filter(|t| t.iter().any(|&v| matches!(bone_of(model, v), Some(35 | 36)))).collect();
+    let mut at: HashMap<[u32; 3], usize> = HashMap::new();
+    for v in on_legs.iter().flatten().copied() {
+        let k = model.pos[v].map(f32::to_bits);
+        let w = *at.entry(k).or_insert(v);
+        let (a, b) = (find(&mut up, v), find(&mut up, w));
+        up[a] = b;
+    }
+    for t in &on_legs {
+        for k in 1..3 {
+            let (a, b) = (find(&mut up, t[0]), find(&mut up, t[k]));
+            up[a] = b;
+        }
+    }
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    for v in on_legs.iter().flatten().copied() {
+        if seen.insert(v) {
+            let root = find(&mut up, v);
+            groups.entry(root).or_default().push(v);
+        }
+    }
+    // a cloud's middle and its main axis's two ends
+    let ends = |pts: &[Vec3]| -> Option<(Vec3, Vec3)> {
+        if pts.len() < 3 {
+            return None;
+        }
+        let m = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
+        let c = pts.iter().fold(glam::Mat3::ZERO, |c, p| {
+            let q = *p - m;
+            c + glam::Mat3::from_cols(q * q.x, q * q.y, q * q.z)
+        });
+        let mut ax = Vec3::ONE.normalize();
+        for _ in 0..64 {
+            ax = (c * ax).normalize_or_zero();
+        }
+        let (lo, hi) = pts.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| ((*p - m).dot(ax).min(lo), (*p - m).dot(ax).max(hi)));
+        Some((m + ax * lo, m + ax * hi))
+    };
+    let mut legs: Vec<([Vec3; 4], Vec<usize>)> = groups
+        .into_values()
+        .filter_map(|vs| {
+            let on = |b: usize| vs.iter().filter(|&&v| bone_of(model, v) == Some(b)).map(|&v| pos(model, v)).collect::<Vec<_>>();
+            let (a, b) = ends(&on(35))?;
+            let mid = |p: Vec3| p.x.abs() + p.z.abs();
+            let (hip, knee) = if mid(a) <= mid(b) { (a, b) } else { (b, a) };
+            let (c, d) = ends(&on(36))?;
+            let toe = if c.distance(knee) >= d.distance(knee) { c } else { d };
+            Some(([hip, knee, knee.lerp(toe, JAL_ANKLE), toe], vs))
+        })
+        .collect();
+    if legs.len() != 2 {
+        return (HashMap::new(), [[Vec3::ZERO; 4]; 2]);
+    }
+    legs.sort_by(|a, b| b.0[0].x.total_cmp(&a.0[0].x));
+    let lines = [legs[0].0, legs[1].0];
+    let out = legs.into_iter().enumerate().flat_map(|(k, (_, vs))| vs.into_iter().map(move |v| (v, k))).collect();
+    (out, lines)
+}
+
+/// The human fitted to (`Reference`), made once per art and sex.
+fn reference(lib: &Library, female: bool) -> Option<Rc<Reference>> {
+    let era = lib.view();
+    REFS.with(|r| r.borrow().get(&(era, female)).cloned()).unwrap_or_else(|| {
+        let made = Human::load(lib, female).and_then(|h| Reference::of(lib, &h)).map(Rc::new);
+        REFS.with(|r| r.borrow_mut().insert((era, female), made.clone()));
+        made
+    })
+}
 
 /// The human's armour for one look carried onto body `id` (`cs` its sprite) by
 /// bone names: each corner of the human's shell (`Shell::of`) whose bones all have
@@ -2563,9 +2744,9 @@ mod tests {
     }
 
     /// The Jal'Raeth in plate wear the human's chest, bracer and gloves carried onto
-    /// their skeleton by bone names: three made-up batches (no legs or boots: theirs
-    /// float crossed), every corner on one of the body's own nodes; bare, nothing
-    /// (the control), and the fit by limbs had found no hands on them.
+    /// their skeleton by bone names, and the legs and boots on their own crossed legs
+    /// (`crossed_legs`): five made-up batches, every corner on one of the body's own
+    /// nodes; bare, nothing (the control).
     #[test]
     fn a_jalraeth_wears_a_humans_upper_armour() {
         let Some(lib) = disc() else { return };
@@ -2580,7 +2761,7 @@ mod tests {
             crate::play::dress_look(&lib, id, &mut dressed, &cs, &plate, false, &t, true);
             let n = model.batches.len();
             let made: Vec<i32> = dressed.batches[n..].iter().map(|b| b.material).collect();
-            assert_eq!(made, vec![ENTRY, ENTRY + 1, ENTRY + 2], "{id:#010x}: chest, bracer and gloves");
+            assert_eq!(made, vec![ENTRY, ENTRY + 1, ENTRY + 2, ENTRY + 3, ENTRY + 4], "{id:#010x}: chest, bracer and gloves, and the legs and boots on its own legs");
             let nodes = cs.h.nodes.len() as u8;
             for b in &dressed.batches[n..] {
                 assert!(b.indices.iter().all(|&v| dressed.bones[v as usize].iter().zip(dressed.weights[v as usize]).all(|(&j, w)| w == 0 || j < nodes)), "{id:#010x}: on its own nodes");
@@ -2631,6 +2812,77 @@ mod tests {
             let share = armour as f32 / rays.max(1) as f32;
             eprintln!("{id:#010x}: {armour} of {rays} rays meet the chest armour first ({:.0}%)", share * 100.0);
             assert!(rays >= 100 && share >= 0.95, "{id:#010x}: the chest armour seen from the front ({:.0}%)", share * 100.0);
+        }
+    }
+
+    /// A Jal'Raeth's helm covers the top of its head (the owner, 2026-11-11: "the jal
+    /// raethe helms are sitting too low and their head is poking through the top"):
+    /// seated as `HEAD_SEATS` has it, from every vertex of the top quarter of the
+    /// head (the crown, the knight's crest) a ray straight up meets each of the eight
+    /// helms, in the frame of the node it hangs on. The control: hung on that node
+    /// alone, as before, the crown came out of the top of every helm.
+    #[test]
+    fn a_jalraeths_helm_covers_its_crown() {
+        let Some(lib) = disc() else { return };
+        for id in HEAD_HELMS {
+            let cs = sprite_of(&lib, *id);
+            assert!(head_fit(*id, &cs, true).is_some(), "{id:#010x}: a seat");
+            let head = skull(&lib, *id, 0, 0);
+            let (lo, hi) = head.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
+            let crown: Vec<Vec3> = head.iter().copied().filter(|p| p.y >= hi - 0.25 * (hi - lo)).collect();
+            let open = |fit: bool| -> Vec<(u8, usize)> {
+                helms_on(&lib, *id, &cs, fit).iter().map(|(set, tris)| (*set, crown.iter().filter(|&&p| meets(tris, p, Vec3::Y).2 == 0).count())).filter(|x| x.1 > 0).collect()
+            };
+            let (seated, alone) = (open(true), open(false));
+            eprintln!("{id:#010x}: {} crown vertices; out of the top seated {seated:?}, on the node alone {alone:?}", crown.len());
+            assert!(seated.is_empty(), "{id:#010x}: the crown out of the top of helms {seated:?}");
+            assert_eq!(alone.len(), 8, "{id:#010x}: the control, out of every helm on the node alone");
+        }
+    }
+
+    /// The Jal'Raeth's crossed legs wear leggings and boots (the owner, 2026-11-11:
+    /// "lets fit the armor onto the jal raethe legs and feet also"): in plate every
+    /// one of their two legs' triangles is fitted (`crossed_legs`), mostly to the
+    /// legs and the rest (the feet) to the boots, each leg to the human's leg on its
+    /// side, and none of the head, the hands or the skirt; nine in ten of each leg's
+    /// vertices lie within 20 cm of their lines (`leg_pieces`: the robes body wears wide trousers). A look with
+    /// no legs or boots fits none (the control).
+    #[test]
+    fn a_jalraeths_legs_wear_leggings_and_boots() {
+        let Some(lib) = disc() else { return };
+        let t = Tables::retail();
+        for id in NAMED_SHELLS.iter().map(|&b| b as i32) {
+            let r = lib.lookup(id).unwrap();
+            let model = lib.build_model(r).unwrap();
+            let cs = sprite_of(&lib, id as u32);
+            let (pieces, lines) = leg_pieces(&model);
+            eprintln!("{id:#010x}: legs {lines:.2?}");
+            let per_leg = |k: usize| pieces.values().filter(|&&l| l == k).count();
+            assert!(per_leg(0) > 40 && per_leg(1) > 40, "{id:#010x}: two legs ({}, {})", per_leg(0), per_leg(1));
+            let mut far: Vec<f32> = pieces
+                .iter()
+                .map(|(&v, &leg)| {
+                    assert!(matches!(bone_of(&model, v), Some(0 | 33 | 35 | 36)), "{id:#010x}: vertex {v} on a leg's node");
+                    (0..3).map(|k| seg_distance(&Frame::new(lines[leg][k], lines[leg][k + 1]), pos(&model, v))).fold(f32::MAX, f32::min)
+                })
+                .collect();
+            far.sort_by(f32::total_cmp);
+            let (p90, max) = (far[far.len() * 9 / 10], far[far.len() - 1]);
+            eprintln!("{id:#010x}: the legs' vertices from their lines: 90% within {p90:.3}, all within {max:.3}");
+            assert!(p90 < 0.2 && max < 0.3, "{id:#010x}: {p90:.3}, {max:.3}");
+            let plate = Look { armor: [4; 6], robe: -1, ..Default::default() };
+            let changes = vi::cust::apply_look_slots(&slots(), cs.race, cs.sex, &plate, false, &|i| lib.surface(i as i32).is_some(), &t);
+            let art = worn(&changes).map(|(t, _)| t);
+            let f = crossed_legs(&lib, id, &model, &cs, art).expect("fitted");
+            let (legs, boots) = (f.tris[3].len(), f.tris[4].len());
+            eprintln!("{id:#010x}: {legs} triangles in the leggings, {boots} in the boots");
+            assert!((0..3).all(|k| f.tris[k].is_empty()));
+            assert!(legs > boots && boots > 0, "{id:#010x}: {legs} legs, {boots} boots");
+            assert!(f.tris[3].iter().chain(&f.tris[4]).all(|t| t.v.iter().all(|v| pieces.contains_key(&(*v as usize)))), "{id:#010x}: the legs alone");
+            let bare = Look { armor: [4, 4, 4, 0, 0, 0], robe: -1, ..Default::default() };
+            let changes = vi::cust::apply_look_slots(&slots(), cs.race, cs.sex, &bare, false, &|i| lib.surface(i as i32).is_some(), &t);
+            let art = worn(&changes).map(|(t, _)| t);
+            assert!(art[3].is_none() && art[4].is_none() && crossed_legs(&lib, id, &model, &cs, art).is_none(), "{id:#010x}: the control");
         }
     }
 
@@ -3382,15 +3634,13 @@ mod tests {
         Some(Drawn { armour, robe, helm, items: [0, 1, 2].map(|k| cs.item_node(k).is_some()) })
     }
 
-    /// The pieces no limb of a body carries, by body: the Jal'Raeth's legs and
-    /// boots (they float with their legs crossed under their robes: chest,
-    /// bracers and gloves alone, `NAMED_SHELLS`); the robed kerrans' bracers
+    /// The pieces no limb of a body carries, by body (the Jal'Raeth's legs and boots,
+    /// none since 2026-11-11: `crossed_legs`): the robed kerrans' bracers
     /// (0x4D9C53EF and 0xB62092E4 name no bracer slot, and their forearms are
     /// their robe's sleeves, their chest slot's entry, which the chest's art
     /// covers as on a PS2); and the fungusmen's helm (`HEADLESS`).
     fn bare(id: u32) -> (Vec<usize>, bool) {
         let slots = match id {
-            _ if NAMED_SHELLS.contains(&id) => vec![3, 4],
             0x4D9C_53EF | 0xB620_92E4 => vec![1],
             _ => Vec::new(),
         };

@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Jal'Raeth helms, leggings, boots and capes
+- A Jal'Raeth's helm now sits higher and a little larger, so its head no longer pokes out of the top (the knight's
+  crested head too), in every helm.
+- Leggings and boots now show on a Jal'Raeth's crossed legs: the leggings on the thighs and shins, the boots on the
+  feet. The skirt still covers some of them from behind.
+- Capes now show on Jal'Raeth players.
+
 ## 2026-11-11 · Auto-cast keeps your pet buffed
 - Auto-cast now works with **pet buffs**. A pet buff's effect shows on your pet, not on your own effects, so auto-cast
   used to think it had not landed, cast it again and turned the slot off after three casts. Now it looks for the buff

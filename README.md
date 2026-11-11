@@ -585,8 +585,10 @@ or a browser (each described where it lives below):
   the head node they name (`slotless::HEAD_HELMS`: they name no helm node), the human's chest, bracers and gloves
   carried onto their skeleton by bone names (`slotless::named_shell_of`: their hands and feet hang off the root, so
   the fit by limbs finds none; the human's chest node, which they lack, carried by its parent's, and the shell put
-  outside their deeper chest and the knight's own plate, `slotless::wrap`), no legs or boots (their crossed legs have
-  no human names), what they hold in their hands (`racebody::HAND_SEATS`: a node under each hand and the left forearm
+  outside their deeper chest and the knight's own plate, `slotless::wrap`), leggings and boots on their own crossed legs
+  (`slotless::crossed_legs`: each leg read off the mesh, its triangles carried onto the human's leg of that side), a
+  helm seated over their taller heads (`slotless::HEAD_SEATS`), a cape (`cape::worn_bones`: the hands their held items
+  hang under), what they hold in their hands (`racebody::HAND_SEATS`: a node under each hand and the left forearm
   as the human's item nodes sit, in place of their own item nodes at the knee, where the knights' blade discs float),
   and the human's emotes on their upper body (`raceemote::TABLE`).
 - **Capes**, on a server that has them (go-eqoa-server's `world.capes`, the Heirloom Test

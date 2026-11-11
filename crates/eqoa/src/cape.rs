@@ -356,7 +356,7 @@ pub fn model(lib: &Library, cape: Cape, wearer: u32, cs: &CSprite<Ee>) -> Option
                     p
                 }
             };
-            let f = fit(&src, &Bones::of(cs), &body, &poses, CROUCHED.contains(&wearer)).map(Rc::new);
+            let f = fit(&src, &worn_bones(wearer, cs), &body, &poses, CROUCHED.contains(&wearer)).map(Rc::new);
             FITTED.with(|c| c.borrow_mut().insert(key, f.clone()));
             f
         }
@@ -364,6 +364,20 @@ pub fn model(lib: &Library, cape: Cape, wearer: u32, cs: &CSprite<Ee>) -> Option
     let mut m = (*fitted).clone();
     tint(&mut m, cape.color);
     Some(m)
+}
+
+/// The wearer's skeleton as a cape is fitted to it: a body whose item nodes are
+/// no hands but which holds a player's items in its hands (`racebody::hand_items`:
+/// the Jal'Raeth's, whose own item nodes hang off the root at the knee, so no arm
+/// was found and no cape was fitted; the owner, 2026-11-11: "i dont see jal raethe
+/// capes") names its hands by the nodes made under them.
+fn worn_bones(wearer: u32, cs: &CSprite<Ee>) -> Bones {
+    let mut b = Bones::of(cs);
+    if let Some(h) = crate::racebody::hand_items(wearer, cs) {
+        b.ids[0] = h[0];
+        b.ids[1] = h[1];
+    }
+    b
 }
 
 /// The cape coloured: every layer's colour times `color` (0xRRGGBBAA; its
@@ -1504,6 +1518,27 @@ mod tests {
             lib.add(f, esf::Container::open(iso.read(f).ok()?).ok()?);
         }
         Some(lib)
+    }
+
+    /// A Jal'Raeth player wears a cape (the owner, 2026-11-11: "i dont see jal raethe
+    /// capes"): each of its three bodies, given its hands (`racebody::grant`, as a
+    /// player's character is), takes every style, on its own nodes. The control: the
+    /// body as its header has it (its item nodes off the root, at the knee: no arms
+    /// found) takes none, as before.
+    #[test]
+    fn a_jalraeth_wears_a_cape() {
+        let Some(lib) = char_lib() else { return };
+        for id in [0xF51B_AB09u32, 0x4B24_FF7E, 0x491F_6347] {
+            let (mut cs, _) = sprite(&lib, id);
+            let n = cs.h.nodes.len();
+            assert!(Frame::of(&worn_bones(id, &cs), &lib.build_model(lib.lookup(id as i32).unwrap()).unwrap()).is_none(), "{id:08X}: the control, no frame as its header has it");
+            let races = net::creation::Creation { all_classes: true, races: vec![net::creation::Race { id: 30, like: 8, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [id, id], name: "J".into(), short: "J".into(), desc: String::new() }] };
+            crate::racebody::grant(&mut cs, id, true, Some(&races));
+            for s in STYLES {
+                let m = model(&lib, Cape { style: s.id, color: 0 }, id, &cs).unwrap_or_else(|| panic!("{id:08X}: style {}", s.id));
+                assert!(m.triangles > 0 && m.bones.iter().zip(&m.weights).all(|(b, w)| (0..4).all(|k| w[k] == 0 || (b[k] as usize) < n)), "{id:08X} style {}: on its own nodes", s.id);
+            }
+        }
     }
 
     fn sprite(lib: &Library, id: u32) -> (CSprite<Ee>, esf::Model) {

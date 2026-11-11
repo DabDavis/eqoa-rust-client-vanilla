@@ -98,6 +98,14 @@ fn hand_seats(model: u32) -> Option<&'static HandSeats> {
     HAND_SEATS.iter().find(|h| h.bodies.contains(&model))
 }
 
+/// The nodes made under `cs`'s hands for its main and off hand (`HAND_SEATS`),
+/// when body `model` has hand seats and `cs` has been given them (`grant`, a
+/// player's): what holds an item in each hand, so their parents are its hands.
+pub fn hand_items(model: u32, cs: &CSprite<Ee>) -> Option<[i32; 2]> {
+    let seats = hand_seats(model)?;
+    (cs.h.nodes.len() == seats.nodes + seats.seats.len()).then(|| [cs.item_nodes[0], cs.item_nodes[1]])
+}
+
 /// Gives `cs` a node for each item slot where `HAND_SEATS` says, under its
 /// hands, and names them its item nodes; once only (a sprite with more nodes
 /// than its skeleton's has them already), and on the skeleton the table was
