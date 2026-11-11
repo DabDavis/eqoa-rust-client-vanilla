@@ -426,6 +426,23 @@ impl Part {
     }
 }
 
+/// Whether skills `a` and `b` (ids) are ranks of one chain: one is reached
+/// from the other through `parent` (the rank below's `x00`), either way.
+fn same_chain(skills: &[Skill], a: i32, b: i32) -> bool {
+    let below = |from: i32, to: i32| {
+        let Some(mut k) = skills.iter().position(|s| s.id == from) else { return false };
+        for _ in 0..skills.len() {
+            match skills.iter().position(|s| s.x00 == skills[k].parent) {
+                Some(p) if skills[p].id == to => return true,
+                Some(p) if p != k => k = p,
+                _ => return false,
+            }
+        }
+        false
+    };
+    a != b && (below(a, b) || below(b, a))
+}
+
 /// `VIWndClassMastery::Chain`: one rank chain moved from `input` to the
 /// result, root first (the skill whose parent is not in the list, then
 /// each child in turn); None when there is no root.
@@ -669,6 +686,14 @@ impl ClassMastery {
         }
         self.shown[0].truncate(200);
         self.shown[1].truncate(200);
+        self.fill_lines(part);
+        self.owned.set_sel(0);
+        self.available.set_sel(0);
+    }
+
+    /// The two lists' lines from `shown`.
+    fn fill_lines(&mut self, part: &Part) {
+        let sk = &part.skills;
         self.owned.clear();
         for id in &self.shown[0] {
             let k = part.find(*id).unwrap();
@@ -682,8 +707,37 @@ impl ClassMastery {
             self.available.set_columns(line, &[0, 330]);
             self.available.set_text(line, 1, &b);
         }
-        self.owned.set_sel(0);
-        self.available.set_sel(0);
+    }
+
+    /// The category's lists made again after a skill was bought or switched
+    /// (the GM Jibrish's petition 1622: the game's `SelectCategory` put the
+    /// cursor back on the first line): each list keeps its selected line
+    /// and its scroll. A skill that left the list for the next rank of its
+    /// chain (a rank bought: the rank after it is now the one offered, or
+    /// the one owned) has that rank put in its place and selected; a line
+    /// gone with no rank of its chain left selects the line now at its place.
+    fn refresh_kept(&mut self, part: &Part) {
+        let kept = [(self.owned.sel, self.owned.top), (self.available.sel, self.available.top)];
+        let was: [Option<i32>; 2] = [0, 1].map(|c| usize::try_from(kept[c].0).ok().and_then(|i| self.shown[c].get(i).copied()));
+        self.select_category(part, self.category);
+        let mut at = [kept[0].0, kept[1].0];
+        for c in 0..2 {
+            let Some(id) = was[c] else { continue };
+            if let Some(j) = self.shown[c].iter().position(|&x| x == id) {
+                at[c] = j as i32;
+            } else if let Some(j) = self.shown[c].iter().position(|&x| same_chain(&part.skills, x, id)) {
+                // the next rank, to where the one bought was
+                let rank = self.shown[c].remove(j);
+                let i = (kept[c].0.max(0) as usize).min(self.shown[c].len());
+                self.shown[c].insert(i, rank);
+                at[c] = i as i32;
+            }
+        }
+        self.fill_lines(part);
+        for (c, list) in [&mut self.owned, &mut self.available].into_iter().enumerate() {
+            list.set_sel(at[c]);
+            list.top = kept[c].1.min(list.count() - list.rows).max(0);
+        }
     }
 
     /// `ShowNode`: the client opened a skill; the inspector shows an owned
@@ -930,7 +984,7 @@ impl ClassMastery {
         let msg = match part.pending {
             0 => {
                 if self.busy {
-                    self.select_category(part, self.category);
+                    self.refresh_kept(part);
                     self.busy = false;
                 }
                 None
@@ -1356,5 +1410,66 @@ mod tests {
         bad[k - 1] = 1;
         assert_eq!(p.recv(&bad), None);
         assert!(p.node.is_none());
+    }
+
+    /// Petition 1622: a rank bought keeps the cursor and the scroll; the
+    /// next rank of its chain takes the bought one's place and is selected.
+    /// The control: the game's `SelectCategory` (what the window did) puts
+    /// the cursor on the first line and the next rank, not known yet, last.
+    #[test]
+    fn a_bought_rank_keeps_the_cursor_and_its_next_rank_its_place() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut part = Part::default();
+        // ten chains of two ranks: the first known (offered), the second not yet
+        for k in 0..10 {
+            part.skills.push(Skill { x00: 100 + k, known: 1, id: 1000 + k, parent: 0, cost: 1, name: wide(&format!("Skill {k} I")), ..Default::default() });
+            part.skills.push(Skill { x00: 200 + k, known: 0, id: 2000 + k, parent: 100 + k, cost: 2, name: wide(&format!("Skill {k} II")), ..Default::default() });
+        }
+        let mut c = ClassMastery::default();
+        c.open(&vui, &r, &part);
+        c.set_column(1);
+        assert_eq!(c.shown[1], (0..10).map(|k| 1000 + k).collect::<Vec<_>>());
+        // the cursor on the eighth line, the list scrolled three down
+        c.available.set_sel(7);
+        c.available.top = 3;
+        let mut control = ClassMastery::default();
+        control.open(&vui, &r, &part);
+        // Skill 7 I bought (Recv05: owned; Skill 7 II not open yet, a level
+        // short), the request answered
+        part.skills[14].on = true;
+        c.busy = true;
+        part.pending = 0;
+        let mut cues = Vec::new();
+        c.draw(&vui, &mut r, &part, &mut cues);
+        assert!(!c.busy);
+        assert_eq!(c.shown[1][7], 2007, "Skill 7 II where Skill 7 I was");
+        assert_eq!((c.available.sel, c.available.top), (7, 3), "the cursor on it, the scroll kept");
+        assert_eq!(c.shown[1].len(), 10);
+        assert_eq!(c.owned.count(), 1, "Skill 7 I owned");
+        // the control: the game's refresh
+        control.select_category(&part, 0);
+        assert_eq!((control.available.sel, control.shown[1].iter().position(|&x| x == 2007)), (0, Some(9)), "the game's: the first line, the rank last");
+        // the last rank bought: no rank left, the cursor stays at its line
+        part.skills[15].on = true;
+        c.busy = true;
+        c.draw(&vui, &mut r, &part, &mut cues);
+        assert_eq!((c.shown[1].len(), c.available.sel, c.shown[1][7]), (9, 7, 1008), "the line now there");
+        assert_eq!(c.shown[0], vec![2007], "the owned list: the chain's highest rank");
+        // a line still listed stays selected wherever the list puts it
+        c.available.set_sel(2);
+        c.busy = true;
+        c.draw(&vui, &mut r, &part, &mut cues);
+        assert_eq!(c.shown[1][c.available.sel as usize], 1002);
+    }
+
+    /// `same_chain`: ranks above and below each other, never two chains, a
+    /// rank with itself, or a cycle forever.
+    #[test]
+    fn ranks_of_one_chain() {
+        let sk = vec![skill(1, 0, 10), skill(2, 1, 20), skill(3, 2, 30), skill(4, 0, 40), skill(5, 6, 50), skill(6, 5, 60)];
+        assert!(same_chain(&sk, 30, 10) && same_chain(&sk, 10, 30) && same_chain(&sk, 20, 10));
+        assert!(!same_chain(&sk, 40, 10) && !same_chain(&sk, 10, 10));
+        assert!(same_chain(&sk, 50, 60) && !same_chain(&sk, 50, 10), "a cycle ends");
     }
 }
