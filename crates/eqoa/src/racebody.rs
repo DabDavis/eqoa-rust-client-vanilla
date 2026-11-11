@@ -376,8 +376,8 @@ mod tests {
                     glam::Vec3::new(m[3][0], m[3][1], m[3][2])
                 };
                 let scale = cs.h.default_scale.0;
-                for slot in 0..3 {
-                    let (item, parent) = (made[slot], cs.h.nodes[made[slot] as usize].parent);
+                for (slot, &item) in made.iter().enumerate().take(3) {
+                    let parent = cs.h.nodes[item as usize].parent;
                     let d = at(item).distance(at(parent));
                     assert!(d < 0.25 * scale, "{id:#010x} {action:?} slot {slot}: {d:.3} from its hand");
                 }
