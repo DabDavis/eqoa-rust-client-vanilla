@@ -41,6 +41,18 @@ impl Play {
         e.creature.as_ref().is_some_and(|c| (c.p256 == 0 && c.npc_flags & 0b1011 == 0) || self.is_dueling(e.id))
     }
 
+    /// The pet's effects with the ms left of each, from a server that sends
+    /// them (go-eqoa-server's 0x7E33, Extended > Pet Effects on); none from
+    /// one that does not (a buff on the pet is then held for its length).
+    fn auto_pet_effects(&self) -> Option<Vec<(String, i64)>> {
+        if !self.session.pet_effects_offer || !crate::settings::pet_effects() {
+            return None;
+        }
+        let gone = self.session.now().wrapping_sub(self.session.pet_effects_at);
+        let gone = if (gone as i32) < 0 { 0 } else { gone };
+        Some(self.session.pet_effects.iter().filter(|e| e.left_ms > gone).map(|e| (e.name.clone(), (e.left_ms - gone) as i64)).collect())
+    }
+
     /// The ability `id` used as a press uses it, at `target`.
     fn auto_send(&mut self, id: i64, target: u32, kind: Kind) {
         let Some(slot) = self.abilities.get(&id).map(|a| a.slot) else { return };
@@ -120,6 +132,8 @@ impl Play {
             hp_max: self.stats.stat[8],
             power: self.stats.stat[9],
             has_pet: self.pet_id != u32::MAX,
+            pet: (self.pet_id != u32::MAX).then_some(self.pet_id),
+            pet_effects: self.auto_pet_effects(),
             attacking: self.auto_attack,
             foe,
             effects: names,
@@ -197,7 +211,7 @@ impl Play {
                     }
                     Some(Some(k)) => {
                         self.autocast.set(a.id, Some(k));
-                        vec![format!("Auto-cast on: {} ({}, {}).", a.name, k.word(), k.when())]
+                        vec![format!("Auto-cast on: {} ({}, {}).", a.name, k.word(), k.when_for(&a))]
                     }
                 },
             },
@@ -339,6 +353,40 @@ mod tests {
         p.pet_id = u32::MAX;
         p.auto_frame_at(glam::Vec3::ZERO);
         assert_eq!(uses(&mut p, &sent), [(1, 0x100)], "no pet: summoned");
+    }
+
+    /// Petition 1616: a buff on the pet (scope 3), its effect never on the
+    /// player's bar. With the pet's effects sent (0x7E33): none while on the
+    /// pet, cast when gone. With none sent: cast, the server's lockout
+    /// (0x00CD) comes, and it is not cast again nor switched off.
+    #[test]
+    fn a_pet_buff_goes_by_the_pets_effects_or_its_begun_cast() {
+        crate::settings::set_client(crate::settings::ClientOptions::default());
+        let (mut p, sent) = rig(&[ability(5, 0, "Motivate", 3)]);
+        p.autocast.set(5, Some(Kind::Buff));
+        p.pet_id = 0x400;
+        p.session.pet_effects_offer = true;
+        p.session.pet_effects_at = p.session.now();
+        p.session.pet_effects = vec![net::session::PetEffect { icon: 1, left_ms: 200_000, name: "Motivate".into() }];
+        p.auto_frame_at(glam::Vec3::ZERO);
+        assert!(uses(&mut p, &sent).is_empty(), "on the pet: none");
+        p.session.pet_effects.clear();
+        p.auto_frame_at(glam::Vec3::ZERO);
+        assert_eq!(uses(&mut p, &sent), [(0, 0x100)], "gone off the pet: cast (the server lands it on the pet)");
+        // a server that sends no pet's effects
+        let (mut p, sent) = rig(&[ability(5, 0, "Motivate", 3)]);
+        p.autocast.set(5, Some(Kind::Buff));
+        p.pet_id = 0x400;
+        p.auto_frame_at(glam::Vec3::ZERO);
+        assert_eq!(uses(&mut p, &sent).len(), 1, "cast");
+        p.abilities.get_mut(&5).unwrap().lockout = 3300;
+        p.auto_frame_at(glam::Vec3::ZERO);
+        p.abilities.get_mut(&5).unwrap().lockout = 0;
+        for _ in 0..3 {
+            p.auto_frame_at(glam::Vec3::ZERO);
+        }
+        assert!(uses(&mut p, &sent).is_empty(), "held for its length");
+        assert_eq!(p.autocast.on.get(&5), Some(&Kind::Buff), "and kept on");
     }
 
     /// Dead, or a window up: nothing, though wanted (the control: the same

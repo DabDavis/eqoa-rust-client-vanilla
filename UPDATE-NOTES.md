@@ -7,6 +7,19 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-11 · Auto-cast keeps your pet buffed
+- Auto-cast now works with **pet buffs**. A pet buff's effect shows on your pet, not on your own effects, so auto-cast
+  used to think it had not landed, cast it again and turned the slot off after three casts. Now it looks for the buff
+  on your pet's effects (under the pet's bar) and casts it again only when it is about to wear off or is gone. If the
+  server sends no pet effects (or Options > Extended > Pet Effects is off), it waits the buff's full length (for
+  example the "5min" in its description) after a cast that went off before casting it again.
+- A pet buff is only cast while you have a pet out, and a new pet (after yours died or you summoned another) is
+  buffed right away.
+- Right-clicking a pet buff on your quick bar now sets it as a buff by itself (it used to ask you to type
+  /autocast).
+- A slot is now turned off only when its cast does not go off three times in a row (refused, out of range, no
+  pet...). A buff that did go off is never turned off just because you cannot see it on yourself.
+
 ## 2026-11-11 · Your mercenary's numbers in their own colour
 - The damage your mercenary does now floats up in **light blue** and its heals on you in **purple**, so you can tell
   them from your own hits (white) and heals (green) at a glance. Its swings, its spells and its damage over time are

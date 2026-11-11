@@ -22,6 +22,18 @@
 //!   of the end the client last saw it run to (a server sends no time left of
 //!   the player's own effects, so the length is learned, the longest seen);
 //!   cast at the player;
+//! - Buff on the pet (an ability of scope 3: the server lands it on the
+//!   player's pet whatever is targeted, cast.go's castTargetsLocked): only
+//!   with a pet out; its effect is looked for in the pet's effects
+//!   (go-eqoa-server's 0x7E33, with Extended > Pet Effects on: each with its
+//!   time left, so it is cast again within [`REFRESH_BEFORE`] of its end),
+//!   and on the player's own (a server that put a pet's buffs there). A
+//!   server that sends no pet's effects (a PS2's, or Pet Effects off): a cast
+//!   the server began (its lockout, 0x00CD) holds the slot for the buff's
+//!   length ([`length`]: its description's "5min", else [`LENGTH_MS`]), and a
+//!   pet died, let go or summoned anew ends the hold (petition 1616: a pet
+//!   buff was cast three times and switched off, its effect never on the
+//!   caster's bar);
 //! - Pet: the player has no pet (none summoned, or it died or was let go);
 //! - Heal: the player below [`HEAL_PCT`] of its hit points and the heal's
 //!   own effect (a heal over time) not on it; cast at the player.
@@ -36,9 +48,13 @@
 //! refuses those casts as it refuses a press. EverQuest Online Adventures
 //! casts on the move (the walk walks through a cast), so moving blocks none.
 //!
-//! A cast that does nothing it can see (a buff whose effect never comes, a
-//! summoning with no pet after it) is tried again later and later, and after
-//! [`MISSES_OFF`] such the slot is taken off auto, the player told.
+//! A cast the server never began (no lockout came for it, 0x00CD: refused,
+//! no target, out of range, short of power) whose outcome is not seen either
+//! (a buff's effect, a pet) is a miss: tried again later and later, and after
+//! [`MISSES_OFF`] such the slot is taken off auto, the player told. A buff the
+//! server began whose effect shows nowhere the client looks (the pet's on a
+//! server that sends none of them, one a stronger buff keeps off) is no miss:
+//! the slot is held for the buff's length (petition 1616).
 //!
 //! Auto targeting (Extended > Combat > Auto Target, off by default, or
 //! `/autotarget`): with no target, or a dead one, the nearest living creature
@@ -85,6 +101,15 @@ impl Kind {
         })
     }
 
+    /// When it fires on ability `a`, for the chat box: a buff on the pet's
+    /// (scope 3) is its.
+    pub fn when_for(self, a: &Ability) -> &'static str {
+        if self == Kind::Buff && a.scope == 3 {
+            return "when its effect is gone from your pet";
+        }
+        self.when()
+    }
+
     /// When it fires, for the chat box.
     pub fn when(self) -> &'static str {
         match self {
@@ -118,6 +143,9 @@ pub const MISSES_OFF: u32 = 3;
 pub const REFRESH_LONGER: i64 = 60_000;
 /// ...this long before.
 pub const REFRESH_BEFORE: i64 = 6000;
+/// A buff's length when the client has neither seen it run nor read it in
+/// its description (go-eqoa-server's and the lists' usual, "5min").
+pub const LENGTH_MS: i64 = 300_000;
 /// Auto targeting picks at most one target this often.
 pub const TARGET_GAP_MS: i64 = 1000;
 
@@ -140,7 +168,15 @@ pub fn guess(a: &Ability) -> Option<Kind> {
     if summon {
         return Some(Kind::Pet);
     }
-    // a pet's own spells (scope 3) and anything wider (4) the player casts
+    // a buff on the pet (scope 3: the server lands it on the pet whatever is
+    // targeted): its words, never a heal of it ("Pet Heal", "Increase
+    // Hitpoints by 539") nor a harm
+    if a.scope == 3 {
+        let heal = has(&d, &["pet heal", "heal hp", "heals ", "heal your", "increase hitpoints by", "increase hp by", "restores health", "restore health", "mend", "repair"]);
+        let buff = has(&d, &["buff", "proc", "increas", "empower", "strengthen", "reinforce", "mastery", "mark", "aura", "shield", "regenerat", "over time", "per tic", "min"]);
+        return (buff && !heal).then_some(Kind::Buff);
+    }
+    // anything wider (4) the player casts
     if !(0..=2).contains(&a.scope) {
         return None;
     }
@@ -158,6 +194,43 @@ pub fn guess(a: &Ability) -> Option<Kind> {
     }
     if a.scope == 0 || a.scope == 2 || (a.scope == 1 && lasting) {
         return Some(Kind::Buff);
+    }
+    None
+}
+
+/// A buff's length as its description gives it ("Pet, Increase STR & DEX by
+/// 10, 5min", "for thirty minutes", "1 hour"), in ms: the first number with a
+/// unit of time after it.
+pub fn length(desc: &str) -> Option<i64> {
+    let d = desc.to_lowercase();
+    let words: Vec<&str> = d.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let unit = |u: &str| -> Option<i64> {
+        Some(match u {
+            "m" | "min" | "mins" | "minute" | "minutes" => 60_000,
+            "h" | "hr" | "hrs" | "hour" | "hours" => 3_600_000,
+            "s" | "sec" | "secs" | "second" | "seconds" => 1000,
+            _ => return None,
+        })
+    };
+    let number = |w: &str| -> Option<i64> {
+        if let Ok(n) = w.parse::<i64>() {
+            return Some(n);
+        }
+        const WORDS: [(&str, i64); 13] = [("one", 1), ("two", 2), ("three", 3), ("four", 4), ("five", 5), ("six", 6), ("ten", 10), ("fifteen", 15), ("twenty", 20), ("thirty", 30), ("forty", 40), ("fifty", 50), ("sixty", 60)];
+        WORDS.iter().find(|(s, _)| *s == w).map(|&(_, n)| n)
+    };
+    for (i, w) in words.iter().enumerate() {
+        // "5min", "30m", "1hr"
+        let digits = w.chars().take_while(|c| c.is_ascii_digit()).count();
+        if digits > 0 && digits < w.len()
+            && let (Ok(n), Some(u)) = (w[..digits].parse::<i64>(), unit(&w[digits..]))
+        {
+            return Some(n * u);
+        }
+        // "5 min", "thirty minutes"
+        if let (Some(n), Some(u)) = (number(w), words.get(i + 1).and_then(|u| unit(u))) {
+            return Some(n * u);
+        }
     }
     None
 }
@@ -200,6 +273,11 @@ pub struct Now {
     pub hp_max: i32,
     pub power: i32,
     pub has_pet: bool,
+    /// the pet's id, when there is one
+    pub pet: Option<u32>,
+    /// the pet's effects with the ms left of each, from a server that sends
+    /// them (0x7E33; none: it sends none, or Pet Effects is off)
+    pub pet_effects: Option<Vec<(String, i64)>>,
     /// the attack held (the 0x40 carries it)
     pub attacking: bool,
     /// the target, a foe
@@ -227,6 +305,13 @@ struct Try {
     /// a buff's or a summoning's outcome still to be seen, by when
     watch: Option<i64>,
     misses: u32,
+    /// when it was sent
+    sent: i64,
+    /// the server began it (its lockout came, 0x00CD)
+    began: bool,
+    /// a begun buff whose effect shows nowhere the client looks: not cast
+    /// again before this
+    held: Option<i64>,
 }
 
 /// A creature in a fight with the player's side: when it last hit the
@@ -268,6 +353,8 @@ pub struct AutoCast {
     fights: BTreeMap<u32, Fight>,
     /// the last target auto targeting took
     targeted: Option<i64>,
+    /// the pet last seen: another (or none) ends a pet buff's hold
+    pet: Option<u32>,
     /// ○ or E held on the HUD's selection: its ability, since when, done
     hold: Option<(i64, i64, bool)>,
     /// what to say in the chat box
@@ -316,7 +403,7 @@ impl AutoCast {
         match guess(a) {
             Some(k) => {
                 self.set(a.id, Some(k));
-                format!("Auto-cast on: {} ({}, {}).", a.name, k.word(), k.when())
+                format!("Auto-cast on: {} ({}, {}).", a.name, k.word(), k.when_for(a))
             }
             None => format!("Auto-cast can't tell when to use {}: type /autocast {} attack, buff, pet or heal.", a.name, a.name),
         }
@@ -366,34 +453,81 @@ impl AutoCast {
         }
     }
 
+    /// Whether buff `a`'s effect shows where the client looks: on the
+    /// player, or (a buff on the pet) in the pet's effects.
+    fn shows(a: &Ability, now: &Now) -> bool {
+        now.effects.iter().any(|e| effect_is(e, &a.name)) || (a.scope == 3 && now.pet_effects.as_ref().is_some_and(|l| l.iter().any(|(e, _)| effect_is(e, &a.name))))
+    }
+
+    /// Whether buff `a` is up and not near its end: on the player
+    /// (`buff_held`), or on the pet with more than `REFRESH_BEFORE` left.
+    fn buff_up(&self, a: &Ability, now: &Now) -> bool {
+        self.buff_held(&a.name, &now.effects, now.ms) || (a.scope == 3 && now.pet_effects.as_ref().is_some_and(|l| l.iter().any(|(e, left)| effect_is(e, &a.name) && *left > REFRESH_BEFORE)))
+    }
+
+    /// Buff `a`'s length: as the client saw it run on the player, else as its
+    /// description says, else `LENGTH_MS`.
+    fn length_of(&self, a: &Ability) -> i64 {
+        self.lasted.iter().find(|(e, _)| effect_is(e, &a.name)).map(|(_, &l)| l).or_else(|| length(&a.desc)).unwrap_or(LENGTH_MS)
+    }
+
     /// What each auto slot's last try came to: a buff's effect seen, or a pet,
-    /// is a success; neither by its time a miss, waited out longer each time,
-    /// and the slot taken off auto after `MISSES_OFF` (said).
+    /// is a success; a buff the server began (its lockout, 0x00CD) whose
+    /// effect is not seen is held for its length; neither by its time a miss,
+    /// waited out longer each time, and the slot taken off auto after
+    /// `MISSES_OFF` (said). Another pet (or none) ends the pet buffs' holds.
     fn watch(&mut self, abilities: &BTreeMap<i64, Ability>, now: &Now) {
+        if now.pet != self.pet {
+            self.pet = now.pet;
+            for (id, t) in self.tries.iter_mut() {
+                if abilities.get(id).is_some_and(|a| a.scope == 3) {
+                    t.held = None;
+                }
+            }
+        }
         let mut off = Vec::new();
+        let mut holds = Vec::new();
         for (id, t) in self.tries.iter_mut() {
             let Some(by) = t.watch else { continue };
             let (Some(kind), Some(a)) = (self.on.get(id), abilities.get(id)) else { continue };
             let seen = match kind {
-                Kind::Buff => now.effects.iter().any(|e| effect_is(e, &a.name)),
+                Kind::Buff => Self::shows(a, now),
                 Kind::Pet => now.has_pet,
                 _ => true,
             };
             if seen {
                 t.watch = None;
                 t.misses = 0;
-            } else if now.ms >= by {
-                t.watch = None;
-                t.misses += 1;
-                t.next = now.ms + MISS_WAIT_MS * t.misses as i64;
-                if t.misses >= MISSES_OFF {
-                    off.push((*id, a.name.clone(), *kind));
+                t.held = None;
+                continue;
+            }
+            if !t.began && a.lockout > 0 {
+                t.began = true;
+                t.misses = 0;
+                if *kind == Kind::Buff {
+                    holds.push((*id, a.clone()));
                 }
+            }
+            if now.ms >= by {
+                t.watch = None;
+                if !t.began {
+                    t.misses += 1;
+                    t.next = now.ms + MISS_WAIT_MS * t.misses as i64;
+                    if t.misses >= MISSES_OFF {
+                        off.push((*id, a.name.clone(), *kind));
+                    }
+                }
+            }
+        }
+        for (id, a) in holds {
+            let until = now.ms + (a.cast_time.clamp(0, 30) * 1000).max(0) + self.length_of(&a);
+            if let Some(t) = self.tries.get_mut(&id) {
+                t.held = Some(until);
             }
         }
         for (id, name, kind) in off {
             self.set(id, None);
-            let what = if kind == Kind::Pet { "no pet came of it" } else { "its effect never showed on you" };
+            let what = if kind == Kind::Pet { "no pet came of it" } else { "the server never began it" };
             self.said.push(format!("Auto-cast off: {name} ({what} {MISSES_OFF} times)."));
         }
     }
@@ -424,7 +558,16 @@ impl AutoCast {
         let wanted = |a: &Ability, k: Kind| match k {
             Kind::Heal => now.hp_max > 0 && now.hp * 100 < HEAL_PCT * now.hp_max && !now.effects.iter().any(|e| effect_is(e, &a.name)),
             Kind::Pet => !now.has_pet,
-            Kind::Buff => !self.buff_held(&a.name, &now.effects, now.ms),
+            Kind::Buff => {
+                let t = self.tries.get(&a.id);
+                // a buff on the pet only with a pet out; up, or held for its
+                // length (begun, not seen), or just sent and not yet landed:
+                // not again
+                !(a.scope == 3 && !now.has_pet)
+                    && !self.buff_up(a, now)
+                    && !t.and_then(|t| t.held).is_some_and(|h| now.ms < h)
+                    && !t.is_some_and(|t| now.ms - t.sent < (a.cast_time.clamp(0, 30) * 1000).max(0) + SEE_MS)
+            }
             Kind::Attack => fighting && now.foe.is_some_and(|f| a.range <= 0.0 || f.distance <= a.range + 1.0),
         };
         let order: &[Kind] = if fighting { &[Kind::Heal, Kind::Pet, Kind::Attack, Kind::Buff] } else { &[Kind::Heal, Kind::Pet, Kind::Buff, Kind::Attack] };
@@ -432,7 +575,7 @@ impl AutoCast {
         let cast_ms = (a.cast_time.clamp(0, 30) * 1000).max(0);
         let watch = matches!(kind, Kind::Buff | Kind::Pet).then_some(now.ms + cast_ms + SEE_MS);
         let misses = self.tries.get(&a.id).map_or(0, |t| t.misses);
-        self.tries.insert(a.id, Try { next: now.ms + RETRY_MS, watch, misses });
+        self.tries.insert(a.id, Try { next: now.ms + RETRY_MS, watch, misses, sent: now.ms, ..Default::default() });
         // a buff cast again before its end begins again
         if kind == Kind::Buff
             && let Some(e) = now.effects.iter().find(|e| effect_is(e, &a.name))
@@ -790,6 +933,125 @@ mod tests {
         now.ms = 3000;
         c.choose(&list, &now);
         assert!(c.on.contains_key(&3) && c.tries[&3].misses == 0);
+    }
+
+    /// A buff on the pet (scope 3) guessed a buff; a pet's heal and its
+    /// invisibility not.
+    #[test]
+    fn a_pet_buff_is_guessed_a_buff() {
+        let g = |name: &str, desc: &str| guess(&ab(1, 0, name, desc, 3));
+        assert_eq!(g("Elemental Mark", "Pet, Increase INT by 75, Add Offensive Proc, Add DS Proc, 10min"), Some(Kind::Buff));
+        assert_eq!(g("Excite", "Empowers your pet, increasing its dexterity, stamina, and strength while restoring health over time. Modified by AGI."), Some(Kind::Buff));
+        assert_eq!(g("Burning Mark", ""), Some(Kind::Buff));
+        assert_eq!(g("Infuse", "Pet Heal"), None);
+        assert_eq!(g("Renewal", "Pet, Increase Hitpoints by 539"), None);
+        assert_eq!(g("Fusion", "Pet, Heal Hp by 722"), None);
+        assert_eq!(g("Repair", "CM: Heals your pet. Modified by AGI."), None);
+        assert_eq!(g("Ghostly Death", "Pet, Invis, 10min"), None);
+        assert_eq!(Kind::Buff.when_for(&ab(1, 0, "Elemental Mark", "", 3)), "when its effect is gone from your pet");
+    }
+
+    #[test]
+    fn a_buffs_length_is_read_off_its_description() {
+        assert_eq!(length("Pet, Increase STR & DEX by 10, 5min"), Some(300_000));
+        assert_eq!(length("Pet, Increase INT by 75, Add Offensive Proc, Add DS Proc, 10min"), Some(600_000));
+        assert_eq!(length("increasing strength and dexterity for thirty minutes."), Some(1_800_000));
+        assert_eq!(length("Self, lasts 1 hour"), Some(3_600_000));
+        assert_eq!(length("Group Buff DEX and WIS by 15, 30m"), Some(1_800_000));
+        assert_eq!(length("Pet Heal"), None);
+        assert_eq!(length("Power cost: 0, Cast: 0, Recast: 0."), None);
+    }
+
+    /// Petition 1616: a buff on the pet, its effect never on the caster's
+    /// bar, on a server that sends no pet's effects. Begun by the server (its
+    /// lockout came): held for its length (the description's 5 minutes), then
+    /// cast again, and never switched off; another pet ends the hold; with no
+    /// pet, none. The control: a cast the server never began (no lockout)
+    /// still counts a miss, and three switch the slot off.
+    #[test]
+    fn a_pet_buff_begun_waits_its_length_and_is_never_switched_off() {
+        let mut list = vec![ab(5, 0, "Motivate", "Pet, Increase STR & DEX by 10, 5min", 3)];
+        let mut c = auto(&[(5, Kind::Buff)]);
+        let mut now = calm(10_000);
+        now.pet = Some(0x400);
+        assert_eq!(c.choose(&book(&list), &now), Some(Cast { id: 5, kind: Kind::Buff, at_self: true }), "the first cast");
+        // the server began it: its lockout (0x00CD), 2 s cast + 1 s recast + 0.3
+        list[0].lockout = 3300;
+        now.ms = 10_100;
+        assert_eq!(c.choose(&book(&list), &now), None);
+        list[0].lockout = 0;
+        let mut casts = vec![10_000];
+        for t in (10_500..1_000_000).step_by(500) {
+            now.ms = t;
+            if c.choose(&book(&list), &now).is_some() {
+                casts.push(t);
+                list[0].lockout = 3300;
+                now.ms = t + 100;
+                c.choose(&book(&list), &now);
+                list[0].lockout = 0;
+            }
+        }
+        assert!(c.on.contains_key(&5) && c.said.is_empty(), "never switched off");
+        assert_eq!(casts.len(), 4, "every 5 minutes and its cast: {casts:?}");
+        for w in casts.windows(2) {
+            let gap = w[1] - w[0];
+            assert!((300_000..=305_000).contains(&gap), "waited its length: {gap}");
+        }
+        // another pet: the hold ends at once
+        let mut c = auto(&[(5, Kind::Buff)]);
+        now.ms = 0;
+        c.choose(&book(&list), &now);
+        list[0].lockout = 3300;
+        now.ms = 100;
+        c.choose(&book(&list), &now);
+        list[0].lockout = 0;
+        now.ms = 20_000;
+        assert_eq!(c.choose(&book(&list), &now), None, "held");
+        now.pet = Some(0x401);
+        now.ms = 21_000;
+        assert!(c.choose(&book(&list), &now).is_some(), "a new pet: buffed");
+        // no pet: none
+        let mut c = auto(&[(5, Kind::Buff)]);
+        now.pet = None;
+        now.has_pet = false;
+        assert_eq!(c.choose(&book(&list), &now), None, "no pet");
+        // refused (no lockout ever came): misses, and off after three
+        let mut c = auto(&[(5, Kind::Buff)]);
+        now.pet = Some(0x400);
+        now.has_pet = true;
+        let mut tries = 0;
+        for t in (0..400_000).step_by(500) {
+            now.ms = t;
+            if c.choose(&book(&list), &now).is_some() {
+                tries += 1;
+            }
+        }
+        assert_eq!(tries, MISSES_OFF as usize);
+        assert!(!c.on.contains_key(&5) && c.said.len() == 1, "{:?}", c.said);
+    }
+
+    /// A buff on the pet with the pet's effects sent (0x7E33): not cast while
+    /// on it with time left, cast again within `REFRESH_BEFORE` of its end or
+    /// when it is gone; seen there, a success.
+    #[test]
+    fn a_pet_buff_follows_the_pets_effects() {
+        let list = book(&[ab(5, 0, "Motivate", "Pet, Increase STR & DEX by 10, 5min", 3)]);
+        let mut c = auto(&[(5, Kind::Buff)]);
+        let mut now = calm(10_000);
+        now.pet = Some(0x400);
+        now.pet_effects = Some(vec![("Motivate".into(), 200_000)]);
+        assert_eq!(c.choose(&list, &now), None, "on the pet");
+        now.pet_effects = Some(vec![("Motivate".into(), REFRESH_BEFORE - 1000)]);
+        assert!(c.choose(&list, &now).is_some(), "near its end");
+        // landed again: seen on the pet, no miss
+        now.pet_effects = Some(vec![("Motivate".into(), 300_000)]);
+        now.ms += 4000;
+        assert_eq!(c.choose(&list, &now), None);
+        assert_eq!(c.tries[&5].misses, 0);
+        assert!(c.tries[&5].watch.is_none());
+        now.pet_effects = Some(vec![]);
+        now.ms += 20_000;
+        assert!(c.choose(&list, &now).is_some(), "gone off the pet");
     }
 
     #[test]
