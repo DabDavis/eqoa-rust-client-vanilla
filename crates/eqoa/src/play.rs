@@ -1570,10 +1570,12 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
         let h = (height as f32 * view.scale).round() as i32;
         let mut min = (qx - (w >> 1), qy - (h >> 1));
         let mut max = (min.0 + w, min.1 + h);
-        // a tag's line under the name: the plate's rect takes it in
+        // a tag (`mercplay`): it sits where the name would, the name a line
+        // above it, both clear of the head (the owner, 2026-11-11: under the
+        // name it covered the merc's head); the plate's rect takes both in
         if let Some(t) = &p.tag {
             let tw = (width(t) as f32 * view.scale).round() as i32;
-            max.1 += h;
+            min.1 -= h;
             if tw > w {
                 (min.0, max.0) = (qx - (tw >> 1), qx - (tw >> 1) + tw);
             }
@@ -1593,14 +1595,16 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
     if view.overlap {
         kept.reverse();
     }
-    // a tag a line below its name, the line the font's height at the plates'
-    // size (`Text::vertices`: a pixel of the PS2's 448 lines is 2 / 448 high)
+    // a tag where the name would be and its name a line above it, the line
+    // the font's height at the plates' size (`Text::vertices`: a pixel of the
+    // PS2's 448 lines is 2 / 448 high)
     let line = 2.0 * height as f32 * view.scale / render::text::SCREEN_H;
     let mut out = Vec::new();
     for (_, _, ndc, p) in kept {
-        out.push(render::text::Label { at: ndc.to_array(), color: p.color, text: p.name.clone() });
+        let up = if p.tag.is_some() { line } else { 0.0 };
+        out.push(render::text::Label { at: [ndc.x, ndc.y + up, ndc.z], color: p.color, text: p.name.clone() });
         if let Some(t) = &p.tag {
-            out.push(render::text::Label { at: [ndc.x, ndc.y - line, ndc.z], color: p.color, text: t.clone() });
+            out.push(render::text::Label { at: ndc.to_array(), color: p.color, text: t.clone() });
         }
     }
     out
@@ -2151,23 +2155,31 @@ mod name_plates {
         labels_by(plates, view, Mat4::IDENTITY, width, 12).into_iter().map(|l| l.text).collect()
     }
 
-    /// A merc's tag (`mercplay`) is a second label a line under its name, in
-    /// its colour, and its plate's rect takes it in: a plate just under the
-    /// name, where the tag is, is dropped as one meeting it. The control: the
+    /// A merc's tag (`mercplay`) sits where its name would, the name a line
+    /// above it, in its colour, nothing drawn below the name's own place (the
+    /// owner, 2026-11-11: under the name the tag covered the merc's head); the
+    /// plate's rect takes both in: a plate just above, where the name now is,
+    /// is dropped as one meeting it, one just below is kept. The control: the
     /// same plates untagged, both are kept.
     #[test]
-    fn a_tag_is_a_line_under_its_name() {
+    fn a_tag_sits_at_the_names_place_and_the_name_above_it() {
         let eye = Vec3::new(0.0, 0.0, -1.0);
-        let below = -14.0 / 224.0;
+        let step = 14.0 / 224.0;
         let mut merc = plate([0.0, 0.0, 0.5], "Ralthas");
         merc.tag = Some("<Lonewulf's Mercenary>".into());
-        let under = plate([0.0, below, 0.5], "Kel");
-        let ls = labels_by(&[merc, under], &PlateView::game(eye), Mat4::IDENTITY, width, 12);
+        let above = plate([0.0, step, 0.5], "Kel");
+        let ls = labels_by(&[merc, above], &PlateView::game(eye), Mat4::IDENTITY, width, 12);
         let texts: Vec<_> = ls.iter().map(|l| l.text.as_str()).collect();
-        assert_eq!(texts, ["Ralthas", "<Lonewulf's Mercenary>"], "the plate under the tag is dropped");
-        assert!((ls[1].at[1] - (ls[0].at[1] - 2.0 * 12.0 / 448.0)).abs() < 1e-6 && ls[1].at[0] == ls[0].at[0], "{:?}", ls[1].at);
+        assert_eq!(texts, ["Ralthas", "<Lonewulf's Mercenary>"], "the plate where the name now is is dropped");
+        assert!(ls[1].at[1].abs() < 1e-6 && ls[1].at[0] == ls[0].at[0], "the tag at the name's own place: {:?}", ls[1].at);
+        assert!((ls[0].at[1] - 2.0 * 12.0 / 448.0).abs() < 1e-6, "the name a line above it: {:?}", ls[0].at);
+        assert!(ls.iter().all(|l| l.at[1] >= -1e-6), "nothing below the name's own place");
         assert_eq!(ls[1].color, ls[0].color);
-        let untagged = [plate([0.0, 0.0, 0.5], "Ralthas"), plate([0.0, below, 0.5], "Kel")];
+        let mut merc = plate([0.0, 0.0, 0.5], "Ralthas");
+        merc.tag = Some("<Lonewulf's Mercenary>".into());
+        let below = plate([0.0, -step, 0.5], "Kel");
+        assert_eq!(names(&PlateView::game(eye), &[merc, below]), ["Ralthas", "<Lonewulf's Mercenary>", "Kel"], "a plate just below is kept");
+        let untagged = [plate([0.0, 0.0, 0.5], "Ralthas"), plate([0.0, step, 0.5], "Kel")];
         assert_eq!(names(&PlateView::game(eye), &untagged), ["Ralthas", "Kel"], "the control must fail");
     }
 
@@ -5797,13 +5809,27 @@ impl Play {
         self.following = !self.following;
         if self.following {
             let target = self.target;
-            if Some(target) != self.self_id32() && self.group.members[..self.group.count()].iter().any(|m| m.id == target) {
+            if Some(target) != self.self_id32() && (self.group_member(target) || self.player_in_scene(target)) {
                 self.follow_id = target;
             } else {
                 self.show_word(1195);
                 self.following = false;
             }
         }
+    }
+
+    /// Whether `id` is one of the player's group (`ToggleFollow`'s test).
+    fn group_member(&self, id: u32) -> bool {
+        self.group.members[..self.group.count()].iter().any(|m| m.id == id)
+    }
+
+    /// Whether `id` is another player's character in the scene: a creature
+    /// whose plate says player (`p256` 2, as `InviteEntity` asks), not an
+    /// NPC, a pet or a merc. Any such may be followed, in a group or not (the
+    /// owner, 2026-11-11: "any player can follow any player"; CLIENT's
+    /// `ToggleFollow` takes group members only, word 1195 else).
+    fn player_in_scene(&self, id: u32) -> bool {
+        self.entities.slots.iter().flatten().any(|e| e.id == id && e.creature.as_ref().is_some_and(|c| c.p256 == 2))
     }
 
     /// What `UpdateControls` changed (`Walker::frame_with`): autorun off
@@ -5852,13 +5878,14 @@ impl Play {
             None
         };
         let (a, b) = self.cast_window;
-        // the member followed, as UpdateControls finds it: still in the
-        // group and the scene (`FindEntity`), with an actor, as the player is
+        // the one followed, as UpdateControls finds it: still in the group,
+        // or a player, and in the scene (`FindEntity`), with an actor, as the
+        // player is; one gone from view or the zone is lost
         let follow = if !self.following {
             crate::controls::Follow::Off
         } else {
             let id = self.follow_id;
-            let member = self.group.members[..self.group.count()].iter().any(|m| m.id == id) && self.entities.slots.iter().flatten().any(|e| e.id == id);
+            let member = (self.group_member(id) && self.entities.slots.iter().flatten().any(|e| e.id == id)) || self.player_in_scene(id);
             match (member && id != u32::MAX && Some(id) != me).then(|| self.actor_pos(id).zip(self.self_at.map(|s| s.0))).flatten() {
                 Some((member_at, self_at)) => crate::controls::Follow::At(member_at, self_at),
                 None => crate::controls::Follow::Lost,
@@ -11962,8 +11989,8 @@ mod commands {
     }
 
     /// `ToggleFollow`: a targeted member of the group is followed; the
-    /// player itself, someone outside the group or nothing is word 1195.
-    /// Again, off.
+    /// player itself, someone outside the group who is no player in the
+    /// scene, or nothing is word 1195. Again, off.
     #[test]
     fn follow_takes_a_targeted_group_member() {
         let mut p = play();
@@ -11983,6 +12010,36 @@ mod commands {
         // and `/follow` is the same command
         p.chat_line("/follow");
         assert!(p.following);
+    }
+
+    /// Any player may be followed, in a group or not (the owner, 2026-11-11:
+    /// "any player can follow any player"): a player in the scene outside
+    /// the group is followed and steered to; gone from the scene, lost. The
+    /// controls: an NPC, a pet or a merc (its plate not a player's) outside
+    /// the group is word 1195.
+    #[test]
+    fn follow_takes_any_player_in_view() {
+        let mut p = play();
+        p.self_at = Some(([0.0; 3], None));
+        let put = |p: &mut Play, k: usize, id: u32, p256: u8| {
+            p.entities.slots[k] = Some(net::entity::Entity { id, creature: Some(net::entity::Creature { p256, ..Default::default() }), ..Default::default() });
+        };
+        put(&mut p, 0, 0x400, 2);
+        put(&mut p, 1, 0x500, 0);
+        put(&mut p, 2, 0x600, 3);
+        for t in [0x500, 0x600] {
+            p.target = t;
+            p.chat.clear();
+            p.do_action(0x0B0E_0007, 0);
+            assert!(!p.following && last_line(&p) == "(word 1195)", "a creature {t:#x} outside the group");
+        }
+        p.target = 0x400;
+        p.chat.clear();
+        p.do_action(0x0B0E_0007, 0);
+        assert!(p.following && p.follow_id == 0x400 && p.chat.is_empty(), "a player outside the group");
+        assert_ne!(p.control_client().follow, Follow::Lost, "steered to while in the scene");
+        p.entities.slots[0] = None;
+        assert_eq!(p.control_client().follow, Follow::Lost, "gone from the scene: lost");
     }
 
     /// What `UpdateControls` is given: off; the member gone from the group
