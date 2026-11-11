@@ -1429,6 +1429,32 @@ mod tests {
         }
     }
 
+    /// A box of lines (a petition's, a mail's body): Enter (13) types a new
+    /// line, and Shift+Enter (4, as `VIKeyboard` makes it; the legend's
+    /// "Shift+Enter = End", petition 1626) ends it with the text kept, as R2
+    /// (143) does. The control: a box of one line ends at Enter.
+    #[test]
+    fn shift_enter_ends_a_box_of_lines() {
+        let vui = crate::pointer::testing::vui();
+        let r = crate::pointer::testing::NullRaster;
+        let mut cues = Vec::new();
+        let mut e = EditBox::default();
+        e.set_multi_line(true);
+        e.set_max_length(512);
+        e.purpose = 7;
+        for key in [b'a' as i32, 13, b'b' as i32] {
+            assert!(matches!(e.key(&vui, &r, key, 0, &mut cues), EditUp::None));
+        }
+        assert_eq!(e.text, wide("a\nb"));
+        assert!(matches!(e.key(&vui, &r, 4, 0, &mut cues), EditUp::Done(7)), "Shift+Enter ends it");
+        assert_eq!(e.text, wide("a\nb"), "with the text as typed");
+        assert!(matches!(e.key(&vui, &r, 143, 0, &mut cues), EditUp::Done(7)), "as R2 does");
+        let mut e = EditBox::default();
+        e.set_max_length(128);
+        e.purpose = 7;
+        assert!(matches!(e.key(&vui, &r, 13, 0, &mut cues), EditUp::Done(7)), "the control: one line");
+    }
+
     #[test]
     fn insert_keeps_room_for_the_terminator() {
         let mut e = EditBox::default();

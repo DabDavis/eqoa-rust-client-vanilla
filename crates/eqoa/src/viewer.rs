@@ -224,6 +224,14 @@ pub enum Camera {
     Fly { pos: Vec3, yaw: f32, pitch: f32 },
 }
 
+/// An edit box's Enter in the game's codes, as `VIKeyboard` makes it: 13
+/// (done, or a new line in a box of lines: a mail's body, a petition's), and
+/// with Shift 4, done in every box (`editbox`), which the box's legend says
+/// ("Shift+Enter = End"; the GM Jibrish's petition 1626). Tab is done too.
+fn enter_key(shift: bool) -> i32 {
+    if shift { 4 } else { 13 }
+}
+
 fn direction(yaw: f32, pitch: f32) -> Vec3 {
     Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos())
 }
@@ -2111,6 +2119,9 @@ struct App {
     /// Alt held (`ModifiersChanged`), for Alt+Enter (`display`), and an
     /// Enter it took, whose release is its too
     alt_held: bool,
+    /// Shift held (`ModifiersChanged`), for Shift+Enter in an edit box: the
+    /// game's key 4, done (`enter_key`)
+    shift_held: bool,
     /// Ctrl held (`ModifiersChanged`), for the clipboard's keys (`clipboard_key`)
     #[cfg(any(target_os = "linux", windows))]
     ctrl_held: bool,
@@ -2323,6 +2334,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         #[cfg(target_os = "macos")]
         super_held: false,
         alt_held: false,
+        shift_held: false,
         #[cfg(any(target_os = "linux", windows))]
         ctrl_held: false,
         #[cfg(any(target_os = "linux", target_os = "macos", windows))]
@@ -3888,7 +3900,8 @@ impl App {
             return;
         }
         // The edit box (mode 2) takes the keyboard: characters type,
-        // Backspace, Escape (cancel), Enter (done), the arrows move the
+        // Backspace, Escape (cancel), Enter (done; in a box of lines a new
+        // line, and Shift+Enter done, `enter_key`), the arrows move the
         // caret (with the soft keyboard showing, its cursor; Insert
         // presses its key).
         if let Some(p) = self.play.as_mut()
@@ -3899,7 +3912,7 @@ impl App {
             let named = match &event.logical_key {
                 Key::Named(NamedKey::Backspace) => Some(8),
                 Key::Named(NamedKey::Escape) => Some(27),
-                Key::Named(NamedKey::Enter) => Some(13),
+                Key::Named(NamedKey::Enter) => Some(enter_key(self.shift_held)),
                 Key::Named(NamedKey::ArrowLeft) => Some(if soft { 136 } else { 17 }),
                 Key::Named(NamedKey::ArrowRight) => Some(if soft { 137 } else { 18 }),
                 Key::Named(NamedKey::ArrowUp) => Some(if soft { 138 } else { 19 }),
@@ -4140,7 +4153,7 @@ impl App {
                 let named = match &event.logical_key {
                     Key::Named(NamedKey::Backspace) => Some(8),
                     Key::Named(NamedKey::Escape) => Some(27),
-                    Key::Named(NamedKey::Enter) => Some(13),
+                    Key::Named(NamedKey::Enter) => Some(enter_key(self.shift_held)),
                     Key::Named(NamedKey::Tab) => Some(143),
                     Key::Named(NamedKey::ArrowLeft) => Some(17),
                     Key::Named(NamedKey::ArrowRight) => Some(18),
@@ -4190,7 +4203,7 @@ impl App {
                 let named = match &event.logical_key {
                     Key::Named(NamedKey::Backspace) => Some(8),
                     Key::Named(NamedKey::Escape) => Some(27),
-                    Key::Named(NamedKey::Enter) => Some(13),
+                    Key::Named(NamedKey::Enter) => Some(enter_key(self.shift_held)),
                     Key::Named(NamedKey::Tab) => Some(143),
                     Key::Named(NamedKey::ArrowLeft) => Some(17),
                     Key::Named(NamedKey::ArrowRight) => Some(18),
@@ -5405,6 +5418,7 @@ impl App {
             // item took it, asking as Settings… does (`macos`)
             WindowEvent::ModifiersChanged(m) => {
                 self.alt_held = m.state().alt_key();
+                self.shift_held = m.state().shift_key();
                 #[cfg(any(target_os = "linux", windows))]
                 {
                     self.ctrl_held = m.state().control_key();
@@ -6361,6 +6375,14 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Enter in an edit box is 13 (a new line in a box of lines), with Shift
+    /// 4, done (petition 1626).
+    #[test]
+    fn shift_enter_is_the_games_done() {
+        assert_eq!(enter_key(false), 13);
+        assert_eq!(enter_key(true), 4);
+    }
 
     /// The five seconds count only frames drawn in the world one after
     /// another: a pause (the pregame, a hidden window) starts them again.
