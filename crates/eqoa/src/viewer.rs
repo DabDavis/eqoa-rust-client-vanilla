@@ -1928,6 +1928,11 @@ impl Gfx {
 /// be skipped.
 const HIDDEN_GAP: std::time::Duration = std::time::Duration::from_millis(33);
 
+/// The most console frames a frame come late steps one at a time while
+/// following (`Walker::frames_behind`): two seconds of them; a longer gap's
+/// earlier frames are one long frame, as before.
+const CATCH_UP_FRAMES: usize = 60;
+
 /// When a window that gave nothing to draw on takes its next frame: at
 /// `HIDDEN_GAP` with this window's Slow When Not Focused on (the GM
 /// Jibrish's petition 1634: a box in the back slowed so far its follow
@@ -5994,6 +5999,29 @@ impl App {
                     let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
                     client.keys = game_keys;
                     client.steer = steer;
+                    // a frame come late while following (a hidden page's
+                    // ticks held up, a covered or busy window's): each
+                    // console frame it would step on one steer is a frame
+                    // of its own first, the member found where it was then
+                    // (`Walker::frames_behind`, `Play::follow_back`)
+                    if let Some(p) = play.as_mut().filter(|p| !p.is_dead())
+                        && client.follow != crate::controls::Follow::Off
+                    {
+                        let behind = w.frames_behind(now, CATCH_UP_FRAMES);
+                        for &t in &behind {
+                            let me = w.cam.walk.phys.smooth_location().to_array();
+                            let c = crate::controls::Client { follow: p.follow_back(now - t, me), ..client };
+                            let changed = w.frame_with(sticks, t, &c, false);
+                            p.controls_changed(changed);
+                        }
+                        // this frame's own, from where they left the player
+                        // (the follow ended by one of them, or not)
+                        if !behind.is_empty() {
+                            client = crate::controls::Client { follow: p.follow_back(0, w.cam.walk.phys.smooth_location().to_array()), ..p.control_client() };
+                            client.keys = game_keys;
+                            client.steer = steer;
+                        }
+                    }
                     let changed = w.frame_with(sticks, now, &client, game_frame);
                     if let Some(p) = play.as_mut() {
                         p.controls_changed(changed);

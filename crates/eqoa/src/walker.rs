@@ -684,6 +684,34 @@ impl Walker {
         }
     }
 
+    /// The console frames come by `now` that a frame drawn at `now` would
+    /// step on its one set of controls (`step_kept`), but the last (that
+    /// frame's own), at most the `most` latest, their times on the wall clock:
+    /// none while frames come at the console's rate or faster. A frame that
+    /// comes late (a hidden page's, a covered or busy window's) steps each of
+    /// them as a frame of its own (`frame_with` at its time, each with its
+    /// own `UpdateControls`) before its own, as the console would have, so
+    /// a follow steers every console frame toward the member as it moved
+    /// rather than holding one steer for them all; past `most` the frames
+    /// before them are one long frame as ever (`step_kept`'s gap).
+    pub fn frames_behind(&self, now: i64, most: usize) -> Vec<i64> {
+        let Some(k) = &self.kept else { return Vec::new() };
+        if self.rewound || !same(&self.cam.walk.phys, &k.left.0) || !same(&self.cam.walk.committed, &k.left.1) {
+            // the walk was moved since the last frame drawn (a place given):
+            // its console frames begin again where it stands
+            return Vec::new();
+        }
+        let mut n = k.frames + 1;
+        let mut due = Vec::new();
+        while k.time(n) <= now {
+            due.push(k.time(n));
+            n += 1;
+        }
+        due.pop();
+        let skip = due.len().saturating_sub(most);
+        due.split_off(skip)
+    }
+
     /// `Process` for every console frame come by `now`, each on this frame's
     /// controls (the forces `UpdateControls` gave, given again to each, as
     /// Process clears them), and the walk kept as the last of them left it.
@@ -1563,6 +1591,92 @@ pub(crate) mod tests {
         let mut w = Walker::arrive(tunaria_round(x, z)?, Spawn::ground(x, z, std::f32::consts::FRAC_PI_2));
         w.cam.set_camera_mode(2);
         Some(w)
+    }
+
+    /// The member a follow runs after: from 8 east of the follower's start,
+    /// east 20, north 15, east 20, south 15, east 20 at 8.6 a second (a
+    /// run), then standing; (x, z) at `ms` from its start.
+    fn member_at(ms: i64) -> (f32, f32) {
+        const WAY: [(f32, f32); 6] = [(8.0, 0.0), (28.0, 0.0), (28.0, -15.0), (48.0, -15.0), (48.0, 0.0), (68.0, 0.0)];
+        let mut left = ms.max(0) as f32 / 1000.0 * 8.6;
+        for p in WAY.windows(2) {
+            let (dx, dz) = (p[1].0 - p[0].0, p[1].1 - p[0].1);
+            let len = (dx * dx + dz * dz).sqrt();
+            if left <= len {
+                return (p[0].0 + dx * left / len, p[0].1 + dz * left / len);
+            }
+            left -= len;
+        }
+        WAY[5]
+    }
+
+    /// Following `member_at` on Tunaria's open ground in the follow orbit
+    /// (the game's camera), frames drawn every `gap` ms; with `catch_up`
+    /// each frame first steps the console frames it is late by as frames of
+    /// their own (`frames_behind`, as the viewer does while following), the
+    /// member where it was at each. The follower's distance to the member
+    /// at each frame drawn from 2 s on, and its distance off the member's
+    /// way, the most of each.
+    fn follow_run(gap: i64, catch_up: bool) -> Option<(f32, f32)> {
+        let (x0, z0) = (22000.0f32, 18000.0f32);
+        let mut w = Walker::arrive(tunaria_round(x0 + 30.0, z0)?, Spawn::ground(x0, z0, std::f32::consts::FRAC_PI_2));
+        w.cam.set_camera_mode(3);
+        let t0 = w.scene.time;
+        let run_speed = (F::<Ee>::new(vi::walk::RUN_SPEED) * F::new(1.05)).0;
+        let client = |w: &Walker, ms: i64| {
+            let (mx, mz) = member_at(ms);
+            let me = w.cam.walk.phys.smooth_location().to_array();
+            crate::controls::Client { follow: crate::controls::Follow::At([x0 + mx, me[1], z0 + mz], me), run_speed, ..Default::default() }
+        };
+        let way = |p: [f32; 3]| {
+            const WAY: [(f32, f32); 6] = [(8.0, 0.0), (28.0, 0.0), (28.0, -15.0), (48.0, -15.0), (48.0, 0.0), (68.0, 0.0)];
+            let (px, pz) = (p[0] - x0, p[2] - z0);
+            WAY.windows(2)
+                .map(|s| {
+                    let (dx, dz) = (s[1].0 - s[0].0, s[1].1 - s[0].1);
+                    let f = (((px - s[0].0) * dx + (pz - s[0].1) * dz) / (dx * dx + dz * dz)).clamp(0.0, 1.0);
+                    ((px - s[0].0 - f * dx).powi(2) + (pz - s[0].1 - f * dz).powi(2)).sqrt()
+                })
+                .fold(f32::MAX, f32::min)
+        };
+        let (mut far, mut off) = (0.0f32, 0.0f32);
+        let mut ms = 0;
+        while ms <= 16000 {
+            if catch_up {
+                for t in w.frames_behind(t0 + ms, 60) {
+                    let c = client(&w, t - t0);
+                    w.frame_with([0.0; 4], t, &c, false);
+                }
+            }
+            let c = client(&w, ms);
+            w.frame_with([0.0; 4], t0 + ms, &c, true);
+            let p = w.cam.walk.phys.position.to_array();
+            let (mx, mz) = member_at(ms);
+            if ms >= 2000 {
+                far = far.max(((p[0] - x0 - mx).powi(2) + (p[2] - z0 - mz).powi(2)).sqrt());
+                off = off.max(way(p));
+            }
+            ms += gap;
+        }
+        Some((far, off))
+    }
+
+    /// A follow whose frames come late (a hidden page's ticks held up, a
+    /// busy machine's; players multiboxing in a browser: "the follow gets
+    /// messed up") keeps to the member as one drawn at the console's rate
+    /// when each late frame steps the console frames it missed one at a
+    /// time, each steered toward the member where it then was. The
+    /// control: the same late frames each stepping all of theirs on one
+    /// steer (the client before) fall behind and cut the corners.
+    #[test]
+    fn a_follow_on_late_frames_keeps_to_the_member() {
+        let Some((far30, off30)) = follow_run(33, false) else { return };
+        let (far_late, off_late) = follow_run(500, true).unwrap();
+        let (far_old, off_old) = follow_run(500, false).unwrap();
+        eprintln!("at 30 a second: {far30:.2} from the member at most, {off30:.2} off its way; late frames caught up: {far_late:.2}, {off_late:.2}; late frames on one steer: {far_old:.2}, {off_old:.2}");
+        assert!(far_late < far30 + 1.0, "caught up, as near as at 30 a second: {far_late} against {far30}");
+        assert!(off_late < off30 + 1.0, "and on the member's way: {off_late} against {off30}");
+        assert!(far_old > far30 + 3.0 || off_old > off30 + 3.0, "the control falls behind or cuts corners: {far_old}, {off_old}");
     }
 
     /// The control: the walk stepped once a frame drawn, as the client
