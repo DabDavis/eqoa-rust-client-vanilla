@@ -794,7 +794,8 @@ pub fn run(lib: Library, effect: Option<u32>, cast_ms: i32, aim: Option<Aim>, pe
     #[cfg(target_arch = "wasm32")]
     {
         use winit::platform::web::EventLoopExtWebSys;
-        event_loop.spawn_app(app);
+        // counted, so an exception that unwinds past it stops the client
+        event_loop.spawn_app(crate::web::Guarded(app));
     }
     #[cfg(not(target_arch = "wasm32"))]
     {

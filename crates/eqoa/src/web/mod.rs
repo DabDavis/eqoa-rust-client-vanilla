@@ -167,6 +167,91 @@ pub fn hidden_tick() {
     });
 }
 
+thread_local! {
+    /// How many of the event loop's calls into the client are under way
+    /// (`Guarded`): 0 between them, so one left over once they have all
+    /// returned is a call that never did.
+    static IN_EVENT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// The client as the event loop calls it (`viewer`'s and `fxview`'s `App`),
+/// each call counted in `IN_EVENT` while it runs. A JavaScript exception
+/// thrown inside one (the engine's own stack overflowing is a `RangeError`,
+/// not a trap; or any call of the browser's that throws) unwinds through the
+/// wasm frames with no Rust code run on the way, winit's runner's among them:
+/// its `RefCell` stays borrowed, every event after is queued and never
+/// handled (the game stands still, no panic), and the page's `pagehide`
+/// panics in winit (`runner.rs:683:69: RefCell already borrowed`, petitions
+/// 1618 and 1664: all their notes said, the cause gone). Counted, the page
+/// asks after such an error (`event_loop_stuck`) and stops the client with
+/// the exception's own words.
+pub struct Guarded<A>(pub A);
+
+/// One call's count (`Guarded`): taken back as the call returns, never when
+/// an exception unwinds past it.
+struct InEvent;
+
+impl InEvent {
+    fn enter() -> InEvent {
+        IN_EVENT.with(|n| n.set(n.get() + 1));
+        InEvent
+    }
+}
+
+impl Drop for InEvent {
+    fn drop(&mut self) {
+        IN_EVENT.with(|n| n.set(n.get().saturating_sub(1)));
+    }
+}
+
+impl<A: winit::application::ApplicationHandler> winit::application::ApplicationHandler for Guarded<A> {
+    fn new_events(&mut self, el: &winit::event_loop::ActiveEventLoop, cause: winit::event::StartCause) {
+        let _g = InEvent::enter();
+        self.0.new_events(el, cause);
+    }
+    fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let _g = InEvent::enter();
+        self.0.resumed(el);
+    }
+    fn user_event(&mut self, el: &winit::event_loop::ActiveEventLoop, event: ()) {
+        let _g = InEvent::enter();
+        self.0.user_event(el, event);
+    }
+    fn window_event(&mut self, el: &winit::event_loop::ActiveEventLoop, id: winit::window::WindowId, event: winit::event::WindowEvent) {
+        let _g = InEvent::enter();
+        self.0.window_event(el, id, event);
+    }
+    fn device_event(&mut self, el: &winit::event_loop::ActiveEventLoop, id: winit::event::DeviceId, event: winit::event::DeviceEvent) {
+        let _g = InEvent::enter();
+        self.0.device_event(el, id, event);
+    }
+    fn about_to_wait(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let _g = InEvent::enter();
+        self.0.about_to_wait(el);
+    }
+    fn suspended(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let _g = InEvent::enter();
+        self.0.suspended(el);
+    }
+    fn exiting(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let _g = InEvent::enter();
+        self.0.exiting(el);
+    }
+    fn memory_warning(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        let _g = InEvent::enter();
+        self.0.memory_warning(el);
+    }
+}
+
+/// Whether a call of the event loop's into the client never returned
+/// (`Guarded`): asked by the page in a task of its own after an uncaught
+/// error (web/notices.js), when no call is under way, so a count left is an
+/// exception's. The loop is dead then: the page stops the client.
+#[wasm_bindgen]
+pub fn event_loop_stuck() -> bool {
+    IN_EVENT.with(|n| n.get() > 0)
+}
+
 /// The tab's title (the window's, `viewer::title`: winit names only the
 /// canvas).
 pub fn set_title(t: &str) {
@@ -267,9 +352,25 @@ pub fn start() {
     net::session::set_debug_sink(log);
     std::panic::set_hook(Box::new(|info| {
         console_error_panic_hook::hook(info);
+        // the page stopped the client already (an exception that left the
+        // event loop dead, `Guarded`): that cause is the report it keeps,
+        // not this panic after it (winit's at the page's unload)
+        if page_dead() {
+            return;
+        }
         keep_crash(info);
         crash("The client stopped", &info.to_string());
     }));
+}
+
+/// Whether the page has said the client stopped (`eqoaNotices.dead`,
+/// web/notices.js).
+fn page_dead() -> bool {
+    web_sys::window()
+        .and_then(|w| js_sys::Reflect::get(&w, &"eqoaNotices".into()).ok())
+        .filter(|n| n.is_object())
+        .and_then(|n| js_sys::Reflect::get(&n, &"dead".into()).ok())
+        .is_some_and(|d| d.is_truthy())
 }
 
 /// A panic kept as a crash report for the server, sent at the next login
