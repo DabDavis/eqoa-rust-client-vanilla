@@ -230,10 +230,13 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     // helm (1-8) front and side (2026-11-12: lower and a little larger than the
     // first seat, 1.1 up 0.22 forward 0.02, which sat high and showed the crown
     // through the smaller helms; their hair is left out under a helm,
-    // `racebody::hide_hair`)
-    HeadSeat { bodies: &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C], anchor: Anchor::Head, scale: [1.15; 3], offset: [0.0, 0.19, 0.0] },
-    // the sea king (Quintashi's body): a larger head, its fin crest out through the helm's top and back
-    HeadSeat { bodies: &[0xD275_EE8F], anchor: Anchor::Head, scale: [1.15; 3], offset: [0.0, 0.21, 0.01] },
+    // `racebody::hide_hair`); 0.035 forward (2026-11-12, the owner: "the helm
+    // for mermaids is almost right, but sits too far back": at 0 the face stood
+    // out of the helm's front as no human's does, `merfolk_helms_sit_at_the_brow`)
+    HeadSeat { bodies: &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C], anchor: Anchor::Head, scale: [1.15; 3], offset: [0.0, 0.19, 0.035] },
+    // the sea king (Quintashi's body): a larger head, its fin crest out through the helm's top and back;
+    // 0.045 forward, its snout to the helm's front as a human's nose is
+    HeadSeat { bodies: &[0xD275_EE8F], anchor: Anchor::Head, scale: [1.15; 3], offset: [0.0, 0.21, 0.045] },
 ];
 
 /// The bodies a server's race may wear that have no head a helm can sit on:
@@ -2808,6 +2811,60 @@ mod tests {
             let mut bare = model.clone();
             crate::play::dress_look(&lib, id, &mut bare, &cs, &Look { robe: -1, ..Default::default() }, false, &t, true);
             assert!(same(&bare, &model), "{id:#010x}: bare, as it was");
+        }
+    }
+
+    /// A merfolk player's helm sits at the brow (the owner, 2026-11-12: "the helm
+    /// for mermaids is almost right, but sits too far back"): in the bind pose, how
+    /// far each helm's front stands out past the face's front (the body's vertices
+    /// skinned most to the head or the neck, above the neck's joint) is, on the merman, the mermaid, both sirens and the
+    /// sea king, within 2 cm (and a fifth of the human's) of what it is on HumanMale for the same helm, every
+    /// helm 1-8; a helm seated with no forward move (the seat of 2026-11-11, the
+    /// control) falls behind the face, as the owner saw. Needs `run/eqoa.iso`.
+    #[test]
+    fn merfolk_helms_sit_at_the_brow() {
+        let Some(lib) = disc() else { return };
+        let t = Tables::retail();
+        // the helm's front past the face's front, in the model, with `seat`'s fit
+        // (None: the body's own)
+        let ahead = |id: u32, set: u8, seat: Option<HelmFit>| -> f32 {
+            let r = lib.lookup(id as i32).unwrap();
+            let body = lib.build_model(r).unwrap();
+            let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+            let (node, mut helm) = helm_on(&lib, id, &cs, true, set, [255; 4], &t, seat.is_none()).unwrap();
+            if let Some(f) = seat {
+                f.apply(&mut helm);
+            }
+            let bind = glam::Mat4::from_cols_array_2d(&cs.h.nodes[node as usize].inv_bind_world.to_cols()).inverse();
+            let front = helm.pos.iter().map(|p| bind.transform_point3(Vec3::from(*p)).z).fold(f32::MIN, f32::max);
+            // the face: what is skinned most to the head or the neck under it (the
+            // merfolk's face is on their neck node, 19), above the neck's joint
+            let head = cs.node_ids[7] as usize;
+            let neck = cs.h.nodes[head].parent as usize;
+            let neck_y = cs.h.nodes[neck].bind.trans.y.0;
+            let face = (0..body.pos.len())
+                .filter(|&v| {
+                    let (b, w) = (body.bones[v], body.weights[v]);
+                    body.pos[v][1] > neck_y && (0..4).max_by_key(|&k| w[k]).is_some_and(|k| b[k] as usize == head || b[k] as usize == neck)
+                })
+                .map(|v| body.pos[v][2])
+                .fold(f32::MIN, f32::max);
+            front - face
+        };
+        for set in 1..=8u8 {
+            let human = ahead(0x70D8_98C6, set, None);
+            for id in [0xA316_EB78u32, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C, 0xD275_EE8F] {
+                let a = ahead(id, set, None);
+                eprintln!("helm {set} on {id:08X}: front {a:+.3} past the face, a human's {human:+.3}");
+                // within 2 cm, and a fifth of the human's more where the helm stands far out
+                // (the straw hat's brim, 11 cm, drawn 1.15 times as wide on them)
+                assert!((a - human).abs() <= 0.02 + 0.2 * human.abs(), "helm {set} on {id:08X}: its front {a:+.3} past the face, a human's {human:+.3}");
+                // (the straw hat, 8, stands out by its brim, wherever the brow is)
+                if id != 0xD275_EE8F && set != 8 {
+                    let back = ahead(id, set, Some(HelmFit { scale: Vec3::splat(1.15), offset: Vec3::new(0.0, 0.19, 0.0) }));
+                    assert!(back < human - 0.02, "the control, helm {set} on {id:08X} as seated before: {back:+.3}, a human's {human:+.3}");
+                }
+            }
         }
     }
 
