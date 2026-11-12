@@ -7,6 +7,16 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Quest markers over NPCs
+- **A yellow "!" floats over an NPC's name when it has a quest you can take right now**, and a **yellow "?" when you
+  can move one of your quests on there right now**: someone you are sent to speak with, or a turn-in you are carrying
+  the items for. It changes as you go: take the quest and the "!" goes, the "?" shows where to go next.
+- The game masters choose which quests show them. To start with, **every race and class's first quest** at its
+  starting city or homeland has them.
+- The marks are bigger up close and smaller far away, and show wherever the NPC's name does.
+- Turn them off or on in **Options > Extended > UI > Name Plates > Quest Markers** (on by default). On a server that
+  does not send them nothing changes.
+
 ## 2026-11-12 · The buff window and loading screen tips
 - **Your buffs now have room for two rows** at the top of the screen (up to 16), and your **pet's buffs sit in a
   smaller third row** just under them, instead of under the pet's bar.
