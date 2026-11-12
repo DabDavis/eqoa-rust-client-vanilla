@@ -279,6 +279,11 @@ current.
   `Walker::rewind` first, or it reads as a place given and no console frame is stepped; a place it
   gives the follow orbit's camera then (`set_orbit_angle`, round the console frame put back) is moved
   onto the walk as last drawn (`Walker::camera_as_drawn`), or a sidestep jitters the camera.
+  A frame that comes late while following (a hidden page's ticks held up, a covered or busy window's) steps each
+  console frame it is late by as a frame of its own, with its own `UpdateControls` and the member extrapolated to
+  its time (`viewer::follow_catch_up`, `Walker::frames_behind`, `Play::follow_back`): on one steer the follower
+  overshot and fell behind (`a_follow_on_late_frames_keeps_to_the_member`). A frame drawn on nothing (`unseen`)
+  skips the dynamic lights, shadows, effect volumes and flora; the game, sound and network go on.
 - Input (README "the pad", "the mouse and the touch screen"): the pad is the game's own path
   (`vi::pad` held to oracle ops 50-52; `input.rs` libpad on the host, `PadKeys`, `Play::set_key`,
   `controls.rs` UpdateControls). Headless: `EQOA_PAD` (`start@2500;stick l 0 -1@1500+2000`),
