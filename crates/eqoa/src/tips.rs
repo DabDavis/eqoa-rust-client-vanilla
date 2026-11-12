@@ -124,6 +124,10 @@ pub fn pick(shown: Option<(usize, i64)>, now: i64, n: usize, roll: u64) -> usize
     }
 }
 
+/// The title screen's tip's width: the menu's bar is clear of gears, and two
+/// lines are all the space under it holds.
+pub const TITLE_WIDTH: i32 = 560;
+
 /// How long the title screen keeps a tip (ms).
 pub const ROTATE: i64 = 8000;
 
@@ -170,7 +174,7 @@ pub fn draw(vui: &Vui, r: &mut dyn Layout, y: i32) {
     let now = clock();
     let i = pick(SHOWN.get(), now, tips.len(), seed());
     SHOWN.set(Some((i, now)));
-    lines(vui, r, tips[i], 320, y);
+    lines(vui, r, tips[i], 320, y, WIDTH);
 }
 
 /// The title screen's tip (petition 1811), centred on `x` from `y` down, in
@@ -185,13 +189,13 @@ pub fn draw_title(vui: &Vui, r: &mut dyn Layout, x: i32, y: i32) {
     }
     let (i, at) = rotate(TITLE.get(), clock(), tips.len(), seed());
     TITLE.set(Some((i, at)));
-    lines(vui, r, tips[i], x, y);
+    lines(vui, r, tips[i], x, y, TITLE_WIDTH);
 }
 
-/// `tip` wrapped to `WIDTH`, each line centred on `x`, from `y` down.
-fn lines(vui: &Vui, r: &mut dyn Layout, tip: &str, x: i32, y: i32) {
+/// `tip` wrapped to `width`, each line centred on `x`, from `y` down.
+fn lines(vui: &Vui, r: &mut dyn Layout, tip: &str, x: i32, y: i32, width: i32) {
     let h = vui.font_height(r);
-    for (k, line) in wrap(tip, WIDTH, |s| vui.string_width(r, &wide(s))).iter().enumerate() {
+    for (k, line) in wrap(tip, width, |s| vui.string_width(r, &wide(s))).iter().enumerate() {
         vui.draw_centered_string_ex(r, &wide(line), x, y + k as i32 * h, COLOR, 0, true);
     }
 }
@@ -273,6 +277,7 @@ mod tests {
         assert_eq!(wrap("aaaaaaaaaaaa b", 50, m), vec!["aaaaaaaaaaaa", "b"]);
         for l in all() {
             assert!(wrap(l, WIDTH, |s| s.len() as i32 * 7).len() <= 3, "{l}");
+            assert!(wrap(l, TITLE_WIDTH, |s| s.len() as i32 * 7).len() <= 2, "the title's two lines: {l}");
         }
     }
 }

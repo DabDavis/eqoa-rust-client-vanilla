@@ -451,7 +451,7 @@ impl Setup {
                 // the client's own: a tip in the space under the menu (`tips`,
                 // the GM Jibrish's petition 1811), while nothing is over it
                 if self.splash.ready && !self.options_visible && !self.message.visible && !self.net_visible {
-                    crate::tips::draw_title(cx.vui, cx.r, 304, 396);
+                    crate::tips::draw_title(cx.vui, cx.r, 304, 392);
                 }
                 if self.options_visible {
                     let mut ups = Vec::new();
