@@ -10,6 +10,7 @@ pub mod cape;
 pub mod creation;
 pub mod dump;
 pub mod entity;
+pub mod headmarks;
 pub mod hidelook;
 pub mod itemlink;
 pub mod npctint;
