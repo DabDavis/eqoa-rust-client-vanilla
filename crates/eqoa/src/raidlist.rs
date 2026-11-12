@@ -16,6 +16,19 @@
 //! the GM Jibrish's petition 1448: "A small icon denoting who is raid leader") a
 //! row carries its member's marks at the right of its name: a gold crown the
 //! leader, a blue cross its helper, a red diamond its main assist (petition 1451).
+//!
+//! On a server that sends each member's group in the raid (go-eqoa-server's 0x7E1A
+//! with a group byte, petition 1687: "sort them by group 1,2,3,4 etc. ... cleanly
+//! labeled, not too big and sorted") the rows go under a small "Group N" line each,
+//! a group's members in the order they joined, the groups in their numbers, a group
+//! never split between columns; past four columns the wheel steps a group at a time.
+//! The leader and its helper drag a row onto another group (or onto a member of
+//! one, to swap them): `play::raid_drag_*`; Community > Group > Raid > Move to Group
+//! does it by the target (a pad, a keyboard, a finger). Every row carries its role
+//! at its health bar's left (the same petition): a shield for a Warrior, a Paladin
+//! or a Shadow Knight, a staff for a Cleric, a Druid or a Shaman, a sword for the
+//! rest. Drawn, not the atlas's: UI.CSF has one shield (texture 120, a 33 by 32
+//! crest that is a smudge at 8) and no staff or sword.
 
 use crate::ui::{Layout, UiRaster, Vui, wide};
 
@@ -35,6 +48,74 @@ pub struct Row {
     /// Its marks: [`LEADER`], [`HELPER`], [`ASSIST`] (none on a server that
     /// sends no raid state).
     pub marks: u8,
+    /// Its class (the roster's), for its role's icon ([`role`]).
+    pub class: u8,
+    /// Its group in the raid from 1; 0 on a server that sends none (no sections).
+    pub group: u8,
+    /// It is being dragged to another group (drawn in gold).
+    pub dragged: bool,
+}
+
+/// A member's part in a fight, by its class (petition 1687).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// Warrior (0), Paladin (2), Shadow Knight (3): a shield
+    Tank,
+    /// Druid (7), Shaman (8), Cleric (9): a staff
+    Healer,
+    /// everyone else: a sword
+    Damage,
+}
+
+/// `class`'s role (the wire's class ids: WAR 0 ... ALC 14).
+pub fn role(class: u8) -> Role {
+    match class {
+        0 | 2 | 3 => Role::Tank,
+        7..=9 => Role::Healer,
+        _ => Role::Damage,
+    }
+}
+
+/// A role icon's room at a bar's left: its width and the gap after it.
+const ROLE_W: i32 = 8;
+const ROLE_GAP: i32 = 2;
+const SHIELD: [f32; 4] = [0.55, 0.72, 1.0, 1.0];
+const SHIELD_RIM: [f32; 4] = [0.85, 0.92, 1.0, 1.0];
+const STAFF: [f32; 4] = [0.45, 0.92, 0.45, 1.0];
+const STAFF_SHAFT: [f32; 4] = [0.72, 0.55, 0.32, 1.0];
+const SWORD: [f32; 4] = [1.0, 0.42, 0.36, 1.0];
+const SWORD_BLADE: [f32; 4] = [0.9, 0.9, 0.95, 1.0];
+
+/// `role`'s icon, 8 by 8 from (`x`, `y`), each quad over its shadow: a shield
+/// (its face and point, a light rim down its middle), a staff (a shaft from the
+/// bottom left with a green orb at its top), a sword (a pale blade from the
+/// bottom left, a red guard across it and a red grip). The quads and colours,
+/// for a test.
+pub fn draw_role(ui: &mut dyn crate::ui::Layout, x: i32, y: i32, role: Role) -> Vec<([f32; 4], [[f32; 2]; 4])> {
+    let (x0, y0) = (x as f32, y as f32);
+    let shape: Vec<([f32; 4], [[f32; 2]; 4])> = match role {
+        Role::Tank => vec![
+            (SHIELD, [[x0, y0], [x0 + 8.0, y0], [x0 + 8.0, y0 + 4.0], [x0, y0 + 4.0]]),
+            (SHIELD, [[x0, y0 + 4.0], [x0 + 8.0, y0 + 4.0], [x0 + 4.0, y0 + 8.0], [x0 + 4.0, y0 + 8.0]]),
+            (SHIELD_RIM, [[x0 + 3.5, y0 + 1.0], [x0 + 4.5, y0 + 1.0], [x0 + 4.5, y0 + 6.5], [x0 + 3.5, y0 + 6.5]]),
+        ],
+        Role::Healer => vec![
+            (STAFF_SHAFT, [[x0, y0 + 7.0], [x0 + 5.0, y0 + 2.0], [x0 + 6.0, y0 + 3.0], [x0 + 1.0, y0 + 8.0]]),
+            (STAFF, [[x0 + 6.0, y0], [x0 + 8.0, y0 + 2.0], [x0 + 6.0, y0 + 4.0], [x0 + 4.0, y0 + 2.0]]),
+        ],
+        Role::Damage => vec![
+            (SWORD_BLADE, [[x0 + 2.0, y0 + 5.0], [x0 + 7.0, y0], [x0 + 8.0, y0 + 1.0], [x0 + 3.0, y0 + 6.0]]),
+            (SWORD, [[x0, y0 + 3.0], [x0 + 1.0, y0 + 2.0], [x0 + 6.0, y0 + 7.0], [x0 + 5.0, y0 + 8.0]]),
+            (SWORD, [[x0, y0 + 7.0], [x0 + 2.0, y0 + 5.0], [x0 + 3.0, y0 + 6.0], [x0 + 1.0, y0 + 8.0]]),
+        ],
+    };
+    for (_, q) in &shape {
+        ui.solid(3, SHADOW, q.map(|p| [p[0] + 1.0, p[1] + 1.0]));
+    }
+    for (c, q) in &shape {
+        ui.solid(3, *c, *q);
+    }
+    shape
 }
 
 /// A row's marks ([`Row::marks`]).
@@ -161,6 +242,164 @@ impl Fit {
     }
 }
 
+/// A group's line over its rows.
+const SECTION_H: i32 = 11;
+/// What a group's line is drawn in, and its band.
+const SECTION_NAME: [f32; 4] = [0.98, 0.85, 0.5, 1.0];
+const SECTION_BAND: [f32; 4] = [0.35, 0.3, 0.15, 0.45];
+const SECTION_DROP: [f32; 4] = [0.95, 0.8, 0.3, 0.35];
+const SECTION_NAME_H: f32 = 10.0;
+
+/// One group of the raid: its number and its rows (places in the list), in the
+/// order they joined.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Section {
+    pub group: u8,
+    pub rows: Vec<usize>,
+}
+
+impl Section {
+    fn height(&self) -> i32 {
+        SECTION_H + self.rows.len().max(1) as i32 * ROW_H
+    }
+}
+
+/// The groups of `rows` in their numbers, each its rows in the list's order (the
+/// order they joined); `extra`, an empty group put in its place (a drag's new
+/// group). None when no row has a group (a server that sends none).
+pub fn sections(rows: &[Row], extra: Option<u8>) -> Vec<Section> {
+    if rows.iter().all(|r| r.group == 0) {
+        return Vec::new();
+    }
+    let mut groups: Vec<u8> = rows.iter().map(|r| r.group).chain(extra).collect();
+    groups.sort_unstable();
+    groups.dedup();
+    groups.into_iter().map(|g| Section { group: g, rows: (0..rows.len()).filter(|&k| rows[k].group == g).collect() }).collect()
+}
+
+/// The highest group a member may go to in a raid of `n` whose highest group is
+/// `top`: one past what four a group needs, or `top` (go-eqoa-server's
+/// `raidSubgroupMost`).
+pub fn most_group(n: usize, top: u8) -> u8 {
+    (n.div_ceil(4) + 1).max(top as usize).min(255) as u8
+}
+
+/// How the groups lay out from group `first`: whole groups down each column, the
+/// next column when one does not fit, four columns at most.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupFit {
+    /// each column's groups (places in the sections)
+    pub columns: Vec<Vec<usize>>,
+    /// the tallest column's height under the head line
+    pub height: i32,
+    /// the first group shown, and how far the wheel goes (0: all are shown)
+    pub first: usize,
+    pub more: usize,
+    pub n: usize,
+}
+
+impl GroupFit {
+    /// `sections` from `first` (kept within what the wheel reaches), with `below`
+    /// left under it as `Fit::under`.
+    pub fn under(sections: &[Section], n: usize, below: i32, first: usize) -> GroupFit {
+        let room = ROOM_H - HEAD_H - below;
+        let pack = |from: usize| -> (Vec<Vec<usize>>, i32, bool) {
+            let mut columns: Vec<Vec<usize>> = vec![Vec::new()];
+            let (mut h, mut tallest) = (0, 0);
+            for (k, s) in sections.iter().enumerate().skip(from) {
+                if h + s.height() > room && !columns.last().unwrap().is_empty() {
+                    if columns.len() == MOST_COLUMNS {
+                        return (columns, tallest, false);
+                    }
+                    columns.push(Vec::new());
+                    h = 0;
+                }
+                columns.last_mut().unwrap().push(k);
+                h += s.height();
+                tallest = tallest.max(h);
+            }
+            (columns, tallest, true)
+        };
+        let more = (0..sections.len()).find(|&f| pack(f).2).unwrap_or(0);
+        let first = first.min(more);
+        let (columns, height, _) = pack(first);
+        GroupFit { columns, height, first, more, n }
+    }
+
+    /// Its rectangle from `at`.
+    pub fn bounds(&self, at: [i32; 2]) -> [i32; 4] {
+        let w = self.columns.len().max(1) as i32 * (COL_W + COL_GAP) - COL_GAP;
+        [at[0], at[1], at[0] + w, at[1] + HEAD_H + self.height]
+    }
+
+    /// The groups shown.
+    fn shown(&self) -> usize {
+        self.columns.iter().map(Vec::len).sum()
+    }
+}
+
+/// What a pointer finds on the grouped list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hit {
+    /// a member's row (its id)
+    Row(u32),
+    /// a group's line or the room under its rows (its number)
+    Group(u8),
+}
+
+/// The grouped list from `at` in the HUD's frame: the head line, then each group
+/// shown its line ("Group 2") over its rows; `drop`, the group a drag is over,
+/// lit. Each group's rectangle, then each row's, for a pointer (a row is the
+/// last drawn over its group: `Hits::at`).
+pub fn draw_groups(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], fit: &GroupFit, sections: &[Section], rows: &[Row], drop: Option<u8>) -> Vec<([i32; 4], Hit)> {
+    let mut hits = Vec::new();
+    ui.solid(3, BACK, corners(fit.bounds(at)));
+    let font = ui.assets.font;
+    let text = |ui: &mut UiRaster, x: i32, y: i32, h: f32, c: [f32; 4], s: &[u16]| {
+        if let Some(f) = font {
+            let scale = h / ui.ui.fonts[f].height.max(1) as f32;
+            ui.ui.text_scaled(f, x as f32 + 1.0, y as f32 + 1.0, scale, SHADOW, s);
+            ui.ui.text_scaled(f, x as f32, y as f32, scale, c, s);
+        }
+    };
+    let head = if fit.more == 0 {
+        format!("Raid ({})", fit.n)
+    } else {
+        let shown = fit.shown();
+        let (a, b) = (sections[fit.first].group, sections[fit.first + shown - 1].group);
+        format!("Raid ({}) Groups {a}-{b}", fit.n)
+    };
+    text(ui, at[0] + 2, at[1] + 1, NAME_H, NAME, &wide(&head));
+    let mut row_hits = Vec::new();
+    for (c, column) in fit.columns.iter().enumerate() {
+        let x = at[0] + c as i32 * (COL_W + COL_GAP);
+        let mut y = at[1] + HEAD_H;
+        for &k in column {
+            let sec = &sections[k];
+            let whole = [x, y, x + COL_W, y + sec.height()];
+            let band = if drop == Some(sec.group) { SECTION_DROP } else { SECTION_BAND };
+            ui.solid(3, band, corners([x, y + 1, x + COL_W, y + SECTION_H - 1]));
+            if drop == Some(sec.group) {
+                ui.solid(3, SECTION_DROP, corners(whole));
+            }
+            text(ui, x + 3, y, SECTION_NAME_H, SECTION_NAME, &wide(&format!("Group {}", sec.group)));
+            hits.push((whole, Hit::Group(sec.group)));
+            y += SECTION_H;
+            for &i in &sec.rows {
+                let r = [x, y, x + COL_W, y + ROW_H];
+                draw_row(vui, ui, r, &rows[i]);
+                row_hits.push((r, Hit::Row(rows[i].id)));
+                y += ROW_H;
+            }
+            if sec.rows.is_empty() {
+                y += ROW_H;
+            }
+        }
+    }
+    hits.extend(row_hits);
+    hits
+}
+
 fn corners(r: [i32; 4]) -> [[f32; 2]; 4] {
     let (x0, y0, x1, y1) = (r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32);
     [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
@@ -190,6 +429,42 @@ fn head(fit: &Fit, first: usize) -> String {
     }
 }
 
+/// One member's row in rectangle `r`: its name (cut to the column, less its
+/// marks) and marks over its role's icon and its health and power bars.
+fn draw_row(vui: &Vui, ui: &mut UiRaster, r: [i32; 4], row: &Row) {
+    let font = ui.assets.font;
+    let scale = font.map_or(1.0, |f| NAME_H / ui.ui.fonts[f].height.max(1) as f32);
+    let (x, y) = (r[0] + 2, r[1]);
+    let marks = marks_width(row.marks);
+    let mut name = wide(&row.name);
+    while let Some(f) = font
+        && !name.is_empty()
+        && ui.ui.fonts[f].string_width(&name) as f32 * scale > (COL_W - 4 - marks) as f32
+    {
+        name.pop();
+    }
+    if let Some(f) = font {
+        let c = if row.dragged { NAME_TARGET } else { name_colour(row) };
+        ui.ui.text_scaled(f, x as f32 + 1.0, y as f32 + 1.0, scale, SHADOW, &name);
+        ui.ui.text_scaled(f, x as f32, y as f32, scale, c, &name);
+    }
+    if marks > 0 {
+        draw_marks(ui, r[2] - 2, y, row.marks);
+    }
+    // the role's icon at the bars' left, the bars after it
+    let bar_top = y + ROW_H - BAR_H - POWER_H - 1;
+    draw_role(ui, x, bar_top - 3, role(row.class));
+    let bar = [x + ROLE_W + ROLE_GAP, bar_top, r[2] - 2, y + ROW_H - 1];
+    ui.solid(3, BAR_BACK, corners(bar));
+    // health in the HUD's own gauge (7), and under it power in its blue (9)
+    for (v, image, top, h) in [(row.hp, 7, bar[1], BAR_H), (row.power, 9, bar[1] + BAR_H, POWER_H)] {
+        let w = ((bar[2] - bar[0]) as f32 * v as f32 / 255.0).round() as i32;
+        if w > 0 {
+            vui.stretch_blit_ex(ui, image, [bar[0], top], [w, h], 3, 1.0);
+        }
+    }
+}
+
 /// The list from `at` in the HUD's frame, from row `first`; each row's rectangle and
 /// member, for a pointer.
 pub fn draw(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], fit: &Fit, rows: &[Row], first: usize) -> Vec<([i32; 4], u32)> {
@@ -206,29 +481,7 @@ pub fn draw(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], fit: &Fit, rows: &[Row],
     text(ui, at[0] + 2, at[1] + 1, NAME, &wide(&head(fit, first)));
     for (k, row) in rows.iter().skip(first).take(fit.shown).enumerate() {
         let r = fit.row(at, k);
-        let (x, y) = (r[0] + 2, r[1]);
-        // the name cut to its column, less its marks
-        let marks = marks_width(row.marks);
-        let mut name = wide(&row.name);
-        while let Some(f) = font
-            && !name.is_empty()
-            && ui.ui.fonts[f].string_width(&name) as f32 * scale > (COL_W - 4 - marks) as f32
-        {
-            name.pop();
-        }
-        text(ui, x, y, name_colour(row), &name);
-        if marks > 0 {
-            draw_marks(ui, r[2] - 2, y, row.marks);
-        }
-        let bar = [x, y + ROW_H - BAR_H - POWER_H - 1, r[2] - 2, y + ROW_H - 1];
-        ui.solid(3, BAR_BACK, corners(bar));
-        // health in the HUD's own gauge (7), and under it power in its blue (9)
-        for (v, image, top, h) in [(row.hp, 7, bar[1], BAR_H), (row.power, 9, bar[1] + BAR_H, POWER_H)] {
-            let w = ((bar[2] - bar[0]) as f32 * v as f32 / 255.0).round() as i32;
-            if w > 0 {
-                vui.stretch_blit_ex(ui, image, [bar[0], top], [w, h], 3, 1.0);
-            }
-        }
+        draw_row(vui, ui, r, row);
         hits.push((r, row.id));
     }
     hits

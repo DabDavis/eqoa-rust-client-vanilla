@@ -402,16 +402,18 @@ pub const OP_MAP_TRAVEL: u16 = 0x7E34;
 pub const OP_MAP_TRAVEL_TO: u16 = 0x7E35;
 /// go-eqoa-server's own, no retail message either: the whole of a raid group,
 /// where a roster holds four (`m_group`). The offer, from the server once the
-/// player is in the world, a u32 after the opcode (1); a server without it
-/// never sends the rest.
+/// player is in the world, a u32 after the opcode (1; 2 from a server that
+/// also sends each member's group in the raid, petition 1687); a server
+/// without it never sends the rest.
 pub const OP_RAID_ROSTER_OFFER: u16 = 0x7E18;
 /// A client's answer to [`OP_RAID_ROSTER_OFFER`]: a u32, 1 to be sent the
-/// roster, 0 to stop.
+/// roster, 2 with each member's group (to an offer of 2 alone), 0 to stop.
 pub const OP_RAID_ROSTER_ANSWER: u16 = 0x7E19;
 /// The roster, to a client that asked, on a change and at most once a second:
 /// u16 members in all, u16 this message's first, u8 how many it holds, then
 /// each [`RaidMember`] (u32 id, u8 and the bytes of its name, u8 class, u8
-/// level, u8 HP of 255, u8 power of 255). 0 members: no raid group (now).
+/// level, u8 HP of 255, u8 power of 255, and when this client answered 2 a u8
+/// its group in the raid from 1). 0 members: no raid group (now).
 pub const OP_RAID_ROSTER: u16 = 0x7E1A;
 /// The most of a note sent, in bytes: one message, as a go-eqoa-server of
 /// before 2026-11-08 takes each fragment of a longer one for a message of its
@@ -438,6 +440,8 @@ pub struct RaidMember {
     pub level: u8,
     pub hp: u8,
     pub power: u8,
+    /// Its group in the raid, from 1 (0: the server sends none).
+    pub group: u8,
 }
 
 /// The raw part of a 0x002C record: the disc's, and the live game's
@@ -1140,6 +1144,8 @@ pub struct Session {
     /// ([`OP_RAID_ROSTER_OFFER`]), and what it was last told since the offer.
     pub raid_roster_offer: bool,
     raid_roster_asked: Option<bool>,
+    /// The offer said each member's group comes too, when asked (2).
+    raid_roster_groups: bool,
     /// The server's worlds past the disc's, as it last listed them
     /// ([`OP_SERVER_WORLDS_DATA`]); none from a server that never offers them.
     pub server_worlds: Option<Vec<crate::serverworlds::World>>,
@@ -1376,6 +1382,7 @@ impl Session {
             flying: false,
             raid_roster_offer: false,
             raid_roster_asked: None,
+            raid_roster_groups: false,
             combat_record: false,
             capes: false,
             item_lists: [ITEM_LIST_DISC; 2],
@@ -1567,7 +1574,9 @@ impl Session {
             return;
         }
         self.raid_roster_asked = Some(want);
-        self.send_op_int(OP_RAID_ROSTER_ANSWER, want as u32);
+        // 2 asks for the members' groups too, where the offer said they come
+        let answer = if want && self.raid_roster_groups { 2 } else { want as u32 };
+        self.send_op_int(OP_RAID_ROSTER_ANSWER, answer);
     }
 
     /// [`OP_BUG_NOTE`]: the note for the petition this client files next,
@@ -2500,20 +2509,25 @@ impl Session {
             OP_RAID_ROSTER_OFFER => {
                 // an offer (again at every world entry): told afresh what the
                 // client wants, the server's player being a new one
-                r.u32();
+                let v = r.u32();
                 if !r.error {
                     self.raid_roster_offer = true;
                     self.raid_roster_asked = None;
+                    self.raid_roster_groups = v >= 2;
                 }
             }
             OP_RAID_ROSTER => {
                 let (total, first, n) = (r.u16() as usize, r.u16() as usize, r.u8() as usize);
+                // a group after each record, where this client asked for them
+                let groups = self.raid_roster_groups && self.raid_roster_asked == Some(true);
                 let rows: Vec<RaidMember> = (0..n)
                     .map(|_| {
                         let id = r.u32();
                         let len = r.u8() as usize;
                         let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
-                        RaidMember { id, name, class: r.u8(), level: r.u8(), hp: r.u8(), power: r.u8() }
+                        let (class, level, hp, power) = (r.u8(), r.u8(), r.u8(), r.u8());
+                        let group = if groups { r.u8() } else { 0 };
+                        RaidMember { id, name, class, level, hp, power, group }
                     })
                     .collect();
                 if !r.error {
@@ -3901,13 +3915,37 @@ mod tests {
         m.extend([0, 7, 255, 0]);
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
         let want = vec![
-            RaidMember { id: 100001, name: "Ann".into(), class: 9, level: 60, hp: 200, power: 100 },
-            RaidMember { id: 0x1DCD_6501, name: "Bo".into(), class: 0, level: 7, hp: 255, power: 0 },
+            RaidMember { id: 100001, name: "Ann".into(), class: 9, level: 60, hp: 200, power: 100, group: 0 },
+            RaidMember { id: 0x1DCD_6501, name: "Bo".into(), class: 0, level: 7, hp: 255, power: 0, group: 0 },
         ];
         assert!(matches!(&ev[..], [Event::RaidRoster { total: 6, first: 2, rows }] if *rows == want), "{ev:?}");
-        m.pop();
-        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m);
+        let mut short = m.clone();
+        short.pop();
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, short);
         assert!(!ev.iter().any(|e| matches!(e, Event::RaidRoster { .. })), "a short one: {ev:?}");
+
+        // an offer of 2 (petition 1687): answered 2, and a group after each record
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x18, 0x7E, 2, 0, 0, 0]);
+        s.agree_raid_roster(true);
+        assert_eq!(answers(&mut s), [vec![0x19, 0x7E, 2, 0, 0, 0]], "2 to an offer of 2");
+        let mut g = vec![0x1A, 0x7E, 6, 0, 2, 0, 2];
+        g.extend([0xA1, 0x86, 1, 0, 3]);
+        g.extend(b"Ann");
+        g.extend([9, 60, 200, 100, 1]);
+        g.extend([0x01, 0x65, 0xCD, 0x1D, 2]);
+        g.extend(b"Bo");
+        g.extend([0, 7, 255, 0, 3]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, g);
+        let groups: Vec<u8> = match &ev[..] {
+            [Event::RaidRoster { rows, .. }] => rows.iter().map(|r| r.group).collect(),
+            _ => panic!("{ev:?}"),
+        };
+        assert_eq!(groups, [1, 3]);
+        // the control: the old records after an offer of 2 asked off read short
+        s.agree_raid_roster(false);
+        answers(&mut s);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m);
+        assert!(matches!(&ev[..], [Event::RaidRoster { rows, .. }] if *rows == want), "asked off, read as before: {ev:?}");
     }
 
     /// The raid's windows (0x7E42-0x7E48): answered only after an offer, once,

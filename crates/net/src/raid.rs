@@ -178,6 +178,11 @@ pub enum Command {
     Assist(u32),
     /// 11: the target kicked out of the raid
     Kick(u32),
+    /// 12: a member (the id the client knows it by) moved to a group of the
+    /// raid, from 1 (petition 1687; the leader's or the helper's)
+    MoveToGroup { id: u32, group: u8 },
+    /// 13: two members' groups traded
+    Swap(u32, u32),
 }
 
 impl Command {
@@ -194,6 +199,8 @@ impl Command {
             Command::Helper(_) => 9,
             Command::Assist(_) => 10,
             Command::Kick(_) => 11,
+            Command::MoveToGroup { .. } => 12,
+            Command::Swap(..) => 13,
         }
     }
 
@@ -210,6 +217,12 @@ impl Command {
             }
             Command::InviteTarget(id) | Command::Leader(id) | Command::Helper(id) | Command::Assist(id) | Command::Kick(id) => {
                 w.u32(id);
+            }
+            Command::MoveToGroup { id, group } => {
+                w.u32(id).u8(group);
+            }
+            Command::Swap(a, b) => {
+                w.u32(a).u32(b);
             }
             Command::Leave | Command::Abandon | Command::Flag | Command::AssistMain => {}
         }
@@ -296,7 +309,7 @@ mod tests {
         assert_eq!(roll_choice(7, Choice::Greed), [0x46, 0x7E, 7, 0, 0, 0, 2]);
         assert_eq!(roll_choice(0x01020304, Choice::Pass), [0x46, 0x7E, 4, 3, 2, 1, 3]);
         let id = 0x7F00_0005u32.to_le_bytes();
-        let cases: [(Command, Vec<u8>); 11] = [
+        let cases: [(Command, Vec<u8>); 13] = [
             (Command::LootRule(RULE_MASTER_LOOTER), vec![1, 2]),
             (Command::Leave, vec![2]),
             (Command::Assign { key: 3, id: 0x7F00_0005 }, [vec![3, 3, 0, 0, 0], id.to_vec()].concat()),
@@ -308,6 +321,8 @@ mod tests {
             (Command::Helper(0), vec![9, 0, 0, 0, 0]),
             (Command::Assist(0x7F00_0005), [vec![10], id.to_vec()].concat()),
             (Command::Kick(0x7F00_0005), [vec![11], id.to_vec()].concat()),
+            (Command::MoveToGroup { id: 0x7F00_0005, group: 3 }, [vec![12], id.to_vec(), vec![3]].concat()),
+            (Command::Swap(0x7F00_0005, 9), [vec![13], id.to_vec(), vec![9, 0, 0, 0]].concat()),
         ];
         for (c, body) in cases {
             assert_eq!(c.bytes(), [vec![0x48, 0x7E], body].concat(), "{c:?}");

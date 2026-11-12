@@ -5073,6 +5073,8 @@ impl Play {
                 // the raid list's: only one the client can see (out of sight its
                 // id is a stand-in, nothing to target)
                 Some(crate::hud::Pick::Raid(id)) => Some(id).filter(|&id| self.sees_entity(id)),
+                // a raid list's group line: nothing to target
+                Some(crate::hud::Pick::RaidGroup(_)) => return true,
                 Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),
                 // the minimap: the map opened, as the compass opens it
                 Some(crate::hud::Pick::Minimap) => {
@@ -9105,8 +9107,22 @@ impl Play {
                 .group
                 .raid
                 .iter()
-                .map(|m| crate::raidlist::Row { id: m.id, name: m.name.clone(), hp: m.hp, power: m.power, is_target: m.id == self.target, seen: self.sees_entity(m.id), me: Some(m.id) == me, marks: self.raid_marks(m.id) })
+                .map(|m| crate::raidlist::Row {
+                    id: m.id,
+                    name: m.name.clone(),
+                    hp: m.hp,
+                    power: m.power,
+                    is_target: m.id == self.target,
+                    seen: self.sees_entity(m.id),
+                    me: Some(m.id) == me,
+                    marks: self.raid_marks(m.id),
+                    class: m.class,
+                    group: m.group,
+                    dragged: self.raid.drag.is_some_and(|d| d.moved && d.id == m.id),
+                })
                 .collect(),
+            raid_drop: self.raid_drag_shown().0,
+            raid_new_group: self.raid_drag_shown().1,
             patches: self.group.members[..self.group.count()]
                 .iter()
                 .enumerate()
@@ -9479,10 +9495,11 @@ impl Play {
     /// the bar's Lock or Reset), and so nothing else's.
     pub fn hud_press(&mut self, at: [f32; 2], size: (u32, u32)) -> bool {
         use crate::hudlayout::{Beyond, Button, Press};
-        if !self.hud_moving() {
-            return false;
-        }
         let f = render::ui::frame_from_window(size, at);
+        if !self.hud_moving() {
+            // a raid list's row held to move it (`raidplay`, petition 1687)
+            return self.raid_drag_press(f);
+        }
         match crate::hudlayout::press(f, Beyond::of(size)) {
             Press::None => false,
             Press::Piece(_) => true,
@@ -9500,7 +9517,7 @@ impl Play {
     /// with it. False with none dragged.
     pub fn hud_drag(&mut self, at: [f32; 2], size: (u32, u32)) -> bool {
         if !crate::hudlayout::dragging() {
-            return false;
+            return self.raid_drag_move(render::ui::frame_from_window(size, at));
         }
         crate::hudlayout::drag_to(render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size));
         true
@@ -9508,7 +9525,7 @@ impl Play {
 
     /// The press let go: a dragged piece stays, kept. False with none.
     pub fn hud_release(&mut self) -> bool {
-        crate::hudlayout::release()
+        crate::hudlayout::release() || self.raid_drag_release()
     }
 
     /// The meter cleared, and the server told to drop the fight under way.
