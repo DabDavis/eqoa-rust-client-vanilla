@@ -27,8 +27,10 @@
 //! does it by the target (a pad, a keyboard, a finger). Every row carries its role
 //! at its health bar's left (the same petition): a shield for a Warrior, a Paladin
 //! or a Shadow Knight, a staff for a Cleric, a Druid or a Shaman, a sword for the
-//! rest. Drawn, not the atlas's: UI.CSF has one shield (texture 120, a 33 by 32
-//! crest that is a smudge at 8) and no staff or sword.
+//! rest; a mercenary's row a gold coin whatever its class (the GM Jibrish's petition
+//! 1869, from go-eqoa-server's 0x7E1A kind byte). Drawn, not the atlas's: UI.CSF has
+//! one shield (texture 120, a 33 by 32 crest that is a smudge at 8) and no staff,
+//! sword or coin.
 
 use crate::ui::{Layout, UiRaster, Vui, wide};
 
@@ -55,6 +57,9 @@ pub struct Row {
     pub group: u8,
     /// It is being dragged to another group (drawn in gold).
     pub dragged: bool,
+    /// It is a mercenary (the roster's kind, go-eqoa-server's offer of 3): its
+    /// icon is a coin, not its class's role ([`row_role`]).
+    pub merc: bool,
 }
 
 /// A member's part in a fight, by its class (petition 1687).
@@ -66,6 +71,10 @@ pub enum Role {
     Healer,
     /// everyone else: a sword
     Damage,
+    /// a mercenary, whatever its class: a gold coin (the GM Jibrish's petition
+    /// 1869: "Flag mercenaries as mercenaries with a special icon instead of
+    /// their tank/heal/dps icon in the raid")
+    Merc,
 }
 
 /// `class`'s role (the wire's class ids: WAR 0 ... ALC 14).
@@ -77,6 +86,11 @@ pub fn role(class: u8) -> Role {
     }
 }
 
+/// The icon a row draws: a merc's coin, else its class's role.
+pub fn row_role(row: &Row) -> Role {
+    if row.merc { Role::Merc } else { role(row.class) }
+}
+
 /// A role icon's room at a bar's left: its width and the gap after it.
 const ROLE_W: i32 = 8;
 const ROLE_GAP: i32 = 2;
@@ -86,12 +100,17 @@ const STAFF: [f32; 4] = [0.45, 0.92, 0.45, 1.0];
 const STAFF_SHAFT: [f32; 4] = [0.72, 0.55, 0.32, 1.0];
 const SWORD: [f32; 4] = [1.0, 0.42, 0.36, 1.0];
 const SWORD_BLADE: [f32; 4] = [0.9, 0.9, 0.95, 1.0];
+const COIN: [f32; 4] = [0.95, 0.72, 0.18, 1.0];
+const COIN_FACE: [f32; 4] = [1.0, 0.9, 0.45, 1.0];
+const COIN_STAMP: [f32; 4] = [0.7, 0.48, 0.1, 1.0];
 
 /// `role`'s icon, 8 by 8 from (`x`, `y`), each quad over its shadow: a shield
 /// (its face and point, a light rim down its middle), a staff (a shaft from the
 /// bottom left with a green orb at its top), a sword (a pale blade from the
-/// bottom left, a red guard across it and a red grip). The quads and colours,
-/// for a test.
+/// bottom left, a red guard across it and a red grip), a merc's coin (a gold
+/// octagon, a paler face and a dark stamp down its middle: a hired hand's pay;
+/// UI.CSF has no coin or contract that reads at 8). The quads and colours, for a
+/// test.
 pub fn draw_role(ui: &mut dyn crate::ui::Layout, x: i32, y: i32, role: Role) -> Vec<([f32; 4], [[f32; 2]; 4])> {
     let (x0, y0) = (x as f32, y as f32);
     let shape: Vec<([f32; 4], [[f32; 2]; 4])> = match role {
@@ -108,6 +127,13 @@ pub fn draw_role(ui: &mut dyn crate::ui::Layout, x: i32, y: i32, role: Role) -> 
             (SWORD_BLADE, [[x0 + 2.0, y0 + 5.0], [x0 + 7.0, y0], [x0 + 8.0, y0 + 1.0], [x0 + 3.0, y0 + 6.0]]),
             (SWORD, [[x0, y0 + 3.0], [x0 + 1.0, y0 + 2.0], [x0 + 6.0, y0 + 7.0], [x0 + 5.0, y0 + 8.0]]),
             (SWORD, [[x0, y0 + 7.0], [x0 + 2.0, y0 + 5.0], [x0 + 3.0, y0 + 6.0], [x0 + 1.0, y0 + 8.0]]),
+        ],
+        Role::Merc => vec![
+            (COIN, [[x0 + 2.0, y0], [x0 + 6.0, y0], [x0 + 8.0, y0 + 2.0], [x0, y0 + 2.0]]),
+            (COIN, [[x0, y0 + 2.0], [x0 + 8.0, y0 + 2.0], [x0 + 8.0, y0 + 6.0], [x0, y0 + 6.0]]),
+            (COIN, [[x0, y0 + 6.0], [x0 + 8.0, y0 + 6.0], [x0 + 6.0, y0 + 8.0], [x0 + 2.0, y0 + 8.0]]),
+            (COIN_FACE, [[x0 + 2.0, y0 + 1.5], [x0 + 6.0, y0 + 1.5], [x0 + 6.0, y0 + 6.5], [x0 + 2.0, y0 + 6.5]]),
+            (COIN_STAMP, [[x0 + 3.5, y0 + 2.5], [x0 + 4.5, y0 + 2.5], [x0 + 4.5, y0 + 5.5], [x0 + 3.5, y0 + 5.5]]),
         ],
     };
     for (_, q) in &shape {
@@ -452,9 +478,9 @@ fn draw_row(vui: &Vui, ui: &mut UiRaster, r: [i32; 4], row: &Row) {
     if marks > 0 {
         draw_marks(ui, r[2] - 2, y, row.marks);
     }
-    // the role's icon at the bars' left, the bars after it
+    // the role's icon at the bars' left (a merc's coin), the bars after it
     let bar_top = y + ROW_H - BAR_H - POWER_H - 1;
-    draw_role(ui, x, bar_top - 2, role(row.class));
+    draw_role(ui, x, bar_top - 2, row_role(row));
     let bar = [x + ROLE_W + ROLE_GAP, bar_top, r[2] - 2, y + ROW_H - 1];
     ui.solid(3, BAR_BACK, corners(bar));
     // health in the HUD's own gauge (7), and under it power in its blue (9)
@@ -607,6 +633,28 @@ mod tests {
                 assert!(q.iter().all(|p| (10.0..=18.0).contains(&p[0]) && (20.0..=28.0).contains(&p[1])), "{r:?}: {q:?}");
             }
         }
+    }
+
+    /// Petition 1869: a merc's row draws a gold coin in its role icon's place
+    /// and room, whatever its class; a player's row of the same class keeps its
+    /// role's icon (the control).
+    #[test]
+    fn a_mercs_row_has_the_coin_and_a_players_its_role() {
+        use crate::pointer::testing::NullRaster;
+        let player = Row { class: 9, ..Default::default() };
+        let merc = Row { merc: true, ..player.clone() };
+        assert_eq!(row_role(&player), Role::Healer);
+        assert_eq!(row_role(&merc), Role::Merc);
+        for class in [0, 9, 13] {
+            assert_eq!(row_role(&Row { class, merc: true, ..Default::default() }), Role::Merc, "class {class}");
+        }
+        let coin = draw_role(&mut NullRaster, 10, 20, row_role(&merc));
+        assert!(coin.iter().any(|(c, _)| *c == COIN) && !coin.iter().any(|(c, _)| [SHIELD, STAFF, SWORD].contains(c)), "{coin:?}");
+        for (_, q) in &coin {
+            assert!(q.iter().all(|p| (10.0..=18.0).contains(&p[0]) && (20.0..=28.0).contains(&p[1])), "its room: {q:?}");
+        }
+        let staff = draw_role(&mut NullRaster, 10, 20, row_role(&player));
+        assert!(staff.iter().any(|(c, _)| *c == STAFF) && !staff.iter().any(|(c, _)| *c == COIN));
     }
 
     fn grouped(groups: &[u8]) -> Vec<Row> {

@@ -9281,6 +9281,7 @@ impl Play {
                     class: m.class,
                     group: m.group,
                     dragged: self.raid.drag.is_some_and(|d| d.moved && d.id == m.id),
+                    merc: m.merc,
                 })
                 .collect(),
             raid_drop: self.raid_drag_shown().0,

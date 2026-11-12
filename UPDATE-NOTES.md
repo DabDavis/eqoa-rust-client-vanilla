@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Mercenaries marked with a coin in the raid window
+- In the raid window a **mercenary's row now shows a gold coin** where a player's shows its role (shield, staff or
+  sword), so you can tell hired hands from players at a glance. Players' rows are unchanged.
+
 ## 2026-11-12 · Mercenaries in the raid window: click them to target them
 - **Mercenaries now show in the raid window**, each under its owner's group, with its health and power bars.
   **Click one** to target it (or reach it with L1's group cycle), as you target any raid member: in a raid you
