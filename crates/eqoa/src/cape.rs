@@ -574,7 +574,22 @@ fn placed(src: &Source, to: &Bones, into: Option<&Frame>, stand: Vec3, debug: bo
     if debug {
         eprintln!("cape: onto {} nodes, scale {scale:?}, back {dz:+.3}; from {from:?}\n  into {into:?}", to.parents.len());
     }
-    Some(transfer(src, to, &map, &anchor, scale, dz))
+    let mut m = transfer(src, to, &map, &anchor, scale, dz);
+    // on a tail body (the merfolk's) the cape's shoulder line on its shoulders:
+    // their chest node is nearer under them than a human's (0.07 against 0.14), so
+    // what the chest carries sat 0.08 high and the collar rose round the head
+    if let (Some(f), Some(i)) = (from, into)
+        && i.tail
+    {
+        let dy = i.shoulder_y - (to.bind[i.chest].y + (f.shoulder_y - src.bones.bind[f.chest].y) * scale.y);
+        for p in &mut m.pos {
+            p[1] += dy;
+        }
+        if debug {
+            eprintln!("cape: on a tail, lowered {:.3} to its shoulders", -dy);
+        }
+    }
+    Some(m)
 }
 
 /// How near the body a cape's place moves wholly as the body under it does
@@ -1189,7 +1204,14 @@ fn through(m: &esf::Model, weld: &Weld, pts: &[(Vec3, [u8; 4], [u8; 4])], edges:
 /// player's body only ever back).
 fn spread(from: &Frame, into: &Frame, sb: &Bones, tb: &Bones, map: &[usize], player: bool) -> (Vec3, f32) {
     let w = into.half_width / from.half_width;
-    let h = (into.shoulder_y - into.ground) / (from.shoulder_y - from.ground);
+    // a tail's end is no ground: the cape is sized by the shoulders' height over
+    // the hips (a merfolk's tail runs half again a human's legs below them, which
+    // stretched the cape and its collar a fifth taller, over the head)
+    let h = if into.tail {
+        (into.shoulder_y - tb.bind[into.root].y) / (from.shoulder_y - sb.bind[from.root].y).max(1e-3)
+    } else {
+        (into.shoulder_y - into.ground) / (from.shoulder_y - from.ground)
+    };
     let (sx, sy) = if player { (w.clamp(1.0, 2.0), 1.0) } else { (w.clamp(0.4, 3.0), h.clamp(0.3, 3.0)) };
     let carried = sx * (from.back - sb.bind[from.chest].z) + tb.bind[map[from.chest]].z;
     let dz = into.back - carried;
@@ -1250,6 +1272,8 @@ struct Frame {
     half_width: f32,
     back: f32,
     mid_x: f32,
+    /// One foot named for both: a tail (the merfolk's), both legs.
+    tail: bool,
 }
 
 impl Frame {
@@ -1291,7 +1315,7 @@ impl Frame {
             arm.reverse();
             (arms[s], chests[s]) = (arm, c);
         }
-        let chest = if b.bind[chests[0]].y >= b.bind[chests[1]].y { chests[0] } else { chests[1] };
+        let mut chest = if b.bind[chests[0]].y >= b.bind[chests[1]].y { chests[0] } else { chests[1] };
         // standing up: the spine rises from the pelvis to the chest more than
         // it runs along the ground. A body on four legs names two hands (its
         // forepaws), two feet and a head too, but its spine lies along the
@@ -1304,7 +1328,6 @@ impl Frame {
         if top.y - pelvis.y <= ((top.x - pelvis.x).powi(2) + (top.z - pelvis.z).powi(2)).sqrt() {
             return None;
         }
-        let spine: Vec<usize> = chain.iter().copied().skip_while(|&i| i != chest).collect();
         // the legs: the chain from the root down to each footstep node, from
         // its first node off the middle (the thigh)
         let mut legs: [Vec<usize>; 2] = Default::default();
@@ -1335,6 +1358,19 @@ impl Frame {
         // an arm's upper bone: the third from its hand
         let upper = |s: usize| arms[s][arms[s].len() - 3];
         let shoulder_y = (b.bind[upper(0)].y + b.bind[upper(1)].y) * 0.5;
+        // on a tail body (the merfolk's) the chest is the spine's node under the
+        // shoulders, as a human's is
+        // (its 2, 0.14 under them): the merfolk's arms and neck hang from a node
+        // over their shoulders (8, 0.04 over), and a cape's collar carried onto it
+        // rose round the head (the owner, 2026-11-12: "mermaid cape is on head like
+        // helm"); the spine's next node down takes it
+        while b.ids[5] == b.ids[6] && b.bind[chest].y > shoulder_y {
+            match up(chest).filter(|p| chain.contains(p)) {
+                Some(p) => chest = p,
+                None => break,
+            }
+        }
+        let spine: Vec<usize> = chain.iter().copied().skip_while(|&i| i != chest).collect();
         if shoulder_y - ground < 0.2 * (b.bind[head].y - ground).max(1e-3) {
             return None;
         }
@@ -1371,7 +1407,8 @@ impl Frame {
         let half_width = edge(torso.iter().filter(|p| (shoulder_y - 0.2 * tall..=shoulder_y).contains(&p.y)).map(|p| (p.x - mid_x).abs()).collect(), true)?;
         let (lo, hi) = (b.bind[root].y, b.bind[chest].y);
         let back = edge(torso.iter().filter(|p| (lo..=hi.max(lo + 1e-3)).contains(&p.y)).map(|p| p.z).collect(), false)?;
-        (half_width > 1e-3).then_some(Frame { root, chest, head, spine, arms, legs, shoulder_y, ground, half_width, back, mid_x })
+        let tail = b.ids[5] == b.ids[6];
+        (half_width > 1e-3).then_some(Frame { root, chest, head, spine, arms, legs, shoulder_y, ground, half_width, back, mid_x, tail })
     }
 
     /// The source skeleton's nodes on another body's (frame `g`, skeleton
@@ -1391,7 +1428,10 @@ impl Frame {
         }
         role[f.root] = Some(g.root);
         role[f.chest] = Some(g.chest);
-        role[f.head] = Some(g.head);
+        // a merfolk's head node sits high over its shoulders (0.23, a human's 0.14):
+        // what hangs from the source's head (Dread's fur mantle) goes on its neck,
+        // 0.08 over them as a human's neck is, or it stood up round the head
+        role[f.head] = Some(if g.tail { usize::try_from(tb.parents[g.head]).ok().filter(|&p| p < tb.parents.len()).unwrap_or(g.head) } else { g.head });
         // a limb of the source on the wearer's limb on the same side
         let side = |fr: &Frame, b: &Bones, x: usize| (b.bind[x].x - fr.mid_x).signum();
         for s in 0..2 {
@@ -1570,6 +1610,11 @@ mod tests {
     #[test]
     fn the_merfolk_wear_capes() {
         let Some(lib) = char_lib() else { return };
+        // how high each style rises over a human's shoulders, as a share of its head
+        // over them (HumanMale: shoulders 1.44, the top of the head, node 5, 1.80)
+        let (hcs, _) = sprite(&lib, 0x70D8_98C6);
+        let rise = |m: &esf::Model, shoulders: f32, top: f32| (m.pos.iter().map(|p| p[1]).fold(f32::MIN, f32::max) - shoulders) / (top - shoulders);
+        let human: Vec<f32> = STYLES.iter().map(|s| rise(&model(&lib, Cape { style: s.id, color: 0 }, 0x70D8_98C6, &hcs).unwrap(), 1.44, hcs.h.nodes[5].bind.trans.y.0)).collect();
         for &id in crate::racebody::MERFOLK {
             let (mut cs, _) = sprite(&lib, id);
             let body = lib.build_model(lib.lookup(id as i32).unwrap()).unwrap();
@@ -1588,6 +1633,18 @@ mod tests {
                 let on_tail = m.bones.iter().zip(&m.weights).any(|(b, w)| (0..4).any(|k| w[k] != 0 && (1..=5).contains(&b[k])));
                 let low = m.pos.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
                 assert!(low < cs.h.nodes[0].bind.trans.y.0, "{id:08X} style {}: down the tail ({low:.2})", s.id);
+                // hung from the shoulders, rising over them no more than on a human,
+                // as a share of the head over them (merfolk: shoulders 0.89, the top of
+                // the head, node 23, 1.21): carried onto the merfolk's chest node over
+                // their shoulders and stretched by the tail's length, it rose round the
+                // head in the game (the owner: "mermaid cape is on head like helm"; style
+                // 1 then 1.27 of the head's height over the shoulders, a human's 0.50;
+                // Magnus Jaeger's high collar now 0.61 to 0.83 to its 0.45, the most: the sea
+                // king's broad shoulders spread it)
+                let k = STYLES.iter().position(|t| t.id == s.id).unwrap();
+                let r = rise(&m, 0.891, cs.h.nodes[23].bind.trans.y.0);
+                eprintln!("{id:08X} style {}: rises {r:.2} of the head, a human's {:.2}", s.id, human[k]);
+                assert!(r <= human[k] + 0.4, "{id:08X} style {}: rises {r:.2} of the head over the shoulders, a human's {:.2}", s.id, human[k]);
                 tails += on_tail as usize;
             }
             assert_eq!(tails, STYLES.len(), "{id:08X}: every style skinned to the tail (`tail_skin`)");

@@ -26,6 +26,11 @@ is put on the page by `.github/workflows/notes.yml`.
 - Whoever asked hears **"Everyone is ready"**, or **"Raid not ready"** (or "Group not ready") with the names of
   who said no and who did not answer in time.
 
+## 2026-11-12 · Mermaid capes hang from the shoulders
+- A Mermaid's cape now hangs from her shoulders down her back and tail. It had been carried too high, so its collar
+  rose round her head like a helm; now her head is clear above it, on every cape style and on mermaids, mermen,
+  sirens and sea kings alike.
+
 ## 2026-11-12 · Mermaid helms and capes
 - **Capes now show on Mermaids** (mermaids, mermen, sirens and sea kings). The cape hangs down the back over the tail
   and sways with the tail as she treads water and swims. Every cape style works.
