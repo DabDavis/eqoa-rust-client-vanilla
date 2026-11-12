@@ -930,6 +930,15 @@ pub struct ClientOptions {
     /// under its bar, where the server sends them (`Session::agree_pet_effects`);
     /// off, none, as the game shows them nowhere. On by default.
     pub pet_effects: bool,
+    /// Buff Window (`buffwnd`; the GM Jibrish's petition 1761): on a server that
+    /// offers it (`Session::agree_buffs`), the player's effects in two rows and
+    /// its pet's in a third, each with its name and time left and a beneficial
+    /// one taken off by a click or the pad; off, or on any other server, the
+    /// game's strip (`influence`). On by default.
+    pub buff_window: bool,
+    /// Loading Tips (`tips`; the GM Jibrish's petition 1778): a "Did you know"
+    /// line on every loading screen. On by default.
+    pub loading_tips: bool,
     /// Number Colors (`numcolor`; the server owner's of 2026-11-09: "we can add
     /// the number colors to extended menu"): each row's colour for the floating
     /// numbers of the player's own figures and its pet's, by what made them, on a
@@ -1260,6 +1269,8 @@ impl Default for ClientOptions {
             overlapping_names: false,
             raid_list: true,
             pet_effects: true,
+            buff_window: true,
+            loading_tips: true,
             number_colors: crate::numcolor::DEFAULTS,
             dps_meter: false,
             dps_view: crate::dpsmeter::View::Fight,
@@ -1369,6 +1380,12 @@ impl ClientOptions {
         }
         if !self.pet_effects {
             s.push_str("pet_effects=off\n");
+        }
+        if !self.buff_window {
+            s.push_str("buff_window=off\n");
+        }
+        if !self.loading_tips {
+            s.push_str("loading_tips=off\n");
         }
         // Number Colors only where a row is not as it came (Default, or a
         // merc row's colour: `numcolor::DEFAULTS`), a row chosen Default as
@@ -1559,6 +1576,10 @@ impl ClientOptions {
                 ("raid_list", "off") => c.raid_list = false,
                 ("pet_effects", "on") => c.pet_effects = true,
                 ("pet_effects", "off") => c.pet_effects = false,
+                ("buff_window", "on") => c.buff_window = true,
+                ("buff_window", "off") => c.buff_window = false,
+                ("loading_tips", "on") => c.loading_tips = true,
+                ("loading_tips", "off") => c.loading_tips = false,
                 ("dps_meter", "on") => c.dps_meter = true,
                 ("dps_meter", "off") => c.dps_meter = false,
                 ("dps_meter_shows", "fight") => c.dps_view = crate::dpsmeter::View::Fight,
@@ -1869,6 +1890,16 @@ pub fn raid_list() -> bool {
 /// Pet Effects: the pet's effects under its bar (`hud`).
 pub fn pet_effects() -> bool {
     client().pet_effects
+}
+
+/// Buff Window: the client's own effects window (`buffwnd`).
+pub fn buff_window() -> bool {
+    client().buff_window
+}
+
+/// Loading Tips: a tip on every loading screen (`tips`).
+pub fn loading_tips() -> bool {
+    client().loading_tips
 }
 
 /// Number Colors now: each row's choice (`numcolor`).
@@ -3013,6 +3044,18 @@ mod tests {
     /// Changes in a later window puts it in client.opt (never in its own
     /// file), and window 1 reads it back. The control: this window's own
     /// brightness stays as it read it.
+    #[test]
+    fn buff_window_and_loading_tips_are_kept_only_when_off() {
+        let d = ClientOptions::default();
+        assert!(d.buff_window && d.loading_tips, "on by default");
+        assert!(!d.to_text().contains("buff_window") && !d.to_text().contains("loading_tips"));
+        let off = ClientOptions { buff_window: false, loading_tips: false, ..Default::default() }.to_text();
+        assert!(off.contains("buff_window=off\n") && off.contains("loading_tips=off\n"));
+        let back = ClientOptions::from_text(&off);
+        assert!(!back.buff_window && !back.loading_tips);
+        assert!(ClientOptions::from_text("buff_window=maybe").buff_window, "the default");
+    }
+
     #[test]
     fn pet_effects_are_kept_only_when_off() {
         assert!(ClientOptions::default().pet_effects, "on by default");

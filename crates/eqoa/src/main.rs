@@ -103,6 +103,8 @@ mod livewords;
 mod hud;
 mod raidlist;
 mod readywnd;
+mod buffwnd;
+mod tips;
 mod rollwnd;
 mod masterloot;
 mod damage;

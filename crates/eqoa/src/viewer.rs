@@ -4485,6 +4485,29 @@ impl App {
                 }
                 return;
             }
+            // the buff window (`buffwnd`, petition 1761): U in play gives it
+            // the arrows (they come as the pad's d-pad) and lets them go; while
+            // it has them Enter takes the lit buff off, Escape and Backspace
+            // let go
+            if p.typing.is_none() && (p.mode == 0 || p.mode == 38) && !event.repeat {
+                match &event.logical_key {
+                    Key::Character(c) if c.eq_ignore_ascii_case("u") && (p.buffs.focused() || p.buff_window_on()) => {
+                        if down {
+                            p.toggle_buff_focus();
+                        }
+                        return;
+                    }
+                    Key::Named(NamedKey::Enter) if p.buffs.focused() => {
+                        p.buff_key(134, down);
+                        return;
+                    }
+                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) if p.buffs.focused() => {
+                        p.buff_key(132, down);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             if p.mode == 0 && down && event.logical_key == Key::Named(NamedKey::Escape) {
                 p.open_start_menu(true);
                 return;

@@ -34,6 +34,8 @@ mod mapsuggest;
 mod groupmark;
 #[path = "linkplay.rs"]
 mod linkplay;
+#[path = "buffplay.rs"]
+mod buffplay;
 #[path = "mercplay.rs"]
 mod mercplay;
 #[path = "autoplay.rs"]
@@ -370,6 +372,9 @@ pub struct Play {
     /// carries (`Event::ChatLinks`, by the event it came as); Shift held (a
     /// click on an item links it).
     pub links: crate::itemlink::Links,
+    /// The buff window (`buffwnd`, petition 1761): its light, its d-pad, where
+    /// it drew.
+    pub buffs: crate::buffwnd::BuffWnd,
     link_draft: Option<(Vec<u16>, Vec<crate::editbox::TextLink>)>,
     event_no: u64,
     next_links: Option<(u64, Vec<net::itemlink::ChatLink>)>,
@@ -2882,7 +2887,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -3613,6 +3618,8 @@ impl Play {
         // Pet Effects: the server told what the Extended row says (off, what it
         // sent forgotten)
         self.session.agree_pet_effects(crate::settings::pet_effects());
+        // Buff Window: the server told what its row says (off, the game's strip)
+        self.session.agree_buffs(crate::settings::buff_window());
         self.agree_number_tags();
         self.agree_dps_meter();
         self.agree_quests();
@@ -4269,6 +4276,10 @@ impl Play {
     /// ends the scroll, L3 toggles autorun (33 is a chat mode), and the
     /// attack and the target's details are let go as in play.
     fn chat_scroll_key(&mut self, key: i32, down: bool) {
+        // L2 with R2 held: the buff window takes the d-pad (`buffwnd`)
+        if down && key == 141 && self.toggle_buff_focus() {
+            return;
+        }
         // the walk through the item links (`itemlink`), unless a loot roll's
         // strips have the d-pad
         if down && !self.rolls_focused() && self.link_key(key) {
@@ -5020,6 +5031,11 @@ impl Play {
         // a loot roll's strips (`raidplay`): in play and while R2 holds the
         // chat box's history, a click on one is theirs
         if matches!(c, Click::Target(..) | Click::Interact(..)) && matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.roll_point(f) {
+            return true;
+        }
+        // the buff window (`buffwnd`): a click on a buff lights it, a second
+        // takes it off
+        if matches!(c, Click::Target(..) | Click::Interact(..)) && matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.buff_point(f) {
             return true;
         }
         // the item links' windows (`itemlink`): a click on one is theirs, on
@@ -6012,6 +6028,10 @@ impl Play {
     /// the chat box's history, a dialog. False in play (mode 0), where
     /// `VIWndGame` takes them.
     fn window_key(&mut self, key: i32, down: bool) -> bool {
+        // the buff window while it has the d-pad (`buffwnd`)
+        if self.buff_key(key, down) {
+            return true;
+        }
         // the map, while it is up, over everything (`map.rs`)
         if self.map.key(key, down) {
             return true;
@@ -9234,8 +9254,16 @@ impl Play {
             r.ui.vertical = Vertical::Top;
             if crate::influence::shown(self.mode) {
                 let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Effects);
-                crate::influence::draw(vui, &mut r, &self.effects);
+                // the client's own buff window where the server sends its set
+                // (`buffwnd`, petition 1761), else the game's strip
+                if self.buff_window_on() {
+                    self.draw_buffs(vui, &mut r);
+                } else {
+                    crate::influence::draw(vui, &mut r, &self.effects);
+                }
                 crate::hudlayout::end(r.ui, m);
+            } else if self.buffs.focused() {
+                self.buffs.let_go();
             }
             r.ui.anchor = Anchor::Right;
             r.ui.vertical = Vertical::Bottom;
@@ -9471,8 +9499,9 @@ impl Play {
     /// row off, from a server that sends none (Sandstorm, eqoa.live), or with no
     /// pet; the game shows a pet's effects nowhere, and nor does this client
     /// anywhere else.
+    /// With the buff window up they are its third row instead (`buffwnd`).
     fn pet_effects(&self) -> Vec<u32> {
-        if !crate::settings::pet_effects() {
+        if !crate::settings::pet_effects() || self.buff_window_on() {
             return Vec::new();
         }
         self.session.pet_effects_left(self.session.now()).into_iter().map(|(icon, _)| icon).collect()

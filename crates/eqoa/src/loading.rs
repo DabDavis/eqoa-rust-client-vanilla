@@ -103,6 +103,8 @@ pub fn draw_2d(vui: Option<&Vui>, r: &mut dyn Layout, frontiers: bool) {
     vui.blit_horz(r, [206, y], 34, 228, 0, 1.0, 0);
     vui.blit_ex(r, 33, [434, y], 0, 1.0, 1);
     vui.blit_ex(r, 203, [228, y + 7], 0, 1.0, 0);
+    // the client's own: a tip under the bar (`tips`, petition 1778)
+    crate::tips::draw(vui, r, y + 40);
 }
 
 /// The model-view `LoadingProgress` sets for the gears: the identity with x
