@@ -205,8 +205,9 @@ mod tests {
 
     /// □ on a merc (the owner, 2026-11-12): its details box shows its class
     /// (and a healer's mode) under its name where the server tells them
-    /// (layout 3); on one's own merc the press also talks (0x0004), which opens
-    /// its menu on the server. The controls: another's merc is only shown, and
+    /// (layout 3); on one's own merc the press talks (0x0004), which opens its
+    /// menu on the server, and opens no details box (it stayed on screen beside
+    /// the menu). The controls: another's merc is only shown, and
     /// a merc the server told no class of (layout 2) shows its name and level.
     #[test]
     fn square_on_a_merc_shows_its_class_and_talks_to_ones_own() {
@@ -230,11 +231,12 @@ mod tests {
         assert_eq!(p.target_info_text().as_deref(), Some("Jorador\nw174 (Defensive)\nw503 60"));
         sent(&mut p);
         p.interact_with_target();
-        assert!(p.info_up);
+        assert!(!p.info_wanted(), "one's own: no details box beside its menu (it stayed up)");
         assert_eq!(sent(&mut p), vec![vec![0x04, 0x00, 0x30, 0, 0, 0]], "one's own: a talk");
         p.target = 0x31;
         assert_eq!(p.target_info_text().as_deref(), Some("Haldor\nw174\nw503 60"));
         p.interact_with_target();
+        assert!(p.info_wanted(), "another's merc: its details box, as before");
         assert!(sent(&mut p).is_empty(), "another's merc: shown, not talked to");
         p.session.mercs.as_mut().unwrap().classes.clear();
         assert_eq!(p.target_info_text().as_deref(), Some("Haldor\nw503 60"), "no class told: name and level");

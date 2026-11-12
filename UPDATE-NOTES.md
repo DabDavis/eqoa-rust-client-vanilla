@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Your mercenary's menu no longer leaves its info box on screen
+- Pressing □ (Q) on **your own** mercenary now opens its menu alone: its info box no longer stays on screen beside
+  the menu and after you close it. □ on anyone else's mercenary still shows its info box (name, class, level).
+
 ## 2026-11-12 · Mercenaries: their class at a glance, and a menu of their own
 - **Press □ (Q) on a mercenary** and its details box now shows its **class** under its name, and for a
   healer whether it is **Defensive** or **Offensive**.

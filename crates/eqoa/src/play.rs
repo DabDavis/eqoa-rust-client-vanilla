@@ -1029,11 +1029,15 @@ impl Play {
         } else if f & 8 != 0 {
             0x0061
         } else if c.p256 == 3 && self.own_merc(&c.name) {
-            // one's own merc: its details box, and the talk that opens its
-            // menu on a server that keeps one (go-eqoa-server's mercmenu.go:
-            // the owner's of 2026-11-12, "let players press Square to open a
-            // dialog with their mercs"; CLIENT talks to no pet)
-            self.info_up = true;
+            // one's own merc: the talk that opens its menu on a server that
+            // keeps one (go-eqoa-server's mercmenu.go: the owner's of
+            // 2026-11-12, "let players press Square to open a dialog with
+            // their mercs"; CLIENT talks to no pet), and no details box: the
+            // menu's question box takes the press, so its release never
+            // reached `info_let_go` and the box stayed up beside the menu and
+            // after it (the owner, 2026-11-12: "the square menu is keeping the
+            // popup on screen")
+            self.info_up = false;
             0x0004
         } else if c.p256 == 2 || c.p256 == 3 {
             self.info_up = true;
