@@ -232,9 +232,9 @@ fn apply_with(lib: &esf::Library, model: &mut esf::Model, parts: &[(Kind, u32, P
             if !part.entries.iter().any(|&e| e as i32 == model.batches[bi].material) {
                 continue;
             }
-            // a shade on the body's own skin, a tattoo on a face (`skin_layer`
-            // takes both): never on an armour's, a robe's or a helm's
-            if matches!(change, Change::Skin(_) | Change::Tattoo(_))
+            // a shade on the body's own skin (`skin_layer`): never on an
+            // armour's, a robe's or a helm's (a tattoo picks its layers itself)
+            if matches!(change, Change::Skin(_))
                 && !model.batches[bi].layers.first().is_some_and(|l| skin_layer(model.batches[bi].material, l.texture))
             {
                 continue;
@@ -271,8 +271,9 @@ enum Change {
     /// texture moved to it, the layer's own colour (an erudite's or a
     /// barbarian's skin tint) white, as the shade is the skin's whole colour
     Skin(u32),
-    /// a barbarian's tattoo (`render::recolor::TATTOO`): the first layer's
-    /// texture, a face, with its woad taken off and the pattern's laid
+    /// a barbarian's tattoo (`render::recolor::TATTOO`): a face's layer with
+    /// its woad taken off and the pattern's laid; the man's bare chest's, its
+    /// tattoo taken off by none
     Tattoo(u32),
     Texture(i32),
 }
@@ -317,10 +318,13 @@ impl Change {
                 }
             }
             Change::Tattoo(r) => {
-                if let Some(l) = b.layers.first_mut()
-                    && l.texture != 0
-                {
-                    l.texture = render::recolor::recolored(l.texture, r, |id| lib.lookup(id).is_some());
+                // a face's layer and the man's bare chest's: never an
+                // armour's, a robe's or a helm's
+                for l in &mut b.layers {
+                    let root = render::recolor::root_of(l.texture) as u32;
+                    if l.texture != 0 && (vi::cust::is_face(root) || render::tattoo::marks(root)) {
+                        l.texture = render::recolor::recolored(l.texture, r, |id| lib.lookup(id).is_some());
+                    }
                 }
             }
             Change::Texture(t) => {
@@ -640,7 +644,7 @@ pub(crate) mod tests {
             key: "tattoo".into(),
             label: "Tattoo".into(),
             kind: Kind::Colour,
-            parts: parts(vec![(0x61CA_3EDF, vec![9]), (0xC44A_D516, vec![6])]),
+            parts: parts(vec![(0x61CA_3EDF, vec![9, 5]), (0xC44A_D516, vec![6])]),
             male: vec![step("Face's own", 0), step("Off", 0x0400_0000), step("Bands", 0x0401_0000), step("Crest", 0x0402_0000)],
             female: vec![step("Off", 0), step("Bands", 0x0401_0000), step("Crest", 0x0402_0000)],
         };
@@ -658,11 +662,12 @@ pub(crate) mod tests {
     /// A barbarian's tattoo on the disc's bodies, drawn through the library
     /// (`render::LibraryTextures`): a man in face 1 (the bands) with Off has
     /// his face's woad taken off (its brow lighter), the rest of the face byte
-    /// for byte; a woman in face 0 with the crest has it laid (her brow
+    /// for byte, and his bare chest's tattoo off; a woman in face 0 with the crest has it laid (her brow
     /// darker), her cheek byte for byte; the crest and a dark skin on a man: the
-    /// shade laid over the tattooed face. The controls: the face's own (his
-    /// first step) changes nothing; a texture on the face's entry that is not a
-    /// face (a helm's, say) takes no tattoo. Needs `run/eqoa.iso`.
+    /// shade laid over the tattooed face, his chest's tattoo kept. The
+    /// controls: the face's own (his first step) changes nothing; a texture on
+    /// the face's entry that is not a face (a helm's, say) and an armour's chest
+    /// take no tattoo. Needs `run/eqoa.iso`.
     #[test]
     fn a_tattoo_on_the_discs_barbarians() {
         use render::TextureSource;
@@ -696,6 +701,17 @@ pub(crate) mod tests {
         assert_eq!(render::recolor::source_of(t), Some((bands as i32, 0x0400_0000)));
         assert!(sum(texel(t, 20, 5)) > sum(texel(bands as i32, 20, 5)) + 60, "his brow's woad off");
         assert_eq!(texel(t, 5, 60), texel(bands as i32, 5, 60), "his chin as it was");
+        // Off: his bare chest's tattoo off too, the skin under it kept
+        let chest = off.batches.iter().find(|b| b.material == 5).unwrap();
+        let art = render::tattoo::CHEST_ART as i32;
+        assert_eq!(render::recolor::source_of(chest.layers[1].texture), Some((art, 0x0400_0000)));
+        assert_eq!(chest.layers[0].texture, 0xB037_9A45u32 as i32, "the skin's layer kept");
+        let alpha = |id: i32, x: u32, y: u32| {
+            let im = &tex.levels(id)[0];
+            im.rgba[(((y * im.width / 128) * im.width + x * im.width / 128) * 4 + 3) as usize]
+        };
+        assert!(alpha(art, 10, 90) > 0, "the swirl on the disc");
+        assert_eq!(alpha(chest.layers[1].texture, 10, 90), 0, "the swirl off");
 
         let her_face = 0x28F1_9AC8u32;
         let mut crest = with_face(woman, 6, her_face);
@@ -706,6 +722,8 @@ pub(crate) mod tests {
 
         let mut dark = with_face(man, 9, 0xD9EC_0301);
         assert!(dress(&lib, man, &mut dark, &look_of_steps(rows, 0, &[3, 1], man)));
+        let chest = dark.batches.iter().find(|b| b.material == 5).unwrap();
+        assert_eq!(alpha(chest.layers[1].texture, 10, 90), alpha(art, 10, 90), "a pattern keeps the swirl");
         let (under, shade) = render::recolor::source_of(face_of(&dark, 9)).unwrap();
         assert_eq!((render::recolor::source_of(under).map(|(s, r)| (s as u32, r)), shade), (Some((0xD9EC_0301, 0x0402_0000)), 0x0313_6B3B), "the shade over the tattoo");
 
@@ -714,8 +732,11 @@ pub(crate) mod tests {
         assert_eq!(face_of(&own, 9), bands as i32);
         let helm = 0x0C6F_2FDAu32;
         let mut hidden = with_face(man, 9, helm);
-        dress(&lib, man, &mut hidden, &look_of_steps(rows, 0, &[3, 0], man));
+        let plate = 0x39BC_F85Fu32 as i32;
+        hidden.batches.iter_mut().filter(|b| b.material == 5).for_each(|b| b.layers[1].texture = plate);
+        dress(&lib, man, &mut hidden, &look_of_steps(rows, 0, &[1, 0], man));
         assert_eq!(face_of(&hidden, 9), helm as i32, "the control: not a face");
+        assert_eq!(hidden.batches.iter().find(|b| b.material == 5).unwrap().layers[1].texture, plate, "the control: an armour's chest");
     }
 
     /// Drawn (`eqoa dress`, the GPU): the fungusman in every row's first step

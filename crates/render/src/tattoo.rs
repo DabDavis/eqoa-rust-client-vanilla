@@ -10,6 +10,12 @@
 //! have none; her faces lie on the texture as his do (the eyes on the same
 //! texels), so a pattern lies on them as it does on his.
 //!
+//! The man's bare chest wears a tattoo too, a swirl and a knotwork band painted
+//! on his chest's second layer ([`CHEST_ART`], the layer an armour's chest
+//! replaces; the woman's leather top is the same texture's, her texture
+//! coordinates never on the tattoo's): a pattern of none takes it off
+//! ([`chest`]), any other keeps it.
+//!
 //! A pattern is read off its face ([`Woad::of`]): where the woad is (its texels'
 //! saturation under 0.3 and lightness 0.15 to 0.62, inside the face, a lone
 //! one dropped, and the pattern's own rectangles where the woad is a darker
@@ -29,6 +35,37 @@ pub const BANDS_FACE: u32 = 0xEB79_B952;
 pub const CREST_FACE: u32 = 0x0E95_25F4;
 /// The barbarian man's body's own face: the crest's art.
 pub const CREST_BODY_FACE: u32 = 0xEFC0_FF3E;
+
+/// The barbarian man's bare chest's layer, his chest tattoo on it.
+pub const CHEST_ART: u32 = 0xEB71_B584;
+
+/// [`CHEST_ART`]'s rectangles (in 128ths: x0, y0, x1, y1, past-last) that
+/// hold the man's chest tattoo: the swirl and the knotwork band (his texture
+/// coordinates alone reach them).
+const CHEST_TATTOO: [[u32; 4]; 2] = [[0, 66, 34, 120], [44, 36, 68, 90]];
+
+/// One level of [`CHEST_ART`] (`rgba`, `w` by `h`) for a tattoo of `pattern`:
+/// none takes the chest tattoo off (its texels clear, the skin under them
+/// showing), any other keeps it.
+pub fn chest(rgba: &mut [u8], w: u32, h: u32, pattern: u8) {
+    if pattern != NONE || rgba.len() < (w * h * 4) as usize {
+        return;
+    }
+    for y in 0..h {
+        for x in 0..w {
+            let (u, v) = (x * 128 / w, y * 128 / h);
+            if CHEST_TATTOO.iter().any(|r| (r[0]..r[2]).contains(&u) && (r[1]..r[3]).contains(&v)) {
+                rgba[((y * w + x) * 4 + 3) as usize] = 0;
+            }
+        }
+    }
+}
+
+/// Whether a tattoo is laid on a layer of this texture (made from it at the
+/// first): a face (the caller's `$Race`) or the man's bare chest.
+pub fn marks(root: u32) -> bool {
+    root == CHEST_ART
+}
 
 /// The patterns of a tattoo's byte 2.
 pub const NONE: u8 = 0;
@@ -372,6 +409,21 @@ mod tests {
         }
         lay(&mut big, 128, 128, None, true, Some(&crest));
         assert!(at(&big, 128, 60, 10)[0] < 200 && at(&big, 128, 10, 120)[0] == 210);
+    }
+
+    /// The chest: none clears the swirl's and the band's texels, a pattern
+    /// keeps them; the rest of the texture byte for byte either way.
+    #[test]
+    fn the_chest() {
+        let px = vec![200u8; 128 * 128 * 4];
+        let mut off = px.clone();
+        chest(&mut off, 128, 128, NONE);
+        let a = |p: &[u8], x: usize, y: usize| p[(y * 128 + x) * 4 + 3];
+        assert_eq!((a(&off, 10, 90), a(&off, 50, 60), a(&off, 100, 20), a(&off, 10, 10)), (0, 0, 200, 200));
+        let mut on = px.clone();
+        chest(&mut on, 128, 128, CREST);
+        assert_eq!(on, px);
+        assert!(marks(CHEST_ART) && !marks(BANDS_FACE));
     }
 
     /// The faces' own patterns and the patterns' faces.

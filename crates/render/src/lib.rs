@@ -2381,6 +2381,12 @@ impl TextureSource for LibraryTextures<'_> {
                     // face it was made from at the first), the pattern's on
                     let mut levels = self.levels(source);
                     let root = recolor::root_of(source);
+                    if root as u32 == tattoo::CHEST_ART {
+                        for l in &mut levels {
+                            tattoo::chest(&mut l.rgba, l.width, l.height, tattoo::pattern_of(r));
+                        }
+                        return levels;
+                    }
                     let own = tattoo::own_pattern(root as u32).and_then(|p| self.woad(p));
                     let put = self.woad(tattoo::pattern_of(r));
                     for l in &mut levels {
