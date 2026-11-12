@@ -160,13 +160,14 @@ fn has(s: &str, words: &[&str]) -> bool {
 /// resurrection, a pet's own spell...): the player may still name one with
 /// `/autocast`.
 pub fn guess(a: &Ability) -> Option<Kind> {
+    // a summoning first: its words (a wizard's familiar, "Summons Efreeti
+    // Lord") would read as a buff or as no kind (petition 1654)
+    if summons_pet(a) {
+        return Some(Kind::Pet);
+    }
     let d = format!("{} {}", a.name, a.desc).to_lowercase();
     if has(&d, &["gate", "teleport", "portal", "invis", "conceal", "hide", "illusion", "assume the form", "form of", "disguise", "resurrect", "ressurect", "revive", "rez ", "an item", "summon item", "creates", "draught", "charm", "lull", "pacify", "calm", "feign", "camouflage", "levitat", "breath", "shrink", "grow", "track", "forage", "bind", "evacuat", "succor", "pickpocket", "stance", "raiment", "experience", "familiar", "eye of"]) {
         return None;
-    }
-    let summon = has(&d, &["pet summon", "summons pet", "summon pet", "summons a pet"]) || (d.contains("summons") && has(&d, &["to aid you", "by your side", "to fight", "guardian", "golem", "animation", "elemental", "skeleton", "spectre", "zombie", "mummy"]) && !d.contains("aura"));
-    if summon {
-        return Some(Kind::Pet);
     }
     // a buff on the pet (scope 3: the server lands it on the pet whatever is
     // targeted): its words, never a heal of it ("Pet Heal", "Increase
@@ -196,6 +197,27 @@ pub fn guess(a: &Ability) -> Option<Kind> {
         return Some(Kind::Buff);
     }
     None
+}
+
+/// Whether ability `a` summons a pet, by its name and words: a summoning
+/// ("Summons", "Summon", "Calls ... to your side") of a pet, of a creature to
+/// aid or fight by the player, of a familiar, a guardian, an elemental...;
+/// an ability named "Summon <creature>" ("Summon Efreeti Lord": "Summons
+/// Efreeti Lord"); the druids' pets, whose records say nothing ("Kindred
+/// Spirit", "Spiritual Guide"). Never one that makes an item, a drink, a
+/// potion, a companion (go-eqoa-server's makes no pet of those) or an aura.
+pub fn summons_pet(a: &Ability) -> bool {
+    let n = a.name.to_lowercase();
+    let d = a.desc.to_lowercase();
+    if has(&d, &["item", "creates", "drink", "potion", "charges", "companion", "aura", "illusion"]) || has(&n, &["summon:", "potion"]) {
+        return false;
+    }
+    let named = n.starts_with("summon ");
+    let summoning = named || has(&d, &["summon", "summun", "calls "]);
+    let of_a_pet = named
+        || has(&d, &["pet", "to aid you", "to your aid", "to your defense", "by your side", "to your side", "to fight", "familiar", "familar", "guardian", "golem", "animation", "elemental", "skeleton", "skeletal", "spectre", "zombie", "mummy"]);
+    let druids = d.trim().is_empty() && a.scope == 0 && (n.starts_with("spiritual ") || ["companion spirit", "feral spirit", "frenzied spirit", "kindred spirit", "vigilant spirit"].contains(&n.as_str()));
+    (summoning && of_a_pet) || druids
 }
 
 /// A buff's length as its description gives it ("Pet, Increase STR & DEX by
@@ -312,6 +334,8 @@ struct Try {
     /// a begun buff whose effect shows nowhere the client looks: not cast
     /// again before this
     held: Option<i64>,
+    /// the pet when it was sent
+    pet: Option<u32>,
 }
 
 /// A creature in a fight with the player's side: when it last hit the
@@ -477,6 +501,27 @@ impl AutoCast {
     /// waited out longer each time, and the slot taken off auto after
     /// `MISSES_OFF` (said). Another pet (or none) ends the pet buffs' holds.
     fn watch(&mut self, abilities: &BTreeMap<i64, Ability>, now: &Now) {
+        // a slot marked a buff that is a summoning (by its words, or a new pet
+        // came of its cast, its effect seen nowhere): a pet slot, kept so
+        // (petition 1654: Summon Efreeti Lord marked a buff was cast again
+        // over its pet)
+        let summons: Vec<(i64, String)> = self
+            .on
+            .iter()
+            .filter(|&(_, &k)| k == Kind::Buff)
+            .filter_map(|(id, _)| abilities.get(id))
+            .filter(|a| {
+                summons_pet(a)
+                    || (a.scope != 3 && !Self::shows(a, now) && now.pet.is_some() && self.tries.get(&a.id).is_some_and(|t| t.watch.is_some() && now.pet != t.pet))
+            })
+            .map(|a| (a.id, a.name.clone()))
+            .collect();
+        for (id, name) in summons {
+            self.on.insert(id, Kind::Pet);
+            self.tries.remove(&id);
+            self.keep();
+            self.said.push(format!("Auto-cast: {name} summons a pet, so it is cast {}.", Kind::Pet.when()));
+        }
         if now.pet != self.pet {
             self.pet = now.pet;
             for (id, t) in self.tries.iter_mut() {
@@ -575,7 +620,7 @@ impl AutoCast {
         let cast_ms = (a.cast_time.clamp(0, 30) * 1000).max(0);
         let watch = matches!(kind, Kind::Buff | Kind::Pet).then_some(now.ms + cast_ms + SEE_MS);
         let misses = self.tries.get(&a.id).map_or(0, |t| t.misses);
-        self.tries.insert(a.id, Try { next: now.ms + RETRY_MS, watch, misses, sent: now.ms, ..Default::default() });
+        self.tries.insert(a.id, Try { next: now.ms + RETRY_MS, watch, misses, sent: now.ms, pet: now.pet, ..Default::default() });
         // a buff cast again before its end begins again
         if kind == Kind::Buff
             && let Some(e) = now.effects.iter().find(|e| effect_is(e, &a.name))
@@ -949,6 +994,73 @@ mod tests {
         assert_eq!(g("Repair", "CM: Heals your pet. Modified by AGI."), None);
         assert_eq!(g("Ghostly Death", "Pet, Invis, 10min"), None);
         assert_eq!(Kind::Buff.when_for(&ab(1, 0, "Elemental Mark", "", 3)), "when its effect is gone from your pet");
+    }
+
+    /// Petition 1654: the summonings are pets, every class's (Summon Efreeti
+    /// Lord was guessed a buff); items, drinks, companions and a pet buff not.
+    #[test]
+    fn summonings_are_pets() {
+        let g = |name: &str, desc: &str, scope: i64| guess(&ab(1, 0, name, desc, scope));
+        for (name, desc) in [
+            ("Summon Efreeti Lord", "Summons Efreeti Lord"),
+            ("Summon Ghilan", "Summons a Ghilan"),
+            ("Summon Djinn", "Summon Djinn the ultimate Air Pet to aid you"),
+            ("Summon Guenhwyvar", "Calls Guenhwyvar to your side."),
+            ("Lumbering Bones", "Summons a skeletal pet to aid you"),
+            ("Ancient Death", "Summons a powerful spectre with a weapon to aid you."),
+            ("Stone Golem", " ENC Pet Summon - Tank- Taunts and self Heals"),
+            ("Steel Tempest", "Summons pet"),
+            ("Kindred Spirit", ""),
+            ("Spiritual Guide", ""),
+            ("Lesser Familiar", "Summons a familar creature"),
+            ("Minor Familiar", "Summon Pet"),
+            ("Crazy Contraption 1", "CM: Summons a Crazy Contraption to aid you."),
+        ] {
+            assert_eq!(g(name, desc, 0), Some(Kind::Pet), "{name}");
+        }
+        for (name, desc) in [
+            ("Summon: Weak Ale", "Creates drinks that give PoT out of Combat"),
+            ("Summon: Badger", "Summons a badger companion."),
+            ("Summon Returning Potion", "SELF Summon Returning Potion"),
+            ("Summon Shadow Knife", "Self, Summons Item, 500 charges and summons 33 Throwing Knives"),
+            ("Spirit Walk", ""),
+            ("Vessel Spirit", ""),
+        ] {
+            assert_ne!(g(name, desc, 0), Some(Kind::Pet), "{name}");
+        }
+        assert_eq!(g("Elemental Mark", "Pet, Increase INT by 75, Add Offensive Proc, Add DS Proc, 10min", 3), Some(Kind::Buff), "a pet buff");
+        assert_eq!(g("Ghostly Death", "Pet, Invis, 10min", 3), None);
+    }
+
+    /// A summoning already kept as a buff (marked before petition 1654's fix)
+    /// is a pet slot at the next look, kept so: not cast with a pet out, cast
+    /// with none. One whose words do not tell is made one when a new pet
+    /// comes of its cast; a real pet buff stays a buff.
+    #[test]
+    fn a_summoning_kept_as_a_buff_becomes_a_pet_slot() {
+        let list = book(&[ab(9, 0, "Summon Efreeti Lord", "Summons Efreeti Lord", 0), ab(5, 1, "Elemental Mark", "Pet, Increase INT by 75, 10min", 3)]);
+        let mut c = auto(&[(9, Kind::Buff), (5, Kind::Buff)]);
+        let mut now = calm(10_000);
+        now.pet = Some(0x400);
+        now.pet_effects = Some(vec![("Elemental Mark".into(), 500_000)]);
+        assert_eq!(c.choose(&list, &now), None, "a pet out: the summoning not cast");
+        assert_eq!((c.on[&9], c.on[&5]), (Kind::Pet, Kind::Buff));
+        assert_eq!(c.said.len(), 1);
+        now.pet = None;
+        now.has_pet = false;
+        now.pet_effects = Some(vec![]);
+        assert_eq!(c.choose(&list, &now).map(|c| (c.id, c.kind)), Some((9, Kind::Pet)), "no pet: summoned");
+        // words that do not tell: the pet its cast brought tells
+        let list = book(&[ab(8, 0, "Yalgima's Fearsome Companion", "Level 60 Epic Spiritual path. 60 epic: Lvl 52 HUGE black panther", 0)]);
+        let mut c = auto(&[(8, Kind::Buff)]);
+        let mut now = calm(10_000);
+        now.has_pet = false;
+        assert!(c.choose(&list, &now).is_some());
+        now.ms += 3000;
+        now.has_pet = true;
+        now.pet = Some(0x401);
+        c.choose(&list, &now);
+        assert_eq!(c.on[&8], Kind::Pet, "a pet came of it");
     }
 
     #[test]

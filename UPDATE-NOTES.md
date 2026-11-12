@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Auto-cast knows your pet summonings again
+- Auto-cast no longer mistakes a pet summoning (Summon Efreeti Lord, the necromancer's bones and spectres, the
+  enchanter's golems, the druid's spirits, familiars...) for a buff: right-clicking one sets it to summon your pet
+  when you have none, and it is never cast over a pet you already have.
+- A summoning you had already set as a buff is switched to a pet summoning by itself (the chat box says so). If a
+  slot set as a buff ever brings a new pet, it is switched the same way.
+
 ## 2026-11-11 · A moved quick bar stays put with a long spell name
 - If you moved your quick bar with **Move HUD**, selecting a spell with a long name (one that scrolls in the bar's
   title, like "Quil'Eyne's Unspeakable Hunger") made the whole bar slide across the screen as the name scrolled. The
