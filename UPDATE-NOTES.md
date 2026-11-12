@@ -14,6 +14,11 @@ is put on the page by `.github/workflows/notes.yml`.
   smaller helms. Her hair (and the enchanting siren's tiara) is tucked away under a helm, as a human's is, instead of
   streaming out of the back of it.
 
+## 2026-11-12 · Floating races stay in the air when they emote
+- A Mermaid (merman, mermaid, sirens, sea king), a Gargoyle or a Jal'Raeth no longer drops to the ground to wave,
+  bow, point or cheer: they emote at the height they float at, their tail treading, their wings beating or their
+  legs crossed as when they are idle. Everyone using this client sees it the same way, yours and others'.
+
 ## 2026-11-12 · Mermen may be sea kings
 - A male Mermaid may now choose the **sea king**: a green-scaled merman with a fin crest, at a merman's height. He holds
   your own weapons (not his trident), wears chest armour, bracers, gloves and a helm like any merfolk, and his skin
