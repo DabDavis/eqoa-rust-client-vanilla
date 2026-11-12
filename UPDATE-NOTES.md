@@ -20,6 +20,14 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - Other players with this client see your tattoo too. On a PS2 your barbarian shows the face you picked as the
   game has it. Needs a server that offers tattoos (the Heirloom Test Server).
 
+## 2026-11-12 · Character select: Wisps, their colour, and more about each character
+- **A Wisp now looks like a Wisp in Customize Character**, and stays one after you press Accept there (it turned
+  into a plain human until you logged in).
+- **Wisps have a Color**: choose your wisp's glow when you make a Wisp, or change it any time at character select's
+  Customize Character. Everyone sees it in the world. Natural is the wisp's own glow.
+- **Character select now shows four lines** under your character on servers that send them: its level, its CMs
+  (mastery points earned, spent and unspent), its race (its own name: Ratman, Wisp, Jal'Raeth...) and its class.
+
 ## 2026-11-12 · Tips on the title screen
 - **The title screen now shows a tip** in the space under Play, Network Setup and Options, a new one every few
   seconds.

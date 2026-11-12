@@ -171,8 +171,10 @@ impl Cust {
             (rec.face, rec.hair_style, rec.hair_length, rec.hair_color) = (self.face, self.style, self.length, self.color);
             // turned a little off the camera: the heading plus 5.934119
             let hpr = [(F::<Ee>::new(self.hpr[0]) + F::new(5.934_119)).0, self.hpr[1], self.hpr[2]];
-            // the race's options as stepped here (none: as Figure::new)
-            let race_look = (!self.extra.is_empty()).then(|| crate::raceopts::look_of_steps(&self.extra, self.sex_of(&rec), &self.steps, rec.model));
+            // the race's options as stepped here, on the look the server told
+            // of it (a Wisp's wisp kept): with none, that look
+            let base = crate::raceopts::look_of(&rec.name);
+            let race_look = if self.extra.is_empty() { base.map(|l| (*l).clone()) } else { crate::raceopts::rechosen(base.as_deref(), &self.extra, self.sex_of(&rec), &self.steps, rec.model) };
             self.figure = Figure::new_dressed(lib, g, rec.model, look_of(&rec, false), race_look, rec.weapons, self.pos, hpr, cx.now);
             self.made = Some(self.look());
             self.made_steps = self.steps.clone();
@@ -300,13 +302,17 @@ impl Cust {
         }
     }
 
-    /// The race's option rows under the four for character `c` (a game
-    /// race's, of more than one step and with a part of its body), each at
-    /// the step its look has (`raceopts`); none for any other.
+    /// The race's option rows under the four for character `c`, each at the
+    /// step its look has (`raceopts`): those the server names for it
+    /// (`net::selectinfo`: a game race's skin, a Wisp's colour, of its own race),
+    /// else a game race's (as the list names it); only rows of more than one
+    /// step with a part of its body; none for any other.
     fn set_extra(&mut self, c: &CharRecord) {
         self.top = 0;
-        self.extra = match crate::raceopts::options() {
-            Some(o) if (0..=9).contains(&c.race) => o.rows(c.race).iter().filter(|r| r.steps(0).len() > 1 && r.parts_of(c.model).next().is_some()).cloned().collect(),
+        let fits = |r: &&net::raceopts::Row| r.steps(0).len() > 1 && r.parts_of(c.model).next().is_some();
+        self.extra = match (crate::raceopts::options(), &c.info) {
+            (Some(o), Some(info)) => o.rows(info.race as i32).iter().filter(|r| info.rows.contains(&r.key)).filter(fits).cloned().collect(),
+            (Some(o), None) if (0..=9).contains(&c.race) => o.rows(c.race).iter().filter(fits).cloned().collect(),
             _ => Vec::new(),
         };
         let look = crate::raceopts::look_of(&c.name);
@@ -315,7 +321,7 @@ impl Cust {
 
     /// The character's sex, by its body (a record has none of its own).
     fn sex_of(&self, c: &CharRecord) -> i32 {
-        (super::create::tables::model_of(c.race, 1) == c.model) as i32
+        c.sex()
     }
 
     /// The rows: the four and the race's.
@@ -484,6 +490,41 @@ mod tests {
         c.set_extra(&rec);
         assert_eq!(c.rows(), 4, "the control");
         assert_eq!(c.key(134, 0, &mut cues), Some(Some((0, [0, 0, 0, 0], Vec::new()))));
+    }
+
+    /// A Wisp passes as a human in the list (race 0): from a server that says
+    /// it is a Wisp (`net::selectinfo`) its Customize has its own colour row
+    /// under the four, not the human's skin, and Accept hands that up. The
+    /// control: the same character with nothing more said has the list's
+    /// race's (the human's skin) as before.
+    #[test]
+    fn a_wisps_colour_under_the_four() {
+        let step = |name: &str, value: u32| net::raceopts::Step { name: name.into(), value, size: 0 };
+        let human = 0x70D8_98C6u32;
+        let at = net::raceopts::Part { entries: vec![2], rects: vec![] };
+        let mut o = crate::raceopts::tests::skin_options();
+        o.races.push((31, vec![
+            net::raceopts::Row { key: "wisp".into(), label: "Wisp".into(), kind: net::raceopts::Kind::Texture, parts: vec![(human, at.clone())], male: vec![step("Will o' wisp", 0x8143_DC70)], female: vec![] },
+            net::raceopts::Row { key: "wispcolor".into(), label: "Color".into(), kind: net::raceopts::Kind::Colour, parts: vec![(human, at)], male: vec![step("Natural", 0), step("Gold", 0x0122_D99A), step("Rose", 0x01EA_B399)], female: vec![] },
+        ]));
+        crate::raceopts::set_options(Some(&o));
+        let info = net::selectinfo::Info { race: 31, race_name: "Wisp".into(), cms: 0, rows: vec!["wispcolor".into()] };
+        let rec = CharRecord { name: "Glim".into(), server_id: 9, race: 0, model: human, info: Some(info), ..Default::default() };
+        let mut c = Cust::default();
+        c.set_extra(&rec);
+        assert_eq!(c.extra.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(), ["wispcolor"]);
+        let mut cues = Vec::new();
+        for _ in 0..4 {
+            c.key(139, 0, &mut cues);
+        }
+        c.key(137, 0, &mut cues);
+        c.key(137, 0, &mut cues);
+        assert_eq!(c.key(134, 0, &mut cues), Some(Some((0, [0, 0, 0, 0], vec![("wispcolor".to_string(), 2)]))));
+
+        let mut c = Cust::default();
+        c.set_extra(&CharRecord { info: None, ..rec });
+        assert!(c.extra.iter().all(|r| r.key == "skin") && !c.extra.is_empty(), "the control: the list's race's rows");
+        crate::raceopts::set_options(None);
     }
 
     /// A pointer: a row selects it, the selected row's halves change its

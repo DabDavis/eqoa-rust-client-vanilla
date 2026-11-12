@@ -51,6 +51,15 @@ pub fn of(lib: &Library, look: &Look) -> Option<u32> {
     look.parts.iter().find(|(k, v, _)| *k == Kind::Texture && is_body(lib, *v)).map(|(_, v, _)| *v)
 }
 
+/// The wisp's colour a look carries (the owner, 2026-11-12: "also add color
+/// customize to wisp char sel"): a colour part on the wisp's own part
+/// (go-eqoa-server's row `wispcolor`, laid on the head entry the wisp is laid on,
+/// which a Wisp's body never draws); none for the wisp's own glow.
+pub fn colour_of(lib: &Library, look: &Look) -> Option<u32> {
+    let (_, _, at) = look.parts.iter().find(|(k, v, _)| *k == Kind::Texture && is_body(lib, *v))?;
+    look.parts.iter().find(|(k, v, p)| *k == Kind::Colour && p == at && *v != 0).map(|(_, v, _)| *v)
+}
+
 /// Whether `id` is a CSprite record (0x2700) in the library.
 fn is_body(lib: &Library, id: u32) -> bool {
     lib.lookup(id as i32).is_some_and(|r| lib.file(r.file).node(r.node).ty == 0x2700)
@@ -140,8 +149,8 @@ pub fn dress(lib: &Library, body: u32, model: &mut esf::Model, cs: &CSprite<Ee>,
 }
 
 /// A Wisp's wisp, to hang on [`node`] as the helm hangs: its mesh ([`mesh`]) moved
-/// from the helm's node toward the head's, when `race_look` (on `body`) has one;
-/// none for any other body.
+/// from the helm's node toward the head's, in its colour ([`colour_of`]), when
+/// `race_look` (on `body`) has one; none for any other body.
 pub fn attachment(lib: &Library, body: u32, cs: &CSprite<Ee>, race_look: Option<&Look>) -> Option<(i32, esf::Model)> {
     let w = wisp_on(lib, body, race_look)?;
     let n = node(cs);
@@ -149,6 +158,9 @@ pub fn attachment(lib: &Library, body: u32, cs: &CSprite<Ee>, race_look: Option<
         return None;
     }
     let mut m = mesh(lib, w)?;
+    if let Some(c) = race_look.and_then(|l| colour_of(lib, l)) {
+        crate::raceopts::colour_all(lib, &mut m, c);
+    }
     // from the helm's node down toward the head's, in the helm node's own space
     let at = |i: i32| usize::try_from(i).ok().and_then(|i| cs.h.nodes.get(i)).map(|n| glam::Mat4::from_cols_array_2d(&n.inv_bind_world.to_cols()));
     if n == cs.node_ids[8]
@@ -295,6 +307,37 @@ mod tests {
         assert!(!dress(&lib, HUMAN, &mut plain, &cs, &plate, Some(&look(0x1234, WISP)), &t), "a look on another body");
         assert!(attachment(&lib, HUMAN, &cs, Some(&look(0x1234, WISP))).is_none(), "a look on another body");
         assert_eq!(format!("{:?}", plain.batches), format!("{:?}", built.batches));
+    }
+
+    /// On the disc: a colour part on the wisp's own part is the wisp's colour
+    /// (`colour_of`), and the wisp hangs in it: its layers' textures recoloured
+    /// (or their colours), the same mesh. The controls: the wisp alone (its own
+    /// glow), a colour on another part, and a colour of 0 (Natural) leave it as
+    /// it was; a look with no wisp has no colour.
+    #[test]
+    fn a_wisp_in_its_colour() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let (_, cs) = human(&lib);
+        let at = Part { entries: vec![2], rects: vec![] };
+        let gold = (48 * 256 / 360) << 16 | 217 << 8 | 154 | 1 << 24;
+        let with = |parts: Vec<(Kind, u32, Part)>| Look { body: HUMAN, parts };
+        let plain = with(vec![(Kind::Texture, WISP, at.clone())]);
+        let coloured = with(vec![(Kind::Texture, WISP, at.clone()), (Kind::Colour, gold, at.clone())]);
+        assert_eq!(colour_of(&lib, &plain), None);
+        assert_eq!(colour_of(&lib, &coloured), Some(gold));
+        assert_eq!(colour_of(&lib, &with(vec![(Kind::Colour, gold, at.clone())])), None, "no wisp, no colour");
+        let layers = |l: &Look| attachment(&lib, HUMAN, &cs, Some(l)).map(|(_, m)| (m.pos.len(), m.batches.iter().flat_map(|b| b.layers.iter().map(|l| (l.texture, l.color))).collect::<Vec<_>>())).unwrap();
+        let (n0, own) = layers(&plain);
+        let (n1, gilt) = layers(&coloured);
+        assert_eq!(n0, n1, "the same mesh");
+        assert_ne!(own, gilt, "in its colour");
+        let elsewhere = with(vec![(Kind::Texture, WISP, at.clone()), (Kind::Colour, gold, Part { entries: vec![3], rects: vec![] })]);
+        assert_eq!(layers(&elsewhere).1, own, "the control: a colour on another part");
+        let natural = with(vec![(Kind::Texture, WISP, at.clone()), (Kind::Colour, 0, at)]);
+        assert_eq!(layers(&natural).1, own, "the control: Natural");
     }
 
     /// A sound device that records what it was asked to play.

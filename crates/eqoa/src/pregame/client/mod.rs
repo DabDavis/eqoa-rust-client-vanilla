@@ -100,9 +100,25 @@ pub struct CharRecord {
     /// Its race's options re-chosen at Customize (a game race's skin shade,
     /// `raceopts`), sent with 0x002A when it is played; empty, as it was.
     pub options: Vec<(String, u8)>,
+    /// More of it from a server that sends it (`net::selectinfo`, by its server
+    /// id, after the list): its own race and the race's name, its mastery
+    /// points, the rows Customize re-chooses; none from any other.
+    pub info: Option<net::selectinfo::Info>,
 }
 
 impl CharRecord {
+    /// Its own race: the server's (`net::selectinfo`), else the list's.
+    pub fn own_race(&self) -> i32 {
+        self.info.as_ref().map_or(self.race, |i| i.race as i32)
+    }
+
+    /// Its sex, by its body (a record has none of its own): 1 for its own
+    /// race's female body where that is not the male's, else 0.
+    pub fn sex(&self) -> i32 {
+        let female = |race: i32| create::tables::model_of(race, 1) == self.model && create::tables::model_of(race, 0) != self.model;
+        (female(self.race) || female(self.own_race())) as i32
+    }
+
     /// `CharacterList`'s read: the zigzags, then the 32 raw bytes (`m_robe`
     /// as an int, `m_p40`, `m_weapons` three ints, `m_p50`, `m_armor`,
     /// `m_p59`).
@@ -132,6 +148,7 @@ impl CharRecord {
             colors: None,
             cape: None,
             options: Vec::new(),
+            info: None,
         }
     }
 
@@ -168,6 +185,7 @@ impl CharRecord {
             }),
             cape: None,
             options: Vec::new(),
+            info: None,
         }
     }
 
@@ -797,6 +815,8 @@ impl Client {
         crate::inventory::set_caps(s.item_lists);
         for c in &mut self.chars {
             c.cape = if s.capes { s.cape_list.get(&c.server_id).copied() } else { None };
+            // and more of each, on a server that sends it (`net::selectinfo`)
+            c.info = s.select_info.get(&c.server_id).cloned();
         }
         // and its races' own options and the looks chosen (`raceopts`)
         crate::raceopts::set_options(s.race_options.as_ref());
@@ -914,8 +934,7 @@ impl Client {
                         // the character drawn in them here until the server's
                         // list says (`raceopts`)
                         if !options.is_empty() {
-                            let sex = (create::tables::model_of(c.race, 1) == c.model) as i32;
-                            crate::raceopts::set_look_of(&c.name, crate::raceopts::look_of_choice(c.race, sex, c.model, &options));
+                            crate::raceopts::set_look_of(&c.name, crate::raceopts::rechosen_by_name(&c.name, c.own_race(), c.sex(), c.model, &options));
                             c.options = options;
                         }
                     }

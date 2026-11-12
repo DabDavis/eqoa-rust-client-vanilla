@@ -86,15 +86,36 @@ pub fn set_look_of(name: &str, look: Option<Look>) {
     }
 }
 
-/// The look the steps `choices` (each a row's key and step) of race `race`'s
-/// options make on `body` for `sex`: a row not chosen at its first. None with
-/// no options or nothing laid.
-pub fn look_of_choice(race: i32, sex: i32, body: u32, choices: &[(String, u8)]) -> Option<Look> {
+/// The look a character's server look `base` (on `body`) becomes with `rows`
+/// re-chosen at the steps `steps` (select's Customize): its parts of those rows
+/// (their kind on their parts of the body) taken out and the steps' laid in their
+/// place, every other part kept (a Wisp's wisp, laid always, beside its colour
+/// re-chosen; a game race's skin beside nothing). None when nothing is laid.
+pub fn rechosen(base: Option<&Look>, rows: &[Row], sex: i32, steps: &[usize], body: u32) -> Option<Look> {
+    let mine = |k: Kind, p: &Part| rows.iter().any(|r| r.kind == k && r.parts_of(body).any(|q| q == p));
+    let mut parts: Vec<(Kind, u32, Part)> = base.filter(|l| l.body == body).map(|l| l.parts.iter().filter(|(k, _, p)| !mine(*k, p)).cloned().collect()).unwrap_or_default();
+    parts.extend(look_of_steps(rows, sex, steps, body).parts);
+    (!parts.is_empty()).then_some(Look { body, parts })
+}
+
+/// [`rechosen`] for the choices Accept hands up (each a row's key and step) of
+/// race `race`'s rows, on the look the server told of the character `name`.
+pub fn rechosen_by_name(name: &str, race: i32, sex: i32, body: u32, choices: &[(String, u8)]) -> Option<Look> {
     let o = options()?;
-    let rows = o.rows(race);
+    let rows: Vec<Row> = o.rows(race).iter().filter(|r| choices.iter().any(|(k, _)| *k == r.key)).cloned().collect();
     let steps: Vec<usize> = rows.iter().map(|r| choices.iter().find(|(k, _)| *k == r.key).map_or(0, |(_, s)| *s as usize)).collect();
-    let look = look_of_steps(rows, sex, &steps, body);
-    (!look.parts.is_empty()).then_some(look)
+    rechosen(look_of(name).as_deref(), &rows, sex, &steps, body)
+}
+
+/// `model` drawn in colour `value` (a race option's colour, `render::recolor`)
+/// on every one of its batches: a Wisp's wisp in its colour (`wisp`). Whether
+/// anything changed (a colour that changes nothing does not).
+pub fn colour_all(lib: &esf::Library, model: &mut esf::Model, value: u32) -> bool {
+    let Some(change @ Change::Colour(_)) = Change::of(lib, Kind::Colour, value) else { return false };
+    for b in &mut model.batches {
+        change.lay(lib, b);
+    }
+    !model.batches.is_empty()
 }
 
 /// The step of each of `rows` that `look` (a character's, as the server told
@@ -469,6 +490,37 @@ pub(crate) mod tests {
         assert_eq!(look_of_steps(&rows, 0, &[0, 1], 0x4A4D_88FB).parts.len(), 1);
         assert!(look_of_steps(&rows, 0, &[0, 0], 0x4A4D_88FB).parts.is_empty(), "the first step: the body's own");
         assert!(look_of_steps(&rows, 0, &[1, 1], 0x5874_ACFC).parts.is_empty(), "a body the row has no part of");
+    }
+
+    /// Select's Customize re-chooses rows on the look the server told: a Wisp's
+    /// colour taken out and laid again, its wisp (laid always, on the same part
+    /// but a texture) kept; Natural leaves the wisp alone; Accept's choices by
+    /// name do the same. The control: a look with nothing of the rows keeps all
+    /// of it and adds the steps', and on another body the base is dropped.
+    #[test]
+    fn rechosen_keeps_what_customize_did_not_choose() {
+        let step = |name: &str, value: u32| net::raceopts::Step { name: name.into(), value, size: 0 };
+        let (human, at) = (0x70D8_98C6u32, Part { entries: vec![2], rects: vec![] });
+        let (gold, rose) = (render::recolor::DYE << 24 | 0x22_D99A, render::recolor::DYE << 24 | 0xEA_B399);
+        let colour = Row { key: "wispcolor".into(), label: "Color".into(), kind: Kind::Colour, parts: vec![(human, at.clone())], male: vec![step("Natural", 0), step("Gold", gold), step("Rose", rose)], female: vec![] };
+        let wisp = (Kind::Texture, 0x8143_DC70, at.clone());
+        let base = Look { body: human, parts: vec![wisp.clone(), (Kind::Colour, gold, at.clone())] };
+        let got = rechosen(Some(&base), std::slice::from_ref(&colour), 0, &[2], human).unwrap();
+        assert_eq!(got.parts, vec![wisp.clone(), (Kind::Colour, rose, at.clone())], "Rose, the wisp kept");
+        let got = rechosen(Some(&base), std::slice::from_ref(&colour), 0, &[0], human).unwrap();
+        assert_eq!(got.parts, vec![wisp.clone()], "Natural: the wisp alone");
+        let other = Look { body: human, parts: vec![(Kind::Colour, gold, Part { entries: vec![5], rects: vec![] })] };
+        assert_eq!(rechosen(Some(&other), std::slice::from_ref(&colour), 0, &[1], human).unwrap().parts.len(), 2, "the control: nothing of the row");
+        assert_eq!(rechosen(Some(&Look { body: 0x1234, ..base.clone() }), std::slice::from_ref(&colour), 0, &[1], human).unwrap().parts.len(), 1, "another body's look");
+        assert!(rechosen(None, std::slice::from_ref(&colour), 0, &[0], human).is_none());
+
+        let o = net::raceopts::Options { races: vec![(31, vec![Row { key: "wisp".into(), label: "Wisp".into(), kind: Kind::Texture, parts: vec![(human, at.clone())], male: vec![step("Will o' wisp", 0x8143_DC70)], female: vec![] }, colour.clone()])] };
+        set_options(Some(&o));
+        set_look_of("Glim", Some(base.clone()));
+        let got = rechosen_by_name("Glim", 31, 0, human, &[("wispcolor".into(), 2)]).unwrap();
+        assert_eq!(got.parts, vec![wisp, (Kind::Colour, rose, at)], "by name, on the server's look");
+        set_look_of("Glim", None);
+        set_options(None);
     }
 
     /// The library of the disc's bodies and their textures, or None (no
