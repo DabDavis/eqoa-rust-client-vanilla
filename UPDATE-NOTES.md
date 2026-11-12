@@ -7,6 +7,15 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Following from a tab in the back
+- **A character on /follow keeps close behind the one it follows when its tab or window is in the back.** A tab
+  you are not looking at gets fewer frames (the browser saving power, a busy computer running several clients), and
+  each of those frames used to run all the steps it had missed in one straight line: the follower overshot, ran
+  back and forth and dropped far behind. Each frame now catches the missed steps up one at a time, turning toward
+  the one followed at every step, as it does on screen.
+- A tab or window in the back also skips the work that only shows on screen (shadows, lights, mist and plants), so
+  it keeps its pace better while you play in another.
+
 ## 2026-11-12 · Tips on the title screen
 - **The title screen now shows a tip** in the space under Play, Network Setup and Options, a new one every few
   seconds.
