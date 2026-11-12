@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Mermen may be sea kings
+- A male Mermaid may now choose the **sea king**: a green-scaled merman with a fin crest, at a merman's height. He holds
+  your own weapons (not his trident), wears chest armour, bracers, gloves and a helm like any merfolk, and his skin
+  takes the colour choices.
+
 ## 2026-11-12 · Auto-cast knows your pet summonings again
 - Auto-cast no longer mistakes a pet summoning (Summon Efreeti Lord, the necromancer's bones and spectres, the
   enchanter's golems, the druid's spirits, familiars...) for a buff: right-clicking one sets it to summon your pet

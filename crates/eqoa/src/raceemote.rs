@@ -1348,9 +1348,9 @@ mod tests {
 
     /// Every body a server's race wears (each one the table lists and every
     /// other its options offer, the helm seats' families with the fungusmen's
-    /// and the Jal'Raeth's), on the disc, through `put_swim`: 133 have a swim
+    /// and the Jal'Raeth's), on the disc, through `put_swim`: 134 have a swim
     /// and a treading of their own (entries 12 and 13), left as they are (the
-    /// merfolk's four among them, sea creatures' bodies); the
+    /// merfolk's five among them, sea creatures' bodies); the
     /// gargoyles' six, the Jal'Raeth's three, the pixie's and the fairy's have
     /// neither (each is the idle), and but the last two (`SWIM_NONE`) take the
     /// human's carried, one clip looping for both, the human's swim. The
@@ -1394,7 +1394,7 @@ mod tests {
         let mut want: Vec<u32> = GARGOYLES.iter().chain(&JALRAETH).chain(SWIM_NONE).copied().collect();
         want.sort_unstable();
         assert_eq!(none, want, "the bodies with no swim");
-        assert_eq!(own, 133, "the bodies with their own");
+        assert_eq!(own, 134, "the bodies with their own");
         let (h12, h13) = (row(&lib, HUMAN, 12).unwrap(), row(&lib, HUMAN, 13).unwrap());
         assert_eq!(h12.clips, h13.clips, "the control: the human's swim and treading, one clip");
     }

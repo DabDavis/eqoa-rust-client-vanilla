@@ -227,7 +227,7 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     HeadSeat { bodies: &[0x491F_6347], anchor: Anchor::Named, scale: [1.15, 1.2, 1.35], offset: [0.0, 0.12, -0.02] },
     // the merfolk (merman, mermaid, the two sirens), one skeleton: a head a
     // little larger than a human's on a head node at the jaw
-    HeadSeat { bodies: &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C], anchor: Anchor::Head, scale: [1.1; 3], offset: [0.0, 0.22, 0.02] },
+    HeadSeat { bodies: &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C, 0xD275_EE8F], anchor: Anchor::Head, scale: [1.1; 3], offset: [0.0, 0.22, 0.02] },
 ];
 
 /// The bodies a server's race may wear that have no head a helm can sit on:
@@ -514,7 +514,7 @@ pub fn dress(lib: &Library, id: i32, model: &mut esf::Model, cs: &CSprite<Ee>, l
 /// (`raceemote::MERFOLK_NAMES`): their NodeIDList names one hand for both and the tail's end
 /// for both feet, so the fit by limbs would find one arm and a leg down the tail; a tail
 /// wears no legs or boots.
-const NAMED_SHELLS: &[u32] = &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347, 0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C];
+const NAMED_SHELLS: &[u32] = &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347, 0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C, 0xD275_EE8F];
 
 /// The named shells whose legs and boots are worn on their own crossed legs
 /// (`crossed_legs`): the Jal'Raeth's three; the merfolk's tails wear none.
@@ -783,7 +783,7 @@ const WRAP_GAP: f32 = 0.02;
 /// armour), but from a corner on the neck, the head or the hair (nodes 19-23: at
 /// 0.2 the collar was pushed out over the chin).
 fn wrap_reach(id: u32) -> (f32, &'static [u8]) {
-    if [0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C].contains(&id) { (0.2, &[19, 20, 21, 22, 23]) } else { (WRAP_REACH, &[]) }
+    if [0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C, 0xD275_EE8F].contains(&id) { (0.2, &[19, 20, 21, 22, 23]) } else { (WRAP_REACH, &[]) }
 }
 
 /// Puts each corner of a shell carried onto a body (`named_shell_of`) outside the
@@ -2439,6 +2439,8 @@ mod tests {
                 let helm = k % 3 == 1;
                 let mut before = model.clone();
                 crate::play::dress(&mut before, &vi::cust::apply_look_with(&cs, look, helm, has, &t));
+                // a player's body leaves its own weapon out whatever it wears (the sea king's trident)
+                crate::racebody::drop_own_weapons(&mut before, id as u32);
                 let mut after = model.clone();
                 crate::play::dress_look(&lib, id, &mut after, &cs, look, helm, &t, true);
                 if whole {
@@ -2446,7 +2448,9 @@ mod tests {
                     continue;
                 }
                 if is_slotless(&cs) {
-                    assert!(same(&before, &model), "a slotless body has nothing of its own to dress");
+                    let mut bare = model.clone();
+                    crate::racebody::drop_own_weapons(&mut bare, id as u32);
+                    assert!(same(&before, &bare), "a slotless body has nothing of its own to dress");
                 }
                 let n = before.batches.len();
                 assert_eq!(after.batches[..n].len(), n);

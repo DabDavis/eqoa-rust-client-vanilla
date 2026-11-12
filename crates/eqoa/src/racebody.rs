@@ -114,8 +114,25 @@ const HAND_SEATS: &[HandSeats] = &[
 ];
 
 /// The merfolk's bodies: go-eqoa-server's race 32's merman (its male's),
-/// mermaid (its female's) and the two sirens its options offer.
-pub const MERFOLK: &[u32] = &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C];
+/// mermaid (its female's), the two sirens and the sea king (Quintashi's body,
+/// the same skeleton) its options offer.
+pub const MERFOLK: &[u32] = &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C, 0xD275_EE8F];
+
+/// Bodies a server's race offers whose mesh holds a weapon of its own, and the
+/// palette entries it is drawn in: the sea king's trident (Quintashi's body,
+/// entries 4-6, every triangle on its right hand's fingertips, 18), left out of
+/// a player's character, who holds its own items (`drop_own_weapons`).
+const OWN_WEAPONS: &[(u32, &[i32])] = &[(0xD275_EE8F, &[4, 5, 6])];
+
+/// Takes the triangles of body `id`'s own weapon (`OWN_WEAPONS`) out of
+/// `model`, a player's character's.
+pub fn drop_own_weapons(model: &mut esf::Model, id: u32) {
+    let Some((_, entries)) = OWN_WEAPONS.iter().find(|(b, _)| *b == id) else { return };
+    for b in model.batches.iter_mut().filter(|b| entries.contains(&b.material)) {
+        model.triangles -= (b.indices.len() / 3) as u32;
+        b.indices.clear();
+    }
+}
 
 /// The hand seats of body `model` (`HAND_SEATS`).
 fn hand_seats(model: u32) -> Option<&'static HandSeats> {
@@ -441,11 +458,13 @@ mod tests {
         let mut lib = esf::Library::new();
         lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
         for &id in MERFOLK {
-            let listed = races(&[[0xA316_EB78, 0x74BA_7C3D], [0xBF21_FEF5, 0x1740_427C]]);
+            let listed = races(&[[0xA316_EB78, 0x74BA_7C3D], [0xBF21_FEF5, 0x1740_427C], [0xD275_EE8F, 0xD275_EE8F]]);
             let (mut sc, mut cache, mut rand) = (AnimScene::<Ee>::default(), AnimCache::new(), Rand(1));
             let mut cs = load_csprite(&lib, lib.lookup(id as i32).unwrap(), &mut sc, &mut cache, &mut rand).unwrap();
             let own = cs.item_nodes;
-            assert_eq!((cs.h.nodes.len(), &own[..3]), (24, &[18, 18, -1][..]), "{id:#010x}");
+            // the sea king (Quintashi's) names its head for both hands and its forearm for the shield
+            let seaking = id == 0xD275_EE8F;
+            assert_eq!((cs.h.nodes.len(), &own[..3]), (24, if seaking { &[20, 20, 11][..] } else { &[18, 18, -1][..] }), "{id:#010x}");
             let mut npc = load_csprite(&lib, lib.lookup(id as i32).unwrap(), &mut AnimScene::<Ee>::default(), &mut AnimCache::new(), &mut Rand(1)).unwrap();
             grant(&mut npc, id, false, Some(&listed));
             assert_eq!((npc.h.nodes.len(), npc.item_nodes), (24, own), "{id:#010x}: an NPC's as it was");
@@ -457,7 +476,7 @@ mod tests {
             assert_eq!((cs.h.nodes.len(), cs.item_nodes), (27, made), "{id:#010x}: again, as it was");
             let bind_x = |n: i32| cs.h.nodes[n as usize].bind.trans.x.0;
             assert!(bind_x(made[0]) < 0.0 && bind_x(made[1]) > 0.0 && bind_x(made[2]) > 0.0, "{id:#010x}: right, left, left");
-            assert!(bind_x(own[1]) < 0.0, "the control: the body's own off hand is its right");
+            assert!(seaking || bind_x(own[1]) < 0.0, "the control: the body's own off hand is its right");
             for action in [None, Some(23)] {
                 let mut t = 0;
                 cs.set_locomotion(13, &sc, &mut rand);

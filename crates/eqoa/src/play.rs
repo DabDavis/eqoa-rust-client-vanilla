@@ -1427,6 +1427,7 @@ pub(crate) fn dress_look(lib: &Library, id: i32, model: &mut esf::Model, cs: &CS
     dress(model, &vi::cust::apply_look_with(cs, look, helm_worn, has, t));
     if player {
         crate::slotless::dress(lib, id, model, cs, look, helm_worn, has, t);
+        crate::racebody::drop_own_weapons(model, id as u32);
     }
 }
 
