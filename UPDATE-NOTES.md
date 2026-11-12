@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Loading tips without "Did you know"
+
+Every loading tip is now a plain sentence ("You can type /stuck to return to your bind point when you cannot move."), without the "Did you know" in front.
+
 ## 2026-11-12 · Tips on the title screen
 - **The title screen now shows a tip** in the space under Play, Network Setup and Options, a new one every few
   seconds.

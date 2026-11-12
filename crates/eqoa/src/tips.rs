@@ -204,14 +204,15 @@ fn lines(vui: &Vui, r: &mut dyn Layout, tip: &str, x: i32, y: i32, width: i32) {
 mod tests {
     use super::*;
 
-    /// Every tip is one sentence in the petition's form, and none is a GM's.
+    /// Every tip is one plain sentence (petition 1815: no "Did you know"), and none is a GM's.
     #[test]
-    fn every_tip_is_a_did_you_know() {
+    fn every_tip_is_one_plain_sentence() {
         let t = all();
         assert!(t.len() >= 60, "{} tips", t.len());
         for l in &t {
-            assert!(l.starts_with("Did you know"), "{l}");
-            assert!(l.ends_with('?'), "{l}");
+            assert!(!l.to_lowercase().starts_with("did you know"), "{l}");
+            assert!(l.chars().next().is_some_and(|c| c.is_uppercase()), "{l}");
+            assert!(l.ends_with('.'), "{l}");
             assert!(!l.contains('#'), "a GM's command: {l}");
             assert!(l.len() < 160, "too long for three lines: {l}");
         }
@@ -252,7 +253,7 @@ mod tests {
         assert!(live.iter().any(|t| t.contains("Dynamic Lighting")) && live.iter().any(|t| t.contains("buffs")));
         assert!(!live.iter().any(|t| t.contains("/home") || t.contains("/merc") || t.contains("/stuck")), "a server's tip on Live");
         assert!(h.iter().any(|t| t.contains("/merc")));
-        assert!(all().iter().all(|t| t.starts_with("Did you know")), "the tag cut off");
+        assert!(all().iter().all(|t| !t.contains(": ") || !t.starts_with("all") && !t.starts_with("heirloom")), "the tag cut off");
     }
 
     /// The title screen keeps a tip `ROTATE` ms, then another, never the same.

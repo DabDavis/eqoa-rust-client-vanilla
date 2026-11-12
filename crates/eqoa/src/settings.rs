@@ -944,7 +944,7 @@ pub struct ClientOptions {
     /// default. (The map's quest marks are `quest_markers`, the Quest
     /// Helper's.)
     pub head_marks: bool,
-    /// Loading Tips (`tips`; the GM Jibrish's petition 1778): a "Did you know"
+    /// Loading Tips (`tips`; the GM Jibrish's petition 1778): a tip
     /// line on every loading screen. On by default.
     pub loading_tips: bool,
     /// Number Colors (`numcolor`; the server owner's of 2026-11-09: "we can add
