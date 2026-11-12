@@ -40,9 +40,10 @@ pub const CREST_BODY_FACE: u32 = 0xEFC0_FF3E;
 pub const CHEST_ART: u32 = 0xEB71_B584;
 
 /// [`CHEST_ART`]'s rectangles (in 128ths: x0, y0, x1, y1, past-last) that
-/// hold the man's chest tattoo: the swirl and the knotwork band (his texture
-/// coordinates alone reach them).
-const CHEST_TATTOO: [[u32; 4]; 2] = [[0, 66, 34, 120], [44, 36, 68, 90]];
+/// hold the man's chest tattoo: the swirl (with the arms' and the belly's
+/// curls) and the knotwork band; his texture coordinates alone reach them, and
+/// every texel of the art his reach is in them (measured off the disc).
+const CHEST_TATTOO: [[u32; 4]; 2] = [[0, 0, 40, 128], [48, 40, 64, 88]];
 
 /// One level of [`CHEST_ART`] (`rgba`, `w` by `h`) for a tattoo of `pattern`:
 /// none takes the chest tattoo off (its texels clear, the skin under them
@@ -419,7 +420,7 @@ mod tests {
         let mut off = px.clone();
         chest(&mut off, 128, 128, NONE);
         let a = |p: &[u8], x: usize, y: usize| p[(y * 128 + x) * 4 + 3];
-        assert_eq!((a(&off, 10, 90), a(&off, 50, 60), a(&off, 100, 20), a(&off, 10, 10)), (0, 0, 200, 200));
+        assert_eq!((a(&off, 10, 90), a(&off, 50, 60), a(&off, 100, 20), a(&off, 45, 100)), (0, 0, 200, 200));
         let mut on = px.clone();
         chest(&mut on, 128, 128, CREST);
         assert_eq!(on, px);
