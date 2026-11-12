@@ -39,8 +39,9 @@ pub struct Row {
     pub name: String,
     /// Its health of 255.
     pub hp: u8,
-    /// Its power of 255.
-    pub power: u8,
+    /// Its power of 255; none with Extended's Power Bars off (its health
+    /// bar then takes the power bar's room too).
+    pub power: Option<u8>,
     pub is_target: bool,
     /// The client has its entity (`Play::sees_entity`).
     pub seen: bool,
@@ -457,11 +458,21 @@ fn draw_row(vui: &Vui, ui: &mut UiRaster, r: [i32; 4], row: &Row) {
     let bar = [x + ROLE_W + ROLE_GAP, bar_top, r[2] - 2, y + ROW_H - 1];
     ui.solid(3, BAR_BACK, corners(bar));
     // health in the HUD's own gauge (7), and under it power in its blue (9)
-    for (v, image, top, h) in [(row.hp, 7, bar[1], BAR_H), (row.power, 9, bar[1] + BAR_H, POWER_H)] {
+    for (v, image, top, h) in bars(row, bar[1]) {
         let w = ((bar[2] - bar[0]) as f32 * v as f32 / 255.0).round() as i32;
         if w > 0 {
             vui.stretch_blit_ex(ui, image, [bar[0], top], [w, h], 3, 1.0);
         }
+    }
+}
+
+/// A row's bars from `top`: its value of 255, its art (7 health, 9 power), top
+/// and height. Health over power (Power Bars on), or health alone in the
+/// room of both (off).
+fn bars(row: &Row, top: i32) -> Vec<(u8, i32, i32, i32)> {
+    match row.power {
+        Some(p) => vec![(row.hp, 7, top, BAR_H), (p, 9, top + BAR_H, POWER_H)],
+        None => vec![(row.hp, 7, top, BAR_H + POWER_H)],
     }
 }
 
@@ -498,6 +509,14 @@ mod tests {
     /// The marks at a row's right, leftwards from its edge: none without a raid's
     /// state (the control), the crown's four quads in gold, and all three in a row
     /// each in its colour, never past the edge; their room is what a name loses.
+    #[test]
+    fn power_bars_go_under_health_or_health_takes_their_room() {
+        let row = Row { hp: 200, power: Some(51), ..Default::default() };
+        assert_eq!(super::bars(&row, 100), [(200, 7, 100, 3), (51, 9, 103, 2)], "health over power, in its blue");
+        let off = Row { power: None, ..row };
+        assert_eq!(super::bars(&off, 100), [(200, 7, 100, 5)], "Power Bars off: health alone, as tall as both");
+    }
+
     #[test]
     fn the_marks_are_drawn_from_the_right() {
         use crate::pointer::testing::NullRaster;

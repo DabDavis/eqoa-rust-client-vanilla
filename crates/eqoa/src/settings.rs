@@ -944,6 +944,14 @@ pub struct ClientOptions {
     /// default. (The map's quest marks are `quest_markers`, the Quest
     /// Helper's.)
     pub head_marks: bool,
+    /// Power Bars (Extended > UI > HUD; the server owner's of 2026-11-12, "lets
+    /// add power bars to group/raid display"): a thin blue bar of each member's
+    /// power under its health in the group's bars (a server's others' power,
+    /// `Session::agree_power_bars`: go-eqoa-server's 0x7E01/0x7E02, players and
+    /// mercs, and the pet's under its bar) and in the raid list's rows (0x7E1A's
+    /// power, which the roster has always carried). Off, or on a server that
+    /// sends none, the game's bars. On by default.
+    pub power_bars: bool,
     /// Loading Tips (`tips`; the GM Jibrish's petition 1778): a tip
     /// line on every loading screen. On by default.
     pub loading_tips: bool,
@@ -1279,6 +1287,7 @@ impl Default for ClientOptions {
             pet_effects: true,
             buff_window: true,
             head_marks: true,
+            power_bars: true,
             loading_tips: true,
             number_colors: crate::numcolor::DEFAULTS,
             dps_meter: false,
@@ -1395,6 +1404,9 @@ impl ClientOptions {
         }
         if !self.head_marks {
             s.push_str("head_marks=off\n");
+        }
+        if !self.power_bars {
+            s.push_str("power_bars=off\n");
         }
         if !self.loading_tips {
             s.push_str("loading_tips=off\n");
@@ -1592,6 +1604,8 @@ impl ClientOptions {
                 ("buff_window", "off") => c.buff_window = false,
                 ("head_marks", "on") => c.head_marks = true,
                 ("head_marks", "off") => c.head_marks = false,
+                ("power_bars", "on") => c.power_bars = true,
+                ("power_bars", "off") => c.power_bars = false,
                 ("loading_tips", "on") => c.loading_tips = true,
                 ("loading_tips", "off") => c.loading_tips = false,
                 ("dps_meter", "on") => c.dps_meter = true,
@@ -1915,6 +1929,12 @@ pub fn buff_window() -> bool {
 /// (`Play::plates`).
 pub fn head_marks() -> bool {
     client().head_marks
+}
+
+/// Power Bars: others' power under their health in the group's bars, the
+/// pet's bar and the raid list (`hud`, `raidlist`).
+pub fn power_bars() -> bool {
+    client().power_bars
 }
 
 /// Loading Tips: a tip on every loading screen (`tips`).
@@ -3074,6 +3094,17 @@ mod tests {
         let back = ClientOptions::from_text(&off);
         assert!(!back.buff_window && !back.loading_tips);
         assert!(ClientOptions::from_text("buff_window=maybe").buff_window, "the default");
+    }
+
+    #[test]
+    fn power_bars_are_kept_only_when_off() {
+        assert!(ClientOptions::default().power_bars, "on by default");
+        assert!(!ClientOptions::default().to_text().contains("power_bars"));
+        assert!(ClientOptions { power_bars: false, ..Default::default() }.to_text().contains("power_bars=off\n"));
+        assert!(!ClientOptions::from_text("power_bars=off").power_bars);
+        assert!(ClientOptions::from_text("power_bars=on").power_bars);
+        assert!(ClientOptions::from_text("power_bars=maybe").power_bars, "the default");
+        assert!(ClientOptions::from_text("mana_bars=off").power_bars, "the control: the old Mana Bars' key is not this");
     }
 
     #[test]

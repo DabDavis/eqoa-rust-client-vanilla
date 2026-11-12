@@ -3686,6 +3686,9 @@ impl Play {
         // Pet Effects: the server told what the Extended row says (off, what it
         // sent forgotten)
         self.session.agree_pet_effects(crate::settings::pet_effects());
+        // Power Bars: the server told what its row says (off, what it sent
+        // forgotten and the raid list's power not drawn)
+        self.session.agree_power_bars(crate::settings::power_bars());
         // Buff Window: the server told what its row says (off, the game's strip)
         self.session.agree_buffs(crate::settings::buff_window());
         // Quest Markers: the server told what its row says (off, none drawn)
@@ -9222,7 +9225,9 @@ impl Play {
             // the client's own: the effects on it the server sent, those not
             // over yet, for the row under its bar (Extended's Pet Effects)
             effects: self.pet_effects(),
+            power: self.session.power_of(self.pet_id),
         });
+        let power_bars = crate::settings::power_bars();
         let dir = walker.eye.direction;
         let (heading, _, _) = dir.get_hpr();
         let state = crate::hud::HudState {
@@ -9245,7 +9250,7 @@ impl Play {
                 .filter(|m| Some(m.id) != me && m.active)
                 .map(|m| {
                     let flags = find(Some(m.id)).and_then(|e| e.creature.as_ref()).map_or(0, |c| c.flags262);
-                    crate::hud::MemberState { id: m.id, name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)), marks: self.raid_marks(m.id) }
+                    crate::hud::MemberState { id: m.id, name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)), marks: self.raid_marks(m.id), power: self.session.power_of(m.id) }
                 })
                 .collect(),
             raid: self
@@ -9256,7 +9261,8 @@ impl Play {
                     id: m.id,
                     name: m.name.clone(),
                     hp: m.hp,
-                    power: m.power,
+                    // the roster's, with Extended's Power Bars on
+                    power: power_bars.then_some(m.power),
                     is_target: m.id == self.target,
                     seen: self.sees_entity(m.id),
                     me: Some(m.id) == me,
