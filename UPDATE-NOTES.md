@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · The web page says why the game stopped
+- In the web page, a rare fault could freeze the game with only a small "Something in the page failed" line, and
+  the bug report you sent later said only "RefCell already borrowed". The page now stops the game at once with
+  the Reload notice, and keeps the real cause for your next bug report, so it can be found and fixed.
+
 ## 2026-11-12 · Auto-cast knows your pet summonings again
 - Auto-cast no longer mistakes a pet summoning (Summon Efreeti Lord, the necromancer's bones and spectres, the
   enchanter's golems, the druid's spirits, familiars...) for a buff: right-clicking one sets it to summon your pet
