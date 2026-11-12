@@ -5993,6 +5993,14 @@ impl App {
                 let say_script = &mut self.say_script;
                 let target_script = &mut self.target_script;
                 let action_script = &mut self.action_script;
+                // a window drawn on nothing this frame (a hidden page, a
+                // covered window): what only shows is left out, the game, its
+                // sound and its network going on (`unseen` below), so a page
+                // in the back costs less and keeps its frames
+                let unseen = {
+                    let ms = clock.elapsed().as_millis() as i64;
+                    self.covered_script.iter().any(|&(a, b)| (a..b).contains(&ms)) || page_hidden() || crate::gpulost::lost()
+                };
                 let walk_view = self.walker.as_mut().map(|w| {
                     // UpdateControls, on the sticks and the keyboard's axes,
                     // as the client stands
@@ -6225,7 +6233,7 @@ impl App {
                     // creatures' emitters (the batches after the world's) and
                     // the spells' bolts, held from frame to frame
                     // (`lights::Lighting`): none comes, goes or changes in a frame
-                    if dynamic && !loading {
+                    if dynamic && !loading && !unseen {
                         let eye = w.eye_position();
                         let moment = &batches[world_end.min(batches.len())..];
                         lights.0.lights = Some(match particles.as_mut() {
@@ -6263,7 +6271,9 @@ impl App {
                     {
                         p.keep_rastered_trips(w, proj * v, lights.0.eye);
                     }
-                    if crate::settings::client().shadows && !loading {
+                    if unseen {
+                        // nothing drawn: the shadows as they were
+                    } else if crate::settings::client().shadows && !loading {
                         let casters = match play.as_ref() {
                             Some(p) => p.shadow_casters(w, lib),
                             None => crate::shadows::walker_caster(w, lib, None).into_iter().collect(),
@@ -6283,7 +6293,7 @@ impl App {
                     mark(perf, 8);
                     // the effect volumes (`VIScene::Render`'s deferred actors);
                     // none with the options' Environment off
-                    if let Some(fx) = fx.as_mut() {
+                    if let Some(fx) = fx.as_mut().filter(|_| !unseen) {
                         if crate::settings::client().environment {
                             fx.stream(Vec3::from(w.cam.walk.phys.position.to_array()), &w.scene, lib);
                             let cam = crate::fx::camera(w.eye.position, w.eye.direction);
@@ -6298,7 +6308,7 @@ impl App {
                     // the radial flora (`VIScene::Render`: Update at the
                     // camera, Render after the rooms' deferred list); none
                     // with the options' Flora off
-                    if let Some(fl) = flora.as_mut() {
+                    if let Some(fl) = flora.as_mut().filter(|_| !unseen) {
                         if crate::settings::client().flora {
                             let drawn = fl.frame(&mut w.scene, &w.eye.position, proj * v);
                             fl.upload(&mut g.renderer, &g.device, &g.queue, lib, &w.scene, &drawn);
