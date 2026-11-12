@@ -313,16 +313,21 @@ or a browser (each described where it lives below):
   the effect's spell id, icon, ms left, name; the player's, then the pet's) and is drawn in the effects
   strip's place: the player's buffs eight to a row in the strip's art, a second row for nine to sixteen
   (the game's strip holds eight), the pet's under them at half size (in place of the row under the pet's
-  bar, with Pet Effects on). A click or a tap lights a buff and shows its name and time left; a second
-  click on it asks it off (0x7E59: u8 whose, u32 id, u32 icon), and the server takes off only what is
-  beneficial and says so in the chat. A controller: R2 held and L2 give the bar the d-pad until △ or L2
-  (left and right, up and down between the rows, ✕ asks the lit one off); a keyboard: C held and Z,
-  the arrows, Enter, Escape. Off, or on any other server, the game's strip (`influence`); a PS2 ignores the offer.
+  bar, with Pet Effects on). A left click or a tap selects a buff and shows its name and time left; a
+  left click on it again, or anywhere off the bar, lets it go (the GM Jibrish's petition 1809); a right
+  click or a long press on a buff asks it off at once (0x7E59: u8 whose, u32 id, u32 icon), and the
+  server takes off only what is beneficial and says so in the chat. A controller: R2 held and L2 give
+  the bar the d-pad until △ or L2 (left and right, up and down between the rows, ✕ selects or lets go
+  of the highlighted one, □ asks it off); a keyboard: C held and Z, the arrows, Enter selects,
+  Backspace asks it off, Escape lets go. Off, or on any other server, the game's strip (`influence`); a PS2 ignores the offer.
 - **Loading tips** (the GM Jibrish's petition 1778, 2026-11-12; `tips.rs`, `tips.txt`): one "Did you
   know" sentence, picked at random as each loading screen comes up (world entry, a logout's way back,
   a zone or world change, a coach, a gate, a rez), under its bar in the 4:3 frame's middle, never the
   last one again; one tip a player command, a client command or a feature, in `tips.txt` (built in,
-  edited as text). Extended > Other > General's Loading Tips, on by default.
+  edited as text). Each tip is tagged (petition 1811): `all:` (the client's own features and the game's own
+  commands) everywhere, `heirloom:` (the server's commands, NPCs, features) only when the shard last picked
+  (`settings::home_shard`) is Heirloom's; the title screen shows one too under Play / Network Setup /
+  Options, a new one every 8 s, by the same shard (none picked yet: `all` only). Extended > Other > General's Loading Tips, on by default.
 - **A raid's windows** (the GM Jibrish's petitions 1448 and 1451, 2026-11-10; `net::raid`,
   `raidplay.rs`, `rollwnd.rs`, `masterloot.rs`): on a server that offers them (go-eqoa-server's
   0x7E42; its answer 0x7E43 is always yes) the client is sent the raid's state (0x7E44: who leads,

@@ -7,6 +7,23 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Tips on the title screen
+- **The title screen now shows a tip** in the space under Play, Network Setup and Options, a new one every few
+  seconds.
+- **Tips now match your server:** on the Heirloom Test Server you see every tip; on the Live Server (and any
+  other server) only tips about the client itself: lighting, the buff window, the raid window, keys, settings and
+  so on. The title screen goes by the server you picked last. Options > Extended > Other > General > Loading
+  Tips turns them off in both places.
+
+## 2026-11-12 · Buffs: right-click to remove
+- **Left-click a buff** to select it (its name and time left show); **left-click it again**, or anywhere else, to
+  unselect it. Left-clicking another buff selects that one instead.
+- **Right-click a buff to remove it**, no need to select it first. On a touch screen: **tap** to select or unselect,
+  **press and hold** to remove. Harmful effects still can't be removed; the bar says so.
+- **On a controller** (hold **R2**, press **L2**, then the d-pad): **✕ selects** the highlighted buff (or unselects
+  it), **□ (Square) removes** it, **△ or L2** gives the d-pad back. **On a keyboard** (hold **C**, press **Z**, then
+  the arrows): **Enter** selects, **Backspace** removes, **Escape** is done.
+
 ## 2026-11-12 · The buff window and loading screen tips
 - **Your buffs now have room for two rows** at the top of the screen (up to 16), and your **pet's buffs sit in a
   smaller third row** just under them, instead of under the pet's bar.
