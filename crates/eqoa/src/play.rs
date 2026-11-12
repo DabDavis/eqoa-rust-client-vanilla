@@ -1428,6 +1428,9 @@ pub(crate) fn dress_look(lib: &Library, id: i32, model: &mut esf::Model, cs: &CS
     if player {
         crate::slotless::dress(lib, id, model, cs, look, helm_worn, has, t);
         crate::racebody::drop_own_weapons(model, id as u32);
+        if helm_worn {
+            crate::racebody::hide_hair(model, id as u32);
+        }
     }
 }
 

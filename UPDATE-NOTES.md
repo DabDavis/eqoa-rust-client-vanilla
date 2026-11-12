@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Mermaid helms and capes
+- **Capes now show on Mermaids** (mermaids, mermen, sirens and sea kings). The cape hangs down the back over the tail
+  and sways with the tail as she treads water and swims. Every cape style works.
+- **Helms sit better on Mermaids**: a little lower and snugger on the head, so the crown no longer shows through the
+  smaller helms. Her hair (and the enchanting siren's tiara) is tucked away under a helm, as a human's is, instead of
+  streaming out of the back of it.
+
 ## 2026-11-12 · Mermen may be sea kings
 - A male Mermaid may now choose the **sea king**: a green-scaled merman with a fin crest, at a merman's height. He holds
   your own weapons (not his trident), wears chest armour, bracers, gloves and a helm like any merfolk, and his skin

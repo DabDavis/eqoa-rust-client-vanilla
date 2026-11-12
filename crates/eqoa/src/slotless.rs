@@ -226,8 +226,14 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     HeadSeat { bodies: &[0xF51B_AB09, 0x4B24_FF7E], anchor: Anchor::Named, scale: [1.05; 3], offset: [0.0, 0.04, 0.0] },
     HeadSeat { bodies: &[0x491F_6347], anchor: Anchor::Named, scale: [1.15, 1.2, 1.35], offset: [0.0, 0.12, -0.02] },
     // the merfolk (merman, mermaid, the two sirens), one skeleton: a head a
-    // little larger than a human's on a head node at the jaw
-    HeadSeat { bodies: &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C, 0xD275_EE8F], anchor: Anchor::Head, scale: [1.1; 3], offset: [0.0, 0.22, 0.02] },
+    // little larger than a human's on a head node at the jaw; judged on every
+    // helm (1-8) front and side (2026-11-12: lower and a little larger than the
+    // first seat, 1.1 up 0.22 forward 0.02, which sat high and showed the crown
+    // through the smaller helms; their hair is left out under a helm,
+    // `racebody::hide_hair`)
+    HeadSeat { bodies: &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C], anchor: Anchor::Head, scale: [1.15; 3], offset: [0.0, 0.19, 0.0] },
+    // the sea king (Quintashi's body): a larger head, its fin crest out through the helm's top and back
+    HeadSeat { bodies: &[0xD275_EE8F], anchor: Anchor::Head, scale: [1.15; 3], offset: [0.0, 0.21, 0.01] },
 ];
 
 /// The bodies a server's race may wear that have no head a helm can sit on:
@@ -2441,6 +2447,9 @@ mod tests {
                 crate::play::dress(&mut before, &vi::cust::apply_look_with(&cs, look, helm, has, &t));
                 // a player's body leaves its own weapon out whatever it wears (the sea king's trident)
                 crate::racebody::drop_own_weapons(&mut before, id as u32);
+                if helm {
+                    crate::racebody::hide_hair(&mut before, id as u32);
+                }
                 let mut after = model.clone();
                 crate::play::dress_look(&lib, id, &mut after, &cs, look, helm, &t, true);
                 if whole {
@@ -2450,6 +2459,9 @@ mod tests {
                 if is_slotless(&cs) {
                     let mut bare = model.clone();
                     crate::racebody::drop_own_weapons(&mut bare, id as u32);
+                    if helm {
+                        crate::racebody::hide_hair(&mut bare, id as u32);
+                    }
                     assert!(same(&before, &bare), "a slotless body has nothing of its own to dress");
                 }
                 let n = before.batches.len();

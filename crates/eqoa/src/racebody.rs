@@ -118,6 +118,51 @@ const HAND_SEATS: &[HandSeats] = &[
 /// the same skeleton) its options offer.
 pub const MERFOLK: &[u32] = &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C, 0xD275_EE8F];
 
+/// Bodies whose hair is a part of their mesh that comes out through a helm, and
+/// where it lies in their one texture (palette entry 0, a rect of texture
+/// coordinates each: u0, v0, u1, v1): the merman's, the mermaid's and the two sirens'
+/// (go-eqoa-server's race 32; the owner, 2026-11-12: "the mermaid helms arent
+/// sitting right"), whose long hair streamed out of the back of every helm and
+/// whose crown showed through the top of the smaller ones. Under a helm their
+/// hair is left out, as a player race's `$Hair` is (the sea king has none).
+const HAIR: [f32; 4] = [0.0, 0.0, 63.0 / 255.0, 128.0 / 255.0];
+const HAIR_UNDER_HELM: &[(u32, &[[f32; 4]])] = &[
+    (0xA316_EB78, &[HAIR]),
+    (0x74BA_7C3D, &[HAIR]),
+    (0xBF21_FEF5, &[HAIR]),
+    // the enchanting siren's tiara too (a strip below the hair, on her head and
+    // neck alone), which stood out of the front of every helm
+    (0x1740_427C, &[HAIR, [0.0, 128.0 / 255.0, 63.0 / 255.0, 150.0 / 255.0]]),
+];
+
+/// Takes body `id`'s hair (`HAIR_UNDER_HELM`) out of `model`, a player's
+/// character's wearing a helm: each triangle of entry 0 whose texture
+/// coordinates' centre (its first layer's) lies in the hair's rect.
+pub fn hide_hair(model: &mut esf::Model, id: u32) {
+    let Some(&(_, rects)) = HAIR_UNDER_HELM.iter().find(|(b, _)| *b == id) else { return };
+    let uv = model.uv.clone();
+    let mut gone = 0;
+    for b in model.batches.iter_mut().filter(|b| b.material == 0) {
+        let Some(l) = b.layers.first().cloned() else { continue };
+        let before = b.indices.len();
+        b.indices = b
+            .indices
+            .chunks_exact(3)
+            .filter(|t| {
+                let c = t.iter().fold([0.0f32; 2], |a, &v| {
+                    let q = l.apply_uv(uv[v as usize]);
+                    [a[0] + q[0].rem_euclid(1.0) / 3.0, a[1] + q[1].rem_euclid(1.0) / 3.0]
+                });
+                !rects.iter().any(|r| c[0] >= r[0] && c[0] < r[2] && c[1] >= r[1] && c[1] < r[3])
+            })
+            .flatten()
+            .copied()
+            .collect();
+        gone += (before - b.indices.len()) / 3;
+    }
+    model.triangles -= gone as u32;
+}
+
 /// Bodies a server's race offers whose mesh holds a weapon of its own, and the
 /// palette entries it is drawn in: the sea king's trident (Quintashi's body,
 /// entries 4-6, every triangle on its right hand's fingertips, 18), left out of
@@ -502,6 +547,31 @@ mod tests {
                     assert!(d < 0.25 * scale, "{id:#010x} {action:?} slot {slot}: {d:.3} from its parent");
                 }
             }
+        }
+    }
+
+    /// A merfolk player's hair is left out under a helm (`hide_hair`; the owner,
+    /// 2026-11-12: "the mermaid helms arent sitting right"): on the merman, the
+    /// mermaid and the sirens the hair's triangles go (the enchanting siren's
+    /// tiara too) and nothing else of the body; the sea king, the human and a body
+    /// of no race keep every triangle. Needs `run/eqoa.iso`.
+    #[test]
+    fn merfolk_hair_goes_under_a_helm() {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no disc at run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
+        for (id, lo, hi) in [(0xA316_EB78u32, 100, 400), (0x74BA_7C3D, 150, 400), (0xBF21_FEF5, 150, 400), (0x1740_427C, 180, 450), (0xD275_EE8F, 0, 0), (0x70D8_98C6, 0, 0)] {
+            let m = lib.build_model(lib.lookup(id as i32).unwrap()).unwrap();
+            let mut h = m.clone();
+            hide_hair(&mut h, id);
+            let gone = (m.triangles - h.triangles) as usize;
+            assert!((lo..=hi).contains(&gone), "{id:08X}: {gone} triangles of hair");
+            let left: usize = h.batches.iter().map(|b| b.indices.len() / 3).sum();
+            assert_eq!(left, h.triangles as usize, "{id:08X}: the count kept");
         }
     }
 

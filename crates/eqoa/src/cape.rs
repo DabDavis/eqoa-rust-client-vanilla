@@ -356,7 +356,11 @@ pub fn model(lib: &Library, cape: Cape, wearer: u32, cs: &CSprite<Ee>) -> Option
                     p
                 }
             };
-            let f = fit(&src, &worn_bones(wearer, cs), &body, &poses, CROUCHED.contains(&wearer)).map(Rc::new);
+            let bones = worn_bones(wearer, cs);
+            let f = fit(&src, &bones, &body, &poses, CROUCHED.contains(&wearer)).map(|mut m| {
+                tail_skin(&mut m, &bones);
+                Rc::new(m)
+            });
             FITTED.with(|c| c.borrow_mut().insert(key, f.clone()));
             f
         }
@@ -378,6 +382,39 @@ fn worn_bones(wearer: u32, cs: &CSprite<Ee>) -> Bones {
         b.ids[1] = h[1];
     }
     b
+}
+
+/// A cape on a tail (a body whose NodeIDList names one node for both feet: the
+/// merfolk's) skinned down it: each vertex below the root, to the node of the
+/// tail whose span (its bind height to the next one's down) holds it, wholly, so
+/// the cape sways with the tail in the tread and the swim. Above the root, and
+/// on any body with two feet, as fitted.
+fn tail_skin(m: &mut esf::Model, b: &Bones) {
+    if b.ids[5] != b.ids[6] {
+        return;
+    }
+    let n = b.parents.len();
+    let Some(foot) = usize::try_from(b.ids[5]).ok().filter(|&f| f < n) else { return };
+    let mut chain = vec![foot];
+    while let Some(p) = usize::try_from(b.parents[*chain.last().unwrap()]).ok().filter(|&p| p < n) {
+        chain.push(p);
+    }
+    chain.reverse(); // the root, then the tail down to its end
+    if chain.len() < 3 {
+        return;
+    }
+    let root_y = b.bind[chain[0]].y;
+    for (v, p) in m.pos.iter().enumerate() {
+        if p[1] >= root_y {
+            continue;
+        }
+        // the deepest node of the tail at or above the vertex
+        let k = chain[1..].iter().rev().find(|&&i| b.bind[i].y >= p[1]).copied().unwrap_or(chain[1]);
+        if let (Some(bs), Some(ws)) = (m.bones.get_mut(v), m.weights.get_mut(v)) {
+            *bs = [k as u8, 255, 255, 255];
+            *ws = [127, 0, 0, 0]; // a weight whole, as the meshes sum theirs (127)
+        }
+    }
 }
 
 /// The cape coloured: every layer's colour times `color` (0xRRGGBBAA; its
@@ -1283,7 +1320,10 @@ impl Frame {
                 return None;
             }
             let drop = (b.bind[root].y - b.bind[foot].y).max(1e-3);
-            let thigh = leg.iter().skip(1).position(|&i| (b.bind[i].x - b.bind[root].x).abs() > 0.03 * drop)? + 1;
+            // one foot named for both (the merfolk's tail's end, go-eqoa-server's
+            // race 32: petition "i dont see capes on mermaids"): the tail is both
+            // legs, from the root's first node down, so a cape hangs down it
+            let thigh = if b.ids[5] == b.ids[6] { 1 } else { leg.iter().skip(1).position(|&i| (b.bind[i].x - b.bind[root].x).abs() > 0.03 * drop)? + 1 };
             legs[s] = leg[thigh..].to_vec();
             // the foot's lowest node, the toes too
             let mut stack = vec![foot];
@@ -1518,6 +1558,40 @@ mod tests {
             lib.add(f, esf::Container::open(iso.read(f).ok()?).ok()?);
         }
         Some(lib)
+    }
+
+    /// The merfolk wear capes (go-eqoa-server's race 32; the owner, 2026-11-12:
+    /// "i dont see capes on mermaids"): each of their five bodies, given its hands
+    /// (`racebody::grant`), takes every style, on its own nodes, its tail both legs
+    /// (their NodeIDList names the tail's end for both feet); the cape hangs down
+    /// the back past the hips toward the tail's end, and below the hips is skinned
+    /// to the tail (`tail_skin`), so it moves with the tread and the swim. The control: the frame by the rule for
+    /// two feet finds no thigh off the middle on a tail.
+    #[test]
+    fn the_merfolk_wear_capes() {
+        let Some(lib) = char_lib() else { return };
+        for &id in crate::racebody::MERFOLK {
+            let (mut cs, _) = sprite(&lib, id);
+            let body = lib.build_model(lib.lookup(id as i32).unwrap()).unwrap();
+            let races = net::creation::Creation { all_classes: true, races: vec![net::creation::Race { id: 32, like: 8, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [id, id], name: "M".into(), short: "M".into(), desc: String::new() }] };
+            crate::racebody::grant(&mut cs, id, true, Some(&races));
+            let n = cs.h.nodes.len();
+            let f = Frame::of(&worn_bones(id, &cs), &body).unwrap_or_else(|| panic!("{id:08X}: a frame"));
+            assert_eq!((f.legs[0].clone(), f.legs[1].clone()), (vec![1, 2, 3, 4, 5], vec![1, 2, 3, 4, 5]), "{id:08X}: the tail both legs");
+            let mut two = worn_bones(id, &cs);
+            two.ids[6] = 4; // the control: two feet named apart, the rule for legs
+            assert!(Frame::of(&two, &body).is_none(), "{id:08X}: the control, no thigh off the middle");
+            let mut tails = 0;
+            for s in STYLES {
+                let m = model(&lib, Cape { style: s.id, color: 0 }, id, &cs).unwrap_or_else(|| panic!("{id:08X}: style {}", s.id));
+                assert!(m.triangles > 0 && m.bones.iter().zip(&m.weights).all(|(b, w)| (0..4).all(|k| w[k] == 0 || (b[k] as usize) < n)), "{id:08X} style {}: on its own nodes", s.id);
+                let on_tail = m.bones.iter().zip(&m.weights).any(|(b, w)| (0..4).any(|k| w[k] != 0 && (1..=5).contains(&b[k])));
+                let low = m.pos.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+                assert!(low < cs.h.nodes[0].bind.trans.y.0, "{id:08X} style {}: down the tail ({low:.2})", s.id);
+                tails += on_tail as usize;
+            }
+            assert_eq!(tails, STYLES.len(), "{id:08X}: every style skinned to the tail (`tail_skin`)");
+        }
     }
 
     /// A Jal'Raeth player wears a cape (the owner, 2026-11-11: "i dont see jal raethe
