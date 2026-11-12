@@ -301,7 +301,7 @@ or a browser (each described where it lives below):
   `raidplay.rs`): on a server that offers it (go-eqoa-server's 0x7E49; the answer 0x7E4A is always
   yes) a group's or a raid's `/readycheck` (the server's: a raid's leader or helper, anyone in a plain
   group) comes as 0x7E4B (u32 id, u8 seconds, the asker's name; 0 seconds closes it): a strip at the
-  top of the loot rolls' column, "<asker>: Are you ready?", Yes and No, the seconds left and a bar,
+  top of the loot rolls' column, "Are you ready?", Yes and No, the seconds left and a bar,
   the rolls a strip lower while it is up. It never stops the walk or takes a key of play: a click or a
   tap answers; R2 held and right give it the d-pad before the rolls (left and right, ✕ answers, △ or
   R2 let go hands it back), on a keyboard C held, the arrows and Enter. The answer goes as 0x7E56

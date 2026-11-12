@@ -3,8 +3,8 @@
 //! does not stop them from moving while the pop up is up. It expires after 30
 //! seconds"): the client's own, as the game has none. One strip, a check the
 //! server asked (go-eqoa-server's 0x7E4B, `net::readycheck::Check`), at the top
-//! of the loot rolls' column (`rollwnd`, which then starts a strip lower): who
-//! asks, "Are you ready?", Yes and No under it, the seconds left on a bar.
+//! of the loot rolls' column (`rollwnd`, which then starts a strip lower):
+//! "Are you ready?", Yes and No under it, the seconds left and a bar.
 //!
 //! It never takes the keys of play. A click (or a tap) on Yes or No answers;
 //! with R2 held (the chat box's history, mode 33, where the walk and the
@@ -24,7 +24,6 @@ pub const AT: [i32; 2] = [436, 164];
 pub const W: i32 = 196;
 pub const H: i32 = 52;
 const TEXT_X: i32 = 10;
-const TEXT_W: i32 = 150;
 const CHOICE_Y: i32 = 33;
 const CHOICE_X: [i32; 2] = [65, 131];
 const CHOICES: [&str; 2] = ["Yes", "No"];
@@ -174,20 +173,10 @@ impl Ready {
         let at = AT;
         r.blit(icon_id("black"), 0, at, [0, 0], [W, H], 3, if self.focused { 0.85 } else { 0.7 });
         vui.blit_frame(r, at, [W, H], &fp, 3, 1.0, true);
-        // "<asker>: Are you ready?", the asker's name cut to the room, and the
+        // "Are you ready?" (the petition's words; the asker's name has no room
+        // beside them at the game's font: the asker is the one told), and the
         // seconds left at the right
-        let mut name = wide(&o.asker);
-        let line = loop {
-            if name.is_empty() {
-                break wide("Are you ready?");
-            }
-            let mut l = name.clone();
-            l.extend(wide(": Are you ready?"));
-            if vui.string_width(r, &l) <= TEXT_W {
-                break l;
-            }
-            name.pop();
-        };
+        let line = wide("Are you ready?");
         vui.draw_string_ex(r, &line, at[0] + TEXT_X, at[1] + 7, if self.focused { yellow } else { white }, true);
         let secs = wide(&format!("{}", o.seconds(now)));
         let sw = vui.string_width(r, &secs);
