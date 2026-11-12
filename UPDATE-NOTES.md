@@ -11,7 +11,7 @@ is put on the page by `.github/workflows/notes.yml`.
 - **Barbarians can now choose a tattoo** when you create one: on the Customize Character page, under Face and the
   hair rows, the **Tattoo** row offers **Off**, **Bands** (the blue-grey blocks and bars) or **Crest** (the framed
   brow and eye band), on any of the four faces, **men and women alike**. A barbarian man's first step,
-  **Face's own**, keeps the face as the game paints it (faces 2 and 4 come with their woad).
+  **Face's own**, keeps the face as the game paints it (his second and fourth faces come with their own woad).
 - **Change it later** from character select: Options > **Customize Character**.
 - Other players with this client see your tattoo too. On a PS2 your barbarian shows the face you picked as the
   game has it. Needs a server that offers tattoos (the Heirloom Test Server).
