@@ -236,6 +236,12 @@ pub fn keep_disc() {
     call("keepDisc", "()V", &[]);
 }
 
+/// A web page opened from the game (`openurl::open`): the activity's VIEW
+/// intent, the device's browser.
+pub fn open_link(url: &str) {
+    call_text("openLink", Some(url));
+}
+
 // ---- the log
 
 #[link(name = "log")]

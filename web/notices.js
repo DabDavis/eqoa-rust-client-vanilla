@@ -129,3 +129,22 @@ window.eqoaGraphicsBack = (text) => {
   setTimeout(() => notice('gpu'), 60000);
 };
 window.eqoaCrash = ([title, detail]) => crash(title, detail);
+// A web page opened from the game (the client's web::open_link: Station's
+// Forgot Password on eqoaclassic) in a new tab. A key's or a touch's press is
+// the browser's gesture for it; a pad's is none, and a browser holds such a
+// tab back: then a notice with the link, a press of which is one.
+window.eqoaOpenLink = (url) => {
+  let w = null;
+  try {
+    w = window.open(url, '_blank');
+  } catch { /* held back */ }
+  if (w) {
+    try { w.opener = null; } catch { /* another origin's */ }
+    notice('link');
+    return;
+  }
+  notice('link', '', `Open ${url} in a new tab?`, [
+    ['Open', () => { window.open(url, '_blank', 'noopener'); notice('link'); }, true],
+    ['Dismiss', () => notice('link')],
+  ]);
+};

@@ -613,6 +613,17 @@ public class EqoaActivity extends NativeActivity {
                 .show());
     }
 
+    /** A web page opened from the game (android::open_link): the device's browser. */
+    public void openLink(final String url) {
+        runOnUiThread(() -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+            } catch (android.content.ActivityNotFoundException e) {
+                android.widget.Toast.makeText(this, url, android.widget.Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
     /** The run ended (android_main's end): the activity closes, and the process after it. */
     public void exitGame() {
         runOnUiThread(this::finishAndRemoveTask);

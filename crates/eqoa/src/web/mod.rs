@@ -305,6 +305,15 @@ pub fn problem(key: &str, text: &str) {
     call_page("eqoaProblem", &js_sys::Array::of2(&key.into(), &text.into()));
 }
 
+/// A web page opened from the game (`openurl::open`) in a new tab
+/// (`window.eqoaOpenLink`, web/notices.js): a press's key or touch is the
+/// browser's gesture for it; a tab the browser holds back (a pad's press is
+/// none) becomes a notice with the link to open.
+pub fn open_link(url: &str) {
+    log(&format!("opening {url}"));
+    call_page("eqoaOpenLink", &JsValue::from_str(url));
+}
+
 /// The server ended the connection in the world (`Play::disconnected`): the
 /// page goes back to its login screen with CLIENT's text for the reason
 /// (`window.eqoaDisconnected`), as the console's VIWndDisconnect shows it.
