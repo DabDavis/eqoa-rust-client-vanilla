@@ -955,6 +955,9 @@ pub enum Event {
     /// [`OP_RAID_MASTER_LOOT`]: the master looter's list for the corpse it
     /// opened, or none (over).
     MasterLoot(Option<crate::raid::MasterLoot>),
+    /// [`crate::readycheck::OP_READY_CHECK`]: a ready check asked, or over for
+    /// this client (0 seconds left).
+    ReadyCheck(crate::readycheck::Check),
     /// 0x0773 (`Msg0773`): an invitation from `id`.
     GroupInvite { id: u32, x: i32, name: String },
     /// 0x0774 (`Msg0774`): the invitation from `id` withdrawn.
@@ -1221,6 +1224,10 @@ pub struct Session {
     /// this connection, and what it was last told (none since the offer).
     pub raid_offer: bool,
     raid_asked: Option<bool>,
+    /// The same for the ready check's window
+    /// ([`crate::readycheck::OP_READY_OFFER`]).
+    pub ready_offer: bool,
+    ready_asked: Option<bool>,
     /// Whether the server offered item links ([`OP_ITEM_LINKS`]) on this
     /// connection, and what it was last told (none since the offer).
     pub item_links_offer: bool,
@@ -1408,6 +1415,8 @@ impl Session {
             dps_meter_asked: None,
             raid_offer: false,
             raid_asked: None,
+            ready_offer: false,
+            ready_asked: None,
             item_links_offer: false,
             item_links_asked: None,
             profanity_offer: false,
@@ -1707,6 +1716,28 @@ impl Session {
         let mut w = Writer::op(OP_RAID_ANSWER);
         w.u8(want as u8);
         self.send(&w.data);
+    }
+
+    /// The ready check's window: a server that offered it
+    /// ([`crate::readycheck::OP_READY_OFFER`]) is told whether to send checks
+    /// as windows (`want`), at once and afresh at another offer; one that
+    /// made no offer is told nothing.
+    pub fn agree_ready(&mut self, want: bool) {
+        if !self.ready_offer || self.ready_asked == Some(want) {
+            return;
+        }
+        self.ready_asked = Some(want);
+        self.send(&crate::readycheck::answer(want));
+    }
+
+    /// A ready check's answer ([`crate::readycheck::OP_READY_REPLY`]) to a
+    /// server that offered the window; false, and nothing sent, to any other.
+    pub fn send_ready_reply(&mut self, id: u32, ready: bool) -> bool {
+        if !self.ready_offer {
+            return false;
+        }
+        self.send(&crate::readycheck::reply(id, ready));
+        true
     }
 
     /// Item Links: a server that offered item links ([`OP_ITEM_LINKS`]) is told
@@ -2620,6 +2651,19 @@ impl Session {
                     self.raid_asked = None;
                 }
             }
+            // the ready check's window offered (again at every world entry):
+            // told afresh whether the client wants it (`agree_ready`)
+            crate::readycheck::OP_READY_OFFER => {
+                r.u8();
+                if !r.error {
+                    self.ready_offer = true;
+                    self.ready_asked = None;
+                }
+            }
+            crate::readycheck::OP_READY_CHECK => match crate::readycheck::read_check(&m.data[2.min(m.data.len())..]) {
+                Some(c) => ev.push(Event::ReadyCheck(c)),
+                None => eprintln!("net: a ready check of {} bytes not read", m.data.len()),
+            },
             OP_RAID_STATE => match crate::raid::read_state(&m.data[2.min(m.data.len())..]) {
                 Some(st) => ev.push(Event::RaidState(st)),
                 None => eprintln!("net: a raid state of {} bytes not read", m.data.len()),
@@ -3946,6 +3990,38 @@ mod tests {
         answers(&mut s);
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m);
         assert!(matches!(&ev[..], [Event::RaidRoster { rows, .. }] if *rows == want), "asked off, read as before: {ev:?}");
+    }
+
+    /// The ready check's window (0x7E49-0x7E4B, 0x7E56): answered only after an
+    /// offer, once, and afresh at another; a check read into an event, a
+    /// short one not; a reply sent only to a server that offered.
+    #[test]
+    fn the_ready_check_is_agreed_read_and_answered() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let ours = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        ours(&mut s);
+        s.agree_ready(true);
+        assert!(!s.send_ready_reply(3, true));
+        assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "no offer: nothing (the control)");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x49, 0x7E, 1]);
+        s.agree_ready(true);
+        s.agree_ready(true);
+        assert_eq!(ours(&mut s), [vec![0x4A, 0x7E, 1]], "once");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x49, 0x7E, 1]);
+        s.agree_ready(true);
+        assert_eq!(ours(&mut s), [vec![0x4A, 0x7E, 1]], "afresh at another offer");
+        assert!(s.send_ready_reply(3, false));
+        assert_eq!(ours(&mut s), [vec![0x56, 0x7E, 3, 0, 0, 0, 0]]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4B, 0x7E, 3, 0, 0, 0, 30, 3, b'A', b'n', b'n']);
+        assert!(matches!(&ev[..], [Event::ReadyCheck(c)] if c.id == 3 && c.seconds == 30 && c.asker == "Ann"), "{ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4B, 0x7E, 3, 0, 0, 0, 30, 3, b'A']);
+        assert!(!ev.iter().any(|e| matches!(e, Event::ReadyCheck(_))), "a short one: {ev:?}");
     }
 
     /// The raid's windows (0x7E42-0x7E48): answered only after an offer, once,

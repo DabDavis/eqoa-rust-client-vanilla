@@ -24,6 +24,8 @@ current.
   server none of it, and the start menu the game's; the raid list in its groups with a role icon on each health bar and the leader's and helper's moves between
   groups by a drag or Raid > Move to Group, the GM Jibrish's petition 1687, 2026-11-12: `raidlist::draw_groups`, go-eqoa-server's
   0x7E18 offer of 2 and a group byte after each 0x7E1A record, 0x7E48 ops 12 and 13; the role icons drawn on every server),
+  a group's or a raid's ready check on a server that offers it (the GM Jibrish's petition 1711, 2026-11-12: a strip atop
+  the rolls' column, Yes or No, 30 seconds, never stopping the walk: `readywnd`, go-eqoa-server's 0x7E49-0x7E4B, 0x7E56),
   the pet's effects in a row under its bar on a server that sends them (the server owner's of 2026-11-09, "put the
   buff icons under the pet name plate": `hud::pet_effects_pieces`, go-eqoa-server's 0x7E32/0x7E33, Extended > UI > HUD's
   Pet Effects, on by default; off, or on any other server, nothing is drawn),

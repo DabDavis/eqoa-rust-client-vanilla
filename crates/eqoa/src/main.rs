@@ -102,6 +102,7 @@ mod jump;
 mod livewords;
 mod hud;
 mod raidlist;
+mod readywnd;
 mod rollwnd;
 mod masterloot;
 mod damage;
