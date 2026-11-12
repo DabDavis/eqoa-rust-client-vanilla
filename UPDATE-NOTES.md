@@ -11,6 +11,14 @@ is put on the page by `.github/workflows/notes.yml`.
 - A Mermaid's helm now sits forward on her head, its front at her brow as on a human, instead of a little behind
   it with her face standing out of the front. Mermaids, mermen, sirens and sea kings, every helm.
 
+## 2026-11-12 · Square deletes in every text box
+- **On a controller, Square (□) now deletes a letter in a bug report or a help request**, the same as it does in the
+  chat line. After a keyboard key had been pressed (F3 for a bug report is one), the text boxes switch to their
+  short keyboard layout, and Square did nothing there. It now deletes on either layout, in every box you type in:
+  the chat line (in the world, in a trade and in a duel's wager), bug reports and help requests and their replies,
+  mail and tells, the auction's search and sell fields, the group finder, the fishing window, gear set names, quick
+  chat lines, map marker names, and the name, account and server fields before you enter the world.
+
 ## 2026-11-12 · Chat while trading
 - **You can chat during a trade.** With the trade window open, Enter opens its chat line, the same way it does in
   the world; `/` starts it with a slash, T with `/tell` and R with `/reply`. Clicking or tapping the chat box opens it

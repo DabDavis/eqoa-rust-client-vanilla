@@ -10,7 +10,8 @@
 //! here, `EQOA_SOFT_KEYBOARD=1` turns the option off); a pad or the touch
 //! screen in use shows the soft keyboard, driven by the d-pad, X, square
 //! (back) and circle (space) (on a keyboard: the arrows, E, Backspace and
-//! Space).
+//! Space). Square backs on the compact face too, the client's own: a
+//! controller sees that face once a keyboard's key was pressed.
 //!
 //! The client's own: the chat line's item links (`itemlink`, `TextLink`), each
 //! an item's name drawn in the links' purple and kept one unit: the caret
@@ -553,6 +554,22 @@ impl EditBox {
                 let ok = self.line_down(vui, r, now);
                 Self::sound(ok, cues);
             }
+            // □: back, on either face. `OnKeyDown` takes it on the soft
+            // keyboard's face alone (a PS2 shows the compact face only with a
+            // keyboard plugged in, whose Backspace backs); here the compact
+            // face is a controller's too once any key of a keyboard was
+            // pressed (`compact_face`, petition 1633), F3 for a bug report
+            // among them, and its □ did nothing there (a player's report,
+            // 2026-11-12: "square backspace missing when sending reports").
+            // It does not repeat while held, on either face.
+            133 => {
+                if self.text.is_empty() {
+                    cues.push(9);
+                } else {
+                    let ok = self.backspace(now);
+                    Self::sound(ok, cues);
+                }
+            }
             _ if pad_only() => {}
             142 => {
                 cues.push(11);
@@ -578,14 +595,6 @@ impl EditBox {
             135 => {
                 let ok = self.insert(b' ' as u16, now);
                 Self::sound(ok, cues);
-            }
-            133 => {
-                if self.text.is_empty() {
-                    cues.push(9);
-                } else {
-                    let ok = self.backspace(now);
-                    Self::sound(ok, cues);
-                }
             }
             134 => return self.press_key(vui, r, now, cues),
             _ => {}
@@ -1139,6 +1148,32 @@ mod tests {
         assert!(!compact_face(true, false), "the other setting, from the keyboard too");
         screen_touched();
         assert!(!compact_face(false, true), "a finger on the screen: no keyboard at hand");
+    }
+
+    /// Square (133) backs on either face, as the chat line's soft keyboard
+    /// has it: a character off before the caret, the refusal's sound (9) on
+    /// an empty box; held, it does not repeat. (`PAD_ONLY` is shared with
+    /// other tests running at once; Square's answer does not depend on it.)
+    #[test]
+    fn square_backs_on_either_face() {
+        let (vui, r) = (crate::pointer::testing::vui(), crate::pointer::testing::NullRaster);
+        for compact in [false, true] {
+            let mut e = EditBox::default();
+            e.set_text(&wide("abc"));
+            let mut cues = Vec::new();
+            set_pad_only(compact);
+            e.key(&vui, &r, 133, 0, &mut cues);
+            assert_eq!(String::from_utf16_lossy(&e.text), "ab", "compact {compact}");
+            assert_eq!(cues, vec![11]);
+            assert_eq!(e.repeat_key, 0, "no repeat while held");
+            e.key_up(133);
+            e.key(&vui, &r, 133, 0, &mut cues);
+            e.key(&vui, &r, 133, 0, &mut cues);
+            cues.clear();
+            e.key(&vui, &r, 133, 0, &mut cues);
+            assert!(e.text.is_empty());
+            assert_eq!(cues, vec![9], "an empty box refuses");
+        }
     }
 
     /// `MoveKey` steps over empty cells and wraps at the edges: from the

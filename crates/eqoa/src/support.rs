@@ -364,4 +364,37 @@ mod tests {
         p.chat_line("hello there");
         assert!(sent(&mut p).iter().all(|d| d[..2] != [0x0F, 0x7E]), "plain chat: no note");
     }
+
+    /// A controller's Square (133, `PadKeys`') backs in the bug report's text
+    /// as it does in the chat line, on either face of the editor: a
+    /// controller sees the compact one once a keyboard's key (F3) was
+    /// pressed, where it did nothing (a player's report, 2026-11-12). Both
+    /// by the pad's own route, `window_key`, to the window that has the keys.
+    #[test]
+    fn square_backs_in_the_bug_report_as_in_the_chat_line() {
+        let (vui, mut r) = (crate::pointer::testing::vui(), crate::pointer::testing::NullRaster);
+        let word = |t: &str| t.encode_utf16().collect::<Vec<u16>>();
+        for compact in [false, true] {
+            let mut p = play();
+            crate::editbox::set_pad_only(compact);
+            // the chat line (mode 2, R3's)
+            p.mode = 2;
+            p.edit.set_text(&word("hail"));
+            assert!(p.window_key(133, true));
+            p.window_key(133, false);
+            p.run_edit(&vui, &r);
+            assert_eq!(String::from_utf16_lossy(&p.edit.text), "hai", "the chat line, compact {compact}");
+            // F3's form, its text's editor up
+            p.mode = 0;
+            p.session.bug_reports = true;
+            assert!(p.open_bug_report());
+            p.run_support(&vui, &mut r);
+            p.support.request.editing = true;
+            p.support.request.edit.set_text(&word("the gate"));
+            assert!(p.window_key(133, true));
+            p.window_key(133, false);
+            p.run_support(&vui, &mut r);
+            assert_eq!(String::from_utf16_lossy(&p.support.request.edit.text), "the gat", "the bug report, compact {compact}");
+        }
+    }
 }
