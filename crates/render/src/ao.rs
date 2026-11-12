@@ -16,7 +16,11 @@
 //! normal out of its neighbours'. Twelve samples on a spiral round it reach
 //! `Settings::radius` in the world; each counts by how far it rises above
 //! the pixel's plane and fades to nothing at the radius, so a wall a step
-//! away darkens the floor at its foot and one across the room does not. A
+//! away darkens the floor at its foot and one across the room does not; a
+//! sample standing out almost straight toward the camera (the front of
+//! another model, a character before the ground behind it) counts for
+//! nothing, as the depth says nothing of how far that model reaches back:
+//! counted, it laid a dark aura round every model's outline. A
 //! sample's depth comes out of a pyramid of the depth, coarser the farther
 //! the sample, as Scalable Ambient Obscurance has it: the reads were most of
 //! the cost. That is done at a small size (`shift`: half the window's, a

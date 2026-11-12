@@ -37,6 +37,13 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - A tab or window in the back also skips the work that only shows on screen (shadows, lights, mist and plants), so
   it keeps its pace better while you play in another.
 
+## 2026-11-12 · Ambient Occlusion without the dark aura
+- **Ambient Occlusion no longer draws a dark aura round characters and models.** The ground, walls and sky seen
+  just past a character's outline (or a post's, a cactus's, a tree's) stayed their own colour instead of a grey
+  shadow that followed the model wherever it stood. Corners, the foot of a wall and the ground right at a
+  character's feet are still darkened as before. (Options > Extended > Graphics > Lighting > Ambient Occlusion;
+  it is still off unless you turn it on.)
+
 ## 2026-11-12 · Tips on the title screen
 - **The title screen now shows a tip** in the space under Play, Network Setup and Options, a new one every few
   seconds.
