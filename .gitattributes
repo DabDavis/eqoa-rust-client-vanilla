@@ -1,0 +1,4 @@
+# Shaders are spliced as text (render: sunshadow::shadowed_lit,
+# lightshadow::receivers_wgsl): their lines end \n on every checkout,
+# Windows (core.autocrlf) included.
+*.wgsl text eol=lf

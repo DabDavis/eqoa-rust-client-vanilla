@@ -6176,6 +6176,24 @@ impl App {
                         if let Some(f) = g.renderer.light_shadow_filter().filter(|_| light_shadows && dynamic) {
                             crate::say(&format!("light shadows' filter: {f:?}"));
                         }
+                        // what the options asked and what was made, on
+                        // which graphics API: a player's log says why a
+                        // shadow does not show (the options read from the
+                        // account's files, Dynamic Lighting off, a map refused)
+                        let made = |on: bool, made: bool| match (on, made, dynamic) {
+                            (false, _, _) => "off",
+                            (true, _, false) => "on, not drawn: Dynamic Lighting is off",
+                            (true, true, true) => "on, drawn",
+                            (true, false, true) => "on, NOT made",
+                        };
+                        crate::say(&format!(
+                            "lighting: Dynamic Lighting {}, Sun Shadows {}, Light Shadows {} ({:?}, {})",
+                            if dynamic { "on" } else { "off" },
+                            made(sun_shadows, g.renderer.sun_shadow_drawn().is_some()),
+                            made(light_shadows, g.renderer.light_shadow_drawn().is_some()),
+                            g.device.adapter_info().backend,
+                            g.device.adapter_info().name,
+                        ));
                     }
                     // the particles' blend as the options have it (Particles:
                     // PS2, the 16-bit frame's; Exact, eight bits a channel)

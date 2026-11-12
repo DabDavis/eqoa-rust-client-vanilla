@@ -2128,6 +2128,18 @@ fn ready<F: std::future::Future>(f: F) -> Option<F::Output> {
     }
 }
 
+/// A shader's text with its lines ended as this source's are (`\n`): a
+/// Windows checkout (git's `core.autocrlf`, the default there and on
+/// GitHub's Windows runners) ends `include_str!`'s lines `\r\n`, and the
+/// receivers' modules are made by finding lit.wgsl's lines in it
+/// (`sunshadow::shadowed_lit`, `lightshadow::receivers_wgsl`), which a `\r`
+/// left unfound: Sun Shadows and Light Shadows were never made in the
+/// Windows release (2026-11-12, a player's "the release shadows wasn't
+/// working, built from source it worked").
+pub(crate) fn lf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 pub(crate) fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,

@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Sun Shadows and Light Shadows on Windows
+- **Sun Shadows and Light Shadows now work in the Windows download.** Until now they did nothing there (the
+  options turned on, but no shadow was drawn); a copy built from the source code had them. Turn on **Dynamic
+  Lighting** too: both shadows need it (Options > Extended > Graphics > Lighting).
+
 ## 2026-11-12 · Loading tips without "Did you know"
 
 Every loading tip is now a plain sentence ("You can type /stuck to return to your bind point when you cannot move."), without the "Did you know" in front.

@@ -90,6 +90,22 @@ jobs:
         shell: bash
         run: cargo build --release --locked -p eqoa
 
+      # The lighting as this checkout builds it, on DirectX 12 (the runner
+      # has no GPU: WARP, Windows' own software device). Sun Shadows' and
+      # Light Shadows' shaders are made by finding lit.wgsl's lines in its
+      # text, and a Windows checkout's line ends hid them: every Windows
+      # release until 2026-11-12 made neither, silently (Linux's tests, here
+      # without a GPU, skip; render::lf, .gitattributes).
+      - name: Test the lighting on DirectX 12 (Windows)
+        if: matrix.os == 'windows'
+        shell: bash
+        env:
+          WGPU_BACKEND: dx12
+        run: |
+          set -o pipefail
+          cargo test --release --locked -p render --test lighting --test sun_shadows --test light_shadows -- --test-threads=1 2>&1 | tee lighting.log
+          if grep -q SKIP lighting.log; then echo "no DirectX 12 adapter: the lighting went untested"; exit 1; fi
+
       # A Windows program's main thread has the stack its header reserves,
       # and the game's first frame needs more than the 1 MB default
       # (crates/eqoa/build.rs): a build without 8 MB dies before it draws.

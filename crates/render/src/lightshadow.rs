@@ -468,7 +468,14 @@ const TENT: &str = "    // the texels round the point, their centres at whole nu
 /// `None` if lit.wgsl's lines are not there to change
 /// (tests::the_receivers_take_the_point_lines holds them to it).
 pub(crate) fn receivers_wgsl(sun: bool, filter: Filter) -> Option<String> {
-    let mut lit = include_str!("lit.wgsl").to_string();
+    receivers_from(include_str!("lit.wgsl"), include_str!("lightshadow.wgsl"), sun, filter)
+}
+
+/// `receivers_wgsl` from lit.wgsl's text `lit` and lightshadow.wgsl's
+/// `shadow`, their lines found whatever the checkout ended them with
+/// (`crate::lf`).
+fn receivers_from(lit: &str, shadow: &str, sun: bool, filter: Filter) -> Option<String> {
+    let mut lit = crate::lf(lit);
     if sun {
         lit = sunshadow::shadowed_lit(&lit)?;
     }
@@ -476,13 +483,13 @@ pub(crate) fn receivers_wgsl(sun: bool, filter: Filter) -> Option<String> {
         return None;
     }
     let lit = lit.replace(POINT_LINE, POINT_LINE_SHADOWED).replace(PLANT_LINE, PLANT_LINE_SHADOWED);
-    let shadow = include_str!("lightshadow.wgsl");
+    let shadow = crate::lf(shadow);
     let tent = format!("{TENT}{WIDE}");
     if shadow.matches(&tent).count() != 1 {
         return None;
     }
     let shadow = match filter {
-        Filter::Wide => shadow.to_string(),
+        Filter::Wide => shadow,
         Filter::Narrow => shadow.replace(WIDE, NARROW),
         Filter::One => shadow.replace(&tent, ONE),
     };
@@ -1151,6 +1158,23 @@ mod tests {
     /// lit.wgsl's point lines are there to change, once each, alone and
     /// after the sun's change: a change to either (another branch's) fails
     /// here, not as shadows that never come.
+    /// lit.wgsl and lightshadow.wgsl as a Windows checkout ends their lines
+    /// (`\r\n`, git's `core.autocrlf`, as the Windows release was built
+    /// until 2026-11-12, when it never made Light Shadows): every filter's
+    /// module, alone and with the sun, the one a `\n` checkout makes. The
+    /// control: the point line itself is not in the text as it stands.
+    #[test]
+    fn the_receivers_are_made_from_a_windows_checkout() {
+        let crlf = |s: &str| crate::lf(s).replace('\n', "\r\n");
+        let (lit, shadow) = (crlf(include_str!("lit.wgsl")), crlf(include_str!("lightshadow.wgsl")));
+        assert!(!lit.contains(POINT_LINE) && !shadow.contains(&format!("{TENT}{WIDE}")), "the control: unfound as the text stands");
+        for (sun, filter) in FILTERS {
+            let made = receivers_from(&lit, &shadow, sun, filter);
+            assert!(made.is_some(), "sun {sun} {filter:?}: made");
+            assert_eq!(made, receivers_wgsl(sun, filter), "sun {sun} {filter:?}: as a \\n checkout's");
+        }
+    }
+
     #[test]
     fn the_receivers_take_the_point_lines() {
         for (sun, filter) in FILTERS {
