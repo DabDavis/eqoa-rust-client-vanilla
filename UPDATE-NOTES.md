@@ -87,6 +87,14 @@ is put on the page by `.github/workflows/notes.yml`.
   feet. The skirt still covers some of them from behind.
 - Capes now show on Jal'Raeth players.
 
+## 2026-11-11 · Mermaids
+- On a server with the **Mermaid** race, a mermaid (or merman, or siren) treads water when she stands and swims when
+  she moves, on land as in the sea, and her attacks now show: she dives and strikes with her tail, where before she
+  floated still while she fought. You see it on your own character and on every other mermaid.
+- Mermaids hold a weapon in each hand and a shield on the left arm, wear chest armour, bracers and gloves over their
+  upper body (no legs or boots on a tail), and wear their helm on their head.
+- They wave, bow, point and cheer with their arms and head, the tail still treading water.
+
 ## 2026-11-11 · Auto-cast keeps your pet buffed
 - Auto-cast now works with **pet buffs**. A pet buff's effect shows on your pet, not on your own effects, so auto-cast
   used to think it had not landed, cast it again and turned the slot off after three casts. Now it looks for the buff

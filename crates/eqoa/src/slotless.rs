@@ -225,6 +225,9 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     // knight's helmeted head, crested up and back, stretched round it and 10 cm up
     HeadSeat { bodies: &[0xF51B_AB09, 0x4B24_FF7E], anchor: Anchor::Named, scale: [1.05; 3], offset: [0.0, 0.04, 0.0] },
     HeadSeat { bodies: &[0x491F_6347], anchor: Anchor::Named, scale: [1.15, 1.2, 1.35], offset: [0.0, 0.12, -0.02] },
+    // the merfolk (merman, mermaid, the two sirens), one skeleton: a head a
+    // little larger than a human's on a head node at the jaw
+    HeadSeat { bodies: &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C], anchor: Anchor::Head, scale: [1.1; 3], offset: [0.0, 0.22, 0.02] },
 ];
 
 /// The bodies a server's race may wear that have no head a helm can sit on:
@@ -505,8 +508,17 @@ pub fn dress(lib: &Library, id: i32, model: &mut esf::Model, cs: &CSprite<Ee>, l
 /// (go-eqoa-server's race 30, 2026-11-09), whose upper body has the human's names
 /// (spine, arms, hands, head) and whose legs float crossed under a robe with names
 /// of their own. Their item and footstep nodes hang off the root, so the fit by limbs
-/// finds no hands on them; their legs and boots go on their own crossed legs (`crossed_legs`).
-const NAMED_SHELLS: &[u32] = &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347];
+/// finds no hands on them; their legs and boots go on their own crossed legs (`crossed_legs`,
+/// `CROSSED_LEGS`). And the merfolk's four (go-eqoa-server's race 32, the Mermaid, petition
+/// 1620: merman, mermaid, the two sirens), whose spine and arms are given the human's names
+/// (`raceemote::MERFOLK_NAMES`): their NodeIDList names one hand for both and the tail's end
+/// for both feet, so the fit by limbs would find one arm and a leg down the tail; a tail
+/// wears no legs or boots.
+const NAMED_SHELLS: &[u32] = &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347, 0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C];
+
+/// The named shells whose legs and boots are worn on their own crossed legs
+/// (`crossed_legs`): the Jal'Raeth's three; the merfolk's tails wear none.
+const CROSSED_LEGS: &[u32] = &[0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347];
 
 /// The slots a named shell carries: chest, bracer, gloves.
 const NAMED_SLOTS: usize = 3;
@@ -526,7 +538,7 @@ const JAL_ANKLE: f32 = 0.73;
 /// (`apply`). Only the legs and boots; None for a body not one of theirs, a look
 /// with neither, or where no human is.
 fn crossed_legs(lib: &Library, id: i32, model: &esf::Model, cs: &CSprite<Ee>, art: Art) -> Option<Fit> {
-    if !NAMED_SHELLS.contains(&(id as u32)) || (art[3].is_none() && art[4].is_none()) {
+    if !CROSSED_LEGS.contains(&(id as u32)) || (art[3].is_none() && art[4].is_none()) {
         return None;
     }
     let r = reference(lib, cs.sex != 0)?;
@@ -745,7 +757,7 @@ fn named_shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<
         }
         if let Some(body) = lib.lookup(id).and_then(|r| lib.build_model(r)) {
             let parents: Vec<i32> = cs.h.nodes.iter().map(|n| n.parent).collect();
-            wrap(&mut tris, &body, &parents);
+            wrap(&mut tris, &body, &parents, wrap_reach(id as u32));
         }
         tris.iter().any(|t| !t.is_empty()).then(|| Rc::new(Shell { tris, layers: full.layers }))
     })();
@@ -764,6 +776,16 @@ fn named_shell_of(lib: &Library, id: i32, cs: &CSprite<Ee>, art: Art) -> Option<
 const WRAP_REACH: f32 = 0.12;
 const WRAP_GAP: f32 = 0.02;
 
+/// How far `wrap` looks on body `id`, and the nodes whose corners look no farther
+/// than `WRAP_REACH`: `WRAP_REACH` and none, but on the merfolk's women (the
+/// mermaid's and the sirens'), whose breasts stand farther out of the chest than
+/// a human woman's, 0.2 (at 0.12 their shells came out through the human's chest
+/// armour), but from a corner on the neck, the head or the hair (nodes 19-23: at
+/// 0.2 the collar was pushed out over the chin).
+fn wrap_reach(id: u32) -> (f32, &'static [u8]) {
+    if [0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C].contains(&id) { (0.2, &[19, 20, 21, 22, 23]) } else { (WRAP_REACH, &[]) }
+}
+
 /// Puts each corner of a shell carried onto a body (`named_shell_of`) outside the
 /// body's own surface where that surface stands over it: the human's chest is
 /// shallower than a Jal'Raeth's, whose own chest (and the knight's own plate) hid
@@ -778,7 +800,7 @@ const WRAP_GAP: f32 = 0.02;
 /// (a bulge of the body between corners: the knight's own plate), which push the
 /// corners they lie between; every copy of a corner (the same place on the same
 /// nodes) moves as far as the farthest push, so the shell keeps its seams.
-fn wrap(tris: &mut [Vec<[Corner; 3]>; SLOTS], body: &esf::Model, parents: &[i32]) {
+fn wrap(tris: &mut [Vec<[Corner; 3]>; SLOTS], body: &esf::Model, parents: &[i32], (reach, near_only): (f32, &[u8])) {
     let main = |v: usize| {
         let (b, w) = (body.bones.get(v).copied().unwrap_or_default(), body.weights.get(v).copied().unwrap_or_default());
         (0..4).max_by_key(|&k| w[k]).map_or(0, |k| b[k])
@@ -796,10 +818,11 @@ fn wrap(tris: &mut [Vec<[Corner; 3]>; SLOTS], body: &esf::Model, parents: &[i32]
         if n == Vec3::ZERO {
             return 0.0;
         }
+        let far_as = if ours.iter().any(|b| near_only.contains(b)) { WRAP_REACH } else { reach };
         let mut hits: Vec<(f32, bool)> = faces
             .iter()
             .filter(|(_, nodes, _)| nodes.iter().any(|&a| ours.iter().any(|&b| near(a, b))))
-            .filter_map(|(f, _, way)| ray_hits(p, n, f).filter(|&t| t > 0.0 && t <= WRAP_REACH).map(|t| (t, way.dot(n) > 0.0)))
+            .filter_map(|(f, _, way)| ray_hits(p, n, f).filter(|&t| t > 0.0 && t <= far_as).map(|t| (t, way.dot(n) > 0.0)))
             .collect();
         hits.sort_by(|a, b| a.0.total_cmp(&b.0));
         let (mut far, mut inside) = (0.0f32, 0u32);
@@ -2751,7 +2774,7 @@ mod tests {
     fn a_jalraeth_wears_a_humans_upper_armour() {
         let Some(lib) = disc() else { return };
         let t = Tables::retail();
-        for id in NAMED_SHELLS.iter().map(|&b| b as i32) {
+        for id in CROSSED_LEGS.iter().map(|&b| b as i32) {
             let r = lib.lookup(id).unwrap();
             let model = lib.build_model(r).unwrap();
             let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
@@ -2785,7 +2808,12 @@ mod tests {
     fn a_jalraeths_chest_armour_is_seen_from_the_front() {
         let Some(lib) = disc() else { return };
         let t = Tables::retail();
-        for id in NAMED_SHELLS.iter().map(|&b| b as i32) {
+        // the Jal'Raeth's three, then the merfolk's four (petition 1620), whose
+        // chest in the bind pose is lower (between the waist at 0.6 and the
+        // shoulders at 0.92) and narrower; the mermaid's and the sirens'
+        // breasts and shells came out through it at `wrap`'s 0.12
+        for (k, id) in NAMED_SHELLS.iter().map(|&b| b as i32).enumerate() {
+            let merfolk = k >= 3;
             let r = lib.lookup(id).unwrap();
             let model = lib.build_model(r).unwrap();
             let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
@@ -2801,7 +2829,7 @@ mod tests {
             let (mut rays, mut armour) = (0, 0);
             for gy in 0..12 {
                 for gx in 0..9 {
-                    let o = Vec3::new(-0.16 + 0.04 * gx as f32, 1.25 + 0.025 * gy as f32, 2.0);
+                    let o = if merfolk { Vec3::new(-0.12 + 0.03 * gx as f32, 0.67 + 0.02 * gy as f32, 2.0) } else { Vec3::new(-0.16 + 0.04 * gx as f32, 1.25 + 0.025 * gy as f32, 2.0) };
                     let first = tris.iter().filter_map(|(f, a)| ray_hits(o, Vec3::NEG_Z, f).filter(|&d| d > 0.0).map(|d| (d, *a))).min_by(|a, b| a.0.total_cmp(&b.0));
                     if let Some((_, a)) = first {
                         rays += 1;
@@ -2811,7 +2839,10 @@ mod tests {
             }
             let share = armour as f32 / rays.max(1) as f32;
             eprintln!("{id:#010x}: {armour} of {rays} rays meet the chest armour first ({:.0}%)", share * 100.0);
-            assert!(rays >= 100 && share >= 0.95, "{id:#010x}: the chest armour seen from the front ({:.0}%)", share * 100.0);
+            // the merman's chin sits at his shoulders' height and comes out in
+            // front of the human's collar (a few rays at the top meet it)
+            let least = if merfolk { 0.9 } else { 0.95 };
+            assert!(rays >= 100 && share >= least, "{id:#010x}: the chest armour seen from the front ({:.0}%)", share * 100.0);
         }
     }
 
@@ -2851,7 +2882,7 @@ mod tests {
     fn a_jalraeths_legs_wear_leggings_and_boots() {
         let Some(lib) = disc() else { return };
         let t = Tables::retail();
-        for id in NAMED_SHELLS.iter().map(|&b| b as i32) {
+        for id in CROSSED_LEGS.iter().map(|&b| b as i32) {
             let r = lib.lookup(id).unwrap();
             let model = lib.build_model(r).unwrap();
             let cs = sprite_of(&lib, id as u32);

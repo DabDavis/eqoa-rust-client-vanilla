@@ -152,6 +152,7 @@ mod tracker;
 mod quickchat;
 mod racebody;
 mod raceemote;
+mod seabody;
 mod racelabel;
 mod raceopts;
 mod wisp;

@@ -591,6 +591,19 @@ or a browser (each described where it lives below):
   hang under), what they hold in their hands (`racebody::HAND_SEATS`: a node under each hand and the left forearm
   as the human's item nodes sit, in place of their own item nodes at the knee, where the knights' blade discs float),
   and the human's emotes on their upper body (`raceemote::TABLE`).
+- **The Mermaid** (a race of go-eqoa-server's own, 32; the GM Jibrish's petition 1620: "Add mermaid as a playable
+  race ... It works functionally the same as the others"): the merfolk's four bodies (the merman, the mermaid and the
+  two sirens of Odus, `racebody::MERFOLK`), one 24-node skeleton and a sea creature's play list (0, 12 swim, 13 tread,
+  14, 34, 44 the swimming attack: no walk and no swing of its own). The player's own character treads water standing
+  and swims moving, on land too (`seabody`: its walk's gait shown as the water's), so a swing plays its attack
+  (`SetAnimation` turns an attack into 44 only while the body plays 12, 13 or 44); every other player sees the same
+  from the server (byte 58, go-eqoa-server's `swimmerbody.go`). Their spine and arms have names of their own and run
+  as the human's do, so they are given the human's names (`raceemote::MERFOLK_NAMES`): the human's emotes move their
+  upper body, the human's chest, bracers and gloves are carried onto it (`slotless::named_shell_of`; the women's
+  breasts and shells wrapped at 0.2, `slotless::wrap_reach`), no legs or boots on the tail. Their NodeIDList names one
+  hand for both items and none for the shield: they hold their items in both hands and the shield on the left forearm
+  (`racebody::HAND_SEATS`), and their helm sits on the head node (`slotless::HEAD_SEATS`). A PS2 draws a mermaid
+  player's own character in its idle and its own swings as nothing.
 - **Capes**, on a server that has them (go-eqoa-server's `world.capes`, the Heirloom Test
   Server's; the server owner, 2026-11-08: "lets add a new equip slot for heirloom server only.
   capes for all. there are many capes we can borrow from for various styles."; `cape`): the
