@@ -35,6 +35,24 @@ pub const PANEL: [i32; 2] = [37, 377];
 /// where its size says it belongs).
 pub const PLATE: ([i32; 2], [i32; 2]) = ([VIEWPORT[0], VIEWPORT[1]], [VIEWPORT[2] - VIEWPORT[0] + 1, VIEWPORT[3] - VIEWPORT[1] + 1]);
 
+/// The lines under the character shown (`OnDrawSelf`'s "Level N" and its class,
+/// words 503 and the class's): on a server that sends more of each character
+/// (`net::selectinfo`, the server owner's of 2026-11-12: "let it be Level 1 / 0
+/// CMs / Ratman / Alchemist") its mastery points and its own race's name between
+/// them, the server's name for a race of its own, else `race_name`'s (the game's
+/// words; a race creation was told of, its own).
+pub fn info_lines(c: &CharRecord, word: &dyn Fn(i32) -> Vec<u16>, race_name: &dyn Fn(i32) -> Vec<u16>) -> Vec<Vec<u16>> {
+    let mut level = word(503);
+    level.extend(wide(&format!(" {}", c.level as u32)));
+    let mut out = vec![level];
+    if let Some(info) = &c.info {
+        out.push(wide(&format!("{} CM{}", info.cms, if info.cms == 1 { "" } else { "s" })));
+        out.push(if info.race_name.is_empty() { race_name(info.race as i32) } else { wide(&info.race_name) });
+    }
+    out.push(word(get_class(c.class).name));
+    out
+}
+
 /// `GetFrameRate()` (name the decomp's guess): the level cap, 60 with
 /// Frontiers' expansion bit, else 50. A character at it stands in the
 /// capped hall (`ShowCharacter`).
@@ -450,11 +468,15 @@ impl CharSelect {
         if self.sel < count {
             let c = &chars[self.sel as usize];
             if c.level > 0 {
-                let mut t = word(503);
-                t.extend(wide(&format!(" {}", c.level as u32)));
-                vui.draw_centered_string_ex(r, &t, 501, 350, white, 0, true);
+                // the game's two lines (level, class) at 350 and a line on,
+                // or four from a server that sends more (`info_lines`), the
+                // last where the game's last is
                 let fh = vui.font_height(r);
-                vui.draw_centered_string_ex(r, &word(get_class(c.class).name), 501, fh + 346, white, 0, true);
+                let lines = info_lines(c, &word, &|race| super::create::tables::race_name(vui, race));
+                let first = 350 - (fh - 4) * (lines.len() as i32 - 2);
+                for (i, t) in lines.iter().enumerate() {
+                    vui.draw_centered_string_ex(r, t, 501, first + (fh - 4) * i as i32, white, 0, true);
+                }
             }
         } else {
             vui.blit_rect(r, 91, PLATE.0, PLATE.1, 0, 1.0);
@@ -824,6 +846,27 @@ mod tests {
 
     fn rec(name: &str, id: i64) -> CharRecord {
         CharRecord { name: name.into(), server_id: id, level: 1, ..Default::default() }
+    }
+
+    /// The lines under the character: the game's two (level, class) from a
+    /// server that sends nothing more (the control); four from one that does,
+    /// the mastery points ("1 CM" alone singular) and the race between them, a
+    /// server's race by the server's name, a game race in the game's words.
+    #[test]
+    fn the_info_lines() {
+        let word = |id: i32| wide(&format!("w{id}"));
+        let race_name = |race: i32| wide(&format!("race{race}"));
+        let text = |c: &CharRecord| info_lines(c, &word, &race_name).iter().map(|l| String::from_utf16_lossy(l)).collect::<Vec<_>>();
+        let mut c = CharRecord { level: 1, class: 14, ..rec("Squeak", 8) };
+        let alchemist = String::from_utf16_lossy(&word(get_class(14).name));
+        assert_eq!(text(&c), ["w503 1".to_string(), alchemist.clone()], "the control: the game's two");
+        c.info = Some(net::selectinfo::Info { race: 24, race_name: "Ratman".into(), cms: 0, rows: vec![] });
+        assert_eq!(text(&c), ["w503 1", "0 CMs", "Ratman", &alchemist]);
+        c.info = Some(net::selectinfo::Info { race: 4, race_name: String::new(), cms: 1, rows: vec![] });
+        assert_eq!(text(&c), ["w503 1", "1 CM", "race4", &alchemist]);
+        c.level = 60;
+        c.info = Some(net::selectinfo::Info { race: 31, race_name: "Wisp".into(), cms: 1500, rows: vec!["wispcolor".into()] });
+        assert_eq!(text(&c), ["w503 60", "1500 CMs", "Wisp", &alchemist]);
     }
 
     /// `ShowCharacter`'s place: the race's, or the capped hall for the

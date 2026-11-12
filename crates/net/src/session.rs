@@ -191,6 +191,17 @@ pub const OP_CRASH_REPORT: u16 = 0x7E65;
 /// u32 ticket, the petition it was filed as (0: not kept, and not to be sent
 /// again) ([`Session::crash_filed`]).
 pub const OP_CRASH_FILED: u16 = 0x7E66;
+/// go-eqoa-server's own, no retail message either: more of each character at
+/// select (`selectinfo`), a u32 after the opcode, both ways. The server offers it
+/// (1) after the session's first character list; this client answers 1 at once and
+/// is sent [`OP_SELECT_INFO_DATA`] after every list and at its answer. A PS2 ignores
+/// the offer; a server that never makes one gets no answer, and select shows the
+/// game's lines.
+pub const OP_SELECT_INFO: u16 = 0x7E67;
+/// Each listed character's own race, its race's name, its mastery points and the
+/// rows its Customize re-chooses (`selectinfo::read`), by server id, the whole
+/// list each time ([`Session::select_info`]).
+pub const OP_SELECT_INFO_DATA: u16 = 0x7E68;
 /// The most bytes of a crash report this client sends, whatever an offer says.
 pub const CRASH_REPORT_MOST: usize = 12_000;
 /// go-eqoa-server's own, no retail message either: any member of a group may
@@ -1182,6 +1193,10 @@ pub struct Session {
     /// knows each by ([`OP_CAPES_IN_VIEW`]); `capes_changed` counts the
     /// messages, so what draws them sees a new one.
     pub cape_list: std::collections::HashMap<i64, crate::cape::Cape>,
+    /// More of each listed character, by server id ([`OP_SELECT_INFO_DATA`]): its
+    /// own race and its name, its mastery points, the rows Customize re-chooses;
+    /// empty from a server that sends none.
+    pub select_info: std::collections::HashMap<i64, crate::selectinfo::Info>,
     pub capes_in_view: std::collections::HashMap<u32, crate::cape::Cape>,
     pub capes_changed: u64,
     /// The server offered the jump ([`OP_JUMP`]) and this client took it (the
@@ -1408,6 +1423,7 @@ impl Session {
             capes: false,
             item_lists: [ITEM_LIST_DISC; 2],
             cape_list: Default::default(),
+            select_info: Default::default(),
             capes_in_view: Default::default(),
             capes_changed: 0,
             jumps: false,
@@ -2476,6 +2492,16 @@ impl Session {
                     self.capes_changed += 1;
                 }
                 None => debug_line(&format!("[net] capes: {} bytes not read", m.data.len())),
+            },
+            // more of each character at select offered: taken (`selectinfo`)
+            OP_SELECT_INFO => {
+                if r.u32() != 0 && !r.error {
+                    self.send_op_int(OP_SELECT_INFO, 1);
+                }
+            }
+            OP_SELECT_INFO_DATA => match crate::selectinfo::read(&m.data[2.min(m.data.len())..]) {
+                Some(list) => self.select_info = list.into_iter().map(|(id, i)| (id as i64, i)).collect(),
+                None => debug_line(&format!("[net] select info: {} bytes not read", m.data.len())),
             },
             // creation's races offered: taken (the create pages offer them)
             OP_CREATION_OFFER => {
@@ -5131,6 +5157,37 @@ mod tests {
     // The controls: an offer cut short or of 0 is neither answered nor kept, a
     // session never offered capes keeps no list sent to it anyway, and a list cut
     // short changes nothing.
+    // The select info's offer (0x7E67) is answered 1 at once and its list
+    // (0x7E68) kept by server id, each message the whole of it. The controls: an
+    // offer cut short or of 0 is not answered, and a list that does not read
+    // leaves the one before.
+    #[test]
+    fn the_select_info_is_answered_and_kept() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        answers(&mut s);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x67, 0x7E, 1, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x67, 0x7E, 0, 0, 0, 0]);
+        assert_eq!(answers(&mut s), [], "the controls: cut short, or 0");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x67, 0x7E, 1, 0, 0, 0]);
+        assert_eq!(answers(&mut s), [(251, vec![0x67, 0x7E, 1, 0, 0, 0])]);
+        let mut m = OP_SELECT_INFO_DATA.to_le_bytes().to_vec();
+        m.extend(crate::selectinfo::tests::sample());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        assert_eq!(s.select_info.len(), 3);
+        assert_eq!(s.select_info.get(&8).map(|i| (i.race, i.race_name.as_str(), i.cms)), Some((24, "Ratman", 900)));
+        assert_eq!(s.select_info.get(&9).map(|i| i.rows.clone()), Some(vec!["wispcolor".to_string()]));
+        m.truncate(m.len() - 1);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m);
+        assert_eq!(s.select_info.len(), 3, "the control: one cut short leaves the last");
+    }
+
     #[test]
     fn the_cape_offer_is_answered_and_its_lists_kept() {
         let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
