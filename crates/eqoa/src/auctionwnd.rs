@@ -1516,13 +1516,14 @@ mod tests {
         assert_eq!(g.w.cursor, 2);
     }
 
-    /// The form opens on the Max. Level a server's patch hooks (Sandstorm's
-    /// S2: 60), retail's 50 without one (the control).
+    /// The form opens on the Max. Level a server's patch hooks (a patch's 55
+    /// here), and on 60 without one (petition 1845: the disc's 50 hid level 60
+    /// items on a server with no S2).
     #[test]
     fn the_form_opens_on_the_patchs_level() {
-        let patched = crate::s2::Rules { auction_max_level: 60, ..crate::s2::Rules::retail() };
-        assert_eq!(crate::s2::with_rules(patched, || Rig::new().w.max_level), 60);
-        assert_eq!(Rig::new().w.max_level, 50);
+        let patched = crate::s2::Rules { auction_max_level: 55, ..crate::s2::Rules::retail() };
+        assert_eq!(crate::s2::with_rules(patched, || Rig::new().w.max_level), 55);
+        assert_eq!(Rig::new().w.max_level, 60);
     }
 
     #[test]
@@ -1537,7 +1538,7 @@ mod tests {
         // the default form: no price bound (16 not set: 0x7FFFFFFF is past
         // 999999999 only after the draw clamps it), nothing else
         let q = &g.a.query;
-        assert_eq!((q.kind, q.p9c, q.pa0, q.pa4, q.pa8, q.pbc), (0, 0xFFFF_FFFF, 0xFFFF_FFFF, 1, 50, true));
+        assert_eq!((q.kind, q.p9c, q.pa0, q.pa4, q.pa8, q.pbc), (0, 0xFFFF_FFFF, 0xFFFF_FFFF, 1, 60, true));
         // negative control: with the max price clamped by a draw, kind 16
         g.w.max_price = 999_999;
         g.out.clear();

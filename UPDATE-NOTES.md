@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · The auction search reaches level 60 items by default
+- The auction's search form now opens with **Max. Level 60** (it was 50, the disc's own), so level 60 items show
+  without changing it first. A server whose patch sets its own maximum still uses that one.
+
 ## 2026-11-12 · Your mercenary's menu no longer leaves its info box on screen
 - Pressing □ (Q) on **your own** mercenary now opens its menu alone: its info box no longer stays on screen beside
   the menu and after you close it. □ on anyone else's mercenary still shows its info box (name, class, level).

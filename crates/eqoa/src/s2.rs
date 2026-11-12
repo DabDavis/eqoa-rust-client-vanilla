@@ -1101,7 +1101,9 @@ impl Rules {
             player_search: false,
             damage_rgb: false,
             commands_to_server: false,
-            auction_max_level: 50,
+            // the disc's 50; every server vanilla plays goes to 60 (Sandstorm's S2 hooks 60; eqoaclassic's
+            // petition 1845, 2026-11-12: "Auction max level defaults to 50 instead of 60")
+            auction_max_level: 60,
             sell_stack: StackTest::Below(2),
             guild_cap: 128,
             worlds: None,
@@ -1695,17 +1697,18 @@ mod tests {
             assert_eq!(r.source, "retail");
             assert!(r.image.is_none() && r.worlds.is_none() && r.tints.is_none());
             assert!(!r.player_search && !r.damage_rgb);
-            assert_eq!((r.armor_set_limit, r.robe_limit, r.auction_max_level, r.sell_stack, r.guild_cap), (9, 4, 50, StackTest::Below(2), 128));
+            assert_eq!((r.armor_set_limit, r.robe_limit, r.auction_max_level, r.sell_stack, r.guild_cap), (9, 4, 60, StackTest::Below(2), 128));
             assert_eq!(r.cust(), vi::cust::Tables::retail());
             assert_eq!(r.world_file(5).as_deref(), Some("SECRETS.ESF"));
             assert_eq!(r.world_file(6), None);
         }
         // the control: a patch that hooks the auction level is not retail
-        let mut p = rec(at::CLIENT_AUCTION_LEVEL, &0x2405_003Cu32.to_le_bytes());
+        // (a hook of 55: no patch's 60 is the default too, petition 1845)
+        let mut p = rec(at::CLIENT_AUCTION_LEVEL, &0x2405_0037u32.to_le_bytes());
         p.extend(tail(&[]));
         std::fs::write(dir.join("S2"), &p).unwrap();
         let r = Rules::from_dir(&dir);
-        assert_eq!((r.source.as_str(), r.auction_max_level), ("S2", 60));
+        assert_eq!((r.source.as_str(), r.auction_max_level), ("S2", 55));
         assert_ne!(r.auction_max_level, retail.auction_max_level);
         assert_eq!(r.sell_stack, StackTest::Below(2), "no record at CanSell: retail's test");
         // and one that rewrites CanSell's test
