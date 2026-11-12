@@ -460,7 +460,18 @@ fn first_frames(rig: &Rig, clips: &[&Anim<Ee>]) -> Vec<Frame<Ee>> {
 /// the human's below it (a spine of other names bends as the human's), and
 /// one with nothing of the human's below it (a tail, a wing, a third finger)
 /// keeps the body's idle's first frame.
-pub fn retarget(human: &Rig, human_idle: &[Anim<Ee>], clips: &[Anim<Ee>], body: &Rig, idle: [&Anim<Ee>; 2], base: Base) -> [Anim<Ee>; 2] {
+/// `hover` (an emote's: the idle's frames to one of the clip's): when the
+/// body hovers (`hovers`: its idle holds every node clear of the ground, a
+/// merfolk treading water, a gargoyle on its wings, a Jal'Raeth floating
+/// cross-legged), its root keeps the idle's place under the emote, frame by
+/// frame as the idle plays on, at the human's move across but none up or down,
+/// and every node with nothing of the human's below it (the tail, the
+/// wings, the crossed legs) plays on as the idle plays it: the owner,
+/// 2026-11-12, "when mermaid, gargoyle, floating models emote they sink to
+/// the ground while they do it, lets keep them in the air" (the root was the
+/// bind pose's, at the ground, the hover being the idle's). A body on the
+/// ground, or `hover` false (the fall, the landing, the swim), is as before.
+pub fn retarget(human: &Rig, human_idle: &[Anim<Ee>], clips: &[Anim<Ee>], body: &Rig, idle: [&Anim<Ee>; 2], base: Base, hover: Option<f32>) -> [Anim<Ee>; 2] {
     let n = clips.iter().map(|a| a.num_frames).max().unwrap_or(1).max(1);
     // which clip node drives each human node
     let mut drives: HashMap<usize, (usize, i32)> = HashMap::new();
@@ -477,6 +488,28 @@ pub fn retarget(human: &Rig, human_idle: &[Anim<Ee>], clips: &[Anim<Ee>], body: 
         Base::Idle => (first_frames(human, &human_idle.iter().collect::<Vec<_>>()), first_frames(body, &idle)),
     };
     let bidle_l = first_frames(body, &idle);
+    // a hovering body: each of its nodes the idle drives, at the idle's frame
+    // `f` emote frames in (looping)
+    let hover = hover.filter(|_| hovers(body, &bidle_l));
+    let mut idle_drives: Vec<Option<(usize, i32)>> = vec![None; body.parent.len()];
+    for (k, a) in idle.iter().enumerate() {
+        for &(rid, first) in &a.nodes {
+            if let Some(&b) = body.by_ref.get(&rid)
+                && idle_drives[b].is_none()
+            {
+                idle_drives[b] = Some((k, first));
+            }
+        }
+    }
+    let idle_at = |b: usize, f: i32| -> Frame<Ee> {
+        match (hover, idle_drives[b]) {
+            (Some(r), Some((k, first))) => {
+                let n = idle[k].num_frames.max(1);
+                frame_of(idle[k], first, ((f as f32 * r) as i32).rem_euclid(n))
+            }
+            _ => bidle_l[b],
+        }
+    };
     let hbase = human.world(&hbase_l.iter().map(|f| gq(&f.rot)).collect::<Vec<_>>());
     let bbase = body.world(&bbase_l.iter().map(|f| gq(&f.rot)).collect::<Vec<_>>());
     // the human node each body node turns as: its own, or the one holding
@@ -535,7 +568,8 @@ pub fn retarget(human: &Rig, human_idle: &[Anim<Ee>], clips: &[Anim<Ee>], body: 
         for &b in &order {
             let p = body.parent[b];
             let pg = if p >= 0 && (p as usize) != b { bg[p as usize] } else { GQuat::IDENTITY };
-            let own = bidle_l[b];
+            let own = idle_at(b, f);
+            let root = !(p >= 0 && (p as usize) != b);
             let (local, g) = match (mine[b], held[b]) {
                 (Some(h), _) => {
                     let g = (hg[h] * hbase[h].inverse()) * bbase[b];
@@ -544,7 +578,12 @@ pub fn retarget(human: &Rig, human_idle: &[Anim<Ee>], clips: &[Anim<Ee>], body: 
                     let hp = human.parent[h];
                     let hpg = if hp >= 0 && (hp as usize) != h { hg[hp as usize] } else { GQuat::IDENTITY };
                     let moved = hpg * (gv(&hl[h].trans) - gv(&hbase_l[h].trans));
-                    let t = gv(&bbase_l[b].trans) + pg.inverse() * moved * k;
+                    let t = if hover.is_some() && root {
+                        // hovering: the idle's place, the human's move across only
+                        gv(&own.trans) + (moved * k).with_y(0.0)
+                    } else {
+                        gv(&bbase_l[b].trans) + pg.inverse() * moved * k
+                    };
                     (Frame { rot: eq(pg.inverse() * g), scale: own.scale, trans: ev(t) }, g)
                 }
                 (None, Some(h)) => {
@@ -591,6 +630,33 @@ fn size_ratio(human: &Rig, body: &Rig) -> f32 {
     r[r.len() / 2]
 }
 
+/// How far clear of the ground (model units) every node of a body's idle
+/// must be for the body to hover: the merfolk's lowest node is 0.84 to 0.98
+/// up, the gargoyles' 0.83, the Jal'Raeth's crossed legs 0.27 (its bob
+/// at its lowest 0.20); every body on its feet has one within 0.07 of it.
+pub const HOVER_CLEAR: f32 = 0.15;
+
+/// Each node's place in the model, the local frames `local` taken down from
+/// the root (`ProcessHierarchy`: rotation, scale and place, a node's world its
+/// parent's times its own).
+fn places(rig: &Rig, local: &[Frame<Ee>]) -> Vec<Vec3> {
+    let mut world: Vec<Option<glam::Mat4>> = vec![None; rig.parent.len()];
+    for b in rig.order() {
+        let l = &local[b];
+        let m = glam::Mat4::from_scale_rotation_translation(Vec3::splat(l.scale.0), gq(&l.rot), gv(&l.trans));
+        let p = rig.parent[b];
+        let pm = if p >= 0 && (p as usize) != b { world[p as usize].unwrap_or(glam::Mat4::IDENTITY) } else { glam::Mat4::IDENTITY };
+        world[b] = Some(pm * m);
+    }
+    world.iter().map(|m| m.map_or(Vec3::ZERO, |m| m.w_axis.truncate())).collect()
+}
+
+/// Whether a body hovers: in its idle's first frame (`idle`, local) every node
+/// is `HOVER_CLEAR` or more off the ground.
+pub fn hovers(rig: &Rig, idle: &[Frame<Ee>]) -> bool {
+    places(rig, idle).iter().all(|p| p.y >= HOVER_CLEAR)
+}
+
 /// The human whose emotes a body borrows: its skeleton and its idle's
 /// clips (what `Base::Idle` measures from).
 pub struct Human {
@@ -608,7 +674,8 @@ impl Human {
     /// The human's `action` carried onto `cs` (its clips in `sc`): the two
     /// layers' clips and the play speed, or `None` where the human or the
     /// sprite lacks what it takes.
-    pub fn carry(&self, lib: &Library, action: i32, cs: &CSprite<Ee>, sc: &AnimScene<Ee>, base: Base) -> Option<([Anim<Ee>; 2], F<Ee>)> {
+    /// `hover`: an emote, which a hovering body plays in the air (`retarget`).
+    pub fn carry(&self, lib: &Library, action: i32, cs: &CSprite<Ee>, sc: &AnimScene<Ee>, base: Base, hover: bool) -> Option<([Anim<Ee>; 2], F<Ee>)> {
         let row = row(lib, HUMAN, action)?;
         let clips: Vec<Anim<Ee>> = row.clips.iter().filter_map(|&c| clip(lib, c)).collect();
         let idle = cs.entries[0].animation;
@@ -618,7 +685,12 @@ impl Human {
             return None;
         }
         let body = Rig::of(cs, &sc.ref_maps[cs.h.ref_map]);
-        Some((retarget(&self.rig, &self.idle, &clips, &body, [&sc.anims[i0], &sc.anims[i1]], base), row.weight))
+        // the idle's frames to one of the emote's: each clip's rate times
+        // its entry's speed
+        let rate = |a: &Anim<Ee>, w: F<Ee>| a.play_rate.0 * a.play_speed.0 * w.0;
+        let r = rate(&sc.anims[i0], cs.entries[0].weight) / rate(&clips[0], row.weight);
+        let hover = (hover && r.is_finite() && r > 0.0).then_some(r);
+        Some((retarget(&self.rig, &self.idle, &clips, &body, [&sc.anims[i0], &sc.anims[i1]], base, hover), row.weight))
     }
 }
 
@@ -647,7 +719,7 @@ pub fn put(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, poses: [
             }
             Pose::Human => {
                 let human = human.get_or_insert_with(|| Human::load(lib));
-                let Some(([a, b], weight)) = human.as_ref().and_then(|h| h.carry(lib, e as i32, cs, sc, BASE)) else { continue };
+                let Some(([a, b], weight)) = human.as_ref().and_then(|h| h.carry(lib, e as i32, cs, sc, BASE, true)) else { continue };
                 sc.anims.push(a);
                 let ia = sc.anims.len() as i32 - 1;
                 let ib = if cs.skel_type == 1 {
@@ -708,7 +780,7 @@ fn put_over(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, entries
                     Some(&(_, animation, weight)) => (animation, weight),
                     None => {
                         let human = human.get_or_insert_with(|| Human::load(lib));
-                        let Some(([a, b], weight)) = human.as_ref().and_then(|h| h.carry(lib, e as i32, cs, sc, BASE)) else { continue };
+                        let Some(([a, b], weight)) = human.as_ref().and_then(|h| h.carry(lib, e as i32, cs, sc, BASE, false)) else { continue };
                         sc.anims.push(a);
                         let ia = sc.anims.len() as i32 - 1;
                         let ib = if cs.skel_type == 1 {
@@ -1089,7 +1161,7 @@ mod tests {
     fn against(lib: &Library, human: &Human, body: u32, action: i32, against: i32, moved: bool) -> (bool, bool, usize) {
         let (cs, sc) = load(lib, body);
         let rig = Rig::of(&cs, &sc.ref_maps[cs.h.ref_map]);
-        let ([a, b], _) = human.carry(lib, action, &cs, &sc, Base::Bind).unwrap();
+        let ([a, b], _) = human.carry(lib, action, &cs, &sc, Base::Bind, false).unwrap();
         let want: Vec<Anim<Ee>> = row(lib, HUMAN, against).unwrap().clips.iter().map(|&c| clip(lib, c).unwrap()).collect();
         let (mut rots, mut trans, mut n) = (true, true, 0);
         for carried in [&a, &b] {
@@ -1539,5 +1611,141 @@ mod tests {
         let (granted, idle, changed, _) = falls(ELDER, true);
         assert!(granted && !idle && !changed, "the brownie elder: its own fall and landing, left as they are");
         crate::raceopts::set_options(None);
+    }
+
+    /// The bodies that hover in their idles: the merfolk's five (treading
+    /// water), the gargoyles' six (on their wings), the Jal'Raeth's three
+    /// (floating cross-legged), the pixie and the fairy (flying; their emotes
+    /// are their own slots, which fly).
+    const HOVERING: [u32; 16] = [
+        0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C, 0xD275_EE8F, 0xB4D2_D132, 0x4E2A_945C, 0xAEC5_D9F6, 0x0013_55C8, 0x6D95_9FD9, 0x9304_BAB5, 0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347, PIXIE, 0x7A85_646C,
+    ];
+
+    /// Root and lowest node heights every 16 ms: the idle for `lead` ms,
+    /// then `action` (if any) over it, for `ms` more.
+    fn heights_over(cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, action: Option<i32>, lead: i64, ms: i64) -> Vec<(i64, f32, f32)> {
+        let mut rand = Rand(1);
+        let mut out = Vec::new();
+        let mut t = 0;
+        while t <= lead + ms {
+            sc.time = t;
+            match action.filter(|_| t == lead) {
+                Some(a) => {
+                    cs.set_action(a, sc, &mut rand);
+                }
+                None => cs.set_locomotion(0, sc, &mut rand),
+            }
+            cs.h.process(0, sc);
+            if t >= lead {
+                let low = cs.h.nodes.iter().map(|n| n.world.m[3].y.0).fold(f32::MAX, f32::min);
+                out.push((t - lead, cs.h.nodes[0].world.m[3].y.0, low));
+            }
+            t += 16;
+        }
+        out
+    }
+
+    /// Which bodies hover (`hovers`, from the idle's first frame): those of
+    /// `HOVERING`, and none of the other bodies the table lists or the races'
+    /// options offer that are on their feet (the giants, goblins, kerrans,
+    /// kobolds, frogloks, the brownie, the human). Needs `run/eqoa.iso`.
+    #[test]
+    fn the_hovering_bodies() {
+        let Some(lib) = disc() else { return };
+        let ground = [HUMAN, 0x0D53_7335, BROWNIE, SKELETON, DRYAD, HILL_GIANT, 0x8117_C627, 0x6C13_08E0, 0x2F34_B867, 0x2217_6258, 0x78FA_8F20, 0xCFC4_78EE, 0x141B_FE0C, 0x0F23_9012, 0x3151_DF13, 0x9112_20E2, 0x31A1_5F17, 0xCF41_5561, 0x8214_A32D, 0xC5CB_F4CF, 0xBADC_25C9, 0xBE10_226F, 0x4A4D_88FB];
+        let judge = |id: u32| {
+            let (cs, sc) = load(&lib, id);
+            let rig = Rig::of(&cs, &sc.ref_maps[cs.h.ref_map]);
+            let idle = cs.entries[0].animation;
+            let clips: Vec<&Anim<Ee>> = idle.iter().filter_map(|&i| usize::try_from(i).ok().and_then(|i| sc.anims.get(i))).collect();
+            hovers(&rig, &first_frames(&rig, &clips))
+        };
+        for id in HOVERING {
+            assert!(judge(id), "{id:#010x} hovers");
+        }
+        for id in ground {
+            assert!(!judge(id), "{id:#010x} stands on the ground");
+        }
+    }
+
+    /// The owner's "when mermaid, gargoyle, floating models emote they sink to
+    /// the ground while they do it, lets keep them in the air" (2026-11-12):
+    /// every hovering body that borrows the human's emotes keeps its idle's
+    /// height through each of the four, its root within the idle's own bob
+    /// (and 0.1 of it) at every moment and its mean within 0.08 of the idle's;
+    /// the merfolk's and gargoyles' lowest node stays more than half a metre
+    /// up, the Jal'Raeth's crossed legs over 0.15. The control: carried as
+    /// before (`hover` off), the merfolk's root fell 1.4 and the gargoyles'
+    /// 0.8. Needs `run/eqoa.iso`.
+    #[test]
+    fn hovering_bodies_emote_in_the_air() {
+        let Some(lib) = disc() else { return };
+        // the pixie and the fairy play their own slots, which fly
+        for id in HOVERING.into_iter().filter(|id| ![PIXIE, 0x7A85_646C].contains(id)) {
+            let (mut cs, mut sc) = load(&lib, id);
+            let idle = heights_over(&mut cs, &mut sc, None, 0, 3000);
+            let (lo, hi) = idle.iter().fold((f32::MAX, f32::MIN), |a, x| (a.0.min(x.1), a.1.max(x.1)));
+            let mean = idle.iter().map(|x| x.1).sum::<f32>() / idle.len() as f32;
+            let clear = if [0xF51B_AB09, 0x4B24_FF7E, 0x491F_6347].contains(&id) { 0.15 } else { 0.5 };
+            for (k, &e) in EMOTES.iter().enumerate() {
+                let (mut cs, mut sc) = load(&lib, id);
+                assert!(put(&lib, &mut cs, &mut sc, [Pose::Human; 4]), "{id:#010x}");
+                let tr = heights_over(&mut cs, &mut sc, Some(e), 480, 2000);
+                for &(t, root, low) in &tr {
+                    assert!(root > lo - 0.1 && root < hi + 0.1, "{id:#010x} {} at {t} ms: root {root} out of the idle's {lo}..{hi}", NAMES[k]);
+                    assert!(low > clear, "{id:#010x} {} at {t} ms: lowest node {low}", NAMES[k]);
+                }
+                let m = tr.iter().map(|x| x.1).sum::<f32>() / tr.len() as f32;
+                assert!((m - mean).abs() < 0.08, "{id:#010x} {}: mean root {m} against the idle's {mean}", NAMES[k]);
+            }
+        }
+        // the control: the emote carried as before sank the merfolk and the gargoyle
+        let human = Human::load(&lib).unwrap();
+        for (id, fell) in [(0x74BA_7C3D, 1.2), (0xB4D2_D132, 0.6)] {
+            let (mut cs, mut sc) = load(&lib, id);
+            let ([a, b], w) = human.carry(&lib, 56, &cs, &sc, BASE, false).unwrap();
+            sc.anims.push(a);
+            sc.anims.push(b);
+            let n = sc.anims.len() as i32;
+            let entry = &mut cs.entries[56];
+            entry.animation = [n - 2, if cs.skel_type == 1 { n - 1 } else { -1 }];
+            entry.weight = w;
+            entry.sync = ONCE;
+            let tr = heights_over(&mut cs, &mut sc, Some(56), 480, 2000);
+            let m = tr[20..60].iter().map(|x| x.1).sum::<f32>() / 40.0;
+            let (mut cs, mut sc) = load(&lib, id);
+            let idle = heights_over(&mut cs, &mut sc, None, 0, 3000);
+            let mean = idle.iter().map(|x| x.1).sum::<f32>() / idle.len() as f32;
+            assert!(mean - m > fell, "the control, {id:#010x}: the old carry sank the root from {mean} to {m}");
+        }
+    }
+
+    /// A body on its feet plays the human's emotes exactly as before: with
+    /// `hover` asked for, every carried clip is frame for frame the one made
+    /// without it (the hill giant, goblin, kerran, kobold, froglok, gnoll,
+    /// minotaur, lizardman, aviak, satyr, kappa, ratman, orc, dryad).
+    /// Needs `run/eqoa.iso`.
+    #[test]
+    fn a_body_on_its_feet_is_unchanged() {
+        let Some(lib) = disc() else { return };
+        let human = Human::load(&lib).unwrap();
+        let frames = |a: &Anim<Ee>| -> Vec<(f32, f32, f32, f32, f32, f32, f32, f32)> {
+            let v: Vec<Frame<Ee>> = match &a.frames {
+                Frames::Full(v) => v.clone(),
+                Frames::Pack(v) => v.iter().map(unpack).collect(),
+            };
+            v.iter().map(|f| (f.rot.x.0, f.rot.y.0, f.rot.z.0, f.rot.w.0, f.scale.0, f.trans.x.0, f.trans.y.0, f.trans.z.0)).collect()
+        };
+        for id in [HILL_GIANT, 0x6C13_08E0, 0x2217_6258, 0xCFC4_78EE, 0x141B_FE0C, 0xCF41_5561, 0xC5CB_F4CF, 0x9112_20E2, 0x3151_DF13, 0xBE10_226F, 0x31A1_5F17, 0xBADC_25C9, 0x8214_A32D, DRYAD] {
+            let (cs, sc) = load(&lib, id);
+            for e in EMOTES {
+                let (on, _) = human.carry(&lib, e, &cs, &sc, BASE, true).unwrap();
+                let (off, _) = human.carry(&lib, e, &cs, &sc, BASE, false).unwrap();
+                for l in 0..2 {
+                    assert_eq!(on[l].nodes, off[l].nodes, "{id:#010x} {e}");
+                    assert!(frames(&on[l]) == frames(&off[l]), "{id:#010x} emote {e} layer {l}: changed");
+                }
+            }
+        }
     }
 }

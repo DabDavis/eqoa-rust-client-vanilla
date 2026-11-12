@@ -120,7 +120,7 @@ fn sprite_for(lib: &Library, model: i32, row: &Row) -> Result<(CSprite<Ee>, Anim
         Row::Human(n, base) => {
             // the human's action n carried onto the body, played as an emote
             let human = raceemote::Human::load(lib).ok_or("no human")?;
-            let ([a, b], weight) = human.carry(lib, *n, &cs, &anims, *base).ok_or_else(|| format!("the human has no action {n}"))?;
+            let ([a, b], weight) = human.carry(lib, *n, &cs, &anims, *base, false).ok_or_else(|| format!("the human has no action {n}"))?;
             anims.anims.push(a);
             let ia = anims.anims.len() as i32 - 1;
             anims.anims.push(b);
