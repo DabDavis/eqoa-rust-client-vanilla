@@ -19,8 +19,11 @@
 //! mean chroma and median lightness), each texel moved by the difference as far
 //! as it is skin-like (its chroma near the skin's: an eye's white, an iris or
 //! a strap keeps its own), its lightness by a curve through the skin's that
-//! keeps black and white where they are. 0, or a mode it does not know, is the
-//! texture as it is.
+//! keeps black and white where they are. [`TATTOO`] (a barbarian's tattoo,
+//! go-eqoa-server's `Tattoo`) takes a face's own woad off and lays a pattern's
+//! (`crate::tattoo`), from the faces it is read off: [`crate::LibraryTextures`]
+//! lays it, as it needs the library; here it changes no colour. 0, or a mode it
+//! does not know, is the texture as it is.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -31,10 +34,13 @@ pub const DYE: u32 = 1;
 pub const TONE: u32 = 2;
 /// A skin texture moved to a shade (go-eqoa-server's `Shade`).
 pub const SKIN: u32 = 3;
+/// A barbarian's face's woad taken off and a pattern's laid (go-eqoa-server's
+/// `Tattoo`: the pattern in byte 2): `crate::tattoo`.
+pub const TATTOO: u32 = 4;
 
 /// Whether `r` changes anything (a known mode).
 pub fn changes(r: u32) -> bool {
-    matches!(r >> 24, DYE | TONE | SKIN)
+    matches!(r >> 24, DYE | TONE | SKIN | TATTOO)
 }
 
 /// A texture's skin, as [`SKIN`] moves it: its texels' mean hue (turns, by
@@ -125,6 +131,12 @@ fn skin(c: [f32; 3], r: u32, from: &SkinRef) -> [f32; 3] {
     rgb(nh.rem_euclid(1.0), ns.clamp(0.0, 1.0), nl.clamp(0.0, 1.0))
 }
 
+/// An RGB colour's hue (turns, 0..1), saturation and lightness (HSL), for
+/// `crate::tattoo`.
+pub(crate) fn hsl_of(c: [f32; 3]) -> (f32, f32, f32) {
+    hsl(c)
+}
+
 /// An RGB colour's hue (turns, 0..1), saturation and lightness (HSL).
 fn hsl(c: [f32; 3]) -> (f32, f32, f32) {
     let (mx, mn) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
@@ -168,7 +180,7 @@ fn rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
 
 /// One colour recoloured by `r` (its RGB; alpha is never touched).
 pub fn recolor_rgb(c: [u8; 3], r: u32) -> [u8; 3] {
-    if !changes(r) {
+    if !changes(r) || r >> 24 == TATTOO {
         return c;
     }
     let (a, b, d) = (((r >> 16) & 0xFF) as f32, ((r >> 8) & 0xFF) as f32, (r & 0xFF) as f32);
@@ -184,7 +196,7 @@ pub fn recolor_rgb(c: [u8; 3], r: u32) -> [u8; 3] {
 /// Every texel of an RGBA image recoloured by `r`, its alpha kept (a [`SKIN`]
 /// shade from the image's own skin).
 pub fn recolor_rgba(rgba: &mut [u8], r: u32) {
-    if !changes(r) {
+    if !changes(r) || r >> 24 == TATTOO {
         return;
     }
     if r >> 24 == SKIN {
@@ -266,6 +278,19 @@ pub fn recolored(source: i32, r: u32, taken: impl Fn(i32) -> bool) -> i32 {
 pub fn source_of(id: i32) -> Option<(i32, u32)> {
     let g = NAMES.lock().unwrap_or_else(|e| e.into_inner());
     g.as_ref().and_then(|n| n.of.get(&id).copied())
+}
+
+/// The texture a recoloured texture's id is made from at the first: its
+/// source's source, and so on, to a texture's own id (`id` itself for one).
+pub fn root_of(id: i32) -> i32 {
+    let mut id = id;
+    for _ in 0..16 {
+        match source_of(id) {
+            Some((source, _)) => id = source,
+            None => break,
+        }
+    }
+    id
 }
 
 /// A recoloured texture's key in the renderer's cache: its source's key and the
@@ -386,5 +411,22 @@ mod tests {
         assert_eq!(source_of(0x7777), None);
         assert_ne!(key_of(5, 1), key_of(5, 2));
         assert_ne!(key_of(5, 1) & (1 << 63), 0);
+    }
+
+    /// A tattoo is a mode that changes something, but no colour here (it is
+    /// laid by `LibraryTextures`, off the faces); its id's root is the face it
+    /// was made from at the first, through a shade laid over it.
+    #[test]
+    fn a_tattoo_names_a_face() {
+        let t = TATTOO << 24 | 2 << 16;
+        assert!(changes(t));
+        assert_eq!(recolor_rgb([214, 156, 135], t), [214, 156, 135]);
+        let mut px = vec![214, 156, 135, 255];
+        recolor_rgba(&mut px, t);
+        assert_eq!(px, [214, 156, 135, 255]);
+        let face = 0x0E95_25F4u32 as i32;
+        let tattooed = recolored(face, t, |_| false);
+        let shaded = recolored(tattooed, SKIN << 24 | 0x13_6B3B, |_| false);
+        assert_eq!((root_of(shaded), root_of(tattooed), root_of(face)), (face, face, face));
     }
 }

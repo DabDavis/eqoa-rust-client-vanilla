@@ -26,6 +26,7 @@ pub mod scale;
 pub mod shadow;
 pub mod standin;
 pub mod sunshadow;
+pub mod tattoo;
 pub mod text;
 pub mod ui;
 
@@ -2331,7 +2332,26 @@ pub const IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
 /// its Frontiers namesake are two textures, and an unchanged one is one.
 pub struct LibraryTextures<'a>(pub &'a esf::Library);
 
+/// The tattoos' patterns read so far, by pattern (`tattoo::Woad::of`, off the
+/// disc's own face: never a texture pack's).
+static WOADS: std::sync::Mutex<Vec<(u8, std::sync::Arc<tattoo::Woad>)>> = std::sync::Mutex::new(Vec::new());
+
 impl LibraryTextures<'_> {
+    /// Tattoo pattern `pattern` read off its face in this library; none for a
+    /// pattern of none or a library without the face.
+    fn woad(&self, pattern: u8) -> Option<std::sync::Arc<tattoo::Woad>> {
+        let face = tattoo::pattern_face(pattern)?;
+        let mut g = WOADS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, w)) = g.iter().find(|(p, _)| *p == pattern) {
+            return Some(w.clone());
+        }
+        let (c, s) = self.0.surface(face as i32)?;
+        let im = s.decode(&c.data)?;
+        let w = std::sync::Arc::new(tattoo::Woad::of(pattern, &im.rgba, im.width, im.height)?);
+        g.push((pattern, w.clone()));
+        Some(w)
+    }
+
     /// The surface a DictID names in the library's view, its container, and
     /// the disc its record came off.
     fn surface(&self, id: i32) -> Option<(&esf::Container, esf::Surface, esf::Era)> {
@@ -2356,6 +2376,18 @@ impl TextureSource for LibraryTextures<'_> {
     fn levels(&self, id: i32) -> Vec<esf::Image> {
         let Some((c, s, era)) = self.surface(id) else {
             return match recolor::source_of(id) {
+                Some((source, r)) if r >> 24 == recolor::TATTOO => {
+                    // a barbarian's tattoo: the face's own woad off (the
+                    // face it was made from at the first), the pattern's on
+                    let mut levels = self.levels(source);
+                    let root = recolor::root_of(source);
+                    let own = tattoo::own_pattern(root as u32).and_then(|p| self.woad(p));
+                    let put = self.woad(tattoo::pattern_of(r));
+                    for l in &mut levels {
+                        tattoo::lay(&mut l.rgba, l.width, l.height, own.as_deref(), source == root, put.as_deref());
+                    }
+                    levels
+                }
                 Some((source, r)) => {
                     let mut levels = self.levels(source);
                     let mut rgba: Vec<Vec<u8>> = levels.iter_mut().map(|l| std::mem::take(&mut l.rgba)).collect();

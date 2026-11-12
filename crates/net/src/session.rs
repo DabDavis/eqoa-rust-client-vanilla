@@ -127,8 +127,10 @@ pub const OP_RACE_OPTIONS: u16 = 0x7E22;
 /// rows (go-eqoa-server's skin shades) under the four, and re-chooses them at
 /// select's Customize (sent after 0x002A's ints); one that answered 1 (before
 /// 2026-11-11) showed a race's rows instead of the four, so the server sends it
-/// none of a game race's.
-pub const RACE_OPTIONS_ANSWER: u32 = 2;
+/// none of a game race's. 3 (since 2026-11-12): it draws a barbarian's tattoo
+/// too (a colour of `render::recolor::TATTOO`), so the server sends it that
+/// row; to one that answered 2 it sends the rows it did before.
+pub const RACE_OPTIONS_ANSWER: u32 = 3;
 /// Each race's options, to a client that answered [`OP_RACE_OPTIONS`]:
 /// `raceopts::read_options`.
 pub const OP_RACE_OPTIONS_DATA: u16 = 0x7E23;
@@ -4944,7 +4946,7 @@ mod tests {
         assert_eq!(answers(&mut s), [], "the control: an offer of 0");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x22, 0x7E, 1, 0, 0, 0]);
         assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
-        assert_eq!(answers(&mut s), [(251, vec![0x22, 0x7E, 2, 0, 0, 0])], "2: a game race's rows shown under the four");
+        assert_eq!(answers(&mut s), [(251, vec![0x22, 0x7E, 3, 0, 0, 0])], "3: a game race's rows shown under the four, a barbarian's tattoo drawn");
         // a race of one body row, two steps
         let mut options = vec![0x23, 0x7E, 1, 1, 13, 1, 4, b'b', b'o', b'd', b'y', 5, b'T', b'r', b'i', b'b', b'e', 1, 0, 2];
         options.extend([1, b'G']);
