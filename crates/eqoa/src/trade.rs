@@ -585,6 +585,9 @@ pub struct Trade {
     /// focus each is (0 the inventory, 1 the offer, 2 the money, 3 the
     /// partner's offer), for a pointer
     hits: Hits,
+    /// What the chat line opens with, when the client's keys opened it
+    /// (`begin_chat`: Enter, `/`, T or R, as they open the chat line in play)
+    begun: Option<Vec<u16>>,
 }
 
 impl Default for Trade {
@@ -613,6 +616,7 @@ impl Default for Trade {
             offer: Window::default(),
             visible: false,
             hits: Hits::default(),
+            begun: None,
         }
     }
 }
@@ -679,6 +683,7 @@ impl Trade {
         self.deposit.visible = false;
         self.deposit.carried = 0;
         self.quantity.visible = false;
+        self.begun = None;
         self.child = Child::Trade;
         self.focus = 0;
         self.i_accepted = false;
@@ -696,9 +701,30 @@ impl Trade {
         self.child == Child::Edit
     }
 
+    /// The window itself has the keys (no box, money entry, picker or chat
+    /// line over it): the chat line's key (32, 147) opens the chat line.
+    pub fn on_window(&self) -> bool {
+        self.visible && self.child == Child::Trade
+    }
+
+    /// The chat line, next opened by its key, begun with `text` (the client's
+    /// keyboard: `/`, T's `/tell `, R's `/reply `; Enter's nothing), as those
+    /// keys begin the chat line in play. Not the game's: CLIENT's trade opens
+    /// its chat line empty, by Space or R3 alone.
+    pub fn begin_chat(&mut self, text: &str) {
+        self.begun = Some(wide(text));
+    }
+
+    /// The chat line's text (a test's look).
+    #[cfg(test)]
+    pub fn chat_text(&self) -> String {
+        String::from_utf16_lossy(&self.edit.text)
+    }
+
     /// `Hide`.
     pub fn hide(&mut self) {
         self.deposit.visible = false;
+        self.begun = None;
         self.child = Child::Trade;
         self.focus = 0;
         self.visible = false;
@@ -883,6 +909,9 @@ impl Trade {
                         // Chat
                         self.edit.clear();
                         self.edit.set_max_length(128);
+                        if let Some(t) = self.begun.take() {
+                            self.edit.set_text(&t);
+                        }
                         self.edit.purpose = 0;
                         self.edit.focus(now);
                         self.child = Child::Edit;

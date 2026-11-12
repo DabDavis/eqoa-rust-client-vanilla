@@ -98,6 +98,9 @@ pub struct DuelWnd {
     /// the three lists' frames and the tunar where they were drawn, by the
     /// focus each is, for a pointer
     hits: Hits,
+    /// What the chat line opens with, when the client's keys opened it
+    /// (`Trade::begin_chat`'s)
+    begun: Option<Vec<u16>>,
 }
 
 impl Default for DuelWnd {
@@ -126,6 +129,7 @@ impl Default for DuelWnd {
             wager: false,
             visible: false,
             hits: Hits::default(),
+            begun: None,
         }
     }
 }
@@ -220,6 +224,7 @@ impl DuelWnd {
         self.scroll = 0;
         self.last = clock;
         self.child = Child::Wnd;
+        self.begun = None;
         self.deposit.visible = false;
         self.quantity.visible = false;
         self.list.init(40);
@@ -232,6 +237,7 @@ impl DuelWnd {
     pub fn close(&mut self) {
         self.visible = false;
         self.child = Child::Wnd;
+        self.begun = None;
         self.deposit.visible = false;
         self.quantity.visible = false;
     }
@@ -239,6 +245,18 @@ impl DuelWnd {
     /// The chat line has the keys.
     pub fn typing(&self) -> bool {
         self.visible && self.child == Child::Edit
+    }
+
+    /// The wager itself has the keys (no box, tunar entry, picker or chat
+    /// line over it): the chat line's key (32, 147) opens the chat line.
+    pub fn on_wager(&self) -> bool {
+        self.visible && self.wager && self.child == Child::Wnd
+    }
+
+    /// The chat line, next opened by its key, begun with `text`
+    /// (`Trade::begin_chat`).
+    pub fn begin_chat(&mut self, text: &str) {
+        self.begun = Some(wide(text));
     }
 
     /// The invitation's time left, in the client's clock's ticks.
@@ -415,6 +433,11 @@ impl DuelWnd {
                             self.edit.set_multi_line(false);
                             self.edit.set_center([320, 180]);
                             self.edit.set_max_length(127);
+                            // the client's keys (`begin_chat`) begin it with
+                            // their text
+                            if let Some(t) = self.begun.take() {
+                                self.edit.set_text(&t);
+                            }
                             self.edit.purpose = 0;
                             self.edit.focus(now);
                             self.child = Child::Edit;

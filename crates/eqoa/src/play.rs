@@ -5109,7 +5109,21 @@ impl Play {
         } else {
             match self.glyphs.at(f, if finger { crate::pointer::FINGER } else { 0.0 }) {
                 Some(k) => vec![k],
-                None => self.window_point(f),
+                None => {
+                    let keys = self.window_point(f);
+                    // the chat box, under a trade's (or a wager's) window and
+                    // not on it: its chat line, as the chat box opens the chat
+                    // line in play
+                    if keys.is_empty()
+                        && !crate::hideui::hidden()
+                        && self.window_chat_ready()
+                        && self.wnd_chat.as_ref().is_some_and(|w| w.contains(Self::chat_point((x, y), size)))
+                    {
+                        self.window_chat("");
+                        return true;
+                    }
+                    keys
+                }
             }
         };
         self.press(&keys);

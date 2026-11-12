@@ -7,6 +7,16 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Chat while trading
+- **You can chat during a trade.** With the trade window open, Enter opens its chat line, the same way it does in
+  the world; `/` starts it with a slash, T with `/tell` and R with `/reply`. Clicking or tapping the chat box opens it
+  too, and R3 (or Space or G) still does. Say, tells, group, guild, shout and slash commands all work from it.
+- Typing in it never touches the trade: Q, E and every other key are part of your message, and Escape closes the
+  chat line first; press Escape again to cancel the trade as before. E (✕) and the mouse still pick items.
+- The same goes for a duel's wager window.
+- On a phone or a tablet, your own keyboard now comes up for the trade's chat line, and for the other windows you
+  type in (mail, bank, help requests).
+
 ## 2026-11-12 · Mermaid helms and capes
 - **Capes now show on Mermaids** (mermaids, mermen, sirens and sea kings). The cape hangs down the back over the tail
   and sways with the tail as she treads water and swims. Every cape style works.

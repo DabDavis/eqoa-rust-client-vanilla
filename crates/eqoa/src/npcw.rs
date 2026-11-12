@@ -75,6 +75,35 @@ impl Play {
         matches!(self.mode, 15 | 16) && self.npcw.trade.typing()
     }
 
+    /// The trade window (modes 15, 16) or the duel's wager (44, the trade's
+    /// copy) has the keys itself, so its chat line opens on its key (32,
+    /// 147): the client's chat keys may open it (`window_chat`).
+    pub fn window_chat_ready(&self) -> bool {
+        (matches!(self.mode, 15 | 16) && self.npcw.trade.on_window()) || (self.mode == 44 && self.duel.wnd.on_wager())
+    }
+
+    /// The trade's or the wager's chat line opened, begun with `text`, by the
+    /// keys and the click that open the chat line in play (Enter, `/`, T, R,
+    /// the chat box): CLIENT opens it by Space or R3 alone, and a keyboard's
+    /// player could not find the way to chat in a trade (the owner,
+    /// 2026-11-12: "im not able to chat when in a trade"). False, nothing
+    /// done, where no such window has the keys.
+    pub fn window_chat(&mut self, text: &str) -> bool {
+        if !self.window_chat_ready() {
+            return false;
+        }
+        if self.mode == 44 {
+            self.duel.wnd.begin_chat(text);
+            self.duel_key(147, true);
+            self.duel_key(147, false);
+        } else {
+            self.npcw.trade.begin_chat(text);
+            self.npcw_key(147, true);
+            self.npcw_key(147, false);
+        }
+        true
+    }
+
     fn coin(&self) -> i32 {
         self.dump.player.p34 as i32
     }
@@ -701,6 +730,76 @@ mod tests {
         for row in [0, 2, 3] {
             assert_eq!(press(32, row), (vec![], 1), "the control, row {row}: the game's 32 sends nothing, the window stays");
         }
+    }
+
+    /// Chatting in a trade (the owner, 2026-11-12: "im not able to chat when
+    /// in a trade"): the client's chat keys open the trade's own chat line
+    /// (`window_chat`: Enter empty, T `/tell `, `/` with it), what is typed
+    /// goes there and none of it to the window (Q, the accept's key, typed;
+    /// E, ✕, typed), Enter sends the line as the chat line in play sends it
+    /// (`chat_line`), and the trade stays up with the window's keys back;
+    /// Escape takes the chat line away first and the trade second, as
+    /// before. The controls: the corpse's and the merchant's windows have no
+    /// chat line (CLIENT's have none), so nothing opens there; with the
+    /// trade's question up the keys stay the question's.
+    #[test]
+    fn a_trade_chats_and_stays_up() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut p = play();
+        p.trade_message(TradeMsg::Accepted(0x99));
+        p.run_npcw(&vui, &mut r);
+        assert_eq!(p.mode, 15);
+        assert!(p.window_chat_ready() && !p.npcw_typing());
+        sent(&mut p);
+        // T: the chat line begun with /tell
+        assert!(p.window_chat("/tell "));
+        p.run_npcw(&vui, &mut r);
+        p.run_npcw(&vui, &mut r);
+        assert!(p.npcw_typing() && p.keyboard_typing(), "the chat line has the keyboard");
+        assert_eq!(p.npcw.trade.chat_text(), "/tell ");
+        assert!(!p.window_chat_ready(), "the window's keys are the line's now");
+        for c in "Bob qe".chars() {
+            p.npcw_key(c as i32, true);
+            p.run_npcw(&vui, &mut r);
+            p.npcw_key(c as i32, false);
+            p.run_npcw(&vui, &mut r);
+        }
+        assert_eq!(p.npcw.trade.chat_text(), "/tell Bob qe");
+        assert!(!p.npcw.trade.i_accepted && sent(&mut p).is_empty(), "Q typed accepted nothing, nothing sent");
+        p.npcw_key(13, true);
+        p.run_npcw(&vui, &mut r);
+        p.npcw_key(13, false);
+        p.run_npcw(&vui, &mut r);
+        let out = sent(&mut p);
+        let wide: Vec<u8> = "qe".encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        assert!(out.iter().any(|m| m.windows(wide.len()).any(|w| w == wide.as_slice()) || m.windows(2).any(|w| w == b"qe")), "the tell went: {out:?}");
+        assert_eq!(p.mode, 15, "the trade stays up");
+        assert!(!p.npcw_typing() && p.window_chat_ready(), "the window has its keys back");
+        // Enter: an empty line; Escape takes it away, the trade stays
+        assert!(p.window_chat(""));
+        p.run_npcw(&vui, &mut r);
+        p.run_npcw(&vui, &mut r);
+        assert_eq!((p.npcw_typing(), p.npcw.trade.chat_text().as_str()), (true, ""));
+        p.npcw_key(27, true);
+        p.run_npcw(&vui, &mut r);
+        p.npcw_key(27, false);
+        p.run_npcw(&vui, &mut r);
+        assert_eq!((p.mode, p.npcw_typing()), (15, false), "Escape: the chat line first");
+        assert!(sent(&mut p).is_empty());
+        // the controls: no chat line in the corpse's or the merchant's window
+        let mut q = play();
+        for mode in [1, 10] {
+            q.mode = mode;
+            assert!(!q.window_chat_ready() && !q.window_chat(""), "mode {mode}");
+        }
+        // Escape again: the trade's own cancel, as before
+        p.npcw_key(27, true);
+        p.run_npcw(&vui, &mut r);
+        p.npcw_key(27, false);
+        p.run_npcw(&vui, &mut r);
+        assert!(p.mode == 15 && !p.window_chat_ready() && !p.npcw_typing(), "Escape on the window: the trade's own (its cancel's question)");
+        assert!(!p.window_chat("/"), "the question up: no chat line over it");
     }
 
     /// 0x0085 (`LootOptions`): why a corpse did not open, as a line in the

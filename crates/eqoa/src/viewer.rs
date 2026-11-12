@@ -1516,6 +1516,20 @@ pub(crate) fn npcw_key_of(key: &Key, mode: i32) -> Option<i32> {
     }
 }
 
+/// What the chat line opens with for a key of the trade's or the wager's own
+/// window (`Play::window_chat`), as the key opens the chat line in play:
+/// Enter empty, `/` with it, T `/tell `, R `/reply ` (with a tell to reply
+/// to, `replies`); any other key is the window's.
+pub(crate) fn window_chat_key(key: &Key, replies: bool) -> Option<&'static str> {
+    match key {
+        Key::Named(NamedKey::Enter) => Some(""),
+        Key::Character(c) if c.as_str() == "/" => Some("/"),
+        Key::Character(c) if c.eq_ignore_ascii_case("t") => Some("/tell "),
+        Key::Character(c) if c.eq_ignore_ascii_case("r") && replies => Some("/reply "),
+        _ => None,
+    }
+}
+
 /// A key as the game's keyboard gives it (`VIKeyboard::Read`): 13 Enter,
 /// 27 Escape, 8 Backspace, 9 Tab, 17-20 the cursor keys (left, right, up,
 /// down), 21-24 Page Up, Page Down, End, Home; a character as itself.
@@ -2198,6 +2212,9 @@ struct App {
     /// `EQOA_TARGET=<name>@<ms>[;...]`: the creature of that name targeted
     /// then (ms on `clock`), as a playshot's does.
     target_script: Vec<(i64, String)>,
+    /// `EQOA_ACTION=<hex>[,<arg>]@<ms>[;...]`: a start-menu entry's message
+    /// then (`DoAction`; ms on `clock`), as a playshot's does.
+    action_script: Vec<(i64, u32, i32)>,
     /// `EQOA_PLAY_KEYS=<key>@<ms>[;...]`: keys a test's script presses then
     /// (ms on `clock`; a key by its `keys.opt` name), down and up through the
     /// keyboard's dispatch, as a controller's button on a key's row is
@@ -2376,6 +2393,21 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         say_script: std::env::var("EQOA_SAY")
             .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(l, t)| Some((t.trim().parse().ok()?, l.to_string())))).collect())
             .unwrap_or_default(),
+        action_script: {
+            let mut a: Vec<(i64, u32, i32)> = std::env::var("EQOA_ACTION")
+                .map(|v| {
+                    v.split(';')
+                        .filter_map(|s| {
+                            let (a, ms) = s.split_once('@')?;
+                            let (a, arg) = a.split_once(',').unwrap_or((a, "0"));
+                            Some((ms.trim().parse().ok()?, u32::from_str_radix(a.trim().trim_start_matches("0x"), 16).ok()?, arg.trim().parse().ok()?))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            a.sort_by_key(|e| e.0);
+            a
+        },
         target_script: std::env::var("EQOA_TARGET")
             .map(|v| v.split(';').filter_map(|s| s.rsplit_once('@').and_then(|(l, t)| Some((t.trim().parse().ok()?, l.to_string())))).collect())
             .unwrap_or_default(),
@@ -3252,11 +3284,15 @@ impl App {
     }
 
     /// Whether an edit box of the game's has the keys (one of the screens'
-    /// before the world, or play's editor), told to a page when it changes:
-    /// a phone's or a tablet's own keyboard comes up for it there
-    /// (`web::want_text`).
+    /// before the world, or play's: the chat line, and a window's, the
+    /// trade's chat line among them, `Play::keyboard_typing`), told to a page
+    /// when it changes: a phone's or a tablet's own keyboard comes up for it
+    /// there (`web::want_text`).
     fn note_typing(&mut self) {
-        let on = self.host.as_ref().map_or_else(|| self.play.as_ref().is_some_and(|p| p.mode == 2), |h| h.pre.typing());
+        let on = match self.host.as_ref() {
+            Some(h) => h.pre.typing(),
+            None => self.play.as_mut().is_some_and(|p| p.keyboard_typing()),
+        };
         if on != std::mem::replace(&mut self.typing, on) {
             #[cfg(target_arch = "wasm32")]
             crate::web::want_text(on);
@@ -4142,6 +4178,17 @@ impl App {
                         send(p, c as i32, true);
                     }
                 }
+                return;
+            }
+            // the trade's and the wager's own window: the keys that open the
+            // chat line in play open its chat line (Enter, `/` begun with it,
+            // T to `/tell `, R to `/reply `); ✕ stays on E and the click
+            if down
+                && !event.repeat
+                && let Some(begun) = window_chat_key(&event.logical_key, !p.reply_name.is_empty())
+                && p.window_chat(begun)
+            {
+                self.held.clear();
                 return;
             }
             if let Some(k) = npcw_key_of(&event.logical_key, p.mode)
@@ -5663,6 +5710,18 @@ impl App {
                 while self.key_script.first().is_some_and(|k| k.0 <= self.clock.elapsed().as_millis() as i64) {
                     let (_, key) = self.key_script.remove(0);
                     crate::say(&format!("script: {key} pressed"));
+                    // `text <chars>`: each character typed, as a keyboard
+                    // types it (its key and its text)
+                    if let Some(text) = key.strip_prefix("text ") {
+                        for c in text.chars() {
+                            let logical_key = if c == ' ' { Key::Named(NamedKey::Space) } else { Key::Character(c.to_string().into()) };
+                            for state in [ElementState::Pressed, ElementState::Released] {
+                                let text = (state == ElementState::Pressed).then(|| c.to_string().into());
+                                self.keyboard(el, KeyIn { logical_key: logical_key.clone(), state, repeat: false, text });
+                            }
+                        }
+                        continue;
+                    }
                     self.keyboard(el, KeyIn::named(&key, true));
                     self.keyboard(el, KeyIn::named(&key, false));
                 }
@@ -5891,6 +5950,7 @@ impl App {
                 let pads = &mut self.pads;
                 let say_script = &mut self.say_script;
                 let target_script = &mut self.target_script;
+                let action_script = &mut self.action_script;
                 let walk_view = self.walker.as_mut().map(|w| {
                     // UpdateControls, on the sticks and the keyboard's axes,
                     // as the client stands
@@ -5910,6 +5970,14 @@ impl App {
                             let name = target_script.remove(0).1;
                             let found = p.target_by_name(&name);
                             crate::say(&format!("script: target {name}: {found}"));
+                            if !found {
+                                crate::say(&format!("script:   in view: {}", p.entity_names().join(", ")));
+                            }
+                        }
+                        while action_script.first().is_some_and(|s| s.0 <= now) {
+                            let (_, a, arg) = action_script.remove(0);
+                            crate::say(&format!("script: action {a:08X},{arg}"));
+                            p.do_action(a, arg);
                         }
                         let gpu = crate::play::Gpu { renderer: &mut g.renderer, device: &g.device, queue: &g.queue };
                         // The server named the player's model: dress the walker in it.
@@ -6463,6 +6531,26 @@ mod tests {
             assert_eq!(arrows, [Some(138), Some(139), Some(136), Some(137)]);
             assert_eq!(k(Key::Character("w".into())), None);
         }
+    }
+
+    /// The trade's and the wager's own window: the keys that open the chat
+    /// line in play open its chat line, begun as there (Enter empty, `/`, T
+    /// `/tell `, R `/reply ` with a tell to answer). The controls: R with no
+    /// tell to answer, E (✕), Q (the accept), G and the arrows stay the
+    /// window's.
+    #[test]
+    fn the_chat_keys_open_a_trades_chat_line() {
+        let k = |key: Key, replies: bool| window_chat_key(&key, replies);
+        assert_eq!(k(Key::Named(NamedKey::Enter), false), Some(""));
+        assert_eq!(k(Key::Character("/".into()), false), Some("/"));
+        assert_eq!((k(Key::Character("t".into()), false), k(Key::Character("T".into()), false)), (Some("/tell "), Some("/tell ")));
+        assert_eq!(k(Key::Character("r".into()), true), Some("/reply "));
+        assert_eq!(k(Key::Character("r".into()), false), None, "no tell to answer");
+        for c in ["e", "q", "g", "w"] {
+            assert_eq!(k(Key::Character(c.into()), true), None, "{c}: the window's");
+        }
+        assert_eq!(k(Key::Named(NamedKey::ArrowUp), true), None);
+        assert_eq!(k(Key::Named(NamedKey::Escape), true), None);
     }
 
     /// VSync's present mode: on, Fifo whatever is offered; off, Immediate,

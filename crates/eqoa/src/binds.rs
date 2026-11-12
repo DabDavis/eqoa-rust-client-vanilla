@@ -140,7 +140,7 @@ pub const ROWS: &[Row] = &[
     row("history", "{424} {1694} (hold)", &["c"], b(bit::R2), "Up and down scroll it while held. In a window C is |c (the factions' next page)."),
     row("autorun", "Autorun", &["x"], b(bit::L3), "A stick pushed past the run's edge ends it."),
     row("jump", "Jump", &["space", "v"], Pad::None, "In play, on a server that has jumps (its own, not the game's); V too. Wherever it makes no jump (any other server, a window up) Space is {1018}'s key, as it was before it jumped. A controller's button can take it here: every button of the pad is the game's, so none has it till given. On the map Space is |x."),
-    row("chat", "{424}", &["enter"], b(bit::R3), "In a window Enter is |x {212}; over the quick chat, the chat line. On the map: |x."),
+    row("chat", "{424}", &["enter"], b(bit::R3), "In a window Enter is |x {212}; in a trade, its chat line (/, T and R too). Over the quick chat, the chat line. On the map: |x."),
     row("start_menu", "Start menu", &["escape"], b(bit::START), "In a window Escape is |t {217}. Escape also cancels a key being chosen here."),
     row("camera_style", "Camera style", &["p"], b(bit::SELECT), "First person, and back."),
     row("back", "{217} (in a window)", &["backspace"], Pad::None, "In a window it is |t {217}. On the map it closes it."),
