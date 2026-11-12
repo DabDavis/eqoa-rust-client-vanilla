@@ -21,7 +21,9 @@ current.
   a raid's windows on a server that sends them (the GM Jibrish's petitions 1448 and 1451, 2026-11-10: the leader's,
   helper's and main assist's marks in the raid list, the loot rolls' pop-up, Community > Group > Raid and the master
   looter's menu on a corpse: `raidplay`, `rollwnd`, `masterloot`, go-eqoa-server's 0x7E42-0x7E48; on any other
-  server none of it, and the start menu the game's),
+  server none of it, and the start menu the game's; the raid list in its groups with a role icon on each health bar and the leader's and helper's moves between
+  groups by a drag or Raid > Move to Group, the GM Jibrish's petition 1687, 2026-11-12: `raidlist::draw_groups`, go-eqoa-server's
+  0x7E18 offer of 2 and a group byte after each 0x7E1A record, 0x7E48 ops 12 and 13; the role icons drawn on every server),
   the pet's effects in a row under its bar on a server that sends them (the server owner's of 2026-11-09, "put the
   buff icons under the pet name plate": `hud::pet_effects_pieces`, go-eqoa-server's 0x7E32/0x7E33, Extended > UI > HUD's
   Pet Effects, on by default; off, or on any other server, nothing is drawn),

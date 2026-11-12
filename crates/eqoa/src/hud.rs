@@ -49,6 +49,11 @@ pub struct HudState {
     /// A raid group's every member (`raidlist`), drawn in place of `group`'s
     /// bars when there are any.
     pub raid: Vec<crate::raidlist::Row>,
+    /// A raid row dragged to another group (`play::raid_drag_*`): the group a new
+    /// one would be (an empty group drawn to drop on), and the group the pointer
+    /// is over (lit).
+    pub raid_new_group: Option<u8>,
+    pub raid_drop: Option<u8>,
     /// The live client's duel (0x1502 sub 8): its centre while the duel is on
     /// and in the player's world, for `DrawPatch`'s orange patch (`duel.rs`).
     pub duel: Option<[f32; 3]>,
@@ -228,6 +233,8 @@ pub struct Hud {
     /// (`Hud::raid_wheel`).
     raid_first: usize,
     raid_panel: Option<([f32; 4], usize)>,
+    /// how far the wheel steps the raid list at the last frame
+    raid_more: usize,
     /// Where the DPS meter's panel lay at the last frame, how many items it
     /// showed and how far its list steps (`Hud::meter_wheel`, `meter_page`).
     meter_panel: Option<([f32; 4], usize, usize)>,
@@ -243,6 +250,8 @@ pub enum Pick {
     Member(u32),
     Pet,
     Raid(u32),
+    /// a raid list's group (its number): its line or the room under its rows
+    RaidGroup(u8),
     /// the minimap (`map::mini`): the map opened
     Minimap,
     /// the quest tracker (`tracker`): the quest journal opened
@@ -271,6 +280,7 @@ impl Hud {
             picks: Vec::new(),
             raid_first: 0,
             raid_panel: None,
+            raid_more: 0,
             meter_panel: None,
         }
     }
@@ -384,14 +394,31 @@ impl Hud {
             self.glow1_on = -1;
             // the pet's bar under it, and its effects' row
             let below = s.pet.as_ref().map_or(0, |p| crate::raidlist::PET_H + pet_effects_height(p.effects.len()));
-            let fit = crate::raidlist::Fit::under(s.raid.len(), below);
-            self.raid_first = self.raid_first.min(fit.more);
-            for (r, id) in crate::raidlist::draw(vui, ui, GROUP_AT, &fit, &s.raid, self.raid_first) {
-                self.note(ui, r, Pick::Raid(id));
-            }
-            let b = fit.bounds(GROUP_AT);
+            let sections = crate::raidlist::sections(&s.raid, s.raid_new_group);
+            let b = if sections.is_empty() {
+                let fit = crate::raidlist::Fit::under(s.raid.len(), below);
+                self.raid_first = self.raid_first.min(fit.more);
+                for (r, id) in crate::raidlist::draw(vui, ui, GROUP_AT, &fit, &s.raid, self.raid_first) {
+                    self.note(ui, r, Pick::Raid(id));
+                }
+                self.raid_more = fit.more;
+                fit.bounds(GROUP_AT)
+            } else {
+                // in its groups (petition 1687): the wheel steps a group
+                let fit = crate::raidlist::GroupFit::under(&sections, s.raid.len(), below, self.raid_first);
+                self.raid_first = fit.first;
+                for (r, hit) in crate::raidlist::draw_groups(vui, ui, GROUP_AT, &fit, &sections, &s.raid, s.raid_drop) {
+                    let pick = match hit {
+                        crate::raidlist::Hit::Row(id) => Pick::Raid(id),
+                        crate::raidlist::Hit::Group(g) => Pick::RaidGroup(g),
+                    };
+                    self.note(ui, r, pick);
+                }
+                self.raid_more = fit.more;
+                fit.bounds(GROUP_AT)
+            };
             let (a, c) = (ui.ui.placed([b[0] as f32, b[1] as f32]), ui.ui.placed([b[2] as f32, b[3] as f32]));
-            self.raid_panel = Some(([a[0], a[1], c[0], c[1]], fit.more));
+            self.raid_panel = Some(([a[0], a[1], c[0], c[1]], self.raid_more));
             b[3] + 2
         };
         crate::hudlayout::end(ui.ui, m);
