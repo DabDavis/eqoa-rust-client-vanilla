@@ -720,6 +720,11 @@ pub fn shot_with(
             // a stick that ran runs until it comes back well under the
             // threshold (`input::RunHold`), as the window's
             run_hold.apply(&mut sticks);
+            // a frame come late while following (`EQOA_FRAME_MS` over the
+            // console's 33): the console frames it is late by, each a frame
+            if let Some(p) = play.as_mut() {
+                client = follow_catch_up(&mut walker, p, sticks, t, client);
+            }
             let changed = walker.frame_with(sticks, t, &client, game_frame);
             if let Some(p) = play.as_mut() {
                 p.controls_changed(changed);
@@ -1927,6 +1932,31 @@ impl Gfx {
 /// at the game's own 30 a second, the game going on, not as fast as they can
 /// be skipped.
 const HIDDEN_GAP: std::time::Duration = std::time::Duration::from_millis(33);
+
+/// A frame come late while following (a hidden page's ticks held up, a
+/// covered or busy window's): each console frame it would step on one steer
+/// (`Walker::frames_behind`) is a frame of its own first, with its own
+/// `UpdateControls`, the member found where it was then (`Play::follow_back`),
+/// as the console would have stepped them. Returns the client for the frame's
+/// own (`client`, its follow from where they left the player).
+fn follow_catch_up(w: &mut Walker, p: &mut crate::play::Play, sticks: [f32; 4], now: i64, client: crate::controls::Client) -> crate::controls::Client {
+    if p.is_dead() || client.follow == crate::controls::Follow::Off {
+        return client;
+    }
+    let behind = w.frames_behind(now, CATCH_UP_FRAMES);
+    if behind.is_empty() {
+        return client;
+    }
+    for &t in &behind {
+        let me = w.cam.walk.phys.smooth_location().to_array();
+        let c = crate::controls::Client { follow: p.follow_back(now - t, me), ..client };
+        let changed = w.frame_with(sticks, t, &c, false);
+        p.controls_changed(changed);
+    }
+    // (the follow ended by one of them, or not)
+    let me = w.cam.walk.phys.smooth_location().to_array();
+    crate::controls::Client { follow: p.follow_back(0, me), run_speed: p.control_client().run_speed, ..client }
+}
 
 /// The most console frames a frame come late steps one at a time while
 /// following (`Walker::frames_behind`): two seconds of them; a longer gap's
@@ -6007,28 +6037,9 @@ impl App {
                     let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
                     client.keys = game_keys;
                     client.steer = steer;
-                    // a frame come late while following (a hidden page's
-                    // ticks held up, a covered or busy window's): each
-                    // console frame it would step on one steer is a frame
-                    // of its own first, the member found where it was then
-                    // (`Walker::frames_behind`, `Play::follow_back`)
-                    if let Some(p) = play.as_mut().filter(|p| !p.is_dead())
-                        && client.follow != crate::controls::Follow::Off
-                    {
-                        let behind = w.frames_behind(now, CATCH_UP_FRAMES);
-                        for &t in &behind {
-                            let me = w.cam.walk.phys.smooth_location().to_array();
-                            let c = crate::controls::Client { follow: p.follow_back(now - t, me), ..client };
-                            let changed = w.frame_with(sticks, t, &c, false);
-                            p.controls_changed(changed);
-                        }
-                        // this frame's own, from where they left the player
-                        // (the follow ended by one of them, or not)
-                        if !behind.is_empty() {
-                            client = crate::controls::Client { follow: p.follow_back(0, w.cam.walk.phys.smooth_location().to_array()), ..p.control_client() };
-                            client.keys = game_keys;
-                            client.steer = steer;
-                        }
+                    // a frame come late while following (`follow_catch_up`)
+                    if let Some(p) = play.as_mut() {
+                        client = follow_catch_up(w, p, sticks, now, client);
                     }
                     let changed = w.frame_with(sticks, now, &client, game_frame);
                     if let Some(p) = play.as_mut() {

@@ -694,13 +694,12 @@ impl Walker {
     /// a follow steers every console frame toward the member as it moved
     /// rather than holding one steer for them all; past `most` the frames
     /// before them are one long frame as ever (`step_kept`'s gap).
-    pub fn frames_behind(&self, now: i64, most: usize) -> Vec<i64> {
+    /// The walk is put back first (`rewind`, once a frame: the look may
+    /// already have), so a walk moved since (a place given) counts its
+    /// console frames from where it stands.
+    pub fn frames_behind(&mut self, now: i64, most: usize) -> Vec<i64> {
+        self.rewind();
         let Some(k) = &self.kept else { return Vec::new() };
-        if self.rewound || !same(&self.cam.walk.phys, &k.left.0) || !same(&self.cam.walk.committed, &k.left.1) {
-            // the walk was moved since the last frame drawn (a place given):
-            // its console frames begin again where it stands
-            return Vec::new();
-        }
         let mut n = k.frames + 1;
         let mut due = Vec::new();
         while k.time(n) <= now {
@@ -1642,6 +1641,9 @@ pub(crate) mod tests {
         let (mut far, mut off) = (0.0f32, 0.0f32);
         let mut ms = 0;
         while ms <= 16000 {
+            // the look puts the walk back first, as a window's does every
+            // frame (`viewer`'s `sticks`: `rewind`)
+            w.rewind();
             if catch_up {
                 for t in w.frames_behind(t0 + ms, 60) {
                     let c = client(&w, t - t0);
