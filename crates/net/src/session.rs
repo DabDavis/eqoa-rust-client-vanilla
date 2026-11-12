@@ -432,17 +432,22 @@ pub const OP_MAP_TRAVEL_TO: u16 = 0x7E35;
 /// go-eqoa-server's own, no retail message either: the whole of a raid group,
 /// where a roster holds four (`m_group`). The offer, from the server once the
 /// player is in the world, a u32 after the opcode (1; 2 from a server that
-/// also sends each member's group in the raid, petition 1687); a server
-/// without it never sends the rest.
+/// also sends each member's group in the raid, petition 1687; 3 from one that
+/// also sends each member's kind, a merc's or a player's, as it puts the
+/// raid's mercs in the roster: the owner's "im not able to target mercs in a
+/// raid group", 2026-11-12); a server without it never sends the rest.
 pub const OP_RAID_ROSTER_OFFER: u16 = 0x7E18;
 /// A client's answer to [`OP_RAID_ROSTER_OFFER`]: a u32, 1 to be sent the
-/// roster, 2 with each member's group (to an offer of 2 alone), 0 to stop.
+/// roster, 2 with each member's group (to an offer of 2), 3 with its group and
+/// its kind (to an offer of 3 or more), 0 to stop.
 pub const OP_RAID_ROSTER_ANSWER: u16 = 0x7E19;
 /// The roster, to a client that asked, on a change and at most once a second:
 /// u16 members in all, u16 this message's first, u8 how many it holds, then
 /// each [`RaidMember`] (u32 id, u8 and the bytes of its name, u8 class, u8
-/// level, u8 HP of 255, u8 power of 255, and when this client answered 2 a u8
-/// its group in the raid from 1). 0 members: no raid group (now).
+/// level, u8 HP of 255, u8 power of 255, when this client answered 2 or 3 a
+/// u8 its group in the raid from 1 (a merc's, its owner's), and when it
+/// answered 3 a u8 its kind, bit 0 a mercenary). 0 members: no raid group
+/// (now).
 pub const OP_RAID_ROSTER: u16 = 0x7E1A;
 /// The most of a note sent, in bytes: one message, as a go-eqoa-server of
 /// before 2026-11-08 takes each fragment of a longer one for a message of its
@@ -469,8 +474,13 @@ pub struct RaidMember {
     pub level: u8,
     pub hp: u8,
     pub power: u8,
-    /// Its group in the raid, from 1 (0: the server sends none).
+    /// Its group in the raid, from 1 (0: the server sends none). A merc's is
+    /// its owner's.
     pub group: u8,
+    /// It is a mercenary (a server of the offer of 3 says so): it takes no
+    /// place in a raid's group of four and is never moved between them, but is
+    /// targeted from its row as any member.
+    pub merc: bool,
 }
 
 /// The raw part of a 0x002C record: the disc's, and the live game's
@@ -1198,6 +1208,8 @@ pub struct Session {
     pub power_bars: Vec<(u32, u8)>,
     /// The offer said each member's group comes too, when asked (2).
     raid_roster_groups: bool,
+    /// The offer said each member's kind comes too, after its group (3).
+    raid_roster_kinds: bool,
     /// The server's worlds past the disc's, as it last listed them
     /// ([`OP_SERVER_WORLDS_DATA`]); none from a server that never offers them.
     pub server_worlds: Option<Vec<crate::serverworlds::World>>,
@@ -1460,6 +1472,7 @@ impl Session {
             power_bars_asked: None,
             power_bars: Vec::new(),
             raid_roster_groups: false,
+            raid_roster_kinds: false,
             combat_record: false,
             capes: false,
             item_lists: [ITEM_LIST_DISC; 2],
@@ -1661,8 +1674,13 @@ impl Session {
             return;
         }
         self.raid_roster_asked = Some(want);
-        // 2 asks for the members' groups too, where the offer said they come
-        let answer = if want && self.raid_roster_groups { 2 } else { want as u32 };
+        // 2 asks for the members' groups too, where the offer said they come;
+        // 3 their kinds as well (a raid's mercs told apart)
+        let answer = match (want, self.raid_roster_kinds, self.raid_roster_groups) {
+            (true, true, _) => 3,
+            (true, false, true) => 2,
+            _ => want as u32,
+        };
         self.send_op_int(OP_RAID_ROSTER_ANSWER, answer);
     }
 
@@ -2750,12 +2768,15 @@ impl Session {
                     self.raid_roster_offer = true;
                     self.raid_roster_asked = None;
                     self.raid_roster_groups = v >= 2;
+                    self.raid_roster_kinds = v >= 3;
                 }
             }
             OP_RAID_ROSTER => {
                 let (total, first, n) = (r.u16() as usize, r.u16() as usize, r.u8() as usize);
                 // a group after each record, where this client asked for them
                 let groups = self.raid_roster_groups && self.raid_roster_asked == Some(true);
+                // and its kind after that, where it asked for them (3)
+                let kinds = groups && self.raid_roster_kinds;
                 let rows: Vec<RaidMember> = (0..n)
                     .map(|_| {
                         let id = r.u32();
@@ -2763,7 +2784,8 @@ impl Session {
                         let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
                         let (class, level, hp, power) = (r.u8(), r.u8(), r.u8(), r.u8());
                         let group = if groups { r.u8() } else { 0 };
-                        RaidMember { id, name, class, level, hp, power, group }
+                        let merc = kinds && r.u8() & 1 != 0;
+                        RaidMember { id, name, class, level, hp, power, group, merc }
                     })
                     .collect();
                 if !r.error {
@@ -4208,8 +4230,8 @@ mod tests {
         m.extend([0, 7, 255, 0]);
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
         let want = vec![
-            RaidMember { id: 100001, name: "Ann".into(), class: 9, level: 60, hp: 200, power: 100, group: 0 },
-            RaidMember { id: 0x1DCD_6501, name: "Bo".into(), class: 0, level: 7, hp: 255, power: 0, group: 0 },
+            RaidMember { id: 100001, name: "Ann".into(), class: 9, level: 60, hp: 200, power: 100, group: 0, merc: false },
+            RaidMember { id: 0x1DCD_6501, name: "Bo".into(), class: 0, level: 7, hp: 255, power: 0, group: 0, merc: false },
         ];
         assert!(matches!(&ev[..], [Event::RaidRoster { total: 6, first: 2, rows }] if *rows == want), "{ev:?}");
         let mut short = m.clone();
@@ -4239,6 +4261,52 @@ mod tests {
         answers(&mut s);
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m);
         assert!(matches!(&ev[..], [Event::RaidRoster { rows, .. }] if *rows == want), "asked off, read as before: {ev:?}");
+    }
+
+    /// An offer of 3 (go-eqoa-server's raid mercs in the roster, 2026-11-12):
+    /// answered 3, and a kind after each record's group, a merc's bit 0. The
+    /// control: an offer of 2 is answered 2 still and its records read with no
+    /// kind, none a merc.
+    #[test]
+    fn the_raid_rosters_kinds_are_agreed_and_read() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        answers(&mut s);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x18, 0x7E, 3, 0, 0, 0]);
+        s.agree_raid_roster(true);
+        assert_eq!(answers(&mut s), [vec![0x19, 0x7E, 3, 0, 0, 0]], "3 to an offer of 3");
+        let mut k = vec![0x1A, 0x7E, 6, 0, 2, 0, 2];
+        k.extend([0xA1, 0x86, 1, 0, 3]);
+        k.extend(b"Ann");
+        k.extend([9, 60, 200, 100, 1, 0]);
+        k.extend([0xEE, 0xFF, 0xC0, 0x00, 2]);
+        k.extend(b"Bo");
+        k.extend([0, 7, 255, 0, 1, 1]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, k);
+        let got: Vec<(u32, u8, bool)> = match &ev[..] {
+            [Event::RaidRoster { rows, .. }] => rows.iter().map(|r| (r.id, r.group, r.merc)).collect(),
+            _ => panic!("{ev:?}"),
+        };
+        assert_eq!(got, [(100001, 1, false), (0x00C0_FFEE, 1, true)]);
+        // the control: an offer of 2 is answered 2 still, its records read with no kind
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x18, 0x7E, 2, 0, 0, 0]);
+        s.agree_raid_roster(true);
+        assert_eq!(answers(&mut s), [vec![0x19, 0x7E, 2, 0, 0, 0]], "2 to an offer of 2");
+        let mut g2 = vec![0x1A, 0x7E, 6, 0, 2, 0, 2];
+        g2.extend([0xA1, 0x86, 1, 0, 3]);
+        g2.extend(b"Ann");
+        g2.extend([9, 60, 200, 100, 1]);
+        g2.extend([0xEE, 0xFF, 0xC0, 0x00, 2]);
+        g2.extend(b"Bo");
+        g2.extend([0, 7, 255, 0, 1]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, g2);
+        assert!(matches!(&ev[..], [Event::RaidRoster { rows, .. }] if rows.len() == 2 && rows.iter().all(|r| !r.merc)), "{ev:?}");
     }
 
     /// The ready check's window (0x7E49-0x7E4B, 0x7E56): answered only after an

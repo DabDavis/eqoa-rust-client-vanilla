@@ -23,7 +23,8 @@ current.
   looter's menu on a corpse: `raidplay`, `rollwnd`, `masterloot`, go-eqoa-server's 0x7E42-0x7E48; on any other
   server none of it, and the start menu the game's; the raid list in its groups with a role icon on each health bar and the leader's and helper's moves between
   groups by a drag or Raid > Move to Group, the GM Jibrish's petition 1687, 2026-11-12: `raidlist::draw_groups`, go-eqoa-server's
-  0x7E18 offer of 2 and a group byte after each 0x7E1A record, 0x7E48 ops 12 and 13; the role icons drawn on every server),
+  0x7E18 offer of 2 and a group byte after each 0x7E1A record (an offer of 3, 2026-11-12: the raid's mercs in it, each in its
+  owner's group, a kind byte after the group, so they are targeted from their rows and kept out of the groups' counts), 0x7E48 ops 12 and 13; the role icons drawn on every server),
   a group's or a raid's ready check on a server that offers it (the GM Jibrish's petition 1711, 2026-11-12: a strip atop
   the rolls' column, Yes or No, 30 seconds, never stopping the walk: `readywnd`, go-eqoa-server's 0x7E49-0x7E4B, 0x7E56),
   the buff window on a server that offers it (the GM Jibrish's petition 1761, 2026-11-12: two rows of the player's

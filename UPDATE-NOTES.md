@@ -7,6 +7,15 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Mercenaries in the raid window: click them to target them
+- **Mercenaries now show in the raid window**, each under its owner's group, with its health and power bars.
+  **Click one** to target it (or reach it with L1's group cycle), as you target any raid member: in a raid you
+  could not target a mercenary before, since the raid window had no row for it.
+- A mercenary takes **no place** in a raid's group of four: a group with two players and their two mercenaries still
+  shows **(2/4)** in Raid > Move to Group. A mercenary goes with its owner, so its row is not dragged, and Move to
+  Group on it says to move its owner instead. Needs the Heirloom Test Server's update (on an older server the raid
+  window is as before).
+
 ## 2026-11-12 · The auction search reaches level 60 items by default
 - The auction's search form now opens with **Max. Level 60** (it was 50, the disc's own), so level 60 items show
   without changing it first. A server whose patch sets its own maximum still uses that one.

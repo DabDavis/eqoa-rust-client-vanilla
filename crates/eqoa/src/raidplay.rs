@@ -38,6 +38,7 @@ const IN_COMBAT_DISBAND: &str = "Your raid is in combat: it cannot be disbanded.
 const IN_COMBAT_RULES: &str = "Your raid is in combat: its loot rules cannot change.";
 const NO_TARGET: &str = "You have no target.";
 const NOT_IN_RAID: &str = "Your target is not in your raid.";
+const MERC_NOT_MOVED: &str = "A mercenary stays in its owner's group: move its owner instead.";
 const REFUSED: [f32; 4] = [1.0, 0.25, 0.25, 1.0];
 
 /// The raid's state, its rolls and the start menu's entries as last set.
@@ -96,11 +97,12 @@ pub fn drop_command(d: &Drag, drop: Option<(u8, Option<u32>)>) -> Option<Command
     }
 }
 
-/// The groups of a raid roster: each group's number and how many it holds, in
-/// their numbers.
+/// The groups of a raid roster: each group's number and how many players it
+/// holds, in their numbers (a merc, in its owner's group, takes no place there:
+/// go-eqoa-server's `subgroupsLocked`).
 pub fn group_counts(raid: &[net::session::RaidMember]) -> Vec<(u8, usize)> {
     let mut out: Vec<(u8, usize)> = Vec::new();
-    for m in raid.iter().filter(|m| m.group > 0) {
+    for m in raid.iter().filter(|m| m.group > 0 && !m.merc) {
         match out.iter_mut().find(|g| g.0 == m.group) {
             Some(g) => g.1 += 1,
             None => out.push((m.group, 1)),
@@ -254,9 +256,16 @@ impl Play {
                     self.add_chat(NO_TARGET.to_string(), REFUSED);
                     return true;
                 };
-                if !self.group.raid.iter().any(|r| r.id == t) {
-                    self.add_chat(NOT_IN_RAID.to_string(), REFUSED);
-                    return true;
+                match self.group.raid.iter().find(|r| r.id == t) {
+                    None => {
+                        self.add_chat(NOT_IN_RAID.to_string(), REFUSED);
+                        return true;
+                    }
+                    Some(r) if r.merc => {
+                        self.add_chat(MERC_NOT_MOVED.to_string(), REFUSED);
+                        return true;
+                    }
+                    Some(_) => {}
                 }
                 Command::MoveToGroup { id: t, group: (m & 0xFF) as u8 }
             }
@@ -292,6 +301,17 @@ impl Play {
         self.group.raid.iter().find(|m| m.id == id).map_or(0, |m| m.group)
     }
 
+    /// Whether the raid member the client knows by `id` is a mercenary.
+    fn raid_is_merc(&self, id: u32) -> bool {
+        self.group.raid.iter().any(|m| m.id == id && m.merc)
+    }
+
+    /// The raid's players: the members less its mercs (what its groups'
+    /// numbers go by, `raidlist::most_group`).
+    fn raid_players(&self) -> usize {
+        self.group.raid.iter().filter(|m| !m.merc).count()
+    }
+
     /// A press (the left button, a finger) at frame point `f` in play: on a raid
     /// list's row, for one who may move members, the row is held (`Drag`). True
     /// when it was taken.
@@ -301,7 +321,9 @@ impl Play {
         }
         let Some(crate::hud::Pick::Raid(id)) = self.hud.as_ref().and_then(|h| h.2.pick(f)) else { return false };
         let group = self.raid_group_of(id);
-        if group == 0 {
+        // a merc is never moved (it goes with its owner): its row is not held,
+        // and the press is the list's click, its merc targeted
+        if group == 0 || self.raid_is_merc(id) {
             return false;
         }
         self.raid.drag = Some(Drag { id, group, from: f, at: f, moved: false });
@@ -319,7 +341,8 @@ impl Play {
     /// Where a held row would go, let go now: a group's number (its line, the
     /// room under its rows, or one of its members). None where it would not.
     fn raid_drop_at(&self, d: &Drag) -> Option<(u8, Option<u32>)> {
-        drop_on(d, self.hud.as_ref().and_then(|h| h.2.pick(d.at)), |id| self.raid_group_of(id))
+        // onto a merc's row: into its group, not swapped (a merc is never moved)
+        drop_on(d, self.hud.as_ref().and_then(|h| h.2.pick(d.at)), |id| self.raid_group_of(id)).map(|(g, on)| (g, on.filter(|&o| !self.raid_is_merc(o))))
     }
 
     /// The group lit under a held row, and the empty group a new one would be
@@ -327,7 +350,7 @@ impl Play {
     pub(super) fn raid_drag_shown(&self) -> (Option<u8>, Option<u8>) {
         let Some(d) = self.raid.drag.filter(|d| d.moved) else { return (None, None) };
         let top = self.group.raid.iter().map(|m| m.group).max().unwrap_or(0);
-        let next = (top < crate::raidlist::most_group(self.group.raid.len(), top)).then_some(top + 1);
+        let next = (top < crate::raidlist::most_group(self.raid_players(), top)).then_some(top + 1);
         (self.raid_drop_at(&d).map(|g| g.0), next)
     }
 
@@ -363,7 +386,7 @@ impl Play {
     /// the raid's windows, its rows the state's (`rows`).
     pub(super) fn raid_menu(&mut self) {
         let groups = group_counts(&self.group.raid);
-        let n = self.group.raid.len();
+        let n = self.raid_players();
         let want = self.session.raid_offer.then(|| rows(&self.raid.state, &groups, n));
         if self.raid.menu.as_ref() == Some(&want) {
             return;
@@ -813,6 +836,32 @@ mod tests {
         assert_eq!(drop_on(&d, Some(Pick::Me), group_of), None);
         assert_eq!(drop_on(&d, None, group_of), None);
         assert_eq!(drop_on(&Drag { moved: false, ..d }, Some(Pick::RaidGroup(3)), group_of), None, "a click");
+    }
+
+    /// A raid's mercs (go-eqoa-server's offer of 3: in the roster, so they can
+    /// be targeted, each in its owner's group): a group's count is its players,
+    /// so a group of two players and their two mercs is not full, and the
+    /// highest group goes by the players; Move to Group on a merc is refused
+    /// here, nothing sent. The controls: the same rows as players count, and a
+    /// player target is moved.
+    #[test]
+    fn a_raids_mercs_take_no_place_and_are_not_moved() {
+        let merc = |id: u32, group: u8| net::session::RaidMember { merc: true, ..member(id, group) };
+        let raid = vec![member(1, 1), merc(11, 1), member(2, 1), merc(12, 1), member(3, 2)];
+        assert_eq!(group_counts(&raid), [(1, 2), (2, 1)]);
+        let players: Vec<_> = raid.iter().map(|m| net::session::RaidMember { merc: false, ..m.clone() }).collect();
+        assert_eq!(group_counts(&players), [(1, 4), (2, 1)], "the control: as players, full");
+
+        let mut p = play();
+        p.group.raid = raid;
+        assert_eq!(p.raid_players(), 3);
+        p.target = 11;
+        assert!(p.raid_action(MSG_GROUP | 2));
+        assert!(sent(&mut p).is_empty(), "a merc is not moved");
+        assert!(p.chat.iter().any(|(t, _)| t == MERC_NOT_MOVED));
+        p.target = 2;
+        assert!(p.raid_action(MSG_GROUP | 2));
+        assert_eq!(sent(&mut p), [Command::MoveToGroup { id: 2, group: 2 }.bytes()], "the control: a player is");
     }
 
     /// Only one who leads or helps, on a server that sends the groups, may move.

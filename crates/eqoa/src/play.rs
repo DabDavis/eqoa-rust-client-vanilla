@@ -11113,8 +11113,10 @@ mod commands {
         p.entities.slots[0] = at(0x100, 0.0);
         p.entities.slots[1] = at(0x103, 3.0); // a raid member past the roster, in sight
         p.entities.slots[2] = at(0x200, -3.0); // a stranger
+        p.entities.slots[3] = at(0x105, -6.0); // a merc of the raid, in sight
         let row = |id: u32| RaidMember { id, name: format!("m{id}"), ..Default::default() };
-        p.group.raid_page(5, 0, vec![row(0x100), row(me), row(0x101), row(0x103), row(0x7F00_0104)]);
+        let merc = RaidMember { merc: true, ..row(0x105) };
+        p.group.raid_page(6, 0, vec![row(0x100), row(me), row(0x101), row(0x103), merc, row(0x7F00_0104)]);
         assert!(p.sees_entity(0x103) && p.sees_entity(me), "in sight, and itself");
         assert!(!p.sees_entity(0x7F00_0104), "out of sight: its id is a stand-in");
         let cycle = |p: &mut Play, group: bool| -> Vec<u32> {
@@ -11129,6 +11131,7 @@ mod commands {
         };
         let group = cycle(&mut p, true);
         assert!(group.contains(&0x103), "L1 reaches the raid member it sees: {group:x?}");
+        assert!(group.contains(&0x105), "and the raid's merc it sees: {group:x?}");
         assert!(!group.contains(&0x7F00_0104), "not one out of sight: {group:x?}");
         assert!(!group.contains(&0x200), "not a stranger: {group:x?}");
         let tab = cycle(&mut p, false);
