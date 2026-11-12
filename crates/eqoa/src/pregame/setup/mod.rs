@@ -614,7 +614,7 @@ impl Setup {
     /// (compact) put back after.
     fn edit_face(&mut self) {
         if self.typing() {
-            crate::editbox::set_pad_only(self.keyboard && self.options.compact != 0);
+            crate::editbox::set_pad_only(crate::editbox::compact_face(self.keyboard, self.options.compact != 0));
             self.face_set = true;
         } else {
             self.restore_face();

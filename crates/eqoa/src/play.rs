@@ -9054,7 +9054,7 @@ impl Play {
         let reticle = (self.mode == 38 && walker.cam.effect.manual_terp == F::ONE).then(|| self.target_centre(walker, view_proj));
         // VIWndEdit::OnDrawSelf's `sPadOnly`: a keyboard in use and the
         // options' Soft Keyboard on show the compact face
-        crate::editbox::set_pad_only(self.keyboard && self.options.compact != 0);
+        crate::editbox::set_pad_only(crate::editbox::compact_face(self.keyboard, self.options.compact != 0));
         let under_liquid = walker.cam.walk.is_under_liquid();
         let (start_stats, start_loc) = self.start_view(walker);
         let info_text = if self.info_wanted() || self.info_window.open > 0.0 { self.target_info_text() } else { None };

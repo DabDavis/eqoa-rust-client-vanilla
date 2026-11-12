@@ -40,6 +40,32 @@ pub fn set_pad_only(compact: bool) {
     PAD_ONLY.store(compact, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// `gKeyboardAttached` as the PS2 has it: a keyboard is plugged in, whichever
+/// of it and the pad was pressed last. Here: a key of a keyboard has been
+/// pressed since the touch screen was last touched (`keyboard_pressed`,
+/// `screen_touched`). The GM Jibrish's petition 1633: with Keyboard set to
+/// Compact, Enter opened the compact face but the controller's R3 the soft
+/// keyboard, the pad's press read as no keyboard at all.
+static KEYBOARD_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A keyboard's key was pressed: one is at hand from now on.
+pub fn keyboard_pressed() {
+    KEYBOARD_SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The touch screen was touched: a phone's or a tablet's, no keyboard at hand
+/// until a key is pressed again.
+pub fn screen_touched() {
+    KEYBOARD_SEEN.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The face the options' Keyboard asks for (`set_pad_only`'s argument): the
+/// compact face with Compact chosen and a keyboard at hand, whether the last
+/// key (`last_keyboard`) was the keyboard's or a controller's.
+pub fn compact_face(last_keyboard: bool, compact: bool) -> bool {
+    compact && (last_keyboard || KEYBOARD_SEEN.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 /// The compact face is showing.
 pub fn pad_only() -> bool {
     PAD_ONLY.load(std::sync::atomic::Ordering::Relaxed)
@@ -1096,6 +1122,24 @@ impl EditBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The options' Keyboard on Compact (petition 1633): the compact face
+    /// whether the box was opened by Enter or by a controller's R3, once a
+    /// keyboard has been used; the soft keyboard with the other setting, with
+    /// no keyboard used yet, and after the touch screen is touched (the
+    /// controls: the face as the last key alone picked it).
+    #[test]
+    fn compact_keyboard_holds_for_a_controller() {
+        screen_touched();
+        assert!(!compact_face(false, true), "no keyboard yet: a controller's press shows the soft keyboard");
+        assert!(compact_face(true, true), "Enter: compact");
+        keyboard_pressed();
+        assert!(compact_face(false, true), "R3 after a keyboard was used: compact, as Enter");
+        assert!(!compact_face(false, false), "the other setting: the soft keyboard");
+        assert!(!compact_face(true, false), "the other setting, from the keyboard too");
+        screen_touched();
+        assert!(!compact_face(false, true), "a finger on the screen: no keyboard at hand");
+    }
 
     /// `MoveKey` steps over empty cells and wraps at the edges: from the
     /// top-left, up wraps to the bottom row's first key, left to the last

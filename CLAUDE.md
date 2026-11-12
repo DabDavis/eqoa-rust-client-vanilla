@@ -12,7 +12,10 @@ current.
   the Controls page, copy and paste in the edit boxes (the user's of 2026-11-07, held to what a
   console's keyboard can type: `editbox::typable`), chat lines selected with a mouse and copied (the
   same day; `chat`, drawn over the game's chat, not in it), 1,000 lines of chat, no green backdrop behind the start menu's windows, the
-  Extended options, the updater, the 2002 disc's art on F9, Hide UI
+  Extended options (since 2026-11-11, the GM Jibrish's petitions 1631 and 1634, four groups each a menu of its
+  categories: Graphics, how the world is drawn; UI, what is drawn over it; Other, the rest; Multi-boxing settings,
+  one page: a new row goes in the group of its kind, `options::ALL_CATEGORIES`' `group`; setting keys never change
+  with a row's place), the updater, the 2002 disc's art on F9, Hide UI
   on H, names from farther and smaller zoomed out (and every one in a crowd, Overlapping Names Show),
   the raid list on a server that has raid groups (the user's of 2026-11-07: `raidlist`, an Extended row, on by default),
   a raid's windows on a server that sends them (the GM Jibrish's petitions 1448 and 1451, 2026-11-10: the leader's,
@@ -20,7 +23,7 @@ current.
   looter's menu on a corpse: `raidplay`, `rollwnd`, `masterloot`, go-eqoa-server's 0x7E42-0x7E48; on any other
   server none of it, and the start menu the game's),
   the pet's effects in a row under its bar on a server that sends them (the server owner's of 2026-11-09, "put the
-  buff icons under the pet name plate": `hud::pet_effects_pieces`, go-eqoa-server's 0x7E32/0x7E33, Extended > UI's
+  buff icons under the pet name plate": `hud::pet_effects_pieces`, go-eqoa-server's 0x7E32/0x7E33, Extended > UI > HUD's
   Pet Effects, on by default; off, or on any other server, nothing is drawn),
   the floating numbers of the player's own figures and its pet's in a colour chosen for what made them on a server
   that tags them (the server owner's of 2026-11-09, "we can add the number colors to extended menu": `numcolor`,
@@ -29,7 +32,7 @@ current.
   Light Blue and Purple until chosen, petition 1613),
   a DPS meter of the player's group on a server that keeps one (the server owner's of 2026-11-10, "lets add dps meters,
   will work solo, group, raid": `dpsmeter`, go-eqoa-server's 0x7E3A-0x7E3D, a HUD panel under the quest tracker,
-  `/dps`, Extended > Combat, off by default; off, or on any other server, nothing is drawn or asked),
+  `/dps`, Extended > UI > DPS Meter, off by default; off, or on any other server, nothing is drawn or asked),
   Ignore Shouts kept, Update Notices, Text Sharp or Smooth, Loading Screens Longer or Instant, Render
   Scale x1, x2 or x4 (off unless chosen), HUD Nearest or Sharp (Nearest, the game's, by default: the
   user's of 2026-10-28, "make nearest the default ... since there is a cost"; Sharp was the default
@@ -92,7 +95,7 @@ current.
   auto-cast on the quick bars and auto targeting (the server owner's of 2026-11-11, "lets add auto-cast to abilities to
   fire off cooldown/timer/buff gone/pet's die similar to the mercs, also auto targeting": `autocast`, `autoplay`; a slot
   marked auto is pressed by the client itself with the press's own 0x0032, its target taken with the game's 0x0010:
-  nothing new on the wire; Extended > Combat's Auto-Cast and Auto Target, `/autocast`, `/autotarget`)).
+  nothing new on the wire; Extended > Other > Combat's Auto-Cast and Auto Target, `/autocast`, `/autotarget`)).
   A new client-side addition is the user's call: ask first. Sharp filtering is for the 2D layer and
   the text only: the world's textures are drawn smooth, as the game filters them (the user,
   2026-10-27, after a Crisp row for them: "world textures cant render proper without smooth. so
@@ -287,7 +290,9 @@ current.
   controllers' buttons the game's fields before `VIPad::Read`. A key added to the dispatch needs a
   row in `binds::ROWS` (a test reads `viewer.rs` for them).
   Multiboxing: each window reads the controllers its Controller Focus picks (`input::pick`,
-  Extended's Controller page; per window by its place, `multibox.rs`: lock files in the config directory's
+  Extended's Multi-boxing settings, with Capture Controller, Sound in Background and Slow When Not Focused (petition
+  1634: off by default, a covered or minimised window at its Frame Rate; on, at `HIDDEN_GAP`'s 30 a second; per
+  window as Controller Focus, `slow_unfocused.<n>` in client.opt); per window by its place, `multibox.rs`: lock files in the config directory's
   `windows/`, Web Locks in a page; one place a program, never a thread's: a settings read on another
   thread took a second; let go at the loop's end). Windows' Xbox pads are read through XInput (`xinput.rs`) and its
   DualShock 4s and DualSenses over HID (`hidpad.rs`, which also sets their motors; gilrs's force feedback
