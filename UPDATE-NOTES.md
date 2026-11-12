@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Ambient Occlusion without the dark aura
+- **Ambient Occlusion no longer draws a dark aura round characters and models.** The ground, walls and sky seen
+  just past a character's outline (or a post's, a cactus's, a tree's) stayed their own colour instead of a grey
+  shadow that followed the model wherever it stood. Corners, the foot of a wall and the ground right at a
+  character's feet are still darkened as before. (Options > Extended > Graphics > Lighting > Ambient Occlusion;
+  it is still off unless you turn it on.)
+
 ## 2026-11-12 · Tips on the title screen
 - **The title screen now shows a tip** in the space under Play, Network Setup and Options, a new one every few
   seconds.
