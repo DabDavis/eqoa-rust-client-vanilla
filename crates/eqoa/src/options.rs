@@ -844,6 +844,10 @@ impl WndOptions {
                     // (`Session::agree_pet_effects`), the row under the pet's
                     // bar drawn or not (`hud`)
                     58 => c.pet_effects = !c.pet_effects,
+                    // Power Bars: the server told from the next frame
+                    // (`Session::agree_power_bars`), the bars drawn or not
+                    // under the group's, the pet's and the raid list's health
+                    86 => c.power_bars = !c.power_bars,
                     // Buff Window: the server told from the next frame
                     // (`Session::agree_buffs`), ours or the game's strip
                     // drawn (`buffwnd`)
@@ -1566,7 +1570,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 69] = [
+const EXTENDED_ITEMS: [(i32, &str); 70] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1636,6 +1640,7 @@ const EXTENDED_ITEMS: [(i32, &str); 69] = [
     (83, "Buff Window"),
     (84, "Loading Tips"),
     (85, "Quest Markers"),
+    (86, "Power Bars"),
 ];
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
@@ -1711,13 +1716,16 @@ const GROUPS: [(Group, &str); 4] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// Video's Loading Screens Other's General; petition 1634: Controller Focus,
 /// Capture Controller and Sound in Background the Multi-boxing settings',
 /// Controller's touch rows Other's Touch).
-const ALL_CATEGORIES: [Category; 19] = [
+const ALL_CATEGORIES: [Category; 20] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
     Category { name: "Characters", items: &[12, 23, 24, 46], note: Note::Server, group: Group::Graphics },
     Category { name: "Textures", items: TEXTURES, note: Note::Textures, group: Group::Graphics },
-    Category { name: "HUD", items: &[22, 30, 40, 49, 58, 83], note: Note::None, group: Group::Ui },
+    Category { name: "HUD", items: &[22, 30, 40, 58, 83], note: Note::None, group: Group::Ui },
+    // the group's and the raid's windows (2026-11-12, Power Bars: HUD's page
+    // was full, so Raid List came with it)
+    Category { name: "Group & Raid", items: &[49, 86], note: Note::None, group: Group::Ui },
     Category { name: "HUD Layout", items: &[76, 77], note: Note::Hud, group: Group::Ui },
     Category { name: "Name Plates", items: &[27, 34, 85], note: Note::None, group: Group::Ui },
     Category { name: "Map", items: &[41, 42, 43, 44, 45], note: Note::None, group: Group::Ui },
@@ -1739,7 +1747,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[18]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -1879,6 +1887,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
         49 => on_off(c.raid_list),
         58 => on_off(c.pet_effects),
+        86 => on_off(c.power_bars),
         83 => on_off(c.buff_window),
         85 => on_off(c.head_marks),
         84 => on_off(c.loading_tips),
@@ -2496,6 +2505,15 @@ mod tests {
         assert_eq!((settings::raid_list(), cues.last()), (false, Some(&11)), "off: the game's bars");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::raid_list(), "and back: two values");
+        goto!(86);
+        assert_eq!(w.item, 86, "Power Bars");
+        assert!(settings::power_bars(), "on: others' power under their health");
+        assert_eq!(value_text(&vui, 86), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::power_bars(), cues.last()), (false, Some(&11)), "off: the game's bars");
+        assert_eq!(value_text(&vui, 86), Some(wide(vui.words.get(552, vui.language))));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::power_bars(), "and back: two values");
         goto!(58);
         assert_eq!(w.item, 58, "Pet Effects");
         assert!(settings::pet_effects(), "on: the pet's effects under its bar");
@@ -3070,7 +3088,8 @@ mod tests {
         assert_eq!(
             of(1),
             vec![
-                ("HUD", vec!["Ability Bars", "Text", "HUD", "Raid List", "Pet Effects", "Buff Window"]),
+                ("HUD", vec!["Ability Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
+                ("Group & Raid", vec!["Raid List", "Power Bars"]),
                 ("HUD Layout", vec!["Move HUD", "Reset HUD"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers"]),
                 ("Map", vec!["Map", "Minimap", "Map Markers", "Quest Helper", "Quest Tracker"]),

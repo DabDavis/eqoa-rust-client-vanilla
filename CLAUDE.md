@@ -76,14 +76,19 @@ current.
   eqoaclassic.com on any server), the waypoints and the group's waypoint, the minimap on N; the quest marks on
   the map and the minimap and the quest tracker from a server that sends them, else the client's own quest
   guide's, labelled "(guide)"; the Map and the Quest Helper off are the game without them, exactly. The Stats
-  Box, others' mana bars and Target of Target stay out; the owner's "they are everywhere" the same day: the
+  Box, the target's mana bar and Target of Target stay out (others' power came back to the group's bars on
+  2026-11-12, below); the owner's "they are everywhere" the same day: the
   minimap's rim keeps only the player's own steps' "?", a "!" only where it lies, and the server marks a quest's
   name once near the player's level; and a GM's Ctrl+click on the map travels there, offered by go-eqoa-server
   to a GM's client alone, 0x7E34/0x7E35); the map's list of places, any world or town shown from the player's
   own disc, and the minimap inside a building, cave or dungeon (players' petitions 1479 and 1494, 2026-11-11:
   `map::places`, `map::indoor`, the floors under the ceiling as FrontiersForge's minimap drew them), and
   Options > Interface's Profanity Filter told to a server that asks (the GM Jibrish's petition 1490:
-  go-eqoa-server's 0x7E60; the filter is the server's, on at every login)).
+  go-eqoa-server's 0x7E60; the filter is the server's, on at every login), and Power Bars on a server that sends
+  others' power (the server owner's of 2026-11-12, "lets add power bars to group/raid display": a member's power,
+  a player's or a merc's, and the pet's under its health in the game's bars, go-eqoa-server's 0x7E01/0x7E02,
+  `Session::agree_power_bars`, `hud::power_at`; the raid list's from 0x7E1A as before; Extended > UI > Group &
+  Raid's Power Bars, setting `power_bars`, on by default; off, or on any other server, the game's bars)).
   `render::lit`, `lights.rs`; off it is the PS2's light exactly, every test and oracle unchanged, and `vi` untouched), and Sun
   Shadows (2026-11-08: Extended > Lighting, off unless chosen, drawn only with Dynamic Lighting; `render::sunshadow`; off, every
   frame byte for byte as before, on Vulkan and GL)).

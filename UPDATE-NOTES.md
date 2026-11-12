@@ -14,6 +14,14 @@ is put on the page by `.github/workflows/notes.yml`.
   them on or off), its **Stance**, a healer's **Be offensive / Be defensive**, and **Dismiss** (asked again
   before it goes). Needs a server with mercenaries (the Heirloom Test Server); on a PS2, type `/merc menu`.
 
+## 2026-11-12 · Power bars in the group and raid windows
+- **See your group's power**: a thin blue power bar now sits under each group member's health bar, for
+  other players and for mercenaries in your group alike, and under your pet's health too. They move as
+  people cast and as their power comes back, wherever they are, near or far.
+- **The raid window** keeps its thin blue power bar under every member's health.
+- **Turn them off** in Options > Extended > UI > **Group & Raid** > **Power Bars** (on by default). Raid List
+  moved to the same page. On a server that does not send others' power, the windows are as before.
+
 ## 2026-11-12 · Loading tips without "Did you know"
 
 Every loading tip is now a plain sentence ("You can type /stuck to return to your bind point when you cannot move."), without the "Did you know" in front.

@@ -104,6 +104,10 @@ pub struct MemberState {
     /// The client's own: the raid's marks on its bar (`raidlist::draw_marks`),
     /// none outside a raid or on a server that sends no raid state.
     pub marks: u8,
+    /// The client's own (Extended's Power Bars): its power of 255 as the
+    /// server last sent it (`Session::power_of`), none when there is none to
+    /// show.
+    pub power: Option<u8>,
 }
 
 /// What `DrawPet` reads: `GetPetName`, whether the pet is the target, and
@@ -117,6 +121,21 @@ pub struct PetState {
     pub is_target: bool,
     pub creature: Option<(i32, bool, bool)>,
     pub effects: Vec<u32>,
+    /// Power Bars: its power of 255 where the server sends it.
+    pub power: Option<u8>,
+}
+
+/// Power Bars (the server owner's of 2026-11-12, "lets add power bars to
+/// group/raid display"; the game draws no one's power but the player's): a
+/// member's or the pet's power in the player's own power art (fill 9 in the
+/// gauge's frame 136, 60 by 10) under its health, from its bar's top as the
+/// player's own frame stacks them: the health gauge 25 down, the power 10
+/// under it, inside the bar's 46 and clear of the pet's effects' row (48).
+const POWER_UNDER: [i32; 2] = [10, 35];
+
+/// Where a bar's power gauge goes, for its bar at `at`.
+fn power_at(at: [i32; 2]) -> [i32; 2] {
+    [at[0] + POWER_UNDER[0], at[1] + POWER_UNDER[1]]
 }
 
 /// The pet's effects' row (the user, 2026-11-09: "put the buff icons under the
@@ -500,6 +519,9 @@ impl Hud {
             if m.marks != 0 {
                 crate::raidlist::draw_marks(ui, p[0] + 168, p[1] + 5, m.marks);
             }
+            if let Some(v) = m.power {
+                draw_gauge(vui, ui, 9, 136, power_at(start), m.is_target, v as f32 / 255.0);
+            }
             if let Some((hp, f4, f8)) = m.hp {
                 p = [p[0] + 10, p[1] + 25];
                 draw_gauge(vui, ui, 7, 136, p, m.is_target, hp as f32 / 255.0);
@@ -539,6 +561,9 @@ impl Hud {
         w.open(true);
         w.text_box(vui, ui, &wide(&pet.name), 0, 0, 160, 1, [0.0, 0.0, 0.0, g], 10);
         draw_pet_effects(vui, ui, p, fx);
+        if let Some(v) = pet.power {
+            draw_gauge(vui, ui, 9, 136, power_at(p), pet.is_target, v as f32 / 255.0);
+        }
         let Some((hp, f4, f8)) = pet.creature else { return };
         p = [p[0] + 10, p[1] + 25];
         draw_gauge(vui, ui, 7, 136, p, pet.is_target, hp as f32 / 255.0);
@@ -719,7 +744,21 @@ pub fn draw_gauge(vui: &Vui, ui: &mut dyn Raster, bar: i32, frame: i32, at: [i32
 
 #[cfg(test)]
 mod tests {
-    use super::{FxArt, FxPiece, Hud, HudState, MemberState, PetState, Pick, bearing_point, patch_point, pet_effects_height, pet_effects_pieces, waypoint_point};
+    use super::{FxArt, FxPiece, Hud, HudState, MemberState, PetState, Pick, bearing_point, patch_point, pet_effects_height, pet_effects_pieces, power_at, waypoint_point};
+
+    /// Power Bars: a member's (or the pet's) power under its health gauge (25
+    /// down, its frame 10 high), inside its 46-high bar and above the pet's
+    /// effects' row (48 down); the next member's bar 48 on.
+    #[test]
+    fn a_power_bar_sits_under_the_health_it_goes_with() {
+        let at = [20, 93];
+        let health = [at[0] + 10, at[1] + 25];
+        let p = power_at(at);
+        assert_eq!(p, [health[0], health[1] + 10], "under the health, its left edge");
+        assert!(p[1] + 10 <= at[1] + 46, "inside the bar");
+        assert!(p[1] + 10 <= at[1] + super::PET_FX_AT[1], "clear of the pet's effects");
+        assert!(p[1] + 10 <= at[1] + 48, "clear of the next member's bar");
+    }
 
     /// A Vui whose atlas has the player's effects strip's art at the disc's
     /// sizes (SUPPORT's: the cell 157 32x32, the caps 159 5x34 and 160 3x34).
