@@ -42,10 +42,13 @@ held), 'rdrag X0 Y0 X1 Y1 [MS]' (the right), 'press X Y [left|right]' and
 navigator.getGamepads (the standard layout's indices: 0 A, 1 B, 2 X, 3 Y,
 4 LB, 5 RB, 6 LT, 7 RT, 8 Back, 9 Start, 10 L3, 11 R3, 12-15 the d-pad):
 'tap N [MS]', 'press N', 'release N', 'axes LX LY RX RY'.
---hide SECONDS=DURATION puts another tab in front then, for DURATION seconds, so
+--hide SECONDS=DURATION (SECONDS +N after --then too) puts another tab in front then, for DURATION seconds, so
 the page is hidden as a player's is when they switch tabs (no animation
 frames, its timers held back; with --headed the browser's own throttling,
 which headless may not do), then brings the page's tab back.
+--cpu SECONDS=RATE slows the page's main thread RATE times from then (CDP's CPU
+throttling, 1 back to normal): a machine busy with other windows, as a player's
+running several clients is.
 --iso-2002 PATH puts the 2002 disc (EverQuest Online Adventures (USA),
 SLUS-20470) into the page's second input with the first, for the art on F9;
 --ask-2002 PATH answers the picker F9's ask opens in the game (the file
@@ -393,10 +396,13 @@ async def drive(a, base, ws_url, target_id):
         for s in a.insert:
             t, text = s.split("=", 1)
             events.append((when(t), "insert", os.environ.get(text[1:], "") if text.startswith("$") else text))
+        for s in a.cpu:
+            t, rate = s.split("=", 1)
+            events.append((when(t), "cpu", rate))
         for s in a.hide:
             t, dur = s.split("=", 1)
-            events.append((float(t), "hide", ""))
-            events.append((float(t) + float(dur), "unhide", ""))
+            events.append((when(t), "hide", ""))
+            events.append((when(t) + float(dur), "unhide", ""))
         events.sort()
         other = []  # the tab put in front of the page (--hide)
 
@@ -438,6 +444,9 @@ async def drive(a, base, ws_url, target_id):
                 out(f"shown again (page visibility {await js('document.visibilityState')})")
             elif kind == "js":
                 out(f"js {arg[:60]} -> {await js(arg)}")
+            elif kind == "cpu":
+                await call("Emulation.setCPUThrottlingRate", rate=float(arg))
+                out(f"cpu: the page's main thread {arg} times slower")
             elif kind == "touch":
                 await touches(arg)
             elif kind == "gamepad":
@@ -529,6 +538,7 @@ if __name__ == "__main__":
     ap.add_argument("--then", help="console text: an event's SECONDS written +N count N seconds from the first line holding it ('in the world as')")
     ap.add_argument("--start-when", help="a page expression, or line:TEXT for a console line: the events' seconds count from when it first holds ('line:the HUD is in')")
     ap.add_argument("--hide", action="append", default=[], help="SECONDS=DURATION: another tab in front for DURATION seconds (the page hidden)")
+    ap.add_argument("--cpu", action="append", default=[], help="SECONDS=RATE: the page's main thread RATE times slower from then (CDP's CPU throttling; 1: as it is), a machine busy with other windows")
     ap.add_argument("--final-shot")
     ap.add_argument("--until")
     ap.add_argument("--timeout", type=float, default=60)

@@ -6044,6 +6044,39 @@ impl Play {
         self.mode == 0 && self.locks.1 && !self.map.open
     }
 
+    /// The one followed as `UpdateControls` finds it (`control_client`):
+    /// still in the group, or a player, and in the scene (`FindEntity`), with
+    /// an actor (`member_at`), as the player is (`self_at`); one gone from
+    /// view or the zone is lost.
+    fn follow_found(&self, member_at: Option<[f32; 3]>, self_at: Option<[f32; 3]>) -> crate::controls::Follow {
+        if !self.following {
+            return crate::controls::Follow::Off;
+        }
+        let (id, me) = (self.follow_id, self.self_id32());
+        let member = (self.group_member(id) && self.entities.slots.iter().flatten().any(|e| e.id == id)) || self.player_in_scene(id);
+        match (member && id != u32::MAX && Some(id) != me).then(|| member_at.zip(self_at)).flatten() {
+            Some((member_at, self_at)) => crate::controls::Follow::At(member_at, self_at),
+            None => crate::controls::Follow::Lost,
+        }
+    }
+
+    /// The follow (`follow_found`) at a console frame `back_ms` before this
+    /// frame's (`Walker::frames_behind`: a frame that came late, a hidden
+    /// page's or a busy machine's), the player where the walk now stands
+    /// (`self_at`): the one followed where its actor was then, extrapolated
+    /// to that time as each frame extrapolates it (`VIClient::Extrapolate`)
+    /// from what the last frame had heard, so each console frame's steering
+    /// sees the member move on as it went.
+    pub fn follow_back(&self, back_ms: i64, self_at: [f32; 3]) -> crate::controls::Follow {
+        let at = self.session.now().wrapping_sub(back_ms.clamp(0, u32::MAX as i64) as u32);
+        let member_at = self.entities.slots.iter().flatten().find(|e| e.id == self.follow_id).filter(|e| self.in_scene(e)).map(|e| {
+            let mut e = e.clone();
+            e.extrapolate(at, UPDATE_RATE);
+            e.actor_pos
+        });
+        self.follow_found(member_at, Some(self_at))
+    }
+
     /// What `UpdateControls` reads of the client this frame.
     pub fn control_client(&self) -> crate::controls::Client {
         let now = self.session.now();
@@ -6057,16 +6090,7 @@ impl Play {
         // the one followed, as UpdateControls finds it: still in the group,
         // or a player, and in the scene (`FindEntity`), with an actor, as the
         // player is; one gone from view or the zone is lost
-        let follow = if !self.following {
-            crate::controls::Follow::Off
-        } else {
-            let id = self.follow_id;
-            let member = (self.group_member(id) && self.entities.slots.iter().flatten().any(|e| e.id == id)) || self.player_in_scene(id);
-            match (member && id != u32::MAX && Some(id) != me).then(|| self.actor_pos(id).zip(self.self_at.map(|s| s.0))).flatten() {
-                Some((member_at, self_at)) => crate::controls::Follow::At(member_at, self_at),
-                None => crate::controls::Follow::Lost,
-            }
-        };
+        let follow = self.follow_found(self.actor_pos(self.follow_id), self.self_at.map(|s| s.0));
         crate::controls::Client {
             follow,
             // UpdateGame: `m_speed`, 1.05 times it while following
