@@ -26,6 +26,11 @@ current.
   0x7E18 offer of 2 and a group byte after each 0x7E1A record, 0x7E48 ops 12 and 13; the role icons drawn on every server),
   a group's or a raid's ready check on a server that offers it (the GM Jibrish's petition 1711, 2026-11-12: a strip atop
   the rolls' column, Yes or No, 30 seconds, never stopping the walk: `readywnd`, go-eqoa-server's 0x7E49-0x7E4B, 0x7E56),
+  the buff window on a server that offers it (the GM Jibrish's petition 1761, 2026-11-12: two rows of the player's
+  buffs and one of its pet's in the effects strip's place, a click shows a buff's name and time left and a second
+  takes it off, R2 held and L2 (the keyboard's U) give it the d-pad: `buffwnd`, go-eqoa-server's 0x7E57-0x7E59;
+  Extended > UI > HUD's Buff Window, on by default; off, or on any other server, the game's strip), a "Did you know"
+  tip on every loading screen (petition 1778: `tips.rs`, `tips.txt`, Extended > Other > General's Loading Tips),
   the pet's effects in a row under its bar on a server that sends them (the server owner's of 2026-11-09, "put the
   buff icons under the pet name plate": `hud::pet_effects_pieces`, go-eqoa-server's 0x7E32/0x7E33, Extended > UI > HUD's
   Pet Effects, on by default; off, or on any other server, nothing is drawn),
