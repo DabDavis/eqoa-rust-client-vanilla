@@ -1028,6 +1028,13 @@ impl Play {
             0x124D
         } else if f & 8 != 0 {
             0x0061
+        } else if c.p256 == 3 && self.own_merc(&c.name) {
+            // one's own merc: its details box, and the talk that opens its
+            // menu on a server that keeps one (go-eqoa-server's mercmenu.go:
+            // the owner's of 2026-11-12, "let players press Square to open a
+            // dialog with their mercs"; CLIENT talks to no pet)
+            self.info_up = true;
+            0x0004
         } else if c.p256 == 2 || c.p256 == 3 {
             self.info_up = true;
             return;
@@ -9905,7 +9912,20 @@ impl Play {
                 let rank = if title.is_empty() { class.as_str() } else { title };
                 Some(if guild.is_empty() { format!("{}\n{race}\n{rank}\n{level}", c.name) } else { format!("{}\n{guild}\n{race}\n{rank}\n{level}", c.name) })
             }
-            3 => Some(format!("{}\n{level}", c.name)),
+            // a merc's class (and a healer's mode) under its name, where the
+            // server tells them (0x7E5B's layout 3: the owner's of 2026-11-12,
+            // "for mercs show class also in the square pop up")
+            3 => Some(match self.session.mercs.as_ref().and_then(|m| m.class(&c.name)) {
+                Some((k, mode)) => {
+                    let class = word(if k < 15 { 165 + k as i32 } else { 165 });
+                    match mode {
+                        1 => format!("{}\n{class} (Defensive)\n{level}", c.name),
+                        2 => format!("{}\n{class} (Offensive)\n{level}", c.name),
+                        _ => format!("{}\n{class}\n{level}", c.name),
+                    }
+                }
+                None => format!("{}\n{level}", c.name),
+            }),
             // a monster the server said has nothing to say (`mob_info`): its
             // name and level as the server holds them, as a pet's are drawn
             _ => self.mob_info.as_ref().filter(|m| m.0 == e.id).map(|(_, lv, name)| format!("{name}\n{} {lv}", word(503))),

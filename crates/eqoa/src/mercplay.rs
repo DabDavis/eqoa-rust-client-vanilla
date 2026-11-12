@@ -66,6 +66,12 @@ impl Play {
         Some(format!("<{owner}'s Mercenary>"))
     }
 
+    /// Whether a creature of that name is the player's own merc: a merc
+    /// whose hirer the server names as the player (0x7E5B's layout 2 or 3).
+    pub(super) fn own_merc(&self, name: &str) -> bool {
+        self.session.mercs.as_ref().and_then(|m| m.owner(name)).is_some_and(|o| !o.is_empty() && o == self.player.name)
+    }
+
     /// The menus came again (a CLIENT image read): the entry is put in again.
     pub(super) fn merc_menu_again(&mut self) {
         self.merc.menu = None;
@@ -192,8 +198,45 @@ mod tests {
         let npc = net::entity::Creature { p256: 0, name: "Ralthas".into(), ..Default::default() };
         p.session.mercs = Some(Mercs { own: false, names: vec!["Ralthas".into()], ..Default::default() });
         assert_eq!(p.merc_tag(&merc), None, "the control: no hirer named");
-        p.session.mercs = Some(Mercs { own: false, names: vec!["Ralthas".into()], owners: vec!["Lonewulf".into()] });
+        p.session.mercs = Some(Mercs { own: false, names: vec!["Ralthas".into()], owners: vec!["Lonewulf".into()], ..Default::default() });
         assert_eq!(p.merc_tag(&merc).as_deref(), Some("<Lonewulf's Mercenary>"));
         assert_eq!((p.merc_tag(&pet), p.merc_tag(&npc)), (None, None));
+    }
+
+    /// □ on a merc (the owner, 2026-11-12): its details box shows its class
+    /// (and a healer's mode) under its name where the server tells them
+    /// (layout 3); on one's own merc the press also talks (0x0004), which opens
+    /// its menu on the server. The controls: another's merc is only shown, and
+    /// a merc the server told no class of (layout 2) shows its name and level.
+    #[test]
+    fn square_on_a_merc_shows_its_class_and_talks_to_ones_own() {
+        let mut p = play();
+        p.words = Some(crate::groupsearch::tests::numbered());
+        p.player.name = "Jibrish".into();
+        let merc = |id: u32, name: &str| net::entity::Entity {
+            id,
+            creature: Some(net::entity::Creature { name: name.into(), class: 9, level: 60, p256: 3, ..Default::default() }),
+            ..Default::default()
+        };
+        p.entities.slots[0] = Some(merc(0x30, "Jorador"));
+        p.entities.slots[1] = Some(merc(0x31, "Haldor"));
+        p.session.mercs = Some(Mercs {
+            own: true,
+            names: vec!["Jorador".into(), "Haldor".into()],
+            owners: vec!["Jibrish".into(), "Tmac".into()],
+            classes: vec![(9, 1), (9, 0)],
+        });
+        p.target = 0x30;
+        assert_eq!(p.target_info_text().as_deref(), Some("Jorador\nw174 (Defensive)\nw503 60"));
+        sent(&mut p);
+        p.interact_with_target();
+        assert!(p.info_up);
+        assert_eq!(sent(&mut p), vec![vec![0x04, 0x00, 0x30, 0, 0, 0]], "one's own: a talk");
+        p.target = 0x31;
+        assert_eq!(p.target_info_text().as_deref(), Some("Haldor\nw174\nw503 60"));
+        p.interact_with_target();
+        assert!(sent(&mut p).is_empty(), "another's merc: shown, not talked to");
+        p.session.mercs.as_mut().unwrap().classes.clear();
+        assert_eq!(p.target_info_text().as_deref(), Some("Haldor\nw503 60"), "no class told: name and level");
     }
 }
