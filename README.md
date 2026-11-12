@@ -316,8 +316,8 @@ or a browser (each described where it lives below):
   bar, with Pet Effects on). A click or a tap lights a buff and shows its name and time left; a second
   click on it asks it off (0x7E59: u8 whose, u32 id, u32 icon), and the server takes off only what is
   beneficial and says so in the chat. A controller: R2 held and L2 give the bar the d-pad until △ or L2
-  (left and right, up and down between the rows, ✕ asks the lit one off); a keyboard: U, the arrows,
-  Enter, Escape. Off, or on any other server, the game's strip (`influence`); a PS2 ignores the offer.
+  (left and right, up and down between the rows, ✕ asks the lit one off); a keyboard: C held and Z,
+  the arrows, Enter, Escape. Off, or on any other server, the game's strip (`influence`); a PS2 ignores the offer.
 - **Loading tips** (the GM Jibrish's petition 1778, 2026-11-12; `tips.rs`, `tips.txt`): one "Did you
   know" sentence, picked at random as each loading screen comes up (world entry, a logout's way back,
   a zone or world change, a coach, a gate, a rez), under its bar in the 4:3 frame's middle, never the

@@ -1,6 +1,6 @@
 //! The buff window in play (`buffwnd`; the GM Jibrish's petition 1761): the
 //! set the server sends, drawn in the effects strip's place, its clicks, its
-//! d-pad (R2 held and L2; the keyboard's U) and its removals sent. A child of
+//! d-pad (R2 held and L2; the keyboard's C and Z) and its removals sent. A child of
 //! `play`, for `Play`'s fields.
 
 use super::Play;
@@ -17,7 +17,7 @@ impl Play {
         self.session.buffs_left(self.session.now())
     }
 
-    /// The bar takes the d-pad (R2 held and L2, or U), or lets it go when it
+    /// The bar takes the d-pad (R2 held and L2, the keyboard's C and Z), or lets it go when it
     /// has it. False when it is not up or has nothing to walk.
     pub fn toggle_buff_focus(&mut self) -> bool {
         if self.buffs.focused() {

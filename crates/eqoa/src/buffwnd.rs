@@ -20,8 +20,8 @@
 //! - A controller: hold R2 (the chat box's history, where the walk goes on) and
 //!   press L2, and the bar has the d-pad until it is let go: left and right
 //!   along a row, up and down between the rows, the lit buff's name and time
-//!   left shown, ✕ takes it off, △ or L2 lets go. The keyboard: U, then the
-//!   arrows, Enter takes it off, Escape, Backspace or U lets go. While the bar
+//!   left shown, ✕ takes it off, △ or L2 lets go. The keyboard: C held and Z,
+//!   then the arrows, Enter takes it off, Escape or Backspace lets go. While the bar
 //!   has them, those keys are its alone; the sticks walk and turn as ever.
 //! - A removal goes to the server (0x7E59), which takes off only what is
 //!   beneficial and says so in the chat either way; the set it sends again
@@ -104,7 +104,7 @@ fn key_of(l: &Line) -> (u8, u32, u32, String) {
 }
 
 pub struct BuffWnd {
-    /// the bar has the d-pad (R2 + L2, U)
+    /// the bar has the d-pad (R2 + L2; C + Z)
     focused: bool,
     /// the lit buff, and until when its name shows (a click's; the session's ms)
     lit: Option<(u8, u32, u32, String)>,
@@ -154,7 +154,7 @@ impl BuffWnd {
         }
     }
 
-    /// The d-pad to the bar (R2 + L2, U): the first buff lit. False with none.
+    /// The d-pad to the bar (R2 + L2; C + Z): the first buff lit. False with none.
     pub fn take_focus(&mut self, lines: &[Line], pets: bool) -> bool {
         let cells = layout(lines, self.cw.max(1), self.capw.max(1), pets);
         let Some(first) = cells.first() else { return false };
@@ -165,7 +165,7 @@ impl BuffWnd {
         true
     }
 
-    /// The d-pad handed back (△, L2, Escape, U), the light with it.
+    /// The d-pad handed back (△, L2, Escape), the light with it.
     pub fn let_go(&mut self) {
         self.focused = false;
         self.lit = None;

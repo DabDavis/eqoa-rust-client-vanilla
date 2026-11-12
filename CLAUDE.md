@@ -28,7 +28,7 @@ current.
   the rolls' column, Yes or No, 30 seconds, never stopping the walk: `readywnd`, go-eqoa-server's 0x7E49-0x7E4B, 0x7E56),
   the buff window on a server that offers it (the GM Jibrish's petition 1761, 2026-11-12: two rows of the player's
   buffs and one of its pet's in the effects strip's place, a click shows a buff's name and time left and a second
-  takes it off, R2 held and L2 (the keyboard's U) give it the d-pad: `buffwnd`, go-eqoa-server's 0x7E57-0x7E59;
+  takes it off, R2 held and L2 (the keyboard's C and Z) give it the d-pad: `buffwnd`, go-eqoa-server's 0x7E57-0x7E59;
   Extended > UI > HUD's Buff Window, on by default; off, or on any other server, the game's strip), a "Did you know"
   tip on every loading screen (petition 1778: `tips.rs`, `tips.txt`, Extended > Other > General's Loading Tips),
   the pet's effects in a row under its bar on a server that sends them (the server owner's of 2026-11-09, "put the

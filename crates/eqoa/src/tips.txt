@@ -85,7 +85,7 @@ Did you know you can select chat lines with the mouse and copy them?
 Did you know you can Shift+click an item to link it in chat for others to see?
 Did you know you can hold a quick bar's ability, or right-click it, to have it cast by itself?
 Did you know you can click one of your buffs to see how long it has left, and click it again to remove it?
-Did you know you can press U, or hold R2 and press L2, to walk your buffs with the arrows and remove one?
+Did you know you can hold R2 and press L2, or hold C and press Z, to walk your buffs and remove one?
 Did you know you can turn the DPS meter on in Options > Extended > UI > DPS Meter?
 Did you know you can choose the colours of your damage and healing numbers in Options > Extended > UI > Number Colors?
 Did you know you can make loading screens instant in Options > Extended > Other > General?

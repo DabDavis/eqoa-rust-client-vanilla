@@ -4276,8 +4276,12 @@ impl Play {
     /// ends the scroll, L3 toggles autorun (33 is a chat mode), and the
     /// attack and the target's details are let go as in play.
     fn chat_scroll_key(&mut self, key: i32, down: bool) {
-        // L2 with R2 held: the buff window takes the d-pad (`buffwnd`)
+        // L2 with R2 held (the keyboard's Z with C): the buff window takes the
+        // d-pad, or lets it go (`buffwnd`); while it has it, the d-pad is its
         if down && key == 141 && self.toggle_buff_focus() {
+            return;
+        }
+        if self.buff_key(key, down) {
             return;
         }
         // the walk through the item links (`itemlink`), unless a loot roll's

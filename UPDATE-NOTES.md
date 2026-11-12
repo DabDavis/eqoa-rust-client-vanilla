@@ -15,7 +15,7 @@ is put on the page by `.github/workflows/notes.yml`.
   buffs can be removed the same way, and so can the Tester Pro's.
 - **On a controller:** hold **R2** and press **L2**, then use the d-pad to walk your buffs (left and right along a
   row, up and down between rows); each shows its name and time left. **✕ removes** the lit one, **△ or L2** gives
-  the d-pad back. **On a keyboard:** press **U**, then the arrows, **Enter** removes, **Escape** or **U** is done.
+  the d-pad back. **On a keyboard:** hold **C** and press **Z**, then the arrows, **Enter** removes, **Escape** is done.
   You can still walk and turn meanwhile.
 - **Loading screens now show a tip**: one "Did you know..." line about a command or a feature, a different one each
   time, when you enter the world, zone, coach, gate, die and return, or log out.

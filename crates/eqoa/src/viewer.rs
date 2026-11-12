@@ -4485,24 +4485,22 @@ impl App {
                 }
                 return;
             }
-            // the buff window (`buffwnd`, petition 1761): U in play gives it
-            // the arrows (they come as the pad's d-pad) and lets them go; while
-            // it has them Enter takes the lit buff off, Escape and Backspace
-            // let go
-            if p.typing.is_none() && (p.mode == 0 || p.mode == 38) && !event.repeat {
+            // the buff window holding the keys (`buffwnd`, petition 1761; C
+            // held and Z give it them, as R2 and L2): Enter takes the lit buff
+            // off, Escape and Backspace let go (the arrows come as the d-pad's)
+            if p.typing.is_none() && (p.mode == 0 || p.mode == 38) && !event.repeat && p.buffs.focused() {
                 match &event.logical_key {
-                    Key::Character(c) if c.eq_ignore_ascii_case("u") && (p.buffs.focused() || p.buff_window_on()) => {
-                        if down {
-                            p.toggle_buff_focus();
-                        }
-                        return;
-                    }
-                    Key::Named(NamedKey::Enter) if p.buffs.focused() => {
+                    Key::Named(NamedKey::Enter) => {
                         p.buff_key(134, down);
                         return;
                     }
-                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) if p.buffs.focused() => {
+                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => {
                         p.buff_key(132, down);
+                        return;
+                    }
+                    // Z, as L2: let go
+                    Key::Character(c) if c.eq_ignore_ascii_case("z") => {
+                        p.buff_key(141, down);
                         return;
                     }
                     _ => {}
@@ -4713,6 +4711,16 @@ impl App {
             let down = event.state == ElementState::Pressed;
             let k = match &event.logical_key {
                 Key::Character(c) if c.eq_ignore_ascii_case("c") => Some(99),
+                // the buff window (`buffwnd`): Z with C held gives it the
+                // arrows, as L2 with R2 held
+                Key::Character(c) if c.eq_ignore_ascii_case("z") && p.mode == 33 && (p.buff_window_on() || p.buffs.focused()) => Some(141),
+                // and while it has them, the arrows, Enter and Escape are its
+                Key::Named(NamedKey::ArrowUp) if p.mode == 33 && p.buffs.focused() => Some(138),
+                Key::Named(NamedKey::ArrowDown) if p.mode == 33 && p.buffs.focused() => Some(139),
+                Key::Named(NamedKey::ArrowLeft) if p.mode == 33 && p.buffs.focused() => Some(136),
+                Key::Named(NamedKey::ArrowRight) if p.mode == 33 && p.buffs.focused() => Some(137),
+                Key::Named(NamedKey::Enter) if p.mode == 33 && p.buffs.focused() => Some(134),
+                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) if p.mode == 33 && p.buffs.focused() => Some(132),
                 Key::Named(NamedKey::ArrowUp) if p.mode == 33 => Some(19),
                 Key::Named(NamedKey::ArrowDown) if p.mode == 33 => Some(20),
                 // a loot roll's strips up (`raidplay`): right gives them the

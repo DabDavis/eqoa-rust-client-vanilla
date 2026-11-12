@@ -168,7 +168,6 @@ pub const ROWS: &[Row] = &[
     row("group_leave", "{994}", &["f8"], Pad::None, ""),
     row("art", "Art: Frontiers' or 2002's", &["f9"], Pad::None, "Everything drawn swaps between Frontiers' art and the 2002 disc's (EverQuest Online Adventures, USA, SLUS-20470), at once; the first time, it asks for that disc."),
     row("hide_ui", "Hide UI", &["h"], Pad::None, "Hides everything over the world: the HUD, the chat, the names over heads, the damage numbers and the target's rings. Again, or any window coming up, shows them."),
-    row("buffs", "Buff window", &["u"], Pad::None, "On a server with the buff window: the arrows walk your buffs, showing each one's name and time left, Enter takes the lit one off, U, Escape or Backspace let go. A controller: hold |* and press |&."),
     row("minimap", "Minimap", &["n"], Pad::None, "Shows or hides the minimap, as Extended's Map page does, and keeps it. On the map: a community marker suggested."),
     row("controls", "Controls", &["f1"], Pad::None, "This page, from play."),
 ];
