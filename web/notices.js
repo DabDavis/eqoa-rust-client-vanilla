@@ -91,6 +91,21 @@ function caught(err, where) {
   // the browser's own, harmless
   if (/ResizeObserver loop/.test(text)) return;
   problem('page', `Something in the page failed (${where}): ${text}`);
+  // an exception thrown through the client's event loop (the engine's stack
+  // overflowing is a RangeError, not a trap) leaves it dead: winit's runner
+  // stays borrowed, the game stands still and the page's unload panics in
+  // winit ("runner.rs:683:69: RefCell already borrowed", petitions 1618 and
+  // 1664), this error's words lost. Asked in a task of its own, when no call
+  // of the loop's is under way (web::event_loop_stuck): the client stopped,
+  // with this error as its cause.
+  setTimeout(() => {
+    let stuck = false;
+    try { stuck = !dead && typeof window.eqoaLoopStuck === 'function' && !!window.eqoaLoopStuck(); } catch { /* the client is gone */ }
+    if (stuck) {
+      notice('problem:page');
+      crash('The client stopped', errorText(err));
+    }
+  }, 0);
 }
 
 addEventListener('error', (e) => {

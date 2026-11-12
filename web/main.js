@@ -5,7 +5,7 @@
 // override the defaults: ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a
 // local server. Notices and what goes wrong are notices.js's
 // (window.eqoaNotices).
-import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick, field_up, field_text, chat_copy_text, chat_copied, field_cut, field_paste, lose_device } from './eqoa.js';
+import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick, field_up, field_text, chat_copy_text, chat_copied, field_cut, field_paste, lose_device, event_loop_stuck } from './eqoa.js';
 import { canRemember, keptHandle, keepHandle, forgetHandle } from './discstore.js';
 
 const $ = (id) => document.getElementById(id);
@@ -179,6 +179,8 @@ window.eqoaWebglKeep = (why) => store.set('webglKept', `${new Date().toISOString
 // a test's: the graphics device lost at the next frame (gpulost::test), the
 // page recovering from it as from a real loss
 window.eqoaLoseDevice = () => { if (clientReady) lose_device(); };
+// whether the client's event loop was left dead by an exception (web/notices.js)
+window.eqoaLoopStuck = () => clientReady && event_loop_stuck();
 const wsBase = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
 // What the page offers when nothing is given: kept only when the player
 // changed it, so that a new default reaches everyone who did not.

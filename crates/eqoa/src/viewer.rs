@@ -2411,7 +2411,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         use winit::platform::web::EventLoopExtWebSys;
         // a hidden page's frames come through it (`web::hidden_tick`)
         crate::web::set_waker(event_loop.create_proxy());
-        event_loop.spawn_app(app);
+        // counted, so an exception that unwinds past it stops the client (`web::Guarded`)
+        event_loop.spawn_app(crate::web::Guarded(app));
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
