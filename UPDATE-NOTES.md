@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Mercenaries: their class at a glance, and a menu of their own
+- **Press □ (Q) on a mercenary** and its details box now shows its **class** under its name, and for a
+  healer whether it is **Defensive** or **Offensive**.
+- **Press □ (Q) on your own mercenary** to open its menu: **Advice** from it, its **Spells** (turn any of
+  them on or off), its **Stance**, a healer's **Be offensive / Be defensive**, and **Dismiss** (asked again
+  before it goes). Needs a server with mercenaries (the Heirloom Test Server); on a PS2, type `/merc menu`.
+
 ## 2026-11-12 · Loading tips without "Did you know"
 
 Every loading tip is now a plain sentence ("You can type /stuck to return to your bind point when you cannot move."), without the "Did you know" in front.
