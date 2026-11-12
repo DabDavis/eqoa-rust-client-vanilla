@@ -80,6 +80,9 @@ pub struct Rolls {
     choice: usize,
     /// where each choice was drawn last (frame x0 y0 x1 y1), its roll and choice
     hits: Vec<([i32; 4], usize, usize)>,
+    /// strips' places left free at the top (the ready check's, `readywnd`):
+    /// the rolls start that many lower and that many fewer are shown
+    pub skip: usize,
 }
 
 impl Rolls {
@@ -148,7 +151,12 @@ impl Rolls {
     }
 
     fn shown(&self) -> usize {
-        self.open.len().min(SHOWN)
+        self.open.len().min(SHOWN - self.skip.min(SHOWN - 1))
+    }
+
+    /// The first strip's top (`skip` places down).
+    fn top(&self) -> i32 {
+        AT[1] + self.skip.min(SHOWN - 1) as i32 * (H + GAP)
     }
 
     fn first_choice(&self, roll: usize) -> usize {
@@ -230,7 +238,7 @@ impl Rolls {
     /// the world's).
     pub fn covers(&self, p: [f32; 2]) -> bool {
         let n = self.shown() as i32;
-        n > 0 && p[0] >= AT[0] as f32 && p[0] < (AT[0] + W) as f32 && p[1] >= AT[1] as f32 && p[1] < (AT[1] + n * (H + GAP)) as f32
+        n > 0 && p[0] >= AT[0] as f32 && p[0] < (AT[0] + W) as f32 && p[1] >= self.top() as f32 && p[1] < (self.top() + n * (H + GAP)) as f32
     }
 
     /// The strips at `now` (the session's clock), each choice's place noted.
@@ -240,9 +248,10 @@ impl Rolls {
         let (white, yellow, dim) = ([1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 0.0, 1.0], [0.55, 0.55, 0.55, 0.7]);
         let fh = vui.font_height(r);
         let fp = FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 1), br: (106, 0), bottom: (102, 2), bl: (105, 0), left: (104, 0) };
-        for (k, o) in self.open.iter().take(SHOWN).enumerate() {
+        let (shown, top) = (self.shown(), self.top());
+        for (k, o) in self.open.iter().take(shown).enumerate() {
             let lit_roll = self.focused && k == self.sel;
-            let at = [AT[0], AT[1] + k as i32 * (H + GAP)];
+            let at = [AT[0], top + k as i32 * (H + GAP)];
             r.blit(icon_id("black"), 0, at, [0, 0], [W, H], 3, if lit_roll { 0.85 } else { 0.7 });
             vui.blit_frame(r, at, [W, H], &fp, 3, 1.0, true);
             // the item: its icon at half size, its name cut to its room
@@ -283,9 +292,9 @@ impl Rolls {
             }
         }
         // more waiting: their count left of the last strip (under it is the chat box)
-        if self.open.len() > SHOWN {
-            let s = wide(&format!("+{} more", self.open.len() - SHOWN));
-            let y = AT[1] + (SHOWN as i32 - 1) * (H + GAP) + H / 2 - fh / 2;
+        if self.open.len() > shown {
+            let s = wide(&format!("+{} more", self.open.len() - shown));
+            let y = top + (shown as i32 - 1) * (H + GAP) + H / 2 - fh / 2;
             let w = vui.string_width(r, &s);
             vui.draw_string_ex(r, &s, AT[0] - 6 - w, y, white, true);
         }
@@ -376,6 +385,27 @@ mod tests {
         r.draw(&vui, &mut nr, 1000, &|_| 0);
         assert_eq!(r.point(greed_of(0)), Some((1, Choice::Greed)));
         assert!(!r.is_open());
+    }
+
+    /// A ready check's strip up (`skip` 1): the rolls a strip lower, one
+    /// fewer shown; at 0 where they were (the control).
+    #[test]
+    fn the_rolls_make_room_for_the_ready_check() {
+        let (vui, mut nr) = (vui(), NullRaster);
+        let mut r = Rolls::default();
+        for id in 1..=4 {
+            r.roll(roll(id, 120, true), 0);
+        }
+        let greed = |slot: i32| [(AT[0] + CHOICE_X[1]) as f32, (AT[1] + slot * (H + GAP) + CHOICE_Y) as f32];
+        r.skip = 1;
+        r.draw(&vui, &mut nr, 1000, &|_| 0);
+        assert!(!r.covers(greed(0)), "the ready check's place is not the rolls'");
+        assert!(r.covers(greed(2)) && r.shown() == SHOWN - 1);
+        assert_eq!(r.point(greed(0)), None);
+        assert_eq!(r.point(greed(1)), Some((1, Choice::Greed)), "the first roll a strip lower");
+        r.skip = 0;
+        r.draw(&vui, &mut nr, 1000, &|_| 0);
+        assert_eq!(r.point(greed(0)), Some((2, Choice::Greed)));
     }
 
     /// Past `SHOWN` the rest wait: the d-pad steps only over those drawn.

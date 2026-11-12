@@ -297,6 +297,16 @@ or a browser (each described where it lives below):
   by the wheel. A click targets a member the client can see, and L1's cycle reaches
   them. Extended > UI's Raid List, on by default; a client that does not ask gets the
   game's bars, as a PS2 does.
+- **The ready check** (the GM Jibrish's petition 1711, 2026-11-12; `net::readycheck`, `readywnd.rs`,
+  `raidplay.rs`): on a server that offers it (go-eqoa-server's 0x7E49; the answer 0x7E4A is always
+  yes) a group's or a raid's `/readycheck` (the server's: a raid's leader or helper, anyone in a plain
+  group) comes as 0x7E4B (u32 id, u8 seconds, the asker's name; 0 seconds closes it): a strip at the
+  top of the loot rolls' column, "<asker>: Are you ready?", Yes and No, the seconds left and a bar,
+  the rolls a strip lower while it is up. It never stops the walk or takes a key of play: a click or a
+  tap answers; R2 held and right give it the d-pad before the rolls (left and right, ✕ answers, △ or
+  R2 let go hands it back), on a keyboard C held, the arrows and Enter. The answer goes as 0x7E56
+  (u32 id, u8 1 ready) and closes the strip; the server tells the asker who is not ready. On any other
+  server nothing is drawn or sent; a PS2 is told in a line to type `/t ready` or `/t notready`.
 - **A raid's windows** (the GM Jibrish's petitions 1448 and 1451, 2026-11-10; `net::raid`,
   `raidplay.rs`, `rollwnd.rs`, `masterloot.rs`): on a server that offers them (go-eqoa-server's
   0x7E42; its answer 0x7E43 is always yes) the client is sent the raid's state (0x7E44: who leads,

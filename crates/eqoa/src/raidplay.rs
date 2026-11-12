@@ -46,6 +46,8 @@ pub struct RaidPlay {
     /// what the server last said (all zero: in no raid, or never told)
     pub state: State,
     pub rolls: crate::rollwnd::Rolls,
+    /// the ready check's strip above them (`readywnd`; petition 1711)
+    pub ready: crate::readywnd::Ready,
     /// the start menu's Raid entries as last set (none: taken out), once set
     menu: Option<Option<(Vec<LabelRow>, Vec<LabelRow>, Vec<LabelRow>)>>,
     /// a raid list's row dragged to another group (`raid_drag_press`)
@@ -157,6 +159,25 @@ impl Play {
     /// server that made no offer is told nothing).
     pub(super) fn agree_raid(&mut self) {
         self.session.agree_raid(true);
+        self.session.agree_ready(true);
+    }
+
+    /// 0x7E4B: a ready check asked (its strip up, a cue), or over (its strip
+    /// gone).
+    pub(super) fn ready_check(&mut self, c: net::readycheck::Check) {
+        let now = self.session.now() as i64;
+        if c.seconds > 0 {
+            eprintln!("play: ready check {} from {}, {} s", c.id, c.asker, c.seconds);
+            self.cues.push(crate::sound::Cue::Ui(11));
+        }
+        self.raid.ready.check(c, now);
+    }
+
+    /// The ready check answered (a click or a tap, ✕ while R2 holds the d-pad
+    /// on it).
+    fn make_ready(&mut self, id: u32, ready: bool) {
+        eprintln!("play: ready check {id}: {}", if ready { "ready" } else { "not ready" });
+        self.session.send_ready_reply(id, ready);
     }
 
     /// 0x7E44: the raid as it is now. In a raid the client leads as the server
@@ -366,6 +387,28 @@ impl Play {
     /// keyboard's arrows and Enter as those) are theirs and the chat box's
     /// scroll waits. True when the key was theirs.
     pub(super) fn roll_key(&mut self, key: i32, down: bool) -> bool {
+        // the ready check's strip first: right gives it the d-pad while it is up
+        let ready = &mut self.raid.ready;
+        if ready.focused() || down && matches!(key, 137 | 18) && !self.raid.rolls.focused() && ready.is_open() {
+            if !ready.focused() {
+                ready.take_focus();
+                self.cues.push(crate::sound::Cue::Ui(11));
+                return true;
+            }
+            if !matches!(key, 136 | 137 | 17 | 18 | 134 | 13 | 132 | 27) {
+                return matches!(key, 138 | 139 | 19 | 20);
+            }
+            if !down {
+                return !matches!(key, 134 | 13);
+            }
+            let mut cues = Vec::new();
+            let made = ready.key(key, &mut cues);
+            self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+            if let Some((id, yes)) = made {
+                self.make_ready(id, yes);
+            }
+            return true;
+        }
         let rolls = &mut self.raid.rolls;
         if !rolls.focused() {
             if down && matches!(key, 137 | 18) && rolls.take_focus() {
@@ -393,21 +436,29 @@ impl Play {
     /// R2 let go: the d-pad back from the strips.
     pub(super) fn roll_let_go(&mut self) {
         self.raid.rolls.let_go();
+        self.raid.ready.let_go();
     }
 
     /// A roll's strip is up (the keyboard's right, with C held, reaches it).
     pub fn rolls_up(&self) -> bool {
-        self.raid.rolls.is_open()
+        self.raid.rolls.is_open() || self.raid.ready.is_open()
     }
 
     /// The strips have the d-pad (the keyboard's left, right and Enter are theirs).
     pub fn rolls_focused(&self) -> bool {
-        self.raid.rolls.focused()
+        self.raid.rolls.focused() || self.raid.ready.focused()
     }
 
     /// The rolls' strips are where frame point `f` is: a click there is
     /// theirs, a choice on one made. False when it is not on a strip.
     pub(super) fn roll_point(&mut self, f: [f32; 2]) -> bool {
+        if matches!(self.mode, 0 | 33 | 38) && self.raid.ready.covers(f) {
+            if let Some((id, yes)) = self.raid.ready.point(f) {
+                self.cues.push(crate::sound::Cue::Ui(13));
+                self.make_ready(id, yes);
+            }
+            return true;
+        }
         if !self.rolls_shown() || !self.raid.rolls.covers(f) {
             return false;
         }
@@ -430,6 +481,11 @@ impl Play {
     pub(super) fn run_rolls(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
         let now = self.session.now() as i64;
         self.raid.rolls.expire(now);
+        self.raid.ready.expire(now);
+        self.raid.rolls.skip = self.raid.ready.is_open() as usize;
+        if matches!(self.mode, 0 | 33 | 38) {
+            self.raid.ready.draw(vui, r, now);
+        }
         if !self.rolls_shown() {
             return;
         }
@@ -576,6 +632,44 @@ mod tests {
         // the server's end closes the strip
         p.raid_roll(Roll { id: 7, ..Default::default() });
         assert!(!p.raid.rolls.is_open());
+    }
+
+    /// The ready check's strip (petition 1711): with a roll up too, R2 and right
+    /// reach the check first, ✕ answers it (0x7E56) and the next right the
+    /// rolls; a click answers too; the server's end closes it. The control: a
+    /// session that made no offer is sent nothing.
+    #[test]
+    fn the_ready_check_before_the_rolls() {
+        let mut p = play();
+        p.session.ready_offer = true;
+        p.mode = 33;
+        p.raid_roll(roll(7));
+        p.ready_check(net::readycheck::Check { id: 4, seconds: 30, asker: "Ann".into() });
+        assert!(p.rolls_up());
+        assert!(p.roll_key(137, true) && p.raid.ready.focused() && !p.raid.rolls.focused());
+        p.roll_key(137, true); // No
+        p.roll_key(136, true); // Yes again
+        p.roll_key(134, true);
+        assert_eq!(sent(&mut p), [net::readycheck::reply(4, true)]);
+        assert!(!p.raid.ready.is_open());
+        assert!(p.roll_key(137, true) && p.raid.rolls.focused(), "then the rolls");
+        p.roll_let_go();
+        // a click on No where it was drawn
+        p.ready_check(net::readycheck::Check { id: 5, seconds: 30, asker: "Ann".into() });
+        let (vui, mut nr) = (crate::pointer::testing::vui(), crate::pointer::testing::NullRaster);
+        p.raid.ready.draw(&vui, &mut nr, 0);
+        assert!(p.roll_point([(crate::readywnd::AT[0] + 131) as f32, (crate::readywnd::AT[1] + 33) as f32]));
+        assert_eq!(sent(&mut p), [net::readycheck::reply(5, false)]);
+        // the server's end closes one
+        p.ready_check(net::readycheck::Check { id: 6, seconds: 30, asker: "Ann".into() });
+        p.ready_check(net::readycheck::Check { id: 6, seconds: 0, asker: String::new() });
+        assert!(!p.raid.ready.is_open());
+        // no offer: an answer sends nothing
+        p.session.ready_offer = false;
+        p.ready_check(net::readycheck::Check { id: 8, seconds: 30, asker: "Ann".into() });
+        p.roll_key(137, true);
+        p.roll_key(134, true);
+        assert!(sent(&mut p).is_empty());
     }
 
     /// The server's raid commands, typed (or a quick chat line's), go to it as

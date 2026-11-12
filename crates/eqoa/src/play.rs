@@ -3084,6 +3084,7 @@ impl Play {
                 // (`world.mob_info`): its name and level, for the info window
                 Event::MobInfo { id, level, name } => self.mob_info_shown(id, level, name, now),
                 Event::RaidRoll(r) => self.raid_roll(r),
+                Event::ReadyCheck(c) => self.ready_check(c),
                 Event::MasterLoot(m) => self.master_loot(m),
                 Event::GroupInvite { id, name, .. } => {
                     // Msg0773: refused at once while in a group

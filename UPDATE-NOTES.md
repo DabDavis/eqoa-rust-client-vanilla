@@ -7,6 +7,15 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · Ready checks
+- A raid's leader or helper, or anyone in a regular group, can type **`/readycheck`**. Everyone else in the group
+  gets a small **"Are you ready?"** pop-up at the right of the screen with **Yes** and **No** and 30 seconds on a
+  bar. It never stops you moving or fighting: click or tap Yes or No, or on a controller hold **R2** and press
+  **right**, pick with left and right and press **✕** (on a keyboard, hold **C** and use the arrows and Enter).
+  You can also type `/ready` or `/notready`.
+- Whoever asked hears **"Everyone is ready"**, or **"Raid not ready"** (or "Group not ready") with the names of
+  who said no and who did not answer in time.
+
 ## 2026-11-12 · Mermaid helms and capes
 - **Capes now show on Mermaids** (mermaids, mermen, sirens and sea kings). The cape hangs down the back over the tail
   and sways with the tail as she treads water and swims. Every cape style works.
