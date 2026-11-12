@@ -14,6 +14,7 @@ pub mod itemlink;
 pub mod npctint;
 pub mod raceopts;
 pub mod raid;
+pub mod readycheck;
 pub mod serverworlds;
 pub mod session;
 pub mod stream;
