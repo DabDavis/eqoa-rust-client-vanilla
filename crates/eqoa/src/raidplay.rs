@@ -70,6 +70,30 @@ pub struct Drag {
 /// How far a press goes before it is a drag, in frame units.
 const DRAG_SLOP: f32 = 4.0;
 
+/// Where held row `d` would go over `pick` (what the pointer is on): a group's
+/// number, and the member there when it is on one. None when it has not moved,
+/// or it is on its own group or nothing of the list.
+pub fn drop_on(d: &Drag, pick: Option<crate::hud::Pick>, group_of: impl Fn(u32) -> u8) -> Option<(u8, Option<u32>)> {
+    if !d.moved {
+        return None;
+    }
+    match pick? {
+        crate::hud::Pick::RaidGroup(g) => Some((g, None)),
+        crate::hud::Pick::Raid(id) => Some((group_of(id), Some(id))),
+        _ => None,
+    }
+    .filter(|&(g, _)| g != 0 && g != d.group)
+}
+
+/// The command a drop sends: onto a member, the two swapped; onto a group, the
+/// member moved there.
+pub fn drop_command(d: &Drag, drop: Option<(u8, Option<u32>)>) -> Option<Command> {
+    match drop? {
+        (_, Some(other)) => Some(Command::Swap(d.id, other)),
+        (g, None) => Some(Command::MoveToGroup { id: d.id, group: g }),
+    }
+}
+
 /// The groups of a raid roster: each group's number and how many it holds, in
 /// their numbers.
 pub fn group_counts(raid: &[net::session::RaidMember]) -> Vec<(u8, usize)> {
@@ -274,15 +298,7 @@ impl Play {
     /// Where a held row would go, let go now: a group's number (its line, the
     /// room under its rows, or one of its members). None where it would not.
     fn raid_drop_at(&self, d: &Drag) -> Option<(u8, Option<u32>)> {
-        if !d.moved {
-            return None;
-        }
-        match self.hud.as_ref().and_then(|h| h.2.pick(d.at))? {
-            crate::hud::Pick::RaidGroup(g) => Some((g, None)),
-            crate::hud::Pick::Raid(id) => Some((self.raid_group_of(id), Some(id))),
-            _ => None,
-        }
-        .filter(|&(g, _)| g != 0 && g != d.group)
+        drop_on(d, self.hud.as_ref().and_then(|h| h.2.pick(d.at)), |id| self.raid_group_of(id))
     }
 
     /// The group lit under a held row, and the empty group a new one would be
@@ -305,11 +321,7 @@ impl Play {
             }
             return true;
         }
-        let cmd = match self.raid_drop_at(&d) {
-            Some((_, Some(other))) => Command::Swap(d.id, other),
-            Some((g, None)) => Command::MoveToGroup { id: d.id, group: g },
-            None => return true,
-        };
+        let Some(cmd) = drop_command(&d, self.raid_drop_at(&d)) else { return true };
         eprintln!("play: raid command {cmd:?} (dragged)");
         self.cues.push(crate::sound::Cue::Ui(13));
         self.session.send_raid_command(cmd);
@@ -638,5 +650,90 @@ mod tests {
         assert_eq!(p.raid_marks(6), crate::raidlist::HELPER);
         assert_eq!(p.raid_marks(7), 0);
         assert_eq!(p.raid_marks(0), 0, "no id");
+    }
+
+    fn member(id: u32, group: u8) -> net::session::RaidMember {
+        net::session::RaidMember { id, name: format!("m{id}"), group, ..Default::default() }
+    }
+
+    /// Petition 1687's menu: the leader and the helper have Move to Group after
+    /// Kick on a server that sends the groups, a row a group up to one past what
+    /// the raid needs, a full one dimmed; a member has none, nor anyone on a
+    /// server that sends no groups (the controls).
+    #[test]
+    fn move_to_group_is_the_leaders_and_helpers() {
+        let raid: Vec<_> = (1..=9).map(|i| member(i, ((i - 1) / 4 + 1) as u8)).collect();
+        let groups = group_counts(&raid);
+        assert_eq!(groups, [(1, 4), (2, 4), (3, 1)]);
+        let (lead, _, moves) = rows(&state(5, 2, 0), &groups, 9);
+        let k = lead.iter().position(|r| r.msg == MSG_KICK).unwrap();
+        assert_eq!(lead[k + 1].msg, crate::startmenu::RAID_GROUPS_SUB);
+        assert_eq!(
+            moves.iter().map(|r| (r.msg, r.text.to_string(), r.tail.to_string(), r.dim)).collect::<Vec<_>>(),
+            [
+                (MSG_GROUP | 1, "Group 1".into(), " (4/4)".into(), true),
+                (MSG_GROUP | 2, "Group 2".into(), " (4/4)".into(), true),
+                (MSG_GROUP | 3, "Group 3".into(), " (1/4)".into(), false),
+                (MSG_GROUP | 4, "Group 4".into(), " (0/4)".into(), false),
+            ]
+        );
+        let (help, _, hmoves) = rows(&state(5, 4, 0), &groups, 9);
+        assert!(help.iter().any(|r| r.msg == crate::startmenu::RAID_GROUPS_SUB) && hmoves.len() == 4, "the helper");
+        let (member_rows, _, none) = rows(&state(5, 0, 0), &groups, 9);
+        assert!(none.is_empty() && !member_rows.iter().any(|r| r.msg == crate::startmenu::RAID_GROUPS_SUB), "a member: none");
+    }
+
+    /// Move to Group's row sends the target's move; a target not in the raid
+    /// and no target are said here, nothing sent.
+    #[test]
+    fn move_to_group_sends_the_targets_move() {
+        let mut p = play();
+        p.group.raid = vec![member(0x0012_3456, 1), member(7, 2)];
+        p.target = 0x0012_3456;
+        assert!(p.raid_action(MSG_GROUP | 2));
+        assert_eq!(sent(&mut p), [Command::MoveToGroup { id: 0x0012_3456, group: 2 }.bytes()]);
+        p.target = 99;
+        assert!(p.raid_action(MSG_GROUP | 2));
+        p.target = u32::MAX;
+        assert!(p.raid_action(MSG_GROUP | 2));
+        assert!(sent(&mut p).is_empty());
+        assert!(p.chat.iter().any(|(t, _)| t == NOT_IN_RAID) && p.chat.iter().any(|(t, _)| t == NO_TARGET));
+    }
+
+    /// A held row let go: on another group, moved; on a member of another,
+    /// swapped; on its own group, nothing of the list, or before it moved,
+    /// nothing (the controls).
+    #[test]
+    fn a_dropped_row_moves_or_swaps() {
+        use crate::hud::Pick;
+        let group_of = |id: u32| match id {
+            1 | 2 => 1,
+            3 => 2,
+            _ => 0,
+        };
+        let d = Drag { id: 1, group: 1, from: [0.0; 2], at: [30.0, 40.0], moved: true };
+        assert_eq!(drop_command(&d, drop_on(&d, Some(Pick::RaidGroup(3)), group_of)), Some(Command::MoveToGroup { id: 1, group: 3 }));
+        assert_eq!(drop_command(&d, drop_on(&d, Some(Pick::Raid(3)), group_of)), Some(Command::Swap(1, 3)));
+        assert_eq!(drop_on(&d, Some(Pick::Raid(2)), group_of), None, "its own group");
+        assert_eq!(drop_on(&d, Some(Pick::RaidGroup(1)), group_of), None, "its own group's line");
+        assert_eq!(drop_on(&d, Some(Pick::Me), group_of), None);
+        assert_eq!(drop_on(&d, None, group_of), None);
+        assert_eq!(drop_on(&Drag { moved: false, ..d }, Some(Pick::RaidGroup(3)), group_of), None, "a click");
+    }
+
+    /// Only one who leads or helps, on a server that sends the groups, may move.
+    #[test]
+    fn only_the_leader_and_helper_may_move() {
+        let mut p = play();
+        p.group.raid = vec![member(1, 1), member(2, 2)];
+        p.raid_state(state(5, 2, 0));
+        assert!(p.may_move_raid());
+        p.raid_state(state(5, 4, 0));
+        assert!(p.may_move_raid(), "the helper");
+        p.raid_state(state(5, 0, 0));
+        assert!(!p.may_move_raid(), "a member");
+        p.raid_state(state(5, 2, 0));
+        p.group.raid = vec![member(1, 0), member(2, 0)];
+        assert!(!p.may_move_raid(), "no groups sent");
     }
 }

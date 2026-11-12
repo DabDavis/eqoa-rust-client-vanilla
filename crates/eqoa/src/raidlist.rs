@@ -568,4 +568,80 @@ mod tests {
         assert_eq!(head(&Fit::under(6, 0), 0), "Raid (6)");
         assert_eq!(head(&Fit::under(60, 0), 3), "Raid (60) 4-51");
     }
+
+    /// Petition 1687's roles: Warrior, Paladin, Shadow Knight a shield; Druid,
+    /// Shaman, Cleric a staff; the rest a sword, each in its own colours and
+    /// within its 8 by 8 (and the shadow's pixel).
+    #[test]
+    fn each_class_has_its_role_icon() {
+        use crate::pointer::testing::NullRaster;
+        let tanks: Vec<u8> = (0..15).filter(|&c| role(c) == Role::Tank).collect();
+        let healers: Vec<u8> = (0..15).filter(|&c| role(c) == Role::Healer).collect();
+        assert_eq!(tanks, [0, 2, 3]);
+        assert_eq!(healers, [7, 8, 9]);
+        assert_eq!(role(1), Role::Damage, "ranger");
+        assert_eq!(role(14), Role::Damage, "alchemist");
+        for (r, colour) in [(Role::Tank, SHIELD), (Role::Healer, STAFF), (Role::Damage, SWORD)] {
+            let quads = draw_role(&mut NullRaster, 10, 20, r);
+            assert!(quads.iter().any(|(c, _)| *c == colour), "{r:?}");
+            for (_, q) in &quads {
+                assert!(q.iter().all(|p| (10.0..=18.0).contains(&p[0]) && (20.0..=28.0).contains(&p[1])), "{r:?}: {q:?}");
+            }
+        }
+    }
+
+    fn grouped(groups: &[u8]) -> Vec<Row> {
+        groups.iter().enumerate().map(|(i, &g)| Row { id: i as u32 + 1, name: format!("m{i}"), group: g, ..Default::default() }).collect()
+    }
+
+    /// The groups in their numbers, each its members in the list's order; an
+    /// extra group (a drag's) in its place, empty; none at all from a server
+    /// that sends no groups (the control: the old list).
+    #[test]
+    fn the_rows_go_under_their_groups() {
+        let rows = grouped(&[1, 1, 2, 3, 1, 2, 3]);
+        let s = sections(&rows, None);
+        assert_eq!(s, [Section { group: 1, rows: vec![0, 1, 4] }, Section { group: 2, rows: vec![2, 5] }, Section { group: 3, rows: vec![3, 6] }]);
+        let s = sections(&rows, Some(4));
+        assert_eq!(s.last(), Some(&Section { group: 4, rows: vec![] }));
+        assert!(sections(&grouped(&[0, 0, 0]), None).is_empty(), "no groups sent");
+        assert_eq!(most_group(10, 3), 4);
+        assert_eq!(most_group(8, 2), 3);
+        assert_eq!(most_group(5, 6), 6, "a group in use past it");
+    }
+
+    /// Any raid in groups of four fits above the chat box, whole groups in a
+    /// column, four columns at most, inside the frame; past that the wheel
+    /// steps a group, and the last group is always reachable.
+    #[test]
+    fn groups_fit_above_the_chat_box() {
+        let fx = crate::hud::pet_effects_height(crate::hud::PET_FX_MOST);
+        for below in [0, PET_H, PET_H + fx] {
+            for n in 1..=200usize {
+                let rows = grouped(&(0..n).map(|i| (i / 4 + 1) as u8).collect::<Vec<_>>());
+                let secs = sections(&rows, Some((n.div_ceil(4) + 1) as u8));
+                for first in [0, 1, 1000] {
+                    let f = GroupFit::under(&secs, n, below, first);
+                    let b = f.bounds(AT);
+                    assert!(b[3] <= AT[1] + ROOM_H - below, "{n} ({below} under): {b:?}");
+                    assert!(b[2] < 640 && f.columns.len() <= MOST_COLUMNS, "{n}: {f:?}");
+                    assert!(f.columns.iter().all(|c| !c.is_empty()), "{n}: an empty column");
+                    let shown: Vec<usize> = f.columns.concat();
+                    assert_eq!(shown, (f.first..f.first + shown.len()).collect::<Vec<_>>(), "{n}: in order");
+                    if first == 1000 {
+                        assert_eq!(*shown.last().unwrap(), secs.len() - 1, "{n}: the wheel reaches the last group");
+                    }
+                    if f.more == 0 {
+                        assert_eq!(shown.len(), secs.len(), "{n}: all shown");
+                    }
+                }
+            }
+        }
+        // a raid of 8 (two groups and a new one's room): one column; of 24, two
+        let rows = grouped(&[1, 1, 1, 1, 2, 2, 2, 2]);
+        assert_eq!(GroupFit::under(&sections(&rows, None), 8, 0, 0).columns, [vec![0, 1]]);
+        let rows = grouped(&(0..24).map(|i| (i / 4 + 1) as u8).collect::<Vec<_>>());
+        let f = GroupFit::under(&sections(&rows, None), 24, 0, 0);
+        assert_eq!((f.columns.len(), f.more), (3, 0));
+    }
 }

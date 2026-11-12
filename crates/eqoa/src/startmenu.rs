@@ -1645,4 +1645,31 @@ pub(crate) mod tests {
         d.set_raid(None);
         assert_eq!(group(&d), disc, "taken out");
     }
+
+    /// Raid > Move to Group (petition 1687): a main row of `RAID_GROUPS_SUB` is
+    /// a sub-menu of the group rows, with their words; `set_raid` (no group
+    /// rows) leaves it empty. Needs `run/client.bin` (SKIPs without).
+    #[test]
+    fn move_to_group_is_a_sub_menu_of_raid() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/client.bin");
+        let Some(img) = std::fs::read(&path).ok().and_then(crate::client_image::ClientImage::from_bytes) else {
+            eprintln!("SKIP: no run/client.bin");
+            return;
+        };
+        let mut d = StartData::from_image(&img);
+        let row = |msg, text: &'static str, tail: &'static str| LabelRow { msg, text: text.into(), tail: tail.into(), dim: false };
+        let main = [row(0x7E48_0B00, "Kick", ""), row(RAID_GROUPS_SUB, "Move to Group", ""), row(0x7E48_0200, "Leave Raid", "")];
+        let groups = [row(0x7E48_0C01, "Group 1", " (4/4)"), row(0x7E48_0C02, "Group 2", " (1/4)")];
+        d.set_raid_groups(Some((&main, &[], &groups)));
+        let (raid, _) = d.raid_menu.unwrap();
+        let moves = d.raid_groups_menu.unwrap();
+        assert_eq!(d.menus.list[raid].entries.iter().map(|e| (e.msg, e.sub)).collect::<Vec<_>>(), [(0x7E48_0B00, None), (0, Some(moves)), (0x7E48_0200, None)]);
+        assert_eq!(d.menus.list[moves].entries.iter().map(|e| e.msg).collect::<Vec<_>>(), [0x7E48_0C01, 0x7E48_0C02]);
+        let text = |d: &StartData, k: (u32, i32)| d.menus.labels.get(&k).map(|l| (String::from_utf16_lossy(&l.text), String::from_utf16_lossy(&l.tail)));
+        assert_eq!(text(&d, (0, RAID_GROUPS_ENTRY)), Some(("Move to Group".into(), String::new())));
+        assert_eq!(text(&d, (0x7E48_0C02, 0)), Some(("Group 2".into(), " (1/4)".into())));
+        d.set_raid(Some((&main[..1], &[])));
+        assert!(d.menus.list[moves].entries.is_empty(), "no group rows: empty");
+        assert_eq!(text(&d, (0x7E48_0C02, 0)), None, "their words gone");
+    }
 }
