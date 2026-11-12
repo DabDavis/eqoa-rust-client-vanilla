@@ -167,13 +167,31 @@ const NAME_COLORS: [[f32; 4]; 3] = [[212.0 / 255.0, 192.0 / 255.0, 111.0 / 255.0
 /// pet's.
 const MERC_COLOR: [f32; 4] = [155.0 / 255.0, 165.0 / 255.0, 210.0 / 255.0, 1.0];
 
-/// A name plate to draw: where, in what colour, what, and a line under it
-/// (a merc's "<Hirer's Mercenary>": `mercplay`).
+/// A name plate to draw: where, in what colour, what, a line under it (a
+/// merc's "<Hirer's Mercenary>": `mercplay`), and a quest mark over it (the
+/// server's, `net::headmarks`: `TAKE` "!", `STEP` "?").
 pub struct Plate {
     pub at: [f32; 3],
     pub color: [f32; 4],
     pub name: String,
     pub tag: Option<String>,
+    pub mark: Option<u8>,
+}
+
+/// A quest mark's colour (the GM Jibrish's petition 1813: "yellow ! and ?").
+const MARK_COLOR: [f32; 4] = [1.0, 0.86, 0.1, 1.0];
+
+/// A quest mark's size against its name's at `MARK_NEAR` from the camera.
+const MARK_SIZE: f32 = 1.75;
+
+/// Where a quest mark is drawn at `MARK_SIZE`: nearer it is larger, farther
+/// smaller, within `MARK_SCALE`.
+const MARK_NEAR: f32 = 10.0;
+const MARK_SCALE: (f32, f32) = (0.7, 1.4);
+
+/// A quest mark's size at clip depth `w` (the distance from the camera).
+fn mark_size(w: f32) -> f32 {
+    MARK_SIZE * (MARK_NEAR / w.max(1e-3)).clamp(MARK_SCALE.0, MARK_SCALE.1)
 }
 
 pub struct Play {
@@ -1583,6 +1601,10 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
         let h = (height as f32 * view.scale).round() as i32;
         let mut min = (qx - (w >> 1), qy - (h >> 1));
         let mut max = (min.0 + w, min.1 + h);
+        // a quest mark over the name (and its tag): the rect takes it in
+        if p.mark.is_some() {
+            min.1 -= (height as f32 * mark_size(clip.w) * view.scale).round() as i32;
+        }
         // a tag (`mercplay`): it sits where the name would, the name a line
         // above it, both clear of the head (the owner, 2026-11-11: under the
         // name it covered the merc's head); the plate's rect takes both in
@@ -1596,13 +1618,13 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
         queued.push((clip.w, min, max, ndc, p));
     }
     queued.sort_by(|a, b| a.0.total_cmp(&b.0));
-    /// A kept plate: its rect's corners, where it is drawn, what.
-    type Kept<'a> = ((i32, i32), (i32, i32), glam::Vec3, &'a Plate);
+    /// A kept plate: its depth, its rect's corners, where it is drawn, what.
+    type Kept<'a> = (f32, (i32, i32), (i32, i32), glam::Vec3, &'a Plate);
     let mut kept: Vec<Kept> = Vec::new();
-    for (_, min, max, ndc, p) in queued {
-        let meets = !view.overlap && kept.iter().any(|k| !(min.0 > k.1.0 || max.0 < k.0.0 || min.1 > k.1.1 || max.1 < k.0.1));
+    for (w, min, max, ndc, p) in queued {
+        let meets = !view.overlap && kept.iter().any(|k| !(min.0 > k.2.0 || max.0 < k.1.0 || min.1 > k.2.1 || max.1 < k.1.1));
         if !meets {
-            kept.push((min, max, ndc, p));
+            kept.push((w, min, max, ndc, p));
         }
     }
     if view.overlap {
@@ -1613,11 +1635,18 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
     // PS2's 448 lines is 2 / 448 high)
     let line = 2.0 * height as f32 * view.scale / render::text::SCREEN_H;
     let mut out = Vec::new();
-    for (_, _, ndc, p) in kept {
+    for (w, _, _, ndc, p) in kept {
         let up = if p.tag.is_some() { line } else { 0.0 };
         out.push(render::text::Label { at: [ndc.x, ndc.y + up, ndc.z], color: p.color, text: p.name.clone(), size: 1.0 });
         if let Some(t) = &p.tag {
             out.push(render::text::Label { at: ndc.to_array(), color: p.color, text: t.clone(), size: tag_size(height) });
+        }
+        // the quest mark over the name: its centre half the name's line and
+        // half its own above the name's, and a little more
+        if let Some(sign) = p.mark.and_then(net::headmarks::sign) {
+            let size = mark_size(w);
+            let at = ndc.y + up + line * (0.5 + 0.5 * size + 0.15);
+            out.push(render::text::Label { at: [ndc.x, at, ndc.z], color: MARK_COLOR, text: sign.into(), size });
         }
     }
     out
@@ -2172,7 +2201,7 @@ mod name_plates {
     /// A plate at `at` (the view is the identity, so its x and y are where
     /// it is on the screen, -1 to 1).
     fn plate(at: [f32; 3], name: &str) -> Plate {
-        Plate { at, color: [1.0; 4], name: name.into(), tag: None }
+        Plate { at, color: [1.0; 4], name: name.into(), tag: None, mark: None }
     }
 
     fn names(view: &PlateView, plates: &[Plate]) -> Vec<String> {
@@ -2209,6 +2238,45 @@ mod name_plates {
         assert_eq!(names(&PlateView::game(eye), &[merc, below]), ["Ralthas", "<Lonewulf's Mercenary>", "Kel"], "a plate just below is kept");
         let untagged = [plate([0.0, 0.0, 0.5], "Ralthas"), plate([0.0, step, 0.5], "Kel")];
         assert_eq!(names(&PlateView::game(eye), &untagged), ["Ralthas", "Kel"], "the control must fail");
+    }
+
+    /// A quest mark (petition 1813) is drawn over its name in yellow, "!" for
+    /// a quest to take and "?" for a step, larger than the name, and larger
+    /// near than far; over a merc's tag's name too. The control: an unmarked
+    /// plate draws its name alone.
+    #[test]
+    fn a_quest_mark_sits_over_the_name() {
+        let eye = Vec3::new(0.0, 0.0, -1.0);
+        let mut nothard = plate([0.0, 0.0, 0.5], "Commander Nothard");
+        nothard.mark = Some(net::headmarks::TAKE);
+        let ls = labels_by(&[nothard], &PlateView::game(eye), Mat4::IDENTITY, width, 12);
+        let texts: Vec<_> = ls.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["Commander Nothard", "!"]);
+        assert_eq!(ls[1].color, MARK_COLOR);
+        assert!(ls[1].size > 1.0, "larger than the name: {}", ls[1].size);
+        assert!(ls[1].at[1] > ls[0].at[1] + 12.0 / 448.0 && ls[1].at[0] == ls[0].at[0], "over the name: {:?} {:?}", ls[1].at, ls[0].at);
+        let mut galosh = plate([0.0, 0.0, 0.5], "Merchant Galosh");
+        galosh.mark = Some(net::headmarks::STEP);
+        galosh.tag = Some("<a tag>".into());
+        let ls = labels_by(&[galosh], &PlateView::game(eye), Mat4::IDENTITY, width, 12);
+        assert_eq!(ls.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Merchant Galosh", "<a tag>", "?"]);
+        assert!(ls[2].at[1] > ls[0].at[1], "over the name a line up: {:?}", ls[2].at);
+        // a plate just above a marked one, where the mark is, is dropped
+        let mut marked = plate([0.0, 0.0, 0.5], "Ab");
+        marked.mark = Some(net::headmarks::TAKE);
+        let step = 20.0 / 224.0;
+        assert_eq!(names(&PlateView::game(eye), &[marked, plate([0.0, step, 0.5], "Cd")]), ["Ab", "!"]);
+        assert_eq!(names(&PlateView::game(eye), &[plate([0.0, 0.0, 0.5], "Ab"), plate([0.0, step, 0.5], "Cd")]), ["Ab", "Cd"], "the control: unmarked");
+        // near larger than far, in a perspective view
+        let proj = Mat4::from_cols(glam::Vec4::X, glam::Vec4::Y, glam::Vec4::new(0.0, 0.0, 1.0, 1.0), glam::Vec4::ZERO);
+        let size_at = |z: f32| {
+            let mut p = plate([0.0, 0.0, z], "Ab");
+            p.mark = Some(net::headmarks::TAKE);
+            labels_by(&[p], &PlateView::game(Vec3::ZERO), proj, width, 12).into_iter().find(|l| l.text == "!").unwrap().size
+        };
+        assert!(size_at(4.0) > size_at(18.0), "near {} far {}", size_at(4.0), size_at(18.0));
+        assert_eq!(mark_size(1.0), MARK_SIZE * MARK_SCALE.1);
+        assert_eq!(mark_size(1000.0), MARK_SIZE * MARK_SCALE.0);
     }
 
     /// Zoomed out to 50 the plates round the player stay, measured from the
@@ -3620,6 +3688,8 @@ impl Play {
         self.session.agree_pet_effects(crate::settings::pet_effects());
         // Buff Window: the server told what its row says (off, the game's strip)
         self.session.agree_buffs(crate::settings::buff_window());
+        // Quest Markers: the server told what its row says (off, none drawn)
+        self.session.agree_head_marks(crate::settings::head_marks());
         self.agree_number_tags();
         self.agree_dps_meter();
         self.agree_quests();
@@ -4266,7 +4336,10 @@ impl Play {
             if c.name.is_empty() || !p.shown {
                 continue;
             }
-            out.push(Plate { at, color: self.name_color(c), name: c.name.clone(), tag: self.merc_tag(c) });
+            // a quest mark over it from a server that sends them, while
+            // Extended's Quest Markers is on (`net::headmarks`)
+            let mark = crate::settings::head_marks().then(|| self.session.head_mark(e.id)).flatten();
+            out.push(Plate { at, color: self.name_color(c), name: c.name.clone(), tag: self.merc_tag(c), mark });
         }
         out
     }

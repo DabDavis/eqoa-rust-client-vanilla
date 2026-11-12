@@ -848,6 +848,10 @@ impl WndOptions {
                     // (`Session::agree_buffs`), ours or the game's strip
                     // drawn (`buffwnd`)
                     83 => c.buff_window = !c.buff_window,
+                    // Quest Markers: the server told from the next frame
+                    // (`Session::agree_head_marks`), the marks drawn or not
+                    // over the NPCs' names (`Play::plates`)
+                    85 => c.head_marks = !c.head_marks,
                     // Loading Tips: from the next loading screen (`tips`)
                     84 => c.loading_tips = !c.loading_tips,
                     // the Map: the map, the minimap and the waypoints from
@@ -1562,7 +1566,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 68] = [
+const EXTENDED_ITEMS: [(i32, &str); 69] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1631,6 +1635,7 @@ const EXTENDED_ITEMS: [(i32, &str); 68] = [
     (SLOW_UNFOCUSED, "Slow When Not Focused"),
     (83, "Buff Window"),
     (84, "Loading Tips"),
+    (85, "Quest Markers"),
 ];
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
@@ -1714,7 +1719,7 @@ const ALL_CATEGORIES: [Category; 19] = [
     Category { name: "Textures", items: TEXTURES, note: Note::Textures, group: Group::Graphics },
     Category { name: "HUD", items: &[22, 30, 40, 49, 58, 83], note: Note::None, group: Group::Ui },
     Category { name: "HUD Layout", items: &[76, 77], note: Note::Hud, group: Group::Ui },
-    Category { name: "Name Plates", items: &[27, 34], note: Note::None, group: Group::Ui },
+    Category { name: "Name Plates", items: &[27, 34, 85], note: Note::None, group: Group::Ui },
     Category { name: "Map", items: &[41, 42, 43, 44, 45], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
@@ -1875,6 +1880,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         49 => on_off(c.raid_list),
         58 => on_off(c.pet_effects),
         83 => on_off(c.buff_window),
+        85 => on_off(c.head_marks),
         84 => on_off(c.loading_tips),
         50 => on_off(c.texture_packs),
         51 => on_off(c.dump_textures),
@@ -3066,7 +3072,7 @@ mod tests {
             vec![
                 ("HUD", vec!["Ability Bars", "Text", "HUD", "Raid List", "Pet Effects", "Buff Window"]),
                 ("HUD Layout", vec!["Move HUD", "Reset HUD"]),
-                ("Name Plates", vec!["Name Distance", "Overlapping Names"]),
+                ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers"]),
                 ("Map", vec!["Map", "Minimap", "Map Markers", "Quest Helper", "Quest Tracker"]),
                 ("Number Colors", n[..6].to_vec()),
                 ("Merc Colors", n[6..8].to_vec()),

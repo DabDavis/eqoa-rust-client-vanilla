@@ -936,6 +936,14 @@ pub struct ClientOptions {
     /// one taken off by a click or the pad; off, or on any other server, the
     /// game's strip (`influence`). On by default.
     pub buff_window: bool,
+    /// Quest Markers over the heads (Extended > UI > Name Plates; the GM
+    /// Jibrish's petition 1813): on a server that sends them
+    /// (`Session::agree_head_marks`), a yellow "!" over an NPC with a quest
+    /// the player may take now and a "?" over one where a quest can be moved
+    /// on now, above its name; off, or on any other server, none. On by
+    /// default. (The map's quest marks are `quest_markers`, the Quest
+    /// Helper's.)
+    pub head_marks: bool,
     /// Loading Tips (`tips`; the GM Jibrish's petition 1778): a "Did you know"
     /// line on every loading screen. On by default.
     pub loading_tips: bool,
@@ -1270,6 +1278,7 @@ impl Default for ClientOptions {
             raid_list: true,
             pet_effects: true,
             buff_window: true,
+            head_marks: true,
             loading_tips: true,
             number_colors: crate::numcolor::DEFAULTS,
             dps_meter: false,
@@ -1383,6 +1392,9 @@ impl ClientOptions {
         }
         if !self.buff_window {
             s.push_str("buff_window=off\n");
+        }
+        if !self.head_marks {
+            s.push_str("head_marks=off\n");
         }
         if !self.loading_tips {
             s.push_str("loading_tips=off\n");
@@ -1578,6 +1590,8 @@ impl ClientOptions {
                 ("pet_effects", "off") => c.pet_effects = false,
                 ("buff_window", "on") => c.buff_window = true,
                 ("buff_window", "off") => c.buff_window = false,
+                ("head_marks", "on") => c.head_marks = true,
+                ("head_marks", "off") => c.head_marks = false,
                 ("loading_tips", "on") => c.loading_tips = true,
                 ("loading_tips", "off") => c.loading_tips = false,
                 ("dps_meter", "on") => c.dps_meter = true,
@@ -1895,6 +1909,12 @@ pub fn pet_effects() -> bool {
 /// Buff Window: the client's own effects window (`buffwnd`).
 pub fn buff_window() -> bool {
     client().buff_window
+}
+
+/// Quest Markers over the heads: the "!" and "?" over quest NPCs' names
+/// (`Play::plates`).
+pub fn head_marks() -> bool {
+    client().head_marks
 }
 
 /// Loading Tips: a tip on every loading screen (`tips`).
@@ -3054,6 +3074,18 @@ mod tests {
         let back = ClientOptions::from_text(&off);
         assert!(!back.buff_window && !back.loading_tips);
         assert!(ClientOptions::from_text("buff_window=maybe").buff_window, "the default");
+    }
+
+    #[test]
+    fn head_marks_are_kept_only_when_off() {
+        assert!(ClientOptions::default().head_marks, "on by default");
+        assert!(!ClientOptions::default().to_text().contains("head_marks"));
+        assert!(ClientOptions { head_marks: false, ..Default::default() }.to_text().contains("head_marks=off\n"));
+        let back = ClientOptions::from_text("head_marks=off\nquest_markers=on");
+        assert!(!back.head_marks && back.quest_markers, "the map's Quest Markers its own");
+        assert!(ClientOptions::from_text("head_marks=on").head_marks);
+        assert!(ClientOptions::from_text("head_marks=maybe").head_marks, "the default");
+        assert!(ClientOptions::from_text("quest_markers=off").head_marks, "the control: the map's row is not this");
     }
 
     #[test]

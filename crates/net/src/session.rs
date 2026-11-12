@@ -1235,6 +1235,13 @@ pub struct Session {
     buffs_asked: Option<bool>,
     pub buffs: Vec<crate::buffs::Line>,
     pub buffs_at: u32,
+    /// Whether the server offered the quest marks over the NPCs' heads
+    /// ([`crate::headmarks::OP_OFFER`]) on this connection, what it was last
+    /// told (none since the offer), and the marks it last sent
+    /// ([`crate::headmarks::OP_MARKS`]) by the entity's id.
+    pub head_marks_offer: bool,
+    head_marks_asked: Option<bool>,
+    pub head_marks: std::collections::HashMap<u32, u8>,
     /// Whether the server offered item links ([`OP_ITEM_LINKS`]) on this
     /// connection, and what it was last told (none since the offer).
     pub item_links_offer: bool,
@@ -1428,6 +1435,9 @@ impl Session {
             buffs_asked: None,
             buffs: Vec::new(),
             buffs_at: 0,
+            head_marks_offer: false,
+            head_marks_asked: None,
+            head_marks: Default::default(),
             item_links_offer: false,
             item_links_asked: None,
             profanity_offer: false,
@@ -1754,6 +1764,32 @@ impl Session {
         }
         self.buffs_asked = Some(want);
         self.send(&crate::buffs::answer(want));
+    }
+
+    /// The quest marks over the NPCs' heads: a server that offered them
+    /// ([`crate::headmarks::OP_OFFER`]) is told whether to send them (`want`),
+    /// at once and whenever that changes, and afresh at another offer; one
+    /// that made no offer is told nothing. Off, the marks it sent are
+    /// forgotten.
+    pub fn agree_head_marks(&mut self, want: bool) {
+        if !want {
+            self.head_marks.clear();
+        }
+        if !self.head_marks_offer || self.head_marks_asked == Some(want) {
+            return;
+        }
+        self.head_marks_asked = Some(want);
+        self.send(&crate::headmarks::answer(want));
+    }
+
+    /// The mark over the entity `id`'s head, from a server that sends them
+    /// (offered and asked): [`crate::headmarks::TAKE`], [`crate::headmarks::STEP`],
+    /// or None.
+    pub fn head_mark(&self, id: u32) -> Option<u8> {
+        if !self.head_marks_offer || self.head_marks_asked != Some(true) {
+            return None;
+        }
+        self.head_marks.get(&id).copied()
     }
 
     /// Whether the server sends the buff window's set (offered and asked).
@@ -2197,6 +2233,9 @@ impl Session {
                 self.buffs_offer = false;
                 self.buffs_asked = None;
                 self.buffs.clear();
+                self.head_marks_offer = false;
+                self.head_marks_asked = None;
+                self.head_marks.clear();
                 self.number_tags_offer = false;
                 self.number_tags_asked = None;
                 self.dps_meter_offer = false;
@@ -2726,6 +2765,22 @@ impl Session {
                     self.buffs_asked = None;
                 }
             }
+            // the quest marks over the NPCs' heads offered (again at every
+            // world entry), in the layout this client reads: told afresh
+            // whether the client wants them (`agree_head_marks`); another
+            // layout is no offer
+            crate::headmarks::OP_OFFER => {
+                let layout = r.u8();
+                if !r.error && layout == crate::headmarks::LAYOUT {
+                    self.head_marks_offer = true;
+                    self.head_marks_asked = None;
+                }
+            }
+            crate::headmarks::OP_MARKS => match crate::headmarks::read(&m.data[2.min(m.data.len())..]) {
+                Some(set) if self.head_marks_asked == Some(true) => self.head_marks = set.into_iter().collect(),
+                Some(_) => {}
+                None => eprintln!("net: quest marks of {} bytes not read", m.data.len()),
+            },
             crate::buffs::OP_BUFF_WINDOW_DATA => match crate::buffs::read_set(&m.data[2.min(m.data.len())..]) {
                 Some(set) => {
                     self.buffs = set;
@@ -4384,6 +4439,53 @@ mod tests {
     // the session's until the game takes it, and answered with nothing; a new
     // connection leaves the empty set. The controls: an offer cut short is not
     // answered, and a set cut short leaves nothing new.
+    // The quest marks over the NPCs' heads (go-eqoa-server's 0x7E61-0x7E63):
+    // an offer of layout 1 is the session's, answered as the game agrees
+    // (`agree_head_marks`), once a want; the marks read as the server writes
+    // them are kept by entity id while asked, and dropped when the client stops.
+    // The controls: no answer to a server that made no offer, an offer cut
+    // short or of another layout is no offer, marks the client did not ask
+    // for are not kept, a new connection holds none.
+    #[test]
+    fn head_marks_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x62, 0x7E])).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_head_marks(true);
+        assert_eq!(answers(&mut s), Vec::<Vec<u8>>::new(), "the control: no offer, nothing told");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x61, 0x7E]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x61, 0x7E, 2]);
+        s.agree_head_marks(true);
+        assert_eq!(answers(&mut s), Vec::<Vec<u8>>::new(), "a short offer, or another layout, is no offer");
+        let marks = vec![0x63, 0x7E, 1, 0, 0xA1, 0x86, 0x01, 0x00, 1];
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x61, 0x7E, 1]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, marks.clone());
+        assert_eq!(s.head_mark(100_001), None, "the control: marks not asked for are not kept");
+        s.agree_head_marks(true);
+        s.agree_head_marks(true);
+        assert_eq!(answers(&mut s), [vec![0x62, 0x7E, 1]], "told once");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, marks.clone());
+        assert!(ev.is_empty(), "the marks are the session's: {ev:?}");
+        assert_eq!((s.head_mark(100_001), s.head_mark(100_002)), (Some(crate::headmarks::TAKE), None));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x63, 0x7E, 1, 0, 0xA1, 0x86]);
+        assert_eq!(s.head_mark(100_001), Some(crate::headmarks::TAKE), "a set cut short changes nothing");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x63, 0x7E, 1, 0, 0xA2, 0x86, 0x01, 0x00, 2]);
+        assert_eq!((s.head_mark(100_001), s.head_mark(100_002)), (None, Some(crate::headmarks::STEP)), "the whole set each time");
+        s.agree_head_marks(false);
+        assert_eq!(answers(&mut s), [vec![0x62, 0x7E, 0]]);
+        assert_eq!(s.head_mark(100_002), None, "stopped: dropped");
+        s.agree_head_marks(true);
+        answers(&mut s);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, marks);
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(s.head_mark(100_001), None, "a new connection: none held");
+    }
+
     #[test]
     fn npc_tints_offer_answer_and_set() {
         let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
