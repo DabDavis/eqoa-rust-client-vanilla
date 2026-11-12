@@ -7,6 +7,17 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · The raid list in its groups, with role icons
+- On a server with raids, the **raid list** now sorts everyone into **Group 1, Group 2, Group 3...** of up to four,
+  each under a small label, in the order they joined. A big raid fills more columns, and the mouse wheel over the
+  list steps through the groups when they do not all fit.
+- Each member's health bar has a small **role icon**: a blue **shield** for Warriors, Paladins and Shadow Knights, a
+  green **staff** for Clerics, Druids and Shamans, and a red **sword** for everyone else.
+- The **raid leader and the raid helper** can move members between groups: drag a name onto another group (or onto
+  a member of a full group, to swap the two), or target the member and choose **Community > Group > Raid > Move to
+  Group**. Typed: `/raidgroup <name> <number>` and `/raidswap <name> <name>`; `/raidgroup` alone lists the groups
+  in chat. Groups are for organising: experience, loot and group spells work as before.
+
 ## 2026-11-12 · Mermen may be sea kings
 - A male Mermaid may now choose the **sea king**: a green-scaled merman with a fin crest, at a merman's height. He holds
   your own weapons (not his trident), wears chest armour, bracers, gloves and a helm like any merfolk, and his skin
