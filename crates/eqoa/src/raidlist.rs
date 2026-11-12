@@ -453,7 +453,7 @@ fn draw_row(vui: &Vui, ui: &mut UiRaster, r: [i32; 4], row: &Row) {
     }
     // the role's icon at the bars' left, the bars after it
     let bar_top = y + ROW_H - BAR_H - POWER_H - 1;
-    draw_role(ui, x, bar_top - 3, role(row.class));
+    draw_role(ui, x, bar_top - 2, role(row.class));
     let bar = [x + ROLE_W + ROLE_GAP, bar_top, r[2] - 2, y + ROW_H - 1];
     ui.solid(3, BAR_BACK, corners(bar));
     // health in the HUD's own gauge (7), and under it power in its blue (9)
