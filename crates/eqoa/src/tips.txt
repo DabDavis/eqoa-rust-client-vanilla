@@ -1,0 +1,92 @@
+# The loading screens' tips (the GM Jibrish's petition 1778, 2026-11-12: "Add text
+# tips to the loading screens. Create one for each command, with a brief one
+# sentence description of the command ... Create one hint that loads on a loading
+# screen that is randomly displayed"). One tip a line, one sentence each; a line
+# starting with # is a note, and a blank line is nothing. Edit freely: `tips.rs`
+# reads this file into the client as it is built. GM-only commands stay out.
+
+# The game's own chat commands
+Did you know you can type /say to speak one line aloud to those near you?
+Did you know you can type /shout (or /s) to call out to everyone in the zone?
+Did you know you can type /group (or /g) to speak to your group?
+Did you know you can type /guild (or /gu) to speak to your guild?
+Did you know you can type /tell (or /t) and a name to send someone a private message?
+Did you know you can type /reply (or /r), or press R, to answer the last tell you received?
+Did you know you can type /follow to follow your target?
+Did you know you can type /time to see the time in the world?
+Did you know you can type /alarm and a time, or a number of minutes, to set an alarm?
+
+# The server's commands for everyone
+Did you know you can type /help to list the commands everyone can use?
+Did you know you can type /who to see who is in the world?
+Did you know you can type /tar (or /target) and a name to target the nearest one by that name?
+Did you know you can type /invite and a name to invite a player to your group?
+Did you know you can type /stuck to return to your bind point when you cannot move?
+Did you know you can type /roll to roll a random number everyone near you can see?
+Did you know you can type /lfg on to let others know you are looking for a group?
+Did you know you can type /record to see your combat record, or /record and a name to see someone else's?
+Did you know you can type /bug and a few words, or press F3, to send a bug report to the GMs?
+Did you know you can type /filter to turn the profanity filter on or off?
+Did you know you can type /tutorial to read the welcome guide again?
+Did you know you can type /duel to challenge your target to a duel?
+Did you know you can type /fish to cast a line with the fishing pole in your hand?
+Did you know you can type /pvp to turn your player-versus-player flag on or off?
+Did you know you can type /home to visit your own home and invite guests to it?
+Did you know you can type /ctf to see the capture the flag arena's match and sign up for it?
+Did you know you can type /merc to give orders to your mercenary?
+Did you know you can type /familiar to see or dismiss your familiar?
+Did you know you can type /campfix to report a hunting camp that needs fixing?
+Did you know you can type /mark to mark a spot in your open camp report?
+Did you know you can type /testinvis to keep creatures from attacking you on sight while you test?
+
+# Raids, groups and loot
+Did you know you can type /raid to invite everyone nearby who is not in a group to your raid?
+Did you know you can type /raidinvite and a name to invite a player, or your target, to your raid?
+Did you know you can type /raidleave to leave your raid or your group?
+Did you know a raid's leader or helper can type /raidkick and a name to take a member out of the raid?
+Did you know you can type /raidleader and a name to hand your raid's lead to another member?
+Did you know a raid's leader can type /raidhelper and a name to choose a helper who may invite and kick?
+Did you know a raid's leader can type /raidassist and a name to choose the main assist, and anyone can type /raidassist to assist them?
+Did you know a raid's leader can type /raidloot to choose free for all, need before greed or master looter?
+Did you know you can type /raidgroup to list your raid's groups, and its leader can move members between them?
+Did you know a raid's leader or helper can type /raidswap and two names to trade those members' groups?
+Did you know you can type /rsay to talk to your whole raid?
+Did you know you can type /readycheck to ask your group or raid whether everyone is ready?
+Did you know you can type /ready or /notready to answer a ready check?
+Did you know you can type /need, /greed or /pass to answer a loot roll?
+Did you know a master looter can type /assign and an item's number and a name to give that item away?
+Did you know a master looter can type /abandon to let every item on the corpse go to everyone?
+
+# This client's own commands
+Did you know you can type /dps to show the DPS meter, and /dps reset to start it over?
+Did you know you can type /autocast to list or set the abilities your quick bars fire by themselves?
+Did you know you can type /autotarget to have whatever is attacking you targeted whenever you have no target?
+Did you know you can type /hud to drag the pieces of your HUD wherever you like, and /hud reset to put them back?
+
+# Features
+Did you know you can turn the graphics up in Options > Extended > Graphics?
+Did you know you can turn on Dynamic Lighting, Sun Shadows and Ambient Occlusion in Options > Extended > Graphics > Lighting?
+Did you know you can draw the game sharper with Render Scale in Options > Extended > Graphics > Video?
+Did you know you can use PCSX2 texture packs in Options > Extended > Graphics > Textures?
+Did you know you can press F9 to see the world in the art of the 2002 disc?
+Did you know you can play several characters at once, each in its own window, with a controller for each?
+Did you know you can set up macros, PCSX2's way, in the Options window's Macros page?
+Did you know you can change every key and button in the Options window's Controls page, or press F1 in play?
+Did you know you can press M to open the map, and N to show or hide the minimap?
+Did you know you can click the compass to open the map?
+Did you know you can press Z, or L2, to open the quick chat menus?
+Did you know you can press H to hide everything over the world for a clean view?
+Did you know you can press Space to jump?
+Did you know you can press X, or L3, to run without holding the stick?
+Did you know you can press F to assist: target whatever your target is fighting?
+Did you know you can press 1 to 6 to target yourself, your group and your pet?
+Did you know you can hold R2, or C, to scroll back through the chat?
+Did you know you can select chat lines with the mouse and copy them?
+Did you know you can Shift+click an item to link it in chat for others to see?
+Did you know you can hold a quick bar's ability, or right-click it, to have it cast by itself?
+Did you know you can click one of your buffs to see how long it has left, and click it again to remove it?
+Did you know you can hold R2 and press L2, or hold C and press Z, to walk your buffs and remove one?
+Did you know you can turn the DPS meter on in Options > Extended > UI > DPS Meter?
+Did you know you can choose the colours of your damage and healing numbers in Options > Extended > UI > Number Colors?
+Did you know you can make loading screens instant in Options > Extended > Other > General?
+Did you know you can press F11, or Alt+Enter, to play full screen?

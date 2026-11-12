@@ -844,6 +844,12 @@ impl WndOptions {
                     // (`Session::agree_pet_effects`), the row under the pet's
                     // bar drawn or not (`hud`)
                     58 => c.pet_effects = !c.pet_effects,
+                    // Buff Window: the server told from the next frame
+                    // (`Session::agree_buffs`), ours or the game's strip
+                    // drawn (`buffwnd`)
+                    83 => c.buff_window = !c.buff_window,
+                    // Loading Tips: from the next loading screen (`tips`)
+                    84 => c.loading_tips = !c.loading_tips,
                     // the Map: the map, the minimap and the waypoints from
                     // the next frame (`Play::map_frame`; off, an open map
                     // closes)
@@ -1556,7 +1562,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 66] = [
+const EXTENDED_ITEMS: [(i32, &str); 68] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1623,6 +1629,8 @@ const EXTENDED_ITEMS: [(i32, &str); 66] = [
     (80, crate::numcolor::LABELS[6]),
     (81, crate::numcolor::LABELS[7]),
     (SLOW_UNFOCUSED, "Slow When Not Focused"),
+    (83, "Buff Window"),
+    (84, "Loading Tips"),
 ];
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
@@ -1704,7 +1712,7 @@ const ALL_CATEGORIES: [Category; 19] = [
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
     Category { name: "Characters", items: &[12, 23, 24, 46], note: Note::Server, group: Group::Graphics },
     Category { name: "Textures", items: TEXTURES, note: Note::Textures, group: Group::Graphics },
-    Category { name: "HUD", items: &[22, 30, 40, 49, 58], note: Note::None, group: Group::Ui },
+    Category { name: "HUD", items: &[22, 30, 40, 49, 58, 83], note: Note::None, group: Group::Ui },
     Category { name: "HUD Layout", items: &[76, 77], note: Note::Hud, group: Group::Ui },
     Category { name: "Name Plates", items: &[27, 34], note: Note::None, group: Group::Ui },
     Category { name: "Map", items: &[41, 42, 43, 44, 45], note: Note::None, group: Group::Ui },
@@ -1712,7 +1720,7 @@ const ALL_CATEGORIES: [Category; 19] = [
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
     Category { name: "Chat", items: &[73], note: Note::Links, group: Group::Ui },
-    Category { name: "General", items: &[29, 38], note: Note::None, group: Group::Other },
+    Category { name: "General", items: &[29, 38, 84], note: Note::None, group: Group::Other },
     Category { name: "Combat", items: &[78, 79], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None, group: Group::Other },
     Category { name: "Touch", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Other },
@@ -1866,6 +1874,8 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         34 => wide(if c.overlapping_names { "Show" } else { "Hide" }),
         49 => on_off(c.raid_list),
         58 => on_off(c.pet_effects),
+        83 => on_off(c.buff_window),
+        84 => on_off(c.loading_tips),
         50 => on_off(c.texture_packs),
         51 => on_off(c.dump_textures),
         55 => wide("Open"),
@@ -3054,7 +3064,7 @@ mod tests {
         assert_eq!(
             of(1),
             vec![
-                ("HUD", vec!["Ability Bars", "Text", "HUD", "Raid List", "Pet Effects"]),
+                ("HUD", vec!["Ability Bars", "Text", "HUD", "Raid List", "Pet Effects", "Buff Window"]),
                 ("HUD Layout", vec!["Move HUD", "Reset HUD"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names"]),
                 ("Map", vec!["Map", "Minimap", "Map Markers", "Quest Helper", "Quest Tracker"]),
@@ -3068,7 +3078,7 @@ mod tests {
         assert_eq!(
             of(2),
             vec![
-                ("General", vec!["Update Notices", "Loading Screens"]),
+                ("General", vec!["Update Notices", "Loading Screens", "Loading Tips"]),
                 ("Combat", vec!["Auto-Cast", "Auto Target"]),
                 ("Camera", vec!["Camera Distance", "Camera Turn Speed", "Screen Shake"]),
                 ("Touch", vec!["Touch Stick Size", "Touch Button Size", "Touch Opacity", "Touch Edge"]),

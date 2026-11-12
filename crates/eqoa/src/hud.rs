@@ -184,7 +184,12 @@ pub fn pet_effects_pieces(vui: &Vui, at: [i32; 2], icons: &[u32]) -> Vec<FxPiece
 /// The row drawn: each piece's texels over its rectangle, in floats (half the
 /// strip's size falls between the frame's pixels), as `Blit` draws them.
 fn draw_pet_effects(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], icons: &[u32]) {
-    for p in pet_effects_pieces(vui, at, icons) {
+    draw_fx_pieces(vui, ui, &pet_effects_pieces(vui, at, icons), 1.0);
+}
+
+/// Pieces of an effects' row drawn (the pet's, `buffwnd`'s), each at `alpha`.
+pub fn draw_fx_pieces(vui: &Vui, ui: &mut UiRaster, pieces: &[FxPiece], alpha: f32) {
+    for &p in pieces {
         let (id, texels) = match p.art {
             FxArt::Entry(n, size) => {
                 let e = vui.entry(n);
@@ -197,7 +202,7 @@ fn draw_pet_effects(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], icons: &[u32]) {
         let t = texels.unwrap_or([0, 0, w as i32, h as i32]).map(|v| v as f32);
         let (u0, v0, u1, v1) = (t[0] / w as f32, t[1] / h as f32, (t[0] + t[2]) / w as f32, (t[1] + t[3]) / h as f32);
         let (x0, y0, x1, y1) = (p.r[0], p.r[1], p.r[0] + p.r[2], p.r[1] + p.r[3]);
-        ui.ui.push(Quad { tex, blend: 0, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[u0, v0], [u1, v0], [u1, v1], [u0, v1]], color: [1.0; 4], clip: None });
+        ui.ui.push(Quad { tex, blend: 0, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[u0, v0], [u1, v0], [u1, v1], [u0, v1]], color: [1.0, 1.0, 1.0, alpha], clip: None });
         ui.glyphs.other();
     }
 }

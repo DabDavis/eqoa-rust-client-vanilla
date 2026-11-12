@@ -7,6 +7,21 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · The buff window and loading screen tips
+- **Your buffs now have room for two rows** at the top of the screen (up to 16), and your **pet's buffs sit in a
+  smaller third row** just under them, instead of under the pet's bar.
+- **Click (or tap) a buff** to see its name and how long it has left. **Click it again to remove it.** Only buffs
+  you would want gone can be removed: a poison or another harmful effect stays, and the chat says so. Your pet's
+  buffs can be removed the same way, and so can the Tester Pro's.
+- **On a controller:** hold **R2** and press **L2**, then use the d-pad to walk your buffs (left and right along a
+  row, up and down between rows); each shows its name and time left. **✕ removes** the lit one, **△ or L2** gives
+  the d-pad back. **On a keyboard:** hold **C** and press **Z**, then the arrows, **Enter** removes, **Escape** is done.
+  You can still walk and turn meanwhile.
+- **Loading screens now show a tip**: one "Did you know..." line about a command or a feature, a different one each
+  time, when you enter the world, zone, coach, gate, die and return, or log out.
+- Both are in Options > Extended: **UI > HUD > Buff Window** (Off brings back the old single strip) and **Other >
+  General > Loading Tips**.
+
 ## 2026-11-12 · Mermaid helms sit at the brow
 - A Mermaid's helm now sits forward on her head, its front at her brow as on a human, instead of a little behind
   it with her face standing out of the front. Mermaids, mermen, sirens and sea kings, every helm.

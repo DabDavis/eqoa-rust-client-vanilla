@@ -1228,6 +1228,13 @@ pub struct Session {
     /// ([`crate::readycheck::OP_READY_OFFER`]).
     pub ready_offer: bool,
     ready_asked: Option<bool>,
+    /// The same for the buff window ([`crate::buffs::OP_BUFF_WINDOW`]), and
+    /// the set it last sent ([`crate::buffs::OP_BUFF_WINDOW_DATA`]) and when it
+    /// came (`now`'s clock): what is left of each is counted down from then.
+    pub buffs_offer: bool,
+    buffs_asked: Option<bool>,
+    pub buffs: Vec<crate::buffs::Line>,
+    pub buffs_at: u32,
     /// Whether the server offered item links ([`OP_ITEM_LINKS`]) on this
     /// connection, and what it was last told (none since the offer).
     pub item_links_offer: bool,
@@ -1417,6 +1424,10 @@ impl Session {
             raid_asked: None,
             ready_offer: false,
             ready_asked: None,
+            buffs_offer: false,
+            buffs_asked: None,
+            buffs: Vec::new(),
+            buffs_at: 0,
             item_links_offer: false,
             item_links_asked: None,
             profanity_offer: false,
@@ -1728,6 +1739,49 @@ impl Session {
         }
         self.ready_asked = Some(want);
         self.send(&crate::readycheck::answer(want));
+    }
+
+    /// The buff window: a server that offered it
+    /// ([`crate::buffs::OP_BUFF_WINDOW`]) is told whether to send its set
+    /// (`want`), at once and whenever that changes, and afresh at another offer;
+    /// one that made no offer is told nothing. Off, the set it sent is forgotten.
+    pub fn agree_buffs(&mut self, want: bool) {
+        if !want {
+            self.buffs.clear();
+        }
+        if !self.buffs_offer || self.buffs_asked == Some(want) {
+            return;
+        }
+        self.buffs_asked = Some(want);
+        self.send(&crate::buffs::answer(want));
+    }
+
+    /// Whether the server sends the buff window's set (offered and asked).
+    pub fn buffs_on(&self) -> bool {
+        self.buffs_offer && self.buffs_asked == Some(true)
+    }
+
+    /// A line of the set asked to be taken off
+    /// ([`crate::buffs::OP_BUFF_REMOVE`]); false, and nothing sent, to a server
+    /// that made no offer.
+    pub fn send_buff_remove(&mut self, l: &crate::buffs::Line) -> bool {
+        if !self.buffs_offer {
+            return false;
+        }
+        self.send(&crate::buffs::remove(l));
+        true
+    }
+
+    /// The set's lines not over at `now` (`now`'s clock), each with what is
+    /// left of it then (a line of no end kept as it is).
+    pub fn buffs_left(&self, now: u32) -> Vec<crate::buffs::Line> {
+        let gone = now.wrapping_sub(self.buffs_at);
+        let gone = if (gone as i32) < 0 { 0 } else { gone };
+        self.buffs
+            .iter()
+            .filter(|l| l.left_ms == crate::buffs::NO_END || l.left_ms > gone)
+            .map(|l| crate::buffs::Line { left_ms: if l.left_ms == crate::buffs::NO_END { l.left_ms } else { l.left_ms - gone }, ..l.clone() })
+            .collect()
     }
 
     /// A ready check's answer ([`crate::readycheck::OP_READY_REPLY`]) to a
@@ -2140,6 +2194,9 @@ impl Session {
                 self.pet_effects_offer = false;
                 self.pet_effects_asked = None;
                 self.pet_effects.clear();
+                self.buffs_offer = false;
+                self.buffs_asked = None;
+                self.buffs.clear();
                 self.number_tags_offer = false;
                 self.number_tags_asked = None;
                 self.dps_meter_offer = false;
@@ -2660,6 +2717,22 @@ impl Session {
                     self.ready_asked = None;
                 }
             }
+            // the buff window offered (again at every world entry): told
+            // afresh whether the client wants it (`agree_buffs`)
+            crate::buffs::OP_BUFF_WINDOW => {
+                r.u8();
+                if !r.error {
+                    self.buffs_offer = true;
+                    self.buffs_asked = None;
+                }
+            }
+            crate::buffs::OP_BUFF_WINDOW_DATA => match crate::buffs::read_set(&m.data[2.min(m.data.len())..]) {
+                Some(set) => {
+                    self.buffs = set;
+                    self.buffs_at = self.now();
+                }
+                None => eprintln!("net: a buff window's set of {} bytes not read", m.data.len()),
+            },
             crate::readycheck::OP_READY_CHECK => match crate::readycheck::read_check(&m.data[2.min(m.data.len())..]) {
                 Some(c) => ev.push(Event::ReadyCheck(c)),
                 None => eprintln!("net: a ready check of {} bytes not read", m.data.len()),
