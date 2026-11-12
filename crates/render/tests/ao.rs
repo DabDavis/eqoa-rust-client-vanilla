@@ -257,6 +257,59 @@ fn foot_of_a_wall(g: &Gpu, size: (u32, u32)) {
     assert_eq!(wider.len(), ((w + 40) * h * 4) as usize);
 }
 
+/// No dark aura round a model (the owner's "ambient occlusion shows a black
+/// aura around models", 2026-11-12): a post as thin as a leg, 0.4 wide and 2
+/// tall, stands on the floor, the camera 3 in front of it and 3 up looking
+/// past it at the floor behind. The floor seen just beside the post's
+/// outline (1, 2 and 4 pixels out, from its knee to its top), a fraction of
+/// a unit to a few units behind it, is not darkened: the post is the front
+/// of a model, not a wall reaching back to that floor (the control: before
+/// `thickness` it read 147 there). The floor at its foot still is (a
+/// contact counts), at Render Scale x1 and x2; a wall's foot stays as dark
+/// as it was (`the_foot_of_a_wall_darkened_and_open_ground_not`).
+#[test]
+fn no_aura_round_a_model() {
+    let Some(g) = gpu() else { return };
+    let size = (320u32, 240u32);
+    let none = |_: i32| None;
+    let o = FREEPORT;
+    for k in [1u32, 2] {
+        let mut r = Renderer::new(&g.device, &g.queue, render::TARGET_FORMAT);
+        let floor = quad([o + Vec3::new(-20.0, 0.0, -40.0), o + Vec3::new(20.0, 0.0, -40.0), o + Vec3::new(20.0, 0.0, 10.0), o + Vec3::new(-20.0, 0.0, 10.0)], Vec3::Y, 0.5, 0);
+        let post = quad([o + Vec3::new(-0.2, 0.0, 0.0), o + Vec3::new(0.2, 0.0, 0.0), o + Vec3::new(0.2, 2.0, 0.0), o + Vec3::new(-0.2, 2.0, 0.0)], Vec3::Z, 0.5, 0);
+        let models: Vec<_> = [floor, post].iter().map(|m| r.upload(&g.device, &g.queue, m, &[render::IDENTITY], &none)).collect();
+        let items: Vec<Draw> = models.iter().map(Draw::Model).collect();
+        let eye = o + Vec3::new(0.0, 3.0, 3.0);
+        let vp = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), size.0 as f32 / size.1 as f32, 0.3, 6000.0) * glam::camera::rh::view::look_at_mat4(eye, o + Vec3::new(0.0, 0.8, 0.0), Vec3::Y);
+        let view = View { eye, sun: Vec3::ZERO, ambient: Vec3::ZERO, ..View::daylight(vp) };
+        r.scale.set(k);
+        r.ao.set(Settings::with(Mode::Factor));
+        let factor = render::capture(&g.device, &g.queue, &mut r, size.0, size.1, &view, &items, None);
+        let at = |p: Vec3| {
+            let ((x, y), _) = pixel(vp, size, o + p);
+            factor[((y * size.0 + x) * 4) as usize]
+        };
+        // the floor seen just beside the post's outline, from its knee to
+        // its top, each side: one, two and four frame pixels out
+        let mut beside = Vec::new();
+        for step in 0..=10 {
+            let y = 0.6 + step as f32 * 0.13;
+            let ((x0, py), _) = pixel(vp, size, o + Vec3::new(-0.2, y, 0.0));
+            let ((x1, _), _) = pixel(vp, size, o + Vec3::new(0.2, y, 0.0));
+            for d in [1, 2, 4] {
+                for x in [x0 - d - 1, x1 + d + 1] {
+                    beside.push((factor[((py * size.0 + x) * 4) as usize], (x, py)));
+                }
+            }
+        }
+        let darkest = *beside.iter().min().unwrap();
+        let foot = at(Vec3::new(0.32, 0.0, -0.05));
+        eprintln!("x{k}: the floor beside the post at worst {} at {:?}; beside its foot {foot}", darkest.0, darkest.1);
+        assert!(darkest.0 >= 235, "x{k}: an aura round the post: {} at {:?}", darkest.0, darkest.1);
+        assert!(foot < 235, "x{k}: the floor at the post's foot not darkened: {foot}");
+    }
+}
+
 /// The same floor and wall at the origin and at Freeport give the same
 /// factor (within the blur's rounding): the positions are the eye's, never
 /// the world's. The control: the origin's at half the radius, which the

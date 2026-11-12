@@ -52,6 +52,10 @@ const STEP: f32 = 2.6179939; // TURNS * TAU / SAMPLES
 const REACH: f32 = 0.0889;
 // samples nearer than this (small texels) read the pyramid's level 0
 const NEAR_TEXELS: f32 = 8.0;
+// a sample stops counting once it stands nearer the eye than `STEEP` times
+// its distance beside the pixel, by this share of the radius (`thickness`)
+const THICKNESS: f32 = 0.1;
+const STEEP: f32 = 3.0;
 // the view depths the stored key spans
 const KEY_RANGE: f32 = 512.0;
 // view depths the factor fades out over (the depth's steps grow with it)
@@ -164,6 +168,28 @@ fn spin(h: vec2<i32>) -> f32 {
     return TAU * fract(52.9829189 * fract(dot(f, vec2<f32>(0.06711056, 0.00583715))));
 }
 
+// How much a sample `v` from the pixel (`vv` its length squared, `ray` the
+// eye's direction to the pixel) is trusted as an occluder. The depth is a
+// surface seen from the eye, not a solid: a sample that stands out of the
+// pixel's surface almost straight toward the camera (nearer the eye by more
+// than three times its distance beside the pixel's line of sight) is the
+// front of another model in front of it, a character's legs over the ground
+// a step behind them, a post, a cactus, a leaf; how far that model reaches
+// back is unknown, and counted as a wall reaching back to the pixel it
+// darkened everything seen round each model's outline, a dark aura (the
+// owner's report, 2026-11-12: 57 of 255 on the ground beside a character at
+// noon in Freeport, now 5). Past a tenth of the radius beyond that it
+// counts for nothing. A corner's other face rises beside the pixel more than
+// a third as much as toward the eye from any camera above about 18 degrees
+// off it, and counts in full (a wall's foot as dark as before, 164 and 166
+// in render/tests/ao.rs, where a test of the pixel's depth difference alone
+// took a fifth of it off the wall's side of every corner).
+fn thickness(v: vec3<f32>, vv: f32, ray: vec3<f32>, radius: f32) -> f32 {
+    let toward = -dot(v, ray);
+    let beside = sqrt(max(vv - toward * toward, 0.0));
+    return 1.0 - smoothstep(0.0, THICKNESS * radius, toward - STEEP * beside);
+}
+
 // The small pass: its pixel `h` stands for the frame's pixel at its
 // coordinates times the scale (the pyramid's level 0). A sample counts by how far above
 // the pixel's plane it is (a sine) and fades to nothing at the radius, so a
@@ -194,6 +220,7 @@ fn fs_ao(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
         var dir = vec2<f32>(cos(turn), sin(turn));
         let step = vec2<f32>(cos(STEP), sin(STEP));
         let r2 = radius * radius;
+        let ray = c * inverseSqrt(max(dot(c, c), 1e-12));
         let last = vec2<i32>(u.size.zw) - vec2<i32>(1);
         var sum = 0.0;
         for (var i = 0; i < SAMPLES; i++) {
@@ -210,7 +237,7 @@ fn fs_ao(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
             let v = position(vec2<i32>(sq.xy), sq.z) - c;
             let vv = dot(v, v);
             let rise = max(dot(v, n) * inverseSqrt(vv + 1e-8) - u.params.z, 0.0);
-            sum += rise * max(1.0 - vv / r2, 0.0);
+            sum += rise * max(1.0 - vv / r2, 0.0) * thickness(v, vv, ray, radius);
         }
         a = max(1.0 - u.params.y * 2.0 * sum / f32(SAMPLES), 0.0);
     }
