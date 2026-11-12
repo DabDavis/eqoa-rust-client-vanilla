@@ -137,7 +137,7 @@ pub const ROWS: &[Row] = &[
     row("cycle_target", "Target: {1405}, group, {418}", &["`", "~"], b(bit::L1), "Each press the next of the player, the group and the pet; held, aim as with Tab. On the map |7 zooms out."),
     row("quick_chat", "Quick chat", &["z"], b(bit::L2), "Again, it closes the quick chat."),
     row("next_target", "Target: the next (hold: aim)", &["tab"], b(bit::R1), "Held: the view at the eyes, the target the one nearest the crosshair. In a window Tab is |8; on the map |8 zooms in."),
-    row("history", "{424} {1694} (hold)", &["c"], b(bit::R2), "Up and down scroll it while held. In a window C is |c (the factions' next page)."),
+    row("history", "{424} {1694} (hold)", &["c"], b(bit::R2), "Up and down scroll it while held. With it held, Z (L2) gives the buff bar the arrows: Enter (|x) selects a buff, Backspace (|s) removes it, Escape (|t) or Z again lets go. With the mouse, left-click a buff to select it, right-click (long-press on touch) to remove it. In a window C is |c (the factions' next page)."),
     row("autorun", "Autorun", &["x"], b(bit::L3), "A stick pushed past the run's edge ends it."),
     row("jump", "Jump", &["space", "v"], Pad::None, "In play, on a server that has jumps (its own, not the game's); V too. Wherever it makes no jump (any other server, a window up) Space is {1018}'s key, as it was before it jumped. A controller's button can take it here: every button of the pad is the game's, so none has it till given. On the map Space is |x."),
     row("chat", "{424}", &["enter"], b(bit::R3), "In a window Enter is |x {212}; in a trade, its chat line (/, T and R too). Over the quick chat, the chat line. On the map: |x."),

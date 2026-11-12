@@ -1,6 +1,7 @@
 //! The buff window in play (`buffwnd`; the GM Jibrish's petition 1761): the
-//! set the server sends, drawn in the effects strip's place, its clicks, its
-//! d-pad (R2 held and L2; the keyboard's C and Z) and its removals sent. A child of
+//! set the server sends, drawn in the effects strip's place, its clicks (left
+//! selects, right removes: petition 1809), its d-pad (R2 held and L2; the
+//! keyboard's C and Z) and its removals sent. A child of
 //! `play`, for `Play`'s fields.
 
 use super::Play;
@@ -37,7 +38,8 @@ impl Play {
     }
 
     /// A key while the bar has the d-pad (play, or R2's history held): the
-    /// walk, ✕ (Enter) a removal asked, △ (Escape, Backspace) or L2 let go.
+    /// walk, ✕ (Enter) selects, □ (Backspace) a removal asked, △
+    /// (Escape) or L2 let go.
     /// True when it was the bar's; its release too.
     pub fn buff_key(&mut self, key: i32, down: bool) -> bool {
         if !self.buffs.focused() {
@@ -50,13 +52,14 @@ impl Play {
         }
         let key = match key {
             13 => 134,
-            27 | 8 => 132,
+            8 | 127 => 133,
+            27 => 132,
             17 => 136,
             18 => 137,
             k => k,
         };
         if !down {
-            return matches!(key, 132 | 134 | 136..=139 | 141);
+            return matches!(key, 132..=134 | 136..=139 | 141);
         }
         let lines = self.buff_lines();
         let mut cues = Vec::new();
@@ -68,15 +71,16 @@ impl Play {
         took
     }
 
-    /// A pointer at frame point `f` on the bar: lit, or taken off on a second
-    /// click. False when it is not on a buff.
-    pub(super) fn buff_point(&mut self, f: [f32; 2]) -> bool {
+    /// A pointer at frame point `f` on the bar (petition 1809): a left click
+    /// (a tap) selects or lets go, a right click (`right`; a long press) takes
+    /// it off. False when it is not on a buff (a left click there lets go).
+    pub(super) fn buff_point(&mut self, f: [f32; 2], right: bool, finger: bool) -> bool {
         if !self.buff_window_on() || !crate::influence::shown(self.mode) {
             return false;
         }
         let now = self.session.now() as i64;
         let mut cues = Vec::new();
-        let Some(remove) = self.buffs.point(f, now, &mut cues) else { return false };
+        let Some(remove) = self.buffs.point(f, now, right, finger, &mut cues) else { return false };
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
         if let Some(l) = remove {
             self.remove_buff(&l);
@@ -88,6 +92,12 @@ impl Play {
     fn remove_buff(&mut self, l: &Line) {
         eprintln!("play: buff {:?} ({}, id {}) asked off", l.name, if l.whose == net::buffs::ON_PET { "pet" } else { "self" }, l.id);
         self.session.send_buff_remove(l);
+    }
+
+    /// A finger held still at frame point `f` (`hud_hold`): on a buff, a
+    /// right click's removal. False when it is not on one.
+    pub(super) fn buff_hold(&mut self, f: [f32; 2]) -> bool {
+        self.buff_point(f, true, true)
     }
 
     /// The bar drawn where the game's strip is (`influence`), into `r` within

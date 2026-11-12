@@ -5005,14 +5005,19 @@ impl Play {
             return false;
         }
         let f = render::ui::frame_from_window(size, at);
+        // on a buff (`buffwnd`, petition 1809): taken off, as a right click
+        if self.buff_hold(f) {
+            return true;
+        }
         let (side, up) = (render::ui::side(size), render::ui::top(size));
         let menus = crate::hudlayout::shift(crate::hudlayout::Piece::QuickMenus, crate::hudlayout::Beyond::of(size));
         self.auto_point([f[0] - side - menus[0], f[1] + up - menus[1]])
     }
 
-    /// Long presses are wanted in play (`hud_hold`): auto-cast on.
+    /// Long presses are wanted in play (`hud_hold`): auto-cast on, or the
+    /// buff window up.
     pub fn wants_holds(&self) -> bool {
-        self.mode == 0 && crate::settings::auto_cast() && !self.map.open
+        self.mode == 0 && (crate::settings::auto_cast() || self.buff_window_on()) && !self.map.open
     }
 
     pub fn point(&mut self, c: crate::mouse::Click, size: (u32, u32), finger: bool) -> bool {
@@ -5037,9 +5042,10 @@ impl Play {
         if matches!(c, Click::Target(..) | Click::Interact(..)) && matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.roll_point(f) {
             return true;
         }
-        // the buff window (`buffwnd`): a click on a buff lights it, a second
-        // takes it off
-        if matches!(c, Click::Target(..) | Click::Interact(..)) && matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.buff_point(f) {
+        // the buff window (`buffwnd`, petition 1809): a left click on a buff
+        // selects it or lets it go, a right click takes it off (a left click
+        // off it lets go and is still the world's)
+        if matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.buff_point(f, matches!(c, Click::Right(..)), finger) {
             return true;
         }
         // the item links' windows (`itemlink`): a click on one is theirs, on

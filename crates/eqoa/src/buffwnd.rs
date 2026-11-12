@@ -13,16 +13,21 @@
 //!   sixteen (the game's strip holds eight); the pet's under them in a row of
 //!   their own at half the size (the art of the row under the pet's bar, which
 //!   it replaces), with Extended's Pet Effects on.
-//! - The mouse and a finger: a click on a buff lights it and shows its name and
-//!   its time left under the rows for `INFO_MS`; a second click on the lit buff
-//!   takes it off (a buff the server says cannot come off, a harmful one, says
-//!   so and stays). One click never removes anything.
+//! - The mouse and a finger (the GM Jibrish's petition 1809, 2026-11-12: "Make
+//!   it right click to remove, and left click to unselect"): a left click (a
+//!   tap) on a buff selects it, its name and its time left shown under the rows
+//!   for `INFO_MS`; a left click on the selected one, or anywhere off the bar,
+//!   lets it go; on another, selects that one. A right click (a long press) on
+//!   a buff takes it off at once, selected or not (a buff the server says
+//!   cannot come off, a harmful one, is selected and says so).
 //! - A controller: hold R2 (the chat box's history, where the walk goes on) and
 //!   press L2, and the bar has the d-pad until it is let go: left and right
-//!   along a row, up and down between the rows, the lit buff's name and time
-//!   left shown, ✕ takes it off, △ or L2 lets go. The keyboard: C held and Z,
-//!   then the arrows, Enter takes it off, Escape or Backspace lets go. While the bar
-//!   has them, those keys are its alone; the sticks walk and turn as ever.
+//!   along a row, up and down between the rows (the highlighted buff framed),
+//!   ✕ selects or lets go of the highlighted one (its name and time left
+//!   shown), □ takes it off, △ or L2 lets go of the bar. The keyboard: C held
+//!   and Z, then the arrows, Enter selects, Backspace takes it off,
+//!   Escape lets go. While the bar has them, those keys are its alone; the
+//!   sticks walk and turn as ever.
 //! - A removal goes to the server (0x7E59), which takes off only what is
 //!   beneficial and says so in the chat either way; the set it sends again
 //!   takes the buff out of the rows.
@@ -109,6 +114,10 @@ pub struct BuffWnd {
     /// the lit buff, and until when its name shows (a click's; the session's ms)
     lit: Option<(u8, u32, u32, String)>,
     lit_until: i64,
+    /// focused: the highlighted buff selected (✕), its name and time shown
+    chosen: bool,
+    /// the last pointer was a finger (the hint says long-press, not right-click)
+    finger: bool,
     /// the lines and cells drawn last, and the frame's offset from the frame to
     /// where they were placed (`Ui::placed`), for a pointer
     lines: Vec<Line>,
@@ -122,7 +131,7 @@ pub struct BuffWnd {
 
 impl Default for BuffWnd {
     fn default() -> Self {
-        BuffWnd { focused: false, lit: None, lit_until: 0, lines: Vec::new(), cells: Vec::new(), off: [0.0; 2], cw: 32, capw: 5 }
+        BuffWnd { focused: false, lit: None, lit_until: 0, chosen: false, finger: false, lines: Vec::new(), cells: Vec::new(), off: [0.0; 2], cw: 32, capw: 5 }
     }
 }
 
@@ -159,6 +168,7 @@ impl BuffWnd {
         let cells = layout(lines, self.cw.max(1), self.capw.max(1), pets);
         let Some(first) = cells.first() else { return false };
         self.focused = true;
+        self.chosen = false;
         if self.lit_index(lines).is_none_or(|i| !cells.iter().any(|c| c.line == i)) {
             self.lit = Some(key_of(&lines[first.line]));
         }
@@ -168,12 +178,14 @@ impl BuffWnd {
     /// The d-pad handed back (△, L2, Escape), the light with it.
     pub fn let_go(&mut self) {
         self.focused = false;
+        self.chosen = false;
         self.lit = None;
     }
 
     /// A key (the game's codes; the keyboard's arrows come as the pad's)
     /// while focused: whether it was the bar's, and the line to take off when
-    /// ✕ asked it of one that may come off. Unfocused, no key is the bar's.
+    /// □ asked it of one that may come off (✕ selects or lets go of the
+    /// highlighted one). Unfocused, no key is the bar's.
     pub fn key(&mut self, key: i32, lines: &[Line], pets: bool, cues: &mut Vec<i32>) -> (bool, Option<Line>) {
         if !self.focused {
             return (false, None);
@@ -206,11 +218,18 @@ impl BuffWnd {
                 })
             }
             134 => {
+                self.chosen = !self.chosen;
+                cues.push(if self.chosen { 11 } else { 8 });
+                return (true, None);
+            }
+            133 => {
                 let l = &lines[here.line];
                 if l.removable {
                     cues.push(13);
                     return (true, Some(l.clone()));
                 }
+                // one that may not come off: selected, so it says so
+                self.chosen = true;
                 cues.push(9);
                 return (true, None);
             }
@@ -231,25 +250,51 @@ impl BuffWnd {
         (true, None)
     }
 
-    /// A pointer at frame point `p` (as placed on the screen): None when it is
-    /// not on a buff; on one, Some, and the line to take off when it was the
-    /// lit one (a second click) and may come off. A first click lights it and
-    /// shows its name and time for `INFO_MS`.
-    pub fn point(&mut self, p: [f32; 2], now: i64, cues: &mut Vec<i32>) -> Option<Option<Line>> {
-        let c = self.cells.iter().find(|c| {
+    /// A pointer at frame point `p` (as placed on the screen); `right` a
+    /// right click or a long press, `finger` a touch screen's. Off the bar,
+    /// None, and a left click lets go of a selected buff (the click is still
+    /// the world's). On a buff, Some: a left click selects it, or lets it go
+    /// when it was the one selected; a right click takes it off at once (the
+    /// line to send) when it may come off, else selects it to say so.
+    pub fn point(&mut self, p: [f32; 2], now: i64, right: bool, finger: bool, cues: &mut Vec<i32>) -> Option<Option<Line>> {
+        let at = self.cells.iter().find(|c| {
             let (x, y) = (p[0] - self.off[0], p[1] - self.off[1]);
             x >= c.r[0] && x < c.r[0] + c.r[2] && y >= c.r[1] && y < c.r[1] + c.r[3] + if c.row == PLAYER_ROWS { 2.0 } else { 4.0 }
-        })?;
-        let l = self.lines.get(c.line)?.clone();
-        let again = self.lit.as_ref() == Some(&key_of(&l)) && (self.focused || now < self.lit_until);
-        if again && l.removable {
-            cues.push(13);
-            self.lit_until = now + INFO_MS;
-            return Some(Some(l));
+        });
+        let Some(l) = at.and_then(|c| self.lines.get(c.line)).cloned() else {
+            if !right && !self.focused {
+                self.lit = None;
+                self.lit_until = 0;
+            }
+            return None;
+        };
+        self.finger = finger;
+        let selected = self.lit.as_ref() == Some(&key_of(&l)) && (if self.focused { self.chosen } else { now < self.lit_until });
+        if right {
+            if l.removable {
+                cues.push(13);
+                if self.lit.as_ref() == Some(&key_of(&l)) && !self.focused {
+                    self.lit = None;
+                    self.lit_until = 0;
+                }
+                return Some(Some(l));
+            }
+            cues.push(9);
+        } else if selected {
+            cues.push(8);
+            if self.focused {
+                self.chosen = false;
+            } else {
+                self.lit = None;
+                self.lit_until = 0;
+            }
+            return Some(None);
+        } else {
+            cues.push(11);
         }
-        cues.push(if again { 9 } else { 11 });
         self.lit = Some(key_of(&l));
         self.lit_until = now + INFO_MS;
+        self.chosen = true;
         Some(None)
     }
 
@@ -291,6 +336,8 @@ impl BuffWnd {
         // the lit buff: a frame round its icon, and its name and time under the rows
         let shown = self.focused || now < self.lit_until;
         let Some(i) = self.lit_index(lines).filter(|_| shown) else { return };
+        // focused with none selected: the highlight framed and the keys only
+        let info = !self.focused || self.chosen;
         let Some(c) = cells.iter().find(|c| c.line == i).copied() else { return };
         let k = if c.row == PLAYER_ROWS { PET_SCALE } else { 1.0 };
         let (x0, y0) = ((c.r[0] + 2.0 * k) as i32, (c.r[1] + 5.0 * k) as i32);
@@ -303,26 +350,37 @@ impl BuffWnd {
         let fh = vui.font_height(r);
         let name = wide(&if l.whose == ON_PET { format!("{} (pet)", l.name) } else { l.name.clone() });
         let left = wide(&time_text(l.left_ms));
-        let hint = match (self.focused, l.removable) {
-            (true, true) => "|x Remove   |t Done",
-            (true, false) => "Cannot be removed   |t Done",
-            (false, true) => "Click again to remove",
-            (false, false) => "Cannot be removed",
-        };
-        let hint = wide(hint);
+        let hint = wide(hint(self.focused, info, l.removable, self.finger));
         let mut win = Window::default();
-        let w = (vui.string_width(r, &name) + vui.string_width(r, &left) + 36).max(win.text_width(vui, r, &hint) + 20).max(180);
-        let h = fh * 2 + 12;
+        let w = if info { vui.string_width(r, &name) + vui.string_width(r, &left) + 36 } else { 0 }.max(win.text_width(vui, r, &hint) + 20).max(180);
+        let h = if info { fh * 2 + 12 } else { fh + 12 };
         let at = [AT[0], bottom(cells) + 2];
         r.blit(icon_id("black"), 0, at, [0, 0], [w, h], 3, 0.8);
         let fp = FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 1), br: (106, 0), bottom: (102, 2), bl: (105, 0), left: (104, 0) };
         vui.blit_frame(r, at, [w, h], &fp, 3, 1.0, true);
-        vui.draw_string_ex(r, &name, at[0] + 10, at[1] + 5, [1.0, 1.0, 0.0, 1.0], true);
-        let lw = vui.string_width(r, &left);
-        vui.draw_string_ex(r, &left, at[0] + w - 10 - lw, at[1] + 5, [1.0; 4], true);
+        let mut y = at[1] + 5;
+        if info {
+            vui.draw_string_ex(r, &name, at[0] + 10, y, [1.0, 1.0, 0.0, 1.0], true);
+            let lw = vui.string_width(r, &left);
+            vui.draw_string_ex(r, &left, at[0] + w - 10 - lw, y, [1.0; 4], true);
+            y += fh;
+        }
         win.init(vui, r, [at[0], at[1]], w, 1, 0);
         win.open(true);
-        win.draw_text_internal(vui, r, &hint, at[0] + 10, at[1] + 5 + fh + fh / 2, [0.85, 0.85, 0.85, 1.0], 1);
+        win.draw_text_internal(vui, r, &hint, at[0] + 10, y + fh / 2, [0.85, 0.85, 0.85, 1.0], 1);
+    }
+}
+
+/// The line under a selected buff's name: what may be done with it, for the
+/// d-pad (`focused`; `info` one selected) or a pointer (`finger` a touch's).
+pub fn hint(focused: bool, info: bool, removable: bool, finger: bool) -> &'static str {
+    match (focused, info, removable, finger) {
+        (true, false, _, _) => "|x Select   |s Remove   |t Done",
+        (true, true, true, _) => "|s Remove   |x Deselect   |t Done",
+        (true, true, false, _) => "Cannot be removed   |x Deselect   |t Done",
+        (false, _, true, false) => "Right-click to remove",
+        (false, _, true, true) => "Long-press to remove",
+        (false, _, false, _) => "Cannot be removed",
     }
 }
 
@@ -367,17 +425,24 @@ mod tests {
     }
 
     /// The d-pad, focused: right along the row, down to the next row's nearest,
-    /// down again to the pet's, ✕ takes off one that may come off and not one
-    /// that may not, △ lets go. The control: unfocused, no key is the bar's.
+    /// down again to the pet's, ✕ selects and lets go, □ takes off one that may
+    /// come off and not one that may not (that one selected instead), △ lets
+    /// go. The control: unfocused, no key is the bar's.
     #[test]
     fn the_dpad_walks_the_buffs_and_takes_one_off() {
         let l = set(10, 2);
         let mut b = BuffWnd::default();
         let mut cues = Vec::new();
         assert_eq!(b.key(137, &l, true, &mut cues), (false, None), "unfocused: not the bar's");
+        assert_eq!(b.key(133, &l, true, &mut cues), (false, None), "unfocused: □ not the bar's");
         assert!(b.take_focus(&l, true));
         let lit = |b: &BuffWnd| b.lit.as_ref().map(|k| k.1);
         assert_eq!(lit(&b), Some(1));
+        assert!(!b.chosen, "highlighted, not selected");
+        assert_eq!(b.key(134, &l, true, &mut cues), (true, None), "✕ selects");
+        assert!(b.chosen);
+        assert_eq!(b.key(134, &l, true, &mut cues), (true, None), "✕ again lets go");
+        assert!(!b.chosen && b.focused());
         b.key(137, &l, true, &mut cues);
         b.key(137, &l, true, &mut cues);
         assert_eq!(lit(&b), Some(3));
@@ -385,7 +450,8 @@ mod tests {
         assert_eq!(lit(&b), Some(10), "down: the second row's nearest (it has two)");
         b.key(139, &l, true, &mut cues);
         assert_eq!(lit(&b), Some(102), "down: the pet's row's nearest");
-        assert_eq!(b.key(134, &l, true, &mut cues), (true, Some(l[11].clone())), "✕: the pet's buff off");
+        assert_eq!(b.key(134, &l, true, &mut cues), (true, None), "✕ never removes");
+        assert_eq!(b.key(133, &l, true, &mut cues), (true, Some(l[11].clone())), "□: the pet's buff off");
         b.key(138, &l, true, &mut cues);
         b.key(138, &l, true, &mut cues);
         b.key(136, &l, true, &mut cues);
@@ -395,10 +461,22 @@ mod tests {
         b.key(137, &l, true, &mut cues);
         b.key(137, &l, true, &mut cues);
         assert_eq!(lit(&b), Some(5));
-        assert_eq!(b.key(134, &l, true, &mut cues), (true, None), "✕ on one that may not come off: nothing");
+        b.key(134, &l, true, &mut cues);
+        assert_eq!(b.key(133, &l, true, &mut cues), (true, None), "□ on one that may not come off: nothing");
+        assert!(b.chosen, "selected, to say so");
         assert_eq!(b.key(132, &l, true, &mut cues), (true, None));
-        assert!(!b.focused());
+        assert!(!b.focused() && !b.chosen);
         assert!(!b.take_focus(&[], true), "nothing to walk");
+    }
+
+    #[test]
+    fn the_hint_names_the_keys() {
+        assert_eq!(hint(true, false, true, false), "|x Select   |s Remove   |t Done");
+        assert_eq!(hint(true, true, true, false), "|s Remove   |x Deselect   |t Done");
+        assert_eq!(hint(true, true, false, true), "Cannot be removed   |x Deselect   |t Done");
+        assert_eq!(hint(false, true, true, false), "Right-click to remove");
+        assert_eq!(hint(false, true, true, true), "Long-press to remove");
+        assert_eq!(hint(false, true, false, false), "Cannot be removed");
     }
 
     /// The set changing under it: the lit one gone, the light to the first
@@ -418,9 +496,10 @@ mod tests {
     }
 
     /// Through the drawing: `pieces` notes each cell where it went (here 10
-    /// right of the frame, as a moved piece is), a click there lights it and a
-    /// second takes it off; the name's box draws over a null raster. The
-    /// control: before `pieces`, a click there finds nothing.
+    /// right of the frame, as a moved piece is), a left click there selects
+    /// it and a right click takes it off; the name's box draws over a null
+    /// raster, focused or not. The control: before `pieces`, a click there
+    /// finds nothing.
     #[test]
     fn a_click_finds_a_buff_where_it_was_drawn() {
         use crate::pointer::testing::NullRaster;
@@ -433,36 +512,52 @@ mod tests {
         let mut b = BuffWnd::default();
         let mut cues = Vec::new();
         let at = [10.0 + 148.0 + 32.0 + 16.0, 30.0];
-        assert_eq!(b.point(at, 0, &mut cues), None, "nothing noted yet");
+        assert_eq!(b.point(at, 0, false, false, &mut cues), None, "nothing noted yet");
         let p = b.pieces(&vui, &l, true, [10.0, 0.0]);
         assert_eq!(p.len(), 2 + 4 * 2 + 2 + 2, "two rows: caps, a cell and an icon a buff");
-        assert_eq!(b.point(at, 0, &mut cues), Some(None));
+        assert_eq!(b.point(at, 0, false, false, &mut cues), Some(None));
         b.draw_info(&vui, &mut NullRaster, 10);
-        assert_eq!(b.point(at, 20, &mut cues), Some(Some(l[1].clone())));
+        assert_eq!(b.point(at, 20, true, false, &mut cues), Some(Some(l[1].clone())));
+        b.take_focus(&l, true);
+        b.draw_info(&vui, &mut NullRaster, 30);
+        b.key(134, &l, true, &mut cues);
+        b.draw_info(&vui, &mut NullRaster, 40);
     }
 
-    /// A pointer: the first click lights a buff, the second on it takes it off
-    /// (one that may come off); a click on another lights that; a click off
-    /// the bar is not the bar's. The control: before a frame drew it, nothing
-    /// is on it.
+    /// A pointer (petition 1809): a left click selects a buff, a left click on
+    /// it again lets it go, on another selects that, off the bar lets go too;
+    /// a right click takes one off at once, selected or not, and one that may
+    /// not come off is only selected. The controls: two left clicks remove
+    /// nothing, a right click off the bar is not the bar's, nothing before a
+    /// frame drew it.
     #[test]
-    fn two_clicks_take_a_buff_off() {
+    fn left_selects_right_removes() {
         let l = set(9, 0);
         let mut b = BuffWnd::default();
         let mut cues = Vec::new();
-        assert_eq!(b.point([160.0, 20.0], 0, &mut cues), None, "nothing drawn yet");
+        assert_eq!(b.point([160.0, 20.0], 0, false, false, &mut cues), None, "nothing drawn yet");
         b.lines = l.clone();
         b.cells = layout(&l, 37, 13, true);
         b.off = [10.0, 0.0];
-        assert_eq!(b.point([170.0, 20.0], 0, &mut cues), Some(None), "the first click: lit");
-        assert_eq!(b.point([170.0, 20.0], 100, &mut cues), Some(Some(l[0].clone())), "the second: off");
-        assert_eq!(b.point([210.0, 20.0], 200, &mut cues), Some(None), "another: lit");
-        assert_eq!(b.point([210.0, 20.0], 200 + INFO_MS, &mut cues), Some(None), "its name gone: lit again, not off");
-        b.cells = layout(&l, 37, 13, true);
-        assert_eq!(b.point([600.0, 20.0], 0, &mut cues), None, "off the bar");
-        // one that may not come off (the fifth): lit, then refused
+        let lit = |b: &BuffWnd, now: i64| b.lit.as_ref().filter(|_| now < b.lit_until).map(|k| k.1);
+        assert_eq!(b.point([170.0, 20.0], 0, false, false, &mut cues), Some(None), "left: selected");
+        assert_eq!(lit(&b, 50), Some(1));
+        assert_eq!(b.point([170.0, 20.0], 100, false, false, &mut cues), Some(None), "left again: not removed");
+        assert_eq!(lit(&b, 150), None, "left again: let go");
+        b.point([170.0, 20.0], 200, false, false, &mut cues);
+        assert_eq!(b.point([210.0, 20.0], 300, false, false, &mut cues), Some(None), "another: selected");
+        assert_eq!(lit(&b, 350), Some(2));
+        assert_eq!(b.point([600.0, 20.0], 400, false, false, &mut cues), None, "off the bar: the world's");
+        assert_eq!(lit(&b, 450), None, "and let go");
+        assert_eq!(b.point([210.0, 20.0], 500, false, false, &mut cues), Some(None), "selected again");
+        assert_eq!(b.point([210.0, 20.0], 500 + INFO_MS, false, false, &mut cues), Some(None), "its name gone: selected again, not off");
+        assert_eq!(lit(&b, 600 + INFO_MS), Some(2));
+        assert_eq!(b.point([600.0, 20.0], 0, true, false, &mut cues), None, "a right click off the bar");
+        assert_eq!(b.point([180.0, 20.0], 0, true, false, &mut cues), Some(Some(l[0].clone())), "right: off, none selected first");
+        assert_eq!(b.point([210.0, 20.0], 700 + INFO_MS, true, true, &mut cues), Some(Some(l[1].clone())), "a long press on the selected one: off");
+        // one that may not come off (the fifth): right: selected, refused
         let x = 10.0 + b.cells[4].r[0] + 5.0;
-        b.point([x, 20.0], 0, &mut cues);
-        assert_eq!(b.point([x, 20.0], 10, &mut cues), Some(None));
+        assert_eq!(b.point([x, 20.0], 0, true, false, &mut cues), Some(None));
+        assert_eq!(lit(&b, 10), Some(5), "selected, to say so");
     }
 }
