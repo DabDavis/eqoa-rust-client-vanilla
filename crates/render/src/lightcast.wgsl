@@ -94,17 +94,21 @@ fn light_cast_vertex(v: VsIn) -> LightCastOut {
 // fs_main's alpha test, and nothing else: what it lets through casts.
 @fragment
 fn fs_light_cast(i: LightCastOut) {
+    if (light_cast_alpha(i.uv, i.depth) < 0.5) {
+        discard;
+    }
+}
+
+fn light_cast_alpha(uv: vec2<f32>, depth: f32) -> f32 {
     var alpha = layer.tint.a;
     if (layer.flags.x > 0.5) {
         var lod = -16.0;
         if (frame.eye.w > 0.5) {
-            lod = log2(max(i.depth, 1e-6)) + layer.flags.z;
+            lod = log2(max(depth, 1e-6)) + layer.flags.z;
         }
-        alpha *= textureSampleLevel(tex, samp, i.uv, lod).a;
+        alpha *= textureSampleLevel(tex, samp, uv, lod).a;
     }
-    if (alpha < 0.5) {
-        discard;
-    }
+    return alpha;
 }
 
 // A layer no texel of which fails the alpha test casts as depth alone.
@@ -137,4 +141,38 @@ fn vs_light_cast_mover(v: VsIn) -> LightCastOut {
 @vertex
 fn vs_light_cast_solid_mover(v: VsIn) -> @builtin(position) vec4<f32> {
     return light_cast_clip_held(light_cast_place(v));
+}
+
+// The player's own body under the personal light (`lightshadow::under_personal`),
+// drawn only into the face looking down: what of it is at least OWN_CLEAR
+// under the light casts, cut there per fragment, so a body round its
+// lantern (a hovering gargoyle's wings, 3 over its feet as the lantern is)
+// shadows the ground under it as a body under a lamp does instead of
+// covering the face from beside the light. Not held on the near plane.
+const OWN_CLEAR: f32 = 0.75;
+
+struct LightCastOwn {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) depth: f32,
+    // how far under the light
+    @location(2) below: f32,
+};
+
+@vertex
+fn vs_light_cast_own(v: VsIn) -> LightCastOwn {
+    let c = light_cast_vertex(v);
+    var o: LightCastOwn;
+    o.clip = c.clip;
+    o.uv = c.uv;
+    o.depth = c.depth;
+    o.below = face.origin.y - light_cast_place(v).rel.y;
+    return o;
+}
+
+@fragment
+fn fs_light_cast_own(i: LightCastOwn) {
+    if (i.below < OWN_CLEAR || light_cast_alpha(i.uv, i.depth) < 0.5) {
+        discard;
+    }
 }

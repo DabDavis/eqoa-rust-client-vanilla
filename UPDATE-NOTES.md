@@ -22,6 +22,14 @@ is put on the page by `.github/workflows/notes.yml`.
 - **Turn them off** in Options > Extended > UI > **Group & Raid** > **Power Bars** (on by default). Raid List
   moved to the same page. On a server that does not send others' power, the windows are as before.
 
+## 2026-11-12 · Sun Shadows and Light Shadows on Windows; your own shadow from your lantern
+- **Sun Shadows and Light Shadows now work in the Windows download.** Until now they did nothing there (the
+  options turned on, but no shadow was drawn); a copy built from the source code had them. Turn on **Dynamic
+  Lighting** too: both shadows need it (Options > Extended > Graphics > Lighting).
+- **Your own character now casts a shadow from your lantern** with Light Shadows on, as everyone else's does: a
+  small shadow at your feet, and under a gargoyle (or any race) hovering in the air, the shape of its body and wings
+  on the ground below.
+
 ## 2026-11-12 · Loading tips without "Did you know"
 
 Every loading tip is now a plain sentence ("You can type /stuck to return to your bind point when you cannot move."), without the "Did you know" in front.

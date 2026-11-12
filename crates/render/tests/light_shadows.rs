@@ -227,12 +227,17 @@ fn a_model_cleared_of_casting_casts_nothing() {
     }
 }
 
-/// The personal light 3 over a body's feet (the player's lantern) leaves
-/// the ground round them lit; the same light as a fire's shadows the floor
-/// past the body's edge (1.5 out, where the light's ray passes through it);
-/// a fire inside the body casts nothing of it.
+/// The personal light 3 over a body's feet (the player's lantern) shadows
+/// the ground round them as a light over a head does (the owner, 2026-11-12:
+/// the player's own body cast no shadow for it, others' did), as the same
+/// light as a fire's does past the body's edge (1.5 out, where the light's
+/// ray passes through it), but only from the face looking down and only what
+/// is `OWN_CLEAR` (0.75) under the light: a body round its lantern (a
+/// gargoyle hovering, its wings about the light) casts nothing past the face
+/// looking down (4 out, the side faces' ground), where before this a square
+/// of the face went dark. A fire inside the body casts nothing of it.
 #[test]
-fn a_body_does_not_shadow_its_own_light() {
+fn a_body_shadows_its_own_light_from_below_it() {
     let Some(g) = gpu() else { return };
     let none = |_: i32| None;
     let warm = Vec3::X;
@@ -247,7 +252,21 @@ fn a_body_does_not_shadow_its_own_light() {
     let past = pixel(1.5, 0.0);
     let personal = frame(&[], Some((lamp, 20.0, warm)), true);
     let personal_off = frame(&[], Some((lamp, 20.0, warm)), false);
-    assert!((red(&personal, past) - red(&personal_off, past)).abs() <= 1.0 / 255.0, "the lantern's own body: no shadow at its feet ({} against {})", red(&personal, past), red(&personal_off, past));
+    assert!(red(&personal, past) <= 0.1 + 2.5 / 255.0, "the lantern's own body shadows the ground at its feet: {} (off {})", red(&personal, past), red(&personal_off, past));
+    // a body round its lantern: from 0.6 under it (past the faces' near
+    // plane, within OWN_CLEAR) to 1.5 over it; the control (no OWN_CLEAR)
+    // darkens the ground at 2.2
+    let round = |light: bool| {
+        let mut r = renderer(&g, true, false, light);
+        let f = r.upload(&g.device, &g.queue, &floor(HALF), &[at(Vec3::ZERO)], &none);
+        let body = r.upload(&g.device, &g.queue, &esf::Model { skinned: true, ..cuboid(Vec3::new(-0.8, 2.4, -0.8), Vec3::new(0.8, 4.5, 0.8), layer(0, 0)) }, &[at(Vec3::ZERO)], &none);
+        shot(&g, &mut r, &view(Vec3::ZERO, &[], Some((lamp, 20.0, warm))), &[Draw::Model(&f), Draw::Model(&body)])
+    };
+    let (on, off) = (round(true), round(false));
+    for x in [2.2, -2.2, 4.0, -4.0] {
+        let p = pixel(x, 0.0);
+        assert!((red(&on, p) - red(&off, p)).abs() <= 1.0 / 255.0, "a body round its lantern: the ground at {x} lit ({} against {})", red(&on, p), red(&off, p));
+    }
     let fixed = frame(&[fire(lamp, 20.0, 7)], None, true);
     assert!((red(&fixed, past) - 0.1).abs() <= 2.5 / 255.0, "the control: a fire there shadows past the body's edge: {}", red(&fixed, past));
     // a fire inside the body
@@ -684,15 +703,16 @@ fn a_helm_floating_up_to_its_lantern_casts_whole() {
     let run = |top: f32, moves: bool| {
         let mut r = renderer(&g, true, false, true);
         let f = r.upload(&g.device, &g.queue, &floor(HALF), &[at(Vec3::ZERO)], &none);
-        let body = r.upload(&g.device, &g.queue, &esf::Model { skinned: true, ..cuboid(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 2.0, 0.5), layer(0, 0)) }, &[at(Vec3::ZERO)], &none);
+        // the wearer left out: its body casts for its lantern too (as
+        // `a_body_shadows_its_own_light_from_below_it`), over these probes
         let helm = cap(Vec3::new(-0.2, top - 0.3, -0.25), Vec3::new(0.3, top, 0.25));
         let px = if moves {
             let h = r.upload(&g.device, &g.queue, &helm, &[at(Vec3::ZERO)], &none);
-            shot(&g, &mut r, &view(Vec3::ZERO, &[], Some(lamp)), &[Draw::Model(&f), Draw::Model(&body), Draw::Model(&h)])
+            shot(&g, &mut r, &view(Vec3::ZERO, &[], Some(lamp)), &[Draw::Model(&f), Draw::Model(&h)])
         } else {
             let part = |m| GroupPart { model: m, instances: &[render::IDENTITY], statics: &[], moves: false, baked: false };
             let gr = r.upload_group(&g.device, &g.queue, &[part(&helm)], &none);
-            shot(&g, &mut r, &view(Vec3::ZERO, &[], Some(lamp)), &[Draw::Model(&f), Draw::Model(&body), Draw::Group(&gr)])
+            shot(&g, &mut r, &view(Vec3::ZERO, &[], Some(lamp)), &[Draw::Model(&f), Draw::Group(&gr)])
         };
         probes.iter().map(|&p| red(&px, p)).collect::<Vec<f32>>()
     };

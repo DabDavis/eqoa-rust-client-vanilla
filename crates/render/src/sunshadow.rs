@@ -335,6 +335,8 @@ pub(crate) fn receivers_wgsl() -> Option<String> {
 /// map's visibility, as the receivers have them (Light Shadows' with the
 /// sun's too, `lightshadow::receivers_wgsl`, change this further).
 pub(crate) fn shadowed_lit(lit: &str) -> Option<String> {
+    // its lines as the patterns end them, whatever the checkout's (`lf`)
+    let lit = crate::lf(lit);
     if lit.matches(SUN_LINE).count() != 1 || lit.matches(PLANT_RETURN).count() != 1 {
         return None;
     }
@@ -787,6 +789,20 @@ mod tests {
         assert!(s.contains("min(i.base.w, sun_shadow(i, n))") && s.contains(PLANT_RETURN_SHADOWED));
         assert!(!s.contains(SUN_LINE), "the unshadowed line gone");
         assert!(s.contains("fn fs_lit_baked") && s.contains("fn sun_shadow") && CAST_WGSL.contains("fn fs_cast"));
+    }
+
+    /// lit.wgsl as a Windows checkout ends its lines (`\r\n`, git's
+    /// `core.autocrlf`, as the Windows release was built until 2026-11-12):
+    /// its sun line and a plant's return found all the same, the result the
+    /// one a `\n` checkout makes. The control: the patterns themselves end
+    /// `\n`, so unchanged text with `\r\n` does not hold them.
+    #[test]
+    fn the_sun_line_is_found_in_a_windows_checkout() {
+        let lit = include_str!("lit.wgsl");
+        let crlf = crate::lf(lit).replace('\n', "\r\n");
+        assert!(!crlf.contains(SUN_LINE) && !crlf.contains(PLANT_RETURN), "the control: the lines unfound as the text stands");
+        assert_eq!(shadowed_lit(&crlf), shadowed_lit(lit), "found, and changed as a \\n checkout's");
+        assert!(shadowed_lit(&crlf).is_some());
     }
 
     fn view(eye: Vec3, at: Vec3) -> Mat4 {
