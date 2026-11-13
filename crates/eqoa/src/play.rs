@@ -9207,6 +9207,35 @@ impl Play {
         }
     }
 
+    /// The raid list's rows this frame: the roster's members, its mercs only
+    /// with Extended's Raid Mercenaries Shown (the owner, 2026-11-13: "lets
+    /// hide mercs from raid group display"; Hidden by default). Hidden, a merc
+    /// stays in `group.raid`, so L1's group cycle still reaches it, and the
+    /// groups' counts and Move to Group take players alone either way.
+    pub(super) fn raid_rows(&self, me: Option<u32>, power_bars: bool) -> Vec<crate::raidlist::Row> {
+        let show_mercs = crate::settings::raid_mercs();
+        self.group
+            .raid
+            .iter()
+            .filter(|m| show_mercs || !m.merc)
+            .map(|m| crate::raidlist::Row {
+                id: m.id,
+                name: m.name.clone(),
+                hp: m.hp,
+                // the roster's, with Extended's Power Bars on
+                power: power_bars.then_some(m.power),
+                is_target: m.id == self.target,
+                seen: self.sees_entity(m.id),
+                me: Some(m.id) == me,
+                marks: self.raid_marks(m.id),
+                class: m.class,
+                group: m.group,
+                dragged: self.raid.drag.is_some_and(|d| d.moved && d.id == m.id),
+                merc: m.merc,
+            })
+            .collect()
+    }
+
     /// The HUD's quads for one of the game's frames (`VIWndGame::OnDrawSelf`),
     /// its windows stepped (their pulses, animations and scrolls count
     /// frames).
@@ -9279,26 +9308,7 @@ impl Play {
                     crate::hud::MemberState { id: m.id, name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)), marks: self.raid_marks(m.id), power: self.session.power_of(m.id) }
                 })
                 .collect(),
-            raid: self
-                .group
-                .raid
-                .iter()
-                .map(|m| crate::raidlist::Row {
-                    id: m.id,
-                    name: m.name.clone(),
-                    hp: m.hp,
-                    // the roster's, with Extended's Power Bars on
-                    power: power_bars.then_some(m.power),
-                    is_target: m.id == self.target,
-                    seen: self.sees_entity(m.id),
-                    me: Some(m.id) == me,
-                    marks: self.raid_marks(m.id),
-                    class: m.class,
-                    group: m.group,
-                    dragged: self.raid.drag.is_some_and(|d| d.moved && d.id == m.id),
-                    merc: m.merc,
-                })
-                .collect(),
+            raid: self.raid_rows(me, power_bars),
             raid_drop: self.raid_drag_shown().0,
             raid_new_group: self.raid_drag_shown().1,
             patches: self.group.members[..self.group.count()]
@@ -11159,6 +11169,50 @@ mod commands {
         p.agree_raid_roster();
         assert!(p.group.raid.is_empty());
         assert!(!cycle(&mut p, true).contains(&0x103), "the control: the roster's own");
+        crate::settings::set_client(crate::settings::ClientOptions::default());
+    }
+
+    /// Raid Mercenaries (the owner, 2026-11-13: "lets hide mercs from raid group
+    /// display"): Hidden by default, the raid list's rows are its players' alone
+    /// while the roster keeps its merc, which L1's group cycle still reaches;
+    /// Shown, the merc's row too, with its coin. The control: every player's row
+    /// either way.
+    #[test]
+    fn a_raids_mercs_are_hidden_from_its_list_unless_shown() {
+        use net::entity::{Entity, TYPE_CREATURE};
+        use net::session::RaidMember;
+        let mut p = play();
+        crate::settings::set_client(crate::settings::ClientOptions::default());
+        let me = 0x1DCD_6501;
+        p.session.self_id = Some(u64::from(me));
+        grouped(&mut p, &[me, 0x101]);
+        let at = |id: u32, x: f32| {
+            Some(Entity { id, kind: TYPE_CREATURE, creature: Some(net::entity::Creature { name: format!("{id:x}"), ..Default::default() }), p18: 1, actor_pos: [x, 0.0, -12.0], ..Default::default() })
+        };
+        p.entities.slots[0] = at(0x105, -3.0); // the raid's merc, in sight
+        let row = |id: u32, class: u8| RaidMember { id, name: format!("m{id}"), class, group: 1, ..Default::default() };
+        let merc = RaidMember { merc: true, ..row(0x105, 9) };
+        p.group.raid_page(5, 0, vec![row(me, 0), row(0x101, 9), merc, row(0x102, 13), row(0x103, 2)]);
+        let ids = |rows: &[crate::raidlist::Row]| rows.iter().map(|r| r.id).collect::<Vec<_>>();
+
+        let hidden = p.raid_rows(Some(me), true);
+        assert_eq!(ids(&hidden), [me, 0x101, 0x102, 0x103], "Hidden by default: the players' rows alone");
+        assert_eq!(p.group.raid.len(), 5, "the roster keeps the merc");
+        let view = glam::camera::rh::view::look_to_mat4(glam::Vec3::ZERO, glam::Vec3::NEG_Z, glam::Vec3::Y);
+        let m = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
+        let reached: Vec<u32> = (0..4)
+            .map(|_| {
+                p.cycle_target(true, glam::Vec3::ZERO, glam::Vec3::NEG_Z, m, m);
+                p.target
+            })
+            .collect();
+        assert!(reached.contains(&0x105), "L1 still reaches the hidden merc: {reached:x?}");
+
+        crate::settings::set_client(crate::settings::ClientOptions { raid_mercs: true, ..Default::default() });
+        let shown = p.raid_rows(Some(me), true);
+        assert_eq!(ids(&shown), [me, 0x101, 0x105, 0x102, 0x103], "Shown: the merc's row in its place");
+        assert_eq!(crate::raidlist::row_role(&shown[2]), crate::raidlist::Role::Merc, "with its coin");
+        assert_eq!(crate::raidlist::row_role(&shown[1]), crate::raidlist::Role::Healer, "a player of its class keeps its role");
         crate::settings::set_client(crate::settings::ClientOptions::default());
     }
 

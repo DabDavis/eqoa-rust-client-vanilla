@@ -300,7 +300,11 @@ or a browser (each described where it lives below):
   place of the group's bars, which hold three, in up to four columns and past them
   by the wheel. A click targets a member the client can see, and L1's cycle reaches
   them. Extended > UI's Raid List, on by default; a client that does not ask gets the
-  game's bars, as a PS2 does.
+  game's bars, as a PS2 does. A raid's mercs (go-eqoa-server's roster offer of 3, a kind
+  byte a record) have rows only with Extended > UI > Group & Raid's **Raid Mercenaries**
+  Shown (Hidden by default, the owner's of 2026-11-13: "lets hide mercs from raid group
+  display"; `client.opt`'s `raid_mercs=shown`, written only when Shown, `Play::raid_rows`),
+  each with a gold coin for its role icon (petition 1869); hidden, L1's cycle still reaches them.
 - **The ready check** (the GM Jibrish's petition 1711, 2026-11-12; `net::readycheck`, `readywnd.rs`,
   `raidplay.rs`): on a server that offers it (go-eqoa-server's 0x7E49; the answer 0x7E4A is always
   yes) a group's or a raid's `/readycheck` (the server's: a raid's leader or helper, anyone in a plain

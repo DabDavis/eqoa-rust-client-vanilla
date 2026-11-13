@@ -952,6 +952,13 @@ pub struct ClientOptions {
     /// power, which the roster has always carried). Off, or on a server that
     /// sends none, the game's bars. On by default.
     pub power_bars: bool,
+    /// Raid Mercenaries (Extended > UI > Group & Raid; the owner, 2026-11-13:
+    /// "lets hide mercs from raid group display"): false, Hidden (the
+    /// default), the raid list draws its players' rows alone; true, Shown, the
+    /// raid's mercs' rows too, each with its coin (`raidlist::row_role`), as
+    /// go-eqoa-server's roster sends them (0x7E1A's kind byte). Either way a
+    /// merc is targeted in the world and by L1's group cycle.
+    pub raid_mercs: bool,
     /// Loading Tips (`tips`; the GM Jibrish's petition 1778): a tip
     /// line on every loading screen. On by default.
     pub loading_tips: bool,
@@ -1293,6 +1300,7 @@ impl Default for ClientOptions {
             buff_window: true,
             head_marks: true,
             power_bars: true,
+            raid_mercs: false,
             loading_tips: true,
             number_colors: crate::numcolor::DEFAULTS,
             dps_meter: false,
@@ -1413,6 +1421,10 @@ impl ClientOptions {
         }
         if !self.power_bars {
             s.push_str("power_bars=off\n");
+        }
+        // Raid Mercenaries only when Shown
+        if self.raid_mercs {
+            s.push_str("raid_mercs=shown\n");
         }
         if !self.loading_tips {
             s.push_str("loading_tips=off\n");
@@ -1616,6 +1628,8 @@ impl ClientOptions {
                 ("head_marks", "off") => c.head_marks = false,
                 ("power_bars", "on") => c.power_bars = true,
                 ("power_bars", "off") => c.power_bars = false,
+                ("raid_mercs", "shown") => c.raid_mercs = true,
+                ("raid_mercs", "hidden") => c.raid_mercs = false,
                 ("loading_tips", "on") => c.loading_tips = true,
                 ("loading_tips", "off") => c.loading_tips = false,
                 ("dps_meter", "on") => c.dps_meter = true,
@@ -1950,6 +1964,12 @@ pub fn head_marks() -> bool {
 /// pet's bar and the raid list (`hud`, `raidlist`).
 pub fn power_bars() -> bool {
     client().power_bars
+}
+
+/// Raid Mercenaries: the raid list draws the raid's mercs' rows (Shown) or
+/// its players' alone (Hidden, the default).
+pub fn raid_mercs() -> bool {
+    client().raid_mercs
 }
 
 /// Loading Tips: a tip on every loading screen (`tips`).
@@ -3115,6 +3135,17 @@ mod tests {
         let back = ClientOptions::from_text(&off);
         assert!(!back.buff_window && !back.loading_tips);
         assert!(ClientOptions::from_text("buff_window=maybe").buff_window, "the default");
+    }
+
+    #[test]
+    fn raid_mercs_are_kept_only_when_shown() {
+        assert!(!ClientOptions::default().raid_mercs, "Hidden by default");
+        assert!(!ClientOptions::default().to_text().contains("raid_mercs"), "the default writes nothing");
+        let t = ClientOptions { raid_mercs: true, ..Default::default() }.to_text();
+        assert!(t.contains("raid_mercs=shown\n"), "{t}");
+        assert!(ClientOptions::from_text(&t).raid_mercs, "read back");
+        assert!(!ClientOptions::from_text("raid_mercs=hidden").raid_mercs);
+        assert!(!ClientOptions::from_text("raid_mercs=maybe").raid_mercs, "anything else: the default");
     }
 
     #[test]

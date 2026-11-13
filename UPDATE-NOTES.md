@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Mercenaries hidden from the raid window (a toggle shows them)
+- The raid window now lists **players only**; mercenaries no longer take up its rows. You can still target a mercenary
+  in the world, and L1's group cycle still reaches it.
+- To see them again, with their gold coin: Options > Extended > UI > **Group & Raid** > **Raid Mercenaries** > **Shown**.
+
 ## 2026-11-13 · Feature requests, apart from bug reports
 - Have an idea for the game? **Type /feature and what you would like**: the bug report window opens with
   **Feature Request** already picked and your words in it, ready to send. Feature requests now reach the GMs

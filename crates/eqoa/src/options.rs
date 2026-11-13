@@ -845,6 +845,9 @@ impl WndOptions {
                     // Raid List: the server told from the next frame
                     // (`Session::agree_raid_roster`)
                     49 => c.raid_list = !c.raid_list,
+                    // Raid Mercenaries: the raid list's mercs' rows drawn or
+                    // not from the next frame (`Play::raid_rows`)
+                    88 => c.raid_mercs = !c.raid_mercs,
                     // Pet Effects: the server told from the next frame
                     // (`Session::agree_pet_effects`), the row under the pet's
                     // bar drawn or not (`hud`)
@@ -1579,7 +1582,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 71] = [
+const EXTENDED_ITEMS: [(i32, &str); 72] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1651,6 +1654,7 @@ const EXTENDED_ITEMS: [(i32, &str); 71] = [
     (85, "Quest Markers"),
     (86, "Power Bars"),
     (87, "Map Pointer"),
+    (88, "Raid Mercenaries"),
 ];
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
@@ -1735,7 +1739,7 @@ const ALL_CATEGORIES: [Category; 20] = [
     Category { name: "HUD", items: &[22, 30, 40, 58, 83], note: Note::None, group: Group::Ui },
     // the group's and the raid's windows (2026-11-12, Power Bars: HUD's page
     // was full, so Raid List came with it)
-    Category { name: "Group & Raid", items: &[49, 86], note: Note::None, group: Group::Ui },
+    Category { name: "Group & Raid", items: &[49, 86, 88], note: Note::None, group: Group::Ui },
     Category { name: "HUD Layout", items: &[76, 77], note: Note::Hud, group: Group::Ui },
     Category { name: "Name Plates", items: &[27, 34, 85], note: Note::None, group: Group::Ui },
     Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
@@ -1899,6 +1903,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         49 => on_off(c.raid_list),
         58 => on_off(c.pet_effects),
         86 => on_off(c.power_bars),
+        88 => wide(if c.raid_mercs { "Shown" } else { "Hidden" }),
         83 => on_off(c.buff_window),
         85 => on_off(c.head_marks),
         84 => on_off(c.loading_tips),
@@ -2525,6 +2530,14 @@ mod tests {
         assert_eq!(value_text(&vui, 86), Some(wide(vui.words.get(552, vui.language))));
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::power_bars(), "and back: two values");
+        goto!(88);
+        assert_eq!(w.item, 88, "Raid Mercenaries");
+        assert_eq!((settings::raid_mercs(), value_text(&vui, 88)), (false, Some(wide("Hidden"))), "Hidden by default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::raid_mercs(), value_text(&vui, 88), cues.last()), (true, Some(wide("Shown")), Some(&11)), "Shown");
+        assert!(settings::raid_list() && settings::power_bars(), "moving no other row");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::raid_mercs(), "and back: two values");
         goto!(58);
         assert_eq!(w.item, 58, "Pet Effects");
         assert!(settings::pet_effects(), "on: the pet's effects under its bar");
@@ -3112,7 +3125,7 @@ mod tests {
             of(1),
             vec![
                 ("HUD", vec!["Ability Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
-                ("Group & Raid", vec!["Raid List", "Power Bars"]),
+                ("Group & Raid", vec!["Raid List", "Power Bars", "Raid Mercenaries"]),
                 ("HUD Layout", vec!["Move HUD", "Reset HUD"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers"]),
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
