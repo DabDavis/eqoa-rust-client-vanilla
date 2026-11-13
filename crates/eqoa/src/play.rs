@@ -2144,6 +2144,37 @@ mod entity_actors {
 /// (200), or farther is never targeted.
 const CYCLE_REACH2: f32 = 40000.0;
 
+/// Whether `c` is a familiar, which no target cycle takes (the GM Jibwiz's
+/// petitions 1881 and 1903, Brother's 1902, 2026-11-13: "Only direct mouse
+/// targeting, or pressing and holding the target button to go into first
+/// person with a cross hair ... should target heal bot. The cycle targeting
+/// should not"); a click, the crosshair, a name and the 6 key still do. A
+/// familiar is a follower that does not fight, as go-eqoa-server makes them
+/// (no marker of its own on the wire):
+///   - Healbot and any familiar an item calls (its `entity/familiar.go`): an
+///     NPC with the NPC bit (`npc_flags` 0x80) and no owner, as a merchant,
+///     known by its name (table familiars: Healbot alone);
+///   - a pet (`m_p256` 3, a player's or the player's own) of a summoning
+///     whose pet takes no fight: the wizard's familiars (Minor Familiar to
+///     Arch Familiar, Gargoyle Familiar: passive alone) and the workbook's
+///     non-combat pets (Crazy Contraption, Invention, Swamp Friend).
+///
+/// A combat pet stays the cycle's (the wizard's Guardians, a magician's,
+/// necromancer's or enchanter's pet, a charmed creature), and so does a
+/// creature of the world named so (a caster's own "Familiar", which fights).
+fn is_familiar(c: &net::entity::Creature) -> bool {
+    let name = c.name.trim();
+    let is = |w: &str| name.eq_ignore_ascii_case(w);
+    if c.npc_flags & 0x80 != 0 && c.p256 != 3 {
+        return is("Healbot");
+    }
+    c.p256 == 3
+        && (name.rsplit(' ').next().is_some_and(|w| w.eq_ignore_ascii_case("Familiar"))
+            || is("Crazy Contraption")
+            || is("Invention")
+            || is("Swamp Friend"))
+}
+
 /// What `TargetCentre` reads of a creature with an actor: its id, where it is
 /// measured (a character's slot 4, else its place), its +0x18 bit 0 (the
 /// selectable flag), whether it is of a player's side (`m_p256` 3) and how
@@ -4436,9 +4467,9 @@ impl Play {
     /// `CycleTarget(group)`. Not `group` (R1, Tab): the next creature in
     /// view, by `CompareY` over the game's score (mostly how far off the
     /// screen's centre line, plus distance; a corpse 2 further), from the
-    /// camera at `eye` looking along `dir`, the group, the pet and the player
-    /// left out. `group` (L1): the player, the group's other members, the
-    /// pet, in turn. Changing between the two starts each from its first;
+    /// camera at `eye` looking along `dir`, the group, the pet, the player
+    /// and a familiar (`is_familiar`: Healbot) left out. `group` (L1): the
+    /// player, the group's other members, the pet (but a familiar), in turn. Changing between the two starts each from its first;
     /// then 0x0010 with the token and the choice.
     ///
     /// How far off the centre line a creature is (its x after the divide)
@@ -4465,7 +4496,9 @@ impl Play {
         if group {
             cand.extend(me.map(|id| (0.0, id)));
             cand.extend(members.iter().filter(|&&id| Some(id) != me).map(|&id| (0.0, id)));
-            if self.pet_id != u32::MAX {
+            // the pet, but a familiar (`is_familiar`: a wizard's Familiar)
+            let familiar = self.entities.slots.iter().flatten().find(|e| e.id == self.pet_id).and_then(|e| e.creature.as_ref()).is_some_and(is_familiar);
+            if self.pet_id != u32::MAX && !familiar {
                 cand.push((0.0, self.pet_id));
             }
         }
@@ -4479,6 +4512,10 @@ impl Play {
                 // a pet (of a player's side) is passed over, but the duel's
                 // (the live client's `IsDueling`)
                 if c.p256 == 3 && !self.is_dueling(e.id) {
+                    continue;
+                }
+                // a familiar (Healbot) is never cycled to (`is_familiar`)
+                if is_familiar(c) {
                     continue;
                 }
                 dead = c.state == 14;
@@ -11084,6 +11121,77 @@ mod commands {
         assert_eq!(p.actor_pos(0x0010_1076), Some([0.0, 0.0, -10.0]));
         assert_eq!(p.slot4_of(1), None, "no body, no slot 4");
         assert_eq!(p.actor_pos(0x0020_0001), None, "the control: another world's has no actor here");
+    }
+
+    /// No target cycle takes a familiar (petitions 1881, 1902, 1903): Tab and
+    /// R1 pass Healbot by (an NPC-bit NPC of that name), L1 the player's own
+    /// wizard's Familiar; a click on Healbot still targets it. The controls:
+    /// a merchant (the NPC bit too) and a creature of the world named
+    /// "Familiar" (no pet: it fights) are still Tab's, and a wizard's
+    /// Guardian (a combat pet) still L1's.
+    #[test]
+    fn no_target_cycle_takes_a_familiar() {
+        let mut p = play();
+        let me = 0x1DCD_6501;
+        p.session.self_id = Some(u64::from(me));
+        let creature = |id: u32, x: f32, name: &str, npc_flags: u16, p256: u8| net::entity::Entity {
+            id,
+            kind: 130,
+            p18: 1,
+            p19: 1,
+            pos: [x, 0.0, -12.0],
+            actor_pos: [x, 0.0, -12.0],
+            creature: Some(net::entity::Creature { name: name.into(), npc_flags, p256, ..Default::default() }),
+            ..Default::default()
+        };
+        let (healbot, merchant, wild, pet) = (0x0010_0001, 0x0010_0002, 0x0010_0003, 0x0010_0004);
+        p.entities.slots[0] = Some(creature(healbot, 0.0, "Healbot", 0x80, 0));
+        p.entities.slots[1] = Some(creature(merchant, 3.0, "Merchant Merb", 0x80, 0));
+        p.entities.slots[2] = Some(creature(wild, -3.0, "Familiar", 0, 0));
+        p.entities.slots[3] = Some(creature(pet, 1.5, "Lesser Familiar", 0, 3));
+        p.pet_id = pet;
+        let view = glam::camera::rh::view::look_to_mat4(glam::Vec3::ZERO, glam::Vec3::NEG_Z, glam::Vec3::Y);
+        let m = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
+        let cycle = |p: &mut Play, group: bool| -> Vec<u32> {
+            (0..6)
+                .map(|_| {
+                    p.cycle_target(group, glam::Vec3::ZERO, glam::Vec3::NEG_Z, m, m);
+                    p.target
+                })
+                .collect()
+        };
+        let tab = cycle(&mut p, false);
+        assert!(!tab.contains(&healbot), "Tab passes Healbot by: {tab:x?}");
+        assert!(tab.contains(&merchant) && tab.contains(&wild), "but not a merchant or a wild Familiar: {tab:x?}");
+        assert!(!tab.contains(&pet), "nor takes the pet, as before: {tab:x?}");
+        let l1 = cycle(&mut p, true);
+        assert!(!l1.contains(&pet), "L1 passes the wizard's Familiar by: {l1:x?}");
+        assert!(l1.contains(&me), "and still takes the player: {l1:x?}");
+        // the control: a wizard's Guardian fights, and is L1's
+        p.entities.slots[3] = Some(creature(pet, 1.5, "Lesser Guardian", 0, 3));
+        assert!(cycle(&mut p, true).contains(&pet), "L1 takes a combat pet");
+        // a click on Healbot still targets it
+        let c = m * glam::Vec4::new(0.0, 1.0, -12.0, 1.0);
+        let at = (((c.x / c.w + 1.0) * 0.5 * 640.0) as f64, ((1.0 - c.y / c.w) * 0.5 * 480.0) as f64);
+        assert_eq!(p.creature_at(at, (640, 480), m), Some(healbot), "the mouse still finds Healbot");
+        // the rule itself
+        let c = |name: &str, npc_flags: u16, p256: u8| net::entity::Creature { name: name.into(), npc_flags, p256, ..Default::default() };
+        for (name, flags, p256, want) in [
+            ("Healbot", 0x80, 0, true),
+            ("healbot ", 0x80, 0, true),
+            ("Healbot", 0, 0, false), // no NPC bit: a creature of that name
+            ("Arch Familiar", 0, 3, true),
+            ("Gargoyle Familiar", 0, 3, true),
+            ("Crazy Contraption", 0, 3, true),
+            ("Invention", 0, 3, true),
+            ("Swamp Friend", 0, 3, true),
+            ("Gargoyle Guardian", 0, 3, false),
+            ("Fire Elemental", 0, 3, false),
+            ("Familiar", 0, 0, false),
+            ("Merchant Merb", 0x80, 0, false),
+        ] {
+            assert_eq!(is_familiar(&c(name, flags, p256)), want, "{name:?} flags {flags:#x} p256 {p256}");
+        }
     }
 
     /// R1 and Tab in a window wider than 4:3 go in the console's order (F3
