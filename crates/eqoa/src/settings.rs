@@ -997,6 +997,17 @@ pub struct ClientOptions {
     /// target or a dead one, the nearest creature fighting the player (else
     /// its pet or group) targeted. Off by default.
     pub auto_target: bool,
+    /// Chat Always Shown (Jibwiz's ticket 1914: "allows your chat box to stay
+    /// fully visible without auto collapse"): the chat box open at its five
+    /// rows with the last lines in it, never sliding away (`chat::WndChat::
+    /// always`). Off by default, the game's box.
+    pub chat_always: bool,
+    /// Stacked Spell Bars (Jibwiz's ticket 1913): on a computer, the first two
+    /// ability bars drawn as two rows of five stacked above the chat box at
+    /// 95%, with no name bar, each slot a key of its own on the Controls page
+    /// (`hudmenu::Stacked`, `binds`' bar rows). Off by default, the game's
+    /// carousel; a controller or a touch screen keeps the carousel.
+    pub stacked_bars: bool,
     /// Profanity Filter (the GM Jibrish's petition 1490: "Under options then
     /// interface add an option to turn the profanity filter on or off"): the
     /// server's filter of what this player hears, told to a server that asks
@@ -1308,6 +1319,8 @@ impl Default for ClientOptions {
             item_links: true,
             auto_cast: true,
             auto_target: false,
+            chat_always: false,
+            stacked_bars: false,
             profanity_filter: Profanity::High,
             map: true,
             minimap: true,
@@ -1451,6 +1464,13 @@ impl ClientOptions {
         }
         if self.auto_target {
             s.push_str("auto_target=on\n");
+        }
+        // Chat Always Shown and Stacked Spell Bars only when on
+        if self.chat_always {
+            s.push_str("chat_always=on\n");
+        }
+        if self.stacked_bars {
+            s.push_str("stacked_bars=on\n");
         }
         if !self.item_links {
             s.push_str("item_links=off\n");
@@ -1642,6 +1662,10 @@ impl ClientOptions {
                 ("auto_cast", "off") => c.auto_cast = false,
                 ("auto_target", "on") => c.auto_target = true,
                 ("auto_target", "off") => c.auto_target = false,
+                ("chat_always", "on") => c.chat_always = true,
+                ("chat_always", "off") => c.chat_always = false,
+                ("stacked_bars", "on") => c.stacked_bars = true,
+                ("stacked_bars", "off") => c.stacked_bars = false,
                 ("profanity_filter", v) => {
                     if let Some(p) = Profanity::from_key(v) {
                         c.profanity_filter = p;
@@ -2000,6 +2024,16 @@ pub fn auto_cast() -> bool {
 /// Auto Target (`autocast`).
 pub fn auto_target() -> bool {
     client().auto_target
+}
+
+/// Chat Always Shown (Extended > UI > Chat; ticket 1914).
+pub fn chat_always() -> bool {
+    client().chat_always
+}
+
+/// Stacked Spell Bars (Extended > UI > HUD; ticket 1913).
+pub fn stacked_bars() -> bool {
+    client().stacked_bars
 }
 
 /// Profanity Filter (Options > Interface).
@@ -3201,6 +3235,19 @@ mod tests {
     }
 
     /// Item Links: on by default and written only when off.
+    #[test]
+    fn chat_always_and_stacked_bars_are_kept_only_when_on() {
+        let d = ClientOptions::default();
+        assert!(!d.chat_always && !d.stacked_bars, "off by default");
+        assert!(!d.to_text().contains("chat_always") && !d.to_text().contains("stacked_bars"));
+        let t = ClientOptions { chat_always: true, stacked_bars: true, ..Default::default() }.to_text();
+        assert!(t.contains("chat_always=on\n") && t.contains("stacked_bars=on\n"), "{t}");
+        let back = ClientOptions::from_text(&t);
+        assert!(back.chat_always && back.stacked_bars, "round trip");
+        assert!(!ClientOptions::from_text("chat_always=off").chat_always);
+        assert!(!ClientOptions::from_text("stacked_bars=maybe").stacked_bars, "the default");
+    }
+
     #[test]
     fn item_links_are_kept_only_when_off() {
         assert!(ClientOptions::default().item_links, "on by default");

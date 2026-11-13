@@ -43,6 +43,13 @@
 //! defaults (a row it put on G takes G, the attack the key that row left), and
 //! a macro it put on G keeps G (`Binds::from_text`).
 //!
+//! The ability bars' slots (Jibwiz's ticket 1913, "allow you to keybind each
+//! key", for PC players: `hudmenu::Stacked`) are rows of no key and no button
+//! (`Pad::KeysOnly`): a key the player puts on one uses that slot's ability
+//! (`Alias::Slot`, `Play::bar_slot_key`), the first two bars' ten, whether the
+//! bars are drawn stacked or as the game's carousel. Nothing is on them until
+//! the player puts a key there.
+//!
 //! With nothing moved every key is itself and every button its own field
 //! (`Binds::default`, the tests). Kept per device in `keys.opt` beside the
 //! client's options (`settings`), as the PS2 keeps every option on its card.
@@ -86,6 +93,9 @@ pub enum Pad {
     Button(u16),
     /// a stick's way (the right stick when set); not rebound
     Stick(bool, Dir),
+    /// none, and none may be given: a row of the keyboard's alone (an ability
+    /// bar's slot, `bar_slot`)
+    KeysOnly,
 }
 
 /// A row of the default layout.
@@ -134,6 +144,16 @@ pub const ROWS: &[Row] = &[
     row("menu_down", "Quick menu: down", &["down"], b(bit::DOWN), "In a window, down a row. On the map: pan down."),
     row("menu_prev", "Quick menu: {1692}", &["left"], b(bit::LEFT), "In a window, left. On the map: pan left."),
     row("menu_next", "Quick menu: {216}", &["right"], b(bit::RIGHT), "In a window, right. On the map: pan right."),
+    row("bar1_slot1", "Bar 1: slot 1", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar1_slot2", "Bar 1: slot 2", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar1_slot3", "Bar 1: slot 3", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar1_slot4", "Bar 1: slot 4", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar1_slot5", "Bar 1: slot 5", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar2_slot1", "Bar 2: slot 1", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar2_slot2", "Bar 2: slot 2", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar2_slot3", "Bar 2: slot 3", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar2_slot4", "Bar 2: slot 4", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar2_slot5", "Bar 2: slot 5", &[], Pad::KeysOnly, BAR_HELP),
     row("cycle_target", "Target: {1405}, group, {418}", &["`", "~"], b(bit::L1), "Each press the next of the player, the group and the pet; held, aim as with Tab. On the map |7 zooms out."),
     row("quick_chat", "Quick chat", &["z"], b(bit::L2), "Again, it closes the quick chat."),
     row("next_target", "Target: the next (hold: aim)", &["tab"], b(bit::R1), "Held: the view at the eyes, the target the one nearest the crosshair. In a window Tab is |8; on the map |8 zooms in."),
@@ -171,6 +191,18 @@ pub const ROWS: &[Row] = &[
     row("minimap", "Minimap", &["n"], Pad::None, "Shows or hides the minimap, as Extended's Map page does, and keeps it. On the map: a community marker suggested."),
     row("controls", "Controls", &["f1"], Pad::None, "This page, from play."),
 ];
+
+/// What a key on an ability bar's slot row does (`bar_slot`).
+const BAR_HELP: &str = "Uses the ability on this slot, as clicking it does. No key until you give it one. Extended > UI > HUD > Stacked Spell Bars shows the first two bars above the chat box.";
+
+/// The ability bar and its slot (each from 0) a row is the key of: the
+/// first two bars' ten (`bar1_slot1` .. `bar2_slot5`).
+pub fn bar_slot(row: usize) -> Option<(usize, usize)> {
+    let id = ROWS.get(row)?.id.strip_prefix("bar")?;
+    let (bar, slot) = id.split_once("_slot")?;
+    let (bar, slot) = (bar.parse::<usize>().ok()?, slot.parse::<usize>().ok()?);
+    ((1..=2).contains(&bar) && (1..=5).contains(&slot)).then(|| (bar - 1, slot - 1))
+}
 
 /// A row's index by its name.
 pub fn row_named(id: &str) -> Option<usize> {
@@ -257,6 +289,8 @@ pub enum Alias {
     Button(u16),
     /// in a macro's trigger (one or more: `macros::Run` reads it by name)
     Macro,
+    /// an ability bar's slot row put on it (`bar_slot`): the bar and slot
+    Slot(usize, usize),
 }
 
 /// A field whose button went to a row of the client's keys (`Binds::button`).
@@ -565,7 +599,7 @@ impl Binds {
             return match (ROWS[r].keys.first(), ROWS[r].pad) {
                 (Some(k), _) => Alias::To(k),
                 (None, Pad::Button(b)) => Alias::Button(b),
-                (None, _) => Alias::Nothing,
+                (None, _) => bar_slot(r).map_or(Alias::Nothing, |(bar, slot)| Alias::Slot(bar, slot)),
             };
         }
         match default_row(name) {
@@ -579,7 +613,7 @@ impl Binds {
     /// key); else that key is free.
     pub fn bind_key(&mut self, row: usize, name: &str) -> Moved {
         let old = self.key(row).map(str::to_string);
-        if old.as_deref() == Some(name) || (ROWS[row].keys.is_empty() && !matches!(ROWS[row].pad, Pad::Button(_))) {
+        if old.as_deref() == Some(name) || (ROWS[row].keys.is_empty() && !matches!(ROWS[row].pad, Pad::Button(_)) && bar_slot(row).is_none()) {
             return Moved::Already;
         }
         // the macros' triggers with the key give it up: the row takes it
@@ -1255,6 +1289,9 @@ pub enum Sent {
     Button(u16),
     /// a key in a macros' trigger (its name), to the macros (`macros::Run`)
     Macro(String),
+    /// a key on an ability bar's slot row: the bar and the slot, to play
+    /// (`Play::bar_slot_key`)
+    Slot(usize, usize),
 }
 
 /// The keys from press to release through the bindings: what each key
@@ -1281,6 +1318,7 @@ impl KeyEdge {
             Alias::To(k) => same(k),
             Alias::Button(k) => Some(Sent::Button(k)),
             Alias::Macro => Some(Sent::Macro(name.to_string())),
+            Alias::Slot(bar, slot) => Some(Sent::Slot(bar, slot)),
             Alias::Nothing => None,
         };
         if !down {
@@ -1629,8 +1667,40 @@ mod tests {
         // from a key, onto another row's: that row takes the key it left
         assert_eq!(t.bind_key(clear, "e"), Moved::Swapped(use_));
         assert_eq!(t.key(use_), Some("y"));
-        // a stick's row has keys; no row without keys or a button exists to refuse
-        assert!(ROWS.iter().all(|r| !r.keys.is_empty() || matches!(r.pad, Pad::Button(_))));
+        // a stick's row has keys; no row without keys or a button exists to
+        // refuse but the bars' slots, which take a key
+        assert!(ROWS.iter().enumerate().all(|(k, r)| !r.keys.is_empty() || matches!(r.pad, Pad::Button(_)) || bar_slot(k).is_some()));
+    }
+
+    /// The bars' slots (ticket 1913): ten rows, none with a key until given
+    /// one; a key put on one sends that bar's slot (and is let go as it), is
+    /// kept in `keys.opt` and read back; a slot moved onto another slot's key
+    /// swaps; a row's own key put there leaves that row with none. The
+    /// control: with nothing moved the key is itself.
+    #[test]
+    fn a_bars_slot_takes_a_key() {
+        let slots: Vec<usize> = (0..ROWS.len()).filter(|&k| bar_slot(k).is_some()).collect();
+        assert_eq!(slots.len(), 10);
+        assert_eq!(bar_slot(row_named("bar1_slot1").unwrap()), Some((0, 0)));
+        assert_eq!(bar_slot(row_named("bar2_slot5").unwrap()), Some((1, 4)));
+        assert_eq!(bar_slot(row_named("attack").unwrap()), None);
+        let mut b = Binds::default();
+        assert!(slots.iter().all(|&k| b.key(k).is_none()), "no key by default");
+        assert_eq!(b.alias("7"), Alias::Same, "the control");
+        let (s13, s21) = (row_named("bar1_slot3").unwrap(), row_named("bar2_slot1").unwrap());
+        assert_eq!(b.bind_key(s13, "7"), Moved::Freed(None));
+        assert_eq!(b.alias("7"), Alias::Slot(0, 2));
+        let mut e = KeyEdge::default();
+        assert_eq!(e.key("7", true, false, false, &b), Some(Sent::Slot(0, 2)));
+        assert_eq!(e.key("7", false, false, false, &b), Some(Sent::Slot(0, 2)));
+        assert_eq!(e.key("7", true, false, true, &b), Some(Sent::Key("7".into())), "typed into an edit box: the key");
+        let back = Binds::from_text(&b.to_text());
+        assert_eq!(back.alias("7"), Alias::Slot(0, 2), "kept: {}", b.to_text());
+        assert_eq!(b.bind_key(s21, "7"), Moved::Swapped(s13));
+        assert_eq!((b.alias("7"), b.key(s13)), (Alias::Slot(1, 0), None));
+        // the target's 1 put on a slot: target self is left with none
+        assert_eq!(b.bind_key(s13, "1"), Moved::Swapped(row_named("target_self").unwrap()));
+        assert_eq!(b.alias("1"), Alias::Slot(0, 2));
     }
 
     /// The pad: a field moved onto another button swaps the two; the
@@ -1721,6 +1791,11 @@ mod tests {
             assert_eq!(b.bind_row_button(row_named(id).unwrap(), l3), Moved::Already, "{id}");
         }
         assert!(ROWS.iter().enumerate().filter(|(r, _)| takes_button(*r)).all(|(_, r)| r.pad == Pad::None && !r.keys.is_empty()));
+        for k in 0..ROWS.len() {
+            if bar_slot(k).is_some() {
+                assert_eq!(b.bind_row_button(k, l3), Moved::Already, "a bar's slot takes no button");
+            }
+        }
         everything_once(&b);
         // the control: fields alone stay a permutation, none left without
         let mut c = Binds::default();

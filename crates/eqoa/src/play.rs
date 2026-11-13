@@ -110,7 +110,7 @@ struct Puppet {
     race_look: Option<std::rc::Rc<net::raceopts::Look>>,
     /// The tint the server names for its body (`npctint`: an NPC's, by its
     /// name): another, or one gone, rebuilds it.
-    tint: Option<u32>,
+    tint: Option<crate::npctint::Tint>,
     /// A Wisp's (`wisp::is`): it casts no shadow, neither its blob shadow
     /// (`shadow_casters`) nor any of its models into the shadow maps
     /// (`set_casts`).
@@ -1083,7 +1083,7 @@ fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Lo
 
 /// The tint the server names for an NPC's body (`npctint`), by the name its
 /// channel carries; none for a player's character.
-fn tint_of(e: &net::entity::Entity) -> Option<u32> {
+fn tint_of(e: &net::entity::Entity) -> Option<crate::npctint::Tint> {
     e.creature.as_ref().filter(|_| !a_player(e)).and_then(|c| crate::npctint::of(&c.name))
 }
 
@@ -2842,18 +2842,23 @@ mod held {
             ..Default::default()
         };
         let (yhafiran, twin, player) = (entity(7001, "YHAFIRAN", 0), entity(7002, "Uzrathixius", 0), entity(7003, "Yhafiran", 2));
-        crate::npctint::set(vec![("yhafiran".into(), 0x2A73_33FF)]);
+        use crate::npctint::Tint;
+        crate::npctint::set(vec![("yhafiran".into(), Tint::color(0x2A73_33FF))]);
         let tint = |p: &Option<Puppet>| p.as_ref().expect("a puppet").tint;
         let (mut him, mut beside, mut them) = (None, None, None);
         for (p, e) in [(&mut him, &yhafiran), (&mut beside, &twin), (&mut them, &player)] {
             apply(&lib, &mut g, p, e, None, 0, 0, None, false);
         }
-        assert_eq!((tint(&him), tint(&beside), tint(&them)), (Some(0x2A73_33FF), None, None));
+        assert_eq!((tint(&him), tint(&beside), tint(&them)), (Some(Tint::color(0x2A73_33FF)), None, None));
         assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 33, None, false).is_none(), "the same tint: kept");
-        crate::npctint::set(vec![("yhafiran".into(), 0x4D80_4DFF)]);
+        crate::npctint::set(vec![("yhafiran".into(), Tint::color(0x4D80_4DFF))]);
         assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 66, None, false).is_some(), "a new tint: made anew");
         assert!(apply(&lib, &mut g, &mut beside, &twin, None, 0, 66, None, false).is_none(), "the twin kept");
-        assert_eq!(tint(&him), Some(0x4D80_4DFF));
+        assert_eq!(tint(&him), Some(Tint::color(0x4D80_4DFF)));
+        // a glow come on the same colour (petition 1893): made anew in it
+        crate::npctint::set(vec![("yhafiran".into(), Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080 })]);
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 77, None, false).is_some(), "a glow come: made anew");
+        assert_eq!(tint(&him), Some(Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080 }));
         crate::npctint::set(Vec::new());
         assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 99, None, false).is_some(), "the tint gone: made anew");
         assert_eq!(tint(&him), None);
@@ -3992,7 +3997,7 @@ impl Play {
                                 if cs.cur[0].play >= 0 { cs.h.plays.get(cs.cur[0].play).frame_a } else { -1 },
                                 crate::jump::blended(cs, &p.anims),
                                 self.airs[slot],
-                                p.tint.map_or_else(|| "none".to_string(), |t| format!("{t:08X}"))
+                                p.tint.map_or_else(|| "none".to_string(), |t| if t.glow != 0 { format!("{:08X} glow {:08X}", t.color, t.glow) } else { format!("{:08X}", t.color) })
                             );
                         }
                     }
@@ -5225,7 +5230,9 @@ impl Play {
             // a right click on a bar's ability: its auto turned (`autocast`);
             // anywhere else, the world's as ever
             if matches!(c, Click::Right(..)) {
-                return self.auto_point([f[0] - side - menus[0], f[1] + up - menus[1]]);
+                let chat = moved(crate::hudlayout::Piece::Chat);
+                let bars_at = if self.hud_menus.stacked { [f[0] - side - chat[0], f[1] - up - chat[1]] } else { [f[0] - side - menus[0], f[1] + up - menus[1]] };
+                return self.auto_point(bars_at);
             }
             // the compass opens the map, with the Map on (the touch screen's
             // way to it)
@@ -5233,7 +5240,10 @@ impl Play {
                 self.map.show();
                 return true;
             }
-            if let Some(k) = self.hud_menus.point([f[0] - side - menus[0], f[1] + up - menus[1]]) {
+            // the stacked bars (ticket 1913) are in the chat box's place
+            let chat = moved(crate::hudlayout::Piece::Chat);
+            let bars_at = if self.hud_menus.stacked { [f[0] - side - chat[0], f[1] - up - chat[1]] } else { [f[0] - side - menus[0], f[1] + up - menus[1]] };
+            if let Some(k) = self.hud_menus.point(bars_at) {
                 // the pad key it stands for in S2's record, let go at once
                 self.note_hud_key(k, true);
                 self.hud_key(k);
@@ -5241,7 +5251,6 @@ impl Play {
                 return true;
             }
             // the chat box: the chat line, as R3 opens it
-            let chat = moved(crate::hudlayout::Piece::Chat);
             if self.wnd_chat.as_ref().is_some_and(|w| w.contains([f[0] - side - chat[0], f[1] - up - chat[1]])) {
                 self.open_chat_line();
                 return true;
@@ -6209,6 +6218,7 @@ impl Play {
             modal: self.mode == 38,
             // the server's word (`Session::flying`, `walker`)
             flying: self.session.flying,
+            noclip: self.session.noclip,
             // the server's offer (`Session::jumps`), and a report standing sent
             // since its last move (none while one is not done)
             jumps: self.session.jumps,
@@ -8276,13 +8286,44 @@ impl Play {
         let used = self.hud_menus.key(key, now, bars, self.mode == 0, &mut cues);
         self.cues.extend(cues);
         if let Some((msg, id)) = used {
-            match msg {
-                0x8060000 => self.send_0032(id),
-                0x2030000 => self.use_item(id as i32, 1),
-                crate::gear::MSG => self.use_gear_set(id),
-                _ => {}
-            }
+            self.use_hud_entry(msg, id);
         }
+    }
+
+    /// What a HUD menu's entry says, done: an ability's 0x0032, an item used,
+    /// a weapon set taken up.
+    fn use_hud_entry(&mut self, msg: u32, id: i64) {
+        match msg {
+            0x8060000 => self.send_0032(id),
+            0x2030000 => self.use_item(id as i32, 1),
+            crate::gear::MSG => self.use_gear_set(id),
+            _ => {}
+        }
+    }
+
+    /// A key on an ability bar's slot (`binds::bar_slot`, Jibwiz's ticket
+    /// 1913): in play (and the manual camera), the ability on it used as a
+    /// click on it uses it, its bar lit; nothing for an empty slot, a bar
+    /// the carousel does not hold, or with a window up.
+    pub fn bar_slot_key(&mut self, bar: usize, slot: usize) {
+        if (self.mode != 0 && self.mode != 38) || self.typing.is_some() || self.map.open {
+            return;
+        }
+        if bar >= self.ability_bars() as usize {
+            return;
+        }
+        let Some((msg, id)) = self.hud_menus.slot_entry(bar, slot) else { return };
+        self.hud_menus.menus[bar].sel = slot as i32;
+        eprintln!("play: bar {} slot {} key: {msg:#x} {id}", bar + 1, slot + 1);
+        self.use_hud_entry(msg, id);
+    }
+
+    /// Stacked Spell Bars are drawn (`hudmenu`'s doc, ticket 1913): the
+    /// Extended row on, and play on a computer: the last input the keyboard's
+    /// or the mouse's (a controller's or a finger's keeps the carousel, whose
+    /// d-pad walk they need), never on a phone.
+    pub fn stacked_bars(&self) -> bool {
+        crate::settings::stacked_bars() && self.keyboard && !cfg!(target_os = "android")
     }
 
     /// A memorize past the game's ten slots that the server left unanswered
@@ -9484,6 +9525,8 @@ impl Play {
                 }
                 // item links drawn as links, or the line's plain words (`itemlink`)
                 c.show_links = crate::settings::item_links();
+                // Chat Always Shown (ticket 1914): never sliding away
+                c.always = crate::settings::chat_always();
                 for (text, color, at, links) in self.chat_pending.drain(..) {
                     let rr = &r;
                     c.text.add_text_linked(&crate::ui::wide(&text), color, at, |s| vi::ui::Raster::string_width(rr, s), &links);
@@ -9623,9 +9666,25 @@ impl Play {
                         _ => Vec::new(),
                     }
                 };
-                let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::QuickMenus);
-                self.hud_menus.draw(vui, &mut r, now as i64, &name);
-                crate::hudlayout::end(r.ui, m);
+                // Stacked Spell Bars (ticket 1913): the first two bars in two
+                // rows above the chat box, moving with it, no name bar
+                self.hud_menus.stacked = self.stacked_bars();
+                if self.hud_menus.stacked {
+                    let (anchor, vertical) = (r.ui.anchor, r.ui.vertical);
+                    r.ui.anchor = Anchor::Right;
+                    r.ui.vertical = Vertical::Bottom;
+                    let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Chat);
+                    let [left, top] = crate::chat::WndChat::full_top_left(vui, &r);
+                    self.hud_menus.draw_stacked(vui, &mut r, top, left, bars);
+                    crate::hudlayout::end(r.ui, m);
+                    (r.ui.anchor, r.ui.vertical) = (anchor, vertical);
+                } else {
+                    let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::QuickMenus);
+                    self.hud_menus.draw(vui, &mut r, now as i64, &name);
+                    crate::hudlayout::end(r.ui, m);
+                }
+            } else {
+                self.hud_menus.stacked = false;
             }
             // Move HUD (`hudlayout`): the pieces outlined and named, the bar
             // at the top with Lock and Reset, over everything but the fade

@@ -118,6 +118,9 @@ pub struct Client {
     pub modal: bool,
     /// the client's own (the module's doc): a GM's flight is on
     pub flying: bool,
+    /// A GM's noclip (go-eqoa-server's 0x7E7A, `Session::noclip`): while
+    /// flying, the walk meets no wall, floor or ceiling (`walker`).
+    pub noclip: bool,
     /// the client's own (the module's doc): the server offered the jump
     /// (`Session::jumps`)
     pub jumps: bool,
@@ -132,7 +135,7 @@ pub struct Client {
 
 impl Default for Client {
     fn default() -> Self {
-        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0, modal: false, flying: false, jumps: false, stood_sent: false, step: true }
+        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0, modal: false, flying: false, noclip: false, jumps: false, stood_sent: false, step: true }
     }
 }
 

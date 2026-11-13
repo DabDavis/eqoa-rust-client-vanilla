@@ -45,9 +45,17 @@ pub struct State {
     /// [`RULE_MASTER_LOOTER`] (another a later server may send).
     pub rule: u8,
     /// Bit 0 the raid is in combat (its loot rule cannot change, it cannot be
-    /// disbanded), bit 1 this client leads it, bit 2 this client is its helper.
+    /// disbanded), bit 1 this client leads it, bit 2 this client is its helper,
+    /// bit 3 ([`GROUP_RULE`]) the state is a plain group's own loot rule.
     pub flags: u8,
 }
+
+/// [`State::flags`]' bit for a plain group's own rule (go-eqoa-server's
+/// `groupRuleFlag`, the GM Jibrish's petition 1878, 2026-11-13: a group's
+/// leader may set need before greed as a raid's does): the leader 0 (no raid),
+/// [`State::rule`] the group's rule, bit 0 its fight and bit 1 this client its
+/// leader as a raid's. A group whose rule is free for all is sent all zero.
+pub const GROUP_RULE: u8 = 8;
 
 impl State {
     /// In a raid at all.
@@ -62,6 +70,15 @@ impl State {
     }
     pub fn helps(&self) -> bool {
         self.in_raid() && self.flags & 4 != 0
+    }
+    /// A plain group's loot rule ([`GROUP_RULE`]): the rule the server says in
+    /// no raid, free for all when it says none.
+    pub fn group_rule(&self) -> u8 {
+        if !self.in_raid() && self.flags & GROUP_RULE != 0 { self.rule } else { RULE_FREE_FOR_ALL }
+    }
+    /// A plain group under its own rule in a fight (its rule cannot change).
+    pub fn group_in_combat(&self) -> bool {
+        !self.in_raid() && self.flags & GROUP_RULE != 0 && self.flags & 1 != 0
     }
 }
 
@@ -183,6 +200,12 @@ pub enum Command {
     MoveToGroup { id: u32, group: u8 },
     /// 13: two members' groups traded
     Swap(u32, u32),
+    /// 14, 15: the target added to the party's instance, or taken out of it
+    /// (the GM Jibrish's petition 1879: go-eqoa-server's `/addinstance`,
+    /// `/removeinstance`; its party's leader's, its raid's helper's or the
+    /// instance's owner's)
+    InstanceAdd(u32),
+    InstanceRemove(u32),
 }
 
 impl Command {
@@ -201,6 +224,8 @@ impl Command {
             Command::Kick(_) => 11,
             Command::MoveToGroup { .. } => 12,
             Command::Swap(..) => 13,
+            Command::InstanceAdd(_) => 14,
+            Command::InstanceRemove(_) => 15,
         }
     }
 
@@ -215,7 +240,7 @@ impl Command {
             Command::Assign { key, id } => {
                 w.u32(key).u32(id);
             }
-            Command::InviteTarget(id) | Command::Leader(id) | Command::Helper(id) | Command::Assist(id) | Command::Kick(id) => {
+            Command::InviteTarget(id) | Command::Leader(id) | Command::Helper(id) | Command::Assist(id) | Command::Kick(id) | Command::InstanceAdd(id) | Command::InstanceRemove(id) => {
                 w.u32(id);
             }
             Command::MoveToGroup { id, group } => {
@@ -249,6 +274,14 @@ mod tests {
         // all zero: no raid, whatever its flags say
         let none = read_state(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7]).unwrap();
         assert!(!none.in_raid() && !none.in_combat() && !none.leads() && !none.helps());
+        assert_eq!((none.group_rule(), none.group_in_combat()), (RULE_FREE_FOR_ALL, false), "the control: no group rule's bit");
+        // a plain group's need before greed (build180: leader 0, rule 1, bit 3,
+        // its leader's bit 1, in a fight bit 0)
+        let group = read_state(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, GROUP_RULE | 3]).unwrap();
+        assert!(!group.in_raid() && !group.leads() && !group.in_combat(), "no raid");
+        assert_eq!((group.group_rule(), group.group_in_combat()), (RULE_NEED_BEFORE_GREED, true));
+        // a raid's own rule is not a group's
+        assert_eq!(s.group_rule(), RULE_FREE_FOR_ALL);
     }
 
     /// An inventory record as 0x003B's body (the server's `writeSingleItem`): the
@@ -309,6 +342,8 @@ mod tests {
         assert_eq!(roll_choice(7, Choice::Greed), [0x46, 0x7E, 7, 0, 0, 0, 2]);
         assert_eq!(roll_choice(0x01020304, Choice::Pass), [0x46, 0x7E, 4, 3, 2, 1, 3]);
         let id = 0x7F00_0005u32.to_le_bytes();
+        assert_eq!(Command::InstanceAdd(0x7F00_0005).bytes(), [vec![0x48, 0x7E, 14], id.to_vec()].concat());
+        assert_eq!(Command::InstanceRemove(0x7F00_0005).bytes(), [vec![0x48, 0x7E, 15], id.to_vec()].concat());
         let cases: [(Command, Vec<u8>); 13] = [
             (Command::LootRule(RULE_MASTER_LOOTER), vec![1, 2]),
             (Command::Leave, vec![2]),

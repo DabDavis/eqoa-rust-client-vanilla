@@ -495,7 +495,7 @@ fn run(args: &[String]) -> Result<()> {
         Some("rumble") => input::check_motors(10_000)?,
         Some("view") | Some("shot") => {
             let shot = args[0] == "shot";
-            let usage = "usage: eqoa view <file> [model] [tint=RRGGBBAA] | eqoa view <world> zone <n> | eqoa shot <same> <out.png> [camera...]";
+            let usage = "usage: eqoa view <file> [model] [tint=RRGGBBAA] [glow=RRGGBBAA] | eqoa view <world> zone <n> | eqoa shot <same> <out.png> [camera...]";
             let file = args.get(1).ok_or(usage)?;
             // `tint=RRGGBBAA`: the model in a server's body tint, as an NPC of
             // a tinted name is drawn (`npctint`)
@@ -1028,11 +1028,11 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
 }
 
 /// A model in a tint (`tint=`, `npctint`); a zone or a walk takes none.
-fn tinted(mut src: viewer::Source, tint: Option<u32>) -> Result<viewer::Source> {
+fn tinted(mut src: viewer::Source, tint: Option<npctint::Tint>) -> Result<viewer::Source> {
     match (&mut src, tint) {
         (_, None) => {}
         (viewer::Source::Models { tint: t, .. }, Some(c)) => *t = Some(c),
-        _ => return Err("tint= is a model's: eqoa shot <file> <model> <out.png> tint=RRGGBBAA".into()),
+        _ => return Err("tint= and glow= are a model's: eqoa shot <file> <model> <out.png> tint=RRGGBBAA glow=RRGGBBAA".into()),
     }
     Ok(src)
 }

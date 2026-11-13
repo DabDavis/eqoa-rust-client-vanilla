@@ -22,6 +22,21 @@
 //! on one) and CLIENT shows only 0-9 and 252-255, so what is on 10-19 is the
 //! server's to keep: a server that keeps any slot (go-eqoa-server does)
 //! needs no change for them.
+//!
+//! Stacked Spell Bars (Extended > UI > HUD, Jibwiz's ticket 1913, "move your
+//! spellbars vertically, and nest them x2 evenly above the chat box stacked on
+//! top of each other. Scale them down about 5% and remove the pop up horizontal
+//! box on the current bar that tells you what the spell is. This should be for
+//! PC players"): the client's own, on a computer (the keyboard and the mouse;
+//! a controller's or a touch screen's play keeps the carousel). The first bar
+//! (menu 0, its packed 252-255 too) and the second (menu 1) are drawn as two
+//! rows of their slots' frames, the first over the second, just above the
+//! chat box's full height and moving with it (`draw_stacked`, `Piece::Chat`),
+//! at 95% (`STACKED_SCALE`), with no title bar: no name pops up. A click on a
+//! slot uses it, a right click turns its auto (`stacked_at`), and each slot
+//! of both can be given a key on the Controls page (`binds::bar_slot`,
+//! `slot_entry`). The arrows and E still walk and use the bar up, its
+//! selection outlined.
 
 use crate::gear::Gear;
 use crate::ui::Vui;
@@ -118,6 +133,17 @@ pub enum Key {
     /// E / X (135): use the selection
     Use,
 }
+
+/// Stacked Spell Bars' scale (ticket 1913: "scale them down about 5%").
+pub const STACKED_SCALE: f32 = 0.95;
+
+/// A slot's cell in the carousel's list, frame pixels (`row_at`'s: 36 across
+/// from its frame's left, its rows 31 apart), which the stacked bars scale.
+const CELL: [i32; 2] = [36, 31];
+
+/// How far the stacked bars stand above the chat box's window top, frame pixels:
+/// its panel is drawn 10 inside it, so they stand 2 above the panel.
+const STACKED_GAP: i32 = -8;
 
 /// `VIWndHUDMenu`
 pub struct HudMenu {
@@ -295,6 +321,14 @@ fn draw_auto_mark(r: &mut dyn Raster, icon: [i32; 2], a: f32) {
     r.draw_centered_string([at[0] + 6, at[1] + 6], [1.0, 0.82, 0.25, a], &[b'A' as u16], 0);
 }
 
+/// A one-pixel outline of rectangle `c` (x0, y0, x1, y1) in `color`.
+fn outline(r: &mut dyn Raster, c: [i32; 4], color: [f32; 4]) {
+    let [x0, y0, x1, y1] = c;
+    for [a, b] in [[[x0, y0], [x1, y0 + 1]], [[x0, y1 - 1], [x1, y1]], [[x0, y0], [x0 + 1, y1]], [[x1 - 1, y0], [x1, y1]]] {
+        r.fill_fan(color, [a, [b[0], a[1]], b, [a[0], b[1]]]);
+    }
+}
+
 /// The menus and which is up (`m_hudSel`), and whether the items' stack
 /// is drawn with the live client's slot icons (the layout `build` saw);
 /// the abilities the player made auto (`autocast`), marked as drawn.
@@ -304,6 +338,12 @@ pub struct HudMenus {
     pub defs: [MenuDef; MENUS],
     live: bool,
     pub auto: Vec<i64>,
+    /// Stacked Spell Bars are drawn (the module's doc): the pointer reads
+    /// the stacked rows' cells (`stacked`), not the carousel's.
+    pub stacked: bool,
+    /// The cells the stacked bars last drew: (menu, entry, rectangle x0, y0,
+    /// x1, y1 in the chat box's frame points).
+    stacked_hits: Vec<(usize, i32, [i32; 4])>,
 }
 
 impl Default for HudMenus {
@@ -318,6 +358,8 @@ impl Default for HudMenus {
             }),
             live: false,
             auto: Vec::new(),
+            stacked: false,
+            stacked_hits: Vec::new(),
         }
     }
 }
@@ -424,12 +466,77 @@ impl HudMenus {
         self.menus[k].draw(vui, r, &def, now, name, live, &self.auto);
     }
 
+    /// Stacked Spell Bars (the module's doc): the first bar's slots over the
+    /// second's (the second with the expansion's second bar), each a slot's
+    /// frame scaled `STACKED_SCALE` with its icon, lock badge and auto mark,
+    /// the rows standing on `chat_top` (the chat box's top at its full
+    /// height, frame points, as it is drawn) from its left at `left`; the
+    /// menu up's selection outlined; no title bar. The cells are noted for
+    /// the pointer (`stacked_at`).
+    pub fn draw_stacked(&mut self, vui: &Vui, r: &mut dyn Raster, chat_top: i32, left: i32, bars: Bars) {
+        self.stacked_hits.clear();
+        let frame = vui.entry(29);
+        let s = |v: i32| (v as f32 * STACKED_SCALE).round() as i32;
+        let (cw, ch) = (s(CELL[0]), s(CELL[1]));
+        let rows: Vec<usize> = if bars.abilities >= 2 { vec![0, 1] } else { vec![0] };
+        let up = self.up();
+        for (k, &menu) in rows.iter().enumerate() {
+            let y = chat_top - STACKED_GAP - ch * (rows.len() - k) as i32;
+            let def = &self.defs[menu];
+            for n in 0..def.count.max(0) {
+                let x = left + (n as f32 * CELL[0] as f32 * STACKED_SCALE).round() as i32;
+                let at = [x, y];
+                r.stretch_blit(vui.entry_id(&frame), 0, at, [cw, ch], frame.uv0, frame.uv1, 3, 1.0);
+                let e = def.entries.get(n as usize).copied().unwrap_or_default();
+                // the icon where the list puts it in its frame, scaled
+                let icon = [x + s(7), y + s(2)];
+                if e.icon2 != -1 {
+                    r.stretch_blit(e.icon2 as u32, 0, icon, [s(22), s(22)], [0, 0], [22, 22], 3, 1.0);
+                }
+                if e.x08 == 61 {
+                    let badge = vui.entry(61);
+                    r.stretch_blit(vui.entry_id(&badge), 0, [icon[0] - s(2), icon[1] - s(2)], [s(26), s(26)], badge.uv0, [26, 26], 3, 0.5);
+                }
+                if e.msg == 0x8060000 && e.icon2 != -1 && self.auto.contains(&e.id) {
+                    draw_auto_mark(r, icon, 1.0);
+                }
+                if menu == up && n == self.menus[menu].sel {
+                    outline(r, [icon[0] - 2, icon[1] - 2, icon[0] + s(22) + 1, icon[1] + s(22) + 1], [1.0, 0.85, 0.3, 1.0]);
+                }
+                self.stacked_hits.push((menu, n, [x, y, x + cw, y + ch]));
+            }
+        }
+    }
+
+    /// The stacked bars' cell at frame point `p` (in the chat box's place, as
+    /// `draw_stacked` drew it): its menu and entry.
+    pub fn stacked_at(&self, p: [f32; 2]) -> Option<(usize, i32)> {
+        let (x, y) = (p[0] as i32, p[1] as i32);
+        self.stacked_hits.iter().find(|(_, _, c)| (c[0]..c[2]).contains(&x) && (c[1]..c[3]).contains(&y)).map(|&(m, n, _)| (m, n))
+    }
+
+    /// The entry an ability bar's slot shows (`binds::bar_slot`: bar 0 is
+    /// menu 0, bar 1 menu 1), when it holds something to use.
+    pub fn slot_entry(&self, bar: usize, slot: usize) -> Option<(u32, i64)> {
+        let menu = [0, 1].get(bar).copied()?;
+        let e = self.defs[menu].entries.get(slot).copied()?;
+        (e.msg != 0 && e.id >= 0 && e.icon2 != -1).then_some((e.msg, e.id))
+    }
+
     /// A pointer at frame point `p`, in the menu's own place (before a wide
     /// window moves it out to the right, or a tall one up to its top; the
     /// client's own, as the game takes the pad and the keyboard): on an
     /// entry of the menu up, that entry selected and the key that uses it;
-    /// on the title bar, the next menu (as the d-pad's right).
+    /// on the title bar, the next menu (as the d-pad's right). With the bars
+    /// stacked (`stacked`), `p` is in the chat box's place: a slot's cell
+    /// makes its bar the one up and its entry the selection, and is used.
     pub fn point(&mut self, p: [f32; 2]) -> Option<Key> {
+        if self.stacked {
+            let (menu, n) = self.stacked_at(p)?;
+            self.sel = menu as i32;
+            self.menus[menu].sel = n;
+            return Some(Key::Use);
+        }
         let k = self.up();
         let at = self.menus[k].pos;
         let (x, y) = (p[0] as i32, p[1] as i32);
@@ -463,8 +570,8 @@ impl HudMenus {
     /// The ability under frame point `p` on a bar (`point`'s place), its id:
     /// what a right click or a long press makes auto (`autocast`).
     pub fn ability_at(&self, p: [f32; 2]) -> Option<i64> {
-        let n = self.row_at(p)?;
-        let e = self.defs[self.up()].entries.get(n as usize).copied()?;
+        let (menu, n) = if self.stacked { self.stacked_at(p)? } else { (self.up(), self.row_at(p)?) };
+        let e = self.defs[menu].entries.get(n as usize).copied()?;
         (e.msg == 0x8060000 && e.icon2 != -1).then_some(e.id)
     }
 
@@ -598,6 +705,74 @@ mod tests {
         assert_eq!(h.ability_at([(at[0] + 50) as f32, (at[1] + 10) as f32]), None, "the title bar");
         assert_eq!(h.menus[0].sel, 1, "the selection not moved");
         assert_eq!(h.selected_ability(), Some(12));
+    }
+
+    /// Stacked Spell Bars (ticket 1913): two rows of five cells, the first bar
+    /// over the second, standing on the chat box's top, each 95% of a slot's
+    /// frame, and no name drawn (the carousel's title, the control, draws the
+    /// selection's); a click on a cell makes its bar the one up and uses its
+    /// entry; a right click finds its ability; a bar's slot key finds its
+    /// entry; with one bar, one row.
+    #[test]
+    fn the_stacked_bars_are_two_rows_with_no_name() {
+        struct Rec(Vec<Vec<u16>>, Vec<([i32; 2], [i32; 2])>);
+        impl Raster for Rec {
+            fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn stretch_blit(&mut self, _: u32, _: u32, at: [i32; 2], size: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {
+                self.1.push((at, size));
+            }
+            fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+            fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+            fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16]) {
+                self.0.push(s.to_vec());
+            }
+            fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+                self.0.push(s.to_vec());
+            }
+            fn string_width(&self, s: &[u16]) -> i32 {
+                s.len() as i32 * 8
+            }
+            fn point_size(&self) -> i32 {
+                16
+            }
+            fn viewport(&self) -> [i32; 4] {
+                [0, 0, 640, 448]
+            }
+            fn set_viewport(&mut self, _: [i32; 4]) {}
+        }
+        let vui = crate::pointer::testing::vui();
+        let mut h = HudMenus::default();
+        let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id };
+        h.defs[0] = MenuDef { count: 5, entries: vec![ab(11), ab(12), ab(13), Entry::default(), Entry::default()] };
+        h.defs[1] = MenuDef { count: 5, entries: vec![Entry::default(), ab(22), Entry::default(), Entry::default(), ab(25)] };
+        let name = |_: u32, _: i64| crate::ui::wide("Fire Bolt");
+        let mut r = Rec(Vec::new(), Vec::new());
+        h.draw(&vui, &mut r, 0, &name);
+        assert!(!r.0.is_empty(), "the control: the carousel's title draws the name");
+        let mut r = Rec(Vec::new(), Vec::new());
+        h.stacked = true;
+        h.draw_stacked(&vui, &mut r, 320, 216, DISC);
+        assert!(r.0.is_empty(), "no name popped up: {:?}", r.0);
+        assert_eq!(h.stacked_hits.len(), 10);
+        let hits = h.stacked_hits.clone();
+        let cell = |m: usize, n: i32| hits.iter().find(|c| c.0 == m && c.1 == n).unwrap().2;
+        let (a, b) = (cell(0, 0), cell(1, 0));
+        let s = |v: i32| (v as f32 * STACKED_SCALE).round() as i32;
+        assert_eq!([a[2] - a[0], a[3] - a[1]], [s(CELL[0]), s(CELL[1])], "95% of a slot's cell");
+        assert!(a[3] <= b[1] && b[3] == 320 - STACKED_GAP, "the first bar over the second, on the chat box's panel: {a:?} {b:?}");
+        assert_eq!((a[0], b[0]), (216, 216), "evenly, from the chat box's left");
+        assert_eq!(cell(0, 4)[1], a[1], "a row");
+        // icons drawn 21 for 22
+        assert!(r.1.iter().any(|&(_, size)| size == [21, 21]));
+        let mid = |c: [i32; 4]| [(c[0] + c[2]) as f32 / 2.0, (c[1] + c[3]) as f32 / 2.0];
+        assert_eq!(h.point(mid(cell(1, 4))), Some(Key::Use));
+        assert_eq!((h.sel, h.menus[1].sel), (1, 4), "bar 2 up, its fifth selected");
+        assert_eq!(h.ability_at(mid(cell(0, 2))), Some(13));
+        assert_eq!(h.ability_at(mid(cell(1, 0))), None, "an empty slot");
+        assert_eq!(h.point([0.0, 0.0]), None);
+        assert_eq!((h.slot_entry(0, 1), h.slot_entry(1, 4), h.slot_entry(1, 0), h.slot_entry(2, 0)), (Some((0x8060000, 12)), Some((0x8060000, 25)), None, None));
+        h.draw_stacked(&vui, &mut r, 320, 216, Bars { abilities: 1, gear: false });
+        assert_eq!(h.stacked_hits.len(), 5, "one bar, one row");
     }
 
     /// A pointer on the quick menu up: the title bar is the next menu, a

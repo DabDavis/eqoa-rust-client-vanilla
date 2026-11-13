@@ -20,6 +20,12 @@
 //! (`Let::Link`); with the history held (mode 33) left walks up through them and
 //! right back down (`walk_older`, `walk_newer`), the one lit washed, and the
 //! history let go forgets the walk.
+//!
+//! Chat Always Shown (Extended > UI > Chat, Jibwiz's ticket 1914: "allows your
+//! chat box to stay fully visible without auto collapse") is the client's too
+//! (`always`): the box stays open at its five rows as the fixed mode keeps it,
+//! the last five lines in it whatever their age, with no backdrop strip (the
+//! fixed mode's, a window's). Off, the game's box exactly.
 
 use std::cell::RefCell;
 use vi::ui::{Raster, Vui, Window};
@@ -432,6 +438,8 @@ pub struct WndChat {
     link_hits: Vec<LinkHit>,
     pub show_links: bool,
     walk: Option<u64>,
+    /// Chat Always Shown (the module's doc): open at five rows, every line.
+    pub always: bool,
 }
 
 impl WndChat {
@@ -444,13 +452,13 @@ impl WndChat {
 
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
-        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(462 - 45), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None }
+        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(462 - 45), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None, always: false }
     }
 
     /// `CountLines`: the fresh lines (every line while scrolling; five in a
     /// fixed mode), at most five.
     fn count_lines(&self) -> i32 {
-        if self.mode != 0 {
+        if self.fixed() {
             return 5;
         }
         let mut n = 0;
@@ -462,6 +470,24 @@ impl WndChat {
             i = ChatText::next(i);
         }
         n.min(5)
+    }
+
+    /// The chat box's top left at its full height (its five rows, as the fixed
+    /// mode and Chat Always Shown keep it), and its text's left (frame points,
+    /// before a moved piece's shift): `draw`'s window there. The stacked bars
+    /// stand on it (`hudmenu::HudMenus::draw_stacked`).
+    pub fn full_top_left(vui: &Vui, ui: &dyn Raster) -> [i32; 2] {
+        let mut w = Window::default();
+        w.init(vui, ui, [422, 390], 462, 6, 1);
+        w.center = [422, 475 - 85];
+        let tl = w.top_left();
+        [tl[0] + 25, tl[1]]
+    }
+
+    /// Whether the box is held open at five rows with every line in it: the
+    /// fixed mode's, or Chat Always Shown's (`always`).
+    fn fixed(&self) -> bool {
+        self.mode != 0 || self.always
     }
 
     /// `SetScroll`: 1 opens the view on the last five lines, 0 ends it. (A
@@ -571,7 +597,7 @@ impl WndChat {
         let it = if self.scroll == 1 { self.bottom } else { self.text.end() };
         self.lines = if self.scroll == 1 { 5 } else { self.count_lines() };
         let h = vui.font_height(ui);
-        if self.mode != 0 {
+        if self.fixed() {
             self.target = 85;
             self.height = 85;
             self.window.open(true);
@@ -595,7 +621,7 @@ impl WndChat {
             if let Some(l) = self.text.line(i)
                 && !l.text.is_empty()
                 && l.text[0] != 0
-                && (self.scroll == 1 || (self.scroll == 0 && l.kind == 1) || self.mode != 0)
+                && (self.scroll == 1 || (self.scroll == 0 && l.kind == 1) || self.fixed())
             {
                 let (text, color, seq) = (l.text.clone(), l.color, l.seq);
                 let links = if self.show_links { l.links.clone() } else { Vec::new() };
@@ -1104,6 +1130,34 @@ mod tests {
     /// A frame `dt` seconds on.
     fn frame(c: &mut WndChat, dt: f32) {
         c.draw(&vui(), &mut Rows, 0, dt);
+    }
+
+    /// Chat Always Shown (ticket 1914): two lines 30 s old (past `Age`'s 20)
+    /// are both still drawn, the box open at its five rows; the box with no
+    /// lines at all stays open too. The control: the game's box (off) shows
+    /// neither line and slides shut.
+    #[test]
+    fn chat_always_shown_never_collapses() {
+        let (v, mut r) = (vui(), Rows);
+        let mut run = |always: bool, lines: usize| {
+            let mut c = WndChat::new();
+            c.always = always;
+            for k in 0..lines {
+                c.text.add_text(&crate::ui::wide(&format!("line {k}")), [1.0; 4], 0, width);
+            }
+            for _ in 0..40 {
+                c.draw(&v, &mut r, 30_000, 0.1);
+            }
+            c
+        };
+        let on = run(true, 2);
+        assert_eq!((on.shown.len(), on.lines, on.height), (2, 5, 85), "both old lines in the full box");
+        assert!(on.window.is_open());
+        let empty = run(true, 0);
+        assert!(empty.window.is_open() && empty.height == 85, "open with nothing said yet");
+        let off = run(false, 2);
+        assert_eq!((off.shown.len(), off.lines), (0, 0), "the control: the game's box let them go");
+        assert!(!off.window.is_open() && off.height < 0, "the control: slid shut");
     }
 
     /// A press on line `seq`, past the slop and a frame on: the view the drag goes

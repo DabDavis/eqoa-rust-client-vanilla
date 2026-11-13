@@ -334,6 +334,12 @@ impl GroupReg {
 /// to a server that made no such offer (Sandstorm's, eqoa.live's), and one that
 /// never sends it leaves the walk as it was.
 pub const OP_FLY: u16 = 0x7E1B;
+/// go-eqoa-server's own, no retail message: a GM's `/noclip` (the GM Jibrish's
+/// petition 1904), server to a client that flies ([`OP_FLY`]'s): a u32, 1 on
+/// and 0 off. On, the walk passes through every wall, floor and ceiling while it
+/// flies (`walker`); it comes with [`OP_FLY`] 1 and goes with its 0, and a
+/// flight's end ends it here too.
+pub const OP_NOCLIP: u16 = 0x7E7A;
 /// go-eqoa-server's own, no retail message either: the character's combat
 /// record, its PvP and its duels (`record`), a u32 after the opcode, both ways.
 /// The server offers it (1) once the player is in the world; this client answers
@@ -718,18 +724,21 @@ fn read_pet_effects(r: &mut Reader) -> Option<Vec<PetEffect>> {
 /// go-eqoa-server's own: a tint on the bodies of the NPCs of a name (the server
 /// owner, 2026-11-10: Yhafiran, "the black and green oriental dragon", drawn as
 /// the disc's green one tinted; `crate::npctint`, the game's `npctint`). The
-/// offer, server to client once the player is in the world: a u8, 1, the layout
-/// of [`OP_NPC_TINTS`]. CLIENT has no such case, so a PS2 ignores it and draws
+/// offer, server to client once the player is in the world: a u8, the newest
+/// layout of [`OP_NPC_TINTS`] the server sends (1; 2 with a glow after each
+/// colour, petition 1893). CLIENT has no such case, so a PS2 ignores it and draws
 /// every body in its own colours.
 pub const OP_NPC_TINTS_OFFER: u16 = 0x7E3E;
-/// The answer to [`OP_NPC_TINTS_OFFER`], client to server, at once: a u8, 1 to
+/// The answer to [`OP_NPC_TINTS_OFFER`], client to server, at once: a u8, the
+/// layout this client reads (the offer's, at most `crate::npctint::LAYOUT`) to
 /// be sent the tints (this client drops what it held and is sent the set there
 /// is), 0 to stop.
 pub const OP_NPC_TINTS_ANSWER: u16 = 0x7E3F;
 /// The tints, from a server the client answered ([`OP_NPC_TINTS_ANSWER`]), at
 /// once and whenever a GM changes them: a u16 count, then each its NPC name (a
-/// u8 byte count and UTF-8, keyed as `crate::npctint::key` keys one) and its u32
-/// colour 0xRRGGBBAA (`crate::npctint::read`). Each is the whole set.
+/// u8 byte count and UTF-8, keyed as `crate::npctint::key` keys one), its u32
+/// colour 0xRRGGBBAA and, in layout 2, its u32 glow (`crate::npctint::read`).
+/// Each is the whole set.
 pub const OP_NPC_TINTS: u16 = 0x7E40;
 
 /// go-eqoa-server's own: a monster's name and level, shown when the player
@@ -1204,11 +1213,16 @@ pub struct Session {
     /// `crate::npctint::key` keys one), until the game takes them (`npctint`):
     /// the empty set at its offer and at a new connection, this client holding
     /// none then.
-    pub npc_tints: Option<Vec<(String, u32)>>,
+    pub npc_tints: Option<Vec<(String, crate::npctint::Tint)>>,
+    /// The layout of [`OP_NPC_TINTS`] this client answered the offer with.
+    pub npc_tints_layout: u8,
     /// The server has this client's character flying ([`OP_FLY`]); gone with
     /// the connection, as the server's goes with its login. A dump (a respawn,
     /// a restart of the server's) leaves it.
     pub flying: bool,
+    /// The server has this client's flight going through walls ([`OP_NOCLIP`]);
+    /// gone with the flight and with the connection.
+    pub noclip: bool,
     /// The server offered the whole of a raid group
     /// ([`OP_RAID_ROSTER_OFFER`]), and what it was last told since the offer.
     pub raid_roster_offer: bool,
@@ -1480,7 +1494,9 @@ impl Session {
             race_options: None,
             race_looks: None,
             npc_tints: None,
+            npc_tints_layout: 1,
             flying: false,
+            noclip: false,
             raid_roster_offer: false,
             raid_roster_asked: None,
             power_bars_offer: false,
@@ -2323,6 +2339,7 @@ impl Session {
                 }
                 self.entity_view_offer = None;
                 self.flying = false;
+                self.noclip = false;
                 self.jumps = false;
                 self.map_travel = false;
                 // the NPCs' body tints too (the next world entry offers them)
@@ -2486,6 +2503,14 @@ impl Session {
                 let on = r.u32() != 0;
                 if !r.error {
                     self.flying = on;
+                    self.noclip &= on;
+                }
+            }
+            // noclip on or off (`walker`'s `Aloft`), a GM's flight's
+            OP_NOCLIP => {
+                let on = r.u32() != 0;
+                if !r.error {
+                    self.noclip = on;
                 }
             }
             // the jump offered: taken (the jump key, `walker`); a 0 ends it
@@ -2653,16 +2678,18 @@ impl Session {
             OP_RACE_LOOKS => self.race_looks = Some(m.data[2.min(m.data.len())..].to_vec()),
             // the NPCs' body tints offered: taken (`npctint`), what was held
             // dropped, the server sending the set there is
+            // in the newest layout both read (an older server's 1: no glows)
             OP_NPC_TINTS_OFFER => {
-                r.u8();
+                let layout = r.u8().clamp(1, crate::npctint::LAYOUT);
                 if !r.error {
                     self.npc_tints = Some(Vec::new());
+                    self.npc_tints_layout = layout;
                     let mut w = Writer::op(OP_NPC_TINTS_ANSWER);
-                    w.u8(1);
+                    w.u8(layout);
                     self.send(&w.data);
                 }
             }
-            OP_NPC_TINTS => match crate::npctint::read(&m.data[2.min(m.data.len())..]) {
+            OP_NPC_TINTS => match crate::npctint::read(&m.data[2.min(m.data.len())..], self.npc_tints_layout) {
                 Some(t) => self.npc_tints = Some(t),
                 None => debug_line(&format!("[net] NPC tints: {} bytes not read", m.data.len())),
             },
@@ -4187,6 +4214,33 @@ mod tests {
         assert!(!s.flying, "a new connection, a new login: not flying");
     }
 
+    // A GM's noclip (0x7E7A, petition 1904): the server's word kept, a short one
+    // not; a flight's end ends it, and a new connection; nothing is answered.
+    #[test]
+    fn noclip_kept_with_the_flight() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.flush();
+        sent.borrow_mut().clear();
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x7A, 0x7E, 1, 0]);
+        assert!(s.flying && !s.noclip, "the control: a short word");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x7A, 0x7E, 1, 0, 0, 0]);
+        assert!(s.noclip && ev.is_empty(), "{ev:?}");
+        s.flush();
+        let ours = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).count();
+        assert_eq!(ours, 0, "nothing answered");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x7A, 0x7E, 0, 0, 0, 0]);
+        assert!(s.flying && !s.noclip, "off, still flying");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x7A, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 0, 0, 0, 0]);
+        assert!(!s.flying && !s.noclip, "the flight's end ends it");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x7A, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.noclip, "a new connection");
+    }
+
     // The jump (0x7E28): the offer answered with 1 at once and kept; a 0 ends it
     // and is answered nothing; it goes with the connection. The controls: an
     // offer cut short and an offer of 0 are neither answered nor kept, and a
@@ -4736,12 +4790,26 @@ mod tests {
         assert_eq!(s.npc_tints.take(), Some(vec![]), "what was held dropped");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x40, 0x7E, 1, 0, 8, b'y', b'h', b'a', b'f', b'i', b'r', b'a', b'n', 0xFF, 0x50, 0x8C, 0x55]);
         assert!(ev.is_empty(), "the set is the session's until taken: {ev:?}");
-        assert_eq!(s.npc_tints.take(), Some(vec![("yhafiran".to_string(), 0x558C_50FF)]));
+        assert_eq!(s.npc_tints.take(), Some(vec![("yhafiran".to_string(), crate::npctint::Tint::color(0x558C_50FF))]));
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x40, 0x7E, 1, 0, 8, b'y', b'h']);
         assert_eq!(s.npc_tints, None, "the control: a set cut short is nothing new");
         assert_eq!(answers(&mut s), [], "the set answered nothing");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3E, 0x7E, 1]);
         assert_eq!(answers(&mut s), [(251, vec![0x3F, 0x7E, 1])], "a new offer is answered again");
+        // build180's offer of 2: answered 2, each colour's glow read after it;
+        // an offer above it answered 2 too
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3E, 0x7E, 2]);
+        assert_eq!(answers(&mut s), [(251, vec![0x3F, 0x7E, 2])], "an offer of 2: answered 2");
+        let mut moogie = vec![0x40, 0x7E, 1, 0, 3, b'm', b'o', b'o'];
+        moogie.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        moogie.extend_from_slice(&0xFF40_4080u32.to_le_bytes());
+        s.npc_tints = None;
+        deliver(&mut s, drdp::TYPE_GUARANTEED, moogie);
+        assert_eq!(s.npc_tints.take(), Some(vec![("moo".to_string(), crate::npctint::Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080 })]));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3E, 0x7E, 9]);
+        assert_eq!(answers(&mut s), [(251, vec![0x3F, 0x7E, 2])], "a newer offer: the newest this client reads");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3E, 0x7E, 1]);
+        answers(&mut s);
         s.npc_tints = None;
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert_eq!(s.npc_tints.take(), Some(vec![]), "a new connection: none held");
