@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Mr. Moogie's aura covers his mane
+- **The aura over Mr. Moogie's mane no longer has holes.** His mane is two layers of hair back to back, and the
+  shell of light was bent the wrong way where they meet, leaving dark, hole-like patches and stray bright shards in
+  it. Each side of the mane now carries its own layer of the aura, so the glow wraps the mane as evenly as the rest
+  of him.
+- Creatures without an aura look exactly as before.
+
 ## 2026-11-13 · A glowing NPC's aura
 - **Glowing creatures now wear one aura round their whole body**: a creature the server gives a glow, such as
   **Mr. Moogie** in Freeport, is wrapped in a single soft, form-fitting shell of light in its glow colour that

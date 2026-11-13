@@ -10,7 +10,7 @@
 //! large creature's shell stands as far off it, in proportion, as a small
 //! one's), before the skin palette, so the shell bends with every node the
 //! body bends with. The normals pushed along are the mesh's own averaged over
-//! the vertices that share a place ([`smooth_normals`]), so a seam of the
+//! the vertices that share a place and face its way ([`smooth_normals`]), so a seam of the
 //! texture's does not open a crack in the shell.
 //!
 //! `shell.wgsl` draws it additively (the GS's blend 1, `Cs·As + Cd`) in the
@@ -96,24 +96,34 @@ pub fn inflation(bounds: (glam::Vec3, glam::Vec3)) -> f32 {
     d.max_element() * INFLATE
 }
 
+/// Two normals at one place whose dot product is this or less (more than 120°
+/// apart) are a sheet's two sides, not a seam's ([`smooth_normals`]).
+pub const SIDES: f32 = -0.5;
+
 /// Each vertex's normal averaged (unit length) with every other vertex's at
-/// the same place (to a thousandth), so the shell pushed along them stays
-/// closed across the mesh's seams; a vertex whose sum is nothing keeps its
-/// own.
+/// the same place (to a thousandth) that faces its way (their dot product
+/// above [`SIDES`]: a hard edge's are still averaged), so the shell pushed
+/// along them stays closed across the mesh's seams; a vertex whose sum is
+/// nothing keeps its own.
+///
+/// A sheet's two sides at one place (Mr. Moogie's mane is a double sheet,
+/// back to back, half its triangles facing in) are not averaged together:
+/// their normals would cancel, pushing that side's shell nowhere or the
+/// wrong way, under the mane itself (where its depth hides it) or culled,
+/// the holes the owner saw in his mane (2026-11-13). Each side keeps its own.
 pub fn smooth_normals(pos: &[[f32; 3]], normal: &[[f32; 3]]) -> Vec<[f32; 3]> {
     let key = |p: &[f32; 3]| p.map(|v| (v * 1000.0).round() as i64);
-    let mut sums: std::collections::HashMap<[i64; 3], glam::Vec3> = std::collections::HashMap::new();
-    for (p, n) in pos.iter().zip(normal) {
-        let n = glam::Vec3::from(*n);
-        if n.is_finite() {
-            *sums.entry(key(p)).or_default() += n.normalize_or_zero();
-        }
+    let unit: Vec<glam::Vec3> = normal.iter().map(|n| glam::Vec3::from(*n)).map(|n| if n.is_finite() { n.normalize_or_zero() } else { glam::Vec3::ZERO }).collect();
+    let mut at: std::collections::HashMap<[i64; 3], Vec<usize>> = std::collections::HashMap::new();
+    for (i, p) in pos.iter().enumerate().take(unit.len()) {
+        at.entry(key(p)).or_default().push(i);
     }
     pos.iter()
         .zip(normal)
-        .map(|(p, n)| {
-            let s = sums.get(&key(p)).copied().unwrap_or_default();
-            let own = glam::Vec3::from(*n).normalize_or_zero();
+        .enumerate()
+        .map(|(i, (p, n))| {
+            let own = unit.get(i).copied().unwrap_or_else(|| glam::Vec3::from(*n).normalize_or_zero());
+            let s: glam::Vec3 = at.get(&key(p)).map_or(glam::Vec3::ZERO, |g| g.iter().map(|&j| unit[j]).filter(|u| u.dot(own) > SIDES).sum());
             if s.length_squared() > 1e-8 { s.normalize().to_array() } else { own.to_array() }
         })
         .collect()
@@ -252,6 +262,20 @@ mod tests {
         assert_eq!(n[0], n[1]);
         assert!((n[0][0] - h).abs() < 1e-6 && (n[0][1] - h).abs() < 1e-6 && n[0][2] == 0.0);
         assert_eq!(n[2], [0.0, 0.0, 1.0]);
+    }
+
+    /// A sheet's two sides at one place (back to back) keep their own
+    /// normals: averaged they would cancel.
+    #[test]
+    fn a_double_sheets_sides_stay_apart() {
+        let pos = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
+        let n = smooth_normals(&pos, &[[0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [0.0, 1.0, 1.0]]);
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        assert_eq!(n[1], [0.0, 0.0, -1.0], "the far side alone");
+        let want = glam::Vec3::new(0.0, h, 1.0 + h).normalize();
+        for k in [0, 2] {
+            assert!((glam::Vec3::from(n[k]) - want).length() < 1e-6, "{k}: {:?}", n[k]);
+        }
     }
 
     /// `shell.wgsl` validates and comes out as GLSL ES 3.00 for a page's
