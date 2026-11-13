@@ -118,7 +118,7 @@ struct Puppet {
     aura: Vec<crate::aura::Worn>,
     /// The worn pieces' auras it was made with (the channel's): others made
     /// it anew.
-    pieces: [net::entity::PieceAura; 7],
+    pieces: [net::entity::PieceAura; 8],
     /// A Wisp's (`wisp::is`): it casts no shadow, neither its blob shadow
     /// (`shadow_casters`) nor any of its models into the shadow maps
     /// (`set_casts`).
@@ -1093,7 +1093,7 @@ fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Lo
 /// channel carries; none for a player's character.
 /// The auras on its worn pieces the channel carries (`aura::pieces`): none
 /// from a server that sends none.
-fn pieces_of(e: &net::entity::Entity) -> [net::entity::PieceAura; 7] {
+fn pieces_of(e: &net::entity::Entity) -> [net::entity::PieceAura; 8] {
     e.creature.as_ref().and_then(|c| c.colors).map(|l| l.auras).unwrap_or_default()
 }
 
@@ -1171,12 +1171,18 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                         if let Some(pt) = crate::aura::npc_particles(tint) {
                             aura.push(crate::aura::Worn { nodes: crate::aura::body_nodes(cs, pt.nodes), particles: pt, first: 0 });
                         }
-                        if pieces != [net::entity::PieceAura::default(); 7] {
+                        if pieces != [net::entity::PieceAura::default(); 8] {
                             let robed = look.as_ref().is_some_and(|l| l.robe >= 0);
                             let (s, w) = crate::aura::pieces(&model, cs, &pieces, robed);
                             shells.extend(s);
                             aura.extend(w);
                             trims.extend(crate::aura::piece_trims(&model, cs, &pieces, robed, &taken));
+                            // the body's own, under the armour it wears
+                            if let Some(lk) = &look {
+                                let (s, w) = crate::aura::body_aura(&model, cs, &pieces, crate::aura::covered(lk));
+                                shells.extend(s);
+                                aura.extend(w);
+                            }
                         }
                     }
                     aura.extend(helm_aura);

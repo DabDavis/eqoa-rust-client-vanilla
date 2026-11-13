@@ -66,9 +66,10 @@ pub struct LiveColors {
     pub trim: [[u8; 4]; 6],
     /// go-eqoa-server's auras per worn piece (chest, bracer, gloves, legs,
     /// boots, helm, robe), after the trims ([`AURA_STATE_SIZE`]) to a client
-    /// that draws them ([`crate::session::LIVE_LOOK_AURAS`]); all none from
-    /// every other server.
-    pub auras: [PieceAura; 7],
+    /// that draws them ([`crate::session::LIVE_LOOK_AURAS`]), then the
+    /// character's body's ([`BODY_AURA`], [`BODY_AURA_STATE_SIZE`]); all none
+    /// from every other server.
+    pub auras: [PieceAura; 8],
 }
 
 /// A worn piece's aura (go-eqoa-server's, [`AURA_STATE_SIZE`]): ten bytes, its
@@ -93,9 +94,18 @@ pub const PIECE_AURA_SIZE: usize = 10;
 /// after them ([`LiveColors::auras`]): 295 bytes, to a client that draws them.
 pub const AURA_STATE_SIZE: usize = ARMOR_STATE_SIZE + 7 * PIECE_AURA_SIZE;
 
-/// Seven pieces' auras out of `b`'s first 70 bytes (each: r, g, b, a, kind,
-/// the source's u32 little-endian, nodes).
-pub fn auras_of(b: &[u8]) -> [PieceAura; 7] {
+/// The eighth aura: a character's own body and underclothes, under its
+/// armour (go-eqoa-server's charaura slot 7).
+pub const BODY_AURA: usize = 7;
+
+/// The aura channel with the body's aura after the pieces': 305 bytes, to a
+/// client that answered [`crate::session::LIVE_LOOK_BODY`].
+pub const BODY_AURA_STATE_SIZE: usize = AURA_STATE_SIZE + PIECE_AURA_SIZE;
+
+/// The auras out of `b` (each: r, g, b, a, kind, the source's u32
+/// little-endian, nodes): seven pieces' in its first 70 bytes, the body's in
+/// the next ten (none when `b` is shorter).
+pub fn auras_of(b: &[u8]) -> [PieceAura; 8] {
     std::array::from_fn(|i| {
         let p = |k: usize| b.get(PIECE_AURA_SIZE * i + k).copied().unwrap_or(0);
         PieceAura { color: [p(0), p(1), p(2), p(3)], kind: p(4), source: u32::from_le_bytes([p(5), p(6), p(7), p(8)]), nodes: p(9) }
@@ -411,7 +421,9 @@ impl Entities {
         {
             l.trim = trims_of(&data[LIVE_STATE_SIZE..ARMOR_STATE_SIZE]);
             // and the worn pieces' auras after them
-            if data.len() >= AURA_STATE_SIZE {
+            if data.len() >= BODY_AURA_STATE_SIZE {
+                l.auras = auras_of(&data[ARMOR_STATE_SIZE..BODY_AURA_STATE_SIZE]);
+            } else if data.len() >= AURA_STATE_SIZE {
                 l.auras = auras_of(&data[ARMOR_STATE_SIZE..AURA_STATE_SIZE]);
             }
         }
@@ -620,7 +632,15 @@ mod tests {
         assert_eq!(ac.auras[1], PieceAura { color: [0xFF, 0x20, 0x20, 0xFF], kind: 2, source: 0, nodes: 0 });
         assert_eq!(ac.auras[5], PieceAura { color: [0; 4], kind: 3, source: 0x88EC_092D, nodes: 2 });
         assert_eq!([ac.auras[2], ac.auras[3], ac.auras[4], ac.auras[6]], [PieceAura::default(); 4]);
-        assert_eq!(bc.auras, [PieceAura::default(); 7], "the trims alone: no auras");
+        assert_eq!(bc.auras, [PieceAura::default(); 8], "the trims alone: no auras");
+        assert_eq!(ac.auras[BODY_AURA], PieceAura::default(), "the 295 bytes: no body");
+        // the 305 bytes: the body's after the pieces'
+        let mut body = auras.clone();
+        body.extend(piece([0, 0, 0, 0xFF], 2, 0, 0));
+        assert_eq!(body.len(), BODY_AURA_STATE_SIZE);
+        let bdc = read(&body).colors.unwrap();
+        assert_eq!(bdc.auras[BODY_AURA], PieceAura { color: [0, 0, 0, 0xFF], kind: 2, source: 0, nodes: 0 });
+        assert_eq!(bdc.auras[..7], ac.auras[..7], "the pieces' the same");
         assert_eq!(LiveColors { auras: bc.auras, ..ac }, bc, "every other colour the same");
         assert_eq!((a.name, a.armor, a.level), (b.name, b.armor, b.level));
     }

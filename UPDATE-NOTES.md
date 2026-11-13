@@ -16,6 +16,9 @@ is put on the page by `.github/workflows/notes.yml`.
   in a smoky halo that darkens what is behind it, with a faint violet sheen on its outline so it still shows at
   night; a dark trim takes the trim toward black under a dark sheen, with smoke off it. Any aura can be dark, on a
   creature or on a piece of armour. These show once the server sends them.
+- **A character's own aura**: a GM can now give one character (or one mercenary) an aura on a single armour piece,
+  or on their body: a body aura wraps the skin and underclothes, and any armour worn covers it up, each armour piece
+  able to carry its own. Only that character shows it, not everyone wearing the same item.
 - Everything without such an aura looks exactly as before.
 
 ## 2026-11-13 · Mr. Moogie's aura covers his mane

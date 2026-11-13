@@ -44,7 +44,8 @@
 //! the Sword of Virtue's by default, on the body's nodes in the glow's hue)
 //! are run from the start to `at=` (8000 shows them steady).
 //! `pieceaura=slot:RRGGBBAA[:kind[:DictID[:nodes]]]` (slot chest, bracer,
-//! gloves, legs, boots, helm or robe) puts an aura on a worn piece as the
+//! gloves, legs, boots, helm or robe; `body` the body and underclothes under
+//! the armour, `aura::body_aura`) puts an aura on a worn piece as the
 //! channel's `net::entity::PieceAura` does (`aura::pieces`); kind `trim` or
 //! `trimshell` lights the plate's trim (`aura::piece_trims`), and a black or
 //! near-black colour (000000FF) is a dark aura (`net::npctint::dark`).
@@ -113,7 +114,7 @@ pub struct Words {
     /// An NPC's body tint and glow (`npctint=`, `npcglow=`).
     pub npc: Option<crate::npctint::Tint>,
     /// The worn pieces' auras (`pieceaura=`), as the channel carries them.
-    pub pieces: [net::entity::PieceAura; 7],
+    pub pieces: [net::entity::PieceAura; 8],
 }
 
 /// The node a tried helm seat hangs on.
@@ -135,7 +136,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
     let mut seat = None;
     let mut night = false;
     let mut npc: Option<crate::npctint::Tint> = None;
-    let mut pieces = [net::entity::PieceAura::default(); 7];
+    let mut pieces = [net::entity::PieceAura::default(); 8];
     let nums = |v: &str| v.split(',').map(|n| n.trim().parse::<u8>().map_err(|e| format!("{v}: {e}"))).collect::<Result<Vec<u8>, String>>();
     let hex = |w: &str, v: &str| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|e| format!("{w}: {e}"));
     for w in words {
@@ -164,8 +165,8 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             "pieceaura" => {
                 // slot:RRGGBBAA[:kind[:source[:nodes]]]
                 let parts: Vec<&str> = v.split(':').collect();
-                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe:RRGGBBAA[:shell|particles|both|none|trim|trimshell[:DictID[:nodes]]]");
-                let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
+                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body:RRGGBBAA[:shell|particles|both|none|trim|trimshell[:DictID[:nodes]]]");
+                let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe", "body"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
                 let c = u32::from_str_radix(parts.get(1).ok_or_else(usage)?.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))?;
                 let kind = match parts.get(2).copied() {
                     None | Some("default") => net::npctint::Aura::DEFAULT,
@@ -397,6 +398,10 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     let taken = |id: i32| lib.lookup(id).is_some();
     let mut trims: Vec<render::trimglow::TrimOf> = crate::aura::npc_trim(&mesh, words.npc, &taken).into_iter().collect();
     trims.extend(crate::aura::piece_trims(&mesh, &cs, &words.pieces, look.robe >= 0, &taken));
+    // the body's own (pieceaura=body:...), under the armour
+    let (body_shell, body_worn) = crate::aura::body_aura(&mesh, &cs, &words.pieces, crate::aura::covered(look));
+    shells.extend(body_shell);
+    worn.extend(body_worn);
     for t in &trims {
         eprintln!("trim aura in {:?}{} over batches {:?}", t.color, if t.dark { " (dark)" } else { "" }, t.batches.iter().map(|b| b.0).collect::<Vec<_>>());
     }
