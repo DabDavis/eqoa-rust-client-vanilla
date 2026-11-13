@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Auto Save Options
+- **Auto Save Options** (Options > Extended > Other > General, off by default): turn it on and every change you
+  make in the Options window is kept as soon as you back out of the page you made it on, so you no longer have to
+  go back to Save Changes. Backing out of the Options menu itself saves too, instead of putting everything back.
+  Off, the game works as before: only Save Changes keeps your changes. Turning it on takes effect when you back out
+  of its page.
+
 ## 2026-11-13 · Stat maximums in Character > Summary, auto-cast keeps self buffs
 - **See how far each stat can go**: in Character > Summary every stat now shows its value and its maximum, as
   "346/435", so you know your target while you train. The maximum is your level's cap plus whatever your Combat

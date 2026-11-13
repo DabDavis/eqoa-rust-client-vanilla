@@ -1035,6 +1035,13 @@ pub struct ClientOptions {
     /// world gives the account its menus once. Off by default, the game's:
     /// each character its own, as the server keeps them.
     pub shared_shortcuts: bool,
+    /// Auto Save Options (Waldorf's ticket 2002: "A toggle that autosaves
+    /// changes to your options instead of having to go back to the 'Save
+    /// Changes'"): every step back in the Options window keeps what was
+    /// changed as Save Changes keeps it, and Triangle on its menu saves
+    /// instead of putting the settings back (`options::WndOptions::keep`).
+    /// Off by default, the game's: only Save Changes keeps them.
+    pub auto_save: bool,
     /// Profanity Filter (the GM Jibrish's petition 1490: "Under options then
     /// interface add an option to turn the profanity filter on or off"): the
     /// server's filter of what this player hears, told to a server that asks
@@ -1360,6 +1367,7 @@ impl Default for ClientOptions {
             chat_tab_names: [['\0'; crate::chat::TAB_NAME_MOST]; crate::chat::TABS],
             pets_pass: true,
             shared_shortcuts: false,
+            auto_save: false,
             profanity_filter: Profanity::High,
             map: true,
             minimap: true,
@@ -1531,6 +1539,10 @@ impl ClientOptions {
         }
         if self.shared_shortcuts {
             s.push_str("shared_shortcuts=on\n");
+        }
+        // Auto Save Options only when on
+        if self.auto_save {
+            s.push_str("auto_save_options=on\n");
         }
         if !self.item_links {
             s.push_str("item_links=off\n");
@@ -1736,6 +1748,8 @@ impl ClientOptions {
                 ("pets_pass", "off") => c.pets_pass = false,
                 ("shared_shortcuts", "on") => c.shared_shortcuts = true,
                 ("shared_shortcuts", "off") => c.shared_shortcuts = false,
+                ("auto_save_options", "on") => c.auto_save = true,
+                ("auto_save_options", "off") => c.auto_save = false,
                 (k, v) if k.starts_with("chat_tab.") => {
                     let kind = crate::chat::Kind::ALL.iter().position(|x| Some(x.key()) == k.strip_prefix("chat_tab."));
                     if let (Some(kind), Some(t)) = (kind, v.parse::<u8>().ok().filter(|t| (1..=crate::chat::TABS as u8).contains(t))) {
@@ -2112,6 +2126,11 @@ pub fn auto_target() -> bool {
 /// Chat Always Shown (Extended > UI > Chat; ticket 1914).
 pub fn chat_always() -> bool {
     client().chat_always
+}
+
+/// Auto Save Options (Extended > Other > General; ticket 2002).
+pub fn auto_save() -> bool {
+    client().auto_save
 }
 
 /// The account's quick-chat menus as `quickchat::shared_text` keeps them (Same
@@ -2640,6 +2659,11 @@ pub mod testing {
             c.get()
         });
         super::store::STAMPS.with(|s| s.borrow_mut().insert(name.to_string(), t));
+    }
+
+    /// Drops `name` from the store, so a test sees whether it is written again.
+    pub fn forget(name: &str) {
+        super::store::FILES.with(|f| f.borrow_mut().remove(name));
     }
 
     /// What the store holds under `name`.
@@ -3349,6 +3373,20 @@ mod tests {
         assert_eq!(Profanity::Off.step(1), Profanity::Medium);
         assert_eq!(Profanity::High.step(1), Profanity::Off);
         assert_eq!(Profanity::Off.step(-1), Profanity::High);
+    }
+
+    /// Auto Save Options (ticket 2002): off by default and written only when
+    /// on.
+    #[test]
+    fn auto_save_options_is_kept_only_when_on() {
+        let d = ClientOptions::default();
+        assert!(!d.auto_save, "off by default");
+        assert!(!d.to_text().contains("auto_save"));
+        let t = ClientOptions { auto_save: true, ..Default::default() }.to_text();
+        assert!(t.contains("auto_save_options=on\n"), "{t}");
+        assert!(ClientOptions::from_text(&t).auto_save, "round trip");
+        assert!(!ClientOptions::from_text("auto_save_options=off").auto_save);
+        assert!(!ClientOptions::from_text("auto_save_options=maybe").auto_save, "the default");
     }
 
     /// The rows of tickets 1951, 1953, 1977 and 1987: kept only when changed,

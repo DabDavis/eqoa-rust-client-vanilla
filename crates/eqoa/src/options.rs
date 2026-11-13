@@ -207,6 +207,14 @@
 //! menu puts them back, and Save Changes keeps them with the game's
 //! (`client.opt`).
 //!
+//! Auto Save Options (Other > General; Waldorf's ticket 2002, 2026-11-13, Off
+//! by default, the game's): On, every step back (a page to the menu, an
+//! Extended page or menu up a step, the Controls and Macros pages) keeps what
+//! was changed as Save Changes does, the game's, the client's and the keys
+//! (`WndOptions::keep`), and Triangle on the options menu saves as Save
+//! Changes' Yes does ("Saving...", then kept and applied) instead of putting
+//! them back. It takes effect from the step back after it is turned.
+//!
 //! The client's own Controls page after it (`bindpage`): every key and
 //! button of the default layout, moved by pressing the one to put there,
 //! kept by Save Changes (`keys.opt`) and put back by Triangle as the rest.
@@ -632,10 +640,7 @@ impl WndOptions {
                 if std::mem::take(&mut self.notice) {
                     crate::settings::account_notice_seen();
                 }
-                o.no_faction = (self.edit[0] == 0) as u8;
-                o.no_loot = (self.edit[1] == 0) as u8;
-                o.auto_attack = self.edit[2];
-                o.vibration = self.edit[3];
+                self.take_held(o);
                 self.save_count = 4;
             }
             return;
@@ -646,12 +651,14 @@ impl WndOptions {
         if self.page == 4 {
             if self.controls.key(key, true, now, cues) {
                 self.back(cues);
+                self.keep(o);
             }
             return;
         }
         if self.page == 5 {
             if self.macros.key(key, true, now, cues) {
                 self.back(cues);
+                self.keep(o);
             }
             return;
         }
@@ -674,25 +681,62 @@ impl WndOptions {
                     self.message.focus(vui, r);
                 }
             }
-            27 | 132
-                if self.back(cues) => {
-                    let s = self.saved;
-                    o.follow = s.follow;
-                    o.inverted = s.inverted;
-                    o.battle = s.battle;
-                    o.stereo = s.stereo;
-                    o.fx_volume = s.fx_volume;
-                    o.music_volume = s.music_volume;
-                    o.compact = s.compact;
-                    o.no_damage = s.no_damage;
-                    crate::settings::set_client(self.saved_client);
-                    crate::settings::set_binds(self.saved_binds.clone());
-                    ups.push(OptionsUp::Volume(0, o.fx_volume));
-                    ups.push(OptionsUp::Volume(1, o.music_volume));
-                    ups.push(OptionsUp::Apply);
-                }
+            // a step back: kept there with Auto Save Options on (`keep`)
+            27 | 132 if !self.back(cues) => self.keep(o),
+            // Triangle on the menu with Auto Save Options on: saved as Save
+            // Changes' Yes saves ("Saving...", then kept and applied), no box
+            27 | 132 if crate::settings::auto_save() => {
+                self.take_held(o);
+                self.save_count = 4;
+            }
+            27 | 132 => {
+                let s = self.saved;
+                o.follow = s.follow;
+                o.inverted = s.inverted;
+                o.battle = s.battle;
+                o.stereo = s.stereo;
+                o.fx_volume = s.fx_volume;
+                o.music_volume = s.music_volume;
+                o.compact = s.compact;
+                o.no_damage = s.no_damage;
+                crate::settings::set_client(self.saved_client);
+                crate::settings::set_binds(self.saved_binds.clone());
+                ups.push(OptionsUp::Volume(0, o.fx_volume));
+                ups.push(OptionsUp::Volume(1, o.music_volume));
+                ups.push(OptionsUp::Apply);
+            }
             _ => {}
         }
+    }
+
+    /// The four settings only Save commits (`m_edit93` .. `m_edit97`) taken
+    /// into the options, as Save Changes' Yes takes them.
+    fn take_held(&self, o: &mut GameOptions) {
+        o.no_faction = (self.edit[0] == 0) as u8;
+        o.no_loot = (self.edit[1] == 0) as u8;
+        o.auto_attack = self.edit[2];
+        o.vibration = self.edit[3];
+    }
+
+    /// A step back (a page to the menu, an Extended page or menu up a step)
+    /// with Auto Save Options on (Waldorf's ticket 2002): everything changed
+    /// kept as Save Changes keeps it (the four held settings taken,
+    /// `settings::save`: game.opt, client.opt and keys.opt), with no box and
+    /// no "Saving...", and what Triangle on the menu would put back made
+    /// what was kept. Off, nothing: the game's, only Save Changes keeps them.
+    fn keep(&mut self, o: &mut GameOptions) {
+        if !crate::settings::auto_save() {
+            return;
+        }
+        self.take_held(o);
+        // nothing changed since the window opened or last kept: nothing written
+        if *o == self.saved && crate::settings::client() == self.saved_client && crate::settings::binds() == self.saved_binds {
+            return;
+        }
+        crate::settings::save(o);
+        self.saved = *o;
+        self.saved_client = crate::settings::client();
+        self.saved_binds = crate::settings::binds();
     }
 
     /// The row up and down move: the options menu's, Extended's
@@ -987,6 +1031,9 @@ impl WndOptions {
                     // account's quick-chat menus from the next frame
                     // (`Play::sync_shortcuts`)
                     SHARED_SHORTCUTS => c.shared_shortcuts = !c.shared_shortcuts,
+                    // Auto Save Options (ticket 2002): from the next step
+                    // back (`WndOptions::keep`)
+                    AUTO_SAVE => c.auto_save = !c.auto_save,
                     // the Chat Tabs rows (ticket 1951): the kind's lines to
                     // Main or a tab, round Main and the three, from the next
                     // line (`chat::WndChat::set_tabs`)
@@ -1560,7 +1607,11 @@ impl WndOptions {
             Note::Links => self.links_note.clone().filter(|_| self.item == 73),
             Note::Hud => (self.item == 76 && crate::hudlayout::unlocked()).then(|| "Leave the menu and drag the pieces".to_string()),
             Note::ChatTabs => Some("Name a tab in chat: /tabname 1 Loot".to_string()),
-            Note::Shortcuts => (self.item == SHARED_SHORTCUTS).then(|| "L2's menus on every character of the account".to_string()),
+            Note::Shortcuts => match self.item {
+                SHARED_SHORTCUTS => Some("L2's menus on every character of the account".to_string()),
+                AUTO_SAVE => Some("Back saves your changes".to_string()),
+                _ => None,
+            },
             Note::None => None,
         }
     }
@@ -1621,7 +1672,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 88] = [
+const EXTENDED_ITEMS: [(i32, &str); 89] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1710,6 +1761,7 @@ const EXTENDED_ITEMS: [(i32, &str); 88] = [
     (SPELL_BAR_OPACITY, "Spell Bar Opacity"),
     (PETS_PASS, "Pets Pass Through"),
     (SHARED_SHORTCUTS, "Same Shortcuts"),
+    (AUTO_SAVE, "Auto Save Options"),
 ];
 
 /// The Chat Tabs rows' first item (ticket 1951): one a kind of line, in
@@ -1727,6 +1779,8 @@ const SPELL_BAR_OPACITY: i32 = 102;
 const PETS_PASS: i32 = 103;
 /// Same Shortcuts on Every Character's item (Piedpiper's ticket 1987).
 const SHARED_SHORTCUTS: i32 = 104;
+/// Auto Save Options' item (Waldorf's ticket 2002).
+const AUTO_SAVE: i32 = 105;
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -1824,7 +1878,7 @@ const ALL_CATEGORIES: [Category; 22] = [
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
     Category { name: "Chat", items: &[73, 89], note: Note::Links, group: Group::Ui },
-    Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS], note: Note::Shortcuts, group: Group::Other },
+    Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE], note: Note::Shortcuts, group: Group::Other },
     Category { name: "Combat", items: &[78, 79, PETS_PASS], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None, group: Group::Other },
     Category { name: "Touch", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Other },
@@ -2011,6 +2065,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         89 => on_off(c.chat_always),
         PETS_PASS => on_off(c.pets_pass),
         SHARED_SHORTCUTS => on_off(c.shared_shortcuts),
+        AUTO_SAVE => on_off(c.auto_save),
         item if chat_tab_kind(item).is_some() => {
             let t = c.chat_tabs[chat_tab_kind(item).unwrap_or(0)] as usize;
             if t == 0 {
@@ -3247,7 +3302,7 @@ mod tests {
         assert_eq!(
             of(2),
             vec![
-                ("General", vec!["Update Notices", "Loading Screens", "Loading Tips", "Same Shortcuts"]),
+                ("General", vec!["Update Notices", "Loading Screens", "Loading Tips", "Same Shortcuts", "Auto Save Options"]),
                 ("Combat", vec!["Auto-Cast", "Auto Target", "Pets Pass Through"]),
                 ("Camera", vec!["Camera Distance", "Camera Turn Speed", "Screen Shake"]),
                 ("Touch", vec!["Touch Stick Size", "Touch Button Size", "Touch Opacity", "Touch Edge"]),
@@ -3831,5 +3886,99 @@ mod tests {
         once.sort_unstable();
         once.dedup();
         assert_eq!(once.len(), listed.len(), "an item on two pages");
+    }
+
+    /// Auto Save Options (Waldorf's ticket 2002). Off (the control, the
+    /// game's): Faction Messages (held) and Damage Numbers changed on Game's
+    /// page, Triangle to the menu keeps nothing, Triangle there puts them
+    /// back and nothing is written. Turned on on Other > General's page, the
+    /// step back off that page keeps it at once; the same changes then kept
+    /// by the step back off Game's page, Faction Messages taken as Save's Yes
+    /// takes it; a step back with nothing changed writes nothing; Triangle on
+    /// the menu saves ("Saving...", then applied) and puts nothing back.
+    /// (Planted: `keep` returning at once, or the menu's Triangle putting
+    /// them back with it on, fails it.)
+    #[test]
+    fn auto_save_options_keeps_changes_on_a_step_back() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::settings::{self, testing};
+        testing::reset(false);
+        let vui = vui();
+        let mut o = GameOptions::default();
+        let mut w = WndOptions::default();
+        let mut ups = Vec::new();
+        let mut press = |w: &mut WndOptions, o: &mut GameOptions, k: i32, ups: &mut Vec<OptionsUp>| {
+            w.key(&vui, &mut NullRaster, o, k, 0, &mut Vec::new(), ups);
+            w.draw(&vui, &mut NullRaster, o, ups);
+        };
+        let game_page = [key::CROSS, key::RIGHT, key::DOWN, key::DOWN, key::RIGHT];
+        // off: the game's
+        assert!(!settings::auto_save(), "off by default");
+        w.open(&vui, &NullRaster, &o);
+        for k in game_page {
+            press(&mut w, &mut o, k, &mut ups);
+        }
+        assert_eq!((w.edit[0], o.no_damage), (0, 1), "Faction Messages held off, Damage Numbers off");
+        press(&mut w, &mut o, key::TRIANGLE, &mut ups);
+        assert_eq!(w.page, -1, "the menu");
+        assert_eq!(testing::kept("game.opt"), None, "nothing kept by the step back");
+        press(&mut w, &mut o, key::TRIANGLE, &mut ups);
+        assert_eq!((o.no_faction, o.no_damage, w.save_count), (0, 0, 0), "put back, no save");
+        assert_eq!(ups.last(), Some(&OptionsUp::Apply));
+        assert_eq!(testing::kept("game.opt"), None, "nothing written");
+        // turned on, by its row: kept by the step back off its page
+        w.open(&vui, &NullRaster, &o);
+        press(&mut w, &mut o, key::DOWN, &mut ups);
+        press(&mut w, &mut o, key::DOWN, &mut ups);
+        press(&mut w, &mut o, key::DOWN, &mut ups);
+        press(&mut w, &mut o, key::CROSS, &mut ups);
+        for k in path_to(&w, AUTO_SAVE) {
+            press(&mut w, &mut o, k, &mut ups);
+        }
+        assert_eq!(w.item, AUTO_SAVE);
+        press(&mut w, &mut o, key::RIGHT, &mut ups);
+        assert!(settings::auto_save(), "on");
+        press(&mut w, &mut o, key::TRIANGLE, &mut ups);
+        let kept = String::from_utf8(testing::kept("client.opt").expect("kept at the step back")).unwrap();
+        assert!(kept.ends_with("auto_save_options=on\n"), "{kept}");
+        assert_eq!((w.grp, w.cat), (Some(2), None), "Other's categories");
+        for _ in 0..2 {
+            press(&mut w, &mut o, key::TRIANGLE, &mut ups);
+        }
+        assert_eq!((w.page, w.sel), (-1, 3), "the menu, on Extended");
+        // Game's page: kept by the step back, the held setting taken
+        for _ in 0..3 {
+            press(&mut w, &mut o, key::UP, &mut ups);
+        }
+        // (the toggle's save wrote game.opt as well: Save Changes writes all three)
+        testing::forget("game.opt");
+        for k in game_page {
+            press(&mut w, &mut o, k, &mut ups);
+        }
+        assert_eq!(testing::kept("game.opt"), None, "not yet: still on the page");
+        press(&mut w, &mut o, key::TRIANGLE, &mut ups);
+        let game = GameOptions::from_card(&testing::kept("game.opt").expect("kept at the step back")).unwrap();
+        assert_eq!((game.no_faction, game.no_damage), (1, 1), "both kept");
+        assert_eq!(o.no_faction, 1, "Faction Messages taken as Save's Yes takes it");
+        // a step back with nothing changed writes nothing
+        testing::forget("game.opt");
+        press(&mut w, &mut o, key::CROSS, &mut ups);
+        press(&mut w, &mut o, key::TRIANGLE, &mut ups);
+        assert_eq!(testing::kept("game.opt"), None, "nothing changed, nothing written");
+        // Triangle on the menu: saved as Save Changes' Yes, nothing put back
+        ups.clear();
+        press(&mut w, &mut o, key::TRIANGLE, &mut ups);
+        assert_eq!(w.save_count, 3, "Saving... (one frame drawn)");
+        assert!(!w.message.visible, "no box");
+        for _ in 0..3 {
+            w.draw(&vui, &mut NullRaster, &o, &mut ups);
+        }
+        assert_eq!(ups.last(), Some(&OptionsUp::Apply));
+        assert!(!ups.iter().any(|u| matches!(u, OptionsUp::Volume(..))), "nothing put back");
+        assert_eq!((o.no_faction, o.no_damage), (1, 1), "as changed");
+        let game = GameOptions::from_card(&testing::kept("game.opt").expect("saved")).unwrap();
+        assert_eq!((game.no_faction, game.no_damage), (1, 1));
+        assert!(settings::auto_save());
+        testing::reset(false);
     }
 }
