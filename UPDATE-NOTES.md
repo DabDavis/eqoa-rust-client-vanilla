@@ -14,8 +14,8 @@ is put on the page by `.github/workflows/notes.yml`.
   of its creatures here, the rare creatures near it and the notable drops of its area.
 - A camp whose name alone would not say which it is carries its area: "Undead (Druid's Watch)", "Goblins
   (Guardian Forest)", and a side where one area has two ("Tae Ew (Dinbak, east)").
-- Zoomed far out, with a whole world in view, only the popular camps and the coaches are shown; zoom in and the
-  others appear.
+- Zoomed out, only the popular camps and the coaches are shown, as before; zoom in a few steps and the others
+  appear.
 
 ## 2026-11-13 · Stat maximums in Character > Summary, auto-cast keeps self buffs
 - **See how far each stat can go**: in Character > Summary every stat now shows its value and its maximum, as

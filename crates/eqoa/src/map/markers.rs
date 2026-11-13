@@ -162,12 +162,12 @@ impl Marker {
     }
 
     /// Whether it is drawn (and answers the pointer) at a zoom of `scale`,
-    /// world units a window pixel: far out (past `COMPACT_FROM`, a world in
-    /// view) the guide's camps and the coaches alone, so that the map's 150
-    /// other camps do not crowd it; in from there every one.
+    /// world units a window pixel: out past `OTHERS_FROM` the guide's camps
+    /// and the coaches alone, so that the map's 150 other camps do not crowd
+    /// it; in from there every one.
     pub fn shown_at(self, scale: f32) -> bool {
         match self {
-            Marker::Camp(i) => CAMPS[i].guide || scale <= COMPACT_FROM,
+            Marker::Camp(i) => CAMPS[i].guide || scale <= OTHERS_FROM,
             Marker::Coach(_) => true,
         }
     }
@@ -438,6 +438,10 @@ const CARD_WIDTH: i32 = 290;
 /// crowd it: world units a window pixel.
 pub const NAMES_FROM: f32 = 2.0;
 pub const COMPACT_FROM: f32 = 12.0;
+/// How far in the map's other camps (not the guide's) are drawn: their badges
+/// overlap one another past it (at 11, a dozen of Tunaria's pairs), so there
+/// only the guide's camps and the coaches are, as before they came.
+pub const OTHERS_FROM: f32 = 8.0;
 
 fn fill(ui: &mut Ui, white: usize, pos: [[f32; 2]; 4], color: [f32; 4]) {
     ui.push(Quad { tex: white, blend: 3, pos, uv: [[0.5, 0.5]; 4], color, clip: None });
@@ -777,7 +781,7 @@ mod tests {
 
     /// The map's other camps beside the guide's 49: each name once in its world
     /// (the generic ones told apart by their zones: no two "Undead" in
-    /// Tunaria), each drawn in close and left out far out, where the guide's
+    /// Tunaria), each drawn in close and left out past `OTHERS_FROM`, where the guide's
     /// and the coaches stay (and the pointer finds only what is drawn); an
     /// other camp's card says "Camp" and where it is, with no note. The
     /// controls: a guide camp is drawn at every zoom, and an other camp under
@@ -793,7 +797,7 @@ mod tests {
         assert!(CAMPS.iter().any(|c| !c.guide && c.name.starts_with("Undead (")));
         let other = CAMPS.iter().position(|c| !c.guide && c.world == 0).unwrap();
         let guide = CAMPS.iter().position(|c| c.guide && c.world == 0).unwrap();
-        for (scale, far) in [(1.0, false), (COMPACT_FROM, false), (COMPACT_FROM * 1.5, true), (30.0, true)] {
+        for (scale, far) in [(1.0, false), (OTHERS_FROM, false), (OTHERS_FROM * 1.1, true), (COMPACT_FROM, true), (30.0, true)] {
             assert_eq!(Marker::Camp(other).shown_at(scale), !far, "an other camp at {scale}");
             assert!(Marker::Camp(guide).shown_at(scale), "the control: the guide's at {scale}");
             assert!(Marker::Coach(0).shown_at(scale));
