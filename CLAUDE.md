@@ -216,6 +216,10 @@ current.
   Its held items' colours (`Look::item_color`) recolour an item's glow (`aura.rs`: emissive, additive layers and
   particles to the colour's hue at their own brightness, other layers tinted 25%); white or none draws the disc's
   item bit for bit. `eqoa dress ... main=ID maincolor=RRGGBB night=1` shows it.
+  go-eqoa-server's armour (`LIVE_LOOK_ARMOR`, granted in the look in force's third u32): set 9 (`vi::cust::ORNATE`,
+  CHAR.ESF's ornate plate) and the trim colours after the live channel and record; `s2::server_armor` is the switch
+  (`Rules::cust_with`), set by the session's `armor_look`. A trim is drawn only on `vi::cust::TRIMMED` textures (the
+  plate's gold; brown leather reads as gold by hue, so never by rule alone), and no trim draws every piece bit for bit.
 - Game-logic floats go through `ee::*`, never host `f32` operators; every compare too.
 - Port from the decomp (`../decomp/src`), not from the Go client: the Go client's
   differences from the original are listed in `../claude-notes/go-client-vs-decomp-audit-20261015.md`.

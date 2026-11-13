@@ -182,6 +182,8 @@ impl CharRecord {
                 items: std::array::from_fn(|k| rgba(31 + 4 * k)),
                 armor: std::array::from_fn(|k| rgba(43 + 4 * k)),
                 robe: rgba(67),
+                // go-eqoa-server's trims after the 71 (`ARMOR_GEAR_SIZE`), else none
+                trim: std::array::from_fn(|k| rgba(net::session::LIVE_GEAR_SIZE + 4 * k)),
             }),
             cape: None,
             options: Vec::new(),
@@ -795,6 +797,8 @@ impl Client {
         }
         let Some(s) = self.session.as_mut() else { return };
         let events = s.pump();
+        // go-eqoa-server's armour (set 9, the trims), as the server says
+        crate::s2::set_server_armor(s.armor_look);
         // a character played while the server's worlds were being built goes
         // once the server is told which are held (the pump told it), or once
         // the server's word comes that its login needs none of them
@@ -1103,6 +1107,25 @@ mod tests {
         assert_eq!((look.armor_color, look.robe_color), (Some(l.armor), Some(l.robe)));
         let disc = CharRecord::of(&character("Plain", 8, vec![0; net::session::DISC_GEAR_SIZE]));
         assert!(disc.colors.is_none() && select::look_of(&disc, true).armor_color.is_none(), "the control: the disc's record");
+    }
+
+    /// go-eqoa-server's record with its armour (`ARMOR_GEAR_SIZE`: the live
+    /// game's 71, then six trim colours): the trims read into the colours and
+    /// onto the look, set 9 kept; the live game's 71 alone (the control) have
+    /// no trim.
+    #[test]
+    fn a_record_with_the_servers_armour_reads_its_trims() {
+        let mut g = vec![0u8; net::session::ARMOR_GEAR_SIZE];
+        g[19] = 9;
+        g[net::session::LIVE_GEAR_SIZE..net::session::LIVE_GEAR_SIZE + 4].copy_from_slice(&[0xD1, 0, 0, 0xFF]);
+        g[net::session::LIVE_GEAR_SIZE + 16..net::session::LIVE_GEAR_SIZE + 20].copy_from_slice(&[0x20, 0x50, 0xE0, 0xFF]);
+        let r = CharRecord::of(&character("Gilded", 9, g.clone()));
+        assert_eq!(r.armor[0], 9);
+        let l = r.colors.expect("colours");
+        assert_eq!(l.trim, [[0xD1, 0, 0, 0xFF], [0; 4], [0; 4], [0; 4], [0x20, 0x50, 0xE0, 0xFF], [0; 4]]);
+        assert_eq!(select::look_of(&r, true).trim_color, Some(l.trim));
+        let live = CharRecord::of(&character("Plain", 8, g[..net::session::LIVE_GEAR_SIZE].to_vec()));
+        assert_eq!(live.colors.unwrap().trim, [[0; 4]; 6], "the control: the live game's record");
     }
 
     /// A character played while the server's worlds are still being built

@@ -2406,6 +2406,20 @@ impl TextureSource for LibraryTextures<'_> {
                     }
                     levels
                 }
+                Some((source, r)) if r >> 24 == recolor::TRIM => {
+                    // a plate piece's trim in a dye's colour: the trim read off
+                    // the texture it was made from (a MUL before it changed
+                    // the texels' colours, not which are trim)
+                    let mut levels = self.levels(source);
+                    let root = recolor::root_of(source);
+                    let base: Vec<Vec<u8>> = if root == source { levels.iter().map(|l| l.rgba.clone()).collect() } else { self.levels(root).into_iter().map(|l| l.rgba).collect() };
+                    let mut rgba: Vec<Vec<u8>> = levels.iter_mut().map(|l| std::mem::take(&mut l.rgba)).collect();
+                    recolor::trim_levels(&mut rgba, &base, r);
+                    for (l, px) in levels.iter_mut().zip(rgba) {
+                        l.rgba = px;
+                    }
+                    levels
+                }
                 Some((source, r)) => {
                     let mut levels = self.levels(source);
                     let mut rgba: Vec<Vec<u8>> = levels.iter_mut().map(|l| std::mem::take(&mut l.rgba)).collect();

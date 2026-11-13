@@ -66,6 +66,48 @@ pub fn helm_with(set: u8, t: &Tables) -> Option<u32> {
     if set == 0 { None } else { HELM.get(set).copied() }
 }
 
+/// Set 9, the ornate gold-and-steel plate CHAR.ESF holds under the plain
+/// plate's five DictIDs (claude-notes/charesf-shadowed-armor.md): the five
+/// DictIDs Sandstorm's S2 registers those surfaces under (its
+/// `GetArmorSetTexture` hook's table), chest, bracer, gloves, legs, boots.
+/// go-eqoa-server draws it without the patch (the eqoa crate's `s2`, the
+/// server's armour): the same ids, the same surfaces.
+pub const ORNATE: [u32; 5] = [0xC214_1C0A, 0x03C1_BE9E, 0x85EA_2A1D, 0x432C_4890, 0xB179_23D2];
+/// The set [`ORNATE`] is.
+pub const ORNATE_SET: u8 = 9;
+/// The set whose helm set 9 wears (S2's `GetHelm` hook: helm 36 is 16).
+pub const ORNATE_HELM: u8 = 4;
+
+/// The armour textures with gold trim, which a trim dye draws in its colour
+/// ([`Look::trim_color`]): the plate's, set 4's chest, bracer, legs and boots
+/// and set 9's ([`ORNATE`]) the same; their gloves and helms have none, and no
+/// other set's art has gold (its brown leather reads as gold by hue alone,
+/// so no other texture is ever trimmed).
+pub const TRIMMED: [u32; 8] = [0x40B0_DDA7, 0xEB41_6A29, 0xF506_17E7, 0x4328_B710, 0xC214_1C0A, 0x03C1_BE9E, 0x432C_4890, 0xB179_23D2];
+
+/// Whether an armour texture has gold trim ([`TRIMMED`]).
+pub fn has_trim(tex: u32) -> bool {
+    TRIMMED.contains(&tex)
+}
+
+/// What names a trimmed texture (the eqoa crate's: render's `recolor::trimmed`):
+/// the texture, the piece's colour (RGB) and its trim's, and whether an id is
+/// a texture's own, to the id the layer is drawn with.
+#[derive(Clone, Copy)]
+pub struct TrimNamer(pub fn(u32, [u8; 3], [u8; 3], &dyn Fn(u32) -> bool) -> u32);
+
+impl PartialEq for TrimNamer {
+    fn eq(&self, o: &Self) -> bool {
+        self.0 as usize == o.0 as usize
+    }
+}
+impl Eq for TrimNamer {}
+impl std::fmt::Debug for TrimNamer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TrimNamer")
+    }
+}
+
 /// `Tints`, RGBA.
 pub const TINTS: [[u8; 4]; 15] = [
     [255, 255, 255, 255],
@@ -107,12 +149,32 @@ pub struct Tables {
     /// a set past `$Armor`'s nine: its five slots' DictIDs (Sandstorm's
     /// set 9, `GetArmorSetTexture`'s hook)
     pub armor_extra: Vec<(u8, [u32; 5])>,
+    /// a trimmed piece's texture with its trim in a dye's colour
+    /// ([`Look::trim_color`]); none: every trim as the art has it (retail's,
+    /// and every server's but go-eqoa-server's)
+    pub trim: Option<TrimNamer>,
 }
 
 impl Tables {
     /// The retail disc's.
     pub fn retail() -> Tables {
-        Tables { tints: TINTS.to_vec(), tint_limit: 15, armor_limit: 9, helm_remap: Vec::new(), robe_limit: 4, robe_art: Vec::new(), armor_extra: Vec::new() }
+        Tables { tints: TINTS.to_vec(), tint_limit: 15, armor_limit: 9, helm_remap: Vec::new(), robe_limit: 4, robe_art: Vec::new(), armor_extra: Vec::new(), trim: None }
+    }
+
+    /// These tables with go-eqoa-server's armour (the server says so: its live
+    /// look's `LIVE_LOOK_ARMOR`): set 9, [`ORNATE`], below the set limit,
+    /// wearing set 4's helm, as Sandstorm's S2 has it; and the trims drawn by
+    /// `trim`. What a patch already has of it is kept.
+    pub fn with_server_armor(mut self, trim: TrimNamer) -> Tables {
+        self.armor_limit = self.armor_limit.max(ORNATE_SET + 1);
+        if !self.helm_remap.iter().any(|(from, _)| *from == ORNATE_SET) {
+            self.helm_remap.push((ORNATE_SET, ORNATE_HELM));
+        }
+        if !self.armor_extra.iter().any(|(set, _)| *set == ORNATE_SET) {
+            self.armor_extra.push((ORNATE_SET, ORNATE));
+        }
+        self.trim = Some(trim);
+        self
     }
 
     /// A tint's colour as `SetArmorSlot` takes it: past the limit, tint 0.
@@ -154,6 +216,11 @@ pub struct Look {
     /// alone; the client recolours an item's glow by it (`eqoa::aura`).
     /// None: the disc's look, which carries none.
     pub item_color: Option<[[u8; 4]; 3]>,
+    /// go-eqoa-server's trim colours, one per armour slot (chest .. helm), sent
+    /// after the live game's look to a client that draws its armour: a
+    /// [`TRIMMED`] texture on that slot is drawn with its gold trim in the
+    /// colour (by [`Tables::trim`]); alpha 0 is none. None: no trims sent.
+    pub trim_color: Option<[[u8; 4]; 6]>,
 }
 
 impl Look {
@@ -234,6 +301,16 @@ pub fn apply_look_slots(slots: &[(i32, i32); 19], race: i32, sex: i32, look: &Lo
             continue;
         }
         let color = look.armor_color.map_or_else(|| t.tint(look.armor_tint[i]), |a| a[i]);
+        // a trim dye: the piece's colour baked into its texture under the trim's,
+        // the layer white (its alpha the piece's)
+        let trim = look.trim_color.map(|c| c[i]).filter(|c| c[3] != 0);
+        if let (Some(x), Some(c), Some(n)) = (tex, trim, t.trim)
+            && has_trim(x)
+        {
+            let id = (n.0)(x, [color[0], color[1], color[2]], [c[0], c[1], c[2]], &|id| has(id));
+            out.push(LayerChange { entry, layer, texture: Some(id), color: Some([255, 255, 255, color[3]]) });
+            continue;
+        }
         out.push(LayerChange { entry, layer, texture: tex, color: Some(color) });
     }
     // SetHair: every hair slot must exist.
@@ -305,7 +382,7 @@ mod tests {
     fn sandstorm() -> Tables {
         let mut tints = TINTS.to_vec();
         tints.extend((15..30u8).map(|i| [i, i, i, if i == 15 { 0 } else { 255 }]));
-        Tables { tints, tint_limit: 30, armor_limit: 10, helm_remap: vec![(9, 4)], robe_limit: 6, robe_art: vec![(4, [0xDEAD_BEEF, 0xCAFE_BABE]), (5, [0xDEAD_BEFE, 0xCAFE_BAEB])], armor_extra: Vec::new() }
+        Tables { tints, tint_limit: 30, armor_limit: 10, helm_remap: vec![(9, 4)], robe_limit: 6, robe_art: vec![(4, [0xDEAD_BEEF, 0xCAFE_BABE]), (5, [0xDEAD_BEFE, 0xCAFE_BAEB])], armor_extra: Vec::new(), trim: None }
     }
 
     fn change(out: &[LayerChange], entry: i32) -> Option<LayerChange> {
@@ -356,6 +433,68 @@ mod tests {
         assert_eq!(apply_look(&cs, &look, false, all), apply_look_with(&cs, &look, false, all, &retail));
         assert_eq!(retail.tint_at_most(20), TINTS[14]);
         assert_eq!(ss.tint_at_most(20), ss.tints[20]);
+    }
+
+    /// A made-up namer: the texture, the piece's colour and the trim's in one
+    /// id (`0x7000_0000 | low bits`), so a test sees what it was handed.
+    fn namer(tex: u32, body: [u8; 3], trim: [u8; 3], has: &dyn Fn(u32) -> bool) -> u32 {
+        assert!(has(tex), "a texture's own id is one the library has");
+        0x7000_0000 | (tex & 0xFF) << 16 | (body[0] as u32) << 8 | trim[0] as u32
+    }
+
+    /// go-eqoa-server's armour: set 9 below the limit, its five DictIDs, set
+    /// 4's helm, whatever a patch's tables (Sandstorm's keep their own); the
+    /// trims named by the namer. Retail's without it: set 9 none.
+    #[test]
+    fn the_servers_armour_is_set_nine_and_the_trims() {
+        let n = TrimNamer(namer);
+        let t = Tables::retail().with_server_armor(n);
+        assert_eq!((t.armor_limit, t.helm_remap.clone(), t.armor_extra.clone(), t.trim), (10, vec![(9, 4)], vec![(9, ORNATE)], Some(n)));
+        let ss = Tables { armor_extra: vec![(9, ORNATE)], ..sandstorm() }.with_server_armor(n);
+        assert_eq!((ss.armor_limit, ss.helm_remap.len(), ss.armor_extra.len(), ss.tint_limit), (10, 1, 1, 30), "a patch's own kept, nothing twice");
+        let cs = sprite();
+        let all = |_: u32| true;
+        let look = Look { armor: [9; 6], robe: -1, ..Default::default() };
+        let r = apply_look_with(&cs, &look, false, all, &t);
+        assert_eq!(change(&r, 10).unwrap().texture, Some(ORNATE[0]));
+        assert_eq!(change(&r, 14).unwrap().texture, Some(ORNATE[4]));
+        assert_eq!(helm_with(9, &t), helm_with(4, &t));
+        assert_eq!(change(&apply_look_with(&cs, &look, false, all, &Tables::retail()), 10).unwrap().texture, None, "the control: retail's clamp");
+    }
+
+    /// A trim colour on a slot whose texture has trim ([`TRIMMED`]: the plate's)
+    /// draws the slot with the namer's texture, handed the texture, the
+    /// slot's colour and the trim's, and the layer white with the colour's
+    /// alpha; every other slot, a set whose art has none (set 2), the gloves
+    /// (none on any plate), a trim of alpha 0, and tables without a namer are
+    /// exactly the changes with no trim. The control: no trim colours at all
+    /// changes nothing, whatever the tables.
+    #[test]
+    fn a_trim_dye_names_its_texture_and_leaves_the_rest() {
+        let cs = sprite();
+        let all = |_: u32| true;
+        let t = Tables::retail().with_server_armor(TrimNamer(namer));
+        let dyed = [[0x80, 0x10, 0x10, 0xFF]; 6];
+        let base = Look { armor: [9, 4, 4, 2, 9, 4], armor_color: Some(dyed), robe: -1, ..Default::default() };
+        let plain = apply_look_with(&cs, &base, false, all, &t);
+        let trims = Look { trim_color: Some([[0xD1, 0, 0, 0xFF], [0x20, 0, 0, 0xFF], [0x30, 0, 0, 0xFF], [0x40, 0, 0, 0xFF], [0x50, 0, 0, 0], [0x60, 0, 0, 0xFF]]), ..base };
+        let r = apply_look_with(&cs, &trims, false, all, &t);
+        assert_eq!(r.len(), plain.len());
+        // chest (set 9): named, white
+        assert_eq!(change(&r, 10), Some(LayerChange { entry: 10, layer: 0, texture: Some(0x7000_0000 | (ORNATE[0] & 0xFF) << 16 | 0x80 << 8 | 0xD1), color: Some([255, 255, 255, 0xFF]) }));
+        // bracer (set 4's has trim): named
+        assert_eq!(change(&r, 11).unwrap().texture, Some(0x7000_0000 | (ARMOR[4][1] & 0xFF) << 16 | 0x80 << 8 | 0x20));
+        // gloves (set 4's has none), legs (set 2), boots (alpha 0): as with no trim
+        for e in [12, 13, 14] {
+            assert_eq!(change(&r, e), change(&plain, e), "entry {e}");
+        }
+        assert_eq!(apply_look_with(&cs, &trims, false, all, &Tables::retail()), apply_look_with(&cs, &base, false, all, &Tables::retail()), "no namer: no trim");
+        for tables in [Tables::retail(), sandstorm(), t.clone()] {
+            let none = Look { trim_color: None, ..base };
+            let zeros = Look { trim_color: Some([[0; 4]; 6]), ..base };
+            assert_eq!(apply_look_with(&cs, &none, false, all, &tables), apply_look_with(&cs, &zeros, false, all, &tables), "the control: zeros are none");
+        }
+        assert!(TRIMMED.iter().all(|&x| has_trim(x)) && !has_trim(ARMOR[4][2]) && !has_trim(ORNATE[2]) && !has_trim(ARMOR[2][0]));
     }
 
     /// `apply_look_slots` on a sprite's own slots, race and sex is

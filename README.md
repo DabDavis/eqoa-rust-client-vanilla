@@ -808,6 +808,18 @@ or a browser (each described where it lives below):
   disc lacks). An undyed slot comes in its tint's colour and looks as it
   always has; a server that never offers the look (Sandstorm, eqoa.live) is
   read as the disc's.
+- **Ornate plate and trim dyes**, on go-eqoa-server (the owner, 2026-11-13):
+  this client answers the live look's offer with bit 2 (`LIVE_LOOK_ARMOR`),
+  and a server that grants it (the look in force's third u32) has it draw
+  armour set 9, the ornate gold-and-steel plate CHAR.ESF holds under the plain
+  plate's DictIDs (registered under Sandstorm's S2's five ids, `s2::ORNATE_RECORDS`,
+  wearing set 4's helm), with no patch (`s2::set_server_armor`, `Rules::cust_with`);
+  and read six trim colours after the live channel (225 bytes) and record (95):
+  the gold trim of the plate (`vi::cust::TRIMMED`, sets 4 and 9) is drawn in its
+  colour (`render::recolor::trimmed`: the piece's colour baked into a copy of
+  its texture, `MUL`, its trim, `trim_weight`, in the colour's hue at the gold's
+  brightness, `TRIM`, the layer white). With no trim colour a piece is drawn
+  exactly as before. `eqoa dress <body> <out.png> set=9 dye=RRGGBB trim=RRGGBB`.
 - **Bug reports with F3**, on a server that takes them (go-eqoa-server's
   0x7E0E; Sandstorm and eqoa.live make no offer, and F3 does nothing there):
   Support's request form, the game's own, opened from the world on Bug Report

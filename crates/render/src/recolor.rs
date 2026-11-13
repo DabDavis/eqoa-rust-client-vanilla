@@ -22,8 +22,14 @@
 //! keeps black and white where they are. [`TATTOO`] (a barbarian's tattoo,
 //! go-eqoa-server's `Tattoo`) takes a face's own woad off and lays a pattern's
 //! (`crate::tattoo`), from the faces it is read off: [`crate::LibraryTextures`]
-//! lays it, as it needs the library; here it changes no colour. 0, or a mode it
-//! does not know, is the texture as it is.
+//! lays it, as it needs the library; here it changes no colour. [`MUL`] (an
+//! armour piece's colour, baked) multiplies every texel by a colour, as a
+//! layer's colour does; [`TRIM`] (go-eqoa-server's trim dye) draws a plate
+//! piece's gold trim ([`trim_weight`]) in a colour's hue at the trim's own
+//! brightness ([`trim_glow`]), every other texel as it is, the trim found on
+//! the texture it was made from at the first ([`root_of`]: through a [`MUL`]
+//! laid before it, [`crate::LibraryTextures`]); [`trimmed`] names the pair. 0,
+//! or a mode it does not know, is the texture as it is.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -37,10 +43,113 @@ pub const SKIN: u32 = 3;
 /// A barbarian's face's woad taken off and a pattern's laid (go-eqoa-server's
 /// `Tattoo`: the pattern in byte 2): `crate::tattoo`.
 pub const TATTOO: u32 = 4;
+/// Every texel times a colour (RGB in the low three bytes; 255 keeps a
+/// channel): a layer's colour baked into its texture, so the layer can take
+/// white and its trim keep its own colour ([`trimmed`]).
+pub const MUL: u32 = 5;
+/// A plate piece's gold trim in a colour (RGB in the low three bytes), its
+/// other texels as they are ([`trim_weight`], [`trim_glow`]).
+pub const TRIM: u32 = 6;
 
 /// Whether `r` changes anything (a known mode).
 pub fn changes(r: u32) -> bool {
-    matches!(r >> 24, DYE | TONE | SKIN | TATTOO)
+    matches!(r >> 24, DYE | TONE | SKIN | TATTOO | MUL | TRIM)
+}
+
+/// How much of a texel is a plate piece's gold trim, 0 to 1: its hue between
+/// 25 and 70 degrees (none below 15 or past 80), its saturation (HSV) past
+/// 0.25 (none below 0.12) and its value past 0.18 (none below 0.08). Measured
+/// on the disc's plate (sets 4 and 9, `vi::cust::TRIMMED`): the gold and its
+/// shading, and on set 4 nothing of the grey steel; the brown leather of
+/// sets 2, 5 and 7 would read as gold too, which is why only the textures in
+/// that list are ever trimmed.
+pub fn trim_weight(c: [u8; 3]) -> f32 {
+    let f = c.map(|v| v as f32 / 255.0);
+    let (mx, mn) = (f[0].max(f[1]).max(f[2]), f[0].min(f[1]).min(f[2]));
+    if mx <= 0.0 || mx - mn <= f32::EPSILON {
+        return 0.0;
+    }
+    let (h, _, _) = hsl(f);
+    let deg = h * 360.0;
+    let ramp = |x: f32, a: f32, b: f32| ((x - a) / (b - a)).clamp(0.0, 1.0);
+    let hue = ramp(deg, 15.0, 25.0).min(1.0 - ramp(deg, 70.0, 80.0));
+    hue * ramp((mx - mn) / mx, 0.12, 0.25) * ramp(mx, 0.08, 0.18)
+}
+
+/// A trim texel `o` in the hue of `c`, as the eqoa crate's `aura::glow` lays
+/// a held item's glow: `c`'s hue and saturation at `o`'s brightness (its
+/// largest channel), times how much of a colour `c` is (a grey keeps its
+/// lightness of it: white the trim's own brightness, black none).
+pub fn trim_glow(o: [u8; 3], c: [u8; 3]) -> [u8; 3] {
+    let v = o[0].max(o[1]).max(o[2]) as f32;
+    let hi = c[0].max(c[1]).max(c[2]) as f32;
+    if v <= 0.0 || hi <= 0.0 {
+        return [0; 3];
+    }
+    let lo = c[0].min(c[1]).min(c[2]) as f32;
+    let sat = (hi - lo) / hi;
+    let k = sat + (1.0 - sat) * hi / 255.0;
+    let s = v * k / hi;
+    c.map(|x| (x as f32 * s).round().clamp(0.0, 255.0) as u8)
+}
+
+/// Texel `px` with its trim (read off `root`, the texel of the texture it was
+/// made from) in colour `c`: `px` where `root` is no trim, the trim's glow in
+/// `c` where it wholly is, between by [`trim_weight`].
+fn trim_texel(px: [u8; 3], root: [u8; 3], c: [u8; 3]) -> [u8; 3] {
+    let w = trim_weight(root);
+    if w <= 0.0 {
+        return px;
+    }
+    let g = trim_glow(root, c);
+    std::array::from_fn(|k| (px[k] as f32 + (g[k] as f32 - px[k] as f32) * w).round().clamp(0.0, 255.0) as u8)
+}
+
+/// Every level of a texture with its trim in `r`'s colour ([`TRIM`]), the
+/// trim read off `root`'s levels (the texture it was made from, the same
+/// sizes; a level without its root's is left as it is).
+pub fn trim_levels(levels: &mut [Vec<u8>], root: &[Vec<u8>], r: u32) {
+    let c = rgb_of(r);
+    for (l, rl) in levels.iter_mut().zip(root) {
+        if l.len() != rl.len() {
+            continue;
+        }
+        for (px, rp) in l.chunks_exact_mut(4).zip(rl.chunks_exact(4)) {
+            let out = trim_texel([px[0], px[1], px[2]], [rp[0], rp[1], rp[2]], c);
+            px[..3].copy_from_slice(&out);
+        }
+    }
+}
+
+fn rgb_of(r: u32) -> [u8; 3] {
+    [(r >> 16) as u8, (r >> 8) as u8, r as u8]
+}
+
+/// The id an armour piece's texture `source` with gold trim is drawn by when
+/// the piece's colour is `body` and its trim's `trim` (go-eqoa-server's trim
+/// dye): its texels times `body` ([`MUL`], none for white) with the trim in
+/// `trim` over them ([`TRIM`]). The layer that draws it then takes white (its
+/// alpha the piece's): the trim keeps its colour, the rest is as the layer's
+/// colour made it. `taken` as [`recolored`]'s.
+pub fn trimmed(source: i32, body: [u8; 3], trim: [u8; 3], taken: impl Fn(i32) -> bool) -> i32 {
+    let rgb = |c: [u8; 3]| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32;
+    let s = if body == [255; 3] { source } else { recolored(source, MUL << 24 | rgb(body), &taken) };
+    recolored(s, TRIM << 24 | rgb(trim), &taken)
+}
+
+/// The texture whose texels an id's alpha is: for a [`trimmed`] id (made by
+/// [`MUL`] and [`TRIM`] alone, which keep every alpha) the texture it was made
+/// from; any other id itself.
+pub fn alpha_source(id: i32) -> i32 {
+    let mut at = id;
+    for _ in 0..16 {
+        match source_of(at) {
+            Some((source, r)) if matches!(r >> 24, MUL | TRIM) => at = source,
+            Some(_) => return id,
+            None => return at,
+        }
+    }
+    id
 }
 
 /// A texture's skin, as [`SKIN`] moves it: its texels' mean hue (turns, by
@@ -182,6 +291,15 @@ fn rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
 pub fn recolor_rgb(c: [u8; 3], r: u32) -> [u8; 3] {
     if !changes(r) || r >> 24 == TATTOO {
         return c;
+    }
+    match r >> 24 {
+        MUL => {
+            let m = rgb_of(r);
+            return std::array::from_fn(|k| ((c[k] as u32 * m[k] as u32 + 127) / 255) as u8);
+        }
+        // the texel its own root
+        TRIM => return trim_texel(c, c, rgb_of(r)),
+        _ => {}
     }
     let (a, b, d) = (((r >> 16) & 0xFF) as f32, ((r >> 8) & 0xFF) as f32, (r & 0xFF) as f32);
     if r >> 24 == SKIN {
@@ -411,6 +529,111 @@ mod tests {
         assert_eq!(source_of(0x7777), None);
         assert_ne!(key_of(5, 1), key_of(5, 2));
         assert_ne!(key_of(5, 1) & (1 << 63), 0);
+    }
+
+    /// The trim's weight: gold (the plate's, lit and shaded) wholly, the grey
+    /// steel, set 9's blue steel, black and white not at all; a colour past
+    /// the hue window (a red, a green) not at all.
+    #[test]
+    fn the_trim_is_the_gold() {
+        for c in [[200, 160, 40], [120, 96, 30], [235, 205, 110]] {
+            assert_eq!(trim_weight(c), 1.0, "gold {c:?}");
+        }
+        for c in [[128, 128, 130], [100, 140, 150], [0, 0, 0], [255, 255, 255], [200, 30, 30], [40, 180, 60], [20, 16, 6]] {
+            assert_eq!(trim_weight(c), 0.0, "{c:?}");
+        }
+        let edge = trim_weight([150, 140, 120]);
+        assert!(edge > 0.0 && edge < 1.0, "a greyish gold: {edge}");
+    }
+
+    /// The trim's colour is `aura::glow`'s: the colour's hue at the trim's
+    /// brightness (the sword's numbers), a grey its lightness of it; MUL
+    /// multiplies as a layer's colour does (255 keeps).
+    #[test]
+    fn the_trims_glow_and_the_multiply() {
+        assert_eq!(trim_glow([204, 255, 255], [0xB0, 0x10, 0x2A]), [248, 23, 59]);
+        assert_eq!(trim_glow([200, 160, 40], [255, 255, 255]), [200, 200, 200]);
+        assert_eq!(trim_glow([200, 160, 40], [0, 0, 0]), [0, 0, 0]);
+        assert_eq!(recolor_rgb([200, 100, 50], MUL << 24 | 0xFF_FFFF), [200, 100, 50]);
+        assert_eq!(recolor_rgb([200, 100, 50], MUL << 24 | 0x80_8080), [100, 50, 25]);
+        assert_eq!(recolor_rgb([128, 128, 130], TRIM << 24 | 0xD1_0000), [128, 128, 130], "steel kept");
+        assert_eq!(recolor_rgb([200, 160, 40], TRIM << 24 | 0xD1_0000), [200, 0, 0], "gold red");
+    }
+
+    /// `trim_levels`: the trim (read off the root) in the colour, every other
+    /// texel of the level exactly as it was (the body's colour baked in by a
+    /// MUL before it stays), alpha kept; a level whose root is another size
+    /// is left.
+    #[test]
+    fn trim_levels_touch_the_trim_alone() {
+        let root = vec![200, 160, 40, 255, 128, 128, 130, 77, 100, 140, 150, 0];
+        let mut body = root.clone();
+        recolor_rgba(&mut body, MUL << 24 | 0x40_8040);
+        let mut l = vec![body.clone(), vec![1, 2, 3, 4]];
+        trim_levels(&mut l, &[root.clone(), vec![]], TRIM << 24 | 0x20_50E0);
+        assert_eq!(&l[0][..4], &[trim_glow([200, 160, 40], [0x20, 0x50, 0xE0])[0], trim_glow([200, 160, 40], [0x20, 0x50, 0xE0])[1], trim_glow([200, 160, 40], [0x20, 0x50, 0xE0])[2], 255]);
+        assert_eq!(&l[0][4..], &body[4..], "the steel as the MUL left it, alpha too");
+        assert_eq!(l[1], vec![1, 2, 3, 4]);
+    }
+
+    /// `trimmed`: one id a (texture, colour, trim), the trim over a MUL of the
+    /// colour (none for white); its alpha source and root the texture.
+    #[test]
+    fn trimmed_names() {
+        let tex = 0x40B0_DDA7u32 as i32;
+        let a = trimmed(tex, [0x80, 0x10, 0x10], [0xD1, 0, 0], |_| false);
+        assert_eq!(trimmed(tex, [0x80, 0x10, 0x10], [0xD1, 0, 0], |_| false), a);
+        let (mul, r) = source_of(a).unwrap();
+        assert_eq!(r, TRIM << 24 | 0xD1_0000);
+        assert_eq!(source_of(mul), Some((tex, MUL << 24 | 0x80_1010)));
+        assert_eq!((root_of(a), alpha_source(a)), (tex, tex));
+        let w = trimmed(tex, [255; 3], [0xD1, 0, 0], |_| false);
+        assert_eq!(source_of(w), Some((tex, TRIM << 24 | 0xD1_0000)), "white: the trim alone");
+        assert_ne!(a, w);
+        let dyed = recolored(tex, DYE << 24 | 1, |_| false);
+        assert_eq!(alpha_source(dyed), dyed, "another recolour is its own");
+        assert_eq!(alpha_source(tex), tex);
+    }
+
+    /// The disc's plate (`vi::cust::TRIMMED`, sets 4 and 9; set 9's out of
+    /// CHAR.ESF by file offset): how much of each texture is trim (printed;
+    /// set 9's chest, bracer, legs and boots a third and more, set 4's a
+    /// fifth and less, of the texels that show), and the gloves (no trim on either set) nearly none.
+    /// Needs `run/eqoa.iso`; without it, SKIPs.
+    #[test]
+    fn the_plates_trim_on_the_disc() {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("CHARCUST.CSF", esf::Container::open(disc.read("CHARCUST.CSF").unwrap()).unwrap());
+        let file = lib.add("CHAR.ESF", esf::Container::open(disc.read("CHAR.ESF").unwrap()).unwrap());
+        let ornate = [0xC214_1C0Au32, 0x03C1_BE9E, 0x85EA_2A1D, 0x432C_4890, 0xB179_23D2];
+        for (id, off) in ornate.iter().zip([0x073BECusize, 0x072257, 0x0C7D31, 0x06C8BE, 0x06AF29]) {
+            let node = lib.file(file).nodes.iter().position(|n| n.ty == esf::types::SURFACE && n.body == off + 12).unwrap();
+            lib.alias(*id as i32, esf::Ref { file, node });
+        }
+        let share = |id: u32| {
+            let (c, s) = lib.surface(id as i32).unwrap();
+            let im = s.decode(&c.data).unwrap();
+            let px: Vec<[u8; 3]> = im.rgba.chunks_exact(4).filter(|p| p[3] > 0 || !im.alpha).map(|p| [p[0], p[1], p[2]]).collect();
+            px.iter().map(|&c| trim_weight(c)).sum::<f32>() / px.len() as f32
+        };
+        let set4 = [0x40B0_DDA7u32, 0xEB41_6A29, 0x0638_5212, 0xF506_17E7, 0x4328_B710];
+        for (name, set) in [("set 4", set4), ("set 9", ornate)] {
+            let v: Vec<f32> = set.iter().map(|&id| share(id)).collect();
+            eprintln!("{name}: chest {:.1}% bracer {:.1}% gloves {:.1}% legs {:.1}% boots {:.1}%", v[0] * 100.0, v[1] * 100.0, v[2] * 100.0, v[3] * 100.0, v[4] * 100.0);
+            assert!(v[2] < 0.01, "{name}'s gloves have no trim: {}", v[2]);
+        }
+        for id in [ornate[0], ornate[1], ornate[3], ornate[4]] {
+            assert!(share(id) > 0.30, "{id:08X}: {}", share(id));
+        }
+        for id in [set4[0], set4[1], set4[3], set4[4]] {
+            let s = share(id);
+            assert!(s > 0.02 && s < 0.25, "{id:08X}: {s}");
+        }
     }
 
     /// A tattoo is a mode that changes something, but no colour here (it is

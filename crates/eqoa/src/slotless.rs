@@ -1376,7 +1376,8 @@ fn alpha_of(lib: &Library, id: i32) -> Option<Rc<Alpha>> {
     if let Some(a) = ALPHAS.with(|a| a.borrow().get(&key).cloned()) {
         return a;
     }
-    let made = lib.surface(id).and_then(|(c, s)| s.decode(&c.data)).map(|img| {
+    // a trimmed piece's texture (`render::recolor::trimmed`) keeps its own's alpha
+    let made = lib.surface(render::recolor::alpha_source(id)).and_then(|(c, s)| s.decode(&c.data)).map(|img| {
         Rc::new(Alpha { w: img.width as usize, h: img.height as usize, a: img.rgba.chunks_exact(4).map(|p| p[3]).collect() })
     });
     ALPHAS.with(|a| a.borrow_mut().insert(key, made.clone()));

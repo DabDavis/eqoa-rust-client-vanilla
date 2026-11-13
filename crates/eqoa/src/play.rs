@@ -1701,6 +1701,8 @@ fn look_of(c: &net::entity::Creature) -> vi::cust::Look {
         robe_color: c.colors.map(|l| l.robe),
         // the held items' (`aura`)
         item_color: c.colors.map(|l| l.items),
+        // go-eqoa-server's trims
+        trim_color: c.colors.map(|l| l.trim),
     }
 }
 
@@ -3552,6 +3554,7 @@ impl Play {
                     let air = &mut self.airs[slot];
                     // the live game's look, when the server said it is in force
                     self.entities.live_look = self.session.live_look;
+                    crate::s2::set_server_armor(self.session.armor_look);
                     // where it was drawn and its speed, before this update
                     let was = self.entities.slots[slot].as_ref().and_then(|e| Some((e.id, e.actor_pos, e.creature.as_ref()?.velocity)));
                     self.entities.channel(slot, &data, self_id, now, UPDATE_RATE, |e| {
