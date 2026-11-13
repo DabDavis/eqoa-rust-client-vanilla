@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Feature requests, apart from bug reports
+- Have an idea for the game? **Type /feature and what you would like**: the bug report window opens with
+  **Feature Request** already picked and your words in it, ready to send. Feature requests now reach the GMs
+  apart from the real bug reports.
+- **Feature Request** is also the last choice in Bug Report's list (F3, or Support in the start menu). A PS2
+  player can pick it there too, or type **#feature** and the request in chat.
+- Needs the Heirloom Test Server's update; on another server /feature goes to the server as typed.
+
 ## 2026-11-12 · The map's arrow can turn with your camera
 - New row **Extended > UI > Map > Map Pointer**: what your arrow on the minimap (and the map) points along.
   - **Facing** (the default, as before): the way your character faces.

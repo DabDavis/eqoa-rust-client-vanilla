@@ -815,7 +815,13 @@ or a browser (each described where it lives below):
   webclient". Support's request form and its reply hold as long a text as
   the server says it takes (the offer's second u32: go-eqoa-server's 2,047
   characters, a PS2's form 511; petition 1300, 2026-11-08), sent in DRDP's
-  pieces, which that server puts back together.
+  pieces, which that server puts back together. A typed `/feature` (petition
+  1841, the owner's "add feature req") opens the same form with Bug Report's
+  Feature Request topic already picked (`cs::FEATURE_REQUEST`, go-eqoa-server's
+  subcategory 100, the last of the server's list, so any client can pick it),
+  the words in its text; a server whose list lacks it leaves the topics open,
+  and a server that made no offer is sent the line as typed (its `#feature`
+  the same, the note first).
 - **Hide UI** (H): everything drawn over the world hidden until H again or a
   window opens.
 - **Move HUD** (the server owner's of 2026-11-11, "lets add click to drag HUD

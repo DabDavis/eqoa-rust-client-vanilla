@@ -25,6 +25,9 @@ pub struct SupportWindows {
     opening: Option<i32>,
     /// F3's opening (`open_bug_report`): the request form set on Bug Report
     bug_preset: bool,
+    /// with it, the subcategory picked (`/feature`'s Feature Request,
+    /// `open_feature_request_typed`); none, the topics' picker open
+    bug_sub: Option<i32>,
     /// `/bug`'s words (`open_bug_report_typed`), put in the form's text as it opens
     bug_text: Option<Vec<u16>>,
     keys: Vec<(i32, bool)>,
@@ -32,7 +35,7 @@ pub struct SupportWindows {
 
 impl Default for SupportWindows {
     fn default() -> Self {
-        SupportWindows { cs: CsClient::default(), request: Request::new(false), inbox: Inbox::default(), script: (0, false), smith: Blacksmith::default(), smith_id: 0, opening: None, bug_preset: false, bug_text: None, keys: Vec::new() }
+        SupportWindows { cs: CsClient::default(), request: Request::new(false), inbox: Inbox::default(), script: (0, false), smith: Blacksmith::default(), smith_id: 0, opening: None, bug_preset: false, bug_sub: None, bug_text: None, keys: Vec::new() }
     }
 }
 
@@ -95,6 +98,7 @@ impl Play {
         }
         self.open_support(31);
         self.support.bug_preset = true;
+        self.support.bug_sub = None;
         self.support.bug_text = None;
         true
     }
@@ -105,11 +109,27 @@ impl Play {
     /// on a server that did not offer bug reports, or with another window up:
     /// the line then goes as typed, to a server's own /bug.
     pub fn open_bug_report_typed(&mut self, words: &str) -> bool {
+        self.open_report_typed(words, None)
+    }
+
+    /// `/feature` typed (petition 1841, the owner's "add feature req"): as
+    /// `/bug`, the form on Bug Report with its Feature Request topic
+    /// (`cs::FEATURE_REQUEST`) already picked, the words in its text, so a
+    /// request for something new goes apart from the bugs. A server whose
+    /// lists lack the topic leaves the form on Bug Report's picker; one that
+    /// made no offer (false here) is sent the line as typed, its own /feature.
+    pub fn open_feature_request_typed(&mut self, words: &str) -> bool {
+        self.open_report_typed(words, Some(crate::cs::FEATURE_REQUEST))
+    }
+
+    /// `/bug`'s or `/feature`'s form, `sub` the topic picked.
+    fn open_report_typed(&mut self, words: &str, sub: Option<i32>) -> bool {
         if !self.session.bug_reports || !matches!(self.mode, 0 | 2) {
             return false;
         }
         self.open_support(31);
         self.support.bug_preset = true;
+        self.support.bug_sub = sub;
         let w: Vec<u16> = words.trim().encode_utf16().take(self.session.petition_text).collect();
         self.support.bug_text = (!w.is_empty()).then_some(w);
         true
@@ -206,7 +226,10 @@ impl Play {
                     s.request.visible = true;
                     s.request.focus(vui, r);
                     if std::mem::take(&mut s.bug_preset) {
-                        s.request.preset(crate::cs::BUG_REPORT);
+                        match s.bug_sub.take() {
+                            Some(sub) => s.request.preset_sub(crate::cs::BUG_REPORT, sub),
+                            None => s.request.preset(crate::cs::BUG_REPORT),
+                        }
                         s.request.text = s.bug_text.take().unwrap_or_default();
                     }
                 }
@@ -363,6 +386,71 @@ mod tests {
         p.mode = 0;
         p.chat_line("hello there");
         assert!(sent(&mut p).iter().all(|d| d[..2] != [0x0F, 0x7E]), "plain chat: no note");
+    }
+
+    /// `/feature` (petition 1841): on a server that offered bug reports, the
+    /// form on Bug Report with Feature Request (`cs::FEATURE_REQUEST`) picked
+    /// once its lists are in, the words in its text, and the filing goes
+    /// after the note as category 1, subcategory 100; `#feature` (a PS2's
+    /// spelling) sends the note before its line too. The controls: `/bug`'s
+    /// form still opens on the topics' picker; with no offer `/feature` goes
+    /// as typed (0x000B, the server's own /feature), with no note.
+    #[test]
+    fn feature_request_opens_the_form_on_its_topic() {
+        let (vui, mut r) = (crate::pointer::testing::vui(), crate::pointer::testing::NullRaster);
+        let lists = || {
+            let sub = |id: i32, n: &str| crate::cs::Subcategory { id, hidden: false, name: n.encode_utf16().collect() };
+            vec![crate::cs::Category { id: 1, hidden: false, name: "Bug Report".encode_utf16().collect(), subs: vec![sub(12, "Quest"), sub(18, "Game client"), sub(100, "Feature Request")] }]
+        };
+        // no offer: the line as typed, no form, no note
+        let mut p = play();
+        p.chat_line("/feature a bank in Qeynos");
+        let m = sent(&mut p);
+        assert_eq!(p.mode, 0);
+        assert!(m.iter().all(|d| d[..2] != [0x0F, 0x7E]), "no offer: no note");
+        assert!(m.iter().any(|d| d[..2] == [0x0B, 0x00] && String::from_utf16_lossy(&d[6..].chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect::<Vec<_>>()).starts_with("/feature a bank in Qeynos")), "the line as typed");
+
+        p.session.bug_reports = true;
+        p.mode = 2;
+        p.chat_line("/feature a bank in Qeynos");
+        assert!(sent(&mut p).is_empty(), "nothing goes before the form is filed");
+        assert_eq!((p.mode, p.support.bug_preset, p.support.bug_sub), (31, true, Some(crate::cs::FEATURE_REQUEST)));
+        p.run_support(&vui, &mut r);
+        assert_eq!(String::from_utf16_lossy(&p.support.request.text), "a bank in Qeynos");
+        assert!(p.support.request.subcategory.is_empty(), "the lists not in yet");
+        p.support.cs.categories = lists();
+        p.support.cs.state = 0;
+        p.run_support(&vui, &mut r);
+        let q = &p.support.request;
+        assert_eq!((q.category_id, q.subcategory_id, String::from_utf16_lossy(&q.subcategory), q.sel), (1, 100, "Feature Request".to_string(), 2));
+        let (cat, sub, text) = (q.category_id, q.subcategory_id, q.text.clone());
+        // filed: the note, then 0x0AA1 sub-op 0, Bug Report / Feature Request
+        sent(&mut p);
+        p.support.cs.submit_request(cat, sub, &text);
+        p.run_support(&vui, &mut r);
+        let m = sent(&mut p);
+        let i = m.iter().position(|d| d[..2] == [0x0F, 0x7E]).expect("the note");
+        let j = m.iter().position(|d| d[..3] == [0xA1, 0x0A, 0]).expect("the request");
+        assert!(i < j, "the note first");
+        assert_eq!(m[j][3..6], [2, 200, 1], "category 1, subcategory 100 (zigzag)");
+
+        // the control: /bug's form opens on the picker, no topic picked
+        p.mode = 0;
+        p.chat_line("/bug the gate is shut");
+        assert_eq!((p.mode, p.support.bug_sub), (31, None));
+        p.run_support(&vui, &mut r);
+        p.support.cs.categories = lists();
+        p.support.cs.state = 0;
+        p.run_support(&vui, &mut r);
+        assert_eq!((p.support.request.category_id, p.support.request.subcategory_id, p.support.request.sel), (1, 0, 1));
+
+        // #feature, a PS2's spelling: the note before the line
+        p.mode = 0;
+        sent(&mut p);
+        p.chat_line("#feature more hair styles");
+        let m = sent(&mut p);
+        let i = m.iter().position(|d| d[..2] == [0x0F, 0x7E]).expect("#feature's note");
+        assert!(i == 0 && m.len() > 1, "the note, then the line");
     }
 
     /// A controller's Square (133, `PadKeys`') backs in the bug report's text

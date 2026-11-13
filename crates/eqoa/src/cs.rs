@@ -408,6 +408,12 @@ pub enum RequestUp {
 /// (`Play::open_bug_report`).
 pub const BUG_REPORT: i32 = 1;
 
+/// go-eqoa-server's Feature Request topic under Bug Report (petition 1841, its
+/// `featureSubcategory`), which `/feature` opens the form on
+/// (`Play::open_feature_request_typed`). Any client picks it off the server's
+/// lists; a server that lists none leaves the form on Bug Report's picker.
+pub const FEATURE_REQUEST: i32 = 100;
+
 /// The text's buffer as the disc's form has it (`m_text[512]`, the editor's
 /// `SetMaxLength(512)`): 511 characters and the end.
 pub const TEXT_DISC: usize = 512;
@@ -438,6 +444,9 @@ pub struct Request {
     /// The category to start on once the lists are in (`preset`), not the
     /// game's: F3's Bug Report.
     preset: Option<i32>,
+    /// The subcategory to start on with it (`preset_sub`), not the game's:
+    /// `/feature`'s Feature Request.
+    preset_sub: Option<i32>,
     cat_ids: Vec<i32>,
     sub_ids: Vec<i32>,
     /// a send seen going / categories seen coming / an inbox seen coming
@@ -482,6 +491,7 @@ impl Request {
             reply_to: -1,
             most: TEXT_DISC,
             preset: None,
+            preset_sub: None,
             cat_ids: Vec::new(),
             sub_ids: Vec::new(),
             x4d0: false,
@@ -562,6 +572,7 @@ impl Request {
         self.cat_ids.clear();
         self.sub_ids.clear();
         self.preset = None;
+        self.preset_sub = None;
         self.x4d0 = false;
         self.x4d4 = false;
         self.x4d8 = false;
@@ -573,6 +584,16 @@ impl Request {
     /// without it leaves the form as the game opens it.
     pub fn preset(&mut self, id: i32) {
         self.preset = Some(id);
+        self.preset_sub = None;
+    }
+
+    /// `preset` on category `id` with its subcategory `sub` already picked, as
+    /// `PickSubcategory` picks it, the form on its text. Not the game's:
+    /// `/feature`'s Feature Request. A category whose offered subcategories
+    /// lack it opens its picker, as `preset`.
+    pub fn preset_sub(&mut self, id: i32, sub: i32) {
+        self.preset = Some(id);
+        self.preset_sub = Some(sub);
     }
 
     /// `preset`, once the lists are in (the client free) and hold it.
@@ -591,8 +612,20 @@ impl Request {
         self.category = capped(&c.name, 64);
         self.category_id = id;
         self.cat_sel = i as i32;
-        self.sel = 1;
         self.picking = false;
+        let offered: Vec<&Subcategory> = c.subs.iter().filter(|s| !s.hidden).collect();
+        if let Some(sub) = self.preset_sub.take()
+            && let Some(k) = offered.iter().position(|s| s.id == sub)
+        {
+            self.sub_sel = k as i32;
+            self.x4cc = 0;
+            self.subcategory = capped(&offered[k].name, 64);
+            self.subcategory_id = sub;
+            self.picking_sub = false;
+            self.sel = 2;
+            return;
+        }
+        self.sel = 1;
         self.picking_sub = true;
         self.list.set_title(Some(&wide(&word(vui, 871))));
         self.list.open(false);
@@ -1849,6 +1882,68 @@ mod tests {
         cs.categories.push(Category { id: 9, hidden: false, name: wide("Other"), subs: Vec::new() });
         q.draw(&vui, &mut r, &mut cs, 2016, &mut cues);
         assert!(q.category.is_empty(), "a new opening drops the preset");
+    }
+
+    /// `/feature`'s preset (petition 1841): on lists as go-eqoa-server sends
+    /// them (Bug Report's topics, a hidden one, Feature Request last) the form
+    /// starts on Bug Report with Feature Request picked, no picker open, on
+    /// its text; with a text, Submit sends category 1 and subcategory 100.
+    /// The controls: lists without it (a server of before it) and lists with
+    /// it hidden open Bug Report's picker, as F3's `preset`.
+    #[test]
+    fn a_feature_request_preset_picks_its_topic() {
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut cues = Vec::new();
+        let sub = |id: i32, hidden: bool, n: &str| Subcategory { id, hidden, name: wide(n) };
+        let lists = |feature: Option<bool>| {
+            let mut subs = vec![sub(12, false, "Quest"), sub(13, false, "Creature or NPC"), sub(18, false, "Game client")];
+            if let Some(hidden) = feature {
+                subs.push(sub(FEATURE_REQUEST, hidden, "Feature Request"));
+            }
+            subs.push(sub(19, true, "Sent from chat"));
+            vec![Category { id: BUG_REPORT, hidden: false, name: wide("Bug Report"), subs }, Category { id: 2, hidden: false, name: wide("Stuck"), subs: vec![sub(20, false, "In terrain")] }]
+        };
+        let start = |cs: &mut CsClient| {
+            let mut q = Request::new(false);
+            q.refresh(cs);
+            q.visible = true;
+            q.focus(&vui, &NullRaster);
+            q.preset_sub(BUG_REPORT, FEATURE_REQUEST);
+            q
+        };
+
+        let mut cs = CsClient::default();
+        let mut q = start(&mut cs);
+        q.draw(&vui, &mut r, &mut cs, 1000, &mut cues);
+        assert!(q.category.is_empty() && q.subcategory.is_empty(), "the lists not in yet");
+        cs.categories = lists(Some(false));
+        cs.state = 0;
+        q.draw(&vui, &mut r, &mut cs, 1016, &mut cues);
+        assert_eq!(
+            (q.category.clone(), q.category_id, q.subcategory.clone(), q.subcategory_id, q.sel, q.picking_sub, q.sub_sel),
+            (wide("Bug Report"), BUG_REPORT, wide("Feature Request"), FEATURE_REQUEST, 2, false, 3)
+        );
+        // the text, then Submit (down to it, ✕)
+        cs.state = 0;
+        q.text = wide("a bank in Qeynos");
+        cs.out.clear();
+        q.key(&vui, &mut r, &mut cs, 20, true, 1100, &mut cues);
+        assert_eq!(q.sel, 3);
+        q.key(&vui, &mut r, &mut cs, key::CROSS, true, 1116, &mut cues);
+        let mut want = vec![0xA1, 0x0A, 0, 2, 200, 1, 16, 0, 0, 0];
+        want.extend("a bank in Qeynos".encode_utf16().flat_map(|u| u.to_le_bytes()));
+        assert_eq!(cs.out, vec![want], "Bug Report (zigzag 2) / Feature Request (zigzag 200, two bytes)");
+
+        // the controls: none listed, and listed hidden
+        for feature in [None, Some(true)] {
+            let mut cs = CsClient::default();
+            let mut q = start(&mut cs);
+            cs.categories = lists(feature);
+            cs.state = 0;
+            q.draw(&vui, &mut r, &mut cs, 2000, &mut cues);
+            assert_eq!((q.category_id, q.sel, q.picking_sub), (BUG_REPORT, 1, true), "{feature:?}");
+            assert!(q.subcategory.is_empty() && q.subcategory_id == 0, "{feature:?}");
+        }
     }
 
     /// The inbox: rows selected and read, not past the list, not while the

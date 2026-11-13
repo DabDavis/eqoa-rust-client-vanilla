@@ -385,7 +385,7 @@ current.
   over the game's own connection (the user, 2026-11-05), so a server hears only its own players: on
   a server that offers them (go-eqoa-server's 0x7E0E, `net::session::OP_BUG_REPORTS`) F3 opens
   Support's request form on Bug Report (`Play::open_bug_report`), and each petition the player files
-  (the form, a typed `/bug` or `#bug`) goes after the client's note (0x7E0F, `bugnote.rs`: build,
+  (the form, a typed `/bug` or `#bug`, `/feature` or `#feature`: the form on Bug Report / Feature Request, subcategory 100, petition 1841) goes after the client's note (0x7E0F, `bugnote.rs`: build,
   platform, graphics, frame rate, where it shows the player and its target; one message, at most
   1,000 bytes; never an account name, an address or a path). Support's forms hold as many characters
   as the offer's second u32 says the server takes (`Session::petition_text`, at most 2,047, petition

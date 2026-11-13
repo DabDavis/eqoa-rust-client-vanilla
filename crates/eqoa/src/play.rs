@@ -5564,7 +5564,7 @@ impl Play {
         let target = self.target;
         if wide.first() != Some(&(b'/' as u16)) {
             // a PS2's spelling of /bug: the note goes first (`send_bug_note`)
-            if text.split(' ').next().is_some_and(|w| w.eq_ignore_ascii_case("#bug")) {
+            if text.split(' ').next().is_some_and(|w| w.eq_ignore_ascii_case("#bug") || w.eq_ignore_ascii_case("#feature")) {
                 self.send_bug_note();
             }
             let l = Self::wire_links(&wide, links, 0, 0);
@@ -5681,6 +5681,15 @@ impl Play {
             // reports; elsewhere the line as typed, its note first
             "/bug" => {
                 if !self.open_bug_report_typed(&rest) {
+                    self.send_bug_note();
+                    self.session.say(text, target);
+                }
+            }
+            // go-eqoa-server's feature request (petition 1841): the form on
+            // Bug Report / Feature Request, the words in it; elsewhere the
+            // line as typed (a server's own /feature), its note first
+            "/feature" => {
+                if !self.open_feature_request_typed(&rest) {
                     self.send_bug_note();
                     self.session.say(text, target);
                 }
