@@ -1863,6 +1863,7 @@ impl Map {
             }
             markers::draw_routes(ui, white, &pieces, half * k, shade * k);
             let shown: Vec<(markers::Marker, [f32; 2])> = markers::of_world(w.index)
+                .filter(|m| m.shown_at(v.scale))
                 .map(|m| (m, v.to_window(size, m.at())))
                 .filter(|(_, p)| p[0] >= lo[0] && p[1] >= lo[1] && p[0] <= hi[0] && p[1] <= hi[1])
                 .map(|(m, p)| (m, f(p)))

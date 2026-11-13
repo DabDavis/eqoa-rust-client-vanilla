@@ -7,6 +7,16 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · 154 more camps on the map
+- **More camps on the map (M)**: besides the 49 popular XP camps, the map now marks 154 more of the hunting camps
+  from the EQOA-Data map guide that this server really has: 137 in Tunaria and 17 on Odus. They wear a darker
+  "XP" badge so the popular ones still stand out. Hover or tap one for its card: its name, where it is, the levels
+  of its creatures here, the rare creatures near it and the notable drops of its area.
+- A camp whose name alone would not say which it is carries its area: "Undead (Druid's Watch)", "Goblins
+  (Guardian Forest)", and a side where one area has two ("Tae Ew (Dinbak, east)").
+- Zoomed far out, with a whole world in view, only the popular camps and the coaches are shown; zoom in and the
+  others appear.
+
 ## 2026-11-13 · Stat maximums in Character > Summary, auto-cast keeps self buffs
 - **See how far each stat can go**: in Character > Summary every stat now shows its value and its maximum, as
   "346/435", so you know your target while you train. The maximum is your level's cap plus whatever your Combat

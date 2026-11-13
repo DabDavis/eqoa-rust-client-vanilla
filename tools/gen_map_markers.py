@@ -6,6 +6,10 @@ tooltip:
 
   - EQOA-Data's XP camps (github.com/Jadiction/EQOA-Data, MIT: Map/zones.json's
     pois of category "camp", the 69 with a note being its XP-camp guide), the
+    guide's camps (guide: true) and its other camps go-eqoa-server has (its
+    internal/handlers/mapcamps.go, its gen_camp_teles.py --map-out: shown by the
+    name it gives, in their zone, at their creatures' levels where the map
+    writes none; drawn under the guide's), the guide's being the
     49 go-eqoa-server places (its internal/handlers/camps.go, written by its
     tools/gen_camp_teles.py: each camp on one of its creatures' spawns, where
     the guide's map point was off on the creatures' cluster): the guide's name,
@@ -106,6 +110,31 @@ def server_camps(path):
     return out
 
 
+def map_camps(path):
+    """mapcamps.go's mapCamps (go-eqoa-server's tools/gen_camp_teles.py
+    --map-out: EQOA-Data's map's other camps this server has, the maps'
+    alone): key -> its fields."""
+    out = collections.OrderedDict()
+    if not os.path.exists(path):
+        return out
+    q = r'"((?:[^"\\]|\\.)*)"'
+    for m in re.finditer(
+            r'"(\w+)":\s*\{Name: ' + q + ', Map: ' + q + ', Zone: ' + q + ', Label: ' + q + ', NPC: ' + q +
+            r', X: ([-\d.]+), Y: [-\d.]+, Z: ([-\d.]+), World: (\d+), Levels: ' + q + ', Guide: ' + q +
+            r', MapX: ([-\d.]+), MapY: ([-\d.]+),', open(path).read()):
+        g = m.groups()
+        js = lambda v: json.loads('"' + v + '"')
+        out[g[0]] = dict(name=js(g[1]), map=js(g[2]), zone=js(g[3]), label=js(g[4]), x=float(g[6]), z=float(g[7]),
+                         world=int(g[8]), levels=js(g[9]), guide=js(g[10]), mx=float(g[11]), my=float(g[12]))
+    return out
+
+
+def level_range(text):
+    """A level range as the server writes one ("33-40", "45") as (lo, hi)."""
+    parts = [int(v) for v in text.split("-") if v.strip()]
+    return (parts[0], parts[-1]) if parts else (1, 1)
+
+
 def coach_towns(path):
     """coachtowns.go's coachLocationNames: coachman -> town."""
     text = open(path).read()
@@ -137,6 +166,8 @@ def main():
     ap.add_argument("--eqoa-data", default="../external/EQOA-Data")
     ap.add_argument("--db", required=True)
     ap.add_argument("--out")
+    ap.add_argument("--camps-only", action="store_true",
+                    help="rewrite only the camps (and the header) of the --out file, its coaches, towns and routes kept as they are")
     a = ap.parse_args()
 
     teles = module(os.path.join(a.server, "tools", "gen_camp_teles.py"), "gen_camp_teles")
@@ -162,7 +193,15 @@ def main():
         note = pts[0]["note"]
         # the guide's own reminders to itself
         note = re.sub(r"\s*Needs review:.*$", "", note).strip()
-        camps.append(dict(key=key, name=spec[2], label=label, world=world, at=(gx, gz), map=(mx, my), lo=lo, hi=hi, note=note))
+        camps.append(dict(key=key, name=spec[2], label=label, world=world, at=(gx, gz), map=(mx, my), lo=lo, hi=hi, note=note, guide=True))
+
+    # the map's other camps (no note, mostly no level range: their creatures'
+    # levels here), each at the place go-eqoa-server gives it, in its zone
+    others = []
+    for key, c in map_camps(os.path.join(a.server, "internal", "handlers", "mapcamps.go")).items():
+        lo, hi = level_range(c["guide"] or c["levels"])
+        others.append(dict(key=key, name=c["name"], label=c["zone"], world=c["world"], at=(c["x"], c["z"]), map=(c["mx"], c["my"]),
+                           lo=lo, hi=hi, note="", guide=False))
 
     # the map laid over the game by the camps themselves
     fits = {}
@@ -172,11 +211,17 @@ def main():
         fits[w] = (fa, fb, fc, fd)
         print(f"world {w}: game x = {fa:.5f} map x + {fb:.1f}, z = {fc:.5f} map y + {fd:.1f} ({kept} of {n} camps, median {med:.0f} off)", file=sys.stderr)
 
+    # the map's other camps under the guide's (drawn first, so a guide camp's
+    # badge is over theirs)
+    camps = others + camps
+
     rares = []
     for q in zones["pois"]:
         if q["category"] not in ("rare-mob", "raid-mob"):
             continue
         w = map_world(q["x"], q["y"])
+        if w not in fits:
+            continue
         fa, fb, fc, fd = fits[w]
         rares.append((clean_poi(q["name"]), q["category"], w, (fa * q["x"] + fb, fc * q["y"] + fd)))
 
@@ -209,7 +254,7 @@ def main():
                 if len(drops) == DROPS:
                     break
         c["drops"] = drops
-        print(f"{c['key']:15} {c['name'][:28]:28} L{c['lo']}-{c['hi']:<3} {c['table'] or '-':12} rare {c['rare']} drops {drops}", file=sys.stderr)
+        print(f"{c['key']:15} {'G' if c['guide'] else ' '} {c['name'][:28]:28} L{c['lo']}-{c['hi']:<3} {c['table'] or '-':12} rare {c['rare']} drops {drops}", file=sys.stderr)
 
     # the coaches: each coachman at its spawn, its town and where it runs
     db = sqlite3.connect(f"file:{a.db}?mode=ro", uri=True)
@@ -279,6 +324,16 @@ def main():
     print(f"{len(routes)} routes; left out (no place, or another world): {sorted(left)}", file=sys.stderr)
 
     out = render(camps, coaches, towns, routes)
+    if a.out and a.camps_only:
+        # the camps from this run, the rest as the file has it (a database of
+        # another day has other coachmen)
+        old = open(a.out).read()
+        head = out[: out.index("pub const CAMPS")]
+        block = out[out.index("pub const CAMPS"):]
+        block = block[: block.index("\n];\n") + 4]
+        rest = old[old.index("pub const CAMPS"):]
+        rest = rest[rest.index("\n];\n") + 4:]
+        out = head + block + rest
     if a.out:
         open(a.out, "w").write(out)
         print(f"{a.out}: {len(camps)} camps, {len(coaches)} coaches, {len(towns)} towns, {len(routes)} routes", file=sys.stderr)
@@ -295,8 +350,9 @@ def render(camps, coaches, towns, routes):
     o.append("// Code written by tools/gen_map_markers.py; DO NOT EDIT: change the tool and run it again.")
     o.append("//")
     o.append("// The XP camps are EQOA-Data's (github.com/Jadiction/EQOA-Data, MIT: its map's camps with a")
-    o.append("// note, its XP-camp guide; their rare creatures and its biome loot tables' items), each at the")
-    o.append("// place go-eqoa-server's tools/gen_camp_teles.py gives it; the coaches are each coachman's")
+    o.append("// note, its XP-camp guide (guide: true), and its other camps this server has; their rare")
+    o.append("// creatures and its biome loot tables' items), each at the place go-eqoa-server's")
+    o.append("// tools/gen_camp_teles.py gives it (camps.go, mapcamps.go); the coaches are each coachman's")
     o.append("// spawn, the town go-eqoa-server's coach menus name for it and the towns EQOA-Data's coach map")
     o.append("// has its coach run to; the towns are EQOA-Data's, Tunaria's where go-eqoa-server's coach menus")
     o.append("// put them, and the routes its coach map's.")
@@ -309,7 +365,7 @@ def render(camps, coaches, towns, routes):
             "    Camp { "
             f"name: {rust_str(c['name'])}, place: {rust_str(c['label'])}, world: {c['world']}, at: [{c['at'][0]:.1f}, {c['at'][1]:.1f}], "
             f"levels: ({c['lo']}, {c['hi']}), note: {rust_str(c['note'])}, rare: {strs(c['rare'])}, own: {strs(c['own'])}, "
-            f"table: {rust_str(c['table'])}, drops: {strs(c['drops'])} }},"
+            f"table: {rust_str(c['table'])}, drops: {strs(c['drops'])}, guide: {'true' if c['guide'] else 'false'} }},"
         )
     o.append("];")
     o.append("")
