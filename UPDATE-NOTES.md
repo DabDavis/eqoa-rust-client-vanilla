@@ -7,6 +7,26 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Key combinations, chat tabs, spell bar opacity, pets you walk through, shared shortcuts
+- **Key combinations on the Controls page**: holding Shift, Ctrl or Alt while you pick a key now binds the
+  combination (Shift+1, Ctrl+F, Alt+2...) instead of the character it types ("!"). The binding fires when you press
+  that key with the same modifiers held; the key on its own keeps doing what it did. Works for macros' triggers too.
+- **Chat tabs**: send any kind of chat to a tab of its own, up to three tabs besides Main, in **Options > Extended >
+  UI > Chat Tabs: Talk** (say, tells, group, guild, shouts) and **Chat Tabs: Game** (combat, loot, rolls, experience,
+  system). A tab's lines no longer show in Main. With the chat box open, the tabs' names sit above it: click one to
+  show it (a tab with new lines turns green), or type `/tab` (next tab), `/tab 2` or `/tab Loot`. Name a tab with
+  `/tabname 1 Loot` (eight characters at most). Everything stays in Main until you choose otherwise.
+- **Spell Bar Opacity** (Extended > UI > HUD Layout): how solid the frames of the Stacked Spell Bars are, 0 to 100%.
+  The spell icons always stay fully visible.
+- **Pets pass through you**: your pet, other players' pets and mercenaries no longer block your walk or make you
+  slide round them (Extended > Other > Combat > Pets Pass Through, on by default; off, they are solid as before).
+- **Same Shortcuts on Every Character** (Extended > Other > General > Same Shortcuts): your L2 quick-chat menus are
+  kept for your account. Turn it on and the character you are playing gives the account its menus; every other
+  character of the account gets them when it enters the world, and a change on any character is kept for all.
+  Off, each character keeps its own, as before.
+- **Jal'Raeth helms fit better**: on the robed and channeler bodies the helm sits higher and is a little taller, so
+  the brim is above the eyes and the top of the head stays inside it.
+
 ## 2026-11-13 · Glowing armour trim, and dark auras
 - **Armour trim can glow**: the gold trim of plate armour (the plain plate and the ornate plate) can now light up in
   an aura's colour, the trim itself bright and a soft halo bleeding off it onto the steel, stronger along the

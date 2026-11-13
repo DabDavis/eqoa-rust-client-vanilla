@@ -480,13 +480,17 @@ impl HudMenus {
         let (cw, ch) = (s(CELL[0]), s(CELL[1]));
         let rows: Vec<usize> = if bars.abilities >= 2 { vec![0, 1] } else { vec![0] };
         let up = self.up();
+        // Spell Bar Opacity (ticket 1953): the cells' frames, not the icons
+        let opacity = frame_alpha(crate::settings::client().spell_bar_opacity);
         for (k, &menu) in rows.iter().enumerate() {
             let y = chat_top - STACKED_GAP - ch * (rows.len() - k) as i32;
             let def = &self.defs[menu];
             for n in 0..def.count.max(0) {
                 let x = left + (n as f32 * CELL[0] as f32 * STACKED_SCALE).round() as i32;
                 let at = [x, y];
-                r.stretch_blit(vui.entry_id(&frame), 0, at, [cw, ch], frame.uv0, frame.uv1, 3, 1.0);
+                if opacity > 0.0 {
+                    r.stretch_blit(vui.entry_id(&frame), 0, at, [cw, ch], frame.uv0, frame.uv1, 3, opacity);
+                }
                 let e = def.entries.get(n as usize).copied().unwrap_or_default();
                 // the icon where the list puts it in its frame, scaled
                 let icon = [x + s(7), y + s(2)];
@@ -644,6 +648,12 @@ impl HudMenus {
         m.alpha = 0.3;
         m.time = now + 20000;
     }
+}
+
+/// Spell Bar Opacity's percent (ticket 1953) as the stacked bars' frames'
+/// alpha: 100 the frames as before, 0 none drawn.
+pub fn frame_alpha(percent: u8) -> f32 {
+    percent.min(100) as f32 / 100.0
 }
 
 #[cfg(test)]

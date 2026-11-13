@@ -201,6 +201,91 @@ fn set_text_set(sets: &mut TextSets, id: i32, pairs: [(Option<&str>, Option<&str
     }
 }
 
+/// The quick-chat menus as the account keeps them (Same Shortcuts on Every
+/// Character, Piedpiper's ticket 1987, `settings::account_shortcuts`): a line
+/// a set, its id and its four pairs' labels and lines, tab-separated, each
+/// escaped (`\\`, `\t`, `\n`); a pair with none an empty field.
+pub fn shared_text(sets: &TextSets) -> String {
+    let esc = |v: &Option<Vec<u16>>| {
+        let t = v.as_deref().map(String::from_utf16_lossy).unwrap_or_default();
+        t.replace('\\', "\\\\").replace('\t', "\\t").replace('\n', "\\n")
+    };
+    let mut out = String::new();
+    for id in 0..256 {
+        let Some(set) = sets.set(id) else { continue };
+        out.push_str(&id.to_string());
+        for p in &set.pairs {
+            out.push('\t');
+            out.push_str(&esc(&p.label));
+            out.push('\t');
+            out.push_str(&esc(&p.text));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// What `shared_text` wrote, as sets: each line's set and its four records
+/// (`TextSets::load`'s input); a line not understood is left out.
+pub fn from_shared_text(s: &str) -> Vec<(i32, Vec<Record>)> {
+    let unesc = |t: &str| -> Vec<u16> {
+        let mut out = String::new();
+        let mut it = t.chars();
+        while let Some(c) = it.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match it.next() {
+                Some('t') => out.push('\t'),
+                Some('n') => out.push('\n'),
+                Some(o) => out.push(o),
+                None => {}
+            }
+        }
+        out.encode_utf16().collect()
+    };
+    let mut sets = Vec::new();
+    for line in s.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        let Some(id) = f.first().and_then(|i| i.parse::<i32>().ok()).filter(|i| (0..256).contains(i)) else { continue };
+        if f.len() != 9 {
+            continue;
+        }
+        let recs = (0..4).map(|k| Record { slot: k as i32, label: field(Some(&unesc(f[1 + 2 * k])), 64), text: field(Some(&unesc(f[2 + 2 * k])), 128) }).collect();
+        sets.push((id, recs));
+    }
+    sets
+}
+
+/// The messages that make the server's copy of a character's menus `want`
+/// where it holds `had` (0x006B for each set but the root `had` has, then the
+/// root's four 0x006C and every other set's 0x006A, parents first, as
+/// `DefaultTextSets` makes a tree): none when they are the same already.
+pub fn sync_messages(had: &TextSets, want: &TextSets) -> Vec<Vec<u8>> {
+    if had == want {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for i in 1..256 {
+        if had.set(i).is_some() {
+            out.push(send_006b(i));
+        }
+    }
+    let mut ids: Vec<i32> = (0..256).filter(|&i| want.set(i).is_some()).collect();
+    ids.sort_by_key(|&i| (i & 3, i));
+    for id in ids {
+        let Some(set) = want.set(id) else { continue };
+        let recs: [Record; 4] = std::array::from_fn(|k| fill_rec(&set.pairs[k], k as i32));
+        if id == 0 {
+            out.extend(recs.iter().map(|r| send_006c(0, r)));
+        } else {
+            out.push(send_006a(id, &recs));
+        }
+    }
+    out
+}
+
 /// `VIClient::DefaultTextSets` ("Def. Menu4", 0x0B080000): every set out of
 /// the table (each but the root's dropped, 0x006B), then the built-in tree,
 /// sent as it is made. Its commands are numbered as shipped: Passive is
@@ -1209,6 +1294,31 @@ fn closes(key: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ticket 1987: the account's copy of the menus reads back as the menus
+    /// (a tab, a newline and a backslash in a line kept), and the messages
+    /// that give them to a character make the character's copy (read back as
+    /// a server would keep them) the account's: none when they are the same.
+    /// The control: a character with other menus gets messages.
+    #[test]
+    fn the_accounts_menus_read_back_and_are_given_whole() {
+        let mut mine = TextSets::default();
+        default_text_sets(&mut mine);
+        if let Some(s) = mine.get(make_id(3, -1, -1)) {
+            s.pairs[0] = TextPair { label: Some(wide("Odd\tone")), text: Some(wide("a\\b\nc")) };
+        }
+        let text = shared_text(&mine);
+        let mut back = TextSets::default();
+        back.load(&from_shared_text(&text));
+        assert_eq!(back, mine, "read back");
+        assert!(sync_messages(&mine, &back).is_empty(), "the same: nothing sent");
+        let mut other = TextSets::default();
+        other.load(&[(0, vec![Record { slot: 0, text: wide("hi"), label: wide("Hi") }]), (make_id(1, -1, -1), vec![])]);
+        let msgs = sync_messages(&other, &mine);
+        assert!(!msgs.is_empty(), "the control: another's menus are sent");
+        assert_eq!(msgs[0], send_006b(make_id(1, -1, -1)), "the character's own sets dropped first");
+        assert!(from_shared_text("nonsense\n300\tx\n").is_empty(), "lines not understood are left out");
+    }
     use crate::pointer::testing::{NullRaster, mid, vui};
 
     fn w(s: &str) -> Vec<u16> {

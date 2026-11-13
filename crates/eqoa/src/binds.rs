@@ -738,6 +738,13 @@ impl Binds {
         }
     }
 
+    /// Whether a key name with modifiers ("shift+1") is anything's: a row's
+    /// or a macro's trigger's. Only then is a key pressed with them sent on
+    /// by that name; else by the name it types, as before (`App::key_name`).
+    pub fn combo_bound(&self, name: &str) -> bool {
+        self.alias(name) != Alias::Same
+    }
+
     /// Whether a key is in a macro's trigger (any macro's).
     pub fn key_in_macros(&self, name: &str) -> bool {
         self.macros.iter().any(|m| m.triggers.iter().flatten().any(|i| matches!(i, Input::Key(k) if k == name)))
@@ -1374,7 +1381,7 @@ fn split_chord(v: &str) -> Vec<&str> {
 
 /// Whether a name read back can be a key's (`name_of`'s, or a character).
 fn valid_name(v: &str) -> bool {
-    !v.is_empty() && v.chars().count() <= 12 && !v.chars().any(char::is_control)
+    !v.is_empty() && v.chars().count() <= 32 && !v.chars().any(char::is_control)
 }
 
 /// A key's name, as the client's dispatch and `keys.opt` use it: the cursor
@@ -1454,8 +1461,117 @@ pub fn key_of(name: &str) -> Key {
     Key::Named(named)
 }
 
-/// A key's name as the page shows it.
+/// A key's name with the modifiers held written before it, in the order
+/// ctrl, alt, shift ("ctrl+alt+shift+1"; Jibwiz's ticket 1950: Shift+1 binds
+/// as Shift+1, not as the "!" it types): `base` the key's own, as it is
+/// without them (`base_name`).
+pub fn combo_name(ctrl: bool, alt: bool, shift: bool, base: &str) -> String {
+    let mut s = String::new();
+    for (held, m) in [(ctrl, "ctrl"), (alt, "alt"), (shift, "shift")] {
+        if held {
+            s.push_str(m);
+            s.push('+');
+        }
+    }
+    s.push_str(base);
+    s
+}
+
+/// A name split into its modifiers (ctrl, alt, shift) and its key. "+" alone,
+/// or a name ending in "+", is a key's own.
+pub fn split_combo(name: &str) -> ((bool, bool, bool), &str) {
+    let (mut ctrl, mut alt, mut shift) = (false, false, false);
+    let mut rest = name;
+    loop {
+        let Some((m, tail)) = rest.split_once('+') else { break };
+        if tail.is_empty() {
+            break;
+        }
+        match m {
+            "ctrl" => ctrl = true,
+            "alt" => alt = true,
+            "shift" => shift = true,
+            _ => break,
+        }
+        rest = tail;
+    }
+    ((ctrl, alt, shift), rest)
+}
+
+/// A key's own name by where it is on the keyboard (the US layout's), as it
+/// is with no modifier held: the "1" under a "!" typed with Shift. The keys
+/// whose names no modifier changes (the named keys) are None: `name_of`'s
+/// name is theirs.
+pub fn base_name(code: winit::keyboard::KeyCode) -> Option<&'static str> {
+    use winit::keyboard::KeyCode as C;
+    Some(match code {
+        C::KeyA => "a",
+        C::KeyB => "b",
+        C::KeyC => "c",
+        C::KeyD => "d",
+        C::KeyE => "e",
+        C::KeyF => "f",
+        C::KeyG => "g",
+        C::KeyH => "h",
+        C::KeyI => "i",
+        C::KeyJ => "j",
+        C::KeyK => "k",
+        C::KeyL => "l",
+        C::KeyM => "m",
+        C::KeyN => "n",
+        C::KeyO => "o",
+        C::KeyP => "p",
+        C::KeyQ => "q",
+        C::KeyR => "r",
+        C::KeyS => "s",
+        C::KeyT => "t",
+        C::KeyU => "u",
+        C::KeyV => "v",
+        C::KeyW => "w",
+        C::KeyX => "x",
+        C::KeyY => "y",
+        C::KeyZ => "z",
+        C::Digit0 | C::Numpad0 => "0",
+        C::Digit1 | C::Numpad1 => "1",
+        C::Digit2 | C::Numpad2 => "2",
+        C::Digit3 | C::Numpad3 => "3",
+        C::Digit4 | C::Numpad4 => "4",
+        C::Digit5 | C::Numpad5 => "5",
+        C::Digit6 | C::Numpad6 => "6",
+        C::Digit7 | C::Numpad7 => "7",
+        C::Digit8 | C::Numpad8 => "8",
+        C::Digit9 | C::Numpad9 => "9",
+        C::Minus => "-",
+        C::Equal => "=",
+        C::BracketLeft => "[",
+        C::BracketRight => "]",
+        C::Backslash => "\\",
+        C::Semicolon => ";",
+        C::Quote => "'",
+        C::Comma => ",",
+        C::Period => ".",
+        C::Slash => "/",
+        C::Backquote => "`",
+        _ => return None,
+    })
+}
+
+/// A key's name as the page shows it, its modifiers before it ("Shift+1").
 pub fn display(name: &str) -> String {
+    let ((ctrl, alt, shift), key) = split_combo(name);
+    if key.len() == name.len() {
+        return display_key(name);
+    }
+    let mut s = String::new();
+    for (held, m) in [(ctrl, "Ctrl+"), (alt, "Alt+"), (shift, "Shift+")] {
+        if held {
+            s.push_str(m);
+        }
+    }
+    s + &display_key(key)
+}
+
+fn display_key(name: &str) -> String {
     match name {
         "" => "-".into(),
         "space" => "Space".into(),
@@ -2358,5 +2474,40 @@ mod tests {
         assert_eq!(name_of(&Key::Character("Q".into())).as_deref(), Some("q"));
         assert_eq!(name_of(&Key::Named(NamedKey::Shift)), None);
         assert_eq!((display("pageup"), display("q"), display("f5"), display("|")), ("Page Up".into(), "Q".into(), "F5".into(), "||".into()));
+    }
+
+    /// Ticket 1950: a key captured with Shift held is "shift+1", a name of its
+    /// own: a row put on it takes it, the plain key stays the row's it was,
+    /// and only the combination is bound (`combo_bound`); it reads back from
+    /// keys.opt and shows as "Shift+1".
+    #[test]
+    fn a_key_with_modifiers_binds_as_itself() {
+        assert_eq!(combo_name(false, false, true, "1"), "shift+1");
+        assert_eq!(combo_name(true, true, true, "f"), "ctrl+alt+shift+f");
+        assert_eq!(split_combo("ctrl+shift+1"), ((true, false, true), "1"));
+        assert_eq!(split_combo("+"), ((false, false, false), "+"));
+        assert_eq!(split_combo("shift++"), ((false, false, true), "+"));
+        assert_eq!(display("shift+1"), "Shift+1");
+        assert_eq!(display("ctrl+alt+pageup"), "Ctrl+Alt+Page Up");
+        assert_eq!(display("+"), "+");
+        assert_eq!(base_name(winit::keyboard::KeyCode::Digit1), Some("1"));
+        let mut b = Binds::default();
+        let slot = row_named("bar1_slot1").unwrap();
+        assert!(!b.combo_bound("shift+1"));
+        b.bind_key(slot, "shift+1");
+        assert!(b.combo_bound("shift+1"));
+        assert_eq!(b.alias("shift+1"), Alias::Slot(0, 0));
+        // the plain key is whatever it was
+        assert_eq!(b.alias("1"), Binds::default().alias("1"));
+        assert!(!b.combo_bound("ctrl+1"));
+        let back = Binds::from_text(&b.to_text());
+        assert_eq!(back, b);
+        // the edge sends the combination's press and its release as the slot
+        let mut e = KeyEdge::default();
+        assert_eq!(e.key("shift+1", true, false, false, &b), Some(Sent::Slot(0, 0)));
+        assert_eq!(e.key("shift+1", false, false, false, &b), Some(Sent::Slot(0, 0)));
+        // negative control: unbound, the combination is itself, not the slot
+        let d = Binds::default();
+        assert_ne!(d.alias("shift+1"), Alias::Slot(0, 0));
     }
 }

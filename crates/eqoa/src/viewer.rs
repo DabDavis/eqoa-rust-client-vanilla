@@ -1616,17 +1616,24 @@ struct KeyIn {
     state: ElementState,
     repeat: bool,
     text: Option<winit::keyboard::SmolStr>,
+    /// the key's own name by its place on the keyboard (`binds::base_name`),
+    /// for a binding with modifiers (ticket 1950); None where none is known
+    base: Option<&'static str>,
 }
 
 impl KeyIn {
     fn of(e: &KeyEvent) -> KeyIn {
-        KeyIn { logical_key: e.logical_key.clone(), state: e.state, repeat: e.repeat, text: e.text.clone() }
+        let base = match e.physical_key {
+            winit::keyboard::PhysicalKey::Code(c) => crate::binds::base_name(c),
+            _ => None,
+        };
+        KeyIn { logical_key: e.logical_key.clone(), state: e.state, repeat: e.repeat, text: e.text.clone(), base }
     }
 
     /// The key `binds::name_of` names `name`, pressed or let go by the client
     /// itself: no repeat, no text.
     fn named(name: &str, down: bool) -> KeyIn {
-        KeyIn { logical_key: crate::binds::key_of(name), state: if down { ElementState::Pressed } else { ElementState::Released }, repeat: false, text: None }
+        KeyIn { logical_key: crate::binds::key_of(name), state: if down { ElementState::Pressed } else { ElementState::Released }, repeat: false, text: None, base: None }
     }
 }
 
@@ -2181,6 +2188,13 @@ struct App {
     /// Ctrl held (`ModifiersChanged`), for the clipboard's keys (`clipboard_key`)
     #[cfg(any(target_os = "linux", windows))]
     ctrl_held: bool,
+    /// Ctrl, Alt and Shift held (`ModifiersChanged`), on every platform: a
+    /// key pressed with them is named with them where that name is bound
+    /// (`key_name`, ticket 1950)
+    mods: (bool, bool, bool),
+    /// the name each key down was pressed as (by its own name), so it is let
+    /// go as that whatever modifiers were let go first
+    key_names: std::collections::HashMap<String, String>,
     /// The key a clipboard's press took, until it is let go.
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     clip_key: Option<winit::keyboard::PhysicalKey>,
@@ -2394,6 +2408,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         super_held: false,
         alt_held: false,
         shift_held: false,
+        mods: (false, false, false),
+        key_names: std::collections::HashMap::new(),
         #[cfg(any(target_os = "linux", windows))]
         ctrl_held: false,
         #[cfg(any(target_os = "linux", target_os = "macos", windows))]
@@ -5239,7 +5255,7 @@ impl App {
                 }
                 Event::Key { key, text, down, repeat, soft } => {
                     crate::android::key_taken(soft);
-                    let k = KeyIn { logical_key: key, state: if down { ElementState::Pressed } else { ElementState::Released }, repeat, text: text.map(Into::into) };
+                    let k = KeyIn { logical_key: key, state: if down { ElementState::Pressed } else { ElementState::Released }, repeat, text: text.map(Into::into), base: None };
                     self.key_input(el, k, false);
                 }
                 Event::Disc(Some(path)) => self.android_disc(path),
@@ -5318,6 +5334,33 @@ impl App {
     /// window's keys in order: play over, a key already down as the window
     /// came to the front, full screen, the update's question, the pregame,
     /// play.
+    /// A key's name as the bindings take it (`binds::name_of`): pressed with
+    /// Ctrl, Alt or Shift held, its own name with theirs before it
+    /// ("shift+1", `binds::combo_name`) where a row or a macro is on that, or
+    /// a capture waits (`capture`); else the name it types, as ever. Never
+    /// while an edit box types. A key let go is named as it was pressed.
+    fn key_name(&mut self, ev: &KeyIn, capture: bool, typing: bool) -> Option<String> {
+        let plain = crate::binds::name_of(&ev.logical_key)?;
+        let own = ev.base.map(str::to_string).unwrap_or_else(|| plain.clone());
+        if ev.state == ElementState::Released {
+            return Some(self.key_names.remove(&own).unwrap_or(plain));
+        }
+        if ev.repeat
+            && let Some(n) = self.key_names.get(&own)
+        {
+            return Some(n.clone());
+        }
+        let (c, a, sh) = self.mods;
+        let name = if (c || a || sh) && !typing {
+            let combo = crate::binds::combo_name(c, a, sh, &own);
+            if capture || crate::settings::with_binds(|b| b.combo_bound(&combo)) { combo } else { plain }
+        } else {
+            plain
+        };
+        self.key_names.insert(own, name.clone());
+        Some(name)
+    }
+
     fn key_input(&mut self, el: &ActiveEventLoop, event: KeyIn, is_synthetic: bool) {
         let pressed = event.state == ElementState::Pressed;
         // a key pressed: the first since the window came to the front, or
@@ -5394,10 +5437,11 @@ impl App {
             }
             // the title's Options' Controls page waiting for a key: it is
             // the page's, as play's is
+            let capturing = self.host.as_ref().unwrap().pre.setup.capturing();
+            let cname = if capturing.is_some() && !event.repeat { self.key_name(&event, true, false) } else { None };
             let host = self.host.as_mut().unwrap();
-            if let Some(c) = host.pre.setup.capturing()
-                && !event.repeat
-                && let Some(name) = crate::binds::name_of(&event.logical_key)
+            if let Some(c) = capturing
+                && let Some(name) = cname
             {
                 if event.state == ElementState::Pressed {
                     host.pre.setup.capture_key(&name);
@@ -5458,10 +5502,15 @@ impl App {
         // `macropage`): the key pressed is its, as it is, and nothing else
         // sees it or its release; a trigger awaited takes the release too
         // (it is kept at the first)
+        // the key's name, with the modifiers held where that is bound (or
+        // a capture waits): Shift+1 as "shift+1", not "!" (ticket 1950)
+        let capturing = self.play.as_mut().and_then(|p| p.capturing());
+        let typing = self.play.as_mut().is_some_and(|p| p.keyboard_typing());
+        let kname = self.key_name(&event, capturing.is_some(), typing);
         if let Some(p) = self.play.as_mut()
-            && let Some(c) = p.capturing()
+            && let Some(c) = capturing
             && !event.repeat
-            && let Some(name) = crate::binds::name_of(&event.logical_key)
+            && let Some(name) = kname.clone()
         {
             if event.state == ElementState::Pressed {
                 p.capture_key(&name);
@@ -5478,10 +5527,9 @@ impl App {
         // (which the game has no key for) presses △ as the pad's
         // does; text typed into an edit box is never remapped; a key
         // lets go as what it was pressed as.
-        let event = match crate::binds::name_of(&event.logical_key) {
+        let event = match kname {
             Some(name) => {
                 use crate::binds::Sent;
-                let typing = self.play.as_mut().is_some_and(|p| p.keyboard_typing());
                 let down = event.state == ElementState::Pressed;
                 // Space, the jump's, is the attack's wherever it makes no
                 // jump: in the world but not in play on a server that offered
@@ -5587,6 +5635,7 @@ impl App {
             WindowEvent::ModifiersChanged(m) => {
                 self.alt_held = m.state().alt_key();
                 self.shift_held = m.state().shift_key();
+                self.mods = (m.state().control_key(), m.state().alt_key(), m.state().shift_key());
                 #[cfg(any(target_os = "linux", windows))]
                 {
                     self.ctrl_held = m.state().control_key();
@@ -5822,7 +5871,7 @@ impl App {
                             let logical_key = if c == ' ' { Key::Named(NamedKey::Space) } else { Key::Character(c.to_string().into()) };
                             for state in [ElementState::Pressed, ElementState::Released] {
                                 let text = (state == ElementState::Pressed).then(|| c.to_string().into());
-                                self.keyboard(el, KeyIn { logical_key: logical_key.clone(), state, repeat: false, text });
+                                self.keyboard(el, KeyIn { logical_key: logical_key.clone(), state, repeat: false, text, base: None });
                             }
                         }
                         continue;

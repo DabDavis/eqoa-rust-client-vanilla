@@ -272,6 +272,13 @@ pub struct Play {
     self_actor: Option<EntityActor>,
     actors_in: u64,
     refresh_collision: bool,
+    /// Each slot's actor made to pass through as a pet's (Pets Pass Through,
+    /// ticket 1977), as last set (`place_actors`).
+    actor_passes: Vec<bool>,
+    /// Same Shortcuts on Every Character (ticket 1987): the world entry's
+    /// quick-chat menus in, and the account's given to them since
+    /// (`sync_shortcuts`).
+    shortcuts: (bool, bool),
     /// The player's model as the server last named it on its channel.
     pub self_model: Option<u32>,
     /// The player dressed as its own channel says (look, items, helm),
@@ -1989,6 +1996,38 @@ mod entity_actors {
         assert!(cs.h.triggers.iter().all(|t| t.tripped == 0), "the trips let go");
     }
 
+    /// Pets Pass Through (ticket 1977): a pet's capsule (plate colour 3) is met
+    /// by no walk while the row is on, as by default; turned off, it is solid
+    /// again from the next frame, and on, not. The control: a creature of the
+    /// world beside it (colour 0) is solid throughout.
+    #[test]
+    fn pets_pass_through_while_the_row_is_on() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some((lib, file)) = freeport_lib(x, z) else { return };
+        let mut w = Walker::arrive(World::load(&lib, file).unwrap(), crate::walker::Spawn::ground(x + 40.0, z, 0.0));
+        let (x2, z2) = (x - 12.0, z);
+        let mut p = super::commands::play();
+        let ground = |w: &mut Walker, x: f32, z: f32| [x, crate::walker::ground(&mut w.scene, x, z).unwrap(), z];
+        let pet = |id: u32, at: [f32; 3], p256: u8| net::entity::Entity { id, kind: net::entity::TYPE_CREATURE, model: HUMAN, drawn_model: HUMAN, scale: 1.0, pos: at, actor_pos: at, creature: Some(net::entity::Creature { p256, ..Default::default() }), ..Default::default() };
+        let (a, b) = (ground(&mut w, x, z), ground(&mut w, x2, z2));
+        p.entities.slots[3] = Some(pet(0x30, a, 3));
+        p.entities.slots[4] = Some(pet(0x40, b, 0));
+        let mut c = crate::settings::client();
+        assert!(c.pets_pass, "on by default");
+        p.place_actors(&mut w, &lib);
+        let (a3, a4) = (p.actors[3].unwrap().actor as i32, p.actors[4].unwrap().actor as i32);
+        assert_eq!(meets(&mut w.scene, x, z), -2, "the pet passes");
+        assert_eq!(meets(&mut w.scene, x2, z2), a4, "the control: a creature of the world is solid");
+        c.pets_pass = false;
+        crate::settings::set_client(c);
+        p.place_actors(&mut w, &lib);
+        assert_eq!(meets(&mut w.scene, x, z), a3, "off: the pet is solid");
+        c.pets_pass = true;
+        crate::settings::set_client(c);
+        p.place_actors(&mut w, &lib);
+        assert_eq!((meets(&mut w.scene, x, z), meets(&mut w.scene, x2, z2)), (-2, a4), "on again");
+    }
+
     /// `place_actor` over an entity's time in a slot: made with its first
     /// frame, kept (the same actor) as it moves, its sprite made again when
     /// its model changes, nothing while its sprite is dead, let go for another
@@ -2225,6 +2264,13 @@ const CYCLE_REACH2: f32 = 40000.0;
 /// A combat pet stays the cycle's (the wizard's Guardians, a magician's,
 /// necromancer's or enchanter's pet, a charmed creature), and so does a
 /// creature of the world named so (a caster's own "Familiar", which fights).
+/// Whether entity `e` is a pet as Pets Pass Through takes one (ticket 1977):
+/// the player's own pet (`pet_id`), or any creature of a player's side whose
+/// plate is a pet's (colour 3: pets, mercs, familiars).
+fn passes_as_pet(e: &net::entity::Entity, pet_id: u32) -> bool {
+    e.id == pet_id || e.creature.as_ref().is_some_and(|c| c.p256 == 3)
+}
+
 fn is_familiar(c: &net::entity::Creature) -> bool {
     let name = c.name.trim();
     let is = |w: &str| name.eq_ignore_ascii_case(w);
@@ -3107,7 +3153,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -4259,7 +4305,10 @@ impl Play {
     /// place, turn (a creature with its own walk kept level) and scale, its
     /// copy dead with its sprite; a creature's is a capsule the player's walk
     /// stops at. `RefreshCollision`: a creature new, or every one after the
-    /// ignore list changed, collideable unless the list names it.
+    /// ignore list changed, collideable unless the list names it. Pets Pass
+    /// Through (ticket 1977, on by default): a pet's or a merc's capsule (a
+    /// player's side's, the plate colour 3, or the player's own pet) as an
+    /// ignored player's, solid to no one; set again whenever that changes.
     ///
     /// The sprite is the model's whether or not it draws anything:
     /// `VIClientPart06D00::LoadRes` puts on the actor whatever sprite the
@@ -4272,6 +4321,7 @@ impl Play {
         self.actors_scene(walker);
         let me = self.self_id32();
         let refresh = std::mem::take(&mut self.refresh_collision);
+        let pets_pass = crate::settings::client().pets_pass;
         for slot in 0..MAX_SLOTS {
             let e = self.entities.slots[slot].as_ref().filter(|e| Some(e.id) != me);
             let want = e.filter(|e| e.drawn_model != 0).map(|e| {
@@ -4285,12 +4335,14 @@ impl Play {
             });
             let (a, made) = place_actor(&mut walker.scene, lib, self.actors[slot], want);
             self.actors[slot] = a;
+            let passes = pets_pass && e.is_some_and(|e| passes_as_pet(e, self.pet_id));
             if let (Some(a), Some(c)) = (a, e.and_then(|e| e.creature.as_ref()))
-                && (made || refresh)
+                && (made || refresh || self.actor_passes[slot] != passes)
             {
                 let ignored = self.ignore.list.iter().any(|r| r.name == c.name);
-                walker.scene.set_actor_collideable(a.actor, !ignored);
+                walker.scene.set_actor_collideable(a.actor, !ignored && !passes);
             }
+            self.actor_passes[slot] = passes;
         }
     }
 
@@ -5416,6 +5468,10 @@ impl Play {
         if c.dragging() {
             return true;
         }
+        // a tab's name over the box (ticket 1951): that tab shown
+        if left && lines && c.click_tab(Self::chat_point(at, size)) {
+            return true;
+        }
         if left && lines && c.press(Self::chat_point(at, size), at) {
             return true;
         }
@@ -5791,6 +5847,9 @@ impl Play {
             "/alarm" => self.alarm_command(&rest),
             // the DPS meter's (`dpsmeter`), the client's own
             "/dps" => self.dps_command(&rest),
+            // the chat tabs' (`chat`, ticket 1951), the client's own
+            "/tab" => self.tab_command(&rest),
+            "/tabname" => self.tabname_command(&rest),
             // auto-cast and auto targeting (`autocast`), the client's own
             "/autocast" | "/ac" => self.autocast_command(&rest),
             "/at" => self.autotarget_command(&rest),
@@ -6532,6 +6591,8 @@ impl Play {
     /// sets (`LoadTextSets`).
     fn take_abilities(&mut self) {
         self.quick.load(&self.dump.text_sets);
+        // the account's menus given at the next frame (Same Shortcuts, ticket 1987)
+        self.shortcuts = (true, false);
         self.abilities = self.dump.abilities.iter().map(|a| (a.id, a.clone())).collect();
         self.ability_token = self.dump.p2bb60;
         // the dump's crafting token and slots (SetP78C0, ReadSlots)
@@ -7918,6 +7979,7 @@ impl Play {
                 for m in crate::quickchat::default_text_sets(&mut self.quick.sets) {
                     self.session.send(&m);
                 }
+                self.keep_shortcuts();
             }
             // VITimeOfDay::GetLocalTime, to the chat box
             0x0B0E_0008 => {
@@ -8212,6 +8274,8 @@ impl Play {
     /// details.
     fn quick_outs(&mut self, outs: Vec<crate::quickchat::Out>) {
         use crate::quickchat::Out;
+        // an edit sent: the account's copy kept too (Same Shortcuts, ticket 1987)
+        let edited = outs.iter().any(|o| matches!(o, Out::Send(_)));
         for o in outs {
             match o {
                 Out::Say(line) => {
@@ -8238,6 +8302,9 @@ impl Play {
                     _ => {}
                 },
             }
+        }
+        if edited {
+            self.keep_shortcuts();
         }
     }
 
@@ -9605,9 +9672,12 @@ impl Play {
                 c.show_links = crate::settings::item_links();
                 // Chat Always Shown (ticket 1914): never sliding away
                 c.always = crate::settings::chat_always();
+                // the chat tabs (ticket 1951), each line into its kind's
+                let opts = crate::settings::client();
+                c.set_tabs(opts.chat_tabs, opts.chat_tab_names);
                 for (text, color, at, links) in self.chat_pending.drain(..) {
                     let rr = &r;
-                    c.text.add_text_linked(&crate::ui::wide(&text), color, at, |s| vi::ui::Raster::string_width(rr, s), &links);
+                    c.add_line(&text, color, at, |s| vi::ui::Raster::string_width(rr, s), &links);
                 }
                 let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Chat);
                 c.draw(vui, &mut r, now, dt);
@@ -9795,7 +9865,52 @@ impl Play {
         }
         self.start_actions(actions);
         self.quick_outs(quick_outs);
+        self.sync_shortcuts();
         self.pump_keys();
+    }
+
+    /// Same Shortcuts on Every Character (Piedpiper's ticket 1987), once the
+    /// world entry's menus are in and the row is on: the account's menus
+    /// given to this character (shown, and sent so the server keeps them as
+    /// its own, `quickchat::sync_messages`: nothing when they are the same);
+    /// an account with none kept takes this character's, once. Off, nothing:
+    /// each character's own, as the server keeps them.
+    fn sync_shortcuts(&mut self) {
+        if !crate::settings::client().shared_shortcuts {
+            self.shortcuts.1 = false;
+            return;
+        }
+        if !self.shortcuts.0 || self.shortcuts.1 || !crate::settings::account_known() {
+            return;
+        }
+        self.shortcuts.1 = true;
+        let kept = crate::settings::account_shortcuts().map(|b| crate::quickchat::from_shared_text(&String::from_utf8_lossy(&b))).filter(|s| !s.is_empty());
+        let Some(recs) = kept else {
+            self.keep_shortcuts();
+            crate::say("shortcuts: this character's quick-chat menus kept for the account");
+            return;
+        };
+        let mut want = vi::textset::TextSets::default();
+        want.load(&recs);
+        let msgs = crate::quickchat::sync_messages(&self.quick.sets, &want);
+        if !msgs.is_empty() {
+            crate::say(&format!("shortcuts: the account's quick-chat menus given to this character ({} messages)", msgs.len()));
+            for m in &msgs {
+                self.session.send(m);
+            }
+            self.quick.sets = want;
+        }
+    }
+
+    /// The quick-chat menus as they stand kept for the account, while Same
+    /// Shortcuts on Every Character is on (an edit, `DefaultTextSets`).
+    fn keep_shortcuts(&mut self) {
+        if !crate::settings::client().shared_shortcuts || !self.shortcuts.0 {
+            return;
+        }
+        if let Err(e) = crate::settings::set_account_shortcuts(crate::quickchat::shared_text(&self.quick.sets).as_bytes()) {
+            crate::say(&format!("shortcuts: not kept for the account: {e}"));
+        }
     }
 
     /// Where the creature `id` is drawn this frame, which its damage numbers
@@ -9974,6 +10089,49 @@ impl Play {
     /// reset, the meter on or off (as the Extended row, kept by Save Changes),
     /// or how to type it; each said in the chat box, and that the meter is off
     /// when a view or a reset was asked of it off.
+    /// `/tab [n|name]` (ticket 1951): the chat tab of that number (0 or
+    /// "main" Main) or name shown; none, the next tab there.
+    fn tab_command(&mut self, arg: &str) {
+        let Some(c) = self.wnd_chat.as_mut() else { return };
+        let tabs = c.tab_names();
+        if tabs.len() < 2 {
+            self.add_chat("There are no chat tabs: Extended > UI > Chat Tabs sends a kind of line to one.".to_string(), [1.0; 4]);
+            return;
+        }
+        let a = arg.trim();
+        let to = if a.is_empty() {
+            let at = tabs.iter().position(|t| t.0 == c.tab()).unwrap_or(0);
+            Some(tabs[(at + 1) % tabs.len()].0)
+        } else if let Ok(n) = a.parse::<usize>() {
+            Some(n)
+        } else {
+            tabs.iter().find(|t| t.1.eq_ignore_ascii_case(a)).map(|t| t.0)
+        };
+        if !to.is_some_and(|t| c.show_tab(t)) {
+            let names: Vec<String> = tabs.iter().map(|t| format!("{} {}", t.0, t.1)).collect();
+            self.add_chat(format!("No such chat tab. The tabs: {}.", names.join(", ")), [1.0; 4]);
+        }
+    }
+
+    /// `/tabname n name` (ticket 1951): chat tab n (1 to 3) named, eight
+    /// characters at most, kept at once; no name, its first kind's again.
+    fn tabname_command(&mut self, arg: &str) {
+        let (n, name) = arg.trim().split_once(' ').unwrap_or((arg.trim(), ""));
+        let line = match n.parse::<usize>().ok().filter(|n| (1..=crate::chat::TABS).contains(n)) {
+            None => "To name a chat tab: /tabname 1 Loot (tabs 1 to 3, eight characters at most).".to_string(),
+            Some(n) => {
+                let kept = crate::settings::set_chat_tab_name(n, name);
+                let shown = crate::chat::tab_name_text(&crate::chat::tab_name(name));
+                let what = if shown.is_empty() { format!("Chat tab {n} is named after what it shows.") } else { format!("Chat tab {n} is named {shown}.") };
+                match kept {
+                    Ok(()) => what,
+                    Err(e) => format!("{what} (not kept: {e})"),
+                }
+            }
+        };
+        self.add_chat(line, [1.0; 4]);
+    }
+
     fn dps_command(&mut self, arg: &str) {
         use crate::dpsmeter::{Command, View};
         let offer = self.session.dps_meter_offer;

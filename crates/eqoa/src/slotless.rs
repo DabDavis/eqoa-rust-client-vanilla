@@ -226,8 +226,13 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     // node's name), whose heads rise higher above it than a human's (the owner,
     // 2026-11-11: "the jal raethe helms are sitting too low and their head is
     // poking through the top"): the robes' and the channeler's 4 cm up; the
-    // knight's helmeted head, crested up and back, stretched round it and 10 cm up
-    HeadSeat { bodies: &[0xF51B_AB09, 0x4B24_FF7E], anchor: Anchor::Named, scale: [1.05; 3], offset: [0.0, 0.04, 0.0] },
+    // knight's helmeted head, crested up and back, stretched round it and 10 cm up;
+    // the robes' and the channeler's taller and higher again (Zenyatta's ticket
+    // 1627, "head sticks through helmet, helmet covers eyes": at 1.05 and 4 cm
+    // the brim of helms 1, 2, 3, 6 and 7 crossed the eyes, and in an attack's
+    // swing covered them): stretched 22% up and 12% round, 9 cm up and 1 cm
+    // back, the brim over the eyes and the crown inside, judged on helms 1-8
+    HeadSeat { bodies: &[0xF51B_AB09, 0x4B24_FF7E], anchor: Anchor::Named, scale: [1.12, 1.22, 1.12], offset: [0.0, 0.09, -0.01] },
     HeadSeat { bodies: &[0x491F_6347], anchor: Anchor::Named, scale: [1.15, 1.2, 1.35], offset: [0.0, 0.12, -0.02] },
     // the merfolk (merman, mermaid, the two sirens), one skeleton: a head a
     // little larger than a human's on a head node at the jaw; judged on every

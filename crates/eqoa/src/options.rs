@@ -977,6 +977,24 @@ impl WndOptions {
                     // Stacked Spell Bars (ticket 1913): from the next frame
                     // (`hudmenu::Stacked`)
                     90 => c.stacked_bars = !c.stacked_bars,
+                    // Spell Bar Opacity (ticket 1953): the stacked bars' frames
+                    // from the next frame (`hudmenu::HudMenus::draw_stacked`)
+                    SPELL_BAR_OPACITY => slide(&mut c.spell_bar_opacity, 0, 100, 10),
+                    // Pets Pass Through (ticket 1977): every creature's capsule
+                    // set again from the next frame (`Play::place_actors`)
+                    PETS_PASS => c.pets_pass = !c.pets_pass,
+                    // Same Shortcuts on Every Character (ticket 1987): the
+                    // account's quick-chat menus from the next frame
+                    // (`Play::sync_shortcuts`)
+                    SHARED_SHORTCUTS => c.shared_shortcuts = !c.shared_shortcuts,
+                    // the Chat Tabs rows (ticket 1951): the kind's lines to
+                    // Main or a tab, round Main and the three, from the next
+                    // line (`chat::WndChat::set_tabs`)
+                    item if chat_tab_kind(item).is_some() => {
+                        let k = chat_tab_kind(item).unwrap_or(0);
+                        let n = crate::chat::TABS as i32 + 1;
+                        c.chat_tabs[k] = (c.chat_tabs[k] as i32 + if d < 0 { n - 1 } else { 1 }).rem_euclid(n) as u8;
+                    }
                     // Auto-Cast and Auto Target (`autocast`): from the next
                     // game frame
                     78 => c.auto_cast = !c.auto_cast,
@@ -1541,6 +1559,8 @@ impl WndOptions {
             Note::Meter => self.meter_note.clone().filter(|_| matches!(self.item, 70..=72)),
             Note::Links => self.links_note.clone().filter(|_| self.item == 73),
             Note::Hud => (self.item == 76 && crate::hudlayout::unlocked()).then(|| "Leave the menu and drag the pieces".to_string()),
+            Note::ChatTabs => Some("Name a tab in chat: /tabname 1 Loot".to_string()),
+            Note::Shortcuts => (self.item == SHARED_SHORTCUTS).then(|| "L2's menus on every character of the account".to_string()),
             Note::None => None,
         }
     }
@@ -1601,7 +1621,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 75] = [
+const EXTENDED_ITEMS: [(i32, &str); 88] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1677,7 +1697,36 @@ const EXTENDED_ITEMS: [(i32, &str); 75] = [
     (89, "Chat Always Shown"),
     (90, "Stacked Spell Bars"),
     (91, "Minimap Scroll Frame"),
+    (92, "Say"),
+    (93, "Tells"),
+    (94, "Group"),
+    (95, "Guild"),
+    (96, "Shouts"),
+    (97, "Combat"),
+    (98, "Loot"),
+    (99, "Rolls"),
+    (100, "Experience"),
+    (101, "System"),
+    (SPELL_BAR_OPACITY, "Spell Bar Opacity"),
+    (PETS_PASS, "Pets Pass Through"),
+    (SHARED_SHORTCUTS, "Same Shortcuts"),
 ];
+
+/// The Chat Tabs rows' first item (ticket 1951): one a kind of line, in
+/// `chat::Kind::ALL`'s order, 92 to 101.
+const CHAT_TAB_FIRST: i32 = 92;
+
+/// The kind (`chat::Kind::ALL`'s index) a Chat Tabs row sends to a tab.
+fn chat_tab_kind(item: i32) -> Option<usize> {
+    usize::try_from(item - CHAT_TAB_FIRST).ok().filter(|&k| k < crate::chat::KINDS)
+}
+
+/// Spell Bar Opacity's item (Jibwiz's ticket 1953).
+const SPELL_BAR_OPACITY: i32 = 102;
+/// Pets Pass Through's item (Thorinoak's ticket 1977).
+const PETS_PASS: i32 = 103;
+/// Same Shortcuts on Every Character's item (Piedpiper's ticket 1987).
+const SHARED_SHORTCUTS: i32 = 104;
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -1714,6 +1763,10 @@ enum Note {
     Links,
     /// how the HUD's pieces move while Move HUD is on and chosen (`hudlayout`)
     Hud,
+    /// how a chat tab is named (`/tabname`), on the Chat Tabs pages
+    ChatTabs,
+    /// what Same Shortcuts does, while it is chosen
+    Shortcuts,
 }
 
 /// One of Extended's categories: its name, its rows (their items, in the
@@ -1752,7 +1805,7 @@ const GROUPS: [(Group, &str); 4] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// Video's Loading Screens Other's General; petition 1634: Controller Focus,
 /// Capture Controller and Sound in Background the Multi-boxing settings',
 /// Controller's touch rows Other's Touch).
-const ALL_CATEGORIES: [Category; 20] = [
+const ALL_CATEGORIES: [Category; 22] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
@@ -1763,19 +1816,24 @@ const ALL_CATEGORIES: [Category; 20] = [
     // was full, so Raid List came with it)
     Category { name: "Group & Raid", items: &[49, 86, 88], note: Note::None, group: Group::Ui },
     // Minimap Scroll Frame (2026-11-13) here: Map's page was full
-    Category { name: "HUD Layout", items: &[76, 77, 91], note: Note::Hud, group: Group::Ui },
+    // Spell Bar Opacity (2026-11-13, ticket 1953) here: HUD's page is full
+    Category { name: "HUD Layout", items: &[76, 77, 91, SPELL_BAR_OPACITY], note: Note::Hud, group: Group::Ui },
     Category { name: "Name Plates", items: &[27, 34, 85], note: Note::None, group: Group::Ui },
     Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
     Category { name: "Chat", items: &[73, 89], note: Note::Links, group: Group::Ui },
-    Category { name: "General", items: &[29, 38, 84], note: Note::None, group: Group::Other },
-    Category { name: "Combat", items: &[78, 79], note: Note::None, group: Group::Other },
+    Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS], note: Note::Shortcuts, group: Group::Other },
+    Category { name: "Combat", items: &[78, 79, PETS_PASS], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None, group: Group::Other },
     Category { name: "Touch", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Other },
     Category { name: "Sound", items: &[32], note: Note::Output, group: Group::Other },
     Category { name: "Multi-boxing settings", items: MULTIBOX, note: Note::Reads, group: Group::Multibox },
+    // the chat tabs (2026-11-13, Jibwiz's ticket 1951): each kind of line to
+    // Main or a tab of its own, the talk on one page and the game's on another
+    Category { name: "Chat Tabs: Talk", items: &[92, 93, 94, 95, 96], note: Note::ChatTabs, group: Group::Ui },
+    Category { name: "Chat Tabs: Game", items: &[97, 98, 99, 100, 101], note: Note::ChatTabs, group: Group::Ui },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -1784,7 +1842,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -1951,6 +2009,17 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         77 => wide("Reset"),
         73 => on_off(c.item_links),
         89 => on_off(c.chat_always),
+        PETS_PASS => on_off(c.pets_pass),
+        SHARED_SHORTCUTS => on_off(c.shared_shortcuts),
+        item if chat_tab_kind(item).is_some() => {
+            let t = c.chat_tabs[chat_tab_kind(item).unwrap_or(0)] as usize;
+            if t == 0 {
+                wide("Main")
+            } else {
+                let own = crate::chat::tab_name_text(&c.chat_tab_names[t - 1]);
+                wide(&if own.is_empty() { format!("Tab {t}") } else { format!("{t}: {own}") })
+            }
+        }
         90 => on_off(c.stacked_bars),
         78 => on_off(c.auto_cast),
         79 => on_off(c.auto_target),
@@ -2020,6 +2089,7 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         61 => (at(c.touch_opacity as f32, TOUCH_OPACITY_MIN as f32, TOUCH_OPACITY_MAX as f32), Some(c.touch_opacity as u16)),
         62 => (c.touch_edge as f32 / TOUCH_EDGE_MAX as f32, Some(c.touch_edge as u16)),
         57 => (at(c.shadow_distance as f32, SHADOW_DISTANCE_GAME as f32, SHADOW_DISTANCE_MAX as f32), Some(c.shadow_distance)),
+        SPELL_BAR_OPACITY => (c.spell_bar_opacity as f32 / 100.0, Some(c.spell_bar_opacity as u16)),
         _ => return None,
     })
 }
@@ -3162,21 +3232,23 @@ mod tests {
             vec![
                 ("HUD", vec!["Ability Bars", "Stacked Spell Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
                 ("Group & Raid", vec!["Raid List", "Power Bars", "Raid Mercenaries"]),
-                ("HUD Layout", vec!["Move HUD", "Reset HUD", "Minimap Scroll Frame"]),
+                ("HUD Layout", vec!["Move HUD", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers"]),
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
                 ("Number Colors", n[..6].to_vec()),
                 ("Merc Colors", n[6..8].to_vec()),
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "Reset DPS Meter"]),
                 ("Chat", vec!["Item Links", "Chat Always Shown"]),
+                ("Chat Tabs: Talk", vec!["Say", "Tells", "Group", "Guild", "Shouts"]),
+                ("Chat Tabs: Game", vec!["Combat", "Loot", "Rolls", "Experience", "System"]),
             ],
             "UI: what is drawn over the world"
         );
         assert_eq!(
             of(2),
             vec![
-                ("General", vec!["Update Notices", "Loading Screens", "Loading Tips"]),
-                ("Combat", vec!["Auto-Cast", "Auto Target"]),
+                ("General", vec!["Update Notices", "Loading Screens", "Loading Tips", "Same Shortcuts"]),
+                ("Combat", vec!["Auto-Cast", "Auto Target", "Pets Pass Through"]),
                 ("Camera", vec!["Camera Distance", "Camera Turn Speed", "Screen Shake"]),
                 ("Touch", vec!["Touch Stick Size", "Touch Button Size", "Touch Opacity", "Touch Edge"]),
                 ("Sound", vec!["Output Device"]),
@@ -3549,7 +3621,7 @@ mod tests {
         assert_eq!(CATEGORIES[by_name("DPS Meter")].note, Note::Meter);
         assert_eq!(CATEGORIES[by_name("Chat")].note, Note::Links);
         assert_eq!(CATEGORIES[by_name("HUD Layout")].note, Note::Hud);
-        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 8 } else { 10 }, "the notes only");
+        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 11 } else { 13 }, "the notes only");
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Textures: nothing to say while both are off (a test keeps no

@@ -1008,6 +1008,33 @@ pub struct ClientOptions {
     /// (`hudmenu::Stacked`, `binds`' bar rows). Off by default, the game's
     /// carousel; a controller or a touch screen keeps the carousel.
     pub stacked_bars: bool,
+    /// Spell Bar Opacity (Jibwiz's ticket 1953: "the horizontal spell bars need
+    /// opacity as a setting for the non spell icon portion of the bar"): the
+    /// stacked bars' cell frames drawn at this percent (0 to 100 in tens), the
+    /// icons always whole (`hudmenu::HudMenus::draw_stacked`). 100 by default,
+    /// the frames as before.
+    pub spell_bar_opacity: u8,
+    /// Chat Tabs (Jibwiz's ticket 1951): which of the chat box's tabs each
+    /// kind of line goes to (`chat::Kind`, by its index): 0 the box's own,
+    /// Main; 1 to 3 a tab of its own, which exists while a kind goes to it and
+    /// whose lines Main no longer shows. Every kind Main's by default: no tabs.
+    pub chat_tabs: [u8; crate::chat::KINDS],
+    /// The tabs' names (`/tabname`), eight characters at most, NUL past the
+    /// end; none, the tab is called after the first kind that goes to it.
+    pub chat_tab_names: [[char; crate::chat::TAB_NAME_MOST]; crate::chat::TABS],
+    /// Pets Pass Through (Thorinoak's ticket 1977, "can we make pets auto
+    /// ignored, the clipping on them is terrible"): a pet's or a merc's
+    /// (a player's side's: the plate colour 3) capsule collides with no one, as
+    /// an ignored player's (`Play::place_actors`). On by default; off, the
+    /// game's: every creature is solid.
+    pub pets_pass: bool,
+    /// Same Shortcuts on Every Character (Piedpiper's ticket 1987): the
+    /// quick-chat menus (L2's, `quickchat`) kept for the account, every
+    /// character of it given them at its world entry, an edit on any kept
+    /// for all (`Play::sync_shortcuts`); turned on, the character in the
+    /// world gives the account its menus once. Off by default, the game's:
+    /// each character its own, as the server keeps them.
+    pub shared_shortcuts: bool,
     /// Profanity Filter (the GM Jibrish's petition 1490: "Under options then
     /// interface add an option to turn the profanity filter on or off"): the
     /// server's filter of what this player hears, told to a server that asks
@@ -1328,6 +1355,11 @@ impl Default for ClientOptions {
             auto_target: false,
             chat_always: false,
             stacked_bars: false,
+            spell_bar_opacity: 100,
+            chat_tabs: [0; crate::chat::KINDS],
+            chat_tab_names: [['\0'; crate::chat::TAB_NAME_MOST]; crate::chat::TABS],
+            pets_pass: true,
+            shared_shortcuts: false,
             profanity_filter: Profanity::High,
             map: true,
             minimap: true,
@@ -1479,6 +1511,26 @@ impl ClientOptions {
         }
         if self.stacked_bars {
             s.push_str("stacked_bars=on\n");
+        }
+        if self.spell_bar_opacity != 100 {
+            s.push_str(&format!("spell_bar_opacity={}\n", self.spell_bar_opacity));
+        }
+        for (k, &t) in self.chat_tabs.iter().enumerate() {
+            if t != 0 {
+                s.push_str(&format!("chat_tab.{}={t}\n", crate::chat::Kind::ALL[k].key()));
+            }
+        }
+        for (n, name) in self.chat_tab_names.iter().enumerate() {
+            let name: String = name.iter().take_while(|&&c| c != '\0').collect();
+            if !name.is_empty() {
+                s.push_str(&format!("chat_tab_name.{}={name}\n", n + 1));
+            }
+        }
+        if !self.pets_pass {
+            s.push_str("pets_pass=off\n");
+        }
+        if self.shared_shortcuts {
+            s.push_str("shared_shortcuts=on\n");
         }
         if !self.item_links {
             s.push_str("item_links=off\n");
@@ -1675,6 +1727,26 @@ impl ClientOptions {
                 ("chat_always", "off") => c.chat_always = false,
                 ("stacked_bars", "on") => c.stacked_bars = true,
                 ("stacked_bars", "off") => c.stacked_bars = false,
+                ("spell_bar_opacity", v) => {
+                    if let Some(o) = v.parse::<u8>().ok().filter(|o| *o <= 100 && o % 10 == 0) {
+                        c.spell_bar_opacity = o;
+                    }
+                }
+                ("pets_pass", "on") => c.pets_pass = true,
+                ("pets_pass", "off") => c.pets_pass = false,
+                ("shared_shortcuts", "on") => c.shared_shortcuts = true,
+                ("shared_shortcuts", "off") => c.shared_shortcuts = false,
+                (k, v) if k.starts_with("chat_tab.") => {
+                    let kind = crate::chat::Kind::ALL.iter().position(|x| Some(x.key()) == k.strip_prefix("chat_tab."));
+                    if let (Some(kind), Some(t)) = (kind, v.parse::<u8>().ok().filter(|t| (1..=crate::chat::TABS as u8).contains(t))) {
+                        c.chat_tabs[kind] = t;
+                    }
+                }
+                (k, v) if k.starts_with("chat_tab_name.") => {
+                    if let Some(n) = k.strip_prefix("chat_tab_name.").and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=crate::chat::TABS).contains(n)) {
+                        c.chat_tab_names[n - 1] = crate::chat::tab_name(v);
+                    }
+                }
                 ("profanity_filter", v) => {
                     if let Some(p) = Profanity::from_key(v) {
                         c.profanity_filter = p;
@@ -2042,6 +2114,23 @@ pub fn chat_always() -> bool {
     client().chat_always
 }
 
+/// The account's quick-chat menus as `quickchat::shared_text` keeps them (Same
+/// Shortcuts on Every Character, ticket 1987): None with no account known or
+/// none kept.
+pub fn account_shortcuts() -> Option<Vec<u8>> {
+    account_read("shortcuts")
+}
+
+/// Keeps the account's quick-chat menus (nothing with no account known).
+pub fn set_account_shortcuts(b: &[u8]) -> Result<(), String> {
+    account_write("shortcuts", b)
+}
+
+/// Whether an account is known, whose files `account_shortcuts` reads.
+pub fn account_known() -> bool {
+    account_key().is_some()
+}
+
 /// Stacked Spell Bars (Extended > UI > HUD; ticket 1913).
 pub fn stacked_bars() -> bool {
     client().stacked_bars
@@ -2103,6 +2192,17 @@ pub fn art() -> esf::Era {
 pub fn set_art(art: esf::Era) -> Result<(), String> {
     let mut c = client();
     c.art = art;
+    set_client(c);
+    save_client()
+}
+
+/// Chat tab `n`'s name (1 to 3; `/tabname`), kept at once as F9's Art is (a
+/// typed command, no page's row that Save Changes keeps).
+pub fn set_chat_tab_name(n: usize, name: &str) -> Result<(), String> {
+    let mut c = client();
+    if let Some(slot) = n.checked_sub(1).and_then(|i| c.chat_tab_names.get_mut(i)) {
+        *slot = crate::chat::tab_name(name);
+    }
     set_client(c);
     save_client()
 }
@@ -3249,6 +3349,28 @@ mod tests {
         assert_eq!(Profanity::Off.step(1), Profanity::Medium);
         assert_eq!(Profanity::High.step(1), Profanity::Off);
         assert_eq!(Profanity::Off.step(-1), Profanity::High);
+    }
+
+    /// The rows of tickets 1951, 1953, 1977 and 1987: kept only when changed,
+    /// read back as kept, a value out of range left at its default.
+    #[test]
+    fn the_tickets_rows_of_2026_11_13_are_kept_only_when_changed() {
+        let d = ClientOptions::default();
+        assert!(d.pets_pass && !d.shared_shortcuts && d.spell_bar_opacity == 100 && d.chat_tabs == [0; crate::chat::KINDS], "the defaults");
+        let t = d.to_text();
+        for k in ["pets_pass", "shared_shortcuts", "spell_bar_opacity", "chat_tab"] {
+            assert!(!t.contains(k), "{k} not kept at its default: {t}");
+        }
+        let mut c = ClientOptions { pets_pass: false, shared_shortcuts: true, spell_bar_opacity: 40, ..d };
+        c.chat_tabs[crate::chat::Kind::Loot.index()] = 3;
+        c.chat_tabs[crate::chat::Kind::Tells.index()] = 1;
+        c.chat_tab_names[2] = crate::chat::tab_name("Loot");
+        let t = c.to_text();
+        assert!(t.contains("chat_tab.loot=3\n") && t.contains("chat_tab_name.3=Loot\n") && t.contains("spell_bar_opacity=40\n"), "{t}");
+        assert_eq!(ClientOptions::from_text(&t), c, "round trip");
+        // out of range: left at the default
+        let bad = ClientOptions::from_text("spell_bar_opacity=45\nchat_tab.loot=4\nchat_tab.nonsense=1\nchat_tab_name.4=x");
+        assert_eq!(bad, d);
     }
 
     /// Item Links: on by default and written only when off.
