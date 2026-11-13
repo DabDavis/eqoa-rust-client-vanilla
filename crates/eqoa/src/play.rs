@@ -110,7 +110,7 @@ struct Puppet {
     race_look: Option<std::rc::Rc<net::raceopts::Look>>,
     /// The tint the server names for its body (`npctint`: an NPC's, by its
     /// name): another, or one gone, rebuilds it.
-    tint: Option<u32>,
+    tint: Option<crate::npctint::Tint>,
     /// A Wisp's (`wisp::is`): it casts no shadow, neither its blob shadow
     /// (`shadow_casters`) nor any of its models into the shadow maps
     /// (`set_casts`).
@@ -1083,7 +1083,7 @@ fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Lo
 
 /// The tint the server names for an NPC's body (`npctint`), by the name its
 /// channel carries; none for a player's character.
-fn tint_of(e: &net::entity::Entity) -> Option<u32> {
+fn tint_of(e: &net::entity::Entity) -> Option<crate::npctint::Tint> {
     e.creature.as_ref().filter(|_| !a_player(e)).and_then(|c| crate::npctint::of(&c.name))
 }
 
@@ -2842,18 +2842,23 @@ mod held {
             ..Default::default()
         };
         let (yhafiran, twin, player) = (entity(7001, "YHAFIRAN", 0), entity(7002, "Uzrathixius", 0), entity(7003, "Yhafiran", 2));
-        crate::npctint::set(vec![("yhafiran".into(), 0x2A73_33FF)]);
+        use crate::npctint::Tint;
+        crate::npctint::set(vec![("yhafiran".into(), Tint::color(0x2A73_33FF))]);
         let tint = |p: &Option<Puppet>| p.as_ref().expect("a puppet").tint;
         let (mut him, mut beside, mut them) = (None, None, None);
         for (p, e) in [(&mut him, &yhafiran), (&mut beside, &twin), (&mut them, &player)] {
             apply(&lib, &mut g, p, e, None, 0, 0, None, false);
         }
-        assert_eq!((tint(&him), tint(&beside), tint(&them)), (Some(0x2A73_33FF), None, None));
+        assert_eq!((tint(&him), tint(&beside), tint(&them)), (Some(Tint::color(0x2A73_33FF)), None, None));
         assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 33, None, false).is_none(), "the same tint: kept");
-        crate::npctint::set(vec![("yhafiran".into(), 0x4D80_4DFF)]);
+        crate::npctint::set(vec![("yhafiran".into(), Tint::color(0x4D80_4DFF))]);
         assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 66, None, false).is_some(), "a new tint: made anew");
         assert!(apply(&lib, &mut g, &mut beside, &twin, None, 0, 66, None, false).is_none(), "the twin kept");
-        assert_eq!(tint(&him), Some(0x4D80_4DFF));
+        assert_eq!(tint(&him), Some(Tint::color(0x4D80_4DFF)));
+        // a glow come on the same colour (petition 1893): made anew in it
+        crate::npctint::set(vec![("yhafiran".into(), Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080 })]);
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 77, None, false).is_some(), "a glow come: made anew");
+        assert_eq!(tint(&him), Some(Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080 }));
         crate::npctint::set(Vec::new());
         assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 99, None, false).is_some(), "the tint gone: made anew");
         assert_eq!(tint(&him), None);
@@ -3992,7 +3997,7 @@ impl Play {
                                 if cs.cur[0].play >= 0 { cs.h.plays.get(cs.cur[0].play).frame_a } else { -1 },
                                 crate::jump::blended(cs, &p.anims),
                                 self.airs[slot],
-                                p.tint.map_or_else(|| "none".to_string(), |t| format!("{t:08X}"))
+                                p.tint.map_or_else(|| "none".to_string(), |t| if t.glow != 0 { format!("{:08X} glow {:08X}", t.color, t.glow) } else { format!("{:08X}", t.color) })
                             );
                         }
                     }

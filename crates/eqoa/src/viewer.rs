@@ -125,7 +125,7 @@ pub fn lit(
 pub enum Source {
     /// The models listed and the one shown, in a server's body tint when
     /// given one (`npctint`: `eqoa shot ... tint=RRGGBBAA`).
-    Models { list: Vec<(i32, Ref)>, index: usize, tint: Option<u32> },
+    Models { list: Vec<(i32, Ref)>, index: usize, tint: Option<crate::npctint::Tint> },
     Zone { file: usize, zone: esf::NodeId, index: usize },
     /// A zone with the character in it, walking: at `spawn` when a server
     /// gave the place.
