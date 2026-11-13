@@ -13,6 +13,11 @@ is put on the page by `.github/workflows/notes.yml`.
   it. Each side of the mane now carries its own layer of the aura, so the glow wraps the mane as evenly as the rest
   of him.
 - Creatures without an aura look exactly as before.
+## 2026-11-13 · The minimap on a scroll
+- **The minimap now hangs on a scroll, like the spell bar's**: the same parchment round the map, with a wooden roller
+  and its brass knobs across the top and another across the bottom. The map inside is the same size and nothing of
+  it is covered; it moves, zooms and opens the big map as before.
+- Prefer the old plain border? Turn **Extended > UI > HUD Layout > Minimap Scroll Frame** off.
 
 ## 2026-11-13 · A glowing NPC's aura
 - **Glowing creatures now wear one aura round their whole body**: a creature the server gives a glow, such as

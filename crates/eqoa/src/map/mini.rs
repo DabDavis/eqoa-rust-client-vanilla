@@ -26,6 +26,13 @@
 //! Every mark is a `Mark` (a kind, a world, a place, its card's lines): the
 //! one under the mouse's pointer shows its card left of the minimap.
 //!
+//! Its border is the quick menu's scroll (`draw_scroll`, Extended's Minimap
+//! Scroll Frame, on by default; the owner, 2026-11-13: "make the minimap have
+//! the borders like the spell bar the scroll, with the rollers on top and
+//! bottom"): the bar's parchment round the pictures and its roller across the
+//! top and, turned over, across the bottom, as `hudmenu`'s `DrawList` draws
+//! the spell bar's column. Off, a window's frame, as it was.
+//!
 //! A click or a tap on it opens the map (`hud::Pick::Minimap`); the wheel over
 //! it zooms it (`Map::mini_wheel`, between `SCALE_LIMITS`). It is shown where
 //! the quick menus are (in play, no window up, no player search), only with
@@ -57,6 +64,77 @@ pub const PLATE: [i32; 4] = [430, 25, 592, 44];
 /// The frame art's border (`vi::ui::frame_sets`' first, a window's), the
 /// pictures inside it.
 pub const INSET: i32 = 6;
+
+/// The quick menu's scroll (`hudmenu::HudMenu::draw_list`, the spell bar):
+/// its parchment, a slot's frame (`SCROLL_CELL`, 36 by 31), and its roller
+/// (`SCROLL_ROLLER`, 44 by 9: a brass knob 4 texels wide at each end, the
+/// rod between them shaded across only), drawn as is above the column and
+/// turned over (flag 2, the atlas's own entry 31) below it.
+pub const SCROLL_CELL: i32 = 29;
+pub const SCROLL_ROLLER: i32 = 30;
+/// The roller's knobs, texels at each end: kept at their size while the rod
+/// between them stretches to the frame's width.
+const ROLLER_KNOB: i32 = 4;
+/// The parchment's border, texels from each edge of the slot's frame:
+/// drawn at `INSET`, the pictures' own inset, so nothing of it is over them.
+const CELL_EDGE: i32 = 6;
+/// How far the rollers reach past the parchment's sides (the spell bar's are
+/// 4 past its 36: here 3, so the right knob ends at the quick menus' column
+/// of icons, x 589, and not on it).
+pub const ROLLER_OVER: i32 = 3;
+/// How far the rollers lie over the parchment's top and bottom edges (the
+/// spell bar's bottom one 4), and so past them (the roller is 9 high): the
+/// top one clear of the name plate (to y 44), the bottom one of the quest
+/// tracker (from y 168).
+pub const ROLLER_ON: i32 = 4;
+/// The roller's height, SUPPORT's atlas's (entry 30's 9), for where the
+/// minimap reaches before the atlas is read (`drawn`).
+pub const ROLLER_HEIGHT: i32 = 9;
+
+/// What the minimap draws in the HUD's frame: `FRAME`, and with the scroll
+/// (`settings::minimap_scroll`) its rollers past its sides, top and bottom.
+/// The HUD notes it as the minimap's place (`hud`, `hudlayout`).
+pub fn drawn(scroll: bool) -> [i32; 4] {
+    if !scroll {
+        return FRAME;
+    }
+    let h = ROLLER_HEIGHT;
+    [FRAME[0] - ROLLER_OVER, FRAME[1] + ROLLER_ON - h, FRAME[2] + ROLLER_OVER, FRAME[3] - ROLLER_ON + h]
+}
+
+/// The minimap's border as the quick menu's scroll, round the HUD frame
+/// rectangle `f` (`FRAME`): the slot's frame's edges as the parchment, `INSET`
+/// wide (its middle, where the pictures are, not drawn: this layer goes over
+/// them), and the roller across the top and, turned over, across the bottom,
+/// its knobs at their size and its rod stretched between them.
+pub fn draw_scroll(vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, f: [i32; 4]) {
+    let (cell, roller) = (vui.entry(SCROLL_CELL), vui.entry(SCROLL_ROLLER));
+    // the parchment: the slot frame's nine pieces less its middle, each
+    // texel edge `CELL_EDGE` drawn `INSET` wide
+    let (id, [u, v], [cw, ch]) = (vui.entry_id(&cell), cell.uv0, cell.uv1);
+    let e = CELL_EDGE.min(cw / 2).min(ch / 2);
+    let (w, h) = (f[2] - f[0], f[3] - f[1]);
+    let cols = [(0, e, f[0], INSET), (e, cw - 2 * e, f[0] + INSET, w - 2 * INSET), (cw - e, e, f[2] - INSET, INSET)];
+    let rows = [(0, e, f[1], INSET), (e, ch - 2 * e, f[1] + INSET, h - 2 * INSET), (ch - e, e, f[3] - INSET, INSET)];
+    for (j, &(ty, th, y, dh)) in rows.iter().enumerate() {
+        for (i, &(tx, tw, x, dw)) in cols.iter().enumerate() {
+            if i == 1 && j == 1 {
+                continue;
+            }
+            r.stretch_blit(id, 0, [x, y], [dw, dh], [u + tx, v + ty], [tw, th], 3, 1.0);
+        }
+    }
+    // the rollers: knob, rod, knob; the top one as it is, the bottom one
+    // turned over (its shadow towards the parchment, as the spell bar's)
+    let (id, [u, v], [rw, rh]) = (vui.entry_id(&roller), roller.uv0, roller.uv1);
+    let k = ROLLER_KNOB.min(rw / 2);
+    let (x0, x1) = (f[0] - ROLLER_OVER, f[2] + ROLLER_OVER);
+    for (y, flags) in [(f[1] + ROLLER_ON - rh, 0), (f[3] - ROLLER_ON, 2)] {
+        r.stretch_blit(id, flags, [x0, y], [k, rh], [u, v], [k, rh], 3, 1.0);
+        r.stretch_blit(id, flags, [x0 + k, y], [x1 - x0 - 2 * k, rh], [u + k, v], [rw - 2 * k, rh], 3, 1.0);
+        r.stretch_blit(id, flags, [x1 - k, y], [k, rh], [u + rw - k, v], [k, rh], 3, 1.0);
+    }
+}
 
 /// World units a frame pixel at first: the pictures' 100 frame pixels across
 /// show 600 units, a couple of camps' worth round the player. The wheel's
@@ -417,7 +495,9 @@ impl Map {
         let size = cx.size;
         // where the player put it (`hudlayout`), the HUD's last frame keeping it on the screen
         let moved = crate::hudlayout::shift(crate::hudlayout::Piece::Minimap, crate::hudlayout::Beyond::of(size));
-        let outer = window_rect_moved(size, FRAME, moved);
+        // all it draws, the scroll's rollers too: where a pointer finds it
+        // and what its cards keep left of
+        let outer = window_rect_moved(size, drawn(crate::settings::minimap_scroll()), moved);
         let inside = window_rect_moved(size, inner(), moved);
         let across = (inner()[2] - inner()[0]) as f32;
         let k = (inside[2] - inside[0]) / across;
@@ -563,7 +643,11 @@ impl Map {
             r.ui.anchor = Anchor::Right;
             r.ui.vertical = Vertical::Top;
             r.ui.shift = moved;
-            vui.blit_frame(&mut r, [FRAME[0], FRAME[1]], [FRAME[2] - FRAME[0], FRAME[3] - FRAME[1]], &vi::ui::frame_sets()[0], 3, 1.0, true);
+            if crate::settings::minimap_scroll() {
+                draw_scroll(vui, &mut r, FRAME);
+            } else {
+                vui.blit_frame(&mut r, [FRAME[0], FRAME[1]], [FRAME[2] - FRAME[0], FRAME[3] - FRAME[1]], &vi::ui::frame_sets()[0], 3, 1.0, true);
+            }
             // north, up: the compass turns with the camera, the minimap does not
             let i = inner();
             let h = vui.font_height(&r);
@@ -680,6 +764,83 @@ mod tests {
         assert_eq!((i[2] - i[0], i[3] - i[1]), (100, 100), "the pictures square");
         let reaching = [FRAME[0], FRAME[1], column_x + 2, FRAME[3]];
         assert!(reaching[2] >= column_x, "the control: a frame on the column");
+    }
+
+    /// The scroll frame: the parchment's eight pieces in the `INSET` ring
+    /// round the pictures and none on them, the two rollers (knob, rod,
+    /// knob) across the top and the bottom, the bottom one turned over, all
+    /// inside `drawn`, which keeps clear of the name plate, the quick menus'
+    /// column of icons (from x 589) and the quest tracker (from y 168). The
+    /// control: with the scroll off, `drawn` is the frame.
+    #[test]
+    fn the_scroll_frames_the_pictures_with_a_roller_top_and_bottom() {
+        struct Rec(Vec<(u32, u32, [i32; 4], [i32; 2], [i32; 2])>);
+        impl vi::ui::Raster for Rec {
+            fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn stretch_blit(&mut self, id: u32, flags: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], _: i32, _: f32) {
+                self.0.push((id, flags, [at[0], at[1], at[0] + size[0], at[1] + size[1]], a, b));
+            }
+            fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+            fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+            fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+            fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+            fn string_width(&self, _: &[u16]) -> i32 {
+                0
+            }
+            fn point_size(&self) -> i32 {
+                0
+            }
+            fn viewport(&self) -> [i32; 4] {
+                [0; 4]
+            }
+            fn set_viewport(&mut self, _: [i32; 4]) {}
+        }
+        // SUPPORT's entries: the slot's frame at (4, 300), 36 by 31; the roller at (0, 290), 44 by 9
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 32];
+        atlas[SCROLL_CELL as usize] = vi::ui::UiTexEntry { x00: 29, row: 1, uv0: [4, 300], uv1: [36, 31], ..Default::default() };
+        atlas[SCROLL_ROLLER as usize] = vi::ui::UiTexEntry { x00: 30, row: 1, uv0: [0, 290], uv1: [44, ROLLER_HEIGHT], ..Default::default() };
+        let vui = vi::ui::Vui::new(Default::default(), Default::default(), atlas);
+        let mut rec = Rec(Vec::new());
+        draw_scroll(&vui, &mut rec, FRAME);
+        let (parchment, rollers) = rec.0.split_at(8);
+        assert_eq!(rollers.len(), 6, "two rollers of three pieces");
+        let i = inner();
+        let overlaps = |a: [i32; 4], b: [i32; 4]| a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+        // the parchment: in the frame, off the pictures, and covering the ring
+        let area: i32 = parchment.iter().map(|p| (p.2[2] - p.2[0]) * (p.2[3] - p.2[1])).sum();
+        assert_eq!(area, 112 * 112 - 100 * 100, "the ring round the pictures, each pixel once");
+        for p in parchment {
+            assert!(!overlaps(p.2, i), "parchment on the pictures: {p:?}");
+            assert!(p.2[0] >= FRAME[0] && p.2[2] <= FRAME[2] && p.2[1] >= FRAME[1] && p.2[3] <= FRAME[3], "{p:?}");
+            assert!(p.3[0] >= 4 && p.3[0] + p.4[0] <= 40 && p.3[1] >= 300 && p.3[1] + p.4[1] <= 331, "the slot's texels: {p:?}");
+            assert_eq!(p.1, 0);
+        }
+        // the rollers: the knobs at their size, the rod stretched, the top
+        // one as it is, the bottom one turned over, over the frame's edges
+        // only, never the pictures
+        for (k, row) in rollers.chunks(3).enumerate() {
+            let flags = if k == 0 { 0 } else { 2 };
+            assert!(row.iter().all(|p| p.1 == flags), "{k}: flags {flags}");
+            assert_eq!((row[0].2[2] - row[0].2[0], row[0].4), (4, [4, 9]), "the left knob as it is");
+            assert_eq!((row[2].2[2] - row[2].2[0], row[2].3[0], row[2].4), (4, 40, [4, 9]), "the right knob as it is");
+            assert_eq!((row[1].2[0], row[1].2[2], row[1].3[0], row[1].4[0]), (row[0].2[2], row[2].2[0], 4, 36), "the rod between");
+            assert_eq!((row[0].2[0], row[2].2[2]), (FRAME[0] - ROLLER_OVER, FRAME[2] + ROLLER_OVER), "past the sides");
+            for p in row {
+                assert!(!overlaps(p.2, i), "a roller on the pictures: {p:?}");
+            }
+        }
+        assert_eq!((rollers[0].2[1], rollers[0].2[3]), (FRAME[1] + ROLLER_ON - 9, FRAME[1] + ROLLER_ON), "over the top edge");
+        assert_eq!((rollers[3].2[1], rollers[3].2[3]), (FRAME[3] - ROLLER_ON, FRAME[3] - ROLLER_ON + 9), "over the bottom edge");
+        // all of it inside `drawn`, and `drawn` clear of its neighbours
+        let d = drawn(true);
+        for p in &rec.0 {
+            assert!(p.2[0] >= d[0] && p.2[2] <= d[2] && p.2[1] >= d[1] && p.2[3] <= d[3], "{p:?} past {d:?}");
+        }
+        assert_eq!([rec.0.iter().map(|p| p.2[0]).min().unwrap(), rec.0.iter().map(|p| p.2[1]).min().unwrap(), rec.0.iter().map(|p| p.2[2]).max().unwrap(), rec.0.iter().map(|p| p.2[3]).max().unwrap()], d, "drawn is all of it");
+        assert!(d[1] > PLATE[3], "below the name plate: {d:?}");
+        assert!(d[2] <= 589, "the knob ends where the column of icons starts: {d:?}");
+        assert!(d[3] <= crate::tracker::COLUMN[1], "above the quest tracker: {d:?}");
+        assert_eq!(drawn(false), FRAME, "the control: the window's frame is the frame");
     }
 
     /// The frame is placed as the HUD's right side places the quick menus: in

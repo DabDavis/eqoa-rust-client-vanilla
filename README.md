@@ -205,6 +205,15 @@ or a browser (each described where it lives below):
   turns with the walk's heading (Facing, the default, as before) or the camera's,
   the compass's (Camera: `map::Pointer`, `map::pointer_heading`, `Play::camera_heading`;
   `client.opt`'s `map_pointer=camera`, written only when Camera).
+  **Minimap Scroll Frame** (Extended > UI > HUD Layout, after Reset HUD, Map's page being full; the owner's of
+  2026-11-13, "make the minimap have the borders like the spell bar the scroll, with
+  the rollers on top and bottom"; on by default): its border is the quick menu's
+  scroll as `DrawList` draws the spell bar, SUPPORT's atlas entry 29 (the slot's
+  frame, its edges as the parchment, `INSET` wide round the pictures) and 30 (the
+  roller, its knobs kept and its rod stretched) across the top and, turned over,
+  the bottom, 3 past the sides and 5 past the frame (`map::mini::draw_scroll`,
+  `drawn`); off, the window's frame it had (`client.opt`'s `minimap_scroll=off`).
+  `eqoa mapshot` with `EQOA_MINIMAP=1` draws the minimap alone.
   **Inside** (petition 1494, as FrontiersForge's minimap: `map::indoor`): under a
   ceiling (the collision world probed over the player and four points round it,
   a change held half a second) it shows the floors round the player instead of the

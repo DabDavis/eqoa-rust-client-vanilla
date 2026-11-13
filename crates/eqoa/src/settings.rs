@@ -1028,6 +1028,13 @@ pub struct ClientOptions {
     /// Minimap (on by default): the map's pictures round the player under
     /// the quick menus' name plate (`map::mini`); off, none.
     pub minimap: bool,
+    /// Minimap Scroll Frame (the owner, 2026-11-13: "make the minimap have
+    /// the borders like the spell bar the scroll, with the rollers on top and
+    /// bottom"; on by default): the minimap framed as the quick menu's
+    /// scroll, its parchment round the pictures and a roller across its top
+    /// and its bottom (`map::mini::draw_scroll`); off, the window's frame it
+    /// had before.
+    pub minimap_scroll: bool,
     /// Map Pointer (petition 1848; the owner: "add as a toggle"): what the
     /// player's dart on the minimap and the map turns with, Facing (the way
     /// the character faces, as it always was; the default) or Camera (the
@@ -1324,6 +1331,7 @@ impl Default for ClientOptions {
             profanity_filter: Profanity::High,
             map: true,
             minimap: true,
+            minimap_scroll: true,
             map_pointer: crate::map::Pointer::Facing,
             map_markers: true,
             map_towns: true,
@@ -1483,6 +1491,7 @@ impl ClientOptions {
         for (on, key) in [
             (self.map, "map"),
             (self.minimap, "minimap"),
+            (self.minimap_scroll, "minimap_scroll"),
             (self.map_markers, "map_markers"),
             (self.map_towns, "map_towns"),
             (self.quest_helper, "quest_helper"),
@@ -1675,6 +1684,8 @@ impl ClientOptions {
                 ("map", "off") => c.map = false,
                 ("minimap", "on") => c.minimap = true,
                 ("minimap", "off") => c.minimap = false,
+                ("minimap_scroll", "on") => c.minimap_scroll = true,
+                ("minimap_scroll", "off") => c.minimap_scroll = false,
                 ("map_pointer", v) => {
                     if let Some(p) = crate::map::Pointer::from_key(v) {
                         c.map_pointer = p;
@@ -2123,6 +2134,12 @@ pub fn map() -> bool {
 pub fn minimap() -> bool {
     let c = client();
     c.map && c.minimap
+}
+
+/// Whether the minimap is framed as the quick menu's scroll (Minimap Scroll
+/// Frame), else the window's frame.
+pub fn minimap_scroll() -> bool {
+    client().minimap_scroll
 }
 
 /// Whether the map marks the XP camps and the coaches (Map Markers).
@@ -3086,8 +3103,8 @@ mod tests {
     #[test]
     fn the_map_and_the_quest_helper_kept_only_when_off() {
         let d = ClientOptions::default();
-        assert!(d.map && d.minimap && d.map_markers && d.map_towns && d.quest_helper && d.quest_markers && d.quest_tracker, "on by default");
-        for key in ["map", "minimap", "map_markers", "map_towns", "quest_helper", "quest_markers", "quest_tracker"] {
+        assert!(d.map && d.minimap && d.minimap_scroll && d.map_markers && d.map_towns && d.quest_helper && d.quest_markers && d.quest_tracker, "on by default");
+        for key in ["map", "minimap", "minimap_scroll", "map_markers", "map_towns", "quest_helper", "quest_markers", "quest_tracker"] {
             let off = ClientOptions::from_text(&format!("{key}=off"));
             assert_ne!(off, d, "{key}=off read");
             assert_eq!(off.to_text(), format!("lod=on\nbrightness=5\ncamera_distance=11\n{key}=off\n"), "{key}: only when off");
