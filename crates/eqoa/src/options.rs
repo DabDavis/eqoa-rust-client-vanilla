@@ -186,7 +186,9 @@
 //!   items linked from the inventory into the chat line, drawn purple in the
 //!   chat box and opened in a window, `itemlink`, the server asked for them:
 //!   `Session::agree_item_links`; Off: none, the server sends the plain names a
-//!   PS2 gets), the page saying when this server has no links.
+//!   PS2 gets), the page saying when this server has no links; Chat Always
+//!   Shown (2026-11-13, Jibwiz's ticket 1914, Off by default: On, the chat box
+//!   stays open at its five rows, the last lines in it, never sliding away).
 //! - Multi-boxing settings (2026-11-11, petition 1634): natively Slow When Not
 //!   Focused (Off by default: a window covered or minimised takes its frames
 //!   at its Frame Rate as in front; On: at the game's 30 a second, as every
@@ -958,6 +960,9 @@ impl WndOptions {
                     // (`Session::agree_item_links`), the chat box's links drawn
                     // or plain, the windows closed when off (`itemlink`)
                     73 => c.item_links = !c.item_links,
+                    // Chat Always Shown (ticket 1914): the box from the next
+                    // frame (`chat::WndChat::always`)
+                    89 => c.chat_always = !c.chat_always,
                     // Auto-Cast and Auto Target (`autocast`): from the next
                     // game frame
                     78 => c.auto_cast = !c.auto_cast,
@@ -1582,7 +1587,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 72] = [
+const EXTENDED_ITEMS: [(i32, &str); 73] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1655,6 +1660,7 @@ const EXTENDED_ITEMS: [(i32, &str); 72] = [
     (86, "Power Bars"),
     (87, "Map Pointer"),
     (88, "Raid Mercenaries"),
+    (89, "Chat Always Shown"),
 ];
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
@@ -1746,7 +1752,7 @@ const ALL_CATEGORIES: [Category; 20] = [
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
-    Category { name: "Chat", items: &[73], note: Note::Links, group: Group::Ui },
+    Category { name: "Chat", items: &[73, 89], note: Note::Links, group: Group::Ui },
     Category { name: "General", items: &[29, 38, 84], note: Note::None, group: Group::Other },
     Category { name: "Combat", items: &[78, 79], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None, group: Group::Other },
@@ -1926,6 +1932,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         76 => on_off(crate::hudlayout::unlocked()),
         77 => wide("Reset"),
         73 => on_off(c.item_links),
+        89 => on_off(c.chat_always),
         78 => on_off(c.auto_cast),
         79 => on_off(c.auto_target),
         52 => on_off(c.dynamic_lighting),
@@ -3132,7 +3139,7 @@ mod tests {
                 ("Number Colors", n[..6].to_vec()),
                 ("Merc Colors", n[6..8].to_vec()),
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "Reset DPS Meter"]),
-                ("Chat", vec!["Item Links"]),
+                ("Chat", vec!["Item Links", "Chat Always Shown"]),
             ],
             "UI: what is drawn over the world"
         );

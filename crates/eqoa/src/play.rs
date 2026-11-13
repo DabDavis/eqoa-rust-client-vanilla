@@ -9490,6 +9490,8 @@ impl Play {
                 }
                 // item links drawn as links, or the line's plain words (`itemlink`)
                 c.show_links = crate::settings::item_links();
+                // Chat Always Shown (ticket 1914): never sliding away
+                c.always = crate::settings::chat_always();
                 for (text, color, at, links) in self.chat_pending.drain(..) {
                     let rr = &r;
                     c.text.add_text_linked(&crate::ui::wide(&text), color, at, |s| vi::ui::Raster::string_width(rr, s), &links);
