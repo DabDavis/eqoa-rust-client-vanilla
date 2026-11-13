@@ -301,6 +301,10 @@ impl Res {
                         let took = super::bodytrace::watch();
                         let mb = c.data.len() as f64 / 1048576.0;
                         let f = self.lib.add(BODIES, c);
+                        // set 9's art, where its bodies are among them
+                        // (`s2::art_bodies`), under its DictIDs as the world
+                        // has it (`s2::Rules::register_art`)
+                        crate::s2::get().register_art_cut(&mut self.lib, f);
                         super::bodytrace::note(|| format!("their file ({mb:.1} MB) put in the library in {:.1} ms on the frame's thread", took()));
                         self.bodies_files.push((f, ids));
                         self.bodies_in = true;

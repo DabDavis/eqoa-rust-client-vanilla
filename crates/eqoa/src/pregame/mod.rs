@@ -338,6 +338,10 @@ impl Pregame {
         // and the bodies the characters' capes are cut from (`cape`)
         let mut bodies = client::create::tables::bodies();
         bodies.extend(self.client.cape_bodies());
+        // and, with go-eqoa-server's armour, the bodies set 9's art is in
+        // (`s2::art_bodies`): the world registers it out of CHAR.ESF whole,
+        // which the pregame never reads
+        bodies.extend(crate::s2::art_bodies());
         self.res.want_bodies(&bodies);
         if self.res.take_bodies_in() {
             self.client.bodies_in();
