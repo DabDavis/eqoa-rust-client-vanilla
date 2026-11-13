@@ -7,6 +7,16 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Ornate plate (armor set 9) and trim dyes
+- **Ornate plate** (armor set 9), the gold-and-steel plate that was on the disc all along, is now drawn on the
+  Heirloom Test Server without any patch: the Ornate armor pieces show as ornate plate (with the plain plate helm),
+  in the world and at character select. On a PS2, or an older client, they show as plain plate.
+- **Trim dyes**: plate's **gold trim** can now be dyed apart from the rest of the armor, so a dyed suit no longer
+  mutes its trim. Ask an **Armor Dyer** for **Armor trim** (the last choice), then all your armor's trim or one piece
+  (chest, bracers, legs or boots). The trim takes the color you pick at its own shading; the rest of the piece keeps
+  its own dye. The plain plate (set 4) and the ornate plate (set 9) have trim; other armor has none to dye.
+- Armor with no trim dye looks exactly as before. Needs the Heirloom Test Server's update; on any other server
+  armor is drawn as before.
 ## 2026-11-13 · The browser page survives a graphics driver reset
 - In the browser, when the graphics card's driver resets (on Windows: the screen flickers black, and the game
   stopped with "the browser gave no new graphics device"), the game now **waits for the graphics card for about

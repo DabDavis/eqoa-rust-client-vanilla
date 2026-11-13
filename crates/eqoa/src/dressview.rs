@@ -29,6 +29,12 @@
 //! item in its own colour, as the live look's held-item colours draw it
 //! (`aura`: its glow in the colour's hue, the rest lightly tinted);
 //! `night=1` draws it under a night's dim light, where a glow shows.
+//! `trim=RRGGBB` draws the gold trim of the plate (sets 4 and 9,
+//! `vi::cust::TRIMMED`) in that colour on every slot, as go-eqoa-server's trim
+//! dyes do (`render::recolor::trimmed`); `trim=a,b,c,d,e` one a slot (chest,
+//! bracer, gloves, legs, boots; `-` none). The look is dressed by the tables
+//! of go-eqoa-server's armour (`s2::Rules::cust_with`): set 9 is the ornate
+//! plate, and the rest as retail's.
 //! `helm=N` puts on armour set N's helm (`SetHelm`, on the node and seated
 //! as a player's character wears it: `slotless::helm_on`), in the helm's
 //! tint (`tint=T`); `helmfit=0` seats it as the PS2 does, without this
@@ -125,6 +131,19 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                 look.item_color.get_or_insert([[255; 4]; 3])[slot] = [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255];
             }
             "night" => night = v != "0",
+            "trim" => {
+                let mut t = [[0u8; 4]; 6];
+                let parts: Vec<&str> = v.split(',').collect();
+                for i in 0..5 {
+                    let p = if parts.len() == 1 { parts[0] } else { parts.get(i).copied().unwrap_or("-") };
+                    if p == "-" || p.is_empty() {
+                        continue;
+                    }
+                    let c = u32::from_str_radix(p.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))?;
+                    t[i] = [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255];
+                }
+                look.trim_color = Some(t);
+            }
             "race" => race = v != "0",
             "cape" => cape.style = v.parse().map_err(|e| format!("{w}: {e}"))?,
             "capecolor" => cape.color = (u32::from_str_radix(v.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))? << 8) | 0xFF,
@@ -240,7 +259,8 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     let mut mesh = lib.build_model(r).ok_or("no mesh")?;
     let before = mesh.batches.len();
     // the helm, on its node and seated as a player's character wears it
-    let t = vi::cust::Tables::retail();
+    // go-eqoa-server's armour: set 9 and the trims (sets 0-8 untrimmed as retail's)
+    let t = crate::s2::Rules::retail().cust_with(true);
     let mut helm = crate::slotless::helm_on(lib, model as u32, &cs, true, look.armor[5], look.helm_color(&t), &t, words.helm_fit);
     // a seat tried in place of the body's (`helmseat=`)
     if let Some((at, fit)) = words.seat {

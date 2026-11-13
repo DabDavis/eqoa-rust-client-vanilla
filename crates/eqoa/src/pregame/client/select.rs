@@ -130,6 +130,8 @@ pub fn look_of(c: &CharRecord, helm: bool) -> vi::cust::Look {
         robe_color: c.colors.map(|l| l.robe),
         // the held items' (`aura`)
         item_color: c.colors.map(|l| l.items),
+        // go-eqoa-server's trims
+        trim_color: c.colors.map(|l| l.trim),
     }
 }
 

@@ -157,6 +157,13 @@ pub const OP_LIVE_LOOK_IN_FORCE: u16 = 0x7E0D;
 /// ([`Session::char_slots`]), and the list comes again, whole. A server that
 /// knows no such bit reads bit 0 alone (go-eqoa-server before 2026-11-11).
 pub const LIVE_LOOK_MANY_CHARS: u32 = 2;
+/// Bit 2 of this client's answer to [`OP_LIVE_LOOK`]: it draws
+/// go-eqoa-server's armour, set 9 (the ornate plate CHAR.ESF holds, which
+/// Sandstorm's S2 adds) and the trim colours after the live game's channel
+/// ([`crate::entity::ARMOR_STATE_SIZE`]) and record ([`ARMOR_GEAR_SIZE`]). The
+/// look in force's third u32 says it is granted ([`Session::armor_look`]); a
+/// server that knows no such bit sends none, and set 9 as set 4.
+pub const LIVE_LOOK_ARMOR: u32 = 4;
 /// CLIENT's character select: eight (`CharacterList`, `m_chars[8]`).
 pub const CLIENT_CHAR_SLOTS: u32 = 8;
 /// The most characters a list is read of, whatever a server says.
@@ -489,6 +496,9 @@ pub struct RaidMember {
 /// and robe's colours).
 pub const DISC_GEAR_SIZE: usize = 32;
 pub const LIVE_GEAR_SIZE: usize = 71;
+/// The live game's record with go-eqoa-server's six trim colours after it
+/// ([`LIVE_LOOK_ARMOR`]).
+pub const ARMOR_GEAR_SIZE: usize = LIVE_GEAR_SIZE + 24;
 /// go-eqoa-server's own, no retail message: the quest marks the map draws (a
 /// "!" at each giver of a quest the player may take, a "?" where a step of
 /// its quests is to be done). A u32 after the opcode, both ways: offered once
@@ -1146,6 +1156,10 @@ pub struct Session {
     /// of its length too (`entity::Entities::live_look`). Kept for the
     /// session, as the server keeps it, through the world's connection.
     pub live_look: bool,
+    /// go-eqoa-server's armour is in force ([`OP_LIVE_LOOK_IN_FORCE`]'s third
+    /// u32 has [`LIVE_LOOK_ARMOR`]): set 9 is drawn and the trims are read,
+    /// each record's gear [`ARMOR_GEAR_SIZE`]. Kept for the session.
+    pub armor_look: bool,
     /// The characters this account may hold and character select lists
     /// (go-eqoa-server's `world.max_characters`), told with the look in
     /// force ([`OP_LIVE_LOOK_IN_FORCE`]'s second u32) to a client that said
@@ -1446,6 +1460,7 @@ impl Session {
             expansion: 0,
             entity_view_offer: None,
             live_look: false,
+            armor_look: false,
             char_slots: CLIENT_CHAR_SLOTS,
             bug_reports: false,
             petition_text: PETITION_TEXT_DISC,
@@ -2503,7 +2518,9 @@ impl Session {
             // every character listed (character select scrolls them)
             OP_LIVE_LOOK => {
                 if r.u32() & 1 != 0 && !r.error {
-                    self.send_op_int(OP_LIVE_LOOK, wants_live_look() as u32 | LIVE_LOOK_MANY_CHARS);
+                    // the server's armour with the live look alone (its trims ride the live channel)
+                    let live = if wants_live_look() { 1 | LIVE_LOOK_ARMOR } else { 0 };
+                    self.send_op_int(OP_LIVE_LOOK, live | LIVE_LOOK_MANY_CHARS);
                 }
             }
             // bug reports offered: taken (F3 and the note, `bugnote`), with the
@@ -2800,6 +2817,8 @@ impl Session {
                     if m.data.len() >= r.pos + 4 {
                         self.char_slots = r.u32().clamp(1, CHAR_SLOTS_MOST);
                     }
+                    // its armour, from a server that says (go-eqoa-server)
+                    self.armor_look = self.live_look && m.data.len() >= r.pos + 4 && r.u32() & LIVE_LOOK_ARMOR != 0;
                 }
             }
             // the quest marks and tracker offered (again at every world
@@ -2946,7 +2965,7 @@ impl Session {
             }
             0x002C if matches!(self.state, State::Shard | State::Characters) => {
                 self.state = State::Characters;
-                ev.push(Event::Characters(read_characters(&mut r, self.live_look, self.char_slots.max(CLIENT_CHAR_SLOTS))));
+                ev.push(Event::Characters(read_characters(&mut r, self.live_look, self.armor_look, self.char_slots.max(CLIENT_CHAR_SLOTS))));
             }
             0x0012 if self.state == State::Characters => ev.push(Event::RandomName(String::from_utf8_lossy(&r.string(24)).into_owned())),
             0x002E if self.state == State::Characters => ev.push(Event::CreateRefused(269)),
@@ -3260,10 +3279,15 @@ fn wants_live_look() -> bool {
 }
 
 /// `CharacterList`: the disc's records, or with `live` the live game's
-/// ([`LIVE_GEAR_SIZE`] raw bytes each); at most `most` of them (CLIENT's
-/// eight, or the characters a server said it lists, [`Session::char_slots`]).
-fn read_characters(r: &mut Reader, live: bool, most: u32) -> Vec<Character> {
-    let gear = if live { LIVE_GEAR_SIZE } else { DISC_GEAR_SIZE };
+/// ([`LIVE_GEAR_SIZE`] raw bytes each, [`ARMOR_GEAR_SIZE`] with `armor`,
+/// go-eqoa-server's armour); at most `most` of them (CLIENT's eight, or the
+/// characters a server said it lists, [`Session::char_slots`]).
+fn read_characters(r: &mut Reader, live: bool, armor: bool, most: u32) -> Vec<Character> {
+    let gear = match (live, armor) {
+        (true, true) => ARMOR_GEAR_SIZE,
+        (true, false) => LIVE_GEAR_SIZE,
+        _ => DISC_GEAR_SIZE,
+    };
     let n = r.signed().clamp(0, most as i64) as usize;
     (0..n)
         .map(|_| {
@@ -4904,6 +4928,54 @@ mod tests {
     // through the world's connection, as the server keeps it for the
     // session. The control: a list that comes before the server's answer is
     // the disc's, though this client asked already.
+    /// go-eqoa-server's armour (`LIVE_LOOK_ARMOR`): a look in force whose
+    /// third u32 has bit 2 puts it in force, and a list is then read with 95
+    /// bytes of gear a record (the live game's 71 and six trim colours); a
+    /// look in force of two u32s (an older server) or a third of 0 leaves it
+    /// off and the records 71. The disc's look never has it.
+    #[test]
+    fn armor_look_in_force_and_lists() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.state = State::Shard;
+        let list = |gear: usize| {
+            let mut w = Writer::op(0x002C);
+            w.signed(1).u32(4).bytes(b"Gild");
+            for v in [17, 0x70D8_98C6, 2, 0, 60, 1, 2, 3, 2] {
+                w.signed(v);
+            }
+            let mut g = vec![0u8; gear];
+            if gear > LIVE_GEAR_SIZE {
+                g[LIVE_GEAR_SIZE..LIVE_GEAR_SIZE + 4].copy_from_slice(&[0xD1, 0, 0, 0xFF]);
+            }
+            w.bytes(&g);
+            w.data
+        };
+        let gear_of = |ev: &[Event]| match ev {
+            [Event::Characters(c)] => c.iter().map(|c| c.gear.clone()).collect::<Vec<_>>(),
+            other => panic!("{other:?}"),
+        };
+        let in_force = |s: &mut Session, words: &[u32]| {
+            let mut d = vec![0x0D, 0x7E];
+            for w in words {
+                d.extend(w.to_le_bytes());
+            }
+            deliver(s, drdp::TYPE_GUARANTEED, d);
+        };
+        in_force(&mut s, &[1, 8]);
+        assert!(s.live_look && !s.armor_look, "an older server's two words");
+        assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(LIVE_GEAR_SIZE)))[0].len(), LIVE_GEAR_SIZE);
+        in_force(&mut s, &[1, 8, 0]);
+        assert!(!s.armor_look, "a third word of 0");
+        in_force(&mut s, &[1, 8, LIVE_LOOK_ARMOR]);
+        assert!(s.armor_look);
+        let g = gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(ARMOR_GEAR_SIZE)));
+        assert_eq!(g[0].len(), ARMOR_GEAR_SIZE);
+        assert_eq!(&g[0][LIVE_GEAR_SIZE..LIVE_GEAR_SIZE + 4], &[0xD1, 0, 0, 0xFF], "the chest's trim");
+        in_force(&mut s, &[0, 8, LIVE_LOOK_ARMOR]);
+        assert!(!s.live_look && !s.armor_look, "the disc's look has none");
+    }
+
     #[test]
     fn live_look_offer_answer_and_lists() {
         let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -4931,8 +5003,8 @@ mod tests {
         s.state = State::Shard;
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "a first list: the disc's");
         assert!(deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0C, 0x7E, 1, 0, 0, 0]).is_empty());
-        let bits = wants_live_look() as u8 | LIVE_LOOK_MANY_CHARS as u8;
-        assert_eq!(answers(&mut s), [(251, vec![0x0C, 0x7E, bits, 0, 0, 0])], "the offer answered with 1, and every character listed (2)");
+        let bits = if wants_live_look() { 1 | LIVE_LOOK_ARMOR as u8 } else { 0 } | LIVE_LOOK_MANY_CHARS as u8;
+        assert_eq!(answers(&mut s), [(251, vec![0x0C, 0x7E, bits, 0, 0, 0])], "the offer answered with 1, every character listed (2) and the server's armour drawn (4)");
         assert!(!s.live_look, "not in force until the server says so");
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "the control: a list before the server's answer");
 
@@ -5481,7 +5553,7 @@ mod tests {
         };
         answers(&mut s);
         deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK, &[1]));
-        let want = if wants_live_look() { 3 } else { 2 };
+        let want = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | 2 } else { 2 };
         assert_eq!(answers(&mut s), [(251, words(OP_LIVE_LOOK, &[want]))]);
         assert_eq!(s.char_slots, CLIENT_CHAR_SLOTS);
         deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK_IN_FORCE, &[1]));
@@ -5503,7 +5575,7 @@ mod tests {
         for (slots, n) in [(20, 12), (8, 8)] {
             s.char_slots = slots;
             let mut r = Reader::new(&list.data[2..]);
-            assert_eq!(read_characters(&mut r, false, s.char_slots.max(CLIENT_CHAR_SLOTS)).len(), n);
+            assert_eq!(read_characters(&mut r, false, false, s.char_slots.max(CLIENT_CHAR_SLOTS)).len(), n);
         }
     }
 

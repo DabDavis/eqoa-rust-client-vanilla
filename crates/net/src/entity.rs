@@ -60,10 +60,22 @@ pub struct LiveColors {
     pub variants: [u8; 6],
     /// The robe's, `+0x2BA`.
     pub robe: [u8; 4],
+    /// go-eqoa-server's trim colours per armour slot (chest .. helm), after
+    /// the live game's 201 bytes ([`ARMOR_STATE_SIZE`]) to a client that draws
+    /// its armour; alpha 0 none (all none from every other server).
+    pub trim: [[u8; 4]; 6],
 }
 
 /// The live game's entity channel: 201 bytes (the disc's 162).
 pub const LIVE_STATE_SIZE: usize = 201;
+/// The live channel with go-eqoa-server's six trim colours after it
+/// ([`LiveColors::trim`]): 225 bytes, to a client that draws its armour.
+pub const ARMOR_STATE_SIZE: usize = LIVE_STATE_SIZE + 24;
+
+/// Six trim colours (r, g, b, a each) out of `b`'s first 24 bytes.
+pub fn trims_of(b: &[u8]) -> [[u8; 4]; 6] {
+    std::array::from_fn(|i| std::array::from_fn(|k| b.get(4 * i + k).copied().unwrap_or(0)))
+}
 
 /// `VICreatureEntity`'s part of the update.
 #[derive(Clone, Debug, Default)]
@@ -357,6 +369,12 @@ impl Entities {
         e.id = id;
         let old_vel = e.creature.as_ref().map(|c| c.velocity);
         e.read_update(&mut r, self.live_look && data.len() >= LIVE_STATE_SIZE);
+        // go-eqoa-server's trims, after the live game's channel
+        if self.live_look && data.len() >= ARMOR_STATE_SIZE
+            && let Some(l) = e.creature.as_mut().and_then(|c| c.colors.as_mut())
+        {
+            l.trim = trims_of(&data[LIVE_STATE_SIZE..ARMOR_STATE_SIZE]);
+        }
         sync(e);
         if created {
             e.vel = [0.0; 3];
@@ -500,6 +518,31 @@ mod tests {
 
         let not_yet = read(&live, false).creature.unwrap();
         assert!(not_yet.colors.is_none() && not_yet.name != "Tinctoria", "the control: before the look is in force, read as the disc's");
+    }
+
+    /// go-eqoa-server's trims after the live channel (225 bytes, to a client
+    /// that draws its armour): read into the colours' `trim`, every other field
+    /// as the 201 bytes alone read; the 201 alone (and the disc's channel) have
+    /// none.
+    #[test]
+    fn the_trims_after_the_live_channel() {
+        let live = unhex(LIVE_DYED);
+        let mut armor = live.clone();
+        for c in [[0xD1, 0, 0, 0xFF], [0; 4], [0; 4], [0x20, 0x50, 0xE0, 0xFF], [0; 4], [0; 4]] {
+            armor.extend(c);
+        }
+        assert_eq!(armor.len(), ARMOR_STATE_SIZE);
+        let read = |data: &[u8]| {
+            let mut e = Entities { live_look: true, ..Default::default() };
+            e.channel(1, data, Some(7), 0, 100, |_| {});
+            e.slots[1].clone().unwrap().creature.unwrap()
+        };
+        let (a, l) = (read(&armor), read(&live));
+        let (ac, lc) = (a.colors.unwrap(), l.colors.unwrap());
+        assert_eq!(ac.trim, [[0xD1, 0, 0, 0xFF], [0; 4], [0; 4], [0x20, 0x50, 0xE0, 0xFF], [0; 4], [0; 4]]);
+        assert_eq!(lc.trim, [[0; 4]; 6], "the live channel alone: no trims");
+        assert_eq!(LiveColors { trim: lc.trim, ..ac }, lc, "every other colour the same");
+        assert_eq!((a.name, a.armor, a.level), (l.name, l.armor, l.level));
     }
 
     /// A slot past the limit is not read (CLIENT's `type < 24` until a server

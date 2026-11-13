@@ -582,7 +582,7 @@ fn run(args: &[String]) -> Result<()> {
         // in a look, standing, from four sides (`dressview`)
         #[cfg(not(target_arch = "wasm32"))]
         Some("dress") => {
-            let usage = "usage: eqoa dress <body DictID> <out.png> [set=N armor=a,b,c,d,e tint=T robe=R rtint=T dye=RRGGBB hair=c,l,s face=F helm=N helmfit=0 main=ID off=ID shield=ID race=1 action=N at=ms size=WxH cape=N capecolor=RRGGBB maincolor=RRGGBB offcolor=RRGGBB shieldcolor=RRGGBB night=1 era=2002]";
+            let usage = "usage: eqoa dress <body DictID> <out.png> [set=N armor=a,b,c,d,e tint=T robe=R rtint=T dye=RRGGBB hair=c,l,s face=F helm=N helmfit=0 main=ID off=ID shield=ID race=1 action=N at=ms size=WxH cape=N capecolor=RRGGBB maincolor=RRGGBB offcolor=RRGGBB shieldcolor=RRGGBB trim=RRGGBB night=1 era=2002]";
             let model = args.get(1).and_then(|m| fxview::parse_visual(m)).ok_or(usage)? as i32;
             let out = args.get(2).filter(|o| o.ends_with(".png")).ok_or(usage)?;
             let words = dressview::parse(&args[3..])?;
@@ -591,6 +591,8 @@ fn run(args: &[String]) -> Result<()> {
             for f in dressview::FILES {
                 lib.add(*f, esf::Container::open(iso.read(f)?)?);
             }
+            // set 9's art (go-eqoa-server's armour, Sandstorm's S2)
+            s2::get().register_art(&mut lib);
             // the 2002 disc's copies standing in, as the world has them with F9
             if words.y2002 {
                 let path = era::disc().ok_or("era=2002 needs the 2002 disc (EQOA_2002_ISO)")?;
