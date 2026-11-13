@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-12 · The map's arrow can turn with your camera
+- New row **Extended > UI > Map > Map Pointer**: what your arrow on the minimap (and the map) points along.
+  - **Facing** (the default, as before): the way your character faces.
+  - **Camera**: the way your camera looks, as the compass does, so looking around while standing still
+    turns the arrow too.
+
 ## 2026-11-12 · Mercenaries marked with a coin in the raid window
 - In the raid window a **mercenary's row now shows a gold coin** where a player's shows its role (shield, staff or
   sword), so you can tell hired hands from players at a glance. Players' rows are unchanged.

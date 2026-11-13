@@ -150,13 +150,17 @@
 //!   click, the minimap, the waypoints on the compass and the group's
 //!   waypoint, `map`; Off: none of them, the game's own), Minimap (On: the
 //!   map round the player under the quick menus, `map::mini`; N turns it
-//!   too), Map Markers (On: the map's XP camps and coaches, `map::markers`;
+//!   too), Map Pointer (Facing: the player's dart on the minimap and the
+//!   map turns with the way the character faces, as it always did; Camera:
+//!   with the way the camera looks, as the compass turns, so swinging the
+//!   camera standing still turns it; petition 1848, Facing by default), Map
+//!   Markers (On: the map's XP camps and coaches, `map::markers`;
 //!   the map's own X or ○ turns it too), Quest Helper (On: the quests' marks
 //!   on the map and the minimap and their tracker, from a server that sends
 //!   them, else the client's own guide, `questguide`, `map::quests`; Off:
 //!   none, and no server asked for them) and Quest Tracker (On: the HUD's
 //!   list of the quests under way, each step counted, under the minimap,
-//!   `tracker`). Each defaults to On; the Map and the Quest Helper Off are
+//!   `tracker`). Each but Map Pointer defaults to On; the Map and the Quest Helper Off are
 //!   the game as it is without them;
 //! - Number Colors (2026-11-09, the server owner's "we can add the number
 //!   colors to extended menu"): Your Damage, Your Procs, Your Heals, Pet
@@ -754,7 +758,8 @@ impl WndOptions {
     /// Smooth; Update Notices (29), Overlapping Names (34, Hide and Show),
     /// Mipmaps (35), Loading Screens (38, Longer and Instant), Texture Packs
     /// (50), Dump Textures (51), the Map (41), Minimap (42), Map Markers (43),
-    /// the Quest Helper (44) and Quest Tracker (45) turn over; Texture Folder (55) shows the
+    /// the Quest Helper (44) and Quest Tracker (45) turn over, Map Pointer (87)
+    /// between Facing and Camera; Texture Folder (55) shows the
     /// folder (`texpack::open_folder`: sound 8, or 9 with none to show);
     /// Output Device (32) goes round the system default and the devices
     /// listed (`step_output`); Display (33) turns the window over (`display`);
@@ -864,6 +869,10 @@ impl WndOptions {
                     41 => c.map = !c.map,
                     // Minimap: drawn or not from the next frame (`map::mini`)
                     42 => c.minimap = !c.minimap,
+                    // Map Pointer: the dart on the minimap and the map turned
+                    // with the walk or the camera from the next frame
+                    // (`map::pointer_heading`)
+                    87 => c.map_pointer = c.map_pointer.other(),
                     // Map Markers: the map's camps and coaches from its next
                     // frame (`map::markers`)
                     43 => c.map_markers = !c.map_markers,
@@ -1570,7 +1579,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 70] = [
+const EXTENDED_ITEMS: [(i32, &str); 71] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1641,6 +1650,7 @@ const EXTENDED_ITEMS: [(i32, &str); 70] = [
     (84, "Loading Tips"),
     (85, "Quest Markers"),
     (86, "Power Bars"),
+    (87, "Map Pointer"),
 ];
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
@@ -1728,7 +1738,7 @@ const ALL_CATEGORIES: [Category; 20] = [
     Category { name: "Group & Raid", items: &[49, 86], note: Note::None, group: Group::Ui },
     Category { name: "HUD Layout", items: &[76, 77], note: Note::Hud, group: Group::Ui },
     Category { name: "Name Plates", items: &[27, 34, 85], note: Note::None, group: Group::Ui },
-    Category { name: "Map", items: &[41, 42, 43, 44, 45], note: Note::None, group: Group::Ui },
+    Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
@@ -1881,6 +1891,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         29 => on_off(c.update_notices),
         41 => on_off(c.map),
         42 => on_off(c.minimap),
+        87 => wide(c.map_pointer.name()),
         43 => on_off(c.map_markers),
         44 => on_off(c.quest_helper),
         45 => on_off(c.quest_tracker),
@@ -2726,10 +2737,22 @@ mod tests {
         }
         assert!(crate::texpack::testing::shown().is_empty());
         // Map: the Map, Minimap, Map Markers, the Quest Helper and Quest
-        // Tracker, each On then Off, one moving no other
+        // Tracker, each On then Off, one moving no other; Map Pointer
+        // (after Minimap) Facing then Camera, moving none of them
         goto!(41);
         assert_eq!(w.item, 41, "Map, the Map");
         for (item, on) in [(41, settings::map as fn() -> bool), (42, settings::minimap), (43, settings::map_markers), (44, settings::quest_helper), (45, settings::quest_tracker)] {
+            if item == 43 {
+                use crate::map::Pointer;
+                assert_eq!(w.item, 87, "Map Pointer, after Minimap");
+                assert_eq!((settings::map_pointer(), value_text(&vui, 87)), (Pointer::Facing, Some(wide("Facing"))), "Facing by default");
+                press(&mut w, &mut o, key::RIGHT, &mut cues);
+                assert_eq!((settings::map_pointer(), value_text(&vui, 87), cues.last()), (Pointer::Camera, Some(wide("Camera")), Some(&11)), "Camera");
+                assert!(settings::map() && settings::minimap(), "Map Pointer moves no other row");
+                press(&mut w, &mut o, key::LEFT, &mut cues);
+                assert_eq!(settings::map_pointer(), Pointer::Facing, "and back: two values");
+                press(&mut w, &mut o, key::DOWN, &mut cues);
+            }
             assert_eq!(w.item, item, "{}", label_of(item));
             assert!(on(), "{}: on by default", label_of(item));
             assert_eq!(value_text(&vui, item), Some(wide(vui.words.get(551, vui.language))), "{}: On, the game's word", label_of(item));
@@ -2740,7 +2763,7 @@ mod tests {
             assert!(on(), "{}: and back, two values", label_of(item));
             press(&mut w, &mut o, key::DOWN, &mut cues);
         }
-        assert_eq!((w.row, cues.last()), (4, Some(&9)), "Map's last row");
+        assert_eq!((w.row, cues.last()), (5, Some(&9)), "Map's last row");
         // Number Colors: six rows, each Default (the game's colour, drawn as
         // any value) then round the palette either way, each drawn in its
         // colour, one moving no other
@@ -3092,7 +3115,7 @@ mod tests {
                 ("Group & Raid", vec!["Raid List", "Power Bars"]),
                 ("HUD Layout", vec!["Move HUD", "Reset HUD"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers"]),
-                ("Map", vec!["Map", "Minimap", "Map Markers", "Quest Helper", "Quest Tracker"]),
+                ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
                 ("Number Colors", n[..6].to_vec()),
                 ("Merc Colors", n[6..8].to_vec()),
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "Reset DPS Meter"]),

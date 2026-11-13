@@ -2187,6 +2187,66 @@ pub fn on_compass(f: [f32; 2]) -> bool {
     (f[0] - 39.0).powi(2) + (f[1] - 54.0).powi(2) <= 22.0 * 22.0
 }
 
+/// What the player's dart on the minimap and the map turns with (Extended >
+/// Map's Map Pointer; petition 1848, "minimap pointer should turn the way you
+/// move the camera when looking around. similar to the way the compass
+/// moves"): the way the character faces (the walk's heading, as it always
+/// was), or the way the camera looks (the eye's heading, the compass's).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pointer {
+    #[default]
+    Facing,
+    Camera,
+}
+
+impl Pointer {
+    pub fn other(self) -> Pointer {
+        match self {
+            Pointer::Facing => Pointer::Camera,
+            Pointer::Camera => Pointer::Facing,
+        }
+    }
+
+    /// Its name on the Extended page.
+    pub fn name(self) -> &'static str {
+        match self {
+            Pointer::Facing => "Facing",
+            Pointer::Camera => "Camera",
+        }
+    }
+
+    /// Its word in `client.opt`'s line.
+    pub fn key(self) -> &'static str {
+        match self {
+            Pointer::Facing => "facing",
+            Pointer::Camera => "camera",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Pointer> {
+        match k {
+            "facing" => Some(Pointer::Facing),
+            "camera" => Some(Pointer::Camera),
+            _ => None,
+        }
+    }
+
+    /// The dart's heading: `facing` (the walk's) or `camera` (the eye's, the
+    /// compass's), by this choice.
+    pub fn heading(self, facing: f32, camera: f32) -> f32 {
+        match self {
+            Pointer::Facing => facing,
+            Pointer::Camera => camera,
+        }
+    }
+}
+
+/// The heading the player's dart is drawn at this frame (`Context::player`),
+/// by Map Pointer (`settings::map_pointer`): each window's own walk and camera.
+pub fn pointer_heading(facing: f32, camera: f32) -> f32 {
+    crate::settings::map_pointer().heading(facing, camera)
+}
+
 fn title_case(s: &str) -> String {
     let mut c = s.chars();
     c.next().map(|f| f.to_uppercase().chain(c.flat_map(char::to_lowercase)).collect()).unwrap_or_default()

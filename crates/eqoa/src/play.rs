@@ -1701,6 +1701,12 @@ fn v3(a: [f32; 3]) -> Vect3<Ee> {
     Vect3::of(a[0], a[1], a[2])
 }
 
+/// The camera's heading (the eye's direction's, `GetHPR`): what the HUD's
+/// compass turns by, and the map's dart with Map Pointer on Camera.
+fn camera_heading(walker: &Walker) -> f32 {
+    walker.eye.direction.get_hpr().0.0
+}
+
 /// Where the walk stands now (`self.player.pos` changes only on a move).
 fn walker_at(walker: &Walker) -> [f32; 3] {
     let p = walker.cam.walk.phys.position;
@@ -8920,7 +8926,8 @@ impl Play {
             format,
             size,
             dt,
-            player: Some(([p.position.x.0, p.position.y.0, p.position.z.0], p.angles.x.0)),
+            // the dart the way the walk faces, or the camera looks (Map Pointer)
+            player: Some(([p.position.x.0, p.position.y.0, p.position.z.0], crate::map::pointer_heading(p.angles.x.0, camera_heading(walker)))),
             world,
             origin,
             group,
@@ -9239,8 +9246,7 @@ impl Play {
             power: self.session.power_of(self.pet_id),
         });
         let power_bars = crate::settings::power_bars();
-        let dir = walker.eye.direction;
-        let (heading, _, _) = dir.get_hpr();
+        let heading = camera_heading(walker);
         let state = crate::hud::HudState {
             has_self: me_e.is_some(),
             self_hp: me_e.map_or(0, |e| e.p19 as i32),
@@ -9248,7 +9254,7 @@ impl Play {
             max_power: self.stats.stat[10],
             level: self.dump.player.level as i32,
             exp: self.dump.player.exp as i32,
-            heading: heading.0,
+            heading,
             chat_open: self.wnd_chat.as_ref().is_some_and(|c| c.mode != 0),
             target_name: target.and_then(|e| e.creature.as_ref()).map(|c| c.name.clone()),
             target_hp: target.map_or(0, |e| e.p19 as i32),

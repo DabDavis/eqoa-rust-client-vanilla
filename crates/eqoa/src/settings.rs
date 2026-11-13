@@ -1010,6 +1010,11 @@ pub struct ClientOptions {
     /// Minimap (on by default): the map's pictures round the player under
     /// the quick menus' name plate (`map::mini`); off, none.
     pub minimap: bool,
+    /// Map Pointer (petition 1848; the owner: "add as a toggle"): what the
+    /// player's dart on the minimap and the map turns with, Facing (the way
+    /// the character faces, as it always was; the default) or Camera (the
+    /// way the camera looks, as the compass turns): `map::Pointer`.
+    pub map_pointer: crate::map::Pointer,
     /// Map Markers: on, the map (M) marks EQOA-Data's XP camps and every
     /// coach (`map::markers`), each with a card of what it is under the
     /// pointer (the user, F3 pass 18: "mark popular xp camps on map with an XP
@@ -1298,6 +1303,7 @@ impl Default for ClientOptions {
             profanity_filter: Profanity::High,
             map: true,
             minimap: true,
+            map_pointer: crate::map::Pointer::Facing,
             map_markers: true,
             map_towns: true,
             quest_helper: true,
@@ -1454,6 +1460,10 @@ impl ClientOptions {
             if !on {
                 s.push_str(&format!("{key}=off\n"));
             }
+        }
+        // Map Pointer only when Camera
+        if self.map_pointer != crate::map::Pointer::Facing {
+            s.push_str(&format!("map_pointer={}\n", self.map_pointer.key()));
         }
         if self.art == esf::Era::Y2002 {
             s.push_str("art=2002\n");
@@ -1627,6 +1637,11 @@ impl ClientOptions {
                 ("map", "off") => c.map = false,
                 ("minimap", "on") => c.minimap = true,
                 ("minimap", "off") => c.minimap = false,
+                ("map_pointer", v) => {
+                    if let Some(p) = crate::map::Pointer::from_key(v) {
+                        c.map_pointer = p;
+                    }
+                }
                 ("map_markers", "on") => c.map_markers = true,
                 ("map_markers", "off") => c.map_markers = false,
                 ("map_towns", "on") => c.map_towns = true,
@@ -1970,6 +1985,12 @@ pub fn auto_target() -> bool {
 /// Profanity Filter (Options > Interface).
 pub fn profanity_filter() -> Profanity {
     client().profanity_filter
+}
+
+/// Map Pointer: what the player's dart on the minimap and the map turns
+/// with (`map::Pointer`).
+pub fn map_pointer() -> crate::map::Pointer {
+    client().map_pointer
 }
 
 /// What the DPS Meter shows (`dpsmeter::View`).
@@ -3186,6 +3207,22 @@ mod tests {
         let text = m.to_text();
         assert!(text.contains("number_color.merc_damage=default\n") && text.contains("number_color.merc_heals=green\n"), "{text}");
         assert_eq!(ClientOptions::from_text(&text).number_colors, m.number_colors, "read back");
+    }
+
+    /// Map Pointer: Facing by default and then written nothing; Camera
+    /// kept and read back; anything else the default.
+    #[test]
+    fn the_map_pointer_is_kept_only_when_camera() {
+        use crate::map::Pointer;
+        let d = ClientOptions::default();
+        assert_eq!(d.map_pointer, Pointer::Facing, "Facing by default");
+        assert!(!d.to_text().contains("map_pointer"), "the default writes nothing");
+        let c = ClientOptions { map_pointer: Pointer::Camera, ..Default::default() };
+        let t = c.to_text();
+        assert!(t.contains("map_pointer=camera\n"), "{t}");
+        assert_eq!(ClientOptions::from_text(&t), c, "round trip");
+        assert_eq!(ClientOptions::from_text("map_pointer=facing"), d);
+        assert_eq!(ClientOptions::from_text("map_pointer=sideways"), d, "anything else: the default");
     }
 
     #[test]

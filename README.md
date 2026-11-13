@@ -200,7 +200,11 @@ or a browser (each described where it lives below):
   farther) and marks of other kinds by `map::mini::Mark` (camps, coach stops,
   quests: their tooltips under the mouse); the wheel over it zooms, a click or a
   tap opens the map; shown where the quick menus are, never under Hide UI. N
-  shows or hides it, kept as the Minimap row is.
+  shows or hides it, kept as the Minimap row is. **Map Pointer** (Extended > UI >
+  Map, after Minimap; petition 1848): the player's dart on the minimap and the map
+  turns with the walk's heading (Facing, the default, as before) or the camera's,
+  the compass's (Camera: `map::Pointer`, `map::pointer_heading`, `Play::camera_heading`;
+  `client.opt`'s `map_pointer=camera`, written only when Camera).
   **Inside** (petition 1494, as FrontiersForge's minimap: `map::indoor`): under a
   ceiling (the collision world probed over the player and four points round it,
   a change held half a second) it shows the floors round the player instead of the
