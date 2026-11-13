@@ -7,6 +7,24 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Stacked spell bars, a chat box that stays open, glowing NPCs, group loot rules and instances
+- **Stacked Spell Bars** (Options > Extended > UI > HUD, off by default): on a computer your first two ability bars
+  are drawn as two rows of five, one above the other, just above the chat box, a little smaller (95%) and with no
+  name box popping up over them. Click a slot to use it; right-click it to turn its auto-cast. They move with the
+  chat box when you move it (Move HUD). Playing with a controller or a touch screen keeps the usual bar.
+- **A key for every slot**: Options > Controls now has **Bar 1: slot 1** to **Bar 2: slot 5**. Pick one, press a key,
+  and that key uses the ability on that slot (with or without stacked bars). None has a key until you give it one.
+- **Chat Always Shown** (Options > Extended > UI > Chat, off by default): the chat box stays open at its full size
+  with your last lines in it, and no longer slides away when nothing is said.
+- **Glowing NPCs**: on the Heirloom Test Server some creatures can now glow in a colour of their own, as **Mr. Moogie**
+  does in a soft red. Every other creature looks exactly as before.
+- **GM flight through walls** (/noclip, for the server's GMs): the client now flies straight through walls, floors
+  and ceilings while it is on.
+- **Group loot rules**: a group's leader now finds **Loot Rules** under Community > Group > Raid even outside a raid:
+  **Free for All** or **Need Before Greed** (the rule in use is marked with *). The same as typing /grouploot.
+- **Add to Instance** and **Remove from Instance** under Community > Group > Raid (in a group or a raid): they act
+  on your target, as /addinstance and /removeinstance do. The server says who may.
+
 ## 2026-11-13 · Target cycling skips familiars; no false crash reports when leaving the browser page
 - **Tab, R1 and L1 no longer pick familiars.** Cycling targets (Tab or R1 for the next creature, ` or L1 for
   you, your group and your pet) now passes over **Healbot** and other familiars an item calls, a wizard's own
