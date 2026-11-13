@@ -37,6 +37,16 @@
 //!   own colours with no glow.
 //!
 //! No aura asked for and no glow: none of either, and nothing is looked up.
+//!
+//! The trim's aura ([`npc_trim`], [`piece_trims`]; the owner, 2026-11-13:
+//! "lets also let armor trim glow also. and make dusts armor trim glow a
+//! black aura"): kind 5 (`net::npctint::Aura::TRIM`) lights the gold trim of
+//! the plate a body or piece wears (`vi::cust::TRIMMED`, found on each batch's
+//! texture through its recolours, [`trim_batches`]) in the aura's colour, kind
+//! 6 that and the shell (`render::trimglow`). A colour black or near black
+//! (`net::npctint::dark`) makes any shell or trim a DARK aura: a smoky shadow
+//! instead of a light, in the colour as sent (not times its alpha), with no
+//! light of its own on the body ([`aura_rgb`]).
 
 use vi::fpu::{Ee, F};
 use vi::geom::{Matrix44, Vect4};
@@ -134,10 +144,58 @@ pub fn npc_glow(t: Option<crate::npctint::Tint>) -> Option<[u8; 3]> {
     t.filter(|t| net::npctint::glows(t.glow)).map(|t| crate::npctint::glow_rgb(t.glow))
 }
 
+/// The colour an aura of tint `t` is drawn in, and whether it is dark: a
+/// dark glow's own red, green and blue (`net::npctint::dark`), any other the
+/// glow's ([`crate::npctint::glow_rgb`], times its alpha).
+pub fn aura_rgb(t: &crate::npctint::Tint) -> ([u8; 3], bool) {
+    if net::npctint::dark(t.glow) {
+        let g = t.glow;
+        ([(g >> 24) as u8, (g >> 16) as u8, (g >> 8) as u8], true)
+    } else {
+        (crate::npctint::glow_rgb(t.glow), false)
+    }
+}
+
 /// The colour of an NPC's shell, if it wears one (`Aura::shell`: asked for
-/// or the default, and a glow that lights): its glow's.
+/// or the default, and a glow that lights, or a dark one named): its glow's
+/// ([`aura_rgb`]).
 pub fn npc_shell(t: Option<crate::npctint::Tint>) -> Option<[u8; 3]> {
-    t.filter(net::npctint::Aura::shell).and_then(|t| npc_glow(Some(t)))
+    t.filter(net::npctint::Aura::shell).map(|t| aura_rgb(&t).0)
+}
+
+/// An NPC's shell over its whole body ([`npc_shell`]), dark or not.
+pub fn npc_shell_part(t: Option<crate::npctint::Tint>) -> Option<render::shell::PartOf> {
+    let color = npc_shell(t)?;
+    Some(render::shell::PartOf { color, batches: None, dark: t.is_some_and(|t| aura_rgb(&t).1) })
+}
+
+/// The batches of `model` (`only` of them; `None` all) whose texture has the
+/// plate's gold trim (`vi::cust::has_trim`, the texture a layer's recolours
+/// were made from: `render::recolor::root_of`), each with its trim's mask
+/// (`render::recolor::TRIM_MASK` of that texture; `taken`, a library's
+/// lookup, as `recolored`'s).
+pub fn trim_batches(model: &esf::Model, only: Option<&[usize]>, taken: &dyn Fn(i32) -> bool) -> Vec<(usize, i32)> {
+    let mut out = Vec::new();
+    for (i, b) in model.batches.iter().enumerate() {
+        if only.is_some_and(|o| !o.contains(&i)) {
+            continue;
+        }
+        let root = b.layers.iter().map(|l| render::recolor::root_of(l.texture)).find(|&r| r != 0 && vi::cust::has_trim(r as u32));
+        if let Some(root) = root {
+            out.push((i, render::recolor::recolored(root, render::recolor::TRIM_MASK << 24, taken)));
+        }
+    }
+    out
+}
+
+/// An NPC's trim aura over its whole body (`Aura::trim`: kind 5 or 6 and a
+/// glow that lights or a dark one): the trim of every batch that has one
+/// ([`trim_batches`]); none on a body with no trim.
+pub fn npc_trim(model: &esf::Model, t: Option<crate::npctint::Tint>, taken: &dyn Fn(i32) -> bool) -> Option<render::trimglow::TrimOf> {
+    let t = t.filter(net::npctint::Aura::trim)?;
+    let batches = trim_batches(model, None, taken);
+    let (color, dark) = aura_rgb(&t);
+    (!batches.is_empty()).then_some(render::trimglow::TrimOf { color, dark, batches })
 }
 
 /// An NPC's particles: whose particle sprite, on how many nodes, in which
@@ -311,17 +369,36 @@ pub fn pieces(model: &esf::Model, cs: &vi::csprite::CSprite<Ee>, auras: &[net::e
             }
         }
         if let Some(color) = shell {
-            shells.push(render::shell::PartOf { color, batches: Some(batches) });
+            shells.push(render::shell::PartOf { color, batches: Some(batches), dark: aura_rgb(&t).1 });
         }
     }
     (shells, worn)
 }
 
-/// The helm's aura (`auras[HELM]`): its shell's colour over the whole helm,
-/// and its particles on the helm's node `node`.
-pub fn helm_aura(auras: &[net::entity::PieceAura; 7], node: i32) -> (Option<[u8; 3]>, Option<Worn>) {
+/// The worn pieces' trim auras (`auras`, as [`pieces`] reads them; a robe's
+/// in the chest's and the legs' place): each piece of kind 5 or 6 lights the
+/// trim of its slot's batches ([`trim_batches`]); a piece with no trim (the
+/// gauntlets, any set but the plate) shows none.
+pub fn piece_trims(model: &esf::Model, cs: &vi::csprite::CSprite<Ee>, auras: &[net::entity::PieceAura; 7], robed: bool, taken: &dyn Fn(i32) -> bool) -> Vec<render::trimglow::TrimOf> {
+    let mut out = Vec::new();
+    for slot in 0..5 {
+        let a = if robed && (slot == 0 || slot == 3) { &auras[ROBE] } else { &auras[slot] };
+        let Some(t) = piece_tint(a).filter(net::npctint::Aura::trim) else { continue };
+        let batches = trim_batches(model, Some(&slot_batches(model, cs, slot)), taken);
+        if !batches.is_empty() {
+            let (color, dark) = aura_rgb(&t);
+            out.push(render::trimglow::TrimOf { color, dark, batches });
+        }
+    }
+    out
+}
+
+/// The helm's aura (`auras[HELM]`): its shell over the whole helm, and its
+/// particles on the helm's node `node`. (The helm the plate wears, set 4's,
+/// is plain steel: no trim.)
+pub fn helm_aura(auras: &[net::entity::PieceAura; 7], node: i32) -> (Option<render::shell::PartOf>, Option<Worn>) {
     let t = piece_tint(&auras[HELM]);
-    (npc_shell(t), npc_particles(t).map(|particles| Worn { nodes: vec![node], particles, first: 64 * (HELM + 1) }))
+    (npc_shell_part(t), npc_particles(t).map(|particles| Worn { nodes: vec![node], particles, first: 64 * (HELM + 1) }))
 }
 
 /// Every aura's particles a body carries this frame (`body_emitters` for
@@ -515,7 +592,7 @@ mod tests {
         // the helm's
         auras[HELM] = piece(0xFFFF_00FF, net::npctint::Aura::BOTH, 0);
         let (shell, worn) = helm_aura(&auras, 5);
-        assert_eq!(shell, Some([255, 255, 0]));
+        assert_eq!(shell.map(|s| (s.color, s.dark)), Some(([255, 255, 0], false)));
         assert_eq!(worn.map(|w| (w.nodes, w.first)), Some((vec![5], 64 * 6)));
         assert_eq!(helm_aura(&[PieceAura::default(); 7], 5), (None, None));
     }

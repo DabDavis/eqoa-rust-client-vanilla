@@ -134,7 +134,7 @@ fn each_part_its_own_batches_and_colour() {
     let shot = |r: &mut Renderer, m: &render::GpuModel| (render::capture(&device, &queue, r, n, n, &view, &[Draw::Model(m)], None), r.drawn.get().1);
     let (before, draws) = shot(&mut r, &m);
     use render::shell::PartOf;
-    r.set_shells(&device, &mut m, &body, &[PartOf { color: [255, 0, 0], batches: Some(vec![0]) }, PartOf { color: [0, 0, 255], batches: Some(vec![1]) }]);
+    r.set_shells(&device, &mut m, &body, &[PartOf { color: [255, 0, 0], batches: Some(vec![0]), dark: false }, PartOf { color: [0, 0, 255], batches: Some(vec![1]), dark: false }]);
     let (both, draws_both) = shot(&mut r, &m);
     assert_eq!(draws_both, draws + 2, "a draw call a part");
     let at = |x: u32, y: u32| ((y * n + x) * 4) as usize;
@@ -156,7 +156,7 @@ fn each_part_its_own_batches_and_colour() {
     }
     assert!(red_above > 100 && blue_below > 100, "{red_above} red above, {blue_below} blue below");
     // one part alone: the bottom half as before
-    r.set_shells(&device, &mut m, &body, &[PartOf { color: [255, 0, 0], batches: Some(vec![0]) }]);
+    r.set_shells(&device, &mut m, &body, &[PartOf { color: [255, 0, 0], batches: Some(vec![0]), dark: false }]);
     let (top_only, draws_top) = shot(&mut r, &m);
     assert_eq!(draws_top, draws + 1);
     for y in n / 2 + 4..n {
@@ -166,6 +166,6 @@ fn each_part_its_own_batches_and_colour() {
         }
     }
     // a part of no batch draws nothing: no shell at all
-    r.set_shells(&device, &mut m, &body, &[PartOf { color: [255, 0, 0], batches: Some(Vec::new()) }]);
+    r.set_shells(&device, &mut m, &body, &[PartOf { color: [255, 0, 0], batches: Some(Vec::new()), dark: false }]);
     assert!(m.shell.is_none());
 }

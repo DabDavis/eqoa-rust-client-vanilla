@@ -24,6 +24,15 @@
 //! batches (a worn armour piece's: its bracers alone, its breastplate alone)
 //! in a colour of its own, or all of them.
 //!
+//! A dark part ([`PartOf::dark`]: an aura in black or near black, the owner,
+//! 2026-11-13: "make dusts armor trim glow a black aura") is a shadow, not a
+//! light: drawn premultiplied over ([`DARK_BLEND`], `Cs + Cd·(1 − As)`), its
+//! alpha a smoky darkness (a fill, the rim stronger, the shimmer in deeper
+//! contrast) that takes what is behind it toward black, its colour a faint
+//! sheen at the silhouette (the part's colour lifted, or a cold violet for
+//! black) so it still shows against a night; it stands [`DARK_INFLATE`] times
+//! as far off the body, a halo of smoke round it.
+//!
 //! Cost: one draw call more a part for the model that wears it (its LOD
 //! level's batches of the part in one index buffer), a vertex buffer of its
 //! normals and a pipeline made at the first shell. A model with no shell (every other
@@ -37,6 +46,16 @@ use crate::BufferInit;
 /// largest extent in its own space ([`inflation`]).
 pub const INFLATE: f32 = 0.02;
 
+/// How much farther off the body a dark part stands than a glowing one.
+pub const DARK_INFLATE: f32 = 2.5;
+
+/// A dark part's blend: premultiplied over, `Cs + Cd·(1 − As)` (the shader's
+/// rgb is its sheen, already times its own strength).
+pub const DARK_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+    alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+};
+
 /// `shell.wgsl`'s `Shell`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -44,7 +63,7 @@ pub(crate) struct ShellUniform {
     /// the glow's colour (0..1) and its strength
     pub color: [f32; 4],
     /// x: the inflation, y: the shimmer's frequency (per unit of the body's
-    /// own space), z and w unused
+    /// own space), z: 1 dark ([`PartOf::dark`]), w unused
     pub params: [f32; 4],
 }
 
@@ -54,6 +73,8 @@ pub(crate) struct ShellUniform {
 pub struct PartOf {
     pub color: [u8; 3],
     pub batches: Option<Vec<usize>>,
+    /// A dark aura: a shadow in `color`'s hue, not a light (the module's doc).
+    pub dark: bool,
 }
 
 /// One part of a shell, drawn in one call.
@@ -65,6 +86,8 @@ pub(crate) struct Part {
     /// picks.
     pub(crate) runs: Vec<(Option<u8>, wgpu::Buffer, u32)>,
     color: [u8; 3],
+    /// drawn through [`Pipeline::dark`]
+    pub(crate) dark: bool,
 }
 
 /// A model's aura shell, drawn after its blended layers.
@@ -138,6 +161,8 @@ pub fn runs_of(m: &esf::Model, only: Option<&[usize]>) -> Vec<(Option<u8>, Vec<u
 /// The shell's pipeline and its uniform's layout, made at the first shell.
 pub(crate) struct Pipeline {
     pub(crate) pipeline: wgpu::RenderPipeline,
+    /// the same for a dark part ([`DARK_BLEND`])
+    pub(crate) dark: wgpu::RenderPipeline,
     pub(crate) layout: wgpu::BindGroupLayout,
 }
 
@@ -160,7 +185,7 @@ impl Pipeline {
             wgpu::VertexAttribute { format: wgpu::VertexFormat::Uint8x4, offset: 48, shader_location: 8 },
             wgpu::VertexAttribute { format: wgpu::VertexFormat::Uint8x4, offset: 52, shader_location: 9 },
         ];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let make = |blend: Option<wgpu::BlendState>| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("shell"),
             layout: Some(&pl),
             vertex: wgpu::VertexState {
@@ -190,12 +215,13 @@ impl Pipeline {
                 module: &module,
                 entry_point: Some("fs_shell"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format, blend: crate::blend_state(1), write_mask: wgpu::ColorWrites::COLOR })],
+                targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::COLOR })],
             }),
             multiview_mask: None,
             cache: None,
         });
-        Pipeline { pipeline, layout }
+        let (pipeline, dark) = (make(crate::blend_state(1)), make(Some(DARK_BLEND)));
+        Pipeline { pipeline, dark, layout }
     }
 
     /// A shell for model `m` (as uploaded, its bounds `bounds`) in `parts`
@@ -219,14 +245,15 @@ impl Pipeline {
                     return None;
                 }
                 let c = p.color;
-                let u = ShellUniform { color: [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0], params: [inflate, 6.0 / size, 0.0, 0.0] };
+                let (inflate, dark) = if p.dark { (inflate * DARK_INFLATE, 1.0) } else { (inflate, 0.0) };
+                let u = ShellUniform { color: [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0], params: [inflate, 6.0 / size, dark, 0.0] };
                 let uniform = device.buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("shell"), contents: bytemuck::bytes_of(&u), usage: wgpu::BufferUsages::UNIFORM });
                 let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("shell"),
                     layout: &self.layout,
                     entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
                 });
-                Some(Part { bg, _uniform: uniform, runs, color: c })
+                Some(Part { bg, _uniform: uniform, runs, color: c, dark: p.dark })
             })
             .collect();
         if parts.is_empty() {

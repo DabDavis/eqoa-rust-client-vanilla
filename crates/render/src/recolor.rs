@@ -50,10 +50,13 @@ pub const MUL: u32 = 5;
 /// A plate piece's gold trim in a colour (RGB in the low three bytes), its
 /// other texels as they are ([`trim_weight`], [`trim_glow`]).
 pub const TRIM: u32 = 6;
+/// Not a colour: a plate texture's trim as a mask ([`trim_mask`]), which the
+/// trim's aura (`crate::trimglow`) samples; drawn by no layer.
+pub const TRIM_MASK: u32 = 7;
 
 /// Whether `r` changes anything (a known mode).
 pub fn changes(r: u32) -> bool {
-    matches!(r >> 24, DYE | TONE | SKIN | TATTOO | MUL | TRIM)
+    matches!(r >> 24, DYE | TONE | SKIN | TATTOO | MUL | TRIM | TRIM_MASK)
 }
 
 /// How much of a texel is a plate piece's gold trim, 0 to 1: its hue between
@@ -91,6 +94,61 @@ pub fn trim_glow(o: [u8; 3], c: [u8; 3]) -> [u8; 3] {
     let k = sat + (1.0 - sat) * hi / 255.0;
     let s = v * k / hi;
     c.map(|x| (x as f32 * s).round().clamp(0.0, 255.0) as u8)
+}
+
+/// How far the trim's halo bleeds off it, as a fraction of a texture's width
+/// ([`trim_mask`]'s blur).
+pub const HALO: f32 = 1.0 / 20.0;
+
+/// A plate texture's trim as a mask for the trim's aura (`crate::trimglow`),
+/// a texel each: red the trim's weight ([`trim_weight`]), green its halo (the
+/// weight blurred [`HALO`] of the width round, twice, so it fades off the
+/// trim's edges onto the steel), blue the texel's brightness (its largest
+/// channel, the gold's own shading) and alpha the texel's own (a hole stays a
+/// hole). `w` by `h` texels of `rgba`; a size that does not fit is all clear.
+pub fn trim_mask(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let (w, h) = (w as usize, h as usize);
+    if w == 0 || h == 0 || rgba.len() < w * h * 4 {
+        return vec![0; rgba.len()];
+    }
+    let weight: Vec<f32> = rgba.chunks_exact(4).take(w * h).map(|p| trim_weight([p[0], p[1], p[2]])).collect();
+    let r = ((w as f32 * HALO).round() as usize).max(1);
+    let mut halo = weight.clone();
+    for _ in 0..2 {
+        halo = box_blur(&halo, w, h, r);
+    }
+    let mut out = vec![0u8; rgba.len()];
+    for (k, p) in rgba.chunks_exact(4).take(w * h).enumerate() {
+        let b = |x: f32| (x * 255.0).round().clamp(0.0, 255.0) as u8;
+        // the halo at least the trim's own, and lifted so that its middle
+        // reaches the trim's full weight
+        let g = (halo[k] * 2.0).min(1.0).max(weight[k]);
+        out[4 * k..4 * k + 4].copy_from_slice(&[b(weight[k]), b(g), p[0].max(p[1]).max(p[2]), p[3]]);
+    }
+    out
+}
+
+/// `v` (`w` by `h`) blurred by a box `r` round, across then down, its edges
+/// clamped.
+fn box_blur(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    let n = (2 * r + 1) as f32;
+    let pass = |src: &[f32], len: usize, lines: usize, at: &dyn Fn(usize, usize) -> usize| {
+        let mut out = vec![0.0f32; src.len()];
+        for line in 0..lines {
+            for i in 0..len {
+                let lo = i.saturating_sub(r);
+                let hi = (i + r).min(len - 1);
+                // the clamped edge counts as many times as the box reaches past it
+                let mut sum: f32 = (lo..=hi).map(|j| src[at(line, j)]).sum();
+                sum += src[at(line, 0)] * (r.saturating_sub(i)) as f32;
+                sum += src[at(line, len - 1)] * ((i + r).saturating_sub(len - 1)) as f32;
+                out[at(line, i)] = sum / n;
+            }
+        }
+        out
+    };
+    let across = pass(v, w, h, &|y, x| y * w + x);
+    pass(&across, h, w, &|x, y| y * w + x)
 }
 
 /// Texel `px` with its trim (read off `root`, the texel of the texture it was
@@ -424,6 +482,29 @@ pub fn key_of(source_key: u64, r: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The trim's mask: a gold stripe down a steel texture reads as trim in
+    /// red, its halo in green spreading off it onto the steel and fading, the
+    /// gold's brightness in blue, every alpha kept; steel far off is none.
+    #[test]
+    fn a_trim_mask_and_its_halo() {
+        let (w, h) = (40u32, 4u32);
+        let mut rgba = Vec::new();
+        for _ in 0..h {
+            for x in 0..w {
+                let px = if (18..22).contains(&x) { [200, 150, 40, 255] } else { [120, 124, 130, 128] };
+                rgba.extend_from_slice(&px);
+            }
+        }
+        let m = trim_mask(&rgba, w, h);
+        let at = |x: usize| &m[4 * (w as usize + x)..4 * (w as usize + x) + 4];
+        assert_eq!((at(20)[0], at(20)[1], at(20)[2], at(20)[3]), (255, 255, 200, 255), "the trim");
+        assert_eq!((at(0)[0], at(0)[1], at(0)[3]), (0, 0, 128), "steel far off: none, its alpha kept");
+        assert_eq!(at(16)[0], 0, "steel beside the trim is no trim");
+        assert!(at(16)[1] > at(14)[1] && at(14)[1] > 0, "the halo fades off the trim: {} {}", at(16)[1], at(14)[1]);
+        assert_eq!(trim_mask(&rgba[..8], w, h), vec![0; 8], "a size that does not fit");
+        assert!(changes(TRIM_MASK << 24));
+    }
 
     /// 0 and an unknown mode leave every colour as it is; a tone of 128s and
     /// no turn keeps a colour within a rounding; a dye's grey stays grey with

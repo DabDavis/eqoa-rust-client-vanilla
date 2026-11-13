@@ -20,6 +20,15 @@
 //! emitter on the body's nodes), the item or model whose particle sprite the
 //! particles are, and on how many nodes. A layout 2 server's glow is the
 //! shell alone ([`Aura::DEFAULT`]).
+//!
+//! The trim kinds (the owner, 2026-11-13: "lets also let armor trim glow
+//! also. and make dusts armor trim glow a black aura"): [`Aura::TRIM`] lights
+//! the plate's gold trim (sets 4 and 9) in the glow's colour with a soft halo
+//! off it, [`Aura::TRIM_SHELL`] that and the shell. A glow whose colour is
+//! black or near black ([`dark`]) is a DARK aura: a shadow, not a light. No
+//! byte of the wire changes: the kind byte already travels, and the colour
+//! says dark. A client before them reads 5 and 6 as the default (the shell
+//! while the glow lights), and draws nothing of a black glow.
 
 use crate::stream::Reader;
 
@@ -32,7 +41,8 @@ pub const LAYOUT: u8 = 3;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Aura {
     /// [`Aura::DEFAULT`], [`Aura::NONE`], [`Aura::SHELL`],
-    /// [`Aura::PARTICLES`] or [`Aura::BOTH`]; any other is the default.
+    /// [`Aura::PARTICLES`], [`Aura::BOTH`], [`Aura::TRIM`] or
+    /// [`Aura::TRIM_SHELL`]; any other is the default.
     pub kind: u8,
     /// The DictID of the item or model whose particle sprite the particles
     /// are (an ITEM.ESF hand model, or any model with one); 0 the Sword of
@@ -55,11 +65,34 @@ impl Aura {
     pub const PARTICLES: u8 = 3;
     /// The shell and the particles.
     pub const BOTH: u8 = 4;
+    /// The armour's gold trim lit in the glow's colour, a soft halo off it
+    /// (go-eqoa-server's `AuraTrim`); nothing on a body or piece with no trim.
+    pub const TRIM: u8 = 5;
+    /// The trim and the shell.
+    pub const TRIM_SHELL: u8 = 6;
+
+    /// Whether a kind names a shell or a trim outright (not the default): a
+    /// black glow, which lights nothing, is then a dark aura ([`dark`]).
+    pub fn named(kind: u8) -> bool {
+        matches!(kind, Self::SHELL | Self::BOTH | Self::TRIM | Self::TRIM_SHELL)
+    }
+
+    /// Whether tint `t`'s glow draws a shell or a trim at all: it lights, or
+    /// it is dark ([`dark`]: black too) with a shell or trim named.
+    pub fn lit(t: &Tint) -> bool {
+        glows(t.glow) || (dark(t.glow) && Self::named(t.aura.kind))
+    }
 
     /// Whether a body in tint `t` wears the shell: asked for (the default
-    /// included) and the glow lights.
+    /// included) and the glow lights (or is dark, [`Aura::lit`]).
     pub fn shell(t: &Tint) -> bool {
-        glows(t.glow) && !matches!(t.aura.kind, Self::NONE | Self::PARTICLES)
+        Self::lit(t) && !matches!(t.aura.kind, Self::NONE | Self::PARTICLES | Self::TRIM)
+    }
+
+    /// Whether a body in tint `t` wears the trim's aura: asked for, and the
+    /// glow lights or is dark.
+    pub fn trim(t: &Tint) -> bool {
+        Self::lit(t) && matches!(t.aura.kind, Self::TRIM | Self::TRIM_SHELL)
     }
 
     /// Whether a body in tint `t` wears the particles: asked for alone.
@@ -90,6 +123,19 @@ impl Tint {
 /// (go-eqoa-server's `NPCGlowShows`).
 pub fn glows(glow: u32) -> bool {
     glow & 0xFF != 0 && glow >> 8 != 0
+}
+
+/// The brightest an aura's colour (each channel, before its alpha) is and
+/// still dark: go-eqoa-server's `AuraDarkMost`.
+pub const DARK_MOST: u32 = 0x30;
+
+/// Whether a glow (0xRRGGBBAA) is a DARK aura's colour: an alpha, and no
+/// channel past [`DARK_MOST`] (black included). Drawn as a shadow that
+/// darkens what is behind it, not a light added to it (`render::shell`,
+/// `render::trimglow`); a dim colour by its alpha alone (0xFF000020) is a dim
+/// light, not dark.
+pub fn dark(glow: u32) -> bool {
+    glow & 0xFF != 0 && [24, 16, 8].iter().all(|s| (glow >> s) & 0xFF <= DARK_MOST)
 }
 
 /// The tints in `layout` (1, 2, or 3 and more as 3): a u16 count, then each
@@ -189,6 +235,28 @@ mod tests {
         assert!(!Aura::shell(&with(Aura::DEFAULT, 0)) && !Aura::shell(&with(Aura::BOTH, 0)), "no glow: no shell");
         assert!(Aura::particles(&with(Aura::PARTICLES, 0)), "particles need no glow");
         assert!(!Aura::shell(&Tint::color(0x558C_50FF)) && !Aura::particles(&Tint::color(0x558C_50FF)), "a colour alone: nothing");
+    }
+
+    /// The trim kinds and a dark aura: a black glow lights nothing, so it
+    /// draws only with a shell or trim named (the default and none draw
+    /// nothing of it); a near-black is dark whatever the kind that draws; a
+    /// dim colour by its alpha alone is not dark (the control); the trim
+    /// alone is no shell, the trim and shell both.
+    #[test]
+    fn the_trim_kinds_and_a_dark_aura() {
+        let with = |kind: u8, glow: u32| Tint { color: 0xFFFF_FFFF, glow, aura: Aura { kind, source: 0, nodes: 0 } };
+        assert!(dark(0x0000_00FF) && dark(0x1000_18FF) && dark(0x3030_3001));
+        assert!(!dark(0xFF00_0020) && !dark(0x3130_30FF) && !dark(0) && !dark(0x0000_0000));
+        let dust = with(Aura::TRIM, 0x0000_00FF);
+        assert!(Aura::trim(&dust) && !Aura::shell(&dust) && !Aura::particles(&dust), "Dust's: the trim alone, dark");
+        let both = with(Aura::TRIM_SHELL, 0xFFC0_40FF);
+        assert!(Aura::trim(&both) && Aura::shell(&both));
+        assert!(Aura::shell(&with(Aura::SHELL, 0x0000_00FF)) && Aura::shell(&with(Aura::BOTH, 0x0000_00FF)), "a black shell named");
+        assert!(!Aura::shell(&with(Aura::DEFAULT, 0x0000_00FF)) && !Aura::trim(&with(Aura::DEFAULT, 0x0000_00FF)), "black, the default: nothing");
+        assert!(!Aura::trim(&with(Aura::NONE, 0x0000_00FF)) && !Aura::trim(&with(Aura::TRIM, 0x0000_0000)), "none; alpha 0");
+        assert!(Aura::shell(&with(Aura::DEFAULT, 0x2020_20FF)), "a near-black glow lights: its shell (dark)");
+        assert!(!Aura::trim(&with(Aura::SHELL, 0xFF00_00FF)) && !Aura::trim(&with(9, 0xFF00_00FF)), "no trim unless named");
+        assert!(Aura::shell(&with(9, 0xFF00_00FF)) && !Aura::shell(&with(9, 0x0000_00FF)), "an unknown kind is the default");
     }
 
     /// A set reads to its tints in order, keyed (case, spaces and a trailing

@@ -4,7 +4,8 @@
 // glow's colour. Its alpha is a rim, strongest where the surface turns away
 // from the eye (1 − |N·V|)^1.6, eased to nothing at the very edge), over a faint fill, times a shimmer
 // (value noise in the body's own space drifting up with time) and a slow
-// pulse, faded by the fog.
+// pulse, faded by the fog. A dark part (params.z) is a shadow instead
+// (`dark_shell`), drawn premultiplied over (shell.rs's DARK_BLEND).
 
 struct Frame {
     view_proj: mat4x4<f32>,
@@ -21,7 +22,7 @@ struct Frame {
 
 struct Shell {
     color: vec4<f32>,   // rgb the glow, a its strength
-    params: vec4<f32>,  // x: inflation, y: shimmer frequency
+    params: vec4<f32>,  // x: inflation, y: shimmer frequency, z: 1 dark
 };
 @group(1) @binding(0) var<uniform> shell: Shell;
 
@@ -112,6 +113,30 @@ fn fs_shell(i: VsOut) -> @location(0) vec4<f32> {
     let p = i.body * shell.params.y;
     let shimmer = 0.55 + 0.9 * noise(p + vec3<f32>(0.0, -0.6 * t, 0.25 * t)) * noise(p * 2.1 + vec3<f32>(0.4 * t, 0.0, -0.3 * t));
     let pulse = 0.85 + 0.15 * sin(t * 2.2);
+    if (shell.params.z > 0.5) {
+        return dark_shell(facing, rim, shimmer, pulse, i.fog);
+    }
     let a = (0.08 + 0.92 * rim) * shimmer * pulse * shell.color.a * i.fog;
     return vec4<f32>(shell.color.rgb, clamp(a, 0.0, 1.0));
+}
+
+// A dark aura's sheen: its colour's hue lifted to a faint light, or for black
+// (no hue) a cold violet; what shows of it against a night.
+fn dark_sheen(c: vec3<f32>) -> vec3<f32> {
+    let hi = max(c.r, max(c.g, c.b));
+    if (hi < 0.01) {
+        return vec3<f32>(0.16, 0.12, 0.24);
+    }
+    return c / hi * 0.22;
+}
+
+// A dark part: smoke that darkens what is behind it (alpha: a fill, the rim
+// stronger, the shimmer in deeper contrast), a sheen on its silhouette (rgb,
+// premultiplied).
+fn dark_shell(facing: f32, rim: f32, shimmer: f32, pulse: f32, fog: f32) -> vec4<f32> {
+    let smoke = clamp((shimmer - 0.55) / 0.9, 0.0, 1.0);
+    let a = (0.45 + 0.55 * rim) * (0.6 + 0.6 * smoke) * pulse * shell.color.a * fog;
+    let edge = pow(1.0 - facing, 3.0) * smoothstep(0.0, 0.2, facing);
+    let sheen = dark_sheen(shell.color.rgb) * edge * (0.6 + 0.6 * smoke) * fog;
+    return vec4<f32>(sheen, clamp(a, 0.0, 0.9));
 }
