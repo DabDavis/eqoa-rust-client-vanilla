@@ -64,6 +64,42 @@ pub struct LiveColors {
     /// the live game's 201 bytes ([`ARMOR_STATE_SIZE`]) to a client that draws
     /// its armour; alpha 0 none (all none from every other server).
     pub trim: [[u8; 4]; 6],
+    /// go-eqoa-server's auras per worn piece (chest, bracer, gloves, legs,
+    /// boots, helm, robe), after the trims ([`AURA_STATE_SIZE`]) to a client
+    /// that draws them ([`crate::session::LIVE_LOOK_AURAS`]); all none from
+    /// every other server.
+    pub auras: [PieceAura; 7],
+}
+
+/// A worn piece's aura (go-eqoa-server's, [`AURA_STATE_SIZE`]): ten bytes, its
+/// colour (r, g, b, a: the aura's colour is the rgb times the alpha, alpha 0
+/// none), its kind (`crate::npctint::Aura`'s: 0 the default, the shell while
+/// it has a colour; 1 none; 2 shell; 3 particles; 4 both), the u32 DictID of
+/// the item or model whose particle sprite its particles are (0 the Sword of
+/// Virtue's) and the u8 count of nodes they take (0 the default). All zero:
+/// none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct PieceAura {
+    pub color: [u8; 4],
+    pub kind: u8,
+    pub source: u32,
+    pub nodes: u8,
+}
+
+/// The bytes of one piece's aura on the channel.
+pub const PIECE_AURA_SIZE: usize = 10;
+
+/// The live channel with the trims and go-eqoa-server's seven pieces' auras
+/// after them ([`LiveColors::auras`]): 295 bytes, to a client that draws them.
+pub const AURA_STATE_SIZE: usize = ARMOR_STATE_SIZE + 7 * PIECE_AURA_SIZE;
+
+/// Seven pieces' auras out of `b`'s first 70 bytes (each: r, g, b, a, kind,
+/// the source's u32 little-endian, nodes).
+pub fn auras_of(b: &[u8]) -> [PieceAura; 7] {
+    std::array::from_fn(|i| {
+        let p = |k: usize| b.get(PIECE_AURA_SIZE * i + k).copied().unwrap_or(0);
+        PieceAura { color: [p(0), p(1), p(2), p(3)], kind: p(4), source: u32::from_le_bytes([p(5), p(6), p(7), p(8)]), nodes: p(9) }
+    })
 }
 
 /// The live game's entity channel: 201 bytes (the disc's 162).
@@ -374,6 +410,10 @@ impl Entities {
             && let Some(l) = e.creature.as_mut().and_then(|c| c.colors.as_mut())
         {
             l.trim = trims_of(&data[LIVE_STATE_SIZE..ARMOR_STATE_SIZE]);
+            // and the worn pieces' auras after them
+            if data.len() >= AURA_STATE_SIZE {
+                l.auras = auras_of(&data[ARMOR_STATE_SIZE..AURA_STATE_SIZE]);
+            }
         }
         sync(e);
         if created {
@@ -543,6 +583,46 @@ mod tests {
         assert_eq!(lc.trim, [[0; 4]; 6], "the live channel alone: no trims");
         assert_eq!(LiveColors { trim: lc.trim, ..ac }, lc, "every other colour the same");
         assert_eq!((a.name, a.armor, a.level), (l.name, l.armor, l.level));
+    }
+
+    /// go-eqoa-server's pieces' auras after the trims (295 bytes, to a client
+    /// that draws them): red bracers and a blue breastplate's shells, a
+    /// helm's particles of a source on 2 nodes; every other field as the 225
+    /// bytes read; the 225 (and the 201) have none.
+    #[test]
+    fn the_pieces_auras_after_the_trims() {
+        let mut armor = unhex(LIVE_DYED);
+        armor.extend([0u8; 24]);
+        let mut auras = armor.clone();
+        let piece = |c: [u8; 4], kind: u8, source: u32, nodes: u8| {
+            let mut b = c.to_vec();
+            b.push(kind);
+            b.extend(source.to_le_bytes());
+            b.push(nodes);
+            b
+        };
+        auras.extend(piece([0x30, 0x60, 0xFF, 0xFF], 0, 0, 0));
+        auras.extend(piece([0xFF, 0x20, 0x20, 0xFF], 2, 0, 0));
+        for _ in 0..3 {
+            auras.extend([0u8; PIECE_AURA_SIZE]);
+        }
+        auras.extend(piece([0, 0, 0, 0], 3, 0x88EC_092D, 2));
+        auras.extend([0u8; PIECE_AURA_SIZE]);
+        assert_eq!(auras.len(), AURA_STATE_SIZE);
+        let read = |data: &[u8]| {
+            let mut e = Entities { live_look: true, ..Default::default() };
+            e.channel(1, data, Some(7), 0, 100, |_| {});
+            e.slots[1].clone().unwrap().creature.unwrap()
+        };
+        let (a, b) = (read(&auras), read(&armor));
+        let (ac, bc) = (a.colors.unwrap(), b.colors.unwrap());
+        assert_eq!(ac.auras[0], PieceAura { color: [0x30, 0x60, 0xFF, 0xFF], kind: 0, source: 0, nodes: 0 });
+        assert_eq!(ac.auras[1], PieceAura { color: [0xFF, 0x20, 0x20, 0xFF], kind: 2, source: 0, nodes: 0 });
+        assert_eq!(ac.auras[5], PieceAura { color: [0; 4], kind: 3, source: 0x88EC_092D, nodes: 2 });
+        assert_eq!([ac.auras[2], ac.auras[3], ac.auras[4], ac.auras[6]], [PieceAura::default(); 4]);
+        assert_eq!(bc.auras, [PieceAura::default(); 7], "the trims alone: no auras");
+        assert_eq!(LiveColors { auras: bc.auras, ..ac }, bc, "every other colour the same");
+        assert_eq!((a.name, a.armor, a.level), (b.name, b.armor, b.level));
     }
 
     /// A slot past the limit is not read (CLIENT's `type < 24` until a server

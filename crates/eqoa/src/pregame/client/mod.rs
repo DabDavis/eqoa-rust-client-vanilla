@@ -184,6 +184,8 @@ impl CharRecord {
                 robe: rgba(67),
                 // go-eqoa-server's trims after the 71 (`ARMOR_GEAR_SIZE`), else none
                 trim: std::array::from_fn(|k| rgba(net::session::LIVE_GEAR_SIZE + 4 * k)),
+                // the character record carries no auras: character select draws none
+                auras: Default::default(),
             }),
             cape: None,
             options: Vec::new(),

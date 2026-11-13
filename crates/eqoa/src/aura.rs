@@ -17,14 +17,26 @@
 //! White (the server's "plain", 0xFFFFFFFF) and no colour at all (the disc's
 //! look, a PS2's server) leave the item exactly as the disc draws it.
 //!
-//! A glowing NPC's aura (the owner, 2026-11-13: "mr. moogie aura should have
-//! particle effects like the effect of dust's sword of twisted virtue"): an
-//! NPC whose body tint glows (`npctint`, layout 2) carries the Sword of
-//! Virtue's own particle emitter ([`SWORD_OF_VIRTUE`]'s one particle sprite,
-//! its definition as the disc has it) on [`AURA_NODES`] of its body's nodes
-//! spread over it ([`body_nodes`]), each streaming up from its node in the
-//! world's up and following it, its particles in the glow's hue as the
-//! sword's are in its item's colour ([`recolor_quads`]). No glow: none.
+//! An NPC's auras, a template any body can wear, chosen per NPC name by the
+//! server (`npctint`, layout 3: `net::npctint::Aura`; the owner, 2026-11-13:
+//! "the moogie aura should only be one aura that encompasses his whole body
+//! form fitting similar to how anarchy online shows certain buffs", and
+//! "moogies aura also can be a template to make any model have particle
+//! effects"). Two, each chosen apart:
+//!
+//! - The shell ([`npc_shell`]): the body's own skinned mesh drawn again,
+//!   pushed out along its normals, an additive rim in the glow's colour
+//!   (`render::shell`). The default of a glow: Mr. Moogie's, and every glow a
+//!   layout 2 server sends.
+//! - The particles ([`npc_particles`]): an item's or model's particle sprite
+//!   (its source, [`SWORD_OF_VIRTUE`]'s by default; [`source_emitter`]) on
+//!   some of the body's nodes spread over it ([`body_nodes`], [`AURA_NODES`]
+//!   unless the server names a count), each streaming up from its node in the
+//!   world's up and following it, its particles in the glow's hue as the
+//!   sword's are in its item's colour ([`recolor_quads`]), or in the source's
+//!   own colours with no glow.
+//!
+//! No aura asked for and no glow: none of either, and nothing is looked up.
 
 use vi::fpu::{Ee, F};
 use vi::geom::{Matrix44, Vect4};
@@ -108,15 +120,51 @@ pub fn recolor_quads(b: &mut render::billboard::Batch, c: [u8; 3]) {
 /// sparkles that rise along its blade, is a glowing NPC's aura.
 pub const SWORD_OF_VIRTUE: u32 = 0x88EC_092D;
 
-/// How many of a glowing body's nodes carry the aura: the sword's emitter
-/// keeps about 25 particles alive (4.1 a second, 6 s each), so a body's
-/// aura is about 200.
+/// How many of a body's nodes carry its particles unless the server names a
+/// count: the sword's emitter keeps about 25 particles alive (4.1 a second,
+/// 6 s each), so a body's aura is about 200.
 pub const AURA_NODES: usize = 8;
 
-/// The colour of an NPC's aura: its tint's glow's ([`crate::npctint::glow_rgb`]),
-/// none for a tint that does not glow and none without a tint.
+/// The most nodes a body's particles take, whatever the server names.
+pub const AURA_NODES_MOST: usize = 32;
+
+/// The colour of an NPC's glow ([`crate::npctint::glow_rgb`]), none for a
+/// tint that does not glow and none without a tint.
 pub fn npc_glow(t: Option<crate::npctint::Tint>) -> Option<[u8; 3]> {
     t.filter(|t| net::npctint::glows(t.glow)).map(|t| crate::npctint::glow_rgb(t.glow))
+}
+
+/// The colour of an NPC's shell, if it wears one (`Aura::shell`: asked for
+/// or the default, and a glow that lights): its glow's.
+pub fn npc_shell(t: Option<crate::npctint::Tint>) -> Option<[u8; 3]> {
+    t.filter(net::npctint::Aura::shell).and_then(|t| npc_glow(Some(t)))
+}
+
+/// An NPC's particles: whose particle sprite, on how many nodes, in which
+/// hue (the glow's; none, the source's own colours).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Particles {
+    pub source: u32,
+    pub nodes: usize,
+    pub hue: Option<[u8; 3]>,
+}
+
+/// An NPC's particles, if it wears them (`Aura::particles`): the server's
+/// source (0: [`SWORD_OF_VIRTUE`]) and node count (0: [`AURA_NODES`], at most
+/// [`AURA_NODES_MOST`]), in the glow's hue.
+pub fn npc_particles(t: Option<crate::npctint::Tint>) -> Option<Particles> {
+    let t = t.filter(net::npctint::Aura::particles)?;
+    let source = if t.aura.source == 0 { SWORD_OF_VIRTUE } else { t.aura.source };
+    let nodes = if t.aura.nodes == 0 { AURA_NODES } else { (t.aura.nodes as usize).min(AURA_NODES_MOST) };
+    Some(Particles { source, nodes, hue: npc_glow(Some(t)) })
+}
+
+/// The particle definition a source's particles are: an item's (or any
+/// group sprite's) first particle sprite (`particles::item_emitters`), else a
+/// character sprite's first own emitter (`particles::part_emitters`); none
+/// for a source with neither, or not loaded.
+pub fn source_emitter(lib: &esf::Library, source: u32) -> Option<esf::Ref> {
+    crate::particles::item_emitters(lib, source).first().map(|e| e.def).or_else(|| crate::particles::part_emitters(lib, source).first().map(|e| e.def))
 }
 
 /// `n` of `points` spread over them, by index: the one nearest their middle,
@@ -143,11 +191,11 @@ pub fn spread(points: &[[f32; 3]], n: usize) -> Vec<usize> {
     taken
 }
 
-/// The nodes of a body that carry its aura: [`AURA_NODES`] spread over its
-/// bind pose (each node's model-space place, `SetNodeBindPose`).
-pub fn body_nodes(cs: &vi::csprite::CSprite<Ee>) -> Vec<i32> {
+/// The `n` nodes of a body that carry its particles, spread over its bind
+/// pose (each node's model-space place, `SetNodeBindPose`).
+pub fn body_nodes(cs: &vi::csprite::CSprite<Ee>, n: usize) -> Vec<i32> {
     let at: Vec<[f32; 3]> = cs.h.nodes.iter().map(|n| [n.bind.trans.x.0, n.bind.trans.y.0, n.bind.trans.z.0]).collect();
-    spread(&at, AURA_NODES).into_iter().map(|i| i as i32).collect()
+    spread(&at, n).into_iter().map(|i| i as i32).collect()
 }
 
 /// An aura emitter's world transform at a node's (`w`, its world transform):
@@ -158,12 +206,13 @@ pub fn upright(w: &Matrix44<Ee>) -> Matrix44<Ee> {
     Matrix44 { m: [Vect4::new(i, o, o, o), Vect4::new(o, o, -i, o), Vect4::new(o, i, o, o), Vect4::new(w.m[3].x, w.m[3].y, w.m[3].z, i)] }
 }
 
-/// A glowing NPC's aura this frame: the sword's emitter (`sword`, its
-/// definition record) on each of its `nodes` (`body_nodes`) of sprite `cs`,
-/// under the centre transform `centre`, in `glow`'s hue, run while the body
-/// is drawn. Keyed by the holder, `particles::AURA` and the node's place in
-/// the list.
-pub fn body_emitters(holder: i32, cs: &vi::csprite::CSprite<Ee>, nodes: &[i32], centre: &Matrix44<Ee>, sword: esf::Ref, glow: [u8; 3], drawn: bool) -> Vec<crate::particles::InHand> {
+/// An NPC's particles this frame: the source's emitter (`def`, its
+/// definition record, [`source_emitter`] of `source`) on each of its `nodes`
+/// (`body_nodes`) of sprite `cs`, under the centre transform `centre`, in
+/// `hue` (none: its own colours), run while the body is drawn. Keyed by the
+/// holder, `particles::AURA`, the source and the node's place in the list.
+#[allow(clippy::too_many_arguments)]
+pub fn body_emitters(holder: i32, cs: &vi::csprite::CSprite<Ee>, nodes: &[i32], centre: &Matrix44<Ee>, source: u32, def: esf::Ref, hue: Option<[u8; 3]>, drawn: bool) -> Vec<crate::particles::InHand> {
     use crate::particles::{AURA, How, InHand};
     nodes
         .iter()
@@ -171,9 +220,122 @@ pub fn body_emitters(holder: i32, cs: &vi::csprite::CSprite<Ee>, nodes: &[i32], 
         .filter_map(|(k, &node)| {
             let n = cs.h.nodes.get(usize::try_from(node).ok()?)?;
             let world = upright(&Matrix44::mul(&n.world, centre));
-            Some(InHand { key: (holder, AURA, SWORD_OF_VIRTUE, k), world, def: sword, how: How::Part { use_location: false, once: false }, drawn, tint: Some(glow) })
+            Some(InHand { key: (holder, AURA, source, k), world, def, how: How::Part { use_location: false, once: false }, drawn, tint: hue })
         })
         .collect()
+}
+
+/// The worn pieces an aura can be on, as `net::entity::PieceAura`s come:
+/// chest, bracer, gloves, legs, boots (the text slots 0 to 4), the helm and
+/// the robe (the owner, 2026-11-13: "even pieces of armor like bracers only if
+/// that piece has aura. or only a breastplate etc. and they can have their own
+/// aura color each").
+pub const HELM: usize = 5;
+pub const ROBE: usize = 6;
+
+/// A worn piece's aura read as an NPC's tint is (`npc_shell`,
+/// `npc_particles`): its colour the glow, its kind, source and nodes the
+/// aura; none for a piece with no aura (all zero).
+pub fn piece_tint(p: &net::entity::PieceAura) -> Option<crate::npctint::Tint> {
+    (*p != net::entity::PieceAura::default()).then(|| crate::npctint::Tint {
+        color: 0xFFFF_FFFF,
+        glow: u32::from_be_bytes(p.color),
+        aura: net::npctint::Aura { kind: p.kind, source: p.source, nodes: p.nodes },
+    })
+}
+
+/// The batches of `model` a body slot (0 chest .. 4 boots) draws: its text
+/// slot's palette entry's (`cs.text_slots`) and the made-up batches the
+/// slotless bodies dress it with (`slotless::ENTRY`).
+pub fn slot_batches(model: &esf::Model, cs: &vi::csprite::CSprite<Ee>, slot: usize) -> Vec<usize> {
+    let entry = cs.text_slots.get(slot).map_or(-1, |s| s.0);
+    let made = crate::slotless::ENTRY + slot as i32;
+    model.batches.iter().enumerate().filter(|(_, b)| (entry != -1 && b.material == entry) || b.material == made).map(|(i, _)| i).collect()
+}
+
+/// The nodes `batches` of `model` are skinned to: each vertex's heaviest
+/// bone (a palette index is a node's), in order, once each.
+pub fn batch_nodes(model: &esf::Model, batches: &[usize]) -> Vec<i32> {
+    let mut out: Vec<i32> = Vec::new();
+    for b in batches.iter().filter_map(|&i| model.batches.get(i)) {
+        for &v in &b.indices {
+            let (Some(bones), Some(w)) = (model.bones.get(v as usize), model.weights.get(v as usize)) else { continue };
+            let k = (0..4).max_by_key(|&k| (w[k], std::cmp::Reverse(k))).unwrap_or(0);
+            if w[k] > 0 && bones[k] != 255 && !out.contains(&(bones[k] as i32)) {
+                out.push(bones[k] as i32);
+            }
+        }
+    }
+    out
+}
+
+/// `n` of the `among` nodes of a body spread over its bind pose (`spread`).
+pub fn nodes_among(cs: &vi::csprite::CSprite<Ee>, among: &[i32], n: usize) -> Vec<i32> {
+    let among: Vec<i32> = among.iter().copied().filter(|&k| usize::try_from(k).is_ok_and(|k| k < cs.h.nodes.len())).collect();
+    let at: Vec<[f32; 3]> = among.iter().map(|&k| cs.h.nodes[k as usize].bind.trans).map(|t| [t.x.0, t.y.0, t.z.0]).collect();
+    spread(&at, n).into_iter().map(|i| among[i]).collect()
+}
+
+/// One aura's particles a body carries: on `nodes`, `particles`' source in
+/// its hue, keyed from `first` (each piece's apart).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Worn {
+    pub nodes: Vec<i32>,
+    pub particles: Particles,
+    pub first: usize,
+}
+
+/// The body's auras from its worn pieces (`auras`, the channel's, by
+/// [`HELM`]/[`ROBE`] and the body slots), the helm's aside (it is an
+/// attachment: [`helm_aura`]): each piece's shell over its slot's batches in
+/// its colour, and its particles on the nodes those batches are skinned to.
+/// A robe (`robed`) covers the chest and the legs: their aura is the robe's.
+/// Nothing for pieces with none.
+pub fn pieces(model: &esf::Model, cs: &vi::csprite::CSprite<Ee>, auras: &[net::entity::PieceAura; 7], robed: bool) -> (Vec<render::shell::PartOf>, Vec<Worn>) {
+    let (mut shells, mut worn) = (Vec::new(), Vec::new());
+    for slot in 0..5 {
+        let a = if robed && (slot == 0 || slot == 3) { &auras[ROBE] } else { &auras[slot] };
+        let Some(t) = piece_tint(a) else { continue };
+        let (shell, particles) = (npc_shell(Some(t)), npc_particles(Some(t)));
+        if shell.is_none() && particles.is_none() {
+            continue;
+        }
+        let batches = slot_batches(model, cs, slot);
+        if batches.is_empty() {
+            continue;
+        }
+        if let Some(pt) = particles {
+            let nodes = nodes_among(cs, &batch_nodes(model, &batches), pt.nodes);
+            if !nodes.is_empty() {
+                worn.push(Worn { nodes, particles: pt, first: 64 * (slot + 1) });
+            }
+        }
+        if let Some(color) = shell {
+            shells.push(render::shell::PartOf { color, batches: Some(batches) });
+        }
+    }
+    (shells, worn)
+}
+
+/// The helm's aura (`auras[HELM]`): its shell's colour over the whole helm,
+/// and its particles on the helm's node `node`.
+pub fn helm_aura(auras: &[net::entity::PieceAura; 7], node: i32) -> (Option<[u8; 3]>, Option<Worn>) {
+    let t = piece_tint(&auras[HELM]);
+    (npc_shell(t), npc_particles(t).map(|particles| Worn { nodes: vec![node], particles, first: 64 * (HELM + 1) }))
+}
+
+/// Every aura's particles a body carries this frame (`body_emitters` for
+/// each of `worn`, its source looked up: one with no particle sprite, none).
+pub fn worn_emitters(lib: &esf::Library, holder: i32, cs: &vi::csprite::CSprite<Ee>, worn: &[Worn], centre: &Matrix44<Ee>, drawn: bool) -> Vec<crate::particles::InHand> {
+    let mut out = Vec::new();
+    for w in worn {
+        let Some(def) = source_emitter(lib, w.particles.source) else { continue };
+        out.extend(body_emitters(holder, cs, &w.nodes, centre, w.particles.source, def, w.particles.hue, drawn).into_iter().map(|mut h| {
+            h.key.3 += w.first;
+            h
+        }));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -266,11 +428,11 @@ mod tests {
     #[test]
     fn only_a_glow_makes_an_aura() {
         use crate::npctint::Tint;
-        assert_eq!(npc_glow(Some(Tint { color: 0xFF60_60FF, glow: 0xFF00_00FF })), Some([255, 0, 0]));
-        assert_eq!(npc_glow(Some(Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080 })), Some([128, 32, 32]));
+        assert_eq!(npc_glow(Some(Tint { color: 0xFF60_60FF, glow: 0xFF00_00FF, ..Default::default() })), Some([255, 0, 0]));
+        assert_eq!(npc_glow(Some(Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080, ..Default::default() })), Some([128, 32, 32]));
         assert_eq!(npc_glow(Some(Tint::color(0x558C_50FF))), None);
-        assert_eq!(npc_glow(Some(Tint { color: 0xFFFF_FFFF, glow: 0x0000_00FF })), None);
-        assert_eq!(npc_glow(Some(Tint { color: 0xFFFF_FFFF, glow: 0xFF00_0000 })), None);
+        assert_eq!(npc_glow(Some(Tint { color: 0xFFFF_FFFF, glow: 0x0000_00FF, ..Default::default() })), None);
+        assert_eq!(npc_glow(Some(Tint { color: 0xFFFF_FFFF, glow: 0xFF00_0000, ..Default::default() })), None);
         assert_eq!(npc_glow(None), None);
         let w = Matrix44::<Ee>::transform(&vi::vect::Vect3::of(0.3, 1.0, 0.2), F::new(2.0), &vi::vect::Vect3::of(5.0, 6.0, 7.0));
         let u = upright(&w);
@@ -278,8 +440,88 @@ mod tests {
         assert_eq!((up.x.0, up.y.0, up.z.0), (5.0, 7.0, 7.0), "+z is the world's up, unscaled, at the node");
     }
 
-    /// Mr. Moogie's body (0x485AD952, the lion-like cat) in his glow: the
-    /// sword's own emitter (one particle sprite of the Sword of Virtue,
+    /// Which aura a tint gives: a glow with no aura named (a layout 2
+    /// server's, Mr. Moogie's) the shell alone, in the glow; particles alone
+    /// or both as named, the source and count the server's or the defaults
+    /// (the Sword of Virtue, 8 nodes, at most 32), in the glow's hue or, with
+    /// no glow, the source's own colours; none named, nothing; a colour alone
+    /// or no tint, nothing at all.
+    #[test]
+    fn each_aura_as_the_server_names_it() {
+        use crate::npctint::Tint;
+        use net::npctint::Aura;
+        let t = |glow: u32, kind: u8, source: u32, nodes: u8| Some(Tint { color: 0xFFFF_FFFF, glow, aura: Aura { kind, source, nodes } });
+        let moogie = Some(Tint { color: 0xFF60_60FF, glow: 0xFF00_00FF, ..Default::default() });
+        assert_eq!((npc_shell(moogie), npc_particles(moogie)), (Some([255, 0, 0]), None), "the default: the shell");
+        assert_eq!(npc_shell(t(0x40FF_40FF, Aura::SHELL, 0, 0)), Some([64, 255, 64]));
+        let sword = Particles { source: SWORD_OF_VIRTUE, nodes: AURA_NODES, hue: Some([64, 255, 64]) };
+        assert_eq!((npc_shell(t(0x40FF_40FF, Aura::PARTICLES, 0, 0)), npc_particles(t(0x40FF_40FF, Aura::PARTICLES, 0, 0))), (None, Some(sword)));
+        assert_eq!((npc_shell(t(0x40FF_40FF, Aura::BOTH, 0, 0)), npc_particles(t(0x40FF_40FF, Aura::BOTH, 0, 0))), (Some([64, 255, 64]), Some(sword)));
+        assert_eq!(npc_particles(t(0x40FF_40FF, Aura::BOTH, 0x1234_5678, 12)), Some(Particles { source: 0x1234_5678, nodes: 12, hue: Some([64, 255, 64]) }));
+        assert_eq!(npc_particles(t(0x40FF_40FF, Aura::BOTH, 0, 200)).map(|p| p.nodes), Some(AURA_NODES_MOST));
+        assert_eq!(npc_particles(t(0, Aura::PARTICLES, 0, 0)), Some(Particles { hue: None, ..sword }), "no glow: its own colours");
+        assert_eq!(npc_shell(t(0, Aura::BOTH, 0, 0)), None, "no glow: no shell");
+        assert_eq!((npc_shell(t(0xFF00_00FF, Aura::NONE, 0, 0)), npc_particles(t(0xFF00_00FF, Aura::NONE, 0, 0))), (None, None));
+        let plain = Some(Tint::color(0x558C_50FF));
+        assert_eq!((npc_shell(plain), npc_particles(plain), npc_shell(None), npc_particles(None)), (None, None, None, None));
+    }
+
+    /// Worn pieces' auras on a human in plate (set 4): red bracers and a
+    /// blue breastplate are two shell parts, each over its own slot's batches
+    /// alone (none shared), in its own colour; bracers' particles on 3 of the
+    /// nodes the bracers are skinned to (the forearms', not the chest's); a
+    /// robe's aura takes the chest's and the legs' place; no piece with an
+    /// aura, nothing. A helm's: its shell, its particles on its node. Needs
+    /// `run/eqoa.iso`; without it, SKIPs.
+    #[test]
+    fn each_worn_piece_its_own_aura() {
+        use net::entity::PieceAura;
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(disc.read("CHAR.ESF").unwrap()).unwrap());
+        lib.add("CHARCUST.CSF", esf::Container::open(disc.read("CHARCUST.CSF").unwrap()).unwrap());
+        let human = 0x70D8_98C6u32 as i32;
+        let r = lib.lookup(human).expect("the human man");
+        let mut model = lib.build_model(r).unwrap();
+        let mut anims = vi::hsprite::AnimScene::<Ee>::default();
+        let cs = vi::character::load_csprite(&lib, r, &mut anims, &mut vi::character::AnimCache::new(), &mut vi::csprite::Rand(1)).unwrap();
+        let look = vi::cust::Look { armor: [4; 6], robe: -1, ..Default::default() };
+        crate::play::dress_look(&lib, human, &mut model, &cs, &look, false, &vi::cust::Tables::retail(), true);
+        let piece = |c: u32, kind: u8, nodes: u8| PieceAura { color: c.to_be_bytes(), kind, source: 0, nodes };
+        let mut auras = [PieceAura::default(); 7];
+        assert_eq!(pieces(&model, &cs, &auras, false), (Vec::new(), Vec::new()), "no aura: nothing");
+        auras[0] = piece(0x3060_FFFF, 0, 0);
+        auras[1] = piece(0xFF20_20FF, net::npctint::Aura::BOTH, 3);
+        let (shells, worn) = pieces(&model, &cs, &auras, false);
+        assert_eq!(shells.iter().map(|s| s.color).collect::<Vec<_>>(), vec![[48, 96, 255], [255, 32, 32]]);
+        let (chest, bracer) = (shells[0].batches.clone().unwrap(), shells[1].batches.clone().unwrap());
+        assert_eq!(chest, slot_batches(&model, &cs, 0));
+        assert_eq!(bracer, slot_batches(&model, &cs, 1));
+        assert!(!chest.is_empty() && !bracer.is_empty() && chest.iter().all(|b| !bracer.contains(b)), "{chest:?} {bracer:?}");
+        assert_eq!(worn.len(), 1, "the bracers' particles alone");
+        let on = batch_nodes(&model, &bracer);
+        assert_eq!(worn[0].nodes.len(), 3.min(on.len()));
+        assert!(worn[0].nodes.iter().all(|n| on.contains(n)), "on the bracers' nodes {on:?}: {:?}", worn[0].nodes);
+        assert_eq!((worn[0].particles.hue, worn[0].first), (Some([255, 32, 32]), 128));
+        // a robe's aura in the chest's and the legs' place
+        auras[ROBE] = piece(0x20FF_20FF, net::npctint::Aura::SHELL, 0);
+        let (robed, _) = pieces(&model, &cs, &auras, true);
+        assert_eq!(robed.iter().map(|s| s.color).collect::<Vec<_>>(), vec![[32, 255, 32], [255, 32, 32], [32, 255, 32]]);
+        assert_eq!(robed[2].batches, Some(slot_batches(&model, &cs, 3)));
+        // the helm's
+        auras[HELM] = piece(0xFFFF_00FF, net::npctint::Aura::BOTH, 0);
+        let (shell, worn) = helm_aura(&auras, 5);
+        assert_eq!(shell, Some([255, 255, 0]));
+        assert_eq!(worn.map(|w| (w.nodes, w.first)), Some((vec![5], 64 * 6)));
+        assert_eq!(helm_aura(&[PieceAura::default(); 7], 5), (None, None));
+    }
+
+    /// The particles template on Mr. Moogie's body (0x485AD952, the lion-like
+    /// cat) in a red glow: the sword's own emitter (one particle sprite of the Sword of Virtue,
     /// 4.1 a second) on eight of his 39 nodes spread from his back to his
     /// paws, jaw and tail; its particles red, rising from the nodes, about
     /// 25 an emitter and never more than 30; gone with the creature. Needs
@@ -302,7 +544,7 @@ mod tests {
         let mut cs = vi::character::load_csprite(&lib, r, &mut anims, &mut vi::character::AnimCache::new(), &mut rand).unwrap();
         cs.set_locomotion(0, &anims, &mut rand);
         cs.h.process(0, &anims);
-        let nodes = body_nodes(&cs);
+        let nodes = body_nodes(&cs, AURA_NODES);
         assert_eq!(cs.h.nodes.len(), 39);
         assert_eq!(nodes.len(), AURA_NODES);
         eprintln!("aura nodes {nodes:?}");
@@ -312,7 +554,8 @@ mod tests {
         assert_eq!(sorted.len(), AURA_NODES, "eight different nodes");
         let centre = Matrix44::transform(&vi::vect::Vect3::of(0.0, 0.0, 0.0), F::new(2.12), &vi::vect::Vect3::of(100.0, 0.0, 200.0));
         let red = [255, 0, 0];
-        let now = body_emitters(9, &cs, &nodes, &centre, sword[0].def, red, true);
+        assert_eq!(source_emitter(&lib, SWORD_OF_VIRTUE), Some(sword[0].def));
+        let now = body_emitters(9, &cs, &nodes, &centre, SWORD_OF_VIRTUE, sword[0].def, Some(red), true);
         assert_eq!(now.len(), AURA_NODES);
         let mut held = crate::particles::Held::new(0);
         let eye = vi::vect::Vect3::of(100.0, 3.0, 190.0);

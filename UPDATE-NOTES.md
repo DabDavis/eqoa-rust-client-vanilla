@@ -8,11 +8,15 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 ## 2026-11-13 · A glowing NPC's aura
-- **Glowing creatures now sparkle**: a creature the server gives a glow, such as **Mr. Moogie** in Freeport, now
-  has an aura of rising sparkles all over its body, from its back, head, paws and tail: the same sparkles that rise
-  from the blade of the Sword of Virtue, in the creature's own glow colour (Mr. Moogie's are red, as the Heirloom
-  Sword of Twisted Virtue's are). They follow the creature as it moves.
+- **Glowing creatures now wear one aura round their whole body**: a creature the server gives a glow, such as
+  **Mr. Moogie** in Freeport, is wrapped in a single soft, form-fitting shell of light in its glow colour that
+  follows its body, head, legs and tail exactly as it moves, brightest along its outline with a slow shimmer and
+  pulse, as some buffs looked in Anarchy Online. It replaces the rising sparkles of the last build.
+- **Auras are a template the server can give any creature or armour piece**: the shell, the Sword of Virtue's rising
+  sparkles (or another item's) over the body, or both, each in its own colour; and on a worn piece alone, so a
+  character's bracers can glow red and their breastplate blue. These show once the server sends them.
 - Every other creature, and every player, looks exactly as before.
+
 ## 2026-11-13 · Ornate plate at character select
 - **Your armour now shows at character select on the Heirloom Test Server.** A character in the server's ornate
   plate (its own armour set, with or without a trim colour) stood at character select in plain clothes, though the

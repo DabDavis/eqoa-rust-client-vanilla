@@ -37,9 +37,15 @@
 //! plate, and the rest as retail's.
 //! `npctint=RRGGBBAA` and `npcglow=RRGGBBAA` draw the body in an NPC's body
 //! tint and glow as go-eqoa-server's `npctint` sends them (`npctint::apply`);
-//! a glow brings its aura (`aura::body_emitters`: the Sword of Virtue's
-//! particles on the body's nodes in the glow's hue), run from the start to
-//! `at=` (8000 shows it steady).
+//! a glow brings its aura's shell (`aura::npc_shell`, `render::shell`), and
+//! `aura=default|none|shell|particles|both`, `aurasrc=DictID` and
+//! `auranodes=N` name the aura as the server's layout 3 does
+//! (`net::npctint::Aura`); particles (`aura::body_emitters`: the source's,
+//! the Sword of Virtue's by default, on the body's nodes in the glow's hue)
+//! are run from the start to `at=` (8000 shows them steady).
+//! `pieceaura=slot:RRGGBBAA[:kind[:DictID[:nodes]]]` (slot chest, bracer,
+//! gloves, legs, boots, helm or robe) puts an aura on a worn piece as the
+//! channel's `net::entity::PieceAura` does (`aura::pieces`).
 //! `helm=N` puts on armour set N's helm (`SetHelm`, on the node and seated
 //! as a player's character wears it: `slotless::helm_on`), in the helm's
 //! tint (`tint=T`); `helmfit=0` seats it as the PS2 does, without this
@@ -104,6 +110,8 @@ pub struct Words {
     pub night: bool,
     /// An NPC's body tint and glow (`npctint=`, `npcglow=`).
     pub npc: Option<crate::npctint::Tint>,
+    /// The worn pieces' auras (`pieceaura=`), as the channel carries them.
+    pub pieces: [net::entity::PieceAura; 7],
 }
 
 /// The node a tried helm seat hangs on.
@@ -125,6 +133,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
     let mut seat = None;
     let mut night = false;
     let mut npc: Option<crate::npctint::Tint> = None;
+    let mut pieces = [net::entity::PieceAura::default(); 7];
     let nums = |v: &str| v.split(',').map(|n| n.trim().parse::<u8>().map_err(|e| format!("{v}: {e}"))).collect::<Result<Vec<u8>, String>>();
     let hex = |w: &str, v: &str| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|e| format!("{w}: {e}"));
     for w in words {
@@ -143,11 +152,47 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                 let h = v.trim_start_matches('#').trim_start_matches("0x");
                 let c = u32::from_str_radix(h, 16).map_err(|e| format!("{w}: {e}"))?;
                 let c = if h.len() == 6 { c << 8 | 0xFF } else { c };
-                let t = npc.get_or_insert(crate::npctint::Tint { color: 0xFFFF_FFFF, glow: 0 });
+                let t = npc.get_or_insert(crate::npctint::Tint { color: 0xFFFF_FFFF, glow: 0, ..Default::default() });
                 if k == "npctint" {
                     t.color = c;
                 } else {
                     t.glow = c;
+                }
+            }
+            "pieceaura" => {
+                // slot:RRGGBBAA[:kind[:source[:nodes]]]
+                let parts: Vec<&str> = v.split(':').collect();
+                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe:RRGGBBAA[:shell|particles|both|none[:DictID[:nodes]]]");
+                let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
+                let c = u32::from_str_radix(parts.get(1).ok_or_else(usage)?.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))?;
+                let kind = match parts.get(2).copied() {
+                    None | Some("default") => net::npctint::Aura::DEFAULT,
+                    Some("none") => net::npctint::Aura::NONE,
+                    Some("shell") => net::npctint::Aura::SHELL,
+                    Some("particles") => net::npctint::Aura::PARTICLES,
+                    Some("both") => net::npctint::Aura::BOTH,
+                    _ => return Err(usage()),
+                };
+                let source = parts.get(3).map(|v| hex(w, v)).transpose()?.unwrap_or(0);
+                let nodes = parts.get(4).map(|v| v.parse::<u8>().map_err(|e| format!("{w}: {e}"))).transpose()?.unwrap_or(0);
+                pieces[slot] = net::entity::PieceAura { color: c.to_be_bytes(), kind, source, nodes };
+            }
+            "aura" | "aurasrc" | "auranodes" => {
+                use net::npctint::Aura;
+                let t = npc.get_or_insert(crate::npctint::Tint { color: 0xFFFF_FFFF, glow: 0, ..Default::default() });
+                match k {
+                    "aura" => {
+                        t.aura.kind = match v {
+                            "default" => Aura::DEFAULT,
+                            "none" => Aura::NONE,
+                            "shell" => Aura::SHELL,
+                            "particles" => Aura::PARTICLES,
+                            "both" => Aura::BOTH,
+                            _ => return Err(format!("{w}: default, none, shell, particles or both")),
+                        }
+                    }
+                    "aurasrc" => t.aura.source = hex(w, v)?,
+                    _ => t.aura.nodes = v.parse().map_err(|e| format!("{w}: {e}"))?,
                 }
             }
             "trim" => {
@@ -234,7 +279,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             _ => return Err(format!("{w}: not a word of a look")),
         }
     }
-    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex, helm_fit, y2002, head, seat, night, npc })
+    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex, helm_fit, y2002, head, seat, night, npc, pieces })
 }
 
 /// The body drawn in the look, holding what `words` say, from four sides
@@ -332,13 +377,30 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     if let Some(t) = words.npc {
         crate::npctint::apply(&mut mesh, t);
     }
-    let aura_nodes = crate::aura::npc_glow(words.npc).map(|_| crate::aura::body_nodes(&cs)).unwrap_or_default();
-    let sword = crate::particles::item_emitters(lib, crate::aura::SWORD_OF_VIRTUE).first().map(|e| e.def);
+    // the auras as the world makes them (`play::build_puppet_in`): the
+    // body's own and each worn piece's, their particles and their shells
+    let mut worn = Vec::new();
+    let mut shells: Vec<render::shell::PartOf> = crate::aura::npc_shell(words.npc).map(|color| render::shell::PartOf { color, batches: None }).into_iter().collect();
+    if let Some(pt) = crate::aura::npc_particles(words.npc) {
+        worn.push(crate::aura::Worn { nodes: crate::aura::body_nodes(&cs, pt.nodes), particles: pt, first: 0 });
+    }
+    let (piece_shells, piece_worn) = crate::aura::pieces(&mesh, &cs, &words.pieces, look.robe >= 0);
+    shells.extend(piece_shells);
+    worn.extend(piece_worn);
+    let (helm_shell, helm_worn) = match &helm {
+        Some((node, _)) => crate::aura::helm_aura(&words.pieces, *node),
+        None => (None, None),
+    };
+    worn.extend(helm_worn);
+    for w in &worn {
+        let found = crate::aura::source_emitter(lib, w.particles.source).is_some();
+        eprintln!("aura particles of {:#010X} on nodes {:?}{}", w.particles.source, w.nodes, if found { "" } else { " (no particle sprite: none)" });
+    }
+    for s in shells.iter().chain(helm_shell.map(|color| render::shell::PartOf { color, batches: None }).as_ref()) {
+        eprintln!("aura shell in {:?} over {}", s.color, s.batches.as_ref().map_or("the whole body".to_string(), |b| format!("batches {b:?}")));
+    }
     let mut aura = crate::particles::Held::new(0);
     let mut aura_batches = Vec::new();
-    if !aura_nodes.is_empty() {
-        eprintln!("aura on nodes {aura_nodes:?}{}", if sword.is_none() { " (no Sword of Virtue: no particles)" } else { "" });
-    }
     let tris = |b: &[esf::Batch]| b.iter().map(|b| b.indices.len() / 3).sum::<usize>();
     // `EQOA_DRESS_DEBUG=slots`: the made-up batches flat, a colour a slot
     // (chest red, bracer yellow, gloves green, legs blue, boots magenta);
@@ -421,14 +483,14 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
             }
         }
         cs.h.process(0, &anims);
-        if let (Some(sword), Some(glow)) = (sword, crate::aura::npc_glow(words.npc).filter(|_| !aura_nodes.is_empty())) {
+        if !worn.is_empty() {
             let centre = cs.h.calc_trans_about_center(&Matrix44::identity(), &anims);
-            let now = crate::aura::body_emitters(0, &cs, &aura_nodes, &centre, sword, glow, true);
+            let now = crate::aura::worn_emitters(lib, 0, &cs, &worn, &centre, true);
             aura_batches = aura.frame(lib, &now, &Vect3::of(0.0, 1.0, 6.0), t);
         }
         t += 16;
     }
-    if !aura_nodes.is_empty() {
+    if !worn.is_empty() {
         eprintln!("{}", aura.describe());
     }
     let centre = cs.h.calc_trans_about_center(&Matrix44::identity(), &anims);
@@ -509,6 +571,11 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     let mut r = Renderer::new(&device, &queue, render::TARGET_FORMAT);
     let textures = render::library_textures(lib);
     let mut gpu = r.upload(&device, &queue, &mesh, &[render::IDENTITY], &textures);
+    if !shells.is_empty() || helm_shell.is_some() {
+        r.set_shells(&device, &mut gpu, &mesh, &shells);
+        // its shimmer at the pose's time: the same picture every run
+        r.scroll_time = Some(at as f32 / 1000.0);
+    }
     r.set_instances(&queue, &gpu, &[centre.to_cols()]);
     if !palette.is_empty() {
         r.set_palette(&queue, &gpu, &palette);
@@ -538,6 +605,7 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         })
         .chain(helm.map(|(node, m)| (node, 0, Some(m))));
     for (node, id, m) in hung {
+        let is_helm = id == 0;
         let (Some(n), Some(m)) = (cs.h.nodes.get(node as usize), m) else {
             eprintln!("{id:#010x}: no such item");
             continue;
@@ -549,7 +617,10 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
             let (lo, hi) = m.pos.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| (std::array::from_fn(|k| lo[k].min(p[k])), std::array::from_fn(|k| hi[k].max(p[k]))));
             eprintln!("  item {id:#010x} bounds {lo:?} .. {hi:?}");
         }
-        let g = r.upload(&device, &queue, &m, &[render::IDENTITY], &textures);
+        let mut g = r.upload(&device, &queue, &m, &[render::IDENTITY], &textures);
+        if is_helm && helm_shell.is_some() {
+            r.set_shell(&device, &mut g, &m, helm_shell);
+        }
         r.set_instances(&queue, &g, &[at.to_cols()]);
         items.push((g, at));
     }

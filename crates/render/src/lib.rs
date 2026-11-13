@@ -24,6 +24,7 @@ pub mod overlay;
 pub mod recolor;
 pub mod scale;
 pub mod shadow;
+pub mod shell;
 pub mod standin;
 pub mod sunshadow;
 pub mod tattoo;
@@ -333,6 +334,9 @@ pub struct GpuModel {
     /// bounds make at its instances, which Light Shadows ask whether it holds
     /// a light (`lightshadow`).
     core: std::cell::Cell<Option<(Vec3, Vec3)>>,
+    /// A glowing creature's aura shell (`shell`, `Renderer::set_shell`),
+    /// drawn after its blended layers; none for every other model.
+    pub shell: Option<shell::Shell>,
 }
 
 impl GpuModel {
@@ -682,6 +686,8 @@ pub struct Renderer {
     pub curve: curve::Curve,
     /// The options' Ambient Occlusion (`ao`): off until set.
     pub ao: ao::Ao,
+    /// The aura shells' pipeline (`shell`), made at the first shell.
+    shell: Option<shell::Pipeline>,
 }
 
 /// What to draw this frame. The lights are the VU1 strip programs' uniforms:
@@ -958,6 +964,7 @@ impl Renderer {
             scale: scale::Scale::new(format),
             curve: curve::Curve::new(format),
             ao: ao::Ao::new(format),
+            shell: None,
         }
     }
 
@@ -1156,6 +1163,7 @@ impl Renderer {
             casts: true,
             world: std::cell::Cell::new(sunshadow::world_box((lo, hi), m.skinned, instances)),
             core: std::cell::Cell::new(sunshadow::world_box((lo, hi), false, instances)),
+            shell: None,
         }
     }
 
@@ -1318,6 +1326,31 @@ impl Renderer {
         if let Some(u) = quads {
             u.draw(device, &mut pass, size);
         }
+    }
+
+    /// Gives `m` (uploaded from `model`) an aura shell in `color` over the
+    /// whole of it (`shell`: its mesh again, pushed out along its normals,
+    /// drawn additively as a rim after its blended layers), or with `None`
+    /// takes its shell away.
+    pub fn set_shell(&mut self, device: &wgpu::Device, m: &mut GpuModel, model: &esf::Model, color: Option<[u8; 3]>) {
+        let parts: Vec<shell::PartOf> = color.map(|color| shell::PartOf { color, batches: None }).into_iter().collect();
+        self.set_shells(device, m, model, &parts);
+    }
+
+    /// Gives `m` (uploaded from `model`) an aura shell in `parts`, each over
+    /// some of its batches in a colour of its own (a worn piece's), or with
+    /// none takes its shell away. The pipeline is made at the first shell; a
+    /// page whose WebGL2 refuses it draws none.
+    pub fn set_shells(&mut self, device: &wgpu::Device, m: &mut GpuModel, model: &esf::Model, parts: &[shell::PartOf]) {
+        if parts.is_empty() {
+            m.shell = None;
+            return;
+        }
+        if self.shell.is_none() && !self.refused.contains(&SHELL) {
+            let (frame, palette, format) = (&self.frame_layout, &self.palette_layout, self.format);
+            self.shell = guarded(device, &mut self.refused, &mut self.refusals, SHELL, || Some(shell::Pipeline::new(device, frame, palette, format)));
+        }
+        m.shell = self.shell.as_ref().and_then(|p| p.shell(device, model, m.bounds, parts));
     }
 
     /// The skin palette for a skinned model: one matrix per skeleton node
@@ -1568,6 +1601,14 @@ impl Renderer {
                             current = usize::MAX;
                         }
                         draws += self.encode_model(&mut pass, m, deferred, &mut current, 0..m.instance_count, shade);
+                        // its aura shell after its blended layers (`shell`)
+                        if deferred && let Some(n) = self.encode_shell(&mut pass, m) {
+                            draws += n;
+                            current = usize::MAX;
+                            if let Some(bg) = shade.group3() {
+                                pass.set_bind_group(3, bg, &[]);
+                            }
+                        }
                     }
                     Draw::Instances(m, r) => {
                         if !Self::draws_anything(m) || r.is_empty() {
@@ -1607,6 +1648,28 @@ impl Renderer {
             }
         }
         self.drawn.set((drawn_models, draws));
+    }
+
+    /// A model's aura shell (`shell`), if it has one and a pipeline was
+    /// made: its draw calls (one a part), or `None` when nothing was drawn.
+    fn encode_shell<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, m: &'a GpuModel) -> Option<u32> {
+        let (Some(s), Some(p)) = (m.shell.as_ref(), self.shell.as_ref()) else { return None };
+        let mut draws = 0;
+        for part in &s.parts {
+            let Some((_, indices, count)) = part.run(m.level) else { continue };
+            if draws == 0 {
+                pass.set_pipeline(&p.pipeline);
+                pass.set_bind_group(2, &m.palette_bg, &[]);
+                pass.set_vertex_buffer(0, m.vertices.slice(..));
+                pass.set_vertex_buffer(1, m.instances.slice(..));
+                pass.set_vertex_buffer(2, s.normals.slice(..));
+            }
+            pass.set_bind_group(1, &part.bg, &[]);
+            pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..*count, 0, 0..m.instance_count);
+            draws += 1;
+        }
+        (draws > 0).then_some(draws)
     }
 
     /// Whether `draw` draws `m` at all (the sky draws apart).
@@ -2093,6 +2156,7 @@ fn layer_state(l: &esf::Layer, textured: bool) -> (usize, LayerUniform, usize) {
 const LIT: &str = "Dynamic Lighting";
 const SUN: &str = "Sun Shadows";
 const POINTS: &str = "Light Shadows";
+const SHELL: &str = "Aura shells";
 
 /// What `make` makes (a lighting feature's maps, samplers and pipelines),
 /// unless a page's WebGL2 refuses it. A browser's GL driver may refuse a

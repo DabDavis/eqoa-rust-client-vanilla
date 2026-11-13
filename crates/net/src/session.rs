@@ -164,6 +164,12 @@ pub const LIVE_LOOK_MANY_CHARS: u32 = 2;
 /// look in force's third u32 says it is granted ([`Session::armor_look`]); a
 /// server that knows no such bit sends none, and set 9 as set 4.
 pub const LIVE_LOOK_ARMOR: u32 = 4;
+/// Bit 3 of this client's answer to [`OP_LIVE_LOOK`]: it draws worn pieces'
+/// auras, seven after the trims on the channel
+/// ([`crate::entity::AURA_STATE_SIZE`]: [`crate::entity::PieceAura`] each).
+/// A server that knows no such bit sends the trims alone; the channel's
+/// length says which came.
+pub const LIVE_LOOK_AURAS: u32 = 8;
 /// CLIENT's character select: eight (`CharacterList`, `m_chars[8]`).
 pub const CLIENT_CHAR_SLOTS: u32 = 8;
 /// The most characters a list is read of, whatever a server says.
@@ -726,7 +732,8 @@ fn read_pet_effects(r: &mut Reader) -> Option<Vec<PetEffect>> {
 /// the disc's green one tinted; `crate::npctint`, the game's `npctint`). The
 /// offer, server to client once the player is in the world: a u8, the newest
 /// layout of [`OP_NPC_TINTS`] the server sends (1; 2 with a glow after each
-/// colour, petition 1893). CLIENT has no such case, so a PS2 ignores it and draws
+/// colour, petition 1893; 3 with an aura after each glow, `crate::npctint::Aura`).
+/// CLIENT has no such case, so a PS2 ignores it and draws
 /// every body in its own colours.
 pub const OP_NPC_TINTS_OFFER: u16 = 0x7E3E;
 /// The answer to [`OP_NPC_TINTS_OFFER`], client to server, at once: a u8, the
@@ -2544,7 +2551,7 @@ impl Session {
             OP_LIVE_LOOK => {
                 if r.u32() & 1 != 0 && !r.error {
                     // the server's armour with the live look alone (its trims ride the live channel)
-                    let live = if wants_live_look() { 1 | LIVE_LOOK_ARMOR } else { 0 };
+                    let live = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS } else { 0 };
                     self.send_op_int(OP_LIVE_LOOK, live | LIVE_LOOK_MANY_CHARS);
                 }
             }
@@ -4796,8 +4803,7 @@ mod tests {
         assert_eq!(answers(&mut s), [], "the set answered nothing");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3E, 0x7E, 1]);
         assert_eq!(answers(&mut s), [(251, vec![0x3F, 0x7E, 1])], "a new offer is answered again");
-        // build180's offer of 2: answered 2, each colour's glow read after it;
-        // an offer above it answered 2 too
+        // build180's offer of 2: answered 2, each colour's glow read after it
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3E, 0x7E, 2]);
         assert_eq!(answers(&mut s), [(251, vec![0x3F, 0x7E, 2])], "an offer of 2: answered 2");
         let mut moogie = vec![0x40, 0x7E, 1, 0, 3, b'm', b'o', b'o'];
@@ -4805,9 +4811,22 @@ mod tests {
         moogie.extend_from_slice(&0xFF40_4080u32.to_le_bytes());
         s.npc_tints = None;
         deliver(&mut s, drdp::TYPE_GUARANTEED, moogie);
-        assert_eq!(s.npc_tints.take(), Some(vec![("moo".to_string(), crate::npctint::Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080 })]));
+        assert_eq!(s.npc_tints.take(), Some(vec![("moo".to_string(), crate::npctint::Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080, ..Default::default() })]));
+        // an offer of 3 (or newer): answered 3, each glow's aura read after
+        // it (the skeleton's both auras, the Sword of Virtue's on 4 nodes)
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3E, 0x7E, 9]);
-        assert_eq!(answers(&mut s), [(251, vec![0x3F, 0x7E, 2])], "a newer offer: the newest this client reads");
+        assert_eq!(answers(&mut s), [(251, vec![0x3F, 0x7E, crate::npctint::LAYOUT])], "a newer offer: the newest this client reads");
+        assert_eq!(crate::npctint::LAYOUT, 3);
+        let mut skel = vec![0x40, 0x7E, 1, 0, 4, b's', b'k', b'e', b'l'];
+        skel.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        skel.extend_from_slice(&0x40FF_40FFu32.to_le_bytes());
+        skel.push(crate::npctint::Aura::BOTH);
+        skel.extend_from_slice(&0x88EC_092Du32.to_le_bytes());
+        skel.push(4);
+        s.npc_tints = None;
+        deliver(&mut s, drdp::TYPE_GUARANTEED, skel);
+        let aura = crate::npctint::Aura { kind: crate::npctint::Aura::BOTH, source: 0x88EC_092D, nodes: 4 };
+        assert_eq!(s.npc_tints.take(), Some(vec![("skel".to_string(), crate::npctint::Tint { color: 0xFFFF_FFFF, glow: 0x40FF_40FF, aura })]));
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3E, 0x7E, 1]);
         answers(&mut s);
         s.npc_tints = None;
@@ -5071,7 +5090,7 @@ mod tests {
         s.state = State::Shard;
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "a first list: the disc's");
         assert!(deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0C, 0x7E, 1, 0, 0, 0]).is_empty());
-        let bits = if wants_live_look() { 1 | LIVE_LOOK_ARMOR as u8 } else { 0 } | LIVE_LOOK_MANY_CHARS as u8;
+        let bits = if wants_live_look() { 1 | LIVE_LOOK_ARMOR as u8 | LIVE_LOOK_AURAS as u8 } else { 0 } | LIVE_LOOK_MANY_CHARS as u8;
         assert_eq!(answers(&mut s), [(251, vec![0x0C, 0x7E, bits, 0, 0, 0])], "the offer answered with 1, every character listed (2) and the server's armour drawn (4)");
         assert!(!s.live_look, "not in force until the server says so");
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "the control: a list before the server's answer");
@@ -5621,7 +5640,7 @@ mod tests {
         };
         answers(&mut s);
         deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK, &[1]));
-        let want = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | 2 } else { 2 };
+        let want = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS | 2 } else { 2 };
         assert_eq!(answers(&mut s), [(251, words(OP_LIVE_LOOK, &[want]))]);
         assert_eq!(s.char_slots, CLIENT_CHAR_SLOTS);
         deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK_IN_FORCE, &[1]));

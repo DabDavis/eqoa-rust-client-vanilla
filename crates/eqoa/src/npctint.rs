@@ -40,10 +40,11 @@ pub fn set(tints: Vec<(String, Tint)>) {
     TINTS.with_borrow_mut(|t| *t = tints);
 }
 
-/// Whether a tint draws anything: its colour changes the body or its glow
-/// lights it (go-eqoa-server's `NPCTint.Shows`).
+/// Whether a tint draws anything: its colour changes the body, its glow
+/// lights it (go-eqoa-server's `NPCTint.Shows`) or it names particles
+/// (`net::npctint::Aura::particles`, which need no glow).
 pub fn shows(t: Tint) -> bool {
-    changes(t.color) || net::npctint::glows(t.glow)
+    changes(t.color) || net::npctint::glows(t.glow) || net::npctint::Aura::particles(&t)
 }
 
 /// The tint the NPCs of this name (as their channel carries it) are drawn in,
@@ -117,7 +118,7 @@ pub fn take_arg(args: &[String]) -> Result<(Option<Tint>, Vec<String>), String> 
             rest.push(a.clone());
         }
     }
-    let tint = (color.is_some() || glow.is_some()).then(|| Tint { color: color.unwrap_or(0xFFFF_FFFF), glow: glow.unwrap_or(0) });
+    let tint = (color.is_some() || glow.is_some()).then(|| Tint { color: color.unwrap_or(0xFFFF_FFFF), glow: glow.unwrap_or(0), ..Default::default() });
     Ok((tint, rest))
 }
 
@@ -173,26 +174,26 @@ mod tests {
     #[test]
     fn a_glow_sets_every_emissive() {
         let mut m = body();
-        apply(&mut m, Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080 });
+        apply(&mut m, Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080, ..Default::default() });
         let l = &m.batches[0].layers;
         assert_eq!((l[0].emissive, l[1].emissive), ([128, 32, 32, 0], [128, 32, 32, 0]));
         assert_eq!((l[0].color, l[1].color), (body().batches[0].layers[0].color, body().batches[0].layers[1].color));
         assert_eq!(glow_rgb(0xFF40_40FF), [255, 64, 64]);
         let mut both = body();
-        apply(&mut both, Tint { color: 0x558C_50FF, glow: 0x00FF_00FF });
+        apply(&mut both, Tint { color: 0x558C_50FF, glow: 0x00FF_00FF, ..Default::default() });
         assert_eq!((both.batches[0].layers[0].color, both.batches[0].layers[0].emissive), ([0x55, 0x8C, 0x50, 255], [0, 255, 0, 0]));
         for g in [0, 0x0000_00FF, 0xFF40_4000] {
             let mut same = body();
-            apply(&mut same, Tint { color: 0xFFFF_FFFF, glow: g });
+            apply(&mut same, Tint { color: 0xFFFF_FFFF, glow: g, ..Default::default() });
             assert_eq!(same.batches[0].layers, body().batches[0].layers, "{g:08X} changed something");
-            assert!(!shows(Tint { color: 0xFFFF_FFFF, glow: g }));
+            assert!(!shows(Tint { color: 0xFFFF_FFFF, glow: g, ..Default::default() }));
             let mut tinted = body();
-            apply(&mut tinted, Tint { color: 0x558C_50FF, glow: g });
+            apply(&mut tinted, Tint { color: 0x558C_50FF, glow: g, ..Default::default() });
             let mut want = body();
             apply(&mut want, Tint::color(0x558C_50FF));
             assert_eq!(tinted.batches[0].layers, want.batches[0].layers, "{g:08X}: the colour's alone");
         }
-        assert!(shows(Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080 }));
+        assert!(shows(Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080, ..Default::default() }));
     }
 
     /// The set is by name as the server keys it, so the channel's name in any
@@ -200,10 +201,10 @@ mod tests {
     /// has none; a tint that changes nothing is none.
     #[test]
     fn the_set_is_by_name() {
-        set(vec![("yhafiran".into(), Tint::color(0x558C_50FF)), ("Uzrathixius ".into(), Tint::color(0xFFFF_FFFF)), ("Mr. Moogie".into(), Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080 })]);
+        set(vec![("yhafiran".into(), Tint::color(0x558C_50FF)), ("Uzrathixius ".into(), Tint::color(0xFFFF_FFFF)), ("Mr. Moogie".into(), Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080, ..Default::default() })]);
         assert_eq!(of("Yhafiran"), Some(Tint::color(0x558C_50FF)));
         assert_eq!(of("YHAFIRAN "), Some(Tint::color(0x558C_50FF)));
-        assert_eq!(of("mr. moogie"), Some(Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080 }), "a glow alone is a tint");
+        assert_eq!(of("mr. moogie"), Some(Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080, ..Default::default() }), "a glow alone is a tint");
         assert_eq!(of("Poxathixius"), None, "the control: an untinted twin");
         assert_eq!(of("Uzrathixius"), None, "a white tint is none");
         set(Vec::new());
@@ -255,7 +256,7 @@ mod tests {
         assert_eq!(take_arg(&args(&["0xB5C8A651", "tint=558C50FF"])).unwrap(), (Some(Tint::color(0x558C_50FF)), args(&["0xB5C8A651"])));
         assert_eq!(take_arg(&args(&["tint=0x558c50", "0.6"])).unwrap(), (Some(Tint::color(0x558C_50FF)), args(&["0.6"])));
         assert_eq!(take_arg(&args(&["tint=#558C5080"])).unwrap().0, Some(Tint::color(0x558C_5080)));
-        assert_eq!(take_arg(&args(&["glow=FF404080", "x"])).unwrap(), (Some(Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080 }), args(&["x"])));
+        assert_eq!(take_arg(&args(&["glow=FF404080", "x"])).unwrap(), (Some(Tint { color: 0xFFFF_FFFF, glow: 0xFF40_4080, ..Default::default() }), args(&["x"])));
         assert!(take_arg(&args(&["glow=red"])).is_err());
         assert_eq!(take_arg(&args(&["zone", "3"])).unwrap(), (None, args(&["zone", "3"])));
         assert!(take_arg(&args(&["tint=green"])).is_err());

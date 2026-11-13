@@ -111,9 +111,14 @@ struct Puppet {
     /// The tint the server names for its body (`npctint`: an NPC's, by its
     /// name): another, or one gone, rebuilds it.
     tint: Option<crate::npctint::Tint>,
-    /// The nodes its aura rises from (`aura::body_nodes`): a glowing tint's
-    /// body's alone, none for every other.
-    aura: Vec<i32>,
+    /// Its auras' particles (`aura::Worn`): a body whose tint asks for them
+    /// (`aura::npc_particles`) and each worn piece's whose aura does
+    /// (`aura::pieces`, `aura::helm_aura`), none for every other. Its shells
+    /// (`aura::npc_shell`, the pieces') are on its `gpu` and its helm's.
+    aura: Vec<crate::aura::Worn>,
+    /// The worn pieces' auras it was made with (the channel's): others made
+    /// it anew.
+    pieces: [net::entity::PieceAura; 7],
     /// A Wisp's (`wisp::is`): it casts no shadow, neither its blob shadow
     /// (`shadow_casters`) nor any of its models into the shadow maps
     /// (`set_casts`).
@@ -1086,6 +1091,12 @@ fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Lo
 
 /// The tint the server names for an NPC's body (`npctint`), by the name its
 /// channel carries; none for a player's character.
+/// The auras on its worn pieces the channel carries (`aura::pieces`): none
+/// from a server that sends none.
+fn pieces_of(e: &net::entity::Entity) -> [net::entity::PieceAura; 7] {
+    e.creature.as_ref().and_then(|c| c.colors).map(|l| l.auras).unwrap_or_default()
+}
+
 fn tint_of(e: &net::entity::Entity) -> Option<crate::npctint::Tint> {
     e.creature.as_ref().filter(|_| !a_player(e)).and_then(|c| crate::npctint::of(&c.name))
 }
@@ -1121,9 +1132,9 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                         crate::raceemote::grant_swim(lib, cs, &mut anims, e.drawn_model, player, races);
                     }
                     let held = held_by(sprite.as_ref(), e.creature.as_ref());
-                    let (attached, weapons, helm_worn) = match (&sprite, &e.creature) {
+                    let (attached, weapons, helm_worn, helm_aura) = match (&sprite, &e.creature) {
                         (Some(cs), Some(c)) => attach(lib, g, cs, c, held, e.drawn_model, player),
-                        _ => (Vec::new(), [None; 3], false),
+                        _ => (Vec::new(), [None; 3], false, None),
                     };
                     let projectile = projectiles_of(sprite.as_ref(), e.creature.as_ref());
                     // ApplyLook: the look's textures and tints on the layers the
@@ -1148,13 +1159,28 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                         crate::npctint::apply(&mut model, t);
                     }
                     let wisp = crate::wisp::is(lib, e.drawn_model, race_look.as_deref());
-                    // a glowing NPC's aura (`aura::body_emitters`): the nodes it rises from
-                    let aura = match (&sprite, crate::aura::npc_glow(tint)) {
-                        (Some(cs), Some(_)) => crate::aura::body_nodes(cs),
-                        _ => Vec::new(),
-                    };
-                    let gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
-                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look, tint, aura, wisp };
+                    // its auras (`aura`): an NPC's whole body's (its tint's) and
+                    // each worn piece's, their particles' nodes and their shells
+                    let pieces = pieces_of(e);
+                    let mut aura = Vec::new();
+                    let mut shells: Vec<render::shell::PartOf> = crate::aura::npc_shell(tint).map(|color| render::shell::PartOf { color, batches: None }).into_iter().collect();
+                    if let Some(cs) = &sprite {
+                        if let Some(pt) = crate::aura::npc_particles(tint) {
+                            aura.push(crate::aura::Worn { nodes: crate::aura::body_nodes(cs, pt.nodes), particles: pt, first: 0 });
+                        }
+                        if pieces != [net::entity::PieceAura::default(); 7] {
+                            let robed = look.as_ref().is_some_and(|l| l.robe >= 0);
+                            let (s, w) = crate::aura::pieces(&model, cs, &pieces, robed);
+                            shells.extend(s);
+                            aura.extend(w);
+                        }
+                    }
+                    aura.extend(helm_aura);
+                    let mut gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
+                    if !shells.is_empty() {
+                        g.renderer.set_shells(g.device, &mut gpu, &model, &shells);
+                    }
+                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look, tint, aura, pieces, wisp };
                     p.set_casts();
                     Some(p)
                 })
@@ -1249,7 +1275,7 @@ fn projectiles_of(sprite: Option<&CSprite<Ee>>, c: Option<&net::entity::Creature
 /// the hands' weapon ends and whether a helm is worn. `model`: the body's
 /// DictID; `player`: a player's character.
 #[allow(clippy::too_many_arguments)]
-fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creature, held: Held, model: u32, player: bool) -> (Vec<(i32, GpuModel)>, Weapons, bool) {
+fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creature, held: Held, model: u32, player: bool) -> (Vec<(i32, GpuModel)>, Weapons, bool, Option<crate::aura::Worn>) {
     let textures = render::library_textures(lib);
     let mut attached = Vec::new();
     let mut weapons = [None; 3];
@@ -1268,14 +1294,25 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
     let mut helm_worn = false;
     // the server's patch's tables (`s2`), retail's without one
     let t = crate::s2::get().cust();
+    let mut helm_aura = None;
     if let Some((node, m)) = crate::slotless::helm_on(lib, model, cs, player, c.armor[5], look_of(c).helm_color(&t), &t, true) {
         helm_worn = true;
-        attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+        let mut gpu = g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures);
+        // the helm's own aura (`aura::helm_aura`): its shell over it, its
+        // particles on its node
+        if let Some(a) = c.colors.map(|l| l.auras).filter(|a| a[crate::aura::HELM] != Default::default()) {
+            let (shell, worn) = crate::aura::helm_aura(&a, node);
+            if shell.is_some() {
+                g.renderer.set_shell(g.device, &mut gpu, &m, shell);
+            }
+            helm_aura = worn;
+        }
+        attached.push((node, gpu));
     }
     if let Some((node, m)) = wisp_of(lib, cs, c, model, player) {
         attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
     }
-    (attached, weapons, helm_worn)
+    (attached, weapons, helm_worn, helm_aura)
 }
 
 /// A Wisp's wisp (`wisp`), for a player's character whose race look (by its
@@ -1339,9 +1376,10 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
         Some(p) if r != Redo::Build && p.race_look != race_look_of(e) => Redo::Build,
         _ => r,
     };
-    // a tint on its body come, changed or gone (`npctint`): made anew
+    // a tint on its body come, changed or gone (`npctint`), or a worn
+    // piece's aura (`aura::pieces`): made anew
     let r = match p.as_ref() {
-        Some(p) if r != Redo::Build && p.tint != tint_of(e) => Redo::Build,
+        Some(p) if r != Redo::Build && (p.tint != tint_of(e) || p.pieces != pieces_of(e)) => Redo::Build,
         _ => r,
     };
     // the art swapped (F9), or a texture pack turned on or off (`texpack`),
@@ -1356,7 +1394,11 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
             {
                 p.held = held_items(cs, c);
                 p.projectile = crate::spells::hand_projectiles(c, cs.holds_items);
-                (p.attached, p.weapons, _) = lib.with_view(p.era, || attach(lib, g, cs, c, p.held, p.model, a_player(e)));
+                let helm_aura;
+                (p.attached, p.weapons, _, helm_aura) = lib.with_view(p.era, || attach(lib, g, cs, c, p.held, p.model, a_player(e)));
+                // the helm's aura's particles made again with it
+                p.aura.retain(|w| w.first != 64 * (crate::aura::HELM + 1));
+                p.aura.extend(helm_aura);
                 p.set_casts();
             }
             None
@@ -2858,21 +2900,33 @@ mod held {
             apply(&lib, &mut g, p, e, None, 0, 0, None, false);
         }
         assert_eq!((tint(&him), tint(&beside), tint(&them)), (Some(Tint::color(0x2A73_33FF)), None, None));
-        let aura = |p: &Option<Puppet>| p.as_ref().expect("a puppet").aura.len();
+        let aura = |p: &Option<Puppet>| p.as_ref().expect("a puppet").aura.iter().map(|w| w.nodes.len()).sum::<usize>();
+        let shell = |p: &Option<Puppet>| p.as_ref().expect("a puppet").gpu.shell.as_ref().map(|s| s.colors()[0]);
         assert_eq!((aura(&him), aura(&beside), aura(&them)), (0, 0, 0), "a colour alone: no aura");
+        assert_eq!((shell(&him), shell(&beside), shell(&them)), (None, None, None), "a colour alone: no shell");
         assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 33, None, false).is_none(), "the same tint: kept");
         crate::npctint::set(vec![("yhafiran".into(), Tint::color(0x4D80_4DFF))]);
         assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 66, None, false).is_some(), "a new tint: made anew");
         assert!(apply(&lib, &mut g, &mut beside, &twin, None, 0, 66, None, false).is_none(), "the twin kept");
         assert_eq!(tint(&him), Some(Tint::color(0x4D80_4DFF)));
         // a glow come on the same colour (petition 1893): made anew in it
-        crate::npctint::set(vec![("yhafiran".into(), Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080 })]);
+        crate::npctint::set(vec![("yhafiran".into(), Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080, ..Default::default() })]);
         assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 77, None, false).is_some(), "a glow come: made anew");
-        assert_eq!(tint(&him), Some(Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080 }));
-        assert_eq!((aura(&him), aura(&beside)), (crate::aura::AURA_NODES, 0), "a glow: its aura's nodes; the twin none");
+        assert_eq!(tint(&him), Some(Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080, ..Default::default() }));
+        assert_eq!((aura(&him), aura(&beside)), (0, 0), "a glow (the default aura): no particles");
+        assert_eq!((shell(&him), shell(&beside)), (Some([128, 32, 32]), None), "a glow: its shell in the glow; the twin none");
+        // the particles template named (layout 3): both, the sword's on 5 nodes
+        use net::npctint::Aura;
+        let both = Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080, aura: Aura { kind: Aura::BOTH, source: 0, nodes: 5 } };
+        crate::npctint::set(vec![("yhafiran".into(), both)]);
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 88, None, false).is_some(), "an aura named: made anew");
+        assert_eq!((aura(&him), shell(&him)), (5, Some([128, 32, 32])));
+        crate::npctint::set(vec![("yhafiran".into(), Tint { aura: Aura { kind: Aura::PARTICLES, source: 0, nodes: 0 }, ..both })]);
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 89, None, false).is_some());
+        assert_eq!((aura(&him), shell(&him)), (crate::aura::AURA_NODES, None), "particles alone");
         crate::npctint::set(Vec::new());
         assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 99, None, false).is_some(), "the tint gone: made anew");
-        assert_eq!((tint(&him), aura(&him)), (None, 0));
+        assert_eq!((tint(&him), aura(&him), shell(&him)), (None, 0, None));
     }
 
     /// A player of a server's race in the gargoyles' body (go-eqoa-server's
@@ -10119,14 +10173,12 @@ impl Play {
     /// and its sprite's own emitters (`particles::part_emitters`) under their
     /// nodes, run while the creature is rastered (`UpdateParticleEmitters`,
     /// from `VICSprite::Raster`), a player-only one on the player alone
-    /// (`SetIsPlayer`). A glowing NPC carries its aura too
-    /// (`aura::body_emitters`: the Sword of Virtue's emitter on its nodes, in
-    /// its glow's hue), run while it is rastered.
+    /// (`SetIsPlayer`). An NPC whose tint names particles carries them too
+    /// (`aura::body_emitters`: its source's emitter on its nodes, the Sword
+    /// of Virtue's by default, in its glow's hue), run while it is rastered.
     pub fn in_hand(&self, lib: &Library, walker: &Walker, matrix: [[f32; 4]; 4]) -> Vec<crate::particles::InHand> {
         use crate::particles::{How, InHand, OWN};
         let mut out = Vec::new();
-        // the sword's emitter, looked up only while a glowing NPC is about
-        let sword = self.puppets.iter().flatten().any(|p| !p.aura.is_empty()).then(|| crate::particles::item_emitters(lib, crate::aura::SWORD_OF_VIRTUE).first().map(|e| e.def)).flatten();
         let mut add = |holder: i32, p: &Puppet, cs: &CSprite<Ee>, centre: &Matrix44<Ee>, shown: Option<bool>| {
             for (hand, h) in p.held.iter().enumerate() {
                 let Some((item, node)) = *h else { continue };
@@ -10147,8 +10199,9 @@ impl Play {
                 let how = How::Part { use_location: e.use_location, once: e.once };
                 out.push(InHand { key: (holder, OWN, p.model, k), world: Matrix44::mul(&n.world, centre), def: e.def, how, drawn: shown.unwrap_or(p.shown), tint: None });
             }
-            if let (Some(sword), Some(glow)) = (sword, crate::aura::npc_glow(p.tint).filter(|_| !p.aura.is_empty())) {
-                out.extend(crate::aura::body_emitters(holder, cs, &p.aura, centre, sword, glow, shown.unwrap_or(p.shown)));
+            // its auras' particles: sources looked up only for a body that wears some
+            if !p.aura.is_empty() {
+                out.extend(crate::aura::worn_emitters(lib, holder, cs, &p.aura, centre, shown.unwrap_or(p.shown)));
             }
         };
         for (slot, p) in self.puppets.iter().enumerate() {
