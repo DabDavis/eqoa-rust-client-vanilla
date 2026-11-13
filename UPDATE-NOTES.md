@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Stat maximums in Character > Summary
+- **See how far each stat can go**: in Character > Summary every stat now shows its value and its maximum, as
+  "346/435", so you know your target while you train. The maximum is your level's cap plus whatever your Combat
+  Mastery stat-max purchases (Brawn, and the others for each stat) have added, and it updates as soon as you buy or
+  remove one.
+
 ## 2026-11-13 · Key combinations, chat tabs, spell bar opacity, pets you walk through, shared shortcuts
 - **Key combinations on the Controls page**: holding Shift, Ctrl or Alt while you pick a key now binds the
   combination (Shift+1, Ctrl+F, Alt+2...) instead of the character it types ("!"). The binding fires when you press

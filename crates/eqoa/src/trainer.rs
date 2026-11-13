@@ -29,6 +29,11 @@ const STAT_MASKS: [i32; 15] = [3, 12, 3, 3, 10, 6, 12, 24, 18, 80, 36, 34, 96, 4
 /// `VIClientPart4EC58::GetStat`'s slot -> id map (-1 none).
 const MASTERY_IDS: [i32; 29] = [0, 1, 2, 3, 4, 5, 6, -1, -1, -1, -1, -1, -1, -1, 8, 10, 12, 13, 14, -1, -1, -1, 24, 26, 25, 27, 22, 23, -1];
 
+/// The left column's caption and value widths: the game's 200 and 75, here
+/// 175 and 100 for a stat's "value/cap" (ticket 1996), the column as wide.
+const LEFT_CAPTION: i32 = 175;
+const LEFT_VALUE: i32 = 100;
+
 /// `gRaces[r].m_nameStrID` (`GetRace`), the ten playable races.
 const RACE_WORDS: [i32; 10] = [183, 185, 186, 187, 188, 189, 191, 192, 193, 190];
 
@@ -116,6 +121,14 @@ pub(crate) fn mastery_stat(m: &[i64; 29], id: i32) -> i32 {
 /// cap of trainable stat `i` (0-6), none for another.
 pub(crate) fn stat_cap(p44: i32, bonuses: &[i64; 7], i: i32) -> i32 {
     p44 + if (0..7).contains(&i) { bonuses[i as usize] as i32 } else { 0 }
+}
+
+/// A stat's value with its cap after it, "343/435" (not the game's, which
+/// shows the value alone: ticket 1996, "an easy way to see what your stat
+/// maxes were"). The cap is `GetP44Total`, the level's and what the
+/// masteries raise it by (go-eqoa-server's StatCapOf).
+pub(crate) fn value_of_cap(value: i32, cap: i32) -> String {
+    format!("{value}/{cap}")
 }
 
 /// What the trainer asks of the game.
@@ -502,16 +515,16 @@ impl Trainer {
         let p0 = [25, 15];
         let mut p1 = [p0[0], p0[1] + 25];
         let mut p2 = [p1[0] + 300, p1[1]];
-        let mut p3 = [p1[0] + 200, p1[1]];
+        let mut p3 = [p1[0] + LEFT_CAPTION, p1[1]];
         let mut p4 = [p2[0] + 220, p2[1]];
         Self::draw_header(vui, r, d, p0);
         if self.mode == 4 {
-            Self::bar(vui, r, &w(665), BLACK, p1, 200, true);
-            Self::bar(vui, r, &[], BLACK, p3, 75, false);
+            Self::bar(vui, r, &w(665), BLACK, p1, LEFT_CAPTION, true);
+            Self::bar(vui, r, &[], BLACK, p3, LEFT_VALUE, false);
         } else {
             let c = if self.points < 1 { BLACK } else { self.color };
-            Self::bar(vui, r, &w(489), c, p1, 200, true);
-            Self::bar(vui, r, &wide(&self.points.to_string()), c, p3, 75, false);
+            Self::bar(vui, r, &w(489), c, p1, LEFT_CAPTION, true);
+            Self::bar(vui, r, &wide(&self.points.to_string()), c, p3, LEFT_VALUE, false);
         }
         p1[1] += 25;
         p3[1] += 25;
@@ -524,18 +537,19 @@ impl Trainer {
             } else {
                 BLACK
             };
-            Self::bar(vui, r, &w(caption), c, p1, 200, true);
+            Self::bar(vui, r, &w(caption), c, p1, LEFT_CAPTION, true);
             let v = d.cur[stat as usize] + self.add[stat as usize];
-            Self::bar(vui, r, &wide(&v.to_string()), c, p3, 75, false);
+            Self::bar(vui, r, &wide(&value_of_cap(v, d.cap(stat))), c, p3, LEFT_VALUE, false);
             let i = i as i32;
+            let half = LEFT_VALUE / 2;
             self.hits.push([p1[0], p1[1], p3[0], p1[1] + ROW_H], STAT + i);
-            self.hits.push([p3[0], p3[1], p3[0] + 37, p3[1] + ROW_H], LESS + i);
-            self.hits.push([p3[0] + 37, p3[1], p3[0] + 75, p3[1] + ROW_H], MORE + i);
+            self.hits.push([p3[0], p3[1], p3[0] + half, p3[1] + ROW_H], LESS + i);
+            self.hits.push([p3[0] + half, p3[1], p3[0] + LEFT_VALUE, p3[1] + ROW_H], MORE + i);
             if lit {
                 let y = Self::arrow_y(vui, p1[1]);
                 vui.blit_ex(r, vui.entry(85).x00, [p1[0], y], 3, self.fade, 0);
                 vui.blit_ex(r, 128, [p3[0] + 2, y], 3, self.fade, 1);
-                vui.blit_ex(r, 128, [p3[0] + 62, y], 3, self.fade, 0);
+                vui.blit_ex(r, 128, [p3[0] + LEFT_VALUE - 13, y], 3, self.fade, 0);
             }
             p1[1] += 25;
             p3[1] += 25;
@@ -710,6 +724,41 @@ mod tests {
         assert_eq!(train_stats(&[1, 1, 0, 0, 0, 0, 0], 2), Some(vec![0x1D, 0, 2, 2, 0, 0, 0, 0, 0]));
         assert!(d.highlighted(0) && d.highlighted(1) && !d.highlighted(2), "WAR's mask 3");
         assert_eq!(Data::derived(&base, 20), (10 / 7 + 10 + 40).min(315));
+    }
+
+    /// Ticket 1996: each stat's row says its value and its cap, "value/cap",
+    /// `GetP44Total` (m_p44 the highest cap, m_bonus each stat's less it:
+    /// go-eqoa-server's TrainerCap and TrainerBonuses), the points being
+    /// added counted in the value; the selected stat's Base and Current as
+    /// the game draws them.
+    #[test]
+    fn each_stat_shows_its_cap() {
+        use crate::racelabel::tests::{Drawn, numbered_vui};
+        let vui = numbered_vui();
+        let (mut base, mut cur) = ([10; 29], [10; 29]);
+        base[0] = 300;
+        cur[0] = 380;
+        cur[1] = 400;
+        let inv = ItemList::default();
+        // Brawn 1 and 2: STR's cap 435, the rest the level's 400
+        let bonuses = [0, -35, -35, -35, -35, -35, -35];
+        let d = Data { name: "X", class: 0, race: 0, level: 60, base: &base, cur: &cur, p40: 2, p44: 435, mastery: &[0; 29], bonuses: &bonuses, inv: &inv, slot_words: &[] };
+        let mut t = Trainer::default();
+        let drawn = |t: &mut Trainer| {
+            let mut r = Drawn::default();
+            t.draw_stats(&vui, &mut r, &d);
+            r.0
+        };
+        let after = |s: &[String], caption: &str| s[s.iter().position(|l| l == caption).unwrap_or_else(|| panic!("{caption} in {s:?}")) + 1].clone();
+        let s = drawn(&mut t);
+        assert_eq!(after(&s, "w248"), "380/435", "STR and its cap with the masteries' raise");
+        assert_eq!(after(&s, "w249"), "400/400", "STA at the level's cap");
+        assert_eq!(after(&s, "w254"), "10/400", "CHA");
+        assert_eq!(after(&s, "w480 w248"), "300", "Base as the game draws it");
+        assert_eq!(after(&s, "w481 w248"), "380", "Current as the game draws it");
+        t.add[0] = 5;
+        let s = drawn(&mut t);
+        assert_eq!(after(&s, "w248"), "385/435", "the points being added");
     }
 
     /// A pointer as the keys: another stat is the steps to it, the selected

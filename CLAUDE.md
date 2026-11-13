@@ -46,6 +46,9 @@ current.
   a DPS meter of the player's group on a server that keeps one (the server owner's of 2026-11-10, "lets add dps meters,
   will work solo, group, raid": `dpsmeter`, go-eqoa-server's 0x7E3A-0x7E3D, a HUD panel under the quest tracker,
   `/dps`, Extended > UI > DPS Meter, off by default; off, or on any other server, nothing is drawn or asked),
+  each stat's cap after its value in Character > Summary (ticket 1996, the owner's: `trainer::value_of_cap`,
+  "346/435", the cap the game's own `GetP44Total`, m_p44 and m_bonus as any server sends them; the column's caption
+  175 wide and value 100 where the game's are 200 and 75),
   Ignore Shouts kept, Update Notices, Text Sharp or Smooth, Loading Screens Longer or Instant, Render
   Scale x1, x2 or x4 (off unless chosen), HUD Nearest or Sharp (Nearest, the game's, by default: the
   user's of 2026-10-28, "make nearest the default ... since there is a cost"; Sharp was the default
