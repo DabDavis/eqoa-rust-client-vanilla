@@ -32,10 +32,23 @@ pub const MSG_KICK: u32 = MSG_RAID | 0x0B00;
 /// Move to Group's entries (petition 1687): the target to group `msg & 0xFF`;
 /// with no group, the sub-menu itself (`startmenu::RAID_GROUPS_SUB`).
 pub const MSG_GROUP: u32 = MSG_RAID | 0x0C00;
+/// Add to Instance and Remove from Instance (the GM Jibrish's petition 1879):
+/// the target added to the party's instance, or taken out of it (ops 14, 15).
+pub const MSG_INST_ADD: u32 = MSG_RAID | 0x0E00;
+pub const MSG_INST_REMOVE: u32 = MSG_RAID | 0x0F00;
+
+/// The player's plain group as the menu needs it: in one, and its leader (the
+/// game's own flag, `Group::leader`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Party {
+    pub in_group: bool,
+    pub leads: bool,
+}
 
 /// The lines the client says itself (red, as the server's refusals).
 const IN_COMBAT_DISBAND: &str = "Your raid is in combat: it cannot be disbanded.";
 const IN_COMBAT_RULES: &str = "Your raid is in combat: its loot rules cannot change.";
+const IN_COMBAT_GROUP_RULES: &str = "Your group is in combat: its loot rule cannot change.";
 const NO_TARGET: &str = "You have no target.";
 const NOT_IN_RAID: &str = "Your target is not in your raid.";
 const MERC_NOT_MOVED: &str = "A mercenary stays in its owner's group: move its owner instead.";
@@ -122,11 +135,29 @@ pub fn group_counts(raid: &[net::session::RaidMember]) -> Vec<(u8, usize)> {
 /// after Kick, its menu a row a group to the highest a member may go to
 /// (`raidlist::most_group` of `n` members), each with how many it holds, a
 /// full one dimmed (petition 1687).
-pub fn rows(st: &State, groups: &[(u8, usize)], n: usize) -> (Vec<LabelRow>, Vec<LabelRow>, Vec<LabelRow>) {
+///
+/// Out of a raid, a plain group's leader (`party`) has Loot Rules too, first:
+/// Free for All and Need Before Greed (the GM Jibrish's petition 1878; master
+/// looter stays a raid's), the group's rule as the server says it marked
+/// (`State::group_rule`), dimmed in its fight. Everyone has Add to Instance and
+/// Remove from Instance (petition 1879: the target; the server says who may),
+/// in a raid before Leave Raid.
+pub fn rows(st: &State, groups: &[(u8, usize)], n: usize, party: Party) -> (Vec<LabelRow>, Vec<LabelRow>, Vec<LabelRow>) {
     let row = |msg, text: &'static str| LabelRow { msg, text: text.into(), tail: "".into(), dim: false };
     let invite = [row(MSG_INVITE, "Invite"), row(MSG_FLAG, "Raid Flag")];
+    let instance = [row(MSG_INST_ADD, "Add to Instance"), row(MSG_INST_REMOVE, "Remove from Instance")];
     if !st.in_raid() {
-        return (invite.to_vec(), Vec::new(), Vec::new());
+        let mut out = Vec::new();
+        let mut loot = Vec::new();
+        if party.in_group && party.leads {
+            out.push(row(0, "Loot Rules"));
+            for (msg, text, rule) in [(MSG_LOOT_FREE, "Free for All", RULE_FREE_FOR_ALL), (MSG_LOOT_NEED, "Need Before Greed", RULE_NEED_BEFORE_GREED)] {
+                loot.push(LabelRow { msg, text: text.into(), tail: if st.group_rule() == rule { " *" } else { "" }.into(), dim: st.group_in_combat() });
+            }
+        }
+        out.extend(invite);
+        out.extend(instance);
+        return (out, loot, Vec::new());
     }
     let mut moves = Vec::new();
     let mut out = Vec::new();
@@ -152,7 +183,9 @@ pub fn rows(st: &State, groups: &[(u8, usize)], n: usize) -> (Vec<LabelRow>, Vec
     if st.leads() {
         out.extend([row(MSG_LEADER, "Make Leader"), row(MSG_HELPER, "Make Helper"), row(MSG_MAIN_ASSIST, "Make Main Assist")]);
     }
-    out.extend([row(MSG_ASSIST, "Assist Main Assist"), row(MSG_LEAVE, "Leave Raid")]);
+    out.push(row(MSG_ASSIST, "Assist Main Assist"));
+    out.extend(instance);
+    out.push(row(MSG_LEAVE, "Leave Raid"));
     (out, loot, moves)
 }
 
@@ -245,6 +278,12 @@ impl Play {
                 self.add_chat(IN_COMBAT_RULES.to_string(), REFUSED);
                 return true;
             }
+            // a plain group's own rule (petition 1878): op 1 as a raid's,
+            // which the server takes as `/grouploot`
+            MSG_LOOT_FREE | MSG_LOOT_NEED if self.raid.state.group_in_combat() => {
+                self.add_chat(IN_COMBAT_GROUP_RULES.to_string(), REFUSED);
+                return true;
+            }
             MSG_LOOT_FREE => Command::LootRule(RULE_FREE_FOR_ALL),
             MSG_LOOT_NEED => Command::LootRule(RULE_NEED_BEFORE_GREED),
             MSG_LOOT_MASTER => Command::LootRule(RULE_MASTER_LOOTER),
@@ -269,7 +308,7 @@ impl Play {
                 }
                 Command::MoveToGroup { id: t, group: (m & 0xFF) as u8 }
             }
-            MSG_INVITE | MSG_LEADER | MSG_HELPER | MSG_MAIN_ASSIST | MSG_KICK => {
+            MSG_INVITE | MSG_LEADER | MSG_HELPER | MSG_MAIN_ASSIST | MSG_KICK | MSG_INST_ADD | MSG_INST_REMOVE => {
                 let Some(t) = target else {
                     self.add_chat(NO_TARGET.to_string(), REFUSED);
                     return true;
@@ -279,6 +318,8 @@ impl Play {
                     MSG_LEADER => Command::Leader(t),
                     MSG_HELPER => Command::Helper(t),
                     MSG_MAIN_ASSIST => Command::Assist(t),
+                    MSG_INST_ADD => Command::InstanceAdd(t),
+                    MSG_INST_REMOVE => Command::InstanceRemove(t),
                     _ => Command::Kick(t),
                 }
             }
@@ -387,7 +428,8 @@ impl Play {
     pub(super) fn raid_menu(&mut self) {
         let groups = group_counts(&self.group.raid);
         let n = self.raid_players();
-        let want = self.session.raid_offer.then(|| rows(&self.raid.state, &groups, n));
+        let party = Party { in_group: self.group.in_group, leads: self.group.in_group && self.group.leader };
+        let want = self.session.raid_offer.then(|| rows(&self.raid.state, &groups, n, party));
         if self.raid.menu.as_ref() == Some(&want) {
             return;
         }
@@ -547,18 +589,63 @@ mod tests {
 
     #[test]
     fn the_raid_menus_rows_by_who_one_is() {
-        let msgs = |st: &State| rows(st, &[], 0).0.iter().map(|r| r.msg).collect::<Vec<_>>();
-        assert_eq!(msgs(&State::default()), [MSG_INVITE, MSG_FLAG], "in no raid: begin one");
-        assert_eq!(msgs(&state(5, 0, 0)), [MSG_ASSIST, MSG_LEAVE], "a member");
-        assert_eq!(msgs(&state(5, 4, 0)), [MSG_INVITE, MSG_FLAG, MSG_KICK, MSG_ASSIST, MSG_LEAVE], "the helper");
-        let (lead, loot, moves) = rows(&state(5, 2, RULE_NEED_BEFORE_GREED), &[], 0);
+        let msgs = |st: &State| rows(st, &[], 0, Party::default()).0.iter().map(|r| r.msg).collect::<Vec<_>>();
+        assert_eq!(msgs(&State::default()), [MSG_INVITE, MSG_FLAG, MSG_INST_ADD, MSG_INST_REMOVE], "in no raid: begin one");
+        assert_eq!(msgs(&state(5, 0, 0)), [MSG_ASSIST, MSG_INST_ADD, MSG_INST_REMOVE, MSG_LEAVE], "a member");
+        assert_eq!(msgs(&state(5, 4, 0)), [MSG_INVITE, MSG_FLAG, MSG_KICK, MSG_ASSIST, MSG_INST_ADD, MSG_INST_REMOVE, MSG_LEAVE], "the helper");
+        let (lead, loot, moves) = rows(&state(5, 2, RULE_NEED_BEFORE_GREED), &[], 0, Party::default());
         assert!(moves.is_empty(), "a server that sends no groups: no Move to Group");
-        assert_eq!(lead.iter().map(|r| r.msg).collect::<Vec<_>>(), [0, MSG_INVITE, MSG_FLAG, MSG_KICK, MSG_LEADER, MSG_HELPER, MSG_MAIN_ASSIST, MSG_ASSIST, MSG_LEAVE], "the leader");
+        assert_eq!(lead.iter().map(|r| r.msg).collect::<Vec<_>>(), [0, MSG_INVITE, MSG_FLAG, MSG_KICK, MSG_LEADER, MSG_HELPER, MSG_MAIN_ASSIST, MSG_ASSIST, MSG_INST_ADD, MSG_INST_REMOVE, MSG_LEAVE], "the leader");
         assert_eq!(loot.iter().map(|r| (r.msg, r.tail.as_ref(), r.dim)).collect::<Vec<_>>(), [(MSG_LOOT_FREE, "", false), (MSG_LOOT_NEED, " *", false), (MSG_LOOT_MASTER, "", false)]);
-        let (_, fighting, _) = rows(&state(5, 3, RULE_MASTER_LOOTER), &[], 0);
+        let (_, fighting, _) = rows(&state(5, 3, RULE_MASTER_LOOTER), &[], 0, Party::default());
         assert!(fighting.iter().all(|r| r.dim), "in combat: dimmed");
         assert_eq!(fighting[2].tail, " *");
-        assert!(rows(&state(5, 0, 0), &[], 0).1.is_empty(), "a member has no loot rules");
+        assert!(rows(&state(5, 0, 0), &[], 0, Party::default()).1.is_empty(), "a member has no loot rules");
+    }
+
+    /// A plain group's leader (petition 1878) has Loot Rules first, Free for
+    /// All and Need Before Greed, the server's rule marked (none said: free for
+    /// all), dimmed in its fight; a member of the group, and a player in none,
+    /// have none (the control); a raid's leader keeps the raid's three.
+    #[test]
+    fn a_group_leader_has_the_groups_loot_rules() {
+        let lead = Party { in_group: true, leads: true };
+        let (main, loot, _) = rows(&State::default(), &[], 0, lead);
+        assert_eq!(main.iter().map(|r| r.msg).collect::<Vec<_>>(), [0, MSG_INVITE, MSG_FLAG, MSG_INST_ADD, MSG_INST_REMOVE]);
+        assert_eq!(main[0].text, "Loot Rules");
+        assert_eq!(loot.iter().map(|r| (r.msg, r.tail.as_ref(), r.dim)).collect::<Vec<_>>(), [(MSG_LOOT_FREE, " *", false), (MSG_LOOT_NEED, "", false)]);
+        let nbg = State { rule: RULE_NEED_BEFORE_GREED, flags: net::raid::GROUP_RULE | 2, ..Default::default() };
+        let (_, loot, _) = rows(&nbg, &[], 0, lead);
+        assert_eq!(loot.iter().map(|r| r.tail.as_ref()).collect::<Vec<_>>(), ["", " *"]);
+        let fight = State { flags: nbg.flags | 1, ..nbg };
+        assert!(rows(&fight, &[], 0, lead).1.iter().all(|r| r.dim), "in its fight: dimmed");
+        for p in [Party { in_group: true, leads: false }, Party::default()] {
+            let (main, loot, _) = rows(&nbg, &[], 0, p);
+            assert!(loot.is_empty() && main[0].msg != 0, "the control: {p:?}");
+        }
+        assert_eq!(rows(&state(5, 2, 0), &[], 0, lead).1.len(), 3, "a raid's leader: the raid's three");
+    }
+
+    /// The group's rule and the instance's entries send what `/grouploot` and
+    /// `/addinstance` send (0x7E48 ops 1, 14, 15 with the target); with no
+    /// target an instance entry says so and sends nothing; the group's rule in
+    /// its fight is refused here.
+    #[test]
+    fn the_group_and_instance_entries_send_their_commands() {
+        let mut p = play();
+        p.group.in_group = true;
+        p.group.leader = true;
+        p.target = 0x0012_3456;
+        assert!(p.raid_action(MSG_LOOT_NEED));
+        assert!(p.raid_action(MSG_INST_ADD));
+        assert!(p.raid_action(MSG_INST_REMOVE));
+        assert_eq!(sent(&mut p), [Command::LootRule(RULE_NEED_BEFORE_GREED).bytes(), vec![0x48, 0x7E, 14, 0x56, 0x34, 0x12, 0], vec![0x48, 0x7E, 15, 0x56, 0x34, 0x12, 0]]);
+        p.target = u32::MAX;
+        assert!(p.raid_action(MSG_INST_ADD));
+        p.raid_state(State { rule: 1, flags: net::raid::GROUP_RULE | 3, ..Default::default() });
+        assert!(p.raid_action(MSG_LOOT_FREE));
+        assert!(sent(&mut p).is_empty());
+        assert!(p.chat.iter().any(|(t, _)| t == IN_COMBAT_GROUP_RULES) && p.chat.iter().any(|(t, _)| t == NO_TARGET));
     }
 
     /// Play on a session that offered the raid's windows, recording what it sends.
@@ -782,7 +869,7 @@ mod tests {
         let raid: Vec<_> = (1..=9).map(|i| member(i, ((i - 1) / 4 + 1) as u8)).collect();
         let groups = group_counts(&raid);
         assert_eq!(groups, [(1, 4), (2, 4), (3, 1)]);
-        let (lead, _, moves) = rows(&state(5, 2, 0), &groups, 9);
+        let (lead, _, moves) = rows(&state(5, 2, 0), &groups, 9, Party::default());
         let k = lead.iter().position(|r| r.msg == MSG_KICK).unwrap();
         assert_eq!(lead[k + 1].msg, crate::startmenu::RAID_GROUPS_SUB);
         assert_eq!(
@@ -794,9 +881,9 @@ mod tests {
                 (MSG_GROUP | 4, "Group 4".into(), " (0/4)".into(), false),
             ]
         );
-        let (help, _, hmoves) = rows(&state(5, 4, 0), &groups, 9);
+        let (help, _, hmoves) = rows(&state(5, 4, 0), &groups, 9, Party::default());
         assert!(help.iter().any(|r| r.msg == crate::startmenu::RAID_GROUPS_SUB) && hmoves.len() == 4, "the helper");
-        let (member_rows, _, none) = rows(&state(5, 0, 0), &groups, 9);
+        let (member_rows, _, none) = rows(&state(5, 0, 0), &groups, 9, Party::default());
         assert!(none.is_empty() && !member_rows.iter().any(|r| r.msg == crate::startmenu::RAID_GROUPS_SUB), "a member: none");
     }
 
