@@ -267,6 +267,7 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         let node = match at {
             SeatNode::Anchor(crate::slotless::Anchor::Named) => crate::slotless::named_helm_node(lib, model as u32, cs.sex != 0).unwrap_or(-1),
             SeatNode::Anchor(crate::slotless::Anchor::Head) => cs.node_ids[7],
+            SeatNode::Anchor(crate::slotless::Anchor::Node(n)) => n,
             SeatNode::Node(n) => n,
         };
         helm = (node >= 0)

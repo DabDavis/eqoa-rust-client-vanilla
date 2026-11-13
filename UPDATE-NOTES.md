@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Froglok helms seated as the PS2's were
+- **A Froglok's helm sits closer to its head again**, as it did on the PS2 with our old patch: lower and snugger
+  over the crown, following the head as it moves, instead of riding high and loose. The sides of the head and the
+  snout may show past the helm's edges, as they did there. Every helm, on frogloks robed and spiked, and on ghouls.
 ## 2026-11-13 · Stacked spell bars, a chat box that stays open, glowing NPCs, group loot rules and instances
 - **Stacked Spell Bars** (Options > Extended > UI > HUD, off by default): on a computer your first two ability bars
   are drawn as two rows of five, one above the other, just above the chat box, a little smaller (95%) and with no
