@@ -334,6 +334,12 @@ impl GroupReg {
 /// to a server that made no such offer (Sandstorm's, eqoa.live's), and one that
 /// never sends it leaves the walk as it was.
 pub const OP_FLY: u16 = 0x7E1B;
+/// go-eqoa-server's own, no retail message: a GM's `/noclip` (the GM Jibrish's
+/// petition 1904), server to a client that flies ([`OP_FLY`]'s): a u32, 1 on
+/// and 0 off. On, the walk passes through every wall, floor and ceiling while it
+/// flies (`walker`); it comes with [`OP_FLY`] 1 and goes with its 0, and a
+/// flight's end ends it here too.
+pub const OP_NOCLIP: u16 = 0x7E7A;
 /// go-eqoa-server's own, no retail message either: the character's combat
 /// record, its PvP and its duels (`record`), a u32 after the opcode, both ways.
 /// The server offers it (1) once the player is in the world; this client answers
@@ -1214,6 +1220,9 @@ pub struct Session {
     /// the connection, as the server's goes with its login. A dump (a respawn,
     /// a restart of the server's) leaves it.
     pub flying: bool,
+    /// The server has this client's flight going through walls ([`OP_NOCLIP`]);
+    /// gone with the flight and with the connection.
+    pub noclip: bool,
     /// The server offered the whole of a raid group
     /// ([`OP_RAID_ROSTER_OFFER`]), and what it was last told since the offer.
     pub raid_roster_offer: bool,
@@ -1487,6 +1496,7 @@ impl Session {
             npc_tints: None,
             npc_tints_layout: 1,
             flying: false,
+            noclip: false,
             raid_roster_offer: false,
             raid_roster_asked: None,
             power_bars_offer: false,
@@ -2329,6 +2339,7 @@ impl Session {
                 }
                 self.entity_view_offer = None;
                 self.flying = false;
+                self.noclip = false;
                 self.jumps = false;
                 self.map_travel = false;
                 // the NPCs' body tints too (the next world entry offers them)
@@ -2492,6 +2503,14 @@ impl Session {
                 let on = r.u32() != 0;
                 if !r.error {
                     self.flying = on;
+                    self.noclip &= on;
+                }
+            }
+            // noclip on or off (`walker`'s `Aloft`), a GM's flight's
+            OP_NOCLIP => {
+                let on = r.u32() != 0;
+                if !r.error {
+                    self.noclip = on;
                 }
             }
             // the jump offered: taken (the jump key, `walker`); a 0 ends it
@@ -4193,6 +4212,33 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 1, 0, 0, 0]);
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert!(!s.flying, "a new connection, a new login: not flying");
+    }
+
+    // A GM's noclip (0x7E7A, petition 1904): the server's word kept, a short one
+    // not; a flight's end ends it, and a new connection; nothing is answered.
+    #[test]
+    fn noclip_kept_with_the_flight() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        s.flush();
+        sent.borrow_mut().clear();
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x7A, 0x7E, 1, 0]);
+        assert!(s.flying && !s.noclip, "the control: a short word");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x7A, 0x7E, 1, 0, 0, 0]);
+        assert!(s.noclip && ev.is_empty(), "{ev:?}");
+        s.flush();
+        let ours = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).count();
+        assert_eq!(ours, 0, "nothing answered");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x7A, 0x7E, 0, 0, 0, 0]);
+        assert!(s.flying && !s.noclip, "off, still flying");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x7A, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 0, 0, 0, 0]);
+        assert!(!s.flying && !s.noclip, "the flight's end ends it");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x1B, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x7A, 0x7E, 1, 0, 0, 0]);
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.noclip, "a new connection");
     }
 
     // The jump (0x7E28): the offer answered with 1 at once and kept; a 0 ends it

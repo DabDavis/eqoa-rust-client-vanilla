@@ -6214,6 +6214,7 @@ impl Play {
             modal: self.mode == 38,
             // the server's word (`Session::flying`, `walker`)
             flying: self.session.flying,
+            noclip: self.session.noclip,
             // the server's offer (`Session::jumps`), and a report standing sent
             // since its last move (none while one is not done)
             jumps: self.session.jumps,
