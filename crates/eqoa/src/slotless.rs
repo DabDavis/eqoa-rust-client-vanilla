@@ -139,6 +139,9 @@ pub enum Anchor {
     Named,
     /// The node the body names for its head (NodeIDList slot 7).
     Head,
+    /// A node by its number: the froglok's bone 5, the top-of-head child of
+    /// its head that the PS2 patch hung its helm on (`FROGLOK_NODE`).
+    Node(i32),
 }
 
 /// How a player's helm sits on a body one of the server's races may wear that
@@ -204,9 +207,9 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     // the kobolds and the ratmen
     HeadSeat { bodies: &[0xCFC4_78EE, 0x6B9B_7016, 0x5973_25B5, 0x9CDF_3C2D], anchor: Anchor::Head, scale: [1.75; 3], offset: [0.0, 0.30, 0.05] },
     HeadSeat { bodies: &[0xBADC_25C9, 0x0ECC_836A, 0x133A_79CA, 0x46BA_26A9], anchor: Anchor::Head, scale: [1.2; 3], offset: [0.0, 0.22, 0.04] },
-    // the frogloks (and their ghouls, one head): measured, not judged by eye
+    // the frogloks (and their ghouls, one head): as the PS2 patch seated them
     // (`FROGLOK_SEAT`)
-    HeadSeat { bodies: FROGLOKS, anchor: Anchor::Head, scale: FROGLOK_SEAT.0, offset: FROGLOK_SEAT.1 },
+    HeadSeat { bodies: FROGLOKS, anchor: Anchor::Node(FROGLOK_NODE), scale: FROGLOK_SEAT.0, offset: FROGLOK_SEAT.1 },
     HeadSeat {
         bodies: &[0x2217_6258, 0x4D9C_53EF, 0x77A7_E7B8, 0x78FA_8F20, 0x0DDD_4087, 0x5D40_C8AB, 0xB749_BF57, 0xB620_92E4, 0xE700_DE53, 0x39FE_AA5F, 0x7654_AC3C, 0xD8E0_F980],
         anchor: Anchor::Head,
@@ -244,28 +247,33 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
 /// ghouls', the same head on the same skeleton.
 pub const FROGLOKS: &[u32] = &[0x141B_FE0C, 0x429A_04AB, 0x063C_5D97, 0x0F23_9012, 0x6F17_325E, 0x1663_EC1C];
 
-/// The frogloks' helm seat (`HeadSeat`'s stretch and move, on the head node),
-/// measured off the meshes (`tests::measure_froglok_seat` prints it). The
-/// froglok's head is a box half a metre across, flat on top: the seat judged by
-/// eye on 2026-11-10 (stretched 2.4 across, 1.6 up and 2.0 front to back, 0.48
-/// up and 0.12 forward) hung each helm as a cap sunk into it, and its sides and
-/// the back of the head came out through every helm by 3 to 9 cm (the owner,
-/// 2026-11-13: "froglok helms are not sitting correctly, but clipping through
-/// the head"). Up, the helm is stretched as the head is against a human's from
-/// the lips to the crown: 0.178 (its lips, the top of its jaw, 0.182 above the
-/// head node; its crown 0.360) over HumanMale's 0.195 (lips 0.002, crown
-/// 0.197), 0.91. Across, front to back and its place: of the stretches (by
-/// twentieths) and moves (by centimetres) that keep every vertex of the head
-/// above the lips at least `HEAD_INSIDE` inside each of the eight helms
-/// wherever the helm reaches it, standing and in eight actions, with the upper
-/// half of that height under every helm, the least stretch across times front
-/// to back, then the lowest. Its
-/// eyes, at the sides of the head under the brow, sit inside the helm's cheeks,
-/// as a human's sit behind its face's opening; its snout comes out of the
-/// opening.
-pub const FROGLOK_SEAT: ([f32; 3], [f32; 3]) = ([2.90, 0.91, 1.90], [0.0, 0.56, 0.16]);
+/// The frogloks' helm seat (`HeadSeat`'s stretch and move, on `FROGLOK_NODE`):
+/// the PS2 patch's (August 2026, `re-tools/extend_s2_race.py`), whose fit the
+/// owner liked (2026-11-13: "froglok plate helms are not right still. we had an
+/// old pcsx2 patch we had the helm closer"). That patch gave the froglok's
+/// bone 5 (`FROG_HELM_BONE`, the childless top-of-head child of its head, 0.327
+/// above it and 0.020 behind, its bind turned by nothing) the helm FixScale
+/// `FROG_FIXSCALE` (3.36, 1.61, 2.52), so `ProcessHierarchy` stretched the helm
+/// by it in the bone's axes, and slid the matrix the attachment reads (its
+/// `jal Mul__10VIMatrix44` at 0x004478B8 displaced) by `FROG_HELM_OFFSET`, 0.130
+/// up and 0.146 forward in MODEL units: each divided by its FixScale component
+/// before going along a row whose length is that FixScale, so a unit move.
+/// Here a node's frame has rows of length one (the froglok's bones carry no
+/// FixScale of their own), so the helm is stretched by the FixScale and moved
+/// by the offset as they stand, which is the same transform: in the head's
+/// frame, standing, the helm's origin 0.457 up and 0.126 forward. The seat of
+/// 2026-11-13 morning (measured so no head vertex came out, (2.90, 0.91, 1.90)
+/// and 0.56 up, 0.16 forward on the head node) hung a big, high, loose helm;
+/// this one sits lower and closer, and lets the sides of the head and the snout
+/// show as the PS2's did.
+pub const FROGLOK_SEAT: ([f32; 3], [f32; 3]) = ([3.36, 1.61, 2.52], [0.0, 0.130, 0.146]);
 
-/// How far inside each helm the frogloks' heads are kept (`FROGLOK_SEAT`).
+/// The node the frogloks' helms hang on (`FROGLOK_SEAT`): bone 5, as the PS2
+/// patch's (`FROG_HELM_BONE`); it follows the head and the twenty of the
+/// froglok's forty actions that move it.
+pub const FROGLOK_NODE: i32 = 5;
+
+/// How far inside a helm `holds` keeps a head.
 #[cfg(test)]
 const HEAD_INSIDE: f32 = 0.002;
 
@@ -287,12 +295,13 @@ pub fn head_seat(id: u32) -> Option<&'static HeadSeat> {
     HEAD_SEATS.iter().find(|s| s.bodies.contains(&id))
 }
 
-/// The node a seat's helm hangs on, on body `id` (`cs` its sprite): its named node
-/// or its head's; none when it has no such node.
+/// The node a seat's helm hangs on, on body `id` (`cs` its sprite): its named node,
+/// its head's or the one numbered; none when it has no such node.
 fn seat_node(lib: &Library, id: u32, cs: &CSprite<Ee>, seat: &HeadSeat) -> Option<i32> {
     match seat.anchor {
         Anchor::Named => named_helm_node(lib, id, cs.sex != 0),
         Anchor::Head => Some(cs.node_ids[7]).filter(|&n| n >= 0),
+        Anchor::Node(n) => Some(n).filter(|&n| n >= 0 && (n as usize) < cs.h.nodes.len()),
     }
 }
 
@@ -4077,7 +4086,7 @@ mod tests {
     /// flourish, casting and the wave (as `a_skeletons_skull_stays_inside_its_helm`).
     const POSES: [i32; 8] = [1, 2, 14, 17, 22, 23, 37, 56];
 
-    /// A head as a seated helm must hold it (`FROGLOK_SEAT`), in the frame of
+    /// A head as a seated helm must hold it (`holds`), in the frame of
     /// the node a player's helm hangs on: the vertices on the head node itself
     /// above its lips (the highest vertex on a node under the head: its jaw), but
     /// any above `top` (a spiked froglok's spikes, out through a helm's top as a
@@ -4150,108 +4159,69 @@ mod tests {
         HelmFit { scale: Vec3::from(seat.0), offset: Vec3::from(seat.1) }
     }
 
-    /// The report (the owner, 2026-11-13: "froglok helms are not sitting
-    /// correctly, but clipping through the head"), measured on the froglok's
-    /// three bodies and the ghouls' (`FROGLOKS`): seated by `FROGLOK_SEAT`, each
-    /// head stays inside each of the eight helms as `holds` has it, at least
-    /// `HEAD_INSIDE` inside, its top under every helm; and it rides the head node
-    /// the helm hangs on rigidly (sampled: walking, running, dying, the battle
-    /// stance, attacks, casting), so one pose holds for all. The control: seated
-    /// as before (judged by eye, 2026-11-10), the head came out through every one
-    /// of the eight helms, by 3 cm at the least. And the seat is the least that
-    /// holds (`measure_froglok_seat`): a twentieth less stretch across or front to
-    /// back, or a centimetre lower, and some froglok's head comes out.
+    /// The frogloks' helms sit as the PS2 patch seated them (`FROGLOK_SEAT`, the
+    /// owner, 2026-11-13: "we had an old pcsx2 patch we had the helm closer"):
+    /// on every froglok and ghoul body, on bone 5 (a childless child of the head
+    /// node, its bind turned by nothing, 0.327 above the head and 0.020 behind),
+    /// stretched by the patch's FixScale (3.36, 1.61, 2.52) and moved 0.130 up
+    /// and 0.146 forward; each helm's vertex where the patch's hook put it (the
+    /// bone's matrix, its rows FixScale long, slid by the offset over FixScale
+    /// along them), standing, to a hundredth of a millimetre. What of the head
+    /// comes out of each helm is printed (the PS2's fit lets the sides and the
+    /// snout show).
     #[test]
-    fn a_frogloks_head_stays_inside_its_helm() {
+    fn froglok_helms_sit_as_the_ps2_patch_seated_them() {
+        // `re-tools/extend_s2_race.py`: FROG_HELM_BONE, FROG_FIXSCALE, FROG_HELM_OFFSET
+        const PS2_BONE: i32 = 5;
+        const PS2_FIXSCALE: [f32; 3] = [3.36, 1.61, 2.52];
+        const PS2_OFFSET: [f32; 2] = [0.130, 0.146];
+        assert_eq!(FROGLOK_NODE, PS2_BONE);
+        assert_eq!(FROGLOK_SEAT, (PS2_FIXSCALE, [0.0, PS2_OFFSET[0], PS2_OFFSET[1]]));
         let Some(lib) = disc() else { return };
-        let fit = seat_fit(FROGLOK_SEAT);
-        let old = seat_fit(([2.4, 1.6, 2.0], [0.0, 0.48, 0.12]));
-        // the plain froglok's crown: what stands above it on a spiked one is its spikes
-        let plain = 0x141B_FE0Cu32;
-        let top = skull_bones(&lib, plain, 0, 0).iter().filter(|(_, b)| *b == sprite_of(&lib, plain).node_ids[7] as usize).map(|(p, _)| p.y).fold(f32::MIN, f32::max);
-        assert!((top - 0.36).abs() < 0.005, "the crown at {top}");
+        let fs = Vec3::from(PS2_FIXSCALE);
         for &id in FROGLOKS {
             let cs = sprite_of(&lib, id);
             let seat = head_seat(id).unwrap();
-            assert_eq!((seat.anchor, seat.scale, seat.offset), (Anchor::Head, FROGLOK_SEAT.0, FROGLOK_SEAT.1), "{id:08X}");
-            assert_eq!(head_fit(id, &cs, true), Some(fit), "{id:08X}: a player's");
-            let bare = helms_on(&lib, id, &cs, false);
-            assert_eq!(bare.len(), 8, "{id:08X}");
-            let (crown, cover, mid) = cranium(&lib, id, Some(top + 0.005)).unwrap();
-            assert!(crown.len() > 100 * 17 && cover.len() > 40, "{id:08X}: {} vertices, {} on top", crown.len(), cover.len());
-            let held = holds(&bare, &crown, &cover, mid, &fit);
-            eprintln!("{id:08X}: {} vertices of the head, {} on top: {held:?}", crown.len(), cover.len());
-            assert!(held.is_ok(), "{id:08X}: out of helm {:?}", held);
-            // seated as `helm_on` seats it: the same
-            assert_eq!(holds(&helms_on(&lib, id, &cs, true), &crown, &cover, mid, &HelmFit { scale: Vec3::ONE, offset: Vec3::ZERO }).map(|c| (c * 1e4).round()), held.map(|c| (c * 1e4).round()), "{id:08X}");
-            // the control: the old seat let the head out of every helm, by 3 cm at least
-            for helm in &bare {
-                let set = helm.0;
-                let worst = crown.iter().map(|&p| holds(std::slice::from_ref(helm), &[p], &[], mid, &old).err().map_or(f32::MAX, |e| e.2)).fold(f32::MAX, f32::min);
-                eprintln!("  helm {set} as seated before: out by {:.1} mm", -worst * 1000.0);
-                assert!(worst < -0.03, "{id:08X} helm {set}: out by {:.1} mm at the most", -worst * 1000.0);
-            }
-        }
-        // the least that holds: a twentieth less stretch either way, or a
-        // centimetre lower, and some froglok's head comes out
-        let heads: Vec<_> = FROGLOKS
-            .iter()
-            .map(|&id| {
-                let (crown, cover, mid) = cranium(&lib, id, Some(top + 0.005)).unwrap();
-                (helms_on(&lib, id, &sprite_of(&lib, id), false), crown, cover, mid)
-            })
-            .collect();
-        let ([sx, sy, sz], [ox, oy, oz]) = FROGLOK_SEAT;
-        for (scale, offset) in [([sx - 0.05, sy, sz], [ox, oy, oz]), ([sx, sy, sz - 0.05], [ox, oy, oz]), ([sx, sy, sz], [ox, oy - 0.01, oz])] {
-            let f = seat_fit((scale, offset));
-            assert!(heads.iter().any(|(bare, crown, cover, mid)| holds(bare, crown, cover, *mid, &f).is_err()), "{f:?} holds too");
-        }
-    }
-
-    /// The frogloks' seat (`FROGLOK_SEAT`), measured (run with `--ignored
-    /// --nocapture`): up, the head's height from the lips to the crown against
-    /// HumanMale's (0.195: its crown 0.197 above its head node, its lips, where
-    /// the midline dips between them, 0.002); then of the stretches across and
-    /// front to back from 2.2 and 1.4 by twentieths and the moves up from 0.20
-    /// and forward from -0.10 by centimetres, those that hold every froglok's
-    /// and ghoul's head (`holds`), the least stretch across times front to back,
-    /// then the lowest, then the least move forward or back.
-    #[test]
-    #[ignore]
-    fn measure_froglok_seat() {
-        let Some(lib) = disc() else { return };
-        let plain = 0x141B_FE0Cu32;
-        let head = sprite_of(&lib, plain).node_ids[7] as usize;
-        let pts = skull_bones(&lib, plain, 0, 0);
-        let lips = pts.iter().filter(|(_, b)| *b != head).map(|(p, _)| p.y).fold(f32::MIN, f32::max);
-        let top = pts.iter().filter(|(_, b)| *b == head).map(|(p, _)| p.y).fold(f32::MIN, f32::max);
-        let sy = ((top - lips) / 0.195 * 100.0).round() / 100.0;
-        eprintln!("lips {lips:.3}, crown {top:.3}: up {sy:.2}");
-        // every body's head and helms (a spiked one's spikes left out, `cranium`)
-        let heads: Vec<_> = FROGLOKS
-            .iter()
-            .map(|&id| {
-                let (crown, cover, mid) = cranium(&lib, id, Some(top + 0.005)).unwrap();
-                (helms_on(&lib, id, &sprite_of(&lib, id), false), crown, cover, mid)
-            })
-            .collect();
-        let mut all = Vec::new();
-        for a in 0..=24 {
-            for b in 0..=28 {
-                for e in 0..=40 {
-                    for g in 0..=30 {
-                        all.push(HelmFit { scale: Vec3::new(2.2 + 0.05 * a as f32, sy, 1.4 + 0.05 * b as f32), offset: Vec3::new(0.0, 0.20 + 0.01 * e as f32, -0.10 + 0.01 * g as f32) });
-                    }
+            assert_eq!((seat.anchor, seat.scale, seat.offset), (Anchor::Node(PS2_BONE), FROGLOK_SEAT.0, FROGLOK_SEAT.1), "{id:08X}");
+            assert_eq!(cs.node_ids[8], -1, "{id:08X}: no helm node of its own");
+            assert_eq!(helm_node(&lib, id, &cs, true), PS2_BONE, "{id:08X}");
+            assert_eq!(head_fit(id, &cs, true), Some(seat_fit(FROGLOK_SEAT)), "{id:08X}");
+            // bone 5: the head's childless child, unturned, at the top of the head
+            let bone = &cs.h.nodes[PS2_BONE as usize];
+            let head = cs.node_ids[7];
+            assert_eq!((bone.parent, bone.child), (head, -1), "{id:08X}");
+            let at = |n: i32| glam::Mat4::from_cols_array_2d(&cs.h.nodes[n as usize].inv_bind_world.to_cols()).inverse();
+            let (_, rot, t5) = at(PS2_BONE).to_scale_rotation_translation();
+            assert!(rot.abs_diff_eq(glam::Quat::IDENTITY, 1e-6), "{id:08X}: {rot:?}");
+            let up = t5 - at(head).transform_point3(Vec3::ZERO);
+            assert!(up.abs_diff_eq(Vec3::new(0.0, 0.327, -0.020), 0.001), "{id:08X}: bone 5 at {up:.3} from the head");
+            // each helm vertex where the patch's hook put it, standing
+            let t = Tables::retail();
+            for set in 1..9u8 {
+                let (n, raw) = helm_on(&lib, id, &cs, true, set, [255; 4], &t, false).unwrap();
+                let (_, fitted) = helm_on(&lib, id, &cs, true, set, [255; 4], &t, true).unwrap();
+                assert_eq!(n, PS2_BONE);
+                assert_eq!(raw.pos.len(), fitted.pos.len());
+                // the bone's world matrix as `ProcessHierarchy` made it on the PS2:
+                // its rows FixScale long; the hook's offset over FixScale along them
+                let rows = [Vec3::X * fs.x, Vec3::Y * fs.y, Vec3::Z * fs.z];
+                let slide = rows[1] * (PS2_OFFSET[0] / fs.y) + rows[2] * (PS2_OFFSET[1] / fs.z);
+                for (p, q) in raw.pos.iter().zip(&fitted.pos) {
+                    let p = Vec3::from(*p);
+                    let ps2 = t5 + slide + rows[0] * p.x + rows[1] * p.y + rows[2] * p.z;
+                    let ours = at(PS2_BONE).transform_point3(Vec3::from(*q));
+                    assert!(ps2.abs_diff_eq(ours, 1e-5), "{id:08X} helm {set}: {ps2} against {ours}");
                 }
             }
         }
-        let key = |f: &HelmFit| (((f.scale.x * f.scale.z) * 1e4).round() as i64, (f.offset.y * 1e4).round() as i64, (f.offset.z.abs() * 1e4).round() as i64);
-        all.sort_by_key(key);
-        let fits = |f: &HelmFit| heads.iter().all(|(bare, crown, cover, mid)| holds(bare, crown, cover, *mid, f).is_ok());
-        let best = all.iter().find(|f| fits(f)).expect("a seat in the search");
-        eprintln!("pub const FROGLOK_SEAT: ([f32; 3], [f32; 3]) = ([{:.2}, {:.2}, {:.2}], [0.0, {:.2}, {:.2}]);", best.scale.x, best.scale.y, best.scale.z, best.offset.y, best.offset.z);
-        for (id, (bare, crown, cover, mid)) in FROGLOKS.iter().zip(&heads) {
-            eprintln!("{id:08X}: least clearance {:.1} mm", holds(bare, crown, cover, *mid, best).unwrap() * 1000.0);
+        // what of the plain froglok's head shows past each helm, as the PS2 had it
+        let plain = 0x141B_FE0Cu32;
+        if let Some((crown, _, mid)) = cranium(&lib, plain, None) {
+            let one = HelmFit { scale: Vec3::ONE, offset: Vec3::ZERO };
+            for h in helms_on(&lib, plain, &sprite_of(&lib, plain), true) {
+                let out: Vec<f32> = crown.iter().filter_map(|&p| holds(std::slice::from_ref(&h), &[p], &[], mid, &one).err().map(|e| e.2)).collect();
+                eprintln!("helm {}: {} of {} head vertices out, by {:.0} mm at most", h.0, out.len(), crown.len(), -out.iter().copied().fold(0.0, f32::min) * 1000.0);
+            }
         }
     }
 
@@ -4379,3 +4349,4 @@ mod tests {
         }
     }
 }
+
