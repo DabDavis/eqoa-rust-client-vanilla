@@ -42,9 +42,10 @@ pub fn set(tints: Vec<(String, Tint)>) {
 
 /// Whether a tint draws anything: its colour changes the body, its glow
 /// lights it (go-eqoa-server's `NPCTint.Shows`) or it names particles
-/// (`net::npctint::Aura::particles`, which need no glow).
+/// (`net::npctint::Aura::particles`, which need no glow) or a dark aura (a
+/// black glow with a shell or trim named, `net::npctint::Aura::lit`).
 pub fn shows(t: Tint) -> bool {
-    changes(t.color) || net::npctint::glows(t.glow) || net::npctint::Aura::particles(&t)
+    changes(t.color) || net::npctint::glows(t.glow) || net::npctint::Aura::particles(&t) || net::npctint::Aura::lit(&t)
 }
 
 /// The tint the NPCs of this name (as their channel carries it) are drawn in,
@@ -79,10 +80,12 @@ pub fn glow_rgb(g: u32) -> [u8; 3] {
 /// the texel (`render`'s layer `tint`), so the whole body is multiplied; a
 /// batch with no layer at all (drawn white, untextured) is left as it is.
 /// A glow that lights ([`net::npctint::glows`]) sets every layer's emissive's
-/// red, green and blue to [`glow_rgb`], its fourth kept; none leaves them.
+/// red, green and blue to [`glow_rgb`], its fourth kept; none leaves them,
+/// and so does a dark aura's ([`net::npctint::dark`]: a shadow lights
+/// nothing).
 pub fn apply(model: &mut esf::Model, t: Tint) {
     let m = multipliers(t.color);
-    let glow = net::npctint::glows(t.glow).then(|| glow_rgb(t.glow));
+    let glow = (net::npctint::glows(t.glow) && !net::npctint::dark(t.glow)).then(|| glow_rgb(t.glow));
     if m == [255; 3] && glow.is_none() {
         return;
     }

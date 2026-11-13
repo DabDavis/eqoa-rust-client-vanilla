@@ -118,7 +118,7 @@ struct Puppet {
     aura: Vec<crate::aura::Worn>,
     /// The worn pieces' auras it was made with (the channel's): others made
     /// it anew.
-    pieces: [net::entity::PieceAura; 7],
+    pieces: [net::entity::PieceAura; 8],
     /// A Wisp's (`wisp::is`): it casts no shadow, neither its blob shadow
     /// (`shadow_casters`) nor any of its models into the shadow maps
     /// (`set_casts`).
@@ -1093,7 +1093,7 @@ fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Lo
 /// channel carries; none for a player's character.
 /// The auras on its worn pieces the channel carries (`aura::pieces`): none
 /// from a server that sends none.
-fn pieces_of(e: &net::entity::Entity) -> [net::entity::PieceAura; 7] {
+fn pieces_of(e: &net::entity::Entity) -> [net::entity::PieceAura; 8] {
     e.creature.as_ref().and_then(|c| c.colors).map(|l| l.auras).unwrap_or_default()
 }
 
@@ -1163,22 +1163,35 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     // each worn piece's, their particles' nodes and their shells
                     let pieces = pieces_of(e);
                     let mut aura = Vec::new();
-                    let mut shells: Vec<render::shell::PartOf> = crate::aura::npc_shell(tint).map(|color| render::shell::PartOf { color, batches: None }).into_iter().collect();
+                    let mut shells: Vec<render::shell::PartOf> = crate::aura::npc_shell_part(tint).into_iter().collect();
+                    // and the trims' (`aura::npc_trim`, `aura::piece_trims`)
+                    let taken = |id: i32| lib.lookup(id).is_some();
+                    let mut trims: Vec<render::trimglow::TrimOf> = crate::aura::npc_trim(&model, tint, &taken).into_iter().collect();
                     if let Some(cs) = &sprite {
                         if let Some(pt) = crate::aura::npc_particles(tint) {
                             aura.push(crate::aura::Worn { nodes: crate::aura::body_nodes(cs, pt.nodes), particles: pt, first: 0 });
                         }
-                        if pieces != [net::entity::PieceAura::default(); 7] {
+                        if pieces != [net::entity::PieceAura::default(); 8] {
                             let robed = look.as_ref().is_some_and(|l| l.robe >= 0);
                             let (s, w) = crate::aura::pieces(&model, cs, &pieces, robed);
                             shells.extend(s);
                             aura.extend(w);
+                            trims.extend(crate::aura::piece_trims(&model, cs, &pieces, robed, &taken));
+                            // the body's own, under the armour it wears
+                            if let Some(lk) = &look {
+                                let (s, w) = crate::aura::body_aura(&model, cs, &pieces, crate::aura::covered(lk));
+                                shells.extend(s);
+                                aura.extend(w);
+                            }
                         }
                     }
                     aura.extend(helm_aura);
                     let mut gpu = g.renderer.upload(g.device, g.queue, &model, &[render::IDENTITY], &textures);
                     if !shells.is_empty() {
                         g.renderer.set_shells(g.device, &mut gpu, &model, &shells);
+                    }
+                    if !trims.is_empty() {
+                        g.renderer.set_trims(g.device, g.queue, &mut gpu, &model, &trims, &textures);
                     }
                     let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look, tint, aura, pieces, wisp };
                     p.set_casts();
@@ -1302,8 +1315,8 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
         // particles on its node
         if let Some(a) = c.colors.map(|l| l.auras).filter(|a| a[crate::aura::HELM] != Default::default()) {
             let (shell, worn) = crate::aura::helm_aura(&a, node);
-            if shell.is_some() {
-                g.renderer.set_shell(g.device, &mut gpu, &m, shell);
+            if let Some(s) = &shell {
+                g.renderer.set_shells(g.device, &mut gpu, &m, std::slice::from_ref(s));
             }
             helm_aura = worn;
         }

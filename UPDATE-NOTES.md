@@ -7,6 +7,20 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Glowing armour trim, and dark auras
+- **Armour trim can glow**: the gold trim of plate armour (the plain plate and the ornate plate) can now light up in
+  an aura's colour, the trim itself bright and a soft halo bleeding off it onto the steel, stronger along the
+  armour's outline, with the same slow shimmer and pulse as the body auras. It follows every move. The server can
+  give it to a creature's armour or to any worn plate piece, alone or with the shell round the piece.
+- **Dark auras**: an aura in black (or nearly black) is now a shadow instead of a light. A dark shell wraps the body
+  in a smoky halo that darkens what is behind it, with a faint violet sheen on its outline so it still shows at
+  night; a dark trim takes the trim toward black under a dark sheen, with smoke off it. Any aura can be dark, on a
+  creature or on a piece of armour. These show once the server sends them.
+- **A character's own aura**: a GM can now give one character (or one mercenary) an aura on a single armour piece,
+  or on their body: a body aura wraps the skin and underclothes, and any armour worn covers it up, each armour piece
+  able to carry its own. Only that character shows it, not everyone wearing the same item.
+- Everything without such an aura looks exactly as before.
+
 ## 2026-11-13 · Mr. Moogie's aura covers his mane
 - **The aura over Mr. Moogie's mane no longer has holes.** His mane is two layers of hair back to back, and the
   shell of light was bent the wrong way where they meet, leaving dark, hole-like patches and stray bright shards in

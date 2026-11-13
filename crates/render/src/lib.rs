@@ -29,6 +29,7 @@ pub mod standin;
 pub mod sunshadow;
 pub mod tattoo;
 pub mod text;
+pub mod trimglow;
 pub mod ui;
 
 use bytemuck::{Pod, Zeroable};
@@ -337,6 +338,9 @@ pub struct GpuModel {
     /// A glowing creature's aura shell (`shell`, `Renderer::set_shell`),
     /// drawn after its blended layers; none for every other model.
     pub shell: Option<shell::Shell>,
+    /// Its armour trims' auras (`trimglow`, `Renderer::set_trims`), drawn
+    /// after its blended layers; none for every other model.
+    pub trim: Option<trimglow::Trim>,
 }
 
 impl GpuModel {
@@ -688,6 +692,8 @@ pub struct Renderer {
     pub ao: ao::Ao,
     /// The aura shells' pipeline (`shell`), made at the first shell.
     shell: Option<shell::Pipeline>,
+    /// The trims' auras' pipelines (`trimglow`), made at the first trim.
+    trim: Option<trimglow::Pipeline>,
 }
 
 /// What to draw this frame. The lights are the VU1 strip programs' uniforms:
@@ -965,6 +971,7 @@ impl Renderer {
             curve: curve::Curve::new(format),
             ao: ao::Ao::new(format),
             shell: None,
+            trim: None,
         }
     }
 
@@ -1164,6 +1171,7 @@ impl Renderer {
             world: std::cell::Cell::new(sunshadow::world_box((lo, hi), m.skinned, instances)),
             core: std::cell::Cell::new(sunshadow::world_box((lo, hi), false, instances)),
             shell: None,
+            trim: None,
         }
     }
 
@@ -1333,7 +1341,7 @@ impl Renderer {
     /// drawn additively as a rim after its blended layers), or with `None`
     /// takes its shell away.
     pub fn set_shell(&mut self, device: &wgpu::Device, m: &mut GpuModel, model: &esf::Model, color: Option<[u8; 3]>) {
-        let parts: Vec<shell::PartOf> = color.map(|color| shell::PartOf { color, batches: None }).into_iter().collect();
+        let parts: Vec<shell::PartOf> = color.map(|color| shell::PartOf { color, batches: None, dark: false }).into_iter().collect();
         self.set_shells(device, m, model, &parts);
     }
 
@@ -1351,6 +1359,26 @@ impl Renderer {
             self.shell = guarded(device, &mut self.refused, &mut self.refusals, SHELL, || Some(shell::Pipeline::new(device, frame, palette, format)));
         }
         m.shell = self.shell.as_ref().and_then(|p| p.shell(device, model, m.bounds, parts));
+    }
+
+    /// Gives `m` (uploaded from `model`) its armour trims' auras in `trims`
+    /// (`trimglow`: each the trim of some of its batches lit in a colour, or
+    /// darkened), their masks out of `textures`; with none (or none whose
+    /// mask resolves) takes them away. The pipelines are made at the first
+    /// trim; a page whose WebGL2 refuses them draws none.
+    pub fn set_trims(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, m: &mut GpuModel, model: &esf::Model, trims: &[trimglow::TrimOf], textures: &Textures) {
+        m.trim = None;
+        if trims.iter().all(|t| t.batches.is_empty()) {
+            return;
+        }
+        if self.trim.is_none() && !self.refused.contains(&TRIM) {
+            let (frame, material, palette, format) = (&self.frame_layout, &self.material_layout, &self.palette_layout, self.format);
+            self.trim = guarded(device, &mut self.refused, &mut self.refusals, TRIM, || Some(trimglow::Pipeline::new(device, frame, material, palette, format)));
+        }
+        let Some(p) = self.trim.take() else { return };
+        let views: std::collections::HashMap<i32, Option<wgpu::TextureView>> = trimglow::by_mask(trims).into_iter().map(|(_, id, _)| (id, self.texture(device, queue, id, textures))).collect();
+        m.trim = p.trim(device, &self.material_layout, &self.samplers[0], model, m.bounds, trims, |id| views.get(&id).cloned().flatten());
+        self.trim = Some(p);
     }
 
     /// The skin palette for a skinned model: one matrix per skeleton node
@@ -1609,6 +1637,14 @@ impl Renderer {
                                 pass.set_bind_group(3, bg, &[]);
                             }
                         }
+                        // and its trims' auras (`trimglow`)
+                        if deferred && let Some(n) = self.encode_trim(&mut pass, m) {
+                            draws += n;
+                            current = usize::MAX;
+                            if let Some(bg) = shade.group3() {
+                                pass.set_bind_group(3, bg, &[]);
+                            }
+                        }
                     }
                     Draw::Instances(m, r) => {
                         if !Self::draws_anything(m) || r.is_empty() {
@@ -1657,12 +1693,35 @@ impl Renderer {
         let mut draws = 0;
         for part in &s.parts {
             let Some((_, indices, count)) = part.run(m.level) else { continue };
+            pass.set_pipeline(if part.dark { &p.dark } else { &p.pipeline });
             if draws == 0 {
-                pass.set_pipeline(&p.pipeline);
                 pass.set_bind_group(2, &m.palette_bg, &[]);
                 pass.set_vertex_buffer(0, m.vertices.slice(..));
                 pass.set_vertex_buffer(1, m.instances.slice(..));
                 pass.set_vertex_buffer(2, s.normals.slice(..));
+            }
+            pass.set_bind_group(1, &part.bg, &[]);
+            pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..*count, 0, 0..m.instance_count);
+            draws += 1;
+        }
+        (draws > 0).then_some(draws)
+    }
+
+    /// A model's trims' auras (`trimglow`), if it has any and the pipelines
+    /// were made: its draw calls (one a part), or `None` when nothing was
+    /// drawn.
+    fn encode_trim<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, m: &'a GpuModel) -> Option<u32> {
+        let (Some(t), Some(p)) = (m.trim.as_ref(), self.trim.as_ref()) else { return None };
+        let mut draws = 0;
+        for part in &t.parts {
+            let Some((_, indices, count)) = part.run(m.level) else { continue };
+            pass.set_pipeline(if part.dark { &p.dark } else { &p.glow });
+            if draws == 0 {
+                pass.set_bind_group(2, &m.palette_bg, &[]);
+                pass.set_vertex_buffer(0, m.vertices.slice(..));
+                pass.set_vertex_buffer(1, m.instances.slice(..));
+                pass.set_vertex_buffer(2, t.normals.slice(..));
             }
             pass.set_bind_group(1, &part.bg, &[]);
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -2157,6 +2216,7 @@ const LIT: &str = "Dynamic Lighting";
 const SUN: &str = "Sun Shadows";
 const POINTS: &str = "Light Shadows";
 const SHELL: &str = "Aura shells";
+const TRIM: &str = "Trim auras";
 
 /// What `make` makes (a lighting feature's maps, samplers and pipelines),
 /// unless a page's WebGL2 refuses it. A browser's GL driver may refuse a
@@ -2474,6 +2534,14 @@ impl TextureSource for LibraryTextures<'_> {
                     let put = self.woad(tattoo::pattern_of(r));
                     for l in &mut levels {
                         tattoo::lay(&mut l.rgba, l.width, l.height, own.as_deref(), source == root, put.as_deref());
+                    }
+                    levels
+                }
+                Some((source, r)) if r >> 24 == recolor::TRIM_MASK => {
+                    // a plate texture's trim as a mask (`trimglow`), each level its own
+                    let mut levels = self.levels(source);
+                    for l in &mut levels {
+                        l.rgba = recolor::trim_mask(&l.rgba, l.width, l.height);
                     }
                     levels
                 }
