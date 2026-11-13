@@ -379,7 +379,12 @@ current.
   order, after the build. Every file a page loads must be in its build (a new one goes into
   `build.sh`'s copy list). Its notices are `web/notices.js`'s: the client raises them through
   `web::problem` (a part gone: dismissed) and `web::crash` (the client stopped: Reload).
-  `web/pagetest.py` checks the page's half.
+  `web/pagetest.py` checks the page's half. A call of winit's loop into the client that never
+  returns (an exception, or the browser stopping the script mid-frame: Firefox does for a
+  navigation away) leaves winit's runner borrowed: `web::Guarded` counts the calls, notices.js
+  stops the client with where it stopped (after an error, and its watch every second), and
+  main.js's own `pagehide` keeps winit's off a dead loop (its panic, "runner.rs:683:69: RefCell
+  already borrowed", is no crash: `crashfile::is_unload_panic`, never kept or sent).
   The page puts itself full screen at Start (`main.js` "full screen", README "In a browser"): on a
   touch device but iOS's (there the Home Screen app is), on a computer only where Keyboard Lock keeps
   Escape the game's, never while multiboxing; F11 stays the browser's. A full screen asked for uses

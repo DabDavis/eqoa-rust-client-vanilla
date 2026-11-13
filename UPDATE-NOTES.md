@@ -7,6 +7,21 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Target cycling skips familiars; no false crash reports when leaving the browser page
+- **Tab, R1 and L1 no longer pick familiars.** Cycling targets (Tab or R1 for the next creature, ` or L1 for
+  you, your group and your pet) now passes over **Healbot** and other familiars an item calls, a wizard's own
+  **Familiar** (Minor Familiar to Arch Familiar, Gargoyle Familiar) and the non-combat pets (Crazy Contraption,
+  Invention, Swamp Friend). This works the same on a keyboard, a controller and a touch screen.
+- You can still target a familiar on purpose: **click it**, hold the target button for the **crosshair**, or press
+  **6** for your pet. Combat pets are unchanged: a wizard's Guardian or a magician's, necromancer's, enchanter's or
+  charmed pet is still yours with L1, and merchants and other townsfolk are still cycled to.
+- **Browser page:** leaving the page while the game was in the middle of a frame (most often in Firefox, by going
+  Back, typing an address or opening a bookmark) sent a false crash report at your next login: "The game client
+  stopped: ... runner.rs:683:69: RefCell already borrowed". Leaving the page no longer counts as a crash, and old
+  reports of it saved in your browser are dropped without being sent.
+- If the browser stops the game itself while you play (Firefox's "This page is slowing down" **Stop**, or running
+  out of memory), the page now says so within two seconds and offers **Reload**. Before, the game just froze.
+
 ## 2026-11-13 · Ornate plate (armor set 9) and trim dyes
 - **Ornate plate** (armor set 9), the gold-and-steel plate that was on the disc all along, is now drawn on the
   Heirloom Test Server without any patch: the Ornate armor pieces show as ornate plate (with the plain plate helm),

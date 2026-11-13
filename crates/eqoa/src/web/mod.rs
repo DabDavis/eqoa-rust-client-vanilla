@@ -172,6 +172,10 @@ thread_local! {
     /// (`Guarded`): 0 between them, so one left over once they have all
     /// returned is a call that never did.
     static IN_EVENT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// The outermost call under way (`Guarded`): what it is and when it
+    /// began (`performance.now()`, ms), for the page's word on a loop left
+    /// dead (`event_loop_stuck_in`).
+    static IN_EVENT_WHAT: std::cell::Cell<(&'static str, f64)> = const { std::cell::Cell::new(("", 0.0)) };
 }
 
 /// The client as the event loop calls it (`viewer`'s and `fxview`'s `App`),
@@ -185,6 +189,19 @@ thread_local! {
 /// 1618 and 1664: all their notes said, the cause gone). Counted, the page
 /// asks after such an error (`event_loop_stuck`) and stops the client with
 /// the exception's own words.
+///
+/// A call can end with no exception at all, nothing for the page to catch:
+/// the browser stops the page's script where it is (Firefox cancels a
+/// running script when the player navigates away, by the address bar, a
+/// bookmark or Back, so that the navigation is not held up; its "this page
+/// is slowing down Firefox" Stop; an out-of-memory it does not throw). That
+/// was petitions 1618, 1664, 5003 and 5004 too (three of the four on
+/// Firefox, 5004 on a build with the count): the page left mid-frame, and its
+/// `pagehide` reached winit's runner still borrowed. The page now looks for
+/// a call left over every second as well (web/notices.js's watch), and its
+/// own `pagehide` (main.js, before winit's) keeps winit's from running on a
+/// loop left dead: the panic it would raise is no crash of the client's, and
+/// was kept and sent as one (`crashfile::is_unload_panic`).
 pub struct Guarded<A>(pub A);
 
 /// One call's count (`Guarded`): taken back as the call returns, never when
@@ -192,8 +209,13 @@ pub struct Guarded<A>(pub A);
 struct InEvent;
 
 impl InEvent {
-    fn enter() -> InEvent {
-        IN_EVENT.with(|n| n.set(n.get() + 1));
+    fn enter(what: &'static str) -> InEvent {
+        IN_EVENT.with(|n| {
+            if n.get() == 0 {
+                IN_EVENT_WHAT.with(|w| w.set((what, now_ms())));
+            }
+            n.set(n.get() + 1)
+        });
         InEvent
     }
 }
@@ -204,52 +226,92 @@ impl Drop for InEvent {
     }
 }
 
+/// `performance.now()`, 0 without one.
+fn now_ms() -> f64 {
+    web_sys::window().and_then(|w| w.performance()).map_or(0.0, |p| p.now())
+}
+
+/// A window event's name for `IN_EVENT_WHAT` (no data of it: a key typed is
+/// not said).
+fn window_event_name(e: &winit::event::WindowEvent) -> &'static str {
+    use winit::event::WindowEvent as W;
+    match e {
+        W::RedrawRequested => "a frame (RedrawRequested)",
+        W::Resized(_) => "a resize",
+        W::ScaleFactorChanged { .. } => "a scale change",
+        W::Focused(_) => "a focus change",
+        W::KeyboardInput { .. } => "a key",
+        W::ModifiersChanged(_) => "a modifier key",
+        W::Ime(_) => "typed text",
+        W::CursorMoved { .. } | W::CursorEntered { .. } | W::CursorLeft { .. } => "the mouse moving",
+        W::MouseWheel { .. } => "the mouse wheel",
+        W::MouseInput { .. } => "a mouse button",
+        W::Touch(_) => "a touch",
+        W::Occluded(_) => "the page hidden or shown",
+        W::CloseRequested | W::Destroyed => "the window closing",
+        _ => "a window event",
+    }
+}
+
 impl<A: winit::application::ApplicationHandler> winit::application::ApplicationHandler for Guarded<A> {
     fn new_events(&mut self, el: &winit::event_loop::ActiveEventLoop, cause: winit::event::StartCause) {
-        let _g = InEvent::enter();
+        let _g = InEvent::enter("the loop's wake (NewEvents)");
         self.0.new_events(el, cause);
     }
     fn resumed(&mut self, el: &winit::event_loop::ActiveEventLoop) {
-        let _g = InEvent::enter();
+        let _g = InEvent::enter("the start (Resumed)");
         self.0.resumed(el);
     }
     fn user_event(&mut self, el: &winit::event_loop::ActiveEventLoop, event: ()) {
-        let _g = InEvent::enter();
+        let _g = InEvent::enter("a hidden page's frame (a user event)");
         self.0.user_event(el, event);
     }
     fn window_event(&mut self, el: &winit::event_loop::ActiveEventLoop, id: winit::window::WindowId, event: winit::event::WindowEvent) {
-        let _g = InEvent::enter();
+        let _g = InEvent::enter(window_event_name(&event));
         self.0.window_event(el, id, event);
     }
     fn device_event(&mut self, el: &winit::event_loop::ActiveEventLoop, id: winit::event::DeviceId, event: winit::event::DeviceEvent) {
-        let _g = InEvent::enter();
+        let _g = InEvent::enter("a device event");
         self.0.device_event(el, id, event);
     }
     fn about_to_wait(&mut self, el: &winit::event_loop::ActiveEventLoop) {
-        let _g = InEvent::enter();
+        let _g = InEvent::enter("the game's step (AboutToWait)");
         self.0.about_to_wait(el);
     }
     fn suspended(&mut self, el: &winit::event_loop::ActiveEventLoop) {
-        let _g = InEvent::enter();
+        let _g = InEvent::enter("a suspend");
         self.0.suspended(el);
     }
     fn exiting(&mut self, el: &winit::event_loop::ActiveEventLoop) {
-        let _g = InEvent::enter();
+        let _g = InEvent::enter("the loop's end (LoopExiting)");
         self.0.exiting(el);
     }
     fn memory_warning(&mut self, el: &winit::event_loop::ActiveEventLoop) {
-        let _g = InEvent::enter();
+        let _g = InEvent::enter("a memory warning");
         self.0.memory_warning(el);
     }
 }
 
 /// Whether a call of the event loop's into the client never returned
-/// (`Guarded`): asked by the page in a task of its own after an uncaught
-/// error (web/notices.js), when no call is under way, so a count left is an
-/// exception's. The loop is dead then: the page stops the client.
+/// (`Guarded`): asked by the page in a task of its own (web/notices.js: after
+/// an uncaught error, and every second), when no call is under way, so a
+/// count left is a call that ended with no return. The loop is dead then:
+/// the page stops the client. Its `pagehide` asks too (main.js), and keeps
+/// winit's from running on a dead loop.
 #[wasm_bindgen]
 pub fn event_loop_stuck() -> bool {
     IN_EVENT.with(|n| n.get() > 0)
+}
+
+/// The call that never returned (`event_loop_stuck`) and how long ago it
+/// began, for the page's notice: "a frame (RedrawRequested), 3.2 s ago";
+/// none while the loop lives.
+#[wasm_bindgen]
+pub fn event_loop_stuck_in() -> Option<String> {
+    event_loop_stuck().then(|| {
+        let (what, at) = IN_EVENT_WHAT.with(|w| w.get());
+        format!("{what}, {:.1} s ago", (now_ms() - at).max(0.0) / 1000.0)
+    })
 }
 
 /// The tab's title (the window's, `viewer::title`: winit names only the
@@ -356,6 +418,13 @@ pub fn start() {
         // event loop dead, `Guarded`): that cause is the report it keeps,
         // not this panic after it (winit's at the page's unload)
         if page_dead() {
+            return;
+        }
+        // winit's at the page's unload on a loop the browser stopped (a
+        // navigation away in Firefox): the page was going, no crash
+        // (petitions 1618, 1664, 5003, 5004)
+        if crate::crashfile::is_unload_panic(&format!("{info}")) {
+            log("the page left in the middle of the game's frame: winit's unload panic let go");
             return;
         }
         keep_crash(info);

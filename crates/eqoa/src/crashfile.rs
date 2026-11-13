@@ -218,8 +218,28 @@ pub fn write_page(text: &str) {
 #[cfg(target_arch = "wasm32")]
 pub fn pending() -> Vec<Kept> {
     let Some(s) = storage() else { return Vec::new() };
+    // winit's unload panic, kept by an older page: let go unsent
+    if s.get_item(PAGE_KEY).ok().flatten().is_some_and(|t| is_unload_panic(&t)) {
+        let _ = s.remove_item(PAGE_KEY);
+    }
+    if crate::bugnote::last_crash().is_some_and(|l| is_unload_panic(&l)) {
+        crate::bugnote::crash_sent();
+    }
     let text = s.get_item(PAGE_KEY).ok().flatten().filter(|t| !t.trim().is_empty()).or_else(|| crate::bugnote::last_crash().map(|l| from_last_crash(&l)));
     text.map(|text| vec![Kept { number: number_of(&text), text }]).unwrap_or_default()
+}
+
+/// Whether a crash's text (a report, a panic's message, a page's kept line)
+/// is winit's web runner's panic at the page's unload: its `RefCell` still
+/// borrowed by a call into the client that never returned (the browser
+/// stopped the page's script mid-frame, as Firefox does to a page the player
+/// navigates away from; or an exception: `web::Guarded`). Petitions 1618,
+/// 1664, 5003 and 5004 were all of it, "The game client stopped:
+/// .../winit-0.30.13/src/platform_impl/web/event_loop/runner.rs:683:69:
+/// RefCell already borrowed": no crash of the client's, the page was going.
+/// It is never kept, and one kept by an older page is let go unsent.
+pub fn is_unload_panic(text: &str) -> bool {
+    text.contains("platform_impl/web/event_loop/runner.rs") && text.contains("already borrowed")
 }
 
 /// A report made of a page's kept line (`bugnote::last_crash`): all it says.
@@ -311,6 +331,20 @@ mod tests {
     fn an_older_pages_line_is_a_report() {
         let r = from_last_crash("2026-11-11T04:52:13Z, page 54bb79225fde: The client stopped: panicked at crates/eqoa/src/play.rs:1:2: boom");
         assert_eq!(r, "EQOA client crash report\nkept by: an older page (its one line)\npanic: 2026-11-11T04:52:13Z, page 54bb79225fde: The client stopped: panicked at crates/eqoa/src/play.rs:1:2: boom\n");
+    }
+
+    /// winit's unload panic (petitions 1618, 1664, 5003, 5004) is known in a
+    /// panic's message, a report and a page's kept line, and so is never
+    /// kept or sent. The controls: another panic of the same words elsewhere,
+    /// and one of winit's runner with other words, are crashes.
+    #[test]
+    fn winits_unload_panic_is_no_crash() {
+        let msg = "panicked at src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/web/event_loop/runner.rs:683:69:\nRefCell already borrowed";
+        assert!(is_unload_panic(msg));
+        assert!(is_unload_panic(&compose(&[("build", "page 5b0d728a05c6".into())], msg, "")));
+        assert!(is_unload_panic(&from_last_crash(&format!("2026-11-12T21:20:54Z, page 5b0d728a05c6: The client stopped: {}", msg.replace('\n', " ")))));
+        assert!(!is_unload_panic("panicked at crates/eqoa/src/play.rs:1:2:\nRefCell already borrowed"), "ours: a crash");
+        assert!(!is_unload_panic("panicked at src/winit-0.30.13/src/platform_impl/web/event_loop/runner.rs:9:9:\nboom"), "winit's other words: a crash");
     }
 
     /// Natively a report is a file in the config directory's crashes/, the

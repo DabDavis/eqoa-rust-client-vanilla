@@ -19,6 +19,8 @@ function el(tag, props, ...kids) {
 }
 
 let dead = false;    // the client stopped: its exports are not called again
+let leavingAt = -Infinity; // the page's last beforeunload (performance.now())
+addEventListener('beforeunload', () => { leavingAt = performance.now(); });
 let running = false; // in the world, or the viewer: the canvas has the keys
 
 function notice(key, kind, text, actions = []) {
@@ -81,6 +83,12 @@ function errorText(e) {
 }
 
 function caught(err, where) {
+  // the page going: winit's unload on a loop left dead traps after its
+  // panic, which the client lets go (main.js's pagehide); no crash
+  if (window.eqoaUnloading) {
+    console.log(`as the page leaves (${where}): ${errorText(err)}`);
+    return;
+  }
   // a trap is the client stopping where no panic was raised (out of memory,
   // a stack overflow); after a panic it is that panic's, already said
   if (typeof WebAssembly !== 'undefined' && err instanceof WebAssembly.RuntimeError) {
@@ -99,14 +107,53 @@ function caught(err, where) {
   // of the loop's is under way (web::event_loop_stuck): the client stopped,
   // with this error as its cause.
   setTimeout(() => {
-    let stuck = false;
-    try { stuck = !dead && typeof window.eqoaLoopStuck === 'function' && !!window.eqoaLoopStuck(); } catch { /* the client is gone */ }
-    if (stuck) {
-      notice('problem:page');
-      crash('The client stopped', errorText(err));
-    }
+    if (dead || leaving() || !loopStuck()) return;
+    notice('problem:page');
+    // a winit closure called again while its call the browser stopped never
+    // returned is that stop's consequence, not its cause: the watch below
+    // says it, after the page has had its time to go (a navigation's stop)
+    if (/closure invoked recursively or after being dropped/.test(text)) return;
+    crash('The client stopped', `${errorText(err)} (in ${stuckIn()})`);
   }, 0);
 }
+
+// the page going: from its beforeunload (a navigation's fetch between) to
+// its pagehide, a loop stopped is the browser's doing for the navigation,
+// no crash
+function leaving() {
+  return !!window.eqoaUnloading || performance.now() - leavingAt < 10000;
+}
+
+function stoppedText() {
+  return `the browser stopped the game's script in ${stuckIn()}, with no error to say why (a "page is slowing down" Stop, or the browser out of memory)`;
+}
+
+function loopStuck() {
+  try { return typeof window.eqoaLoopStuck === 'function' && !!window.eqoaLoopStuck(); } catch { return false; /* the client is gone */ }
+}
+
+function stuckIn() {
+  try { return (typeof window.eqoaLoopStuckIn === 'function' && window.eqoaLoopStuckIn()) || 'the game'; } catch { return 'the game'; }
+}
+
+// A call of the loop's can end with no exception, nothing above to catch:
+// the browser stops the page's script where it is (Firefox's "this page is
+// slowing down" Stop, an out-of-memory it does not throw, its cancelling a
+// running script for a navigation away), and the game stands still with no
+// word. So the loop is looked at every second too, in a task of its own (no
+// call of the loop's under way: one counted is one that never returned),
+// and seen dead twice running, the client stopped is said with where it
+// stopped. Not while the page is going (beforeunload to pagehide, a
+// navigation's fetch between): that is no crash, the page is leaving.
+let stuckSeen = 0;
+setInterval(() => {
+  if (dead || leaving()) {
+    stuckSeen = 0;
+    return;
+  }
+  stuckSeen = loopStuck() ? stuckSeen + 1 : 0;
+  if (stuckSeen >= 2) crash('The client stopped', stoppedText());
+}, 1000);
 
 addEventListener('error', (e) => {
   const t = e.target;
