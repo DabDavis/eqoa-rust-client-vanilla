@@ -13,6 +13,12 @@ is put on the page by `.github/workflows/notes.yml`.
   from the blade of the Sword of Virtue, in the creature's own glow colour (Mr. Moogie's are red, as the Heirloom
   Sword of Twisted Virtue's are). They follow the creature as it moves.
 - Every other creature, and every player, looks exactly as before.
+## 2026-11-13 · Ornate plate at character select
+- **Your armour now shows at character select on the Heirloom Test Server.** A character in the server's ornate
+  plate (its own armour set, with or without a trim colour) stood at character select in plain clothes, though the
+  armour showed in the world. Character select now reads the plate's art off the disc the moment the
+  server says it uses its own armour, and the character is drawn in it as the world draws it, trims and dye included.
+- On every other server character select is exactly as before.
 
 ## 2026-11-13 · Stacked spell bars, a chat box that stays open, glowing NPCs, group loot rules and instances
 - **Stacked Spell Bars** (Options > Extended > UI > HUD, off by default): on a computer your first two ability bars

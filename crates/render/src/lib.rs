@@ -1168,6 +1168,13 @@ impl Renderer {
         self.materials.clear();
     }
 
+    /// What the texture under `key` (`TextureSource::key`) was made as: None
+    /// never asked for, `Some(false)` asked for and nothing, `Some(true)` a
+    /// texture.
+    pub fn texture_made(&self, key: u64) -> Option<bool> {
+        self.textures.get(&key).map(Option::is_some)
+    }
+
     /// Re-points one layer pass of one batch, as `VIAtmosphere` changes the
     /// sky's materials: its texture (rebound when it changes), blend mode and
     /// colour (0..1, alpha included).

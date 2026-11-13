@@ -1228,6 +1228,36 @@ impl Rules {
         }
     }
 
+    /// `register_art` for a library with no CHAR.ESF whole (character
+    /// select's, `pregame::res`): the art's records found in `file`, bodies
+    /// cut out of CHAR.ESF (`ART_BODIES`, `files::cut`), each at its place in
+    /// its body's record, which in the cut sits elsewhere than in the file.
+    /// A record in no body of the cut is not registered; an id registered
+    /// already is left as it is.
+    pub fn register_art_cut(&self, lib: &mut esf::Library, file: usize) {
+        let ornate = (vi::cust::ORNATE_SET, vi::cust::ORNATE, ORNATE_RECORDS);
+        for (_, ids, records) in self.armor_art.iter().chain(std::iter::once(&ornate)) {
+            for (&id, &off) in ids.iter().zip(records) {
+                if lib.surface(id as i32).is_some() {
+                    continue;
+                }
+                let Some(&(body, start, len)) = ART_BODIES.iter().find(|&&(_, start, len)| (start..start + len).contains(&off)) else { continue };
+                let c = lib.file(file);
+                let Some(&b) = c.dict.get(&(body as i32)) else { continue };
+                let b = c.node(b);
+                if b.body < 12 || b.size + 12 != len as usize {
+                    continue;
+                }
+                // the body's record starts 12 bytes before its body, the
+                // surface's body 12 past its own header
+                let at = b.body - 12 + (off - start) as usize + 12;
+                if let Some(node) = c.nodes.iter().position(|n| n.ty == esf::types::SURFACE && n.body == at) {
+                    lib.alias(id as i32, esf::Ref { file, node });
+                }
+            }
+        }
+    }
+
     /// One line for the log.
     pub fn describe(&self) -> String {
         let tints = self.tints.as_ref().map_or(15, |t| self.tint_count_of(t.len()));
@@ -1338,6 +1368,22 @@ static CURRENT: RwLock<Option<Arc<Rules>>> = RwLock::new(None);
 /// S2 registers (`SetResources`' hook) and go-eqoa-server's armour draws.
 pub const ORNATE_RECORDS: [u32; 5] = [0x073BEC, 0x072257, 0x0C7D31, 0x06C8BE, 0x06AF29];
 
+/// The CHAR.ESF bodies set 9's records lie in (`ORNATE_RECORDS`): each
+/// body's DictID, its record's offset in the file and its length (header and
+/// body), as the file's directory has them. The chest, bracer, legs and boots
+/// are in the first, the gloves in the second. Character select reads no
+/// CHAR.ESF whole: it cuts these out of it (`art_bodies`).
+pub const ART_BODIES: [(u32, u32, u32); 2] = [(0xDC3B_344D, 0x06AEB9, 321_452), (0xDC3B_344E, 0x0B9665, 344_805)];
+
+/// The CHAR.ESF bodies a library with no CHAR.ESF whole (character select)
+/// is to cut out of it for set 9's art (`ART_BODIES`,
+/// `Rules::register_art_cut`): with go-eqoa-server's armour in force on this
+/// connection (`server_armor`), else none (retail and Sandstorm draw
+/// character select as the console does, with no CHAR.ESF).
+pub fn art_bodies() -> Vec<u32> {
+    if server_armor() { ART_BODIES.iter().map(|b| b.0).collect() } else { Vec::new() }
+}
+
 /// go-eqoa-server's armour is in force on this connection (its live look's
 /// third word: `net::session::Session::armor_look`): set 9 and the trims.
 static SERVER_ARMOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1352,7 +1398,27 @@ pub fn set_server_armor(on: bool) {
 /// Whether go-eqoa-server's armour is in force (`set_server_armor`); false
 /// on every other server, and before any says.
 pub fn server_armor() -> bool {
+    #[cfg(test)]
+    if let Some(on) = TEST_ARMOR.with(|t| t.get()) {
+        return on;
+    }
     SERVER_ARMOR.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's own word on the server's armour (`with_server_armor`).
+    static TEST_ARMOR: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// `f` run with go-eqoa-server's armour in force or not on this thread
+/// alone (a test's), so tests running at once never see each other's.
+#[cfg(test)]
+pub fn with_server_armor<T>(on: bool, f: impl FnOnce() -> T) -> T {
+    TEST_ARMOR.with(|t| t.set(Some(on)));
+    let out = f();
+    TEST_ARMOR.with(|t| t.set(None));
+    out
 }
 
 /// `vi::cust::TrimNamer`'s: a trimmed piece's texture by `render::recolor`.
@@ -1686,6 +1752,49 @@ mod tests {
             assert_eq!((r.file, lib.file(file).node(r.node).body), (file, off as usize + 12));
             let (_, s) = lib.surface(*id as i32).unwrap();
             assert!(s.width >= 64, "{id:08X}");
+        }
+    }
+
+    /// Set 9's art out of the two bodies cut out of CHAR.ESF (character
+    /// select's, `register_art_cut`): `ART_BODIES` is what CHAR.ESF's
+    /// directory says of those bodies, every one of `ORNATE_RECORDS` lies in
+    /// one, and each DictID registered in the cut is the very surface the
+    /// world registers out of the whole file (`register_art`), byte for byte.
+    /// The control: a cut of other bodies registers nothing. Needs the disc.
+    #[test]
+    fn set_9s_art_out_of_a_cut() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(d) = iso::Iso::open(path.to_str().unwrap()) else {
+            eprintln!("SKIP: no disc");
+            return;
+        };
+        let e = d.find("CHAR.ESF").cloned().unwrap();
+        let window = || esf::Window::new(std::fs::File::open(&path).unwrap(), e.lba as u64 * iso::SECTOR, e.size as u64);
+        let dir = esf::ResourceDir::read(&mut window()).unwrap();
+        for &(id, off, len) in &ART_BODIES {
+            assert_eq!(dir.find(id), Some((off as u64, len as usize)), "{id:08X}");
+        }
+        assert!(ORNATE_RECORDS.iter().all(|&r| ART_BODIES.iter().any(|&(_, off, len)| (off..off + len).contains(&r))));
+        let ids: Vec<u32> = ART_BODIES.iter().map(|b| b.0).collect();
+        let cut = crate::pregame::files::cut_from(&mut window(), &[ids, vec![0xD130_0BD3]]).unwrap();
+        let mut groups = cut.groups.into_iter();
+        let (art, other) = (groups.next().flatten().unwrap(), groups.next().flatten().unwrap());
+        let mut none = esf::Library::new();
+        let f = none.add("CHAR.ESF (bodies)", other);
+        Rules::retail().register_art_cut(&mut none, f);
+        assert!(vi::cust::ORNATE.iter().all(|&id| none.lookup(id as i32).is_none()), "the control");
+        let mut lib = esf::Library::new();
+        let f = lib.add("CHAR.ESF (bodies)", art);
+        Rules::retail().register_art_cut(&mut lib, f);
+        Rules::retail().register_art_cut(&mut lib, f);
+        let mut world = esf::Library::new();
+        world.add("CHAR.ESF", crate::stream::open_file(&path, "CHAR.ESF").unwrap());
+        Rules::retail().register_art(&mut world);
+        for id in vi::cust::ORNATE {
+            let (c, s) = lib.surface(id as i32).unwrap_or_else(|| panic!("{id:08X}"));
+            let (wc, ws) = world.surface(id as i32).unwrap();
+            assert_eq!((s.width, s.height), (ws.width, ws.height), "{id:08X}");
+            assert_eq!(s.decode(&c.data).unwrap().rgba, ws.decode(&wc.data).unwrap().rgba, "{id:08X}");
         }
     }
 
