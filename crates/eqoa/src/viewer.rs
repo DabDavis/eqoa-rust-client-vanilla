@@ -1725,6 +1725,9 @@ pub struct PendingGfx {
     pub queue: wgpu::Queue,
     /// the adapter can add up the ground fog's sums (`render::fog16`)
     pub ps2_sums: bool,
+    /// a lost device's replacement on a fresh canvas (`web::remake`'s
+    /// fallback to WebGL2): the window made again on it from `attrs`
+    pub new_window: bool,
 }
 
 struct Gfx {
@@ -3487,7 +3490,20 @@ impl App {
             // the browser's answer to come: the game goes on, drawing nothing
             None => true,
             Some(Ok(p)) => {
-                self.reattach(Some(p.surface), p.config, p.device, p.queue, p.ps2_sums, Vec::new());
+                // WebGL2 after WebGPU, on a fresh canvas: winit's window (its
+                // input, its size) made again on it, the old one let go
+                let window = if p.new_window {
+                    match el.create_window(p.attrs) {
+                        Ok(w) => Some(Arc::new(w)),
+                        Err(e) => {
+                            self.give_up_gfx(el, &format!("no window on the fresh canvas ({e})"));
+                            return false;
+                        }
+                    }
+                } else {
+                    None
+                };
+                self.reattach(window, Some(p.surface), p.config, p.device, p.queue, p.ps2_sums, Vec::new());
                 true
             }
             Some(Err(e)) => {
@@ -3498,7 +3514,7 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         match self.remake() {
             Ok((surface, config, device, queue, ps2_sums, modes)) => {
-                self.reattach(surface, config, device, queue, ps2_sums, modes);
+                self.reattach(None, surface, config, device, queue, ps2_sums, modes);
                 true
             }
             Err(e) => {
@@ -3559,10 +3575,14 @@ impl App {
     /// creatures as they are next applied, the spell effects, the rings, the
     /// gears, the world's zones in place, the flora and the effect volumes,
     /// before the world the pregame's layer and stages. The session, the
-    /// world, the walk and the windows are not touched.
-    fn reattach(&mut self, surface: Option<wgpu::Surface<'static>>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue, ps2_sums: bool, present_modes: Vec<wgpu::PresentMode>) {
+    /// world, the walk and the windows are not touched; a page's window is
+    /// replaced by `new_window` when the device is on a fresh canvas
+    /// (`web::remake`'s fallback to WebGL2).
+    #[allow(clippy::too_many_arguments)]
+    fn reattach(&mut self, new_window: Option<Arc<Window>>, surface: Option<wgpu::Surface<'static>>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue, ps2_sums: bool, present_modes: Vec<wgpu::PresentMode>) {
         let Some(old) = self.gfx.take() else { return };
         let Gfx { window, title, whole, config: old_config, .. } = old;
+        let window = new_window.unwrap_or(window);
         crate::gpulost::watch(&device, true);
         crate::texpack::redraw_all();
         let mut config = config;

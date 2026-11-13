@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · The browser page survives a graphics driver reset
+- In the browser, when the graphics card's driver resets (on Windows: the screen flickers black, and the game
+  stopped with "the browser gave no new graphics device"), the game now **waits for the graphics card for about
+  50 seconds** instead of 16, asking the browser afresh each time.
+- If WebGPU still can't be had, the game **switches to WebGL2 and carries on**: you stay where you were, and a
+  notice says it now draws with WebGL2. It stays on WebGL2 until the page is reloaded; a reload tries WebGPU again.
+- The downloaded program is unchanged.
+
 ## 2026-11-13 · Weapons glow in their own colour
 - A weapon or shield with a colour of its own now **glows in that colour**: its glow, sheen and sparkles take the
   colour's hue at the glow's usual brightness, and the rest of it is tinted lightly. The first is the **Heirloom

@@ -674,12 +674,13 @@ enum Remake {
 /// browser has a working adapter, else WebGL2 (whose adapter is the canvas's
 /// own context, so the surface comes first).
 async fn gfx(canvas: web_sys::HtmlCanvasElement) -> Result<viewer::PendingGfx, String> {
-    gfx_on(canvas, None).await
+    gfx_on(canvas, None, false).await
 }
 
 /// `gfx`, or with `again` a new device on that backend in place of a lost
-/// one (`remake`).
-async fn gfx_on(canvas: web_sys::HtmlCanvasElement, again: Option<wgpu::Backend>) -> Result<viewer::PendingGfx, String> {
+/// one (`remake`); `fresh`, on a canvas put in the lost one's place
+/// (`fresh_canvas`), which the window is made again on.
+async fn gfx_on(canvas: web_sys::HtmlCanvasElement, again: Option<wgpu::Backend>, fresh: bool) -> Result<viewer::PendingGfx, String> {
     use winit::platform::web::WindowAttributesExtWebSys;
     let dpr = web_sys::window().map_or(1.0, |w| w.device_pixel_ratio());
     let (w, h) = (((canvas.client_width() as f64) * dpr).max(1.0) as u32, ((canvas.client_height() as f64) * dpr).max(1.0) as u32);
@@ -726,7 +727,7 @@ async fn gfx_on(canvas: web_sys::HtmlCanvasElement, again: Option<wgpu::Backend>
     // a new one is made (`gpulost`, `viewer`'s `recover`). `Destroyed` is the
     // page closing, or a device let go.
     crate::gpulost::watch(&device, again.is_some());
-    if info.backend == wgpu::Backend::Gl && again.is_none() {
+    if info.backend == wgpu::Backend::Gl && (again.is_none() || fresh) {
         watch_webgl(&canvas);
     }
     let mut config = surface.get_default_config(&adapter, w, h).ok_or("the surface cannot be configured")?;
@@ -735,7 +736,7 @@ async fn gfx_on(canvas: web_sys::HtmlCanvasElement, again: Option<wgpu::Backend>
     surface.configure(&device, &config);
     let attrs = winit::window::Window::default_attributes().with_canvas(Some(canvas)).with_title("EQOA");
     let ps2_sums = render::fog16::supported(&adapter);
-    Ok(viewer::PendingGfx { attrs, surface, config, device, queue, ps2_sums })
+    Ok(viewer::PendingGfx { attrs, surface, config, device, queue, ps2_sums, new_window: fresh })
 }
 
 thread_local! {
@@ -784,17 +785,53 @@ fn watch_webgl(canvas: &web_sys::HtmlCanvasElement) {
     }
 }
 
-/// How long a lost device's page waits for a new one in all (each try's
-/// pause first, `remake`): the browser restarts its graphics process
-/// meanwhile, for every page of it at once.
-const REMAKE_PAUSES_MS: [i32; 8] = [100, 250, 500, 1000, 2000, 3000, 4000, 5000];
 /// How long a WebGL2 page waits for its context back.
 const WEBGL_BACK_MS: i32 = 10_000;
 
+thread_local! {
+    /// The page fell back from WebGPU to WebGL2 (`remake`), for
+    /// `recovered`'s notice and `give_up`'s.
+    static FELL_BACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `remake` went on to WebGL2 after WebGPU's tries.
+    static TRIED_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A fresh canvas in the page's in place of its own, for WebGL2 after
+/// WebGPU (a canvas that has had a "webgpu" context never gives a "webgl2"
+/// one): its attributes copied (the id, so the page's stylesheet sizes it as
+/// it did the old, and the tabindex), the focus moved to it if the old had
+/// it, and the page told (main.js's `eqoaCanvasNew`, which puts its own
+/// listeners on it). winit's are put on it as the window is made again on it
+/// (`viewer`'s `recover`); the old one's go with the old window.
+fn fresh_canvas() -> Result<web_sys::HtmlCanvasElement, String> {
+    let old = canvas()?;
+    let doc = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
+    let new: web_sys::HtmlCanvasElement = doc.create_element("canvas").map_err(|_| "no canvas made")?.dyn_into().map_err(|_| "not a canvas")?;
+    for name in old.get_attribute_names().iter() {
+        if let Some(name) = name.as_string()
+            && let Some(v) = old.get_attribute(&name)
+        {
+            let _ = new.set_attribute(&name, &v);
+        }
+    }
+    let focused = doc.active_element().is_some_and(|e| JsValue::from(e) == JsValue::from(old.clone()));
+    old.replace_with_with_node_1(&new).map_err(|e| format!("the canvas not replaced: {e:?}"))?;
+    if focused {
+        let _ = new.focus();
+    }
+    call_page("eqoaCanvasNew", &new);
+    log("graphics: a fresh canvas in place of WebGPU's, for WebGL2");
+    Ok(new)
+}
+
 /// A new device in place of the lost one (`viewer`'s `recover`, each frame
-/// while it is lost): asked for the first time (on the backend drawn on),
-/// then `None` until the browser's answer, then the device, or why none
-/// could be had after `REMAKE_PAUSES_MS`.
+/// while it is lost): asked for the first time, then `None` until the
+/// browser's answer, then the device, or why none could be had. The way to
+/// it is `gpulost::page::plan`'s: on WebGPU, WebGPU again for about 50 s
+/// (each try a new instance and a fresh adapter: `navigator.gpu.
+/// requestAdapter()` again, never the lost device's), then WebGL2 on a fresh
+/// canvas (`fresh_canvas`), kept for the rest of the page's life; on WebGL2,
+/// WebGL2 again once the browser gives its context back.
 pub fn remake() -> Option<Result<viewer::PendingGfx, String>> {
     let asked = REMAKE.with(|r| {
         let mut r = r.borrow_mut();
@@ -816,25 +853,47 @@ pub fn remake() -> Option<Result<viewer::PendingGfx, String>> {
     status(&format!("graphics: the device was lost ({}): asking the browser for a new one", crate::gpulost::why()));
     wasm_bindgen_futures::spawn_local(async move {
         let r = async {
-            if backend == wgpu::Backend::Gl {
-                let mut waited = 0;
-                while !WEBGL_BACK.with(std::cell::Cell::get) {
-                    if waited >= WEBGL_BACK_MS {
-                        return Err(format!("the browser did not give the WebGL2 context back within {} s", WEBGL_BACK_MS / 1000));
-                    }
-                    sleep(100).await;
-                    waited += 100;
-                }
-                WEBGL_LOST.with(|l| l.set(false));
-            }
             let mut last = String::new();
-            for (k, pause) in REMAKE_PAUSES_MS.iter().enumerate() {
-                sleep(*pause).await;
-                match gfx_on(canvas()?, Some(backend)).await {
-                    Ok(p) => return Ok(p),
-                    Err(e) => {
-                        log(&format!("graphics: try {} for a new device: {e}", k + 1));
-                        last = e;
+            for leg in crate::gpulost::page::plan(backend) {
+                let canvas = if leg.fresh_canvas {
+                    TRIED_FALLBACK.with(|t| t.set(true));
+                    status(&format!(
+                        "graphics: no new WebGPU device within {} s ({last}): trying WebGL2",
+                        crate::gpulost::page::total_ms(&crate::gpulost::page::WEBGPU_PAUSES_MS) / 1000
+                    ));
+                    // WebGL2's own losses on the old canvas are not this one's
+                    WEBGL_LOST.with(|l| l.set(false));
+                    fresh_canvas()?
+                } else {
+                    if leg.backend == wgpu::Backend::Gl {
+                        let mut waited = 0;
+                        while !WEBGL_BACK.with(std::cell::Cell::get) {
+                            if waited >= WEBGL_BACK_MS {
+                                return Err(format!("the browser did not give the WebGL2 context back within {} s", WEBGL_BACK_MS / 1000));
+                            }
+                            sleep(100).await;
+                            waited += 100;
+                        }
+                        WEBGL_LOST.with(|l| l.set(false));
+                    }
+                    canvas()?
+                };
+                for (k, pause) in leg.pauses_ms.iter().enumerate() {
+                    sleep(*pause).await;
+                    // each try a new instance and adapter (a failed try's
+                    // surface let go); the fresh canvas's window is made by
+                    // `recover` on the device that comes
+                    match gfx_on(canvas.clone(), Some(leg.backend), leg.fresh_canvas).await {
+                        Ok(p) => {
+                            if leg.fresh_canvas {
+                                FELL_BACK.with(|f| f.set(true));
+                            }
+                            return Ok(p);
+                        }
+                        Err(e) => {
+                            log(&format!("graphics: try {} for a new {:?} device: {e}", k + 1, leg.backend));
+                            last = e;
+                        }
                     }
                 }
             }
@@ -849,7 +908,13 @@ pub fn remake() -> Option<Result<viewer::PendingGfx, String>> {
 /// A new device is in place of the lost one (`viewer`'s `reattach`): said on
 /// the page, the game having gone on.
 pub fn recovered() {
-    call_page("eqoaGraphicsBack", &JsValue::from_str(&format!("The graphics card stopped for a moment ({}). The game made its graphics again and went on: you are still where you were.", short_why())));
+    let webgl = if FELL_BACK.with(|f| f.replace(false)) {
+        TRIED_FALLBACK.with(|t| t.set(false));
+        " WebGPU could not be had again, so the game now draws with WebGL2 until the page is reloaded."
+    } else {
+        ""
+    };
+    call_page("eqoaGraphicsBack", &JsValue::from_str(&format!("The graphics card stopped for a moment ({}). The game made its graphics again and went on: you are still where you were.{webgl}", short_why())));
 }
 
 /// The loss's reason, its first line, for a notice.
@@ -865,7 +930,7 @@ fn short_why() -> String {
 /// process that keeps losing WebGPU's devices may still draw on.
 pub fn give_up(why: &str) {
     let backend = BACKEND.with(std::cell::Cell::get);
-    if backend == Some(wgpu::Backend::BrowserWebGpu) {
+    if backend == Some(wgpu::Backend::BrowserWebGpu) || TRIED_FALLBACK.with(std::cell::Cell::get) {
         call_page("eqoaWebglKeep", &JsValue::from_str(why));
         crash("The graphics stopped", &format!("{why}. This page will use WebGL2 from now on in this browser (the start card says so, and can go back to WebGPU)."));
         return;

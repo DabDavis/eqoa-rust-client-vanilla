@@ -9,6 +9,14 @@ import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick, fiel
 import { canRemember, keptHandle, keepHandle, forgetHandle } from './discstore.js';
 
 const $ = (id) => document.getElementById(id);
+// The page's own listeners on the game's canvas, kept so that a fresh canvas
+// put in its place gets them too: the client's fallback from WebGPU to WebGL2
+// after a lost device that WebGPU could not make again (crates/eqoa/src/web,
+// `fresh_canvas`; a canvas that has had a "webgpu" context gives no "webgl2"
+// one). winit puts its own on the fresh one as it makes the window again.
+const canvasHooks = [];
+const onCanvas = (type, fn) => { canvasHooks.push([type, fn]); $('eqoa').addEventListener(type, fn); };
+window.eqoaCanvasNew = (c) => { for (const [type, fn] of canvasHooks) c.addEventListener(type, fn); };
 // the client's own graphics line ("graphics: <adapter> (<backend>)")
 let clientGraphics = '';
 // a software renderer's name, as WebGL's unmasked renderer, WebGPU's adapter
@@ -424,13 +432,13 @@ window.eqoaWantText = (on) => {
   // (where a browser allows it; else at the next touch)
   if (wantText && lastTouch && navigator.userActivation && navigator.userActivation.isActive) typeHere();
 };
-$('eqoa').addEventListener('pointerdown', (e) => {
+onCanvas('pointerdown', (e) => {
   lastTouch = e.pointerType === 'touch';
   $('eqoa').focus();
 });
 // winit puts the focus on the canvas at every press: a touch while the game
 // wants text puts it back in the input, the device's keyboard with it
-$('eqoa').addEventListener('pointerup', (e) => { if (wantText && e.pointerType === 'touch') typeHere(); });
+onCanvas('pointerup', (e) => { if (wantText && e.pointerType === 'touch') typeHere(); });
 
 // ---- a DNAS module off the disc (CLIENT, for the start menu): unpacked by
 // the disc's own library in a worker (unpack.js), and kept in this origin's
@@ -1091,7 +1099,7 @@ for (const ev of ['keydown', 'keyup']) {
   addEventListener(ev, (e) => { if (e.key === 'F11') e.stopImmediatePropagation(); }, true);
 }
 
-$('eqoa').addEventListener('pointerup', (e) => {
+onCanvas('pointerup', (e) => {
   if (e.pointerType !== 'mouse' && started && !wantText && window.eqoaTouchFirst()) fullScreen();
 });
 
