@@ -7,6 +7,17 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Froglok helms, Mermaid robes and armour
+- **A Froglok's helm now fits its head**: wider and deeper, it sits down over the whole head above the mouth,
+  instead of perching on top with the sides and back of the head poking out through it. Every helm, on frogloks
+  robed and spiked, and on ghouls.
+- **Mermaid robes**: the sleeves now follow the arm down to the wrist with a normal cuff, instead of stopping at
+  the elbow in a huge bell.
+- **Mermaid chest armour and robes no longer cover the chin**: the collar now sits at the neck, where before it
+  stood up over the mouth, and a Merman's broad chest no longer shows through his chest armour. Mermen, mermaids,
+  sirens and the sea king, every armour set.
+- Every other race's helms, armour and robes are exactly as before.
+
 ## 2026-11-13 · The browser page survives a graphics driver reset
 - In the browser, when the graphics card's driver resets (on Windows: the screen flickers black, and the game
   stopped with "the browser gave no new graphics device"), the game now **waits for the graphics card for about
