@@ -7,6 +7,17 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · 154 more camps on the map
+- **More camps on the map (M)**: besides the 49 popular XP camps, the map now marks 154 more of the hunting camps
+  from the EQOA-Data map guide that this server really has: 137 in Tunaria and 17 on Odus. They wear a darker
+  "XP" badge so the popular ones still stand out. Hover or tap one for its card: its name, where it is, the levels
+  of its creatures here, the rare creatures near it and the notable drops of its area.
+- A camp whose name alone would not say which it is carries its area: "Undead (Druid's Watch)", "Goblins
+  (Guardian Forest)", and a side where one area has two ("Tae Ew (Dinbak, east)").
+- Zoomed out, only the popular camps and the coaches are shown, as before; zoom in a few steps and the others
+  appear.
+
+
 ## 2026-11-13 · Auto Save Options
 - **Auto Save Options** (Options > Extended > Other > General, off by default): turn it on and every change you
   make in the Options window is kept as soon as you back out of the page you made it on, so you no longer have to

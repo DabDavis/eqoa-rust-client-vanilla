@@ -28,20 +28,27 @@
 use super::markers_data::{CAMPS, COACHES, ROUTES, TOWNS};
 use super::view::{self, View};
 
-/// An XP camp, as `markers_data` lists it.
+/// An XP camp, as `markers_data` lists it: one of EQOA-Data's XP-camp guide
+/// (`guide`), or one of the other camps its map marks that go-eqoa-server has
+/// (the owner's of 2026-11-13, "lets add more xp camps to the map"), which the
+/// map draws darker and leaves out far out (`Marker::shown_at`).
 #[derive(Clone, Copy, Debug)]
 pub struct Camp {
-    /// EQOA-Data's name for it
+    /// EQOA-Data's name for it (an other camp's with its zone, and a side,
+    /// where the name alone would not tell it apart: "Goblins (Guardian
+    /// Forest)")
     pub name: &'static str,
-    /// go-eqoa-server's words for where it is (its `#tele` list's)
+    /// go-eqoa-server's words for where it is (its `#tele` list's; an other
+    /// camp's zone on EQOA-Data's map)
     pub place: &'static str,
     /// `gWorldInfo`'s index
     pub world: i32,
     /// (x, z), game units
     pub at: [f32; 2],
-    /// the guide's level range
+    /// the guide's level range (an other camp's creatures' here, where the map
+    /// writes none)
     pub levels: (u8, u8),
-    /// the guide's note
+    /// the guide's note ("" for an other camp)
     pub note: &'static str,
     /// the rare and raid creatures EQOA-Data's map marks near it
     pub rare: &'static [&'static str],
@@ -51,6 +58,9 @@ pub struct Camp {
     pub table: &'static str,
     /// that table's notable items at its levels, the highest first
     pub drops: &'static [&'static str],
+    /// one of the guide's XP camps (the popular ones); else one of the map's
+    /// other camps
+    pub guide: bool,
 }
 
 /// A coach, as `markers_data` lists it: its coachman where it stands.
@@ -131,6 +141,9 @@ pub const DROPS: [f32; 4] = [0.72, 0.9, 1.0, 1.0];
 /// The XP badge: its fill and its letters.
 pub const BADGE: [f32; 4] = [0.6, 0.07, 0.07, 1.0];
 pub const BADGE_TEXT: [f32; 4] = [1.0, 0.86, 0.3, 1.0];
+/// An other camp's badge (not the guide's): darker, its letters paler.
+pub const BADGE_OTHER: [f32; 4] = [0.33, 0.13, 0.1, 1.0];
+pub const BADGE_OTHER_TEXT: [f32; 4] = [0.88, 0.78, 0.55, 1.0];
 
 impl Marker {
     /// Where it is, (x, z).
@@ -145,6 +158,17 @@ impl Marker {
         match self {
             Marker::Camp(i) => CAMPS[i].world,
             Marker::Coach(i) => COACHES[i].world,
+        }
+    }
+
+    /// Whether it is drawn (and answers the pointer) at a zoom of `scale`,
+    /// world units a window pixel: out past `OTHERS_FROM` the guide's camps
+    /// and the coaches alone, so that the map's 150 other camps do not crowd
+    /// it; in from there every one.
+    pub fn shown_at(self, scale: f32) -> bool {
+        match self {
+            Marker::Camp(i) => CAMPS[i].guide || scale <= OTHERS_FROM,
+            Marker::Coach(_) => true,
         }
     }
 
@@ -168,10 +192,11 @@ impl Marker {
                     let first = place.next().map(|ch| ch.to_uppercase().collect::<String>()).unwrap_or_default();
                     out.push((first + place.as_str(), TEXT));
                 }
+                let what = if c.guide { "XP camp" } else { "Camp" };
                 out.push((
                     match c.levels {
-                        (lo, hi) if lo == hi => format!("XP camp, level {lo}"),
-                        (lo, hi) => format!("XP camp, levels {lo}-{hi}"),
+                        (lo, hi) if lo == hi => format!("{what}, level {lo}"),
+                        (lo, hi) => format!("{what}, levels {lo}-{hi}"),
                     },
                     TEXT,
                 ));
@@ -302,11 +327,13 @@ pub fn place_names(cands: &[(usize, [f32; 2], [f32; 2])], gap: f32, obstacles: &
 }
 
 /// The marker under window pixel `s` of view `v` in a `size` window, of world
-/// `world`: the nearest within reach of its middle (`view::marker_reach`, a
-/// finger's miss more), none when none is.
+/// `world`: the nearest drawn at the view's zoom (`Marker::shown_at`) within
+/// reach of its middle (`view::marker_reach`, a finger's miss more), none
+/// when none is.
 pub fn under(world: i32, v: View, size: (u32, u32), s: [f32; 2], finger: bool) -> Option<Marker> {
     let reach = view::marker_reach(size, finger);
     of_world(world)
+        .filter(|m| m.shown_at(v.scale))
         .map(|m| {
             let p = v.to_window(size, m.at());
             (m, (p[0] - s[0]).hypot(p[1] - s[1]))
@@ -411,6 +438,10 @@ const CARD_WIDTH: i32 = 290;
 /// crowd it: world units a window pixel.
 pub const NAMES_FROM: f32 = 2.0;
 pub const COMPACT_FROM: f32 = 12.0;
+/// How far in the map's other camps (not the guide's) are drawn: their badges
+/// overlap one another past it (at 11, a dozen of Tunaria's pairs), so there
+/// only the guide's camps and the coaches are, as before they came.
+pub const OTHERS_FROM: f32 = 8.0;
 
 fn fill(ui: &mut Ui, white: usize, pos: [[f32; 2]; 4], color: [f32; 4]) {
     ui.push(Quad { tex: white, blend: 3, pos, uv: [[0.5, 0.5]; 4], color, clip: None });
@@ -494,30 +525,40 @@ fn horseshoe_arc() -> impl Iterator<Item = (f32, f32)> {
 
 /// The camps' badges at their frame points: "XP" in gold on red, outlined,
 /// the size of the map's names (the font `font`: its height and index on
-/// the layer), and each camp's name under it once the map is in close
-/// (`scale`, world units a window pixel, below `NAMES_FROM`).
+/// the layer), an other camp's darker (`BADGE_OTHER`), and each camp's name
+/// under it once the map is in close (`scale`, world units a window pixel,
+/// below `NAMES_FROM`).
 pub fn draw_badges(ui: &mut Ui, assets: &crate::ui::UiAssets, vui: &vi::ui::Vui, white: usize, font: Option<(f32, usize)>, camps: &[(Marker, [f32; 2])], scale: f32) {
     let label = vi::ui::wide("XP");
     let (h, tw) = font.map_or((14.0, 20.0), |(h, fo)| (h, ui.fonts[fo].string_width(&label) as f32));
     if scale > COMPACT_FROM {
         // far out: a small red mark each, no letters
-        for &(_, p) in camps {
+        for &(m, p) in camps {
             rect(ui, white, [p[0] - 4.5, p[1] - 4.5, p[0] + 4.5, p[1] + 4.5], OUTLINE);
-            rect(ui, white, [p[0] - 3.5, p[1] - 3.5, p[0] + 3.5, p[1] + 3.5], BADGE);
+            rect(ui, white, [p[0] - 3.5, p[1] - 3.5, p[0] + 3.5, p[1] + 3.5], badge(m).0);
         }
         return;
     }
     let (hw, hh) = (tw / 2.0 + 4.0, h / 2.0);
-    for &(_, p) in camps {
+    for &(m, p) in camps {
         rect(ui, white, [p[0] - hw - 1.5, p[1] - hh - 1.5, p[0] + hw + 1.5, p[1] + hh + 1.5], OUTLINE);
-        rect(ui, white, [p[0] - hw, p[1] - hh, p[0] + hw, p[1] + hh], BADGE);
+        rect(ui, white, [p[0] - hw, p[1] - hh, p[0] + hw, p[1] + hh], badge(m).0);
     }
     let mut r = assets.raster(ui);
     for &(m, p) in camps {
-        vui.draw_centered_string_ex(&mut r, &label, p[0].round() as i32, p[1].round() as i32, BADGE_TEXT, 0, false);
+        vui.draw_centered_string_ex(&mut r, &label, p[0].round() as i32, p[1].round() as i32, badge(m).1, 0, false);
         if let (true, Marker::Camp(i)) = (scale < NAMES_FROM, m) {
             vui.draw_centered_string_ex(&mut r, &vi::ui::wide(CAMPS[i].name), p[0].round() as i32, (p[1] + hh + h * 0.75).round() as i32, super::chrome::NAME, 0, true);
         }
+    }
+}
+
+/// A camp's badge's fill and letters: the guide's red and gold, an other
+/// camp's darker.
+fn badge(m: Marker) -> ([f32; 4], [f32; 4]) {
+    match m {
+        Marker::Camp(i) if !CAMPS[i].guide => (BADGE_OTHER, BADGE_OTHER_TEXT),
+        _ => (BADGE, BADGE_TEXT),
     }
 }
 
@@ -687,12 +728,12 @@ mod tests {
     fn the_markers_lie_in_their_worlds() {
         let grid = |p: [f32; 2]| (2000.0..28000.0).contains(&p[0]) && (0.0..34000.0).contains(&p[1]);
         for c in CAMPS.iter() {
-            assert!([0, 2].contains(&c.world), "{}", c.name);
-            assert!(c.levels.0 <= c.levels.1 && c.levels.1 <= 62, "{}: {:?}", c.name, c.levels);
+            assert!([0, 1, 2].contains(&c.world), "{}", c.name);
+            assert!(c.levels.0 >= 1 && c.levels.0 <= c.levels.1 && c.levels.1 <= if c.guide { 62 } else { 70 }, "{}: {:?}", c.name, c.levels);
             if c.world == 0 {
                 assert!(grid(c.at), "{} at {:?}", c.name, c.at);
             }
-            assert!(!c.note.is_empty(), "{}: the guide's camps carry a note", c.name);
+            assert_eq!(!c.note.is_empty(), c.guide, "{}: the guide's camps carry a note, the map's others none", c.name);
         }
         let towns: Vec<&str> = COACHES.iter().map(|c| c.town).filter(|t| !t.is_empty()).collect();
         for c in COACHES.iter() {
@@ -736,6 +777,43 @@ mod tests {
         assert_eq!(card[0].0, "Coach: Freeport");
         assert_eq!(card[1].0, "Coachman Ronks");
         assert_eq!(card[2].0, "To Neriak, Bobble-by-Water, Highpass Hold, Muniel's Tea Garden");
+    }
+
+    /// The map's other camps beside the guide's 49: each name once in its world
+    /// (the generic ones told apart by their zones: no two "Undead" in
+    /// Tunaria), each drawn in close and left out past `OTHERS_FROM`, where the guide's
+    /// and the coaches stay (and the pointer finds only what is drawn); an
+    /// other camp's card says "Camp" and where it is, with no note. The
+    /// controls: a guide camp is drawn at every zoom, and an other camp under
+    /// the pointer in close is found there.
+    #[test]
+    fn the_maps_other_camps_give_way_far_out() {
+        assert_eq!(CAMPS.iter().filter(|c| c.guide).count(), 49, "the guide's camps, as before");
+        assert!(CAMPS.iter().filter(|c| !c.guide).count() >= 100);
+        for (i, a) in CAMPS.iter().enumerate() {
+            assert!(!CAMPS[..i].iter().any(|b| b.world == a.world && b.name == a.name && !(a.guide && b.guide)), "{} twice in world {}", a.name, a.world);
+        }
+        assert!(!CAMPS.iter().any(|c| !c.guide && c.name == "Undead"), "a generic name takes its zone");
+        assert!(CAMPS.iter().any(|c| !c.guide && c.name.starts_with("Undead (")));
+        let other = CAMPS.iter().position(|c| !c.guide && c.world == 0).unwrap();
+        let guide = CAMPS.iter().position(|c| c.guide && c.world == 0).unwrap();
+        for (scale, far) in [(1.0, false), (OTHERS_FROM, false), (OTHERS_FROM * 1.1, true), (COMPACT_FROM, true), (30.0, true)] {
+            assert_eq!(Marker::Camp(other).shown_at(scale), !far, "an other camp at {scale}");
+            assert!(Marker::Camp(guide).shown_at(scale), "the control: the guide's at {scale}");
+            assert!(Marker::Coach(0).shown_at(scale));
+        }
+        let card = Marker::Camp(other).card();
+        assert!(card.iter().any(|l| l.0.starts_with("Camp, level")) && !card.iter().any(|l| l.0.starts_with("XP camp")), "{card:?}");
+        assert!(Marker::Camp(guide).card()[1..].iter().any(|l| l.0.starts_with("XP camp, level")));
+        // the pointer: on the other camp in close it is found; far out not
+        let size = (1280, 720);
+        let at = CAMPS[other].at;
+        let near = View { center: at, scale: 1.0 };
+        let mid = [size.0 as f32 / 2.0, size.1 as f32 / 2.0];
+        let found = under(0, near, size, mid, false);
+        assert!(matches!(found, Some(Marker::Camp(i)) if CAMPS[i].at == at), "in close: {found:?}");
+        let far = View { scale: 30.0, ..near };
+        assert!(!matches!(under(0, far, size, mid, false), Some(Marker::Camp(i)) if !CAMPS[i].guide), "far out an other camp is not found");
     }
 
     /// A long line is broken at its spaces into lines that fit; one that fits
