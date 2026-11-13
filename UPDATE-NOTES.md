@@ -7,6 +7,17 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Froglok helms, Mermaid robes and armour
+- **A Froglok's helm now fits its head**: wider and deeper, it sits down over the whole head above the mouth,
+  instead of perching on top with the sides and back of the head poking out through it. Every helm, on frogloks
+  robed and spiked, and on ghouls.
+- **Mermaid robes**: the sleeves now follow the arm down to the wrist with a normal cuff, instead of stopping at
+  the elbow in a huge bell.
+- **Mermaid chest armour and robes no longer cover the chin**: the collar now sits at the neck, where before it
+  stood up over the mouth, and a Merman's broad chest no longer shows through his chest armour. Mermen, mermaids,
+  sirens and the sea king, every armour set.
+- Every other race's helms, armour and robes are exactly as before.
+
 ## 2026-11-13 · Target cycling skips familiars; no false crash reports when leaving the browser page
 - **Tab, R1 and L1 no longer pick familiars.** Cycling targets (Tab or R1 for the next creature, ` or L1 for
   you, your group and your pet) now passes over **Healbot** and other familiars an item calls, a wizard's own
