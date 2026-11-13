@@ -467,9 +467,10 @@ impl Hud {
             ui.ui.anchor = Anchor::Right;
             ui.ui.vertical = Vertical::Top;
             let m = crate::hudlayout::begin(ui.ui, Piece::Minimap);
-            self.note(ui, crate::map::mini::FRAME, Pick::Minimap);
+            // all it draws (the scroll's rollers past its frame too)
+            let f = crate::map::mini::drawn(crate::settings::minimap_scroll());
+            self.note(ui, f, Pick::Minimap);
             // drawn on the map's own layer: noted where it lies
-            let f = crate::map::mini::FRAME;
             let (a, b) = (ui.ui.placed([f[0] as f32, f[1] as f32]), ui.ui.placed([f[2] as f32, f[3] as f32]));
             crate::hudlayout::note(Piece::Minimap, [a[0], a[1], b[0], b[1]], ui.ui.shift);
             crate::hudlayout::end(ui.ui, m);

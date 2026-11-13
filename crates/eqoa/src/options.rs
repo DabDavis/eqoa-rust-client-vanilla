@@ -156,7 +156,11 @@
 //!   too), Map Pointer (Facing: the player's dart on the minimap and the
 //!   map turns with the way the character faces, as it always did; Camera:
 //!   with the way the camera looks, as the compass turns, so swinging the
-//!   camera standing still turns it; petition 1848, Facing by default), Map
+//!   camera standing still turns it; petition 1848, Facing by default),
+//!   Minimap Scroll Frame (on HUD Layout's page, Map's being full; On: the minimap framed as the quick menu's
+//!   scroll, its parchment round the map and a roller across its top and
+//!   its bottom, the owner's of 2026-11-13; Off: the window's frame it had
+//!   before, `map::mini::draw_scroll`), Map
 //!   Markers (On: the map's XP camps and coaches, `map::markers`;
 //!   the map's own X or ○ turns it too), Quest Helper (On: the quests' marks
 //!   on the map and the minimap and their tracker, from a server that sends
@@ -763,7 +767,8 @@ impl WndOptions {
     /// Smooth; Update Notices (29), Overlapping Names (34, Hide and Show),
     /// Mipmaps (35), Loading Screens (38, Longer and Instant), Texture Packs
     /// (50), Dump Textures (51), the Map (41), Minimap (42), Map Markers (43),
-    /// the Quest Helper (44) and Quest Tracker (45) turn over, Map Pointer (87)
+    /// the Quest Helper (44), Quest Tracker (45) and Minimap Scroll Frame (91)
+    /// turn over, Map Pointer (87)
     /// between Facing and Camera; Texture Folder (55) shows the
     /// folder (`texpack::open_folder`: sound 8, or 9 with none to show);
     /// Output Device (32) goes round the system default and the devices
@@ -881,6 +886,9 @@ impl WndOptions {
                     // with the walk or the camera from the next frame
                     // (`map::pointer_heading`)
                     87 => c.map_pointer = c.map_pointer.other(),
+                    // Minimap Scroll Frame: the scroll or the window's frame
+                    // round the minimap from the next frame (`map::mini`)
+                    91 => c.minimap_scroll = !c.minimap_scroll,
                     // Map Markers: the map's camps and coaches from its next
                     // frame (`map::markers`)
                     43 => c.map_markers = !c.map_markers,
@@ -1593,7 +1601,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 74] = [
+const EXTENDED_ITEMS: [(i32, &str); 75] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1668,6 +1676,7 @@ const EXTENDED_ITEMS: [(i32, &str); 74] = [
     (88, "Raid Mercenaries"),
     (89, "Chat Always Shown"),
     (90, "Stacked Spell Bars"),
+    (91, "Minimap Scroll Frame"),
 ];
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
@@ -1753,7 +1762,8 @@ const ALL_CATEGORIES: [Category; 20] = [
     // the group's and the raid's windows (2026-11-12, Power Bars: HUD's page
     // was full, so Raid List came with it)
     Category { name: "Group & Raid", items: &[49, 86, 88], note: Note::None, group: Group::Ui },
-    Category { name: "HUD Layout", items: &[76, 77], note: Note::Hud, group: Group::Ui },
+    // Minimap Scroll Frame (2026-11-13) here: Map's page was full
+    Category { name: "HUD Layout", items: &[76, 77, 91], note: Note::Hud, group: Group::Ui },
     Category { name: "Name Plates", items: &[27, 34, 85], note: Note::None, group: Group::Ui },
     Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
@@ -1909,6 +1919,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         41 => on_off(c.map),
         42 => on_off(c.minimap),
         87 => wide(c.map_pointer.name()),
+        91 => on_off(c.minimap_scroll),
         43 => on_off(c.map_markers),
         44 => on_off(c.quest_helper),
         45 => on_off(c.quest_tracker),
@@ -2923,6 +2934,16 @@ mod tests {
             assert_eq!(crate::hudlayout::layout(), Default::default(), "every piece back ({k})");
             assert_eq!((testing::kept("hud.opt"), cues.last()), (Some(Vec::new()), Some(&8)), "kept so, its sound ({k})");
         }
+        // Minimap Scroll Frame: On by default, Off and back, moving no other
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, 91, "Minimap Scroll Frame, after Reset HUD");
+        assert!(settings::minimap_scroll(), "on by default");
+        assert_eq!(value_text(&vui, 91), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::minimap_scroll(), cues.last()), (false, Some(&11)), "off");
+        assert!(settings::minimap() && !crate::hudlayout::unlocked(), "moving no other row");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::minimap_scroll(), "and back: two values");
         // Triangle: UI's categories, the groups, the menu, then closed with
         // every setting put back
         press(&mut w, &mut o, key::TRIANGLE, &mut cues);
@@ -3141,7 +3162,7 @@ mod tests {
             vec![
                 ("HUD", vec!["Ability Bars", "Stacked Spell Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
                 ("Group & Raid", vec!["Raid List", "Power Bars", "Raid Mercenaries"]),
-                ("HUD Layout", vec!["Move HUD", "Reset HUD"]),
+                ("HUD Layout", vec!["Move HUD", "Reset HUD", "Minimap Scroll Frame"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers"]),
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
                 ("Number Colors", n[..6].to_vec()),
