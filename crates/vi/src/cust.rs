@@ -148,6 +148,12 @@ pub struct Look {
     /// tints'.
     pub armor_color: Option<[[u8; 4]; 6]>,
     pub robe_color: Option<[u8; 4]>,
+    /// The live game's colours of the three held items (main hand, off
+    /// hand, shield: its channel's `+0x296`, its record's after the attack
+    /// types), which nothing in SOE's build draws and `ApplyLook` leaves
+    /// alone; the client recolours an item's glow by it (`eqoa::aura`).
+    /// None: the disc's look, which carries none.
+    pub item_color: Option<[[u8; 4]; 3]>,
 }
 
 impl Look {

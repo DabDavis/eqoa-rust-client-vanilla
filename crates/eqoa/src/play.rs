@@ -1245,10 +1245,15 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
     let textures = render::library_textures(lib);
     let mut attached = Vec::new();
     let mut weapons = [None; 3];
+    // each hand's item's own colour on its glow (`aura`), none plain
+    let colors = crate::aura::hands(Some(&look_of(c)));
     for (i, held) in held.into_iter().enumerate() {
         let Some((id, node)) = held else { continue };
         weapons[i] = crate::trails::weapon_points(lib, id).map(|w| (node, w));
-        if let Some(m) = lib.lookup(id as i32).and_then(|r| lib.build_model(r)) {
+        if let Some(mut m) = lib.lookup(id as i32).and_then(|r| lib.build_model(r)) {
+            if let Some(color) = colors[i] {
+                crate::aura::recolor(&mut m, color);
+            }
             attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
         }
     }
@@ -1694,6 +1699,8 @@ fn look_of(c: &net::entity::Creature) -> vi::cust::Look {
         // the live game's channel's colours, when the server sends its look
         armor_color: c.colors.map(|l| l.armor),
         robe_color: c.colors.map(|l| l.robe),
+        // the held items' (`aura`)
+        item_color: c.colors.map(|l| l.items),
     }
 }
 
@@ -2603,6 +2610,18 @@ mod held {
         dyed.armor_tint[0] = 3;
         assert_eq!(redo(was, state(&human, &dyed, 0xC698D870)), Redo::Build);
         assert_eq!(redo(was, state(&human, &swapped, 0x9BBCEEB9)), Redo::Build);
+        // a hand's own colour (the live look's, `aura`) come or changed: made
+        // anew, the item drawn in it
+        let colors = |items: [[u8; 4]; 3]| net::entity::LiveColors { items, ..Default::default() };
+        let mut plain = c.clone();
+        plain.colors = Some(colors([[255; 4]; 3]));
+        let mut twisted = plain.clone();
+        twisted.colors = Some(colors([[0xB0, 0x10, 0x2A, 0xFF], [255; 4], [255; 4]]));
+        let plain_state = state(&human, &plain, 0xC698D870);
+        assert_eq!(redo(plain_state, plain_state), Redo::Keep);
+        assert_eq!(redo(plain_state, state(&human, &twisted, 0xC698D870)), Redo::Build);
+        assert_eq!(crate::aura::hands(plain_state.2.as_ref()), [None; 3], "white is plain");
+        assert_eq!(crate::aura::hands(state(&human, &twisted, 0xC698D870).2.as_ref())[0], Some([0xB0, 0x10, 0x2A]));
 
         let mut form = CSprite::<Ee>::new(vi::hsprite::HSprite::new(0), 2, 9, 0, F::ONE, false);
         form.item_nodes[..2].copy_from_slice(&[6, 10]);
@@ -10000,8 +10019,9 @@ impl Play {
                 let Some(n) = cs.h.nodes.get(node as usize) else { continue };
                 let drawn = shown.unwrap_or_else(|| p.attached.iter().any(|a| a.0 == node && a.1.visible));
                 let at = Matrix44::mul(&n.world, centre);
+                let tint = p.look.as_ref().and_then(|l| crate::aura::hand(l, hand));
                 for (k, e) in lib.with_view(p.era, || crate::particles::item_emitters(lib, item)).into_iter().enumerate() {
-                    out.push(InHand { key: (holder, hand, item, k), world: Matrix44::mul(&e.member, &at), def: e.def, how: How::Sprite(e.flags), drawn });
+                    out.push(InHand { key: (holder, hand, item, k), world: Matrix44::mul(&e.member, &at), def: e.def, how: How::Sprite(e.flags), drawn, tint });
                 }
             }
             let player = holder == crate::spells::SELF;
@@ -10011,7 +10031,7 @@ impl Play {
                     continue;
                 }
                 let how = How::Part { use_location: e.use_location, once: e.once };
-                out.push(InHand { key: (holder, OWN, p.model, k), world: Matrix44::mul(&n.world, centre), def: e.def, how, drawn: shown.unwrap_or(p.shown) });
+                out.push(InHand { key: (holder, OWN, p.model, k), world: Matrix44::mul(&n.world, centre), def: e.def, how, drawn: shown.unwrap_or(p.shown), tint: None });
             }
         };
         for (slot, p) in self.puppets.iter().enumerate() {

@@ -52,6 +52,7 @@ mod cape;
 mod chat;
 mod dialog;
 mod attackclock;
+mod aura;
 mod auction;
 mod admin;
 mod buffpc;
@@ -581,7 +582,7 @@ fn run(args: &[String]) -> Result<()> {
         // in a look, standing, from four sides (`dressview`)
         #[cfg(not(target_arch = "wasm32"))]
         Some("dress") => {
-            let usage = "usage: eqoa dress <body DictID> <out.png> [set=N armor=a,b,c,d,e tint=T robe=R rtint=T dye=RRGGBB hair=c,l,s face=F helm=N helmfit=0 main=ID off=ID shield=ID race=1 action=N at=ms size=WxH cape=N capecolor=RRGGBB era=2002]";
+            let usage = "usage: eqoa dress <body DictID> <out.png> [set=N armor=a,b,c,d,e tint=T robe=R rtint=T dye=RRGGBB hair=c,l,s face=F helm=N helmfit=0 main=ID off=ID shield=ID race=1 action=N at=ms size=WxH cape=N capecolor=RRGGBB maincolor=RRGGBB offcolor=RRGGBB shieldcolor=RRGGBB night=1 era=2002]";
             let model = args.get(1).and_then(|m| fxview::parse_visual(m)).ok_or(usage)? as i32;
             let out = args.get(2).filter(|o| o.ends_with(".png")).ok_or(usage)?;
             let words = dressview::parse(&args[3..])?;

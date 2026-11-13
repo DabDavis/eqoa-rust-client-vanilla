@@ -213,6 +213,9 @@ current.
 - SOE's live game's look (README "Dyes", `net::session::OP_LIVE_LOOK`): taken whenever a server offers it; the
   disc's look stays every other server's (Sandstorm never offers it), so a change to the disc's readers is tested on
   both. `EQOA_LIVE_LOOK=0` keeps the disc's in a test (a PS2's view of the same server).
+  Its held items' colours (`Look::item_color`) recolour an item's glow (`aura.rs`: emissive, additive layers and
+  particles to the colour's hue at their own brightness, other layers tinted 25%); white or none draws the disc's
+  item bit for bit. `eqoa dress ... main=ID maincolor=RRGGBB night=1` shows it.
 - Game-logic floats go through `ee::*`, never host `f32` operators; every compare too.
 - Port from the decomp (`../decomp/src`), not from the Go client: the Go client's
   differences from the original are listed in `../claude-notes/go-client-vs-decomp-audit-20261015.md`.

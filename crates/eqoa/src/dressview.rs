@@ -25,6 +25,10 @@
 //! (`raceopts`), out of the list go-eqoa-server sends (`$EQOA_RACE_OPTIONS`, a
 //! file of 0x7E23's body): the body row's step is the body drawn, the others
 //! its parts' colours and textures; `sex=1` a female's steps.
+//! `maincolor=RRGGBB` (and `offcolor=`, `shieldcolor=`) draws that hand's
+//! item in its own colour, as the live look's held-item colours draw it
+//! (`aura`: its glow in the colour's hue, the rest lightly tinted);
+//! `night=1` draws it under a night's dim light, where a glow shows.
 //! `helm=N` puts on armour set N's helm (`SetHelm`, on the node and seated
 //! as a player's character wears it: `slotless::helm_on`), in the helm's
 //! tint (`tint=T`); `helmfit=0` seats it as the PS2 does, without this
@@ -85,6 +89,8 @@ pub struct Words {
     /// A helm seat tried in place of the body's (`helmseat=`): the node (by
     /// `slotless::Anchor`, or a node's number) and the fit.
     pub seat: Option<(SeatNode, crate::slotless::HelmFit)>,
+    /// Under a night's dim light (`night=1`), not the daylight.
+    pub night: bool,
 }
 
 /// The node a tried helm seat hangs on.
@@ -104,6 +110,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
     let (mut opts, mut sex) = (None, 0);
     let (mut helm_fit, mut y2002, mut head) = (true, false, false);
     let mut seat = None;
+    let mut night = false;
     let nums = |v: &str| v.split(',').map(|n| n.trim().parse::<u8>().map_err(|e| format!("{v}: {e}"))).collect::<Result<Vec<u8>, String>>();
     let hex = |w: &str, v: &str| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|e| format!("{w}: {e}"));
     for w in words {
@@ -112,6 +119,12 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             "main" => items[0] = hex(w, v)?,
             "off" => items[1] = hex(w, v)?,
             "shield" => items[2] = hex(w, v)?,
+            "maincolor" | "offcolor" | "shieldcolor" => {
+                let c = u32::from_str_radix(v.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))?;
+                let slot = ["maincolor", "offcolor", "shieldcolor"].iter().position(|n| *n == k).unwrap_or(0);
+                look.item_color.get_or_insert([[255; 4]; 3])[slot] = [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255];
+            }
+            "night" => night = v != "0",
             "race" => race = v != "0",
             "cape" => cape.style = v.parse().map_err(|e| format!("{w}: {e}"))?,
             "capecolor" => cape.color = (u32::from_str_radix(v.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))? << 8) | 0xFF,
@@ -183,7 +196,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             _ => return Err(format!("{w}: not a word of a look")),
         }
     }
-    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex, helm_fit, y2002, head, seat })
+    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex, helm_fit, y2002, head, seat, night })
 }
 
 /// The body drawn in the look, holding what `words` say, from four sides
@@ -453,7 +466,18 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     // each item (and the helm) on its node's animated place under the centre
     // transform, as the game draws an attached sprite
     let mut items = Vec::new();
-    let hung = held.iter().map(|&(node, id)| (node, id, lib.lookup(id as i32).and_then(|r| lib.build_model(r)))).chain(helm.map(|(node, m)| (node, 0, Some(m))));
+    let hung = held
+        .iter()
+        .map(|&(node, id)| {
+            let mut m = lib.lookup(id as i32).and_then(|r| lib.build_model(r));
+            // its own colour on its glow (`aura`), as the world draws it
+            let slot = words.items.iter().position(|&i| i == id).unwrap_or(0);
+            if let (Some(m), Some(c)) = (m.as_mut(), crate::aura::hand(look, slot)) {
+                crate::aura::recolor(m, c);
+            }
+            (node, id, m)
+        })
+        .chain(helm.map(|(node, m)| (node, 0, Some(m))));
     for (node, id, m) in hung {
         let (Some(n), Some(m)) = (cs.h.nodes.get(node as usize), m) else {
             eprintln!("{id:#010x}: no such item");
@@ -495,6 +519,10 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         let p = glam::camera::rh::proj::directx::perspective(fov, w as f32 / h as f32, reach * 0.05, reach * 4.0);
         let mut view = View::daylight(p * v);
         view.eye = eye;
+        if words.night {
+            // a night's: the sun and the ambient dim, the sky dark
+            (view.sun, view.ambient, view.clear) = (Vec3::splat(0.08), Vec3::splat(0.12), Vec3::new(0.02, 0.02, 0.04));
+        }
         // the sun from over the camera's shoulder, so each side is seen lit
         view.sun_dir = (Vec3::new(-dir.x, 0.0, -dir.z) * 0.6 + Vec3::new(dir.z, 0.0, -dir.x) * 0.25 + Vec3::new(0.0, -0.75, 0.0)).normalize();
         let at_eye = Vect3::new(F::new(eye.x), F::new(eye.y), F::new(eye.z));
@@ -558,6 +586,11 @@ mod tests {
         assert!(parse(&words("helmseat=chin,1,0,0,0")).is_err());
         assert!(parse(&words("sett=3")).is_err());
         assert!(parse(&words("main=sword")).is_err());
+        let red = parse(&words("main=88ec092d maincolor=b0102a night=1")).unwrap();
+        assert_eq!((red.look.item_color, red.night), (Some([[0xB0, 0x10, 0x2A, 255], [255; 4], [255; 4]]), true));
+        assert_eq!(parse(&words("shieldcolor=0000ff")).unwrap().look.item_color, Some([[255; 4], [255; 4], [0, 0, 255, 255]]));
+        assert_eq!((bare.look.item_color, bare.night), (None, false), "the disc's look and the daylight unless asked");
+        assert!(parse(&words("maincolor=crimson")).is_err());
         assert!(parse(&words("era=1999")).is_err());
     }
 }

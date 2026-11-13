@@ -207,7 +207,11 @@ impl Figure {
                 let Some(node) = cs.item_node(i).filter(|_| id != 0) else { continue };
                 // `AttachItem`: the item, or `!Item` when it is not there
                 let m = lib.lookup(id as i32).or_else(|| lib.lookup(vi::hash::hash_resource_id("!Item") as i32)).and_then(|r| lib.build_model(r));
-                if let Some(m) = m {
+                if let Some(mut m) = m {
+                    // its own colour on its glow (`aura`), as the world draws it
+                    if let Some(color) = crate::aura::hand(&look, i) {
+                        crate::aura::recolor(&mut m, color);
+                    }
                     attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
                 }
             }
@@ -322,7 +326,7 @@ impl Figure {
                 let Some(n) = cs.item_node(slot).filter(|_| item != 0).and_then(|node| cs.h.nodes.get(node as usize)) else { continue };
                 let at = Matrix44::mul(&n.world, &self.centre);
                 for (k, e) in crate::particles::item_emitters(lib, item).into_iter().enumerate() {
-                    hands.push(InHand { key: (0, slot, item, k), world: Matrix44::mul(&e.member, &at), def: e.def, how: How::Sprite(e.flags), drawn: true });
+                    hands.push(InHand { key: (0, slot, item, k), world: Matrix44::mul(&e.member, &at), def: e.def, how: How::Sprite(e.flags), drawn: true, tint: crate::aura::hand(&self.look, slot) });
                 }
             }
         });
@@ -382,7 +386,9 @@ mod tests {
     /// The items in a figure's hands carry their particles at character
     /// select as in the world (`particles_frame`): the Sword of Virtue's
     /// glow, round the hand that holds it. The control: the same figure with
-    /// nothing in its hands has none. Needs `run/eqoa.iso` (the pregame's
+    /// nothing in its hands has none. In the live look's crimson for its hand
+    /// (`aura`: the Heirloom Sword of Twisted Virtue) the glow is red, where
+    /// the disc's and a plain (white) one's are the same pale white. Needs `run/eqoa.iso` (the pregame's
     /// files, ITEM.CSF among them) and a graphics adapter.
     #[test]
     fn a_figures_epic_weapon_glows_at_character_select() {
@@ -409,7 +415,7 @@ mod tests {
         let human = vi::hash::hash_resource_id("HumanMale");
         let look = vi::cust::Look { hair: [1, 2, 3], face: 1, robe: -1, ..Default::default() };
         let eye = Vect3::of(0.0, 1.0, 4.0);
-        let glow = |items: [u32; 3], g: &mut Gpu| {
+        let glow_in = |items: [u32; 3], look: vi::cust::Look, g: &mut Gpu| {
             let mut fig = Figure::new(&lib, g, human, look, items, [0.0; 3], [0.0; 3], 0).unwrap();
             let mut hand = [0.0; 3];
             for t in (33..1500).step_by(33) {
@@ -421,13 +427,26 @@ mod tests {
                 hand = [w.m[3].x.0, w.m[3].y.0, w.m[3].z.0];
             }
             let quads: Vec<[f32; 3]> = fig.fx.iter().flat_map(|b| b.quads.iter().map(|q| q.center)).collect();
-            (quads, hand)
+            let colors: Vec<[f32; 4]> = fig.fx.iter().flat_map(|b| b.quads.iter().map(|q| q.color)).collect();
+            (quads, hand, colors)
+        };
+        let glow = |items: [u32; 3], g: &mut Gpu| {
+            let (q, h, _) = glow_in(items, look, g);
+            (q, h)
         };
         let (quads, hand) = glow([0x88EC_092D, 0, 0], &mut g);
         assert!(!quads.is_empty(), "the sword's glow");
         let near = |c: &[f32; 3]| (0..3).map(|k| (c[k] - hand[k]).powi(2)).sum::<f32>().sqrt() < 3.0;
         assert!(quads.iter().all(near), "round the hand at {hand:?}: {:?}", quads.iter().find(|c| !near(c)));
         assert!(glow([0; 3], &mut g).0.is_empty(), "the control: empty hands, no particles");
+        let sword = [0x88EC_092D, 0, 0];
+        let colored = |c: [u8; 4]| vi::cust::Look { item_color: Some([c, [255; 4], [255; 4]]), ..look };
+        let (_, _, disc) = glow_in(sword, look, &mut g);
+        let (_, _, plain) = glow_in(sword, colored([255; 4]), &mut g);
+        let (_, _, red) = glow_in(sword, colored([0xB0, 0x10, 0x2A, 0xFF]), &mut g);
+        assert_eq!(plain, disc, "white is plain: the disc's glow exactly");
+        assert!(!disc.is_empty() && disc.iter().all(|c| c[0] <= c[1].max(c[2]) + 0.01), "the disc's glow is a pale white, not red: {:?}", disc.first());
+        assert!(!red.is_empty() && red.iter().all(|c| c[0] > 3.0 * c[1].max(c[2]) || c[0] == 0.0), "crimson: {:?}", red.iter().find(|c| c[0] <= 3.0 * c[1].max(c[2])));
     }
 
     /// A figure in a body one of the server's races wears holds its items as

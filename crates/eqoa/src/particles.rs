@@ -152,6 +152,12 @@ impl Particles {
 /// `VIParticleSystem::Render`: each emitter's billboards with its
 /// definition's material.
 pub fn render(sys: &mut System<Ee>, time: i64) -> Vec<Batch> {
+    render_tinted(sys, time, |_| None)
+}
+
+/// `render`, each emitter's billboards in the hue `tint` gives it
+/// (`aura::recolor_quads`; none: as they are).
+fn render_tinted(sys: &mut System<Ee>, time: i64, tint: impl Fn(usize) -> Option<[u8; 3]>) -> Vec<Batch> {
     let mut out = Vec::new();
     for (id, bbs) in sys.render(time) {
         let def = sys.emitter(id).def;
@@ -171,6 +177,9 @@ pub fn render(sys: &mut System<Ee>, time: i64) -> Vec<Batch> {
                 })
                 .collect(),
         });
+        if let (Some(c), Some(b)) = (tint(id), out.last_mut()) {
+            crate::aura::recolor_quads(b, c);
+        }
     }
     out
 }
@@ -313,6 +322,9 @@ pub struct InHand {
     pub def: Ref,
     pub how: How,
     pub drawn: bool,
+    /// A held item's own colour (`aura::hand`): its particles in its hue;
+    /// none as the disc's.
+    pub tint: Option<[u8; 3]>,
 }
 
 /// The particles creatures carry, on a particle system of their own: the
@@ -346,6 +358,7 @@ impl Held {
                 self.sys.destroy_emitter(id);
             }
         }
+        let mut tints = HashMap::new();
         for h in now {
             let id = match self.emitters.get(&h.key) {
                 Some(&id) => id,
@@ -365,6 +378,9 @@ impl Held {
                     id
                 }
             };
+            if let Some(t) = h.tint {
+                tints.insert(id, t);
+            }
             if h.drawn {
                 match h.how {
                     How::Sprite(flags) => raster_sprite(&mut self.sys, id, flags, &h.world, eye, &mut self.rand),
@@ -372,7 +388,7 @@ impl Held {
                 }
             }
         }
-        render(&mut self.sys, time)
+        render_tinted(&mut self.sys, time, |id| tints.get(&id).copied())
     }
 
     /// How many emitters are in hands, and their particles.
@@ -492,7 +508,7 @@ mod tests {
         let Some(lib) = items() else { return };
         let e = item_emitters(&lib, 0x8A82B605)[0];
         let at = |x: f32, y: f32, z: f32| Matrix44::transform(&Vect3::of(0.0, 0.0, 0.0), F::ONE, &Vect3::of(x, y, z));
-        let hand = |world, drawn| [InHand { key: (3, 0, 0x8A82B605, 0), world, def: e.def, how: How::Sprite(e.flags), drawn }];
+        let hand = |world, drawn| [InHand { key: (3, 0, 0x8A82B605, 0), world, def: e.def, how: How::Sprite(e.flags), drawn, tint: None }];
         let mut held = Held::new(0);
         let near = [100.0, 52.0, 195.0];
         let pts = run(&mut held, &lib, &hand(at(100.0, 50.0, 200.0), true), near, 0, 1000);
@@ -561,7 +577,7 @@ mod tests {
         let e = part_emitters(&lib, 0x6E5E0E2A)[0];
         let at = |x: f32, y: f32, z: f32| Matrix44::transform(&Vect3::of(0.0, 0.0, 0.0), F::ONE, &Vect3::of(x, y, z));
         let how = How::Part { use_location: e.use_location, once: e.once };
-        let own = |world, drawn, how| [InHand { key: (5, OWN, 0x6E5E0E2A, 0), world, def: e.def, how, drawn }];
+        let own = |world, drawn, how| [InHand { key: (5, OWN, 0x6E5E0E2A, 0), world, def: e.def, how, drawn, tint: None }];
         let near = [100.0, 52.0, 195.0];
         let mut held = Held::new(0);
         let pts = run(&mut held, &lib, &own(at(100.0, 50.0, 200.0), true, how), near, 0, 1000);

@@ -128,6 +128,8 @@ pub fn look_of(c: &CharRecord, helm: bool) -> vi::cust::Look {
         // and SetRobe take them), when the server sent its look
         armor_color: c.colors.map(|l| l.armor),
         robe_color: c.colors.map(|l| l.robe),
+        // the held items' (`aura`)
+        item_color: c.colors.map(|l| l.items),
     }
 }
 

@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Weapons glow in their own colour
+- A weapon or shield with a colour of its own now **glows in that colour**: its glow, sheen and sparkles take the
+  colour's hue at the glow's usual brightness, and the rest of it is tinted lightly. The first is the **Heirloom
+  Sword of Twisted Virtue**: the Sword of Virtue with a crimson, evil aura in place of its white-cyan one.
+- **Weapon and shield dyes from the Armor Dyers now show** the same way (before, only armour dyes were drawn).
+- Plain weapons look exactly as before. Shown in the world and at character select. Needs the Heirloom Test
+  Server's update; on any other server weapons are drawn as before.
+
 ## 2026-11-13 · Mercenaries hidden from the raid window (a toggle shows them)
 - The raid window now lists **players only**; mercenaries no longer take up its rows. You can still target a mercenary
   in the world, and L1's group cycle still reaches it.
