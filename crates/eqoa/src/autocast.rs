@@ -220,6 +220,14 @@ pub fn summons_pet(a: &Ability) -> bool {
     (summoning && of_a_pet) || druids
 }
 
+/// Whether an ability's description names a change it makes to a body (a
+/// stat, a proc, a shield): a buff's words, never a summoning's. A slot whose
+/// cast was followed by another pet is made a pet slot only without them
+/// (petition 1997: Ebonweave, a necromancer's AC buff, was).
+pub fn names_a_change(a: &Ability) -> bool {
+    has(&a.desc.to_lowercase(), &["increase", "decrease", "proc", "regenerat", "absorb", "shield", "per tic", "over time"])
+}
+
 /// A buff's length as its description gives it ("Pet, Increase STR & DEX by
 /// 10, 5min", "for thirty minutes", "1 hour"), in ms: the first number with a
 /// unit of time after it.
@@ -512,7 +520,7 @@ impl AutoCast {
             .filter_map(|(id, _)| abilities.get(id))
             .filter(|a| {
                 summons_pet(a)
-                    || (a.scope != 3 && !Self::shows(a, now) && now.pet.is_some() && self.tries.get(&a.id).is_some_and(|t| t.watch.is_some() && now.pet != t.pet))
+                    || (a.scope != 3 && !names_a_change(a) && !Self::shows(a, now) && now.pet.is_some() && self.tries.get(&a.id).is_some_and(|t| t.watch.is_some() && now.pet != t.pet))
             })
             .map(|a| (a.id, a.name.clone()))
             .collect();
@@ -521,6 +529,23 @@ impl AutoCast {
             self.tries.remove(&id);
             self.keep();
             self.said.push(format!("Auto-cast: {name} summons a pet, so it is cast {}.", Kind::Pet.when()));
+        }
+        // a slot made a pet slot by the pet its cast seemed to bring, though its
+        // words name a change of the caster's own (petition 1997: Ebonweave,
+        // "Self, Increase AC by 320", kept as a pet): a buff again
+        let buffs: Vec<(i64, String)> = self
+            .on
+            .iter()
+            .filter(|&(_, &k)| k == Kind::Pet)
+            .filter_map(|(id, _)| abilities.get(id))
+            .filter(|a| a.scope != 3 && !summons_pet(a) && names_a_change(a) && guess(a) == Some(Kind::Buff))
+            .map(|a| (a.id, a.name.clone()))
+            .collect();
+        for (id, name) in buffs {
+            self.on.insert(id, Kind::Buff);
+            self.tries.remove(&id);
+            self.keep();
+            self.said.push(format!("Auto-cast: {name} is a buff, so it is cast {}.", Kind::Buff.when()));
         }
         if now.pet != self.pet {
             self.pet = now.pet;
@@ -1061,6 +1086,26 @@ mod tests {
         now.pet = Some(0x401);
         c.choose(&list, &now);
         assert_eq!(c.on[&8], Kind::Pet, "a pet came of it");
+    }
+
+    /// Petition 1997: a self buff whose effect is not seen by its name (an AC
+    /// line another holds), cast as the necromancer's pet changes, stays a
+    /// buff; one already kept as a pet slot is a buff again at the next look.
+    #[test]
+    fn a_self_buff_is_never_made_a_pet_slot() {
+        let list = book(&[ab(7, 0, "Ebonweave", "Self, Increase AC by 320", 0)]);
+        let mut c = auto(&[(7, Kind::Buff)]);
+        let mut now = calm(10_000);
+        now.has_pet = true;
+        now.pet = Some(0x400);
+        assert!(c.choose(&list, &now).is_some());
+        now.ms += 3000;
+        now.pet = Some(0x401);
+        c.choose(&list, &now);
+        assert_eq!(c.on[&7], Kind::Buff, "another pet came, yet its words name a buff");
+        let mut c = auto(&[(7, Kind::Pet)]);
+        c.choose(&list, &now);
+        assert_eq!(c.on[&7], Kind::Buff, "a pet slot made of it before is a buff again");
     }
 
     #[test]

@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Auto-cast keeps self buffs as buffs
+- **Auto-cast**: a buff on yourself (such as the necromancer's Ebonweave) is no longer switched to a pet slot
+  when your pet changes around the time you cast it. A slot that was already switched shows as a buff again.
+
 ## 2026-11-13 · Key combinations, chat tabs, spell bar opacity, pets you walk through, shared shortcuts
 - **Key combinations on the Controls page**: holding Shift, Ctrl or Alt while you pick a key now binds the
   combination (Shift+1, Ctrl+F, Alt+2...) instead of the character it types ("!"). The binding fires when you press
