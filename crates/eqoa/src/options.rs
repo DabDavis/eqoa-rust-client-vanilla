@@ -81,7 +81,10 @@
 //!   Exact: at eight bits a channel, where many faint puffs pile up into a
 //!   darker mass; here because World's page is full);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
-//!   the spell book's slots, `hudmenu`), Update Notices (one setting for
+//!   the spell book's slots, `hudmenu`), Stacked Spell Bars (2026-11-13,
+//!   Jibwiz's ticket 1913, Off by default: On, on a computer, the first two
+//!   bars as two rows of five above the chat box at 95% with no name bar,
+//!   each slot a key on the Controls page; `hudmenu::Stacked`), Update Notices (one setting for
 //!   every window: off, the game never asks to restart into a newer build,
 //!   which starts the next time the game does; `update::asks`, and a page's
 //!   Reload notice, `web/main.js`), Text (Sharp or Smooth: the game's font
@@ -963,6 +966,9 @@ impl WndOptions {
                     // Chat Always Shown (ticket 1914): the box from the next
                     // frame (`chat::WndChat::always`)
                     89 => c.chat_always = !c.chat_always,
+                    // Stacked Spell Bars (ticket 1913): from the next frame
+                    // (`hudmenu::Stacked`)
+                    90 => c.stacked_bars = !c.stacked_bars,
                     // Auto-Cast and Auto Target (`autocast`): from the next
                     // game frame
                     78 => c.auto_cast = !c.auto_cast,
@@ -1587,7 +1593,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 73] = [
+const EXTENDED_ITEMS: [(i32, &str); 74] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1661,6 +1667,7 @@ const EXTENDED_ITEMS: [(i32, &str); 73] = [
     (87, "Map Pointer"),
     (88, "Raid Mercenaries"),
     (89, "Chat Always Shown"),
+    (90, "Stacked Spell Bars"),
 ];
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
@@ -1742,7 +1749,7 @@ const ALL_CATEGORIES: [Category; 20] = [
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
     Category { name: "Characters", items: &[12, 23, 24, 46], note: Note::Server, group: Group::Graphics },
     Category { name: "Textures", items: TEXTURES, note: Note::Textures, group: Group::Graphics },
-    Category { name: "HUD", items: &[22, 30, 40, 58, 83], note: Note::None, group: Group::Ui },
+    Category { name: "HUD", items: &[22, 90, 30, 40, 58, 83], note: Note::None, group: Group::Ui },
     // the group's and the raid's windows (2026-11-12, Power Bars: HUD's page
     // was full, so Raid List came with it)
     Category { name: "Group & Raid", items: &[49, 86, 88], note: Note::None, group: Group::Ui },
@@ -1933,6 +1940,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         77 => wide("Reset"),
         73 => on_off(c.item_links),
         89 => on_off(c.chat_always),
+        90 => on_off(c.stacked_bars),
         78 => on_off(c.auto_cast),
         79 => on_off(c.auto_target),
         52 => on_off(c.dynamic_lighting),
@@ -3131,7 +3139,7 @@ mod tests {
         assert_eq!(
             of(1),
             vec![
-                ("HUD", vec!["Ability Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
+                ("HUD", vec!["Ability Bars", "Stacked Spell Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
                 ("Group & Raid", vec!["Raid List", "Power Bars", "Raid Mercenaries"]),
                 ("HUD Layout", vec!["Move HUD", "Reset HUD"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers"]),

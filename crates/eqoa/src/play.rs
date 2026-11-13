@@ -5230,7 +5230,9 @@ impl Play {
             // a right click on a bar's ability: its auto turned (`autocast`);
             // anywhere else, the world's as ever
             if matches!(c, Click::Right(..)) {
-                return self.auto_point([f[0] - side - menus[0], f[1] + up - menus[1]]);
+                let chat = moved(crate::hudlayout::Piece::Chat);
+                let bars_at = if self.hud_menus.stacked { [f[0] - side - chat[0], f[1] - up - chat[1]] } else { [f[0] - side - menus[0], f[1] + up - menus[1]] };
+                return self.auto_point(bars_at);
             }
             // the compass opens the map, with the Map on (the touch screen's
             // way to it)
@@ -5238,7 +5240,10 @@ impl Play {
                 self.map.show();
                 return true;
             }
-            if let Some(k) = self.hud_menus.point([f[0] - side - menus[0], f[1] + up - menus[1]]) {
+            // the stacked bars (ticket 1913) are in the chat box's place
+            let chat = moved(crate::hudlayout::Piece::Chat);
+            let bars_at = if self.hud_menus.stacked { [f[0] - side - chat[0], f[1] - up - chat[1]] } else { [f[0] - side - menus[0], f[1] + up - menus[1]] };
+            if let Some(k) = self.hud_menus.point(bars_at) {
                 // the pad key it stands for in S2's record, let go at once
                 self.note_hud_key(k, true);
                 self.hud_key(k);
@@ -5246,7 +5251,6 @@ impl Play {
                 return true;
             }
             // the chat box: the chat line, as R3 opens it
-            let chat = moved(crate::hudlayout::Piece::Chat);
             if self.wnd_chat.as_ref().is_some_and(|w| w.contains([f[0] - side - chat[0], f[1] - up - chat[1]])) {
                 self.open_chat_line();
                 return true;
@@ -8282,13 +8286,44 @@ impl Play {
         let used = self.hud_menus.key(key, now, bars, self.mode == 0, &mut cues);
         self.cues.extend(cues);
         if let Some((msg, id)) = used {
-            match msg {
-                0x8060000 => self.send_0032(id),
-                0x2030000 => self.use_item(id as i32, 1),
-                crate::gear::MSG => self.use_gear_set(id),
-                _ => {}
-            }
+            self.use_hud_entry(msg, id);
         }
+    }
+
+    /// What a HUD menu's entry says, done: an ability's 0x0032, an item used,
+    /// a weapon set taken up.
+    fn use_hud_entry(&mut self, msg: u32, id: i64) {
+        match msg {
+            0x8060000 => self.send_0032(id),
+            0x2030000 => self.use_item(id as i32, 1),
+            crate::gear::MSG => self.use_gear_set(id),
+            _ => {}
+        }
+    }
+
+    /// A key on an ability bar's slot (`binds::bar_slot`, Jibwiz's ticket
+    /// 1913): in play (and the manual camera), the ability on it used as a
+    /// click on it uses it, its bar lit; nothing for an empty slot, a bar
+    /// the carousel does not hold, or with a window up.
+    pub fn bar_slot_key(&mut self, bar: usize, slot: usize) {
+        if (self.mode != 0 && self.mode != 38) || self.typing.is_some() || self.map.open {
+            return;
+        }
+        if bar >= self.ability_bars() as usize {
+            return;
+        }
+        let Some((msg, id)) = self.hud_menus.slot_entry(bar, slot) else { return };
+        self.hud_menus.menus[bar].sel = slot as i32;
+        eprintln!("play: bar {} slot {} key: {msg:#x} {id}", bar + 1, slot + 1);
+        self.use_hud_entry(msg, id);
+    }
+
+    /// Stacked Spell Bars are drawn (`hudmenu`'s doc, ticket 1913): the
+    /// Extended row on, and play on a computer: the last input the keyboard's
+    /// or the mouse's (a controller's or a finger's keeps the carousel, whose
+    /// d-pad walk they need), never on a phone.
+    pub fn stacked_bars(&self) -> bool {
+        crate::settings::stacked_bars() && self.keyboard && !cfg!(target_os = "android")
     }
 
     /// A memorize past the game's ten slots that the server left unanswered
@@ -9631,9 +9666,25 @@ impl Play {
                         _ => Vec::new(),
                     }
                 };
-                let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::QuickMenus);
-                self.hud_menus.draw(vui, &mut r, now as i64, &name);
-                crate::hudlayout::end(r.ui, m);
+                // Stacked Spell Bars (ticket 1913): the first two bars in two
+                // rows above the chat box, moving with it, no name bar
+                self.hud_menus.stacked = self.stacked_bars();
+                if self.hud_menus.stacked {
+                    let (anchor, vertical) = (r.ui.anchor, r.ui.vertical);
+                    r.ui.anchor = Anchor::Right;
+                    r.ui.vertical = Vertical::Bottom;
+                    let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Chat);
+                    let [left, top] = crate::chat::WndChat::full_top_left(vui, &r);
+                    self.hud_menus.draw_stacked(vui, &mut r, top, left, bars);
+                    crate::hudlayout::end(r.ui, m);
+                    (r.ui.anchor, r.ui.vertical) = (anchor, vertical);
+                } else {
+                    let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::QuickMenus);
+                    self.hud_menus.draw(vui, &mut r, now as i64, &name);
+                    crate::hudlayout::end(r.ui, m);
+                }
+            } else {
+                self.hud_menus.stacked = false;
             }
             // Move HUD (`hudlayout`): the pieces outlined and named, the bar
             // at the top with Lock and Reset, over everything but the fade

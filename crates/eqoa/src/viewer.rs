@@ -2971,6 +2971,8 @@ impl App {
                     let now = self.clock.elapsed().as_secs_f64() * 1000.0;
                     crate::settings::with_binds(|b| self.macro_run.key(&name, false, now, b));
                 }
+                // a bar's slot acts on its press alone
+                Sent::Slot(..) => {}
             }
         }
         // a toggled macro does not run on behind a window that lost the keys
@@ -5507,6 +5509,17 @@ impl App {
                             crate::settings::with_binds(|b| self.macro_run.key(&name, down, now, b));
                             if let Some(p) = self.play.as_mut() {
                                 p.keyboard = true;
+                            }
+                        }
+                        return;
+                    }
+                    // an ability bar's slot (`binds::bar_slot`, ticket 1913):
+                    // its ability used on the press
+                    Some(Sent::Slot(bar, slot)) => {
+                        if let Some(p) = self.play.as_mut() {
+                            p.keyboard = true;
+                            if down && !event.repeat {
+                                p.bar_slot_key(bar, slot);
                             }
                         }
                         return;

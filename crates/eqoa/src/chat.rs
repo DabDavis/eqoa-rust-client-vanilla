@@ -472,6 +472,18 @@ impl WndChat {
         n.min(5)
     }
 
+    /// The chat box's top left at its full height (its five rows, as the fixed
+    /// mode and Chat Always Shown keep it), and its text's left (frame points,
+    /// before a moved piece's shift): `draw`'s window there. The stacked bars
+    /// stand on it (`hudmenu::HudMenus::draw_stacked`).
+    pub fn full_top_left(vui: &Vui, ui: &dyn Raster) -> [i32; 2] {
+        let mut w = Window::default();
+        w.init(vui, ui, [422, 390], 462, 6, 1);
+        w.center = [422, 475 - 85];
+        let tl = w.top_left();
+        [tl[0] + 25, tl[1]]
+    }
+
     /// Whether the box is held open at five rows with every line in it: the
     /// fixed mode's, or Chat Always Shown's (`always`).
     fn fixed(&self) -> bool {
