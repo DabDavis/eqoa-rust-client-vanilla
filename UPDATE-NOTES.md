@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · A glowing NPC's aura
+- **Glowing creatures now sparkle**: a creature the server gives a glow, such as **Mr. Moogie** in Freeport, now
+  has an aura of rising sparkles all over its body, from its back, head, paws and tail: the same sparkles that rise
+  from the blade of the Sword of Virtue, in the creature's own glow colour (Mr. Moogie's are red, as the Heirloom
+  Sword of Twisted Virtue's are). They follow the creature as it moves.
+- Every other creature, and every player, looks exactly as before.
+
 ## 2026-11-13 · Stacked spell bars, a chat box that stays open, glowing NPCs, group loot rules and instances
 - **Stacked Spell Bars** (Options > Extended > UI > HUD, off by default): on a computer your first two ability bars
   are drawn as two rows of five, one above the other, just above the chat box, a little smaller (95%) and with no

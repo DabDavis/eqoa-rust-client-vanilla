@@ -35,6 +35,11 @@
 //! bracer, gloves, legs, boots; `-` none). The look is dressed by the tables
 //! of go-eqoa-server's armour (`s2::Rules::cust_with`): set 9 is the ornate
 //! plate, and the rest as retail's.
+//! `npctint=RRGGBBAA` and `npcglow=RRGGBBAA` draw the body in an NPC's body
+//! tint and glow as go-eqoa-server's `npctint` sends them (`npctint::apply`);
+//! a glow brings its aura (`aura::body_emitters`: the Sword of Virtue's
+//! particles on the body's nodes in the glow's hue), run from the start to
+//! `at=` (8000 shows it steady).
 //! `helm=N` puts on armour set N's helm (`SetHelm`, on the node and seated
 //! as a player's character wears it: `slotless::helm_on`), in the helm's
 //! tint (`tint=T`); `helmfit=0` seats it as the PS2 does, without this
@@ -97,6 +102,8 @@ pub struct Words {
     pub seat: Option<(SeatNode, crate::slotless::HelmFit)>,
     /// Under a night's dim light (`night=1`), not the daylight.
     pub night: bool,
+    /// An NPC's body tint and glow (`npctint=`, `npcglow=`).
+    pub npc: Option<crate::npctint::Tint>,
 }
 
 /// The node a tried helm seat hangs on.
@@ -117,6 +124,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
     let (mut helm_fit, mut y2002, mut head) = (true, false, false);
     let mut seat = None;
     let mut night = false;
+    let mut npc: Option<crate::npctint::Tint> = None;
     let nums = |v: &str| v.split(',').map(|n| n.trim().parse::<u8>().map_err(|e| format!("{v}: {e}"))).collect::<Result<Vec<u8>, String>>();
     let hex = |w: &str, v: &str| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|e| format!("{w}: {e}"));
     for w in words {
@@ -131,6 +139,17 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                 look.item_color.get_or_insert([[255; 4]; 3])[slot] = [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255];
             }
             "night" => night = v != "0",
+            "npctint" | "npcglow" => {
+                let h = v.trim_start_matches('#').trim_start_matches("0x");
+                let c = u32::from_str_radix(h, 16).map_err(|e| format!("{w}: {e}"))?;
+                let c = if h.len() == 6 { c << 8 | 0xFF } else { c };
+                let t = npc.get_or_insert(crate::npctint::Tint { color: 0xFFFF_FFFF, glow: 0 });
+                if k == "npctint" {
+                    t.color = c;
+                } else {
+                    t.glow = c;
+                }
+            }
             "trim" => {
                 let mut t = [[0u8; 4]; 6];
                 let parts: Vec<&str> = v.split(',').collect();
@@ -215,7 +234,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             _ => return Err(format!("{w}: not a word of a look")),
         }
     }
-    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex, helm_fit, y2002, head, seat, night })
+    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex, helm_fit, y2002, head, seat, night, npc })
 }
 
 /// The body drawn in the look, holding what `words` say, from four sides
@@ -308,6 +327,17 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         crate::wisp::dress(lib, model as u32, &mut mesh, &cs, look, Some(&rl), &t);
         wisp = crate::wisp::attachment(lib, model as u32, &cs, Some(&rl));
     }
+    // an NPC's body tint and glow, and the glow's aura's nodes
+    if let Some(t) = words.npc {
+        crate::npctint::apply(&mut mesh, t);
+    }
+    let aura_nodes = crate::aura::npc_glow(words.npc).map(|_| crate::aura::body_nodes(&cs)).unwrap_or_default();
+    let sword = crate::particles::item_emitters(lib, crate::aura::SWORD_OF_VIRTUE).first().map(|e| e.def);
+    let mut aura = crate::particles::Held::new(0);
+    let mut aura_batches = Vec::new();
+    if !aura_nodes.is_empty() {
+        eprintln!("aura on nodes {aura_nodes:?}{}", if sword.is_none() { " (no Sword of Virtue: no particles)" } else { "" });
+    }
     let tris = |b: &[esf::Batch]| b.iter().map(|b| b.indices.len() / 3).sum::<usize>();
     // `EQOA_DRESS_DEBUG=slots`: the made-up batches flat, a colour a slot
     // (chest red, bracer yellow, gloves green, legs blue, boots magenta);
@@ -390,7 +420,15 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
             }
         }
         cs.h.process(0, &anims);
+        if let (Some(sword), Some(glow)) = (sword, crate::aura::npc_glow(words.npc).filter(|_| !aura_nodes.is_empty())) {
+            let centre = cs.h.calc_trans_about_center(&Matrix44::identity(), &anims);
+            let now = crate::aura::body_emitters(0, &cs, &aura_nodes, &centre, sword, glow, true);
+            aura_batches = aura.frame(lib, &now, &Vect3::of(0.0, 1.0, 6.0), t);
+        }
         t += 16;
+    }
+    if !aura_nodes.is_empty() {
+        eprintln!("{}", aura.describe());
     }
     let centre = cs.h.calc_trans_about_center(&Matrix44::identity(), &anims);
     cs.h.set_blend_matrices();
@@ -554,7 +592,8 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
             crate::lod::place(g, &centre, &at_eye);
         }
         let draws: Vec<render::Draw> = std::iter::once(render::Draw::Model(&gpu)).chain(items.iter().map(|(g, _)| render::Draw::Model(g))).chain(cape.iter().map(render::Draw::Model)).collect();
-        let rgba = render::capture(&device, &queue, &mut r, w, h, &view, &draws, None);
+        let particles = (!aura_batches.is_empty()).then_some((v, p, aura_batches.as_slice(), &textures as &render::Textures));
+        let rgba = render::capture(&device, &queue, &mut r, w, h, &view, &draws, particles);
         for y in 0..h as usize {
             let src = &rgba[y * w as usize * 4..(y + 1) * w as usize * 4];
             let o = (y * (w as usize * yaws.len()) + k * w as usize) * 4;

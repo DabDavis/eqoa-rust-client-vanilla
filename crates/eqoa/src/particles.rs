@@ -311,6 +311,10 @@ pub enum How {
 /// The key a creature's own emitters take in the hand's place.
 pub const OWN: usize = usize::MAX;
 
+/// The key a glowing NPC's aura (`aura::body_emitters`) takes in the hand's
+/// place.
+pub const AURA: usize = usize::MAX - 1;
+
 /// One of the emitters creatures carry this frame: which (the holder, the
 /// hand or `OWN`, the item or the creature's model, its place among them),
 /// its world transform (the member's under the hand's node, or the
@@ -395,7 +399,12 @@ impl Held {
     pub fn describe(&self) -> String {
         let n: usize = self.emitters.values().map(|&id| self.sys.particle_count(id)).sum();
         let own = self.emitters.keys().filter(|k| k.1 == OWN).count();
-        format!("{} held-item emitters, {own} creatures' own, {n} particles", self.emitters.len() - own)
+        let aura = self.emitters.keys().filter(|k| k.1 == AURA).count();
+        if aura == 0 {
+            format!("{} held-item emitters, {own} creatures' own, {n} particles", self.emitters.len() - own)
+        } else {
+            format!("{} held-item emitters, {own} creatures' own, {aura} aura, {n} particles", self.emitters.len() - own - aura)
+        }
     }
 }
 
