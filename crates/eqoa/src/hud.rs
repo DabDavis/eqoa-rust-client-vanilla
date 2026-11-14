@@ -236,6 +236,35 @@ pub fn exp_for_level(level: i32) -> u32 {
     }
 }
 
+/// The experience bars' fills, as `OnDrawSelf` works them: the level's (the
+/// experience the server sends, 0x0020 and the dump, over `ExpForLevel` of
+/// the next level: go-eqoa-server's `CharXPDict`, or at 60 and at 100% to the
+/// masteries the way to the next mastery point on the same scale) and how far
+/// through its current fifth (a fifth whole at 5 x need / 5 and over, the
+/// game's: none).
+pub fn exp_gauges(level: i32, exp: i32) -> (f32, f32) {
+    let need = exp_for_level(level + 1);
+    let v = exp as f32 / need as f32;
+    let fifth = (need / 5) as i32;
+    let mut part = 0.0f32;
+    if exp > 0 {
+        if exp < fifth {
+            part = exp as f32 / fifth as f32;
+        } else {
+            let mut i: i32 = 2;
+            while i < 6 {
+                // the EE's 32-bit products (a GM's level 100 bar passes 2^31)
+                if exp < i.wrapping_mul(fifth) {
+                    part = exp.wrapping_sub((i - 1).wrapping_mul(fifth)) as f32 / fifth as f32;
+                    break;
+                }
+                i += 1;
+            }
+        }
+    }
+    (v, part.clamp(0.0, 1.0))
+}
+
 pub struct Hud {
     glow0: f32,
     glow0_on: i32,
@@ -385,26 +414,7 @@ impl Hud {
         let v = if s.max_power == 0 { 0.0 } else { s.power as f32 / s.max_power as f32 };
         draw_gauge(vui, ui, 9, 136, p, true, v);
         p[1] += 10;
-        let need = exp_for_level(s.level + 1);
-        let v = s.exp as f32 / need as f32;
-        let fifth = (need / 5) as i32;
-        // How far through the current fifth of the level.
-        let mut part = 0.0f32;
-        if s.exp > 0 {
-            if s.exp < fifth {
-                part = s.exp as f32 / fifth as f32;
-            } else {
-                let mut i = 2;
-                while i < 6 {
-                    if s.exp < i * fifth {
-                        part = (s.exp - (i - 1) * fifth) as f32 / fifth as f32;
-                        break;
-                    }
-                    i += 1;
-                }
-            }
-        }
-        let part = part.clamp(0.0, 1.0);
+        let (v, part) = exp_gauges(s.level, s.exp);
         draw_gauge(vui, ui, 152, 151, [p[0], p[1] + 10], true, part);
         draw_gauge(vui, ui, 8, 136, p, true, v);
         crate::hudlayout::end(ui.ui, m);
@@ -745,6 +755,32 @@ pub fn draw_gauge(vui: &Vui, ui: &mut dyn Raster, bar: i32, frame: i32, at: [i32
 
 #[cfg(test)]
 mod tests {
+    /// The experience bars against the server's tables (go-eqoa-server's
+    /// `CharXPDict`, CLIENT's `ExpForLevel`): level 1 to 2 takes 424, 50 to
+    /// 51 181,731,870 (the upper branch from 51), 60's bar is drawn over
+    /// 372,248,840; a level just begun is empty, one point short of the next
+    /// all but full, half way half; the fifths' bar restarts at each fifth and
+    /// is empty past the last whole one (the game's: 424 / 5 = 84, 420..423).
+    #[test]
+    fn the_experience_bars_are_the_levels_share() {
+        use super::{exp_for_level, exp_gauges};
+        assert_eq!((exp_for_level(2), exp_for_level(51), exp_for_level(61)), (424, 181_731_870, 372_248_840));
+        assert_eq!(exp_for_level(50), 174_625_000, "49 to 50, the lower branch");
+        assert_eq!(exp_gauges(1, 0), (0.0, 0.0));
+        let (v, part) = exp_gauges(1, 423);
+        assert!(v < 1.0 && v > 0.99 && part == 0.0, "{v} {part}");
+        let (v, part) = exp_gauges(30, 25_769_215 / 2);
+        assert!((v - 0.5).abs() < 1e-6 && (part - 0.5).abs() < 1e-3, "{v} {part}");
+        let fifth = 25_769_215 / 5;
+        assert_eq!(exp_gauges(30, fifth).1, 0.0, "a fifth just made: its bar starts again");
+        assert!((exp_gauges(30, fifth + fifth / 2).1 - 0.5).abs() < 1e-3);
+        assert_eq!(exp_gauges(1, 84), (84.0 / 424.0, 0.0));
+        let (v, _) = exp_gauges(60, 186_124_420);
+        assert!((v - 0.5).abs() < 1e-6, "60's bar, half way to the next mastery point: {v}");
+        let (v, part) = exp_gauges(100, i32::MAX);
+        assert!(v.is_finite() && v > 0.0 && (0.0..=1.0).contains(&part), "a GM's level 100: {v} {part}");
+    }
+
     use super::{FxArt, FxPiece, Hud, HudState, MemberState, PetState, Pick, bearing_point, patch_point, pet_effects_height, pet_effects_pieces, power_at, waypoint_point};
 
     /// Power Bars: a member's (or the pet's) power under its health gauge (25
