@@ -3968,6 +3968,7 @@ impl Play {
             self.options_tick();
             self.tell_shouts();
         }
+        self.end_options_preview();
         // what the Options window asked of the sound device and the camera
         // (kept until there is a device: the volumes loaded with the options)
         for op in if sound.is_some() { std::mem::take(&mut self.sound_ops) } else { Vec::new() } {
@@ -9188,6 +9189,16 @@ impl Play {
         }
     }
 
+    /// The Options window's Sound page preview ended once the window is not
+    /// the mode, however it closed: a teleport's `mode = 0` (and every other
+    /// close that is not its own Save or Triangle) left the battle track the
+    /// preview asked for playing over all other music (petition 2129).
+    fn end_options_preview(&mut self) {
+        if self.mode != 34 && self.options_wnd.take_preview() {
+            self.sound_ops.push(crate::options::OptionsUp::PreviewEnd);
+        }
+    }
+
     /// The map's frame (`map.rs`): its build behind the game, and while it
     /// is up its view and quads, the player and the group on it. It closes
     /// when a window comes up (the server's, a dialog) or the player dies.
@@ -10605,6 +10616,40 @@ mod commands {
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
         Play::new(s, Player::default(), dump)
+    }
+
+    /// A preview of the Sound page's Battle Music playing when the Options
+    /// window closes under it (a teleport's `mode = 0`, petition 2129) is
+    /// ended by `Play`'s frame, once. The control: the window still the mode
+    /// keeps it.
+    #[test]
+    fn a_preview_ends_when_options_closes_under_it() {
+        use crate::options::OptionsUp;
+        use crate::pointer::key;
+        use crate::pointer::testing::{NullRaster, vui};
+        crate::settings::testing::reset(false);
+        let vui = vui();
+        let mut r = NullRaster;
+        let mut p = play();
+        p.options.battle = 4;
+        p.mode = 34;
+        p.options_wnd.open(&vui, &r, &p.options);
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        for k in [key::DOWN, key::DOWN, key::CROSS] {
+            p.options_wnd.key(&vui, &mut r, &mut p.options, k, 0, &mut cues, &mut ups);
+        }
+        ups.clear();
+        p.options_wnd.draw(&vui, &mut r, &p.options, &mut ups);
+        assert_eq!(ups, vec![OptionsUp::Preview(4)], "the Sound page previews");
+        // what entering asked (the options' volumes)
+        p.sound_ops.clear();
+        p.end_options_preview();
+        assert!(p.sound_ops.is_empty(), "the control: the window up keeps it");
+        p.mode = 0;
+        p.end_options_preview();
+        assert_eq!(p.sound_ops, vec![OptionsUp::PreviewEnd], "ended with the window");
+        p.end_options_preview();
+        assert_eq!(p.sound_ops.len(), 1, "once");
     }
 
     /// A character wears the cape the server's set names for its id

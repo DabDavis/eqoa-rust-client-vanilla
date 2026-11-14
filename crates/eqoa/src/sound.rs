@@ -577,6 +577,9 @@ impl Sound {
     /// The world changed: `VIScene::StopSoundTrack`, and the region's music
     /// stops with the scene it was in.
     pub fn world_changed(&mut self) {
+        // the Options window's preview ends with the world it was asked in
+        // (petition 2129: it played on over the move)
+        self.end_preview();
         self.stop_sound_track();
         self.stream_best = -1;
         self.dev.stop_bgm(1);
@@ -936,6 +939,29 @@ mod tests {
         assert_eq!(s.times, 2, "a new run starts again from nothing");
         s.look(playing, held);
         assert_eq!(s.times, 4);
+    }
+
+    /// A world change ends the Options window's preview (petition 2129): its
+    /// battle track no longer out-ranks the fight's choice after the move,
+    /// so with no fight the battle slot stops. The control: before the
+    /// change the preview plays with no fight.
+    #[test]
+    fn a_world_change_ends_the_preview() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !path.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let mut s = Sound::offline(&path).unwrap();
+        s.preview = Some(5);
+        s.battle_music(Some(false));
+        assert_eq!(s.battle.1, 5, "the control: the preview plays");
+        s.world_changed();
+        assert_eq!(s.preview, None);
+        assert_eq!(s.battle.0, 0);
+        s.battle.1 = 0;
+        s.battle_music(Some(false));
+        assert_eq!(s.battle.1, 0, "no fight, nothing asked of the battle slot");
     }
 
     /// The options' volumes go on the classes as the game sets them (Fx on

@@ -559,7 +559,15 @@ impl WndOptions {
         self.cat_sel = 0;
         self.item = -1;
         self.save_count = 0;
-        self.preview = None;
+        // a preview still playing is left for `draw`, which ends it (the
+        // menu's page wants none): forgetting it here kept it playing
+        // (petition 2129)
+    }
+
+    /// The Sound page's preview, if one is playing, let go of: whether it
+    /// was (`Play` then ends it, the window closed under it).
+    pub fn take_preview(&mut self) -> bool {
+        self.preview.take().is_some()
     }
 
     /// The Controls page straight from play (F1, the HUD's "F1 Controls"):
@@ -2257,6 +2265,38 @@ mod tests {
         let o = GameOptions::default();
         assert_eq!(o.auto_attack, 1);
         assert_eq!((o.stereo, o.follow, o.vibration, o.no_loot), (1, 0, 1, 0));
+    }
+
+    /// The Sound page previews the Battle Music choice until the page is
+    /// left; the window opened again over a preview still playing (petition
+    /// 2129: closed under it) ends it at its first draw, where `open` used to
+    /// forget it with the track playing. The control: on the page, drawn
+    /// again, nothing more is asked.
+    #[test]
+    fn opening_the_window_ends_a_preview_left_playing() {
+        use crate::pointer::key;
+        use crate::pointer::testing::{NullRaster, vui};
+        crate::settings::testing::reset(false);
+        let vui = vui();
+        let mut r = NullRaster;
+        let mut o = GameOptions { battle: 3, ..Default::default() };
+        let mut w = WndOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        w.open(&vui, &r, &o);
+        w.sel = 2;
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        assert_eq!(w.page, 2, "the Sound page");
+        ups.clear();
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(ups, vec![OptionsUp::Preview(3)]);
+        ups.clear();
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert!(ups.is_empty(), "the control: still on the page, nothing more: {ups:?}");
+        // closed under it (a teleport's mode 0), then opened again
+        w.open(&vui, &r, &o);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        assert_eq!(ups, vec![OptionsUp::PreviewEnd], "ended, not forgotten");
+        assert!(!w.take_preview());
     }
 
     /// The Interface page's last row is the client's Profanity Filter (petition

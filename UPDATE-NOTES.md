@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Battle music after a teleport
+- **Music from the Options sound preview no longer keeps playing after a teleport** (or anything else that closes
+  the Options window while its Sound page is up): the battle track the page previews now stops with the window.
+
 ## 2026-11-14 · Freezing at the tip
 - **Spell-effect weapon auras** (the freezing drip) now sit at the tip of whatever is held: a sword's point, a
   staff's head, a bow's limb end, instead of at the hand.
