@@ -2045,6 +2045,7 @@ dependencies = [
  "esf",
  "glam",
  "iso",
+ "js-sys",
  "pollster 1.0.1",
  "web-time",
  "wgpu",

@@ -56,6 +56,20 @@ impl BufferInit for wgpu::Device {
         let mask = wgpu::COPY_BUFFER_ALIGNMENT - 1;
         let size = ((n + mask) & !mask).max(wgpu::COPY_BUFFER_ALIGNMENT);
         let buffer = self.create_buffer(&wgpu::BufferDescriptor { label: d.label, size, usage: d.usage, mapped_at_creation: true });
+        // In a browser on WebGPU the mapping is written through the page's
+        // own `getMappedRange` (`web_write_mapped`), which says when it has
+        // no bytes to give; wgpu's view of it is made by a call that cannot
+        // fail and throws instead, through the whole frame (the page's "The
+        // client stopped: Uint8Array@[native code]
+        // __wbg_new_with_byte_offset_and_length", petition 2097).
+        #[cfg(target_arch = "wasm32")]
+        if let Some(gpu) = buffer.as_webgpu() {
+            // unmapped whatever came of it: a buffer drawn while mapped is a
+            // validation error, which wgpu raises as a panic
+            web_write_mapped(gpu, d.contents);
+            buffer.unmap();
+            return buffer;
+        }
         let mapped = match buffer.get_mapped_range_mut(..) {
             Ok(mut m) => {
                 m.slice(..n as usize).copy_from_slice(d.contents);
@@ -68,6 +82,78 @@ impl BufferInit for wgpu::Device {
         }
         buffer
     }
+}
+
+/// A buffer mapped at its creation written with `contents` through the
+/// browser's WebGPU itself: whether it was. The
+/// mapping's `ArrayBuffer` comes back short, or detached (no bytes at all),
+/// when the browser could not give the buffer its memory (its GPU process
+/// out of it, the device lost): then nothing is written, and the buffer is
+/// left as the browser made it, drawn nowhere, as a lost device's are.
+#[cfg(target_arch = "wasm32")]
+fn web_write_mapped(gpu: &wgpu::webgpu::GpuBuffer, contents: &[u8]) -> bool {
+    let Ok(range) = gpu.get_mapped_range() else { return false };
+    if !mapping_holds(range.byte_length() as u64, contents.len() as u64) {
+        return false;
+    }
+    js_sys::Uint8Array::new_with_byte_offset_and_length(&range, 0, contents.len() as u32).copy_from(contents);
+    true
+}
+
+/// A draw's buffers made a frame (the 2D layer's and the text's vertices),
+/// destroyed `RETIRE_AFTER` draws later, when the frames that drew them
+/// are long submitted: dropped, a browser's WebGPU keeps each until its
+/// garbage collector comes by (wgpu destroys nothing on a drop), 60 to 120
+/// a second of a frame's quads.
+#[derive(Default)]
+pub struct Retire(std::sync::Mutex<std::collections::VecDeque<wgpu::Buffer>>);
+
+/// How many draws a buffer `Retire` keeps outlives: a layer draws two or
+/// three times a frame, so its buffer goes ten frames or more after its own.
+pub const RETIRE_AFTER: usize = 32;
+
+impl Retire {
+    /// `b`, drawn now, kept until `RETIRE_AFTER` draws on; the oldest past
+    /// that destroyed.
+    pub fn keep(&self, b: wgpu::Buffer) {
+        let Ok(mut q) = self.0.lock() else { return };
+        q.push_back(b);
+        while q.len() > RETIRE_AFTER {
+            if let Some(old) = q.pop_front() {
+                old.destroy();
+            }
+        }
+    }
+
+    /// How many are kept.
+    pub fn len(&self) -> usize {
+        self.0.lock().map_or(0, |q| q.len())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Whether a mapping of `have` bytes takes the `want` written into it (a
+/// detached one has none).
+pub fn mapping_holds(have: u64, want: u64) -> bool {
+    have >= want
+}
+
+/// A mapped `buffer`'s bytes, read through the browser's WebGPU itself
+/// where it is the page's (`web_write_mapped`'s reasons): None when the
+/// mapping has fewer bytes than the buffer; natively wgpu's.
+pub fn read_mapped(buffer: &wgpu::Buffer) -> Option<Vec<u8>> {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(gpu) = buffer.as_webgpu() {
+        let range = gpu.get_mapped_range().ok()?;
+        if !mapping_holds(range.byte_length() as u64, buffer.size()) {
+            return None;
+        }
+        return Some(js_sys::Uint8Array::new(&range).to_vec());
+    }
+    buffer.slice(..).get_mapped_range().ok().map(|d| d.to_vec())
 }
 
 pub use lit::{Lights, MAX_LIGHTS, PointLight};
@@ -345,6 +431,27 @@ pub struct GpuModel {
 }
 
 impl GpuModel {
+    /// Destroys the model's buffers (its vertices, palette, instances,
+    /// static lights, and each batch's indices and layers' uniforms), for a
+    /// model let go once the work drawing it is submitted (the map's tiles,
+    /// `forget_textures`): their memory is the GPU's again when that work is
+    /// done. Dropped alone, a model's buffers wait for the page's garbage
+    /// collector in a browser (wgpu's WebGPU backend destroys nothing on a
+    /// drop), tens of thousands of them a minute while the map is drawn.
+    /// Never for a model still to be drawn: a destroyed buffer in a
+    /// submission is a validation error.
+    pub fn destroy(&self) {
+        for b in [&self.vertices, &self.palette, &self.instances, &self.statics] {
+            b.destroy();
+        }
+        for (indices, _, passes, _) in &self.batches {
+            indices.destroy();
+            for p in passes {
+                p.uniform.destroy();
+            }
+        }
+    }
+
     /// How many batches (each with its layer passes) the model has.
     pub fn batch_count(&self) -> usize {
         self.batches.len()
@@ -1176,10 +1283,16 @@ impl Renderer {
         }
     }
 
-    /// Lets go of every texture uploaded so far (the models made keep
-    /// theirs while they live): for a renderer that draws one thing after
-    /// another and keeps nothing from one to the next (the map's tiles).
+    /// Lets go of every texture uploaded so far, and destroys them: for a
+    /// renderer that draws one thing after another and keeps nothing from
+    /// one to the next (the map's tiles), its models drawn with them already
+    /// submitted and let go too (`GpuModel::destroy`). A destroyed texture's
+    /// memory is the GPU's again once the work submitted with it is done; one
+    /// only dropped waits for the page's garbage collector in a browser.
     pub fn forget_textures(&mut self) {
+        for (view, _) in self.textures.values().flatten() {
+            view.texture().destroy();
+        }
         self.textures.clear();
         self.missing_textures.clear();
         self.materials.clear();

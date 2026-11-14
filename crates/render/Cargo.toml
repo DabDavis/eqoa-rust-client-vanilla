@@ -15,6 +15,11 @@ glam = "0.34.1"
 wgpu = { version = "30.0.1", features = ["counters"] }
 web-time.workspace = true
 
+# a browser's WebGPU buffer mappings read and written through the page's own
+# calls, which say when they fail (`BufferInit`, `read_mapped`)
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.106"
+
 [dev-dependencies]
 iso.workspace = true
 pollster = "1.0.1"

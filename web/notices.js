@@ -78,8 +78,15 @@ function crash(title, detail) {
 
 // ---- what the page catches
 
+// what went wrong and where: Safari's and Firefox's stacks leave out the
+// error's own words (petition 2097 kept only "Uint8Array@[native code]
+// __wbg_new_with_byte_offset_and_length…", not its RangeError or TypeError),
+// so they go first wherever the stack does not start with them
 function errorText(e) {
-  return e && (e.stack || e.message) ? String(e.stack || e.message) : String(e);
+  if (!e || !(e.stack || e.message)) return String(e);
+  const head = e.name && e.message ? `${e.name}: ${e.message}` : String(e.message || '');
+  const stack = String(e.stack || '');
+  return !stack ? head : !head || stack.startsWith(head) || stack.includes(e.message) ? stack : `${head}\n${stack}`;
 }
 
 function caught(err, where) {
