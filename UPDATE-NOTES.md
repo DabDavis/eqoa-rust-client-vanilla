@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Cleaner armor trim
+- **Trim dyes stay on the trim**: the trim colour no longer speckles or smears onto the armor around it. On cloth
+  it now fills the yellow bands and the cream padding whole, with clean edges, and leaves the brown leather alone;
+  the stray flecks of trim colour on other sets' leather, mail and robes are gone too.
+
 ## 2026-11-13 · Trim dyes on every armour
 - **Armor trim on every set**: an Armor Dyer's trim colour now shows on cloth, leather, chain, banded, scale and the
   monk's wraps as well as the plate: cloth's yellow bands, leather's studded bands and buckles, the leather straps of

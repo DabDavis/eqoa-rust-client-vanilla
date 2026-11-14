@@ -828,7 +828,8 @@ or a browser (each described where it lives below):
   (`vi::cust::TRIMMED`, 51 textures: the plate's gold, cloth's yellow bands,
   leather's studded bands, chain's and scale's leather, banded's steel plates,
   ...; each texture's texels by its own rule, `render::trimart`, read off the
-  disc's art by eye, 2026-11-13: "armor trim for cloth isnt showing, also make
+  disc's art by eye, crisp and cleaned of specks (`Trim::mask`, 2026-11-14: "a
+  bit of color smear not kept in the main trim areas"), 2026-11-13: "armor trim for cloth isnt showing, also make
   sure leather, chain, etc. all sets can be trimmed") is drawn in its colour
   (`render::recolor::trimmed`: the piece's colour baked into a copy of its
   texture, `MUL`, its trim in the colour's hue at the trim's own brightness,

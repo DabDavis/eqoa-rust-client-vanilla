@@ -160,10 +160,34 @@ fn box_blur(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     pass(&across, h, w, &|x, y| y * w + x)
 }
 
-/// Each texel's trim weight by `trim` (`w` by `h` texels of `rgba`), at its
-/// centre.
+/// Each texel's trim weight by `trim` (`w` by `h` texels of `rgba`):
+/// [`Trim::mask`].
 fn trim_weights(rgba: &[u8], w: usize, h: usize, trim: Trim) -> Vec<f32> {
-    rgba.chunks_exact(4).take(w * h).enumerate().map(|(k, p)| trim.weight([p[0], p[1], p[2]], ((k % w) as f32 + 0.5) / w as f32, ((k / w) as f32 + 0.5) / h as f32)).collect()
+    trim.mask(rgba, w, h)
+}
+
+/// `base` (`bw` by `bh`) shrunk to `w` by `h` by averaging each block of it,
+/// as a texture's next level is of its last; `None` when the sizes do not
+/// divide.
+fn shrink(base: &[f32], bw: usize, bh: usize, w: usize, h: usize) -> Option<Vec<f32>> {
+    if w == 0 || h == 0 || bw % w != 0 || bh % h != 0 {
+        return None;
+    }
+    let (fx, fy) = (bw / w, bh / h);
+    Some(
+        (0..w * h)
+            .map(|k| {
+                let (x, y) = (k % w, k / w);
+                let mut sum = 0.0;
+                for dy in 0..fy {
+                    for dx in 0..fx {
+                        sum += base[(y * fy + dy) * bw + x * fx + dx];
+                    }
+                }
+                sum / (fx * fy) as f32
+            })
+            .collect(),
+    )
 }
 
 /// Texel `px` with its trim (read off `root`, the texel of the texture it was
@@ -188,12 +212,25 @@ fn trim_texel_by(px: [u8; 3], root: [u8; 3], c: [u8; 3], w: f32) -> [u8; 3] {
 /// as `levels`; a level without its root's is left as it is).
 pub fn trim_levels(levels: &mut [Vec<u8>], root: &[(Vec<u8>, u32)], r: u32, trim: Trim) {
     let c = rgb_of(r);
-    for (l, (rl, rw)) in levels.iter_mut().zip(root) {
+    // a texture's trim found on its first level and each smaller level's the
+    // first's shrunk (the clean-up's specks and patches are the first's), the
+    // plate's gold level by level as before
+    let first = root.first().filter(|(rl, rw)| *rw > 0 && rl.len() % (4 * *rw as usize) == 0).map(|(rl, rw)| {
+        let w = *rw as usize;
+        (trim_weights(rl, w, rl.len() / 4 / w, trim), w, rl.len() / 4 / w)
+    });
+    for (i, (l, (rl, rw))) in levels.iter_mut().zip(root).enumerate() {
         let w = *rw as usize;
         if l.len() != rl.len() || w == 0 || rl.len() % (4 * w) != 0 {
             continue;
         }
-        let weight = trim_weights(rl, w, rl.len() / 4 / w, trim);
+        let h = rl.len() / 4 / w;
+        let shrunk = match (&first, trim) {
+            (Some((base, bw, bh)), Trim::Parts(_)) if i > 0 => shrink(base, *bw, *bh, w, h),
+            (Some((base, _, _)), _) if i == 0 => Some(base.clone()),
+            _ => None,
+        };
+        let weight = shrunk.unwrap_or_else(|| trim_weights(rl, w, h, trim));
         for ((px, rp), &k) in l.chunks_exact_mut(4).zip(rl.chunks_exact(4)).zip(&weight) {
             let out = trim_texel_by([px[0], px[1], px[2]], [rp[0], rp[1], rp[2]], c, k);
             px[..3].copy_from_slice(&out);
