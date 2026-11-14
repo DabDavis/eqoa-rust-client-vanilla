@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · New camps on the map
+- **The map shows the new camps**: the Frosteye Orcs at the Snowblind Plains excavation, the Tae Ew Aggressors at
+  the Stone Watchers, the Desert Bandits in Tak 'Xiv, the frogloks of the Burial Mounds, the Mossmouth Goblins, the
+  hobgoblins of the Cyclops' Fortress in the Rathe, Quintashi's Lair and the beasts of The Hunt, each with its levels.
+- **Camps whose creatures' levels changed show the new levels**: Cracktooth Orcs 21-30, Mossmouth Goblins 21-30, the
+  Tae Ew of Brokenskull Rock 41-47, the South Barren Coast gargoyles 41-50, Tendora-Buki 46-50 and the others, and
+  some camps sit closer to their creatures.
+
 ## 2026-11-14 · Hair, gnome caps and glasses in a GM's colour
 - **A GM can colour a character's hair** (white, red, any colour), **a gnome's cap** and **a gnome's glasses**, each
   on its own: glasses no longer have to take the hair's colour.
