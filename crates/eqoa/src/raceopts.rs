@@ -314,7 +314,12 @@ impl Change {
     fn lay(&self, lib: &esf::Library, b: &mut esf::Batch) {
         match *self {
             Change::Colour(r) => {
+                // a paint: the layer white, the dye its whole colour
+                let paint = r >> 24 == render::recolor::PAINT;
                 for l in &mut b.layers {
+                    if paint {
+                        l.color = [255, 255, 255, l.color[3]];
+                    }
                     if l.texture != 0 {
                         l.texture = render::recolor::recolored(l.texture, r, |id| lib.lookup(id).is_some());
                     } else {
@@ -459,6 +464,27 @@ pub(crate) mod tests {
             assert!(!apply(&lib(), &mut m, &[(kind, value, Part { entries, rects: vec![] })]));
             assert_eq!(format!("{:?}", m.batches), format!("{:?}", before.batches), "the control");
         }
+    }
+
+    /// A paint (go-eqoa-server's GM looks: a gnome's glasses, whose layer is
+    /// 36 grey) dyes the texture as a dye does and makes the layer white, so
+    /// the dye is the whole colour; a dye (the control) keeps the layer's.
+    #[test]
+    fn a_paint_whitens_its_layer() {
+        let gold = render::recolor::PAINT << 24 | 0x1C_FFB2;
+        let mut m = model();
+        m.batches[1].layers[0].color = [36, 36, 36, 255];
+        assert!(apply(&lib(), &mut m, &[(Kind::Colour, gold, Part { entries: vec![1], rects: vec![] })]));
+        assert_eq!(m.batches[1].layers[0].color, [255, 255, 255, 255]);
+        assert_eq!(render::recolor::source_of(m.batches[1].layers[0].texture), Some((8, gold)));
+        let dye = render::recolor::DYE << 24 | 0x1C_FFB2;
+        let mut m = model();
+        m.batches[1].layers[0].color = [36, 36, 36, 255];
+        apply(&lib(), &mut m, &[(Kind::Colour, dye, Part { entries: vec![1], rects: vec![] })]);
+        assert_eq!(m.batches[1].layers[0].color, [36, 36, 36, 255], "the control: a dye keeps the layer's");
+        // the texels: a paint is a dye
+        assert_eq!(render::recolor::recolor_rgb([120, 80, 40], gold), render::recolor::recolor_rgb([120, 80, 40], dye));
+        assert!(render::recolor::changes(gold));
     }
 
     /// A look is drawn on the body it was chosen on, never on another (an

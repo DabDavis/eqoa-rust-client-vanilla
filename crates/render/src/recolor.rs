@@ -55,10 +55,15 @@ pub const TRIM: u32 = 6;
 /// Not a colour: a plate texture's trim as a mask ([`trim_mask`]), which the
 /// trim's aura (`crate::trimglow`) samples; drawn by no layer.
 pub const TRIM_MASK: u32 = 7;
+/// [`DYE`] on the texels, and the layer it is laid on made white, so the dye
+/// is the part's whole colour (go-eqoa-server's `Paint`: a GM's colour on the
+/// hair, a gnome's cap and glasses, whose layers are tinted: the glasses 36
+/// grey). The layer's half is `eqoa`'s `raceopts`.
+pub const PAINT: u32 = 8;
 
 /// Whether `r` changes anything (a known mode).
 pub fn changes(r: u32) -> bool {
-    matches!(r >> 24, DYE | TONE | SKIN | TATTOO | MUL | TRIM | TRIM_MASK)
+    matches!(r >> 24, DYE | TONE | SKIN | TATTOO | MUL | TRIM | TRIM_MASK | PAINT)
 }
 
 /// How much of a texel is a plate piece's gold trim, 0 to 1: its hue between
@@ -424,7 +429,7 @@ pub fn recolor_rgb(c: [u8; 3], r: u32) -> [u8; 3] {
         return skin(f, r, &SkinRef::of_colour(f)).map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8);
     }
     let (h, s, l) = hsl(c.map(|v| v as f32 / 255.0));
-    let (h, s, l) = if r >> 24 == DYE { (a / 256.0, b / 255.0, l * d / 128.0) } else { (h + a / 256.0, s * b / 128.0, l * d / 128.0) };
+    let (h, s, l) = if matches!(r >> 24, DYE | PAINT) { (a / 256.0, b / 255.0, l * d / 128.0) } else { (h + a / 256.0, s * b / 128.0, l * d / 128.0) };
     rgb(h, s.clamp(0.0, 1.0), l.clamp(0.0, 1.0)).map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8)
 }
 

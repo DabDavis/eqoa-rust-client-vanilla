@@ -104,6 +104,10 @@ pub struct Words {
     /// A race's option rows' steps (`opts=R:a,b,c`), and the sex they are a
     /// sex's of.
     pub opts: Option<(i32, Vec<usize>)>,
+    /// Colours laid on palette entries as a server's race look lays them
+    /// (`paint=E1,E2,...:VALUE`, VALUE the look's u32 in hex: go-eqoa-server's
+    /// GM looks on the hair, a gnome's cap and glasses), in order.
+    pub paints: Vec<(Vec<u8>, u32)>,
     pub sex: i32,
     /// The helm seated with this client's fit (`slotless::helm_fit`).
     pub helm_fit: bool,
@@ -137,6 +141,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
     let (mut items, mut race, mut action, mut tilt) = ([0u32; 3], false, None, None);
     let mut cape = net::cape::Cape::default();
     let (mut opts, mut sex) = (None, 0);
+    let mut paints = Vec::new();
     let (mut helm_fit, mut y2002, mut head) = (true, false, false);
     let mut seat = None;
     let mut night = false;
@@ -251,6 +256,11 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                 }
             }
             "face" => look.face = nums(v)?[0],
+            "paint" => {
+                let (e, val) = v.split_once(':').ok_or_else(|| format!("{w}: paint=entry,entry:VALUE"))?;
+                let entries = e.split(',').map(|x| x.parse::<u8>().map_err(|e| format!("{w}: {e}"))).collect::<Result<Vec<_>, _>>()?;
+                paints.push((entries, hex(w, val)?));
+            }
             "opts" => {
                 let (r, steps) = v.split_once(':').ok_or_else(|| format!("{w}: opts=race:step,step"))?;
                 let race = r.parse().map_err(|e| format!("{w}: {e}"))?;
@@ -294,7 +304,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             _ => return Err(format!("{w}: not a word of a look")),
         }
     }
-    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, sex, helm_fit, y2002, head, seat, night, npc, pieces })
+    Ok(Words { look, items, race, action, at, size, tilt, cape, opts, paints, sex, helm_fit, y2002, head, seat, night, npc, pieces })
 }
 
 /// The body drawn in the look, holding what `words` say, from four sides
@@ -404,6 +414,12 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         crate::raceopts::dress(lib, model as u32, &mut mesh, &rl);
         crate::wisp::dress(lib, model as u32, &mut mesh, &cs, look, Some(&rl), &t);
         wisp = crate::wisp::attachment(lib, model as u32, &cs, Some(&rl));
+    }
+    // the server's GM looks (`paint=`), as `raceopts::dress` lays a race look
+    if !words.paints.is_empty() {
+        let parts = words.paints.iter().map(|(e, v)| (net::raceopts::Kind::Colour, *v, net::raceopts::Part { entries: e.clone(), rects: Vec::new() })).collect();
+        let changed = crate::raceopts::dress(lib, model as u32, &mut mesh, &net::raceopts::Look { body: model as u32, parts });
+        eprintln!("paints {:?}: {}", words.paints, if changed { "laid" } else { "nothing laid" });
     }
     // an NPC's body tint and glow, and the glow's aura's nodes
     if let Some(t) = words.npc {
