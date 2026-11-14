@@ -22,8 +22,10 @@
 //! as that one is, of four groups (the GM Jibrish's petitions 1631 and 1634,
 //! 2026-11-11: `GROUPS`): Graphics (Video, World, Lighting, Characters,
 //! natively Textures), UI (HUD, HUD Layout, Name Plates, Map, Number Colors,
-//! Merc Colors, DPS Meter, Chat), Other (General, Combat, Camera, Touch,
-//! natively Sound) and the Multi-boxing settings. A group opens a menu of its
+//! Merc Colors, DPS Meter, Chat), Other (General, Combat, Camera, natively
+//! Sound), Touch Controls (Size & Look, Layout: every row of the touch
+//! screen's pad, the GM Jibcrotwo's petition 2084) and the Multi-boxing
+//! settings. A group opens a menu of its
 //! categories in the place of the groups' (`CATEGORIES`), the Multi-boxing
 //! settings, a group of one, its page at once; each category opens a page laid
 //! out and driven as the game's pages are, short enough that none scrolls
@@ -111,7 +113,14 @@
 //!   Opacity (10 to 200% of its own in tens) and Touch Edge (how far in from
 //!   the window's left and right edges it keeps, 0 to 10% of the window's
 //!   shorter side); they took over Touch Pad Size (the whole pad's 50 to 100,
-//!   which an older client.opt's line gives both sizes);
+//!   which an older client.opt's line gives both sizes); and Move Touch Pad
+//!   (Off; On: once the menu is left, the pad's three parts outlined, a
+//!   finger dragging one, two pinching both sizes, a bar with Reset and Done,
+//!   `touch::editing`; kept the moment the fingers lift; not kept itself, a
+//!   mode), Button Layout (Classic, or Bottom: Select and Start low between
+//!   the sticks, `touch::Opts::low_start`, petition 2084) and Reset Touch Pad
+//!   (the sizes, the edge and every move back, by ✕, left or right). Since
+//!   2026-11-14 they are all Touch Controls' (Size & Look, Layout);
 //! - Camera: Camera Distance (a slider: the follow orbit's zoom-out ceiling,
 //!   8 to 50, `camstyle`), Camera Turn Speed (a slider: how fast the stick
 //!   and the keys turn the view, half to three times the game's,
@@ -1046,6 +1055,18 @@ impl WndOptions {
                     // game frame
                     78 => c.auto_cast = !c.auto_cast,
                     79 => c.auto_target = !c.auto_target,
+                    // Move Touch Pad: the pad's parts dragged and pinched once
+                    // the menu is left (`touch::editing`); a mode, not kept
+                    MOVE_TOUCH => crate::touch::set_editing(!crate::touch::editing()),
+                    // Button Layout: Classic or Bottom, the pad laid out so
+                    // from the next frame
+                    TOUCH_LAYOUT => c.touch_low_start = !c.touch_low_start,
+                    // Reset Touch Pad: the sizes, the edge and every move the
+                    // pad's as it was (kept as the other rows are)
+                    RESET_TOUCH => {
+                        c = c.with_touch_opts(&crate::touch::reset_opts(c.touch_opts()));
+                        cues.push(8);
+                    }
                     // Move HUD: the HUD's pieces dragged once the menu is left
                     // (`hudlayout`); not an option kept, so Triangle leaves it
                     76 => crate::hudlayout::set_unlocked(!crate::hudlayout::unlocked()),
@@ -1127,7 +1148,7 @@ impl WndOptions {
             _ => {}
         }
         // (Texture Folder and Reset DPS Meter make their own sound)
-        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == 55 || self.item == 72 || self.item == 77;
+        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == 55 || self.item == 72 || self.item == 77 || self.item == RESET_TOUCH;
         let slides = matches!(self.item, 3 | 4) || slider_at(self.item).is_some();
         if !slides && !inert && ((0..=11).contains(&self.item) || extended(self.item)) {
             cues.push(11);
@@ -1194,6 +1215,18 @@ impl WndOptions {
         if self.page == 3 && self.cat.is_some() && self.item == 77 {
             crate::hudlayout::reset();
             cues.push(8);
+            return false;
+        }
+        // Reset Touch Pad and Move Touch Pad the same (`change`)
+        if self.page == 3 && self.cat.is_some() && self.item == RESET_TOUCH {
+            let c = crate::settings::client();
+            crate::settings::set_client(c.with_touch_opts(&crate::touch::reset_opts(c.touch_opts())));
+            cues.push(8);
+            return false;
+        }
+        if self.page == 3 && self.cat.is_some() && self.item == MOVE_TOUCH {
+            crate::touch::set_editing(!crate::touch::editing());
+            cues.push(11);
             return false;
         }
         if self.page == 3 && self.cat.is_some() && self.item == 76 {
@@ -1605,6 +1638,11 @@ impl WndOptions {
             },
             Note::Meter => self.meter_note.clone().filter(|_| matches!(self.item, 70..=72)),
             Note::Links => self.links_note.clone().filter(|_| self.item == 73),
+            Note::TouchLayout => match self.item {
+                MOVE_TOUCH if crate::touch::editing() => Some("Leave the menu, drag a part, pinch to size".to_string()),
+                TOUCH_LAYOUT => Some("Bottom: Start and Select between the sticks".to_string()),
+                _ => None,
+            },
             Note::Hud => (self.item == 76 && crate::hudlayout::unlocked()).then(|| "Leave the menu and drag the pieces".to_string()),
             Note::ChatTabs => Some("Name a tab in chat: /tabname 1 Loot".to_string()),
             Note::Shortcuts => match self.item {
@@ -1672,7 +1710,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 89] = [
+const EXTENDED_ITEMS: [(i32, &str); 92] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1762,6 +1800,9 @@ const EXTENDED_ITEMS: [(i32, &str); 89] = [
     (PETS_PASS, "Pets Pass Through"),
     (SHARED_SHORTCUTS, "Same Shortcuts"),
     (AUTO_SAVE, "Auto Save Options"),
+    (MOVE_TOUCH, "Move Touch Pad"),
+    (RESET_TOUCH, "Reset Touch Pad"),
+    (TOUCH_LAYOUT, "Button Layout"),
 ];
 
 /// The Chat Tabs rows' first item (ticket 1951): one a kind of line, in
@@ -1781,6 +1822,12 @@ const PETS_PASS: i32 = 103;
 const SHARED_SHORTCUTS: i32 = 104;
 /// Auto Save Options' item (Waldorf's ticket 2002).
 const AUTO_SAVE: i32 = 105;
+/// Move Touch Pad's, Reset Touch Pad's and Button Layout's items (the server
+/// owner's of 2026-11-14, "the apk client cant resize or move touch pad
+/// display"; the GM Jibcrotwo's petition 2084).
+const MOVE_TOUCH: i32 = 106;
+const RESET_TOUCH: i32 = 107;
+const TOUCH_LAYOUT: i32 = 108;
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -1819,6 +1866,9 @@ enum Note {
     Hud,
     /// how a chat tab is named (`/tabname`), on the Chat Tabs pages
     ChatTabs,
+    /// how the touch pad is moved while Move Touch Pad is on and chosen, and
+    /// where Button Layout's Bottom puts Select and Start while it is chosen
+    TouchLayout,
     /// what Same Shortcuts does, while it is chosen
     Shortcuts,
 }
@@ -1847,10 +1897,13 @@ enum Group {
     Other,
     /// what a window of several keeps for itself or shares with the others
     Multibox,
+    /// the touch screen's pad (petition 2084: "Move all of the mobile / cell
+    /// phone specific controls into its own category under the extended menu")
+    Touch,
 }
 
 /// The groups in their menu's order, and their names.
-const GROUPS: [(Group, &str); 4] = [(Group::Graphics, "Graphics"), (Group::Ui, "UI"), (Group::Other, "Other"), (Group::Multibox, "Multi-boxing settings")];
+const GROUPS: [(Group, &str); 5] = [(Group::Graphics, "Graphics"), (Group::Ui, "UI"), (Group::Other, "Other"), (Group::Touch, "Touch Controls"), (Group::Multibox, "Multi-boxing settings")];
 
 /// Extended's categories, each a page of `PAGE_MOST` rows at most, listed
 /// in its group's menu in this order (2026-11-11, petition 1631: the fifteen
@@ -1858,8 +1911,9 @@ const GROUPS: [(Group, &str); 4] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// UI's Name Plates, Combat's meter UI's DPS Meter, UI's Update Notices and
 /// Video's Loading Screens Other's General; petition 1634: Controller Focus,
 /// Capture Controller and Sound in Background the Multi-boxing settings',
-/// Controller's touch rows Other's Touch).
-const ALL_CATEGORIES: [Category; 22] = [
+/// Controller's touch rows Other's Touch; petition 2084, 2026-11-14: Touch a
+/// group of its own, Touch Controls, its rows Size & Look and Layout).
+const ALL_CATEGORIES: [Category; 23] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
@@ -1881,13 +1935,16 @@ const ALL_CATEGORIES: [Category; 22] = [
     Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE], note: Note::Shortcuts, group: Group::Other },
     Category { name: "Combat", items: &[78, 79, PETS_PASS], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None, group: Group::Other },
-    Category { name: "Touch", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Other },
+    Category { name: "Size & Look", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Touch },
     Category { name: "Sound", items: &[32], note: Note::Output, group: Group::Other },
     Category { name: "Multi-boxing settings", items: MULTIBOX, note: Note::Reads, group: Group::Multibox },
     // the chat tabs (2026-11-13, Jibwiz's ticket 1951): each kind of line to
     // Main or a tab of its own, the talk on one page and the game's on another
     Category { name: "Chat Tabs: Talk", items: &[92, 93, 94, 95, 96], note: Note::ChatTabs, group: Group::Ui },
     Category { name: "Chat Tabs: Game", items: &[97, 98, 99, 100, 101], note: Note::ChatTabs, group: Group::Ui },
+    // the touch pad's place and buttons (2026-11-14: Move Touch Pad, Button
+    // Layout, petition 2084), its sizes' page full
+    Category { name: "Layout", items: &[MOVE_TOUCH, TOUCH_LAYOUT, RESET_TOUCH], note: Note::TouchLayout, group: Group::Touch },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -1896,7 +1953,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -2060,6 +2117,9 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         71 => wide(c.dps_view.name()),
         72 => wide("Reset"),
         76 => on_off(crate::hudlayout::unlocked()),
+        MOVE_TOUCH => on_off(crate::touch::editing()),
+        RESET_TOUCH => wide("Reset"),
+        TOUCH_LAYOUT => wide(if c.touch_low_start { "Bottom" } else { "Classic" }),
         77 => wide("Reset"),
         73 => on_off(c.item_links),
         89 => on_off(c.chat_always),
@@ -2762,7 +2822,37 @@ mod tests {
             press(&mut w, &mut o, key::RIGHT, &mut cues);
         }
         assert_eq!((settings::client().touch_edge, slider_at(62), cues.last()), (10, Some((1.0, Some(10))), Some(&9)), "0 to 10 in ones");
-        assert_eq!(settings::touch_options(), crate::touch::Opts { stick: 0.55, buttons: 2.0, opacity: 2.0, edge: 0.1 }, "the pad drawn so");
+        assert_eq!(settings::touch_options(), crate::touch::Opts { stick: 0.55, buttons: 2.0, opacity: 2.0, edge: 0.1, ..Default::default() }, "the pad drawn so");
+        // Touch Controls' Layout (2026-11-14, petition 2084): Move Touch Pad
+        // Off, On and back by right and ✕ (its note while on), a mode not
+        // kept; Button Layout Classic, then Bottom, kept as a row; Reset Touch
+        // Pad the sizes, the edge and the moves back, the opacity and the
+        // layout left, by right or ✕, with its own sound
+        crate::touch::set_editing(false);
+        goto!(MOVE_TOUCH);
+        assert_eq!(w.item, MOVE_TOUCH, "Layout, Move Touch Pad");
+        assert_eq!(value_text(&vui, MOVE_TOUCH), Some(wide(vui.words.get(552, vui.language))), "Off");
+        assert_eq!(w.page_note(w.cat.unwrap()), None, "no note while off");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((crate::touch::editing(), cues.last()), (true, Some(&11)), "on");
+        assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some("Leave the menu, drag a part, pinch to size"));
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert!(!crate::touch::editing(), "✕ turns it too");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, TOUCH_LAYOUT)), (TOUCH_LAYOUT, Some(wide("Classic"))), "Button Layout");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((value_text(&vui, TOUCH_LAYOUT), settings::touch_options().low_start), (Some(wide("Bottom")), true));
+        assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some("Bottom: Start and Select between the sticks"));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, RESET_TOUCH)), (RESET_TOUCH, Some(wide("Reset"))), "Reset Touch Pad");
+        for k in [key::RIGHT, key::CROSS] {
+            settings::set_client(settings::client().with_touch_opts(&crate::touch::Opts { stick: 1.5, moves: [[0.1, 0.0], [0.0, 0.0], [0.0, -0.2]], ..settings::touch_options() }));
+            assert_ne!(settings::client().touch_moves, [[0; 2]; 3], "the control: moved");
+            press(&mut w, &mut o, k, &mut cues);
+            let c = settings::client();
+            assert_eq!((c.touch_stick, c.touch_buttons, c.touch_edge, c.touch_moves), (100, 100, 0, [[0; 2]; 3]), "back ({k})");
+            assert_eq!((c.touch_opacity, c.touch_low_start, cues.last()), (200, true, Some(&8)), "opacity and layout left, its sound ({k})");
+        }
         // Camera: Camera Distance, Camera Turn Speed, Screen Shake
         goto!(15);
         assert_eq!(w.item, 15, "Camera, Camera Distance");
@@ -3204,7 +3294,7 @@ mod tests {
         w.sel = 3;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         let names: Vec<&str> = GROUPS.iter().map(|g| g.1).collect();
-        assert_eq!(names, ["Graphics", "UI", "Other", "Multi-boxing settings"], "four entries, in the petitions' order");
+        assert_eq!(names, ["Graphics", "UI", "Other", "Touch Controls", "Multi-boxing settings"], "five entries, in the petitions' order");
         // the groups' window holds them and, a row clear, the legend
         assert_eq!(w.window4.rows, GROUPS.len() as i32 + 3, "the groups' window");
         let bottom = |w: &Window| w.top_left()[1] + w.size[1];
@@ -3305,12 +3395,16 @@ mod tests {
                 ("General", vec!["Update Notices", "Loading Screens", "Loading Tips", "Same Shortcuts", "Auto Save Options"]),
                 ("Combat", vec!["Auto-Cast", "Auto Target", "Pets Pass Through"]),
                 ("Camera", vec!["Camera Distance", "Camera Turn Speed", "Screen Shake"]),
-                ("Touch", vec!["Touch Stick Size", "Touch Button Size", "Touch Opacity", "Touch Edge"]),
                 ("Sound", vec!["Output Device"]),
             ],
             "Other: the rest"
         );
-        assert_eq!(of(3), vec![("Multi-boxing settings", vec!["Slow When Not Focused", "Controller Focus", "Capture Controller", "Sound in Background"])], "petition 1634's folder");
+        assert_eq!(
+            of(3),
+            vec![("Size & Look", vec!["Touch Stick Size", "Touch Button Size", "Touch Opacity", "Touch Edge"]), ("Layout", vec!["Move Touch Pad", "Button Layout", "Reset Touch Pad"])],
+            "petition 2084: every touch row in a group of its own"
+        );
+        assert_eq!(of(4), vec![("Multi-boxing settings", vec!["Slow When Not Focused", "Controller Focus", "Capture Controller", "Sound in Background"])], "petition 1634's folder");
     }
 
     /// Slow When Not Focused (petition 1634): Off by default, turned by left
@@ -3669,14 +3763,15 @@ mod tests {
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         let by_name = |n: &str| CATEGORIES.iter().position(|c| c.name == n).unwrap();
         assert_eq!(CATEGORIES[by_name("Multi-boxing settings")].note, Note::Reads);
-        assert_eq!(CATEGORIES[by_name("Touch")].note, Note::Reads);
+        assert_eq!(CATEGORIES[by_name("Size & Look")].note, Note::Reads);
+        assert_eq!(CATEGORIES[by_name("Layout")].note, Note::TouchLayout);
         assert_eq!(CATEGORIES[by_name("Characters")].note, Note::Server);
         assert_eq!(CATEGORIES[by_name("Video")].note, Note::Scale);
         assert_eq!(CATEGORIES[by_name("Lighting")].note, Note::Lighting);
         assert_eq!(CATEGORIES[by_name("DPS Meter")].note, Note::Meter);
         assert_eq!(CATEGORIES[by_name("Chat")].note, Note::Links);
         assert_eq!(CATEGORIES[by_name("HUD Layout")].note, Note::Hud);
-        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 11 } else { 13 }, "the notes only");
+        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 12 } else { 14 }, "the notes only");
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Textures: nothing to say while both are off (a test keeps no

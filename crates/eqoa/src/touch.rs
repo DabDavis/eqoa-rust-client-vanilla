@@ -42,6 +42,16 @@
 //! the window's left and right edges. Left as they come, it is the pad as it
 //! was, to the pixel.
 //!
+//! Its place and size by touch (the server owner's of 2026-11-14, "the apk
+//! client cant resize or move touch pad display": the rows above are a
+//! menu's sliders, and the place was only Touch Edge's inward step): Move
+//! Touch Pad (`editing`), on in play with nothing over the world, outlines
+//! the pad's three parts (`Part`); a finger drags one (`Opts::moves`, kept on
+//! the screen by `moved`), two pinch both sizes, and the bar's Reset and Done
+//! (`draw_edit_bar`) put it back or end it; the viewer keeps each edit as the
+//! fingers lift (`take_edited`). Button Layout's Bottom (the GM Jibcrotwo's
+//! petition 2084) puts Select and Start low between the sticks (`lowered`).
+//!
 //! The client's own dialog over the game (the update's question) takes a
 //! finger as the mouse's pointer: a finger there is a
 //! [`Taps`]', and lifted where it came down it is a click there.
@@ -188,11 +198,67 @@ pub struct Opts {
     pub buttons: f32,
     pub opacity: f32,
     pub edge: f32,
+    /// Move Touch Pad's: how far each part (`Part`, in `PARTS`' order) is
+    /// moved from where `layout` puts it, across and down, a share of the
+    /// window's shorter side (`MOVE_MOST` at most either way), and drawn kept
+    /// on the screen (`moved`)
+    pub moves: [[f32; 2]; 3],
+    /// Button Layout's Bottom (the GM Jibcrotwo's petition 2084: "a secondary
+    /// one that moves the start and select buttons from the top of the screen
+    /// to near the bottom in between the two joysticks"): Select and Start low
+    /// between the sticks (`lowered`); off, Classic, where `layout` puts them
+    pub low_start: bool,
 }
 
 impl Default for Opts {
     fn default() -> Self {
-        Opts { stick: 1.0, buttons: 1.0, opacity: 1.0, edge: 0.0 }
+        Opts { stick: 1.0, buttons: 1.0, opacity: 1.0, edge: 0.0, moves: [[0.0; 2]; 3], low_start: false }
+    }
+}
+
+/// The farthest a part is moved either way, a share of the window's shorter
+/// side (`Opts::moves`): past any window's other side, which the drawing
+/// keeps it inside anyway.
+pub const MOVE_MOST: f32 = 3.0;
+
+/// The pad's parts that Move Touch Pad moves, each as one (the server
+/// owner's of 2026-11-14 for the APK: "the apk client cant resize or move
+/// touch pad display"): the left side (L1 and L2, the d-pad, the left stick
+/// and, wider than tall, L3), the right side (R1 and R2, the face buttons,
+/// the right stick and, wider than tall, R3), and the middle (Select and
+/// Start and, taller than wide, L3 and R3 between the sticks).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Part {
+    Left,
+    Right,
+    Middle,
+}
+
+/// The parts, in `Opts::moves`' order.
+pub const PARTS: [Part; 3] = [Part::Left, Part::Right, Part::Middle];
+
+impl Part {
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// Its stick (`Layout::sticks`' index), if it has one.
+    fn stick(self) -> Option<usize> {
+        match self {
+            Part::Left => Some(0),
+            Part::Right => Some(1),
+            Part::Middle => None,
+        }
+    }
+
+    /// The part a button is of, in a window `wide`r than tall or not.
+    fn of(b: u16, wide: bool) -> Part {
+        match b {
+            bit::SELECT | bit::START => Part::Middle,
+            bit::L3 | bit::R3 if !wide => Part::Middle,
+            bit::L1 | bit::L2 | bit::UP | bit::DOWN | bit::LEFT | bit::RIGHT | bit::L3 => Part::Left,
+            _ => Part::Right,
+        }
     }
 }
 
@@ -225,7 +291,122 @@ fn unit(size: (u32, u32)) -> f32 {
 /// than wide: `Layout::fits`), the sizes past what fits come down together, the
 /// larger first (a ceiling over both, the largest that fits to a 1,000th),
 /// which `Layout::drawn` says. Half size fits every window at every edge.
+///
+/// Then each part Move Touch Pad moved (`Opts::moves`) is moved so, kept
+/// whole on the screen (`moved`); none moved, it is the pad as laid out, to
+/// the pixel.
 pub fn layout(size: (u32, u32), o: &Opts) -> Layout {
+    let l = laid_out(size, o);
+    let l = if o.low_start { lowered(l, size) } else { l };
+    if o.moves.iter().all(|m| *m == [0.0; 2]) { l } else { moved(l, size, &o.moves) }
+}
+
+/// Button Layout's Bottom: Select and Start out of the top of the screen
+/// into the bottom between the two sticks, as low as they go keeping `GAP`
+/// off every other disc and the window's bottom: side by side where the
+/// sticks leave room, else Start under Select. Taller than wide, where L3 and
+/// R3 lie lowest between the sticks under Select and Start, the two pairs
+/// change rows first. Where the sticks leave too little room (grown, or
+/// brought in toward the middle by larger buttons), they are drawn a little
+/// smaller (to 80%); where even that does not fit, they stay where Classic
+/// has them.
+fn lowered(mut l: Layout, size: (u32, u32)) -> Layout {
+    let (w, h) = (size.0.max(1) as f32, size.1.max(1) as f32);
+    let find = |l: &Layout, b: u16| l.buttons.iter().position(|x| x.bit == b);
+    let (Some(sel), Some(start)) = (find(&l, bit::SELECT), find(&l, bit::START)) else { return l };
+    let was = l.clone();
+    if w < h
+        && let (Some(l3), Some(r3)) = (find(&l, bit::L3), find(&l, bit::R3))
+    {
+        // the two rows exchanged, each button keeping its own side
+        let (top, low) = (l.buttons[sel].at[1], l.buttons[l3].at[1]);
+        l.buttons[l3].at[1] = top;
+        l.buttons[r3].at[1] = top;
+        l.buttons[sel].at[1] = low;
+        l.buttons[start].at[1] = low;
+    }
+    let full_r = l.buttons[sel].r.max(l.buttons[start].r);
+    let gap = GAP * l.u;
+    let mid = (l.sticks[0].home[0] + l.sticks[1].home[0]) / 2.0;
+    let others: Vec<([f32; 2], f32)> =
+        l.buttons.iter().enumerate().filter(|&(k, _)| k != sel && k != start).map(|(_, b)| (b.at, b.r)).chain(l.sticks.iter().map(|s| (s.home, s.r))).collect();
+    let step = 0.05 * l.u;
+    // at their size, else smaller where the sticks, grown or brought in, leave
+    // too little room between them (no smaller than L3's and R3's)
+    for k in [1.0, 0.9, 0.8] {
+        let r = k * full_r;
+        let clear = |p: [f32; 2]| p[0] - r >= 0.0 && p[0] + r <= w && p[1] + r <= h && others.iter().all(|&(c, cr)| dist(c, p) >= cr + r + gap);
+        let lowest = h - r - gap;
+        // side by side, a disc's width and a gap apart; then one over the other
+        let across = r + gap;
+        let tries: [([f32; 2], [f32; 2]); 2] = [([mid - across, 0.0], [mid + across, 0.0]), ([mid, -(2.0 * r + gap)], [mid, 0.0])];
+        for (a, b) in tries {
+            let mut y = lowest;
+            // no higher than the screen's middle: low, or not at all
+            while y + a[1] > h / 2.0 {
+                let (pa, pb) = ([a[0], y + a[1]], [b[0], y + b[1]]);
+                if clear(pa) && clear(pb) {
+                    (l.buttons[sel].at, l.buttons[sel].r) = (pa, r);
+                    (l.buttons[start].at, l.buttons[start].r) = (pb, r);
+                    return l;
+                }
+                y -= step;
+            }
+        }
+    }
+    was
+}
+
+/// Each part of `l` moved by `moves` (`Opts::moves`), each as far as it can
+/// go that way and stay whole on the screen (its discs and its stick's
+/// ring); a stick's zone goes with it, kept to the window's sides it reached.
+fn moved(mut l: Layout, size: (u32, u32), moves: &[[f32; 2]; 3]) -> Layout {
+    let (w, h) = (size.0.max(1) as f32, size.1.max(1) as f32);
+    let wide = w >= h;
+    for part in PARTS {
+        let d = part_shift(&l, size, part, moves[part.index()]);
+        if d == [0.0; 2] {
+            continue;
+        }
+        for b in l.buttons.iter_mut().filter(|b| Part::of(b.bit, wide) == part) {
+            b.at = [b.at[0] + d[0], b.at[1] + d[1]];
+        }
+        if let Some(k) = part.stick() {
+            let s = &mut l.sticks[k];
+            s.home = [s.home[0] + d[0], s.home[1] + d[1]];
+            let z = s.zone;
+            let side = |v: f32, edge: f32, by: f32| if v == edge { v } else { v + by };
+            s.zone = [side(z[0], 0.0, d[0]).clamp(0.0, w), side(z[1], 0.0, d[1]).clamp(0.0, h), side(z[2], w, d[0]).clamp(0.0, w), side(z[3], h, d[1]).clamp(0.0, h)];
+        }
+    }
+    l
+}
+
+/// How far (window pixels) `part` of the unmoved `l` goes for a move of
+/// `m` (shares of the window's shorter side): as far as it stays whole on
+/// the screen.
+fn part_shift(l: &Layout, size: (u32, u32), part: Part, m: [f32; 2]) -> [f32; 2] {
+    let (w, h) = (size.0.max(1) as f32, size.1.max(1) as f32);
+    let Some(b) = l.part_box(part, w >= h) else { return [0.0; 2] };
+    let short = w.min(h);
+    let axis = |m: f32, lo: f32, hi: f32, most: f32| {
+        let v = if m.is_nan() { 0.0 } else { m.clamp(-MOVE_MOST, MOVE_MOST) * short };
+        if hi - lo >= most { 0.0 } else { v.clamp(-lo, most - hi) }
+    };
+    [axis(m[0], b[0], b[2], w), axis(m[1], b[1], b[3], h)]
+}
+
+/// `o`'s moves as drawn in a `size` window (each kept to what keeps its
+/// part on the screen, `part_shift`), as shares of the shorter side.
+pub fn moves_drawn(size: (u32, u32), o: &Opts) -> [[f32; 2]; 3] {
+    let l = laid_out(size, o);
+    let short = size.0.min(size.1).max(1) as f32;
+    PARTS.map(|p| part_shift(&l, size, p, o.moves[p.index()]).map(|v| v / short))
+}
+
+/// The pad as the sizes and the edge lay it out, before Move Touch Pad's
+/// moves (`layout`).
+fn laid_out(size: (u32, u32), o: &Opts) -> Layout {
     let (w, h) = (size.0.max(1) as f32, size.1.max(1) as f32);
     let sized = |v: f32| if v.is_nan() { 1.0 } else { v.clamp(SMALLEST, LARGEST) };
     let (a, b) = (sized(o.stick), sized(o.buttons));
@@ -508,6 +689,31 @@ fn today(size: (u32, u32), scale: f32) -> Layout {
 }
 
 impl Layout {
+    /// The box (x0, y0, x1, y1, window pixels) round `part`'s discs and its
+    /// stick's ring, in a window `wide`r than tall or not.
+    pub fn part_box(&self, part: Part, wide: bool) -> Option<[f32; 4]> {
+        let discs = self.buttons.iter().filter(|b| Part::of(b.bit, wide) == part).map(|b| (b.at, b.r));
+        let ring = part.stick().map(|k| (self.sticks[k].home, self.sticks[k].r));
+        discs.chain(ring).fold(None, |a: Option<[f32; 4]>, (c, r)| {
+            let d = [c[0] - r, c[1] - r, c[0] + r, c[1] + r];
+            Some(a.map_or(d, |a| [a[0].min(d[0]), a[1].min(d[1]), a[2].max(d[2]), a[3].max(d[3])]))
+        })
+    }
+
+    /// The part a finger put down at `at` takes while Move Touch Pad is on:
+    /// the one whose box (`part_box`, a little generously) it is in, the
+    /// nearest disc's where two boxes hold it.
+    pub fn part_at(&self, at: [f32; 2], wide: bool) -> Option<Part> {
+        let reach = 0.3 * self.full;
+        let inside = |p: Part| self.part_box(p, wide).is_some_and(|b| at[0] >= b[0] - reach && at[0] <= b[2] + reach && at[1] >= b[1] - reach && at[1] <= b[3] + reach);
+        let near = |p: Part| {
+            let discs = self.buttons.iter().filter(|b| Part::of(b.bit, wide) == p).map(|b| (b.at, b.r));
+            let ring = p.stick().map(|k| (self.sticks[k].home, self.sticks[k].r));
+            discs.chain(ring).map(|(c, r)| dist(c, at) - r).fold(f32::INFINITY, f32::min)
+        };
+        PARTS.into_iter().filter(|&p| inside(p)).min_by(|&a, &b| near(a).total_cmp(&near(b)))
+    }
+
     /// The button under a finger at `at`, a little generously.
     fn button_at(&self, at: [f32; 2]) -> Option<&Button> {
         self.buttons.iter().filter(|b| dist(b.at, at) <= b.r * 1.25).min_by(|a, b| dist(a.at, at).total_cmp(&dist(b.at, at)))
@@ -556,6 +762,75 @@ pub struct TouchPad {
     /// a finger held still is a long press (`take_holds`; the viewer sets it
     /// each frame: the map is up, where it puts the group's waypoint)
     pub holds: bool,
+    /// Move Touch Pad is on and nothing is over the world (the viewer sets it
+    /// each frame, `editing`): a finger drags a part of the pad, two pinch
+    /// its size, the bar's buttons end it or reset it, and nothing is pressed
+    /// on the pad's port
+    pub edit: bool,
+    /// the fingers on the pad while it is edited
+    grips: Vec<Grip>,
+    /// the pad as the fingers have it while they edit it, drawn and laid out
+    /// in `opts`' place until it is kept (`take_edited`)
+    live: Option<Opts>,
+    /// a pinch under way: the fingers' distance and the sizes when the
+    /// second came down
+    pinch_from: Option<(f32, f32, f32)>,
+    /// the pad as an edit ended, to be kept (`take_edited`)
+    edited: Option<Opts>,
+}
+
+/// A finger on the pad while it is edited: the part it took (none: the
+/// second of a pinch, or one off every part), where it came down and is now,
+/// and the part's move when it took it.
+#[derive(Clone, Copy, Debug)]
+struct Grip {
+    id: u64,
+    part: Option<Part>,
+    from: [f32; 2],
+    at: [f32; 2],
+    start: [f32; 2],
+}
+
+thread_local! {
+    /// Move Touch Pad: on or off (not kept: a mode, as Move HUD is).
+    static EDITING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The edit bar's buttons as last drawn (frame pixels), for `TouchPad::touch`.
+    static EDIT_BUTTONS: std::cell::RefCell<Vec<([f32; 4], EditButton)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether Move Touch Pad is on (Extended > Other > Touch, the edit bar's
+/// Done turns it off).
+pub fn editing() -> bool {
+    EDITING.with(|e| e.get())
+}
+
+pub fn set_editing(on: bool) {
+    EDITING.with(|e| e.set(on));
+    if !on {
+        EDIT_BUTTONS.with(|b| b.borrow_mut().clear());
+    }
+}
+
+/// The edit bar's buttons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditButton {
+    /// every part back where `layout` puts it, both sizes the pad's as it was
+    Reset,
+    /// Move Touch Pad off
+    Done,
+}
+
+/// The pad as it was laid out before any edit of its place or its size,
+/// `o`'s opacity kept (Reset Touch Pad, the bar's Reset): both sizes the
+/// pad's as it was, no edge, nothing moved.
+pub fn reset_opts(o: Opts) -> Opts {
+    Opts { opacity: o.opacity, ..Opts::default() }
+}
+
+/// A size a pinch made, in Touch Stick Size's and Touch Button Size's steps
+/// (`settings::TOUCH_SIZE_STEP`, a twentieth) and range.
+fn pinched(v: f32) -> f32 {
+    ((v * 20.0).round() / 20.0).clamp(SMALLEST, LARGEST)
 }
 
 impl Default for TouchPad {
@@ -574,6 +849,11 @@ impl Default for TouchPad {
             tex: None,
             window: false,
             holds: false,
+            edit: false,
+            grips: Vec::new(),
+            live: None,
+            pinch_from: None,
+            edited: None,
         }
     }
 }
@@ -586,7 +866,22 @@ impl TouchPad {
 
     /// Where its buttons and sticks are in its window now.
     fn layout(&self) -> Layout {
-        layout(self.size, &self.opts)
+        layout(self.size, &self.drawn_opts())
+    }
+
+    /// The options it is drawn by: an edit's under way, else `opts`.
+    pub fn drawn_opts(&self) -> Opts {
+        self.live.unwrap_or(self.opts)
+    }
+
+    /// The pad as an edit left it (Move Touch Pad's drag, pinch or Reset), once,
+    /// for the viewer to keep (`settings::keep_touch_options`); it is drawn
+    /// so from now (`opts`).
+    pub fn take_edited(&mut self) -> Option<Opts> {
+        let o = self.edited.take()?;
+        self.opts = o;
+        self.live = None;
+        Some(o)
     }
 
     /// A finger's event in a `size` window, at window pixels `at`.
@@ -594,6 +889,20 @@ impl TouchPad {
         self.shown = true;
         self.used = true;
         self.size = size;
+        if self.edit {
+            self.fingers.clear();
+            self.edit_touch(id, phase, at, size);
+            return;
+        }
+        if !self.grips.is_empty() || self.live.is_some() {
+            // an edit cut off (Move Touch Pad turned off under the fingers):
+            // kept as it was left
+            self.grips.clear();
+            self.pinch_from = None;
+            if let Some(o) = self.live.take() {
+                self.edited = Some(o);
+            }
+        }
         let l = self.layout();
         match phase {
             Phase::Started => {
@@ -651,10 +960,91 @@ impl TouchPad {
         }
     }
 
+    /// A finger while Move Touch Pad is on: on the bar's Done or Reset, that
+    /// button; else the first finger down takes the part it is on and drags
+    /// it (kept on the screen), a second makes the two a pinch, which sizes
+    /// the sticks and the buttons together in Touch Stick Size's steps (the
+    /// drag stops). The last finger's lift ends the edit, to be kept
+    /// (`take_edited`).
+    fn edit_touch(&mut self, id: u64, phase: Phase, at: [f32; 2], size: (u32, u32)) {
+        let short = size.0.min(size.1).max(1) as f32;
+        let wide = size.0 >= size.1;
+        match phase {
+            Phase::Started => {
+                let f = render::ui::frame_from_window(size, at);
+                let button = EDIT_BUTTONS.with(|b| b.borrow().iter().find(|(r, _)| f[0] >= r[0] && f[0] <= r[2] && f[1] >= r[1] && f[1] <= r[3]).map(|b| b.1));
+                if let Some(b) = button {
+                    match b {
+                        EditButton::Done => set_editing(false),
+                        EditButton::Reset => {
+                            let o = reset_opts(self.drawn_opts());
+                            self.live = Some(o);
+                            self.edited = Some(o);
+                        }
+                    }
+                    self.grips.clear();
+                    self.pinch_from = None;
+                    return;
+                }
+                let o = self.drawn_opts();
+                let part = if self.grips.is_empty() { layout(size, &o).part_at(at, wide) } else { None };
+                let start = part.map_or([0.0; 2], |p| moves_drawn(size, &o)[p.index()]);
+                self.grips.retain(|g| g.id != id);
+                self.grips.push(Grip { id, part, from: at, at, start });
+                if self.grips.len() == 2 {
+                    let d = dist(self.grips[0].at, self.grips[1].at);
+                    self.pinch_from = Some((d.max(1.0), o.stick, o.buttons));
+                    for g in &mut self.grips {
+                        g.part = None;
+                    }
+                }
+            }
+            Phase::Moved => {
+                let Some(g) = self.grips.iter_mut().find(|g| g.id == id) else { return };
+                g.at = at;
+                let g = *g;
+                let mut o = self.drawn_opts();
+                if let (2.., Some((d0, s0, b0))) = (self.grips.len(), self.pinch_from) {
+                    let k = dist(self.grips[0].at, self.grips[1].at) / d0;
+                    (o.stick, o.buttons) = (pinched(s0 * k), pinched(b0 * k));
+                } else if let Some(p) = g.part {
+                    o.moves[p.index()] = [g.start[0] + (at[0] - g.from[0]) / short, g.start[1] + (at[1] - g.from[1]) / short];
+                    // kept as drawn: a drag past the screen's side moves it
+                    // back at once
+                    o.moves[p.index()] = moves_drawn(size, &o)[p.index()];
+                } else {
+                    return;
+                }
+                if o != self.drawn_opts() {
+                    self.live = Some(o);
+                }
+            }
+            Phase::Ended | Phase::Cancelled => {
+                self.grips.retain(|g| g.id != id);
+                if self.grips.len() < 2 {
+                    self.pinch_from = None;
+                }
+                if self.grips.is_empty()
+                    && let Some(o) = self.live
+                {
+                    self.edited = Some(o);
+                }
+            }
+        }
+    }
+
+    /// The part being dragged while the pad is edited, if any.
+    fn dragged(&self) -> Option<Part> {
+        self.grips.iter().find_map(|g| g.part)
+    }
+
     /// The pad as the fingers hold it: the buttons touched, the sticks'
-    /// pushes.
+    /// pushes (none while it is edited).
     pub fn report(&self) -> Report {
         let mut r = Report::default();
+        if self.edit {
+            return r;
+        }
         let l = self.layout();
         for f in &self.fingers {
             match f.role {
@@ -713,6 +1103,11 @@ impl TouchPad {
     pub fn hide(&mut self) {
         self.shown = false;
         self.fingers.clear();
+        self.grips.clear();
+        self.pinch_from = None;
+        if let Some(o) = self.live.take() {
+            self.edited = Some(o);
+        }
     }
 
     /// The disc and the ring the buttons and the sticks are drawn on, made
@@ -760,7 +1155,7 @@ impl TouchPad {
     /// as brightly. Every alpha is the options' opacity of its own (at most
     /// opaque), so at the default it is what it always was.
     fn quads(&self, size: (u32, u32), dim: bool, glyph: &dyn Fn(i32) -> Option<Glyph>, disc: usize, ring: usize) -> Vec<Quad> {
-        let l = layout(size, &self.opts);
+        let l = layout(size, &self.drawn_opts());
         let held = self.report().buttons;
         let op = if self.opts.opacity.is_nan() { 1.0 } else { self.opts.opacity.clamp(FAINTEST, BRIGHTEST) };
         let alpha = |a: f32| if op == 1.0 { a } else { (a * op).min(1.0) };
@@ -778,6 +1173,23 @@ impl TouchPad {
         let mut out = Vec::new();
         let full = [0.0, 0.0, 1.0, 1.0];
         let fade = if dim { 0.7 } else { 1.0 };
+        // Move Touch Pad: each part's box, filled lightly (the one held
+        // fuller) and outlined, under its discs (the disc's middle texels
+        // are white)
+        if self.edit {
+            let wide = size.0 >= size.1;
+            let solid = [0.5, 0.5, 0.5, 0.5];
+            for part in PARTS {
+                let Some(b) = l.part_box(part, wide) else { continue };
+                let c = [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0];
+                let half = [(b[2] - b[0]) / 2.0, (b[3] - b[1]) / 2.0];
+                let fill = if self.dragged() == Some(part) { 0.3 } else { 0.12 };
+                out.push(quad(disc, c, half, solid, [1.0, 0.85, 0.25, fill]));
+                for (ec, eh) in [([c[0], b[1]], [half[0], 1.0]), ([c[0], b[3]], [half[0], 1.0]), ([b[0], c[1]], [1.0, half[1]]), ([b[2], c[1]], [1.0, half[1]])] {
+                    out.push(quad(disc, ec, eh, solid, [1.0, 0.85, 0.25, 0.9]));
+                }
+            }
+        }
         for b in &l.buttons {
             let on = held & b.bit != 0;
             out.push(quad(disc, b.at, [b.r, b.r], full, [0.05, 0.05, 0.08, if on { 0.55 } else { 0.3 * fade }]));
@@ -846,6 +1258,70 @@ pub fn draw_pad(ui: &mut Ui, device: &render::wgpu::Device, queue: &render::wgpu
         }
     }
     touch.draw(ui, size, dim, &|id| glyphs.iter().find(|g| g.0 == id).map(|g| g.1));
+    match parts {
+        Some((_, assets)) if touch.edit && touch.shown => draw_edit_bar(ui, assets, size),
+        _ => EDIT_BUTTONS.with(|b| b.borrow_mut().clear()),
+    }
+}
+
+/// The edit bar's words.
+const EDIT_TEXT: &str = "Move Touch Pad: drag a part, pinch to size";
+
+/// Move Touch Pad's bar across the screen's middle, a fifth of the way down:
+/// its words, Reset and Done, noted for `TouchPad::touch`.
+fn draw_edit_bar(ui: &mut Ui, assets: &crate::ui::UiAssets, size: (u32, u32)) {
+    let (Some(white), Some(font)) = (assets.white, assets.font) else { return };
+    let (anchor, vertical, shift, viewport) = (ui.anchor, ui.vertical, ui.shift, ui.viewport);
+    ui.anchor = render::ui::Anchor::Middle;
+    ui.vertical = render::ui::Vertical::Middle;
+    ui.shift = [0.0; 2];
+    ui.viewport = None;
+    let text_h = 11.0;
+    let scale = text_h / ui.fonts[font].height.max(1) as f32;
+    let width = |ui: &Ui, s: &str| ui.fonts[font].string_width(&crate::ui::wide(s)) as f32 * scale;
+    let fill = |ui: &mut Ui, r: [f32; 4], color: [f32; 4]| {
+        ui.push_whole(Quad { tex: white, blend: 3, pos: [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]], uv: [[0.5, 0.5]; 4], color, clip: None });
+    };
+    let words = |ui: &mut Ui, x: f32, y: f32, s: &str| {
+        let w = crate::ui::wide(s);
+        let from = ui.quads.len();
+        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+            ui.text_scaled(font, x + dx, y + dy, scale, [0.0, 0.0, 0.0, 0.85], &w);
+        }
+        ui.text_scaled(font, x, y, scale, [1.0, 0.95, 0.7, 1.0], &w);
+        for q in &mut ui.quads[from..] {
+            q.clip = Some(render::ui::WHOLE);
+        }
+    };
+    // a finger's buttons: twice the HUD bar's height
+    let pad = 4.0;
+    let h = text_h + pad * 6.0;
+    let (reset_w, done_w) = (width(ui, "Reset") + pad * 8.0, width(ui, "Done") + pad * 8.0);
+    let text_w = width(ui, EDIT_TEXT);
+    let w = pad * 3.0 + text_w + pad * 3.0 + reset_w + pad * 2.0 + done_w + pad;
+    // a fifth of the way down: under the HUD's compass and bars, over the
+    // pad's parts held wide, above them held upright
+    let top = render::ui::frame_from_window(size, [0.0, 0.2 * size.1 as f32])[1];
+    let (x0, y0) = (320.0 - w / 2.0, top);
+    fill(ui, [x0, y0, x0 + w, y0 + h], [0.0, 0.0, 0.0, 0.7]);
+    words(ui, x0 + pad * 3.0, y0 + (h - text_h) / 2.0, EDIT_TEXT);
+    let mut x = x0 + pad * 3.0 + text_w + pad * 3.0;
+    let mut buttons = Vec::new();
+    for (label, bw, k) in [("Reset", reset_w, EditButton::Reset), ("Done", done_w, EditButton::Done)] {
+        let r = [x, y0 + 2.0, x + bw, y0 + h - 2.0];
+        fill(ui, r, [0.35, 0.3, 0.12, 0.95]);
+        words(ui, x + pad * 4.0, y0 + (h - text_h) / 2.0, label);
+        buttons.push((r, k));
+        x += bw + pad * 2.0;
+    }
+    EDIT_BUTTONS.with(|b| *b.borrow_mut() = buttons);
+    (ui.anchor, ui.vertical, ui.shift, ui.viewport) = (anchor, vertical, shift, viewport);
+}
+
+/// The edit bar's buttons as if drawn at `r` (frame pixels), for a test.
+#[cfg(test)]
+pub(crate) fn testing_edit_buttons(b: Vec<([f32; 4], EditButton)>) {
+    EDIT_BUTTONS.with(|e| *e.borrow_mut() = b);
 }
 
 /// The fingers where a pointer is taken instead of the pad (the client's
@@ -1646,7 +2122,7 @@ mod tests {
         for stick in [SMALLEST, 1.0, LARGEST] {
             for buttons in [SMALLEST, 1.0, LARGEST] {
                 for edge in [0.0, 0.05, EDGE_MOST] {
-                    v.push(Opts { stick, buttons, edge, opacity: 1.0 });
+                    v.push(Opts { stick, buttons, edge, opacity: 1.0, ..Opts::default() });
                 }
             }
         }
@@ -1742,7 +2218,7 @@ mod tests {
             let e_most = EDGE_MOST * size.0.min(size.1) as f32;
             assert!(place(size, SMALLEST, SMALLEST, e_most).fits(size, e_most), "{size:?}: half size at the widest edge");
             for edge in [0.0, 0.05, EDGE_MOST] {
-                let drawn = |stick: f32, buttons: f32| layout(size, &Opts { stick, buttons, edge, opacity: 1.0 }).drawn;
+                let drawn = |stick: f32, buttons: f32| layout(size, &Opts { stick, buttons, edge, opacity: 1.0, ..Opts::default() }).drawn;
                 for &b in &asks {
                     let mut last = [0.0f32; 2];
                     for &a in &asks {
@@ -1845,4 +2321,215 @@ mod tests {
         p.touch(1, Phase::Started, was, t, SIZE);
         assert_ne!(p.report().buttons, bit::CROSS, "the control: the full pad's ✕ is elsewhere on the larger one");
     }
+
+    /// Bottom Start/Select (petition 2084) over every shape, every size alone
+    /// and together and every edge: Select and Start in the lower half,
+    /// between the sticks, on the screen, kept a gap off every other disc
+    /// (and each other); every other disc where Classic puts it but L3 and R3
+    /// held upright, which take Select's and Start's row. The control: Classic
+    /// keeps them at the top of a wide window, and moving them there as Bottom
+    /// does meets nothing (the test would catch a meeting).
+    #[test]
+    fn bottom_start_and_select_lie_low_between_the_sticks_and_meet_nothing() {
+        let mut asks = extremes();
+        asks.extend(sizes().map(Opts::sized));
+        let (mut low, mut kept_up) = (0, 0);
+        for size in shapes() {
+            let (w, h) = (size.0 as f32, size.1 as f32);
+            for o in &asks {
+                let classic = layout(size, o);
+                let l = layout(size, &Opts { low_start: true, ..*o });
+                let at = |l: &Layout, b: u16| *l.buttons.iter().find(|x| x.bit == b).unwrap();
+                if same_bits(&l, &classic) {
+                    // no room between the sticks: only where a size is larger
+                    // than the pad was
+                    assert!(o.stick > 1.0 || o.buttons > 1.0, "{size:?} {o:?}: Bottom at the pad's own sizes");
+                    kept_up += 1;
+                    continue;
+                }
+                low += 1;
+                for b in [bit::SELECT, bit::START] {
+                    assert!(at(&l, b).r >= 0.8 * at(&classic, b).r - 1e-3, "{size:?} {o:?}: no smaller than 80%");
+                    if o.stick <= 1.0 && o.buttons <= 1.0 && o.edge == 0.0 {
+                        assert_eq!(at(&l, b).r, at(&classic, b).r, "{size:?} {o:?}: at the pad's own sizes, their own size");
+                    }
+                    let d = at(&l, b);
+                    assert!(d.at[1] > h / 2.0 && d.at[1] + d.r <= h, "{size:?} {o:?}: {} low, on the screen: {:?}", bit::name(b), d.at);
+                    // between the sticks (where they are small and close, under them)
+                    let (a, c) = (l.sticks[0], l.sticks[1]);
+                    assert!(d.at[0] > a.home[0] - a.r && d.at[0] < c.home[0] + c.r, "{size:?} {o:?}: {} between the sticks", bit::name(b));
+                    if w >= h {
+                        assert!(d.at[1] > at(&classic, b).at[1] + classic.full, "{size:?}: down from the top");
+                    }
+                }
+                let all = discs(&l);
+                for (i, a) in all.iter().enumerate() {
+                    for c in &all[i + 1..] {
+                        assert!(dist(a.1, c.1) >= a.2 + c.2, "{size:?} {o:?}: {} meets {}", a.0, c.0);
+                    }
+                }
+                for b in &l.buttons {
+                    let was = at(&classic, b.bit);
+                    match b.bit {
+                        bit::SELECT | bit::START => {}
+                        bit::L3 | bit::R3 if w < h => assert_eq!((b.at[0], b.at[1]), (was.at[0], at(&classic, bit::SELECT).at[1]), "{size:?}: upright, L3 and R3 a row up"),
+                        _ => assert_eq!(b.at, was.at, "{size:?}: {} as Classic has it", bit::name(b.bit)),
+                    }
+                }
+            }
+            assert!(at_top(&layout(size, &Opts::default()), size), "{size:?}: the control, Classic's at the top");
+        }
+        eprintln!("Bottom low {low}, kept up for want of room {kept_up}");
+        assert!(low > 10 * kept_up, "nearly always low: {low} against {kept_up}");
+    }
+
+    fn at_top(l: &Layout, size: (u32, u32)) -> bool {
+        size.0 < size.1 || l.buttons.iter().filter(|b| matches!(b.bit, bit::SELECT | bit::START)).all(|b| b.at[1] < size.1 as f32 / 4.0)
+    }
+
+    /// A part moved is every one of its discs (and its stick's ring and zone)
+    /// moved alike and nothing else, as far as it stays whole on the screen,
+    /// at any move asked; nothing moved is the pad as laid out, to the bit.
+    #[test]
+    fn a_part_moved_moves_alone_and_stays_on_the_screen() {
+        for size in shapes() {
+            let (w, h) = (size.0 as f32, size.1 as f32);
+            let wide = w >= h;
+            let base = layout(size, &Opts::default());
+            assert!(same_bits(&layout(size, &Opts { moves: [[0.0; 2]; 3], ..Opts::default() }), &base));
+            for part in PARTS {
+                for m in [[0.1, -0.2], [-0.3, 0.05], [MOVE_MOST, MOVE_MOST], [-MOVE_MOST, -MOVE_MOST], [f32::NAN, 0.2]] {
+                    let mut o = Opts::default();
+                    o.moves[part.index()] = m;
+                    let l = layout(size, &o);
+                    let b = l.part_box(part, wide).unwrap();
+                    assert!(b[0] >= -0.01 && b[1] >= -0.01 && b[2] <= w + 0.01 && b[3] <= h + 0.01, "{size:?} {part:?} {m:?}: on the screen {b:?}");
+                    let d = moves_drawn(size, &o)[part.index()].map(|v| v * w.min(h));
+                    if m[0].abs() < 0.5 && !m[0].is_nan() {
+                        // a small move inside the screen is the move asked
+                        let room = base.part_box(part, wide).unwrap();
+                        if room[0] + m[0] * w.min(h) >= 0.0 && room[2] + m[0] * w.min(h) <= w {
+                            assert!((d[0] - m[0] * w.min(h)).abs() < 0.01, "{size:?} {part:?}: across as asked");
+                        }
+                    }
+                    for (x, y) in l.buttons.iter().zip(&base.buttons) {
+                        let want = if Part::of(x.bit, wide) == part { [y.at[0] + d[0], y.at[1] + d[1]] } else { y.at };
+                        assert!((x.at[0] - want[0]).abs() < 0.01 && (x.at[1] - want[1]).abs() < 0.01, "{size:?} {part:?} {m:?}: {}", bit::name(x.bit));
+                    }
+                    for (k, (x, y)) in l.sticks.iter().zip(&base.sticks).enumerate() {
+                        let mine = part.stick() == Some(k);
+                        let want = if mine { [y.home[0] + d[0], y.home[1] + d[1]] } else { y.home };
+                        assert!((x.home[0] - want[0]).abs() < 0.01 && (x.home[1] - want[1]).abs() < 0.01, "{size:?} {part:?}: stick {k}");
+                        assert!(x.zone[0] >= 0.0 && x.zone[2] <= w && x.zone[1] >= 0.0 && x.zone[3] <= h && x.takes(x.home, false), "{size:?} {part:?}: stick {k}'s zone round it");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Move Touch Pad: a finger on the left side drags it (its d-pad and its
+    /// stick with it, the right side left), pressing nothing on the port and
+    /// looking nowhere; its lift hands the pad as it was left to be kept,
+    /// once, and from then it is drawn so. A drag past the screen's side keeps
+    /// it whole on the screen. The control: with Move Touch Pad off the same
+    /// finger on the d-pad presses Up.
+    #[test]
+    fn move_touch_pad_drags_a_part_by_a_finger() {
+        let t = Instant::now();
+        let base = layout(SIZE, &Opts::default());
+        let up = base.buttons.iter().find(|b| b.bit == bit::UP).unwrap().at;
+        let mut p = TouchPad::new(true);
+        p.touch(1, Phase::Started, up, t, SIZE);
+        assert_eq!(p.report().buttons, bit::UP, "the control: off, the d-pad's");
+        p.touch(1, Phase::Ended, up, t, SIZE);
+        p.edit = true;
+        p.touch(2, Phase::Started, up, t, SIZE);
+        assert_eq!(p.report(), Report::default(), "nothing pressed");
+        p.touch(2, Phase::Moved, [up[0] + 100.0, up[1] - 50.0], t, SIZE);
+        assert_eq!((p.report(), p.take_look()), (Report::default(), (0.0, 0.0, 0.0)), "nothing pressed or looked");
+        let l = p.layout();
+        let moved = |l: &Layout, b: u16| l.buttons.iter().find(|x| x.bit == b).unwrap().at;
+        assert_eq!(moved(&l, bit::UP), [up[0] + 100.0, up[1] - 50.0], "drawn where the finger has it");
+        assert_eq!(l.sticks[0].home, [base.sticks[0].home[0] + 100.0, base.sticks[0].home[1] - 50.0], "its stick with it");
+        assert_eq!((moved(&l, bit::TRIANGLE), l.sticks[1].home), (moved(&base, bit::TRIANGLE), base.sticks[1].home), "the right side left");
+        assert_eq!(p.take_edited(), None, "nothing kept while the finger is down");
+        p.touch(2, Phase::Ended, [up[0] + 100.0, up[1] - 50.0], t, SIZE);
+        let o = p.take_edited().expect("kept at the lift");
+        let short = SIZE.1 as f32;
+        assert!((o.moves[0][0] - 100.0 / short).abs() < 1e-5 && (o.moves[0][1] + 50.0 / short).abs() < 1e-5 && o.moves[1] == [0.0; 2], "{o:?}");
+        assert_eq!((p.opts, p.take_edited()), (o, None), "drawn so, handed once");
+        assert!(p.take_clicks().is_empty(), "no tap");
+        // past the screen's side: whole on it
+        let now = moved(&p.layout(), bit::UP);
+        p.touch(3, Phase::Started, now, t, SIZE);
+        p.touch(3, Phase::Moved, [now[0] - 5000.0, now[1]], t, SIZE);
+        p.touch(3, Phase::Ended, [now[0] - 5000.0, now[1]], t, SIZE);
+        let o = p.take_edited().unwrap();
+        let b = layout(SIZE, &o).part_box(Part::Left, true).unwrap();
+        assert!(b[0].abs() < 0.01, "at the left edge: {b:?}");
+        // a drag back right moves it at once (the move kept is the one drawn)
+        let now = moved(&p.layout(), bit::UP);
+        p.touch(4, Phase::Started, now, t, SIZE);
+        p.touch(4, Phase::Moved, [now[0] + 10.0, now[1]], t, SIZE);
+        assert!((moved(&p.layout(), bit::UP)[0] - now[0] - 10.0).abs() < 0.01, "no slack to take up");
+        p.touch(4, Phase::Ended, [now[0] + 10.0, now[1]], t, SIZE);
+        // the middle, by Select
+        let sel = moved(&p.layout(), bit::SELECT);
+        p.touch(5, Phase::Started, sel, t, SIZE);
+        p.touch(5, Phase::Moved, [sel[0], sel[1] + 200.0], t, SIZE);
+        p.touch(5, Phase::Ended, [sel[0], sel[1] + 200.0], t, SIZE);
+        assert!((p.take_edited().unwrap().moves[2][1] - 200.0 / short).abs() < 1e-5, "Select and Start moved down");
+    }
+
+    /// Two fingers on the pad while it is edited pinch both sizes alike, in
+    /// the rows' fives and range (apart larger, together smaller), and stop a
+    /// drag; the bar's Reset puts the sizes and every move back (the opacity
+    /// kept), Done turns Move Touch Pad off, and a finger off every part and
+    /// the bar does nothing.
+    #[test]
+    fn a_pinch_sizes_the_pad_and_the_bar_resets_or_ends_it() {
+        let t = Instant::now();
+        set_editing(true);
+        let mut p = TouchPad::new(true);
+        p.edit = true;
+        p.opts.opacity = 0.5;
+        let (a, b) = ([1000.0, 500.0], [1200.0, 500.0]);
+        p.touch(1, Phase::Started, a, t, SIZE);
+        p.touch(2, Phase::Started, b, t, SIZE);
+        p.touch(2, Phase::Moved, [1300.0, 500.0], t, SIZE);
+        // 300 / 200 = 1.5
+        assert_eq!((p.drawn_opts().stick, p.drawn_opts().buttons), (1.5, 1.5));
+        p.touch(2, Phase::Moved, [1203.0, 500.0], t, SIZE);
+        assert_eq!((p.drawn_opts().stick, p.drawn_opts().buttons), (1.0, 1.0), "203/200 to the nearest five");
+        p.touch(1, Phase::Moved, [1190.0, 500.0], t, SIZE);
+        assert_eq!(p.drawn_opts().stick, SMALLEST, "no smaller than the rows go");
+        p.touch(2, Phase::Moved, [9000.0, 500.0], t, SIZE);
+        assert_eq!(p.drawn_opts().buttons, LARGEST, "no larger");
+        assert_eq!(p.drawn_opts().moves, [[0.0; 2]; 3], "no part dragged by a pinch");
+        p.touch(1, Phase::Ended, [1190.0, 500.0], t, SIZE);
+        assert_eq!(p.take_edited(), None, "one finger still down");
+        p.touch(2, Phase::Moved, [8000.0, 500.0], t, SIZE);
+        p.touch(2, Phase::Ended, [8000.0, 500.0], t, SIZE);
+        let o = p.take_edited().unwrap();
+        assert_eq!((o.stick, o.buttons, o.opacity), (LARGEST, LARGEST, 0.5), "kept at the last lift");
+        // the bar (as drawn at frame rectangles)
+        let reset = [100.0, 100.0, 140.0, 120.0];
+        let done = [150.0, 100.0, 190.0, 120.0];
+        testing_edit_buttons(vec![(reset, EditButton::Reset), (done, EditButton::Done)]);
+        let window = |f: [f32; 2]| render::ui::window_from_frame(SIZE, f);
+        p.opts.moves[1] = [0.2, 0.1];
+        p.touch(3, Phase::Started, window([120.0, 110.0]), t, SIZE);
+        p.touch(3, Phase::Ended, window([120.0, 110.0]), t, SIZE);
+        assert_eq!(p.take_edited(), Some(Opts { opacity: 0.5, ..Opts::default() }), "Reset: as it was, its opacity kept");
+        assert!(editing(), "still editing");
+        // nowhere: the middle of a wide screen holds no part
+        p.touch(4, Phase::Started, [1200.0, 300.0], t, SIZE);
+        p.touch(4, Phase::Moved, [1300.0, 400.0], t, SIZE);
+        p.touch(4, Phase::Ended, [1300.0, 400.0], t, SIZE);
+        assert_eq!(p.take_edited(), None, "off every part: nothing");
+        p.touch(5, Phase::Started, window([170.0, 110.0]), t, SIZE);
+        assert!(!editing(), "Done");
+        set_editing(false);
+    }
 }
+
