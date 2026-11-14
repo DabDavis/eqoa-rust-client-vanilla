@@ -578,22 +578,43 @@ pub fn borrow_epic(m: &mut esf::Model, src: &esf::Model, hue: Option<[u8; 3]>, s
     }
 }
 
+/// How far along a held item its trail runs: the farther of its two point
+/// sprites (`trails::weapon_points`) from the hand; none for an item without
+/// them (or with them at the hand).
+pub fn reach(lib: &esf::Library, item: u32) -> Option<f32> {
+    let p = crate::trails::weapon_points(lib, item)?;
+    let len = |m: &Matrix44<Ee>| (m.m[3].x.0 * m.m[3].x.0 + m.m[3].y.0 * m.m[3].y.0 + m.m[3].z.0 * m.m[3].z.0).sqrt();
+    Some(len(&p.a).max(len(&p.b))).filter(|&r| r > 0.01)
+}
+
 /// The particles a hand's aura `a` puts on the item `item` held at `at` (its
 /// node's world transform), by holder `holder` and hand `hand`: each of its
 /// source's particle sprites (`particles::item_emitters`) under the member
-/// transform it has in the source, in the aura's hue (none: the source's own
-/// colours), keyed from [`HAND_AURA_FIRST`]. None when the source is the item
-/// itself (its own particles are already in hand) or has none.
+/// transform it has in the source, its place moved along to the same share of
+/// the item's reach as of the source's ([`reach`]: the druid's staff's
+/// sparkles, 1.25 up a 1.61 staff, at 0.78 of a scimitar's blade, not past
+/// its tip; the place kept when either has no trail), in the aura's hue
+/// (none: the source's own colours), keyed from [`HAND_AURA_FIRST`]. None
+/// when the source is the item itself (its own particles are already in
+/// hand) or has none.
 pub fn hand_emitters(lib: &esf::Library, holder: i32, hand: usize, item: u32, at: &Matrix44<Ee>, a: &net::entity::PieceAura, drawn: bool) -> Vec<crate::particles::InHand> {
     let src = hand_source(a);
     if src == item {
         return Vec::new();
     }
     let tint = hand_hue(a);
+    let k = reach(lib, item).zip(reach(lib, src)).map_or(1.0, |(i, s)| i / s);
     crate::particles::item_emitters(lib, src)
         .into_iter()
         .enumerate()
-        .map(|(k, e)| crate::particles::InHand { key: (holder, hand, src, HAND_AURA_FIRST + k), world: Matrix44::mul(&e.member, at), def: e.def, how: crate::particles::How::Sprite(e.flags), drawn, tint })
+        .map(|(n, e)| {
+            let mut member = e.member;
+            if k != 1.0 {
+                let t = member.m[3];
+                member.m[3] = Vect4::new(F::new(t.x.0 * k), F::new(t.y.0 * k), F::new(t.z.0 * k), t.w);
+            }
+            crate::particles::InHand { key: (holder, hand, src, HAND_AURA_FIRST + n), world: Matrix44::mul(&member, at), def: e.def, how: crate::particles::How::Sprite(e.flags), drawn, tint }
+        })
         .collect()
 }
 
@@ -1013,10 +1034,49 @@ mod tests {
         assert_eq!(lent.len(), 1);
         assert_eq!(lent[0].key, (3, 1, SICKLE_OF_AVHI_ESCRON, HAND_AURA_FIRST));
         assert_eq!((lent[0].def, lent[0].tint), (own[0].def, None));
+        // where the sickle carries it, at the same share of the dagger's reach
+        let k = reach(&lib, DAGGER).unwrap() / reach(&lib, SICKLE_OF_AVHI_ESCRON).unwrap();
         let (w, o) = (lent[0].world.m[3], own[0].member.m[3]);
-        assert_eq!((w.x.0, w.y.0, w.z.0), (o.x.0, o.y.0, o.z.0), "where the sickle carries it");
+        assert!([(w.x.0, o.x.0), (w.y.0, o.y.0), (w.z.0, o.z.0)].iter().all(|(w, o)| (w - o * k).abs() < 1e-5), "{:?} vs {:?} x {k}", (w.x.0, w.y.0, w.z.0), (o.x.0, o.y.0, o.z.0));
         assert!(hand_emitters(&lib, 3, 0, SICKLE_OF_AVHI_ESCRON, &at, &a, true).is_empty(), "the sickle itself: its own alone");
         let red = PieceAura { color: [0xFF, 0x20, 0x20, 0xFF], ..a };
         assert_eq!(hand_emitters(&lib, 3, 1, DAGGER, &at, &red, true)[0].tint, Some([0xFF, 0x20, 0x20]));
+    }
+
+    /// The druid staff glow (the Oak Staff of Eilerawdl, 0xCBF4135A) on
+    /// Zerkziee's weapons: its sparkles 1.25 up the 1.61 staff go at that
+    /// share of each held item's reach, inside the Triad Scimitar's (0.999)
+    /// and the ranger's axe's (0.625) tips, not past them; its amber
+    /// emissive (120, 80, 30) and gold sheen (255, 204, 0) lent. The
+    /// control: an item without a trail keeps the staff's place.
+    #[test]
+    fn the_druid_staff_glow_on_a_scimitar_and_an_axe() {
+        use net::entity::PieceAura;
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("ITEM.ESF", esf::Container::open(disc.read("ITEM.ESF").unwrap()).unwrap());
+        const STAFF: u32 = 0xCBF4_135A;
+        let a = PieceAura { color: [0; 4], kind: net::npctint::Aura::EPIC, source: STAFF, nodes: 0 };
+        let at = Matrix44::<Ee>::identity();
+        let staff = reach(&lib, STAFF).unwrap();
+        assert!((staff - 1.606).abs() < 0.01, "{staff}");
+        for (item, tip) in [(0xD039_42DEu32, 0.999f32), (0x1166_6A69, 0.6806)] {
+            let r = reach(&lib, item).unwrap();
+            assert!((r - tip).abs() < 0.01, "{item:#X}: {r}");
+            let lent = hand_emitters(&lib, 1, 0, item, &at, &a, true);
+            assert_eq!(lent.len(), 1, "the staff's one sparkle sprite");
+            let t = lent[0].world.m[3];
+            let d = (t.x.0 * t.x.0 + t.y.0 * t.y.0 + t.z.0 * t.z.0).sqrt();
+            assert!(d < r && (d - r * 1.25 / staff).abs() < 0.01, "{item:#X}: at {d}, reach {r}");
+        }
+        assert_eq!(reach(&lib, 0x1234_5678), None, "the control: no such item, no reach");
+        let build = |id: u32| lib.lookup(id as i32).and_then(|r| lib.build_model(r)).unwrap();
+        let mut m = build(0xD039_42DE);
+        borrow_epic(&mut m, &build(STAFF), None, false);
+        assert!(m.batches.iter().all(|b| b.layers[0].emissive == [120, 80, 30, 255] && b.layers.last().unwrap().color == [255, 204, 0, 255]));
     }
 }

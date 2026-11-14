@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Weapon auras sit on the blade
+- **An epic's sparkles on a borrowed weapon** now sit along that weapon's own blade, where they sit on the epic (a
+  druid staff's sparkles near the top of a scimitar or an axe, not floating past its tip).
+
 ## 2026-11-14 · Move and resize the touch controls with your fingers
 - **Move and resize the on-screen controls by touch** (phones, tablets and the Android app): Options > Extended >
   Touch Controls > Layout > Move Touch Pad, then leave the menu. Drag the left side, the right side or Start and
