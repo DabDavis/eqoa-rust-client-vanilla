@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Plane of Sky isles by name
+- **Where you are in the Plane of Sky**: the map's title, the start menu's Location and the group's waypoint line
+  now name the isle you are on: "Plane of Sky (Night Chain 1)", "Plane of Sky (Rain Chain 3)", "Plane of Sky
+  (Main Isle)", "Plane of Sky (Isle of Wonder)" and so on, for every isle of the Rain, Day, Night, Snow and
+  Desolation chains.
+
 ## 2026-11-14 · Cleaner armor trim
 - **Trim dyes stay on the trim**: the trim colour no longer speckles or smears onto the armor around it. On cloth
   it now fills the yellow bands and the cream padding whole, with clean edges, and leaves the brown leather alone;

@@ -797,6 +797,12 @@ impl Map {
     /// The area a spot is in: its cell's name, as the map's names and title
     /// have it (`cells::name`), when there is one.
     pub fn area_of(&self, spot: community::Spot, words: Option<&vi::strtab::StringTable>) -> Option<String> {
+        // the Plane of Sky's: its isle (`skyisles`; a waypoint has no height, so of two isles over one another the lower)
+        if spot.world == crate::skyisles::WORLD
+            && let Some(isle) = crate::skyisles::isle(spot.at[0], f32::NAN, spot.at[1])
+        {
+            return Some(isle.to_string());
+        }
         let bounds = self.names.bounds.get(usize::try_from(spot.world).ok()?).copied().flatten();
         let n = cells::name(spot.world, bounds, (spot.at[0] / CELL) as i32, (spot.at[1] / CELL) as i32)?;
         words.map(|t| t.get(n as i32, 0).to_string()).filter(|s| s != "(null)" && !s.is_empty())
@@ -1822,9 +1828,11 @@ impl Map {
         let (built, of) = w.builder.progress();
         let c = chrome::Chrome {
             corners: [f([0.0, 0.0]), f([size.0 as f32, size.1 as f32])],
-            title: match area {
-                Some(a) => format!("{world_name}: {a}"),
-                None => world_name,
+            // the Plane of Sky's isle the player stands on (`skyisles`): "Plane of Sky (Night Chain 1)"
+            title: match (player.and_then(|(p, _)| crate::skyisles::place(w.index, p[0], p[1], p[2])), area) {
+                (Some(isle), _) => isle,
+                (None, Some(a)) => format!("{world_name}: {a}"),
+                (None, None) => world_name,
             },
             names,
             keyboard: cx.keyboard,

@@ -176,6 +176,7 @@ mod texpack;
 mod social;
 mod wholist;
 mod zones;
+mod skyisles;
 mod flora;
 mod fx;
 mod fxview;

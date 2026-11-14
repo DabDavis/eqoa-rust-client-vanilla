@@ -720,6 +720,21 @@ fn the_groups_line_names_the_world() {
     assert_eq!(m.group_line(community::Spot { world: 4, at: [1.0, 2.0] }, Some(&words)), None, "a world with no name");
 }
 
+/// In the Plane of Sky the area is the isle (`skyisles`): the group is told
+/// "near Night Chain 1"; off every isle no area. The control: Tunaria's spot
+/// at the same x, z is none (Tunaria's zones are not named here).
+#[test]
+fn the_plane_of_skys_area_is_its_isle() {
+    let mut m = up((1280, 720));
+    let words = vi::strtab::StringTable::parse(b"English\r\nTunaria\r\nPlane of Sky").unwrap();
+    m.names.names[4] = Some(3);
+    let line = m.group_line(community::Spot { world: 4, at: [4160.7, 6404.1] }, Some(&words)).unwrap();
+    assert_eq!(line, "Waypoint in Plane of Sky at x 4161, z 6404 near Night Chain 1");
+    assert_eq!(m.area_of(community::Spot { world: 4, at: [4824.0, 5497.0] }, Some(&words)).as_deref(), Some("Main Isle"));
+    assert_eq!(m.area_of(community::Spot { world: 4, at: [0.0, 0.0] }, Some(&words)), None, "off every isle");
+    assert_eq!(m.area_of(community::Spot { world: 0, at: [4160.7, 6404.1] }, Some(&words)), None, "the control");
+}
+
 /// The waypoints are kept as they change, a line a world, this window's own
 /// (window 2's `waypoints-2.opt`), and read back by a map made later; a
 /// line that does not read is left out. The control: a store that refuses

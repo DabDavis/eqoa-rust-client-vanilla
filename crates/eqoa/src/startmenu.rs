@@ -551,6 +551,8 @@ impl MainMenu {
         let third = |v: f32| if v < -333.34 { 0 } else if v <= 333.34 { 1 } else { 2 };
         let dir = vui.words.get(DIRS[third(off[1])][third(off[0])], vui.language).to_string();
         let text = if dir.is_empty() { name } else { format!("{name} ({dir})") };
+        // the Plane of Sky's isle in the ninth's place (`skyisles`): "Plane of Sky (Night Chain 1)"
+        let text = crate::skyisles::place(loc.world, loc.pos[0], loc.pos[1], loc.pos[2]).unwrap_or(text);
         self.wrap(vui, r, 150, 32, 2, &wide(&text));
     }
 
