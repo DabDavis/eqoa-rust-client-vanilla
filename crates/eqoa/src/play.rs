@@ -1370,10 +1370,28 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
         }
         attached.push((node, gpu));
     }
+    // a circlet round the head (the helm's aura of kind circlet), while no helm is drawn
+    if !helm_worn
+        && let Some((node, m)) = circlet_on(lib, model, cs, player, c)
+    {
+        attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+    }
     if let Some((node, m)) = wisp_of(lib, cs, c, model, player) {
         attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
     }
     (attached, weapons, helm_worn, helm_aura)
+}
+
+/// A circlet on a creature's head (`aura::circlet`): when its helm's aura is
+/// one, the source's glowing part laid round the head on the helm's node,
+/// measured by set 4's helm as the body would wear it. None without one, for
+/// a body that wears no helm, or a source not loaded.
+pub fn circlet_on(lib: &Library, model: u32, cs: &CSprite<Ee>, player: bool, c: &net::entity::Creature) -> Option<(i32, esf::Model)> {
+    let (src, hue) = crate::aura::circlet_of(&c.colors?.auras)?;
+    let t = crate::s2::get().cust();
+    let (node, measure) = crate::slotless::helm_on(lib, model, cs, player, crate::aura::CIRCLET_MEASURE_SET, [255; 4], &t, true)?;
+    let source = lib.lookup(src as i32).and_then(|r| lib.build_model(r))?;
+    Some((node, crate::aura::circlet(&source, &measure, hue)?))
 }
 
 /// A Wisp's wisp (`wisp`), for a player's character whose race look (by its

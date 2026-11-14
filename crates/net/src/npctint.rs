@@ -77,6 +77,10 @@ impl Aura {
     /// particle sprites, in the colour's hue when it lights, else in its own.
     /// Never sent on a body or a piece.
     pub const EPIC: u8 = 7;
+    /// A source's glowing part worn as a circlet round the head
+    /// (go-eqoa-server's `AuraCirclet`, the helm's aura alone): drawn while no
+    /// helm is. Never sent on any other piece.
+    pub const CIRCLET: u8 = 8;
 
     /// Whether a kind names a shell or a trim outright (not the default): a
     /// black glow, which lights nothing, is then a dark aura ([`dark`]).

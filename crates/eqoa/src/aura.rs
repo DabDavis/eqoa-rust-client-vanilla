@@ -450,6 +450,9 @@ pub fn body_aura(model: &esf::Model, cs: &vi::csprite::CSprite<Ee>, auras: &[net
 /// particles on the helm's node `node`. (The helm the plate wears, set 4's,
 /// is plain steel: no trim.)
 pub fn helm_aura(auras: &[net::entity::PieceAura; net::entity::AURAS], node: i32) -> (Option<render::shell::PartOf>, Option<Worn>) {
+    if auras[HELM].kind == net::npctint::Aura::CIRCLET {
+        return (None, None); // a circlet is drawn while no helm is ([`circlet`])
+    }
     let t = piece_tint(&auras[HELM]);
     (npc_shell_part(t), npc_particles(t).map(|particles| Worn { nodes: vec![node], particles, first: 64 * (HELM + 1) }))
 }
@@ -604,7 +607,10 @@ pub fn along(a: &net::entity::PieceAura) -> Option<f32> {
 /// transform it has in the source, its place moved along to the same share of
 /// the item's reach as of the source's ([`reach`]: the druid's staff's
 /// sparkles, 1.25 up a 1.61 staff, at 0.78 of a scimitar's blade, not past
-/// its tip; the place kept when either has no trail), or, when the aura says
+/// its tip; the place kept when the source has no trail), at the hand for an
+/// item with no trail (a bow, whose grip is its middle: the owner,
+/// 2026-11-14, "zerkziee's bow has the aura too far out and lets put it
+/// where the hand is"; a shield), or, when the aura says
 /// where ([`along`]), that share of the item's reach out from the hand along
 /// the emitter's own line, in the aura's hue
 /// (none: the source's own colours), keyed from [`HAND_AURA_FIRST`]. None
@@ -617,7 +623,12 @@ pub fn hand_emitters(lib: &esf::Library, holder: i32, hand: usize, item: u32, at
     }
     let tint = hand_hue(a);
     let held = reach(lib, item);
-    let share = held.zip(reach(lib, src)).map_or(1.0, |(i, s)| i / s);
+    // an item with no trail (a bow, held at its middle; a shield): at the
+    // hand, its grip, whatever the aura's along
+    let share = match held {
+        None => 0.0,
+        Some(i) => reach(lib, src).map_or(1.0, |s| i / s),
+    };
     let at_share = held.zip(along(a));
     crate::particles::item_emitters(lib, src)
         .into_iter()
@@ -637,6 +648,125 @@ pub fn hand_emitters(lib: &esf::Library, holder: i32, hand: usize, item: u32, at
             crate::particles::InHand { key: (holder, hand, src, HAND_AURA_FIRST + n), world: Matrix44::mul(&member, at), def: e.def, how: crate::particles::How::Sprite(e.flags), drawn, tint }
         })
         .collect()
+}
+
+/// The Ascendant staff, the monk's level 49 epic (ITEM.ESF Monk_Staff): at
+/// its yin-yang end a flat glowing ring with a criss-cross through it
+/// (batch 5: additive, a light band and a streak texture scrolling round,
+/// 0.105 across, in the staff's x-z plane at z 1.4), the monk circlet's.
+pub const ASCENDANT_STAFF: u32 = 0x1D87_5ECD;
+
+/// The helm set whose helm measures a head for a circlet ([`circlet`]): set
+/// 4's great helm, which every body that wears helms has, fitted to it.
+pub const CIRCLET_MEASURE_SET: u8 = 4;
+
+/// A source's glowing part ([`circlet`]): its batches every layer of which
+/// is additive, and their vertices' middle and half-extents (staff space).
+pub fn glowing_part(src: &esf::Model) -> Option<(Vec<usize>, [f32; 3], [f32; 3])> {
+    let batches: Vec<usize> = src.batches.iter().enumerate().filter(|(_, b)| !b.layers.is_empty() && b.layers.iter().all(|l| l.blend == 1)).map(|(i, _)| i).collect();
+    let mut lo = [f32::MAX; 3];
+    let mut hi = [f32::MIN; 3];
+    for &i in &batches {
+        for &v in &src.batches[i].indices {
+            let p = src.pos[v as usize];
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+    }
+    (!batches.is_empty()).then(|| (batches, std::array::from_fn(|k| (lo[k] + hi[k]) / 2.0), std::array::from_fn(|k| (hi[k] - lo[k]) / 2.0)))
+}
+
+/// How far past the head a circlet's ring stands: its flat ring laid round
+/// the head shows only where it stands out of it (inside, the head hides it).
+pub const CIRCLET_OUT: f32 = 1.3;
+
+/// Where on the head a circlet sits, in the helm node's frame: the middle of
+/// the measuring helm's ([`CIRCLET_MEASURE_SET`], seated on the body as a
+/// worn one is) across and front to back, 62% of the way up from its lowest
+/// point (the brow; the great helm runs from the chin to its spike), and its
+/// half-width and (a little in: the helm's face guard stands off the face)
+/// half-depth, times [`CIRCLET_OUT`]: the place and the radii across and
+/// front to back.
+pub fn head_band(helm: &esf::Model) -> Option<([f32; 3], [f32; 2])> {
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for p in &helm.pos {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    (lo[0] < hi[0]).then(|| ([(lo[0] + hi[0]) / 2.0, lo[1] + 0.62 * (hi[1] - lo[1]), (lo[2] + hi[2]) / 2.0], [(hi[0] - lo[0]) / 2.0 * CIRCLET_OUT, (hi[2] - lo[2]) / 2.0 * 0.85 * CIRCLET_OUT]))
+}
+
+/// A circlet (kind circlet on the helm's aura, `net::npctint::Aura::CIRCLET`;
+/// the owner, 2026-11-14: "the effect on the end of the monks epic yin yang
+/// staff the circle of light with the criss cross lets make that effect into
+/// a circlet on the head of dust turn it so it will sit like a circlet"):
+/// the source's glowing part ([`glowing_part`]) cut out of it and laid flat
+/// round the head on the helm's node: its flat plane (the source's
+/// thinnest axis) turned to the node's up (y), its middle at the brow and its
+/// width and depth the head's ([`head_band`] of `measure`, the helm a body
+/// wears seated as worn). Its parts inside the head are hidden by it, so the
+/// ring shows round the brow. In the aura's hue when its colour lights
+/// (`glow8`), else in the source's own colours. Drawn while no helm is.
+pub fn circlet(src: &esf::Model, measure: &esf::Model, hue: Option<[u8; 3]>) -> Option<esf::Model> {
+    let (batches, mid, half) = glowing_part(src)?;
+    let (at, radii) = head_band(measure)?;
+    // the source's two widest axes lie in the band, its thinnest goes up
+    let mut order = [0usize, 1, 2];
+    order.sort_by(|&a, &b| half[b].partial_cmp(&half[a]).unwrap());
+    let (across, front, up) = (order[0], order[1], order[2]);
+    let scale = |k: usize, r: f32| if half[k] > 1e-4 { r / half[k] } else { 1.0 };
+    let (sx, sz) = (scale(across, radii[0]), scale(front, radii[1]));
+    // the part's own vertices alone, renumbered
+    let mut m = esf::Model { skinned: false, ..Default::default() };
+    let mut map = std::collections::HashMap::new();
+    for &i in &batches {
+        let mut b = src.batches[i].clone();
+        for v in &mut b.indices {
+            let o = *v as usize;
+            *v = *map.entry(o).or_insert_with(|| {
+                m.pos.push(src.pos[o]);
+                let take = |a: &[[f32; 2]]| a.get(o).copied();
+                if let Some(uv) = take(&src.uv) {
+                    m.uv.push(uv);
+                }
+                if let Some(n) = src.normal.get(o) {
+                    m.normal.push(*n);
+                }
+                if let Some(c) = src.color.get(o) {
+                    m.color.push(*c);
+                }
+                m.pos.len() as u32 - 1
+            });
+        }
+        m.batches.push(b);
+    }
+    m.triangles = m.batches.iter().map(|b| b.indices.len() as u32 / 3).sum();
+    m.parts = 1;
+    for p in &mut m.pos {
+        let d = [p[0] - mid[0], p[1] - mid[1], p[2] - mid[2]];
+        *p = [at[0] + d[across] * sx, at[1] + d[up], at[2] + d[front] * sz];
+    }
+    for n in &mut m.normal {
+        let o = *n;
+        *n = [o[across], o[up], o[front]];
+    }
+    if let Some(c) = hue {
+        for l in m.batches.iter_mut().flat_map(|b| b.layers.iter_mut()) {
+            l.color = glow8(l.color, c);
+        }
+    }
+    Some(m)
+}
+
+/// The circlet a body's helm aura names (kind circlet), if it names one:
+/// its source (0: the Ascendant staff) and its hue.
+pub fn circlet_of(auras: &[net::entity::PieceAura; net::entity::AURAS]) -> Option<(u32, Option<[u8; 3]>)> {
+    let a = auras[HELM];
+    (a.kind == net::npctint::Aura::CIRCLET).then(|| (if a.source == 0 { ASCENDANT_STAFF } else { a.source }, hand_hue(&a)))
 }
 
 #[cfg(test)]
@@ -1135,5 +1265,82 @@ mod tests {
             assert!((len(place(none)) - 1.25 * r / staff).abs() < 0.01, "{none}: the source's share");
         }
         assert_eq!((along(&PieceAura { nodes: 45, ..Default::default() }), along(&PieceAura::default())), (Some(0.45), None));
+    }
+
+    /// A bow has no trail and is held at its middle: a hand aura's borrowed
+    /// particles sit at the hand (the item's origin, its grip), whatever its
+    /// along (Zerkziee's 45); the control, the scimitar in the same hand,
+    /// still at 45% of its reach.
+    #[test]
+    fn a_bows_aura_at_the_grip() {
+        use net::entity::PieceAura;
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("ITEM.ESF", esf::Container::open(disc.read("ITEM.ESF").unwrap()).unwrap());
+        let a = PieceAura { color: [0; 4], kind: net::npctint::Aura::EPIC, source: 0xCBF4_135A, nodes: 45 };
+        let at = Matrix44::<Ee>::identity();
+        let len = |t: Vect4<Ee>| (t.x.0 * t.x.0 + t.y.0 * t.y.0 + t.z.0 * t.z.0).sqrt();
+        for bow in [0x361D_AC84u32, 0x0DA9_879A] {
+            assert_eq!(reach(&lib, bow), None, "{bow:#X}: a bow has no trail");
+            let lent = hand_emitters(&lib, 1, 0, bow, &at, &a, true);
+            assert_eq!(lent.len(), 1);
+            assert!(len(lent[0].world.m[3]) < 1e-5, "{bow:#X}: at the grip");
+        }
+        let lent = hand_emitters(&lib, 1, 0, 0xD039_42DE, &at, &a, true);
+        assert!((len(lent[0].world.m[3]) - 0.45 * reach(&lib, 0xD039_42DE).unwrap()).abs() < 1e-3, "the scimitar still at 45%");
+    }
+
+    /// The monk circlet: the Ascendant staff's glowing part (batch 5, its
+    /// additive ring and criss-cross, flat in the staff's x-z plane at z
+    /// 1.4) cut out, laid flat (its y, the thinnest, the node's up) round a
+    /// head measured by a helm: centred across and front to back on the
+    /// helm, at 62% of its height, its radii [`CIRCLET_OUT`] the helm's
+    /// half-width and 0.85 of its half-depth; its own vertices alone. The
+    /// controls: a source with no additive part (the dagger) makes none; a
+    /// hue recolours the layers; `circlet_of` reads kind 8 alone.
+    #[test]
+    fn the_monk_circlet() {
+        use net::entity::PieceAura;
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("ITEM.ESF", esf::Container::open(disc.read("ITEM.ESF").unwrap()).unwrap());
+        let staff = lib.lookup(ASCENDANT_STAFF as i32).and_then(|r| lib.build_model(r)).unwrap();
+        let (batches, mid, half) = glowing_part(&staff).unwrap();
+        assert_eq!(batches, [5]);
+        assert!((mid[2] - 1.4).abs() < 0.01 && half[1] < 1e-3 && (half[0] - 0.105).abs() < 0.002, "{mid:?} {half:?}");
+        // a helm of known bounds: x -0.09..0.09, y -0.3..-0.03, z -0.14..0.1
+        let helm = esf::Model { pos: vec![[-0.09, -0.3, -0.14], [0.09, -0.03, 0.1]], ..Default::default() };
+        let c = circlet(&staff, &helm, None).unwrap();
+        assert_eq!((c.batches.len(), c.triangles), (1, 16));
+        assert!(c.pos.len() <= 48, "its own vertices alone: {}", c.pos.len());
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for p in &c.pos {
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        let brow = -0.3 + 0.62 * 0.27;
+        assert!((lo[1] - brow).abs() < 1e-4 && (hi[1] - brow).abs() < 1e-4, "flat at the brow: {lo:?} {hi:?}");
+        assert!((hi[0] - 0.09 * CIRCLET_OUT).abs() < 1e-3 && (lo[0] + 0.09 * CIRCLET_OUT).abs() < 1e-3, "across: {lo:?} {hi:?}");
+        assert!(((hi[2] + lo[2]) / 2.0 + 0.02).abs() < 1e-3 && ((hi[2] - lo[2]) / 2.0 - 0.12 * 0.85 * CIRCLET_OUT).abs() < 1e-3, "front to back: {lo:?} {hi:?}");
+        let red = circlet(&staff, &helm, Some([0xFF, 0x20, 0x20])).unwrap();
+        assert_ne!(red.batches[0].layers[0].color, c.batches[0].layers[0].color);
+        let dagger = lib.lookup(0xBD3C_3DC8u32 as i32).and_then(|r| lib.build_model(r)).unwrap();
+        assert!(circlet(&dagger, &helm, None).is_none(), "the control: no glowing part");
+        let mut auras = [PieceAura::default(); net::entity::AURAS];
+        auras[HELM] = PieceAura { kind: net::npctint::Aura::CIRCLET, ..Default::default() };
+        assert_eq!(circlet_of(&auras), Some((ASCENDANT_STAFF, None)));
+        assert_eq!(helm_aura(&auras, 5), (None, None), "no shell or particles on a helm");
+        auras[HELM].kind = net::npctint::Aura::SHELL;
+        assert_eq!(circlet_of(&auras), None);
     }
 }

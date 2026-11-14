@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Bow auras at the grip; circlets
+- **A weapon aura on a bow** now sits at the hand, on the bow's grip, instead of floating off past it.
+- **Circlets**: a GM can now give a character a glowing circlet round the head made from an epic's effect, such as
+  the monk staff's ring of light. It shows while no helm is drawn (a hidden helm counts as none).
+
 ## 2026-11-14 · Weapon aura sparkles placed along the blade
 - **Where a weapon aura's sparkles sit** can now be set by the server, from the hand up to the tip: the druid staff
   glow now sits mid-blade on a scimitar instead of near its tip.

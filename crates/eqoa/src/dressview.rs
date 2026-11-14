@@ -170,7 +170,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             "pieceaura" => {
                 // slot:RRGGBBAA[:kind[:source[:nodes]]]
                 let parts: Vec<&str> = v.split(':').collect();
-                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body|cape|main|off:RRGGBBAA[:shell|particles|both|none|trim|trimshell|epic[:DictID[:nodes]]]");
+                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body|cape|main|off:RRGGBBAA[:shell|particles|both|none|trim|trimshell|epic|circlet[:DictID[:nodes]]]");
                 let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe", "body", "cape", "main", "off"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
                 let c = u32::from_str_radix(parts.get(1).ok_or_else(usage)?.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))?;
                 let kind = match parts.get(2).copied() {
@@ -182,6 +182,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                     Some("trim") => net::npctint::Aura::TRIM,
                     Some("trimshell") => net::npctint::Aura::TRIM_SHELL,
                     Some("epic") => net::npctint::Aura::EPIC,
+                    Some("circlet") => net::npctint::Aura::CIRCLET,
                     _ => return Err(usage()),
                 };
                 let source = parts.get(3).map(|v| hex(w, v)).transpose()?.unwrap_or(0);
@@ -382,6 +383,19 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         }
     }
     crate::play::dress_look(lib, model, &mut mesh, &cs, look, helm.is_some(), &t, true);
+    // a circlet (`pieceaura=helm:RRGGBBAA:circlet[:DictID]`, `aura::circlet`)
+    // while no helm is worn, hung on the helm's node as the world's `attach` hangs it
+    if helm.is_none()
+        && let Some((src, hue)) = crate::aura::circlet_of(&words.pieces)
+    {
+        let made = crate::slotless::helm_on(lib, model as u32, &cs, true, crate::aura::CIRCLET_MEASURE_SET, [255; 4], &t, true)
+            .and_then(|(node, measure)| lib.lookup(src as i32).and_then(|r| lib.build_model(r)).and_then(|s| crate::aura::circlet(&s, &measure, hue)).map(|m| (node, m)));
+        match &made {
+            Some((node, m)) => eprintln!("circlet of {src:#010X} on node {node}: {} triangles", m.batches.iter().map(|b| b.indices.len() / 3).sum::<usize>()),
+            None => eprintln!("circlet of {src:#010X}: none on this body"),
+        }
+        helm = made;
+    }
     // a Wisp's (`wisp`): its armour alone, the wisp hung on the helm's node as an item is
     let mut wisp = None;
     if let Some((rows, steps)) = &opts {
