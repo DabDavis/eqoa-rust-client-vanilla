@@ -1785,7 +1785,28 @@ impl Map {
         let mut names = Vec::new();
         let k = (f([1.0, 0.0])[0] - f([0.0, 0.0])[0]).max(1e-6);
         let font = l.assets.font.map(|fo| (ui.fonts[fo].height as f32, fo));
-        for cell in 0..cells.len() {
+        // the Plane of Sky's isles by name, each on its own (`skyisles::labels`), in the cells' names' place: the
+        // biggest first, a name that would cover another's moved above or below it, else left out
+        let sky = w.index == crate::skyisles::WORLD;
+        let mut sky_names: Vec<([f32; 2], String)> = Vec::new();
+        if sky && let Some((h, fo)) = font {
+            let wanted: Vec<([f32; 2], &str)> = crate::skyisles::labels().iter().map(|&(n, at)| (v.to_window(size, at), n)).collect();
+            let rects: Vec<[f32; 4]> = wanted
+                .iter()
+                .map(|&(at, n)| {
+                    let half = ui.fonts[fo].string_width(&vi::ui::wide(n)) as f32 / k / 2.0 + 2.0;
+                    [at[0] - half, at[1] - h / k / 2.0, at[0] + half, at[1] + h / k / 2.0]
+                })
+                .collect();
+            for ((_, n), spot) in wanted.iter().zip(crate::skyisles::place_labels(&rects)) {
+                let Some(q) = spot else { continue };
+                let mid = [(q[0] + q[2]) / 2.0, (q[1] + q[3]) / 2.0];
+                if (0.0..size.0 as f32).contains(&mid[0]) && (0.0..size.1 as f32).contains(&mid[1]) {
+                    sky_names.push((f(mid), n.to_string()));
+                }
+            }
+        }
+        for cell in (0..cells.len()).filter(|_| !sky) {
             let (c, r) = cells.col_row(cell);
             let rect = rect_of(cells.rect(cell));
             if rect[2] < 0.0 || rect[0] > size.0 as f32 || rect[3] < 0.0 || rect[1] > size.1 as f32 {
@@ -1826,7 +1847,7 @@ impl Map {
             None => cells::name(w.index, bounds, (v.center[0] / CELL) as i32, (v.center[1] / CELL) as i32).and_then(|n| word(n as i32)),
         };
         let (built, of) = w.builder.progress();
-        let c = chrome::Chrome {
+        let mut c = chrome::Chrome {
             corners: [f([0.0, 0.0]), f([size.0 as f32, size.1 as f32])],
             // the Plane of Sky's isle the player stands on (`skyisles`): "Plane of Sky (Night Chain 1)"
             title: match (player.and_then(|(p, _)| crate::skyisles::place(w.index, p[0], p[1], p[2])), area) {
@@ -1852,6 +1873,18 @@ impl Map {
                 &fallback
             }
         };
+        // the isles' names clear of the chrome's panels and words (its legend, its title)
+        if !sky_names.is_empty() {
+            let panels = chrome::footprint(&l.assets.raster(ui), vui, &c);
+            let h = font.map_or(16.0, |f| f.0);
+            for (at, n) in sky_names {
+                let half = font.map_or(0, |(_, fo)| ui.fonts[fo].string_width(&vi::ui::wide(&n))) as f32 / 2.0;
+                let r = [at[0] - half, at[1] - h / 2.0, at[0] + half, at[1] + h / 2.0];
+                if !panels.iter().any(|q| r[0] < q[2] && q[0] < r[2] && r[1] < q[3] && q[1] < r[3]) {
+                    c.names.push((at, n));
+                }
+            }
+        }
         // where the chrome will go, for what keeps clear of it
         let footprint = chrome::footprint(&l.assets.raster(ui), vui, &c);
         // the names, then the group and the player over them, then the rest

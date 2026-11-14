@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Plane of Sky isles on the map
+- **The map names every isle of the Plane of Sky**: "Main Isle", "Isle of Wonder", "Rain Chain 3", "Night Chain 1",
+  "Snow Chain 2" and the rest are written on the isles themselves, in the map's place-name style. Where two names
+  would cover each other one moves just above or below; the smaller is left out if there is no room, and comes back
+  as you zoom in.
+
 ## 2026-11-14 · Plane of Sky isles by name
 - **Where you are in the Plane of Sky**: the map's title, the start menu's Location and the group's waypoint line
   now name the isle you are on: "Plane of Sky (Night Chain 1)", "Plane of Sky (Rain Chain 3)", "Plane of Sky
