@@ -57,6 +57,8 @@ pub struct Text {
     /// A texel of the atlas in uv, across and down: each glyph's quad is
     /// drawn a texel wider all round, onto its clear ring (`ui::pack`).
     texel: [f32; 2],
+    /// The frames' vertex buffers, destroyed a few frames on (`Retire`).
+    retire: crate::Retire,
 }
 
 impl Text {
@@ -146,7 +148,7 @@ impl Text {
             })
         };
         let (sharp, smooth) = (make("fs_sharp"), make("fs_smooth"));
-        Text { sharp, smooth, bg, glyphs, height: font.height, labels: Vec::new(), plates: Vec::new(), plate_scale: 1.0, texel }
+        Text { sharp, smooth, bg, glyphs, height: font.height, labels: Vec::new(), plates: Vec::new(), plate_scale: 1.0, texel, retire: Default::default() }
     }
 
     /// `GetStringWidth`, in PS2 pixels.
@@ -218,5 +220,6 @@ impl Text {
         pass.set_bind_group(0, &self.bg, &[]);
         pass.set_vertex_buffer(0, buf.slice(..));
         pass.draw(0..v.len() as u32, 0..1);
+        self.retire.keep(buf);
     }
 }

@@ -476,8 +476,13 @@ impl Builder {
                 let shot = self.shot.get_or_insert_with(|| TileShot::new(g.device, TILE, TILE));
                 let items: Vec<render::Draw> = m.parts.iter().map(render::Draw::Model).collect();
                 shot.start(g.device, g.queue, r, &tile_view(self.cells.rect(cell)), &items);
-                // a zone's textures are its own: let go with its models, not kept
-                // for the rest of the world (the GPU's memory)
+                // a zone's models and textures are its own: destroyed once the
+                // shot is submitted, not kept for the rest of the world nor left
+                // to a browser's garbage collector (a whole world's thousands of
+                // buffers a minute: the web page's GPU memory, petition 2097)
+                for gm in &m.parts {
+                    gm.destroy();
+                }
                 r.forget_textures();
                 self.uploaded.clear();
                 self.job = Job::Shot { zi };

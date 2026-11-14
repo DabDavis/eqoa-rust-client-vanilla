@@ -645,6 +645,8 @@ pub struct Ui {
     pub split: Option<usize>,
     /// This layer's own number (`serial`).
     serial: u64,
+    /// The frames' vertex buffers, destroyed a few frames on (`Retire`).
+    retire: crate::Retire,
 }
 
 /// The layers made so far (`Ui::serial`).
@@ -738,7 +740,7 @@ impl Ui {
         let sharp = set("ui sharp text", "fs_sharp_tested", "fs_sharp");
         let smooth = set("ui smooth text", "fs_smooth_tested", "fs_smooth");
         let art_sharp = set("ui sharp", "fs_art_sharp_tested", "fs_art_sharp");
-        Ui { layout, sampler, filtering, pipelines, sharp, smooth, art_sharp, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, shift: [0.0; 2], side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed) }
+        Ui { layout, sampler, filtering, pipelines, sharp, smooth, art_sharp, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, shift: [0.0; 2], side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed), retire: Default::default() }
     }
 
     /// A new frame's quads, for a `size` target: none yet, and those made
@@ -1016,6 +1018,7 @@ impl Ui {
         }
         let buf = device.buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("ui"), contents: bytemuck::cast_slice(&v), usage: wgpu::BufferUsages::VERTEX });
         pass.set_vertex_buffer(0, buf.slice(..));
+        self.retire.keep(buf);
         // Runs of one texture, blend mode and viewport, in order.
         let mut i = 0;
         while i < quads.len() {

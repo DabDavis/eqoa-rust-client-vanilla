@@ -7,6 +7,15 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · The web page stops dropping players out of the world
+- **On the web page, the game no longer stops after a while in the world** ("The client stopped: Uint8Array@[native
+  code]…", and the server seeing you vanish): the map, drawn in the background after you enter a world, made tens of
+  thousands of pieces of graphics memory a minute and left every one for the browser to clean up whenever it got
+  round to it; where the graphics memory ran out first, the next piece the game asked for came back empty and
+  stopped it. Each piece is now given back the moment it is done with, as are the
+  menus' and the text's each frame, and a piece the browser cannot give is skipped instead of stopping the game.
+- If the game does stop, its message now says what went wrong as well as where, for the next bug report.
+
 ## 2026-11-14 · Character select shows the right character from the start
 - **No more wrong character for a moment at character select**: on an account with more than eight characters,
   the character shown beside the list could be the one first in the short list the server sends at first (your

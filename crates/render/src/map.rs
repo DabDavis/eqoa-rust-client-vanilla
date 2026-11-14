@@ -356,11 +356,14 @@ impl TileShot {
     pub fn take(&self) -> Vec<u8> {
         let (w, h) = self.size;
         let mut out = Vec::with_capacity((w * h * 4) as usize);
-        if let Ok(data) = self.buffer.slice(..).get_mapped_range() {
+        // read as the page's WebGPU gives it (`read_mapped`): a mapping it
+        // could not give is a blank tile, never a throw through the frame
+        if let Some(data) = crate::read_mapped(&self.buffer) {
             for y in 0..h as usize {
                 out.extend_from_slice(&data[y * self.row as usize..y * self.row as usize + w as usize * 4]);
             }
         }
+        out.resize((w * h * 4) as usize, 0);
         self.buffer.unmap();
         self.state.store(0, Ordering::Release);
         out
