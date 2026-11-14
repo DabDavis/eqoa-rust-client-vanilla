@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Safari's graphics stopping
+- **On the web page in Safari (on an iPhone, iPad or Mac), the game no longer stops when the browser's graphics stop**
+  ("The client stopped: … InvalidStateError: GPUCommandEncoder.beginRenderPass: Unable to begin render pass",
+  "GPUDevice.createBuffer: Unable to create buffer", "GPUDevice.createCommandEncoder: Unable to make command
+  encoder"): Safari ends its graphics when it runs short of memory, and the game now makes its graphics again and
+  goes on, as it already did in other browsers, saying "The graphics card stopped for a moment".
+- **Where it cannot**, the page says "The graphics stopped" with a Reload button instead of "The client stopped".
+
 ## 2026-11-14 · Battle music after a teleport
 - **Music from the Options sound preview no longer keeps playing after a teleport** (or anything else that closes
   the Options window while its Sound page is up): the battle track the page previews now stops with the window.

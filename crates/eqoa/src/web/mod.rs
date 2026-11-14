@@ -428,7 +428,15 @@ pub fn start() {
             return;
         }
         keep_crash(info);
-        crash("The client stopped", &info.to_string());
+        // a WebGPU call the browser threw from on its lost device that
+        // gpuguard.js did not stand in for: the graphics stopped, not the
+        // client's own fault, and a reload brings them back
+        let text = info.to_string();
+        if crate::gpulost::browser_threw(&text) {
+            crash("The graphics stopped", &crate::gpulost::threw_detail(&text));
+            return;
+        }
+        crash("The client stopped", &text);
     }));
 }
 
@@ -1019,6 +1027,15 @@ pub fn give_up(why: &str) {
 #[wasm_bindgen]
 pub fn lose_device() {
     crate::gpulost::ask_loss();
+}
+
+/// The browser threw from a WebGPU call on the client's device (web/gpuguard.js,
+/// Safari's InvalidStateError once its graphics process has gone): the
+/// device taken as lost, and a new one made in its place (`gpulost`,
+/// `remake`), the game going on.
+#[wasm_bindgen]
+pub fn gpu_threw(what: String) {
+    crate::gpulost::mark(&crate::gpulost::threw_why(&what));
 }
 
 /// Files every scene loads after its own (main.rs's `SHARED`).

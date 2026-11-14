@@ -93,6 +93,31 @@ pub fn mark(why: &str) {
     }
 }
 
+/// Why the device is taken as lost when the browser threw from a WebGPU call
+/// on it (`what`: the call and its error, web/gpuguard.js): Safari throws an
+/// InvalidStateError from a lost device's calls (petitions 5074, 5076, 5105,
+/// 5106) where the spec gives invalid objects.
+pub fn threw_why(what: &str) -> String {
+    let what: String = what.lines().next().unwrap_or("").chars().take(200).collect();
+    format!("the browser refused the device's calls, its graphics process gone ({what})")
+}
+
+/// Whether a panic's text is wgpu's WebGPU backend unwrapping a call the
+/// browser threw from with an InvalidStateError: a lost device's
+/// (`threw_why`), where web/gpuguard.js did not stand in for it.
+pub fn browser_threw(panic: &str) -> bool {
+    panic.contains("backend/webgpu.rs") && panic.contains("InvalidStateError")
+}
+
+/// The page's notice for such a panic: the browser's words (the notice says
+/// to reload).
+pub fn threw_detail(panic: &str) -> String {
+    let at = panic.find("InvalidStateError").unwrap_or(0);
+    let words: String = panic[at..].lines().next().unwrap_or("").chars().take(160).collect();
+    let words = words.split(" @").next().unwrap_or("").trim().to_string();
+    format!("the browser's graphics stopped answering ({words}): its graphics process ended, as a browser's does when it runs short of memory")
+}
+
 /// Whether the device is lost (and not yet made again): nothing more is
 /// drawn or uploaded on it.
 pub fn lost() -> bool {
@@ -380,6 +405,23 @@ mod tests {
         assert!(lost() && again_soon(), "lost again within REPEAT: no second recovery");
         *RECOVERED.lock().unwrap() = Instant::now().checked_sub(REPEAT + Duration::from_secs(1));
         assert!(!again_soon(), "past REPEAT, recovered from again");
+    }
+
+    /// The crash reports' panics (petitions 5076 and 5105, Safari's words)
+    /// are the browser refusing a lost device's calls; the control: another
+    /// wgpu panic, and an InvalidStateError not wgpu's, are not.
+    #[test]
+    fn a_browser_refusal_is_the_graphics_stopping() {
+        let pass = "panicked at src/index.crates.io-1949cf8c6b5b557f/wgpu-30.0.1/src/backend/webgpu.rs:3334:70:\ncalled `Result::unwrap()` on an `Err` value: JsValue(InvalidStateError: GPUCommandEncoder.beginRenderPass: Unable to begin render pass. beginRenderPass@[native code] @https://eqoaclassic.com/eqoa/play/v/76e02bcff137/eqoa.js:524:45";
+        let buffer = "panicked at src/index.crates.io-1949cf8c6b5b557f/wgpu-30.0.1/src/backend/webgpu.rs:2461:63:\ncalled `Result::unwrap()` on an `Err` value: JsValue(InvalidStateError: GPUDevice.createBuffer: Unable to create buffer. createBuffer@[native code]";
+        assert!(browser_threw(pass) && browser_threw(buffer));
+        let d = threw_detail(pass);
+        assert!(d.starts_with("the browser's graphics stopped answering (InvalidStateError: GPUCommandEncoder.beginRenderPass: Unable to begin render pass. beginRenderPass@[native code])"), "{d}");
+        assert!(d.ends_with("runs short of memory"));
+        assert!(!browser_threw("panicked at src/backend/webgpu.rs:2015:90: called `Result::unwrap()` on an `Err` value: wgsl"), "the control: wgpu's own panic");
+        assert!(!browser_threw("panicked at crates/eqoa/src/web/mod.rs:1:1: InvalidStateError"), "the control: not wgpu's");
+        let w = threw_why("GPUDevice.createBuffer: Unable to create buffer.\nmore");
+        assert_eq!(w, "the browser refused the device's calls, its graphics process gone (GPUDevice.createBuffer: Unable to create buffer.)");
     }
 
     #[test]
