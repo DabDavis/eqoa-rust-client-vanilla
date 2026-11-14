@@ -385,7 +385,8 @@ impl Auction {
 /// stack; Sandstorm's S2 lets a stack go too (its record 3 rewrites the
 /// test, so on its PS2s crafting materials and gems sell). The live client
 /// with its feature word's bit 0x08 (`live`, live 0x0130EDB8) asks only
-/// that it trades and rents: stacks and lore items go.
+/// that it trades and rents: stacks and lore items go. Here a lore item
+/// stays greyed under the bit too: the server refuses it (petition 2135).
 pub fn can_sell(it: &NetItem) -> bool {
     can_sell_by(it, crate::s2::get().sell_stack)
 }
@@ -396,7 +397,10 @@ pub fn can_sell_by(it: &NetItem, stack: crate::s2::StackTest) -> bool {
         return false;
     }
     if crate::live::features().has(crate::live::Features::STACKS) {
-        return true;
+        // the live client let a lore item go too; go-eqoa-server refuses one
+        // (word 1727: a buyer could come to hold two), so it is greyed here
+        // as the server will answer (petition 2135, 2026-11-14)
+        return it.item.lore == 0;
     }
     it.item.lore == 0 && stack.passes(it.item.max_stack)
 }
@@ -1112,14 +1116,15 @@ mod tests {
     }
 
     /// The live client's CanSell (0x0130EDB8): with the feature word's bit
-    /// 0x08 a stack and a lore item sell, a no-trade one never; without the
-    /// bit (and with no word, the disc's) the stack and the lore item do
-    /// not (the control).
+    /// 0x08 a stack sells, a no-trade one never, and a lore item not either
+    /// (the live client let it go; the server refuses it, petition 2135);
+    /// without the bit (and with no word, the disc's) the stack and the lore
+    /// item do not (the control).
     #[test]
     fn stacks_and_lore_sell_with_bit_0x08() {
         let bank = stack_bank();
         let sells = |word| crate::live::with_features(word, || bank.items.iter().map(can_sell).collect::<Vec<_>>());
-        assert_eq!(sells(Some(0x1B)), vec![true, true, false]);
+        assert_eq!(sells(Some(0x1B)), vec![true, false, false]);
         assert_eq!(sells(Some(0x10)), vec![false, false, false]);
         assert_eq!(sells(None), vec![false, false, false]);
     }
