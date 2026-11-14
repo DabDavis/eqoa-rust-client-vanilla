@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Freezing weapons
+- **Spell effects as weapon auras**: a GM can now put a spell's hand effect on the weapon in a character's hand, such
+  as the ice dripping off a caster's hands ("freezing"), in any colour, at the hand or up the blade.
+
 ## 2026-11-14 · Energy shields
 - **A shield or weapon can carry an energy skin**: the moving streaks of the old energy shield laid over its own
   look, in its colour, glowing at night. Dust's Heirloom Shield of Twisted Virtue keeps its square shape and its

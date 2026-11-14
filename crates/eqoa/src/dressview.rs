@@ -80,7 +80,7 @@ use vi::vect::Vect3;
 
 /// The files a body and what it holds need, in the order the game registers
 /// them.
-pub const FILES: &[&str] = &["CHARCUST.CSF", "CHARFACE.CSF", "CHAR.ESF", "ITEM.ESF"];
+pub const FILES: &[&str] = &["CHARCUST.CSF", "CHARFACE.CSF", "CHAR.ESF", "ITEM.ESF", "SPELLFX.CSF"];
 
 /// What a list of words names.
 #[derive(Debug)]

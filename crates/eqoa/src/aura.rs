@@ -231,7 +231,48 @@ pub fn npc_particles(t: Option<crate::npctint::Tint>) -> Option<Particles> {
 /// character sprite's first own emitter (`particles::part_emitters`); none
 /// for a source with neither, or not loaded.
 pub fn source_emitter(lib: &esf::Library, source: u32) -> Option<esf::Ref> {
-    crate::particles::item_emitters(lib, source).first().map(|e| e.def).or_else(|| crate::particles::part_emitters(lib, source).first().map(|e| e.def))
+    crate::particles::item_emitters(lib, source)
+        .first()
+        .map(|e| e.def)
+        .or_else(|| crate::particles::part_emitters(lib, source).first().map(|e| e.def))
+        .or_else(|| spell_emitters(lib, source).first().copied())
+}
+
+/// The particle definitions a spell visual or a definition names as a source
+/// (the owner, 2026-11-14: "0x6c151a60 the spell effect of the player's hands
+/// the ice dripping make a weapon aura with /aura blue freezing offhand"): a
+/// particle definition (0xC000) itself; a spell visual (SPELLFX.CSF's 0xC200,
+/// `vi::spell::SpellEffect`) the definitions its caster's list starts on the
+/// caster's hands (a type 3 event, `CreateEmitter`, on the caster, 0x10000,
+/// at an item slot 0-2, no circling shape: 0x6C151A60's ice drip 0x5D471C8E,
+/// on slots 0 and 1), each once, in the list's order. Empty for anything
+/// else or a source not loaded.
+pub fn spell_emitters(lib: &esf::Library, source: u32) -> Vec<esf::Ref> {
+    let Some(r) = lib.lookup(source as i32) else { return Vec::new() };
+    let c = lib.file(r.file);
+    match c.node(r.node).ty {
+        0xC000 => vec![r],
+        0xC200 => {
+            let Some(list) = c.child(r.node, 0xC220) else { return Vec::new() };
+            let d = c.body(list);
+            let i = |o: usize| d.get(o..o + 4).map(|b| i32::from_le_bytes(b.try_into().unwrap()));
+            let mut out: Vec<esf::Ref> = Vec::new();
+            let Some(n) = i(0) else { return out };
+            for k in 0..n.clamp(0, 256) as usize {
+                let p = 4 + 44 * k;
+                let (Some(ty), Some(id), Some(flags)) = (i(p), i(p + 8), i(p + 12)) else { break };
+                let on_hand = flags & 0x10000 != 0 && (0..=2).contains(&(flags & 0xFFFF)) && (flags >> 20) & 3 == 0;
+                if ty == 3 && on_hand
+                    && let Some(def) = lib.lookup(id).filter(|d| lib.file(d.file).node(d.node).ty == 0xC000)
+                    && !out.contains(&def)
+                {
+                    out.push(def);
+                }
+            }
+            out
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// `n` of `points` spread over them, by index: the one nearest their middle,
@@ -679,7 +720,16 @@ pub fn hand_emitters(lib: &esf::Library, holder: i32, hand: usize, item: u32, at
         Some(i) => reach(lib, src).map_or(1.0, |s| i / s),
     };
     let at_share = held.zip(along(a));
-    crate::particles::item_emitters(lib, src)
+    // a spell visual's (or a definition's) emitters: free in the world, at
+    // the hand (as the spell puts them on its caster's hand: the item's
+    // slot), or the aura's along up the item's length (its +z)
+    let mut emitters = crate::particles::item_emitters(lib, src);
+    if emitters.is_empty() {
+        let up = at_share.map_or(0.0, |(r, s)| r * s);
+        let place = Matrix44::transform(&vi::vect::Vect3::of(0.0, 0.0, 0.0), F::ONE, &vi::vect::Vect3::of(0.0, 0.0, up));
+        emitters = spell_emitters(lib, src).into_iter().map(|def| crate::particles::ItemEmitter { member: place, def, flags: 0 }).collect();
+    }
+    emitters
         .into_iter()
         .enumerate()
         .map(|(n, e)| {
@@ -688,6 +738,7 @@ pub fn hand_emitters(lib: &esf::Library, holder: i32, hand: usize, item: u32, at
             let d = (t.x.0 * t.x.0 + t.y.0 * t.y.0 + t.z.0 * t.z.0).sqrt();
             let k = match at_share {
                 Some((r, s)) if d > 0.001 => s * r / d,
+                _ if d <= 0.001 => 1.0, // at the hand already (a spell's), or placed up the item
                 _ => share,
             };
             if k != 1.0 {
@@ -1457,5 +1508,43 @@ mod tests {
         let mut plain = square.clone();
         energy_skin(&mut plain, &square, Some(crimson));
         assert_eq!(plain.batches.iter().map(|b| b.layers.len()).collect::<Vec<_>>(), square.batches.iter().map(|b| b.layers.len()).collect::<Vec<_>>(), "no additive layer: nothing");
+    }
+
+    /// A spell visual as a hand aura's source (the "freezing" look, spell
+    /// visual 0x6C151A60): its caster's list starts the ice drip 0x5D471C8E
+    /// on both hands (slots 0 and 1): one definition, once; a definition
+    /// (0xC000) names itself; an item, a model and nothing name none. In a
+    /// hand: the drip free in the world at the hand, or `along` up the
+    /// weapon's +z; tinted. And `source_emitter` takes it for a body's
+    /// particles too.
+    #[test]
+    fn a_spell_visual_as_a_hand_aura() {
+        use net::entity::PieceAura;
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        for f in ["ITEM.ESF", "SPELLFX.CSF"] {
+            lib.add(f, esf::Container::open(disc.read(f).unwrap()).unwrap());
+        }
+        const FREEZING: u32 = 0x6C15_1A60;
+        let drip = lib.lookup(0x5D47_1C8Eu32 as i32).unwrap();
+        assert_eq!(spell_emitters(&lib, FREEZING), [drip], "the hands' drip, once");
+        assert_eq!(spell_emitters(&lib, 0x5D47_1C8E), [drip], "a definition names itself");
+        assert!(spell_emitters(&lib, 0x17F9_870B).is_empty() && spell_emitters(&lib, 0x1234_5678).is_empty(), "an item, nothing: none");
+        assert_eq!(source_emitter(&lib, FREEZING), Some(drip));
+        let at = Matrix44::<Ee>::identity();
+        let a = PieceAura { color: [0x30, 0x60, 0xFF, 0xFF], kind: net::npctint::Aura::PARTICLES, source: FREEZING, nodes: 0 };
+        let lent = hand_emitters(&lib, 1, 1, 0x17F9_870B, &at, &a, true);
+        assert_eq!(lent.len(), 1);
+        assert_eq!((lent[0].def, lent[0].tint), (drip, Some([0x30, 0x60, 0xFF])));
+        assert!(matches!(lent[0].how, crate::particles::How::Sprite(0)), "free in the world, as the spell's");
+        let t = lent[0].world.m[3];
+        assert_eq!((t.x.0, t.y.0, t.z.0), (0.0, 0.0, 0.0), "at the hand");
+        let r = reach(&lib, 0x17F9_870B).unwrap();
+        let up = hand_emitters(&lib, 1, 1, 0x17F9_870B, &at, &PieceAura { nodes: 40, ..a }, true)[0].world.m[3];
+        assert!((up.z.0 - 0.4 * r).abs() < 1e-4 && up.x.0 == 0.0, "40% up the blade: {:?}", (up.x.0, up.y.0, up.z.0));
     }
 }
