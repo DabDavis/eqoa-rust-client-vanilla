@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Character select shows the right character from the start
+- **No more wrong character for a moment at character select**: on an account with more than eight characters,
+  the character shown beside the list could be the one first in the short list the server sends at first (your
+  most recently played) until the whole list came, so the first name was selected but another character stood
+  there. The character shown now always matches the one selected, and wears its own colours from the start.
+
 ## 2026-11-14 · The Android app updates itself
 - **No more downloading each new APK by hand**: the Android app now looks for a new build when it starts and every
   ten minutes while you play, downloads it in the background (a dropped connection picks up where it stopped), and
