@@ -74,8 +74,10 @@ for abi in ${abis//,/ }; do
     export "CC_$var=$clang" "AR_$var=$NDKBIN/llvm-ar"
     export "CARGO_TARGET_${var^^}_LINKER=$clang"
     echo "== the game for $abi ($triple)"
-    # an updater's channel would have the app replace itself: never in an APK
-    env -u EQOA_UPDATE_CHANNEL cargo build "${locked[@]}" -p eqoa --example eqoa-android --features android --target "$triple" "${cargo_profile[@]}"
+    # the updater's channel and commit, when given (CI's: dev.yml), baked in
+    # as on the desktop: an APK that has them offers the release's newer APK
+    # (update.rs); one built without never does
+    cargo build "${locked[@]}" -p eqoa --example eqoa-android --features android --target "$triple" "${cargo_profile[@]}"
     mkdir -p "$stage/lib/$abi"
     # debug info out (a backtrace there has the symbols the library keeps)
     "$NDKBIN/llvm-strip" --strip-debug -o "$stage/lib/$abi/libeqoa_android.so" "$target_dir/$triple/$profile/examples/libeqoa_android.so"

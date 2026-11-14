@@ -6514,7 +6514,9 @@ impl App {
                             let still = self.console.sticks().iter().all(|v| v.abs() < 0.05);
                             let quiet = plain && p.quiet() && self.held.is_empty() && still;
                             crate::update::offer_frame(crate::update::Moment { quiet, plain, world: true, now });
-                            if crate::update::restarting() {
+                            // (and for Android's install, back to the game's
+                            // own screens while its installer asks)
+                            if crate::update::restarting() || crate::update::leaving() {
                                 p.log_out();
                             }
                         }

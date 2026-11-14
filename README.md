@@ -1867,8 +1867,28 @@ is the game's half):
   (`$EQOA_CACHE`); Android's backup is off (the settings name the account, and Save
   Account keeps its password). The log is logcat's too (tag `eqoa`).
 
-The updater is off (`update`): an installed APK cannot put another program in its
-place, so a newer build is a new APK installed over the old one. One window, so no
+**Its updates**: an installed app cannot put another program in its place and Android
+installs nothing unasked, so a newer build is the release's APK, which Android installs
+over the old one at the player's word (`update`'s module doc). An APK CI built carries
+the channel and its commit (dev.yml's `android` job, as the desktop's), and the
+release's `update.txt` names its APK (`build android eqoa-vanilla-android.apk <sha256>
+<size>`). The app asks the release at its start and every ten minutes, never holding
+up the boot; another commit's APK comes into the app's cache (`cache/update/`,
+`$EQOA_UPDATE_DIR`) under its commit, resumed by a Range where a phone's line cut it,
+held to its size and hash, and kept, so the next start does not download it again (the
+installed APK's own bytes, `$EQOA_APK`, are no update). The game's own question asks,
+Install now / Later, when nothing else is up; Install now logs out of the world as the
+desktop's Restart now does, and the activity (`installUpdate`) writes the APK into a
+`PackageInstaller` session, whose commit puts up Android's own confirm screen. The first
+time, Android's leave to install apps (`REQUEST_INSTALL_PACKAGES`, "install unknown
+apps" for the app) is missing: the player is told why and sent to its setting
+(`ACTION_MANAGE_UNKNOWN_APP_SOURCES`), and the install goes on when they come back with
+it. Android closes the game to install; the player's files stay (the same key). A
+cancel, a refusal or a failure is told in a toast or a dialog and the question comes
+again after half an hour. Test it as the desktop's: two `--debug` builds of different
+`EQOA_BUILD_COMMIT`s (with `EQOA_UPDATE_CHANNEL=dev`), the second's APK and an
+`update.txt` naming it on a server of one's own, the first started with `-e
+EQOA_UPDATE_URL http://10.0.2.2:<port>/ -e EQOA_UPDATE_EVERY 20`. One window, so no
 multiboxing; a mouse's hover and wheel do nothing yet.
 
 The emulator plays it: an x86_64 system image with KVM, `-gpu host` (Vulkan on the

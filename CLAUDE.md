@@ -138,6 +138,9 @@ current.
   test before pushing, and never push a half-done change. Only a build that carries `EQOA_UPDATE_CHANNEL`
   and `EQOA_BUILD_COMMIT` (CI's) updates itself; dev.yml refuses one without its commit. Test the
   updater with `EQOA_UPDATE_URL=<base>` against a server of one's own, never by pushing.
+  The Android app follows the same release (update.txt's `android` line, its APK): downloaded into its
+  cache in the background and installed by Android's own screen at the player's Install now (README
+  "Android", "Its updates"); never silently.
 - **Update notes**: a push that changes the program adds a section on top of `UPDATE-NOTES.md`
   (`## <date> · <title>`, then bullets: what a player sees, in a player's words), in the same push.
   The release page shows them, newest first (`release/notes.sh`): the sections new since the last build

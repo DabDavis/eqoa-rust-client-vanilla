@@ -2,8 +2,13 @@ package io.github.dabdavis.eqoa;
 
 import android.app.AlertDialog;
 import android.app.NativeActivity;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInstaller;
 import android.database.Cursor;
 import android.hardware.input.InputManager;
 import android.net.Uri;
@@ -11,6 +16,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.system.Os;
 import android.text.Editable;
 import android.text.InputType;
@@ -31,6 +37,9 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 /**
  * The game's activity: Android's NativeActivity, which loads the game
@@ -48,7 +57,11 @@ import java.io.File;
  *   an open file, and kept for the next start (keepDisc), when it is opened
  *   again before the game starts ($EQOA_ISO);
  * - where the game keeps its files: the app's own folders ($EQOA_CONFIG,
- *   $EQOA_CACHE).
+ *   $EQOA_CACHE), the update's APK among the cache's ($EQOA_UPDATE_DIR), and
+ *   the APK installed ($EQOA_APK);
+ * - the update (installUpdate): the APK the game downloaded, handed to
+ *   Android's installer once the player said Install now, Android's own
+ *   screen asking them to confirm.
  */
 public class EqoaActivity extends NativeActivity {
     static {
@@ -88,12 +101,24 @@ public class EqoaActivity extends NativeActivity {
     static native void nativeDiscAnswer(boolean yes);
     static native void nativePaused(boolean paused);
     static native void nativeKeyboard(int height);
+    static native void nativeInstall(int status, String message);
+
+    /** nativeInstall's statuses (update.rs's INSTALL_*). */
+    private static final int INSTALL_SHOWN = 0;
+    private static final int INSTALL_CANCELLED = 1;
+    private static final int INSTALL_FAILED = 2;
+    private static final int INSTALL_DENIED = 3;
+    private static final int INSTALL_DONE = 4;
 
     @Override
     protected void onCreate(Bundle state) {
         // where the game keeps its things: the app's own folders
         setenv("EQOA_CONFIG", new File(getFilesDir(), "config").getPath());
         setenv("EQOA_CACHE", new File(getCacheDir(), "dnas").getPath());
+        // the update's APK, downloaded by the game (update.rs), and the one
+        // installed, which a release's of the same bytes is no update to
+        setenv("EQOA_UPDATE_DIR", new File(getCacheDir(), "update").getPath());
+        setenv("EQOA_APK", getPackageCodePath());
         setenv("HOME", getFilesDir().getPath());
         setenv("TMPDIR", getCacheDir().getPath());
         setenv("RUST_BACKTRACE", "1");
@@ -119,6 +144,7 @@ public class EqoaActivity extends NativeActivity {
         addContentView(text, new ViewGroup.LayoutParams(1, 1));
         watchKeyboard();
         immersive();
+        watchInstalls();
     }
 
     /**
@@ -166,6 +192,7 @@ public class EqoaActivity extends NativeActivity {
     protected void onResume() {
         super.onResume();
         nativePaused(false);
+        backFromInstallSettings();
         getSystemService(InputManager.class).registerInputDeviceListener(devices, null);
         immersive();
     }
@@ -622,6 +649,176 @@ public class EqoaActivity extends NativeActivity {
                 android.widget.Toast.makeText(this, url, android.widget.Toast.LENGTH_LONG).show();
             }
         });
+    }
+
+    // ---- the update
+
+    /** The broadcast Android's installer answers a session with (its PendingIntent's). */
+    private static final String INSTALL_STATUS = "io.github.dabdavis.eqoa.INSTALL_STATUS";
+    /** The APK waiting for the player's leave to install apps (askInstallLeave). */
+    private String installWaiting;
+    /** The player was sent to Android's setting for it; asked on the way back (onResume). */
+    private boolean installAsked;
+
+    /**
+     * Install now (android::install_update): the APK at `path` to Android's
+     * installer. Android installs an app's APKs only with the player's leave
+     * ("install unknown apps", for this app, once): without it the player is
+     * told why and sent to that setting, and the install goes on when they
+     * come back with it given.
+     */
+    public void installUpdate(final String path) {
+        runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+                askInstallLeave(path);
+            } else {
+                install(path);
+            }
+        });
+    }
+
+    private void askInstallLeave(final String path) {
+        installWaiting = path;
+        new AlertDialog.Builder(this)
+                .setTitle(TITLE)
+                .setMessage("To install its update, EQOA needs Android's leave to install apps. This is asked once: on the next screen turn on \"Allow from this source\", then come back to the game.")
+                .setCancelable(false)
+                .setPositiveButton("Open settings", (d, w) -> {
+                    try {
+                        installAsked = true;
+                        startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+                    } catch (Exception e) {
+                        installAsked = false;
+                        installWaiting = null;
+                        installFailed("Android's setting cannot be opened (" + e.getMessage() + ").");
+                    }
+                })
+                .setNegativeButton("Not now", (d, w) -> {
+                    installWaiting = null;
+                    nativeInstall(INSTALL_DENIED, null);
+                    toast("The update is not installed: the game offers it again later.");
+                })
+                .show();
+    }
+
+    /** Back in the game (onResume): from the setting, the install goes on if the leave was given. */
+    private void backFromInstallSettings() {
+        if (!installAsked) {
+            return;
+        }
+        installAsked = false;
+        String path = installWaiting;
+        installWaiting = null;
+        if (path == null) {
+            return;
+        }
+        if (getPackageManager().canRequestPackageInstalls()) {
+            install(path);
+        } else {
+            nativeInstall(INSTALL_DENIED, null);
+            toast("EQOA may not install apps, so the update is not installed: the game offers it again later.");
+        }
+    }
+
+    /**
+     * The APK written into a PackageInstaller session of its own (on a
+     * thread: tens of megabytes) and committed; Android answers with its
+     * screen for the player to confirm (watchInstalls).
+     */
+    private void install(final String path) {
+        new Thread(() -> {
+            try {
+                PackageInstaller pi = getPackageManager().getPackageInstaller();
+                // a session an earlier Install now left open (its screen left with Back)
+                for (PackageInstaller.SessionInfo old : pi.getMySessions()) {
+                    try {
+                        pi.abandonSession(old.getSessionId());
+                    } catch (Exception e) {
+                        // not ours to abandon any more
+                    }
+                }
+                PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+                params.setAppPackageName(getPackageName());
+                File apk = new File(path);
+                params.setSize(apk.length());
+                int id = pi.createSession(params);
+                try (PackageInstaller.Session session = pi.openSession(id)) {
+                    try (InputStream in = new FileInputStream(apk); OutputStream out = session.openWrite("base.apk", 0, apk.length())) {
+                        byte[] buf = new byte[256 * 1024];
+                        int n;
+                        while ((n = in.read(buf)) > 0) {
+                            out.write(buf, 0, n);
+                        }
+                        session.fsync(out);
+                    }
+                    Intent status = new Intent(INSTALL_STATUS).setPackage(getPackageName());
+                    // mutable: the installer puts its status in it
+                    int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
+                    session.commit(PendingIntent.getBroadcast(this, id, status, flags).getIntentSender());
+                }
+            } catch (Exception e) {
+                runOnUiThread(() -> installFailed(e.toString()));
+            }
+        }, "install").start();
+    }
+
+    /** Android's installer's answers to the session (install), for as long as the activity is. */
+    private void watchInstalls() {
+        BroadcastReceiver r = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                int status = i.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
+                switch (status) {
+                    case PackageInstaller.STATUS_PENDING_USER_ACTION: {
+                        // Android's own screen: Update, or Cancel
+                        @SuppressWarnings("deprecation")
+                        Intent confirm = i.getParcelableExtra(Intent.EXTRA_INTENT);
+                        if (confirm == null) {
+                            installFailed("Android's installer gave no screen to confirm it on.");
+                            return;
+                        }
+                        try {
+                            startActivity(confirm);
+                            nativeInstall(INSTALL_SHOWN, null);
+                        } catch (Exception e) {
+                            installFailed(e.toString());
+                        }
+                        break;
+                    }
+                    case PackageInstaller.STATUS_SUCCESS:
+                        // (Android closes the game for it: seldom heard)
+                        nativeInstall(INSTALL_DONE, null);
+                        break;
+                    case PackageInstaller.STATUS_FAILURE_ABORTED:
+                        nativeInstall(INSTALL_CANCELLED, null);
+                        toast("The update is not installed: the game offers it again later.");
+                        break;
+                    default:
+                        installFailed(i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE));
+                        break;
+                }
+            }
+        };
+        IntentFilter f = new IntentFilter(INSTALL_STATUS);
+        if (Build.VERSION.SDK_INT >= 33) {
+            // only the app's own PendingIntent sends it
+            registerReceiver(r, f, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(r, f);
+        }
+    }
+
+    private void installFailed(String why) {
+        nativeInstall(INSTALL_FAILED, why);
+        new AlertDialog.Builder(this)
+                .setTitle(TITLE)
+                .setMessage("The update could not be installed" + (why != null ? " (" + why + ")" : "") + ". The game offers it again later; the newest APK is also on the project's release page.")
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
+    private void toast(String s) {
+        android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_LONG).show();
     }
 
     /** The run ended (android_main's end): the activity closes, and the process after it. */
