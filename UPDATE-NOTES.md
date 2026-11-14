@@ -7,6 +7,9 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Lore items at the auction
+- **A Lore item is greyed out in the auction's sell list**, as the server refuses to list one ("Item is not auctionable"): no more choosing one only to be told no.
+
 ## 2026-11-14 · Safari's graphics stopping
 - **On the web page in Safari (on an iPhone, iPad or Mac), the game no longer stops when the browser's graphics stop**
   ("The client stopped: … InvalidStateError: GPUCommandEncoder.beginRenderPass: Unable to begin render pass",
