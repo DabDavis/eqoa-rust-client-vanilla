@@ -1236,6 +1236,15 @@ pub struct ClientOptions {
     /// pad keeps, percent of the window's shorter side, 0 to
     /// `TOUCH_EDGE_MAX` (`touch::layout`).
     pub touch_edge: u8,
+    /// Move Touch Pad's moves (`touch::Opts::moves`): the pad's left side,
+    /// right side and middle, each across and down, thousandths of the
+    /// window's shorter side, `TOUCH_MOVE_MOST` at most either way (the
+    /// server owner's of 2026-11-14: "the apk client cant resize or move touch
+    /// pad display"). Kept the moment a drag or a pinch ends.
+    pub touch_moves: [[i16; 2]; 3],
+    /// Button Layout: Bottom (Select and Start low between the sticks,
+    /// `touch::Opts::low_start`; the GM Jibcrotwo's petition 2084), or Classic.
+    pub touch_low_start: bool,
     /// Texture Packs, natively (the user, 2026-11-08: PCSX2's replacement
     /// packs read as they are, "an Extended page row turns packs on and
     /// off"): on, a texture a pack in `textures/SLUS-20744/replacements`
@@ -1267,6 +1276,8 @@ pub const TOUCH_OPACITY_STEP: u8 = 10;
 /// Touch Edge's most (percent of the window's shorter side) and its step.
 pub const TOUCH_EDGE_MAX: u8 = (crate::touch::EDGE_MOST * 100.0 + 0.5) as u8;
 pub const TOUCH_EDGE_STEP: u8 = 1;
+/// Move Touch Pad's farthest move, in thousandths (`touch::MOVE_MOST`).
+pub const TOUCH_MOVE_MOST: i16 = (crate::touch::MOVE_MOST * 1000.0) as i16;
 
 /// Shadow Distance's ends and step (`ClientOptions::shadow_distance`).
 pub const SHADOW_DISTANCE_GAME: u16 = 250;
@@ -1289,7 +1300,34 @@ impl ClientOptions {
     /// Its touch rows as the pad takes them (`touch::Opts`).
     pub fn touch_opts(&self) -> crate::touch::Opts {
         let share = |v: u8| v as f32 / 100.0;
-        crate::touch::Opts { stick: share(self.touch_stick), buttons: share(self.touch_buttons), opacity: share(self.touch_opacity), edge: share(self.touch_edge) }
+        let moves = self.touch_moves.map(|m| m.map(|v| v as f32 / 1000.0));
+        crate::touch::Opts { stick: share(self.touch_stick), buttons: share(self.touch_buttons), opacity: share(self.touch_opacity), edge: share(self.touch_edge), moves, low_start: self.touch_low_start }
+    }
+
+    /// The touch rows as `o` has them (Move Touch Pad's edit): the sizes to
+    /// their rows' steps and range, the moves to thousandths; the opacity and
+    /// the Button Layout as they were (an edit changes neither), and the edge
+    /// as `o`'s.
+    pub fn with_touch_opts(self, o: &crate::touch::Opts) -> ClientOptions {
+        let size = |v: f32| ((v * 100.0 / TOUCH_SIZE_STEP as f32).round() * TOUCH_SIZE_STEP as f32).clamp(TOUCH_SIZE_MIN as f32, TOUCH_SIZE_MAX as f32) as u8;
+        let edge = (o.edge * 100.0).round().clamp(0.0, TOUCH_EDGE_MAX as f32) as u8;
+        let moves = o.moves.map(|m| m.map(|v| if v.is_nan() { 0 } else { (v * 1000.0).round().clamp(-TOUCH_MOVE_MOST as f32, TOUCH_MOVE_MOST as f32) as i16 }));
+        ClientOptions { touch_stick: size(o.stick), touch_buttons: size(o.buttons), touch_edge: edge, touch_moves: moves, ..self }
+    }
+}
+
+/// Keeps the touch pad as Move Touch Pad's edit left it (`TouchPad::take_edited`):
+/// this window's settings changed so and written at once, as Move HUD keeps
+/// a drag (outside the menu, so nothing else of it is pending). Whether it
+/// was kept.
+pub fn keep_touch_options(o: &crate::touch::Opts) -> bool {
+    set_client(client().with_touch_opts(o));
+    match save_client() {
+        Ok(()) => true,
+        Err(e) => {
+            crate::say(&format!("the touch pad's place was not kept: {e}"));
+            false
+        }
     }
 }
 
@@ -1402,6 +1440,8 @@ impl Default for ClientOptions {
             touch_buttons: TOUCH_SIZE_WAS,
             touch_opacity: TOUCH_OPACITY_WAS,
             touch_edge: 0,
+            touch_moves: [[0; 2]; 3],
+            touch_low_start: false,
             texture_packs: false,
             dump_textures: false,
         }
@@ -1653,6 +1693,15 @@ impl ClientOptions {
                 s.push_str(&format!("{key}={v}\n"));
             }
         }
+        // Move Touch Pad's moves only when one is moved, Button Layout only
+        // when Bottom
+        if self.touch_moves != [[0; 2]; 3] {
+            let m: Vec<String> = self.touch_moves.iter().flatten().map(|v| v.to_string()).collect();
+            s.push_str(&format!("touch_moves={}\n", m.join(",")));
+        }
+        if self.touch_low_start {
+            s.push_str("touch_layout=bottom\n");
+        }
         // Texture Packs and Dump Textures only when on
         if self.texture_packs {
             s.push_str("texture_packs=on\n");
@@ -1863,6 +1912,14 @@ impl ClientOptions {
                         c.touch_edge = t;
                     }
                 }
+                ("touch_moves", v) => {
+                    let m: Vec<i16> = v.split(',').filter_map(|n| n.trim().parse::<i16>().ok().filter(|n| n.abs() <= TOUCH_MOVE_MOST)).collect();
+                    if m.len() == 6 && v.split(',').count() == 6 {
+                        c.touch_moves = [[m[0], m[1]], [m[2], m[3]], [m[4], m[5]]];
+                    }
+                }
+                ("touch_layout", "bottom") => c.touch_low_start = true,
+                ("touch_layout", "classic") => c.touch_low_start = false,
                 (k, v) if k.starts_with("number_color.") => {
                     let row = crate::numcolor::KEYS.iter().position(|&r| r == &k["number_color.".len()..]);
                     if let (Some(row), Some(choice)) = (row, crate::numcolor::from_key(v)) {
@@ -3099,7 +3156,7 @@ mod tests {
         let c = ClientOptions { touch_stick: 150, touch_buttons: 55, touch_opacity: 40, touch_edge: 6, ..Default::default() };
         assert_eq!(c.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntouch_stick=150\ntouch_buttons=55\ntouch_opacity=40\ntouch_edge=6\n");
         assert!(ClientOptions::from_text(&c.to_text()) == c);
-        assert_eq!(c.touch_opts(), crate::touch::Opts { stick: 1.5, buttons: 0.55, opacity: 0.4, edge: 0.06 });
+        assert_eq!(c.touch_opts(), crate::touch::Opts { stick: 1.5, buttons: 0.55, opacity: 0.4, edge: 0.06, ..Default::default() });
         for (line, want) in [("touch_stick=200", (200, 100, 100, 0)), ("touch_buttons=50", (100, 50, 100, 0)), ("touch_opacity=10", (100, 100, 10, 0)), ("touch_edge=10", (100, 100, 100, 10))] {
             let c = ClientOptions::from_text(line);
             assert_eq!((c.touch_stick, c.touch_buttons, c.touch_opacity, c.touch_edge), want, "{line}");
@@ -3122,6 +3179,31 @@ mod tests {
             let c = ClientOptions::from_text(bad);
             assert_eq!((c.touch_stick, c.touch_buttons), (100, 100), "{bad}: the control, as it was");
         }
+    }
+
+    /// Move Touch Pad's moves and Button Layout (petition 2084): written only
+    /// when moved or Bottom, read back as written; an edit's options come back
+    /// in the rows' steps (a pinch's size to fives, a move to thousandths) with
+    /// the opacity and the layout left. The controls: a line of five numbers,
+    /// one past the farthest move, or a layout not named is nothing.
+    #[test]
+    fn the_touch_pads_moves_and_layout_are_kept() {
+        let d = ClientOptions::default();
+        assert_eq!((d.touch_moves, d.touch_low_start), ([[0; 2]; 3], false));
+        let c = ClientOptions { touch_moves: [[120, -340], [0, 0], [-5, 2999]], touch_low_start: true, ..Default::default() };
+        assert_eq!(c.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\ntouch_moves=120,-340,0,0,-5,2999\ntouch_layout=bottom\n");
+        assert!(ClientOptions::from_text(&c.to_text()) == c);
+        let o = c.touch_opts();
+        assert_eq!((o.moves, o.low_start), ([[0.12, -0.34], [0.0, 0.0], [-0.005, 2.999]], true));
+        let mut e = o;
+        (e.stick, e.buttons, e.moves[1], e.opacity, e.low_start) = (1.234, 0.5, [0.0004, -9.0], 0.3, false);
+        let k = ClientOptions { touch_opacity: 70, ..c }.with_touch_opts(&e);
+        assert_eq!((k.touch_stick, k.touch_buttons, k.touch_moves[1], k.touch_opacity, k.touch_low_start), (125, 50, [0, -3000], 70, true));
+        for bad in ["touch_moves=1,2,3,4,5", "touch_moves=1,2,3,4,5,3001", "touch_moves=1,2,3,4,5,x", "touch_layout=low"] {
+            let c = ClientOptions::from_text(bad);
+            assert_eq!((c.touch_moves, c.touch_low_start), ([[0; 2]; 3], false), "{bad}");
+        }
+        assert!(ClientOptions::from_text("touch_layout=bottom\ntouch_layout=classic").touch_opts() == crate::touch::Opts::default());
     }
 
     /// Flora and Environment, on by default, each kept only when off;

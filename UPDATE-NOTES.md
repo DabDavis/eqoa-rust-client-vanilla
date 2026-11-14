@@ -7,6 +7,18 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Move and resize the touch controls with your fingers
+- **Move and resize the on-screen controls by touch** (phones, tablets and the Android app): Options > Extended >
+  Touch Controls > Layout > Move Touch Pad, then leave the menu. Drag the left side, the right side or Start and
+  Select wherever you like, and pinch with two fingers to make the controls bigger or smaller. They stay where you
+  leave them. Tap Done on the bar when finished, or Reset to put everything back.
+- **Start and Select at the bottom**: Touch Controls > Layout > Button Layout has a second layout, Bottom, that puts
+  Start and Select down between the two sticks instead of at the top of the screen. Classic is the layout as it
+  was.
+- **All the touch settings in one place**: Touch Stick Size, Touch Button Size, Touch Opacity and Touch Edge moved
+  from Other to their own Touch Controls menu, beside the new rows. Reset Touch Pad puts the sizes and the place
+  back.
+
 ## 2026-11-14 · Weapon auras
 - **Weapons can wear an epic's aura**: a GM can now give the weapon in a character's hand (main hand, off hand, or
   both) the look of an epic weapon: its glow by night and its particles. The first is the necromancer's Sickle of

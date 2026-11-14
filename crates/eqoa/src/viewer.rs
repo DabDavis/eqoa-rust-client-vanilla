@@ -488,8 +488,13 @@ pub fn shot_with(
             }
             touch.window = play.as_ref().is_some_and(|p| p.window_up() || p.map.open);
             touch.opts = crate::settings::touch_options();
+            touch.edit = crate::touch::editing() && play.is_some() && !touch.window;
             for (_, id, phase, at) in touch_script.iter().filter(|e| e.0 == t) {
                 touch.touch(*id, *phase, *at, Instant::now(), (w, h));
+                if let Some(o) = touch.take_edited() {
+                    eprintln!("touch pad kept: {o:?}");
+                    crate::settings::keep_touch_options(&o);
+                }
             }
             // `EQOA_TAP=<name>@<ms>`: a tap where that creature is drawn
             if let Ok(spec) = std::env::var("EQOA_TAP")
@@ -3273,9 +3278,14 @@ impl App {
                 }
             }
             Finger::Pad => {
-                // as the options have it now (the Extended page's touch rows)
+                // as the options have it now (the Extended page's touch rows),
+                // edited by the fingers while Move Touch Pad is on in play
                 self.touch.opts = crate::settings::touch_options();
+                self.touch.edit = self.touch_edit();
                 self.touch.touch(id, phase, at, Instant::now(), size);
+                if let Some(o) = self.touch.take_edited() {
+                    crate::settings::keep_touch_options(&o);
+                }
                 if let Some(p) = self.play.as_mut() {
                     p.keyboard = false;
                 }
@@ -3302,6 +3312,12 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Whether the touch pad is edited now (Move Touch Pad, `touch::editing`):
+    /// on, in play with nothing over the world.
+    fn touch_edit(&self) -> bool {
+        crate::touch::editing() && self.play.as_ref().is_some_and(|p| !(p.window_up() || p.map.open))
     }
 
     /// Whose a finger put down at frame point `p` is now (`Finger`): none's
@@ -3710,6 +3726,7 @@ impl App {
         // `Host::scroll`), in the frame's pixels
         self.touch.window = true;
         self.touch.opts = crate::settings::touch_options();
+        self.touch.edit = false;
         let taps = self.touch.take_clicks();
         let (_, look_y, _) = self.touch.take_look();
         if let (Some(h), Some(g)) = (self.host.as_mut(), self.gfx.as_ref()) {
@@ -6067,6 +6084,7 @@ impl App {
                 self.touch.holds = self.play.as_ref().is_some_and(|p| p.map.open || p.wants_holds());
                 self.touch.window = self.play.as_ref().is_some_and(|p| p.window_up() || p.map.open);
                 self.touch.opts = crate::settings::touch_options();
+                self.touch.edit = self.touch_edit();
                 mark(&mut self.perf, 17);
                 self.grab_pointer(true);
                 let sticks = self.sticks();
