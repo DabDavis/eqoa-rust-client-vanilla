@@ -102,11 +102,11 @@ def module(path, name):
 
 
 def server_camps(path):
-    """camps.go's campDests: key -> (x, z, world, label)."""
+    """camps.go's campDests: key -> (x, z, world, label, levels: its creatures' here)."""
     text = open(path).read()
     out = collections.OrderedDict()
-    for m in re.finditer(r'"(\w+)":\s*\{NPC: "[^"]*", Near: true, X: ([-\d.]+), Y: [-\d.]+, Z: ([-\d.]+), World: (\d+), Levels: "[^"]*", Label: "([^"]*)"\}', text):
-        out[m.group(1)] = (float(m.group(2)), float(m.group(3)), int(m.group(4)), m.group(5))
+    for m in re.finditer(r'"(\w+)":\s*\{NPC: "[^"]*", Near: true, X: ([-\d.]+), Y: [-\d.]+, Z: ([-\d.]+), World: (\d+), Levels: "([^"]*)", Label: "([^"]*)"\}', text):
+        out[m.group(1)] = (float(m.group(2)), float(m.group(3)), int(m.group(4)), m.group(6), m.group(5))
     return out
 
 
@@ -178,7 +178,10 @@ def main():
 
     # each camp: the guide's points, name, levels and note
     camps = []
-    for key, (gx, gz, world, label) in placed.items():
+    # the camps go-eqoa-server's FAQ camps tool re-levelled (its gen_camp_teles.py FAQ_LEVELED): their levels
+    # here, the FAQ's, not the guide's (the owner, 2026-11-14)
+    relevelled = set(getattr(teles, "FAQ_LEVELED", ()))
+    for key, (gx, gz, world, label, here) in placed.items():
         spec = specs[key]
         pts = [q for q in zones["pois"] if q["category"] == "camp" and q["name"] == spec[2] and q.get("note")]
         if spec[3] is not None:
@@ -190,6 +193,8 @@ def main():
         ranges = sorted({q.get("levelRange") for q in pts if q.get("levelRange")})
         lo = min(int(r.split("-")[0]) for r in ranges)
         hi = max(int(r.split("-")[-1]) for r in ranges)
+        if key in relevelled and here:
+            lo, hi = level_range(here)
         note = pts[0]["note"]
         # the guide's own reminders to itself
         note = re.sub(r"\s*Needs review:.*$", "", note).strip()
@@ -199,7 +204,7 @@ def main():
     # levels here), each at the place go-eqoa-server gives it, in its zone
     others = []
     for key, c in map_camps(os.path.join(a.server, "internal", "handlers", "mapcamps.go")).items():
-        lo, hi = level_range(c["guide"] or c["levels"])
+        lo, hi = level_range(c["levels"] if key in relevelled else (c["guide"] or c["levels"]))
         others.append(dict(key=key, name=c["name"], label=c["zone"], world=c["world"], at=(c["x"], c["z"]), map=(c["mx"], c["my"]),
                            lo=lo, hi=hi, note="", guide=False))
 

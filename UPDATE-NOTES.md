@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · New camps on the map
+- **The map shows the new camps**: the Frosteye Orcs at the Snowblind Plains excavation, the Tae Ew Aggressors at
+  the Stone Watchers, the Desert Bandits in Tak 'Xiv, the frogloks of the Burial Mounds, the Mossmouth Goblins, the
+  hobgoblins of the Cyclops' Fortress in the Rathe, Quintashi's Lair and the beasts of The Hunt, each with its levels.
+- **Camps whose creatures' levels changed show the new levels**: Cracktooth Orcs 21-30, Mossmouth Goblins 21-30, the
+  Tae Ew of Brokenskull Rock 41-47, the South Barren Coast gargoyles 41-50, Tendora-Buki 46-50 and the others, and
+  some camps sit closer to their creatures.
+
 ## 2026-11-14 · Circlets higher, bigger and in colour
 - **Circlets** now sit higher, round the upper forehead and temples instead of across the eyes, and are a little
   bigger. The server can set how high each one sits, and a circlet can take a colour (Dust's is red).
