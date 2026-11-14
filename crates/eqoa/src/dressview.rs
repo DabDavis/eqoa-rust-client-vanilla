@@ -386,10 +386,10 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     // a circlet (`pieceaura=helm:RRGGBBAA:circlet[:DictID]`, `aura::circlet`)
     // while no helm is worn, hung on the helm's node as the world's `attach` hangs it
     if helm.is_none()
-        && let Some((src, hue)) = crate::aura::circlet_of(&words.pieces)
+        && let Some((src, hue, height)) = crate::aura::circlet_of(&words.pieces)
     {
         let made = crate::slotless::helm_on(lib, model as u32, &cs, true, crate::aura::CIRCLET_MEASURE_SET, [255; 4], &t, true)
-            .and_then(|(node, measure)| lib.lookup(src as i32).and_then(|r| lib.build_model(r)).and_then(|s| crate::aura::circlet(&s, &measure, hue)).map(|m| (node, m)));
+            .and_then(|(node, measure)| lib.lookup(src as i32).and_then(|r| lib.build_model(r)).and_then(|s| crate::aura::circlet(&s, &measure, hue, height)).map(|m| (node, m)));
         match &made {
             Some((node, m)) => eprintln!("circlet of {src:#010X} on node {node}: {} triangles", m.batches.iter().map(|b| b.indices.len() / 3).sum::<usize>()),
             None => eprintln!("circlet of {src:#010X}: none on this body"),

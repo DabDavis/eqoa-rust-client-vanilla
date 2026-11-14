@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Circlets higher, bigger and in colour
+- **Circlets** now sit higher, round the upper forehead and temples instead of across the eyes, and are a little
+  bigger. The server can set how high each one sits, and a circlet can take a colour (Dust's is red).
+
 ## 2026-11-14 · The experience bar, checked
 - **The experience bar** was checked against the server's level table at every level, at 60 (the way to your next
   mastery point) and with a death's debt: it was right, and it still draws exactly as the PlayStation 2's did. A GM's

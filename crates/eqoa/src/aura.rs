@@ -680,16 +680,25 @@ pub fn glowing_part(src: &esf::Model) -> Option<(Vec<usize>, [f32; 3], [f32; 3])
 
 /// How far past the head a circlet's ring stands: its flat ring laid round
 /// the head shows only where it stands out of it (inside, the head hides it).
-pub const CIRCLET_OUT: f32 = 1.3;
+/// 1.5 since the owner's "make the circlet slightly bigger too" (2026-11-14;
+/// 1.3 before, +15%).
+pub const CIRCLET_OUT: f32 = 1.5;
+
+/// How high on the head a circlet sits unless the server says
+/// ([`circlet_of`]): its share of the measuring helm's height from its lowest
+/// point (the chin of set 4's great helm). 0.62 crossed the eyes (the owner,
+/// 2026-11-14: "the circlet is sitting too low on dust"); the upper forehead
+/// and temples are higher: go-eqoa-server's "monk circlet" sends its own.
+pub const CIRCLET_HEIGHT: f32 = 0.62;
 
 /// Where on the head a circlet sits, in the helm node's frame: the middle of
 /// the measuring helm's ([`CIRCLET_MEASURE_SET`], seated on the body as a
-/// worn one is) across and front to back, 62% of the way up from its lowest
-/// point (the brow; the great helm runs from the chin to its spike), and its
+/// worn one is) across and front to back, `height` of the way up from its
+/// lowest point (the great helm runs from the chin to its spike), and its
 /// half-width and (a little in: the helm's face guard stands off the face)
 /// half-depth, times [`CIRCLET_OUT`]: the place and the radii across and
 /// front to back.
-pub fn head_band(helm: &esf::Model) -> Option<([f32; 3], [f32; 2])> {
+pub fn head_band(helm: &esf::Model, height: f32) -> Option<([f32; 3], [f32; 2])> {
     let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
     for p in &helm.pos {
         for k in 0..3 {
@@ -697,7 +706,7 @@ pub fn head_band(helm: &esf::Model) -> Option<([f32; 3], [f32; 2])> {
             hi[k] = hi[k].max(p[k]);
         }
     }
-    (lo[0] < hi[0]).then(|| ([(lo[0] + hi[0]) / 2.0, lo[1] + 0.62 * (hi[1] - lo[1]), (lo[2] + hi[2]) / 2.0], [(hi[0] - lo[0]) / 2.0 * CIRCLET_OUT, (hi[2] - lo[2]) / 2.0 * 0.85 * CIRCLET_OUT]))
+    (lo[0] < hi[0]).then(|| ([(lo[0] + hi[0]) / 2.0, lo[1] + height * (hi[1] - lo[1]), (lo[2] + hi[2]) / 2.0], [(hi[0] - lo[0]) / 2.0 * CIRCLET_OUT, (hi[2] - lo[2]) / 2.0 * 0.85 * CIRCLET_OUT]))
 }
 
 /// A circlet (kind circlet on the helm's aura, `net::npctint::Aura::CIRCLET`;
@@ -711,9 +720,9 @@ pub fn head_band(helm: &esf::Model) -> Option<([f32; 3], [f32; 2])> {
 /// wears seated as worn). Its parts inside the head are hidden by it, so the
 /// ring shows round the brow. In the aura's hue when its colour lights
 /// (`glow8`), else in the source's own colours. Drawn while no helm is.
-pub fn circlet(src: &esf::Model, measure: &esf::Model, hue: Option<[u8; 3]>) -> Option<esf::Model> {
+pub fn circlet(src: &esf::Model, measure: &esf::Model, hue: Option<[u8; 3]>, height: f32) -> Option<esf::Model> {
     let (batches, mid, half) = glowing_part(src)?;
-    let (at, radii) = head_band(measure)?;
+    let (at, radii) = head_band(measure, height)?;
     // the source's two widest axes lie in the band, its thinnest goes up
     let mut order = [0usize, 1, 2];
     order.sort_by(|&a, &b| half[b].partial_cmp(&half[a]).unwrap());
@@ -763,10 +772,14 @@ pub fn circlet(src: &esf::Model, measure: &esf::Model, hue: Option<[u8; 3]>) -> 
 }
 
 /// The circlet a body's helm aura names (kind circlet), if it names one:
-/// its source (0: the Ascendant staff) and its hue.
-pub fn circlet_of(auras: &[net::entity::PieceAura; net::entity::AURAS]) -> Option<(u32, Option<[u8; 3]>)> {
+/// its source (0: the Ascendant staff), its hue, and its height: the aura's
+/// nodes byte, 1-100 the share in percent of the head's height from the chin
+/// (go-eqoa-server's `/aura ... height=N`, the monk circlet's own), 0 and
+/// past 100 [`CIRCLET_HEIGHT`].
+pub fn circlet_of(auras: &[net::entity::PieceAura; net::entity::AURAS]) -> Option<(u32, Option<[u8; 3]>, f32)> {
     let a = auras[HELM];
-    (a.kind == net::npctint::Aura::CIRCLET).then(|| (if a.source == 0 { ASCENDANT_STAFF } else { a.source }, hand_hue(&a)))
+    let height = if (1..=100).contains(&a.nodes) { a.nodes as f32 / 100.0 } else { CIRCLET_HEIGHT };
+    (a.kind == net::npctint::Aura::CIRCLET).then(|| (if a.source == 0 { ASCENDANT_STAFF } else { a.source }, hand_hue(&a), height))
 }
 
 #[cfg(test)]
@@ -1318,7 +1331,7 @@ mod tests {
         assert!((mid[2] - 1.4).abs() < 0.01 && half[1] < 1e-3 && (half[0] - 0.105).abs() < 0.002, "{mid:?} {half:?}");
         // a helm of known bounds: x -0.09..0.09, y -0.3..-0.03, z -0.14..0.1
         let helm = esf::Model { pos: vec![[-0.09, -0.3, -0.14], [0.09, -0.03, 0.1]], ..Default::default() };
-        let c = circlet(&staff, &helm, None).unwrap();
+        let c = circlet(&staff, &helm, None, CIRCLET_HEIGHT).unwrap();
         assert_eq!((c.batches.len(), c.triangles), (1, 16));
         assert!(c.pos.len() <= 48, "its own vertices alone: {}", c.pos.len());
         let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
@@ -1328,17 +1341,25 @@ mod tests {
                 hi[k] = hi[k].max(p[k]);
             }
         }
-        let brow = -0.3 + 0.62 * 0.27;
+        let brow = -0.3 + CIRCLET_HEIGHT * 0.27;
         assert!((lo[1] - brow).abs() < 1e-4 && (hi[1] - brow).abs() < 1e-4, "flat at the brow: {lo:?} {hi:?}");
         assert!((hi[0] - 0.09 * CIRCLET_OUT).abs() < 1e-3 && (lo[0] + 0.09 * CIRCLET_OUT).abs() < 1e-3, "across: {lo:?} {hi:?}");
         assert!(((hi[2] + lo[2]) / 2.0 + 0.02).abs() < 1e-3 && ((hi[2] - lo[2]) / 2.0 - 0.12 * 0.85 * CIRCLET_OUT).abs() < 1e-3, "front to back: {lo:?} {hi:?}");
-        let red = circlet(&staff, &helm, Some([0xFF, 0x20, 0x20])).unwrap();
+        let red = circlet(&staff, &helm, Some([0xFF, 0x20, 0x20]), CIRCLET_HEIGHT).unwrap();
         assert_ne!(red.batches[0].layers[0].color, c.batches[0].layers[0].color);
         let dagger = lib.lookup(0xBD3C_3DC8u32 as i32).and_then(|r| lib.build_model(r)).unwrap();
-        assert!(circlet(&dagger, &helm, None).is_none(), "the control: no glowing part");
+        assert!(circlet(&dagger, &helm, None, CIRCLET_HEIGHT).is_none(), "the control: no glowing part");
         let mut auras = [PieceAura::default(); net::entity::AURAS];
         auras[HELM] = PieceAura { kind: net::npctint::Aura::CIRCLET, ..Default::default() };
-        assert_eq!(circlet_of(&auras), Some((ASCENDANT_STAFF, None)));
+        assert_eq!(circlet_of(&auras), Some((ASCENDANT_STAFF, None, CIRCLET_HEIGHT)));
+        // the server's height (the nodes byte, percent of the head from the chin), red
+        auras[HELM].nodes = 80;
+        auras[HELM].color = [0xE0, 0x18, 0x18, 0xFF];
+        assert_eq!(circlet_of(&auras), Some((ASCENDANT_STAFF, Some([0xE0, 0x18, 0x18]), 0.8)));
+        let high = circlet(&staff, &helm, None, 0.8).unwrap();
+        assert!(high.pos.iter().all(|p| (p[1] - (-0.3 + 0.8 * 0.27)).abs() < 1e-4), "at 80% of the head");
+        auras[HELM].nodes = 0;
+        auras[HELM].color = [0; 4];
         assert_eq!(helm_aura(&auras, 5), (None, None), "no shell or particles on a helm");
         auras[HELM].kind = net::npctint::Aura::SHELL;
         assert_eq!(circlet_of(&auras), None);

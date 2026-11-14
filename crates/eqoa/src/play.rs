@@ -1387,11 +1387,11 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
 /// measured by set 4's helm as the body would wear it. None without one, for
 /// a body that wears no helm, or a source not loaded.
 pub fn circlet_on(lib: &Library, model: u32, cs: &CSprite<Ee>, player: bool, c: &net::entity::Creature) -> Option<(i32, esf::Model)> {
-    let (src, hue) = crate::aura::circlet_of(&c.colors?.auras)?;
+    let (src, hue, height) = crate::aura::circlet_of(&c.colors?.auras)?;
     let t = crate::s2::get().cust();
     let (node, measure) = crate::slotless::helm_on(lib, model, cs, player, crate::aura::CIRCLET_MEASURE_SET, [255; 4], &t, true)?;
     let source = lib.lookup(src as i32).and_then(|r| lib.build_model(r))?;
-    Some((node, crate::aura::circlet(&source, &measure, hue)?))
+    Some((node, crate::aura::circlet(&source, &measure, hue, height)?))
 }
 
 /// A Wisp's wisp (`wisp`), for a player's character whose race look (by its
