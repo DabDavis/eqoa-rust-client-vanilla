@@ -1078,7 +1078,8 @@ mod native {
                 WhatsNew::Nothing => "no notes new to this build".to_string(),
                 WhatsNew::Unread => "its notes not read".to_string(),
             };
-            crate::say(&format!("update: {version} is in place: the game offers to restart into it, Update Notices on ({what})"));
+            let how = if cfg!(target_os = "android") { "downloaded: the game offers to install it" } else { "in place: the game offers to restart into it" };
+            crate::say(&format!("update: {version} is {how}, Update Notices on ({what})"));
         }
         if let Ok(mut u) = UPDATER.lock()
             && let Some(s) = u.as_mut()
