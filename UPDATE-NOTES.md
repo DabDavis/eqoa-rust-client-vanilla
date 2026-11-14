@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Helm trim auras and cape auras
+- **Helm auras**: a trim aura on a helm now lights the helm's trim (the cloth helm's cream bands, and so on), as it
+  already did on the rest of the armour.
+- **Cape auras**: a cape can now wear an aura of its own, a glow, sparkles or both, in its own colour. Capes have no
+  trim, so a trim aura on a cape makes the whole cape glow.
+
 ## 2026-11-13 · Trim dyes on every armour
 - **Armor trim on every set**: an Armor Dyer's trim colour now shows on cloth, leather, chain, banded, scale and the
   monk's wraps as well as the plate: cloth's yellow bands, leather's studded bands and buckles, the leather straps of

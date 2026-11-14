@@ -67,9 +67,10 @@ pub struct LiveColors {
     /// go-eqoa-server's auras per worn piece (chest, bracer, gloves, legs,
     /// boots, helm, robe), after the trims ([`AURA_STATE_SIZE`]) to a client
     /// that draws them ([`crate::session::LIVE_LOOK_AURAS`]), then the
-    /// character's body's ([`BODY_AURA`], [`BODY_AURA_STATE_SIZE`]); all none
-    /// from every other server.
-    pub auras: [PieceAura; 8],
+    /// character's body's ([`BODY_AURA`], [`BODY_AURA_STATE_SIZE`]), then its
+    /// cape's ([`CAPE_AURA`], [`CAPE_AURA_STATE_SIZE`]); all none from every
+    /// other server.
+    pub auras: [PieceAura; AURAS],
 }
 
 /// A worn piece's aura (go-eqoa-server's, [`AURA_STATE_SIZE`]): ten bytes, its
@@ -102,10 +103,23 @@ pub const BODY_AURA: usize = 7;
 /// client that answered [`crate::session::LIVE_LOOK_BODY`].
 pub const BODY_AURA_STATE_SIZE: usize = AURA_STATE_SIZE + PIECE_AURA_SIZE;
 
+/// The ninth aura: the cape's (go-eqoa-server's charaura slot 8, or the worn
+/// cape item's itemaura; the owner, 2026-11-14: "also cannot apply aura to
+/// capes yet").
+pub const CAPE_AURA: usize = 8;
+
+/// How many auras a channel carries at most: the seven pieces', the body's
+/// and the cape's.
+pub const AURAS: usize = 9;
+
+/// The body aura channel with the cape's aura after the body's: 315 bytes, to
+/// a client that answered [`crate::session::LIVE_LOOK_CAPE`].
+pub const CAPE_AURA_STATE_SIZE: usize = BODY_AURA_STATE_SIZE + PIECE_AURA_SIZE;
+
 /// The auras out of `b` (each: r, g, b, a, kind, the source's u32
 /// little-endian, nodes): seven pieces' in its first 70 bytes, the body's in
-/// the next ten (none when `b` is shorter).
-pub fn auras_of(b: &[u8]) -> [PieceAura; 8] {
+/// the next ten, the cape's in the ten after (none when `b` is shorter).
+pub fn auras_of(b: &[u8]) -> [PieceAura; AURAS] {
     std::array::from_fn(|i| {
         let p = |k: usize| b.get(PIECE_AURA_SIZE * i + k).copied().unwrap_or(0);
         PieceAura { color: [p(0), p(1), p(2), p(3)], kind: p(4), source: u32::from_le_bytes([p(5), p(6), p(7), p(8)]), nodes: p(9) }
@@ -421,7 +435,9 @@ impl Entities {
         {
             l.trim = trims_of(&data[LIVE_STATE_SIZE..ARMOR_STATE_SIZE]);
             // and the worn pieces' auras after them
-            if data.len() >= BODY_AURA_STATE_SIZE {
+            if data.len() >= CAPE_AURA_STATE_SIZE {
+                l.auras = auras_of(&data[ARMOR_STATE_SIZE..CAPE_AURA_STATE_SIZE]);
+            } else if data.len() >= BODY_AURA_STATE_SIZE {
                 l.auras = auras_of(&data[ARMOR_STATE_SIZE..BODY_AURA_STATE_SIZE]);
             } else if data.len() >= AURA_STATE_SIZE {
                 l.auras = auras_of(&data[ARMOR_STATE_SIZE..AURA_STATE_SIZE]);
@@ -632,7 +648,7 @@ mod tests {
         assert_eq!(ac.auras[1], PieceAura { color: [0xFF, 0x20, 0x20, 0xFF], kind: 2, source: 0, nodes: 0 });
         assert_eq!(ac.auras[5], PieceAura { color: [0; 4], kind: 3, source: 0x88EC_092D, nodes: 2 });
         assert_eq!([ac.auras[2], ac.auras[3], ac.auras[4], ac.auras[6]], [PieceAura::default(); 4]);
-        assert_eq!(bc.auras, [PieceAura::default(); 8], "the trims alone: no auras");
+        assert_eq!(bc.auras, [PieceAura::default(); AURAS], "the trims alone: no auras");
         assert_eq!(ac.auras[BODY_AURA], PieceAura::default(), "the 295 bytes: no body");
         // the 305 bytes: the body's after the pieces'
         let mut body = auras.clone();
@@ -641,6 +657,14 @@ mod tests {
         let bdc = read(&body).colors.unwrap();
         assert_eq!(bdc.auras[BODY_AURA], PieceAura { color: [0, 0, 0, 0xFF], kind: 2, source: 0, nodes: 0 });
         assert_eq!(bdc.auras[..7], ac.auras[..7], "the pieces' the same");
+        assert_eq!(bdc.auras[CAPE_AURA], PieceAura::default(), "the 305 bytes: no cape");
+        // the 315 bytes: the cape's after the body's
+        let mut cape = body.clone();
+        cape.extend(piece([0xFF, 0x20, 0x20, 0xFF], 5, 0, 0));
+        assert_eq!(cape.len(), CAPE_AURA_STATE_SIZE);
+        let cc = read(&cape).colors.unwrap();
+        assert_eq!(cc.auras[CAPE_AURA], PieceAura { color: [0xFF, 0x20, 0x20, 0xFF], kind: 5, source: 0, nodes: 0 });
+        assert_eq!(cc.auras[..CAPE_AURA], bdc.auras[..CAPE_AURA], "the pieces' and the body's the same");
         assert_eq!(LiveColors { auras: bc.auras, ..ac }, bc, "every other colour the same");
         assert_eq!((a.name, a.armor, a.level), (b.name, b.armor, b.level));
     }

@@ -118,7 +118,7 @@ struct Puppet {
     aura: Vec<crate::aura::Worn>,
     /// The worn pieces' auras it was made with (the channel's): others made
     /// it anew.
-    pieces: [net::entity::PieceAura; 8],
+    pieces: [net::entity::PieceAura; net::entity::AURAS],
     /// A Wisp's (`wisp::is`): it casts no shadow, neither its blob shadow
     /// (`shadow_casters`) nor any of its models into the shadow maps
     /// (`set_casts`).
@@ -1100,7 +1100,7 @@ fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Lo
 /// channel carries; none for a player's character.
 /// The auras on its worn pieces the channel carries (`aura::pieces`): none
 /// from a server that sends none.
-fn pieces_of(e: &net::entity::Entity) -> [net::entity::PieceAura; 8] {
+fn pieces_of(e: &net::entity::Entity) -> [net::entity::PieceAura; net::entity::AURAS] {
     e.creature.as_ref().and_then(|c| c.colors).map(|l| l.auras).unwrap_or_default()
 }
 
@@ -1178,7 +1178,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                         if let Some(pt) = crate::aura::npc_particles(tint) {
                             aura.push(crate::aura::Worn { nodes: crate::aura::body_nodes(cs, pt.nodes), particles: pt, first: 0 });
                         }
-                        if pieces != [net::entity::PieceAura::default(); 8] {
+                        if pieces != [net::entity::PieceAura::default(); net::entity::AURAS] {
                             let robed = look.as_ref().is_some_and(|l| l.robe >= 0);
                             let (s, w) = crate::aura::pieces(&model, cs, &pieces, robed);
                             shells.extend(s);
@@ -1226,11 +1226,36 @@ fn wear_cape(lib: &Library, g: &mut Gpu, p: &mut Puppet, want: Option<net::cape:
     if p.cape.as_ref().map(|(c, _)| *c) == want {
         return;
     }
+    // the cape's aura's particles go with the cape they were on
+    p.aura.retain(|w| w.first != 64 * (crate::aura::CAPE + 1));
+    let pieces = p.pieces;
+    let mut worn = None;
     p.cape = want.map(|c| {
-        let m = p.sprite.as_ref().and_then(|cs| crate::cape::model(lib, c, p.model, cs));
-        let gpu = m.map(|m| lib.with_view(esf::Era::Frontiers, || g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &render::library_textures(lib))));
+        let cs = p.sprite.as_ref();
+        let m = cs.and_then(|cs| crate::cape::model(lib, c, p.model, cs));
+        let gpu = m.map(|m| {
+            lib.with_view(esf::Era::Frontiers, || {
+                let textures = render::library_textures(lib);
+                let mut gpu = g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures);
+                // its aura (`aura::cape_aura`): the shell over it, the trim's
+                // glow, the particles on the wearer's nodes under it
+                if let Some(cs) = cs.filter(|_| pieces[crate::aura::CAPE] != Default::default()) {
+                    let taken = |id: i32| lib.lookup(id).is_some();
+                    let (shell, w, trim) = crate::aura::cape_aura(&m, cs, &pieces, &taken);
+                    if let Some(s) = &shell {
+                        g.renderer.set_shells(g.device, &mut gpu, &m, std::slice::from_ref(s));
+                    }
+                    if let Some(t) = &trim {
+                        g.renderer.set_trims(g.device, g.queue, &mut gpu, &m, std::slice::from_ref(t), &textures);
+                    }
+                    worn = w;
+                }
+                gpu
+            })
+        });
         (c, gpu)
     });
+    p.aura.extend(worn);
     p.set_casts();
 }
 
@@ -1326,6 +1351,12 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
             let (shell, worn) = crate::aura::helm_aura(&a, node);
             if let Some(s) = &shell {
                 g.renderer.set_shells(g.device, &mut gpu, &m, std::slice::from_ref(s));
+            }
+            // and its trim's glow (kind trim or trimshell: `aura::helm_trim`),
+            // which the body's `piece_trims` never reaches
+            let taken = |id: i32| lib.lookup(id).is_some();
+            if let Some(t) = crate::aura::helm_trim(&m, &a, &taken) {
+                g.renderer.set_trims(g.device, g.queue, &mut gpu, &m, std::slice::from_ref(&t), &textures);
             }
             helm_aura = worn;
         }

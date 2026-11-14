@@ -47,7 +47,7 @@
 //! are run from the start to `at=` (8000 shows them steady).
 //! `pieceaura=slot:RRGGBBAA[:kind[:DictID[:nodes]]]` (slot chest, bracer,
 //! gloves, legs, boots, helm or robe; `body` the body and underclothes under
-//! the armour, `aura::body_aura`) puts an aura on a worn piece as the
+//! the armour, `aura::body_aura`; `cape` the cape's, `aura::cape_aura`) puts an aura on a worn piece as the
 //! channel's `net::entity::PieceAura` does (`aura::pieces`); kind `trim` or
 //! `trimshell` lights the plate's trim (`aura::piece_trims`), and a black or
 //! near-black colour (000000FF) is a dark aura (`net::npctint::dark`).
@@ -116,7 +116,7 @@ pub struct Words {
     /// An NPC's body tint and glow (`npctint=`, `npcglow=`).
     pub npc: Option<crate::npctint::Tint>,
     /// The worn pieces' auras (`pieceaura=`), as the channel carries them.
-    pub pieces: [net::entity::PieceAura; 8],
+    pub pieces: [net::entity::PieceAura; net::entity::AURAS],
 }
 
 /// The node a tried helm seat hangs on.
@@ -138,7 +138,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
     let mut seat = None;
     let mut night = false;
     let mut npc: Option<crate::npctint::Tint> = None;
-    let mut pieces = [net::entity::PieceAura::default(); 8];
+    let mut pieces = [net::entity::PieceAura::default(); net::entity::AURAS];
     let nums = |v: &str| v.split(',').map(|n| n.trim().parse::<u8>().map_err(|e| format!("{v}: {e}"))).collect::<Result<Vec<u8>, String>>();
     let hex = |w: &str, v: &str| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|e| format!("{w}: {e}"));
     for w in words {
@@ -167,8 +167,8 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             "pieceaura" => {
                 // slot:RRGGBBAA[:kind[:source[:nodes]]]
                 let parts: Vec<&str> = v.split(':').collect();
-                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body:RRGGBBAA[:shell|particles|both|none|trim|trimshell[:DictID[:nodes]]]");
-                let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe", "body"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
+                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body|cape:RRGGBBAA[:shell|particles|both|none|trim|trimshell[:DictID[:nodes]]]");
+                let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe", "body", "cape"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
                 let c = u32::from_str_radix(parts.get(1).ok_or_else(usage)?.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))?;
                 let kind = match parts.get(2).copied() {
                     None | Some("default") => net::npctint::Aura::DEFAULT,
@@ -490,6 +490,21 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
             None => eprintln!("cape {}: none on this body", words.cape.style),
         }
     }
+    // the cape's aura (`pieceaura=cape:...`, `aura::cape_aura`), as the world's `wear_cape` puts it on
+    let (cape_shell, cape_worn, cape_trim) = match &cape {
+        Some(m) => crate::aura::cape_aura(m, &cs, &words.pieces, &taken),
+        None => (None, None, None),
+    };
+    if let Some(t) = &cape_trim {
+        eprintln!("cape trim aura in {:?}{} over batches {:?}", t.color, if t.dark { " (dark)" } else { "" }, t.batches.iter().map(|b| b.0).collect::<Vec<_>>());
+    }
+    if let Some(s) = &cape_shell {
+        eprintln!("cape aura shell in {:?}{}", s.color, if s.dark { " (dark)" } else { "" });
+    }
+    if let Some(w) = &cape_worn {
+        eprintln!("cape aura particles of {:#010X} on nodes {:?}", w.particles.source, w.nodes);
+    }
+    worn.extend(cape_worn);
     if words.items.iter().any(|&i| i != 0) {
         eprintln!("holds items: {} (item nodes {:?}); hung: {:?}", cs.holds_items, &cs.item_nodes[..3], held.iter().map(|(n, i)| format!("{i:#010x} on node {n}")).collect::<Vec<_>>());
     }
@@ -594,6 +609,8 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).map_err(|e| e.to_string())?;
     let mut r = Renderer::new(&device, &queue, render::TARGET_FORMAT);
     let textures = render::library_textures(lib);
+    // the auras' shimmer at the pose's time: the same picture every run
+    let shimmer = at as f32 / 1000.0;
     let mut gpu = r.upload(&device, &queue, &mesh, &[render::IDENTITY], &textures);
     if !shells.is_empty() || helm_shell.is_some() {
         r.set_shells(&device, &mut gpu, &mesh, &shells);
@@ -610,7 +627,15 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     }
     // the cape on the body's own palette and place
     let mut cape = cape.map(|m| {
-        let g = r.upload(&device, &queue, &m, &[render::IDENTITY], &textures);
+        let mut g = r.upload(&device, &queue, &m, &[render::IDENTITY], &textures);
+        if let Some(s) = &cape_shell {
+            r.set_shells(&device, &mut g, &m, std::slice::from_ref(s));
+            r.scroll_time = Some(at as f32 / 1000.0);
+        }
+        if let Some(t) = &cape_trim {
+            r.set_trims(&device, &queue, &mut g, &m, std::slice::from_ref(t), &textures);
+            r.scroll_time = Some(at as f32 / 1000.0);
+        }
         r.set_instances(&queue, &g, &[centre.to_cols()]);
         if !palette.is_empty() {
             r.set_palette(&queue, &g, &palette);
@@ -648,6 +673,12 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         let mut g = r.upload(&device, &queue, &m, &[render::IDENTITY], &textures);
         if is_helm && let Some(s) = &helm_shell {
             r.set_shells(&device, &mut g, &m, std::slice::from_ref(s));
+        }
+        // the helm's trim aura (`aura::helm_trim`), as the world's `attach` lights it
+        if is_helm && let Some(t) = crate::aura::helm_trim(&m, &words.pieces, &|id: i32| lib.lookup(id).is_some()) {
+            eprintln!("helm trim aura in {:?}{} over batches {:?}", t.color, if t.dark { " (dark)" } else { "" }, t.batches.iter().map(|b| b.0).collect::<Vec<_>>());
+            r.set_trims(&device, &queue, &mut g, &m, std::slice::from_ref(&t), &textures);
+            r.scroll_time = Some(shimmer);
         }
         r.set_instances(&queue, &g, &[at.to_cols()]);
         items.push((g, at));
