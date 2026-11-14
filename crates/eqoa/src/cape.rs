@@ -575,18 +575,23 @@ fn placed(src: &Source, to: &Bones, into: Option<&Frame>, stand: Vec3, debug: bo
         eprintln!("cape: onto {} nodes, scale {scale:?}, back {dz:+.3}; from {from:?}\n  into {into:?}", to.parents.len());
     }
     let mut m = transfer(src, to, &map, &anchor, scale, dz);
-    // on a tail body (the merfolk's) the cape's shoulder line on its shoulders:
-    // their chest node is nearer under them than a human's (0.07 against 0.14), so
-    // what the chest carries sat 0.08 high and the collar rose round the head
-    if let (Some(f), Some(i)) = (from, into)
-        && i.tail
-    {
+    // the cape's shoulder line on the body's shoulders: on a tail body (the
+    // merfolk's) their chest node is nearer under them than a human's (0.07
+    // against 0.14), so what the chest carries sat 0.08 high and the collar rose
+    // round the head; on any other body only ever down, where its chest node is
+    // as near (the kappa's, 0.04 under) or over them (the aviak's, 0.02 over: its
+    // cape sat 0.18 high, its collar to the top of its head; the owner,
+    // 2026-11-14: "capes on aviaks sit a bit too high above the shoulders,
+    // almost right")
+    if let (Some(f), Some(i)) = (from, into) {
         let dy = i.shoulder_y - (to.bind[i.chest].y + (f.shoulder_y - src.bones.bind[f.chest].y) * scale.y);
-        for p in &mut m.pos {
-            p[1] += dy;
+        if i.tail || dy < 0.0 {
+            for p in &mut m.pos {
+                p[1] += dy;
+            }
         }
         if debug {
-            eprintln!("cape: on a tail, lowered {:.3} to its shoulders", -dy);
+            eprintln!("cape: the shoulder line {:+.3} off the body's{}", -dy, if i.tail || dy < 0.0 { ", moved onto them" } else { "" });
         }
     }
     Some(m)

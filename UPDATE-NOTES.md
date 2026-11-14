@@ -12,6 +12,8 @@ is put on the page by `.github/workflows/notes.yml`.
   already did on the rest of the armour.
 - **Cape auras**: a cape can now wear an aura of its own, a glow, sparkles or both, in its own colour. Capes have no
   trim, so a trim aura on a cape makes the whole cape glow.
+- **Capes on aviaks** now sit on the shoulders instead of riding up the back of the head; kappas' and hill giants'
+  capes sit a little lower too.
 
 ## 2026-11-13 · Trim dyes on every armour
 - **Armor trim on every set**: an Armor Dyer's trim colour now shows on cloth, leather, chain, banded, scale and the
