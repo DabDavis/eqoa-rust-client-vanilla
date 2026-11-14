@@ -1872,6 +1872,75 @@ mod tests {
         assert!(trim > 1000 && body > 1000, "trim {trim}, body {body}");
     }
 
+    /// The textures `vi::cust` names as having trim are the textures render
+    /// has a trim for (`render::trimart`), one for one.
+    #[test]
+    fn the_trimmed_textures_agree() {
+        let mut a: Vec<u32> = vi::cust::TRIMMED.to_vec();
+        let mut b: Vec<u32> = render::trimart::TRIMS.iter().map(|&(id, _)| id).collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+    }
+
+    /// Every texture with trim, off the disc as the world registers it (set
+    /// 9's by `register_art`): how much of it is trim (printed), more than
+    /// nothing and less than its whole (set 9's bracer is four fifths gold). Set 1's chest (cloth) dyed with a
+    /// trim, resolved as the renderer resolves it: its yellow bands in the
+    /// trim's colour, its brown leather times the body's colour (`MUL`), the
+    /// trim found by its own rule (not the plate's gold, which takes the
+    /// leather too). Needs the disc.
+    #[test]
+    fn every_trim_on_the_disc() {
+        use render::TextureSource;
+        let iso = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.is_file() {
+            eprintln!("SKIP: no disc");
+            return;
+        }
+        let mut lib = esf::Library::new();
+        for f in crate::dressview::FILES {
+            lib.add(*f, crate::stream::open_file(&iso, f).unwrap());
+        }
+        Rules::retail().register_art(&mut lib);
+        let src = render::library_textures(&lib);
+        for &(id, trim) in render::trimart::TRIMS {
+            let im = src.levels(id as i32).into_iter().next().unwrap_or_else(|| panic!("{id:08X} on the disc"));
+            let (w, h) = (im.width as usize, im.height as usize);
+            let (mut sum, mut n) = (0.0f32, 0usize);
+            for (k, p) in im.rgba.chunks_exact(4).enumerate() {
+                if im.alpha && p[3] == 0 {
+                    continue;
+                }
+                sum += trim.weight([p[0], p[1], p[2]], ((k % w) as f32 + 0.5) / w as f32, ((k / w) as f32 + 0.5) / h as f32);
+                n += 1;
+            }
+            let share = sum / n as f32;
+            eprintln!("{id:08X}: {:.1}% trim", share * 100.0);
+            assert!(share > 0.015 && share < 0.85, "{id:08X}: {share}");
+        }
+        let cloth = 0xBF4B_7E0Au32 as i32;
+        let id = render::recolor::trimmed(cloth, [0x40, 0x60, 0xC0], [0xD1, 0, 0], |i| lib.surface(i).is_some());
+        let (got, root) = (src.levels(id), src.levels(cloth));
+        assert_eq!(got.len(), root.len());
+        let (mut band, mut leather, mut gold_on_leather) = (0, 0, 0);
+        for (g, r) in got[0].rgba.chunks_exact(4).zip(root[0].rgba.chunks_exact(4)) {
+            let rc = [r[0], r[1], r[2]];
+            assert_eq!(g[3], r[3], "alpha kept");
+            let w = render::trimart::trim_of(cloth as u32).unwrap().weight(rc, 0.5, 0.5);
+            if w == 0.0 {
+                leather += 1;
+                gold_on_leather += (render::recolor::trim_weight(rc) == 1.0) as usize;
+                assert_eq!([g[0], g[1], g[2]], render::recolor::recolor_rgb(rc, render::recolor::MUL << 24 | 0x40_60C0), "{rc:?}");
+            } else if w == 1.0 {
+                band += 1;
+                assert_eq!([g[0], g[1], g[2]], render::recolor::trim_glow(rc, [0xD1, 0, 0]), "{rc:?}");
+            }
+        }
+        assert!(band > 1500 && leather > 2000, "band {band}, leather {leather}");
+        assert!(gold_on_leather > 1000, "the gold rule would have taken the leather: {gold_on_leather}");
+    }
+
     /// The tables with go-eqoa-server's armour (`cust_with(true)`): retail's
     /// with set 9 (its five DictIDs, set 4's helm) and a trim namer; without,
     /// retail's exactly. Sandstorm's S2's tables keep theirs and gain the trims.

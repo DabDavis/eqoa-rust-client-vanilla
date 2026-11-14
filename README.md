@@ -824,11 +824,18 @@ or a browser (each described where it lives below):
   plate's DictIDs (registered under Sandstorm's S2's five ids, `s2::ORNATE_RECORDS`,
   wearing set 4's helm), with no patch (`s2::set_server_armor`, `Rules::cust_with`);
   and read six trim colours after the live channel (225 bytes) and record (95):
-  the gold trim of the plate (`vi::cust::TRIMMED`, sets 4 and 9) is drawn in its
-  colour (`render::recolor::trimmed`: the piece's colour baked into a copy of
-  its texture, `MUL`, its trim, `trim_weight`, in the colour's hue at the gold's
-  brightness, `TRIM`, the layer white). With no trim colour a piece is drawn
-  exactly as before. `eqoa dress <body> <out.png> set=9 dye=RRGGBB trim=RRGGBB`.
+  the trim of every armour piece, robe and helm whose art has one
+  (`vi::cust::TRIMMED`, 51 textures: the plate's gold, cloth's yellow bands,
+  leather's studded bands, chain's and scale's leather, banded's steel plates,
+  ...; each texture's texels by its own rule, `render::trimart`, read off the
+  disc's art by eye, 2026-11-13: "armor trim for cloth isnt showing, also make
+  sure leather, chain, etc. all sets can be trimmed") is drawn in its colour
+  (`render::recolor::trimmed`: the piece's colour baked into a copy of its
+  texture, `MUL`, its trim in the colour's hue at the trim's own brightness,
+  `TRIM`, the layer white); a robe's top takes the chest's trim, its skirt the
+  legs', the helm the helm's (`slotless::helm_trim`); the 2002 art (F9) the
+  plate's gold alone. With no trim colour a piece is drawn exactly as before.
+  `eqoa dress <body> <out.png> set=9 dye=RRGGBB trim=RRGGBB helm=N`.
 - **Bug reports with F3**, on a server that takes them (go-eqoa-server's
   0x7E0E; Sandstorm and eqoa.live make no offer, and F3 does nothing there):
   Support's request form, the game's own, opened from the world on Bug Report

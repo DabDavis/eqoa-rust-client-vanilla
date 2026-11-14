@@ -29,6 +29,7 @@ pub mod standin;
 pub mod sunshadow;
 pub mod tattoo;
 pub mod text;
+pub mod trimart;
 pub mod trimglow;
 pub mod ui;
 
@@ -2502,6 +2503,17 @@ impl LibraryTextures<'_> {
         let (c, s) = self.0.surface(id)?;
         Some((c, s, self.0.era_of(r.file)))
     }
+
+    /// A texture's trim (`trimart`) as this library draws it: every trim
+    /// on Frontiers' art, the plate's gold alone on the 2002 disc's (F9:
+    /// its other sets' art is other art, which the rules were not read off).
+    fn trim_of(&self, id: i32) -> Option<trimart::Trim> {
+        let t = trimart::trim_of(id as u32)?;
+        match self.surface(id).map(|(_, _, era)| era) {
+            Some(esf::Era::Y2002) if t != trimart::Trim::Gold => None,
+            _ => Some(t),
+        }
+    }
 }
 
 /// With a pack set (`set_pack`), a surface it has a stand-in for is drawn
@@ -2538,22 +2550,27 @@ impl TextureSource for LibraryTextures<'_> {
                     levels
                 }
                 Some((source, r)) if r >> 24 == recolor::TRIM_MASK => {
-                    // a plate texture's trim as a mask (`trimglow`), each level its own
+                    // a texture's trim as a mask (`trimglow`), each level its own
                     let mut levels = self.levels(source);
+                    let trim = self.trim_of(source);
                     for l in &mut levels {
-                        l.rgba = recolor::trim_mask(&l.rgba, l.width, l.height);
+                        l.rgba = match trim {
+                            Some(t) => recolor::trim_mask_of(&l.rgba, l.width, l.height, t),
+                            None => recolor::trim_mask_of(&l.rgba, l.width, l.height, trimart::Trim::Parts(&[])),
+                        };
                     }
                     levels
                 }
                 Some((source, r)) if r >> 24 == recolor::TRIM => {
-                    // a plate piece's trim in a dye's colour: the trim read off
-                    // the texture it was made from (a MUL before it changed
-                    // the texels' colours, not which are trim)
+                    // a piece's trim in a dye's colour: the trim read off the
+                    // texture it was made from (a MUL before it changed the
+                    // texels' colours, not which are trim)
                     let mut levels = self.levels(source);
                     let root = recolor::root_of(source);
-                    let base: Vec<Vec<u8>> = if root == source { levels.iter().map(|l| l.rgba.clone()).collect() } else { self.levels(root).into_iter().map(|l| l.rgba).collect() };
+                    let Some(trim) = self.trim_of(root) else { return levels };
+                    let base: Vec<(Vec<u8>, u32)> = if root == source { levels.iter().map(|l| (l.rgba.clone(), l.width)).collect() } else { self.levels(root).into_iter().map(|l| (l.rgba, l.width)).collect() };
                     let mut rgba: Vec<Vec<u8>> = levels.iter_mut().map(|l| std::mem::take(&mut l.rgba)).collect();
-                    recolor::trim_levels(&mut rgba, &base, r);
+                    recolor::trim_levels(&mut rgba, &base, r, trim);
                     for (l, px) in levels.iter_mut().zip(rgba) {
                         l.rgba = px;
                     }

@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-13 · Trim dyes on every armour
+- **Armor trim on every set**: an Armor Dyer's trim colour now shows on cloth, leather, chain, banded, scale and the
+  monk's wraps as well as the plate: cloth's yellow bands, leather's studded bands and buckles, the leather straps of
+  chain and scale, the steel plates of banded armour, and so on, each set its own trim.
+- Robes take it too (their top the chest's trim, their skirt the legs'), and so do most helms. A piece whose art has
+  no trim (the plate's gauntlets, the plain steel helms) looks as before.
+
 ## 2026-11-13 · 154 more camps on the map
 - **More camps on the map (M)**: besides the 49 popular XP camps, the map now marks 154 more of the hunting camps
   from the EQOA-Data map guide that this server really has: 137 in Tunaria and 17 on Odus. They wear a darker

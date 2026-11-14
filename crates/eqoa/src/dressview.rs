@@ -29,10 +29,12 @@
 //! item in its own colour, as the live look's held-item colours draw it
 //! (`aura`: its glow in the colour's hue, the rest lightly tinted);
 //! `night=1` draws it under a night's dim light, where a glow shows.
-//! `trim=RRGGBB` draws the gold trim of the plate (sets 4 and 9,
-//! `vi::cust::TRIMMED`) in that colour on every slot, as go-eqoa-server's trim
-//! dyes do (`render::recolor::trimmed`); `trim=a,b,c,d,e` one a slot (chest,
-//! bracer, gloves, legs, boots; `-` none). The look is dressed by the tables
+//! `trim=RRGGBB` draws the trim of the armour, robe and helm (every texture
+//! whose art has trim, `vi::cust::TRIMMED`, `render::trimart`) in that colour
+//! on every slot, as go-eqoa-server's trim dyes do
+//! (`render::recolor::trimmed`); `trim=a,b,c,d,e,f` one a slot (chest,
+//! bracer, gloves, legs, boots, helm; `-` none; the robe's top takes the
+//! chest's, its skirt the legs'). The look is dressed by the tables
 //! of go-eqoa-server's armour (`s2::Rules::cust_with`): set 9 is the ornate
 //! plate, and the rest as retail's.
 //! `npctint=RRGGBBAA` and `npcglow=RRGGBBAA` draw the body in an NPC's body
@@ -205,7 +207,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             "trim" => {
                 let mut t = [[0u8; 4]; 6];
                 let parts: Vec<&str> = v.split(',').collect();
-                for i in 0..5 {
+                for i in 0..6 {
                     let p = if parts.len() == 1 { parts[0] } else { parts.get(i).copied().unwrap_or("-") };
                     if p == "-" || p.is_empty() {
                         continue;
@@ -352,6 +354,10 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
                 fit.apply(&mut m);
                 (node, m)
             });
+    }
+    // a helm trim dye (`trim=`'s helm, the sixth)
+    if let Some((_, m)) = &mut helm {
+        crate::slotless::helm_trim(lib, m, look.helm_color(&t), look.trim_color.map(|c| c[5]), &t);
     }
     if look.armor[5] != 0 {
         match &helm {

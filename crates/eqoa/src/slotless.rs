@@ -1214,6 +1214,26 @@ pub fn helm_on(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, set: u8, 
     Some((node, m))
 }
 
+/// A helm (`helm_on`'s, every layer in `tint`) with its trim in a trim dye's
+/// colour (`trim`, go-eqoa-server's helm trim; alpha 0 none): each layer whose
+/// texture has trim (`vi::cust::trimmed_layer`: helms 1, 2, 3, 5, 7 and 8)
+/// drawn with the tint baked in under the trim and white; every other layer,
+/// and every layer with no trim colour or tables that name no trims, as it was.
+pub fn helm_trim(lib: &Library, m: &mut esf::Model, tint: [u8; 4], trim: Option<[u8; 4]>, t: &Tables) {
+    if trim.is_none_or(|c| c[3] == 0) || t.trim.is_none() {
+        return;
+    }
+    let has = |id: u32| lib.surface(id as i32).is_some();
+    for b in &mut m.batches {
+        for l in &mut b.layers {
+            if let Some((id, white)) = vi::cust::trimmed_layer(l.texture as u32, tint, trim, t, &has) {
+                l.texture = id as i32;
+                l.color = white;
+            }
+        }
+    }
+}
+
 /// How each skeleton a player may wear (`SHELLED`) wears its helm in each art,
 /// past the node it hangs on: the helm stretched about that node across (x)
 /// and front to back (z), never up, then moved front to back (z, forward

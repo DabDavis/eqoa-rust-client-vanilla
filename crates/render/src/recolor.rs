@@ -34,6 +34,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+pub use crate::trimart::Trim;
+
 /// One colour over a part's own shading.
 pub const DYE: u32 = 1;
 /// A part's own colours shifted.
@@ -100,18 +102,25 @@ pub fn trim_glow(o: [u8; 3], c: [u8; 3]) -> [u8; 3] {
 /// ([`trim_mask`]'s blur).
 pub const HALO: f32 = 1.0 / 20.0;
 
-/// A plate texture's trim as a mask for the trim's aura (`crate::trimglow`),
-/// a texel each: red the trim's weight ([`trim_weight`]), green its halo (the
-/// weight blurred [`HALO`] of the width round, twice, so it fades off the
-/// trim's edges onto the steel), blue the texel's brightness (its largest
-/// channel, the gold's own shading) and alpha the texel's own (a hole stays a
-/// hole). `w` by `h` texels of `rgba`; a size that does not fit is all clear.
+/// A plate texture's trim as a mask for the trim's aura (`crate::trimglow`):
+/// [`trim_mask_of`] by the plate's gold ([`Trim::Gold`]).
 pub fn trim_mask(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
+    trim_mask_of(rgba, w, h, Trim::Gold)
+}
+
+/// A texture's trim as a mask for the trim's aura (`crate::trimglow`), a
+/// texel each: red the trim's weight (`trim`'s, `crate::trimart`), green its
+/// halo (the weight blurred [`HALO`] of the width round, twice, so it fades
+/// off the trim's edges onto the rest), blue the texel's brightness (its
+/// largest channel, the trim's own shading) and alpha the texel's own (a hole
+/// stays a hole). `w` by `h` texels of `rgba`; a size that does not fit is all
+/// clear.
+pub fn trim_mask_of(rgba: &[u8], w: u32, h: u32, trim: Trim) -> Vec<u8> {
     let (w, h) = (w as usize, h as usize);
     if w == 0 || h == 0 || rgba.len() < w * h * 4 {
         return vec![0; rgba.len()];
     }
-    let weight: Vec<f32> = rgba.chunks_exact(4).take(w * h).map(|p| trim_weight([p[0], p[1], p[2]])).collect();
+    let weight = trim_weights(rgba, w, h, trim);
     let r = ((w as f32 * HALO).round() as usize).max(1);
     let mut halo = weight.clone();
     for _ in 0..2 {
@@ -151,11 +160,21 @@ fn box_blur(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
     pass(&across, h, w, &|x, y| y * w + x)
 }
 
+/// Each texel's trim weight by `trim` (`w` by `h` texels of `rgba`), at its
+/// centre.
+fn trim_weights(rgba: &[u8], w: usize, h: usize, trim: Trim) -> Vec<f32> {
+    rgba.chunks_exact(4).take(w * h).enumerate().map(|(k, p)| trim.weight([p[0], p[1], p[2]], ((k % w) as f32 + 0.5) / w as f32, ((k / w) as f32 + 0.5) / h as f32)).collect()
+}
+
 /// Texel `px` with its trim (read off `root`, the texel of the texture it was
 /// made from) in colour `c`: `px` where `root` is no trim, the trim's glow in
 /// `c` where it wholly is, between by [`trim_weight`].
 fn trim_texel(px: [u8; 3], root: [u8; 3], c: [u8; 3]) -> [u8; 3] {
-    let w = trim_weight(root);
+    trim_texel_by(px, root, c, trim_weight(root))
+}
+
+/// [`trim_texel`] at a weight of `w`.
+fn trim_texel_by(px: [u8; 3], root: [u8; 3], c: [u8; 3], w: f32) -> [u8; 3] {
     if w <= 0.0 {
         return px;
     }
@@ -164,16 +183,19 @@ fn trim_texel(px: [u8; 3], root: [u8; 3], c: [u8; 3]) -> [u8; 3] {
 }
 
 /// Every level of a texture with its trim in `r`'s colour ([`TRIM`]), the
-/// trim read off `root`'s levels (the texture it was made from, the same
-/// sizes; a level without its root's is left as it is).
-pub fn trim_levels(levels: &mut [Vec<u8>], root: &[Vec<u8>], r: u32) {
+/// trim (`trim`'s texels, `crate::trimart`) read off `root`'s levels (the
+/// texture it was made from, each level `width` texels across, the same sizes
+/// as `levels`; a level without its root's is left as it is).
+pub fn trim_levels(levels: &mut [Vec<u8>], root: &[(Vec<u8>, u32)], r: u32, trim: Trim) {
     let c = rgb_of(r);
-    for (l, rl) in levels.iter_mut().zip(root) {
-        if l.len() != rl.len() {
+    for (l, (rl, rw)) in levels.iter_mut().zip(root) {
+        let w = *rw as usize;
+        if l.len() != rl.len() || w == 0 || rl.len() % (4 * w) != 0 {
             continue;
         }
-        for (px, rp) in l.chunks_exact_mut(4).zip(rl.chunks_exact(4)) {
-            let out = trim_texel([px[0], px[1], px[2]], [rp[0], rp[1], rp[2]], c);
+        let weight = trim_weights(rl, w, rl.len() / 4 / w, trim);
+        for ((px, rp), &k) in l.chunks_exact_mut(4).zip(rl.chunks_exact(4)).zip(&weight) {
+            let out = trim_texel_by([px[0], px[1], px[2]], [rp[0], rp[1], rp[2]], c, k);
             px[..3].copy_from_slice(&out);
         }
     }
@@ -651,7 +673,7 @@ mod tests {
         let mut body = root.clone();
         recolor_rgba(&mut body, MUL << 24 | 0x40_8040);
         let mut l = vec![body.clone(), vec![1, 2, 3, 4]];
-        trim_levels(&mut l, &[root.clone(), vec![]], TRIM << 24 | 0x20_50E0);
+        trim_levels(&mut l, &[(root.clone(), 3), (vec![], 1)], TRIM << 24 | 0x20_50E0, Trim::Gold);
         assert_eq!(&l[0][..4], &[trim_glow([200, 160, 40], [0x20, 0x50, 0xE0])[0], trim_glow([200, 160, 40], [0x20, 0x50, 0xE0])[1], trim_glow([200, 160, 40], [0x20, 0x50, 0xE0])[2], 255]);
         assert_eq!(&l[0][4..], &body[4..], "the steel as the MUL left it, alpha too");
         assert_eq!(l[1], vec![1, 2, 3, 4]);

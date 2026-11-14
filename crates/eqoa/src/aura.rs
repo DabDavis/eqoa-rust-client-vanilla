@@ -40,8 +40,8 @@
 //!
 //! The trim's aura ([`npc_trim`], [`piece_trims`]; the owner, 2026-11-13:
 //! "lets also let armor trim glow also. and make dusts armor trim glow a
-//! black aura"): kind 5 (`net::npctint::Aura::TRIM`) lights the gold trim of
-//! the plate a body or piece wears (`vi::cust::TRIMMED`, found on each batch's
+//! black aura"): kind 5 (`net::npctint::Aura::TRIM`) lights the trim of the
+//! armour a body or piece wears (`vi::cust::TRIMMED`, found on each batch's
 //! texture through its recolours, [`trim_batches`]) in the aura's colour, kind
 //! 6 that and the shell (`render::trimglow`). A colour black or near black
 //! (`net::npctint::dark`) makes any shell or trim a DARK aura: a smoky shadow
@@ -169,8 +169,8 @@ pub fn npc_shell_part(t: Option<crate::npctint::Tint>) -> Option<render::shell::
     Some(render::shell::PartOf { color, batches: None, dark: t.is_some_and(|t| aura_rgb(&t).1) })
 }
 
-/// The batches of `model` (`only` of them; `None` all) whose texture has the
-/// plate's gold trim (`vi::cust::has_trim`, the texture a layer's recolours
+/// The batches of `model` (`only` of them; `None` all) whose texture has
+/// trim (`vi::cust::has_trim`, the texture a layer's recolours
 /// were made from: `render::recolor::root_of`), each with its trim's mask
 /// (`render::recolor::TRIM_MASK` of that texture; `taken`, a library's
 /// lookup, as `recolored`'s).

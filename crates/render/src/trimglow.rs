@@ -1,7 +1,8 @@
 //! The armour trim's aura (the owner, 2026-11-13: "lets also let armor trim
-//! glow also. and make dusts armor trim glow a black aura"): the gold trim of
-//! a plate piece (sets 4 and 9, `vi::cust::TRIMMED`) lit in an aura's colour,
-//! with a soft halo bleeding off it onto the steel, or with a dark aura the
+//! glow also. and make dusts armor trim glow a black aura"): the trim of an
+//! armour piece (the plate's gold, every other set's own: `vi::cust::TRIMMED`,
+//! `crate::trimart`) lit in an aura's colour, with a soft halo bleeding off it
+//! onto the rest, or with a dark aura the
 //! trim taken toward black under a dark sheen and a smoky shadow off it.
 //!
 //! It is the piece's batches drawn again over themselves ([`Trim`], set on its
@@ -9,7 +10,7 @@
 //! pushed out along the smoothed normals ([`crate::shell::smooth_normals`]) a
 //! little ([`INFLATE`] of the shell's), so it follows every animation and sits
 //! just over the armour. Its fragment samples the trim's mask
-//! ([`crate::recolor::trim_mask`], the texture the piece's own was made from
+//! ([`crate::recolor::trim_mask_of`], the texture the piece's own was made from
 //! at the first: the same weight the trim dye's recolour reads, its halo
 //! blurred into the mask's green): `trimglow.wgsl` lights the trim's texels,
 //! its halo fainter where the surface faces the eye and stronger at its

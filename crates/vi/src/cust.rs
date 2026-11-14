@@ -78,16 +78,44 @@ pub const ORNATE_SET: u8 = 9;
 /// The set whose helm set 9 wears (S2's `GetHelm` hook: helm 36 is 16).
 pub const ORNATE_HELM: u8 = 4;
 
-/// The armour textures with gold trim, which a trim dye draws in its colour
-/// ([`Look::trim_color`]): the plate's, set 4's chest, bracer, legs and boots
-/// and set 9's ([`ORNATE`]) the same; their gloves and helms have none, and no
-/// other set's art has gold (its brown leather reads as gold by hue alone,
-/// so no other texture is ever trimmed).
-pub const TRIMMED: [u32; 8] = [0x40B0_DDA7, 0xEB41_6A29, 0xF506_17E7, 0x4328_B710, 0xC214_1C0A, 0x03C1_BE9E, 0x432C_4890, 0xB179_23D2];
+/// The armour, robe and helm textures with trim in their art, which a trim
+/// dye draws in its colour ([`Look::trim_color`]): the plate's gold (sets 4
+/// and 9), and every other set's own trim (cloth's yellow bands, leather's
+/// studded bands, chain's and scale's leather, banded's steel plates, ...),
+/// which render's `trimart` finds texel by texel, texture by texture. Not
+/// here (no trim in the art): set 2's, 3's, 4's and 9's gloves, set 3's
+/// bracer, set 8's boots, robe 2's and robe 3's skirts, helms 4 and 6.
+pub const TRIMMED: &[u32] = &[
+    0xBF4B_7E0A, 0x6244_4D1A, 0x84D2_F275, 0x2CB5_3288, 0x7AD7_D1B1, // set 1
+    0x72D0_73EB, 0xB99B_D955, 0xA73D_0D53, 0xF55F_AC7C, // set 2
+    0x5810_46F4, 0x06CA_3DD6, 0x54EC_DCFF, // set 3
+    0x40B0_DDA7, 0xEB41_6A29, 0xF506_17E7, 0x4328_B710, // set 4
+    0x39BC_F85F, 0xE60E_EF91, 0xFF44_6CCA, 0x75F2_A4CF, 0xC415_43F8, // set 5
+    0xF94B_D113, 0xA0A2_488D, 0xBED3_457E, 0x6F97_E30B, 0xBDBA_8234, // set 6
+    0x2603_BB5F, 0x238E_0091, 0xEB8B_2FCA, 0x8D3F_65CF, 0xDB62_04F8, // set 7
+    0x3FDB_0DDB, 0x8134_3DA5, 0x0562_8246, 0x0E6C_08A3, // set 8
+    0xC214_1C0A, 0x03C1_BE9E, 0x432C_4890, 0xB179_23D2, // set 9 ([`ORNATE`])
+    0x455F_0D60, 0x7DDA_79FA, 0xA89B_E30B, 0x0D44_77B3, 0x5D2F_97E1, 0x2720_732E, // robes
+    0x2B59_1A0C, 0x52B1_66B3, 0xDF3A_8004, 0xF942_4951, 0xAD2D_F46F, 0x6BA7_2C60, // helms 1, 2, 3, 5, 7, 8
+];
 
-/// Whether an armour texture has gold trim ([`TRIMMED`]).
+/// Whether an armour, robe or helm texture has trim ([`TRIMMED`]).
 pub fn has_trim(tex: u32) -> bool {
     TRIMMED.contains(&tex)
+}
+
+/// The texture and colour a layer drawing `tex` in `color` takes with a trim
+/// colour `trim` (alpha 0: none): the namer's texture (`tex` with `color`
+/// baked in and its trim in `trim`'s colour) and white with `color`'s alpha,
+/// when `tex` has trim ([`has_trim`]) and the tables name trims; else none
+/// (the layer as it was).
+pub fn trimmed_layer(tex: u32, color: [u8; 4], trim: Option<[u8; 4]>, t: &Tables, has: &dyn Fn(u32) -> bool) -> Option<(u32, [u8; 4])> {
+    let c = trim.filter(|c| c[3] != 0)?;
+    let n = t.trim?;
+    if !has_trim(tex) {
+        return None;
+    }
+    Some(((n.0)(tex, [color[0], color[1], color[2]], [c[0], c[1], c[2]], has), [255, 255, 255, color[3]]))
 }
 
 /// What names a trimmed texture (the eqoa crate's: render's `recolor::trimmed`):
@@ -218,8 +246,10 @@ pub struct Look {
     pub item_color: Option<[[u8; 4]; 3]>,
     /// go-eqoa-server's trim colours, one per armour slot (chest .. helm), sent
     /// after the live game's look to a client that draws its armour: a
-    /// [`TRIMMED`] texture on that slot is drawn with its gold trim in the
-    /// colour (by [`Tables::trim`]); alpha 0 is none. None: no trims sent.
+    /// [`TRIMMED`] texture on that slot is drawn with its trim in the colour
+    /// (by [`Tables::trim`]; the robe's top by the chest's, its skirt by the
+    /// legs', the helm's by `trimmed_layer`); alpha 0 is none. None: no trims
+    /// sent.
     pub trim_color: Option<[[u8; 4]; 6]>,
 }
 
@@ -284,7 +314,13 @@ pub fn apply_look_slots(slots: &[(i32, i32); 19], race: i32, sex: i32, look: &Lo
             if let Some(tex) = tex {
                 robed[i] = true;
                 let color = look.robe_color.unwrap_or_else(|| t.tint_at_most(look.robe_tint));
-                out.push(LayerChange { entry, layer, texture: Some(tex), color: Some(color) });
+                // a trim dye on the robe: the chest's trim on its top, the
+                // legs' on its skirt (the slots it covers)
+                let change = match trimmed_layer(tex, color, look.trim_color.map(|c| c[i]), t, &has) {
+                    Some((id, white)) => LayerChange { entry, layer, texture: Some(id), color: Some(white) },
+                    None => LayerChange { entry, layer, texture: Some(tex), color: Some(color) },
+                };
+                out.push(change);
             }
         }
     }
@@ -303,12 +339,8 @@ pub fn apply_look_slots(slots: &[(i32, i32); 19], race: i32, sex: i32, look: &Lo
         let color = look.armor_color.map_or_else(|| t.tint(look.armor_tint[i]), |a| a[i]);
         // a trim dye: the piece's colour baked into its texture under the trim's,
         // the layer white (its alpha the piece's)
-        let trim = look.trim_color.map(|c| c[i]).filter(|c| c[3] != 0);
-        if let (Some(x), Some(c), Some(n)) = (tex, trim, t.trim)
-            && has_trim(x)
-        {
-            let id = (n.0)(x, [color[0], color[1], color[2]], [c[0], c[1], c[2]], &|id| has(id));
-            out.push(LayerChange { entry, layer, texture: Some(id), color: Some([255, 255, 255, color[3]]) });
+        if let Some((id, white)) = tex.and_then(|x| trimmed_layer(x, color, look.trim_color.map(|c| c[i]), t, &has)) {
+            out.push(LayerChange { entry, layer, texture: Some(id), color: Some(white) });
             continue;
         }
         out.push(LayerChange { entry, layer, texture: tex, color: Some(color) });
@@ -462,11 +494,11 @@ mod tests {
         assert_eq!(change(&apply_look_with(&cs, &look, false, all, &Tables::retail()), 10).unwrap().texture, None, "the control: retail's clamp");
     }
 
-    /// A trim colour on a slot whose texture has trim ([`TRIMMED`]: the plate's)
-    /// draws the slot with the namer's texture, handed the texture, the
-    /// slot's colour and the trim's, and the layer white with the colour's
-    /// alpha; every other slot, a set whose art has none (set 2), the gloves
-    /// (none on any plate), a trim of alpha 0, and tables without a namer are
+    /// A trim colour on a slot whose texture has trim ([`TRIMMED`]: the plate's,
+    /// leather's, ...) draws the slot with the namer's texture, handed the
+    /// texture, the slot's colour and the trim's, and the layer white with the
+    /// colour's alpha; every other slot, a texture whose art has none (the
+    /// plate's gloves), a trim of alpha 0, and tables without a namer are
     /// exactly the changes with no trim. The control: no trim colours at all
     /// changes nothing, whatever the tables.
     #[test]
@@ -484,8 +516,10 @@ mod tests {
         assert_eq!(change(&r, 10), Some(LayerChange { entry: 10, layer: 0, texture: Some(0x7000_0000 | (ORNATE[0] & 0xFF) << 16 | 0x80 << 8 | 0xD1), color: Some([255, 255, 255, 0xFF]) }));
         // bracer (set 4's has trim): named
         assert_eq!(change(&r, 11).unwrap().texture, Some(0x7000_0000 | (ARMOR[4][1] & 0xFF) << 16 | 0x80 << 8 | 0x20));
-        // gloves (set 4's has none), legs (set 2), boots (alpha 0): as with no trim
-        for e in [12, 13, 14] {
+        // legs (set 2, leather: its belt and rings): named
+        assert_eq!(change(&r, 13).unwrap().texture, Some(0x7000_0000 | (ARMOR[2][3] & 0xFF) << 16 | 0x80 << 8 | 0x40));
+        // gloves (set 4's has none), boots (alpha 0): as with no trim
+        for e in [12, 14] {
             assert_eq!(change(&r, e), change(&plain, e), "entry {e}");
         }
         assert_eq!(apply_look_with(&cs, &trims, false, all, &Tables::retail()), apply_look_with(&cs, &base, false, all, &Tables::retail()), "no namer: no trim");
@@ -494,7 +528,60 @@ mod tests {
             let zeros = Look { trim_color: Some([[0; 4]; 6]), ..base };
             assert_eq!(apply_look_with(&cs, &none, false, all, &tables), apply_look_with(&cs, &zeros, false, all, &tables), "the control: zeros are none");
         }
-        assert!(TRIMMED.iter().all(|&x| has_trim(x)) && !has_trim(ARMOR[4][2]) && !has_trim(ORNATE[2]) && !has_trim(ARMOR[2][0]));
+        assert!(TRIMMED.iter().all(|&x| has_trim(x)) && !has_trim(ARMOR[4][2]) && !has_trim(ORNATE[2]) && !has_trim(ARMOR[2][2]) && !has_trim(0));
+    }
+
+    /// Every armour set's art but the gloves of sets 2, 3, 4 (and 9) and set
+    /// 3's bracer and set 8's boots has trim; robes 0 and 1 top and skirt,
+    /// robes 2 and 3 their tops; helms 1, 2, 3, 5, 7 and 8 (not the plate's 4,
+    /// nor 6).
+    #[test]
+    fn which_art_has_trim() {
+        let none = [(2, 2), (3, 1), (3, 2), (4, 2), (8, 4)];
+        for (set, row) in ARMOR.iter().enumerate().skip(1) {
+            for (slot, &tex) in row.iter().enumerate() {
+                assert_eq!(has_trim(tex), !none.contains(&(set, slot)), "set {set} slot {slot}");
+            }
+        }
+        assert_eq!(ROBE.map(|r| r.map(has_trim)), [[true, true], [true, true], [true, false], [true, false]]);
+        assert_eq!(ORNATE.map(has_trim), [true, true, false, true, true]);
+        assert_eq!(TRIMMED.len(), 51);
+    }
+
+    /// A robe takes the chest's trim on its top and the legs' on its skirt
+    /// (robe 0: both have trim), as a piece does; robe 2's skirt has none and
+    /// is drawn as with no trim. The control: no trims, the robe as before.
+    #[test]
+    fn a_robe_takes_the_chest_and_legs_trims() {
+        let cs = sprite();
+        let all = |_: u32| true;
+        let t = Tables::retail().with_server_armor(TrimNamer(namer));
+        let robed = Look { armor: [4; 6], robe: 0, robe_color: Some([0x90, 0, 0, 0xFF]), ..Default::default() };
+        let plain = apply_look_with(&cs, &robed, false, all, &t);
+        let trims = Look { trim_color: Some([[0xA1, 0, 0, 0xFF], [0; 4], [0; 4], [0xA4, 0, 0, 0xFF], [0; 4], [0; 4]]), ..robed };
+        let r = apply_look_with(&cs, &trims, false, all, &t);
+        assert_eq!(change(&r, 10), Some(LayerChange { entry: 10, layer: 0, texture: Some(0x7000_0000 | (ROBE[0][0] & 0xFF) << 16 | 0x90 << 8 | 0xA1), color: Some([255; 4]) }));
+        assert_eq!(change(&r, 13).unwrap().texture, Some(0x7000_0000 | (ROBE[0][1] & 0xFF) << 16 | 0x90 << 8 | 0xA4));
+        assert_eq!(change(&plain, 10).unwrap().texture, Some(ROBE[0][0]));
+        let robe2 = Look { robe: 2, ..trims };
+        let r2 = apply_look_with(&cs, &robe2, false, all, &t);
+        assert_eq!(change(&r2, 13), change(&apply_look_with(&cs, &Look { trim_color: None, ..robe2 }, false, all, &t), 13), "robe 2's skirt: none");
+        assert_ne!(change(&r2, 10).unwrap().texture, Some(ROBE[2][0]));
+    }
+
+    /// `trimmed_layer`: a helm's texture with trim (helm 1's) and a trim
+    /// colour is named, white with the colour's alpha; no trim, alpha 0, a
+    /// texture without (helm 4's), or tables without a namer: none.
+    #[test]
+    fn a_helms_trim() {
+        let t = Tables::retail().with_server_armor(TrimNamer(namer));
+        let all = |_: u32| true;
+        let c = [0x30, 0x40, 0x50, 0x80];
+        assert_eq!(trimmed_layer(0x2B59_1A0C, c, Some([0xEE, 0, 0, 0xFF]), &t, &all), Some((0x7000_0000 | 0x0C << 16 | 0x30 << 8 | 0xEE, [255, 255, 255, 0x80])));
+        assert_eq!(trimmed_layer(0x2B59_1A0C, c, None, &t, &all), None);
+        assert_eq!(trimmed_layer(0x2B59_1A0C, c, Some([0xEE, 0, 0, 0]), &t, &all), None);
+        assert_eq!(trimmed_layer(0xC7DB_16B7, c, Some([0xEE, 0, 0, 0xFF]), &t, &all), None, "helm 4: plain steel");
+        assert_eq!(trimmed_layer(0x2B59_1A0C, c, Some([0xEE, 0, 0, 0xFF]), &Tables::retail(), &all), None);
     }
 
     /// `apply_look_slots` on a sprite's own slots, race and sex is

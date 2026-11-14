@@ -218,8 +218,9 @@ impl Figure {
             // the server's patch's tables (`s2`), retail's without one
             let t = crate::s2::get().cust();
             // on the node the world puts it on, seated as there (`play::attach`)
-            if let Some((node, m)) = crate::slotless::helm_on(lib, id, cs, true, look.armor[5], look.helm_color(&t), &t, true) {
+            if let Some((node, mut m)) = crate::slotless::helm_on(lib, id, cs, true, look.armor[5], look.helm_color(&t), &t, true) {
                 helm_worn = true;
+                crate::slotless::helm_trim(lib, &mut m, look.helm_color(&t), look.trim_color.map(|c| c[5]), &t);
                 attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
             }
             crate::play::dress_look(lib, id as i32, &mut built, cs, &look, helm_worn, &t, true);
