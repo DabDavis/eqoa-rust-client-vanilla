@@ -12,7 +12,8 @@
 //! disc's, read at run time: nothing here is game data but these numbers.
 //!
 //! What each set's trim is:
-//! - set 1, cloth: the yellow bands and the cream padding;
+//! - set 1, cloth: the yellow bands and the cream padding (not the legs'
+//!   lattice, whose cream reads texel by texel);
 //! - set 2, leather: the studded bands (bracer, boots), the knee straps and
 //!   their rings (legs), the shoulder bosses (chest), the steel studs and
 //!   buckles; the gloves have none;
@@ -43,7 +44,18 @@ pub struct TrimPart {
     pub sat: [f32; 2],
     pub val: [f32; 2],
     pub rects: &'static [[f32; 4]],
+    /// The clean-up ([`Trim::mask`]): a patch of the part's texels smaller
+    /// than this share of the texture's (never fewer than [`SPECK_LEAST`])
+    /// is dropped, a hole in it as small is filled; 0 none.
+    pub speck: f32,
+    /// Close the part's texels first (a 3x3 dilate, then erode): a ragged
+    /// edge smoothed and one-texel gaps bridged before the specks go.
+    pub close: bool,
 }
+
+/// The fewest texels a patch that [`TrimPart::speck`] keeps has, whatever
+/// the share says (a stud of 2 by 2 texels on a 64-texel texture).
+pub const SPECK_LEAST: usize = 3;
 
 /// How far past a hue window's edge its weight eases to none, in degrees.
 pub const HUE_EASE: f32 = 6.0;
@@ -70,8 +82,130 @@ impl Trim {
     }
 }
 
+impl Trim {
+    /// The trim of a `w` by `h` texture (`rgba`), a weight a texel. The
+    /// plate's gold is [`Trim::weight`]'s, eased as before; every other
+    /// texture's is crisp, 0 or 1: each part's texels (its weight at least a
+    /// half), closed ([`TrimPart::close`]), its specks dropped and its
+    /// pinholes filled ([`TrimPart::speck`]), the parts together. So no
+    /// stray texel of the right colour outside the trim takes its colour,
+    /// and the trim's edge is the art's, not a fade over its neighbours.
+    pub fn mask(&self, rgba: &[u8], w: usize, h: usize) -> Vec<f32> {
+        let n = w * h;
+        if w == 0 || h == 0 || rgba.len() < n * 4 {
+            return vec![0.0; n];
+        }
+        let px = |k: usize| [rgba[4 * k], rgba[4 * k + 1], rgba[4 * k + 2]];
+        let at = |k: usize| (((k % w) as f32 + 0.5) / w as f32, ((k / w) as f32 + 0.5) / h as f32);
+        match self {
+            Trim::Gold => (0..n).map(|k| crate::recolor::trim_weight(px(k))).collect(),
+            Trim::Parts(parts) => {
+                let mut out = vec![0.0f32; n];
+                for p in parts.iter() {
+                    let mut on: Vec<bool> = (0..n).map(|k| {
+                        let (u, v) = at(k);
+                        p.weight(px(k), u, v) >= 0.5
+                    }).collect();
+                    if p.close {
+                        on = erode(&dilate(&on, w, h), w, h);
+                    }
+                    if p.speck > 0.0 {
+                        let least = ((p.speck * n as f32) as usize).max(SPECK_LEAST);
+                        drop_small(&mut on, w, h, true, least);
+                        drop_small(&mut on, w, h, false, least);
+                    }
+                    for (o, &b) in out.iter_mut().zip(&on) {
+                        if b {
+                            *o = 1.0;
+                        }
+                    }
+                }
+                out
+            }
+        }
+    }
+}
+
+/// A 3x3 dilate of `on` (`w` by `h`), its edges clamped.
+fn dilate(on: &[bool], w: usize, h: usize) -> Vec<bool> {
+    morph(on, w, h, true)
+}
+
+/// A 3x3 erode of `on`, its edges clamped (a texel past the edge is the
+/// nearest one's).
+fn erode(on: &[bool], w: usize, h: usize) -> Vec<bool> {
+    morph(on, w, h, false)
+}
+
+fn morph(on: &[bool], w: usize, h: usize, any: bool) -> Vec<bool> {
+    (0..w * h)
+        .map(|k| {
+            let (x, y) = ((k % w) as isize, (k / w) as isize);
+            let mut hit = !any;
+            for dy in -1..=1isize {
+                for dx in -1..=1isize {
+                    let nx = (x + dx).clamp(0, w as isize - 1) as usize;
+                    let ny = (y + dy).clamp(0, h as isize - 1) as usize;
+                    let b = on[ny * w + nx];
+                    if any && b {
+                        hit = true;
+                    }
+                    if !any && !b {
+                        hit = false;
+                    }
+                }
+            }
+            hit
+        })
+        .collect()
+}
+
+/// Every patch (4-connected) of texels equal to `of` in `on` smaller than
+/// `least` texels turned to `!of`: specks dropped (`of` true), pinholes
+/// filled (`of` false).
+fn drop_small(on: &mut [bool], w: usize, h: usize, of: bool, least: usize) {
+    let mut seen = vec![false; w * h];
+    let mut patch = Vec::new();
+    let mut stack = Vec::new();
+    for start in 0..w * h {
+        if seen[start] || on[start] != of {
+            continue;
+        }
+        patch.clear();
+        stack.push(start);
+        seen[start] = true;
+        while let Some(k) = stack.pop() {
+            patch.push(k);
+            let (x, y) = (k % w, k / w);
+            let mut go = |nk: usize| {
+                if !seen[nk] && on[nk] == of {
+                    seen[nk] = true;
+                    stack.push(nk);
+                }
+            };
+            if x > 0 {
+                go(k - 1);
+            }
+            if x + 1 < w {
+                go(k + 1);
+            }
+            if y > 0 {
+                go(k - w);
+            }
+            if y + 1 < h {
+                go(k + w);
+            }
+        }
+        if patch.len() < least {
+            for &k in &patch {
+                on[k] = !of;
+            }
+        }
+    }
+}
+
 impl TrimPart {
-    /// The texel's weight by this part.
+    /// The texel's weight by this part, before [`Trim::mask`]'s clean-up.
     pub fn weight(&self, c: [u8; 3], u: f32, v: f32) -> f32 {
         if !self.rects.is_empty() && !self.rects.iter().any(|r| u >= r[0] && u < r[2] && v >= r[1] && v < r[3]) {
             return 0.0;
@@ -113,37 +247,50 @@ const ANY: [f32; 2] = [0.0, 1.0];
 
 /// Every texel inside the rectangles.
 const fn band(rects: &'static [[f32; 4]]) -> TrimPart {
-    TrimPart { hue: ANY_HUE, sat: ANY, val: ANY, rects }
+    TrimPart { hue: ANY_HUE, sat: ANY, val: ANY, rects, speck: 0.0, close: false }
+}
+
+/// A colour part, closed and its specks (under 0.3% of the texture) dropped.
+const fn colour(hue: [f32; 2], sat: [f32; 2], val: [f32; 2]) -> TrimPart {
+    TrimPart { hue, sat, val, rects: &[], speck: 0.003, close: true }
+}
+
+/// Set 1's yellow bands and cream padding, inside `rects` (none: anywhere),
+/// closed and with patches under 0.4% dropped: hue 36-64 takes the padding
+/// (38-40) whole, where a window from 41 took it texel by texel (the owner,
+/// 2026-11-14: "a bit of color smear not kept in the main trim areas"); the
+/// brown leather's highlights that reach it are specks, or outside the
+/// rectangles.
+const fn cloth(rects: &'static [[f32; 4]]) -> TrimPart {
+    TrimPart { hue: [36.0, 64.0], sat: [0.22, 1.0], val: [0.47, 1.0], rects, speck: 0.004, close: true }
 }
 
 /// Set 1's yellow bands and cream padding (its brown leather is redder: hue
 /// 31-33 against the bands' 45-47 and the padding's 38-40).
-const CLOTH: &[TrimPart] = &[TrimPart { hue: [41.0, 64.0], sat: [0.2, 1.0], val: [0.5, 1.0], rects: &[] }];
+const CLOTH: TrimPart = cloth(&[]);
 /// Steel studs and buckles on leather: a light grey.
-const STUDS: TrimPart = TrimPart { hue: ANY_HUE, sat: [0.0, 0.15], val: [0.5, 1.0], rects: &[] };
+/// Not closed (it would join studs a texel apart); a patch of 3 texels kept.
+const STUDS: TrimPart = TrimPart { hue: ANY_HUE, sat: [0.0, 0.15], val: [0.5, 1.0], rects: &[], speck: 0.0002, close: false };
 /// Leather and wood on steel or mail: a brown or tan of some colour.
-const LEATHER: &[TrimPart] = &[TrimPart { hue: [15.0, 60.0], sat: [0.2, 1.0], val: [0.15, 1.0], rects: &[] }];
-const LEATHER_CHAIN: &[TrimPart] = &[TrimPart { hue: [15.0, 60.0], sat: [0.2, 1.0], val: [0.2, 1.0], rects: &[] }];
-const WOOD: &[TrimPart] = &[TrimPart { hue: [15.0, 60.0], sat: [0.25, 1.0], val: [0.15, 1.0], rects: &[] }];
+const LEATHER: &[TrimPart] = &[colour([15.0, 60.0], [0.2, 1.0], [0.15, 1.0])];
+const LEATHER_CHAIN: &[TrimPart] = &[colour([15.0, 60.0], [0.2, 1.0], [0.2, 1.0])];
+const WOOD: &[TrimPart] = &[colour([15.0, 60.0], [0.25, 1.0], [0.15, 1.0])];
 /// Set 5's steel plates (a blue grey) and studs (a light grey) on leather.
-const BANDED: &[TrimPart] = &[
-    TrimPart { hue: [170.0, 250.0], sat: [0.0, 0.7], val: [0.25, 1.0], rects: &[] },
-    TrimPart { hue: ANY_HUE, sat: [0.0, 0.1], val: [0.45, 1.0], rects: &[] },
-];
+const BANDED: &[TrimPart] = &[colour([170.0, 250.0], [0.0, 0.7], [0.25, 1.0]), colour(ANY_HUE, [0.0, 0.1], [0.45, 1.0])];
 /// Robe 0's and robe 2's red bands, robe 0's gold panels.
-const RED: TrimPart = TrimPart { hue: [345.0, 15.0], sat: [0.35, 1.0], val: [0.2, 1.0], rects: &[] };
-const ROBE_GOLD: TrimPart = TrimPart { hue: [38.0, 65.0], sat: [0.3, 1.0], val: [0.35, 1.0], rects: &[] };
+const RED: TrimPart = colour([345.0, 15.0], [0.35, 1.0], [0.2, 1.0]);
+const ROBE_GOLD: TrimPart = colour([38.0, 65.0], [0.3, 1.0], [0.35, 1.0]);
 /// Robe 1's steel strips on its blue.
-const ROBE_STEEL: TrimPart = TrimPart { hue: ANY_HUE, sat: [0.0, 0.15], val: [0.35, 1.0], rects: &[] };
+const ROBE_STEEL: TrimPart = colour(ANY_HUE, [0.0, 0.15], [0.35, 1.0]);
 
 /// Every armour, robe and helm texture with trim, by DictID, and its trim.
 pub const TRIMS: &[(u32, Trim)] = &[
     // set 1, cloth: chest, bracer, gloves, legs, boots
-    (0xBF4B_7E0A, Trim::Parts(CLOTH)),
-    (0x6244_4D1A, Trim::Parts(CLOTH)),
-    (0x84D2_F275, Trim::Parts(CLOTH)),
-    (0x2CB5_3288, Trim::Parts(CLOTH)),
-    (0x7AD7_D1B1, Trim::Parts(CLOTH)),
+    (0xBF4B_7E0A, Trim::Parts(&[CLOTH])),
+    (0x6244_4D1A, Trim::Parts(&[cloth(&[[0.0, 0.0, 1.0, 0.35]])])),
+    (0x84D2_F275, Trim::Parts(&[cloth(&[[0.25, 0.0, 0.75, 0.3]])])),
+    (0x2CB5_3288, Trim::Parts(&[cloth(&[[0.0, 0.1, 0.5, 0.75]]), TrimPart { speck: 0.001, ..cloth(&[[0.0, 0.9, 1.0, 1.0]]) }])),
+    (0x7AD7_D1B1, Trim::Parts(&[cloth(&[[0.0, 0.0, 1.0, 0.3], [0.55, 0.5, 1.0, 0.85]])])),
     // set 2, leather (the gloves have none)
     (0x72D0_73EB, Trim::Parts(&[STUDS, band(&[[0.25, 0.34, 0.44, 0.62], [0.56, 0.0, 0.75, 0.28]])])),
     (0xB99B_D955, Trim::Parts(&[band(&[[0.0, 0.0, 1.0, 0.34]])])),
@@ -194,7 +341,7 @@ pub const TRIMS: &[(u32, Trim)] = &[
     (0x5D2F_97E1, Trim::Parts(&[RED])),
     (0x2720_732E, Trim::Parts(&[band(&[[0.29, 0.0, 0.53, 0.33]])])),
     // the helms' textures (helms 4 and 6 have none)
-    (0x2B59_1A0C, Trim::Parts(CLOTH)),
+    (0x2B59_1A0C, Trim::Parts(&[band(&[[0.0, 0.13, 1.0, 0.3]]), cloth(&[[0.0, 0.55, 0.75, 0.95]])])),
     (0x52B1_66B3, Trim::Parts(&[TrimPart { val: [0.55, 1.0], ..STUDS }])),
     (0xDF3A_8004, Trim::Parts(&[band(&[[0.0, 0.36, 1.0, 0.5]])])),
     (
@@ -224,12 +371,42 @@ mod tests {
         assert_eq!(gold, [0x40B0_DDA7, 0xEB41_6A29, 0xF506_17E7, 0x4328_B710, 0xC214_1C0A, 0x03C1_BE9E, 0x432C_4890, 0xB179_23D2]);
     }
 
+    /// `Trim::mask`: a colour part's texels crisp (1 or 0, its eased edge
+    /// gone), a lone speck of its colour dropped and a pinhole in a patch
+    /// filled; a part with no clean-up keeps a lone texel; the gold as
+    /// `weight` says, eased.
+    #[test]
+    fn the_mask_is_cleaned() {
+        let (w, h) = (16usize, 16usize);
+        let brown = [110u8, 70, 35, 255];
+        let yellow = [200u8, 170, 90, 255];
+        let mut px = vec![brown; w * h];
+        for y in 2..8 {
+            for x in 2..12 {
+                px[y * w + x] = yellow;
+            }
+        }
+        px[4 * w + 6] = brown; // a pinhole
+        px[12 * w + 12] = yellow; // a speck
+        px[13 * w + 3] = [200, 160, 90, 255]; // an eased texel, alone
+        let rgba: Vec<u8> = px.concat();
+        static PART: TrimPart = TrimPart { hue: [41.0, 64.0], sat: [0.2, 1.0], val: [0.5, 1.0], rects: &[], speck: 0.02, close: false };
+        let m = Trim::Parts(std::slice::from_ref(&PART)).mask(&rgba, w, h);
+        assert!(m.iter().all(|&v| v == 0.0 || v == 1.0), "crisp");
+        assert_eq!((m[3 * w + 3], m[4 * w + 6], m[12 * w + 12], m[13 * w + 3], m[0]), (1.0, 1.0, 0.0, 0.0, 0.0));
+        static RAW: TrimPart = TrimPart { hue: [41.0, 64.0], sat: [0.2, 1.0], val: [0.5, 1.0], rects: &[], speck: 0.0, close: false };
+        let raw = Trim::Parts(std::slice::from_ref(&RAW)).mask(&rgba, w, h);
+        assert_eq!((raw[12 * w + 12], raw[4 * w + 6]), (1.0, 0.0), "no clean-up: the speck and the hole as they are");
+        let gold = Trim::Gold.mask(&rgba, w, h);
+        assert_eq!(gold[13 * w + 3], crate::recolor::trim_weight([200, 160, 90]));
+    }
+
     /// A part's windows: inside wholly, past the ease none, between eased;
     /// a hue window through red wraps; a grey has no hue (none, unless the
     /// window is any colour); a rectangle keeps its outside out.
     #[test]
     fn a_parts_weight() {
-        let p = TrimPart { hue: [41.0, 64.0], sat: [0.2, 1.0], val: [0.5, 1.0], rects: &[] };
+        let p = TrimPart { hue: [41.0, 64.0], sat: [0.2, 1.0], val: [0.5, 1.0], rects: &[], speck: 0.0, close: false };
         assert_eq!(p.weight([200, 170, 90], 0.5, 0.5), 1.0, "a yellow band");
         assert_eq!(p.weight([110, 70, 35], 0.5, 0.5), 0.0, "brown leather");
         assert_eq!(p.weight([128, 128, 128], 0.5, 0.5), 0.0, "a grey");

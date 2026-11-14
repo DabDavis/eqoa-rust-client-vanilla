@@ -1889,7 +1889,7 @@ mod tests {
     /// trim, resolved as the renderer resolves it: its yellow bands in the
     /// trim's colour, its brown leather times the body's colour (`MUL`), the
     /// trim found by its own rule (not the plate's gold, which takes the
-    /// leather too). Needs the disc.
+    /// leather too), crisp: each texel wholly trim or not. Needs the disc.
     #[test]
     fn every_trim_on_the_disc() {
         use render::TextureSource;
@@ -1907,27 +1907,29 @@ mod tests {
         for &(id, trim) in render::trimart::TRIMS {
             let im = src.levels(id as i32).into_iter().next().unwrap_or_else(|| panic!("{id:08X} on the disc"));
             let (w, h) = (im.width as usize, im.height as usize);
+            let mask = trim.mask(&im.rgba, w, h);
             let (mut sum, mut n) = (0.0f32, 0usize);
             for (k, p) in im.rgba.chunks_exact(4).enumerate() {
                 if im.alpha && p[3] == 0 {
                     continue;
                 }
-                sum += trim.weight([p[0], p[1], p[2]], ((k % w) as f32 + 0.5) / w as f32, ((k / w) as f32 + 0.5) / h as f32);
+                sum += mask[k];
                 n += 1;
             }
             let share = sum / n as f32;
             eprintln!("{id:08X}: {:.1}% trim", share * 100.0);
-            assert!(share > 0.015 && share < 0.85, "{id:08X}: {share}");
+            assert!(share > 0.01 && share < 0.85, "{id:08X}: {share}");
         }
         let cloth = 0xBF4B_7E0Au32 as i32;
         let id = render::recolor::trimmed(cloth, [0x40, 0x60, 0xC0], [0xD1, 0, 0], |i| lib.surface(i).is_some());
         let (got, root) = (src.levels(id), src.levels(cloth));
         assert_eq!(got.len(), root.len());
         let (mut band, mut leather, mut gold_on_leather) = (0, 0, 0);
-        for (g, r) in got[0].rgba.chunks_exact(4).zip(root[0].rgba.chunks_exact(4)) {
+        let mask = render::trimart::trim_of(cloth as u32).unwrap().mask(&root[0].rgba, root[0].width as usize, root[0].height as usize);
+        assert!(mask.iter().all(|&w| w == 0.0 || w == 1.0), "cloth's trim is crisp");
+        for ((g, r), &w) in got[0].rgba.chunks_exact(4).zip(root[0].rgba.chunks_exact(4)).zip(&mask) {
             let rc = [r[0], r[1], r[2]];
             assert_eq!(g[3], r[3], "alpha kept");
-            let w = render::trimart::trim_of(cloth as u32).unwrap().weight(rc, 0.5, 0.5);
             if w == 0.0 {
                 leather += 1;
                 gold_on_leather += (render::recolor::trim_weight(rc) == 1.0) as usize;
