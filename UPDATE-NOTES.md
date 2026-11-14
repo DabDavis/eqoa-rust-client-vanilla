@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Energy shields
+- **A shield or weapon can carry an energy skin**: the moving streaks of the old energy shield laid over its own
+  look, in its colour, glowing at night. Dust's Heirloom Shield of Twisted Virtue keeps its square shape and its
+  diamond and cross, now in crimson energy.
+
 ## 2026-11-14 · Circlets higher, bigger and in colour
 - **Circlets** now sit higher, round the upper forehead and temples instead of across the eyes, and are a little
   bigger. The server can set how high each one sits, and a circlet can take a colour (Dust's is red).

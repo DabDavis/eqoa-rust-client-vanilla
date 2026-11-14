@@ -1335,11 +1335,9 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
             if let Some(color) = colors[i] {
                 crate::aura::recolor(&mut m, color);
             }
-            if let Some(a) = crate::aura::hand_aura(&auras, i).filter(|a| a.kind == net::npctint::Aura::EPIC) {
-                let src = crate::aura::hand_source(&a);
-                if let Some(e) = lib.lookup(src as i32).and_then(|r| lib.build_model(r)) {
-                    crate::aura::borrow_epic(&mut m, &e, crate::aura::hand_hue(&a), src == id);
-                }
+            // its hand's aura's look lent it: an epic's, or an energy skin (`aura::lend_hand`)
+            if let Some(a) = crate::aura::hand_aura(&auras, i) {
+                crate::aura::lend_hand(lib, &mut m, &a, id);
             }
             attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
         }

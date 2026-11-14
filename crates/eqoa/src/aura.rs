@@ -535,7 +535,7 @@ pub const SICKLE_OF_AVHI_ESCRON: u32 = 0x5FD4_AE7C;
 /// other (a server never sends another there).
 pub fn hand_aura(auras: &[net::entity::PieceAura; net::entity::AURAS], hand: usize) -> Option<net::entity::PieceAura> {
     let a = auras[if hand == 0 { MAIN_HAND } else { OFF_HAND }];
-    matches!(a.kind, net::npctint::Aura::EPIC | net::npctint::Aura::PARTICLES).then_some(a)
+    matches!(a.kind, net::npctint::Aura::EPIC | net::npctint::Aura::PARTICLES | net::npctint::Aura::ENERGY).then_some(a)
 }
 
 /// The model a hand's aura borrows from: its source, 0 the Sword of Virtue.
@@ -599,6 +599,55 @@ pub fn reach(lib: &esf::Library, item: u32) -> Option<f32> {
 /// source's own share gives.
 pub fn along(a: &net::entity::PieceAura) -> Option<f32> {
     (1..=100).contains(&a.nodes).then(|| a.nodes as f32 / 100.0)
+}
+
+/// An energy skin (kind energy, `net::npctint::Aura::ENERGY`; the owner,
+/// 2026-11-14, of Dust's Heirloom Shield of Twisted Virtue: "should look like
+/// the shield he had before but shaped like the current shield now with the
+/// same diamond and cross pattern but with the energy shield effect"): the
+/// held item keeps its own mesh and its own layers (the casters' square
+/// shield's metal with its diamond and cross), and each of the source's
+/// additive layers (the old energy shield 0x2EC56029's: the streak texture
+/// 0xE7520641, scrolling round at -1 a second) is laid over every batch as it
+/// is on the source: its own texture, colour and scroll, on the item's UVs,
+/// in `hue` when one is named (`glow8`), else in its own colours, and every
+/// layer lit by half that colour (its emissive) so it glows by night. A
+/// source with no additive layer lends nothing.
+pub fn energy_skin(m: &mut esf::Model, src: &esf::Model, hue: Option<[u8; 3]>) {
+    let mut lent: Vec<esf::Layer> = Vec::new();
+    for l in src.batches.iter().flat_map(|b| b.layers.iter()).filter(|l| l.blend == 1 && l.texture != 0) {
+        if !lent.iter().any(|o| o.texture == l.texture && o.uv_rate == l.uv_rate) {
+            lent.push(esf::Layer { color: hue.map_or(l.color, |h| glow8(l.color, h)), ..l.clone() });
+        }
+    }
+    // and lit by night as the energy is (an additive layer takes the light
+    // like any other: the old disc went dim at night), at half its colour's
+    // brightness on every layer's emissive (F3 pass 26's)
+    let glow = lent.first().map(|l| [l.color[0] / 2, l.color[1] / 2, l.color[2] / 2, 255]);
+    for b in &mut m.batches {
+        b.layers.extend(lent.iter().cloned());
+        if let Some(e) = glow {
+            b.layers.iter_mut().for_each(|l| l.emissive = e);
+        }
+    }
+}
+
+/// What a hand's aura `a` lends the held item `item`'s model `m` (`lib`
+/// holding the source): an epic's look ([`borrow_epic`]) or an energy skin
+/// ([`energy_skin`]); nothing for particles alone or a source not loaded.
+/// Whether it lent anything.
+pub fn lend_hand(lib: &esf::Library, m: &mut esf::Model, a: &net::entity::PieceAura, item: u32) -> bool {
+    if !matches!(a.kind, net::npctint::Aura::EPIC | net::npctint::Aura::ENERGY) {
+        return false;
+    }
+    let src = hand_source(a);
+    let Some(e) = lib.lookup(src as i32).and_then(|r| lib.build_model(r)) else { return false };
+    if a.kind == net::npctint::Aura::EPIC {
+        borrow_epic(m, &e, hand_hue(a), src == item);
+    } else if src != item {
+        energy_skin(m, &e, hand_hue(a));
+    }
+    true
 }
 
 /// The particles a hand's aura `a` puts on the item `item` held at `at` (its
@@ -1363,5 +1412,50 @@ mod tests {
         assert_eq!(helm_aura(&auras, 5), (None, None), "no shell or particles on a helm");
         auras[HELM].kind = net::npctint::Aura::SHELL;
         assert_eq!(circlet_of(&auras), None);
+    }
+
+    /// The energy skin (kind 9) of the old energy shield 0x2EC56029 on the
+    /// casters' square shield 0x2486A8D7 in Twisted Virtue crimson: the
+    /// square's own metal layer kept (its diamond and cross), the disc's
+    /// additive streak layer (0xE7520641, scrolling at -1) laid over it in
+    /// the hue, every layer lit by half of it; `lend_hand` does it for kind
+    /// energy and `hand_aura` reads the kind. The controls: a source with no
+    /// additive layer lends nothing; the item itself lends nothing.
+    #[test]
+    fn the_twisted_virtue_shields_energy() {
+        use net::entity::PieceAura;
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("ITEM.ESF", esf::Container::open(disc.read("ITEM.ESF").unwrap()).unwrap());
+        const SQUARE: u32 = 0x2486_A8D7;
+        const DISC: u32 = 0x2EC5_6029;
+        let build = |id: u32| lib.lookup(id as i32).and_then(|r| lib.build_model(r)).unwrap();
+        let square = build(SQUARE);
+        let crimson = [0xC1, 0x0F, 0x0E];
+        let a = PieceAura { color: [0xC1, 0x0F, 0x0E, 0xFF], kind: net::npctint::Aura::ENERGY, source: DISC, nodes: 0 };
+        let mut auras = [PieceAura::default(); net::entity::AURAS];
+        auras[OFF_HAND] = a;
+        assert_eq!(hand_aura(&auras, 2), Some(a), "a shield in the off hand");
+        let mut m = square.clone();
+        assert!(lend_hand(&lib, &mut m, &a, SQUARE));
+        let streak = glow8([255, 255, 255, 255], crimson);
+        for (b, was) in m.batches.iter().zip(&square.batches) {
+            assert_eq!(b.layers.len(), was.layers.len() + 1);
+            assert_eq!((b.layers[0].texture, b.layers[0].blend), (was.layers[0].texture, 0), "the metal kept");
+            let e = b.layers.last().unwrap();
+            assert_eq!((e.texture as u32, e.blend, e.uv_rate, e.color), (0xE752_0641, 1, [-1.0, 0.0], streak));
+            assert!(b.layers.iter().all(|l| l.emissive == [streak[0] / 2, streak[1] / 2, streak[2] / 2, 255]));
+        }
+        let mut same = build(DISC);
+        let before: Vec<_> = same.batches.iter().map(|b| b.layers.clone()).collect();
+        lend_hand(&lib, &mut same, &a, DISC);
+        assert_eq!(same.batches.iter().map(|b| b.layers.clone()).collect::<Vec<_>>(), before, "the source itself: as it is");
+        let mut plain = square.clone();
+        energy_skin(&mut plain, &square, Some(crimson));
+        assert_eq!(plain.batches.iter().map(|b| b.layers.len()).collect::<Vec<_>>(), square.batches.iter().map(|b| b.layers.len()).collect::<Vec<_>>(), "no additive layer: nothing");
     }
 }

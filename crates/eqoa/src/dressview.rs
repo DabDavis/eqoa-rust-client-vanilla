@@ -170,7 +170,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             "pieceaura" => {
                 // slot:RRGGBBAA[:kind[:source[:nodes]]]
                 let parts: Vec<&str> = v.split(':').collect();
-                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body|cape|main|off:RRGGBBAA[:shell|particles|both|none|trim|trimshell|epic|circlet[:DictID[:nodes]]]");
+                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body|cape|main|off:RRGGBBAA[:shell|particles|both|none|trim|trimshell|epic|energy|circlet[:DictID[:nodes]]]");
                 let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe", "body", "cape", "main", "off"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
                 let c = u32::from_str_radix(parts.get(1).ok_or_else(usage)?.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))?;
                 let kind = match parts.get(2).copied() {
@@ -182,6 +182,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                     Some("trim") => net::npctint::Aura::TRIM,
                     Some("trimshell") => net::npctint::Aura::TRIM_SHELL,
                     Some("epic") => net::npctint::Aura::EPIC,
+                    Some("energy") => net::npctint::Aura::ENERGY,
                     Some("circlet") => net::npctint::Aura::CIRCLET,
                     _ => return Err(usage()),
                 };
@@ -675,14 +676,13 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
                 crate::aura::recolor(m, c);
             }
             // its hand's aura: an epic's look lent it (`aura::borrow_epic`), as `play::attach` lends it
-            if let (Some(m), Some(a)) = (m.as_mut(), crate::aura::hand_aura(&words.pieces, slot).filter(|a| a.kind == net::npctint::Aura::EPIC)) {
+            if let (Some(m), Some(a)) = (m.as_mut(), crate::aura::hand_aura(&words.pieces, slot).filter(|a| a.kind != net::npctint::Aura::PARTICLES)) {
                 let src = crate::aura::hand_source(&a);
-                match lib.lookup(src as i32).and_then(|r| lib.build_model(r)) {
-                    Some(e) => {
-                        crate::aura::borrow_epic(m, &e, crate::aura::hand_hue(&a), src == id);
-                        eprintln!("{id:#010x}: the epic look of {src:#010X}{}", crate::aura::hand_hue(&a).map_or(String::new(), |h| format!(" in {h:?}")));
-                    }
-                    None => eprintln!("{id:#010x}: no epic {src:#010X} to borrow from"),
+                let what = if a.kind == net::npctint::Aura::ENERGY { "energy skin" } else { "epic look" };
+                if crate::aura::lend_hand(lib, m, &a, id) {
+                    eprintln!("{id:#010x}: the {what} of {src:#010X}{}", crate::aura::hand_hue(&a).map_or(String::new(), |h| format!(" in {h:?}")));
+                } else {
+                    eprintln!("{id:#010x}: no {src:#010X} to borrow from");
                 }
             }
             (node, id, m)

@@ -81,6 +81,10 @@ impl Aura {
     /// (go-eqoa-server's `AuraCirclet`, the helm's aura alone): drawn while no
     /// helm is. Never sent on any other piece.
     pub const CIRCLET: u8 = 8;
+    /// An energy skin on a held item (go-eqoa-server's `AuraEnergy`, a
+    /// hand's aura alone): the source's additive layers (texture, colour,
+    /// scroll) laid over the item's own (`eqoa`'s `aura::energy_skin`).
+    pub const ENERGY: u8 = 9;
 
     /// Whether a kind names a shell or a trim outright (not the default): a
     /// black glow, which lights nothing, is then a dark aura ([`dark`]).
