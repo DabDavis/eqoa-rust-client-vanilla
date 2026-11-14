@@ -49,6 +49,8 @@ pub struct NotesWnd {
     window: Window,
     notes: WhatsNew,
     world: bool,
+    /// its Yes installs an APK (Android's): Install now, and what follows
+    install: bool,
     /// the list's lines as last wrapped (None: to wrap at the next draw,
     /// where the font is)
     lines: Option<Vec<Line>>,
@@ -124,11 +126,13 @@ fn wrap(w: &Window, vui: &Vui, r: &dyn Raster, text: &[u16], width: i32) -> Vec<
 }
 
 impl NotesWnd {
-    /// Put up for `notes`, in the world or not: the list at its top, the
-    /// choice on Later, the window opening (`OnMessage` 295).
-    pub fn open(&mut self, notes: WhatsNew, world: bool) {
+    /// Put up for `notes`, in the world or not, its Yes a restart or an
+    /// install (`install`): the list at its top, the choice on Later, the
+    /// window opening (`OnMessage` 295).
+    pub fn open(&mut self, notes: WhatsNew, world: bool, install: bool) {
         self.notes = notes;
         self.world = world;
+        self.install = install;
         self.lines = None;
         self.top = 0.0;
         self.sel = 1;
@@ -341,11 +345,17 @@ impl NotesWnd {
         self.list = [tl[0] + LIST_X - 4, ly - 3, tl[0] + LIST_X + LIST_W + 4, ly + LIST_ROWS * h + 1];
         let _ = n;
         // the question, and the choices centred on the window's thirds
-        let ask = if self.world { "Restart now to play it? You leave the world and sign in again." } else { "Restart now to play it?" };
+        let ask = match (self.install, self.world) {
+            (false, true) => "Restart now to play it? You leave the world and sign in again.",
+            (false, false) => "Restart now to play it?",
+            (true, true) => "Install it now? You leave the world. Android asks you to confirm, then closes the game to install it: open it again after.",
+            (true, false) => "Install it now? Android asks you to confirm, then closes the game to install it: open it again after.",
+        };
+        let yes = if self.install { "Install now" } else { "Restart now" };
         self.window.text_box(vui, r, &wide(ask), 20, ASK_ROW, w - 40, 2, black, 8);
         let col = [w / 3, w / 3 * 2];
         let choice = |on: bool, s: &str| wide(&if on { format!("|q{s}|w") } else { s.to_string() });
-        self.window.text_box(vui, r, &choice(self.sel == 0, "Restart now"), col[0] - 100, CHOICE_ROW, 200, 1, black, 8);
+        self.window.text_box(vui, r, &choice(self.sel == 0, yes), col[0] - 100, CHOICE_ROW, 200, 1, black, 8);
         self.window.text_box(vui, r, &choice(self.sel == 1, "Later"), col[1] - 100, CHOICE_ROW, 200, 1, black, 8);
         // each choice its half of the row, split between their centres
         let split = tl[0] + (col[0] + col[1]) / 2;
@@ -369,7 +379,7 @@ mod tests {
     fn opened(n: WhatsNew) -> NotesWnd {
         let (vui, mut r) = (vui(), NullRaster);
         let mut w = NotesWnd::default();
-        w.open(n, true);
+        w.open(n, true, false);
         w.draw(&vui, &mut r, 60_000);
         w
     }

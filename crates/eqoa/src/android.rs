@@ -24,7 +24,9 @@
 //! - where the game keeps its files: the app's own folders (`$EQOA_CONFIG`,
 //!   `$EQOA_CACHE`), set before the game starts;
 //! - the log: what the game writes to stderr goes to logcat too
-//!   ([`Logcat`]), tag `eqoa`.
+//!   ([`Logcat`]), tag `eqoa`;
+//! - the update's APK, handed to Android's installer ([`install_update`],
+//!   `update`'s Install now).
 //!
 //! When the app goes to the background the window's surface goes with it
 //! (`suspended`): the game goes on, drawing nothing, as a covered window's
@@ -242,6 +244,15 @@ pub fn open_link(url: &str) {
     call_text("openLink", Some(url));
 }
 
+/// Install now (`update`): the downloaded APK at `path` handed to the
+/// activity, which asks for Android's leave to install apps when the player
+/// has not given it, writes the APK into a `PackageInstaller` session and
+/// puts up Android's own install screen; what came of it comes back by
+/// `nativeInstall` (`update::install_status`).
+pub fn install_update(path: &str) {
+    call_text("installUpdate", Some(path));
+}
+
 // ---- the log
 
 #[link(name = "log")]
@@ -443,6 +454,14 @@ pub extern "system" fn Java_io_github_dabdavis_eqoa_EqoaActivity_nativeDisc(mut 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_io_github_dabdavis_eqoa_EqoaActivity_nativeDiscAnswer(_env: JNIEnv, _class: JClass, yes: jboolean) {
     push(Event::DiscAnswer(yes != 0));
+}
+
+/// What Android's installer did with the update's APK (`install_update`):
+/// a status of `update::INSTALL_*`, and Android's reason for a failure.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_dabdavis_eqoa_EqoaActivity_nativeInstall(mut env: JNIEnv, _class: JClass, status: jint, message: JString) {
+    let m = if message.is_null() { None } else { env.get_string(&message).ok().map(String::from) };
+    crate::update::install_status(status, m.as_deref());
 }
 
 /// The device's keyboard covers this much of the window's bottom (pixels).

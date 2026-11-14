@@ -11,6 +11,9 @@
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
     <!-- the game's servers -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- its update: the APK the game downloads, handed to Android's installer
+         (EqoaActivity.installUpdate), which asks the player to confirm -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- allowBackup off: the settings name the player's account -->
     <application

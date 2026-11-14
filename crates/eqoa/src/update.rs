@@ -39,6 +39,21 @@
 //! Each window of several asks its own player. A page asks its player itself
 //! (`web/main.js`: `version.json`, Reload / Later).
 //!
+//! An Android app cannot put another program in its own place, and Android
+//! installs nothing unasked: its update is a new APK the player lets Android
+//! install over it (`apk`). The app asks the release at its start and then
+//! every `EVERY`, never holding up the boot; `update.txt`'s `android` line
+//! names the APK, which comes into the app's cache (`$EQOA_UPDATE_DIR`, the
+//! activity's), resumed where a flaky line cut it, held to its size and
+//! hash, and kept there under its commit, so a start finds it downloaded
+//! already. Then the same question asks the player, Install now / Later; Install
+//! now logs out of the world as Restart now does, and the activity hands the
+//! APK to Android's installer (`android::install_update`: a `PackageInstaller`
+//! session, after the player's one-time "install unknown apps" for the app),
+//! whose own screen asks the player to confirm; Android closes the game to
+//! install it, the player's files kept (the same key), and a cancel or a
+//! failure is told and asked again after `LATER`.
+//!
 //! Testing: `EQOA_UPDATE_URL=<base>` reads `<base>update.txt` and the files
 //! beside it instead of the release (a server of one's own, `python3 -m
 //! http.server`), offscreen too, and a build given `EQOA_UPDATE_CHANNEL=dev
@@ -54,7 +69,10 @@ pub const CHANNEL: Option<&str> = option_env!("EQOA_UPDATE_CHANNEL");
 pub const COMMIT: Option<&str> = option_env!("EQOA_BUILD_COMMIT");
 
 /// This platform's name in `update.txt`: the programs `dev.yml` builds.
-pub const PLATFORM: Option<&str> = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+pub const PLATFORM: Option<&str> = if cfg!(target_os = "android") {
+    // one APK for every ABI (`apk`)
+    Some("android")
+} else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
     Some("linux-x86_64")
 } else if cfg!(all(windows, target_arch = "x86_64")) {
     Some("windows-x86_64")
@@ -335,12 +353,22 @@ pub struct Offer {
     timeout: i64,
     /// Restart now: the program in place is to start
     restart: bool,
+    /// the answer installs an APK (Android) rather than restarting: the
+    /// window says Install now, and its Yes asks again after `later` as a
+    /// Later does (the install may be cancelled), `install_asked` set
+    install: bool,
+    install_asked: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Offer {
     pub fn new(later: Duration) -> Offer {
-        Offer { wnd: Default::default(), shown: false, quiet_since: None, later: None, later_ms: later.as_millis() as i64, timeout: 0, restart: false }
+        Offer::installing(later, cfg!(target_os = "android"))
+    }
+
+    /// `new`, its Yes an install (`install`, Android's) or a restart.
+    pub fn installing(later: Duration, install: bool) -> Offer {
+        Offer { wnd: Default::default(), shown: false, quiet_since: None, later: None, later_ms: later.as_millis() as i64, timeout: 0, restart: false, install, install_asked: false }
     }
 
     /// A frame: up when a program is `ready` (with `notes`, what is new in
@@ -360,7 +388,7 @@ impl Offer {
             return;
         }
         if ready && self.quiet_since.is_some_and(|t| m.now - t >= QUIET_MS) && self.later.is_none_or(|t| m.now >= t) {
-            self.wnd.open(notes.cloned().unwrap_or_default(), m.world);
+            self.wnd.open(notes.cloned().unwrap_or_default(), m.world, self.install);
             self.timeout = m.now + BOX_MS;
             self.shown = true;
         }
@@ -373,6 +401,11 @@ impl Offer {
     /// Restart now was answered.
     pub fn restart(&self) -> bool {
         self.restart
+    }
+
+    /// Install now was answered since the last call (once).
+    pub fn take_install(&mut self) -> bool {
+        std::mem::take(&mut self.install_asked)
     }
 
     /// Whether a key is one the window takes, the game's code: `VIKeyboard`'s
@@ -457,6 +490,13 @@ impl Offer {
     fn answer(&mut self, a: Option<crate::updatewnd::Answer>, now: i64) {
         self.timeout = now + BOX_MS;
         match a {
+            Some(crate::updatewnd::Answer::Restart) if self.install => {
+                // the APK to Android's installer; asked again after a while,
+                // when the install did not happen (cancelled, or refused)
+                self.shown = false;
+                self.install_asked = true;
+                self.later = Some(now + self.later_ms);
+            }
             Some(crate::updatewnd::Answer::Restart) => {
                 self.shown = false;
                 self.restart = true;
@@ -505,6 +545,10 @@ pub fn offer_frame(m: Moment) {
             crate::say("update: Update Notices are off: the program in place starts the next time the game does");
         }
         let notes = ready_notes();
+        // out of the world: the logout an install asked for is done
+        if !m.world {
+            LEAVING.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
         with_offer(|o| o.frame(asks(ready), notes.as_ref(), m));
     }
     #[cfg(target_arch = "wasm32")]
@@ -622,15 +666,19 @@ pub fn offer_draw(vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, now: i64) {
 }
 
 /// `f` on the question, and a Restart now it brought made good: the program
-/// in place to start (`native::accept`); the window's sounds when `f` took
-/// its input.
+/// in place to start (`native::accept`), or an Install now's APK handed to
+/// Android's installer (`native::install`), the world left for it
+/// (`leaving`); the window's sounds when `f` took its input.
 #[cfg(not(target_arch = "wasm32"))]
 fn answered(f: impl FnOnce(&mut Offer) -> bool) -> Option<Vec<i32>> {
-    let (took, yes, cues) = with_offer(|o| {
+    let (took, yes, install, cues) = with_offer(|o| {
         let was = o.restart;
         let took = f(o);
-        (took, o.restart && !was, o.take_cues())
+        (took, o.restart && !was, o.take_install(), o.take_cues())
     });
+    if install && native::install() {
+        LEAVING.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     if yes {
         if native::accept() {
             crate::say("update: restarting into the program in place");
@@ -640,6 +688,48 @@ fn answered(f: impl FnOnce(&mut Offer) -> bool) -> Option<Vec<i32>> {
     }
     took.then_some(cues)
 }
+
+/// Install now was answered in the world (Android's): the game logs out, as
+/// for a restart, and goes back to its own screens while Android's installer
+/// asks the player (a cancel leaves them there, signed in again by a pick);
+/// over once a frame out of the world is run.
+#[cfg(not(target_arch = "wasm32"))]
+static LEAVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the world is to be left for an install (`LEAVING`).
+pub fn leaving() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return LEAVING.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(target_arch = "wasm32")]
+    false
+}
+
+/// What Android's installer did with the APK handed it (the activity's
+/// `nativeInstall`): said in the log; the activity tells the player itself.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn install_status(status: i32, message: Option<&str>) {
+    let what = match status {
+        INSTALL_SHOWN => "Android's install screen is up".to_string(),
+        INSTALL_CANCELLED => "the player did not install it: asked again later".to_string(),
+        INSTALL_DENIED => "the app may not install apps (Android's setting): asked again later".to_string(),
+        INSTALL_DONE => "installed".to_string(),
+        INSTALL_FAILED => format!("it could not be installed ({}): asked again later", message.unwrap_or("no reason given")),
+        _ => format!("Android's installer said {status} ({})", message.unwrap_or("no reason given")),
+    };
+    crate::say(&format!("update: {what}"));
+}
+
+/// The activity's `nativeInstall` statuses (EqoaActivity's INSTALL_*).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub const INSTALL_SHOWN: i32 = 0;
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub const INSTALL_CANCELLED: i32 = 1;
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub const INSTALL_FAILED: i32 = 2;
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub const INSTALL_DENIED: i32 = 3;
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub const INSTALL_DONE: i32 = 4;
 
 /// Restart now was answered: the game logs out and the window closes, for
 /// the program in place to start (`relaunch_if_requested`).
@@ -674,6 +764,8 @@ mod native {
         /// in it
         ready: Option<String>,
         notes: Option<WhatsNew>,
+        /// Android's: the APK of `ready`, downloaded into the app's cache
+        apk: Option<PathBuf>,
     }
 
     static UPDATER: Mutex<Option<Shared>> = Mutex::new(None);
@@ -693,12 +785,11 @@ mod native {
     /// The updater's thread, when this build follows a channel and the run
     /// is a player's (the module's doc): the start's check, then the watch.
     pub fn start() {
-        // an installed Android app cannot put another program in its own
-        // place: its updates are a new APK's
-        if cfg!(target_os = "android") {
-            return;
+        // (an installed Android app is not a program beside others: it puts
+        // nothing aside)
+        if !cfg!(target_os = "android") {
+            clean_up();
         }
-        clean_up();
         let (Some(_), Some(commit), Some(platform)) = (CHANNEL, COMMIT, PLATFORM) else { return };
         // the program an update just started does not ask at its start again
         // (it watches, as any does)
@@ -711,11 +802,18 @@ mod native {
         if std::env::var_os("EQOA_NO_UPDATE").is_some() || (std::env::var_os("EQOA_OFFSCREEN").is_some() && test.is_none()) {
             return;
         }
-        let Ok(exe) = std::env::current_exe() else { return };
         let base = test.unwrap_or_else(|| RELEASE.to_string());
         let every = super::intervals(std::env::var("EQOA_UPDATE_EVERY").ok().as_deref());
+        // an installed Android app cannot put another program in its own
+        // place: its update is a new APK, which Android installs when the
+        // player says so (`start_apk`)
+        if cfg!(target_os = "android") {
+            start_apk(base, commit, platform, every.1);
+            return;
+        }
+        let Ok(exe) = std::env::current_exe() else { return };
         let state = if updated.is_some() { State::Done } else { State::Checking };
-        *UPDATER.lock().unwrap() = Some(Shared { state, since: Instant::now(), exe: exe.clone(), relaunch: false, ready: None, notes: None });
+        *UPDATER.lock().unwrap() = Some(Shared { state, since: Instant::now(), exe: exe.clone(), relaunch: false, ready: None, notes: None, apk: None });
         let spawned = std::thread::Builder::new().name("update".into()).spawn(move || {
             // this program's own bytes, before anything is put in its place
             let own = sha256_file(&exe).ok();
@@ -746,6 +844,201 @@ mod native {
         if spawned.is_err() {
             set(State::Done);
         }
+    }
+
+    /// Android's updater (the module's doc): the boot never waits for it
+    /// (`State::Done` from the start); its thread asks the release now and
+    /// then every `every`, and an APK of another commit, downloaded into
+    /// `$EQOA_UPDATE_DIR` (the activity's: the app's cache) or found there,
+    /// is offered. `$EQOA_APK`, the installed APK (the activity's), is this
+    /// build's own bytes: a release whose APK they are is no update.
+    fn start_apk(base: String, commit: &'static str, platform: &'static str, every: Duration) {
+        let Some(dir) = std::env::var_os("EQOA_UPDATE_DIR").map(PathBuf::from) else {
+            crate::say("update: no folder for the update's APK ($EQOA_UPDATE_DIR): no updates");
+            return;
+        };
+        let installed = std::env::var_os("EQOA_APK").map(PathBuf::from);
+        *UPDATER.lock().unwrap() = Some(Shared { state: State::Done, since: Instant::now(), exe: PathBuf::new(), relaunch: false, ready: None, notes: None, apk: None });
+        let _ = std::thread::Builder::new().name("update".into()).spawn(move || {
+            let own = installed.and_then(|p| sha256_file(&p).ok());
+            let mut said = String::new();
+            loop {
+                match look_apk(&base, &dir, commit, platform, own.as_deref(), &RETRIES) {
+                    Ok(ApkLook::Ready { version, path }) => {
+                        if let Ok(mut u) = UPDATER.lock()
+                            && let Some(s) = u.as_mut()
+                        {
+                            s.apk = Some(path);
+                        }
+                        offer(&base, version);
+                        said.clear();
+                    }
+                    Ok(ApkLook::Current) => said.clear(),
+                    Err(e) => {
+                        if e != said {
+                            crate::say(&format!("update: {e}"));
+                            said = e;
+                        }
+                    }
+                }
+                std::thread::sleep(every);
+            }
+        });
+    }
+
+    /// The waits between a download's tries within a look (Android's: a
+    /// phone's line drops); each try takes up where the last one stopped.
+    const RETRIES: [Duration; 3] = [Duration::from_secs(5), Duration::from_secs(20), Duration::from_secs(60)];
+
+    /// What a look for Android's APK found (`look_apk`).
+    #[derive(Clone, Debug, PartialEq)]
+    pub(super) enum ApkLook {
+        /// the release is this build's commit (or its APK this one's bytes)
+        Current,
+        /// the release's APK (`version`) is downloaded, at `path`
+        Ready { version: String, path: PathBuf },
+    }
+
+    /// The release asked for Android's update: when it names another
+    /// commit, its APK (`platform`'s line) downloaded into `dir` as
+    /// `eqoa-vanilla-android-<commit>.apk`, or found there already with the
+    /// size and hash update.txt names, so a start does not download it
+    /// again; a download cut off is resumed from `<name>.part` (`retries`
+    /// the waits between tries; the part kept for the next look when they
+    /// run out). Every other file in `dir` is removed: an older update's
+    /// APK, or this one's once it is installed.
+    pub(super) fn look_apk(base: &str, dir: &Path, commit: &str, platform: &str, own: Option<&str>, retries: &[Duration]) -> Result<ApkLook, String> {
+        let m = fetch_manifest(&agent(), base)?;
+        if m.commit.eq_ignore_ascii_case(commit) {
+            keep_only(dir, &[]);
+            return Ok(ApkLook::Current);
+        }
+        let url = format!("{base}update.txt");
+        let b = m.build(platform).ok_or_else(|| format!("{url} has no {platform} build"))?;
+        if own.is_some_and(|o| o == b.sha256) {
+            keep_only(dir, &[]);
+            return Ok(ApkLook::Current);
+        }
+        if !m.commit.bytes().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(format!("{url} names the commit {:?}", m.commit));
+        }
+        let version = if m.version.is_empty() { m.commit.clone() } else { m.version.clone() };
+        let name = format!("eqoa-vanilla-android-{}.apk", &m.commit[..m.commit.len().min(12)]);
+        let path = dir.join(&name);
+        let part = dir.join(format!("{name}.part"));
+        keep_only(dir, &[&path, &part]);
+        if std::fs::metadata(&path).is_ok_and(|f| f.len() == b.size) && sha256_file(&path).is_ok_and(|h| h == b.sha256) {
+            return Ok(ApkLook::Ready { version, path });
+        }
+        let _ = std::fs::remove_file(&path);
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        crate::say(&format!("update: downloading {version}'s APK ({} bytes)", b.size));
+        let src = format!("{base}{}", b.file);
+        let mut tries = 0;
+        loop {
+            match fetch_part(&src, &part, b) {
+                Ok(()) => break,
+                Err(e) if tries < retries.len() => {
+                    crate::say(&format!("update: {e}: tried again in {} s", retries[tries].as_secs()));
+                    std::thread::sleep(retries[tries]);
+                    tries += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        if sha256_file(&part).ok().as_deref() != Some(b.sha256.as_str()) {
+            let _ = std::fs::remove_file(&part);
+            return Err(format!("{src}: its SHA-256 is not the one update.txt names"));
+        }
+        std::fs::rename(&part, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+        crate::say(&format!("update: {version}'s APK is downloaded"));
+        Ok(ApkLook::Ready { version, path })
+    }
+
+    /// Every file in `dir` but `keep` removed.
+    fn keep_only(dir: &Path, keep: &[&Path]) {
+        let Ok(list) = std::fs::read_dir(dir) else { return };
+        for e in list.flatten() {
+            let p = e.path();
+            if !keep.iter().any(|k| *k == p) {
+                remove(&p);
+            }
+        }
+    }
+
+    /// `b`'s file at `url` into `part`, from where it stopped: the bytes
+    /// there kept when the server answers a range (206), else written again
+    /// from the first. Ok once `part` holds `b.size` bytes (its hash is the
+    /// caller's to check); an error when the line was cut first.
+    fn fetch_part(url: &str, part: &Path, b: &Build) -> Result<(), String> {
+        let have = std::fs::metadata(part).map_or(0, |m| m.len());
+        if have > b.size {
+            let _ = std::fs::remove_file(part);
+            return fetch_part(url, part, b);
+        }
+        if have == b.size {
+            return Ok(());
+        }
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(10)))
+            .timeout_recv_response(Some(Duration::from_secs(30)))
+            .timeout_global(Some(Duration::from_secs(15 * 60)))
+            .user_agent(format!("eqoa-vanilla/{}", COMMIT.unwrap_or("local")))
+            .build()
+            .into();
+        let mut req = agent.get(url);
+        if have > 0 {
+            req = req.header("Range", format!("bytes={have}-"));
+        }
+        let mut resp = match req.call() {
+            Ok(r) => r,
+            Err(e) => {
+                // a range past the file's end: the part is not this file's
+                if matches!(e, ureq::Error::StatusCode(416)) {
+                    let _ = std::fs::remove_file(part);
+                }
+                return Err(format!("{url}: {e}"));
+            }
+        };
+        let resumed = have > 0 && resp.status().as_u16() == 206;
+        let start = if resumed { have } else { 0 };
+        let mut f = std::fs::OpenOptions::new().create(true).write(true).append(resumed).truncate(!resumed).open(part).map_err(|e| format!("{}: {e}", part.display()))?;
+        let mut body = resp.body_mut().with_config().limit(b.size - start + 1).reader();
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut done = start;
+        loop {
+            let n = match body.read(&mut buf) {
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = f.sync_all();
+                    return Err(format!("{url}: {e} at {done} of {} bytes", b.size));
+                }
+            };
+            if n == 0 {
+                break;
+            }
+            f.write_all(&buf[..n]).map_err(|e| format!("{}: {e}", part.display()))?;
+            done += n as u64;
+        }
+        f.sync_all().map_err(|e| format!("{}: {e}", part.display()))?;
+        match done.cmp(&b.size) {
+            std::cmp::Ordering::Less => Err(format!("{url}: cut off at {done} of {} bytes", b.size)),
+            std::cmp::Ordering::Greater => {
+                let _ = std::fs::remove_file(part);
+                Err(format!("{url}: {done} bytes, where update.txt says {}", b.size))
+            }
+            std::cmp::Ordering::Equal => Ok(()),
+        }
+    }
+
+    /// Install now (Android's): the APK in place handed to the activity, for
+    /// Android's installer. False when there is none.
+    pub(super) fn install() -> bool {
+        let Some(apk) = UPDATER.lock().ok().and_then(|u| u.as_ref()?.apk.clone()) else { return false };
+        crate::say(&format!("update: {} to Android's installer", apk.display()));
+        #[cfg(target_os = "android")]
+        crate::android::install_update(&apk.to_string_lossy());
+        true
     }
 
     /// The version of a program in place other than this one (`watch`).
@@ -785,7 +1078,8 @@ mod native {
                 WhatsNew::Nothing => "no notes new to this build".to_string(),
                 WhatsNew::Unread => "its notes not read".to_string(),
             };
-            crate::say(&format!("update: {version} is in place: the game offers to restart into it, Update Notices on ({what})"));
+            let how = if cfg!(target_os = "android") { "downloaded: the game offers to install it" } else { "in place: the game offers to restart into it" };
+            crate::say(&format!("update: {version} is {how}, Update Notices on ({what})"));
         }
         if let Ok(mut u) = UPDATER.lock()
             && let Some(s) = u.as_mut()
@@ -1005,19 +1299,7 @@ mod native {
     fn look(base: &str, exe: &Path, commit: &str, platform: &str, progress: &dyn Fn(State)) -> Result<Look, String> {
         let agent = agent();
         let url = format!("{base}update.txt");
-        let text = agent
-            .get(&url)
-            .call()
-            .map_err(|e| format!("{url}: {e}"))?
-            .body_mut()
-            .with_config()
-            .limit(64 * 1024)
-            .read_to_string()
-            .map_err(|e| format!("{url}: {e}"))?;
-        let m = Manifest::parse(&text);
-        if m.commit.is_empty() {
-            return Err(format!("{url} names no commit"));
-        }
+        let m = fetch_manifest(&agent, base)?;
         if m.commit.eq_ignore_ascii_case(commit) {
             return Ok(Look::Current);
         }
@@ -1036,6 +1318,25 @@ mod native {
         download(&agent, &format!("{base}{}", b.file), &new, b, &|done| progress(State::Downloading { version: version.clone(), done, total: b.size }))?;
         swap(exe, &new)?;
         Ok(Look::Staged(version))
+    }
+
+    /// The release's `update.txt`, naming a commit.
+    fn fetch_manifest(agent: &ureq::Agent, base: &str) -> Result<Manifest, String> {
+        let url = format!("{base}update.txt");
+        let text = agent
+            .get(&url)
+            .call()
+            .map_err(|e| format!("{url}: {e}"))?
+            .body_mut()
+            .with_config()
+            .limit(64 * 1024)
+            .read_to_string()
+            .map_err(|e| format!("{url}: {e}"))?;
+        let m = Manifest::parse(&text);
+        if m.commit.is_empty() {
+            return Err(format!("{url} names no commit"));
+        }
+        Ok(m)
     }
 
     /// The file at `url` into `to`, held to the build's size and SHA-256;
@@ -1646,5 +1947,180 @@ mod tests {
         assert_eq!(fetch_notes(&base).as_deref(), Ok(NOTES_V3));
         let none = serve(vec![]);
         assert!(fetch_notes(&none).is_err(), "the control: none there");
+    }
+
+    // ---- Android's APK
+
+    /// What `serve_ranges` was asked: each request's path and its Range.
+    type Asked = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+
+    /// A server as GitHub's release downloads are: `files` by path, the APK's
+    /// name a redirect (302) to where its bytes are (`objects/<name>`), a
+    /// Range of `bytes=<n>-` answered 206 from there; the first `cut` answers
+    /// of the bytes cut off after half of them. Every request noted.
+    fn serve_ranges(files: Vec<(&'static str, Vec<u8>)>, cut: usize) -> (String, Asked) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}/", l.local_addr().unwrap());
+        let asked: Asked = Default::default();
+        let noted = asked.clone();
+        std::thread::spawn(move || {
+            let mut cuts = cut;
+            for s in l.incoming() {
+                let Ok(mut s) = s else { continue };
+                let mut req = Vec::new();
+                let mut b = [0u8; 1];
+                while !req.ends_with(b"\r\n\r\n") && s.read(&mut b).is_ok_and(|n| n == 1) {
+                    req.push(b[0]);
+                }
+                let head = String::from_utf8_lossy(&req).to_string();
+                let path = head.lines().next().unwrap_or_default().split_whitespace().nth(1).unwrap_or("/").trim_start_matches('/').to_string();
+                let range = head.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("range: bytes=").map(|r| r.trim().to_string()));
+                noted.lock().unwrap().push((path.clone(), range.clone()));
+                if path.ends_with(".apk") && !path.starts_with("objects/") {
+                    let _ = write!(s, "HTTP/1.1 302 Found\r\nLocation: /objects/{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    continue;
+                }
+                let name = path.trim_start_matches("objects/");
+                let Some((_, body)) = files.iter().find(|(p, _)| *p == name) else {
+                    let _ = write!(s, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    continue;
+                };
+                let from = range.as_deref().and_then(|r| r.strip_suffix('-')).and_then(|n| n.parse::<usize>().ok()).filter(|&n| n < body.len());
+                let part = &body[from.unwrap_or(0)..];
+                match from {
+                    Some(n) => {
+                        let _ = write!(s, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {n}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len() - 1, body.len(), part.len());
+                    }
+                    None => {
+                        let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", part.len());
+                    }
+                }
+                if cuts > 0 && path.starts_with("objects/") {
+                    cuts -= 1;
+                    let _ = s.write_all(&part[..part.len() / 2]);
+                    let _ = s.flush();
+                    drop(s);
+                    continue;
+                }
+                let _ = s.write_all(part);
+            }
+        });
+        (base, asked)
+    }
+
+    /// An APK of its own: a few hundred kilobytes, every byte told apart.
+    fn apk_bytes() -> Vec<u8> {
+        (0..300_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect()
+    }
+
+    fn apk_manifest(commit: &str, sha: &str, size: usize) -> Vec<u8> {
+        format!("version dev-{}\ncommit {commit}\nbuild linux-x86_64 eqoa-vanilla-linux-x86_64 {} 5\nbuild android eqoa-vanilla-android.apk {sha} {size}\n", &commit[..7], "0".repeat(64)).into_bytes()
+    }
+
+    const ME: &str = "1111111111111111111111111111111111111111";
+    const THEM: &str = "2222222222222222222222222222222222222222";
+
+    /// The platform's name: one APK for every ABI.
+    #[test]
+    fn android_is_one_platform() {
+        let m = Manifest::parse(&String::from_utf8(apk_manifest(THEM, &"a".repeat(64), 9)).unwrap());
+        assert_eq!(m.build("android").map(|b| b.file.as_str()), Some("eqoa-vanilla-android.apk"));
+        assert_eq!(m.build("linux-x86_64").map(|b| b.size), Some(5), "the desktop's lines read as before");
+        assert_eq!(PLATFORM.is_some(), cfg!(any(target_os = "android", target_os = "linux", windows, target_os = "macos")));
+    }
+
+    /// Another commit's APK comes into the folder under its commit, held to
+    /// its hash; the next look (a start) finds it there and downloads
+    /// nothing; older files there go.
+    #[test]
+    fn another_commits_apk_is_downloaded_once() {
+        use super::native::{ApkLook, look_apk};
+        let apk = apk_bytes();
+        let d = dir("apk-once");
+        std::fs::write(d.join("eqoa-vanilla-android-0000000000.apk"), b"an older update's").unwrap();
+        let (base, asked) = serve_ranges(vec![("update.txt", apk_manifest(THEM, &sha(&apk), apk.len())), ("eqoa-vanilla-android.apk", apk.clone())], 0);
+        let ApkLook::Ready { version, path } = look_apk(&base, &d, ME, "android", None, &[]).unwrap() else { panic!("ready") };
+        assert_eq!(version, "dev-2222222");
+        assert_eq!(path, d.join("eqoa-vanilla-android-222222222222.apk"));
+        assert_eq!(std::fs::read(&path).unwrap(), apk);
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1, "the older APK gone, no part left");
+        let downloads = |a: &Asked| a.lock().unwrap().iter().filter(|(p, _)| p.starts_with("objects/")).count();
+        assert_eq!(downloads(&asked), 1);
+        assert_eq!(look_apk(&base, &d, ME, "android", None, &[]).unwrap(), ApkLook::Ready { version, path: path.clone() });
+        assert_eq!(downloads(&asked), 1, "found downloaded: not again");
+        // one spoilt in the cache is downloaded again
+        std::fs::write(&path, vec![0u8; apk.len()]).unwrap();
+        assert!(matches!(look_apk(&base, &d, ME, "android", None, &[]).unwrap(), ApkLook::Ready { .. }));
+        assert_eq!(downloads(&asked), 2, "the control: a file not the release's is fetched again");
+        assert_eq!(std::fs::read(&path).unwrap(), apk);
+    }
+
+    /// A line cut in the middle: the next try asks for the rest (a Range,
+    /// through the redirect) and keeps what came; the APK is whole.
+    #[test]
+    fn a_cut_download_takes_up_where_it_stopped() {
+        use super::native::{ApkLook, look_apk};
+        let apk = apk_bytes();
+        let d = dir("apk-cut");
+        let (base, asked) = serve_ranges(vec![("update.txt", apk_manifest(THEM, &sha(&apk), apk.len())), ("eqoa-vanilla-android.apk", apk.clone())], 1);
+        let ApkLook::Ready { path, .. } = look_apk(&base, &d, ME, "android", None, &[Duration::from_millis(10)]).unwrap() else { panic!("ready") };
+        assert_eq!(std::fs::read(&path).unwrap(), apk);
+        let got: Vec<_> = asked.lock().unwrap().iter().filter(|(p, _)| p.starts_with("objects/")).map(|(_, r)| r.clone()).collect();
+        assert_eq!(got, vec![None, Some(format!("{}-", apk.len() / 2))], "the second try from the half");
+        // no tries left: the part is kept for the next look, which finishes it
+        let d = dir("apk-cut-later");
+        let (base, _) = serve_ranges(vec![("update.txt", apk_manifest(THEM, &sha(&apk), apk.len())), ("eqoa-vanilla-android.apk", apk.clone())], 1);
+        assert!(look_apk(&base, &d, ME, "android", None, &[]).is_err());
+        let part = d.join("eqoa-vanilla-android-222222222222.apk.part");
+        assert_eq!(std::fs::metadata(&part).unwrap().len(), apk.len() as u64 / 2, "the half kept");
+        assert!(matches!(look_apk(&base, &d, ME, "android", None, &[]).unwrap(), ApkLook::Ready { .. }));
+        assert!(!part.exists());
+    }
+
+    /// An APK that is not the promised one is never offered, nothing of it
+    /// kept; the release of this build's commit, or of its own bytes, is no
+    /// update, and the folder is emptied (the update installed).
+    #[test]
+    fn only_the_promised_apk_of_another_commit_is_offered() {
+        use super::native::{ApkLook, look_apk};
+        let apk = apk_bytes();
+        let d = dir("apk-bad");
+        let (base, _) = serve_ranges(vec![("update.txt", apk_manifest(THEM, &sha(b"another"), apk.len())), ("eqoa-vanilla-android.apk", apk.clone())], 0);
+        assert!(look_apk(&base, &d, ME, "android", None, &[]).unwrap_err().contains("SHA-256"));
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0, "nothing kept");
+        let (base, _) = serve_ranges(vec![("update.txt", apk_manifest(THEM, &sha(&apk), apk.len() + 7)), ("eqoa-vanilla-android.apk", apk.clone())], 0);
+        assert!(look_apk(&base, &d, ME, "android", None, &[]).is_err(), "short of its size");
+        let (base, _) = serve_ranges(vec![("update.txt", apk_manifest(THEM, &sha(&apk), apk.len())), ("eqoa-vanilla-android.apk", apk.clone())], 0);
+        std::fs::write(d.join("eqoa-vanilla-android-222222222222.apk"), &apk).unwrap();
+        assert_eq!(look_apk(&base, &d, THEM, "android", None, &[]).unwrap(), ApkLook::Current, "this build's commit");
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0, "installed: its APK gone");
+        assert_eq!(look_apk(&base, &d, ME, "android", Some(&sha(&apk)), &[]).unwrap(), ApkLook::Current, "this build's own bytes");
+        assert!(look_apk(&base, &d, ME, "ios", None, &[]).unwrap_err().contains("no ios build"));
+        assert!(matches!(look_apk(&base, &d, ME, "android", Some(&sha(b"older")), &[]).unwrap(), ApkLook::Ready { .. }), "the control");
+    }
+
+    /// Android's question: Install now hands the APK on once and asks
+    /// again after LATER (a cancel, or no leave to install); it never
+    /// restarts; Later is a Later.
+    #[test]
+    fn install_now_asks_again_later_and_never_restarts() {
+        let later = 1000;
+        let mut o = Offer::installing(Duration::from_millis(later as u64), true);
+        settle(&mut o, true, 0);
+        assert!(o.shown());
+        assert!(o.key(136, QUIET_MS) && o.key(134, QUIET_MS), "left to Install now, ✕");
+        assert!(!o.shown() && !o.restart(), "no restart");
+        assert!(o.take_install(), "the APK to the installer");
+        assert!(!o.take_install(), "once");
+        o.frame(true, None, quiet(QUIET_MS + later - 1));
+        assert!(!o.shown(), "not again before LATER");
+        o.frame(true, None, quiet(QUIET_MS + later));
+        assert!(o.shown(), "again after it: the install did not happen");
+        assert!(o.key(13, QUIET_MS + later) && !o.take_install(), "Later: nothing installed");
+        // the control: the desktop's restarts
+        let mut d = Offer::installing(Duration::from_millis(later as u64), false);
+        settle(&mut d, true, 0);
+        assert!(d.key(136, QUIET_MS) && d.key(134, QUIET_MS));
+        assert!(d.restart() && !d.take_install());
     }
 }

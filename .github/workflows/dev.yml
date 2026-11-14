@@ -191,11 +191,15 @@ jobs:
   # with the SDK's own tools at the versions given here, and signed with the
   # project's key (secrets ANDROID_KEYSTORE, the keystore in base64, and
   # ANDROID_KEYSTORE_PASSWORD): Android installs an APK over an older one only
-  # when both carry the same key. It never updates itself (update.rs), so it
-  # has no line in update.txt.
+  # when both carry the same key. It carries the channel and its commit as the
+  # desktop's builds do: the app downloads the release's APK of another commit
+  # (its line in update.txt) and hands it to Android's installer at the
+  # player's word (update.rs).
   android:
     runs-on: ubuntu-24.04
     env:
+      EQOA_UPDATE_CHANNEL: dev
+      EQOA_BUILD_COMMIT: ${{ github.sha }}
       ANDROID_NDK_VERSION: 30.0.16248370
       ANDROID_BUILD_TOOLS: 37.0.0
       ANDROID_PLATFORM: android-36
@@ -283,14 +287,14 @@ jobs:
           ls -la dist
 
       # The updater's manifest (crates/eqoa/src/update.rs): the commit, and a
-      # line a platform with its program, the SHA-256 and the size a download
-      # is held to.
+      # line a platform with its program (Android's: the APK), the SHA-256 and
+      # the size a download is held to.
       - name: Write update.txt
         run: |
           {
             echo "version dev-${GITHUB_SHA::7}"
             echo "commit $GITHUB_SHA"
-            for b in linux-x86_64:eqoa-vanilla-linux-x86_64 windows-x86_64:eqoa-vanilla-windows-x86_64.exe macos:eqoa-vanilla-macos; do
+            for b in linux-x86_64:eqoa-vanilla-linux-x86_64 windows-x86_64:eqoa-vanilla-windows-x86_64.exe macos:eqoa-vanilla-macos android:eqoa-vanilla-android.apk; do
               f="dist/${b#*:}"
               echo "build ${b%%:*} ${b#*:} $(sha256sum "$f" | cut -d' ' -f1) $(stat -c%s "$f")"
             done

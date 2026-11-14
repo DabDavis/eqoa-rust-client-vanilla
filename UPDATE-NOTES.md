@@ -7,6 +7,17 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · The Android app updates itself
+- **No more downloading each new APK by hand**: the Android app now looks for a new build when it starts and every
+  ten minutes while you play, downloads it in the background (a dropped connection picks up where it stopped), and
+  asks you when nothing else is on the screen: "A new version is ready", with what is new in it. Install now, or
+  Later (asked again in half an hour).
+- **Install now** leaves the world if you are in it, then Android's own screen asks you to confirm: tap Update.
+  Android closes the game to install it; open EQOA again after. Your settings, servers and disc stay as they were.
+- **The first time only**, Android asks you to allow EQOA to install apps: the game takes you to that setting, turn on
+  "Allow from this source" and come back. Cancel either screen and the game asks again later.
+- This build has to be installed by hand one last time, from the release page; the ones after it come by themselves.
+
 ## 2026-11-14 · Weapon auras sit on the blade
 - **An epic's sparkles on a borrowed weapon** now sit along that weapon's own blade, where they sit on the epic (a
   druid staff's sparkles near the top of a scimitar or an axe, not floating past its tip).
