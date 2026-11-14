@@ -587,13 +587,26 @@ pub fn reach(lib: &esf::Library, item: u32) -> Option<f32> {
     Some(len(&p.a).max(len(&p.b))).filter(|&r| r > 0.01)
 }
 
+/// Where along the held item a hand's aura puts its borrowed particles, when
+/// the server names it: the aura's `nodes` byte, which a hand's aura has no
+/// other use for (go-eqoa-server's `/aura ... along=N`, the named looks'
+/// own: the owner, 2026-11-14, "lets move the druid epic aura down zerkziee
+/// scimitar down the blade more"), 1-100 the share in percent of the item's
+/// [`reach`] from the hand; 0 (and anything past 100) none, the place the
+/// source's own share gives.
+pub fn along(a: &net::entity::PieceAura) -> Option<f32> {
+    (1..=100).contains(&a.nodes).then(|| a.nodes as f32 / 100.0)
+}
+
 /// The particles a hand's aura `a` puts on the item `item` held at `at` (its
 /// node's world transform), by holder `holder` and hand `hand`: each of its
 /// source's particle sprites (`particles::item_emitters`) under the member
 /// transform it has in the source, its place moved along to the same share of
 /// the item's reach as of the source's ([`reach`]: the druid's staff's
 /// sparkles, 1.25 up a 1.61 staff, at 0.78 of a scimitar's blade, not past
-/// its tip; the place kept when either has no trail), in the aura's hue
+/// its tip; the place kept when either has no trail), or, when the aura says
+/// where ([`along`]), that share of the item's reach out from the hand along
+/// the emitter's own line, in the aura's hue
 /// (none: the source's own colours), keyed from [`HAND_AURA_FIRST`]. None
 /// when the source is the item itself (its own particles are already in
 /// hand) or has none.
@@ -603,12 +616,20 @@ pub fn hand_emitters(lib: &esf::Library, holder: i32, hand: usize, item: u32, at
         return Vec::new();
     }
     let tint = hand_hue(a);
-    let k = reach(lib, item).zip(reach(lib, src)).map_or(1.0, |(i, s)| i / s);
+    let held = reach(lib, item);
+    let share = held.zip(reach(lib, src)).map_or(1.0, |(i, s)| i / s);
+    let at_share = held.zip(along(a));
     crate::particles::item_emitters(lib, src)
         .into_iter()
         .enumerate()
         .map(|(n, e)| {
             let mut member = e.member;
+            let t = member.m[3];
+            let d = (t.x.0 * t.x.0 + t.y.0 * t.y.0 + t.z.0 * t.z.0).sqrt();
+            let k = match at_share {
+                Some((r, s)) if d > 0.001 => s * r / d,
+                _ => share,
+            };
             if k != 1.0 {
                 let t = member.m[3];
                 member.m[3] = Vect4::new(F::new(t.x.0 * k), F::new(t.y.0 * k), F::new(t.z.0 * k), t.w);
@@ -1078,5 +1099,41 @@ mod tests {
         let mut m = build(0xD039_42DE);
         borrow_epic(&mut m, &build(STAFF), None, false);
         assert!(m.batches.iter().all(|b| b.layers[0].emissive == [120, 80, 30, 255] && b.layers.last().unwrap().color == [255, 204, 0, 255]));
+    }
+
+    /// A hand's aura that says where (`nodes` 1-100, [`along`]): the druid
+    /// staff glow at half the Triad Scimitar's reach (0.999) sits 0.5 out,
+    /// mid-blade, on its own line; at 1 percent near the hand; 0 and past 100
+    /// the source's share as before (the control, 0.78 of the reach).
+    #[test]
+    fn a_hands_aura_placed_along_the_blade() {
+        use net::entity::PieceAura;
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("ITEM.ESF", esf::Container::open(disc.read("ITEM.ESF").unwrap()).unwrap());
+        const STAFF: u32 = 0xCBF4_135A;
+        const TRIAD: u32 = 0xD039_42DE;
+        let at = Matrix44::<Ee>::identity();
+        let place = |nodes: u8| {
+            let a = PieceAura { color: [0; 4], kind: net::npctint::Aura::EPIC, source: STAFF, nodes };
+            let t = hand_emitters(&lib, 1, 0, TRIAD, &at, &a, true)[0].world.m[3];
+            [t.x.0, t.y.0, t.z.0]
+        };
+        let len = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        let r = reach(&lib, TRIAD).unwrap();
+        let staff = reach(&lib, STAFF).unwrap();
+        assert!((len(place(50)) - 0.5 * r).abs() < 1e-3, "{:?}", place(50));
+        assert!((len(place(1)) - 0.01 * r).abs() < 1e-3);
+        let line = |v: [f32; 3]| v.map(|x| x / len(v));
+        let (a, b) = (line(place(50)), line(place(0)));
+        assert!((0..3).all(|i| (a[i] - b[i]).abs() < 1e-4), "the emitter's own line");
+        for none in [0u8, 101, 255] {
+            assert!((len(place(none)) - 1.25 * r / staff).abs() < 0.01, "{none}: the source's share");
+        }
+        assert_eq!((along(&PieceAura { nodes: 45, ..Default::default() }), along(&PieceAura::default())), (Some(0.45), None));
     }
 }

@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Weapon aura sparkles placed along the blade
+- **Where a weapon aura's sparkles sit** can now be set by the server, from the hand up to the tip: the druid staff
+  glow now sits mid-blade on a scimitar instead of near its tip.
+
 ## 2026-11-14 · The Android app updates itself
 - **No more downloading each new APK by hand**: the Android app now looks for a new build when it starts and every
   ten minutes while you play, downloads it in the background (a dropped connection picks up where it stopped), and
