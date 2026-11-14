@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Freezing at the tip
+- **Spell-effect weapon auras** (the freezing drip) now sit at the tip of whatever is held: a sword's point, a
+  staff's head, a bow's limb end, instead of at the hand.
+
 ## 2026-11-14 · Hair, gnome caps and glasses in a GM's colour
 - **A GM can colour a character's hair** (white, red, any colour), **a gnome's cap** and **a gnome's glasses**, each
   on its own: glasses no longer have to take the hair's colour.

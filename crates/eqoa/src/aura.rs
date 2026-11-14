@@ -631,6 +631,51 @@ pub fn reach(lib: &esf::Library, item: u32) -> Option<f32> {
     Some(len(&p.a).max(len(&p.b))).filter(|&r| r > 0.01)
 }
 
+thread_local! {
+    static TIPS: std::cell::RefCell<std::collections::HashMap<u32, Option<[f32; 3]>>> = std::cell::RefCell::default();
+}
+
+/// A held item's tip, in its own space (the hand at the origin): its trail's
+/// far point (`trails::weapon_points`: a sword's point, a staff's head); for an
+/// item with no trail (a bow, held at its middle; a shield) the vertex
+/// farthest out along its longest axis, toward the farther end (a bow's upper
+/// limb). None for an item not loaded or with no vertex. Worked out once an
+/// item.
+pub fn tip(lib: &esf::Library, item: u32) -> Option<[f32; 3]> {
+    if let Some(t) = TIPS.with_borrow(|m| m.get(&item).copied()) {
+        return t;
+    }
+    let t = tip_of(lib, item);
+    TIPS.with_borrow_mut(|m| m.insert(item, t));
+    t
+}
+
+fn tip_of(lib: &esf::Library, item: u32) -> Option<[f32; 3]> {
+    if let Some(p) = crate::trails::weapon_points(lib, item) {
+        let v = |m: &Matrix44<Ee>| [m.m[3].x.0, m.m[3].y.0, m.m[3].z.0];
+        let len = |v: [f32; 3]| v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+        let (a, b) = (v(&p.a), v(&p.b));
+        let far = if len(a) >= len(b) { a } else { b };
+        if len(far) > 1e-4 {
+            return Some(far);
+        }
+    }
+    let m = lib.lookup(item as i32).and_then(|r| lib.build_model(r))?;
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for p in &m.pos {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    if m.pos.is_empty() {
+        return None;
+    }
+    let k = (0..3).max_by(|&i, &j| (hi[i] - lo[i]).total_cmp(&(hi[j] - lo[j]))).unwrap_or(2);
+    let up = hi[k].abs() >= lo[k].abs();
+    m.pos.iter().copied().max_by(|p, q| if up { p[k].total_cmp(&q[k]) } else { q[k].total_cmp(&p[k]) })
+}
+
 /// Where along the held item a hand's aura puts its borrowed particles, when
 /// the server names it: the aura's `nodes` byte, which a hand's aura has no
 /// other use for (go-eqoa-server's `/aura ... along=N`, the named looks'
@@ -720,14 +765,20 @@ pub fn hand_emitters(lib: &esf::Library, holder: i32, hand: usize, item: u32, at
         Some(i) => reach(lib, src).map_or(1.0, |s| i / s),
     };
     let at_share = held.zip(along(a));
-    // a spell visual's (or a definition's) emitters: free in the world, at
-    // the hand (as the spell puts them on its caster's hand: the item's
-    // slot), or the aura's along up the item's length (its +z)
-    let mut emitters = crate::particles::item_emitters(lib, src);
+    let emitters = crate::particles::item_emitters(lib, src);
+    // a spell visual's (or a definition's) emitters: free in the world at
+    // the held item's tip ([`tip`]: the owner, 2026-11-14, "move it to the end
+    // of the held item, and for any weapon, on the tip"), or the aura's along
+    // of the way from the hand to it; at the hand for an item with no tip
     if emitters.is_empty() {
-        let up = at_share.map_or(0.0, |(r, s)| r * s);
-        let place = Matrix44::transform(&vi::vect::Vect3::of(0.0, 0.0, 0.0), F::ONE, &vi::vect::Vect3::of(0.0, 0.0, up));
-        emitters = spell_emitters(lib, src).into_iter().map(|def| crate::particles::ItemEmitter { member: place, def, flags: 0 }).collect();
+        let s = along(a).unwrap_or(1.0);
+        let t = tip(lib, item).unwrap_or([0.0; 3]).map(|x| x * s);
+        let world = Matrix44::mul(&Matrix44::transform(&vi::vect::Vect3::of(0.0, 0.0, 0.0), F::ONE, &vi::vect::Vect3::of(t[0], t[1], t[2])), at);
+        return spell_emitters(lib, src)
+            .into_iter()
+            .enumerate()
+            .map(|(n, def)| crate::particles::InHand { key: (holder, hand, src, HAND_AURA_FIRST + n), world, def, how: crate::particles::How::Sprite(0), drawn, tint })
+            .collect();
     }
     emitters
         .into_iter()
@@ -1541,10 +1592,44 @@ mod tests {
         assert_eq!(lent.len(), 1);
         assert_eq!((lent[0].def, lent[0].tint), (drip, Some([0x30, 0x60, 0xFF])));
         assert!(matches!(lent[0].how, crate::particles::How::Sprite(0)), "free in the world, as the spell's");
+        // at the tip: the sword's trail's far point (its reach out from the hand)
         let t = lent[0].world.m[3];
-        assert_eq!((t.x.0, t.y.0, t.z.0), (0.0, 0.0, 0.0), "at the hand");
+        let tp = tip(&lib, 0x17F9_870B).unwrap();
         let r = reach(&lib, 0x17F9_870B).unwrap();
+        assert_eq!((t.x.0, t.y.0, t.z.0), (tp[0], tp[1], tp[2]), "at the tip");
+        assert!(((tp[0] * tp[0] + tp[1] * tp[1] + tp[2] * tp[2]).sqrt() - r).abs() < 1e-4);
         let up = hand_emitters(&lib, 1, 1, 0x17F9_870B, &at, &PieceAura { nodes: 40, ..a }, true)[0].world.m[3];
-        assert!((up.z.0 - 0.4 * r).abs() < 1e-4 && up.x.0 == 0.0, "40% up the blade: {:?}", (up.x.0, up.y.0, up.z.0));
+        assert!((up.z.0 - 0.4 * tp[2]).abs() < 1e-4 && (up.x.0 - 0.4 * tp[0]).abs() < 1e-4, "40% of the way: {:?}", (up.x.0, up.y.0, up.z.0));
+    }
+
+    /// The tips: a staff's head (its trail's far point, past half its
+    /// length), a bow's limb end (no trail: the farthest vertex along its
+    /// longest axis, its z, 0.72 out), the controls: no item, none; the
+    /// freezing drip there on a bow, and the sparkles of an item source (the
+    /// Sword of Virtue's) still at the grip on a bow (the earlier rule).
+    #[test]
+    fn the_tips_of_what_is_held() {
+        use net::entity::PieceAura;
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        for f in ["ITEM.ESF", "SPELLFX.CSF"] {
+            lib.add(f, esf::Container::open(disc.read(f).unwrap()).unwrap());
+        }
+        let staff = tip(&lib, 0xCBF4_135A).unwrap();
+        assert!(staff[2] > 1.5, "the druid staff's head: {staff:?}");
+        let bow = tip(&lib, 0x361D_AC84).unwrap();
+        assert!((bow[2].abs() - 0.71875).abs() < 1e-3, "the longbow's limb end: {bow:?}");
+        assert_eq!(tip(&lib, 0x1234_5678), None);
+        let at = Matrix44::<Ee>::identity();
+        let freezing = PieceAura { color: [0; 4], kind: net::npctint::Aura::PARTICLES, source: 0x6C15_1A60, nodes: 0 };
+        let t = hand_emitters(&lib, 1, 0, 0x361D_AC84, &at, &freezing, true)[0].world.m[3];
+        assert_eq!((t.x.0, t.y.0, t.z.0), (bow[0], bow[1], bow[2]), "the drip at the bow's tip");
+        let sparkles = PieceAura { source: SWORD_OF_VIRTUE, ..freezing };
+        let g = hand_emitters(&lib, 1, 0, 0x361D_AC84, &at, &sparkles, true)[0].world.m[3];
+        assert!(g.x.0.abs() + g.y.0.abs() + g.z.0.abs() < 1e-5, "an item's sparkles at the bow's grip");
     }
 }
