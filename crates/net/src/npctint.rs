@@ -70,6 +70,13 @@ impl Aura {
     pub const TRIM: u8 = 5;
     /// The trim and the shell.
     pub const TRIM_SHELL: u8 = 6;
+    /// A held item drawn with an epic weapon's own look (go-eqoa-server's
+    /// `AuraEpic`, a hand's aura alone: `entity::MAIN_HAND_AURA`,
+    /// `OFF_HAND_AURA`): the source's model (the epic's ITEM.ESF hand model)
+    /// lends the item its materials' emissive glow, its additive sheen and its
+    /// particle sprites, in the colour's hue when it lights, else in its own.
+    /// Never sent on a body or a piece.
+    pub const EPIC: u8 = 7;
 
     /// Whether a kind names a shell or a trim outright (not the default): a
     /// black glow, which lights nothing, is then a dark aura ([`dark`]).

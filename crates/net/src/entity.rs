@@ -68,8 +68,9 @@ pub struct LiveColors {
     /// boots, helm, robe), after the trims ([`AURA_STATE_SIZE`]) to a client
     /// that draws them ([`crate::session::LIVE_LOOK_AURAS`]), then the
     /// character's body's ([`BODY_AURA`], [`BODY_AURA_STATE_SIZE`]), then its
-    /// cape's ([`CAPE_AURA`], [`CAPE_AURA_STATE_SIZE`]); all none from every
-    /// other server.
+    /// cape's ([`CAPE_AURA`], [`CAPE_AURA_STATE_SIZE`]), then its hands'
+    /// ([`MAIN_HAND_AURA`], [`OFF_HAND_AURA`], [`HAND_AURA_STATE_SIZE`]); all
+    /// none from every other server.
     pub auras: [PieceAura; AURAS],
 }
 
@@ -108,17 +109,32 @@ pub const BODY_AURA_STATE_SIZE: usize = AURA_STATE_SIZE + PIECE_AURA_SIZE;
 /// capes yet").
 pub const CAPE_AURA: usize = 8;
 
-/// How many auras a channel carries at most: the seven pieces', the body's
-/// and the cape's.
-pub const AURAS: usize = 9;
+/// The tenth and eleventh auras: the items held in the main hand and the off
+/// hand (go-eqoa-server's charaura slots 9 and 10; the owner, 2026-11-14:
+/// "give zaeires equipped weapons the necro's tainted aura from the epic
+/// sickle"), of kind [`crate::npctint::Aura::EPIC`] or
+/// [`crate::npctint::Aura::PARTICLES`], drawn on whatever the hand holds (the
+/// off hand's on a shield held there too).
+pub const MAIN_HAND_AURA: usize = 9;
+pub const OFF_HAND_AURA: usize = 10;
+
+/// How many auras a channel carries at most: the seven pieces', the body's,
+/// the cape's and the two hands'.
+pub const AURAS: usize = 11;
 
 /// The body aura channel with the cape's aura after the body's: 315 bytes, to
 /// a client that answered [`crate::session::LIVE_LOOK_CAPE`].
 pub const CAPE_AURA_STATE_SIZE: usize = BODY_AURA_STATE_SIZE + PIECE_AURA_SIZE;
 
+/// The cape's aura channel with the hands' auras after the cape's (the main
+/// hand's, then the off hand's): 335 bytes, to a client that answered
+/// [`crate::session::LIVE_LOOK_HANDS`].
+pub const HAND_AURA_STATE_SIZE: usize = CAPE_AURA_STATE_SIZE + 2 * PIECE_AURA_SIZE;
+
 /// The auras out of `b` (each: r, g, b, a, kind, the source's u32
 /// little-endian, nodes): seven pieces' in its first 70 bytes, the body's in
-/// the next ten, the cape's in the ten after (none when `b` is shorter).
+/// the next ten, the cape's in the ten after, then the main hand's and the off
+/// hand's (none when `b` is shorter).
 pub fn auras_of(b: &[u8]) -> [PieceAura; AURAS] {
     std::array::from_fn(|i| {
         let p = |k: usize| b.get(PIECE_AURA_SIZE * i + k).copied().unwrap_or(0);
@@ -435,7 +451,9 @@ impl Entities {
         {
             l.trim = trims_of(&data[LIVE_STATE_SIZE..ARMOR_STATE_SIZE]);
             // and the worn pieces' auras after them
-            if data.len() >= CAPE_AURA_STATE_SIZE {
+            if data.len() >= HAND_AURA_STATE_SIZE {
+                l.auras = auras_of(&data[ARMOR_STATE_SIZE..HAND_AURA_STATE_SIZE]);
+            } else if data.len() >= CAPE_AURA_STATE_SIZE {
                 l.auras = auras_of(&data[ARMOR_STATE_SIZE..CAPE_AURA_STATE_SIZE]);
             } else if data.len() >= BODY_AURA_STATE_SIZE {
                 l.auras = auras_of(&data[ARMOR_STATE_SIZE..BODY_AURA_STATE_SIZE]);
@@ -665,6 +683,16 @@ mod tests {
         let cc = read(&cape).colors.unwrap();
         assert_eq!(cc.auras[CAPE_AURA], PieceAura { color: [0xFF, 0x20, 0x20, 0xFF], kind: 5, source: 0, nodes: 0 });
         assert_eq!(cc.auras[..CAPE_AURA], bdc.auras[..CAPE_AURA], "the pieces' and the body's the same");
+        assert_eq!([cc.auras[MAIN_HAND_AURA], cc.auras[OFF_HAND_AURA]], [PieceAura::default(); 2], "the 315 bytes: no hands");
+        // the 335 bytes: the main hand's and the off hand's after the cape's
+        let mut hands = cape.clone();
+        hands.extend(piece([0, 0, 0, 0], 7, 0x5FD4_AE7C, 0));
+        hands.extend(piece([0xFF, 0x20, 0x20, 0xFF], 3, 0x88EC_092D, 0));
+        assert_eq!(hands.len(), HAND_AURA_STATE_SIZE);
+        let hc = read(&hands).colors.unwrap();
+        assert_eq!(hc.auras[MAIN_HAND_AURA], PieceAura { color: [0; 4], kind: 7, source: 0x5FD4_AE7C, nodes: 0 });
+        assert_eq!(hc.auras[OFF_HAND_AURA], PieceAura { color: [0xFF, 0x20, 0x20, 0xFF], kind: 3, source: 0x88EC_092D, nodes: 0 });
+        assert_eq!(hc.auras[..MAIN_HAND_AURA], cc.auras[..MAIN_HAND_AURA], "every aura before the hands' the same");
         assert_eq!(LiveColors { auras: bc.auras, ..ac }, bc, "every other colour the same");
         assert_eq!((a.name, a.armor, a.level), (b.name, b.armor, b.level));
     }

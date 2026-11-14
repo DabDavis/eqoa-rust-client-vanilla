@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Weapon auras
+- **Weapons can wear an epic's aura**: a GM can now give the weapon in a character's hand (main hand, off hand, or
+  both) the look of an epic weapon: its glow by night and its particles. The first is the necromancer's Sickle of
+  Avhi Escron's tainted aura, a green glow with a green mist rising off the blade, on whatever weapon that hand
+  holds. It shows on any weapon held there and goes away with an empty hand.
+
 ## 2026-11-14 · Plane of Sky isles by name
 - **Where you are in the Plane of Sky**: the map's title, the start menu's Location and the group's waypoint line
   now name the isle you are on: "Plane of Sky (Night Chain 1)", "Plane of Sky (Rain Chain 3)", "Plane of Sky

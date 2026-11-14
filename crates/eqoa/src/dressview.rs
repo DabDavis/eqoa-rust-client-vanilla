@@ -47,7 +47,10 @@
 //! are run from the start to `at=` (8000 shows them steady).
 //! `pieceaura=slot:RRGGBBAA[:kind[:DictID[:nodes]]]` (slot chest, bracer,
 //! gloves, legs, boots, helm or robe; `body` the body and underclothes under
-//! the armour, `aura::body_aura`; `cape` the cape's, `aura::cape_aura`) puts an aura on a worn piece as the
+//! the armour, `aura::body_aura`; `cape` the cape's, `aura::cape_aura`; `main`
+//! and `off` the item held in that hand, kind `epic` or `particles`,
+//! `aura::hand_aura`: `pieceaura=main:0:epic:5FD4AE7C` the Sickle of Avhi
+//! Escron's look on it) puts an aura on a worn piece as the
 //! channel's `net::entity::PieceAura` does (`aura::pieces`); kind `trim` or
 //! `trimshell` lights the plate's trim (`aura::piece_trims`), and a black or
 //! near-black colour (000000FF) is a dark aura (`net::npctint::dark`).
@@ -167,8 +170,8 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             "pieceaura" => {
                 // slot:RRGGBBAA[:kind[:source[:nodes]]]
                 let parts: Vec<&str> = v.split(':').collect();
-                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body|cape:RRGGBBAA[:shell|particles|both|none|trim|trimshell[:DictID[:nodes]]]");
-                let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe", "body", "cape"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
+                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body|cape|main|off:RRGGBBAA[:shell|particles|both|none|trim|trimshell|epic[:DictID[:nodes]]]");
+                let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe", "body", "cape", "main", "off"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
                 let c = u32::from_str_radix(parts.get(1).ok_or_else(usage)?.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))?;
                 let kind = match parts.get(2).copied() {
                     None | Some("default") => net::npctint::Aura::DEFAULT,
@@ -178,6 +181,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                     Some("both") => net::npctint::Aura::BOTH,
                     Some("trim") => net::npctint::Aura::TRIM,
                     Some("trimshell") => net::npctint::Aura::TRIM_SHELL,
+                    Some("epic") => net::npctint::Aura::EPIC,
                     _ => return Err(usage()),
                 };
                 let source = parts.get(3).map(|v| hex(w, v)).transpose()?.unwrap_or(0);
@@ -522,14 +526,15 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
             }
         }
         cs.h.process(0, &anims);
-        if !worn.is_empty() {
+        if !worn.is_empty() || !held.is_empty() {
             let centre = cs.h.calc_trans_about_center(&Matrix44::identity(), &anims);
-            let now = crate::aura::worn_emitters(lib, 0, &cs, &worn, &centre, true);
+            let mut now = crate::aura::worn_emitters(lib, 0, &cs, &worn, &centre, true);
+            now.extend(held_emitters(lib, &cs, &held, &words, look, &centre));
             aura_batches = aura.frame(lib, &now, &Vect3::of(0.0, 1.0, 6.0), t);
         }
         t += 16;
     }
-    if !worn.is_empty() {
+    if !worn.is_empty() || !held.is_empty() {
         eprintln!("{}", aura.describe());
     }
     let centre = cs.h.calc_trans_about_center(&Matrix44::identity(), &anims);
@@ -650,9 +655,21 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         .map(|&(node, id)| {
             let mut m = lib.lookup(id as i32).and_then(|r| lib.build_model(r));
             // its own colour on its glow (`aura`), as the world draws it
-            let slot = words.items.iter().position(|&i| i == id).unwrap_or(0);
+            // its hand by its node (two hands may hold the same item)
+            let slot = hand_of(&cs, &words, node, id);
             if let (Some(m), Some(c)) = (m.as_mut(), crate::aura::hand(look, slot)) {
                 crate::aura::recolor(m, c);
+            }
+            // its hand's aura: an epic's look lent it (`aura::borrow_epic`), as `play::attach` lends it
+            if let (Some(m), Some(a)) = (m.as_mut(), crate::aura::hand_aura(&words.pieces, slot).filter(|a| a.kind == net::npctint::Aura::EPIC)) {
+                let src = crate::aura::hand_source(&a);
+                match lib.lookup(src as i32).and_then(|r| lib.build_model(r)) {
+                    Some(e) => {
+                        crate::aura::borrow_epic(m, &e, crate::aura::hand_hue(&a), src == id);
+                        eprintln!("{id:#010x}: the epic look of {src:#010X}{}", crate::aura::hand_hue(&a).map_or(String::new(), |h| format!(" in {h:?}")));
+                    }
+                    None => eprintln!("{id:#010x}: no epic {src:#010X} to borrow from"),
+                }
             }
             (node, id, m)
         })
@@ -736,6 +753,33 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header().and_then(|mut wr| wr.write_image_data(&sheet)).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// The hand (0 main, 1 off hand, 2 shield) whose item `item` hangs on
+/// `node`: by the node, as two hands may hold the same item.
+fn hand_of(cs: &vi::csprite::CSprite<Ee>, words: &Words, node: i32, item: u32) -> usize {
+    (0..3).find(|&i| words.items[i] == item && cs.item_node(i) == Some(node)).or_else(|| words.items.iter().position(|&i| i == item)).unwrap_or(0)
+}
+
+/// The emitters the held items carry as the world runs them (`Play::in_hand`):
+/// each item's own particle sprites under its node, in its own colour, and
+/// its hand's aura's (`aura::hand_emitters`), all drawn.
+fn held_emitters(lib: &Library, cs: &vi::csprite::CSprite<Ee>, held: &[(i32, u32)], words: &Words, look: &vi::cust::Look, centre: &Matrix44<Ee>) -> Vec<crate::particles::InHand> {
+    use crate::particles::{How, InHand};
+    let mut out = Vec::new();
+    for &(node, item) in held {
+        let Some(n) = cs.h.nodes.get(node as usize) else { continue };
+        let hand = hand_of(cs, words, node, item);
+        let at = Matrix44::mul(&n.world, centre);
+        let tint = crate::aura::hand(look, hand);
+        for (k, e) in crate::particles::item_emitters(lib, item).into_iter().enumerate() {
+            out.push(InHand { key: (0, hand, item, k), world: Matrix44::mul(&e.member, &at), def: e.def, how: How::Sprite(e.flags), drawn: true, tint });
+        }
+        if let Some(a) = crate::aura::hand_aura(&words.pieces, hand) {
+            out.extend(crate::aura::hand_emitters(lib, 0, hand, item, &at, &a, true));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
