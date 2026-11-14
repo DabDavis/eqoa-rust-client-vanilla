@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Freezing at the tip
+- **Spell-effect weapon auras** (the freezing drip) now sit at the tip of whatever is held: a sword's point, a
+  staff's head, a bow's limb end, instead of at the hand.
+
 ## 2026-11-14 · New camps on the map
 - **The map shows the new camps**: the Frosteye Orcs at the Snowblind Plains excavation, the Tae Ew Aggressors at
   the Stone Watchers, the Desert Bandits in Tak 'Xiv, the frogloks of the Burial Mounds, the Mossmouth Goblins, the
