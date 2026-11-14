@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-14 · Character select shows the right character from the start
+- **No more wrong character for a moment at character select**: on an account with more than eight characters,
+  the character shown beside the list could be the one first in the short list the server sends at first (your
+  most recently played) until the whole list came, so the first name was selected but another character stood
+  there. The character shown now always matches the one selected, and wears its own colours from the start.
+
 ## 2026-11-14 · Bow auras at the grip; circlets
 - **A weapon aura on a bow** now sits at the hand, on the bow's grip, instead of floating off past it.
 - **Circlets**: a GM can now give a character a glowing circlet round the head made from an epic's effect, such as

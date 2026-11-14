@@ -605,7 +605,13 @@ impl Client {
     /// server said it lists: `Session::char_slots`), creation closed,
     /// character select up.
     fn character_list(&mut self, list: &[net::session::Character]) {
-        self.chars = list.iter().take(self.char_slots() as usize).map(CharRecord::of).collect();
+        let chars: Vec<CharRecord> = list.iter().take(self.char_slots() as usize).map(CharRecord::of).collect();
+        // the figure follows the list: a list that puts another character (or
+        // the same in another look) at the selection has it made again before
+        // it is drawn (`CharSelect::list_replaced`)
+        let at = self.select.sel as usize;
+        self.select.list_replaced(self.chars.get(at), chars.get(at));
+        self.chars = chars;
         self.select.cap = self.char_slots() as i32;
         self.select.reveal(self.chars.len() as i32);
         // creation's form and pages start over; the selection stays where
@@ -1057,6 +1063,52 @@ mod tests {
 
     fn character(name: &str, id: i64, gear: Vec<u8>) -> net::session::Character {
         net::session::Character { name: name.into(), server_id: id, model: 0x70D898C6, class: 11, race: 2, level: 7, hair_color: 1, hair_length: 2, hair_style: 3, face: 1, gear, options: Vec::new() }
+    }
+
+    /// The list sent again puts another character at the selection: the figure
+    /// is made again (the server owner's of 2026-11-14: a session's first list
+    /// is go-eqoa-server's eight most recently played in the disc's look, Dust
+    /// first, and the whole list in the live look comes a moment later,
+    /// Meshuggah first; the figure kept from the first drew Dust at
+    /// Meshuggah's slot). The same character in the live look is made again
+    /// too (its dyes); the same list again, or what the pump adds to a record
+    /// (its cape, its select info), keeps it. The control: comparing the
+    /// selected slot's name alone, as the figure's own look is not, would keep
+    /// the disc's look over the live one's.
+    #[test]
+    fn the_figure_follows_the_list() {
+        let mut dyed = vec![0u8; net::session::LIVE_GEAR_SIZE];
+        dyed[19..25].copy_from_slice(&[3; 6]);
+        for k in 0..6 {
+            dyed[43 + 4 * k..47 + 4 * k].copy_from_slice(&[0xD1, 0, 0, 0xFF]);
+        }
+        let mut disc = vec![0u8; 32];
+        disc[20..26].copy_from_slice(&[3; 6]);
+        let mut first = vec![character("Dust", 197, disc.clone()), character("Skinny", 470, disc.clone())];
+        first[0].model = 0x7ED8_9DAA;
+        let mut whole = vec![character("Meshuggah", 47, dyed.clone()), character("Dust", 197, dyed.clone())];
+        whole[0].model = 0x4C6F_A532;
+        let records = |l: &[net::session::Character]| l.iter().map(CharRecord::of).collect::<Vec<_>>();
+        let (a, b) = (records(&first), records(&whole));
+        assert!(select::refigure(a.first(), b.first()), "another character at the selection: made again");
+        assert!(!select::refigure(b.first(), b.first()), "the same list again: kept");
+        let mut c = b[0].clone();
+        c.cape = Some(Default::default());
+        c.info = Some(Default::default());
+        assert!(!select::refigure(b.first(), Some(&c)), "the pump's cape and select info: kept (the cape is put on every frame)");
+        // the same character, the disc's look then the live one's (its dyes)
+        let mut live = vec![character("Dust", 197, dyed)];
+        live[0].model = 0x7ED8_9DAA;
+        let l = records(&live);
+        assert!(select::refigure(a.first(), l.first()), "the same character in its dyes: made again");
+        assert_eq!(a[0].name, l[0].name, "the control: by name alone it would have been kept");
+        assert!(select::refigure(a.first(), None) && select::refigure(None, a.first()), "a slot emptied or filled");
+        // and through the list's own path: the selection stays at its slot
+        let mut cl = Client::new();
+        cl.phase = 3;
+        cl.character_list(&first);
+        cl.character_list(&whole);
+        assert_eq!((cl.select.sel, cl.chars[0].name.as_str()), (0, "Meshuggah"));
     }
 
     /// `CharacterList`'s raw 32 bytes: the robe as an int, its tint, three

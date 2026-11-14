@@ -135,6 +135,20 @@ pub fn look_of(c: &CharRecord, helm: bool) -> vi::cust::Look {
     }
 }
 
+/// What of a record `ShowCharacter` makes its figure of: who it is (the server's
+/// race look goes by the name), its body, its place (race, class, level), its
+/// look and its items. The cape is put on every frame.
+fn shown_as(c: &CharRecord) -> (i64, &str, u32, [i32; 3], vi::cust::Look, [u32; 3], [u8; 3]) {
+    (c.server_id, c.name.as_str(), c.model, [c.race, c.class, c.level], look_of(c, true), c.weapons, c.attack)
+}
+
+/// Whether a figure made of `old` (the record at the selection) is made again
+/// when the list puts `new` there: another character, or the same drawn
+/// otherwise (`shown_as`: the live look's list after the disc's).
+pub fn refigure(old: Option<&CharRecord>, new: Option<&CharRecord>) -> bool {
+    old.map(shown_as) != new.map(shown_as)
+}
+
 /// The child that has the keys over the list.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Child {
@@ -256,6 +270,20 @@ impl CharSelect {
     /// made again in its own at the next frame.
     pub fn relook(&mut self) {
         self.figure = None;
+    }
+
+    /// The server's list came again (`CharacterList`; the selection stays at
+    /// its slot): the figure made again at the next frame when the slot's
+    /// character is another, or is drawn otherwise (`shown_as`). The first
+    /// list a session gets is the game's eight (go-eqoa-server's the most
+    /// recently played) in the disc's look, and the whole list in the live
+    /// look follows it a moment later: a figure kept from the first drew the
+    /// character that had been at the slot (the server owner's of 2026-11-14:
+    /// Dust where Meshuggah was selected) until something else made it again.
+    pub fn list_replaced(&mut self, old: Option<&CharRecord>, new: Option<&CharRecord>) {
+        if refigure(old, new) {
+            self.figure = None;
+        }
     }
 
     /// The focus going to another window (not the box or customise): the
