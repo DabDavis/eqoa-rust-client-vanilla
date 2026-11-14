@@ -14,7 +14,8 @@
 // {files} (send them now), 'status' {text}, 'started' {visuals: every visual
 // on the disc, '0x...' in its order}, 'error' {text}.
 
-import init, { fxview, fxview_disc, fxview_play, fxview_again, fxview_aim, fxview_distance, fxview_camera, fxview_visuals } from './eqoa.js';
+import './gpuguard.js';
+import init, { fxview, fxview_disc, fxview_play, fxview_again, fxview_aim, fxview_distance, fxview_camera, fxview_visuals, gpu_threw } from './eqoa.js';
 
 const $ = (id) => document.getElementById(id);
 const framed = window.parent !== window;
@@ -54,6 +55,11 @@ window.eqoaCrash = (a) => {
 window.eqoaProblem = (a) => window.eqoaStatus(Array.isArray(a) ? a[1] : String(a));
 
 const ready = init({ module_or_path: new URL('eqoa_bg.wasm', import.meta.url) });
+// a WebGPU call that threw on the preview's device (gpuguard.js): it is lost,
+// and the preview stops with its notice (fxview.rs)
+let wasmIn = false;
+ready.then(() => { wasmIn = true; }, () => {});
+window.eqoaGpuThrew = (text) => { if (wasmIn) gpu_threw(String(text)); };
 let started = false;
 
 async function begin(run) {

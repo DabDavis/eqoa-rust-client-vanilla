@@ -13,6 +13,13 @@ open page by writing new builds and version.json under it:
             problem, not a second reload
   crash     the client stopping (web::crash) is a notice to reload by, and
             one only
+  gpuguard  WebGPU's calls on a device the browser throws from as Safari's
+            does once its graphics process is gone (gpuguard.js's simulate)
+            give stand-ins, not the InvalidStateError: the device's buffers,
+            encoders, passes, textures and queue, the client told once; a
+            device that threw nothing is called as before, and another error
+            (a TypeError) is thrown as before (the controls). Run alone with
+            --only gpuguard
   missing   a page whose build is gone says so in its status line
   hidden    a hidden page's game is ticked at 30 frames a second (tick.js, a
             worker's timer, which a hidden page's own are not), a shown one's
@@ -278,6 +285,76 @@ class Page:
         return (r or {}).get("result", {}).get("value")
 
 
+async def gpuguard(page, check, url):
+    """gpuguard.js on a real device: Safari's InvalidStateError from a lost
+    device's calls (petitions 5074, 5076, 5105, 5106) made by its simulate."""
+    await page.open(url)
+    r = await page.js("""(async () => {
+      const g = window.eqoaGpuGuard;
+      if (!g || !g.installed || !navigator.gpu) return { skip: 'no WebGPU here' };
+      const told = [];
+      const before = window.eqoaGpuThrew;
+      window.eqoaGpuThrew = (t) => told.push(t);
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) return { skip: 'no adapter' };
+        const dev = await adapter.requestDevice();
+        const out = {};
+        // the controls, on a device that threw nothing: real objects, and a
+        // TypeError thrown as before
+        const live = dev.createBuffer({ size: 16, usage: GPUBufferUsage.VERTEX, mappedAtCreation: true });
+        out.liveReal = live instanceof GPUBuffer && !g.isStub(live) && live.getMappedRange().byteLength === 16;
+        live.unmap();
+        try { dev.createBuffer({}); out.typeError = 'none'; } catch (e) { out.typeError = e.name; }
+        const tex = dev.createTexture({ size: [4, 4], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+        // Safari's throwing from now on
+        g.simulate();
+        const pass = () => {
+          const enc = dev.createCommandEncoder();
+          const rp = enc.beginRenderPass({ colorAttachments: [{ view: tex.createView(), loadOp: 'clear', storeOp: 'store' }] });
+          rp.setViewport(0, 0, 4, 4, 0, 1);
+          rp.draw(3);
+          rp.end();
+          dev.queue.submit([enc.finish()]);
+        };
+        let threw = null;
+        try {
+          const b = dev.createBuffer({ size: 64, usage: GPUBufferUsage.VERTEX, mappedAtCreation: true });
+          out.bufStub = g.isStub(b) && b.size === 64;
+          out.mapped = new Uint8Array(b.getMappedRange(0, 64)).length;
+          b.unmap();
+          b.destroy();
+          pass();
+          pass();
+          dev.queue.writeBuffer(live, 0, new Uint8Array(16));
+          out.mapAsync = typeof live.mapAsync(GPUMapMode.READ).then;
+          out.texStub = g.isStub(dev.createTexture({ size: { width: 8, height: 2 }, format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING }));
+        } catch (e) { threw = `${e.name}: ${e.message}`; }
+        out.threw = threw;
+        await new Promise((r) => setTimeout(r, 50));
+        out.told = told.slice();
+        // a new device after it is the browser's again
+        const dev2 = await (await navigator.gpu.requestAdapter()).requestDevice();
+        const b2 = dev2.createBuffer({ size: 8, usage: GPUBufferUsage.VERTEX });
+        out.newReal = b2 instanceof GPUBuffer && !g.isStub(b2);
+        out.lossesTold = g.lossesTold;
+        try { dev.destroy(); dev2.destroy(); } catch (e) { out.threw = out.threw || `${e.name}: ${e.message} (destroy)`; }
+        return out;
+      } finally { window.eqoaGpuThrew = before; }
+    })()""") or {}
+    if r.get("skip"):
+        check(f"gpuguard: skipped ({r['skip']})", True)
+        return
+    check("gpuguard: a device that threw nothing is called as before (control)", r.get("liveReal") is True, str(r))
+    check("gpuguard: another error is thrown as before (control)", r.get("typeError") == "TypeError", str(r))
+    check("gpuguard: a lost device's calls throw nothing", "threw" in r and r["threw"] is None, str(r))
+    check("gpuguard: its buffer a stand-in of its size, mapped bytes to write", r.get("bufStub") is True and r.get("mapped") == 64, str(r))
+    check("gpuguard: its texture a stand-in, its map a promise", r.get("texStub") is True and r.get("mapAsync") == "function", str(r))
+    told = r.get("told") or []
+    check("gpuguard: the client told once, with the call", len(told) == 1 and told[0].startswith("GPUDevice.createBuffer: ") and r.get("lossesTold") == 1, str(told))
+    check("gpuguard: a new device after it is the browser's", r.get("newReal") is True, str(r))
+
+
 async def tests(a, site, base, page):
     failed = []
 
@@ -285,6 +362,10 @@ async def tests(a, site, base, page):
         print(f"{'ok  ' if ok else 'FAIL'} {name}{': ' + detail if detail and not ok else ''}", flush=True)
         if not ok:
             failed.append(name)
+
+    if a.only == "gpuguard":
+        await gpuguard(page, check, base + "?later=3000")
+        return failed
 
     notices = "JSON.stringify([...document.querySelectorAll('#notices .notice')].map(n => n.dataset.key))"
     q = "?later=3000"
@@ -384,6 +465,8 @@ async def tests(a, site, base, page):
     buttons = await page.js("JSON.stringify([...document.querySelectorAll('#notices .notice[data-key=crash] button')].map(b => b.textContent))")
     check("the client stopping is a notice to reload by, one only", shown.count("crash") == 1 and said.startswith("The client stopped: a test panic\n")
           and "its trap" not in said and "reload the page" in said and buttons == '["Reload"]', f"{shown} {said!r} {buttons}")
+
+    await gpuguard(page, check, base + q)
 
     # ---- missing: a page naming a build that is not there
     (site.root / "gone.html").write_text(site.page.replace(f"v/{site.first}/", "v/" + "f" * 12 + "/"))
@@ -1082,6 +1165,7 @@ if __name__ == "__main__":
     ap.add_argument("--other-iso", help="a disc image other than Frontiers, for the disc check's other half")
     ap.add_argument("--iso-2002", help="the EverQuest Online Adventures (USA) disc image, for the 2002 checks")
     ap.add_argument("--serve", action="store_true", help="only serve the site")
+    ap.add_argument("--only", choices=["gpuguard"], help="run one scenario alone")
     ap.add_argument("--http-port", type=int, default=0)
     ap.add_argument("--port", type=int, default=9335)
     ap.add_argument("--profile", default="~/.cache/eqoa-rs-web/pagetest/profile")

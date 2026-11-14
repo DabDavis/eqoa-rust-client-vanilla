@@ -89,6 +89,12 @@ function errorText(e) {
   return !stack ? head : !head || stack.startsWith(head) || stack.includes(e.message) ? stack : `${head}\n${stack}`;
 }
 
+// an InvalidStateError from a WebGPU object's call ("GPUDevice.createCommandEncoder:
+// Unable to make command encoder.")
+function gpuRefused(err) {
+  return !!err && err.name === 'InvalidStateError' && /^GPU[A-Za-z]+\./.test(String(err.message || ''));
+}
+
 function caught(err, where) {
   // the page going: winit's unload on a loop left dead traps after its
   // panic, which the client lets go (main.js's pagehide); no crash
@@ -120,7 +126,11 @@ function caught(err, where) {
     // returned is that stop's consequence, not its cause: the watch below
     // says it, after the page has had its time to go (a navigation's stop)
     if (/closure invoked recursively or after being dropped/.test(text)) return;
-    crash('The client stopped', `${errorText(err)} (in ${stuckIn()})`);
+    // a WebGPU call the browser threw from on a lost device (Safari's,
+    // petition 5074) that gpuguard.js did not stand in for: the graphics
+    // stopped, which a reload brings back
+    if (gpuRefused(err)) crash('The graphics stopped', `the browser's graphics stopped answering (${text}): its graphics process ended, as a browser's does when it runs short of memory`);
+    else crash('The client stopped', `${errorText(err)} (in ${stuckIn()})`);
   }, 0);
 }
 

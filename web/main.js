@@ -4,8 +4,10 @@
 // server list, character select and creation, the world). Query parameters
 // override the defaults: ?relay=ws://127.0.0.1:8790&server=203.0.113.10 for a
 // local server. Notices and what goes wrong are notices.js's
-// (window.eqoaNotices).
-import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick, field_up, field_text, chat_copy_text, chat_copied, field_cut, field_paste, lose_device, event_loop_stuck, event_loop_stuck_in } from './eqoa.js';
+// (window.eqoaNotices). gpuguard.js first: WebGPU's calls on a lost device
+// give what the spec says, not Safari's InvalidStateError.
+import './gpuguard.js';
+import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick, field_up, field_text, chat_copy_text, chat_copied, field_cut, field_paste, lose_device, gpu_threw, event_loop_stuck, event_loop_stuck_in } from './eqoa.js';
 import { canRemember, keptHandle, keepHandle, forgetHandle } from './discstore.js';
 
 const $ = (id) => document.getElementById(id);
@@ -187,6 +189,9 @@ window.eqoaWebglKeep = (why) => store.set('webglKept', `${new Date().toISOString
 // a test's: the graphics device lost at the next frame (gpulost::test), the
 // page recovering from it as from a real loss
 window.eqoaLoseDevice = () => { if (clientReady) lose_device(); };
+// the browser threw from a WebGPU call on the client's device (gpuguard.js):
+// the device taken as lost, a new one made (gpulost)
+window.eqoaGpuThrew = (text) => { if (clientReady) gpu_threw(String(text)); };
 // whether the client's event loop was left dead by an exception, or by the
 // browser stopping its script (web/notices.js), and in what call ("a frame
 // (RedrawRequested), 3.2 s ago")
