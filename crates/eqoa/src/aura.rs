@@ -47,6 +47,15 @@
 //! (`net::npctint::dark`) makes any shell or trim a DARK aura: a smoky shadow
 //! instead of a light, in the colour as sent (not times its alpha), with no
 //! light of its own on the body ([`aura_rgb`]).
+//!
+//! The held items' auras ([`hand_aura`]; the owner, 2026-11-14: "give
+//! zaeires equipped weapons the necro's tainted aura from the epic sickle"):
+//! the channel's tenth and eleventh, the main hand's and the off hand's, on
+//! whatever that hand holds. Kind epic (`net::npctint::Aura::EPIC`) lends the
+//! held item an epic's own look, its source the epic's hand model
+//! ([`borrow_epic`]: its emissive glow and additive sheen; [`hand_emitters`]:
+//! its particle sprites, where the epic carries them), in the colour's hue
+//! when it lights, else in its own; kind particles its particles alone.
 
 use vi::fpu::{Ee, F};
 use vi::geom::{Matrix44, Vect4};
@@ -498,6 +507,96 @@ pub fn worn_emitters(lib: &esf::Library, holder: i32, cs: &vi::csprite::CSprite<
     out
 }
 
+/// The held items' auras (go-eqoa-server's charaura slots 9 and 10, the
+/// channel's tenth and eleventh: `net::entity::MAIN_HAND_AURA`,
+/// `OFF_HAND_AURA`; the owner, 2026-11-14: "give zaeires equipped weapons the
+/// necro's tainted aura from the epic sickle"): drawn on whatever the hand
+/// holds, the off hand's on a shield held there too, nothing on an empty hand.
+pub const MAIN_HAND: usize = net::entity::MAIN_HAND_AURA;
+pub const OFF_HAND: usize = net::entity::OFF_HAND_AURA;
+
+/// The emitter index (the `particles::InHand` key's fourth) a hand's borrowed
+/// particles are counted from, apart from the held item's own.
+pub const HAND_AURA_FIRST: usize = 1 << 16;
+
+/// The Sickle of Avhi Escron, the necromancer's epic (ITEM.ESF's
+/// Necromancer_Sickle): its "tainted aura" is its five materials' olive
+/// emissive (60, 90, 0), which keeps it lit green by night, and its one
+/// particle sprite, a green mist rising off its blade. Its other layer (a
+/// rust texture alpha-blended over the blade and grip) is its own art, not
+/// a glow, and is not lent.
+pub const SICKLE_OF_AVHI_ESCRON: u32 = 0x5FD4_AE7C;
+
+/// A held item's aura, by its hand (0 the main hand, 1 the off hand, 2 a
+/// shield: the off hand's): one of kind epic or particles, none for any
+/// other (a server never sends another there).
+pub fn hand_aura(auras: &[net::entity::PieceAura; net::entity::AURAS], hand: usize) -> Option<net::entity::PieceAura> {
+    let a = auras[if hand == 0 { MAIN_HAND } else { OFF_HAND }];
+    matches!(a.kind, net::npctint::Aura::EPIC | net::npctint::Aura::PARTICLES).then_some(a)
+}
+
+/// The model a hand's aura borrows from: its source, 0 the Sword of Virtue.
+pub fn hand_source(a: &net::entity::PieceAura) -> u32 {
+    if a.source == 0 { SWORD_OF_VIRTUE } else { a.source }
+}
+
+/// The hue a hand's aura is drawn in: its colour when it lights, none (the
+/// source's own colours) without.
+pub fn hand_hue(a: &net::entity::PieceAura) -> Option<[u8; 3]> {
+    net::npctint::glows(u32::from_be_bytes(a.color)).then_some([a.color[0], a.color[1], a.color[2]])
+}
+
+/// An epic's own look lent to a held item (kind epic): `src`, the epic's
+/// model, lends `m` its glow: the brightest emissive colour of its materials
+/// on every layer of `m` (a material's emissive is its light by night, F3
+/// pass 26: the item stays lit as the epic is), and its first additive layer
+/// (the Sword of Virtue's sheen: a material's own texture added over itself)
+/// laid over each of `m`'s batches the same way, `m`'s own texture in the
+/// epic's sheen colour. In `hue` when one is named (`glow8`, as a held item's
+/// own colour recolours its glow), else in the epic's own colours. An epic
+/// with neither lends nothing here; its particles are apart
+/// ([`hand_emitters`]). The epic itself in hand (`same`) keeps its own look,
+/// recoloured only.
+pub fn borrow_epic(m: &mut esf::Model, src: &esf::Model, hue: Option<[u8; 3]>, same: bool) {
+    if same {
+        if let Some(c) = hue {
+            recolor(m, c);
+        }
+        return;
+    }
+    let layers = || src.batches.iter().flat_map(|b| b.layers.iter());
+    let shade = |c: [u8; 4]| hue.map_or(c, |h| glow8(c, h));
+    let emissive = layers().map(|l| l.emissive).filter(|e| e[..3] != [0, 0, 0]).max_by_key(|e| e[0] as u32 + e[1] as u32 + e[2] as u32).map(shade);
+    let sheen = layers().find(|l| l.blend == 1).map(|l| shade(l.color));
+    for b in &mut m.batches {
+        if let Some(e) = emissive {
+            b.layers.iter_mut().for_each(|l| l.emissive = e);
+        }
+        if let (Some(c), Some(base)) = (sheen, b.layers.first().cloned()) {
+            b.layers.push(esf::Layer { blend: 1, color: c, ..base });
+        }
+    }
+}
+
+/// The particles a hand's aura `a` puts on the item `item` held at `at` (its
+/// node's world transform), by holder `holder` and hand `hand`: each of its
+/// source's particle sprites (`particles::item_emitters`) under the member
+/// transform it has in the source, in the aura's hue (none: the source's own
+/// colours), keyed from [`HAND_AURA_FIRST`]. None when the source is the item
+/// itself (its own particles are already in hand) or has none.
+pub fn hand_emitters(lib: &esf::Library, holder: i32, hand: usize, item: u32, at: &Matrix44<Ee>, a: &net::entity::PieceAura, drawn: bool) -> Vec<crate::particles::InHand> {
+    let src = hand_source(a);
+    if src == item {
+        return Vec::new();
+    }
+    let tint = hand_hue(a);
+    crate::particles::item_emitters(lib, src)
+        .into_iter()
+        .enumerate()
+        .map(|(k, e)| crate::particles::InHand { key: (holder, hand, src, HAND_AURA_FIRST + k), world: Matrix44::mul(&e.member, at), def: e.def, how: crate::particles::How::Sprite(e.flags), drawn, tint })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -814,5 +913,110 @@ mod tests {
         // the control: the creature gone (or never glowing), nothing
         assert!(held.frame(&lib, &[], &eye, t + 33).is_empty());
         assert_eq!(held.describe(), "0 held-item emitters, 0 creatures' own, 0 particles");
+    }
+
+    /// A hand's aura (the channel's tenth and eleventh): epic or particles
+    /// alone, the main hand's on hand 0, the off hand's on a weapon or a
+    /// shield there; its source 0 the Sword of Virtue; its hue only a colour
+    /// that lights. The controls: a shell or trim on a hand, nothing.
+    #[test]
+    fn a_hands_aura_off_the_channel() {
+        use net::entity::PieceAura;
+        use net::npctint::Aura;
+        let mut auras = [PieceAura::default(); net::entity::AURAS];
+        auras[MAIN_HAND] = PieceAura { color: [0; 4], kind: Aura::EPIC, source: SICKLE_OF_AVHI_ESCRON, nodes: 0 };
+        auras[OFF_HAND] = PieceAura { color: [0xFF, 0x20, 0x20, 0xFF], kind: Aura::PARTICLES, source: 0, nodes: 0 };
+        assert_eq!(hand_aura(&auras, 0), Some(auras[MAIN_HAND]));
+        assert_eq!((hand_aura(&auras, 1), hand_aura(&auras, 2)), (Some(auras[OFF_HAND]), Some(auras[OFF_HAND])), "a shield takes the off hand's");
+        assert_eq!((hand_source(&auras[MAIN_HAND]), hand_source(&auras[OFF_HAND])), (SICKLE_OF_AVHI_ESCRON, SWORD_OF_VIRTUE));
+        assert_eq!((hand_hue(&auras[MAIN_HAND]), hand_hue(&auras[OFF_HAND])), (None, Some([0xFF, 0x20, 0x20])));
+        for kind in [Aura::DEFAULT, Aura::NONE, Aura::SHELL, Aura::BOTH, Aura::TRIM, Aura::TRIM_SHELL, 8] {
+            auras[MAIN_HAND].kind = kind;
+            assert_eq!(hand_aura(&auras, 0), None, "kind {kind} on a hand");
+        }
+        assert_eq!(hand_aura(&[PieceAura::default(); net::entity::AURAS], 1), None, "none sent");
+    }
+
+    /// `borrow_epic` on models like the disc's: the epic's brightest
+    /// emissive on every layer, its additive sheen laid over each batch on
+    /// the item's own texture, in a hue when named; an epic with neither
+    /// lends nothing; the epic itself keeps its look (recoloured only).
+    #[test]
+    fn an_epics_look_lent() {
+        let layer = |blend: i32, texture: i32, color: [u8; 4], emissive: [u8; 4]| esf::Layer { flags: 1, texture, wrap: 0, blend, color, uv_transform: [0.0; 9], lod_bias: 0.8, uv_rate: [0.0; 2], emissive };
+        let model = |batches: Vec<Vec<esf::Layer>>| esf::Model { batches: batches.into_iter().map(|layers| esf::Batch { material: 0, layers, indices: vec![], lod: None }).collect(), ..Default::default() };
+        let dagger = model(vec![vec![layer(0, 11, [128; 4], [90, 90, 90, 255])], vec![layer(0, 12, [255; 4], [90, 90, 90, 255])]]);
+        let sickle = model(vec![vec![layer(0, 1, [229, 204, 178, 255], [60, 90, 0, 255]), layer(3, 2, [255; 4], [60, 90, 0, 255])]]);
+        let mut m = dagger.clone();
+        borrow_epic(&mut m, &sickle, None, false);
+        for (b, was) in m.batches.iter().zip(&dagger.batches) {
+            assert_eq!(b.layers.len(), 1, "no sheen: no layer added (the sickle's rust is alpha, not a glow)");
+            assert_eq!((b.layers[0].emissive, b.layers[0].texture, b.layers[0].color), ([60, 90, 0, 255], was.layers[0].texture, was.layers[0].color));
+        }
+        let virtue = model(vec![vec![layer(0, 1, [255; 4], [204, 255, 255, 255]), layer(1, 1, [204, 255, 255, 153], [204, 255, 255, 255])], vec![layer(0, 3, [255; 4], [100, 100, 100, 255])]]);
+        let mut m = dagger.clone();
+        borrow_epic(&mut m, &virtue, Some(CRIMSON), false);
+        for (b, was) in m.batches.iter().zip(&dagger.batches) {
+            assert_eq!(b.layers.len(), 2, "the sheen laid over");
+            assert_eq!(b.layers[0].emissive, [248, 23, 59, 255], "the brightest emissive, in the hue");
+            assert_eq!((b.layers[1].blend, b.layers[1].texture, b.layers[1].color), (1, was.layers[0].texture, [248, 23, 59, 153]), "on its own texture");
+        }
+        // the controls: an epic of no glow lends nothing; the epic itself in hand
+        let plain = model(vec![vec![layer(0, 5, [255; 4], [0, 0, 0, 255])]]);
+        let mut m = dagger.clone();
+        borrow_epic(&mut m, &plain, Some(CRIMSON), false);
+        let layers = |m: &esf::Model| m.batches.iter().map(|b| b.layers.clone()).collect::<Vec<_>>();
+        assert_eq!(layers(&m), layers(&dagger));
+        let mut m = virtue.clone();
+        borrow_epic(&mut m, &virtue, None, true);
+        assert_eq!(layers(&m), layers(&virtue), "the epic itself: its own look");
+        borrow_epic(&mut m, &virtue, Some(CRIMSON), true);
+        assert_eq!(m.batches[0].layers.len(), 2, "recoloured, no sheen added");
+        assert_eq!(m.batches[0].layers[1].color, [248, 23, 59, 153]);
+    }
+
+    /// Off the disc: the Sickle of Avhi Escron's taint on the Heirloom Dagger
+    /// of Bloodletting's model (Rogue_Dirk, 0xBD3C3DC8): every material's
+    /// olive emissive (60, 90, 0), no layer added; its one particle sprite
+    /// put on the held dagger under the sickle's member transform, in its own
+    /// colours, keyed apart from the dagger's own. The controls: the dagger
+    /// plain has a grey emissive and no particles; the sickle in hand borrows
+    /// no second emitter. Needs `run/eqoa.iso`; without it, SKIPs.
+    #[test]
+    fn the_sickles_taint_on_a_dagger() {
+        use net::entity::PieceAura;
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("ITEM.ESF", esf::Container::open(disc.read("ITEM.ESF").unwrap()).unwrap());
+        const DAGGER: u32 = 0xBD3C_3DC8;
+        let build = |id: u32| lib.lookup(id as i32).and_then(|r| lib.build_model(r)).unwrap();
+        let (dagger, sickle) = (build(DAGGER), build(SICKLE_OF_AVHI_ESCRON));
+        assert!(sickle.batches.iter().flat_map(|b| &b.layers).all(|l| l.emissive == [60, 90, 0, 255]), "the sickle's five materials");
+        assert!(dagger.batches.iter().flat_map(|b| &b.layers).all(|l| l.emissive == [90, 90, 90, 255]), "the control: the dagger's own grey");
+        let mut m = dagger.clone();
+        borrow_epic(&mut m, &sickle, None, false);
+        assert_eq!(m.batches.len(), dagger.batches.len());
+        for (b, was) in m.batches.iter().zip(&dagger.batches) {
+            assert_eq!(b.layers.len(), was.layers.len());
+            assert!(b.layers.iter().all(|l| l.emissive == [60, 90, 0, 255]));
+        }
+        let a = PieceAura { color: [0; 4], kind: net::npctint::Aura::EPIC, source: SICKLE_OF_AVHI_ESCRON, nodes: 0 };
+        let at = Matrix44::<Ee>::identity();
+        assert!(crate::particles::item_emitters(&lib, DAGGER).is_empty(), "the control: the dagger has none of its own");
+        let own = crate::particles::item_emitters(&lib, SICKLE_OF_AVHI_ESCRON);
+        assert_eq!(own.len(), 1, "the sickle's one green mist");
+        let lent = hand_emitters(&lib, 3, 1, DAGGER, &at, &a, true);
+        assert_eq!(lent.len(), 1);
+        assert_eq!(lent[0].key, (3, 1, SICKLE_OF_AVHI_ESCRON, HAND_AURA_FIRST));
+        assert_eq!((lent[0].def, lent[0].tint), (own[0].def, None));
+        let (w, o) = (lent[0].world.m[3], own[0].member.m[3]);
+        assert_eq!((w.x.0, w.y.0, w.z.0), (o.x.0, o.y.0, o.z.0), "where the sickle carries it");
+        assert!(hand_emitters(&lib, 3, 0, SICKLE_OF_AVHI_ESCRON, &at, &a, true).is_empty(), "the sickle itself: its own alone");
+        let red = PieceAura { color: [0xFF, 0x20, 0x20, 0xFF], ..a };
+        assert_eq!(hand_emitters(&lib, 3, 1, DAGGER, &at, &red, true)[0].tint, Some([0xFF, 0x20, 0x20]));
     }
 }

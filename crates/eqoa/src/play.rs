@@ -1326,12 +1326,20 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
     let mut weapons = [None; 3];
     // each hand's item's own colour on its glow (`aura`), none plain
     let colors = crate::aura::hands(Some(&look_of(c)));
+    // and each hand's aura (`aura::hand_aura`): an epic's look lent it
+    let auras = c.colors.map(|l| l.auras).unwrap_or_default();
     for (i, held) in held.into_iter().enumerate() {
         let Some((id, node)) = held else { continue };
         weapons[i] = crate::trails::weapon_points(lib, id).map(|w| (node, w));
         if let Some(mut m) = lib.lookup(id as i32).and_then(|r| lib.build_model(r)) {
             if let Some(color) = colors[i] {
                 crate::aura::recolor(&mut m, color);
+            }
+            if let Some(a) = crate::aura::hand_aura(&auras, i).filter(|a| a.kind == net::npctint::Aura::EPIC) {
+                let src = crate::aura::hand_source(&a);
+                if let Some(e) = lib.lookup(src as i32).and_then(|r| lib.build_model(r)) {
+                    crate::aura::borrow_epic(&mut m, &e, crate::aura::hand_hue(&a), src == id);
+                }
             }
             attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
         }
@@ -10392,6 +10400,10 @@ impl Play {
                 let tint = p.look.as_ref().and_then(|l| crate::aura::hand(l, hand));
                 for (k, e) in lib.with_view(p.era, || crate::particles::item_emitters(lib, item)).into_iter().enumerate() {
                     out.push(InHand { key: (holder, hand, item, k), world: Matrix44::mul(&e.member, &at), def: e.def, how: How::Sprite(e.flags), drawn, tint });
+                }
+                // its hand's aura's particles (`aura::hand_emitters`): an epic's, lent
+                if let Some(a) = crate::aura::hand_aura(&p.pieces, hand) {
+                    out.extend(lib.with_view(p.era, || crate::aura::hand_emitters(lib, holder, hand, item, &at, &a, drawn)));
                 }
             }
             let player = holder == crate::spells::SELF;
