@@ -12,7 +12,15 @@
 //! particle sprites (the sword's one emitter). Each keeps its own brightness
 //! (`glow`), so a dark colour such as crimson still glows as brightly as the
 //! cyan did; every other layer is tinted lightly (`TINT`), so a dyed or
-//! coloured weapon with no glow shows its colour a little too.
+//! coloured weapon with no glow shows its colour a little too. A layer whose
+//! own colour is a colour (not a grey) takes the hue as far as it is one
+//! (`dye8`): that colour IS the item's colour, as the Shadow Knight epics'
+//! crimson blades are (layer colour 150, 0, 30 over a grey steel texture,
+//! the bulb's gem the only additive layer). The owner, 2026-11-15: "the
+//! shadowknight epic when players change color only changes the bulb on the
+//! handles color": a light tint left a blade with no green at all red under
+//! any dye. Grey and white layers (steel, the Sword of Virtue's every layer)
+//! are tinted lightly as before.
 //!
 //! White (the server's "plain", 0xFFFFFFFF) and no colour at all (the disc's
 //! look, a PS2's server) leave the item exactly as the disc draws it.
@@ -111,19 +119,31 @@ pub fn tint8(o: [u8; 4], c: [u8; 3]) -> [u8; 4] {
     [t(0), t(1), t(2), o[3]]
 }
 
+/// A layer that does not glow in colour `c`: `tint8` for a grey, `glow8`
+/// (the colour's hue at the layer's brightness) for a full colour, and
+/// between them by how much of a colour the layer is (its HSV saturation),
+/// its alpha kept.
+pub fn dye8(o: [u8; 4], c: [u8; 3]) -> [u8; 4] {
+    let hi = o[0].max(o[1]).max(o[2]) as f32;
+    let sat = if hi <= 0.0 { 0.0 } else { (hi - o[0].min(o[1]).min(o[2]) as f32) / hi };
+    let (t, g) = (tint8(o, c), glow8(o, c));
+    let mix = |k: usize| byte(t[k] as f32 * (1.0 - sat) + g[k] as f32 * sat);
+    [mix(0), mix(1), mix(2), o[3]]
+}
+
 fn byte(x: f32) -> u8 {
     x.round().clamp(0.0, 255.0) as u8
 }
 
 /// An item's model in colour `c`: every material's emissive and every
-/// additive layer's colour in its hue (`glow`), every other layer tinted
-/// (`tint8`).
+/// additive layer's colour in its hue (`glow`), every other layer dyed
+/// (`dye8`: a grey tinted, a colour in the hue).
 pub fn recolor(m: &mut esf::Model, c: [u8; 3]) {
     for l in m.batches.iter_mut().flat_map(|b| b.layers.iter_mut()) {
         if l.emissive[..3] != [0, 0, 0] {
             l.emissive = glow8(l.emissive, c);
         }
-        l.color = if l.blend == 1 { glow8(l.color, c) } else { tint8(l.color, c) };
+        l.color = if l.blend == 1 { glow8(l.color, c) } else { dye8(l.color, c) };
     }
 }
 
@@ -1003,6 +1023,56 @@ mod tests {
             }
         }
         assert_eq!(twisted.batches[3].layers[1].color, [248, 23, 59, 153], "the sheen");
+    }
+
+    /// A layer's own colour dyed: a grey tinted lightly as ever, a full
+    /// colour (the Shadow Knight epics' crimson, 150, 0, 30) the dye's hue at
+    /// its brightness, a part colour between; alpha kept.
+    #[test]
+    fn a_coloured_layer_takes_the_dye() {
+        const BLUE: [u8; 3] = [0x20, 0x40, 0xFF];
+        assert_eq!(dye8([128, 128, 128, 255], CRIMSON), tint8([128, 128, 128, 255], CRIMSON), "a grey: the light tint");
+        assert_eq!(dye8([204, 204, 204, 255], BLUE), tint8([204, 204, 204, 255], BLUE));
+        assert_eq!(dye8([150, 0, 30, 255], BLUE), glow8([150, 0, 30, 255], BLUE), "a full colour: the hue");
+        assert_eq!(dye8([150, 0, 30, 255], BLUE), [19, 38, 150, 255]);
+        assert_eq!(dye8([255, 0, 0, 128], BLUE)[3], 128, "alpha kept");
+        let pink = dye8([255, 153, 153, 255], BLUE);
+        assert!(pink[2] > pink[0] && pink[0] > 100, "{pink:?}: a part colour between");
+        assert_eq!(dye8([0, 0, 0, 255], BLUE), [0, 0, 0, 255]);
+    }
+
+    /// The Shadow Knight epics off the disc dyed blue (the owner,
+    /// 2026-11-15: only the bulb on the handle took the colour): every layer
+    /// whose own colour is crimson (the blades, the haft's bands, the gem)
+    /// goes blue, the grey layers tinted, textures and alphas kept. Needs
+    /// `run/eqoa.iso`; without it, SKIPs.
+    #[test]
+    fn the_shadow_knight_epics_dyed() {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut disc) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let c = esf::Container::open(disc.read("ITEM.ESF").unwrap()).unwrap();
+        // Beheader of Isthiak, Downfall, the greataxe
+        for id in [0x6EB7_224Du32, 0x867E_D577, 0x9A1D_BA92] {
+            let r = c.models().into_iter().find(|r| r.dict_id as u32 == id).expect("the epic");
+            let disc_look = c.build_model(r.node).expect("its model");
+            let mut dyed = disc_look.clone();
+            recolor(&mut dyed, [0x20, 0x40, 0xFF]);
+            let mut blue = 0;
+            for (a, b) in disc_look.batches.iter().zip(&dyed.batches) {
+                for (la, lb) in a.layers.iter().zip(&b.layers) {
+                    assert_eq!((lb.texture, lb.blend, lb.color[3]), (la.texture, la.blend, la.color[3]));
+                    let red = la.color[0] > 2 * la.color[1].max(la.color[2]);
+                    if red {
+                        assert!(lb.color[2] > lb.color[0], "{id:08X}: {:?} -> {:?}", la.color, lb.color);
+                        blue += 1;
+                    }
+                }
+            }
+            assert!(blue >= 3, "{id:08X}: the blade and the gem ({blue} layers)");
+        }
     }
 
     /// The spread: the middle first, then each the farthest from those

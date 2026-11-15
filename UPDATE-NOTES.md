@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-15 · Dyed Shadow Knight epics
+- **A dye now colours the whole Shadow Knight epic** (Beheader of Isthiak, Downfall, the Epic Greataxe, their
+  Heirloom and Ascended copies), not only the gem on the handle: the crimson blade and bands take the dye's colour.
+  Any other weapon whose own colour is in its material (Virtus Ferrum's gold hilt, say) takes the dye the same way;
+  steel stays lightly tinted as before.
+
 ## 2026-11-14 · Lore items at the auction
 - **A Lore item is greyed out in the auction's sell list**, as the server refuses to list one ("Item is not auctionable"): no more choosing one only to be told no.
 
