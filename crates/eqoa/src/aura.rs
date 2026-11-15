@@ -1064,7 +1064,7 @@ mod tests {
             for (a, b) in disc_look.batches.iter().zip(&dyed.batches) {
                 for (la, lb) in a.layers.iter().zip(&b.layers) {
                     assert_eq!((lb.texture, lb.blend, lb.color[3]), (la.texture, la.blend, la.color[3]));
-                    let red = la.color[0] > 2 * la.color[1].max(la.color[2]);
+                    let red = la.color[0] as u32 > 2 * la.color[1].max(la.color[2]) as u32;
                     if red {
                         assert!(lb.color[2] > lb.color[0], "{id:08X}: {:?} -> {:?}", la.color, lb.color);
                         blue += 1;
