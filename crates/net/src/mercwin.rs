@@ -43,6 +43,9 @@ pub const SET: u8 = 4;
 pub const CARRIED: u8 = 0;
 pub const WORN: u8 = 1;
 pub const HEIRLOOM: u8 = 2;
+/// The owner's potion stock (an alchemist's window): its id the item's, its
+/// count the record's stack.
+pub const STOCK: u8 = 3;
 
 /// The inventory window's asks.
 pub const ASK_OPEN: u8 = 1;
@@ -50,6 +53,11 @@ pub const ASK_GIVE: u8 = 2;
 pub const ASK_EQUIP: u8 = 3;
 pub const ASK_UNEQUIP: u8 = 4;
 pub const ASK_TAKE: u8 = 5;
+/// From the owner's potion stock into the pack: the item's id and how many
+/// (0 a stack).
+pub const ASK_STOCK: u8 = 6;
+/// The window is down: no stock's change is sent it.
+pub const ASK_CLOSE: u8 = 7;
 
 /// The spell window's asks.
 pub const SPELLS_OPEN: u8 = 1;
@@ -183,9 +191,10 @@ impl MercSpells {
 }
 
 /// An inventory window's ask of the merc of `slot` (0 the player's only
-/// one): `op`, then its fields (`ASK_GIVE` the pack record's key, the others
-/// the merc's record id; `ASK_EQUIP` an equip slot after it, -1 the first of
-/// its wear).
+/// one): `op`, then its fields (`ASK_GIVE` the pack record's key, `ASK_STOCK`
+/// the item's id, the others the merc's record id; `ASK_EQUIP` an equip slot
+/// after it, -1 the first of its wear; `ASK_STOCK` how many after it, 0 a
+/// stack).
 pub fn ask(slot: u8, op: u8, id: u32, equip: i8) -> Vec<u8> {
     let mut w = Writer::op(OP_MERC_WINDOW_ASK);
     w.u8(slot).u8(op);
@@ -195,6 +204,9 @@ pub fn ask(slot: u8, op: u8, id: u32, equip: i8) -> Vec<u8> {
         }
         ASK_EQUIP => {
             w.u32(id).u8(equip as u8);
+        }
+        ASK_STOCK => {
+            w.u32(id).u32(equip.max(0) as u32);
         }
         _ => {}
     }
@@ -345,6 +357,9 @@ mod tests {
         assert_eq!(ask(2, ASK_EQUIP, 7, 17), vec![0x73, 0x7E, 2, 3, 7, 0, 0, 0, 17]);
         assert_eq!(ask(1, ASK_UNEQUIP, 7, 0), vec![0x73, 0x7E, 1, 4, 7, 0, 0, 0]);
         assert_eq!(ask(1, ASK_TAKE, 7, 0), vec![0x73, 0x7E, 1, 5, 7, 0, 0, 0]);
+        assert_eq!(ask(1, ASK_STOCK, 0x0101, 0), vec![0x73, 0x7E, 1, 6, 1, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(ask(1, ASK_STOCK, 0x0101, 1), vec![0x73, 0x7E, 1, 6, 1, 1, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(ask(1, ASK_CLOSE, 0, 0), vec![0x73, 0x7E, 1, 7]);
         assert_eq!(spells_ask(1, SPELLS_SET, 3, 950), vec![0x76, 0x7E, 1, 2, 3, 0xB6, 3, 0, 0]);
         assert_eq!(spells_ask(1, SPELLS_CLEAR, 0, 0), vec![0x76, 0x7E, 1, 3]);
         assert_eq!(spells_ask(1, SPELLS_DEFAULT, 0, 0), vec![0x76, 0x7E, 1, 4]);

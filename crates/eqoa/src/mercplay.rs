@@ -221,7 +221,12 @@ impl Play {
     pub(super) fn run_merc_windows<R: crate::ui::Layout>(&mut self, vui: &vi::ui::Vui, r: &mut R) {
         if !self.merc_win_owns() {
             self.merc.keys.clear();
-            self.merc.items.visible = false;
+            if std::mem::take(&mut self.merc.items.visible) {
+                // the inventory window down (△, or a mode over it): no stock's
+                // change is sent it any more
+                let slot = self.merc.window.as_ref().map_or(0, |w| w.slot);
+                self.session.send(&net::mercwin::ask(slot, net::mercwin::ASK_CLOSE, 0, 0));
+            }
             self.merc.book.visible = false;
             return;
         }
@@ -236,8 +241,8 @@ impl Play {
             self.mode = 0;
             return;
         };
+        self.merc.items.tabs = Some(crate::mercwnd::tabs(&w));
         if std::mem::take(&mut self.merc.items_open) || !self.merc.items.visible {
-            self.merc.items.tabs = Some(crate::mercwnd::TABS.iter().map(|s| s.to_string()).collect());
             self.merc.items.open(vui, &*r);
             self.merc.waiting = false;
         }
@@ -276,8 +281,7 @@ impl Play {
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
         for o in outs {
             if o == crate::itemmenu::ItemOut::Back {
-                // △ at the list: the window closed, back to play
-                self.merc.items.visible = false;
+                // △ at the list: the window closed (said at the next frame), back to play
                 self.mode = 0;
                 continue;
             }
@@ -541,11 +545,12 @@ mod window_tests {
         assert_eq!(p.merc.window.as_ref().unwrap().records[1].item.equip_slot, -1, "nothing changed before the state");
         p.merc_win_opcode(net::mercwin::OP_MERC_WINDOW_RESULT, &[0x73, 3, 1]);
         assert!(!p.merc.waiting);
-        // △ twice: the popup, then the window
+        // △ twice: the popup, then the window, said to the server
         for _ in 0..3 {
             press(&mut p, 132);
         }
         assert_eq!(p.mode, 0, "△ closed it");
+        assert_eq!(sent(&p).last(), Some(&vec![0x73, 0x7E, 1, 7]), "the close said");
         p.merc_win_opcode(net::mercwin::OP_MERC_WINDOW_STATE, &window_body(OPEN, 1, "Kel", &recs));
         assert_eq!(p.mode, ITEMS_MODE);
         p.merc_win_opcode(net::mercwin::OP_MERC_WINDOW_STATE, &window_body(GONE, 1, "Kel", &[]));

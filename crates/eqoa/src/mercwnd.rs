@@ -18,7 +18,7 @@
 use crate::client_image::{Menu, MenuEntry, Menus};
 use crate::infotext;
 use net::dump::{ItemList, NetItem};
-use net::mercwin::{CARRIED, HEIRLOOM, MercWindow, WORN};
+use net::mercwin::{CARRIED, HEIRLOOM, MercWindow, STOCK, WORN};
 
 /// The popups' messages of the client's own (none of the game's): Take Back,
 /// and Give (the merc's window's, and the inventory's Give to the merc).
@@ -28,6 +28,11 @@ pub const MSG_GIVE: u32 = 0x7E73_0002;
 pub const WORD_TAKE: i32 = -20;
 pub const WORD_GIVE: i32 = -21;
 pub const WORD_GIVE_TO: i32 = -22;
+/// The Stock tab's Take a Stack and Take One.
+pub const MSG_TAKE_STACK: u32 = 0x7E73_0006;
+pub const MSG_TAKE_ONE: u32 = 0x7E73_0106;
+pub const WORD_TAKE_STACK: i32 = -23;
+pub const WORD_TAKE_ONE: i32 = -24;
 
 /// The game's popup rows: Equip, Unequip, Inspect.
 const MSG_USE: u32 = 0x0203_0000;
@@ -36,8 +41,15 @@ const WORD_EQUIP: i32 = 121;
 const WORD_UNEQUIP: i32 = 154;
 const WORD_INSPECT: i32 = 122;
 
-/// The tabs' labels.
-pub const TABS: [&str; 3] = ["Worn", "Carried", "Your Pack"];
+/// The tabs' labels; an alchemist's window has the fourth, its owner's
+/// potion stock (the server's records of kind 3).
+pub const TABS: [&str; 4] = ["Worn", "Carried", "Your Pack", "Stock"];
+
+/// The tabs the window shows: the fourth only with a stock (an alchemist's).
+pub fn tabs(m: &MercWindow) -> Vec<String> {
+    let n = if m.records.iter().any(|r| r.kind == STOCK) { 4 } else { 3 };
+    TABS[..n].iter().map(|s| s.to_string()).collect()
+}
 
 /// The rows' text.
 pub fn word(word: i32) -> Option<&'static str> {
@@ -45,6 +57,8 @@ pub fn word(word: i32) -> Option<&'static str> {
         WORD_TAKE => Some("Take Back"),
         WORD_GIVE => Some("Give"),
         WORD_GIVE_TO => Some("Give to Merc"),
+        WORD_TAKE_STACK => Some("Take a Stack"),
+        WORD_TAKE_ONE => Some("Take One"),
         _ => None,
     }
 }
@@ -71,7 +85,7 @@ pub struct View {
 pub fn view(m: &MercWindow, pack: &ItemList) -> View {
     let mut list = ItemList::default();
     let mut src = Vec::new();
-    for kind in [WORN, HEIRLOOM, CARRIED] {
+    for kind in [WORN, HEIRLOOM, CARRIED, STOCK] {
         for r in m.records.iter().filter(|r| r.kind == kind) {
             list.items.push(r.item.clone());
             src.push(Src::Merc { id: r.id, kind: r.kind });
@@ -120,8 +134,9 @@ pub fn build(v: &View, count: usize, icon: &dyn Fn(&NetItem) -> i32, can_wear: &
         for (k, (it, src)) in v.list.items.iter().zip(&v.src).enumerate() {
             let id = k as i32;
             let shown = match (tab, src) {
-                (0, Src::Merc { kind, .. }) => *kind != CARRIED,
+                (0, Src::Merc { kind, .. }) => *kind == WORN || *kind == HEIRLOOM,
                 (1, Src::Merc { kind, .. }) => *kind == CARRIED,
+                (3, Src::Merc { kind, .. }) => *kind == STOCK,
                 (2, Src::Pack { .. }) => true,
                 _ => false,
             };
@@ -133,6 +148,9 @@ pub fn build(v: &View, count: usize, icon: &dyn Fn(&NetItem) -> i32, can_wear: &
                 Src::Merc { kind: HEIRLOOM, .. } => {
                     e.icon2 = 138;
                     vec![entry(WORD_INSPECT, MSG_INSPECT, id)]
+                }
+                Src::Merc { kind: STOCK, .. } => {
+                    vec![entry(WORD_TAKE_STACK, MSG_TAKE_STACK, id), entry(WORD_TAKE_ONE, MSG_TAKE_ONE, id), entry(WORD_INSPECT, MSG_INSPECT, id)]
                 }
                 Src::Merc { kind: WORN, .. } => {
                     e.icon2 = 138;
@@ -170,6 +188,8 @@ pub enum Ask {
     Equip(u32),
     Unequip(u32),
     Take(u32),
+    /// from the owner's stock: the item's id and how many (0 a stack)
+    Stock(u32, u32),
 }
 
 /// The ask the item menu's answer `o` makes of the window's list, if any:
@@ -184,7 +204,11 @@ pub fn ask_of(o: &crate::itemmenu::ItemOut, v: &View) -> Option<Ask> {
             _ => None,
         },
         ItemOut::Custom(MSG_TAKE, i) => match src(i)? {
-            Src::Merc { id, kind } if kind != HEIRLOOM => Some(Ask::Take(id)),
+            Src::Merc { id, kind } if kind == CARRIED || kind == WORN => Some(Ask::Take(id)),
+            _ => None,
+        },
+        ItemOut::Custom(msg @ (MSG_TAKE_STACK | MSG_TAKE_ONE), i) => match src(i)? {
+            Src::Merc { id, kind: STOCK } => Some(Ask::Stock(id, (msg == MSG_TAKE_ONE) as u32)),
             _ => None,
         },
         ItemOut::Custom(MSG_GIVE, i) => match src(i)? {
@@ -197,12 +221,13 @@ pub fn ask_of(o: &crate::itemmenu::ItemOut, v: &View) -> Option<Ask> {
 
 /// The ask's bytes, of the merc of `slot`.
 pub fn ask_bytes(a: Ask, slot: u8) -> Vec<u8> {
-    use net::mercwin::{ASK_EQUIP, ASK_GIVE, ASK_TAKE, ASK_UNEQUIP, ask};
+    use net::mercwin::{ASK_EQUIP, ASK_GIVE, ASK_STOCK, ASK_TAKE, ASK_UNEQUIP, ask};
     match a {
         Ask::Give(key) => ask(slot, ASK_GIVE, key, 0),
         Ask::Equip(id) => ask(slot, ASK_EQUIP, id, -1),
         Ask::Unequip(id) => ask(slot, ASK_UNEQUIP, id, 0),
         Ask::Take(id) => ask(slot, ASK_TAKE, id, 0),
+        Ask::Stock(id, n) => ask(slot, ASK_STOCK, id, n.min(127) as i8),
     }
 }
 
@@ -311,6 +336,32 @@ mod tests {
         assert_eq!(ask_of(&ItemOut::Custom(MSG_TAKE, 99), &v), None);
         assert_eq!(ask_bytes(Ask::Equip(9), 2), vec![0x73, 0x7E, 2, 3, 9, 0, 0, 0, 0xFF]);
         assert_eq!(ask_bytes(Ask::Give(40), 1), vec![0x73, 0x7E, 1, 2, 40, 0, 0, 0]);
+    }
+
+    /// An alchemist's Stock tab: its owner's potions with their counts (Take
+    /// a Stack, Take One, Inspect), asked by the item's id; a window with no
+    /// stock has the three tabs. The controls: Take Back on a stock record
+    /// asks nothing, Take a Stack on a carried one nothing.
+    #[test]
+    fn the_stock_tab() {
+        let mut m = state();
+        assert_eq!(tabs(&m).len(), 3, "no stock: three tabs");
+        let mut draught = item(910010, STOCK, "Infused Draught", -1, -1);
+        draught.item.quantity = 3190;
+        m.records.push(draught);
+        assert_eq!(tabs(&m), vec!["Worn", "Carried", "Your Pack", "Stock"]);
+        let v = view(&m, &pack());
+        let b = build(&v, 40, &|_| -1, &|_| true);
+        assert_eq!(names(&v, &b, 3), vec![("Infused Draught".into(), vec![WORD_TAKE_STACK, WORD_TAKE_ONE, WORD_INSPECT])]);
+        let row = b.0.list[b.1[3]].entries.iter().find(|e| e.id >= 0).unwrap();
+        assert_eq!(row.number, 3190, "its count");
+        assert!(!names(&v, &b, 1).iter().any(|(n, _)| n == "Infused Draught"), "not among the carried");
+        let at = |name: &str| v.list.items.iter().position(|it| it.item.name == name).unwrap() as i32;
+        assert_eq!(ask_of(&ItemOut::Custom(MSG_TAKE_STACK, at("Infused Draught")), &v), Some(Ask::Stock(910010, 0)));
+        assert_eq!(ask_of(&ItemOut::Custom(MSG_TAKE_ONE, at("Infused Draught")), &v), Some(Ask::Stock(910010, 1)));
+        assert_eq!(ask_of(&ItemOut::Custom(MSG_TAKE, at("Infused Draught")), &v), None);
+        assert_eq!(ask_of(&ItemOut::Custom(MSG_TAKE_STACK, at("Buckler")), &v), None);
+        assert_eq!(ask_bytes(Ask::Stock(910010, 1), 1), vec![0x73, 0x7E, 1, 6, 0xBA, 0xE2, 0x0D, 0, 1, 0, 0, 0]);
     }
 
     /// The player's own inventory: Give to Merc after Inspect on an item not

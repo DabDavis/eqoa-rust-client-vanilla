@@ -974,8 +974,10 @@ or a browser (each described where it lives below):
   server owner's of 2026-11-15; go-eqoa-server's 0x7E72-0x7E77, `net::mercwin`,
   `mercwnd`, `play::mercplay`): the merc's menu's Items > Inventory and
   `/merc <name> inv` open the player's own item menu over what the merc holds,
-  three tabs of its own (Worn: its own and, where it wears nothing of its own,
-  its heirlooms; Carried; Your Pack, what it may be given), its name, level,
+  tabs of its own (Worn: its own and, where it wears nothing of its own,
+  its heirlooms; Carried; Your Pack, what it may be given; an alchemist's
+  Stock, its owner's brewed potions with their counts, Take a Stack or Take
+  One), its name, level,
   hit points, power, AC and stats over the item's description; each popup the
   game's Equip, Unequip and Inspect with Take Back and Give. The menu's Spells
   and `/merc <name> spells` open the player's spell book over the merc's book

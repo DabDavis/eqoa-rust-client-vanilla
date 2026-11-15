@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-15 · Your alchemist's potions in its inventory
+- **An alchemist mercenary's inventory now has a Stock tab**: the draughts, potions and cocktails your alchemists have
+  brewed, each with its count. They used to be shown nowhere but the Potion stock box.
+- Choose one to **Take a Stack** or **Take One** into your pack. The counts update while the window is open as your
+  alchemist brews and throws.
+
 ## 2026-11-15 · Your mercenary's inventory and spell book
 - **Your mercenary's Inventory opens a window like your own inventory** on eqoaclassic.com: press □ on your merc,
   choose Items, then Inventory (or type `/merc <name> inv`). Its tabs are **Worn** (what it wears, its own gear and
