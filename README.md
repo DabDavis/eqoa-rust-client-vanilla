@@ -974,7 +974,9 @@ or a browser (each described where it lives below):
   column with ○ (C on the keyboard) or a click on its heading (the game keeps
   the server's order).
 - **Network Setup** on the title: the address of the server to play on (on a
-  PS2 it starts the console's network utility).
+  PS2 it starts the console's network utility), and a "Use eqoaclassic.com"
+  row always there under it that keeps eqoaclassic.com. On the web page it is
+  greyed out and passed over: the page's server is its own.
 - **Updates**: a downloaded build puts the release's newer one in its place
   as it starts, before the title.
 
@@ -1590,7 +1592,8 @@ page's HTTP go through a relay, behind the pregame's `link`: go-eqoa-server's
 WebSocket for the DRDP datagrams and one per TCP connection (the relay must
 reach the server's ports 9735 and 7000 for them). A server named by host name in
 Network Setup is resolved by the relay; with none set, the page's own host is
-the server. A world opens with its zones left on the disc and the ones round
+the server. The page's title greys Network Setup out and passes over it
+(`Splash::no_network`, the owner, 2026-11-15), so the page's own is the one. A world opens with its zones left on the disc and the ones round
 the player read before the walk starts (`stream::fill_set`, awaited), the rest
 as the walk comes near them (`web::disc::WebZones`, a `stream::ZoneSource`
 whose reads finish on a later frame): in Freeport at the display's rate, 60

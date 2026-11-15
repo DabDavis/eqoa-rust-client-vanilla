@@ -810,6 +810,28 @@ mod tests {
         crate::settings::testing::reset(false);
     }
 
+    /// Network Setup's eqoaclassic.com preset, from the title: down to it
+    /// and X keeps eqoaclassic.com (server.opt and the session's) and goes
+    /// back to the title, from another address or from none.
+    #[test]
+    fn network_setup_preset_keeps_eqoaclassic() {
+        for current in [Some("192.0.2.1"), None] {
+            let mut run = Run::new(current);
+            run.s.state = 2;
+            run.s.focus = None;
+            run.frames(32);
+            run.press(18);
+            run.press(13);
+            assert_eq!(run.s.focus, Some(Focus::NetSetup), "the page");
+            run.press(key::DOWN);
+            run.press(key::CROSS);
+            assert_eq!((run.s.focus, run.s.net_visible, run.s.typing()), (Some(Focus::Title), false, false), "kept, and back at the title");
+            assert_eq!(run.shared.server.as_deref(), Some(crate::settings::DEFAULT_SERVER));
+            assert_eq!(crate::settings::server().as_deref(), Some("eqoaclassic.com"), "kept in server.opt");
+            crate::settings::testing::reset(false);
+        }
+    }
+
     thread_local! {
         static STATUS: std::cell::RefCell<Option<crate::patcher::Shared>> = const { std::cell::RefCell::new(None) };
     }

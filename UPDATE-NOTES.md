@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-15 · Network Setup: eqoaclassic.com in one press
+- **On the web page, Network Setup on the title is greyed out**: the page always plays on its own server, so the
+  arrows pass over it and it cannot be chosen. Play and Options are as they were.
+- **In the downloaded game, Network Setup has a "Use eqoaclassic.com" row** under the server's address, always
+  there whatever address you have now: move down to it (the d-pad or the arrow keys) and press X (Enter), or click
+  or tap it, and the game keeps eqoaclassic.com as its server and goes back to the title. The address row still
+  takes any other server as before.
+
 ## 2026-11-15 · A target's level
 - **The target box shows your target's level**, "Level 32" on the "Target" line above its name, on a server that
   allows it: no more guessing from the con colour alone. Extended > UI > Name Plates > Target Level turns it off.

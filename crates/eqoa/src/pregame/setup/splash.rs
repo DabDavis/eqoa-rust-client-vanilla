@@ -38,6 +38,10 @@ pub struct Splash {
     pub frames: i32,
     /// `m_ready`: the menu takes keys
     pub ready: bool,
+    /// Network Setup greyed out and passed over (the web page: its server is
+    /// the page's own relay, the owner, 2026-11-15: "lets grey out the network
+    /// setup for webclient so players dont get confused")
+    pub no_network: bool,
     hits: Hits,
 }
 
@@ -47,6 +51,7 @@ impl Splash {
         self.sel = 0;
         self.frames = 0;
         self.ready = false;
+        self.no_network = cfg!(target_arch = "wasm32");
     }
 
     /// `OnMessage` 295, the focus coming from outside its own windows: the
@@ -93,7 +98,7 @@ impl Splash {
         fx.render(r, now, true);
         let w = self.window.size[0] / 3;
         let x = [0, w, w * 2, w * 3];
-        let (white, yellow) = ([1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 0.0, 1.0]);
+        let (white, yellow, grey) = ([1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 0.0, 1.0], [0.45, 0.45, 0.45, 1.0]);
         // each entry's box: its third and 10 or 20 beyond
         let boxes = [(x[0] - 10, x[1] - x[0] + 20), (x[1] - 20, x[2] - x[1] + 20), (x[2] - 10, x[3] - x[2] + 20)];
         self.hits.clear();
@@ -101,7 +106,8 @@ impl Splash {
             let on = self.sel == k as i32;
             let word = vui.words.get(WORDS[k], vui.language);
             let s = if on { format!("|q{word}|w") } else { word.to_string() };
-            self.window.text_box(vui, r, &wide(&s), bx, 0, bw, 1, if on { yellow } else { white }, 9);
+            let colour = if k == 1 && self.no_network { grey } else if on { yellow } else { white };
+            self.window.text_box(vui, r, &wide(&s), bx, 0, bw, 1, colour, 9);
             self.hits.push(Self::third(&self.window, vui, r, k as i32), k as i32);
         }
         became_ready
@@ -122,6 +128,9 @@ impl Splash {
             17 | key::LEFT => {
                 if self.ready && self.sel > 0 {
                     self.sel -= 1;
+                    if self.no_network && self.sel == 1 {
+                        self.sel = 0;
+                    }
                     self.window.reset_tick_pulse(now);
                     cues.push(11);
                 }
@@ -129,11 +138,14 @@ impl Splash {
             18 | key::RIGHT => {
                 if self.ready && self.sel < 2 {
                     self.sel += 1;
+                    if self.no_network && self.sel == 1 {
+                        self.sel = 2;
+                    }
                     self.window.reset_tick_pulse(now);
                     cues.push(11);
                 }
             }
-            13 | key::CROSS if self.ready => {
+            13 | key::CROSS if self.ready && !(self.no_network && self.sel == 1) => {
                 return Some(match self.sel {
                     0 => {
                         cues.push(15);
@@ -158,7 +170,7 @@ impl Splash {
     /// (its arrows' pulse starts over, as a key's move starts it).
     pub fn point(&mut self, p: [f32; 2], now: i64) -> Vec<i32> {
         let Some(k) = self.hits.at(p) else { return Vec::new() };
-        if !self.ready {
+        if !self.ready || (self.no_network && k == 1) {
             return Vec::new();
         }
         let mut keys = Vec::new();
@@ -215,6 +227,31 @@ mod tests {
         // the control: the keyboard's up is not a move here
         s.key(19, 0, &mut cues);
         assert_eq!(s.sel, 0);
+    }
+
+    /// On the web page Network Setup is greyed out: left and right pass over
+    /// it, and neither a key nor a pointer picks it; Play and Options as ever.
+    #[test]
+    fn the_web_page_passes_over_network_setup() {
+        let (v, r) = (vui(), NullRaster);
+        let mut s = Splash::default();
+        s.init();
+        s.no_network = true;
+        s.focus(&v, &r);
+        drawn(&mut s, 30);
+        let mut cues = Vec::new();
+        s.key(key::RIGHT, 0, &mut cues);
+        assert_eq!(s.sel, 2, "right from Play goes to Options");
+        s.key(key::LEFT, 0, &mut cues);
+        assert_eq!(s.sel, 0, "left from Options goes to Play");
+        assert_eq!(s.key(key::CROSS, 0, &mut cues), Some(Pick::Play));
+        let net = Splash::third(&s.window, &v, &r, 1);
+        assert!(s.point(mid(net), 0).is_empty(), "a pointer on it picks nothing");
+        s.sel = 1; // even if it were chosen somehow
+        assert_eq!(s.key(key::CROSS, 0, &mut cues), None);
+        // the control: native, it is picked
+        s.no_network = false;
+        assert_eq!(s.key(key::CROSS, 0, &mut cues), Some(Pick::NetworkSetup));
     }
 
     /// A pointer picks the entry it is on, once the menu is ready.

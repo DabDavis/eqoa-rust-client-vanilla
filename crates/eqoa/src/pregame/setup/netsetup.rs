@@ -16,8 +16,15 @@
 //! IPv4 address is refused in the game's message box, the page staying.
 //! Triangle closes the page, keeping what it had. Its words are the client's
 //! own, English: WORDS.TXT has none for it.
+//!
+//! Under the address, a second row is always there, whatever the address is
+//! (the owner, 2026-11-15: "add a eqoaclassic.com preset always available"):
+//! X on it (Enter, a click, a tap) keeps [`DEFAULT_SERVER`] and closes the
+//! page as Done does. Up and down move between the two rows, the game's tick
+//! beside the one chosen.
 
 use crate::editbox::{EditBox, EditUp};
+use crate::settings::DEFAULT_SERVER;
 use crate::pointer::{Hits, key, rows_rect};
 use crate::textlist::{Message, PROMPT_OK};
 use crate::ui::Layout;
@@ -27,6 +34,8 @@ const SERVER: &str = "Server";
 const HINT: &str = "A host name or an IPv4 address";
 const BAD: &str = "That is not a server address. Enter a host name (eqoa.example.com) or an IPv4 address (192.0.2.10), or leave it blank for none.";
 const NONE: &str = "(none)";
+/// The preset row's words (eqoaclassic.com, [`DEFAULT_SERVER`]).
+const PRESET: &str = "Use eqoaclassic.com";
 
 /// The longest address the edit box takes (the terminator counts).
 const MAX_LEN: usize = 64;
@@ -63,6 +72,12 @@ pub enum NetUp {
 const ROW: i32 = 0;
 const SELECT: i32 = 1;
 const BACK: i32 = 2;
+const PRESET_ROW: i32 = 3;
+
+/// The window rows of the page's two choices: the address, the preset.
+const ROWS: [i32; 2] = [1, 3];
+/// The legend's row, a row clear of the preset.
+const LEGEND: i32 = 5;
 
 #[derive(Default)]
 pub struct NetSetup {
@@ -73,19 +88,22 @@ pub struct NetSetup {
     hits: Hits,
     /// the address shown
     pub address: String,
+    /// the row chosen: 0 the address, 1 the preset
+    pub sel: i32,
 }
 
 impl NetSetup {
     /// The page opening (the focus arriving): 440 wide at the options'
-    /// place, five rows.
+    /// place, six rows.
     pub fn open(&mut self, vui: &Vui, r: &dyn Layout, current: Option<&str>) {
         self.address = current.unwrap_or("").to_string();
         self.window.close(true);
-        self.window.init(vui, r, [320, 246], 440, 5, 0);
+        self.window.init(vui, r, [320, 246], 440, 6, 0);
         self.window.set_title(Some(&wide(vui.words.get(1635, vui.language))));
         self.window.open(false);
         self.editing = false;
         self.message.visible = false;
+        self.sel = 0;
     }
 
     /// The edit box on the address (`VIWndEdit`'s `SetRows(1)`,
@@ -126,6 +144,29 @@ impl NetSetup {
             return NetUp::None;
         }
         match k {
+            19 | key::UP => {
+                if self.sel > 0 {
+                    self.sel -= 1;
+                    self.window.reset_tick_pulse(now);
+                    cues.push(11);
+                } else {
+                    cues.push(9);
+                }
+            }
+            20 | key::DOWN => {
+                if self.sel < 1 {
+                    self.sel += 1;
+                    self.window.reset_tick_pulse(now);
+                    cues.push(11);
+                } else {
+                    cues.push(9);
+                }
+            }
+            13 | key::CROSS if self.sel == 1 => {
+                cues.push(15);
+                self.address = DEFAULT_SERVER.to_string();
+                return NetUp::Kept(Some(DEFAULT_SERVER.to_string()));
+            }
             13 | key::CROSS => {
                 cues.push(15);
                 self.begin_edit(now);
@@ -156,21 +197,23 @@ impl NetSetup {
         let width = self.window.size[0];
         let c = UI_COLORS[1];
         self.window.text_box(vui, r, &wide(SERVER), 40, 1, 90, 1, c, 0);
-        self.window.tick_r(vui, r, 36, 1, true);
+        self.window.tick_r(vui, r, 36, ROWS[self.sel.clamp(0, 1) as usize], true);
         let shown = if self.address.is_empty() { NONE } else { &self.address };
         // the value in its frame, cut with an ellipsis when it is long
         let (vx, vw) = (140, width - 140 - 40);
         self.window.draw_frame(vui, r, vx, 1, vw, 1, 64);
         self.window.text_box(vui, r, &wide(shown), vx, 1, vw, 1, UI_COLORS[0], 2);
         self.window.text_box(vui, r, &wide(HINT), 40, 2, width - 80, 1, UI_COLORS[2], 0);
+        self.window.text_box(vui, r, &wide(PRESET), 40, 3, width - 80, 1, c, 0);
         let w = |id: i32| vui.words.get(id, vui.language).to_string();
         let legend = wide(&format!("|x {}   |t {}", w(212), w(750)));
-        self.window.text(vui, r, &legend, 40, 4, UI_COLORS[0], 0);
+        self.window.text(vui, r, &legend, 40, LEGEND, UI_COLORS[0], 0);
         self.hits.clear();
         self.hits.push(rows_rect(&self.window, vui, r, 40, 1, width - 80, 1), ROW);
+        self.hits.push(rows_rect(&self.window, vui, r, 40, 3, width - 80, 1), PRESET_ROW);
         let half = (width - 80) / 2;
-        self.hits.push(rows_rect(&self.window, vui, r, 40, 4, half, 1), SELECT);
-        let mut back = rows_rect(&self.window, vui, r, 40 + half, 4, half, 1);
+        self.hits.push(rows_rect(&self.window, vui, r, 40, LEGEND, half, 1), SELECT);
+        let mut back = rows_rect(&self.window, vui, r, 40 + half, LEGEND, half, 1);
         back[0] = self.window.top_left()[0] + 40 + half;
         self.hits.push(back, BACK);
         if self.editing {
@@ -182,7 +225,7 @@ impl NetSetup {
     }
 
     /// A pointer at frame point `p`: the box's choice, the edit box's keys,
-    /// else the row (X) and the legend's halves (X, Triangle).
+    /// else a row (chosen, then X) and the legend's halves (X, Triangle).
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
         if self.message.visible {
             return self.message.point(p).into_iter().collect();
@@ -191,7 +234,15 @@ impl NetSetup {
             return self.edit.point(p).flatten().into_iter().collect();
         }
         match self.hits.at(p) {
-            Some(ROW | SELECT) => vec![key::CROSS],
+            Some(ROW) => {
+                self.sel = 0;
+                vec![key::CROSS]
+            }
+            Some(PRESET_ROW) => {
+                self.sel = 1;
+                vec![key::CROSS]
+            }
+            Some(SELECT) => vec![key::CROSS],
             Some(BACK) => vec![key::TRIANGLE],
             _ => Vec::new(),
         }
@@ -278,10 +329,74 @@ mod tests {
         let row = rows_rect(&n.window, &v, &r, 140, 1, 100, 1);
         assert_eq!(n.point(mid(row)), vec![key::CROSS]);
         let w = n.window.size[0];
-        let back = rows_rect(&n.window, &v, &r, 40 + (w - 80) / 2 + 30, 4, 40, 1);
+        let back = rows_rect(&n.window, &v, &r, 40 + (w - 80) / 2 + 30, LEGEND, 40, 1);
         assert_eq!(n.point(mid(back)), vec![key::TRIANGLE]);
         // the control: without the hit notes, nothing
         n.hits.clear();
         assert!(n.point(mid(row)).is_empty());
+    }
+
+    /// The preset row keeps eqoaclassic.com and closes the page (`Kept`),
+    /// whatever the address was: another, eqoaclassic.com itself, or none;
+    /// by X, Enter, or a pointer on it. The control: X on the address row
+    /// still opens the edit box, keeping nothing.
+    #[test]
+    fn the_preset_keeps_eqoaclassic_from_any_server() {
+        let (v, mut r) = (vui(), NullRaster);
+        let mut cues = Vec::new();
+        for current in [Some("192.0.2.1"), Some(DEFAULT_SERVER), Some(""), None, Some("eqoa.example.com")] {
+            for pick in [key::CROSS, 13] {
+                let mut n = NetSetup::default();
+                n.open(&v, &r, current);
+                n.draw(&v, &mut r, 0, &mut Vec::new());
+                assert_eq!(n.key(&v, &mut r, key::DOWN, 0, &mut cues), NetUp::None);
+                assert_eq!(n.sel, 1, "down: the preset");
+                assert_eq!(n.key(&v, &mut r, pick, 0, &mut cues), NetUp::Kept(Some("eqoaclassic.com".into())), "{current:?}");
+                assert!(!n.editing, "no edit box");
+                assert_eq!(n.address, "eqoaclassic.com");
+            }
+            // a pointer on the preset row chooses it and presses X
+            let mut n = NetSetup::default();
+            n.open(&v, &r, current);
+            n.draw(&v, &mut r, 0, &mut Vec::new());
+            let preset = rows_rect(&n.window, &v, &r, 140, 3, 100, 1);
+            assert_eq!(n.point(mid(preset)), vec![key::CROSS]);
+            assert_eq!(n.sel, 1);
+            assert_eq!(n.key(&v, &mut r, key::CROSS, 0, &mut cues), NetUp::Kept(Some(DEFAULT_SERVER.into())));
+        }
+        // the control: the address row as ever
+        let (mut n, v, mut r) = page();
+        assert_eq!(n.key(&v, &mut r, key::CROSS, 0, &mut cues), NetUp::None);
+        assert!(n.editing, "X on the address: the edit box");
+        assert_eq!(n.address, "192.0.2.1");
+    }
+
+    /// Up and down move between the address and the preset, the ends
+    /// buzzing (9) and staying; a pointer on the address row chooses it
+    /// again; the page opens on the address.
+    #[test]
+    fn up_and_down_move_between_the_rows() {
+        let (mut n, v, mut r) = page();
+        assert_eq!(n.sel, 0, "opens on the address");
+        let mut cues = Vec::new();
+        n.key(&v, &mut r, key::UP, 0, &mut cues);
+        assert_eq!((n.sel, cues.pop()), (0, Some(9)), "up at the top stays");
+        n.key(&v, &mut r, 20, 0, &mut cues);
+        assert_eq!((n.sel, cues.pop()), (1, Some(11)), "down (the keyboard's)");
+        n.key(&v, &mut r, key::DOWN, 0, &mut cues);
+        assert_eq!((n.sel, cues.pop()), (1, Some(9)), "down at the bottom stays");
+        n.key(&v, &mut r, 19, 0, &mut cues);
+        assert_eq!((n.sel, cues.pop()), (0, Some(11)), "up (the keyboard's)");
+        n.sel = 1;
+        n.draw(&v, &mut r, 0, &mut Vec::new());
+        let row = rows_rect(&n.window, &v, &r, 140, 1, 100, 1);
+        assert_eq!(n.point(mid(row)), vec![key::CROSS]);
+        assert_eq!(n.sel, 0, "a pointer on the address chooses it");
+        assert_eq!(n.key(&v, &mut r, key::CROSS, 0, &mut cues), NetUp::None);
+        assert!(n.editing);
+        // reopened, it is on the address again
+        n.sel = 1;
+        n.open(&v, &r, None);
+        assert_eq!(n.sel, 0);
     }
 }
