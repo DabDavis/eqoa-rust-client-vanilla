@@ -29,6 +29,25 @@ use vi::world::World;
 /// The most plants `Render` draws a frame (`m_sorted`).
 const MOST: usize = 700;
 
+/// The plants of `drawn` that the options' Flora draws at `share`
+/// (`settings::share_keeps`): each by where it stands, so a plant is drawn
+/// at every frame or at none, whatever the order `Render` sorts them in; at
+/// all of it `drawn` as it is (the game's), at 0 none. The flora's state
+/// (`vi::flora`, its swatches and `rand()`) is the game's either way.
+pub fn kept(mut drawn: Vec<Drawn<Ee>>, share: u8) -> Vec<Drawn<Ee>> {
+    if share < crate::settings::SHARE_FULL {
+        drawn.retain(|d| crate::settings::share_keeps(plant_key(d), share));
+    }
+    drawn
+}
+
+/// A plant's key: where it stands (its world matrix's place, to the bit).
+fn plant_key(d: &Drawn<Ee>) -> u64 {
+    let t = &d.world.m[3];
+    let (x, y, z) = (t.x.0.to_bits() as u64, t.y.0.to_bits() as u64, t.z.0.to_bits() as u64);
+    x ^ z.rotate_left(32) ^ y.rotate_left(16)
+}
+
 #[derive(Default)]
 pub struct Flora {
     sys: System<Ee>,
@@ -66,7 +85,7 @@ impl Flora {
         for (k, p) in crate::particles::frustum(view_proj).iter().enumerate() {
             fr.planes[k] = Plane { n: Vect3::of(-p.x, -p.y, -p.z), d: F::new(-p.w) };
         }
-        let drawn = self.sys.render(&fr, eye);
+        let drawn = kept(self.sys.render(&fr, eye), crate::settings::client().flora);
         self.grown = self.sys.swatches.iter().flatten().map(|s| s.insts.len()).sum();
         self.drawn = drawn.len();
         drawn
@@ -122,5 +141,40 @@ impl Flora {
     pub fn describe(&self) -> String {
         let swatches = self.sys.swatches.iter().flatten().count();
         format!("flora: {} plants in {swatches} swatches, {} drawn in {} runs, {} models", self.grown, self.drawn, self.runs.len(), self.models.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vi::geom::Matrix44;
+
+    fn plant(x: f32, z: f32) -> Drawn<Ee> {
+        let mut world = Matrix44::<Ee>::identity();
+        world.m[3].x = F::new(x);
+        world.m[3].z = F::new(z);
+        Drawn { world, prim: 0, pal: 0, alpha: F::ONE }
+    }
+
+    /// Flora at all of it is `Render`'s list as it is, in its order; below,
+    /// the plants kept are the same whatever order they come in, fewer at a
+    /// lower share and none at 0. The control: half keeps some, not all.
+    #[test]
+    fn flora_keeps_the_same_plants_at_any_order() {
+        let all: Vec<Drawn<Ee>> = (0..400).map(|k| plant((k % 20) as f32 * 1.7, (k / 20) as f32 * 2.3)).collect();
+        let at = |v: &[Drawn<Ee>]| v.iter().map(|d| (d.world.m[3].x.0.to_bits(), d.world.m[3].z.0.to_bits())).collect::<Vec<_>>();
+        assert_eq!(at(&kept(all.clone(), 100)), at(&all), "all: the game's list, in its order");
+        assert!(kept(all.clone(), 0).is_empty(), "none");
+        let half = kept(all.clone(), 50);
+        assert!(!half.is_empty() && half.len() < all.len(), "the control: {}", half.len());
+        let mut back = all.clone();
+        back.reverse();
+        let mut b = at(&kept(back, 50));
+        b.reverse();
+        assert_eq!(b, at(&half), "the same plants, sorted otherwise");
+        let fewer = kept(all.clone(), 20);
+        assert!(fewer.len() < half.len(), "fewer at 20 than at 50");
+        let h = at(&half);
+        assert!(at(&fewer).iter().all(|p| h.contains(p)), "a plant drawn at 20 is drawn at 50");
     }
 }

@@ -91,7 +91,8 @@ or a browser (each described where it lives below):
 - **The Extended options**, a page for each of Video (Display: a window or full
   screen, as F11 and Alt+Enter toggle it; Brightness, Frame Rate, VSync, Render
   Scale: x1, x2 or x4, Loading Screens: Longer or Instant), World (Fog, Mipmaps,
-  Flora, Environment, Ground Fog: PS2 or Exact, Art), Lighting (Dynamic Lighting, Sun Shadows, Light Shadows,
+  Flora and Environment: sliders, 0 to 100% of the plants and of the effect volumes, 100 the game's, Ground Fog: PS2
+  or Exact, Art), Weather (a slider: 0 to 100% of the rain's and the snow's drops, 100 the game's), Lighting (Dynamic Lighting, Sun Shadows, Light Shadows,
   Shadow Distance: 250 to 1000, Ambient Occlusion, Particles: PS2 or Exact), UI (Ability Bars, Update
   Notices, Text: Sharp or Smooth, HUD: Nearest or Sharp, Raid List, Pet Effects), Controller (Controller
   Focus, Capture Controller, and the touch screen's pad: Touch Stick Size and Touch Button Size,

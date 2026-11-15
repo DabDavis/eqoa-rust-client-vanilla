@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-15 · Sliders for flora, environment effects and weather
+- **Options > Extended > Graphics > World's Flora and Environment are sliders now**, like Fog, from 0 to 100%.
+  Flora is how much of the grass and plants round you is drawn; Environment is how strong the ground fog, dust,
+  falling leaves and light shafts are, and how many birds fly in a flock.
+- **A new Weather page** beside them has a **Weather** slider: how much of the rain and snow falls on your screen.
+- Each starts at 100%, the game as it has always looked, so nothing changes unless you move one. 0% is the same as
+  the old Off, and a setting of Off you chose before is kept.
+
 ## 2026-11-15 · Your alchemist's potions in its inventory
 - **An alchemist mercenary's inventory now has a Stock tab**: the draughts, potions and cocktails your alchemists have
   brewed, each with its count. They used to be shown nowhere but the Potion stock box.

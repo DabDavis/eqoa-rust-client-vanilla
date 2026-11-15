@@ -337,6 +337,18 @@ pub struct Stats {
 /// raster's output (its normal carried from fan to fan).
 type Parts<'a> = (Scene<'a>, &'a mut BTreeMap<usize, Vec<Instance>>, &'a Cards<Ee>, &'a mut Rand, &'a mut Draw<Ee>);
 
+/// A fan as the options' Environment draws it at `share` (0 to
+/// `settings::SHARE_FULL`): its alpha that much of its own, so it is that
+/// much as strong under each blend that weighs the source by it (1 adds, 2
+/// takes away, 3 mixes; the PS2 frame's fog too); a multiply's (4, which
+/// darkens by it) and every fan at all of it, as it is: the game's.
+pub fn faded(mut q: Quad, blend: usize, share: u8) -> Quad {
+    if share < crate::settings::SHARE_FULL && blend != 4 {
+        q.color[3] *= share as f32 / crate::settings::SHARE_FULL as f32;
+    }
+    q
+}
+
 /// The effect volumes of the zones streamed in round the camera.
 pub struct Fx {
     cards: Cards<Ee>,
@@ -497,6 +509,10 @@ impl Fx {
         // the options' Ground Fog: the fog's fans as a PS2 frame keeps them
         // (`render::fog16`), or as they are
         let ps2_fog = crate::settings::client().ps2_fog;
+        // the options' Environment: below all of it, the fans that much as
+        // opaque and that share of a flock's birds (`faded`); the volumes'
+        // own state stepped as the game steps it either way
+        let share = crate::settings::client().environment;
         for inst in zones.values_mut().flatten() {
             stats.volumes += 1;
             let actor = &world.actors[inst.actor];
@@ -517,7 +533,7 @@ impl Fx {
                     Some(&mut (s, b)) => (s, b.clamp(0, 4) as usize, false),
                     None => (0, 3, true),
                 };
-                let q = quad(fan, &inst.m, eye_d);
+                let q = faded(quad(fan, &inst.m, eye_d), blend, share);
                 match runs.last_mut().filter(|r| (r.texture, r.blend, r.zwrite, r.ps2) == (texture, blend, zwrite, ps2)) {
                     Some(r) => r.quads.push(q),
                     None => runs.push(Run { texture, blend, zwrite, ps2, quads: vec![q] }),
@@ -529,7 +545,8 @@ impl Fx {
             if !draw.sprites.is_empty()
                 && let Particles::Flock(boids) = &inst.vs.volume.particles
             {
-                for b in boids.iter().filter(|b| b.sprite != -1) {
+                let kept = |k: usize| crate::settings::share_keeps(((inst.actor as u64) << 16) ^ k as u64, share);
+                for (_, b) in boids.iter().enumerate().filter(|&(k, b)| b.sprite != -1 && kept(k)) {
                     if let Some(Sprite::Boid(s)) = host.sprites.get_mut(b.sprite) {
                         s.drawn = Some(Matrix44::mul(&b.xform, &inst.m));
                         stats.boids += 1;
@@ -782,6 +799,24 @@ mod tests {
         // control: without the planes, behind would draw
         let no_planes = |f: u32, p: &Vect3<Ee>| f & 5 == 0 && crate::lod::within(p, &eye, OFF_DIST);
         assert_ne!(no_planes(8, &behind), rastered(8, &behind, bb, &eye, &planes));
+    }
+
+    /// Environment's fade: at all of it every fan's bits as they were; below,
+    /// the alpha scaled under the blends that weigh by it, a multiply's kept
+    /// (its alpha darkens, so a fainter one would be darker); the colour and
+    /// the place never touched. The control: a fade of half does change it.
+    #[test]
+    fn environment_fades_the_fans_and_keeps_them_whole_at_all() {
+        let q = Quad { corners: [[1.0, 2.0, 3.0]; 4], uvs: [[0.25, 0.75]; 4], color: [0.3, 0.6, 0.9, 0.7], normal: [0.0, 1.0, 0.0] };
+        let bits = |q: &Quad| (q.corners.map(|c| c.map(f32::to_bits)), q.uvs.map(|u| u.map(f32::to_bits)), q.color.map(f32::to_bits), q.normal.map(f32::to_bits));
+        for blend in 0..=4 {
+            assert_eq!(bits(&faded(q.clone(), blend, 100)), bits(&q), "blend {blend} at all of it: the game's");
+        }
+        let half = faded(q.clone(), 3, 50);
+        assert_ne!(bits(&half), bits(&q), "the control");
+        assert_eq!((half.color[..3].to_vec(), half.color[3]), (q.color[..3].to_vec(), 0.35), "only the alpha");
+        assert_eq!(faded(q.clone(), 1, 0).color[3], 0.0, "none at 0");
+        assert_eq!(bits(&faded(q.clone(), 4, 50)), bits(&q), "a multiply's kept");
     }
 
     /// The camera as `VICamera::Update` makes it: the view takes the eye to

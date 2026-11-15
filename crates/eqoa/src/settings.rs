@@ -1133,17 +1133,30 @@ pub struct ClientOptions {
     /// game is drawn; off, every texel off the base level, sharper and
     /// shimmering in the distance (`render::set_mipmaps`).
     pub mipmaps: bool,
-    /// Flora: on, the radial flora the game grows round the camera out of
-    /// each zone's tables (`vi::flora`, `flora`), as it is drawn; off, none.
-    pub flora: bool,
+    /// Flora: the share of the radial flora the game grows round the camera
+    /// out of each zone's tables (`vi::flora`, `flora`) that is drawn, 0 to
+    /// 100 in tens (`SHARE_STEP`): 100, the game's, every plant as it is
+    /// drawn; below, each plant kept or not by where it stands
+    /// (`flora::kept`), the same ones at every frame; 0, none (the owner's
+    /// of 2026-11-15: a slider "like we have a slider for fog"; On or Off
+    /// before).
+    pub flora: u8,
     /// Shadows: on, the characters' blob shadows as the game draws them
     /// (`vi::shadow`, `shadows`: within 50 of the eye, on the ground and the
     /// props under each); off, none.
     pub shadows: bool,
-    /// Environment: on, the effect volumes placed in the world (ground fog,
-    /// dust, falling leaves, light shafts, the flocks of birds: `fx`), as the
-    /// game draws them; off, none.
-    pub environment: bool,
+    /// Environment: how much of the effect volumes placed in the world
+    /// (ground fog, dust, falling leaves, light shafts, the flocks of birds:
+    /// `fx`) is drawn, 0 to 100 in tens: 100, the game's, as it draws them;
+    /// below, their fans that much as opaque and that share of a flock's
+    /// birds (`fx::Fx::frame`); 0, none (On or Off before 2026-11-15).
+    pub environment: u8,
+    /// Weather (2026-11-15, with Flora's and Environment's sliders): the share
+    /// of the rain's and the snow's drops drawn, and the splashes that much
+    /// as bright, 0 to 100 in tens (`weather::Weather::render`); 100, the
+    /// game's. The weather itself (its sky, its sound, its lightning) is the
+    /// server's as ever.
+    pub weather: u8,
     /// Ground Fog: PS2, the effect volumes' fog blended as the GS blends it
     /// into the PS2's 16-bit frame, dithered and cut to five bits a channel
     /// (`render::fog16`: a low, dim band, as the game shows it); Exact, blended
@@ -1429,9 +1442,10 @@ impl Default for ClientOptions {
             update_notices: true,
             text: render::ui::TextFilter::Sharp,
             mipmaps: true,
-            flora: true,
+            flora: SHARE_FULL,
             shadows: true,
-            environment: true,
+            environment: SHARE_FULL,
+            weather: SHARE_FULL,
             ps2_fog: true,
             ps2_particles: true,
             ambient_occlusion: false,
@@ -1639,16 +1653,20 @@ impl ClientOptions {
         if !self.mipmaps {
             s.push_str("mipmaps=off\n");
         }
-        // Flora and Environment only when off
-        if !self.flora {
-            s.push_str("flora=off\n");
+        // Flora, Environment and Weather only when not all of it: 0 as `off`,
+        // as the builds of an On/Off row wrote it (they read a number as on)
+        if let Some(v) = share_text(self.flora) {
+            s.push_str(&format!("flora={v}\n"));
         }
         // Shadows only when off
         if !self.shadows {
             s.push_str("shadows=off\n");
         }
-        if !self.environment {
-            s.push_str("environment=off\n");
+        if let Some(v) = share_text(self.environment) {
+            s.push_str(&format!("environment={v}\n"));
+        }
+        if let Some(v) = share_text(self.weather) {
+            s.push_str(&format!("weather={v}\n"));
         }
         // Ground Fog only when Exact
         if !self.ps2_fog {
@@ -1854,12 +1872,23 @@ impl ClientOptions {
                 ("text", "smooth") => c.text = render::ui::TextFilter::Smooth,
                 ("mipmaps", "on") => c.mipmaps = true,
                 ("mipmaps", "off") => c.mipmaps = false,
-                ("flora", "on") => c.flora = true,
-                ("flora", "off") => c.flora = false,
+                ("flora", v) => {
+                    if let Some(v) = share_of(v) {
+                        c.flora = v;
+                    }
+                }
                 ("shadows", "on") => c.shadows = true,
                 ("shadows", "off") => c.shadows = false,
-                ("environment", "on") => c.environment = true,
-                ("environment", "off") => c.environment = false,
+                ("environment", v) => {
+                    if let Some(v) = share_of(v) {
+                        c.environment = v;
+                    }
+                }
+                ("weather", v) => {
+                    if let Some(v) = share_of(v) {
+                        c.weather = v;
+                    }
+                }
                 ("ground_fog", "ps2") => c.ps2_fog = true,
                 ("ground_fog", "exact") => c.ps2_fog = false,
                 ("particles", "ps2") => c.ps2_particles = true,
@@ -2069,6 +2098,48 @@ pub fn camera_turn() -> u16 {
 /// Fog now, 0 (off) to `fog::STEPS`, the game's at `fog::GAME`.
 pub fn fog() -> u8 {
     client().fog
+}
+
+/// Flora's, Environment's and Weather's whole: the game's, all of it drawn.
+pub const SHARE_FULL: u8 = 100;
+/// Their sliders' step.
+pub const SHARE_STEP: u8 = 10;
+
+/// Whether the thing of `key` is drawn at `share` (Flora's, Environment's,
+/// Weather's): every one at `SHARE_FULL`, so the game's picture is not
+/// touched, none at 0; between, a fixed `share` in a hundred of the keys,
+/// each the same at every frame, and a key kept at a share kept at every
+/// share above it (a slider moved up only adds).
+pub fn share_keeps(key: u64, share: u8) -> bool {
+    if share >= SHARE_FULL {
+        return true;
+    }
+    // splitmix64's finaliser: neighbouring keys spread over the hundred
+    let mut z = key.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    z % (SHARE_FULL as u64) < (share as u64)
+}
+
+/// A share's line in client.opt: none at `SHARE_FULL`, `off` at 0 (what the
+/// On/Off rows' builds wrote and read), else its number.
+fn share_text(v: u8) -> Option<String> {
+    match v {
+        SHARE_FULL => None,
+        0 => Some("off".into()),
+        v => Some(v.to_string()),
+    }
+}
+
+/// A share read off client.opt: `on` all of it, `off` none, or a number of
+/// the sliders' steps; anything else None (the default kept).
+fn share_of(v: &str) -> Option<u8> {
+    match v {
+        "on" => Some(SHARE_FULL),
+        "off" => Some(0),
+        v => v.parse::<u8>().ok().filter(|v| *v <= SHARE_FULL && v % SHARE_STEP == 0),
+    }
 }
 
 /// Whether the camera shakes as the game shakes it (Screen Shake).
@@ -3021,7 +3092,7 @@ mod tests {
         assert_eq!(ClientOptions { shadows: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nshadows=off\n");
         assert!(!d.to_text().contains("shadows"), "the default not written");
         let c = ClientOptions::from_text("shadows=off");
-        assert!(!c.shadows && c.flora && c.environment, "Shadows alone");
+        assert!(!c.shadows && c.flora == 100 && c.environment == 100, "Shadows alone");
         assert!(ClientOptions::from_text("shadows=on") == d);
         for bad in ["shadows=0", "shadows=", "shadow=off"] {
             assert!(ClientOptions::from_text(bad).shadows, "{bad}: on, the default");
@@ -3130,7 +3201,7 @@ mod tests {
         assert_eq!(ClientOptions { ps2_particles: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nparticles=exact\n");
         assert!(!d.to_text().contains("particles"), "the default not written");
         let c = ClientOptions::from_text("particles=exact");
-        assert!(!c.ps2_particles && c.ps2_fog && c.environment, "Particles alone");
+        assert!(!c.ps2_particles && c.ps2_fog && c.environment == 100, "Particles alone");
         assert_eq!(ClientOptions::from_text(&c.to_text()), c);
         assert!(ClientOptions::from_text("particles=ps2") == d);
         for bad in ["particles=off", "particles=", "particle=exact", "particles=PS2"] {
@@ -3149,7 +3220,7 @@ mod tests {
         assert_eq!(ClientOptions { ps2_fog: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nground_fog=exact\n");
         assert!(!d.to_text().contains("ground_fog"), "the default not written");
         let c = ClientOptions::from_text("ground_fog=exact");
-        assert!(!c.ps2_fog && c.environment && c.flora, "Ground Fog alone");
+        assert!(!c.ps2_fog && c.environment == 100 && c.flora == 100, "Ground Fog alone");
         assert!(ClientOptions::from_text("ground_fog=ps2") == d);
         for bad in ["ground_fog=off", "ground_fog=", "groundfog=exact", "ground_fog=PS2"] {
             assert!(ClientOptions::from_text(bad).ps2_fog, "{bad}: PS2, the default");
@@ -3224,22 +3295,52 @@ mod tests {
         assert!(ClientOptions::from_text("touch_layout=bottom\ntouch_layout=classic").touch_opts() == crate::touch::Opts::default());
     }
 
-    /// Flora and Environment, on by default, each kept only when off;
-    /// anything but on or off leaves it on, and one never moves the other.
+    /// A share keeps every key at all of it and none at 0; between, about
+    /// that many in a hundred, and every key kept at a share kept above it.
+    /// The control: a share of 50 keeps neither all nor none.
     #[test]
-    fn flora_and_environment_kept_only_when_off() {
+    fn a_share_keeps_its_part_and_more_as_it_grows() {
+        let keys = 0..20_000u64;
+        assert!(keys.clone().all(|k| share_keeps(k, SHARE_FULL)), "all at 100");
+        assert!(keys.clone().all(|k| !share_keeps(k, 0)), "none at 0");
+        for share in (SHARE_STEP..SHARE_FULL).step_by(SHARE_STEP as usize) {
+            let n = keys.clone().filter(|&k| share_keeps(k, share)).count();
+            let want = 20_000 * share as usize / 100;
+            assert!(n.abs_diff(want) < 400, "{share}: {n} of 20000, not about {want}");
+            assert!(keys.clone().filter(|&k| share_keeps(k, share)).all(|k| share_keeps(k, share + SHARE_STEP)), "{share}: kept above it too");
+        }
+        let half = keys.clone().filter(|&k| share_keeps(k, 50)).count();
+        assert!(half > 0 && half < 20_000, "the control");
+    }
+
+    /// Flora, Environment and Weather, all of each by default, each kept
+    /// only when less: none as `off` (what the On/Off rows' builds wrote, and
+    /// read, so a file of theirs reads the same), else its number; `on` reads
+    /// as all; anything but a step of ten leaves the default; none moves
+    /// another.
+    #[test]
+    fn flora_environment_and_weather_kept_only_when_less() {
         let d = ClientOptions::default();
-        assert!(d.flora && d.environment, "on, the game's");
-        assert_eq!(ClientOptions { flora: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nflora=off\n");
-        assert_eq!(ClientOptions { environment: false, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nenvironment=off\n");
+        assert_eq!((d.flora, d.environment, d.weather), (100, 100, 100), "all of each, the game's");
+        assert_eq!(d.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\n", "nothing kept at the game's");
+        assert_eq!(ClientOptions { flora: 0, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nflora=off\n");
+        assert_eq!(ClientOptions { environment: 0, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nenvironment=off\n");
+        assert_eq!(ClientOptions { flora: 40, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nflora=40\n");
+        assert_eq!(ClientOptions { weather: 30, ..Default::default() }.to_text(), "lod=on\nbrightness=5\ncamera_distance=11\nweather=30\n");
         let c = ClientOptions::from_text("flora=off");
-        assert!(!c.flora && c.environment, "Flora alone");
+        assert_eq!((c.flora, c.environment, c.weather), (0, 100, 100), "Flora alone");
         let c = ClientOptions::from_text("environment=off");
-        assert!(c.flora && !c.environment, "Environment alone");
-        assert!(ClientOptions::from_text("flora=on\nenvironment=on") == d);
-        for bad in ["flora=0", "environment=no", "flora="] {
+        assert_eq!((c.flora, c.environment, c.weather), (100, 0, 100), "Environment alone");
+        let c = ClientOptions::from_text("environment=70\nweather=0");
+        assert_eq!((c.flora, c.environment, c.weather), (100, 70, 0), "numbers");
+        assert!(ClientOptions::from_text("flora=on\nenvironment=on\nweather=on") == d);
+        for v in [0, 10, 50, 90] {
+            let c = ClientOptions { flora: v, environment: v, weather: v, ..Default::default() };
+            assert!(ClientOptions::from_text(&c.to_text()) == c, "{v} read back");
+        }
+        for bad in ["flora=45", "environment=no", "flora=", "weather=110", "weather=-10"] {
             let c = ClientOptions::from_text(bad);
-            assert!(c.flora && c.environment, "{bad}: on, the default");
+            assert_eq!((c.flora, c.environment, c.weather), (100, 100, 100), "{bad}: the default");
         }
     }
 
@@ -3291,7 +3392,7 @@ mod tests {
     #[test]
     fn options_with_the_voice_lines_still_load() {
         let c = ClientOptions::from_text("voice=ptt\nvoice_demo=on\nvoice_volume=15\nflora=off\nloading=instant\n");
-        assert!(!c.flora && !c.loading_longer, "the lines beside them read");
+        assert!(c.flora == 0 && !c.loading_longer, "the lines beside them read");
         let text = c.to_text();
         assert!(!text.contains("voice"), "{text}");
         assert!(text.contains("flora=off\n") && text.contains("loading=instant\n"), "{text}");
@@ -3306,7 +3407,7 @@ mod tests {
     fn options_with_the_lines_of_rows_gone_still_load() {
         let old = "target_of_target=on\nmana_bars=off\nminimap=off\nstats_box=on\nquest_markers=off\nquest_tracker=off\nmap_markers=off\nmap_towns=off\nflora=off\nloading=instant\n";
         let c = ClientOptions::from_text(old);
-        let want = ClientOptions { minimap: false, quest_markers: false, quest_tracker: false, map_markers: false, map_towns: false, flora: false, loading_longer: false, ..Default::default() };
+        let want = ClientOptions { minimap: false, quest_markers: false, quest_tracker: false, map_markers: false, map_towns: false, flora: 0, loading_longer: false, ..Default::default() };
         assert_eq!(c, want, "the lines beside them read");
         let text = c.to_text();
         for gone in ["target_of_target", "mana_bars", "stats_box"] {

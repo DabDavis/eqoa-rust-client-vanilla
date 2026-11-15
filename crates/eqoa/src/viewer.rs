@@ -1162,7 +1162,7 @@ pub fn shot_with(
             // are the shot's
             weather.frame(&mut walker.scene, None, &walker.eye, t, game_hour(play.as_ref(), Instant::now()));
             // the effect volumes, stepped as the scene rasters them
-            if let Some(fx) = fx.as_mut().filter(|_| crate::settings::client().environment) {
+            if let Some(fx) = fx.as_mut().filter(|_| crate::settings::client().environment > 0) {
                 fx.stream(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
                 let cam = crate::fx::camera(walker.eye.position, walker.eye.direction);
                 fx.lod_eye = Some(crate::lod::eye(&walker.cam, &walker.eye.position));
@@ -1310,7 +1310,7 @@ pub fn shot_with(
         renderer.strips.append(&mut shot_trails);
         // the volumes as the shot's camera sees them (the walk's clock does
         // not move: nothing steps again)
-        if let Some(fx) = fx.as_mut().filter(|_| crate::settings::client().environment) {
+        if let Some(fx) = fx.as_mut().filter(|_| crate::settings::client().environment > 0) {
             fx.stream(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
             let cam = crate::fx::camera(vi::vect::Vect3::of(shot_eye.x, shot_eye.y, shot_eye.z), shot_dir);
             fx.lod_eye = Some(shot_lod_eye);
@@ -1320,7 +1320,7 @@ pub fn shot_with(
         }
         // the flora at the shot's camera: a swatch grows the same plants
         // whenever it is made, so the walk's frames need not have grown it
-        if crate::settings::client().flora {
+        if crate::settings::client().flora > 0 {
             let fl = flora.insert(crate::flora::Flora::new());
             let drawn = fl.frame(&mut walker.scene, &vi::vect::Vect3::of(shot_eye.x, shot_eye.y, shot_eye.z), view.view_proj);
             fl.upload(&mut renderer, &device, &queue, lib, &walker.scene, &drawn);
@@ -1392,7 +1392,7 @@ pub fn shot_with(
             .chain(streamed.iter().flat_map(|s| s.draws()))
             .chain(flora.iter().flat_map(|f| f.draws()))
             .chain(play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
-            .chain(fx.iter().filter(|_| crate::settings::client().environment).flat_map(|f| f.models()).map(render::Draw::Model))
+            .chain(fx.iter().filter(|_| crate::settings::client().environment > 0).flat_map(|f| f.models()).map(render::Draw::Model))
             .collect(),
     };
     let textures = render::library_textures(lib);
@@ -6423,7 +6423,7 @@ impl App {
                     // the effect volumes (`VIScene::Render`'s deferred actors);
                     // none with the options' Environment off
                     if let Some(fx) = fx.as_mut().filter(|_| !unseen) {
-                        if crate::settings::client().environment {
+                        if crate::settings::client().environment > 0 {
                             fx.stream(Vec3::from(w.cam.walk.phys.position.to_array()), &w.scene, lib);
                             let cam = crate::fx::camera(w.eye.position, w.eye.direction);
                             fx.lod_eye = Some(crate::lod::eye(&w.cam, &w.eye.position));
@@ -6438,7 +6438,7 @@ impl App {
                     // camera, Render after the rooms' deferred list); none
                     // with the options' Flora off
                     if let Some(fl) = flora.as_mut().filter(|_| !unseen) {
-                        if crate::settings::client().flora {
+                        if crate::settings::client().flora > 0 {
                             let drawn = fl.frame(&mut w.scene, &w.eye.position, proj * v);
                             fl.upload(&mut g.renderer, &g.device, &g.queue, lib, &w.scene, &drawn);
                         } else {
@@ -6569,7 +6569,7 @@ impl App {
                         .chain(self.streamer.iter().flat_map(|s| s.draws()))
                         .chain(self.flora.iter().flat_map(|f| f.draws()))
                         .chain(self.play.iter().flat_map(|p| p.models()).map(render::Draw::Model))
-                        .chain(self.fx.iter().filter(|_| crate::settings::client().environment).flat_map(|f| f.models()).map(render::Draw::Model))
+                        .chain(self.fx.iter().filter(|_| crate::settings::client().environment > 0).flat_map(|f| f.models()).map(render::Draw::Model))
                         .collect(),
                 };
                 // the options' Brightness: the scene through its curve (none

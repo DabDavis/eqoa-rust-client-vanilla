@@ -21,7 +21,7 @@
 //! WORDS.TXT entry). It opens a menu of its own over the options menu, drawn
 //! as that one is, of four groups (the GM Jibrish's petitions 1631 and 1634,
 //! 2026-11-11: `GROUPS`): Graphics (Video, World, Lighting, Characters,
-//! natively Textures), UI (HUD, HUD Layout, Name Plates, Map, Number Colors,
+//! natively Textures, Weather), UI (HUD, HUD Layout, Name Plates, Map, Number Colors,
 //! Merc Colors, DPS Meter, Chat), Other (General, Combat, Camera, natively
 //! Sound), Touch Controls (Size & Look, Layout: every row of the touch
 //! screen's pad, the GM Jibcrotwo's petition 2084) and the Multi-boxing
@@ -48,10 +48,14 @@
 //!   and far plane in the middle, off at the left, thicker to the right,
 //!   `fog`), Mipmaps (On, the game's: the textures' mip levels sampled by
 //!   depth as the GS samples them, `render::gs_lod_k`; Off: the base level
-//!   alone, `render::set_mipmaps`), Flora (On, the game's: the plants it
-//!   grows round the camera, `flora`; Off: none), Environment (On, the
-//!   game's: the effect volumes, ground fog, dust, leaves, light shafts and
-//!   flocks, `fx`; Off: none), Ground Fog (PS2, the game's look: the effect
+//!   alone, `render::set_mipmaps`), Flora (a slider and its number since
+//!   2026-11-15, the owner's "like we have a slider for fog": the share of
+//!   the plants the game grows round the camera that is drawn, 100, the
+//!   game's, to 0, none, in tens, `flora::kept`; On or Off before),
+//!   Environment (a slider and its number, as Flora's: the effect volumes,
+//!   ground fog, dust, leaves, light shafts and flocks, `fx`, 100 as the game
+//!   draws them, below their fans fainter and fewer of a flock's birds, 0
+//!   none), Ground Fog (PS2, the game's look: the effect
 //!   volumes' fog blended as the GS blends it into the PS2's 16-bit frame,
 //!   `render::fog16`; Exact: at eight bits a channel, a brighter cloud) and
 //!   Art (Frontiers' or the 2002 disc's, `era`,
@@ -82,6 +86,11 @@
 //!   frame, `render::Renderer::set_ps2_particles`, as Ground Fog's fog;
 //!   Exact: at eight bits a channel, where many faint puffs pile up into a
 //!   darker mass; here because World's page is full);
+//! - Weather (2026-11-15, World's page full): Weather (a slider and its
+//!   number: the share of the rain's and the snow's drops drawn and the
+//!   splashes' brightness, 100, the game's, to 0 in tens,
+//!   `weather::Weather::render`; the sky, the sound and the lightning the
+//!   weather's own);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Stacked Spell Bars (2026-11-13,
 //!   Jibwiz's ticket 1913, Off by default: On, on a computer, the first two
@@ -986,10 +995,15 @@ impl WndOptions {
                     // Mipmaps: every texture's levels from the next frame
                     // (`viewer`, `render::set_mipmaps`)
                     35 => c.mipmaps = !c.mipmaps,
-                    // Flora: grown or let go from the next frame (`viewer`, `flora`)
-                    36 => c.flora = !c.flora,
-                    // Environment: the effect volumes from the next frame (`viewer`, `fx`)
-                    37 => c.environment = !c.environment,
+                    // Flora: that share of the plants from the next frame, at
+                    // 0 let go (`viewer`, `flora`)
+                    36 => slide(&mut c.flora, 0, crate::settings::SHARE_FULL, crate::settings::SHARE_STEP),
+                    // Environment: the effect volumes so from the next frame,
+                    // at 0 none (`viewer`, `fx`)
+                    37 => slide(&mut c.environment, 0, crate::settings::SHARE_FULL, crate::settings::SHARE_STEP),
+                    // Weather: the rain's and snow's drops so from the next
+                    // frame (`weather`)
+                    WEATHER => slide(&mut c.weather, 0, crate::settings::SHARE_FULL, crate::settings::SHARE_STEP),
                     // Shadows: drawn or not from the next frame (`viewer`, `shadows`)
                     46 => c.shadows = !c.shadows,
                     // Ground Fog: the fog's fans from the next frame (`fx`,
@@ -1721,7 +1735,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 93] = [
+const EXTENDED_ITEMS: [(i32, &str); 94] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1815,6 +1829,7 @@ const EXTENDED_ITEMS: [(i32, &str); 93] = [
     (RESET_TOUCH, "Reset Touch Pad"),
     (TOUCH_LAYOUT, "Button Layout"),
     (TARGET_LEVEL, "Target Level"),
+    (WEATHER, "Weather"),
 ];
 
 /// The Chat Tabs rows' first item (ticket 1951): one a kind of line, in
@@ -1843,6 +1858,9 @@ const TOUCH_LAYOUT: i32 = 108;
 /// Target Level's item (Live petition 5130). 120, not the next free, is this
 /// lane's (sibling lanes may take 109 onwards).
 const TARGET_LEVEL: i32 = 120;
+/// Weather's item (2026-11-15, with Flora's and Environment's sliders). 130,
+/// not the next free, is this lane's, as Target Level's 120.
+const WEATHER: i32 = 130;
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -1928,7 +1946,7 @@ const GROUPS: [(Group, &str); 5] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// Capture Controller and Sound in Background the Multi-boxing settings',
 /// Controller's touch rows Other's Touch; petition 2084, 2026-11-14: Touch a
 /// group of its own, Touch Controls, its rows Size & Look and Layout).
-const ALL_CATEGORIES: [Category; 23] = [
+const ALL_CATEGORIES: [Category; 24] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
@@ -1960,6 +1978,9 @@ const ALL_CATEGORIES: [Category; 23] = [
     // the touch pad's place and buttons (2026-11-14: Move Touch Pad, Button
     // Layout, petition 2084), its sizes' page full
     Category { name: "Layout", items: &[MOVE_TOUCH, TOUCH_LAYOUT, RESET_TOUCH], note: Note::TouchLayout, group: Group::Touch },
+    // the rain and the snow (2026-11-15, with Flora's and Environment's
+    // sliders): World's page is full
+    Category { name: "Weather", items: &[WEATHER], note: Note::None, group: Group::Graphics },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -1968,7 +1989,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[23]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -2120,8 +2141,6 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         51 => on_off(c.dump_textures),
         55 => wide("Open"),
         35 => on_off(c.mipmaps),
-        36 => on_off(c.flora),
-        37 => on_off(c.environment),
         46 => on_off(c.shadows),
         47 => wide(if c.ps2_fog { "PS2" } else { "Exact" }),
         53 => on_off(c.sun_shadows),
@@ -2221,8 +2240,17 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         62 => (c.touch_edge as f32 / TOUCH_EDGE_MAX as f32, Some(c.touch_edge as u16)),
         57 => (at(c.shadow_distance as f32, SHADOW_DISTANCE_GAME as f32, SHADOW_DISTANCE_MAX as f32), Some(c.shadow_distance)),
         SPELL_BAR_OPACITY => (c.spell_bar_opacity as f32 / 100.0, Some(c.spell_bar_opacity as u16)),
+        36 => share_slider(c.flora),
+        37 => share_slider(c.environment),
+        WEATHER => share_slider(c.weather),
         _ => return None,
     })
+}
+
+/// Flora's, Environment's and Weather's slider (items 36, 37, `WEATHER`):
+/// none at the left, all of it, the game's, at the right, and the percent.
+fn share_slider(v: u8) -> (f32, Option<u16>) {
+    (v as f32 / crate::settings::SHARE_FULL as f32, Some(v as u16))
 }
 
 /// Name Distance (item 27): its slider's knob, the game's 22 at the left
@@ -2640,26 +2668,39 @@ mod tests {
         assert_eq!((settings::client().mipmaps, cues.last()), (false, Some(&11)), "off");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::client().mipmaps, "and back: two values");
-        goto!(36);
-        assert_eq!(w.item, 36, "Flora");
-        assert!(settings::client().flora, "on: the game's");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().flora, cues.last()), (false, Some(&11)), "off");
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert!(settings::client().flora, "and back: two values");
-        goto!(37);
-        assert_eq!(w.item, 37, "Environment");
-        assert!(settings::client().environment, "on: the game's");
-        press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().environment, settings::client().flora, cues.last()), (false, true, Some(&11)), "off, Flora still on");
-        press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert!(settings::client().environment, "and back: two values");
+        // Flora, Environment (and Weather, on a page of its own): sliders of
+        // tens, all of it, the game's, at their right end
+        for (item, name) in [(36, "Flora"), (37, "Environment"), (WEATHER, "Weather")] {
+            let share = || {
+                let c = settings::client();
+                [c.flora, c.environment, c.weather]
+            };
+            let at = [36, 37, WEATHER].iter().position(|&i| i == item).unwrap();
+            goto!(item);
+            assert_eq!(w.item, item, "{name}");
+            assert_eq!(share(), [100; 3], "{name}: all of each, the game's");
+            assert_eq!(slider_at(item), Some((1.0, Some(100))), "{name}: the knob at the right, its number");
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((share()[at], cues.last()), (100, Some(&9)), "{name}: no more than all");
+            for _ in 0..11 {
+                press(&mut w, &mut o, key::LEFT, &mut cues);
+            }
+            let mut want = [100; 3];
+            want[at] = 0;
+            assert_eq!((share(), cues.last()), (want, Some(&9)), "{name}: none, at its end, the others kept");
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((share()[at], cues.last(), slider_at(item)), (10, Some(&11), Some((0.1, Some(10)))), "{name}: a step of ten");
+            for _ in 0..9 {
+                press(&mut w, &mut o, key::RIGHT, &mut cues);
+            }
+            assert_eq!(share(), [100; 3], "{name}: and back");
+        }
         goto!(47);
         assert_eq!(w.item, 47, "Ground Fog");
         assert!(settings::client().ps2_fog, "PS2: the game's look");
         assert_eq!(value_text(&vui, 47), Some(wide("PS2")));
         press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::client().ps2_fog, settings::client().environment, cues.last()), (false, true, Some(&11)), "Exact, Environment still on");
+        assert_eq!((settings::client().ps2_fog, settings::client().environment, cues.last()), (false, 100, Some(&11)), "Exact, Environment still all");
         assert_eq!(value_text(&vui, 47), Some(wide("Exact")));
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::client().ps2_fog, "and back: two values");
@@ -3416,6 +3457,7 @@ mod tests {
                 ("Lighting", vec!["Dynamic Lighting", "Sun Shadows", "Light Shadows", "Shadow Distance", "Ambient Occlusion", "Particles"]),
                 ("Characters", vec!["Level of Detail", "NPC/PC Display", "NPC/PC Distance", "Shadows"]),
                 ("Textures", textures),
+                ("Weather", vec!["Weather"]),
             ],
             "Graphics: how the world is drawn"
         );
@@ -3750,12 +3792,13 @@ mod tests {
         assert_eq!(w.point([frame + 110.0, y(&w, 2)]), down(2, key::RIGHT), "Frame Rate's value");
         assert_eq!(w.point([frame + 110.0, y(&w, 3)]), down(3, key::RIGHT), "VSync's value");
         assert!(w.point([frame + 110.0, y(&w, VIDEO.len() as i32)]).is_empty(), "the row under the last: nothing");
-        // World: Fog at 5 of 10 (its knob mid-bar), Flora's and Art's values
+        // World: Fog at 5 of 10 (its knob mid-bar), Flora's, Environment's and Art's
         go(&mut w, &vui, &mut o, "World");
         assert_eq!(w.point([slider + 10.0, y(&w, 0)]), vec![key::LEFT], "Fog thinner");
         assert_eq!(w.point([slider + 130.0, y(&w, 0)]), vec![key::RIGHT], "Fog thicker");
-        assert_eq!(w.point([frame + 110.0, y(&w, 2)]), down(2, key::RIGHT), "Flora's value");
-        assert_eq!(w.point([frame + 20.0, y(&w, 3)]), down(3, key::LEFT), "Environment's value");
+        // Flora and Environment at all of it: their knobs at the right end
+        assert_eq!(w.point([slider + 10.0, y(&w, 2)]), down(2, key::LEFT), "Flora less");
+        assert_eq!(w.point([slider + 10.0, y(&w, 3)]), down(3, key::LEFT), "Environment less");
         assert_eq!(w.point([frame + 20.0, y(&w, 4)]), down(4, key::LEFT), "Ground Fog's value");
         // Characters: NPC/PC Display's knob at its left end (the game's 24),
         // then at 128 near its middle

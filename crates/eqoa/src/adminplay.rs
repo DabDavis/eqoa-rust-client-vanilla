@@ -346,9 +346,9 @@ impl Play {
             // kept)
             0x0509_1008 => {
                 let mut c = crate::settings::client();
-                c.flora = !c.flora;
+                c.flora = if c.flora > 0 { 0 } else { crate::settings::SHARE_FULL };
                 crate::settings::set_client(c);
-                let t = on_off(self, 1597, c.flora);
+                let t = on_off(self, 1597, c.flora > 0);
                 self.add_chat(t, [1.0; 4]);
             }
             // the day-night cycle (m_p00064): UpdateTimeOfDay stopped or

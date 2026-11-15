@@ -284,25 +284,52 @@ impl Weather {
         self.atm.render_sky(&cam, &mut sky, &mut self.rand);
         let mut world = Raster::default();
         self.atm.render_weather(&cam, &mut world);
-        let mut out = self.batches(&world);
+        let mut out = self.batches(&world, crate::settings::client().weather);
         for (id, bbs) in self.sys.render(time) {
             let def = self.sys.emitter(id).def;
             let Some(d) = self.sys.defs[def].as_ref() else { continue };
             out.push(Batch { texture: d.texture as i32, blend: d.blend.clamp(0, 4) as usize, ztest: d.ztest, zwrite: d.zwrite, quads: quads(&bbs) });
         }
-        (self.batches(&sky), out)
+        (self.batches(&sky, crate::settings::SHARE_FULL), out)
     }
 
-    fn batches(&self, r: &Raster<Ee>) -> Vec<Batch> {
+    /// The raster's runs as batches, through the options' Weather at `share`
+    /// (`weathered`).
+    fn batches(&self, r: &Raster<Ee>, share: u8) -> Vec<Batch> {
         r.runs
             .iter()
             .filter(|(_, b)| !b.is_empty())
             .map(|(m, bbs)| {
                 let k = (*m).clamp(0, 4) as usize;
-                Batch { texture: self.tex[k], blend: MATERIALS[k].1, ztest: MATERIALS[k].2, zwrite: false, quads: quads(bbs) }
+                Batch { texture: self.tex[k], blend: MATERIALS[k].1, ztest: MATERIALS[k].2, zwrite: false, quads: weathered(quads(bbs), k, share) }
             })
+            .filter(|b| !b.quads.is_empty())
             .collect()
     }
+}
+
+/// A run of material `k`'s billboards (`MATERIALS`) as the options' Weather
+/// draws it at `share`: of the rain's and the snow's drops (0, 1) that share,
+/// each by its place in the run, which is its particle's (`RenderWeather`
+/// draws every particle, in order, at every frame); the splashes (2) that much
+/// as bright (an added blend); the stars and the lightning (3, 4), and every
+/// run at all of it, as they are: the game's.
+fn weathered(mut q: Vec<Quad>, k: usize, share: u8) -> Vec<Quad> {
+    if share >= crate::settings::SHARE_FULL {
+        return q;
+    }
+    match k {
+        0 | 1 => {
+            let mut at = 0u64;
+            q.retain(|_| {
+                at += 1;
+                crate::settings::share_keeps(at, share)
+            });
+        }
+        2 => q.iter_mut().for_each(|b| b.color[3] *= share as f32 / crate::settings::SHARE_FULL as f32),
+        _ => {}
+    }
+    q
 }
 
 fn quads(bbs: &[Billboard<Ee>]) -> Vec<Quad> {
@@ -349,6 +376,31 @@ mod tests {
         crate::stream::fill(&mut lib, w, 25275.0, 15766.0, &mut src);
         let world = World::load(&lib, w)?;
         Some((lib, world))
+    }
+
+    /// Weather at all of it is every billboard as the raster gave it; below,
+    /// fewer drops of rain and of snow (the same ones at each frame: by their
+    /// place) and fainter splashes; the stars and the lightning kept whole.
+    /// The control: a drop list at half is not the whole list.
+    #[test]
+    fn weather_keeps_its_share_of_the_drops() {
+        let drops: Vec<Quad> = (0..1000).map(|k| Quad { center: [k as f32, 0.0, 0.0], half: [0.1, 0.4], frame: 0, color: [1.0, 1.0, 1.0, 0.5] }).collect();
+        let xs = |v: &[Quad]| v.iter().map(|q| q.center[0].to_bits()).collect::<Vec<_>>();
+        for k in 0..5 {
+            let w = weathered(drops.clone(), k, 100);
+            assert_eq!((xs(&w), w.iter().map(|q| q.color[3]).collect::<Vec<_>>()), (xs(&drops), vec![0.5; 1000]), "material {k} at all of it");
+        }
+        for k in [0, 1] {
+            let half = weathered(drops.clone(), k, 50);
+            assert!(half.len() > 400 && half.len() < 600, "the control: {}", half.len());
+            assert_eq!(xs(&half), xs(&weathered(drops.clone(), k, 50)), "the same drops each frame");
+            assert!(weathered(drops.clone(), k, 0).is_empty(), "none at 0");
+        }
+        let splash = weathered(drops.clone(), 2, 30);
+        assert_eq!((splash.len(), splash[0].color[3]), (1000, 0.5 * 0.3), "the splashes fainter");
+        for k in [3, 4] {
+            assert_eq!(xs(&weathered(drops.clone(), k, 0)), xs(&drops), "the sky's own, kept");
+        }
     }
 
     fn eye() -> Eye<Ee> {
