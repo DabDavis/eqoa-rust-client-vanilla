@@ -786,6 +786,15 @@ pub const OP_MOB_INFO_ANSWER: u16 = 0x7E4D;
 /// is held.
 pub const OP_MOB_INFO: u16 = 0x7E4E;
 
+/// go-eqoa-server's own: a target's level in the target box (Live petition
+/// 5130, the owner 2026-11-15: "yes lets allow"; the server's
+/// `world.con_level`). The offer, server to client once the player is in the
+/// world: a u8, 1, its layout. Nothing is answered: the level is the entity's
+/// own (the channel's byte 140, which every server sends), only drawn where the
+/// server offered it. CLIENT has no such case, so a PS2 ignores it; its players
+/// type /con ("/t con") for a line of it.
+pub const OP_CON_LEVEL_OFFER: u16 = 0x7E70;
+
 /// go-eqoa-server's own: item links in chat (the GM Jibrish's petition 1463,
 /// `crate::itemlink`). Both ways: the server's offer at every world entry (a
 /// u8, the layout, `itemlink::LAYOUT`), and the client's answer (a u8, 1 to be
@@ -1370,6 +1379,9 @@ pub struct Session {
     /// (none since the offer).
     pub profanity_offer: bool,
     profanity_asked: Option<u8>,
+    /// Whether the server offered its players their target's level
+    /// ([`OP_CON_LEVEL_OFFER`]) on this connection: the target box draws it.
+    pub con_level_offer: bool,
     /// The worn looks the character hides, as the server told them
     /// (`crate::hidelook`): none offered until it does.
     pub hide_look: crate::hidelook::State,
@@ -1569,6 +1581,7 @@ impl Session {
             item_links_asked: None,
             profanity_offer: false,
             profanity_asked: None,
+            con_level_offer: false,
             hide_look: crate::hidelook::State::default(),
             user: user.to_string(),
             token,
@@ -2402,6 +2415,7 @@ impl Session {
                 self.item_links_asked = None;
                 self.profanity_offer = false;
                 self.profanity_asked = None;
+                self.con_level_offer = false;
                 self.hide_look = crate::hidelook::State::default();
                 ev.push(Event::Promoted);
             }
@@ -2728,6 +2742,15 @@ impl Session {
                     let mut w = Writer::op(OP_MOB_INFO_ANSWER);
                     w.u8(1);
                     self.send(&w.data);
+                }
+            }
+            // a target's level offered (each world entry), in the layout this
+            // client reads: the target box draws it (`hud::draw_target`);
+            // another layout is left alone
+            OP_CON_LEVEL_OFFER => {
+                let layout = r.u8();
+                if !r.error && layout == 1 {
+                    self.con_level_offer = true;
                 }
             }
             // item links offered (again at every world entry), in the layout
@@ -3593,6 +3616,28 @@ mod tests {
         );
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert!(!s.profanity_offer);
+    }
+
+    /// A target's level (go-eqoa-server's 0x7E70, Live petition 5130): taken
+    /// from an offer of layout 1 as the server writes it (go-eqoa-server's
+    /// TestConLevelOffer's bytes), answering nothing. The controls: nothing
+    /// before the offer, one cut short or of another layout is not taken, a
+    /// new connection forgets it.
+    #[test]
+    fn a_targets_level_is_drawn_only_for_a_server_that_offered_it() {
+        let mut s = session();
+        s.record = Some(Vec::new());
+        assert!(!s.con_level_offer, "nothing before the offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x70, 0x7E]);
+        assert!(!s.con_level_offer, "a short offer is no offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x70, 0x7E, 2]);
+        assert!(!s.con_level_offer, "another layout is not taken");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x70, 0x7E, 1]);
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        assert!(s.con_level_offer);
+        assert_eq!(s.record.as_ref().unwrap().len(), 0, "answered with nothing");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.con_level_offer, "a new connection forgets it");
     }
 
     #[test]

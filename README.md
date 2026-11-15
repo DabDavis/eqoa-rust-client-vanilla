@@ -756,6 +756,13 @@ or a browser (each described where it lives below):
   is a tap. Another press of □ or Q, a change of target, a menu or the map opened, or the monster's death or leaving
   view closes it sooner. A monster that talks still talks, any other server is as before, and a PS2 on the same server
   is shown the two lines in a dialogue box.
+- **A target's level in the target box**, on a server that offers it (Live petition 5130, Indulgence, "Would it be
+  possible to con an enemy to see what level it is?", the owner 2026-11-15: "yes lets allow"; go-eqoa-server's
+  `world.con_level`, its offer 0x7E70, layout 1, answered with nothing): "Level" (word 503) and the target's level,
+  the entity channel's (byte 140, the level its con colour is of), drawn on the "Target" heading's line, ending where
+  the name's bar under it ends (`hud::draw_target`, `Play::target_level`). Extended > UI > Name Plates' Target Level, setting
+  `target_level`, on by default; off, or on any other server, the game's box. A PS2 on the same server types `/t con`
+  for the server's line "<name> is level N.".
 - **Item links in chat**, on a server that offers them (the GM Jibrish's petition 1463, 2026-11-10: "In other games,
   like EQ1, you can shift click an item and if your chat is open it puts a link to that item. If people click it, they
   can view the items stats, name, icon"; go-eqoa-server's offer 0x7E4F (both ways: this client's answer is Extended >

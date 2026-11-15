@@ -109,6 +109,9 @@ current.
   Jibrish's petition 1459, 2026-11-10, "This should ONLY show the monsters name and level, nothing else": Q's talk sent
   as ever, the server's answer 0x7E4E drawn as CLIENT draws a pet's for 3 s or while Q is held, `Play::mob_info_shown`,
   go-eqoa-server's `world.mob_info`, 0x7E4C-0x7E4E; on any other server, or a monster that talks, the game's), and
+  the target's level in the target box on a server that offers it (Live petition 5130, the owner's "yes lets allow",
+  2026-11-15: "Level N" on the "Target" line, `Play::target_level`, go-eqoa-server's `world.con_level`, 0x7E70;
+  Extended > UI > Name Plates' Target Level, on by default; off, or on any other server, the game's), and
   item links in chat on a server that offers them (the GM Jibrish's petition 1463, 2026-11-10: the item menu's Link Item
   and a Shift+click put an item in the chat line as a purple unit, a link in the chat box opens a window of the item at
   the top middle, two at most, R2 held walks the links: `itemlink.rs`, `linkplay.rs`, `net::itemlink`, go-eqoa-server's

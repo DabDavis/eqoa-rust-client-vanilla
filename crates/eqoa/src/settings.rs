@@ -944,6 +944,12 @@ pub struct ClientOptions {
     /// default. (The map's quest marks are `quest_markers`, the Quest
     /// Helper's.)
     pub head_marks: bool,
+    /// Target Level (Extended > UI > Name Plates; Live petition 5130, the owner
+    /// 2026-11-15: "yes lets allow"): on a server that offers it
+    /// (`Session::con_level_offer`, go-eqoa-server's 0x7E70), the target's
+    /// level after "Target" over its name in the target box; off, or on any
+    /// other server, the box the game's. On by default.
+    pub target_level: bool,
     /// Power Bars (Extended > UI > HUD; the server owner's of 2026-11-12, "lets
     /// add power bars to group/raid display"): a thin blue bar of each member's
     /// power under its health in the group's bars (a server's others' power,
@@ -1389,6 +1395,7 @@ impl Default for ClientOptions {
             pet_effects: true,
             buff_window: true,
             head_marks: true,
+            target_level: true,
             power_bars: true,
             raid_mercs: false,
             loading_tips: true,
@@ -1519,6 +1526,9 @@ impl ClientOptions {
         }
         if !self.head_marks {
             s.push_str("head_marks=off\n");
+        }
+        if !self.target_level {
+            s.push_str("target_level=off\n");
         }
         if !self.power_bars {
             s.push_str("power_bars=off\n");
@@ -1768,6 +1778,8 @@ impl ClientOptions {
                 ("buff_window", "off") => c.buff_window = false,
                 ("head_marks", "on") => c.head_marks = true,
                 ("head_marks", "off") => c.head_marks = false,
+                ("target_level", "on") => c.target_level = true,
+                ("target_level", "off") => c.target_level = false,
                 ("power_bars", "on") => c.power_bars = true,
                 ("power_bars", "off") => c.power_bars = false,
                 ("raid_mercs", "shown") => c.raid_mercs = true,
@@ -2136,6 +2148,12 @@ pub fn buff_window() -> bool {
 /// (`Play::plates`).
 pub fn head_marks() -> bool {
     client().head_marks
+}
+
+/// Target Level: the target's level in the target box where the server
+/// offers it (`hud::draw_target`).
+pub fn target_level() -> bool {
+    client().target_level
 }
 
 /// Power Bars: others' power under their health in the group's bars, the
@@ -3414,6 +3432,15 @@ mod tests {
         assert!(ClientOptions::from_text("power_bars=on").power_bars);
         assert!(ClientOptions::from_text("power_bars=maybe").power_bars, "the default");
         assert!(ClientOptions::from_text("mana_bars=off").power_bars, "the control: the old Mana Bars' key is not this");
+    }
+
+    #[test]
+    fn target_level_is_kept_only_when_off() {
+        assert!(ClientOptions::default().target_level, "on by default");
+        assert!(!ClientOptions::default().to_text().contains("target_level"));
+        assert!(ClientOptions { target_level: false, ..Default::default() }.to_text().contains("target_level=off\n"));
+        assert!(!ClientOptions::from_text("target_level=off").target_level);
+        assert!(ClientOptions::from_text("target_level=maybe").target_level, "the default");
     }
 
     #[test]

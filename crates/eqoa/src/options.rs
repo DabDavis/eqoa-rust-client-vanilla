@@ -935,6 +935,9 @@ impl WndOptions {
                     // (`Session::agree_head_marks`), the marks drawn or not
                     // over the NPCs' names (`Play::plates`)
                     85 => c.head_marks = !c.head_marks,
+                    // Target Level: drawn or not from the next frame
+                    // (`hud::draw_target`)
+                    TARGET_LEVEL => c.target_level = !c.target_level,
                     // Loading Tips: from the next loading screen (`tips`)
                     84 => c.loading_tips = !c.loading_tips,
                     // the Map: the map, the minimap and the waypoints from
@@ -1718,7 +1721,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 92] = [
+const EXTENDED_ITEMS: [(i32, &str); 93] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1811,6 +1814,7 @@ const EXTENDED_ITEMS: [(i32, &str); 92] = [
     (MOVE_TOUCH, "Move Touch Pad"),
     (RESET_TOUCH, "Reset Touch Pad"),
     (TOUCH_LAYOUT, "Button Layout"),
+    (TARGET_LEVEL, "Target Level"),
 ];
 
 /// The Chat Tabs rows' first item (ticket 1951): one a kind of line, in
@@ -1836,6 +1840,9 @@ const AUTO_SAVE: i32 = 105;
 const MOVE_TOUCH: i32 = 106;
 const RESET_TOUCH: i32 = 107;
 const TOUCH_LAYOUT: i32 = 108;
+/// Target Level's item (Live petition 5130). 120, not the next free, is this
+/// lane's (sibling lanes may take 109 onwards).
+const TARGET_LEVEL: i32 = 120;
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -1934,7 +1941,7 @@ const ALL_CATEGORIES: [Category; 23] = [
     // Minimap Scroll Frame (2026-11-13) here: Map's page was full
     // Spell Bar Opacity (2026-11-13, ticket 1953) here: HUD's page is full
     Category { name: "HUD Layout", items: &[76, 77, 91, SPELL_BAR_OPACITY], note: Note::Hud, group: Group::Ui },
-    Category { name: "Name Plates", items: &[27, 34, 85], note: Note::None, group: Group::Ui },
+    Category { name: "Name Plates", items: &[27, 34, 85, TARGET_LEVEL], note: Note::None, group: Group::Ui },
     Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
@@ -2107,6 +2114,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         88 => wide(if c.raid_mercs { "Shown" } else { "Hidden" }),
         83 => on_off(c.buff_window),
         85 => on_off(c.head_marks),
+        TARGET_LEVEL => on_off(c.target_level),
         84 => on_off(c.loading_tips),
         50 => on_off(c.texture_packs),
         51 => on_off(c.dump_textures),
@@ -3418,7 +3426,7 @@ mod tests {
                 ("HUD", vec!["Ability Bars", "Stacked Spell Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
                 ("Group & Raid", vec!["Raid List", "Power Bars", "Raid Mercenaries"]),
                 ("HUD Layout", vec!["Move HUD", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity"]),
-                ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers"]),
+                ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers", "Target Level"]),
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
                 ("Number Colors", n[..6].to_vec()),
                 ("Merc Colors", n[6..8].to_vec()),

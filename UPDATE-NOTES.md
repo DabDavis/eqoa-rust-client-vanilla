@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-15 · A target's level
+- **The target box shows your target's level**, "Level 32" on the "Target" line above its name, on a server that
+  allows it: no more guessing from the con colour alone. Extended > UI > Name Plates > Target Level turns it off.
+- On such a server, **/con** in chat also tells you your target's level in a line ("a moss snake is level 22."), and
+  a PlayStation 2 player can type `/t con` for the same.
+
 ## 2026-11-15 · Long spell descriptions in a window
 - **A spell's description too long for the spell book's box can be read whole**: its last line ends in a □ button.
   Press □ (Q on the keyboard), or click or tap the description, and the whole description opens in the game's

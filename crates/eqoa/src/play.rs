@@ -9608,6 +9608,7 @@ impl Play {
             heading,
             chat_open: self.wnd_chat.as_ref().is_some_and(|c| c.mode != 0),
             target_name: target.and_then(|e| e.creature.as_ref()).map(|c| c.name.clone()),
+            target_level: self.target_level(crate::settings::target_level()),
             target_hp: target.map_or(0, |e| e.p19 as i32),
             target_info: self.target_info,
             self_targeted_flag: Some(self.target) == me && self.dump.player.p2c > 0,
@@ -10348,6 +10349,18 @@ impl Play {
         }
         self.mob_shown_at = Some(now);
         self.mob_info = Some((id, level, name));
+    }
+
+    /// The target box's level (Live petition 5130): the target's, a creature's
+    /// (the entity channel's level, the one its con colour is of), only on a
+    /// server that offered it (`Session::con_level_offer`) and with Extended's
+    /// Target Level (`on`); `None`, the game's box.
+    fn target_level(&self, on: bool) -> Option<i32> {
+        if !on || !self.session.con_level_offer {
+            return None;
+        }
+        let e = self.entities.slots.iter().flatten().find(|e| e.id == self.target)?;
+        e.creature.as_ref().map(|c| c.level as i32)
     }
 
     /// `DrawTargetInfo`'s text: a player's name, guild, race, title or
@@ -11969,6 +11982,27 @@ mod commands {
         assert_eq!(centre_choice(&[far, side], Some(0x100), 7, game, drawn), Some(9));
         assert_eq!(centre_choice(&[seen(8, [0.0, 0.0, 199.0]), side], Some(0x100), 7, game, drawn), Some(8));
         assert_eq!(centre_choice(&[far], Some(0x100), 7, game, drawn), None);
+    }
+
+    /// The target box's level (Live petition 5130): the target creature's,
+    /// once the server offered it, with Target Level on. The controls: no
+    /// offer (Sandstorm, any other server), Target Level off, no target, a
+    /// target that is not a creature: none, the game's box.
+    #[test]
+    fn the_target_box_has_its_level_only_where_the_server_offered_it() {
+        let mut p = play();
+        let creature = net::entity::Creature { level: 32, ..Default::default() };
+        p.entities.slots[2] = Some(net::entity::Entity { id: 0x22, kind: net::entity::TYPE_CREATURE, creature: Some(creature), ..Default::default() });
+        p.entities.slots[3] = Some(net::entity::Entity { id: 0x33, ..Default::default() });
+        p.target = 0x22;
+        assert_eq!(p.target_level(true), None, "no offer: the game's box");
+        p.session.con_level_offer = true;
+        assert_eq!(p.target_level(true), Some(32));
+        assert_eq!(p.target_level(false), None, "Target Level off");
+        p.target = 0x33;
+        assert_eq!(p.target_level(true), None, "no creature");
+        p.target = u32::MAX;
+        assert_eq!(p.target_level(true), None, "no target");
     }
 
     /// The choice made the target: a change stops the attack and drops the

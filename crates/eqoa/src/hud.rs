@@ -32,6 +32,10 @@ pub struct HudState {
     pub chat_open: bool,
     /// The target's name when it is a creature (`GetTargetName` answering 0).
     pub target_name: Option<String>,
+    /// The target's level, drawn after "Target" (Live petition 5130): only a
+    /// creature's, only on a server that offered it (`Session::con_level_offer`)
+    /// with Extended's Target Level on; `None` is the game's box.
+    pub target_level: Option<i32>,
     /// The target's +0x19.
     pub target_hp: i32,
     /// `m_targetInfoValid` and `m_targetDisposition`.
@@ -596,6 +600,13 @@ impl Hud {
         self.glow0_on = if has { 1 } else { -1 };
         let name = wide(s.target_name.as_deref().unwrap_or(""));
         vui.draw_word_ex(ui, 408, p[0], p[1], [1.0, 1.0, 1.0, self.glow0], true);
+        // a server's: the level, "Level" (word 503) and the number, ending
+        // where the bar under it ends (Live petition 5130)
+        if let (Some(level), true) = (s.target_level, has) {
+            let text = wide(&target_level_text(vui.words.get(503, vui.language), level));
+            let x = p[0] + 174 - vui.string_width(ui, &text);
+            vui.draw_string_ex(ui, &text, x, p[1], [1.0, 1.0, 1.0, self.glow0], true);
+        }
         p[1] += 25;
         vui.blit_bar(ui, &[], [0.0; 4], p, 25, 26, 174, 3, self.glow0, 0, true);
         self.scroll.init(vui, ui, [p[0] + 87, p[1] + 12], 160, 0, 1);
@@ -701,6 +712,12 @@ impl Hud {
             patch(bearing_point(s.heading, d), crate::duel::ORANGE);
         }
     }
+}
+
+/// The target box's level: "Level" (WORDS.TXT 503, the game's own word, as
+/// `DrawTargetInfo` writes a pet's) and the number.
+fn target_level_text(word: &str, level: i32) -> String {
+    format!("{word} {level}")
 }
 
 /// Where `DrawPatch` puts a member `d` from the camera, whose heading is
@@ -939,6 +956,14 @@ mod tests {
         assert!(near(waypoint_point(std::f32::consts::FRAC_PI_2, cam, [25100.0, 15000.0]), [39.0, 28.0]));
         assert!(near(waypoint_point(0.0, cam, [25000.0, 15000.0 - 9000.0]), [39.0, 82.0]));
         assert!(patch_point(0.0, [0.0, 0.0, 5000.0]).is_none(), "the control: a member that far has no patch");
+    }
+
+    /// The target box's level is the game's word and the number ("Level 32",
+    /// as `DrawTargetInfo` writes a pet's).
+    #[test]
+    fn the_target_level_reads_as_the_games_word() {
+        assert_eq!(super::target_level_text("Level", 32), "Level 32");
+        assert_eq!(super::target_level_text("Niveau", 7), "Niveau 7");
     }
 
     /// The minimap's place (`map::mini::FRAME`): a pointer finds it in a
