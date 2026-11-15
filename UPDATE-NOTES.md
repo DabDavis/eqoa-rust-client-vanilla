@@ -7,6 +7,15 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-15 · Long spell descriptions in a window
+- **A spell's description too long for the spell book's box can be read whole**: its last line ends in a □ button.
+  Press □ (Q on the keyboard), or click or tap the description, and the whole description opens in the game's
+  inspect window, the ability's name on top, scrolled with the d-pad, the arrow keys, the wheel or a finger; △
+  (Escape), or a click off it, closes it. R1 and R2 still scroll the box itself. A description that fits looks as
+  it always did.
+- **The same at a merchant**: when an item's text or description is cut off (a spell scroll's, say), □ or a click on
+  the description shows all of it, its stats and description together.
+
 ## 2026-11-15 · Dyed Shadow Knight epics
 - **A dye now colours the whole Shadow Knight epic** (Beheader of Isthiak, Downfall, the Epic Greataxe, their
   Heirloom and Ascended copies), not only the gem on the handle: the crimson blade and bands take the dye's colour.

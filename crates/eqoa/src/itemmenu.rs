@@ -218,6 +218,19 @@ impl Inspect {
         false
     }
 
+    /// Whether frame point `p` is on the window (the spell book's and the
+    /// merchant's: a click off it closes it, △).
+    pub fn at(&self, p: [f32; 2]) -> bool {
+        let (tl, br) = (self.window.top_left(), self.window.bottom_right());
+        (tl[0] as f32..br[0] as f32).contains(&p[0]) && (tl[1] as f32..br[1] as f32).contains(&p[1])
+    }
+
+    /// The text's lines and the rows shown of them, as `focus` sized it.
+    #[cfg(test)]
+    pub fn lines_shown(&self) -> (i32, i32) {
+        (self.lines, self.shown)
+    }
+
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, cues: &mut Vec<i32>) {
         let white = [1.0; 4];
         self.window.draw(vui, r);
