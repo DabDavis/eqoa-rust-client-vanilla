@@ -273,6 +273,35 @@ pub mod testing {
         Vui::new(Default::default(), Default::default(), Vec::new())
     }
 
+    /// `NullRaster`'s font that keeps every string drawn (a window's text).
+    #[derive(Default)]
+    pub struct Said(pub Vec<String>);
+
+    impl crate::ui::Layout for Said {}
+
+    impl Raster for Said {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16]) {
+            self.0.push(String::from_utf16_lossy(s));
+        }
+        fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+            self.0.push(String::from_utf16_lossy(s));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
     /// A picture `.0` frame pixels wider each side than 4:3 that records
     /// each blit's anchor, place and size (`ui::Layout`).
     pub struct Wide(pub i32, pub render::ui::Anchor, pub Vec<(render::ui::Anchor, [i32; 2], [i32; 2])>);

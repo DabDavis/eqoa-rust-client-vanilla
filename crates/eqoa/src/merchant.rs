@@ -175,6 +175,8 @@ enum Focus {
     List,
     Quantity,
     MBox,
+    /// the selection's whole text (□ on one cut off: `more`)
+    Inspect,
 }
 
 /// One of the six stat lines and its colour.
@@ -195,6 +197,16 @@ pub struct Merchant {
     window: Window,
     stats: String,
     desc: String,
+    /// The selection's text or description, as last drawn, longer than its
+    /// box: □ (the keyboard's Q), a click or a tap on the description opens
+    /// it whole in the item menu's `VIWndInspect` (the player Felthious's
+    /// petition 2107, for the spells' descriptions, a scroll's too)
+    more: bool,
+    /// The selection's whole text, for `inspect` (`Info::inspect_item`)
+    whole: String,
+    inspect: crate::itemmenu::Inspect,
+    /// Where the description's box was drawn (frame x0 y0 x1 y1)
+    desc_at: [i32; 4],
     price: i32,
     coin: i32,
     lines: Vec<Line>,
@@ -218,6 +230,10 @@ impl Default for Merchant {
             window: Window::default(),
             stats: String::new(),
             desc: String::new(),
+            more: false,
+            whole: String::new(),
+            inspect: Default::default(),
+            desc_at: [0; 4],
             price: -1,
             coin: 0,
             lines: Vec::new(),
@@ -291,7 +307,10 @@ impl Merchant {
                 }
                 None => Vec::new(),
             },
+            Focus::List if self.more && in_rect(self.desc_at, p) => vec![key::SQUARE],
             Focus::List => self.list.row_at(p).map(|row| self.list.pick(row)).into_iter().collect(),
+            // its legend's △ is a glyph; off the window, △
+            Focus::Inspect => if self.inspect.at(p) { Vec::new() } else { vec![key::TRIANGLE] },
             Focus::Quantity => self.quantity.point(p),
             Focus::MBox => self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
         }
@@ -342,6 +361,14 @@ impl Merchant {
                         self.open(vui, r, &greeting);
                     }
                     19 | 20 | 138 | 139 => self.list.key_up_down(key, true),
+                    // □ (the keyboard's Q): a text cut off, whole in a window
+                    81 | 113 | 133 if self.more => {
+                        cues.push(13);
+                        self.inspect.set(1, -1, &self.whole);
+                        self.inspect.visible = true;
+                        self.inspect.focus(vui, r);
+                        self.focus = Focus::Inspect;
+                    }
                     13 | 134 => {
                         if view.shop.pending {
                             cues.push(9);
@@ -371,6 +398,12 @@ impl Merchant {
                 }
                 None => {}
             },
+            Focus::Inspect => {
+                if self.inspect.key(key, down, cues) {
+                    self.inspect.visible = false;
+                    self.focus = Focus::List;
+                }
+            }
             Focus::MBox => {
                 if !down {
                     return;
@@ -447,6 +480,7 @@ impl Merchant {
     fn update_info(&mut self, view: &View, out: &mut Vec<MerchantOut>) {
         self.stats.clear();
         self.desc.clear();
+        self.whole.clear();
         self.lines.clear();
         let inv = &view.info.inv.items;
         let wares = &view.shop.wares.items;
@@ -460,6 +494,7 @@ impl Merchant {
         let Some(it) = it else { return };
         self.stats = if self.mode == 1 { view.info.inv_item(sel, 0) } else { view.info.merchant_item(it) };
         self.desc = it.item.desc.clone();
+        self.whole = view.info.inspect_item(it);
         self.price = if self.mode == 1 { sell_price(it, view.shop.sell_rate) } else { merchant_price(it, view.shop.buy_rate) };
         self.coin = view.coin;
         if it.item.wear_slot == -1 {
@@ -496,8 +531,21 @@ impl Merchant {
     fn draw_info(&mut self, vui: &Vui, r: &mut dyn Raster) {
         let black = UI_COLORS[0];
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
-        self.window.text_box(vui, r, &wide(&self.stats), 20, 0, 270, 11, black, 2);
-        self.window.text_box(vui, r, &wide(&self.desc), 20, 12, 445, 3, black, 2);
+        let (stats, desc) = (wide(&self.stats), wide(&self.desc));
+        self.window.text_box(vui, r, &stats, 20, 0, 270, 11, black, 2);
+        // cut off (the text or the description): the description's last row
+        // ends in □, the glyph that opens it whole (narrowed by the glyph, it
+        // wraps again); what fits is drawn as the game draws it
+        self.more = !self.whole.is_empty() && (self.window.count_lines(vui, r, &stats, 270) > 11 || self.window.count_lines(vui, r, &desc, 445) > 3);
+        let mut w = 445;
+        if self.more {
+            let glyph = wide("|s");
+            let gw = self.window.text_width(vui, r, &glyph);
+            w = 445 - gw - 4;
+            self.window.text(vui, r, &glyph, 20 + 445 - gw, 14, black, 0);
+        }
+        self.window.text_box(vui, r, &desc, 20, 12, w, 3, black, 2);
+        self.desc_at = rows_rect(&self.window, vui, r, 20, 12, 445, 3);
         if self.price != -1 {
             self.window.text(vui, r, &wide(&format!("{}:", word(505))), 310, 0, black, 0);
             self.window.text_box(vui, r, &wide(&format!("{} {}", self.price, word(479))), 310, 1, 160, 1, black, 2);
@@ -611,7 +659,15 @@ impl Merchant {
         if self.focus == Focus::MBox {
             self.mbox.draw(vui, r, now);
         }
+        if self.focus == Focus::Inspect {
+            self.inspect.draw(vui, r, cues);
+        }
     }
+}
+
+/// Whether frame point `p` is in `rect` (x0 y0 x1 y1).
+fn in_rect(rect: [i32; 4], p: [f32; 2]) -> bool {
+    (rect[0] as f32..rect[2] as f32).contains(&p[0]) && (rect[1] as f32..rect[3] as f32).contains(&p[1])
 }
 
 #[cfg(test)]
@@ -773,6 +829,60 @@ mod tests {
             assert_eq!(rows(2), (40, 40), "buying: a merchant's 40");
         });
         assert_eq!(rows(1), (40, 40), "the control: CLIENT's 40");
+    }
+
+    /// A ware whose description is cut off in its three rows (a scroll's,
+    /// petition 2107) ends the box's last row in □; □ (or a click on the
+    /// description) opens its whole text in the inspect window (its name,
+    /// its lines and every word of its description), △ closes it back to
+    /// the list. The control: a ware that fits, □ and a click on the box do
+    /// nothing (the list keeps the focus).
+    #[test]
+    fn a_cut_off_description_opens_whole() {
+        use crate::pointer::testing::{Said, vui};
+        let vui = vui();
+        let mut long = item(10, 0, 0);
+        long.item.name = "Scroll of Gift".into();
+        long.item.desc = (0..60).map(|i| format!("word{i}")).collect::<Vec<_>>().join(" ");
+        let mut short = item(10, 0, 0);
+        short.item.desc = "A scroll.".into();
+        let wares = ItemList { p04: 0, items: vec![long, short] };
+        let shop = Shop { id: Some(7), sell_rate: 100, buy_rate: 100, wares, greeting: wide("Hello"), pending: false };
+        let (inv, base) = (ItemList::default(), [0; 29]);
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let (can_use, icon) = (|_: &NetItem| true, |_: &NetItem| 1);
+        let view = View { info: &info, shop: &shop, coin: 0, can_use: &can_use, inv_icon: &icon };
+        let (mut cues, mut out) = (Vec::new(), Vec::new());
+        let mut r = Said::default();
+        let mut m = Merchant::default();
+        m.open(&vui, &mut r, &wide("Hello"));
+        m.key(&vui, &mut r, &view, 134, true, &mut cues, &mut out); // Buy
+        assert_eq!((m.mode, m.focus), (2, Focus::List));
+        m.draw(&vui, &mut r, &view, &mut cues, &mut out);
+        assert!(m.more, "cut off");
+        assert!(!r.0.iter().any(|s| s.contains("word59")), "its end is not in the box");
+        let on_box = [(m.desc_at[0] + 100) as f32, (m.desc_at[1] + 10) as f32];
+        assert_eq!(m.point(on_box), vec![key::SQUARE]);
+        m.key(&vui, &mut r, &view, 133, true, &mut cues, &mut out);
+        assert_eq!(m.focus, Focus::Inspect);
+        let mut r = Said::default();
+        m.draw(&vui, &mut r, &view, &mut cues, &mut out);
+        let said = r.0.join(" ");
+        assert!(said.contains("Scroll of Gift"), "its name");
+        for i in 0..60 {
+            assert!(said.split_whitespace().any(|w| w == format!("word{i}")), "word{i} in the window");
+        }
+        assert_eq!(m.point([20.0, 20.0]), vec![key::TRIANGLE], "off the window: △");
+        m.key(&vui, &mut r, &view, 132, true, &mut cues, &mut out);
+        assert_eq!(m.focus, Focus::List, "△: back to the list");
+        assert!(!out.iter().any(|o| matches!(o, MerchantOut::Buy(..))), "nothing bought");
+        // the control: a ware that fits
+        m.list.sel = 1;
+        m.draw(&vui, &mut r, &view, &mut cues, &mut out);
+        assert!(!m.more);
+        assert!(m.point(on_box).is_empty());
+        m.key(&vui, &mut r, &view, 133, true, &mut cues, &mut out);
+        assert_eq!(m.focus, Focus::List, "□: nothing");
     }
 
     /// The menu's Sell is chosen at once by a click; then the list takes

@@ -885,6 +885,16 @@ or a browser (each described where it lives below):
   again (`SelectCategory`, which put the cursor on the first line) keeping each list's line and scroll, and the next
   rank of a bought rank's chain put in its place and selected (`ClassMastery::refresh_kept`; nothing new on the wire;
   the game's order otherwise). Proof: `classmastery`'s unit test, the game's refresh its control.
+- **A description read whole** (the player Felthious's petition 2107, approved 2026-11-15): a spell book
+  description longer than its four rows, or a merchant's item whose text or description is cut off, ends the box's
+  last row in □ (wrapped short of it); □, the keyboard's Q, or a click or a tap on the box opens it in the item
+  menu's `VIWndInspect`, the game's own (`itemmenu::Inspect`: the ability's name and description, the item's
+  `Info::inspect_item`), the arrows, the wheel and a finger scrolling it, △ or a click off it closing it. One that
+  fits is drawn as the game draws it. The inventory's items had the game's Inspect already. An ability's
+  description is read into CLIENT's 256 bytes (`dump::read_ability`: 127 characters), so a server's longer text
+  never reaches the window; an item's into 512. Proof: `spellbook`'s
+  and `merchant`'s `a_cut_off_description_opens_whole` (every word drawn in the window; a description that fits
+  the control).
 - **Ignore Shouts kept** until Restore Shouts, across logins (the game keeps
   none, and a server forgets it at the next login).
 - **Several windows at once** (multiboxing): each window reads its own

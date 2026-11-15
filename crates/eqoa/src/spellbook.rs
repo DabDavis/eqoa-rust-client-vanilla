@@ -126,6 +126,18 @@ pub struct SpellBook {
     /// its top when another ability is selected
     desc_top: i32,
     desc_of: i64,
+    /// The description, as last drawn, longer than its four rows: □ (the
+    /// keyboard's Q), a click or a tap on it opens it whole (`inspect`; the
+    /// player Felthious's petition 2107, "open the discription for spells in
+    /// a new window if its bigger than what we can read")
+    more: bool,
+    /// The ability's name and its whole description, for `inspect`
+    whole: String,
+    /// The window it is read whole in: the item menu's `VIWndInspect`, the
+    /// game's own (Triangle closes it, the arrows scroll it)
+    inspect: crate::itemmenu::Inspect,
+    /// □ pressed: the window opened at the next draw (where the font is)
+    inspect_due: bool,
     window: Window,
     flash: KeyFlash,
     popup: MiniMenu,
@@ -157,6 +169,10 @@ impl Default for SpellBook {
             desc: Vec::new(),
             desc_top: 0,
             desc_of: -1,
+            more: false,
+            whole: String::new(),
+            inspect: Default::default(),
+            inspect_due: false,
             window: Window::default(),
             flash: KeyFlash::default(),
             popup: MiniMenu::fixed(&POPUP.map(|(w, m)| (w, m, 0))),
@@ -176,6 +192,10 @@ impl SpellBook {
     /// choosing a slot, one chosen, the chosen one taken (✕). The keys to
     /// press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        if self.inspect.visible {
+            // its legend's △ is a glyph; off the window, △
+            return if self.inspect.at(p) { Vec::new() } else { vec![key::TRIANGLE] };
+        }
         if self.popup.visible {
             return match self.popup.point(p) {
                 Some(k) => k.into_iter().collect(),
@@ -183,7 +203,9 @@ impl SpellBook {
             };
         }
         match self.hits.at(p) {
-            Some(DESC) => Vec::new(), // the wheel's (`wheel`), not a click's
+            // a description that is cut off: opened whole (□); else the wheel's
+            Some(DESC) if self.more && self.mode == 0 => vec![key::SQUARE],
+            Some(DESC) => Vec::new(),
             Some(h) if h >= SLOT => {
                 let j = h - SLOT;
                 if self.mode != 2 {
@@ -224,6 +246,8 @@ impl SpellBook {
     /// count for the expansion, the popup down, the fade, the window.
     pub fn open(&mut self, vui: &Vui, r: &dyn Raster, expansion: u32, now: i64) {
         self.popup.visible = false;
+        self.inspect.visible = false;
+        self.inspect_due = false;
         self.mode = 0;
         self.sel = 0;
         self.top = 0;
@@ -290,6 +314,7 @@ impl SpellBook {
     fn build_text(&mut self, vui: &Vui, abilities: &BTreeMap<i64, Ability>) {
         self.text.clear();
         self.desc.clear();
+        self.whole.clear();
         let Some(a) = self.rows.get(self.sel.max(0) as usize).filter(|_| self.sel >= 0).and_then(|r| abilities.get(&r.id)) else { return };
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
         let mut s = format!("{}\n", a.name);
@@ -327,12 +352,23 @@ impl SpellBook {
         }
         self.text = wide(&s);
         self.desc = wide(&a.desc);
+        self.whole = format!("{}\n \n{}", a.name, a.desc);
     }
 
     /// A key, down or up (the game's codes): the popup's while it is up;
     /// a slot is chosen of `bars` bars' (`slot_by`).
     pub fn key(&mut self, abilities: &BTreeMap<i64, Ability>, bars: i32, key: i32, down: bool, now: i64) -> Vec<Out> {
         let mut out = Vec::new();
+        if self.inspect.visible || self.inspect_due {
+            let mut cues = Vec::new();
+            if self.inspect.key(key, down, &mut cues) {
+                self.inspect.visible = false;
+                self.inspect_due = false;
+                self.refocus(now);
+            }
+            out.extend(cues.into_iter().map(Out::Sound));
+            return out;
+        }
         if self.popup.visible {
             self.popup_key(abilities, key, down, now, &mut out);
             return out;
@@ -358,6 +394,12 @@ impl SpellBook {
                     }
                     _ => {}
                 }
+            }
+            // □ (the keyboard's Q): a description cut off, whole in a window
+            81 | 113 | 133 if self.mode == 0 && self.more => {
+                out.push(Out::Sound(13));
+                self.flash.reset();
+                self.inspect_due = true;
             }
             // R1 and R2: the description up and down a line (`desc_top`)
             142 if self.mode == 0 => self.desc_top = (self.desc_top - 1).max(0),
@@ -466,7 +508,7 @@ impl SpellBook {
     /// PageUp/PageDown), held within its text as it is drawn. False off the
     /// box (the wheel then the list's up and down).
     pub fn wheel(&mut self, p: [f32; 2], lines: f32) -> bool {
-        if self.mode != 0 || self.popup.visible || self.hits.at(p) != Some(DESC) {
+        if self.mode != 0 || self.popup.visible || self.inspect.visible || self.hits.at(p) != Some(DESC) {
             return false;
         }
         self.desc_top = (self.desc_top - lines.round() as i32).max(0);
@@ -664,9 +706,21 @@ impl SpellBook {
             }
             let (tl, br) = (self.window.top_left(), self.window.bottom_right());
             self.hits.push([tl[0], tl[1], br[0], br[1]], DESC);
-            let lines = self.window.text_box(vui, r, &desc, 0, 0, 280, 1000, black, 0xFFFF_FFFF);
+            let mut lines = self.window.text_box(vui, r, &desc, 0, 0, 280, 1000, black, 0xFFFF_FFFF);
+            // cut off: its last row ends in □, the glyph that opens it whole
+            // (narrowed by the glyph, it wraps again); one that fits is drawn
+            // as the game draws it
+            self.more = lines > 4;
+            let mut w = 280;
+            if self.more {
+                let glyph = wide("|s");
+                let gw = self.window.text_width(vui, r, &glyph);
+                w = 280 - gw - 4;
+                lines = self.window.text_box(vui, r, &desc, 0, 0, w, 1000, black, 0xFFFF_FFFF);
+                self.window.text(vui, r, &glyph, 280 - gw, 3, black, 0);
+            }
             self.desc_top = self.desc_top.clamp(0, (lines - 4).max(0));
-            self.window.text_box(vui, r, &desc, 0, 0, 280, 4, black, 2 | ((self.desc_top as u32) << 24));
+            self.window.text_box(vui, r, &desc, 0, 0, w, 4, black, 2 | ((self.desc_top as u32) << 24));
         } else if self.mode == 2 {
             let s = wide(&format!("|x {}", vui.words.get(268, vui.language)));
             self.window.text_box(vui, r, &s, 0, 0, 280, 4, black, 2);
@@ -743,6 +797,18 @@ impl SpellBook {
         if self.popup.visible {
             let mut cues = Vec::new();
             self.popup.draw(vui, r, &Menus::default(), now, &mut cues);
+            out.extend(cues.into_iter().map(Out::Sound));
+        }
+        // the description whole (□), over the book
+        if std::mem::take(&mut self.inspect_due) {
+            self.inspect.set(1, -1, &self.whole);
+            self.inspect.visible = true;
+            self.inspect.focus(vui, r);
+            self.x44 = false;
+        }
+        if self.inspect.visible {
+            let mut cues = Vec::new();
+            self.inspect.draw(vui, r, &mut cues);
             out.extend(cues.into_iter().map(Out::Sound));
         }
         out
@@ -1058,6 +1124,69 @@ mod tests {
         b.key(&map, 1, 143, true, 0);
         b.draw(&vui, &mut r, &map, 0, 1, 0);
         assert_eq!(b.desc_top, 0, "the control: a short one stays");
+    }
+
+    /// A description longer than its four rows (petition 2107) ends its last
+    /// row in □ and wraps short of it; □ (the keyboard's Q too), a click or a
+    /// tap on the box opens the game's inspect window over the book with the
+    /// name and the whole description, which the arrows scroll to its end,
+    /// every word drawn, and △ (or a click off it) closes, back to the list;
+    /// the list's keys meanwhile move nothing. The control: one that fits is
+    /// drawn as before (the full width, no glyph) and □ and a click on it do
+    /// nothing.
+    #[test]
+    fn a_cut_off_description_opens_whole() {
+        use crate::pointer::testing::{NullRaster, Said, vui};
+        let vui = vui();
+        let long: String = (0..120).map(|i| format!("word{i} ")).collect();
+        let mut a = ability(1, 7, 1, false, -1);
+        a.name = "Gift of Health".into();
+        a.desc = long.trim_end().into();
+        let mut b2 = ability(2, 8, 1, false, -1);
+        b2.desc = "short".into();
+        let (mut b, map) = book(&[a, b2]);
+        let mut r = Said::default();
+        b.open(&vui, &r, 0, 0);
+        b.draw(&vui, &mut r, &map, 0, 1, 0);
+        assert!(b.more, "cut off");
+        assert!(r.0.iter().any(|s| s.ends_with("...")), "its last row ends as the game cuts it");
+        assert!(!r.0.iter().any(|s| s.contains("word119")), "the end is not in the box");
+        assert_eq!(b.point([300.0, 270.0]), vec![key::SQUARE], "a click on the box: □");
+        assert_eq!(b.key(&map, 1, 133, true, 0), vec![Out::Sound(13)]);
+        assert!(b.key(&map, 1, 133, false, 0).is_empty());
+        let mut r = Said::default();
+        b.draw(&vui, &mut r, &map, 0, 1, 10);
+        assert!(b.inspect.visible, "the window, over the book");
+        let (lines, shown) = b.inspect.lines_shown();
+        assert!(lines > shown, "longer than the window: it scrolls ({lines} lines, {shown} shown)");
+        assert!(r.0.iter().any(|s| s == "Gift of Health"), "its name first");
+        // the list's keys go to the window: down scrolls it, the book's row stays
+        b.key(&map, 1, 139, true, 20);
+        for t in 0..400 {
+            b.draw(&vui, &mut r, &map, 0, 1, 30 + t);
+        }
+        b.key(&map, 1, 139, false, 500);
+        assert_eq!(b.sel, 0, "the book's selection did not move");
+        let said = r.0.join(" ");
+        for i in 0..120 {
+            assert!(said.split_whitespace().any(|w| w == format!("word{i}")), "word{i} drawn in the window");
+        }
+        // a click off the window is △, which closes it
+        assert_eq!(b.point([20.0, 20.0]), vec![key::TRIANGLE]);
+        assert!(b.point([320.0, 170.0]).is_empty(), "on the window: its glyphs'");
+        assert_eq!(b.key(&map, 1, 132, true, 600), vec![Out::Sound(8)]);
+        assert!(!b.inspect.visible && b.mode == 0, "back to the list");
+        assert!(b.key(&map, 1, 132, false, 600).is_empty());
+        // the control: one that fits
+        b.sel = 1;
+        let mut fits = Said::default();
+        b.draw(&vui, &mut fits, &map, 0, 1, 700);
+        assert!(!b.more);
+        assert!(fits.0.iter().any(|s| s == "short"));
+        assert!(b.point([300.0, 270.0]).is_empty(), "a click on a box that fits: nothing");
+        assert!(b.key(&map, 1, 133, true, 800).is_empty(), "□: nothing");
+        b.draw(&vui, &mut NullRaster, &map, 0, 1, 900);
+        assert!(!b.inspect.visible);
     }
 
     /// Arrange: hold one, move, X sends 0x003A (held index, target index);
