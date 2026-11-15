@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-15 · Tailoring in the Recipe Book
+- **Character > Tradeskills > Recipe Book now lists Tailoring**, fourth after Jewelry, Armor and Weapons: choose it
+  to see your tailoring recipes, as the other three show theirs. Until now only a server's patch added the row, and
+  eqoaclassic.com sends none, so neither the web page nor the downloaded game had it.
+- Jewelry, Armor and Weapons are where they were. A PlayStation 2 shows the row only with a patch that adds it.
+
 ## 2026-11-15 · Every race's monk kicks and strikes
 - **A monk of any race now shows the monk's moves**: Flame Kick, Spinning Kick, Lightning Kick and Force Kick are
   the flying kick, and the Punches and Strikes, Lunging Mantis, Swooping Eagle, Pouncing Tiger and Roaring Dragon

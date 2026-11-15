@@ -971,6 +971,32 @@ pub fn own_entry(e: &crate::client_image::MenuEntry) -> bool {
     (e.msg == 0 && e.id == RAID_ENTRY) || e.msg == crate::play::MSG_DISMISS_MERC
 }
 
+/// The Recipe Book's title (`VIMenuDef` 0x00CCED90's word: "Recipe Book").
+const RECIPE_BOOK_WORD: i32 = 1547;
+/// `VIClientPart3834C::Use`'s message for a skill's recipe book (its id the skill).
+const MSG_RECIPE_BOOK: u32 = 0xA701_0000;
+/// Tailoring: its word (1479, "Tailoring") and its skill.
+const TAILORING: (i32, i32) = (1479, 2);
+
+/// Character > Tradeskills > Recipe Book with Tailoring (skill 2) fourth, after
+/// the disc's Jewelry, Armor and Weapons (3, 1, 0), as Sandstorm's S2 and ours
+/// put it (a 4-entry table of their own, the disc's three and then word 1479 with
+/// id 2): a server that serves no S2 (eqoaclassic.com since 2026-10-19), or a
+/// page whose patch is not fetched, left the book with no Tailoring though the
+/// server crafts it (petition 5176). A book that has it already (a patch's) is
+/// left as it is; the disc's three are never moved.
+fn recipe_book_tailoring(menus: &mut Menus) {
+    for m in menus.list.iter_mut().filter(|m| m.x04 == RECIPE_BOOK_WORD) {
+        let books = || m.entries.iter().filter(|e| e.msg == MSG_RECIPE_BOOK);
+        let Some(like) = books().next().copied() else { continue };
+        if books().any(|e| e.id == TAILORING.1) {
+            continue;
+        }
+        let (word, id) = TAILORING;
+        m.entries.push(crate::client_image::MenuEntry { word, id, ..like });
+    }
+}
+
 impl StartData {
     pub fn from_image(img: &crate::client_image::ClientImage) -> Self {
         let mut menus = Menus::default();
@@ -989,6 +1015,7 @@ impl StartData {
         let slot_words = (0..23u32).map(|k| (img.i32_at(0x00CDF6F8 + 8 * k), img.i32_at(0x00CDF6FC + 8 * k) as i64)).collect();
         let buddy_menu = menus.def(img, 0x00CD03B0);
         let ignore_menu = menus.def(img, 0x00CD0340);
+        recipe_book_tailoring(&mut menus);
         StartData { menus, tables, tables_test, bounds, world_words, item_counts, attack_words, slot_words, buddy_menu, ignore_menu, menu, duel_menu: None, raid_menu: None, raid_groups_menu: None }
     }
 
@@ -1673,5 +1700,83 @@ pub(crate) mod tests {
         d.set_raid(Some((&main[..1], &[])));
         assert!(d.menus.list[moves].entries.is_empty(), "no group rows: empty");
         assert_eq!(text(&d, (0x7E48_0C02, 0)), None, "their words gone");
+    }
+}
+
+#[cfg(test)]
+mod recipe_book_tests {
+    use super::*;
+    use crate::client_image::{Menu, MenuEntry};
+
+    fn book(words_ids: &[(i32, i32)]) -> Menus {
+        let mut m = Menus::default();
+        let entries = words_ids.iter().map(|&(word, id)| MenuEntry { word, id, msg: MSG_RECIPE_BOOK, ..Default::default() }).collect();
+        m.push(Menu { x00: -1, x04: RECIPE_BOOK_WORD, entries });
+        m
+    }
+
+    fn rows(m: &Menus) -> Vec<(i32, u32, i32)> {
+        m.list[0].entries.iter().map(|e| (e.word, e.msg, e.id)).collect()
+    }
+
+    /// Petition 5176: the disc's book (Jewelry 3, Armor 1, Weapons 0) gains
+    /// Tailoring (1479, skill 2) last, the three left where they are; a book a
+    /// patch gave it already, or one built again, keeps one; a menu that is no
+    /// Recipe Book is never touched.
+    #[test]
+    fn the_recipe_book_gains_tailoring() {
+        let disc = [(1476, 3), (1477, 1), (1478, 0)];
+        let mut m = book(&disc);
+        recipe_book_tailoring(&mut m);
+        let want = vec![(1476, MSG_RECIPE_BOOK, 3), (1477, MSG_RECIPE_BOOK, 1), (1478, MSG_RECIPE_BOOK, 0), (1479, MSG_RECIPE_BOOK, 2)];
+        assert_eq!(rows(&m), want);
+        recipe_book_tailoring(&mut m);
+        assert_eq!(rows(&m), want, "again, still one");
+        let mut patched = book(&[(1476, 3), (1477, 1), (1478, 0), (1479, 2)]);
+        recipe_book_tailoring(&mut patched);
+        assert_eq!(rows(&patched), want, "a patch's book is left as it is");
+        let mut other = Menus::default();
+        other.push(Menu { x00: -1, x04: 415, entries: vec![MenuEntry { word: 1547, ..Default::default() }] });
+        recipe_book_tailoring(&mut other);
+        assert_eq!(other.list[0].entries.len(), 1, "another menu is never touched");
+    }
+
+    /// The start menu read off CLIENT's image: Character > Tradeskills > Recipe
+    /// Book shows Jewelry, Armor, Weapons and Tailoring on the disc's image (a
+    /// server that serves no S2, eqoaclassic.com's; the web page's), and the same
+    /// four, once each, under Sandstorm's S2 and ours; picking Tailoring asks for
+    /// skill 2's book and opens it. Skipped without CLIENT's image
+    /// (`run/client.bin`); each S2 skipped when it is not beside the repository.
+    #[test]
+    fn every_client_image_shows_tailoring() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let Ok(img) = std::fs::read(root.join("run/client.bin")) else {
+            eprintln!("SKIP: no run/client.bin");
+            return;
+        };
+        let builds = std::env::var_os("EQOA_S2_BUILDS").map(std::path::PathBuf::from).unwrap_or_else(|| root.join(".."));
+        let mut images = vec![("disc", None)];
+        for (name, rel) in [("sandstorm", "extracted-assets/sandstorm-patch-20261015/S2"), ("ours", "go-eqoa-server/patches/serve/S2")] {
+            match std::fs::read(builds.join(rel)) {
+                Ok(s2) => images.push((name, crate::s2::Rules::from_patch(&crate::s2::Patch::parse(&s2).unwrap()).image.clone())),
+                Err(_) => eprintln!("SKIP: no {name} S2 at {}", builds.join(rel).display()),
+            }
+        }
+        for (name, patch) in images {
+            let c = crate::client_image::ClientImage::from_bytes(img.clone()).unwrap().patched(patch);
+            let mut d = StartData::from_image(&c);
+            let tradeskills = c.i32_at(0x00CC_EDE0 + 4);
+            let books: Vec<_> = d.menus.list.iter().filter(|m| m.x04 == RECIPE_BOOK_WORD).map(|m| m.entries.iter().map(|e| (e.word, e.msg, e.id)).collect::<Vec<_>>()).collect();
+            assert!(!books.is_empty(), "{name}: a Recipe Book");
+            for b in &books {
+                assert_eq!(b, &[(1476, MSG_RECIPE_BOOK, 3), (1477, MSG_RECIPE_BOOK, 1), (1478, MSG_RECIPE_BOOK, 0), (1479, MSG_RECIPE_BOOK, 2)], "{name}");
+            }
+            let bars = tests::shown(&mut d, false, &[415, tradeskills, RECIPE_BOOK_WORD]);
+            assert_eq!(bars, ["word 1476", "word 1477", "word 1478", "word 1479"], "{name}: the bars as drawn");
+        }
+        // Tailoring's entry asks for skill 2's list and opens its book
+        let mut craft = crate::craft::Craft::default();
+        let out = craft.use_id(MSG_RECIPE_BOOK, TAILORING.1, &Default::default());
+        assert!(out.iter().any(|o| matches!(o, crate::craft::CraftOut::OpenRecipe(2))), "{out:?}");
     }
 }
