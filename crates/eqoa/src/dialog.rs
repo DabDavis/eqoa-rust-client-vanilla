@@ -1,6 +1,10 @@
 //! The two dialog windows: `VIWndPrivChat` (an NPC's words, "Done" under
-//! them) and `VIWndResponse` (a dialog with answers to pick, three a page,
-//! More / Back / Close).
+//! them) and `VIWndResponse` (a dialog with answers to pick, More / Back /
+//! Close). CLIENT shows three answers a page; vanilla shows `PAGE` (six, every
+//! answer a 0x0034 can carry) so a coach's or a merchant-like list is one box
+//! (the owner, 2026-11-15: "the coach page to select coaches and the other
+//! type pages need to be stacked higher for choices instead of More... to show
+//! 3 per page").
 
 use vi::ui::{Raster, Vui, Window, wide};
 
@@ -58,6 +62,9 @@ struct Option_ {
     text: Vec<u16>,
 }
 
+/// The answers a page of the response window shows (CLIENT's three).
+pub const PAGE: i32 = 6;
+
 /// `VIWndResponse`.
 #[derive(Default)]
 pub struct Response {
@@ -100,16 +107,16 @@ impl Response {
         self.options.clear();
         let count = d.options.len() as i32;
         let mut i = self.first;
-        while self.options.len() < 6 && i < count.min(self.first + 3) {
+        while (self.options.len() as i32) < PAGE && i < count.min(self.first + PAGE) {
             self.options.push(Option_ { index: i, kind: 1, text: d.options[i as usize].clone() });
             i += 1;
         }
         let word = |n: i32| wide(vui.words.get(n, vui.language));
-        if self.first + 3 < count {
+        if self.first + PAGE < count {
             self.options.push(Option_ { index: i, kind: 2, text: word(245) });
             i += 1;
         }
-        if self.first >= 3 {
+        if self.first >= PAGE {
             self.options.push(Option_ { index: i, kind: 3, text: word(217) });
             i += 1;
         }
@@ -158,12 +165,12 @@ impl Response {
                         return Answer::Send(self.dialog.id, 255);
                     }
                     2 => {
-                        self.first += 3;
+                        self.first += PAGE;
                         self.build(vui);
                         self.step(1, time);
                     }
                     3 => {
-                        self.first -= 3;
+                        self.first -= PAGE;
                         self.build(vui);
                         self.step(-1, time);
                     }

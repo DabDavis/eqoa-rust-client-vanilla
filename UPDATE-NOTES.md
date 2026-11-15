@@ -7,6 +7,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-15 · Six choices to a page
+- **A box of choices (a coachman's destinations, a waysender's, a merchant-like list, a quest's answers) now shows
+  up to six at once**, one under another, instead of three and "More…": a coach's five stops are all on one page.
+
 ## 2026-11-15 · Dyed Shadow Knight epics
 - **A dye now colours the whole Shadow Knight epic** (Beheader of Isthiak, Downfall, the Epic Greataxe, their
   Heirloom and Ascended copies), not only the gem on the handle: the crimson blade and bands take the dye's colour.
