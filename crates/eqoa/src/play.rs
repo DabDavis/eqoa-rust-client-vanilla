@@ -923,7 +923,9 @@ impl Play {
         let d = crate::dialog::DialogBox {
             id,
             text: vi::ui::expand(text, 128, true, &ctx),
-            options: options.iter().take(6).map(|o| vi::ui::expand(o, 64, true, &ctx)).collect(),
+            // CLIENT keeps six (m_options[6]); a server told this client's
+            // room (`net::session::OP_DIALOG_ROOM`) sends up to `dialog::PAGE`
+            options: options.iter().take(crate::dialog::PAGE as usize).map(|o| vi::ui::expand(o, 64, true, &ctx)).collect(),
         };
         if self.mode == 0 {
             self.show_dialog_box(d);

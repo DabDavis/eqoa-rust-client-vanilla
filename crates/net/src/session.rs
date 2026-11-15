@@ -795,6 +795,19 @@ pub const OP_MOB_INFO: u16 = 0x7E4E;
 /// type /con ("/t con") for a line of it.
 pub const OP_CON_LEVEL_OFFER: u16 = 0x7E70;
 
+/// go-eqoa-server's own: how many answers an NPC's box (0x0034) may hold (the
+/// owner, 2026-11-15: "lets increase the dialog box for heroic dungeons,
+/// coachmen etc. to stack higher before pagination"). Both ways, a u32: the
+/// server's offer once the player is in the world, its most; this client's
+/// answer at once, [`DIALOG_ROOM`]. The server then fills its boxes to the
+/// lesser of the two, paging only past that. CLIENT has no such case and its
+/// box holds six, so a PS2 ignores the offer and keeps six.
+pub const OP_DIALOG_ROOM: u16 = 0x7E71;
+
+/// The answers this client's response window shows at once
+/// (`eqoa::dialog::PAGE`), told a server that offers more ([`OP_DIALOG_ROOM`]).
+pub const DIALOG_ROOM: u32 = 12;
+
 /// go-eqoa-server's own: item links in chat (the GM Jibrish's petition 1463,
 /// `crate::itemlink`). Both ways: the server's offer at every world entry (a
 /// u8, the layout, `itemlink::LAYOUT`), and the client's answer (a u8, 1 to be
@@ -2753,6 +2766,14 @@ impl Session {
                     self.con_level_offer = true;
                 }
             }
+            // the server's most answers in a box offered (each world entry):
+            // told this client's own at once
+            OP_DIALOG_ROOM => {
+                let most = r.u32();
+                if !r.error && most > 6 {
+                    self.send_op_int(OP_DIALOG_ROOM, DIALOG_ROOM);
+                }
+            }
             // item links offered (again at every world entry), in the layout
             // this client reads: told afresh whether it takes them
             // (`agree_item_links`); another layout is left alone
@@ -3638,6 +3659,25 @@ mod tests {
         assert_eq!(s.record.as_ref().unwrap().len(), 0, "answered with nothing");
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert!(!s.con_level_offer, "a new connection forgets it");
+    }
+
+    /// More answers in an NPC's box (go-eqoa-server's 0x7E71): an offer of
+    /// more than CLIENT's six is answered at once with this client's room, a
+    /// u32 (go-eqoa-server's TestDialogRoomOffer's bytes); one cut short, or of
+    /// no more than six, is not answered.
+    #[test]
+    fn the_dialog_room_is_told_a_server_that_offered_more() {
+        let mut s = session();
+        s.record = Some(Vec::new());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x71, 0x7E, 12, 0]);
+        assert_eq!(s.record.as_ref().unwrap().len(), 0, "a short offer is no offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x71, 0x7E, 6, 0, 0, 0]);
+        assert_eq!(s.record.as_ref().unwrap().len(), 0, "six is CLIENT's: nothing to say");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x71, 0x7E, 12, 0, 0, 0]);
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        let sent = s.record.as_ref().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].1, vec![0x71, 0x7E, DIALOG_ROOM as u8, 0, 0, 0]);
     }
 
     #[test]

@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-15 · Twelve choices to a page
+- **A box of choices now holds up to twelve before "More..."** on a server that sends that many (eqoaclassic.com):
+  a coachman's or a waysender's stops, the Heroic Dungeons board, the Testing Heroes Vendor's wares, the Teleporter,
+  a merc's spells and every other list are one box where they used to be cut at six. The Equipment Dyer's first
+  question lists the armour pieces, the robe and the shield straight away, so dyeing a chest is one choice fewer.
+- A list whose choices run long shows fewer a page so the box always stays on the screen. On any other server the
+  boxes are as before.
+
 ## 2026-11-15 · Network Setup: eqoaclassic.com in one press
 - **On the web page, Network Setup on the title is greyed out**: the page always plays on its own server, so the
   arrows pass over it and it cannot be chosen. Play and Options are as they were.
