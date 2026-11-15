@@ -56,6 +56,10 @@ pub enum ItemOut {
     HideLook(i32, bool),
     /// 260 to the start menu: back to its main menu
     Back,
+    /// An entry's message the game's menu has none of (a merc's window's
+    /// Give and Take Back, the inventory's Give to the merc: `mercwnd`), with
+    /// the item's index
+    Custom(u32, i32),
 }
 
 /// The four inventory menus, with their sub-menus, as the frame's
@@ -310,6 +314,11 @@ pub struct ItemMenu {
     gear: crate::gear::View,
     /// the set name editor (`m_edit`, the live `Init`'s `VIWndEdit`)
     edit: EditBox,
+    /// A merc's window's tabs in place of the game's four (`mercwnd`): their
+    /// labels, two to four; none, the player's own item menu
+    pub tabs: Option<Vec<String>>,
+    /// Lines over the description (a merc's window's: its name and figures)
+    pub header: String,
 }
 
 impl Default for ItemMenu {
@@ -343,6 +352,8 @@ impl Default for ItemMenu {
                 e.set_center([320, 310]);
                 e
             },
+            tabs: None,
+            header: String::new(),
         }
     }
 }
@@ -457,16 +468,22 @@ impl ItemMenu {
         self.focus = Focus::Menu;
     }
 
+    /// The tabs shown: the game's four, or a merc's window's (`tabs`).
+    fn tab_count(&self) -> i32 {
+        self.tabs.as_ref().map_or(4, |t| t.len().clamp(1, 4) as i32)
+    }
+
     /// `ChangeTab`.
     fn change_tab(&mut self, d: i32, now: i64, cues: &mut Vec<i32>) {
+        let last = self.tab_count() - 1;
         if self.menu + d < 0 {
             cues.push(9);
             self.menu = 0;
             self.tab = 0;
-        } else if self.menu + d >= 4 {
+        } else if self.menu + d > last {
             cues.push(9);
-            self.menu = 3;
-            self.tab = 3;
+            self.menu = last;
+            self.tab = last;
         } else {
             cues.push(11);
             self.menu += d;
@@ -619,7 +636,11 @@ impl ItemMenu {
 
     /// `Inspect(item)`: the tab's long description in the inspect window.
     fn inspect(&mut self, item: i32, info: &Info, vui: &Vui, r: &mut dyn Raster) {
+        let wearable = info.inv.items.get(item.max(0) as usize).is_some_and(infotext::is_wearable);
         let (depth, p, text) = match self.menu {
+            // a merc's window: by the item, its tabs being its own
+            _ if self.tabs.is_some() && wearable => (2, item, info.inv_equipment(item)),
+            _ if self.tabs.is_some() => (1, -1, info.inv_misc(item)),
             0 => (1, -1, info.inv_usable(item)),
             1 => (2, item, info.inv_equipment(item)),
             3 => (1, -1, info.inv_misc(item)),
@@ -854,7 +875,9 @@ impl ItemMenu {
                         l.x60 = true;
                     }
                 }
-                _ => {}
+                // a message of the client's own (`ItemOut::Custom`)
+                _ if valid => out.push(ItemOut::Custom(msg, id)),
+                _ => sound = 10,
             }
         }
         cues.push(sound);
@@ -874,6 +897,20 @@ impl ItemMenu {
         // UpdateDesc: the selected entry's short description
         let menus = &self.built.0;
         self.desc = match self.menu {
+            // a merc's window: its header, then the item by its kind
+            0..=3 if self.tabs.is_some() => {
+                let m = &self.menus[self.menu as usize];
+                let item = m.id(menus, m.list.sel);
+                let wearable = info.inv.items.get(item.max(0) as usize).filter(|_| item >= 0).is_some_and(infotext::is_wearable);
+                let d = if item < 0 {
+                    String::new()
+                } else if wearable {
+                    info.inv_equipment_short(item)
+                } else {
+                    info.inv_food(item)
+                };
+                format!("{}\n \n{d}", self.header)
+            }
             0..=3 => {
                 let m = &self.menus[self.menu as usize];
                 let item = m.id(menus, m.list.sel);
@@ -891,8 +928,12 @@ impl ItemMenu {
         let mut lift = pos;
         vui.blit_bar(r, &[], black, [70, 8], 33, 34, 500, 0, 1.0, 0, true);
         self.tab_hits.clear();
-        for (k, (word, step)) in [(437, 100), (438, 140), (1473, 140), (439, 0)].iter().enumerate() {
-            let label = wide(vui.words.get(*word, vui.language));
+        let labels: Vec<(String, i32)> = match &self.tabs {
+            Some(t) => t.iter().map(|s| (s.clone(), 140)).collect(),
+            None => [(437, 100), (438, 140), (1473, 140), (439, 0)].iter().map(|&(w, step)| (vui.words.get(w, vui.language).to_string(), step)).collect(),
+        };
+        for (k, (word, step)) in labels.iter().enumerate() {
+            let label = wide(word);
             self.tab_hits.push([pos[0] - 25, 8, pos[0] + vui.string_width(r, &label) + 10, 34], k as i32);
             vui.draw_centered_string_ex(r, &label, pos[0], pos[1], white, 1, true);
             if self.tab == k as i32 {

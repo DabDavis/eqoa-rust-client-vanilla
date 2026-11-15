@@ -970,6 +970,20 @@ or a browser (each described where it lives below):
   worst frame is ~50 ms. A shot reads them as it asks (`texpack::sync_now`),
   and `EQOA_TEXTURES_SYNC=1` does so in a live run, to measure against.
   A dump is always the surface's own record's texture, never a stand-in.
+- **A merc's inventory and spell windows** on a server that offers them (the
+  server owner's of 2026-11-15; go-eqoa-server's 0x7E72-0x7E77, `net::mercwin`,
+  `mercwnd`, `play::mercplay`): the merc's menu's Items > Inventory and
+  `/merc <name> inv` open the player's own item menu over what the merc holds,
+  three tabs of its own (Worn: its own and, where it wears nothing of its own,
+  its heirlooms; Carried; Your Pack, what it may be given), its name, level,
+  hit points, power, AC and stats over the item's description; each popup the
+  game's Equip, Unequip and Inspect with Take Back and Give. The menu's Spells
+  and `/merc <name> spells` open the player's spell book over the merc's book
+  with its ten slots: Memorize puts a spell on one, Unmemorize takes it off,
+  Unmemorize All empties them, and the merc casts only what they hold once
+  set. The inventory's own popups have Give to Merc while the merc is out.
+  Every move is asked of the server and shown when its state comes back; on
+  any other server, and on a PS2, the merc's boxes.
 - **Sorted lists**: the Who list and the guild's roster by name, or by any
   column with ○ (C on the keyboard) or a click on its heading (the game keeps
   the server's order).

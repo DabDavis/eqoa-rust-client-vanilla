@@ -112,6 +112,9 @@ current.
   the target's level in the target box on a server that offers it (Live petition 5130, the owner's "yes lets allow",
   2026-11-15: "Level N" on the "Target" line, `Play::target_level`, go-eqoa-server's `world.con_level`, 0x7E70;
   Extended > UI > Name Plates' Target Level, on by default; off, or on any other server, the game's), and
+  a merc's inventory and spell windows on a server that offers them (the owner's of 2026-11-15: the player's item menu
+  over what the merc holds and the player's spell book over its book with its ten slots, `mercwnd`, `play::mercplay`,
+  `net::mercwin`, go-eqoa-server's 0x7E72-0x7E77; every move the server's to judge; on any other server the boxes), and
   item links in chat on a server that offers them (the GM Jibrish's petition 1463, 2026-11-10: the item menu's Link Item
   and a Shift+click put an item in the chat line as a purple unit, a link in the chat box opens a window of the item at
   the top middle, two at most, R2 held walks the links: `itemlink.rs`, `linkplay.rs`, `net::itemlink`, go-eqoa-server's

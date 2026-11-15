@@ -13,6 +13,7 @@ pub mod entity;
 pub mod headmarks;
 pub mod hidelook;
 pub mod itemlink;
+pub mod mercwin;
 pub mod npctint;
 pub mod raceopts;
 pub mod raid;

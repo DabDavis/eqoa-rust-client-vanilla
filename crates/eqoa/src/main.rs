@@ -132,6 +132,7 @@ mod inventory;
 mod hidelook;
 mod itemlink;
 mod itemmenu;
+mod mercwnd;
 mod classmastery;
 mod cs;
 mod faction;

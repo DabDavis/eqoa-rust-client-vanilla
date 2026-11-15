@@ -3513,6 +3513,10 @@ impl Play {
                 Event::Opcode { op: net::session::OP_RACE_LABELS_DATA, data } => crate::racelabel::take(&data),
                 // the combat record (`recordplay`)
                 Event::Opcode { op: net::session::OP_COMBAT_RECORD_DATA, data } => self.record_data(&data),
+                // the merc's windows (`mercplay`, `mercwnd`)
+                Event::Opcode { op: op @ (net::mercwin::OP_MERC_WINDOW_STATE | net::mercwin::OP_MERC_WINDOW_RESULT | net::mercwin::OP_MERC_SPELLS_STATE), data } => {
+                    self.merc_win_opcode(op, &data);
+                }
                 // the live client's feature word and group search, and the
                 // server's offer of the live auction form (`liveplay`); the
                 // word goes to the duel part's copy too (`duelplay`)
@@ -5663,6 +5667,9 @@ impl Play {
         if self.record_owns() {
             return self.record_point(f);
         }
+        if self.merc_win_owns() {
+            return self.merc_win_point(f);
+        }
         // Shift+click on an item in the inventory: linked in the chat line
         // (`itemlink`)
         if self.mode == 13
@@ -6493,6 +6500,10 @@ impl Play {
             self.record_key(key, down);
             return true;
         }
+        if self.merc_win_owns() {
+            self.merc_win_key(key, down);
+            return true;
+        }
         if self.start.is_some() {
             match self.mode {
                 13 => self.start_key(key, down),
@@ -6889,6 +6900,9 @@ impl Play {
                     }
                 }
                 ItemOut::Back => {}
+                // Give to Merc (`mercwnd::with_give`, `mercplay`)
+                ItemOut::Custom(crate::mercwnd::MSG_GIVE, i) => self.merc_give(i),
+                ItemOut::Custom(..) => {}
             }
         }
     }
@@ -6977,6 +6991,8 @@ impl Play {
         let bank_tables = crate::live::features().auction(self.dump.bank.p78cc);
         // and its first entry, TEST, while the GM's channel is enabled
         let test = self.admin.part.test_entry();
+        // Give to Merc on the items not worn while the merc's windows are offered (`mercwnd`)
+        let give_on = self.merc_give_on();
         let mut actions = Vec::new();
         let Some(s) = self.start.as_mut() else { return actions };
         let attack_words = s.attack_words.clone();
@@ -6997,6 +7013,7 @@ impl Play {
             link,
         );
         // Hide Look / Show Look on a worn item where the server offers it (`hidelook`)
+        let built = crate::mercwnd::with_give(built, inv, give_on);
         self.items.set_built(crate::hidelook::with_rows(built, inv, &self.session.hide_look));
         self.items.set_gear(self.gear.view(inv, &vui.words, vui.language));
         let info = crate::infotext::Info {
@@ -9786,6 +9803,7 @@ impl Play {
             self.run_class_mastery(vui, &mut r);
             self.run_factions(vui, &mut r);
             self.run_record(vui, &mut r);
+            self.run_merc_windows(vui, &mut r);
             self.run_npcw(vui, &mut r);
             self.run_duel(vui, &mut r);
             self.run_bank(vui, &mut r);

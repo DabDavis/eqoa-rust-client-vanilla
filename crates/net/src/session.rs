@@ -1243,6 +1243,10 @@ pub struct Session {
     /// The mercenaries the server last told ([`OP_MERCS_DATA`]); none from a
     /// server that never offered them, and at a new connection.
     pub mercs: Option<Mercs>,
+    /// The server offered its merc windows and was answered
+    /// ([`crate::mercwin::OP_MERC_WINDOW_OFFER`]): its states come as
+    /// `Event::Opcode` for the game. Not at a new connection until offered again.
+    pub merc_windows: bool,
     /// The group search's standing the server last told
     /// ([`OP_GROUP_REG_STATE`]); none from a server that never offered it, and
     /// at a new connection.
@@ -1533,6 +1537,7 @@ impl Session {
             crash_filed: Vec::new(),
             member_invites: false,
             mercs: None,
+            merc_windows: false,
             group_reg: None,
             creation: None,
             server_worlds: None,
@@ -2398,6 +2403,7 @@ impl Session {
                 self.npc_tints = Some(Vec::new());
                 // the mercs and the group search's standing (offered again)
                 self.mercs = None;
+                self.merc_windows = false;
                 self.group_reg = None;
                 // the old connection's channels go with it
                 self.early_states.clear();
@@ -2833,6 +2839,17 @@ impl Session {
                     let mut w = Writer::op(OP_MERCS_OFFER);
                     w.u8(3);
                     self.send(&w.data);
+                }
+            }
+            // the merc windows offered (each world entry): answered 1, the
+            // layout read (`mercwin`)
+            crate::mercwin::OP_MERC_WINDOW_OFFER => {
+                let layout = r.u8();
+                if !r.error && layout == crate::mercwin::LAYOUT {
+                    let mut w = Writer::op(crate::mercwin::OP_MERC_WINDOW_OFFER);
+                    w.u8(crate::mercwin::LAYOUT);
+                    self.send(&w.data);
+                    self.merc_windows = true;
                 }
             }
             OP_MERCS_DATA => match Mercs::read(&m.data[2.min(m.data.len())..]) {
@@ -4221,6 +4238,30 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x17, 0x7E, 1, 0, 0, 0]);
         assert!(s.member_invites);
         assert_eq!(ours(&mut s), Vec::<Vec<u8>>::new(), "nothing answered");
+    }
+
+    // The merc windows (0x7E72): an offer of 1 answered 1 at once and kept,
+    // another layout nothing; their states pass to the game as opcodes. The
+    // control: never offered, nothing held.
+    #[test]
+    fn merc_windows_offered_answered() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let ours = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        ours(&mut s);
+        assert!(!s.merc_windows, "the control: never offered");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x72, 0x7E, 2]);
+        assert!(!s.merc_windows && ours(&mut s).is_empty(), "another layout: nothing");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x72, 0x7E, 1]);
+        assert!(s.merc_windows);
+        assert_eq!(ours(&mut s), vec![vec![0x72, 0x7E, 1]], "answered 1");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x74, 0x7E, 1, 0]);
+        assert!(matches!(&ev[..], [Event::Opcode { op: 0x7E74, data }] if data[..] == [1, 0]), "{ev:?}");
     }
 
     // The mercs (0x7E5A/0x7E5B) and the group search's standing (0x7E5D/

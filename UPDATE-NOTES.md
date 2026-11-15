@@ -7,6 +7,20 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-15 · Your mercenary's inventory and spell book
+- **Your mercenary's Inventory opens a window like your own inventory** on eqoaclassic.com: press □ on your merc,
+  choose Items, then Inventory (or type `/merc <name> inv`). Its tabs are **Worn** (what it wears, its own gear and
+  its heirlooms where it wears nothing of its own), **Carried** and **Your Pack**. Beside the list are its level,
+  hit points, power, AC and stats, which change as its gear does.
+- Pick an item to **Equip**, **Unequip**, **Inspect** or **Take Back**. An item put on in place of another swaps them,
+  the old piece going to what it carries. From Your Pack, **Give** hands it one of your items. Your own inventory
+  has **Give to Merc** on each item you are not wearing while your merc is out.
+- **Its Spells open a spell book like yours**, with ten slots (□ on your merc, Spells, or `/merc <name> spells`):
+  Memorize puts a spell on a slot, Unmemorize takes it off, Unmemorize All empties them. Once you change them it
+  casts only what its ten slots hold; until then it casts as it always has, and the slots show the ten it picks first.
+- The server checks every move by the rules for a player's gear (class, race, level, two-handers, a full pack, lore
+  items) and nothing is lost. A PlayStation 2 keeps the merc's boxes.
+
 ## 2026-11-15 · Tailoring in the Recipe Book
 - **Character > Tradeskills > Recipe Book now lists Tailoring**, fourth after Jewelry, Armor and Weapons: choose it
   to see your tailoring recipes, as the other three show theirs. Until now only a server's patch added the row, and
