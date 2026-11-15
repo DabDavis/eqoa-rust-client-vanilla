@@ -72,6 +72,23 @@
 //! character in such a body, on a server with races of its own, as the
 //! emotes: the swimmer's own and every other player's on this client; a PS2
 //! still shows them as before.
+//!
+//! The monk's moves, the same way (the owner, 2026-11-15: "the monk abilites
+//! have kicks,etc. but not all the races are able to show them yet, lets
+//! borrow from human like we did for emotes so all races can use"). A monk's
+//! ability plays an entry on its caster through its effect's set-action event
+//! (SPELLFX.CSF, `VISpellEventDriver`): 43 the kick, 50 to 53 the monk's own
+//! (`MOVES`). Of every body a player wears only the human's two play lists
+//! have 50 to 53; `SetDefaultEntries` fills an empty one with the body's 23,
+//! the main hand's punch, so an elf's, an ogre's or a hill giant's Flame Kick
+//! or Lunging Mantis was a punch, and the Jal'Raeth's and the merfolk's (which
+//! have no punch, nor a kick) their idle once. Here each such entry takes the
+//! human's carried onto the body's skeleton (`put_moves`, `retarget`), keeping
+//! the entry's sound, sync and priority, on a player's character in a player
+//! race's body or a race's (`moves_body`; the pixie, fairy and fungusman keep
+//! their own strike, `MOVES_OWN`), on a server with races of its own
+//! (`grant_moves`): the caster's own and every other player's on this client.
+//! A PS2 still shows the punch.
 
 use esf::Library;
 use glam::{Quat as GQuat, Vec3};
@@ -760,9 +777,7 @@ fn put_over(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, entries
     if entries.iter().any(|&e| cs.entries[e as usize].animation != cs.entries[0].animation) {
         return false;
     }
-    let mut human: Option<Option<Human>> = None;
-    // the human's rows carried so far (their clips), to what they made
-    let mut carried: Vec<([i32; 2], [i32; 2], F<Ee>)> = Vec::new();
+    let mut carrier = Carrier::default();
     for ((&e, &pose), &sync) in entries.iter().zip(poses).zip(syncs) {
         let e = e as usize;
         match pose {
@@ -775,26 +790,7 @@ fn put_over(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, entries
                 dst.sync = sync;
             }
             Pose::Human => {
-                let clips = row(lib, HUMAN, e as i32).map(|r| r.clips);
-                let (animation, weight) = match carried.iter().find(|c| Some(c.0) == clips) {
-                    Some(&(_, animation, weight)) => (animation, weight),
-                    None => {
-                        let human = human.get_or_insert_with(|| Human::load(lib));
-                        let Some(([a, b], weight)) = human.as_ref().and_then(|h| h.carry(lib, e as i32, cs, sc, BASE, false)) else { continue };
-                        sc.anims.push(a);
-                        let ia = sc.anims.len() as i32 - 1;
-                        let ib = if cs.skel_type == 1 {
-                            sc.anims.push(b);
-                            sc.anims.len() as i32 - 1
-                        } else {
-                            -1
-                        };
-                        if let Some(c) = clips {
-                            carried.push((c, [ia, ib], weight));
-                        }
-                        ([ia, ib], weight)
-                    }
-                };
+                let Some((animation, weight)) = carrier.carry(lib, cs, sc, e as i32, false) else { continue };
                 let dst = &mut cs.entries[e];
                 dst.animation = animation;
                 dst.weight = weight;
@@ -804,6 +800,44 @@ fn put_over(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, entries
         }
     }
     true
+}
+
+/// The human's rows carried onto one sprite (`Human::carry`), each added to
+/// its clips once: the human loaded at the first, and a row whose clips were
+/// carried already (the human's fall and landing, two entries of one clip)
+/// given what the first made.
+#[derive(Default)]
+struct Carrier {
+    human: Option<Option<Human>>,
+    /// the human's rows carried so far (their clips), to what they made
+    carried: Vec<([i32; 2], [i32; 2], F<Ee>)>,
+}
+
+impl Carrier {
+    /// The human's `action` carried onto `cs` (`hover`: as an emote, in the
+    /// air on a hovering body, `retarget`), its clips added to `sc`: the
+    /// entry's two clips and its play speed, or `None` where the human or the
+    /// sprite lacks what it takes.
+    fn carry(&mut self, lib: &Library, cs: &CSprite<Ee>, sc: &mut AnimScene<Ee>, action: i32, hover: bool) -> Option<([i32; 2], F<Ee>)> {
+        // a row the human lacks (in the 2002 art, say) is nothing to carry:
+        // the human is not loaded for it (a puppet is granted every frame)
+        let clips = row(lib, HUMAN, action)?.clips;
+        if let Some(&(_, animation, weight)) = self.carried.iter().find(|c| c.0 == clips) {
+            return Some((animation, weight));
+        }
+        let human = self.human.get_or_insert_with(|| Human::load(lib));
+        let ([a, b], weight) = human.as_ref()?.carry(lib, action, cs, sc, BASE, hover)?;
+        sc.anims.push(a);
+        let ia = sc.anims.len() as i32 - 1;
+        let ib = if cs.skel_type == 1 {
+            sc.anims.push(b);
+            sc.anims.len() as i32 - 1
+        } else {
+            -1
+        };
+        self.carried.push((clips, [ia, ib], weight));
+        Some(([ia, ib], weight))
+    }
 }
 
 /// The swim's entries: the gait `UpdateLocomotion` gives a body in liquid
@@ -859,6 +893,90 @@ pub fn grant_swim(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, m
 pub fn grant_air(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, model: u32, player: bool, jumps: bool) -> bool {
     let Some(p) = air_poses(model).filter(|_| player && jumps) else { return false };
     put_air(lib, cs, sc, p);
+    true
+}
+
+/// The monk's moves: the play list's entries its abilities play on their
+/// caster (SPELLFX.CSF's set-action events, `VISpellEventDriver`): 43 the kick
+/// (Kick, Pouncing Tiger, Roaring Dragon; the warrior's and the ranger's Kick,
+/// Boot, Punt and Stomp too), 50 to 53 the monk's own (50 every Punch and
+/// Strike, 51 the Lunging Mantis and Swooping Eagle, 52 every Kick of a name,
+/// Flame, Spinning, Lightning and Force; 53 none on eqoaclassic, but a monk's
+/// slot as the others).
+pub const MOVES: [i32; 5] = [43, 50, 51, 52, 53];
+
+/// The player races' bodies (races 0 to 9, male and female: the 0x002C model
+/// ids). Of them only the human's two play lists have the monk's 50 to 53
+/// (HumanFemale's the same clips as HumanMale's); every other race's has none,
+/// so `SetDefaultEntries` fills them with its 23, the main hand's punch: an
+/// elf's or an ogre's Flame Kick was a punch. Every one has a kick (43).
+pub const PLAYER_BODIES: &[u32] = &[
+    0x70D8_98C6, 0x0D53_7335, // human
+    0xD8D5_6FF8, 0xE189_19F7, // elf
+    0x7ED8_9DAA, 0x8C9B_4B39, // dark elf
+    0xA99C_6B15, 0x4C40_84FC, // gnome
+    0xAA5B_0447, 0x350B_FDBE, // dwarf
+    0x4C6F_A532, 0x4DE3_2701, // troll
+    0x61CA_3EDF, 0xC44A_D516, // barbarian
+    0xA3DB_3FE2, 0x8A27_A731, // halfling
+    0x320C_0B47, 0x4F1A_3CBE, // erudite
+    0x8480_7490, 0xACC0_0B4F, // ogre
+];
+
+/// The bodies `TABLE` lists that keep the game's moves: the pixie's, the
+/// fairy's and the fungusman's, which share one bone with the human (carried,
+/// a kick would only nod the head; their emotes are their own nearest too),
+/// and whose fill is a strike of their own (their 23).
+pub const MOVES_OWN: &[u32] = &[0x94BA_77CD, 0x7A85_646C, 0x4A4D_88FB];
+
+/// Whether `model` (the body worn) takes the human's moves where it lacks
+/// them: a player race's body, or a body `TABLE` lists or another its race's
+/// options offer (`race_of`), but `MOVES_OWN`'s.
+pub fn moves_body(model: u32) -> bool {
+    let race = if PLAYER_BODIES.contains(&model) { Some(model) } else { race_of(model) };
+    race.is_some_and(|r| !MOVES_OWN.contains(&r))
+}
+
+/// Whether `cs` lacks move `e`: its entry is still `SetDefaultEntries`' fill,
+/// the body's 23 (the main hand's punch; itself the idle, played once, on a
+/// body with no punch either), not a clip of its own.
+pub fn lacks_move(cs: &CSprite<Ee>, e: i32) -> bool {
+    e != 23 && cs.entries[e as usize].animation == cs.entries[23].animation
+}
+
+/// Puts the human's moves (`MOVES`) carried onto `cs`'s skeleton (`retarget`,
+/// as its emotes are; a hovering body's in the air) on each of them it lacks
+/// (`lacks_move`), its clips added to `sc`; each entry keeps its priority, its
+/// channel, its sync and its sound (the body's own punch's: its own swing and
+/// voice), and plays at the human's speed. A move the body has is left as it
+/// is. How many it put.
+pub fn put_moves(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>) -> usize {
+    let mut carrier = Carrier::default();
+    let mut put = 0;
+    for e in MOVES {
+        if !lacks_move(cs, e) {
+            continue;
+        }
+        let Some((animation, weight)) = carrier.carry(lib, cs, sc, e, true) else { continue };
+        let dst = &mut cs.entries[e as usize];
+        dst.animation = animation;
+        dst.weight = weight;
+        put += 1;
+    }
+    put
+}
+
+/// The human's moves (`put_moves`) on `cs` (made of `model`, its clips in
+/// `sc`) when it is a player's character (`player`) on a server with races of
+/// its own (`races`, `server_has_races`) in a body that takes them
+/// (`moves_body`); anything else (an NPC, a form or an illusion into another
+/// body, any body on Sandstorm or eqoa.live) is left as the game made it.
+/// Whether it is such a character.
+pub fn grant_moves(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, model: u32, player: bool, races: Option<&net::creation::Creation>) -> bool {
+    if !(player && moves_body(model) && server_has_races(races)) {
+        return false;
+    }
+    put_moves(lib, cs, sc);
     true
 }
 
@@ -1747,5 +1865,103 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The monk's moves on the disc: of the player races' bodies only the
+    /// human's two play lists have 50 to 53 (the same clips), and every one
+    /// has a kick (43); the ogre's and the troll's lack 50 to 53 (their 23,
+    /// the punch, `SetDefaultEntries`' fill) and take the human's carried onto
+    /// them, each a clip of its own, 43 left as it was (their own kick); the
+    /// human (the control) has them all and is left as it is, entry for entry;
+    /// the Jal'Raeth's lacks the kick too and takes all five; a second put
+    /// puts none. The pixie's keeps the game's (`MOVES_OWN`). Needs
+    /// `run/eqoa.iso`.
+    #[test]
+    fn the_monks_moves_on_a_body_that_lacks_them() {
+        let Some(lib) = disc() else { return };
+        const OGRE: u32 = 0x8480_7490;
+        const TROLL_F: u32 = 0x4DE3_2701;
+        const JAL_RAETH: u32 = 0xF51B_AB09;
+        let hrow = |e| row(&lib, HUMAN, e).unwrap().clips;
+        for e in [50, 51, 52, 53] {
+            assert_eq!(row(&lib, 0x0D53_7335, e).map(|r| r.clips), Some(hrow(e)), "HumanFemale's {e} is HumanMale's");
+        }
+        for &id in PLAYER_BODIES {
+            assert!(row(&lib, id, 43).is_some(), "{id:#010x} has a kick");
+            let human = id == HUMAN || id == 0x0D53_7335;
+            for e in [50, 51, 52, 53] {
+                assert_eq!(row(&lib, id, e).is_some(), human, "{id:#010x}: move {e} its own only on the human");
+                let (cs, _) = load(&lib, id);
+                assert_eq!(lacks_move(&cs, e), !human, "{id:#010x}: move {e} the fill");
+            }
+            assert!(moves_body(id));
+        }
+        let (mut cs, mut sc) = load(&lib, HUMAN);
+        let had = entries(&cs);
+        assert_eq!(put_moves(&lib, &mut cs, &mut sc), 0, "the human's own");
+        assert_eq!(entries(&cs), had, "the human: as the game made it");
+        for (id, want) in [(OGRE, 4), (TROLL_F, 4), (JAL_RAETH, 5)] {
+            let (mut cs, mut sc) = load(&lib, id);
+            let had = cs.entries;
+            assert!(lacks_move(&cs, 52), "{id:#010x} lacks 52");
+            assert_eq!(put_moves(&lib, &mut cs, &mut sc), want, "{id:#010x}");
+            for e in MOVES {
+                let (got, old) = (cs.entries[e as usize], had[e as usize]);
+                if want == 4 && e == 43 {
+                    assert_eq!(got.animation, old.animation, "{id:#010x}: its own kick");
+                    continue;
+                }
+                assert_ne!(got.animation, cs.entries[23].animation, "{id:#010x}: move {e} no longer the punch");
+                assert!(got.animation[0] >= 0 && (got.animation[0] as usize) < sc.anims.len(), "{id:#010x}: move {e} a clip");
+                assert_eq!((got.sync, got.sound, got.priority, got.channel), (old.sync, old.sound, old.priority, old.channel), "{id:#010x}: move {e} keeps its entry's");
+            }
+            let distinct: std::collections::HashSet<[i32; 2]> = [50, 51, 52, 53].iter().map(|&e| cs.entries[e].animation).collect();
+            assert_eq!(distinct.len(), 4, "{id:#010x}: four moves, four clips");
+            let again = cs.entries;
+            assert_eq!(put_moves(&lib, &mut cs, &mut sc), 0, "{id:#010x}: put already");
+            assert!(again.iter().zip(cs.entries.iter()).all(|(a, b)| a.animation == b.animation));
+        }
+        assert!(!moves_body(PIXIE) && !moves_body(0x4A4D_88FB), "their own");
+    }
+
+    /// Carried onto the elf's skeleton (HumanMale's bones: its 22 to 44 are
+    /// HumanMale's clips), the monk's 50 to 53 turn as the human's clips do,
+    /// node for node, frame for frame. Needs `run/eqoa.iso`.
+    #[test]
+    fn the_monks_moves_on_the_elf_are_the_humans() {
+        let Some(lib) = disc() else { return };
+        let human = Human::load(&lib).unwrap();
+        for e in [50, 51, 52, 53] {
+            let (rots, _, n) = against(&lib, &human, 0xD8D5_6FF8, e, e, true);
+            assert!(rots && n >= 100, "move {e} on the elf: the human's turns ({rots} {n})");
+        }
+    }
+
+    /// The moves go on a player's character in a player race's body or one the
+    /// table lists, on a server with races of its own, and nothing else: not an
+    /// NPC, not with no races, not a body no race wears, not the pixie
+    /// (`MOVES_OWN`). The control: a sprite (no disc: nothing to carry) is
+    /// left as it was whatever is granted.
+    #[test]
+    fn the_moves_go_on_a_races_players() {
+        let lib = Library::new();
+        crate::racelabel::clear();
+        let listed = races(&[HILL_GIANT]);
+        let grants = |model: u32, player: bool, list: Option<&Creation>| {
+            let mut cs = creature();
+            let had = entries(&cs);
+            let g = grant_moves(&lib, &mut cs, &mut AnimScene::default(), model, player, list);
+            assert_eq!(entries(&cs), had);
+            g
+        };
+        assert!(grants(0x8480_7490, true, Some(&listed)), "an ogre player");
+        assert!(grants(HILL_GIANT, true, Some(&listed)), "a hill giant player");
+        assert!(!grants(0x8480_7490, false, Some(&listed)), "an NPC");
+        assert!(!grants(0x8480_7490, true, None), "a server with no races");
+        assert!(!grants(0x1234_5678, true, Some(&listed)), "a body no race wears");
+        assert!(!grants(PIXIE, true, Some(&races(&[PIXIE]))), "the pixie's own");
+        let cs = creature();
+        assert!(MOVES.iter().all(|&e| lacks_move(&cs, e)), "the creature's moves are its punch");
+        assert!(!lacks_move(&cs, 23));
     }
 }

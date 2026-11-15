@@ -7,6 +7,15 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-15 · Every race's monk kicks and strikes
+- **A monk of any race now shows the monk's moves**: Flame Kick, Spinning Kick, Lightning Kick and Force Kick are
+  the flying kick, and the Punches and Strikes, Lunging Mantis, Swooping Eagle, Pouncing Tiger and Roaring Dragon
+  play their own moves, on an elf, a dwarf, an ogre, a troll or any race but the human, where they used to be a
+  plain punch. The new races do too (a hill giant, a kerran, a gnoll...), and the Jal'Raeth and the merfolk move
+  where they used to stand still. They borrow the human's moves, as the emotes do.
+- You see it on your own monk and on every other player's, on eqoaclassic.com; the pixie, the fairy and the
+  fungusman keep their own strike. A PlayStation 2 still shows the punch.
+
 ## 2026-11-15 · Twelve choices to a page
 - **A box of choices now holds up to twelve before "More..."** on a server that sends that many (eqoaclassic.com):
   a coachman's or a waysender's stops, the Heroic Dungeons board, the Testing Heroes Vendor's wares, the Teleporter,
