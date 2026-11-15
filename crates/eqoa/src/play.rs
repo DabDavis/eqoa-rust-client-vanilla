@@ -1118,7 +1118,8 @@ fn tint_of(e: &net::entity::Entity) -> Option<crate::npctint::Tint> {
 /// server with `jumps`, a player's in a body with no fall or landing of its
 /// own falls and lands as the table has it (`raceemote::grant_air`); on one
 /// with races of its own, one in a body with no swim swims as it has it
-/// (`raceemote::grant_swim`).
+/// (`raceemote::grant_swim`), and one in a body with no monk's moves of its
+/// own kicks and strikes as the human (`raceemote::grant_moves`).
 #[allow(clippy::too_many_arguments)]
 fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Puppet> {
     let era = lib.view_for(e.drawn_model as i32);
@@ -1137,6 +1138,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if let Some(cs) = sprite.as_mut() {
                         crate::racebody::grant(cs, e.drawn_model, player, races);
                         crate::raceemote::grant(lib, cs, &mut anims, e.drawn_model, player, races);
+                        crate::raceemote::grant_moves(lib, cs, &mut anims, e.drawn_model, player, races);
                         crate::raceemote::grant_air(lib, cs, &mut anims, e.drawn_model, player, jumps);
                         crate::raceemote::grant_swim(lib, cs, &mut anims, e.drawn_model, player, races);
                     }
@@ -1445,6 +1447,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
         let anims = &mut p.anims;
         lib.with_view(p.era, || {
             crate::raceemote::grant(lib, cs, anims, p.model, a_player(e), races);
+            crate::raceemote::grant_moves(lib, cs, anims, p.model, a_player(e), races);
             crate::raceemote::grant_swim(lib, cs, anims, p.model, a_player(e), races);
             crate::raceemote::grant_air(lib, cs, anims, p.model, a_player(e), jumps)
         });
@@ -3300,6 +3303,8 @@ impl Play {
             let anims = &mut walker.anims;
             lib.with_view(lib.view_for(model as i32), || {
                 crate::raceemote::grant(lib, cs, anims, model, true, self.session.creation.as_ref());
+                // a body with no monk's moves of its own kicks as the human
+                crate::raceemote::grant_moves(lib, cs, anims, model, true, self.session.creation.as_ref());
                 // a body with no swim of its own swims as the table has it
                 crate::raceemote::grant_swim(lib, cs, anims, model, true, self.session.creation.as_ref());
                 // on a server with jumps, its fall and landing the table's
