@@ -931,6 +931,7 @@ function offerAgain(name) {
   b.dataset.mode = 'again';
   b.textContent = `Use ${r.name} again`;
   $(name + '-again-row').hidden = false;
+  { const box = $(name + '-again-row').closest('details'); if (box) box.open = true; } // a remembered 2002 disc shows itself
   const line = $(name + '-what');
   line.className = 'note';
   line.textContent = name === 'iso'
@@ -945,6 +946,7 @@ function offerKeep(name) {
   b.dataset.mode = 'keep';
   b.textContent = `Remember ${$(name).files[0].name}: choose it once more`;
   $(name + '-again-row').hidden = false;
+  { const box = $(name + '-again-row').closest('details'); if (box) box.open = true; } // a remembered 2002 disc shows itself
 }
 
 // The picker that can be remembered, in a click's (or a tick's) activation:

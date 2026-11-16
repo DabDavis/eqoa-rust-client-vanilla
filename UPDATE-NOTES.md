@@ -19,6 +19,10 @@ is put on the page by `.github/workflows/notes.yml`.
 - A Fervor slot you already set to auto as a heal keeps that until you change it: switch its auto off and on again,
   or type **/autocast Fervor buff**.
 
+## 2026-11-16 · A clearer start page
+- **The start page asks for one disc**: your *Frontiers* disc image. The 2002 disc, which only changes the older
+  character art (F9 in the game), is now tucked under **Pre-Frontiers Models (2002), optional**: you do not need it
+  to play. A 2002 disc you had remembered still shows itself.
 ## 2026-11-16 · The server's own account pages, and why a login is refused
 - **The Station pages before the server list are now your server's own**, as a PlayStation 2 shows them after its
   patch: on eqoaclassic.com, Create User Name asks only for a name, a password twice and your e-mail address, Forgot
