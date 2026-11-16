@@ -111,6 +111,9 @@ struct Puppet {
     /// The tint the server names for its body (`npctint`: an NPC's, by its
     /// name): another, or one gone, rebuilds it.
     tint: Option<crate::npctint::Tint>,
+    /// The dyes the server says its body wears (`petdye`: a pet's, by its id
+    /// and body): others, or none, rebuild it.
+    petdye: Option<crate::petdye::PetDye>,
     /// Its auras' particles (`aura::Worn`): a body whose tint asks for them
     /// (`aura::npc_particles`) and each worn piece's whose aura does
     /// (`aura::pieces`, `aura::helm_aura`), none for every other. Its shells
@@ -1120,6 +1123,12 @@ fn tint_of(e: &net::entity::Entity) -> Option<crate::npctint::Tint> {
     e.creature.as_ref().filter(|_| !a_player(e)).and_then(|c| crate::npctint::of(&c.name))
 }
 
+/// The dyes the server says a pet's body wears (`petdye`), by its id and the
+/// body it is drawn in; none for a player's character.
+fn petdye_of(e: &net::entity::Entity) -> Option<crate::petdye::PetDye> {
+    e.creature.as_ref().filter(|_| !a_player(e)).and_then(|_| crate::petdye::of(e.id, e.drawn_model))
+}
+
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
 /// items and helm on their nodes (a player's in a body one of the server's
 /// `races` wears holding items as a race's body does: `racebody`).
@@ -1179,6 +1188,11 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if let Some(t) = tint {
                         crate::npctint::apply(&mut model, t);
                     }
+                    // and a pet's dyes, each on its area (`petdye`)
+                    let petdye = petdye_of(e);
+                    if let Some(d) = petdye {
+                        crate::petdye::apply(&mut model, d);
+                    }
                     let wisp = crate::wisp::is(lib, e.drawn_model, race_look.as_deref());
                     // its auras (`aura`): an NPC's whole body's (its tint's) and
                     // each worn piece's, their particles' nodes and their shells
@@ -1214,7 +1228,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if !trims.is_empty() {
                         g.renderer.set_trims(g.device, g.queue, &mut gpu, &model, &trims, &textures);
                     }
-                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look, tint, aura, pieces, wisp };
+                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look, tint, petdye, aura, pieces, wisp };
                     p.set_casts();
                     Some(p)
                 })
@@ -1477,7 +1491,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
     // a tint on its body come, changed or gone (`npctint`), or a worn
     // piece's aura (`aura::pieces`): made anew
     let r = match p.as_ref() {
-        Some(p) if r != Redo::Build && (p.tint != tint_of(e) || p.pieces != pieces_of(e)) => Redo::Build,
+        Some(p) if r != Redo::Build && (p.tint != tint_of(e) || p.petdye != petdye_of(e) || p.pieces != pieces_of(e)) => Redo::Build,
         _ => r,
     };
     // the art swapped (F9), or a texture pack turned on or off (`texpack`),
@@ -3368,6 +3382,11 @@ impl Play {
         // whose tint changed made again in it (`apply`)
         if let Some(t) = self.session.npc_tints.take() {
             crate::npctint::set(t);
+        }
+        // the pets' dyes (`petdye`): the pets whose dyes changed made again in
+        // them (`apply`)
+        if let Some(d) = self.session.pet_dyes.take() {
+            crate::petdye::set(d);
         }
         // the server takes crash reports: this client's kept ones go, each let
         // go at its answer (`crashfile`)

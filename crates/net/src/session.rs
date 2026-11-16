@@ -785,6 +785,20 @@ pub const OP_NPC_TINTS_ANSWER: u16 = 0x7E3F;
 /// Each is the whole set.
 pub const OP_NPC_TINTS: u16 = 0x7E40;
 
+/// go-eqoa-server's own: a pet's dyes, two colours on two areas of its body
+/// (the server owner, 2026-11-16; its Pet Groomers put them on: `crate::petdye`).
+/// The offer, server to client once the player is in the world: a u8, the
+/// layout (1). CLIENT has no such case, so a PS2 ignores it and draws every
+/// pet in its body's own colours.
+pub const OP_PET_DYES_OFFER: u16 = 0x7E90;
+/// The answer to [`OP_PET_DYES_OFFER`], client to server, at once: a u8, the
+/// layout this client reads (`crate::petdye::LAYOUT`), 0 to stop.
+pub const OP_PET_DYES_ANSWER: u16 = 0x7E91;
+/// The dyed pets this client sees, by the id it knows each by
+/// (`crate::petdye::read`), the whole set each time: when it changes, and at
+/// each MemoryDump and world change.
+pub const OP_PET_DYES: u16 = 0x7E92;
+
 /// go-eqoa-server's own: a monster's name and level, shown when the player
 /// talks to it (□, Q) and it has nothing to say (the GM Jibrish's petition 1459,
 /// 2026-11-10: "press the mob information button on monster ... This should
@@ -1295,6 +1309,11 @@ pub struct Session {
     pub npc_tints: Option<Vec<(String, crate::npctint::Tint)>>,
     /// The layout of [`OP_NPC_TINTS`] this client answered the offer with.
     pub npc_tints_layout: u8,
+    /// The dyed pets the server last sent ([`OP_PET_DYES`], by the id this
+    /// client knows each by), until the game takes them (`petdye`): the empty
+    /// set at its offer and at a new connection, this client holding none
+    /// then.
+    pub pet_dyes: Option<Vec<(u32, crate::petdye::PetDye)>>,
     /// The server has this client's character flying ([`OP_FLY`]); gone with
     /// the connection, as the server's goes with its login. A dump (a respawn,
     /// a restart of the server's) leaves it.
@@ -1582,6 +1601,7 @@ impl Session {
             race_looks: None,
             npc_tints: None,
             npc_tints_layout: 1,
+            pet_dyes: None,
             flying: false,
             noclip: false,
             raid_roster_offer: false,
@@ -2445,6 +2465,8 @@ impl Session {
                 self.map_travel = false;
                 // the NPCs' body tints too (the next world entry offers them)
                 self.npc_tints = Some(Vec::new());
+                // and the pets' dyes (the next world entry offers them)
+                self.pet_dyes = Some(Vec::new());
                 // the mercs and the group search's standing (offered again)
                 self.mercs = None;
                 self.merc_windows = false;
@@ -2798,6 +2820,21 @@ impl Session {
             OP_NPC_TINTS => match crate::npctint::read(&m.data[2.min(m.data.len())..], self.npc_tints_layout) {
                 Some(t) => self.npc_tints = Some(t),
                 None => debug_line(&format!("[net] NPC tints: {} bytes not read", m.data.len())),
+            },
+            // the pets' dyes offered (each world entry): taken at once, what
+            // was held dropped (`petdye`)
+            OP_PET_DYES_OFFER => {
+                let layout = r.u8();
+                if !r.error && layout != 0 {
+                    self.pet_dyes = Some(Vec::new());
+                    let mut w = Writer::op(OP_PET_DYES_ANSWER);
+                    w.u8(crate::petdye::LAYOUT);
+                    self.send(&w.data);
+                }
+            }
+            OP_PET_DYES => match crate::petdye::read(&m.data[2.min(m.data.len())..]) {
+                Some(t) => self.pet_dyes = Some(t),
+                None => debug_line(&format!("[net] pet dyes: {} bytes not read", m.data.len())),
             },
             // a monster's name and level offered (each world entry): taken at
             // once, in the layout this client reads, for the target's details
@@ -5026,6 +5063,38 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, marks);
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert_eq!(s.head_mark(100_001), None, "a new connection: none held");
+    }
+
+    /// The pet dyes' offer is answered at once with this client's layout, and
+    /// drops what was held; the set is the session's until the game takes it;
+    /// one cut short is nothing new (the control), and an offer of 0 is no
+    /// offer.
+    #[test]
+    fn pet_dyes_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x91, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x90, 0x7E, 0]);
+        assert_eq!((answers(&mut s), s.pet_dyes.take()), (vec![], None), "an offer of 0 is no offer");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x90, 0x7E, 1]);
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x91, 0x7E, crate::petdye::LAYOUT])], "answered at once, a u8 1");
+        assert_eq!(s.pet_dyes.take(), Some(vec![]), "what was held dropped");
+        let mut m = vec![0x92, 0x7E, 1];
+        for x in [0x0300_0001u32, 0x1576_4DA8, 0xD100_00FF, 0x0080_00FF] {
+            m.extend_from_slice(&x.to_le_bytes());
+        }
+        m.extend_from_slice(&0b110u64.to_le_bytes());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        assert_eq!(s.pet_dyes.take(), Some(vec![(0x0300_0001, crate::petdye::PetDye { look: 0x1576_4DA8, area: [0xD100_00FF, 0x0080_00FF], mask: 0b110 })]));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 2].to_vec());
+        assert_eq!(s.pet_dyes, None, "the control: a set cut short is nothing new");
+        assert_eq!(answers(&mut s), [], "the set answered nothing");
     }
 
     #[test]

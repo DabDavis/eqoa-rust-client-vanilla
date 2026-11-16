@@ -15,6 +15,7 @@ pub mod hidelook;
 pub mod itemlink;
 pub mod mercwin;
 pub mod npctint;
+pub mod petdye;
 pub mod raceopts;
 pub mod raid;
 pub mod readycheck;
