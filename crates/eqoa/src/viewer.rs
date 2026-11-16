@@ -2956,8 +2956,7 @@ impl App {
             crate::say(&line);
         }
         self.let_go_keys(el);
-        self.mouse.release_all();
-        self.grab_pointer(false);
+        self.let_go_pointer();
         // a finger down as the focus goes: its lift is no tap
         self.taps.forget();
         if let Some(p) = self.play.as_mut() {
@@ -3215,11 +3214,14 @@ impl App {
     /// ends itself on Escape.
     fn grab_pointer(&mut self, frame: bool) {
         let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
-        let free = self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free() || p.aiming()) && !crate::update::offer_shown();
+        // natively, never taken by a window not in front (a press seen
+        // while another window has the focus would hold the cursor there)
+        let front = cfg!(target_arch = "wasm32") || self.pads.focused;
+        let free = front && self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free() || p.aiming()) && !crate::update::offer_shown();
         let Some(g) = &self.gfx else { return };
         #[cfg(target_arch = "wasm32")]
         if frame && self.mouse.lock_seen(crate::web::pointer_locked(), Instant::now()) {
-            crate::mouse::give_pointer(&g.window, self.mouse.home());
+            crate::mouse::give_pointer(&g.window, Some(self.mouse.home()));
         }
         let _ = frame;
         match self.mouse.grab_change(free) {
@@ -3227,8 +3229,22 @@ impl App {
                 let grab = crate::mouse::take_pointer(&g.window).unwrap_or(crate::mouse::Grab::Refused);
                 self.mouse.set_grab(grab);
             }
-            Some(false) => crate::mouse::give_pointer(&g.window, self.mouse.home()),
+            Some(false) => crate::mouse::give_pointer(&g.window, Some(self.mouse.home())),
             None => {}
+        }
+    }
+
+    /// The focus gone (or the window minimised or covered): the mouse's
+    /// holds let go and a held pointer given back where it is, not put home
+    /// into this window (`Mouse::lose_focus`). Given back even when the
+    /// mouse thought it free: on Windows a clip left by a grab the window
+    /// no longer knows of would hold the cursor in it (`mouse::unclip`).
+    fn let_go_pointer(&mut self) {
+        let held = self.mouse.lose_focus();
+        if let Some(g) = &self.gfx {
+            if held || cfg!(windows) {
+                crate::mouse::give_pointer(&g.window, None);
+            }
         }
     }
 
@@ -5632,7 +5648,13 @@ impl App {
             }
             // minimised (Windows sends a size of nothing): no frame comes, and
             // the time until one does is no stall
-            WindowEvent::Resized(s) if s.width == 0 || s.height == 0 => self.stall.away(),
+            WindowEvent::Resized(s) if s.width == 0 || s.height == 0 => {
+                // minimised: the pointer is no longer this window's
+                self.let_go_pointer();
+                self.stall.away()
+            }
+            // covered or minimised (Windows, macOS): as minimised
+            WindowEvent::Occluded(true) => self.let_go_pointer(),
             // the surface takes the new size as the next frame drawn begins
             // (`Gfx::resize`: in a page, configured here it was painted blank)
             WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {

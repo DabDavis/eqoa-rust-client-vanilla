@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · Alt-Tab lets go of the mouse
+- **On Windows, alt-tabbing (or minimising) while you look round with the mouse no longer leaves your cursor stuck in
+  the game's window.** The game now hands the cursor back as soon as it loses the focus, and leaves it where it is
+  instead of pulling it back into the game.
+- Buttons and keys you were holding are let go as the window loses the focus. Coming back, the mouse look starts
+  again only when you press and drag.
 ## 2026-11-16 · A hill giant's shadow is his shape
 - **With Light Shadows on, a hill giant's lantern now throws his own shape on the ground round his feet**, as
   everyone else's does. His lantern rides inside him (he is taller than it), and his shadow was a dark square at his
