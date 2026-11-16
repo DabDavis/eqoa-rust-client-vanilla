@@ -16,7 +16,7 @@
 //!
 //! Not the game's: a server's regional weather (`weather_zones`, board entry
 //! #1550), sampled at the camera each frame into `regional` (Options' Weather
-//! applied): the sand's drops (`vi::atmosphere::Sand`, a sixth material),
+//! applied): the sand's blowing dust (`sanddust`, drawn as strips),
 //! the roof over the eye and a wall upwind (probed every 100 ms), and the
 //! wind's bed on the sound. Its fog is `viewer::lit`'s.
 //! `EQOA_WEATHER_PREVIEW=kind[,strength]` (as `/weatherpreview`'s words, a
@@ -38,9 +38,7 @@ use vi::world::World;
 
 /// The materials `Init` makes, in its order: rain, snow, splash, star,
 /// lightning patch; their texture, blend mode and Z test (none writes Z).
-/// Then not the game's: a server's sandstorm's drops (`vi::atmosphere::
-/// SAND_MAT`), snow's texture tinted sand.
-const MATERIALS: [(&str, usize, bool); 6] = [("rain.tga", 3, true), ("snow.tga", 3, true), ("splash.tga", 1, true), ("star.tga", 1, false), ("lightning_patch.tga", 1, false), ("snow.tga", 3, true)];
+const MATERIALS: [(&str, usize, bool); 5] = [("rain.tga", 3, true), ("snow.tga", 3, true), ("splash.tga", 1, true), ("star.tga", 1, false), ("lightning_patch.tga", 1, false)];
 
 /// FX.CSF's Lavastorm: the fireball's head and its impact.
 const HEAD: &str = "P:\\studio\\eqps2\\team\\brandon\\head.esf";
@@ -101,7 +99,7 @@ pub struct Weather {
     rand: Rand,
     /// the fireballs' emitters
     sys: System<Ee>,
-    tex: [i32; 6],
+    tex: [i32; 5],
     /// `SetSky`'s first call fades (instantly), as entering a world does
     first: bool,
     sounds_attached: bool,
@@ -123,6 +121,8 @@ pub struct Weather {
     /// probed every 100 ms while there is regional weather
     pub roof: bool,
     pub upwind_wall: bool,
+    /// the sandstorm's blowing dust (`sanddust`)
+    pub dust: crate::sanddust::Dust,
     probed: Option<i64>,
 }
 
@@ -198,6 +198,7 @@ impl Weather {
             preview,
             roof: false,
             upwind_wall: false,
+            dust: Default::default(),
             probed: None,
         };
         if let Some(b) = preview.and_then(|p| p.retail_byte()) {
@@ -273,6 +274,7 @@ impl Weather {
             a.p1198.0,
             a.pf48.0
         ) + &format!(", dome {:?}", a.pals.get(&a.sky_sprite).and_then(|p| p.first()).map(|m| m.used().iter().map(|l| (l.texture, l.blend, l.color)).collect::<Vec<_>>()))
+            + &format!(", dust {} grains {} wisps, ground {:?}", self.dust.grain_count, self.dust.wisp_count, self.dust.ground)
     }
 
     /// One frame, before the lights: `SetSky` for the camera's terrain
@@ -303,13 +305,17 @@ impl Weather {
         // the regional weather's roof and wall, every 100 ms while there is any
         let r = self.regional;
         if r.intensity() <= 0.0 {
-            (self.roof, self.upwind_wall, self.probed) = (false, false, None);
+            (self.roof, self.upwind_wall, self.probed, self.dust.ground) = (false, false, None, None);
         } else if self.probed.is_none_or(|t| time - t >= 100 || time < t) {
             self.probed = Some(time);
             let p = eye.position;
             let mut up = CollRay::default();
             up.init(p, Vect3::new(p.x, p.y + F::new(120.0), p.z));
             self.roof = atmosphere::Scene::collide_ray(&mut Rays(world), &mut up);
+            // the ground under the eye, which the dust skims
+            let mut down = CollRay::default();
+            down.init(p, Vect3::new(p.x, p.y - F::new(200.0), p.z));
+            self.dust.ground = atmosphere::Scene::collide_ray(&mut Rays(world), &mut down).then(|| down.hit_point().y.0);
             let len = r.wind[0].hypot(r.wind[1]);
             self.upwind_wall = len > 0.01 && {
                 let mut side = CollRay::default();
@@ -328,7 +334,7 @@ impl Weather {
         self.atm.update(&mut Rays(world), &mut voices, &mut self.sys, &cam, time, F::new(hour), o, &mut self.rand);
         // the sand's drops on the sampled sand and wind (none at 0)
         let (e, d) = (eye.position, eye.direction);
-        self.atm.sand.update([e.x.0, e.y.0, e.z.0], [d.x.0, d.y.0, d.z.0], r.sand, r.wind, time);
+        self.dust.update([e.x.0, e.y.0, e.z.0], [d.x.0, d.y.0, d.z.0], r.sand, r.wind, time);
     }
 
     /// The lights' half (`SetupTimeOfDayLights`' `GetLightning`): the flash,
@@ -355,7 +361,6 @@ impl Weather {
         self.atm.render_sky(&cam, &mut sky, &mut self.rand);
         let mut world = Raster::default();
         self.atm.render_weather(&cam, &mut world);
-        self.atm.sand.render(&cam, &mut world);
         let mut out = self.batches(&world, crate::settings::client().weather);
         for (id, bbs) in self.sys.render(time) {
             let def = self.sys.emitter(id).def;
@@ -363,6 +368,12 @@ impl Weather {
             out.push(Batch { texture: d.texture as i32, blend: d.blend.clamp(0, 4) as usize, ztest: d.ztest, zwrite: d.zwrite, quads: quads(&bbs) });
         }
         (self.batches(&sky, crate::settings::SHARE_FULL), out)
+    }
+
+    /// The sandstorm's dust as strips seen from `eye`, in `color` (the
+    /// storm's fog colour): for the renderer's strips, after the frame's own.
+    pub fn dust_strips(&self, eye: glam::Vec3, color: [f32; 3]) -> Vec<render::billboard::Strips> {
+        self.dust.strips(eye.to_array(), color, self.tex[1])
     }
 
     /// The raster's runs as batches, through the options' Weather at `share`
@@ -381,8 +392,7 @@ impl Weather {
 }
 
 /// A run of material `k`'s billboards (`MATERIALS`) as the options' Weather
-/// draws it at `share`: of the rain's, the snow's and the sand's drops (0, 1,
-/// 5) that share,
+/// draws it at `share`: of the rain's and the snow's drops (0, 1) that share,
 /// each by its place in the run, which is its particle's (`RenderWeather`
 /// draws every particle, in order, at every frame); the splashes (2) that much
 /// as bright (an added blend); the stars and the lightning (3, 4), and every
@@ -392,7 +402,7 @@ fn weathered(mut q: Vec<Quad>, k: usize, share: u8) -> Vec<Quad> {
         return q;
     }
     match k {
-        0 | 1 | 5 => {
+        0 | 1 => {
             let mut at = 0u64;
             q.retain(|_| {
                 at += 1;
