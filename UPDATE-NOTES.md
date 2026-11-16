@@ -36,6 +36,12 @@ is put on the page by `.github/workflows/notes.yml`.
 - Each form of a pet keeps its own colours. Everyone playing this client sees your pet's dyes; a PS2 sees its own colours.
 - **An item can be such a hat too**: the first is the **Turban of Twisted Virtue**, the efreeti lord's turban, drawn
   on your head while you wear it in your helm's place.
+## 2026-11-16 · Dryad helms
+- **A Dryad's helm now sits right**: her locks, and the long tail down her back, no longer stick out of the top, the
+  sides and the back of every helm. Under a helm her hair is tucked away, as a human's is, and the helm sits on her head
+  as on a woman's.
+- The Erych guardian, Haliai and Erych arbiter bodies too: their hair goes under the helm, and the helm sits a little
+  larger and higher, so their heads no longer show through its top. Horns and fins still come out, as a gnoll's ears do.
 
 ## 2026-11-16 · See more players and creatures, farther
 - **NPC/PC Display now starts at 48** (it was the game's 24) and **NPC/PC Distance at 200** (it was 100), in
