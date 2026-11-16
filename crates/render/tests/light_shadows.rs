@@ -732,3 +732,49 @@ fn cap(lo: Vec3, hi: Vec3) -> esf::Model {
     m.batches[0].indices.drain(12..18);
     m
 }
+
+/// Two models as one (`b`'s vertices after `a`'s, one batch).
+fn joined(a: esf::Model, b: esf::Model) -> esf::Model {
+    let mut m = a;
+    let base = m.pos.len() as u32;
+    let more: Vec<u32> = b.batches[0].indices.iter().map(|i| i + base).collect();
+    m.pos.extend(b.pos);
+    m.uv.extend(b.uv);
+    m.normal.extend(b.normal);
+    m.color.extend(b.color);
+    m.batches[0].indices.extend(more);
+    m
+}
+
+/// A body taller than its lantern (a hill giant, 4.81 tall, round the
+/// lantern 3 over its feet; the owner: "his shadow not matching his form"):
+/// a post 4.8 tall with a bar across its top, 2 wide along x (shoulders).
+/// Its shadow is its form, as from 1.65 of its height over its feet
+/// (`lightshadow::OWN_OVER`): the bar's on the ground along x (2.3 out
+/// either side), and none beside the post along z or between the two; and
+/// past the body the ground lit as Light Shadows off light it. Before, what
+/// of it was `OWN_CLEAR` under the lantern cast alone: the post's foot, the
+/// bar nowhere. A body under its lantern (1.78, a human) casts as before
+/// (`a_body_shadows_its_own_light_from_below_it`).
+#[test]
+fn a_body_taller_than_its_lantern_casts_its_form() {
+    let Some(g) = gpu() else { return };
+    let none = |_: i32| None;
+    let lamp = (Vec3::new(0.0, 3.0, 0.0), 20.0, Vec3::X);
+    let run = |light: bool| {
+        let mut r = renderer(&g, true, false, light);
+        let f = r.upload(&g.device, &g.queue, &floor(HALF), &[at(Vec3::ZERO)], &none);
+        let giant = joined(cuboid(Vec3::new(-0.2, 0.0, -0.2), Vec3::new(0.2, 4.4, 0.2), layer(0, 0)), cuboid(Vec3::new(-1.0, 4.4, -0.2), Vec3::new(1.0, 4.8, 0.2), layer(0, 0)));
+        let body = r.upload(&g.device, &g.queue, &esf::Model { skinned: true, ..giant }, &[at(Vec3::ZERO)], &none);
+        shot(&g, &mut r, &view(Vec3::ZERO, &[], Some(lamp)), &[Draw::Model(&f), Draw::Model(&body)])
+    };
+    let (on, off) = (run(true), run(false));
+    for x in [2.3, -2.3] {
+        let p = pixel(x, 0.0);
+        assert!(red(&on, p) < 0.15 && red(&off, p) > 0.4, "the bar's shadow at {x}: {} (off {})", red(&on, p), red(&off, p));
+    }
+    for (x, z) in [(0.0, 2.0), (0.0, -2.0), (1.6, 1.6), (-1.6, -1.6), (4.0, 0.0), (0.0, 4.0)] {
+        let p = pixel(x, z);
+        assert!((red(&on, p) - red(&off, p)).abs() <= 2.0 / 255.0, "lit at ({x}, {z}) as with Light Shadows off: {} against {}", red(&on, p), red(&off, p));
+    }
+}

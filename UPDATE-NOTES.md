@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · A hill giant's shadow is his shape
+- **With Light Shadows on, a hill giant's lantern now throws his own shape on the ground round his feet**, as
+  everyone else's does. His lantern rides inside him (he is taller than it), and his shadow was a dark square at his
+  feet instead. A troll's or an ogre's head is no longer missing from its shadow either.
+
 ## 2026-11-16 · See more players and creatures, farther
 - **NPC/PC Display now starts at 48** (it was the game's 24) and **NPC/PC Distance at 200** (it was 100), in
   Options > Extended. You see more of the people and creatures round you, and farther out.
