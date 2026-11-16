@@ -11,6 +11,8 @@ is put on the page by `.github/workflows/notes.yml`.
 - **A character can now wear a hat another body has built in**, given by a GM on eqoaclassic.com: the first is the
   kappa's wide-brimmed straw hat with its steel spike, sized to your head and worn in place of your helm (the hair
   is dressed as under a helm). Others see it on you; a PS2 shows your helm as before.
+- **An item can be such a hat too**: the first is the **Turban of Twisted Virtue**, the efreeti lord's turban, drawn
+  on your head while you wear it in your helm's place.
 
 ## 2026-11-16 · See more players and creatures, farther
 - **NPC/PC Display now starts at 48** (it was the game's 24) and **NPC/PC Distance at 200** (it was 100), in
