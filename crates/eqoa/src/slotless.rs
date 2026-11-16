@@ -177,19 +177,26 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     // women): the head four times a human's, the named node at the crown
     HeadSeat { bodies: &[0xFFB1_EA2C, 0x8117_C627, 0xE617_303B, 0x72A8_FDBB, 0x7F26_04DF, 0x05F5_9B65, 0x2D68_6972, 0xBF6A_DFDB, 0xF345_01CB, 0x286C_6E9E, 0x8E2A_6552, 0xE308_27CC], anchor: Anchor::Named, scale: [4.2; 3], offset: [0.0, 0.30, -0.05] },
     // the goblins: SOE's own seat, as the 2002 disc's goblins name their helm
-    // node (the named node) and scale it 0.9
-    HeadSeat { bodies: GOBLINS, anchor: Anchor::Named, scale: [0.9; 3], offset: [0.0, 0.0, 0.0] },
+    // node (the named node) and scale it 0.9, 3 cm up: on Frontiers' goblins the
+    // back of the crown came out of the top of every helm (hidden under the tufts
+    // and topknots until those went under the helm, `racebody::hide_hair`; the
+    // coordinator, 2026-11-16, `a_helm_covers_the_crown_under_its_hair`). The
+    // ears still stand out through the sides and the top, as a gnoll's do
+    HeadSeat { bodies: GOBLINS, anchor: Anchor::Named, scale: [0.9; 3], offset: [0.0, 0.03, 0.0] },
     // the gargoyles, their heads on the goblin's skeleton's
     HeadSeat { bodies: &[0xB4D2_D132, 0x4E2A_945C, 0xAEC5_D9F6, 0x0013_55C8, 0x6D95_9FD9, 0x9304_BAB5], anchor: Anchor::Named, scale: [1.1; 3], offset: [0.0, 0.04, 0.0] },
     // the orcs on the orc's skeleton: SOE's 2002 orc's (its helm node the named
     // node, scaled 1.19)
     HeadSeat { bodies: &[0x8214_A32D, 0x84F4_7767, 0x656D_D4C5, 0xB2FB_D7EF, 0x0A03_EB92, 0xDA51_5962], anchor: Anchor::Named, scale: [1.19; 3], offset: [0.0, 0.0, 0.0] },
     // the Deathfist orcs, on HumanMale's and HumanFemale's skeletons (the fire
-    // weaver names a helm node of its own)
-    HeadSeat { bodies: &[0x37FD_13F9, 0x3198_F5B1, 0x0205_D208, 0xC76F_1FA8, 0xE144_942F], anchor: Anchor::Named, scale: [1.05; 3], offset: [0.0, 0.0, 0.0] },
+    // weaver names a helm node of its own); the slayer's crown, its hair under
+    // the helm, came out of the top: 3 cm up
+    HeadSeat { bodies: &[0xC76F_1FA8], anchor: Anchor::Named, scale: [1.05; 3], offset: [0.0, 0.03, 0.0] },
+    HeadSeat { bodies: &[0x37FD_13F9, 0x3198_F5B1, 0x0205_D208, 0xE144_942F], anchor: Anchor::Named, scale: [1.05; 3], offset: [0.0, 0.0, 0.0] },
     // the brownies, on HumanMale's skeleton (the 2002 disc's on its own 2002
-    // HumanMale's), a head more than half again a human's
-    HeadSeat { bodies: &[0x4376_EB52, 0x4946_8331], anchor: Anchor::Named, scale: [1.7; 3], offset: [0.0, 0.16, -0.02] },
+    // HumanMale's), a head more than half again a human's; 2 cm higher once the
+    // brownie's spikes went under the helm, its crown out of the top
+    HeadSeat { bodies: &[0x4376_EB52, 0x4946_8331], anchor: Anchor::Named, scale: [1.7; 3], offset: [0.0, 0.18, -0.02] },
     // the dryads, on HumanFemale's, their hair left out under a helm
     // (`racebody::hide_hair`; the owner, 2026-11-16: "cll is a dryad with the
     // helm not sitting right": it stood out of every helm, and once it was gone
@@ -219,8 +226,12 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     // the frogloks (and their ghouls, one head): as the PS2 patch seated them
     // (`FROGLOK_SEAT`)
     HeadSeat { bodies: FROGLOKS, anchor: Anchor::Node(FROGLOK_NODE), scale: FROGLOK_SEAT.0, offset: FROGLOK_SEAT.1 },
+    // the kerrans; the white tiger and the maned lion, their manes off the head
+    // under a helm (`racebody::hide_hair`), 3 cm higher and 2 cm forward: their
+    // brows and crowns came out of the top
+    HeadSeat { bodies: &[0x77A7_E7B8, 0x5D40_C8AB], anchor: Anchor::Head, scale: [1.05; 3], offset: [0.0, 0.26, 0.07] },
     HeadSeat {
-        bodies: &[0x2217_6258, 0x4D9C_53EF, 0x77A7_E7B8, 0x78FA_8F20, 0x0DDD_4087, 0x5D40_C8AB, 0xB749_BF57, 0xB620_92E4, 0xE700_DE53, 0x39FE_AA5F, 0x7654_AC3C, 0xD8E0_F980],
+        bodies: &[0x2217_6258, 0x4D9C_53EF, 0x78FA_8F20, 0x0DDD_4087, 0xB749_BF57, 0xB620_92E4, 0xE700_DE53, 0x39FE_AA5F, 0x7654_AC3C, 0xD8E0_F980],
         anchor: Anchor::Head,
         scale: [1.05; 3],
         offset: [0.0, 0.23, 0.05],
@@ -3162,6 +3173,74 @@ mod tests {
                 assert!(with_hair.len() >= 5, "{id:#010x}: the control, the hair out of the top of helms {with_hair:?}");
             }
             assert!(!alone.is_empty(), "{id:#010x}: the control, hung on the named node alone");
+        }
+    }
+
+    /// A helm covers the crown of the bodies whose hair, cap or mane goes under
+    /// it (`racebody::hide_hair`; the coordinator, 2026-11-16: the brownie and its
+    /// elder, the goblins' tufts and topknots, the ice goblin chieftain, the maned
+    /// lion, the white tiger, the Deathfist slayer and the orcs) and of the other
+    /// goblins (their seat is one): with the hair left out, standing, no vertex of
+    /// the top quarter of the middle of the head (within 0.6 of helm 4's
+    /// half-width of the middle: ears and horns stand out through the sides as a
+    /// gnoll's do) is above any of helms 1-9 seated as `HEAD_SEATS` has it (a ray
+    /// straight up meets no helm and one straight down from above it meets the
+    /// helm under it). The control: hung as before (the seat of 2026-11-16 with
+    /// the hair kept), the hair or the crown came out of the top of some helm on
+    /// each of these bodies.
+    #[test]
+    fn a_helm_covers_the_crown_under_its_hair() {
+        let Some(lib) = disc() else { return };
+        let t = Tables::retail();
+        let kerran = HelmFit { scale: Vec3::splat(1.05), offset: Vec3::new(0.0, 0.23, 0.05) };
+        let goblin = HelmFit { scale: Vec3::splat(0.9), offset: Vec3::ZERO };
+        // (not the goblins whose own helm, skull mask or hood the helm goes over or
+        // is left off: the overseer, the warmaster, the skull mask, the mystic)
+        let own = [0x2ECB_B95Au32, 0xF54C_2142, 0xB656_DFEA, 0x5937_EA22];
+        let mut bodies: Vec<(u32, HelmFit)> = GOBLINS.iter().filter(|&g| !own.contains(g)).map(|&g| (g, goblin)).collect();
+        bodies.extend([
+            (0x4376_EB52, HelmFit { scale: Vec3::splat(1.7), offset: Vec3::new(0.0, 0.16, -0.02) }),
+            (0x4946_8331, HelmFit { scale: Vec3::splat(1.7), offset: Vec3::new(0.0, 0.16, -0.02) }),
+            (0x5D40_C8AB, kerran),
+            (0x77A7_E7B8, kerran),
+            (0xC76F_1FA8, HelmFit { scale: Vec3::splat(1.05), offset: Vec3::ZERO }),
+        ]);
+        bodies.extend([0x84F4_7767u32, 0xB2FB_D7EF, 0x0A03_EB92, 0xDA51_5962].map(|o| (o, HelmFit { scale: Vec3::splat(1.19), offset: Vec3::ZERO })));
+        for (id, before) in bodies {
+            let cs = sprite_of(&lib, id);
+            let seat = head_fit(id, &cs, true).unwrap_or_else(|| panic!("{id:08X}: a seat"));
+            let model = lib.build_model(lib.lookup(id as i32).unwrap()).unwrap();
+            let mut bare = model.clone();
+            crate::racebody::hide_hair(&mut bare, id);
+            let kept: std::collections::HashSet<u32> = bare.batches.iter().flat_map(|b| b.indices.iter().copied()).collect();
+            let verts = skull_verts(&lib, id, 0, 0);
+            let helms: Vec<(u8, esf::Model)> = (1..10u8).filter_map(|set| helm_on(&lib, id, &cs, true, set, [255; 4], &t, false).map(|(_, m)| (set, m))).collect();
+            let half = helms.iter().find(|h| h.0 == 4).unwrap().1.pos.iter().map(|p| p[0].abs()).fold(0.0f32, f32::max) * seat.scale.x;
+            // the top quarter of the middle of the head
+            let crown = |hair: bool| -> Vec<Vec3> {
+                let mid: Vec<Vec3> = verts.iter().filter(|(v, p, _)| (hair || kept.contains(&(*v as u32))) && p.x.abs() <= 0.6 * half).map(|(_, p, _)| *p).collect();
+                let (lo, hi) = mid.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
+                mid.into_iter().filter(|p| p.y >= hi - 0.25 * (hi - lo)).collect()
+            };
+            let out = |crown: &[Vec3], fit: &HelmFit| -> Vec<(u8, usize)> {
+                helms
+                    .iter()
+                    .map(|(set, m0)| {
+                        let mut m = m0.clone();
+                        fit.apply(&mut m);
+                        let tris: Vec<[Vec3; 3]> = m.batches.iter().flat_map(|b| b.indices.chunks_exact(3).map(|t| [0, 1, 2].map(|k| Vec3::from(m.pos[t[k] as usize])))).collect();
+                        (*set, crown.iter().filter(|&&p| meets(&tris, p, Vec3::Y).2 == 0 && meets(&tris, p + Vec3::Y * 10.0, Vec3::NEG_Y).2 > 0).count())
+                    })
+                    .filter(|x| x.1 > 0)
+                    .collect()
+            };
+            let (seated, old) = (out(&crown(false), &seat), out(&crown(true), &before));
+            eprintln!("{id:08X}: {} triangles under the helm; out of the top seated {seated:?}, as before {old:?}", model.triangles - bare.triangles);
+            assert!(seated.is_empty(), "{id:08X}: the crown out of the top of helms {seated:?}");
+            // (the hatebone elder's hair came out of the back of its helms, not the top)
+            if id != 0xB2FB_D7EF {
+                assert!(!old.is_empty(), "{id:08X}: the control, as before");
+            }
         }
     }
 
