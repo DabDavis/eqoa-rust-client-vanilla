@@ -136,28 +136,65 @@ pub const MERFOLK: &[u32] = &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C
 /// none).
 const HAIR: [f32; 4] = [0.0, 0.0, 63.0 / 255.0, 128.0 / 255.0];
 const ALL: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
-const HAIR_UNDER_HELM: &[(u32, &[(i32, [f32; 4])])] = &[
-    (0xA316_EB78, &[(0, HAIR)]),
-    (0x74BA_7C3D, &[(0, HAIR)]),
-    (0xBF21_FEF5, &[(0, HAIR)]),
+/// A part of a body's hair (`HAIR_UNDER_HELM`): its palette entry, the rect of
+/// texture coordinates it lies in, and the nodes its triangles lie on (each
+/// corner weighted most to one of them; `ANY` wherever they lie).
+type Hair = (i32, [f32; 4], &'static [u8]);
+const ANY: &[u8] = &[];
+const HAIR_UNDER_HELM: &[(u32, &[Hair])] = &[
+    (0xA316_EB78, &[(0, HAIR, ANY)]),
+    (0x74BA_7C3D, &[(0, HAIR, ANY)]),
+    (0xBF21_FEF5, &[(0, HAIR, ANY)]),
     // the enchanting siren's tiara too (a strip below the hair, on her head and
     // neck alone), which stood out of the front of every helm
-    (0x1740_427C, &[(0, HAIR), (0, [0.0, 128.0 / 255.0, 63.0 / 255.0, 150.0 / 255.0])]),
-    (0x70EF_CE05, &[(0, [0.0, 0.30, 0.69, 0.93]), (6, ALL)]),
-    (0x21F3_11BB, &[(0, ALL), (1, ALL), (6, ALL)]),
-    (0xACE7_1E26, &[(1, ALL), (6, ALL)]),
-    (0xB90A_DDD2, &[(0, ALL), (1, ALL), (8, ALL), (9, ALL), (10, ALL)]),
+    (0x1740_427C, &[(0, HAIR, ANY), (0, [0.0, 128.0 / 255.0, 63.0 / 255.0, 150.0 / 255.0], ANY)]),
+    (0x70EF_CE05, &[(0, [0.0, 0.30, 0.69, 0.93], ANY), (6, ALL, ANY)]),
+    (0x21F3_11BB, &[(0, ALL, ANY), (1, ALL, ANY), (6, ALL, ANY)]),
+    (0xACE7_1E26, &[(1, ALL, ANY), (6, ALL, ANY)]),
+    (0xB90A_DDD2, &[(0, ALL, ANY), (1, ALL, ANY), (8, ALL, ANY), (9, ALL, ANY), (10, ALL, ANY)]),
+    // the brownie's spikes (entry 2) and the fringe at its brow (1), both in a hair strip
+    (0x4376_EB52, &[(1, ALL, ANY), (2, ALL, ANY)]),
+    // the brownie elder's red cap, a box of its one atlas
+    (0x4946_8331, &[(0, [0.26, 0.25, 0.50, 0.49], ANY)]),
+    // the goblins' topknots, tufts, mohawk and braid, each an entry drawn in an NPC hair
+    // strip (black `B5632329`, auburn `EF0C9AEB`) on the head (a robed grey goblin's
+    // strip on its sleeves, 581B6A80's and 687E7645's entries 9 and 0, stays)
+    (0x6C13_08E0, &[(7, ALL, ANY)]),
+    (0x581B_6A80, &[(7, ALL, ANY)]),
+    (0x9637_1804, &[(0, ALL, ANY)]),
+    (0xBCDF_0C04, &[(7, ALL, ANY)]),
+    (0xE961_79D4, &[(6, ALL, ANY)]),
+    (0xA5F9_2F43, &[(0, ALL, ANY)]),
+    (0xEDB4_E0AD, &[(1, ALL, ANY)]),
+    (0x687E_7645, &[(4, ALL, ANY)]),
+    (0xEC08_85EB, &[(0, ALL, ANY)]),
+    (0x1F8E_11D3, &[(4, ALL, ANY)]),
+    (0x1245_E56B, &[(2, ALL, ANY)]),
+    (0x27A4_E554, &[(7, ALL, ANY)]),
+    (0x507C_4A52, &[(7, ALL, ANY)]),
+    // the maned lion's and the white tiger's manes where they lie on the head (node
+    // 5): what hangs from the neck and the shoulders stays, as hair below a helm
+    (0x5D40_C8AB, &[(1, ALL, &[5])]),
+    (0x77A7_E7B8, &[(2, ALL, &[5])]),
+    // the Deathfist slayer's hair (entry 8) and its four loose strands (0-3)
+    (0xC76F_1FA8, &[(0, ALL, ANY), (1, ALL, ANY), (2, ALL, ANY), (3, ALL, ANY), (8, ALL, ANY)]),
+    // the orcs' long hair and its loose strands
+    (0x84F4_7767, &[(1, ALL, ANY), (2, ALL, ANY), (3, ALL, ANY), (4, ALL, ANY), (5, ALL, ANY)]),
+    (0xB2FB_D7EF, &[(1, ALL, ANY), (2, ALL, ANY), (3, ALL, ANY), (4, ALL, ANY), (5, ALL, ANY)]),
+    (0x0A03_EB92, &[(0, ALL, ANY), (1, ALL, ANY), (2, ALL, ANY), (3, ALL, ANY), (4, ALL, ANY)]),
+    (0xDA51_5962, &[(0, ALL, ANY), (1, ALL, ANY), (2, ALL, ANY), (3, ALL, ANY), (4, ALL, ANY)]),
 ];
 
 /// Takes body `id`'s hair (`HAIR_UNDER_HELM`) out of `model`, a player's
 /// character's wearing a helm: each triangle of a listed entry whose texture
-/// coordinates' centre (its first layer's) lies in that entry's rect.
+/// coordinates' centre (its first layer's) lies in that entry's rect, and whose
+/// corners lie on the part's nodes when it names any.
 pub fn hide_hair(model: &mut esf::Model, id: u32) {
     let Some(&(_, parts)) = HAIR_UNDER_HELM.iter().find(|(b, _)| *b == id) else { return };
-    let uv = model.uv.clone();
+    let (uv, bones, weights) = (model.uv.clone(), model.bones.clone(), model.weights.clone());
     let mut gone = 0;
     for b in model.batches.iter_mut() {
-        let rects: Vec<[f32; 4]> = parts.iter().filter(|(e, _)| *e == b.material).map(|(_, r)| *r).collect();
+        let rects: Vec<&Hair> = parts.iter().filter(|(e, _, _)| *e == b.material).collect();
         if rects.is_empty() {
             continue;
         }
@@ -171,7 +208,14 @@ pub fn hide_hair(model: &mut esf::Model, id: u32) {
                     let q = l.apply_uv(uv[v as usize]);
                     [a[0] + q[0].rem_euclid(1.0) / 3.0, a[1] + q[1].rem_euclid(1.0) / 3.0]
                 });
-                !rects.iter().any(|r| c[0] >= r[0] && c[0] < r[2] && c[1] >= r[1] && c[1] < r[3])
+                let on = |nodes: &[u8]| {
+                    nodes.is_empty()
+                        || t.iter().all(|&v| {
+                            let (bo, w) = (bones[v as usize], weights[v as usize]);
+                            (0..4).max_by_key(|&k| w[k]).is_some_and(|k| nodes.contains(&bo[k]))
+                        })
+                };
+                !rects.iter().any(|(_, r, n)| c[0] >= r[0] && c[0] < r[2] && c[1] >= r[1] && c[1] < r[3] && on(n))
             })
             .flatten()
             .copied()

@@ -13,6 +13,13 @@ is put on the page by `.github/workflows/notes.yml`.
   back into a cloth cap: the glow, sparkles or trim wrap the hat.
 - **Hats can be dyed**: the Equipment Dyer's helm colour (or a GM's dye) colours the hat; undyed, it keeps its own
   colours.
+## 2026-11-16 · Helms on goblins, brownies, kerrans and orcs
+- **Hair, caps and manes now go under a helm** on the new races' bodies, as a Dryad's do: the goblins' topknots,
+  tufts, the ice goblin chieftain's mohawk and braid, the brownie's spikes and the brownie elder's red cap, the
+  white tiger's and the maned lion's manes where they cover the head, the Deathfist slayer's hair and the orcs' long
+  hair no longer stick out through the top or back of the helm.
+- **Helms sit a little higher on goblins, brownies, the white tiger, the maned lion and the Deathfist slayer**, so
+  the top of the head no longer shows through. Ears and horns still come out, as a gnoll's ears do.
 
 ## 2026-11-16 · Alt-Tab lets go of the mouse
 - **On Windows, alt-tabbing (or minimising) while you look round with the mouse no longer leaves your cursor stuck in
