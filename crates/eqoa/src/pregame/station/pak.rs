@@ -2,8 +2,8 @@
 //! big-endian records, a name's length, the name, the data's length, the
 //! data; each record's path ("data/ui/login.xml") names its directories,
 //! made as they are first met. A record running past the end stops the load.
-//! The renderer reads the disc's copy (`/station.pak`): the card's, which a
-//! server's patcher writes, is not a thing here.
+//! The renderer reads the card's copy, which a server's patch writes (here the
+//! server's folder: `super::pak_for`), else the disc's (`/station.pak`).
 
 /// A file, or a directory of them.
 #[derive(Clone, Debug)]

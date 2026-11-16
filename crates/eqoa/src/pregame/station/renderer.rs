@@ -1695,6 +1695,89 @@ mod tests {
         crate::settings::testing::reset(false);
     }
 
+    /// A pak with `name`'s data swapped for `data` (a server's station.pak).
+    fn pak_with(pak: &[u8], name: &str, data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut p = 0;
+        while p + 4 <= pak.len() {
+            let n = u32::from_be_bytes(pak[p..p + 4].try_into().unwrap()) as usize;
+            let rec = &pak[p + 4..p + 4 + n];
+            let l = u32::from_be_bytes(pak[p + 4 + n..p + 8 + n].try_into().unwrap()) as usize;
+            let mut body = &pak[p + 8 + n..p + 8 + n + l];
+            if rec.split(|&c| c == 0).next() == Some(name.as_bytes()) {
+                body = data;
+            }
+            out.extend((n as u32).to_be_bytes());
+            out.extend(rec);
+            out.extend((body.len() as u32).to_be_bytes());
+            out.extend(body);
+            p += 8 + n + l;
+        }
+        out
+    }
+
+    /// go-eqoa-server's account key page as it serves it with a verified
+    /// e-mail required (tcp.EmailRefusalPage): the login it refuses for want of
+    /// one is answered with status 2, which opens this page.
+    const EMAIL_REFUSAL_PAGE: &str = r#"<PS2GUIPage gridWidth="1" gridHeight="1">
+	<Object>
+		<Position x="0" y="0"/>
+		<Image imageName="P:\studio\eqps2\Game_Assets\UI\stbk00.tga"/>
+	</Object>
+	<Text val="Your account needs a verified e-mail. Verify it at">
+		<Position x="40" y="118"/>
+		<Size width="390" height="64"/>
+		<Wrap mode="true"/>
+		<TextColor r="255" g="226" b="97"/>
+	</Text>
+	<Text val="eqoaclassic.com/eqoa/password.">
+		<Position x="40" y="168"/>
+		<TextColor r="255" g="255" b="255"/>
+	</Text>
+	<Object>
+		<Position x="237" y="380"/>
+		<Image imageType="StationTri"/>
+	</Object>
+	<Text val="Back">
+		<Position x="265" y="378"/>
+		<TextColor r="255" g="226" b="97"/>
+	</Text>
+</PS2GUIPage>
+"#;
+
+    /// A login refused for want of a verified e-mail (status 2, result 0): the
+    /// dialog closed and the server's page saying why, nothing on it to
+    /// select; Triangle goes back to the login page, and the login is no
+    /// login (no conn.xml, nothing to play). The control: a wrong password
+    /// is the game's "Unknown error logging in." (status 4), on the login page.
+    #[test]
+    fn a_login_refused_for_its_email_shows_the_servers_page() {
+        let Some(mut d) = disc() else { return };
+        crate::settings::testing::reset(false);
+        d.pak = pak_with(&d.pak, "data/ui/EnterKey.xml", EMAIL_REFUSAL_PAGE.as_bytes());
+        let mut t = T::new(&d, ("", "", false));
+        t.type_in("StationName", "player0001");
+        t.type_in("StationPassword", "password123");
+        t.r.pages.last_mut().unwrap().select("LogInButton");
+        t.key(134);
+        t.says(login_reply(0, 7, 4, 0xFFFF_FFFF));
+        assert_eq!(t.dialog(), t.word(1364), "a wrong password");
+        assert_eq!(t.page(), "data/ui/login.xml");
+        t.key(134);
+        t.r.pages.last_mut().unwrap().select("LogInButton");
+        t.key(134);
+        t.says(login_reply(0, 7, 2, 0xFFFF_FFFF));
+        assert!(!t.r.dialog.is_open(), "the dialog closed");
+        assert_eq!(t.page(), "data/ui/EnterKey.xml");
+        let texts: Vec<String> = t.r.page().unwrap().objs.iter().filter_map(|o| o.text.clone()).collect();
+        assert!(texts.iter().any(|x| x == "Your account needs a verified e-mail. Verify it at"), "{texts:?}");
+        assert!(texts.iter().any(|x| x == "eqoaclassic.com/eqoa/password."), "{texts:?}");
+        assert_eq!(t.r.page().unwrap().grid.selected(), None, "nothing to select");
+        t.key(132);
+        assert_eq!(t.page(), "data/ui/login.xml", "Triangle goes back");
+        crate::settings::testing::reset(false);
+    }
+
     /// Save Account: ticked, a login keeps the account in game.opt three of
     /// STATION's frames on (the "Saving" box meanwhile); the next run's login
     /// page is filled and its Log In selected. The control: unticked, the

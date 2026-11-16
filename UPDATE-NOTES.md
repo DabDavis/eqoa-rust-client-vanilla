@@ -7,6 +7,16 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · The server's own account pages, and why a login is refused
+- **The Station pages before the server list are now your server's own**, as a PlayStation 2 shows them after its
+  patch: on eqoaclassic.com, Create User Name asks only for a name, a password twice and your e-mail address, Forgot
+  Password for your name and e-mail, and Manage Account offers Change Password and Change E-mail. No billing, address
+  or birthday fields.
+- **A login refused because your account has no verified e-mail now says so** on its own page: "Your account needs a
+  verified e-mail. Verify it at eqoaclassic.com/eqoa/password." Open the link we e-mailed you (or add your address on
+  that page's E-mail tab), then log in again. Press Triangle (Escape) to go back to the login.
+- A server whose patch has no Station pages shows the disc's, as before.
+
 ## 2026-11-15 · Sliders for flora, environment effects and weather
 - **Options > Extended > Graphics > World's Flora and Environment are sliders now**, like Fog, from 0 to 100%.
   Flora is how much of the grass and plants round you is drawn; Environment is how strong the ground fog, dust,

@@ -13,9 +13,9 @@
 //! (`Quiet`), so that what STATION counts in frames (a window opening, a
 //! page's pulse, the news' waits, the save's three frames) keeps its time.
 //!
-//! Not here: the memory card (`McErr`'s checks at the first load and on a
-//! failed save, the card's copy of station.pak: the disc's is read), the
-//! network interface's state (`VINetStatus`: a computer's is up), and
+//! The card's station.pak is the server folder's, which its patch wrote
+//! (`pak_for`), the disc's without one. Not here: the memory card (`McErr`'s
+//! checks at the first load and on a failed save), the network interface's state (`VINetStatus`: a computer's is up), and
 //! customer service (`VICSInterface`, `renderer`'s header).
 
 mod api;
@@ -67,6 +67,21 @@ struct Run {
     compact: bool,
 }
 
+/// The pak STATION reads (`VIWndGenericRenderer`'s first draw): the card's
+/// station.pak when there is one, else the disc's. Here the card is the
+/// server's folder, where its patch put the file (`servers`): a server's own
+/// pages (go-eqoa-server's, trimmed to a name, a password and an e-mail, and
+/// the page saying why a login was refused) show as a PS2's do. A copy with no
+/// login page is no pak (a file cut short): the disc's. Its server addresses
+/// are not read either way (`Renderer::load`), and the news is the server's
+/// at the port both name (7000).
+fn pak_for<'a>(served: Option<&'a [u8]>, disc: &'a [u8]) -> &'a [u8] {
+    match served {
+        Some(b) if pak::Pak::load(b).find("data/ui/login.xml").is_some() => b,
+        _ => disc,
+    }
+}
+
 impl Station {
     pub fn new() -> Self {
         Self::default()
@@ -93,11 +108,12 @@ impl Station {
         self.keys.clear();
     }
 
-    /// `VIStation::Init`: the renderer loaded off the disc's STATION.PAK,
-    /// the fader from black.
+    /// `VIStation::Init`: the renderer loaded off the server's station.pak
+    /// (`pak_for`), the fader from black.
     fn init(&self, cx: &Ctx) -> Run {
         let mut r = Renderer::new(cx.now, cx.vui.words.clone(), cx.vui.language);
-        let pak = cx.res.raw("STATION.PAK").unwrap_or(&[]);
+        let served = if self.server.is_empty() { None } else { crate::servers::file(&self.server, "station.pak") };
+        let pak = pak_for(served.as_deref(), cx.res.raw("STATION.PAK").unwrap_or(&[]));
         let port = super::port("EQOA_AUTH_PORT", super::AUTH_PORT);
         r.load(pak, self.saved.clone(), &self.server, port as i32);
         let mut fader = Fader::new(1.0, cx.now);
@@ -316,5 +332,31 @@ mod tests {
         let Some((mut fresh, _)) = station() else { return };
         fresh.run.as_mut().unwrap().r.hits.clear();
         assert_eq!(fresh.point(at), Vec::<i32>::new());
+    }
+}
+
+#[cfg(test)]
+mod pak_tests {
+    use super::pak_for;
+
+    fn record(name: &str, data: &[u8]) -> Vec<u8> {
+        let mut b = (name.len() as u32).to_be_bytes().to_vec();
+        b.extend(name.as_bytes());
+        b.extend((data.len() as u32).to_be_bytes());
+        b.extend(data);
+        b
+    }
+
+    /// The server's station.pak is read when its patch left one with a login
+    /// page; the disc's otherwise (none, or a copy cut short).
+    #[test]
+    fn the_servers_pak_when_it_has_one() {
+        let disc = record("data/ui/login.xml", b"<PS2GUIPage>disc</PS2GUIPage>");
+        let mut served = record("data/ui/login.xml", b"<PS2GUIPage>served</PS2GUIPage>");
+        served.extend(record("stationdata/pad.txt", &[b' '; 64]));
+        assert_eq!(pak_for(Some(&served), &disc), &served[..]);
+        assert_eq!(pak_for(None, &disc), &disc[..]);
+        assert_eq!(pak_for(Some(&served[..20]), &disc), &disc[..], "cut short");
+        assert_eq!(pak_for(Some(&record("data/ui/conn.xml", b"x")), &disc), &disc[..], "no login page");
     }
 }
