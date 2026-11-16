@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · See more players and creatures, farther
+- **NPC/PC Display now starts at 48** (it was the game's 24) and **NPC/PC Distance at 200** (it was 100), in
+  Options > Extended. You see more of the people and creatures round you, and farther out.
+- If you had set your own numbers they are kept; you can still turn either down to the game's.
+
 ## 2026-11-16 · Auto-cast keeps Fervor up as a buff
 - **Auto-cast now reads a paladin's Fervor as a buff**, not a heal: it is a damage shield you wear that heals you when
   you are hit, so auto-cast keeps it on you (casting it again when it wears off) instead of waiting for you to drop
