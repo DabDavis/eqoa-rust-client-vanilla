@@ -566,10 +566,10 @@ pub const OP_POWER_BARS_DATA: u16 = 0x7E02;
 /// stop (`agree_weather`); answered 1, it is sent [`OP_WEATHER_DATA`]. A PS2
 /// ignores the offer; the retail rain and snow (0x00C5/0x00C7) come to every
 /// client either way.
-pub const OP_WEATHER: u16 = 0x7E90;
+pub const OP_WEATHER: u16 = 0x7E93;
 /// The regional weather's timelines, from a server the client asked
 /// ([`OP_WEATHER`]): `crate::weather`'s layout.
-pub const OP_WEATHER_DATA: u16 = 0x7E91;
+pub const OP_WEATHER_DATA: u16 = 0x7E94;
 /// The marks, from a server the client asked ([`OP_QUEST_MARKERS`]): a u8
 /// count, then each its u8 kind ([`QuestMark::kind`]), u8 world, f32 x and z,
 /// the NPC's name and a u8 count of quests, each its name, u8 lowest and
@@ -4729,9 +4729,9 @@ mod tests {
         assert_eq!(answers(&mut s), [], "and nothing asked");
     }
 
-    // go-eqoa-server's 0x7E90 weather offer: nothing asked before it, the
+    // go-eqoa-server's 0x7E93 weather offer: nothing asked before it, the
     // answer once a change of mind (1 while Options' Weather is above 0, 0 at
-    // 0), a new offer answered afresh, a new connection none. Its 0x7E91
+    // 0), a new offer answered afresh, a new connection none. Its 0x7E94
     // zones come as an event; a bad one is refused whole.
     #[test]
     fn weather_offer_answer_and_zones() {
@@ -4739,27 +4739,27 @@ mod tests {
         let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
             s.flush();
-            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x90, 0x7E])).collect();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x93, 0x7E])).collect();
             sent.borrow_mut().clear();
             m
         };
         s.agree_weather(true);
         assert_eq!(answers(&mut s), [], "no offer, nothing asked");
-        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x90, 0x7E, 1, 0, 0, 0]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x93, 0x7E, 1, 0, 0, 0]);
         assert!(ev.is_empty(), "{ev:?}");
         assert!(s.weather_offer);
         s.agree_weather(true);
         s.agree_weather(true);
-        assert_eq!(answers(&mut s), [(251, vec![0x90, 0x7E, 1, 0, 0, 0])], "asked once");
+        assert_eq!(answers(&mut s), [(251, vec![0x93, 0x7E, 1, 0, 0, 0])], "asked once");
         s.agree_weather(false);
-        assert_eq!(answers(&mut s), [(251, vec![0x90, 0x7E, 0, 0, 0, 0])], "the slider at 0: stopped");
-        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x90, 0x7E, 1, 0, 0, 0]);
+        assert_eq!(answers(&mut s), [(251, vec![0x93, 0x7E, 0, 0, 0, 0])], "the slider at 0: stopped");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x93, 0x7E, 1, 0, 0, 0]);
         s.agree_weather(false);
-        assert_eq!(answers(&mut s), [(251, vec![0x90, 0x7E, 0, 0, 0, 0])], "a new offer, answered again");
+        assert_eq!(answers(&mut s), [(251, vec![0x93, 0x7E, 0, 0, 0, 0])], "a new offer, answered again");
 
         use crate::weather::{Phase, Timeline, Zone};
         let z = Zone { world: 0, col: 3, row: 2, timelines: vec![Timeline { squares: 1, revision: 1, seed: 2, wind: [1.0, 0.0], phases: vec![Phase { at_ms: 0, kind: 3, strength: 255 }, Phase { at_ms: 10, kind: 0, strength: 0 }] }] };
-        let mut body = vec![0x91, 0x7E];
+        let mut body = vec![0x94, 0x7E];
         body.extend(crate::weather::write(std::slice::from_ref(&z)));
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, body.clone());
         assert!(matches!(ev.as_slice(), [Event::WeatherZones(zs)] if zs == &[z.clone()]), "{ev:?}");

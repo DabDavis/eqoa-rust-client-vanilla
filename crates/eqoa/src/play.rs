@@ -254,7 +254,7 @@ pub struct Play {
     /// What the server's messages asked of the atmosphere this frame, in
     /// their order (`Atmos`), for `weather::Weather::take`.
     pub weather: Vec<Atmos>,
-    /// A server's regional weather (0x7E91, `weather_zones`; board entry
+    /// A server's regional weather (0x7E94, `weather_zones`; board entry
     /// #1550): its zones on `regional_clock`'s ms, and `/weatherpreview`'s
     pub regional: crate::weather_zones::Zones,
     regional_clock: web_time::Instant,

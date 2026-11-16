@@ -1,4 +1,4 @@
-//! The regional weather a server sends (go-eqoa-server's 0x7E91,
+//! The regional weather a server sends (go-eqoa-server's 0x7E94,
 //! `net::weather`; board entry #1550): each 2000x2000 zone's timelines kept as
 //! they last came, sampled at the camera as `Grid::profile_blend` blends the
 //! terrain's profiles (the four 500x500 squares' centres round it, bilinear),

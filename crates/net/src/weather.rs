@@ -1,5 +1,5 @@
 //! go-eqoa-server's own, no retail message: the regional weather's timelines
-//! ([`crate::session::OP_WEATHER_DATA`], 0x7E91; board entries #1549 and
+//! ([`crate::session::OP_WEATHER_DATA`], 0x7E94; board entries #1549 and
 //! #1550). The server picks each 500x500 square's weather from the disc's
 //! terrain profile under it (snow on the icy profiles, sand on the sandy,
 //! rain elsewhere, none where the Lavastorm's fireballs fall) and runs it on a
