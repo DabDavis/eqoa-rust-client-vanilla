@@ -243,12 +243,59 @@ pub fn hat_on(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, src: u32, 
     Some((node, hat))
 }
 
+/// The recolour ([`render::recolor::DYE`]) a hat takes in the helm's dye `c`
+/// (the owner, 2026-11-16: "also turban should be abled to be dyed"): the
+/// dye's hue and saturation over the hat's own shading, its lightness raised
+/// with the dye's (a hat's art is dark: the efreeti lord's turban is a deep
+/// teal, which a plain multiply, an armour piece's MUL, turns black). None for
+/// white or near it (no dye: the hat's own colours) or no colour.
+pub fn dye_of(c: [u8; 4]) -> Option<u32> {
+    let [r, g, b, a] = c.map(|v| v as f32 / 255.0);
+    if a == 0.0 || (r > 0.94 && g > 0.94 && b > 0.94) {
+        return None;
+    }
+    let (hi, lo) = (r.max(g).max(b), r.min(g).min(b));
+    let l = (hi + lo) / 2.0;
+    let d = hi - lo;
+    let s = if d <= 0.0 { 0.0 } else { d / (1.0 - (2.0 * l - 1.0).abs()).max(1e-6) };
+    let h = if d <= 0.0 {
+        0.0
+    } else if hi == r {
+        ((g - b) / d).rem_euclid(6.0) / 6.0
+    } else if hi == g {
+        ((b - r) / d + 2.0) / 6.0
+    } else {
+        ((r - g) / d + 4.0) / 6.0
+    };
+    let byte = |x: f32| (x.round().clamp(0.0, 255.0)) as u32;
+    // the hat's lightness times 1 + 2 L (128 keeps it): a dark dye darkens less
+    // than it brightens a light one, black (L 0) keeps the hat's own shading
+    Some(render::recolor::DYE << 24 | byte(h * 256.0).min(255) << 16 | byte(s.clamp(0.0, 1.0) * 255.0) << 8 | byte(128.0 * (1.0 + 2.0 * l)).min(255))
+}
+
+/// `hat` dyed `c` ([`dye_of`]): every layer's texture recoloured, a texture
+/// `taken` names never reused; none when the colour is no dye.
+pub fn dyed(hat: &mut esf::Model, c: [u8; 4], taken: impl Fn(i32) -> bool) {
+    let Some(r) = dye_of(c) else { return };
+    for l in hat.batches.iter_mut().flat_map(|b| b.layers.iter_mut()) {
+        if l.texture != 0 {
+            l.texture = render::recolor::recolored(l.texture, r, &taken);
+        }
+    }
+}
+
 /// The hat a body's helm aura names (kind hat), if it names one: its source
 /// body (0: the kappa's, [`KAPPA_HAT`]) and its hue (`aura::hand_hue`: the
 /// colour when it lights, else none, its own colours).
+///
+/// The hat is the helm's hat ([`net::entity::HELM_HAT_AURA`], a server that
+/// sends it apart: the helm's place then holds the helm's other aura, a
+/// shell, particles or a trim, drawn on the hat: [`crate::aura::helm_aura`]),
+/// else the helm's own aura when that is a hat (an older server's, or a
+/// channel with no place for it).
 pub fn hat_of(auras: &[net::entity::PieceAura; net::entity::AURAS]) -> Option<(u32, Option<[u8; 3]>)> {
-    let a = auras[crate::aura::HELM];
-    (a.kind == net::npctint::Aura::HAT).then(|| (if a.source == 0 { KAPPA_HAT } else { a.source }, crate::aura::hand_hue(&a)))
+    let hat = |a: net::entity::PieceAura| (a.kind == net::npctint::Aura::HAT).then(|| (if a.source == 0 { KAPPA_HAT } else { a.source }, crate::aura::hand_hue(&a)));
+    hat(auras[net::entity::HELM_HAT_AURA]).or_else(|| hat(auras[crate::aura::HELM]))
 }
 
 #[cfg(test)]
@@ -380,6 +427,30 @@ mod tests {
         assert_eq!(m.pos, vec![[10.0, 6.0, 10.5], [11.0, 6.5, 10.0]]);
     }
 
+    /// `dye_of`: white and near it, or no colour, no dye; crimson a red hue,
+    /// full, its lightness raised; dark blue a blue hue; black keeps the
+    /// shading. `dyed` names a recoloured texture for every layer with one.
+    #[test]
+    fn a_hat_dyed() {
+        assert_eq!(dye_of([255, 255, 255, 255]), None);
+        assert_eq!(dye_of([250, 250, 245, 255]), None);
+        assert_eq!(dye_of([0xD1, 0, 0, 0]), None, "alpha 0: none");
+        let red = dye_of([0xD1, 0, 0, 0xFF]).unwrap();
+        assert_eq!((red >> 24, (red >> 16) & 0xFF, (red >> 8) & 0xFF), (render::recolor::DYE, 0, 255));
+        assert!((red & 0xFF) > 128, "a crimson brightens a dark hat");
+        let blue = dye_of([0x10, 0x20, 0x80, 0xFF]).unwrap();
+        assert!(((blue >> 16) & 0xFF).abs_diff(160) < 8, "a blue hue: {:#x}", blue);
+        assert_eq!(dye_of([0, 0, 0, 0xFF]).map(|r| r & 0xFF), Some(128), "black keeps the shading");
+        let layer = |texture: i32| esf::Layer { flags: 1, texture, wrap: 0, blend: 0, color: [255; 4], uv_transform: [0.0; 9], lod_bias: 0.0, uv_rate: [0.0; 2], emissive: [0; 4] };
+        let mut m = esf::Model { batches: vec![esf::Batch { material: 0, layers: vec![layer(0x0808_CC05), layer(0)], indices: Vec::new(), lod: None }], ..Default::default() };
+        dyed(&mut m, [255; 4], |_| false);
+        assert_eq!(m.batches[0].layers[0].texture, 0x0808_CC05, "white: as it was");
+        dyed(&mut m, [0xD1, 0, 0, 0xFF], |_| false);
+        let t = m.batches[0].layers[0].texture;
+        assert_eq!(render::recolor::source_of(t), Some((0x0808_CC05, red)));
+        assert_eq!(m.batches[0].layers[1].texture, 0, "a layer with no texture keeps none");
+    }
+
     /// `moved`: the middle to the middle, scaled by the widths.
     #[test]
     fn moved_by_the_helms() {
@@ -400,5 +471,9 @@ mod tests {
         assert_eq!(hat_of(&auras), Some((0x1234, Some([0x20, 0xC0, 0x20]))));
         auras[crate::aura::HELM].kind = net::npctint::Aura::CIRCLET;
         assert_eq!(hat_of(&auras), None);
+        // the helm's hat apart (a 365-byte channel): the hat there, a shell in the helm's place
+        auras[crate::aura::HELM] = PieceAura { kind: net::npctint::Aura::SHELL, color: [0xFF, 0x20, 0x20, 0xFF], ..Default::default() };
+        auras[net::entity::HELM_HAT_AURA] = PieceAura { kind: net::npctint::Aura::HAT, source: EFREETI_LORD, ..Default::default() };
+        assert_eq!(hat_of(&auras), Some((EFREETI_LORD, None)), "the hat's own colours: the shell's colour is the shell's");
     }
 }

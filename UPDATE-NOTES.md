@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+
+## 2026-11-16 · Auras on hats
+- **An aura put on your helm now lights a hat you wear** (the Turban of Twisted Virtue, say) instead of turning it
+  back into a cloth cap: the glow, sparkles or trim wrap the hat.
+- **Hats can be dyed**: the Equipment Dyer's helm colour (or a GM's dye) colours the hat; undyed, it keeps its own
+  colours.
+
 ## 2026-11-16 · Alt-Tab lets go of the mouse
 - **On Windows, alt-tabbing (or minimising) while you look round with the mouse no longer leaves your cursor stuck in
   the game's window.** The game now hands the cursor back as soon as it loses the focus, and leaves it where it is

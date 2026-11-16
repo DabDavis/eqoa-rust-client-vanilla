@@ -1375,10 +1375,26 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
     // the server's patch's tables (`s2`), retail's without one
     let t = crate::s2::get().cust();
     let mut helm_aura = None;
-    // a hat another body has built in (the helm's aura of kind hat, `hat`): in
-    // place of the helm, and the hair dressed as under one
-    if let Some((node, m)) = c.colors.and_then(|l| crate::hat::hat_of(&l.auras)).and_then(|(src, hue)| crate::hat::hat_on(lib, model, cs, player, src, hue)) {
-        attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+    // a hat another body has built in (the helm's hat, `hat`): in place of the
+    // helm, and the hair dressed as under one; the helm's other aura (a GM's
+    // shell or particles round the hat, a server that sends the hat apart:
+    // `net::entity::HELM_HAT_AURA`) drawn on it as on a helm
+    if let Some((node, mut m)) = c.colors.and_then(|l| crate::hat::hat_of(&l.auras)).and_then(|(src, hue)| crate::hat::hat_on(lib, model, cs, player, src, hue)) {
+        // in the helm's dye (the Equipment Dyer's, a GM's #dye): white, its own colours
+        crate::hat::dyed(&mut m, look_of(c).helm_color(&t), |id| lib.lookup(id).is_some());
+        let mut gpu = g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures);
+        if let Some(a) = c.colors.map(|l| l.auras).filter(|a| a[crate::aura::HELM] != Default::default()) {
+            let (shell, worn) = crate::aura::helm_aura(&a, node);
+            if let Some(s) = &shell {
+                g.renderer.set_shells(g.device, &mut gpu, &m, std::slice::from_ref(s));
+            }
+            let taken = |id: i32| lib.lookup(id).is_some();
+            if let Some(t) = crate::aura::helm_trim(&m, &a, &taken) {
+                g.renderer.set_trims(g.device, g.queue, &mut gpu, &m, std::slice::from_ref(&t), &textures);
+            }
+            helm_aura = worn;
+        }
+        attached.push((node, gpu));
         helm_worn = true;
     } else if let Some((node, mut m)) = crate::slotless::helm_on(lib, model, cs, player, c.armor[5], look_of(c).helm_color(&t), &t, true) {
         helm_worn = true;

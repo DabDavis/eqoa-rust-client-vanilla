@@ -56,7 +56,9 @@
 //! `trimshell` lights the plate's trim (`aura::piece_trims`), and a black or
 //! near-black colour (000000FF) is a dark aura (`net::npctint::dark`).
 //! `pieceaura=helm:0:hat:F0FAB933` puts a hat another body has built in on
-//! the head in place of the helm (`hat`: the kappa's straw hat).
+//! the head in place of the helm (`hat`: the kappa's straw hat);
+//! `pieceaura=hat:0:hat:AA489CBB` puts it in the helm's hat apart, as a
+//! 365-byte channel does, a `pieceaura=helm:...:shell` then drawn on it.
 //! `petdye=RRGGBBAA,RRGGBBAA` and `petmask=0,2,5` draw a pet's two dyed
 //! areas as go-eqoa-server's Pet Groomers put them on (`petdye::apply`: area 2
 //! the palette materials of the mask, area 1 the rest); `petareas=1` prints
@@ -209,8 +211,8 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             "pieceaura" => {
                 // slot:RRGGBBAA[:kind[:source[:nodes]]]
                 let parts: Vec<&str> = v.split(':').collect();
-                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body|cape|main|off|main2|off2:RRGGBBAA[:shell|particles|both|none|trim|trimshell|epic|energy|circlet|hat[:DictID[:nodes]]]");
-                let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe", "body", "cape", "main", "off", "main2", "off2"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
+                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body|cape|main|off|main2|off2|hat:RRGGBBAA[:shell|particles|both|none|trim|trimshell|epic|energy|circlet|hat[:DictID[:nodes]]]");
+                let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe", "body", "cape", "main", "off", "main2", "off2", "hat"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
                 let c = u32::from_str_radix(parts.get(1).ok_or_else(usage)?.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))?;
                 let kind = match parts.get(2).copied() {
                     None | Some("default") => net::npctint::Aura::DEFAULT,
@@ -431,7 +433,11 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     // a hat another body has built in (`pieceaura=helm:0:hat[:DictID]`,
     // `hat::hat_on`), in place of the helm, as the world's `attach` hangs it
     if let Some((src, hue)) = crate::hat::hat_of(&words.pieces) {
-        let made = crate::hat::hat_on(lib, model as u32, &cs, true, src, hue);
+        let made = crate::hat::hat_on(lib, model as u32, &cs, true, src, hue).map(|(n, mut m)| {
+            // in the helm's colour (`dye=`, `tint=`), as the world dyes it
+            crate::hat::dyed(&mut m, look.helm_color(&t), |id| lib.lookup(id).is_some());
+            (n, m)
+        });
         match &made {
             Some((node, m)) => eprintln!("hat of {src:#010X} on node {node}: {} triangles", m.triangles),
             None => eprintln!("hat of {src:#010X}: none on this body"),

@@ -127,9 +127,17 @@ pub const OFF_HAND_AURA: usize = 10;
 pub const MAIN_HAND_AURA2: usize = 11;
 pub const OFF_HAND_AURA2: usize = 12;
 
+/// The fourteenth aura: the helm's hat (go-eqoa-server's `AuraHelmHat`: a hat
+/// another body has built in, kind [`crate::npctint::Aura::HAT`], the
+/// character's own or the worn helm record's) when the server sends it apart
+/// from the helm's aura ([`HAT_AURA_STATE_SIZE`]): the helm's place then holds
+/// the other aura (a GM's shell, say), drawn on the hat. An older server sends
+/// the hat in the helm's place, and none here.
+pub const HELM_HAT_AURA: usize = 13;
+
 /// How many auras a channel carries at most: the seven pieces', the body's,
-/// the cape's, the two hands' and the two hands' second.
-pub const AURAS: usize = 13;
+/// the cape's, the two hands', the two hands' second and the helm's hat.
+pub const AURAS: usize = 14;
 
 /// The body aura channel with the cape's aura after the body's: 315 bytes, to
 /// a client that answered [`crate::session::LIVE_LOOK_CAPE`].
@@ -144,6 +152,10 @@ pub const HAND_AURA_STATE_SIZE: usize = CAPE_AURA_STATE_SIZE + 2 * PIECE_AURA_SI
 /// (the main hand's, then the off hand's): 355 bytes, to a client that
 /// answered [`crate::session::LIVE_LOOK_SECOND`].
 pub const SECOND_AURA_STATE_SIZE: usize = HAND_AURA_STATE_SIZE + 2 * PIECE_AURA_SIZE;
+
+/// The seconds' channel with the helm's hat after them ([`HELM_HAT_AURA`]):
+/// 365 bytes, to a client that answered [`crate::session::LIVE_LOOK_HAT`].
+pub const HAT_AURA_STATE_SIZE: usize = SECOND_AURA_STATE_SIZE + PIECE_AURA_SIZE;
 
 /// The auras out of `b` (each: r, g, b, a, kind, the source's u32
 /// little-endian, nodes): seven pieces' in its first 70 bytes, the body's in
@@ -465,7 +477,9 @@ impl Entities {
         {
             l.trim = trims_of(&data[LIVE_STATE_SIZE..ARMOR_STATE_SIZE]);
             // and the worn pieces' auras after them
-            if data.len() >= SECOND_AURA_STATE_SIZE {
+            if data.len() >= HAT_AURA_STATE_SIZE {
+                l.auras = auras_of(&data[ARMOR_STATE_SIZE..HAT_AURA_STATE_SIZE]);
+            } else if data.len() >= SECOND_AURA_STATE_SIZE {
                 l.auras = auras_of(&data[ARMOR_STATE_SIZE..SECOND_AURA_STATE_SIZE]);
             } else if data.len() >= HAND_AURA_STATE_SIZE {
                 l.auras = auras_of(&data[ARMOR_STATE_SIZE..HAND_AURA_STATE_SIZE]);
@@ -719,6 +733,14 @@ mod tests {
         assert_eq!(sc.auras[MAIN_HAND_AURA2], PieceAura { color: [0x30, 0x60, 0xFF, 0xFF], kind: 3, source: 0x6C15_1A60, nodes: 0 });
         assert_eq!(sc.auras[OFF_HAND_AURA2], PieceAura { color: [0x6E, 0xA8, 0xFF, 0xFF], kind: 3, source: 0x1D87_5ECD, nodes: 100 });
         assert_eq!(sc.auras[..MAIN_HAND_AURA2], hc.auras[..MAIN_HAND_AURA2], "every aura before the second auras the same");
+        assert_eq!(sc.auras[HELM_HAT_AURA], PieceAura::default(), "the 355 bytes: no helm's hat apart");
+        // the 365 bytes: the helm's hat after the seconds (the efreeti lord's turban)
+        let mut hat = second.clone();
+        hat.extend(piece([0, 0, 0, 0], 10, 0xAA48_9CBB, 0));
+        assert_eq!(hat.len(), HAT_AURA_STATE_SIZE);
+        let tc = read(&hat).colors.unwrap();
+        assert_eq!(tc.auras[HELM_HAT_AURA], PieceAura { color: [0; 4], kind: 10, source: 0xAA48_9CBB, nodes: 0 });
+        assert_eq!(tc.auras[..HELM_HAT_AURA], sc.auras[..HELM_HAT_AURA], "every aura before the hat the same");
         assert_eq!(LiveColors { auras: bc.auras, ..ac }, bc, "every other colour the same");
         assert_eq!((a.name, a.armor, a.level), (b.name, b.armor, b.level));
     }

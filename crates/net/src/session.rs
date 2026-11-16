@@ -196,6 +196,14 @@ pub const LIVE_LOOK_HANDS: u32 = 64;
 /// 2026-11-16: "so we can have 2 auras now"). A server that knows no such bit
 /// sends the 335.
 pub const LIVE_LOOK_SECOND: u32 = 128;
+/// Bit 8 of this client's answer to [`OP_LIVE_LOOK`] (with
+/// [`LIVE_LOOK_SECOND`]): it draws the helm's hat apart from the helm's aura,
+/// the hat after the hands' seconds and the other aura (a shell, particles)
+/// in the helm's place, drawn on the hat ([`crate::entity::HAT_AURA_STATE_SIZE`],
+/// 365 bytes; the owner, 2026-11-16: "when i put /aura on dusts turban turns
+/// it into a cloth cap"). A server that knows no such bit sends the 355, the
+/// hat in the helm's place.
+pub const LIVE_LOOK_HAT: u32 = 256;
 /// CLIENT's character select: eight (`CharacterList`, `m_chars[8]`).
 pub const CLIENT_CHAR_SLOTS: u32 = 8;
 /// The most characters a list is read of, whatever a server says.
@@ -2672,7 +2680,7 @@ impl Session {
             OP_LIVE_LOOK => {
                 if r.u32() & 1 != 0 && !r.error {
                     // the server's armour with the live look alone (its trims ride the live channel)
-                    let live = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS | LIVE_LOOK_BODY | LIVE_LOOK_CAPE | LIVE_LOOK_HANDS | LIVE_LOOK_SECOND } else { 0 };
+                    let live = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS | LIVE_LOOK_BODY | LIVE_LOOK_CAPE | LIVE_LOOK_HANDS | LIVE_LOOK_SECOND | LIVE_LOOK_HAT } else { 0 };
                     self.send_op_int(OP_LIVE_LOOK, live | LIVE_LOOK_MANY_CHARS);
                 }
             }
@@ -5408,8 +5416,9 @@ mod tests {
         s.state = State::Shard;
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "a first list: the disc's");
         assert!(deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0C, 0x7E, 1, 0, 0, 0]).is_empty());
-        let bits = if wants_live_look() { 1 | LIVE_LOOK_ARMOR as u8 | LIVE_LOOK_AURAS as u8 | LIVE_LOOK_BODY as u8 | LIVE_LOOK_CAPE as u8 | LIVE_LOOK_HANDS as u8 | LIVE_LOOK_SECOND as u8 } else { 0 } | LIVE_LOOK_MANY_CHARS as u8;
-        assert_eq!(answers(&mut s), [(251, vec![0x0C, 0x7E, bits, 0, 0, 0])], "the offer answered with 1, every character listed (2) and the server's armour drawn (4)");
+        let bits = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS | LIVE_LOOK_BODY | LIVE_LOOK_CAPE | LIVE_LOOK_HANDS | LIVE_LOOK_SECOND | LIVE_LOOK_HAT } else { 0 } | LIVE_LOOK_MANY_CHARS;
+        let [b0, b1, b2, b3] = bits.to_le_bytes();
+        assert_eq!(answers(&mut s), [(251, vec![0x0C, 0x7E, b0, b1, b2, b3])], "the offer answered with 1, every character listed (2) and the server's armour drawn (4)");
         assert!(!s.live_look, "not in force until the server says so");
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "the control: a list before the server's answer");
 
@@ -5958,7 +5967,7 @@ mod tests {
         };
         answers(&mut s);
         deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK, &[1]));
-        let want = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS | LIVE_LOOK_BODY | LIVE_LOOK_CAPE | LIVE_LOOK_HANDS | LIVE_LOOK_SECOND | 2 } else { 2 };
+        let want = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS | LIVE_LOOK_BODY | LIVE_LOOK_CAPE | LIVE_LOOK_HANDS | LIVE_LOOK_SECOND | LIVE_LOOK_HAT | 2 } else { 2 };
         assert_eq!(answers(&mut s), [(251, words(OP_LIVE_LOOK, &[want]))]);
         assert_eq!(s.char_slots, CLIENT_CHAR_SLOTS);
         deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK_IN_FORCE, &[1]));
