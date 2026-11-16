@@ -783,6 +783,10 @@ pub struct Renderer {
     /// `VIParticleSystem::Render` and `RenderShadows` and before the weather
     /// (`draw_billboards_and_shadows`, `draw_queued_strips`).
     pub strips: Vec<billboard::Strips>,
+    /// This frame's decorations' strips (a server's lights' cords and its
+    /// presents): solid, drawn with the world before the name plates
+    /// (`draw_decor`).
+    pub decor: Vec<billboard::Strips>,
     /// How many of the batches `draw_billboards_and_shadows` is handed are
     /// the particle system's: the shadows and the strips go after them, the
     /// rest (the weather's) after those. Set for each frame.
@@ -1089,6 +1093,7 @@ impl Renderer {
             shadows: None,
             overlay: None,
             strips: Vec::new(),
+            decor: Vec::new(),
             particles_end: 0,
             drawn: Default::default(),
             materials: Default::default(),
@@ -2578,6 +2583,9 @@ pub fn capture_around(
     renderer.draw(queue, &mut enc, st, &f.depth, view, items);
     if let Some((v, p, batches, textures)) = sky {
         renderer.draw_sky_billboards(device, queue, &mut enc, st, &f.depth, v, p, batches, textures);
+    }
+    if let Some((v, p, _, textures)) = particles {
+        renderer.draw_decor(device, queue, &mut enc, st, &f.depth, v, p, textures);
     }
     renderer.draw_fans(device, queue, &mut enc, st, &f.depth, view);
     renderer.draw_plates(device, &mut enc, st, &f.depth, f.size);

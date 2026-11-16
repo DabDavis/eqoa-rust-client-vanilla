@@ -8,6 +8,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · Name plates in front of the presents
+- **Names no longer disappear behind the presents**: the presents and the lights' cord round the Christmas tree were
+  drawn over the names of players and NPCs standing among them. They are now drawn with the world, so a name in
+  front of a present shows whole.
+
 ## 2026-11-16 · Presents under the Christmas tree
 - **Presents under Freeport's Christmas tree**: wrapped boxes in red, green, blue, gold, silver and purple, some
   stacked, with ribbons and bows, round the foot of the tree.

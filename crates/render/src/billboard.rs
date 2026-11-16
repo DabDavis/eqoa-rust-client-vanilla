@@ -120,7 +120,7 @@ pub(crate) struct Billboards {
     pipelines: std::collections::HashMap<(usize, bool, bool), wgpu::RenderPipeline>,
     sampler: wgpu::Sampler,
     /// what each of a frame's draws keeps from frame to frame (`Slot`)
-    slots: [Option<Kept>; 4],
+    slots: [Option<Kept>; 5],
     /// a texture's bind group by its key (`Textures::key`; none: white),
     /// made once: the renderer's textures are never let go
     groups: std::collections::HashMap<Option<u64>, wgpu::BindGroup>,
@@ -148,6 +148,10 @@ enum Slot {
     /// the world's billboards drawn after the shadows (the weather's,
     /// `draw_late_billboards`)
     Late = 3,
+    /// the world's own opaque strips (a server's decorations: the lights'
+    /// cords, the presents), drawn with the world, before the name plates
+    /// (`draw_decor`)
+    Decor = 4,
 }
 
 /// A slot's vertex buffer (grown, never shrunk) and its two frame
@@ -206,7 +210,7 @@ impl Billboards {
             layout,
             pipelines: Default::default(),
             sampler,
-            slots: [None, None, None, None],
+            slots: [None, None, None, None, None],
             groups: Default::default(),
             sums: Default::default(),
             spread: Default::default(),
@@ -469,6 +473,31 @@ impl Renderer {
         }
     }
 
+    /// The decorations' strips queued for this frame (`decor`: a server's
+    /// lights' cords and presents), drawn and let go. They are solid things
+    /// standing in the world, Z tested and written, so they go with the
+    /// world, before the effect volumes and the name plates: drawn after the
+    /// plates (which test Z and do not write it), a present behind a name
+    /// painted over it (the owner, 2026-11-16: "the presents are hiding
+    /// players/npcs name plates").
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_decor(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        view: Mat4,
+        proj: Mat4,
+        textures: &Textures,
+    ) {
+        let strips = std::mem::take(&mut self.decor);
+        if !strips.is_empty() {
+            self.strips_in(device, queue, encoder, target, depth, view, proj, &strips, textures, Slot::Decor);
+        }
+    }
+
     /// Triangle strips (lightning), over what `draw` drew, in the order given.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_strips(
@@ -482,6 +511,24 @@ impl Renderer {
         proj: Mat4,
         strips: &[Strips],
         textures: &Textures,
+    ) {
+        self.strips_in(device, queue, encoder, target, depth, view, proj, strips, textures, Slot::Strips);
+    }
+
+    /// `draw_strips` through `slot`'s buffers.
+    #[allow(clippy::too_many_arguments)]
+    fn strips_in(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        view: Mat4,
+        proj: Mat4,
+        strips: &[Strips],
+        textures: &Textures,
+        slot: Slot,
     ) {
         let mut verts: Vec<Vert> = Vec::new();
         let mut draws = Vec::new();
@@ -497,7 +544,7 @@ impl Renderer {
                 draws.push(((s.blend.min(4), s.ztest, s.zwrite), s.texture, start, verts.len() as u32, false));
             }
         }
-        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, &[], textures, Slot::Strips, None);
+        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, &[], textures, slot, None);
     }
 
     /// The billboard program over `verts`, a run of them per (pipeline key,

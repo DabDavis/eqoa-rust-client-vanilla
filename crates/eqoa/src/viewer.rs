@@ -1363,7 +1363,8 @@ pub fn shot_with(
             let mut cords = p.decor_cords(walker.eye_position().to_array());
             cords.extend(p.decor_presents(walker.eye_position().to_array()));
             crate::decorlights::light_cords(&mut cords, &view);
-            shot_bolts.append(&mut cords);
+            // with the world, before the name plates (`draw_decor`)
+            renderer.decor = cords;
         }
         renderer.strips = shot_bolts;
         renderer.strips.append(&mut shot_trails);
@@ -3951,6 +3952,7 @@ impl App {
                 t.plates.clear();
             }
             g.renderer.strips.clear();
+            g.renderer.decor.clear();
             g.renderer.set_overlay(&g.device, &g.queue, glam::Mat4::IDENTITY, &[], &|_| None);
             g.window.request_redraw();
         }
@@ -6516,7 +6518,8 @@ impl App {
                         let mut cords = p.decor_cords(w.eye_position().to_array());
                         cords.extend(p.decor_presents(w.eye_position().to_array()));
                         crate::decorlights::light_cords(&mut cords, &lights.0);
-                        g.renderer.strips.append(&mut cords);
+                        // with the world, before the name plates (`draw_decor`)
+                        g.renderer.decor = cords;
                     }
                     // the characters' blob shadows (`VIScene::RenderShadows`,
                     // `shadows`): drawn after the particle system's batches,
@@ -6740,6 +6743,13 @@ impl App {
                     let mut rot = v;
                     rot.w_axis = glam::Vec4::W;
                     g.renderer.draw_sky_billboards(&g.device, &g.queue, &mut enc, st, &f.depth, rot, p, &self.sky_batches, &textures);
+                }
+                // a server's decorations' cords and presents, solid, with the
+                // world: before the effect volumes and the name plates, which
+                // they painted over when drawn after them
+                match bb_view {
+                    Some((v, p)) => g.renderer.draw_decor(&g.device, &g.queue, &mut enc, st, &f.depth, v, p, &textures),
+                    None => g.renderer.decor.clear(),
                 }
                 // the effect volumes' fans, then the particles over them,
                 // all in the scene (the Brightness curve takes them too)
