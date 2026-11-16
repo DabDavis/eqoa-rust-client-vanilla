@@ -11,6 +11,10 @@ is put on the page by `.github/workflows/notes.yml`.
 - **With Light Shadows on, a hill giant's lantern now throws his own shape on the ground round his feet**, as
   everyone else's does. His lantern rides inside him (he is taller than it), and his shadow was a dark square at his
   feet instead. A troll's or an ogre's head is no longer missing from its shadow either.
+## 2026-11-16 · Hats worn from other bodies
+- **A character can now wear a hat another body has built in**, given by a GM on eqoaclassic.com: the first is the
+  kappa's wide-brimmed straw hat with its steel spike, sized to your head and worn in place of your helm (the hair
+  is dressed as under a helm). Others see it on you; a PS2 shows your helm as before.
 
 ## 2026-11-16 · See more players and creatures, farther
 - **NPC/PC Display now starts at 48** (it was the game's 24) and **NPC/PC Distance at 200** (it was 100), in
