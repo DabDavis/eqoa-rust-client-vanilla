@@ -23,6 +23,13 @@ is put on the page by `.github/workflows/notes.yml`.
 - **The start page asks for one disc**: your *Frontiers* disc image. The 2002 disc, which only changes the older
   character art (F9 in the game), is now tucked under **Pre-Frontiers Models (2002), optional**: you do not need it
   to play. A 2002 disc you had remembered still shows itself.
+
+## 2026-11-16 · Two auras on one weapon
+- **A weapon can now wear two auras at once** on eqoaclassic.com, both drawn on the blade in your hand:
+  **Icingdeath** carries the Sword of Virtue's glow and sparkles in blue together with its freezing drip, and
+  **Twinkle** the Sword of Virtue's glow with the monk staff's twinkle at the blade's tip.
+- Other players see both on your weapon too. An older client shows a weapon's first aura alone, as before.
+
 ## 2026-11-16 · The server's own account pages, and why a login is refused
 - **The Station pages before the server list are now your server's own**, as a PlayStation 2 shows them after its
   patch: on eqoaclassic.com, Create User Name asks only for a name, a password twice and your e-mail address, Forgot
