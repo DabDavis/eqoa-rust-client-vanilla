@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · Dyed pets
+- **Pets can be dyed** on eqoaclassic.com: a **Pet Groomer** now stands beside every Equipment Dyer. With your pet out,
+  talk to the groomer and pick a colour, free, from the dyers' palette. A pet body can have **two colour areas** (the
+  drachnid's torso and its spider body), each dyed apart; every other pet is dyed whole.
+- Each form of a pet keeps its own colours. Everyone playing this client sees your pet's dyes; a PS2 sees its own colours.
+
 ## 2026-11-16 · See more players and creatures, farther
 - **NPC/PC Display now starts at 48** (it was the game's 24) and **NPC/PC Distance at 200** (it was 100), in
   Options > Extended. You see more of the people and creatures round you, and farther out.
