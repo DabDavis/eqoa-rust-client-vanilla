@@ -112,6 +112,7 @@ mod damage;
 mod numcolor;
 mod autocast;
 mod dpsmeter;
+mod decorlights;
 mod npctint;
 mod display;
 mod hudlayout;
@@ -1002,6 +1003,16 @@ fn source(file: &str, rest: &[String]) -> Result<(esf::Library, viewer::Source)>
             // `EQOA_BODY=<DictID>`: another body than the human's (`viewer::shot_body`)
             let character = lib.lookup(viewer::shot_body() as i32).ok_or("no such body")?;
             Ok((lib, viewer::Source::Walk { file: main, index, character, spawn: None }))
+        }
+        // `zonemodel <n> <0xDictID>`: one sprite a zone holds (its own
+        // dictionary's), as a model is shown: finding a zone's art by sight
+        [z, n, id] if z == "zonemodel" => {
+            let index: usize = n.parse()?;
+            lib.file(main).zones().get(index).ok_or("no such zone")?;
+            stream::load_zone_now(&mut lib, main, index)?;
+            let id = u32::from_str_radix(id.trim_start_matches("0x"), 16)? as i32;
+            let r = lib.lookup(id).ok_or("no model with that DictID in the zone")?;
+            Ok((lib, viewer::Source::Models { list: vec![(id, r)], index: 0, tint: None }))
         }
         [z, n] if z == "zone" => {
             let index: usize = n.parse()?;

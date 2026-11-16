@@ -745,6 +745,12 @@ pub fn shot_with(
             last_view = Some(proj * v);
             // the zones it walks toward, read as the game's loader reads them
             streamer.fetch(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
+            // and those whose art a server's decoration wears (`decorlights`)
+            if let Some(p) = play.as_ref() {
+                for z in p.decor_zones() {
+                    streamer.want(z, &walker.scene, lib);
+                }
+            }
             if let Some(first) = streamer.install(lib, &mut walker.scene) {
                 parts.add_from(&walker.scene, first);
             }
@@ -1146,6 +1152,8 @@ pub fn shot_with(
             if let Some(p) = play.as_ref() {
                 let held = held_fx.get_or_insert_with(|| crate::particles::Held::new(t));
                 batches.extend(held.frame(lib, &p.in_hand(lib, &walker, self_m), &walker.eye.position, t));
+                // a server's decorations' lights (`decorlights`)
+                batches.extend(p.decor_batches(walker.eye_position().to_array(), t));
             }
             // the weapon trails (VITrailFxRender) after them
             if let Some(p) = play.as_mut() {
@@ -6055,6 +6063,13 @@ impl App {
                     }
                 }
                 self.fly();
+                // The zones whose art a server's decoration wears (`decorlights`),
+                // asked for wherever the player is.
+                if let (Some(s), Some(w), Some(p)) = (self.streamer.as_mut(), self.walker.as_ref(), self.play.as_ref()) {
+                    for z in p.decor_zones() {
+                        s.want(z, &w.scene, &self.lib);
+                    }
+                }
                 // Zones whose bytes have come: into the library and the collision world.
                 if let (Some(s), Some(w)) = (self.streamer.as_mut(), self.walker.as_mut())
                     && let Some(first) = s.install(&mut self.lib, &mut w.scene)
@@ -6350,6 +6365,8 @@ impl App {
                     if let Some(p) = play.as_ref() {
                         let held = held_fx.get_or_insert_with(|| crate::particles::Held::new(now));
                         batches.extend(held.frame(lib, &p.in_hand(lib, w, m), &w.eye.position, now));
+                        // a server's decorations' lights (`decorlights`)
+                        batches.extend(p.decor_batches(w.eye_position().to_array(), now));
                     }
                     mark(perf, 7);
                     let hour_now = game_hour(play.as_ref(), clock);

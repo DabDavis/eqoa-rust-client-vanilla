@@ -1131,6 +1131,9 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
     let textures = render::library_textures(lib);
     lib.lookup(e.drawn_model as i32).and_then(|r| {
                     let mut model = lib.build_model(r)?;
+                    // a server's decoration's art drawn lower than its NPC stands
+                    // (`decorlights::sink`: a fir's bare stem in the ground)
+                    crate::decorlights::lower(e.drawn_model, &mut model);
                     let mut anims = AnimScene { time: game_ms, ..Default::default() };
                     let mut rand = Rand(slot as u64 + 1);
                     let mut sprite = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand);
@@ -3339,6 +3342,11 @@ impl Play {
         // whose tint changed made again in it (`apply`)
         if let Some(t) = self.session.npc_tints.take() {
             crate::npctint::set(t);
+        }
+        // the server's decorations (`decorlights`): their lights drawn from
+        // the next frame, their art's zones read by the walk's streamer
+        if let Some(d) = self.session.decor.take() {
+            crate::decorlights::set(d);
         }
         // the server takes crash reports: this client's kept ones go, each let
         // go at its answer (`crashfile`)
@@ -10498,6 +10506,28 @@ impl Play {
             add(crate::spells::SELF, p, cs, &glam_to_matrix(matrix), Some(self.self_shown));
         }
         out
+    }
+
+    /// The decorations' lights this frame (`decorlights`): on the creatures
+    /// drawn whose names a string hangs on, and in the player's world, seen
+    /// from `eye`, at the game's `ms`.
+    pub fn decor_batches(&self, eye: [f32; 3], ms: i64) -> Vec<render::billboard::Batch> {
+        if !crate::decorlights::any() {
+            return Vec::new();
+        }
+        let mut holders = Vec::new();
+        for (slot, e) in self.entities.slots.iter().enumerate() {
+            let (Some(e), Some(Some(_))) = (e.as_ref(), self.puppets.get(slot)) else { continue };
+            let Some(c) = e.creature.as_ref().filter(|_| !a_player(e)) else { continue };
+            holders.push(crate::decorlights::Holder { name: &c.name, at: e.actor_pos, heading: e.actor_hpr[0], scale: if e.scale > 0.0 { e.scale } else { 1.0 } });
+        }
+        crate::decorlights::batches(&holders, self.player.world, eye, ms)
+    }
+
+    /// The zones of the player's world whose art a decoration wears
+    /// (`decorlights::art_zones`), for the walk's streamer to read.
+    pub fn decor_zones(&self) -> Vec<usize> {
+        crate::decorlights::art_zones(self.player.world)
     }
 
     pub fn has_self(&self) -> bool {
