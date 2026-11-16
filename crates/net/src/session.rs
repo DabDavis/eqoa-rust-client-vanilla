@@ -4989,6 +4989,7 @@ mod tests {
         for v in [1.5f32, 0.3, 1.0] {
             m.extend(v.to_le_bytes());
         }
+        m.extend([0u8; 12]);
         m.push(1);
         m.extend(0xFFFF_FFFFu32.to_le_bytes());
         m.extend(1u16.to_le_bytes());

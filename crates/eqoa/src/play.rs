@@ -10515,13 +10515,28 @@ impl Play {
         if !crate::decorlights::any() {
             return Vec::new();
         }
+        let holders = self.decor_holders();
+        crate::decorlights::batches(&holders, self.player.world, eye, ms)
+    }
+
+    /// The decorations' cords this frame (`decorlights::cords`), unlit.
+    pub fn decor_cords(&self, eye: [f32; 3]) -> Vec<render::billboard::Strips> {
+        if !crate::decorlights::any() {
+            return Vec::new();
+        }
+        let holders = self.decor_holders();
+        crate::decorlights::cords(&holders, self.player.world, eye)
+    }
+
+    /// The creatures drawn a string may hang on (`decorlights::Holder`).
+    fn decor_holders(&self) -> Vec<crate::decorlights::Holder<'_>> {
         let mut holders = Vec::new();
         for (slot, e) in self.entities.slots.iter().enumerate() {
             let (Some(e), Some(Some(_))) = (e.as_ref(), self.puppets.get(slot)) else { continue };
             let Some(c) = e.creature.as_ref().filter(|_| !a_player(e)) else { continue };
             holders.push(crate::decorlights::Holder { name: &c.name, at: e.actor_pos, heading: e.actor_hpr[0], scale: if e.scale > 0.0 { e.scale } else { 1.0 } });
         }
-        crate::decorlights::batches(&holders, self.player.world, eye, ms)
+        holders
     }
 
     /// The zones of the player's world whose art a decoration wears

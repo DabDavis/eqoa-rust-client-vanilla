@@ -14,6 +14,15 @@
 //! Dynamic Lighting takes each as a light of the moment (`lights::from_batches`)
 //! and the tree casts its colours on the ground round it at night.
 //!
+//! The bulbs hang on a cord (the owner: "for the lights let there look like a
+//! cord connecting them"): a thin wire in the string's cord colour from bulb to
+//! bulb in order, hanging a little between each two ([`cords`]), a ribbon turned
+//! to the eye drawn opaque with the world (`render::billboard::Strips`), lit as
+//! the ground is by the sun and the ambient ([`light_cords`]), never a light of
+//! its own. A ring's first bulb and a box's edge apart from the last break it
+//! (`net::decor::BREAK`); a run that comes back round to its first bulb (a
+//! ring) is closed. A string of single points has none.
+//!
 //! The art a decoration's NPC wears may be a sprite of a zone the player is not
 //! near (Freeport's tree is a fir of Tunaria's north): the server names the
 //! zone, and the walk's streamer reads it ([`art_zones`],
@@ -23,7 +32,7 @@
 //! A server that sends none, and a PS2, draw nothing of it.
 
 use net::decor::{Anchor, Decor};
-use render::billboard::{Batch, Quad};
+use render::billboard::{Batch, Quad, Strips};
 use std::cell::RefCell;
 
 /// The bulb's glow: SPELLFX.CSF's soft round flare, white at its heart.
@@ -31,8 +40,7 @@ pub const BULB: i32 = 0x0BE1_EF02;
 /// A string's top bulb (a tree's star): SPELLFX.CSF's six-pointed sparkle.
 pub const STAR: i32 = 0xEDC2_9ADDu32 as i32;
 
-/// The bit of a bulb's colour byte that marks the string's top (its star).
-pub const TOP: u8 = 0x80;
+pub use net::decor::TOP;
 
 /// How far from the eye a bulb is drawn.
 pub const REACH: f32 = 300.0;
@@ -129,7 +137,7 @@ fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64)
                     continue;
                 }
                 let top = b.color & TOP != 0;
-                let ci = (b.color & !TOP) as usize;
+                let ci = (b.color & net::decor::COLOR) as usize;
                 let c = s.colors.get(ci).copied().unwrap_or(0xFFFF_FFFF);
                 let rgb = [(c >> 24) as u8, (c >> 16) as u8, (c >> 8) as u8];
                 let lit = if top { 0.85 + 0.15 * net::decor::lit(net::decor::Effect::Twinkle, 3.0, 0, t) } else { net::decor::lit(s.effect, s.period, b.phase, t) };
@@ -155,6 +163,102 @@ fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64)
     out
 }
 
+/// How many pieces a cord's span between two bulbs is drawn in (its sag).
+pub const CORD_PIECES: usize = 4;
+
+/// The cords of every string with one, as world-space strips: the same strings
+/// and frames as [`batches`], each run of bulbs (to a break) one strip, a
+/// ribbon `cord_width` across turned to `eye`, sagging `cord_sag` of each span.
+/// Unlit: [`light_cords`] lights them.
+pub fn cords(holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Strips> {
+    DECOR.with_borrow(|d| cords_of(d, holders, world, eye))
+}
+
+fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Strips> {
+    use glam::Vec3;
+    let e = Vec3::from(eye);
+    let mut out = Vec::new();
+    for s in &d.strings {
+        if s.cord & 0xFF == 0 || s.cord_width <= 0.0 {
+            continue;
+        }
+        let frames: Vec<([f32; 3], f32, f32)> = match &s.anchor {
+            Anchor::Npc(key) => holders.iter().filter(|h| net::npctint::key(h.name) == *key).map(|h| (h.at, h.heading, h.scale)).collect(),
+            Anchor::World(w) if *w as i64 == world => vec![([0.0; 3], 0.0, 1.0)],
+            Anchor::World(_) => Vec::new(),
+        };
+        let color = [(s.cord >> 24) as f32 / 255.0, ((s.cord >> 16) & 0xFF) as f32 / 255.0, ((s.cord >> 8) & 0xFF) as f32 / 255.0, 1.0];
+        let mut strips = Vec::new();
+        for (at, heading, scale) in frames {
+            let (sin, cos) = heading.sin_cos();
+            let place = |b: &net::decor::Bulb| {
+                let [x, y, z] = b.at;
+                Vec3::new(at[0] + scale * (z * sin + x * cos), at[1] + scale * y, at[2] + scale * (z * cos - x * sin))
+            };
+            // the runs: bulbs in order, broken where a bulb says, the star never on one
+            let mut runs: Vec<Vec<Vec3>> = Vec::new();
+            for b in s.bulbs.iter().filter(|b| b.color & TOP == 0) {
+                let p = place(b);
+                match runs.last_mut() {
+                    Some(r) if b.color & net::decor::BREAK == 0 => r.push(p),
+                    _ => runs.push(vec![p]),
+                }
+            }
+            let half = 0.5 * s.cord_width * scale.max(0.1);
+            for mut run in runs {
+                if run.len() < 2 || (run[0] - e).length() > REACH {
+                    continue;
+                }
+                // a ring that comes back round: closed
+                if run.len() >= 3 {
+                    let step = (run[1] - run[0]).length();
+                    if (run[run.len() - 1] - run[0]).length() < 1.6 * step {
+                        run.push(run[0]);
+                    }
+                }
+                // the wire: each span in CORD_PIECES, hanging cord_sag of its length at its middle
+                let mut line = vec![run[0]];
+                for w in run.windows(2) {
+                    let (a, b) = (w[0], w[1]);
+                    let sag = s.cord_sag * (b - a).length();
+                    for k in 1..=CORD_PIECES {
+                        let f = k as f32 / CORD_PIECES as f32;
+                        line.push(a.lerp(b, f) - Vec3::Y * (sag * 4.0 * f * (1.0 - f)));
+                    }
+                }
+                // a ribbon turned to the eye
+                let mut strip = Vec::with_capacity(line.len() * 2);
+                for (i, &p) in line.iter().enumerate() {
+                    let dir = if i + 1 < line.len() { line[i + 1] - p } else { p - line[i - 1] };
+                    let side = dir.cross(e - p).normalize_or_zero() * half;
+                    strip.push(([0.0, 0.0], (p - side).to_array()));
+                    strip.push(([0.0, 1.0], (p + side).to_array()));
+                }
+                strips.push(strip);
+            }
+        }
+        if !strips.is_empty() {
+            out.push(Strips { texture: 0, blend: 0, ztest: true, zwrite: true, color, strips, colors: Vec::new() });
+        }
+    }
+    out
+}
+
+/// The cords lit as the world's own matte geometry is: their colour times the
+/// ambient and the sun on a wire facing up, never brighter than it, never a
+/// glow (a bolt's light, `spells::light_bolts`, adds the light to its colour).
+pub fn light_cords(strips: &mut [Strips], view: &render::View) {
+    matte(strips, view.ambient, view.sun, view.sun_dir);
+}
+
+fn matte(strips: &mut [Strips], ambient: glam::Vec3, sun: glam::Vec3, sun_dir: glam::Vec3) {
+    let light = (ambient + sun * (-glam::Vec3::Y.dot(sun_dir)).max(0.0)).clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
+    for s in strips {
+        let c = s.color;
+        s.color = [c[0] * light.x, c[1] * light.y, c[2] * light.z, c[3]];
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +272,9 @@ mod tests {
                 period: 1.5,
                 size: 0.4,
                 bright: 1.0,
+                cord: 0x1E3F_1EFF,
+                cord_width: 0.1,
+                cord_sag: 0.06,
                 colors: vec![0xFF20_20FF, 0x20D0_40FF, 0xFFD0_40FF],
                 bulbs: vec![
                     Bulb { at: [1.0, 2.0, 0.0], color: 0, phase: 0 },
@@ -209,6 +316,38 @@ mod tests {
         // another name, or past the reach: nothing
         assert!(batches_of(&d, &[Holder { name: "Christmas Bush", at: [0.0; 3], heading: 0.0, scale: 1.0 }], 0, [0.0; 3], 0).is_empty());
         assert!(batches_of(&d, &h, 0, [100.0 + REACH + 10.0, 50.0, 200.0], 0).is_empty());
+    }
+
+    /// The cord runs bulb to bulb, the star off it, a break starting a new
+    /// run, each span sagging below the straight line between its bulbs; a
+    /// string with no cord has none.
+    #[test]
+    fn the_cord_hangs_from_bulb_to_bulb() {
+        let mut d = tree(Effect::Steady);
+        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0 }];
+        let c = cords_of(&d, &h, 0, [0.0, 3.0, -20.0]);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].strips.len(), 1, "three bulbs, the star off it: one run");
+        let s = &c[0].strips[0];
+        assert_eq!(s.len(), 2 * (1 + 2 * CORD_PIECES), "two spans of {CORD_PIECES} pieces, two sides a point");
+        // the middle of the first span hangs below the straight line
+        let mid = |i: usize| (glam::Vec3::from(s[2 * i].1) + glam::Vec3::from(s[2 * i + 1].1)) / 2.0;
+        let straight = (glam::Vec3::new(1.0, 2.0, 0.0) + glam::Vec3::new(0.0, 4.0, 1.0)) / 2.0;
+        assert!(mid(CORD_PIECES / 2).y < straight.y - 0.01, "{:?} vs {straight:?}", mid(CORD_PIECES / 2));
+        assert!((mid(0) - glam::Vec3::new(1.0, 2.0, 0.0)).length() < 1e-4, "it starts at the first bulb");
+        // a break: two runs, the second too short for a wire
+        d.strings[0].bulbs[1].color |= net::decor::BREAK;
+        assert_eq!(cords_of(&d, &h, 0, [0.0; 3])[0].strips.len(), 1, "a run of one bulb has no wire");
+        d.strings[0].bulbs[2].color |= net::decor::BREAK;
+        assert!(cords_of(&d, &h, 0, [0.0; 3]).is_empty(), "every bulb alone: no wire");
+        // no cord
+        let mut none = tree(Effect::Steady);
+        none.strings[0].cord = 0;
+        assert!(cords_of(&none, &h, 0, [0.0; 3]).is_empty());
+        // lit: darker than its colour at night, never brighter
+        let mut lit = cords_of(&tree(Effect::Steady), &h, 0, [0.0; 3]);
+        matte(&mut lit, glam::Vec3::splat(0.3), glam::Vec3::ZERO, glam::Vec3::NEG_Y);
+        assert!(lit[0].color[1] < 0x3F as f32 / 255.0 && lit[0].color[1] > 0.0);
     }
 
     /// A twinkle changes each bulb's light over time, out of step.

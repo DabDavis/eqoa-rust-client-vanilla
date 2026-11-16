@@ -55,9 +55,19 @@ pub enum Anchor {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bulb {
     pub at: [f32; 3],
+    /// the colour's index ([`COLOR`] of it), the string's top ([`TOP`]) and
+    /// the cord broken before it ([`BREAK`])
     pub color: u8,
     pub phase: u8,
 }
+
+/// The bits of [`Bulb::color`] that are the colour's index.
+pub const COLOR: u8 = 0x3F;
+/// The bit of [`Bulb::color`] that marks the string's top (a tree's star).
+pub const TOP: u8 = 0x80;
+/// The bit of [`Bulb::color`] that breaks the cord before the bulb (a ring's
+/// first after the ring below).
+pub const BREAK: u8 = 0x40;
 
 /// A string of lights.
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +79,14 @@ pub struct LightString {
     /// a bulb's glow across
     pub size: f32,
     pub bright: f32,
+    /// The cord the bulbs hang on, bulb to bulb (the owner, 2026-11-16: "for
+    /// the lights let there look like a cord connecting them"): 0xRRGGBBAA, 0
+    /// none (a string of single points)
+    pub cord: u32,
+    /// its thickness, in the string's units
+    pub cord_width: f32,
+    /// how far it hangs between two bulbs, of their distance
+    pub cord_sag: f32,
     /// 0xRRGGBBAA
     pub colors: Vec<u32>,
     pub bulbs: Vec<Bulb>,
@@ -110,6 +128,7 @@ pub fn read(data: &[u8]) -> Option<Decor> {
         };
         let effect = Effect::of(r.u8());
         let (period, size, bright) = (r.f32(), r.f32(), r.f32());
+        let (cord, cord_width, cord_sag) = (r.u32(), r.f32(), r.f32());
         let nc = r.u8() as usize;
         let colors: Vec<u32> = (0..nc).map(|_| r.u32()).collect();
         let nb = r.u16() as usize;
@@ -123,8 +142,8 @@ pub fn read(data: &[u8]) -> Option<Decor> {
             return None;
         }
         let ok = |v: f32| v.is_finite();
-        if ok(period) && ok(size) && ok(bright) && bulbs.iter().all(|b| b.at.iter().all(|v| v.is_finite())) && !colors.is_empty() {
-            out.strings.push(LightString { anchor, effect, period, size, bright, colors, bulbs });
+        if ok(period) && ok(size) && ok(bright) && ok(cord_width) && ok(cord_sag) && bulbs.iter().all(|b| b.at.iter().all(|v| v.is_finite())) && !colors.is_empty() {
+            out.strings.push(LightString { anchor, effect, period, size, bright, cord, cord_width, cord_sag, colors, bulbs });
         }
     }
     // the art (a server before it sends none)
@@ -178,6 +197,10 @@ mod tests {
         for v in [1.5f32, 0.3, 1.0] {
             b.extend(v.to_le_bytes());
         }
+        b.extend(0x1E3F_1EFFu32.to_le_bytes());
+        for v in [0.06f32, 0.06] {
+            b.extend(v.to_le_bytes());
+        }
         b.push(2);
         b.extend(0xFF20_20FFu32.to_le_bytes());
         b.extend(0x20D0_40FFu32.to_le_bytes());
@@ -191,6 +214,7 @@ mod tests {
         for v in [2.0f32, 0.5, 2.0] {
             b.extend(v.to_le_bytes());
         }
+        b.extend([0u8; 12]);
         b.push(1);
         b.extend(0xFFFF_FFFFu32.to_le_bytes());
         b.extend(0u16.to_le_bytes());
@@ -210,6 +234,8 @@ mod tests {
         let s = &d.strings[0];
         assert_eq!(s.anchor, Anchor::Npc("christmas tree".into()));
         assert_eq!((s.effect, s.period, s.size, s.bright), (Effect::Twinkle, 1.5, 0.3, 1.0));
+        assert_eq!((s.cord, s.cord_width, s.cord_sag), (0x1E3F_1EFF, 0.06, 0.06));
+        assert_eq!(d.strings[1].cord, 0, "the second has none");
         assert_eq!(s.colors, vec![0xFF20_20FF, 0x20D0_40FF]);
         assert_eq!(s.bulbs, vec![Bulb { at: [1.0, 2.0, 3.0], color: 1, phase: 7 }]);
         assert_eq!(d.strings[1].anchor, Anchor::World(3));
@@ -219,7 +245,7 @@ mod tests {
         assert_eq!(read(&body()).map(|d| d.art.len()), Some(0));
         let cut = &b[..b.len() - 7];
         assert_eq!(read(cut), None);
-        assert_eq!(read(&body()[..20]), None);
+        assert_eq!(read(&body()[..30]), None);
     }
 
     #[test]

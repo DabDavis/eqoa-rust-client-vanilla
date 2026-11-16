@@ -1314,6 +1314,12 @@ pub fn shot_with(
         // the last frame's bolts lit by the shot's lights, its trails unlit
         // after them (`spells::light_bolts`)
         crate::spells::light_bolts(&mut shot_bolts, &view, fx.as_ref().map_or(Vec3::ZERO, |f| f.raster_normal()));
+        // a server's decorations' cords (`decorlights`), lit as matte wire
+        if let Some(p) = play.as_ref() {
+            let mut cords = p.decor_cords(walker.eye_position().to_array());
+            crate::decorlights::light_cords(&mut cords, &view);
+            shot_bolts.append(&mut cords);
+        }
         renderer.strips = shot_bolts;
         renderer.strips.append(&mut shot_trails);
         // the volumes as the shot's camera sees them (the walk's clock does
@@ -6403,6 +6409,12 @@ impl App {
                     g.renderer.strips = bolts;
                     if let Some(p) = play.as_mut() {
                         g.renderer.strips.append(&mut p.trail_strips);
+                    }
+                    // a server's decorations' cords (`decorlights`), lit as matte wire
+                    if let Some(p) = play.as_ref() {
+                        let mut cords = p.decor_cords(w.eye_position().to_array());
+                        crate::decorlights::light_cords(&mut cords, &lights.0);
+                        g.renderer.strips.append(&mut cords);
                     }
                     // the characters' blob shadows (`VIScene::RenderShadows`,
                     // `shadows`): drawn after the particle system's batches,
