@@ -559,6 +559,17 @@ pub const OP_POWER_BARS: u16 = 0x7E01;
 /// u8 power of 255. Each is the whole set: an id it leaves out has no bar.
 /// Sent only when the set changed, at most twice a second.
 pub const OP_POWER_BARS_DATA: u16 = 0x7E02;
+/// go-eqoa-server's own, no retail message: the regional weather (board
+/// entries #1549/#1550). A u32 after the opcode, both ways, as
+/// [`OP_POWER_BARS`]: the server offers it (1) once the player is in the
+/// world, the client answers 1 while Options' Weather is above 0 and 0 to
+/// stop (`agree_weather`); answered 1, it is sent [`OP_WEATHER_DATA`]. A PS2
+/// ignores the offer; the retail rain and snow (0x00C5/0x00C7) come to every
+/// client either way.
+pub const OP_WEATHER: u16 = 0x7E90;
+/// The regional weather's timelines, from a server the client asked
+/// ([`OP_WEATHER`]): `crate::weather`'s layout.
+pub const OP_WEATHER_DATA: u16 = 0x7E91;
 /// The marks, from a server the client asked ([`OP_QUEST_MARKERS`]): a u8
 /// count, then each its u8 kind ([`QuestMark::kind`]), u8 world, f32 x and z,
 /// the NPC's name and a u8 count of quests, each its name, u8 lowest and
@@ -1151,8 +1162,17 @@ pub enum Event {
     AbilityRemove { token: u32, index: i32 },
     AbilityLockout { index: u8, token: u32, lockout: i32 },
     /// 0x00C5 (fades) and 0x00C7 (instant): the weather byte
-    /// (`VIClient::SetWeather`).
+    /// (`VIClient::SetWeather`). The decomp's CLIENT: case 0x00C5 calls
+    /// `SetWeather(w, 0)`, which starts a fade (`m_p608 = 1e-5`), case 0x00C7
+    /// `SetWeather(w, 1)`, at once (`m_p608 = 1`); the atmosphere's
+    /// `lv[7] = {0, .15, .5, 1, .15, .5, 1}` and its `st` split make 1-3 rain
+    /// light to heavy and 4-6 snow, whatever `vi.h`'s enum names them
+    /// (`vi::atmosphere::WX_CLEAR`).
     Weather { weather: u8, instant: bool },
+    /// [`OP_WEATHER_DATA`]: the regional weather's zones, each replacing
+    /// what was last sent of it; their times count from this event's
+    /// receipt.
+    WeatherZones(Vec<crate::weather::Zone>),
     /// 0x00FF (`Msg00FF`): every ability (display index below 252) off
     /// the bar; the answer to 0x00FE.
     AbilityClearBar { token: u32 },
@@ -1293,6 +1313,10 @@ pub struct Session {
     pub power_bars_offer: bool,
     power_bars_asked: Option<bool>,
     pub power_bars: Vec<(u32, u8)>,
+    /// Whether the server offered the regional weather on this connection
+    /// ([`OP_WEATHER`]) and what it was last told (none since the offer).
+    pub weather_offer: bool,
+    weather_asked: Option<bool>,
     /// The offer said each member's group comes too, when asked (2).
     raid_roster_groups: bool,
     /// The offer said each member's kind comes too, after its group (3).
@@ -1565,6 +1589,8 @@ impl Session {
             power_bars_offer: false,
             power_bars_asked: None,
             power_bars: Vec::new(),
+            weather_offer: false,
+            weather_asked: None,
             raid_roster_groups: false,
             raid_roster_kinds: false,
             combat_record: false,
@@ -1792,6 +1818,17 @@ impl Session {
         }
         self.power_bars_asked = Some(want);
         self.send_op_int(OP_POWER_BARS, want as u32);
+    }
+
+    /// The regional weather: a server that offered it ([`OP_WEATHER`]) is
+    /// told whether to send it (`want`: Options' Weather above 0), at once
+    /// and whenever that changes; one that made no offer is told nothing.
+    pub fn agree_weather(&mut self, want: bool) {
+        if !self.weather_offer || self.weather_asked == Some(want) {
+            return;
+        }
+        self.weather_asked = Some(want);
+        self.send_op_int(OP_WEATHER, want as u32);
     }
 
     /// The power of 255 the server last sent for entity `id`
@@ -2420,6 +2457,9 @@ impl Session {
                 self.power_bars_offer = false;
                 self.power_bars_asked = None;
                 self.power_bars.clear();
+                // the regional weather: offered again at the next world entry
+                self.weather_offer = false;
+                self.weather_asked = None;
                 self.quest_marks.clear();
                 self.quest_progress_offer = false;
                 self.quest_progress_asked = None;
@@ -2891,6 +2931,18 @@ impl Session {
                     self.power_bars_asked = None;
                 }
             }
+            OP_WEATHER => {
+                // an offer (again at every world entry): told afresh
+                r.u32();
+                if !r.error {
+                    self.weather_offer = true;
+                    self.weather_asked = None;
+                }
+            }
+            OP_WEATHER_DATA => match crate::weather::read(&m.data[2.min(m.data.len())..]) {
+                Some(zones) => ev.push(Event::WeatherZones(zones)),
+                None => eprintln!("net: a weather message of {} bytes refused", m.data.len()),
+            },
             OP_POWER_BARS_DATA => {
                 let n = r.u8() as usize;
                 let set: Vec<(u32, u8)> = (0..n).map(|_| (r.u32(), r.u8())).collect();
@@ -4674,6 +4726,51 @@ mod tests {
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert!(!s.power_bars_offer && s.power_bars.is_empty(), "a new connection, no offer yet");
         s.agree_power_bars(true);
+        assert_eq!(answers(&mut s), [], "and nothing asked");
+    }
+
+    // go-eqoa-server's 0x7E90 weather offer: nothing asked before it, the
+    // answer once a change of mind (1 while Options' Weather is above 0, 0 at
+    // 0), a new offer answered afresh, a new connection none. Its 0x7E91
+    // zones come as an event; a bad one is refused whole.
+    #[test]
+    fn weather_offer_answer_and_zones() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x90, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_weather(true);
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x90, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty(), "{ev:?}");
+        assert!(s.weather_offer);
+        s.agree_weather(true);
+        s.agree_weather(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x90, 0x7E, 1, 0, 0, 0])], "asked once");
+        s.agree_weather(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x90, 0x7E, 0, 0, 0, 0])], "the slider at 0: stopped");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x90, 0x7E, 1, 0, 0, 0]);
+        s.agree_weather(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x90, 0x7E, 0, 0, 0, 0])], "a new offer, answered again");
+
+        use crate::weather::{Phase, Timeline, Zone};
+        let z = Zone { world: 0, col: 3, row: 2, timelines: vec![Timeline { squares: 1, revision: 1, seed: 2, wind: [1.0, 0.0], phases: vec![Phase { at_ms: 0, kind: 3, strength: 255 }, Phase { at_ms: 10, kind: 0, strength: 0 }] }] };
+        let mut body = vec![0x91, 0x7E];
+        body.extend(crate::weather::write(std::slice::from_ref(&z)));
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, body.clone());
+        assert!(matches!(ev.as_slice(), [Event::WeatherZones(zs)] if zs == &[z.clone()]), "{ev:?}");
+        let at = body.len() - 2;
+        body[at] = 3; // the last phase sand: refused
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, body);
+        assert!(ev.is_empty(), "{ev:?}");
+
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.weather_offer, "a new connection, no offer yet");
+        s.agree_weather(true);
         assert_eq!(answers(&mut s), [], "and nothing asked");
     }
 

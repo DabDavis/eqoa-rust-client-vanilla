@@ -22,3 +22,4 @@ pub mod selectinfo;
 pub mod serverworlds;
 pub mod session;
 pub mod stream;
+pub mod weather;
