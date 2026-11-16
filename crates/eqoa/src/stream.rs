@@ -494,6 +494,22 @@ impl Streamer {
         }
     }
 
+    /// Asks for zone `zi` now, wherever the player is, when it is neither in
+    /// nor asked for: a zone whose art a server's decoration wears
+    /// (`decorlights`), read as it would be were the player walking there (it
+    /// joins the library and the collision world, and is drawn only once the
+    /// player is within the inner radius of it, as any zone is).
+    pub fn want(&mut self, zi: usize, world: &World<Ee>, lib: &Library) {
+        let Some(src) = self.source.as_mut() else { return };
+        if world.loaded.get(zi).copied().unwrap_or(true) || self.requested.contains(&zi) {
+            return;
+        }
+        if let Some((off, len)) = lib.zone_range(self.file, zi) {
+            src.request(zi, off, len);
+            self.requested.insert(zi);
+        }
+    }
+
     /// Puts the zones whose bytes have come into the library and the
     /// collision world. Returns the first actor they added, if any (for what
     /// keeps state per actor: the particles).

@@ -8,6 +8,7 @@ pub mod auth;
 pub mod buffs;
 pub mod cape;
 pub mod creation;
+pub mod decor;
 pub mod dump;
 pub mod entity;
 pub mod headmarks;

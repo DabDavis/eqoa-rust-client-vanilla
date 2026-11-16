@@ -793,6 +793,21 @@ pub const OP_NPC_TINTS_ANSWER: u16 = 0x7E3F;
 /// Each is the whole set.
 pub const OP_NPC_TINTS: u16 = 0x7E40;
 
+/// go-eqoa-server's own: strings of decoration lights and the art its
+/// decorations wear (the server owner, 2026-11-16: Freeport's Christmas tree,
+/// its lights "in different colors", "a template so we can put christmas
+/// lights on fences buildings etc"; `crate::decor`, the game's `decorlights`).
+/// The offer, server to client once the player is in the world: a u8, the
+/// newest layout of [`OP_DECOR_LIGHTS`] the server sends (1). CLIENT has no such
+/// case: a PS2 ignores it, draws no lights and is sent the NPCs' own bodies.
+pub const OP_DECOR_LIGHTS_OFFER: u16 = 0x7E80;
+/// The answer to [`OP_DECOR_LIGHTS_OFFER`], client to server, at once: a u8, the
+/// layout this client reads (at most `crate::decor::LAYOUT`), 0 to stop. From it
+/// the server sends this client the decorations' art in their NPCs' bodies.
+pub const OP_DECOR_LIGHTS_ANSWER: u16 = 0x7E81;
+/// The decorations, from a server the client answered, at once and whenever a
+/// season turns or a GM edits them: the whole set (`crate::decor::read`).
+pub const OP_DECOR_LIGHTS: u16 = 0x7E82;
 /// go-eqoa-server's own: a pet's dyes, two colours on two areas of its body
 /// (the server owner, 2026-11-16; its Pet Groomers put them on: `crate::petdye`).
 /// The offer, server to client once the player is in the world: a u8, the
@@ -1317,6 +1332,10 @@ pub struct Session {
     pub npc_tints: Option<Vec<(String, crate::npctint::Tint)>>,
     /// The layout of [`OP_NPC_TINTS`] this client answered the offer with.
     pub npc_tints_layout: u8,
+    /// The decorations the server last sent ([`OP_DECOR_LIGHTS`]), until the game
+    /// takes them (`decorlights`): the empty set at its offer and at a new
+    /// connection, this client holding none then.
+    pub decor: Option<crate::decor::Decor>,
     /// The dyed pets the server last sent ([`OP_PET_DYES`], by the id this
     /// client knows each by), until the game takes them (`petdye`): the empty
     /// set at its offer and at a new connection, this client holding none
@@ -1609,6 +1628,7 @@ impl Session {
             race_looks: None,
             npc_tints: None,
             npc_tints_layout: 1,
+            decor: None,
             pet_dyes: None,
             flying: false,
             noclip: false,
@@ -2473,6 +2493,8 @@ impl Session {
                 self.map_travel = false;
                 // the NPCs' body tints too (the next world entry offers them)
                 self.npc_tints = Some(Vec::new());
+                // and the decorations (offered again)
+                self.decor = Some(Default::default());
                 // and the pets' dyes (the next world entry offers them)
                 self.pet_dyes = Some(Vec::new());
                 // the mercs and the group search's standing (offered again)
@@ -2825,6 +2847,21 @@ impl Session {
                     self.send(&w.data);
                 }
             }
+            // the decorations offered: taken (`decorlights`), what was held
+            // dropped, the server sending the set there is
+            OP_DECOR_LIGHTS_OFFER => {
+                let layout = r.u8().min(crate::decor::LAYOUT);
+                if !r.error && layout > 0 {
+                    self.decor = Some(Default::default());
+                    let mut w = Writer::op(OP_DECOR_LIGHTS_ANSWER);
+                    w.u8(layout);
+                    self.send(&w.data);
+                }
+            }
+            OP_DECOR_LIGHTS => match crate::decor::read(&m.data[2.min(m.data.len())..]) {
+                Some(d) => self.decor = Some(d),
+                None => debug_line(&format!("[net] decorations: {} bytes not read", m.data.len())),
+            },
             OP_NPC_TINTS => match crate::npctint::read(&m.data[2.min(m.data.len())..], self.npc_tints_layout) {
                 Some(t) => self.npc_tints = Some(t),
                 None => debug_line(&format!("[net] NPC tints: {} bytes not read", m.data.len())),
@@ -5103,6 +5140,40 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 2].to_vec());
         assert_eq!(s.pet_dyes, None, "the control: a set cut short is nothing new");
         assert_eq!(answers(&mut s), [], "the set answered nothing");
+    }
+
+    #[test]
+    fn decor_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x81, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x80, 0x7E]);
+        assert_eq!((answers(&mut s), s.decor.take()), (vec![], None), "a short offer is no offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x80, 0x7E, 3]);
+        assert_eq!(answers(&mut s), [(251, vec![0x81, 0x7E, 1])], "answered at once with the layout read");
+        assert_eq!(s.decor.take(), Some(Default::default()), "what was held dropped");
+        // one string in world 0, one bulb; one art
+        let mut m = vec![0x82, 0x7E, 1, 0, 0, 0, 0];
+        for v in [1.5f32, 0.3, 1.0] {
+            m.extend(v.to_le_bytes());
+        }
+        m.extend([0u8; 12]);
+        m.push(1);
+        m.extend(0xFFFF_FFFFu32.to_le_bytes());
+        m.extend(1u16.to_le_bytes());
+        m.extend([0u8; 14]);
+        m.extend(1u16.to_le_bytes());
+        m.extend(0x0E31_8233u32.to_le_bytes());
+        m.extend([0, 32, 0]);
+        m.extend(9.6f32.to_le_bytes());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m);
+        let d = s.decor.take().expect("taken");
+        assert_eq!((d.strings.len(), d.art.len(), d.art[0].zone), (1, 1, 32));
     }
 
     #[test]

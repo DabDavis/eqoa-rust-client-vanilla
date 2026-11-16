@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · Christmas lights
+- **Seasonal decorations from the server**: when a GM puts the Christmas season up on eqoaclassic.com, a great fir
+  stands lit in Freeport's north plaza, wound with **twinkling lights in many colours** on a dark green cord, and a **gold star** on top.
+  At night the lights glow on the sand round it (with Dynamic Lighting on).
+- The fir is art from your own disc (a fir of Tunaria's northern forests), read while the season is up.
+- A PS2 sees the plaza tree too, as a treant, without the lights.
 
 ## 2026-11-16 · Auras on hats
 - **An aura put on your helm now lights a hat you wear** (the Turban of Twisted Virtue, say) instead of turning it
