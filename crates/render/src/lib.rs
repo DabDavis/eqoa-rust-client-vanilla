@@ -825,9 +825,25 @@ pub struct View {
     pub clear: Vec3,
     /// The view with its translation zeroed, for `GpuModel::sky` models.
     pub sky_view_proj: Option<Mat4>,
+    /// How much of the fog's colour the sky is drawn in, whatever its depth
+    /// (0 to 1): a storm's (the client's regional weather, `weather_zones`).
+    /// The sky's own view puts the dome a few units off, so the distance fog
+    /// barely reaches it, and its horizon (hills, sea) showed through a
+    /// sandstorm that had turned everything else sand (the owner,
+    /// 2026-11-16). 0: the sky as the distance fog leaves it, the game's.
+    pub sky_fog: f32,
     /// Dynamic Lighting's point lights (`lit`): with them (and it on), the
     /// models drawn lit per fragment; `None`, the PS2's way.
     pub lights: Option<Lights>,
+}
+
+/// The sky's fog (near, far) for `View::sky_fog` share `s`: a linear fog over
+/// a span so long that the shader's (far - depth) / (far - near) is 1 - s for
+/// any depth the dome is drawn at.
+pub fn sky_fog_span(s: f32) -> [f32; 4] {
+    const SPAN: f32 = 1.0e6;
+    let far = (1.0 - s.clamp(0.0, 1.0)) * SPAN;
+    [far - SPAN, far, 0.0, 0.0]
 }
 
 impl View {
@@ -843,6 +859,7 @@ impl View {
             point: None,
             clear: Vec3::new(0.18, 0.2, 0.24),
             sky_view_proj: None,
+            sky_fog: 0.0,
             lights: None,
         }
     }
@@ -1593,7 +1610,15 @@ impl Renderer {
         queue.write_buffer(&self.frame_buf, 0, bytemuck::bytes_of(&uniform));
         if let Some(vp) = view.sky_view_proj {
             // the sky's view has no translation: its eye is the origin
-            let sky = FrameUniform { view_proj: vp.to_cols_array_2d(), eye: [0.0, 0.0, 0.0, uniform.eye[3]], ..uniform };
+            let mut sky = FrameUniform { view_proj: vp.to_cols_array_2d(), eye: [0.0, 0.0, 0.0, uniform.eye[3]], ..uniform };
+            // a storm's share of the fog's colour at every depth: the linear
+            // fog over a span so long the dome's few units are nothing in it
+            if let (Some((_, _, c)), s) = (view.fog, view.sky_fog.clamp(0.0, 1.0))
+                && s > 0.0
+            {
+                sky.fog = sky_fog_span(s);
+                sky.fog_color = c.extend(1.0).to_array();
+            }
             queue.write_buffer(&self.sky_frame_buf, 0, bytemuck::bytes_of(&sky));
         }
         // Sun Shadows: the frame's casters into their map before the world,
@@ -2790,5 +2815,22 @@ mod tests {
         let (mut r2, mut s2) = (Vec::new(), Vec::new());
         assert!(super::guarded(&device, &mut r2, &mut s2, super::SUN, || Some(refused_buffer())).is_some() && r2.is_empty());
         assert_eq!(raised.load(Ordering::SeqCst), 1, "the control: without the scopes the refusal is raised");
+    }
+}
+
+#[cfg(test)]
+mod sky_fog_tests {
+    /// The shader's fog factor (1 none, 0 all fog) is 1 - s at any depth the
+    /// sky's dome is drawn at; the control: the world's fog of a storm (near
+    /// 3, far 40) leaves a dome 5 off nearly unfogged.
+    #[test]
+    fn the_sky_takes_its_share_of_the_fog_at_any_depth() {
+        let factor = |f: [f32; 4], w: f32| ((f[1] - w) / (f[1] - f[0])).clamp(0.0, 1.0);
+        for s in [0.0, 0.25, 0.5, 1.0] {
+            for w in [0.5, 5.0, 50.0, 500.0] {
+                assert!((factor(super::sky_fog_span(s), w) - (1.0 - s)).abs() < 1e-3, "s {s} at {w}");
+            }
+        }
+        assert!(factor([3.2, 40.0, 0.0, 0.0], 5.0) > 0.9, "the control");
     }
 }

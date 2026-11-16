@@ -314,10 +314,19 @@ impl Default for Sand {
 
 impl Sand {
     /// The drops' tint (snow.tga's white made sand) and size.
-    pub const TINT: [f32; 3] = [0.67, 0.47, 0.25];
-    pub const SIZE: f32 = 0.11;
-    const RANGE: f32 = 10.0;
-    const MOST: usize = 200;
+    pub const TINT: [f32; 3] = [0.86, 0.70, 0.45];
+    /// Each drop a short streak along the wind: half its width and height.
+    pub const SIZE: [f32; 2] = [0.3, 0.07];
+    /// The box: 24 units, its centre 10 ahead of the camera, so it holds the
+    /// camera and the player before it in every camera (first person, the
+    /// follow orbit 12 back, zoomed out, a GM's free camera) where the game's
+    /// 10 round a point 5 ahead holds only what is at the camera (the owner,
+    /// 2026-11-16: "players can only see the particle effect in first person
+    /// not thirdperson"). The rain and snow keep the game's box.
+    pub const RANGE: f32 = 24.0;
+    pub const AHEAD: f32 = 10.0;
+    /// At the strongest: about the game's rain's drops a unit cubed.
+    pub const MOST: usize = 1600;
 
     fn unit(&mut self) -> f32 {
         let mut x = self.rng;
@@ -339,7 +348,15 @@ impl Sand {
             return;
         }
         let half = Self::RANGE * 0.5;
-        let c = [eye[0] + dir[0] * 5.0, eye[1] + dir[1] * 5.0, eye[2] + dir[2] * 5.0];
+        // the look direction made a unit: the orbit cameras' (modes 1 and 3,
+        // the third person) is the player less the camera, some 12 long, and
+        // taken as it was it put the box 120 off, out of sight (the owner,
+        // 2026-11-16: "players can only see the particle effect in first
+        // person not thirdperson"); first person's is a unit already
+        let n = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        let dir = if n > 1e-6 { dir.map(|v| v / n) } else { [0.0, 0.0, 1.0] };
+        let k = Self::AHEAD;
+        let c = [eye[0] + dir[0] * k, eye[1] + dir[1] * k, eye[2] + dir[2] * k];
         let d = [c[0] - self.camera[0], c[1] - self.camera[1], c[2] - self.camera[2]];
         let jump = self.drops.is_empty() || d.iter().any(|v| v.abs() > Self::RANGE);
         self.camera = c;
@@ -347,7 +364,7 @@ impl Sand {
             self.drops.clear();
             for _ in 0..Self::MOST {
                 let p = [self.unit() * Self::RANGE - half, self.unit() * Self::RANGE - half, self.unit() * Self::RANGE - half];
-                let a = 0.2 + self.unit() * 0.2;
+                let a = 0.35 + self.unit() * 0.25;
                 self.drops.push((p, a));
             }
             return;
@@ -379,9 +396,9 @@ impl Sand {
         r.material(SAND_MAT);
         for (p, a) in self.drops.iter().take(self.count) {
             let loc = Vect3::of(p[0] + self.camera[0], p[1] + self.camera[1], p[2] + self.camera[2]);
-            let sz = if f::<M>(-1.5) < cam.near.distance(&loc) { F::ZERO } else { f(Self::SIZE) };
+            let (w, h) = if f::<M>(-1.5) < cam.near.distance(&loc) { (F::ZERO, F::ZERO) } else { (f(Self::SIZE[0]), f(Self::SIZE[1])) };
             let [tr, tg, tb] = Self::TINT;
-            r.bb(Billboard { location: loc, frame: 0, width: sz, height: sz, color: Color { r: f(tr), g: f(tg), b: f(tb), a: f(*a) } });
+            r.bb(Billboard { location: loc, frame: 0, width: w, height: h, color: Color { r: f(tr), g: f(tg), b: f(tb), a: f(*a) } });
         }
     }
 }
@@ -1420,6 +1437,41 @@ mod tests {
         Camera { position: Vect3::of(0.0, 0.0, 0.0), dir: Vect3::of(0.0, 0.0, 1.0), view: Matrix44::identity(), near: Plane { n: Vect3::of(0.0, 0.0, -1.0), d: f(-0.3) } }
     }
 
+    /// From the follow orbit's camera (12 behind the player and 4 up,
+    /// looking at it, its direction not a unit, as `SetCamera` gives it) the
+    /// box holds the player and the drops fill the ground round it and the
+    /// space between: the third person sees them.
+    /// The control: the game's own box (10 round a point 5 ahead) ends
+    /// short of the player.
+    #[test]
+    fn sand_fills_the_third_persons_view() {
+        let eye = [0.0f32, 4.0, -12.0];
+        let to = [0.0f32, 1.0, 0.0];
+        let d = [to[0] - eye[0], to[1] - eye[1], to[2] - eye[2]];
+        let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let mut s = Sand::default();
+        // the direction as the orbit camera gives it: not a unit
+        s.update(eye, d, 1.0, [4.0, 0.0], 0);
+        let at = [s.camera[0] - eye[0], s.camera[1] - eye[1], s.camera[2] - eye[2]];
+        let ahead = (at[0] * at[0] + at[1] * at[1] + at[2] * at[2]).sqrt();
+        assert!((ahead - Sand::AHEAD).abs() < 1e-3, "the box {ahead:.1} ahead, not {:.1}", Sand::AHEAD * n);
+        let near_player = s.drops.iter().filter(|(p, _)| {
+            let w = [p[0] + s.camera[0], p[1] + s.camera[1], p[2] + s.camera[2]];
+            (w[0] * w[0] + (w[1] - 1.0) * (w[1] - 1.0) + w[2] * w[2]).sqrt() < 4.0
+        });
+        let near_player = near_player.count();
+        assert!(near_player > 10, "drops round the player: {near_player}");
+        let between = s.drops.iter().filter(|(p, _)| {
+            let w = [p[0] + s.camera[0], p[1] + s.camera[1], p[2] + s.camera[2]];
+            w[2] > -11.0 && w[2] < -1.0 && w[0].abs() < 3.0 && w[1] > 0.0 && w[1] < 4.0
+        });
+        let between = between.count();
+        assert!(between > 10, "drops between the camera and the player: {between}");
+        // the control: the game's box round a point 5 ahead reaches 5 past it
+        let game_far = 5.0 + 5.0;
+        assert!(n > game_far, "the player is beyond the game's box ({n:.1} > {game_far})");
+    }
+
     /// The sand's drops: 200 x the weight, under their own material, carried
     /// by the wind and not falling; at 0 none, and the raster untouched.
     #[test]
@@ -1430,7 +1482,7 @@ mod tests {
         s.render(&cam(), &mut r);
         assert!(r.runs.is_empty(), "no sand, nothing rastered");
         s.update([0.0; 3], [0.0, 0.0, 1.0], 0.5, [4.0, 0.0], 0);
-        assert_eq!(s.count, 100);
+        assert_eq!(s.count, Sand::MOST / 2);
         let before: Vec<[f32; 3]> = s.drops.iter().map(|d| d.0).collect();
         s.update([0.0; 3], [0.0, 0.0, 1.0], 0.5, [4.0, 0.0], 100);
         let mut moved_x = 0;
@@ -1439,14 +1491,16 @@ mod tests {
             if (b[0] - a[0] - 0.4).abs() < 1e-4 {
                 moved_x += 1;
             }
-            assert!((b[1] - a[1]).abs() < 0.05, "no fall: {a:?} -> {b:?}");
+            // (a drop at the box's top or bottom wraps round it)
+            let dy = (b[1] - a[1]).rem_euclid(Sand::RANGE);
+            assert!(dy.min(Sand::RANGE - dy) < 0.05, "no fall: {a:?} -> {b:?}");
             assert!((b[2] - a[2]).abs() < 1e-5, "no wind in z");
         }
-        assert!(moved_x > 180, "the wind carries them: {moved_x}");
+        assert!(moved_x > Sand::MOST * 9 / 10, "the wind carries them: {moved_x}");
         let mut r = Raster::<Ieee>::default();
         s.render(&cam(), &mut r);
         assert_eq!(r.runs.len(), 1);
-        assert_eq!((r.runs[0].0, r.runs[0].1.len()), (SAND_MAT, 100));
-        assert_eq!(r.runs[0].1[0].color.r, f(0.67));
+        assert_eq!((r.runs[0].0, r.runs[0].1.len()), (SAND_MAT, Sand::MOST / 2));
+        assert_eq!(r.runs[0].1[0].color.r, f(Sand::TINT[0]));
     }
 }

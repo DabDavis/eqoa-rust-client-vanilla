@@ -88,9 +88,11 @@ pub fn lit(
         point: None,
         clear: Vec3::new(0.18, 0.2, 0.24),
         sky_view_proj: None,
+        sky_fog: 0.0,
         lights: None,
     };
     let mut sky = None;
+    let mut storm_far = None;
     if let Some((b, at, w)) = &blend {
         let at = vi::vect::Vect3::of(at.x, at.y, at.z);
         let flags = w.env_flags(&at);
@@ -119,7 +121,12 @@ pub fn lit(
                 Some((n, fa, c)) => (n.min(near), fa.min(far), c.lerp(wc, f.intensity)),
                 None => (near, far, wc),
             });
+            // the far plane in to the storm's fog (`fog::set_storm_far`)
+            storm_far = v.fog.map(|(_, fa, _)| fa);
             v.sun *= 1.0 - 0.8 * f.intensity;
+            // the sky into the storm too: its horizon is not the world's,
+            // past the far plane, and the distance fog leaves it be
+            v.sky_fog = f.sky;
         }
         let mut c = tod.sky(hour, o, b);
         // the sky (the dome's colour and the clear) toward the storm's by its
@@ -143,6 +150,7 @@ pub fn lit(
             });
         }
     }
+    crate::fog::set_storm_far(storm_far);
     (v, sky)
 }
 
@@ -478,6 +486,11 @@ pub fn shot_with(
         // no server, as though one had offered it and the walk stood
         let jump_at: Vec<i64> = std::env::var("EQOA_JUMP").map(|s| s.split(';').filter_map(|ms| ms.trim().parse().ok()).collect()).unwrap_or_default();
         let walk = walk_script();
+        // `EQOA_FIRST_PERSON`: the walk seen in first person (P's
+        // `InitCameraStyle` from the orbit), as a player sees it so
+        if std::env::var_os("EQOA_FIRST_PERSON").is_some() {
+            crate::camstyle::cycle(&mut walker.cam, false, None, &mut walker.scene);
+        }
         // `EQOA_FRAME_MS=n`: frames of n ms instead of 16 (a display's rate:
         // 6 is about 165 a second, 33 the console's 30)
         let frame_ms: i64 = std::env::var("EQOA_FRAME_MS").ok().and_then(|v| v.parse().ok()).filter(|&v: &i64| v > 0).unwrap_or(16);

@@ -92,7 +92,7 @@ impl Preview {
         Some(Some(Preview { kind, strength }))
     }
 
-    /// The retail byte a rain or snow preview sets the game's atmosphere to
+    /// The retail byte a rain, snow or whiteout preview sets the game's atmosphere to
     /// (1-3 rain, 4-6 snow; a whiteout's snow is heavy); None for the rest.
     pub fn retail_byte(&self) -> Option<u8> {
         let step = if self.strength >= 0.75 {
@@ -105,6 +105,8 @@ impl Preview {
         match self.kind {
             wx::RAIN => Some(step),
             wx::SNOW => Some(3 + step),
+            // as the server sends it: a whiteout's snow at its heaviest
+            wx::WHITEOUT => Some(6),
             _ => None,
         }
     }
@@ -452,6 +454,7 @@ mod tests {
         assert_eq!(z.preview.unwrap().retail_byte(), None);
         assert_eq!(Preview::parse("snow moderate").unwrap().unwrap().retail_byte(), Some(5));
         assert_eq!(Preview::parse("rain light").unwrap().unwrap().retail_byte(), Some(1));
+        assert_eq!(Preview::parse("whiteout light").unwrap().unwrap().retail_byte(), Some(6));
         assert_eq!(Preview::parse("off"), Some(None));
         assert_eq!(Preview::parse("hail"), None);
         assert!(!z.set_world(0), "the same world: kept");

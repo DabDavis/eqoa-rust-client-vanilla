@@ -34,14 +34,48 @@ const THICKEN: f32 = 0.1;
 
 /// The far plane at `eye` through Fog `level`: the game's (`CalcFarPlane`),
 /// that brought in above the game's step, `SKY_FAR` with the fog off or no
-/// profile grid.
+/// profile grid; no farther than a storm's fog (`set_storm_far`).
 pub fn far_plane(world: &World<Ee>, eye: Vec3, level: u8) -> f32 {
-    match world.grid.as_ref() {
+    let far = match world.grid.as_ref() {
         Some(g) if level > 0 => {
             let far = g.far_plane(&Vect3::of(eye.x, eye.y, eye.z)).0;
             far * scale(level)
         }
         _ => SKY_FAR,
+    };
+    within_storm(far, storm_far())
+}
+
+/// A far plane no farther than a storm's fog's far distance.
+fn within_storm(far: f32, storm: Option<f32>) -> f32 {
+    storm.map_or(far, |s| far.min(s))
+}
+
+/// A storm's far distance as kept: none for one not positive and finite.
+fn storm_bits(far: Option<f32>) -> u32 {
+    far.filter(|f| f.is_finite() && *f > 0.0).map_or(0, f32::to_bits)
+}
+
+/// A storm's fog's far distance this frame (the client's regional weather,
+/// `viewer::lit`; 0 bits: none), which the far plane comes in to as the game
+/// brings it to its own fog's: the world all fog by then and nothing past it
+/// drawn. Kept at the profiles' far, the terrain past a sandstorm's 40 was
+/// drawn, all fog colour, but a layer of blend 4 (the destination times its
+/// alpha, which no fog reaches) darkened it, and the far hills stood dark
+/// against a sand sky (the owner, 2026-11-16: "can see distant mountain of
+/// free port but everything else is sand color").
+static STORM_FAR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The storm's far distance, from the next far plane on (None: no storm).
+pub fn set_storm_far(far: Option<f32>) {
+    STORM_FAR.store(storm_bits(far), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The storm's far distance, if there is a storm.
+pub fn storm_far() -> Option<f32> {
+    match STORM_FAR.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        b => Some(f32::from_bits(b)),
     }
 }
 
@@ -78,6 +112,18 @@ pub fn with_far(proj: Mat4, far: f32) -> Mat4 {
 
 #[cfg(test)]
 mod tests {
+    /// A storm brings the far plane in to its fog, never out past the
+    /// profiles'; none, the game's. The control: with no storm the fog off
+    /// draws to `SKY_FAR`.
+    #[test]
+    fn a_storm_brings_the_far_plane_in() {
+        assert_eq!(within_storm(600.0, None), 600.0, "the control: no storm, the game's");
+        assert_eq!(within_storm(600.0, Some(40.0)), 40.0);
+        assert_eq!(within_storm(600.0, Some(9000.0)), 600.0, "never farther");
+        assert_eq!((storm_bits(Some(f32::NAN)), storm_bits(Some(0.0)), storm_bits(None)), (0, 0, 0));
+        assert_eq!(f32::from_bits(storm_bits(Some(40.0))), 40.0);
+    }
+
     use super::*;
 
     /// `with_far` is the perspective glam builds with that far plane, the

@@ -157,6 +157,7 @@ impl Stage {
             point: None,
             clear: glam::Vec3::ZERO,
             sky_view_proj: None,
+            sky_fog: 0.0,
             lights: None,
         };
         // the fog and the sky's colour as the terrain profiles under the eye
