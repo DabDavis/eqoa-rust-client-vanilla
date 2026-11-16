@@ -34,6 +34,8 @@ is put on the page by `.github/workflows/notes.yml`.
   talk to the groomer and pick a colour, free, from the dyers' palette. A pet body can have **two colour areas** (the
   drachnid's torso and its spider body), each dyed apart; every other pet is dyed whole.
 - Each form of a pet keeps its own colours. Everyone playing this client sees your pet's dyes; a PS2 sees its own colours.
+- **An item can be such a hat too**: the first is the **Turban of Twisted Virtue**, the efreeti lord's turban, drawn
+  on your head while you wear it in your helm's place.
 
 ## 2026-11-16 · See more players and creatures, farther
 - **NPC/PC Display now starts at 48** (it was the game's 24) and **NPC/PC Distance at 200** (it was 100), in
