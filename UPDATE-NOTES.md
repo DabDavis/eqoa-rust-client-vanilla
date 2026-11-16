@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · The mouse on character select's scroll bar
+- **Character select's scroll bar now takes the mouse**, on a server that keeps more than eight characters: click
+  its top or bottom end to scroll a character, click above or below the handle to scroll a whole page, or drag the
+  handle. The selected character stays selected while the list moves, as with the wheel.
+- The mouse wheel over the list no longer ignores a trackpad's small turns: they add up to a row.
+- The keyboard and the controller work as before.
+
 ## 2026-11-16 · The server's own account pages, and why a login is refused
 - **The Station pages before the server list are now your server's own**, as a PlayStation 2 shows them after its
   patch: on eqoaclassic.com, Create User Name asks only for a name, a password twice and your e-mail address, Forgot

@@ -3351,7 +3351,7 @@ impl App {
             }
         }
         if let Some(h) = self.host.as_mut() {
-            h.click(p);
+            h.tap(p);
         }
     }
 
@@ -3733,7 +3733,7 @@ impl App {
             let size = (g.config.width, g.config.height);
             for c in taps {
                 let (x, y) = c.at();
-                h.click(render::ui::frame_from_window(size, [x as f32, y as f32]));
+                h.tap(render::ui::frame_from_window(size, [x as f32, y as f32]));
             }
             if look_y != 0.0 {
                 let dy = render::ui::frame_from_window(size, [0.0, look_y])[1] - render::ui::frame_from_window(size, [0.0, 0.0])[1];
@@ -5718,6 +5718,9 @@ impl App {
             WindowEvent::Focused(false) => self.focus_lost(el),
             WindowEvent::CursorLeft { .. } => {
                 self.mouse.release_all();
+                if let Some(h) = self.host.as_mut() {
+                    h.release();
+                }
                 self.grab_pointer(false);
                 if let Some(p) = self.play.as_mut() {
                     p.chat_let_go();
@@ -5768,6 +5771,11 @@ impl App {
                     self.grab_pointer(false);
                 } else if button == MouseButton::Left {
                     self.drag = down.then_some(self.cursor);
+                    // before the world: what the press took let go (character
+                    // select's scroll bar thumb)
+                    if !down && let Some(h) = self.host.as_mut() {
+                        h.release();
+                    }
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -5775,6 +5783,15 @@ impl App {
                 // the update's question's list dragged (`update`)
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.offer_drag() {
+                    return;
+                }
+                // before the world, the left button down: what its press took
+                // dragged (character select's scroll bar thumb)
+                if self.walker.is_none()
+                    && let (Some(h), Some(g)) = (self.host.as_mut(), self.gfx.as_ref())
+                    && h.drag_to(render::ui::frame_from_window((g.config.width, g.config.height), [position.x as f32, position.y as f32]))
+                {
+                    g.window.request_redraw();
                     return;
                 }
                 // a HUD piece dragged (`hudlayout`): nothing else's move

@@ -356,7 +356,7 @@ current.
   scripts in `~/.cache/vanilla-boot/ref{1,2}.pad`, `EQOA_NO_SETUP=1` for STATION on): compare shots. Files go through
   `pregame::files` and the network through `pregame::link` (natively threads; in a page its reader and the relay),
   so nothing in a stage is platform code. Headless: `DISPLAY=:99 EQOA_AUDIO=0 EQOA_OFFSCREEN=WxH EQOA_KEYS='enter@3000;
-  text name@4000' EQOA_PAD=... EQOA_SHOTS='3000=a.png' EQOA_QUIT=s eqoa boot <server>` (shots in play's frames too);
+  text name@4000' EQOA_PAD=... EQOA_SHOTS='3000=a.png' EQOA_QUIT=s eqoa boot <server>` (shots in play's frames too); `EQOA_PREGAME_MOUSE` (`press X Y@ms;move X Y@ms;release@ms;wheel N@ms`, frame points) plays the mouse there;
   in a page `web/drive.py --boot --keys/--type`. One login at a time per account, and a run that is killed holds its
   session about a minute: give each run's account time, or another account. `eqoa play <server> <account>` still goes
   straight into the world for scripts and playshots.
