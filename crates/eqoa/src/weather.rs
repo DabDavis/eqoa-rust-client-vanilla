@@ -13,6 +13,14 @@
 //!
 //! What differs from the game: the Lavastorm's fireballs ride a particle
 //! system of their own rather than the scene's.
+//!
+//! Not the game's: a server's regional weather (`weather_zones`, board entry
+//! #1550), sampled at the camera each frame into `regional` (Options' Weather
+//! applied): the sand's drops (`vi::atmosphere::Sand`, a sixth material),
+//! the roof over the eye and a wall upwind (probed every 100 ms), and the
+//! wind's bed on the sound. Its fog is `viewer::lit`'s.
+//! `EQOA_WEATHER_PREVIEW=kind[,strength]` (as `/weatherpreview`'s words, a
+//! comma for the space) previews one with no server, for shots.
 
 use crate::sky::Sprites;
 use esf::Library;
@@ -30,7 +38,9 @@ use vi::world::World;
 
 /// The materials `Init` makes, in its order: rain, snow, splash, star,
 /// lightning patch; their texture, blend mode and Z test (none writes Z).
-const MATERIALS: [(&str, usize, bool); 5] = [("rain.tga", 3, true), ("snow.tga", 3, true), ("splash.tga", 1, true), ("star.tga", 1, false), ("lightning_patch.tga", 1, false)];
+/// Then not the game's: a server's sandstorm's drops (`vi::atmosphere::
+/// SAND_MAT`), snow's texture tinted sand.
+const MATERIALS: [(&str, usize, bool); 6] = [("rain.tga", 3, true), ("snow.tga", 3, true), ("splash.tga", 1, true), ("star.tga", 1, false), ("lightning_patch.tga", 1, false), ("snow.tga", 3, true)];
 
 /// FX.CSF's Lavastorm: the fireball's head and its impact.
 const HEAD: &str = "P:\\studio\\eqps2\\team\\brandon\\head.esf";
@@ -91,7 +101,7 @@ pub struct Weather {
     rand: Rand,
     /// the fireballs' emitters
     sys: System<Ee>,
-    tex: [i32; 5],
+    tex: [i32; 6],
     /// `SetSky`'s first call fades (instantly), as entering a world does
     first: bool,
     sounds_attached: bool,
@@ -104,6 +114,16 @@ pub struct Weather {
     offset: i64,
     /// `CalcOutdoorsIntensity`'s probe
     pub outdoors: vi::world::Outdoors<Ee>,
+    /// The server's regional weather at the camera this frame, through
+    /// Options' Weather (`weather_zones`; `set_regional`)
+    pub regional: crate::weather_zones::Sample,
+    /// `EQOA_WEATHER_PREVIEW`'s, standing in when no server's is given
+    preview: Option<crate::weather_zones::Preview>,
+    /// a roof within 120 over the eye, and a wall within 8 upwind of it,
+    /// probed every 100 ms while there is regional weather
+    pub roof: bool,
+    pub upwind_wall: bool,
+    probed: Option<i64>,
 }
 
 impl Weather {
@@ -161,7 +181,28 @@ impl Weather {
         if models.is_none() {
             atm.initialised = false;
         }
-        let mut w = Weather { atm, rand, sys, tex: MATERIALS.map(|m| id(m.0)), first: true, sounds_attached: false, silent_handles: 0, flash: None, last: time, offset: 0, outdoors: Default::default() };
+        let preview = std::env::var("EQOA_WEATHER_PREVIEW").ok().and_then(|v| crate::weather_zones::Preview::parse(&v.replace(',', " "))).flatten();
+        let mut w = Weather {
+            atm,
+            rand,
+            sys,
+            tex: MATERIALS.map(|m| id(m.0)),
+            first: true,
+            sounds_attached: false,
+            silent_handles: 0,
+            flash: None,
+            last: time,
+            offset: 0,
+            outdoors: Default::default(),
+            regional: Default::default(),
+            preview,
+            roof: false,
+            upwind_wall: false,
+            probed: None,
+        };
+        if let Some(b) = preview.and_then(|p| p.retail_byte()) {
+            w.atm.set_weather(atmosphere::weather_from_wire(b), true);
+        }
         if let Ok(v) = std::env::var("EQOA_WEATHER") {
             let mut it = v.split(',');
             let t = it.next().and_then(|t| t.trim().parse().ok()).unwrap_or(0);
@@ -169,6 +210,14 @@ impl Weather {
             w.atm.set_weather(t, !fade);
         }
         w
+    }
+
+    /// This frame's regional weather: the server's sample at the camera
+    /// (`Play::weather_sample`), else `EQOA_WEATHER_PREVIEW`'s, else none;
+    /// through Options' Weather.
+    pub fn set_regional(&mut self, server: Option<crate::weather_zones::Sample>, now_ms: i64) {
+        let s = server.or_else(|| self.preview.map(|p| p.sample(now_ms))).unwrap_or_default();
+        self.regional = s.scaled(crate::settings::client().weather);
     }
 
     /// A weather byte off the wire (`VIClient::SetWeather`).
@@ -251,13 +300,35 @@ impl Weather {
             self.atm.p118c = s.sound_named("lightning_far02");
             self.sounds_attached = true;
         }
+        // the regional weather's roof and wall, every 100 ms while there is any
+        let r = self.regional;
+        if r.intensity() <= 0.0 {
+            (self.roof, self.upwind_wall, self.probed) = (false, false, None);
+        } else if self.probed.is_none_or(|t| time - t >= 100 || time < t) {
+            self.probed = Some(time);
+            let p = eye.position;
+            let mut up = CollRay::default();
+            up.init(p, Vect3::new(p.x, p.y + F::new(120.0), p.z));
+            self.roof = atmosphere::Scene::collide_ray(&mut Rays(world), &mut up);
+            let len = r.wind[0].hypot(r.wind[1]);
+            self.upwind_wall = len > 0.01 && {
+                let mut side = CollRay::default();
+                side.init(p, Vect3::new(p.x - F::new(r.wind[0] / len * 8.0), p.y, p.z - F::new(r.wind[1] / len * 8.0)));
+                atmosphere::Scene::collide_ray(&mut Rays(world), &mut side)
+            };
+        }
         if let Some(s) = sound.as_deref_mut() {
             s.weather = self.atm.intensity;
             s.outdoors = o;
+            let fx = s.dev.sound_class_volume(0);
+            s.set_wind(crate::weather_zones::wind_target(&r, fx, self.roof || self.upwind_wall));
         }
         let cam = camera(eye);
         let mut voices = Voices(sound, &mut self.silent_handles);
         self.atm.update(&mut Rays(world), &mut voices, &mut self.sys, &cam, time, F::new(hour), o, &mut self.rand);
+        // the sand's drops on the sampled sand and wind (none at 0)
+        let (e, d) = (eye.position, eye.direction);
+        self.atm.sand.update([e.x.0, e.y.0, e.z.0], [d.x.0, d.y.0, d.z.0], r.sand, r.wind, time);
     }
 
     /// The lights' half (`SetupTimeOfDayLights`' `GetLightning`): the flash,
@@ -284,6 +355,7 @@ impl Weather {
         self.atm.render_sky(&cam, &mut sky, &mut self.rand);
         let mut world = Raster::default();
         self.atm.render_weather(&cam, &mut world);
+        self.atm.sand.render(&cam, &mut world);
         let mut out = self.batches(&world, crate::settings::client().weather);
         for (id, bbs) in self.sys.render(time) {
             let def = self.sys.emitter(id).def;
@@ -300,7 +372,7 @@ impl Weather {
             .iter()
             .filter(|(_, b)| !b.is_empty())
             .map(|(m, bbs)| {
-                let k = (*m).clamp(0, 4) as usize;
+                let k = (*m).clamp(0, MATERIALS.len() as i32 - 1) as usize;
                 Batch { texture: self.tex[k], blend: MATERIALS[k].1, ztest: MATERIALS[k].2, zwrite: false, quads: weathered(quads(bbs), k, share) }
             })
             .filter(|b| !b.quads.is_empty())
@@ -309,7 +381,8 @@ impl Weather {
 }
 
 /// A run of material `k`'s billboards (`MATERIALS`) as the options' Weather
-/// draws it at `share`: of the rain's and the snow's drops (0, 1) that share,
+/// draws it at `share`: of the rain's, the snow's and the sand's drops (0, 1,
+/// 5) that share,
 /// each by its place in the run, which is its particle's (`RenderWeather`
 /// draws every particle, in order, at every frame); the splashes (2) that much
 /// as bright (an added blend); the stars and the lightning (3, 4), and every
@@ -319,7 +392,7 @@ fn weathered(mut q: Vec<Quad>, k: usize, share: u8) -> Vec<Quad> {
         return q;
     }
     match k {
-        0 | 1 => {
+        0 | 1 | 5 => {
             let mut at = 0u64;
             q.retain(|_| {
                 at += 1;

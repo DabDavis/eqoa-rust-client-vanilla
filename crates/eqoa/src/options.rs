@@ -2980,6 +2980,8 @@ mod tests {
         assert_eq!(cues.last(), Some(&11));
         goto!(23);
         assert_eq!(w.item, 23, "NPC/PC Display");
+        assert_eq!(settings::entity_slots(), settings::ENTITY_SLOTS_DEFAULT as usize, "the default 48");
+        settings::set_client(settings::ClientOptions { entity_slots: 24, ..settings::client() });
         assert_eq!(settings::entity_slots(), 24, "the game's 24");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!((settings::entity_slots(), cues.last()), (24, Some(&9)), "no fewer than the game's");
@@ -3002,6 +3004,8 @@ mod tests {
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         goto!(24);
         assert_eq!(w.item, 24, "NPC/PC Distance");
+        assert_eq!(settings::entity_view(), settings::ENTITY_VIEW_DEFAULT, "the default 200");
+        settings::set_client(settings::ClientOptions { entity_view: 100, ..settings::client() });
         assert_eq!(settings::entity_view(), 100, "the game's 100");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!((settings::entity_view(), cues.last()), (100, Some(&9)), "no nearer than the game's");

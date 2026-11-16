@@ -103,7 +103,32 @@ pub fn lit(
         } else {
             crate::fog::distances(crate::settings::fog(), fog.near.0, fog.far.0).map(|(n, f)| (n, f, color))
         };
-        let c = tod.sky(hour, o, b);
+        // a server's regional weather (`weather_zones`, board entry #1550):
+        // the storms' fog, never farther than the fog it replaces, its colour
+        // moved to by the weather's intensity, the sun dimmed; under a roof
+        // nearer fog is kept off and the far is four times; none in a liquid
+        let storm = weather.as_deref().filter(|_| flags & 0xF == 0).and_then(|w| crate::weather_zones::fog(&w.regional, hour_now).map(|f| (f, w.roof)));
+        if let Some((f, roof)) = storm {
+            let (mut near, mut far) = (f.near, f.far);
+            if roof {
+                near = near.max(6.0);
+                far *= 4.0;
+            }
+            let wc = Vec3::from(f.color);
+            v.fog = Some(match v.fog {
+                Some((n, fa, c)) => (n.min(near), fa.min(far), c.lerp(wc, f.intensity)),
+                None => (near, far, wc),
+            });
+            v.sun *= 1.0 - 0.8 * f.intensity;
+        }
+        let mut c = tod.sky(hour, o, b);
+        // the sky (the dome's colour and the clear) toward the storm's by its
+        // sand and whiteout
+        if let Some((f, _)) = storm {
+            for i in 0..3 {
+                c[i] = (c[i] as f32 + (f.color[i] * 255.0 - c[i] as f32) * f.sky).round().clamp(0.0, 255.0) as u8;
+            }
+        }
         v.clear = Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32) / 255.0;
         // the sky through a far plane of its own: the world's is the fog's
         v.sky_view_proj = Some(crate::fog::with_far(proj, crate::fog::SKY_FAR) * rot);
@@ -1168,6 +1193,11 @@ pub fn shot_with(
             }
             // the atmosphere every frame; the last frame's lights and render
             // are the shot's
+            let e = walker.eye.position;
+            weather.set_regional(play.as_ref().map(|p| p.weather_sample(e.x.0, e.z.0)), t);
+            if let Some(p) = play.as_mut() {
+                p.weather_fog = crate::weather_zones::fog(&weather.regional, game_hour(Some(&*p), Instant::now())).map(|f| (f.near, f.far));
+            }
             weather.frame(&mut walker.scene, None, &walker.eye, t, game_hour(play.as_ref(), Instant::now()));
             // the effect volumes, stepped as the scene rasters them
             if let Some(fx) = fx.as_mut().filter(|_| crate::settings::client().environment > 0) {
@@ -1185,6 +1215,7 @@ pub fn shot_with(
             }
         }
         if script.ms == 0 {
+            weather.set_regional(None, 0);
             weather.frame(&mut walker.scene, None, &walker.eye, 0, game_hour(play.as_ref(), Instant::now()));
         }
         eprintln!("{}", parts.describe());
@@ -1369,6 +1400,7 @@ pub fn shot_with(
                 // the walker's camera's (`PlateView::of`), or from the offset's
                 // eye at the game's size
                 let mut pv = crate::play::PlateView::of(&walker.cam, &walker.eye.position, (w, h));
+                pv.fog = p.weather_fog;
                 if shot_override {
                     (pv.eye, pv.scale) = (shot_eye, 1.0);
                 }
@@ -2970,8 +3002,7 @@ impl App {
             crate::say(&line);
         }
         self.let_go_keys(el);
-        self.mouse.release_all();
-        self.grab_pointer(false);
+        self.let_go_pointer();
         // a finger down as the focus goes: its lift is no tap
         self.taps.forget();
         if let Some(p) = self.play.as_mut() {
@@ -3229,11 +3260,14 @@ impl App {
     /// ends itself on Escape.
     fn grab_pointer(&mut self, frame: bool) {
         let dead = self.play.as_ref().is_some_and(|p| p.is_dead());
-        let free = self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free() || p.aiming()) && !crate::update::offer_shown();
+        // natively, never taken by a window not in front (a press seen
+        // while another window has the focus would hold the cursor there)
+        let front = cfg!(target_arch = "wasm32") || self.pads.focused;
+        let free = front && self.walker.is_some() && !dead && self.play.as_ref().is_none_or(|p| p.look_free() || p.aiming()) && !crate::update::offer_shown();
         let Some(g) = &self.gfx else { return };
         #[cfg(target_arch = "wasm32")]
         if frame && self.mouse.lock_seen(crate::web::pointer_locked(), Instant::now()) {
-            crate::mouse::give_pointer(&g.window, self.mouse.home());
+            crate::mouse::give_pointer(&g.window, Some(self.mouse.home()));
         }
         let _ = frame;
         match self.mouse.grab_change(free) {
@@ -3241,8 +3275,22 @@ impl App {
                 let grab = crate::mouse::take_pointer(&g.window).unwrap_or(crate::mouse::Grab::Refused);
                 self.mouse.set_grab(grab);
             }
-            Some(false) => crate::mouse::give_pointer(&g.window, self.mouse.home()),
+            Some(false) => crate::mouse::give_pointer(&g.window, Some(self.mouse.home())),
             None => {}
+        }
+    }
+
+    /// The focus gone (or the window minimised or covered): the mouse's
+    /// holds let go and a held pointer given back where it is, not put home
+    /// into this window (`Mouse::lose_focus`). Given back even when the
+    /// mouse thought it free: on Windows a clip left by a grab the window
+    /// no longer knows of would hold the cursor in it (`mouse::unclip`).
+    fn let_go_pointer(&mut self) {
+        let held = self.mouse.lose_focus();
+        if let Some(g) = &self.gfx {
+            if held || cfg!(windows) {
+                crate::mouse::give_pointer(&g.window, None);
+            }
         }
     }
 
@@ -3365,7 +3413,7 @@ impl App {
             }
         }
         if let Some(h) = self.host.as_mut() {
-            h.click(p);
+            h.tap(p);
         }
     }
 
@@ -3747,7 +3795,7 @@ impl App {
             let size = (g.config.width, g.config.height);
             for c in taps {
                 let (x, y) = c.at();
-                h.click(render::ui::frame_from_window(size, [x as f32, y as f32]));
+                h.tap(render::ui::frame_from_window(size, [x as f32, y as f32]));
             }
             if look_y != 0.0 {
                 let dy = render::ui::frame_from_window(size, [0.0, look_y])[1] - render::ui::frame_from_window(size, [0.0, 0.0])[1];
@@ -5646,7 +5694,13 @@ impl App {
             }
             // minimised (Windows sends a size of nothing): no frame comes, and
             // the time until one does is no stall
-            WindowEvent::Resized(s) if s.width == 0 || s.height == 0 => self.stall.away(),
+            WindowEvent::Resized(s) if s.width == 0 || s.height == 0 => {
+                // minimised: the pointer is no longer this window's
+                self.let_go_pointer();
+                self.stall.away()
+            }
+            // covered or minimised (Windows, macOS): as minimised
+            WindowEvent::Occluded(true) => self.let_go_pointer(),
             // the surface takes the new size as the next frame drawn begins
             // (`Gfx::resize`: in a page, configured here it was painted blank)
             WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {
@@ -5732,6 +5786,9 @@ impl App {
             WindowEvent::Focused(false) => self.focus_lost(el),
             WindowEvent::CursorLeft { .. } => {
                 self.mouse.release_all();
+                if let Some(h) = self.host.as_mut() {
+                    h.release();
+                }
                 self.grab_pointer(false);
                 if let Some(p) = self.play.as_mut() {
                     p.chat_let_go();
@@ -5782,6 +5839,11 @@ impl App {
                     self.grab_pointer(false);
                 } else if button == MouseButton::Left {
                     self.drag = down.then_some(self.cursor);
+                    // before the world: what the press took let go (character
+                    // select's scroll bar thumb)
+                    if !down && let Some(h) = self.host.as_mut() {
+                        h.release();
+                    }
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -5789,6 +5851,15 @@ impl App {
                 // the update's question's list dragged (`update`)
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.offer_drag() {
+                    return;
+                }
+                // before the world, the left button down: what its press took
+                // dragged (character select's scroll bar thumb)
+                if self.walker.is_none()
+                    && let (Some(h), Some(g)) = (self.host.as_mut(), self.gfx.as_ref())
+                    && h.drag_to(render::ui::frame_from_window((g.config.width, g.config.height), [position.x as f32, position.y as f32]))
+                {
+                    g.window.request_redraw();
                     return;
                 }
                 // a HUD piece dragged (`hudlayout`): nothing else's move
@@ -6352,6 +6423,12 @@ impl App {
                     g.set_title(title(play.as_ref().map(|p| p.player.name.as_str())));
                     mark(perf, 5);
                     if let Some(wx) = weather.as_mut() {
+                        // the server's regional weather at the camera (`weather_zones`)
+                        let e = w.eye.position;
+                        wx.set_regional(play.as_ref().map(|p| p.weather_sample(e.x.0, e.z.0)), now);
+                        if let Some(p) = play.as_mut() {
+                            p.weather_fog = crate::weather_zones::fog(&wx.regional, game_hour(Some(&*p), clock)).map(|f| (f.near, f.far));
+                        }
                         wx.frame(&mut w.scene, sound.as_mut(), &w.eye, now, game_hour(play.as_ref(), clock));
                     }
                     mark(perf, 6);
@@ -6567,7 +6644,8 @@ impl App {
                     }
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {
-                        let pv = crate::play::PlateView::of(&w.cam, &w.eye.position, (g.config.width, g.config.height));
+                        let mut pv = crate::play::PlateView::of(&w.cam, &w.eye.position, (g.config.width, g.config.height));
+                        pv.fog = p.weather_fog;
                         t.plates = crate::play::labels(&plates, &pv, view.view_proj, t);
                         t.plate_scale = pv.scale;
                         t.labels = crate::play::chat_labels(p, t, (g.config.width, g.config.height));

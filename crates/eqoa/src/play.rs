@@ -111,6 +111,9 @@ struct Puppet {
     /// The tint the server names for its body (`npctint`: an NPC's, by its
     /// name): another, or one gone, rebuilds it.
     tint: Option<crate::npctint::Tint>,
+    /// The dyes the server says its body wears (`petdye`: a pet's, by its id
+    /// and body): others, or none, rebuild it.
+    petdye: Option<crate::petdye::PetDye>,
     /// Its auras' particles (`aura::Worn`): a body whose tint asks for them
     /// (`aura::npc_particles`) and each worn piece's whose aura does
     /// (`aura::pieces`, `aura::helm_aura`), none for every other. Its shells
@@ -254,6 +257,16 @@ pub struct Play {
     /// What the server's messages asked of the atmosphere this frame, in
     /// their order (`Atmos`), for `weather::Weather::take`.
     pub weather: Vec<Atmos>,
+    /// A server's regional weather (0x7E94, `weather_zones`; board entry
+    /// #1550): its zones on `regional_clock`'s ms, and `/weatherpreview`'s
+    pub regional: crate::weather_zones::Zones,
+    regional_clock: web_time::Instant,
+    /// the last retail weather byte the server sent (a preview's end puts
+    /// it back)
+    retail_weather: u8,
+    /// the storms' fog this frame (near, far), which the name plates fade
+    /// across (`labels`); set by the frame's caller (`viewer`)
+    pub weather_fog: Option<(f32, f32)>,
     /// Each creature's `m_walk`, made with it (`CreateEntity`: `Init` at the
     /// origin), keyed by the entity's id.
     walks: Vec<Option<(u32, WalkControl<Ee>)>>,
@@ -1110,6 +1123,12 @@ fn tint_of(e: &net::entity::Entity) -> Option<crate::npctint::Tint> {
     e.creature.as_ref().filter(|_| !a_player(e)).and_then(|c| crate::npctint::of(&c.name))
 }
 
+/// The dyes the server says a pet's body wears (`petdye`), by its id and the
+/// body it is drawn in; none for a player's character.
+fn petdye_of(e: &net::entity::Entity) -> Option<crate::petdye::PetDye> {
+    e.creature.as_ref().filter(|_| !a_player(e)).and_then(|_| crate::petdye::of(e.id, e.drawn_model))
+}
+
 /// A creature's model as `Apply` dresses it: the look on its text slots, the
 /// items and helm on their nodes (a player's in a body one of the server's
 /// `races` wears holding items as a race's body does: `racebody`).
@@ -1172,6 +1191,11 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if let Some(t) = tint {
                         crate::npctint::apply(&mut model, t);
                     }
+                    // and a pet's dyes, each on its area (`petdye`)
+                    let petdye = petdye_of(e);
+                    if let Some(d) = petdye {
+                        crate::petdye::apply(&mut model, d);
+                    }
                     let wisp = crate::wisp::is(lib, e.drawn_model, race_look.as_deref());
                     // its auras (`aura`): an NPC's whole body's (its tint's) and
                     // each worn piece's, their particles' nodes and their shells
@@ -1207,7 +1231,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if !trims.is_empty() {
                         g.renderer.set_trims(g.device, g.queue, &mut gpu, &model, &trims, &textures);
                     }
-                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look, tint, aura, pieces, wisp };
+                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look, tint, petdye, aura, pieces, wisp };
                     p.set_casts();
                     Some(p)
                 })
@@ -1354,7 +1378,28 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
     // the server's patch's tables (`s2`), retail's without one
     let t = crate::s2::get().cust();
     let mut helm_aura = None;
-    if let Some((node, mut m)) = crate::slotless::helm_on(lib, model, cs, player, c.armor[5], look_of(c).helm_color(&t), &t, true) {
+    // a hat another body has built in (the helm's hat, `hat`): in place of the
+    // helm, and the hair dressed as under one; the helm's other aura (a GM's
+    // shell or particles round the hat, a server that sends the hat apart:
+    // `net::entity::HELM_HAT_AURA`) drawn on it as on a helm
+    if let Some((node, mut m)) = c.colors.and_then(|l| crate::hat::hat_of(&l.auras)).and_then(|(src, hue)| crate::hat::hat_on(lib, model, cs, player, src, hue)) {
+        // in the helm's dye (the Equipment Dyer's, a GM's #dye): white, its own colours
+        crate::hat::dyed(&mut m, look_of(c).helm_color(&t), |id| lib.lookup(id).is_some());
+        let mut gpu = g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures);
+        if let Some(a) = c.colors.map(|l| l.auras).filter(|a| a[crate::aura::HELM] != Default::default()) {
+            let (shell, worn) = crate::aura::helm_aura(&a, node);
+            if let Some(s) = &shell {
+                g.renderer.set_shells(g.device, &mut gpu, &m, std::slice::from_ref(s));
+            }
+            let taken = |id: i32| lib.lookup(id).is_some();
+            if let Some(t) = crate::aura::helm_trim(&m, &a, &taken) {
+                g.renderer.set_trims(g.device, g.queue, &mut gpu, &m, std::slice::from_ref(&t), &textures);
+            }
+            helm_aura = worn;
+        }
+        attached.push((node, gpu));
+        helm_worn = true;
+    } else if let Some((node, mut m)) = crate::slotless::helm_on(lib, model, cs, player, c.armor[5], look_of(c).helm_color(&t), &t, true) {
         helm_worn = true;
         let look = look_of(c);
         crate::slotless::helm_trim(lib, &mut m, look.helm_color(&t), look.trim_color.map(|c| c[5]), &t);
@@ -1465,7 +1510,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
     // a tint on its body come, changed or gone (`npctint`), or a worn
     // piece's aura (`aura::pieces`): made anew
     let r = match p.as_ref() {
-        Some(p) if r != Redo::Build && (p.tint != tint_of(e) || p.pieces != pieces_of(e)) => Redo::Build,
+        Some(p) if r != Redo::Build && (p.tint != tint_of(e) || p.petdye != petdye_of(e) || p.pieces != pieces_of(e)) => Redo::Build,
         _ => r,
     };
     // the art swapped (F9), or a texture pack turned on or off (`texpack`),
@@ -1688,6 +1733,9 @@ pub struct PlateView {
     /// Overlapping Names Show: every plate kept, a plate that meets a
     /// nearer one's included (the game's `RasterDeferred` drops it: Hide)
     pub overlap: bool,
+    /// The storms' fog (near, far; `weather_zones::fog`): a plate fades out
+    /// across it and is gone past it
+    pub fog: Option<(f32, f32)>,
 }
 
 impl PlateView {
@@ -1695,7 +1743,7 @@ impl PlateView {
     /// that meets a nearer one's dropped.
     #[cfg(test)]
     pub fn game(eye: glam::Vec3) -> PlateView {
-        PlateView { eye, distance: crate::settings::NAME_DISTANCE_GAME as f32, scale: 1.0, most: NAME_PLATES_GAME, overlap: false }
+        PlateView { eye, distance: crate::settings::NAME_DISTANCE_GAME as f32, scale: 1.0, most: NAME_PLATES_GAME, overlap: false, fog: None }
     }
 
     /// This frame's for the walker's camera `cam` at `eye` in a window
@@ -1710,6 +1758,7 @@ impl PlateView {
             scale: crate::lod::plate_scale(cam, eye, k),
             most: crate::settings::entity_slots().max(NAME_PLATES_GAME),
             overlap: crate::settings::overlapping_names(),
+            fog: None,
         }
     }
 }
@@ -1735,6 +1784,11 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
     for p in plates {
         let at = glam::Vec3::from(p.at);
         if reach <= (at - view.eye).length_squared() + 1.0 || queued.len() >= view.most {
+            continue;
+        }
+        // faded in a storm's fog, gone past it (`weather_zones::plate_alpha`)
+        let fade = crate::weather_zones::plate_alpha(view.fog, (at - view.eye).length());
+        if fade < 0.01 {
             continue;
         }
         // in doubles, as the models' view-projection is made eye-relative
@@ -1767,16 +1821,16 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
                 (min.0, max.0) = (qx - (tw >> 1), qx - (tw >> 1) + tw);
             }
         }
-        queued.push((clip.w, min, max, ndc, p));
+        queued.push((clip.w, min, max, ndc, p, fade));
     }
     queued.sort_by(|a, b| a.0.total_cmp(&b.0));
     /// A kept plate: its depth, its rect's corners, where it is drawn, what.
-    type Kept<'a> = (f32, (i32, i32), (i32, i32), glam::Vec3, &'a Plate);
+    type Kept<'a> = (f32, (i32, i32), (i32, i32), glam::Vec3, &'a Plate, f32);
     let mut kept: Vec<Kept> = Vec::new();
-    for (w, min, max, ndc, p) in queued {
+    for (w, min, max, ndc, p, fade) in queued {
         let meets = !view.overlap && kept.iter().any(|k| !(min.0 > k.2.0 || max.0 < k.1.0 || min.1 > k.2.1 || max.1 < k.1.1));
         if !meets {
-            kept.push((w, min, max, ndc, p));
+            kept.push((w, min, max, ndc, p, fade));
         }
     }
     if view.overlap {
@@ -1787,18 +1841,21 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
     // PS2's 448 lines is 2 / 448 high)
     let line = 2.0 * height as f32 * view.scale / render::text::SCREEN_H;
     let mut out = Vec::new();
-    for (w, _, _, ndc, p) in kept {
+    for (w, _, _, ndc, p, fade) in kept {
         let up = if p.tag.is_some() { line } else { 0.0 };
-        out.push(render::text::Label { at: [ndc.x, ndc.y + up, ndc.z], color: p.color, text: p.name.clone(), size: 1.0 });
+        let color = [p.color[0], p.color[1], p.color[2], p.color[3] * fade];
+        out.push(render::text::Label { at: [ndc.x, ndc.y + up, ndc.z], color, text: p.name.clone(), size: 1.0 });
         if let Some(t) = &p.tag {
-            out.push(render::text::Label { at: ndc.to_array(), color: p.color, text: t.clone(), size: tag_size(height) });
+            out.push(render::text::Label { at: ndc.to_array(), color, text: t.clone(), size: tag_size(height) });
         }
         // the quest mark over the name: its centre half the name's line and
         // half its own above the name's, and a little more
         if let Some(sign) = p.mark.and_then(net::headmarks::sign) {
             let size = mark_size(w);
             let at = ndc.y + up + line * (0.5 + 0.5 * size + 0.15);
-            out.push(render::text::Label { at: [ndc.x, at, ndc.z], color: MARK_COLOR, text: sign.into(), size });
+            let mut color = MARK_COLOR;
+            color[3] *= fade;
+            out.push(render::text::Label { at: [ndc.x, at, ndc.z], color, text: sign.into(), size });
         }
     }
     out
@@ -2532,6 +2589,8 @@ mod name_plates {
     #[test]
     fn the_walkers_view_of_the_plates() {
         crate::settings::testing::reset(false);
+        // the game's 24 slots (the default is 48 since 2026-11-16)
+        crate::settings::set_client(crate::settings::ClientOptions { entity_slots: NAME_PLATES_GAME as u8, ..crate::settings::client() });
         let mut cam = vi::camera::WalkCamera::<Ee> { camera_mode: 3, target_height: F::new(1.68), ..Default::default() };
         cam.walk.phys.position = Vect3::of(1000.0, 50.0, 2000.0);
         let back = |d: f32| Vect3::of(1000.0, 51.68, 2000.0 - d);
@@ -3219,7 +3278,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -3347,6 +3406,11 @@ impl Play {
         // the next frame, their art's zones read by the walk's streamer
         if let Some(d) = self.session.decor.take() {
             crate::decorlights::set(d);
+        }
+        // the pets' dyes (`petdye`): the pets whose dyes changed made again in
+        // them (`apply`)
+        if let Some(d) = self.session.pet_dyes.take() {
+            crate::petdye::set(d);
         }
         // the server takes crash reports: this client's kept ones go, each let
         // go at its answer (`crashfile`)
@@ -3895,7 +3959,17 @@ impl Play {
                     // stamped with the server's hour, which every window shares
                     let hour = self.session.time_of_day().map_or(String::new(), |h| format!(" at hour {:.4}", h.0));
                     eprintln!("play: weather {weather}{}{hour}", if instant { " (instant)" } else { "" });
-                    self.weather.push(Atmos::Weather(weather, instant));
+                    self.retail_weather = weather;
+                    // a rain or snow preview holds the atmosphere until it ends
+                    if self.regional.preview.and_then(|p| p.retail_byte()).is_none() {
+                        self.weather.push(Atmos::Weather(weather, instant));
+                    }
+                }
+                Event::WeatherZones(zones) => {
+                    self.weather_world();
+                    let now = self.regional_ms();
+                    eprintln!("play: regional weather for {} zones", zones.len());
+                    self.regional.take(zones, now);
                 }
                 Event::WorldEntry { self_id, player, dump } => {
                     eprintln!("play: world entry again as {self_id:#x} at {:?}", player.pos);
@@ -3965,6 +4039,10 @@ impl Play {
         // Power Bars: the server told what its row says (off, what it sent
         // forgotten and the raid list's power not drawn)
         self.session.agree_power_bars(crate::settings::power_bars());
+        // the regional weather: asked for while Options' Weather is above 0;
+        // another world forgets it and ends a preview
+        self.session.agree_weather(crate::settings::client().weather > 0);
+        self.weather_world();
         // Buff Window: the server told what its row says (off, the game's strip)
         self.session.agree_buffs(crate::settings::buff_window());
         // Quest Markers: the server told what its row says (off, none drawn)
@@ -5928,6 +6006,8 @@ impl Play {
             "/alarm" => self.alarm_command(&rest),
             // the DPS meter's (`dpsmeter`), the client's own
             "/dps" => self.dps_command(&rest),
+            // a local look at the regional weather (`weather_zones`), never sent
+            "/weatherpreview" => self.weather_preview_command(&rest),
             // the chat tabs' (`chat`, ticket 1951), the client's own
             "/tab" => self.tab_command(&rest),
             "/tabname" => self.tabname_command(&rest),
@@ -10235,6 +10315,54 @@ impl Play {
         self.add_chat(line, [1.0; 4]);
     }
 
+    /// The regional weather's clock: ms since this `Play` began.
+    fn regional_ms(&self) -> i64 {
+        self.regional_clock.elapsed().as_millis() as i64
+    }
+
+    /// The regional weather at (x, z) in the player's world now (a preview's
+    /// in its place), before Options' Weather.
+    pub fn weather_sample(&self, x: f32, z: f32) -> crate::weather_zones::Sample {
+        self.regional.sample(self.world_id(), x, z, self.regional_ms())
+    }
+
+    /// `/weatherpreview rain|snow|sand|whiteout|clear [light|moderate|heavy]`
+    /// and `/weatherpreview off`: the client's own look at a weather, which
+    /// stands in for the server's until off or another world. A rain or snow
+    /// preview sets the game's atmosphere too.
+    fn weather_preview_command(&mut self, arg: &str) {
+        match crate::weather_zones::Preview::parse(arg) {
+            Some(Some(p)) => {
+                self.regional.preview = Some(p);
+                if let Some(b) = p.retail_byte() {
+                    self.weather.push(Atmos::Weather(b, true));
+                } else {
+                    self.weather.push(Atmos::Weather(self.retail_weather, true));
+                }
+                let line = format!("Weather preview (on this client only): {} at {}. /weatherpreview off ends it.", arg.trim(), p.strength);
+                self.add_chat(line, [1.0; 4]);
+            }
+            Some(None) => self.end_weather_preview("The weather preview is off."),
+            None => self.add_chat("Usage: /weatherpreview rain|snow|sand|whiteout|clear [light|moderate|heavy], or off (on this client only).".to_string(), [1.0; 4]),
+        }
+    }
+
+    /// The regional weather kept for the player's world: another forgets
+    /// what was kept and ends a preview.
+    fn weather_world(&mut self) {
+        if self.regional.set_world(self.world_id()) {
+            self.end_weather_preview("The weather preview ended: another world.");
+        }
+    }
+
+    /// The preview ended: the server's weather back, its byte too.
+    fn end_weather_preview(&mut self, line: &str) {
+        if self.regional.preview.take().is_some_and(|p| p.retail_byte().is_some()) {
+            self.weather.push(Atmos::Weather(self.retail_weather, true));
+        }
+        self.add_chat(line.to_string(), [1.0; 4]);
+    }
+
     fn dps_command(&mut self, arg: &str) {
         use crate::dpsmeter::{Command, View};
         let offer = self.session.dps_meter_offer;
@@ -12270,7 +12398,7 @@ mod commands {
 
         p.session.entity_view_offer = Some((204, 1000));
         p.agree_entity_view();
-        assert_eq!(asked(&mut p), [vec![0x00, 0x7E, 128, 0, 0, 0, 100, 0, 0, 0]], "128 within the game's 100");
+        assert_eq!(asked(&mut p), [vec![0x00, 0x7E, 128, 0, 0, 0, 200, 0, 0, 0]], "128 within the default 200");
         assert_eq!(p.entities.limit, 128);
         assert_eq!(p.options_wnd.server_note.as_deref(), Some("This server: 204 within 1000"));
         p.agree_entity_view();

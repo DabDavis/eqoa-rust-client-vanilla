@@ -270,6 +270,43 @@ fn under_personal(m: &GpuModel, at: Vec3) -> bool {
     m.skinned && m.core.get().is_some_and(|(lo, hi)| lo.x <= at.x && at.x <= hi.x && lo.z <= at.z && at.z <= hi.z)
 }
 
+/// How far under the personal light the player's own body casts from
+/// (`lightcast.wgsl`'s `OWN_CLEAR`): what of it is nearer the light's height
+/// is cut.
+pub const OWN_CLEAR: f32 = 0.75;
+
+/// How high over its feet, in its own heights, the player's own body casts
+/// its shadow from at the least (`own_cast`): a human's lantern rides 3 over
+/// the feet of a body 1.78 tall, 1.69 of it, so of the game's own races only
+/// the barbarian's (2.20), the troll's (2.65) and the ogre's (2.66) bodies
+/// stand within 1.65 of their heights of it.
+pub const OWN_OVER: f32 = 1.65;
+
+/// How the player's own body under the personal light at `at` casts (the
+/// face's `own`, `lightcast.wgsl`'s `own_place`): as the light casts it,
+/// all 0, unless the body stands round the light, under [`OWN_OVER`] times
+/// its height over its feet. The lantern rides 3 over the feet whatever the
+/// body: a hill giant (4.81 tall) stands round it, and what of him was
+/// [`OWN_CLEAR`] under it, his hips and belly, cast across the whole of the
+/// face looking down, a square of shadow at his feet with nothing of his form
+/// in it (the owner: "his shadow not matching his form"); a troll's or an
+/// ogre's head (2.65 up, 0.35 under the light) was cut off its shadow. Such
+/// a body casts the shadow it would from `OWN_OVER` times its height over its
+/// feet, as a human's lantern is over a human, onto the ground at its feet:
+/// each vertex put on the lantern's ray to where that shadow of it falls, as
+/// far under the light as its height squeezed under the cut. The light's map
+/// stays where the light is: a roof or a cave's ceiling over a hill giant
+/// shadows nothing more than before. `bodies`: the skinned models' boxes
+/// (`under_personal`'s, the body's own bounds where it stands); the tallest
+/// whose footprint holds the light.
+fn own_cast(at: Vec3, bodies: impl IntoIterator<Item = (Vec3, Vec3)>) -> Option<(f32, f32, f32)> {
+    let (lo, hi) = bodies.into_iter().filter(|(lo, hi)| lo.x <= at.x && at.x <= hi.x && lo.z <= at.z && at.z <= hi.z).max_by(|a, b| (a.1.y - a.0.y).total_cmp(&(b.1.y - b.0.y)))?;
+    let (height, over) = (hi.y - lo.y, at.y - lo.y);
+    // (a lantern within a little of OWN_CLEAR over the feet leaves no room
+    // to squeeze a body under the cut: a body hovering round it casts as it is)
+    (height > 0.0 && over > OWN_CLEAR + 0.1 && over < height * OWN_OVER).then_some((lo.y, height * OWN_OVER, height))
+}
+
 /// +x, −x, +y, −y, +z, −z, as `lightshadow.wgsl`'s `light_face` picks them.
 pub const FACES: [(Vec3, Vec3); 6] = [(Vec3::X, Vec3::Y), (Vec3::NEG_X, Vec3::Y), (Vec3::Y, Vec3::Z), (Vec3::NEG_Y, Vec3::NEG_Z), (Vec3::Z, Vec3::Y), (Vec3::NEG_Z, Vec3::Y)];
 
@@ -413,6 +450,10 @@ struct FaceUniform {
     origin: [f32; 4],
     /// x: the face's layer (the cache's, which the copy reads)
     layer: [u32; 4],
+    /// The player's own body under the personal light, when it stands round
+    /// it (`own_cast`): x its feet's height less the eye's, y the height
+    /// over them it casts from, z its height, w 1; else all 0.
+    own: [f32; 4],
 }
 
 /// lit.wgsl's point terms, as the receivers change them (`receivers_wgsl`).
@@ -860,8 +901,11 @@ impl Points {
             u.origin[k] = (s.at - view.eye).extend(s.strength).to_array();
             let (a, b) = depth_map(s.range);
             u.depth[k] = [a, b, 0.0, 0.0];
+            // the player's own body under the personal light, standing round it
+            let own = if s.key == lit::PERSONAL_KEY { own_cast(s.at, movers.iter().filter_map(|m| match m { Mover::Model(m) if m.skinned => m.core.get(), _ => None })) } else { None };
+            let own = own.map_or([0.0; 4], |(feet, over, height)| [feet - view.eye.y, over, height, 1.0]);
             for face in 0..6 {
-                let f = FaceUniform { m: face_matrix(face, s.range, g).to_cols_array_2d(), origin: (s.at - view.eye).extend(BACK_PUSH).to_array(), layer: [(k * 6 + face) as u32, 0, 0, 0] };
+                let f = FaceUniform { m: face_matrix(face, s.range, g).to_cols_array_2d(), origin: (s.at - view.eye).extend(BACK_PUSH).to_array(), layer: [(k * 6 + face) as u32, 0, 0, 0], own };
                 let at = (k * 6 + face) * self.stride as usize;
                 faces[at..at + size_of::<FaceUniform>()].copy_from_slice(bytemuck::bytes_of(&f));
             }
@@ -1384,6 +1428,26 @@ mod tests {
         let personal = lit::PointLight { key: lit::PERSONAL_KEY, ..moment(10.0) };
         assert_eq!((map_range(&fire, Some(11.0)), map_range(&personal, Some(11.0))), (10.0, 10.0), "a fire's and the lantern's exactly");
         assert_eq!((hold(&fire), hold(&personal), hold(&moment(10.0))), (0.0, PERSONAL_HOLD, MOMENT_HOLD));
+    }
+
+    /// The player's own body casts as its lantern casts it while the
+    /// lantern is over it by `OWN_OVER` of its height (a human's 1.78 under
+    /// it at 3), and from that high when it stands round it (a hill giant's
+    /// 4.81, a troll's 2.65); a body hovering up round it (its feet within
+    /// `OWN_CLEAR` and a little of it) or not under it at all, as it is; and
+    /// `OWN_CLEAR` is the casters' module's.
+    #[test]
+    fn a_body_round_its_lantern_casts_from_over_it() {
+        let lamp = Vec3::new(10.0, 3.0, 20.0);
+        let body = |feet: f32, height: f32, x: f32| (Vec3::new(x - 0.4, feet, 19.8), Vec3::new(x + 0.4, feet + height, 20.2));
+        assert_eq!(own_cast(lamp, [body(0.0, 1.78, 10.0)]), None, "a human under its lantern");
+        assert_eq!(own_cast(lamp, [body(0.0, 4.81, 10.0)]), Some((0.0, 4.81 * OWN_OVER, 4.81)), "a hill giant");
+        assert_eq!(own_cast(lamp, [body(0.0, 2.65, 10.0)]), Some((0.0, 2.65 * OWN_OVER, 2.65)), "a troll");
+        assert_eq!(own_cast(lamp, [body(2.4, 2.1, 10.0)]), None, "a body hovering round it");
+        assert_eq!(own_cast(lamp, [body(0.0, 4.81, 12.0)]), None, "a giant beside it");
+        assert_eq!(own_cast(lamp, [body(0.0, 1.78, 10.0), body(0.0, 4.81, 10.0)]).map(|o| o.2), Some(4.81), "the tallest under it");
+        assert!(1.78 * OWN_OVER < 3.0 && 2.2 * OWN_OVER > 3.0);
+        assert!(CAST_WGSL.contains(&format!("const OWN_CLEAR: f32 = {OWN_CLEAR:?};")));
     }
 
     /// A box is in a face where any of it is in the face's view: a box

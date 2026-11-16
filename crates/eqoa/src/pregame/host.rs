@@ -10,7 +10,11 @@
 //! Headless, for tests: `EQOA_KEYS` types on the keyboard by script
 //! (`enter@3000;down@3400;text player@4000`: a key's name, or `text` and
 //! what to type, at ms on the client's clock), `EQOA_SHOTS` writes PNGs of
-//! what was drawn (`3000=eula.png,9000=title.png`, under `EQOA_OFFSCREEN`).
+//! what was drawn (`3000=eula.png,9000=title.png`, under `EQOA_OFFSCREEN`),
+//! `EQOA_PREGAME_MOUSE` plays the mouse's left button and wheel at frame
+//! points (640 by 448) through what the window's events call
+//! (`press 344 290@9000;move 344 200@9200;release@9300;wheel -2@9500`:
+//! `click`, `drag_to`, `release`, `scroll`).
 
 use super::{Entered, Music, Pregame, Stage};
 use crate::frames::{FRAME_MS, Frames};
@@ -61,6 +65,8 @@ pub struct Host {
     /// music playing: (playback, the device's sound) by the stage's tag
     playing: HashMap<&'static str, (i32, i32)>,
     keys: Vec<(i64, i32, bool)>,
+    /// `EQOA_PREGAME_MOUSE`'s steps still to come
+    mouse: Vec<(i64, MouseStep)>,
     /// keys a pointer pressed, let go a frame later
     pointer_held: Vec<i32>,
     pub world: Option<WorldLoad>,
@@ -82,6 +88,7 @@ impl Host {
             pictures: HashMap::new(),
             playing: HashMap::new(),
             keys: due_after(key_script(), now),
+            mouse: mouse_script().into_iter().filter(|s| s.0 > now).collect(),
             pointer_held: Vec::new(),
             world: None,
             gears: None,
@@ -186,6 +193,25 @@ impl Host {
         }
     }
 
+    /// A finger's tap at frame point `p`: a click, its press let go at once
+    /// (nothing it touched is held: the scroll bar's thumb).
+    pub fn tap(&mut self, p: [f32; 2]) {
+        self.click(p);
+        self.pre.release();
+    }
+
+    /// The mouse moved to frame point `p` with its left button down: what a
+    /// press took dragged (character select's scroll bar thumb). True when
+    /// something was.
+    pub fn drag_to(&mut self, p: [f32; 2]) -> bool {
+        self.pre.drag_to(p)
+    }
+
+    /// The mouse's left button let go (or the pointer gone off the window).
+    pub fn release(&mut self) -> bool {
+        self.pre.release()
+    }
+
     /// The mouse wheel's `lines` (up positive) or a finger's drag of `dy`
     /// frame pixels: the window up scrolls (`Pregame::scroll`).
     pub fn scroll(&mut self, lines: f32, dy: f32) {
@@ -222,6 +248,22 @@ impl Host {
             }
             self.keys.remove(0);
             self.pre.key(k, down);
+        }
+        while let Some(&(t, m)) = self.mouse.first() {
+            if t > now {
+                break;
+            }
+            self.mouse.remove(0);
+            match m {
+                MouseStep::Press(p) => self.click(p),
+                MouseStep::Move(p) => {
+                    self.drag_to(p);
+                }
+                MouseStep::Release => {
+                    self.release();
+                }
+                MouseStep::Wheel(n) => self.scroll(n, 0.0),
+            }
         }
         self.layer(renderer, device, queue, format);
         // the art swapped, its files in: the stages make again what they
@@ -497,6 +539,43 @@ pub fn parse_keys(s: &str) -> Vec<(i64, i32, bool)> {
     out
 }
 
+/// A step of `EQOA_PREGAME_MOUSE`, at a frame point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MouseStep {
+    Press([f32; 2]),
+    Move([f32; 2]),
+    Release,
+    Wheel(f32),
+}
+
+fn mouse_script() -> Vec<(i64, MouseStep)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(s) = std::env::var("EQOA_PREGAME_MOUSE") {
+        return parse_mouse(&s);
+    }
+    Vec::new()
+}
+
+/// `press X Y@ms`, `move X Y@ms`, `release@ms`, `wheel N@ms`, `;`-separated.
+pub fn parse_mouse(s: &str) -> Vec<(i64, MouseStep)> {
+    let mut out = Vec::new();
+    for part in s.split(';').map(str::trim).filter(|p| !p.is_empty()) {
+        let Some((what, at)) = part.rsplit_once('@') else { continue };
+        let Ok(at) = at.trim().parse::<i64>() else { continue };
+        let w: Vec<f32> = what.split_whitespace().skip(1).filter_map(|v| v.parse().ok()).collect();
+        let step = match (what.split_whitespace().next(), w.as_slice()) {
+            (Some("press"), [x, y]) => MouseStep::Press([*x, *y]),
+            (Some("move"), [x, y]) => MouseStep::Move([*x, *y]),
+            (Some("release"), []) => MouseStep::Release,
+            (Some("wheel"), [n]) => MouseStep::Wheel(*n),
+            _ => continue,
+        };
+        out.push((at, step));
+    }
+    out.sort_by_key(|e| e.0);
+    out
+}
+
 /// `EQOA_SHOTS`: `ms=file.png`, comma-separated (the window takes them).
 pub fn shot_script() -> Vec<(i64, String)> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -516,6 +595,12 @@ mod tests {
         assert_eq!(k, vec![(3000, 13, true), (3100, 13, false), (3500, 20, true), (3600, 20, false), (4000, 97, true), (4040, 97, false), (4080, 98, true), (4120, 98, false)]);
         // the control: an unknown key name is not a key
         assert_eq!(key_code("nonsense"), None);
+    }
+
+    #[test]
+    fn a_mouse_script_presses_drags_and_lets_go() {
+        let m = parse_mouse("release@300; press 344 290@100;move 344 200@200;wheel -2@400;press 1@5;nonsense@1");
+        assert_eq!(m, vec![(100, MouseStep::Press([344.0, 290.0])), (200, MouseStep::Move([344.0, 200.0])), (300, MouseStep::Release), (400, MouseStep::Wheel(-2.0))]);
     }
 
     /// A host made at 3,550 ms (back from the world) keeps only what is still

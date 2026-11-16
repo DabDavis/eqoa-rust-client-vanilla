@@ -1,7 +1,7 @@
 //! `VIWndCharacterSelect` (CLIENT `viwndcharacterselect.cpp`): eight slots
 //! and Delete Character (more slots, eight in view, on a server that keeps
-//! more characters: `slot_count`, the list scrolled by the d-pad, the wheel
-//! and a finger's drag); the highlighted character stands in its race's set
+//! more characters: `slot_count`, the list scrolled by the d-pad, the wheel,
+//! a finger's drag and the mouse on its scroll bar); the highlighted character stands in its race's set
 //! of the arena (`ShowCharacter`), the camera turning round it
 //! (`ApplyCamera`), with a flourish every five seconds; Enter plays it (with
 //! Frontiers, first the Options box: Enter Game World or Customize
@@ -189,6 +189,46 @@ pub struct CharSelect {
     top: i32,
     /// a finger's drag not yet a whole row, in frame pixels
     drag: f32,
+    /// the wheel's turn not yet a whole row, in lines (a trackpad's
+    /// fractions of a notch add up)
+    wheel: f32,
+    /// the scroll bar as last drawn (a list longer than `ROWS`)
+    bar: Option<Bar>,
+    /// the bar's thumb held by the mouse: how far under the thumb's top it
+    /// was taken, in frame pixels
+    grab: Option<f32>,
+}
+
+/// The scroll bar at the list's right as `draw` laid it out: the bar
+/// (`BlitVertBar` 81/82/83) from `y` down `h`, its caps the arrows, and the
+/// thumb (84) `thumb` high at the first slot in view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Bar {
+    y: i32,
+    h: i32,
+    up: i32,
+    down: i32,
+    thumb: i32,
+    /// the thumb's top
+    at: i32,
+}
+
+impl Bar {
+    /// The thumb's top for the first slot in view `top` of `max` (the
+    /// travel `draw` gives it).
+    fn thumb_at(y: i32, h: i32, thumb: i32, top: i32, max: i32) -> i32 {
+        let t = top as f32 / max.max(1) as f32;
+        y + (t * (h - thumb) as f32) as i32
+    }
+}
+
+/// The bar's place across, for the pointer: the bar is 13 wide from x 337
+/// and the thumb 14 from 336; a pixel or two more either side.
+const BAR_X: [i32; 2] = [334, 353];
+/// A size off the disc's atlas, or the Frontiers SUPPORT's when the atlas
+/// has none (the pointer tests' empty one).
+fn size_or(v: i32, disc: i32) -> i32 {
+    if v > 0 { v } else { disc }
 }
 
 /// The slots in view at once: CLIENT's eight, 30 apart.
@@ -211,6 +251,7 @@ fn slot_rect(i: i32) -> [i32; 4] {
 const HIT_SELECT: i32 = 100;
 const HIT_EXIT: i32 = 101;
 const HIT_CHOICE: i32 = 200;
+const HIT_BAR: i32 = 102;
 
 impl CharSelect {
     /// `Connecting` (`ConnectShard` calls it): the state from the top, the
@@ -218,6 +259,8 @@ impl CharSelect {
     pub fn connecting(&mut self) {
         self.top = 0;
         self.drag = 0.0;
+        self.wheel = 0.0;
+        self.grab = None;
         self.show_time = -1;
         self.attack_slot = -1;
         self.last_race = -1;
@@ -409,12 +452,18 @@ impl CharSelect {
         }
         // more slots than are in view: the game's scroll bar at the bars'
         // right, its thumb at the first in view
+        // (the pointer's too: its arrows, its track and its thumb, `bar_press`)
+        self.bar = None;
         if shown > ROWS {
-            let t = self.top as f32 / (shown - ROWS) as f32;
             let e = vui.entry(84);
             let (at, h) = ([337, 58], 30 * ROWS - 2);
             vui.blit_vert_bar(r, at, 81, 83, 82, h, 0, 1.0);
-            vui.blit_ex(r, e.x00, [at[0] - 1, at[1] + (t * (h - e.uv1[1]) as f32) as i32], 0, 1.0, 0);
+            let y = Bar::thumb_at(at[1], h, e.uv1[1], self.top, shown - ROWS);
+            vui.blit_ex(r, e.x00, [at[0] - 1, y], 0, 1.0, 0);
+            let thumb = size_or(e.uv1[1], 15);
+            let bar = Bar { y: at[1], h, up: size_or(vui.entry(81).uv1[1], 12), down: size_or(vui.entry(83).uv1[1], 13), thumb, at: Bar::thumb_at(at[1], h, thumb, self.top, shown - ROWS) };
+            self.hits.push([BAR_X[0], bar.y, BAR_X[1], bar.y + bar.h], HIT_BAR);
+            self.bar = Some(bar);
         }
         let frame = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
         vui.blit_fill_frame(r, [15, 358], [320, 35], &frame, 35, 0, 1.0, true);
@@ -734,7 +783,9 @@ impl CharSelect {
             return;
         }
         let shown = if self.deleting { count } else { self.slots(count) };
-        let mut rows = -lines.round() as i32;
+        self.wheel += lines;
+        let mut rows = -self.wheel.trunc() as i32;
+        self.wheel = self.wheel.fract();
         self.drag += dy;
         while self.drag >= 30.0 {
             self.drag -= 30.0;
@@ -745,6 +796,63 @@ impl CharSelect {
             rows += 1;
         }
         self.top = (self.top + rows).clamp(0, (shown - ROWS).max(0));
+    }
+
+    /// The slots the list shows (only the characters while deleting) and the
+    /// furthest its first in view goes.
+    fn view(&self, count: i32) -> (i32, i32) {
+        let shown = if self.deleting { count } else { self.slots(count) };
+        (shown, (shown - ROWS).max(0))
+    }
+
+    /// A press on the scroll bar at frame point `p` (`point`'s, the bar's
+    /// hit): an arrow (a cap) a row, the track above or below the thumb a
+    /// view's worth, the thumb held for `drag_to` (the mouse's: a tap's
+    /// let go at once, `release`). The view moves, the selection stays, as
+    /// with the wheel; nothing while a box is up.
+    fn bar_press(&mut self, p: [f32; 2], count: i32) {
+        self.grab = None;
+        let Some(b) = self.bar else { return };
+        if self.child.is_some() || self.choosing || self.busy {
+            return;
+        }
+        let (_, max) = self.view(count);
+        let y = p[1];
+        let rows = if y >= b.at as f32 && y < (b.at + b.thumb) as f32 {
+            self.grab = Some(y - b.at as f32);
+            0
+        } else if y < (b.y + b.up) as f32 {
+            -1
+        } else if y >= (b.y + b.h - b.down) as f32 {
+            1
+        } else if y < b.at as f32 {
+            -ROWS
+        } else {
+            ROWS
+        };
+        self.top = (self.top + rows).clamp(0, max);
+    }
+
+    /// The mouse moved to frame point `p` with the thumb held: the view
+    /// follows the thumb (its first slot the nearest the thumb's place
+    /// reads). False when the thumb is not held.
+    pub fn drag_to(&mut self, p: [f32; 2], count: i32) -> bool {
+        let (Some(g), Some(b)) = (self.grab, self.bar) else { return false };
+        if self.child.is_some() || self.choosing || self.busy {
+            self.grab = None;
+            return false;
+        }
+        let (_, max) = self.view(count);
+        let travel = (b.h - b.thumb).max(1) as f32;
+        let t = ((p[1] - g - b.y as f32) / travel).clamp(0.0, 1.0);
+        self.top = ((t * max as f32).round() as i32).clamp(0, max);
+        true
+    }
+
+    /// The mouse's button let go (or a tap's press, at once): the thumb no
+    /// longer held. True when it was.
+    pub fn release(&mut self) -> bool {
+        self.grab.take().is_some()
     }
 
     /// `MoveSel(d)`: the delete slot (past the slots) only with no delete
@@ -824,7 +932,8 @@ impl CharSelect {
     }
 
     /// A pointer at frame point `p`: a slot moves the selection there (the
-    /// selected one presses ✕); the Options box's rows; the legend's glyphs;
+    /// selected one presses ✕); the scroll bar (`bar_press`); the Options
+    /// box's rows; the legend's glyphs;
     /// the box's buttons; customise's rows.
     pub fn point(&mut self, p: [f32; 2], count: usize) -> Vec<i32> {
         match self.child {
@@ -836,6 +945,10 @@ impl CharSelect {
         match h {
             HIT_SELECT => vec![key::CROSS],
             HIT_EXIT => vec![key::TRIANGLE],
+            HIT_BAR => {
+                self.bar_press(p, count as i32);
+                Vec::new()
+            }
             _ if h >= HIT_CHOICE => {
                 let k = h - HIT_CHOICE;
                 if k == self.choice { vec![key::CROSS] } else { crate::pointer::steps(self.choice, k, key::UP, key::DOWN) }
@@ -1074,6 +1187,78 @@ mod tests {
             f.key(139, true, 0, &full, 3, &mut cues, &mut reqs);
         }
         assert_eq!((f.sel, f.top), (20, 12));
+    }
+
+    /// The scroll bar at the list's right takes the mouse (the owner's of
+    /// 2026-11-16, "char sel the mouse is not able to use the scrollbar": it
+    /// was drawn with no hit notes): a cap is an arrow, a row; the track
+    /// above or below the thumb a view's worth; the thumb dragged follows
+    /// the pointer and is let go with the button. The view moves, never the
+    /// selection; nothing while busy; a trackpad's fractions of a notch add
+    /// up. The control: with the game's eight there is no bar, and a press
+    /// there does nothing.
+    #[test]
+    fn the_scroll_bar_takes_the_mouse() {
+        let (vui, mut r) = (crate::pointer::testing::vui(), crate::pointer::testing::NullRaster);
+        let mut reqs = Vec::new();
+        let x = 344.0;
+        // the control: two characters, eight slots, no bar
+        let few = vec![rec("A", 1), rec("B", 2)];
+        let mut c = CharSelect::default();
+        c.draw(&mut UiCx::bare(&vui, &mut r), &few, None, &mut reqs);
+        assert_eq!(c.hits.at([x, 150.0]), None, "the control: no bar, no note");
+        assert!(c.point([x, 150.0], 2).is_empty() && c.top == 0);
+        // fifteen of twenty: sixteen slots, the first in view 0..=8
+        let chars: Vec<CharRecord> = (0..15).map(|i| rec(&format!("C{i}"), 100 + i)).collect();
+        let mut s = CharSelect { cap: 20, ..Default::default() };
+        let mut draw = |s: &mut CharSelect| s.draw(&mut UiCx::bare(&vui, &mut r), &chars, None, &mut reqs);
+        draw(&mut s);
+        let b = s.bar.expect("a bar for sixteen slots");
+        assert_eq!((b.y, b.h, b.at), (58, 238, 58));
+        assert_eq!(s.hits.at([x, 150.0]), Some(HIT_BAR));
+        // the down arrow, then the up
+        assert!(s.point([x, 290.0], 15).is_empty(), "no key: the view moved itself");
+        assert_eq!(s.top, 1);
+        draw(&mut s);
+        assert!(s.point([x, 60.0], 15).is_empty());
+        assert_eq!(s.top, 0);
+        // the track under the thumb: a view down (to the end), over it: back up
+        draw(&mut s);
+        s.point([x, 200.0], 15);
+        assert_eq!(s.top, 8);
+        draw(&mut s);
+        assert_eq!(s.bar.unwrap().at, 58 + 238 - 15, "the thumb at the bar's foot");
+        s.point([x, 150.0], 15);
+        assert_eq!(s.top, 0);
+        // the thumb taken 7 pixels under its top and dragged half its travel
+        draw(&mut s);
+        s.point([x, 65.0], 15);
+        assert_eq!(s.top, 0, "a press on the thumb moves nothing");
+        assert!(s.drag_to([x, 65.0 + 223.0 / 2.0], 15));
+        assert_eq!(s.top, 4, "half way");
+        assert!(s.drag_to([x, 400.0], 15));
+        assert_eq!(s.top, 8, "past the foot: the end");
+        assert!(s.drag_to([x, 0.0], 15));
+        assert_eq!(s.top, 0, "past the head: the top");
+        assert!(s.drag_to([500.0, 65.0 + 223.0], 15), "off the bar across, still held");
+        assert_eq!(s.top, 8);
+        assert!(s.release(), "the button let go");
+        assert!(!s.drag_to([x, 65.0], 15) && s.top == 8, "let go: no drag");
+        assert!(!s.release());
+        assert_eq!(s.sel, 0, "the selection never moved");
+        // busy (the Options box, a pending play): the bar does nothing
+        draw(&mut s);
+        s.busy = true;
+        s.point([x, 60.0], 15);
+        assert_eq!(s.top, 8);
+        s.busy = false;
+        // a trackpad's fifths of a notch: a row after five
+        for _ in 0..4 {
+            s.scroll(0.2, 0.0, 15);
+        }
+        assert_eq!(s.top, 8, "four fifths: not yet a row");
+        s.scroll(0.2, 0.0, 15);
+        assert_eq!(s.top, 7, "the fifth: a row toward the top");
     }
 
     /// Enter on a character: with Frontiers' bit the Options box first

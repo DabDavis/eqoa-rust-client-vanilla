@@ -11,6 +11,7 @@ struct Face {
     m: mat4x4<f32>,
     origin: vec4<f32>,
     layer: vec4<u32>,
+    own: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> face: Face;
 @group(1) @binding(0) var cache: texture_2d_array<f32>;

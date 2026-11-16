@@ -132,6 +132,20 @@ pub fn chosen(form: &net::session::NewChar) -> (u32, Option<net::raceopts::Look>
     (model, Some(crate::raceopts::look_of_steps(rows, form.sex, &steps, model)))
 }
 
+/// The look a race's character of `sex` shows before its options are chosen
+/// (the race page): its rows at their first steps on its own body, which lays
+/// only a texture row of one step, laid always (the Wisp's wisp: `wisp`); none
+/// for a race with no rows. Without it the race page drew a Wisp as the plain
+/// human its body is, face and all (the owner, 2026-11-16).
+pub fn first_look(race: i32, sex: i32) -> Option<net::raceopts::Look> {
+    let o = crate::raceopts::options()?;
+    let rows = o.rows(race);
+    if rows.is_empty() {
+        return None;
+    }
+    Some(crate::raceopts::look_of_steps(rows, sex, &vec![0; rows.len()], model_of(race, sex)))
+}
+
 /// `IsStatHighlighted`.
 pub fn stat_highlighted(c: i32, stat: i32) -> bool {
     (0..7).contains(&stat) && (0..15).contains(&c) && (CLASSES[c as usize].stat_mask >> stat) & 1 != 0
@@ -300,6 +314,38 @@ pub(crate) mod tests {
         crate::raceopts::set_options(None);
     }
     use super::*;
+
+    /// The race page shows a server's race in the look of its rows' first
+    /// steps: the Wisp's wisp, a texture row of one step laid always, on its
+    /// human body (without it the page drew a plain human, 2026-11-16); a
+    /// colour row's first step lays nothing. The controls: a race with no rows,
+    /// and no options at all, show no look.
+    #[test]
+    fn the_race_page_shows_the_wisps_wisp() {
+        use net::raceopts::{Kind, Options, Part, Row, Step};
+        let step = |v: u32| Step { name: "s".into(), value: v, size: 1000 };
+        let at = Part { entries: vec![2], rects: vec![] };
+        let rows = vec![
+            Row { key: "wisp".into(), label: "Wisp".into(), kind: Kind::Texture, parts: vec![(0x70D8_98C6, at.clone()), (0x0D53_7335, at.clone())], male: vec![Step { size: 0, ..step(0x8143_DC70) }], female: vec![] },
+            Row { key: "wispcolor".into(), label: "Color".into(), kind: Kind::Colour, parts: vec![(0x70D8_98C6, at.clone()), (0x0D53_7335, at.clone())], male: vec![step(0), step(0x0122_D99A)], female: vec![] },
+        ];
+        let mut wisp = servers_offer(false).races[0].clone();
+        (wisp.id, wisp.body, wisp.name) = (31, [0x70D8_98C6, 0x0D53_7335], "Wisp".into());
+        let mut o = servers_offer(false);
+        o.races.push(wisp);
+        set_offer(Some(&o));
+        crate::raceopts::set_options(None);
+        assert_eq!(first_look(31, 0), None, "the control: no options");
+        crate::raceopts::set_options(Some(&Options { races: vec![(31, rows)] }));
+        for (sex, body) in [(0, 0x70D8_98C6), (1, 0x0D53_7335)] {
+            let l = first_look(31, sex).expect("the wisp's look");
+            assert_eq!(l.body, body);
+            assert_eq!(l.parts, vec![(Kind::Texture, 0x8143_DC70, at.clone())], "the wisp alone, no colour");
+        }
+        assert_eq!(first_look(11, 0), None, "the control: a race with no rows");
+        crate::raceopts::set_options(None);
+        set_offer(None);
+    }
 
     #[test]
     fn the_race_list_keeps_its_display_order_and_the_human_cities() {

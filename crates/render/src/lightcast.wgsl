@@ -21,6 +21,10 @@ struct Face {
     origin: vec4<f32>,
     // x: the face's layer in the maps (the cache's, which lightcopy.wgsl reads)
     layer: vec4<u32>,
+    // the player's own body standing round the personal light (own_place):
+    // x its feet's height less the eye's, y the height over them it casts
+    // from, z its height, w 1; else 0
+    own: vec4<f32>,
 };
 @group(3) @binding(0) var<uniform> face: Face;
 
@@ -150,6 +154,7 @@ fn vs_light_cast_solid_mover(v: VsIn) -> @builtin(position) vec4<f32> {
 // shadows the ground under it as a body under a lamp does instead of
 // covering the face from beside the light. Not held on the near plane.
 const OWN_CLEAR: f32 = 0.75;
+const OWN_HAIR: f32 = 0.01;
 
 struct LightCastOwn {
     @builtin(position) clip: vec4<f32>,
@@ -159,14 +164,45 @@ struct LightCastOwn {
     @location(2) below: f32,
 };
 
+// A body standing round its lantern (taller than it, or nearly: a hill
+// giant's 4.81 round the lantern 3 over its feet, `lightshadow::own_cast`)
+// casts the shadow it would from face.own.y over its feet, onto the ground
+// at its feet: each vertex moved onto the lantern's ray to where that
+// shadow of it falls, as far under the light as its height squeezed under
+// OWN_CLEAR (its feet where they are, its top just OWN_CLEAR under the light), so
+// what is higher on the body stays nearer the light. Any other body: as it
+// is.
+fn own_place(p: Placed) -> Placed {
+    if (face.own.w < 0.5) {
+        return p;
+    }
+    let o = face.origin.xyz;
+    let feet = face.own.x;
+    let over = face.own.y;
+    let height = face.own.z;
+    let lantern = o.y - feet;
+    let up = clamp(p.rel.y - feet, 0.0, height);
+    // where the ray from `over` over the feet through the vertex meets the
+    // feet's level
+    let high = vec3<f32>(o.x, feet + over, o.z);
+    let at = vec3<f32>(p.rel.x, feet + up, p.rel.z);
+    let ground = high + (at - high) * (over / max(over - up, 1e-3));
+    // (its top a hair under the cut, not on it)
+    let squeezed = up * (lantern - OWN_CLEAR - OWN_HAIR) / height;
+    var q = p;
+    q.rel = o + (ground - o) * ((lantern - squeezed) / lantern);
+    return q;
+}
+
 @vertex
 fn vs_light_cast_own(v: VsIn) -> LightCastOwn {
     let c = light_cast_vertex(v);
+    let p = own_place(light_cast_place(v));
     var o: LightCastOwn;
-    o.clip = c.clip;
+    o.clip = light_cast_clip(p);
     o.uv = c.uv;
     o.depth = c.depth;
-    o.below = face.origin.y - light_cast_place(v).rel.y;
+    o.below = face.origin.y - p.rel.y;
     return o;
 }
 

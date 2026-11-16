@@ -461,13 +461,8 @@ impl Create {
 
 /// The model (`CreateActor` + `SetHair` + `SetFace`), its sprite and its
 /// look, at `at` facing `hpr` (a server's race's body until it is read: its
-/// `like` race's, `Figure::new`).
-pub(crate) fn create_model(cx: &mut Ctx, model: u32, look: [i32; 4], at: [f32; 3], hpr: [f32; 3]) -> Option<Figure> {
-    create_model_dressed(cx, model, look, None, at, hpr)
-}
-
-/// `create_model` in a server's race's look too (`raceopts`: its parts'
-/// colours and textures, on the body they were chosen on).
+/// `like` race's, `Figure::new`), in a server's race's look too (`raceopts`:
+/// its parts' colours and textures, on the body they were chosen on).
 pub(crate) fn create_model_dressed(cx: &mut Ctx, model: u32, look: [i32; 4], race_look: Option<&net::raceopts::Look>, at: [f32; 3], hpr: [f32; 3]) -> Option<Figure> {
     let l = cust_look(look);
     let g = cx.gpu.as_mut()?;
@@ -486,11 +481,10 @@ fn cust_look(look: [i32; 4]) -> vi::cust::Look {
 pub(crate) fn redress_dressed(cx: &mut Ctx, f: &mut Figure, look: [i32; 4], race_look: Option<&net::raceopts::Look>) {
     let Some(g) = cx.gpu.as_mut() else { return };
     let l = cust_look(look);
-    if let Some(mut n) = Figure::new_dressed(&cx.res.lib, g, f.model, l, race_look.cloned(), [0; 3], f.at, f.hpr, cx.now) {
-        // the new body, the old sprite: its animation goes on
-        std::mem::swap(&mut n.gpu, &mut f.gpu);
-        f.look = l;
-        f.race_look = n.race_look.take();
+    if let Some(n) = Figure::new_dressed(&cx.res.lib, g, f.model, l, race_look.cloned(), [0; 3], f.at, f.hpr, cx.now) {
+        // the new body and what hangs on it (a Wisp's wisp in its colour), the
+        // old sprite: its animation goes on
+        f.dress_as(n);
     }
 }
 

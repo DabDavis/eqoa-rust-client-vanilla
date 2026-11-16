@@ -326,6 +326,17 @@ impl Pregame {
         }
     }
 
+    /// The mouse moved to frame point `p` with its button down: a window's
+    /// held part dragged (character select's scroll bar thumb).
+    pub fn drag_to(&mut self, p: [f32; 2]) -> bool {
+        self.entering.is_none() && self.stage == Stage::Client && self.client.drag_to(p)
+    }
+
+    /// The mouse's button let go.
+    pub fn release(&mut self) -> bool {
+        self.client.release()
+    }
+
     /// The files read since the last frame go into `res`; then the stage
     /// moves on if its files are in.
     pub fn update(&mut self, now: i64) {

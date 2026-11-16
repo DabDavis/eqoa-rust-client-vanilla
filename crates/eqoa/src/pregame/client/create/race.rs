@@ -7,7 +7,7 @@
 //! city), the review framing turning round it (`UpdateCamera`).
 
 use super::tables::{self, RaceRow};
-use super::{Env, Msg, create_model, frame_camera, legend, play_bgm, word};
+use super::{Env, Msg, create_model_dressed, frame_camera, legend, play_bgm, redress_dressed, word};
 use crate::pointer::{Hits, key};
 use crate::pregame::Ctx;
 use crate::pregame::stage::Stage;
@@ -288,7 +288,10 @@ impl RacePage {
             let at = [race.select[0], 0.0, race.select[1]];
             let hpr = stage.cam.walk.committed.angles.to_array();
             let look = self.look(form, env);
-            env.figure = create_model(cx, tables::model_of(r.race, self.sex), look, at, hpr);
+            // a server's race's look at its first steps (`tables::first_look`:
+            // the Wisp's wisp)
+            let race_look = tables::first_look(r.race, self.sex);
+            env.figure = create_model_dressed(cx, tables::model_of(r.race, self.sex), look, race_look.as_ref(), at, hpr);
             if env.figure.is_some() {
                 stage.aim(at, hpr);
                 if self.music > 0 {
@@ -302,6 +305,13 @@ impl RacePage {
                     self.music = 1;
                 }
             }
+        }
+        // the races' options came (or changed) after the model was made: dressed
+        // again in its race's look, its sprite and clock kept (no music again)
+        let race_look = tables::first_look(self.row().race, self.sex);
+        let look = self.look(form, env);
+        if let Some(f) = env.figure.as_mut().filter(|f| f.race_look != race_look) {
+            redress_dressed(cx, f, look, race_look.as_ref());
         }
         // SetAction(0) on the scene's clock this frame
         if let Some(f) = env.figure.as_mut() {

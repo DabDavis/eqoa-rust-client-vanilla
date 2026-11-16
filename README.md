@@ -277,9 +277,15 @@ or a browser (each described where it lives below):
   and props over a copy of it each frame; a light that moves (the personal light as
   the player walks, a spell's) drawn whole each frame. When the budget hands a map on,
   the leaving light's shadow fades out and the coming one's in, a quarter of a second
-  each. The personal light's own body casts nothing for it (a skinned body whose box's
-  footprint holds the lantern, and a cape; not a held weapon, whose box straddled that
-  line in an idle stance and cast nothing standing still), nor a body round a light,
+  each. The personal light's own body (a skinned body whose box's footprint holds the
+  lantern, and a cape; not a held weapon, whose box straddled that line in an idle
+  stance and cast nothing standing still) casts only onto the ground under it, what of
+  it is 0.75 under the light; a body standing round its lantern (a hill giant, 4.81
+  tall, the lantern 3 over its feet; a troll's or an ogre's head) casts its whole form
+  there, as from 1.65 of its height over its feet, where a human's lantern is over a
+  human (`lightshadow::own_cast`: from inside the giant his hips and belly had cast a
+  square at his feet with nothing of his form in it, the owner's "his shadow not
+  matching his form", 2026-11-16); a body round any other light casts nothing for it,
   nor a placed thing no more than 6 across whose box holds it (a street lamp's
   housing round its light, whose floor darkened a square under every lamp); nothing
   that does not move nearer a light than 0.5 does (a character, what it wears and holds

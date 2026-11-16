@@ -14,6 +14,55 @@ is put on the page by `.github/workflows/notes.yml`.
 - The fir is art from your own disc (a fir of Tunaria's northern forests), read while the season is up.
 - A PS2 sees the plaza tree too, as a treant, without the lights.
 
+## 2026-11-16 · Auras on hats
+- **An aura put on your helm now lights a hat you wear** (the Turban of Twisted Virtue, say) instead of turning it
+  back into a cloth cap: the glow, sparkles or trim wrap the hat.
+- **Hats can be dyed**: the Equipment Dyer's helm colour (or a GM's dye) colours the hat; undyed, it keeps its own
+  colours.
+## 2026-11-16 · Helms on goblins, brownies, kerrans and orcs
+- **Hair, caps and manes now go under a helm** on the new races' bodies, as a Dryad's do: the goblins' topknots,
+  tufts, the ice goblin chieftain's mohawk and braid, the brownie's spikes and the brownie elder's red cap, the
+  white tiger's and the maned lion's manes where they cover the head, the Deathfist slayer's hair and the orcs' long
+  hair no longer stick out through the top or back of the helm.
+- **Helms sit a little higher on goblins, brownies, the white tiger, the maned lion and the Deathfist slayer**, so
+  the top of the head no longer shows through. Ears and horns still come out, as a gnoll's ears do.
+
+## 2026-11-16 · Alt-Tab lets go of the mouse
+- **On Windows, alt-tabbing (or minimising) while you look round with the mouse no longer leaves your cursor stuck in
+  the game's window.** The game now hands the cursor back as soon as it loses the focus, and leaves it where it is
+  instead of pulling it back into the game.
+- Buttons and keys you were holding are let go as the window loses the focus. Coming back, the mouse look starts
+  again only when you press and drag.
+## 2026-11-16 · Sandstorms, whiteouts and fog in storms
+- **Weather: the server's sandstorms and whiteouts, and fog in storms (Options -> Weather turns it down or off).**
+  On eqoaclassic.com the weather now follows the ground: sandstorms blow over the deserts, snow and whiteouts on the
+  icy lands, rain elsewhere, and none over lava, unless a GM calls a storm. Sand blows past you on the wind, a
+  whiteout closes in to a few steps, names fade into the storm, and you hear the wind (quieter under a roof).
+- **/weatherpreview sand** (or rain, snow, whiteout, clear; light, moderate or heavy) shows a weather on your own
+  screen only, until **/weatherpreview off** or you travel to another world.
+
+## 2026-11-16 · A hill giant's shadow is his shape
+- **With Light Shadows on, a hill giant's lantern now throws his own shape on the ground round his feet**, as
+  everyone else's does. His lantern rides inside him (he is taller than it), and his shadow was a dark square at his
+  feet instead. A troll's or an ogre's head is no longer missing from its shadow either.
+## 2026-11-16 · Hats worn from other bodies
+- **A character can now wear a hat another body has built in**, given by a GM on eqoaclassic.com: the first is the
+  kappa's wide-brimmed straw hat with its steel spike, sized to your head and worn in place of your helm (the hair
+  is dressed as under a helm). Others see it on you; a PS2 shows your helm as before.
+## 2026-11-16 · Dyed pets
+- **Pets can be dyed** on eqoaclassic.com: a **Pet Groomer** now stands beside every Equipment Dyer. With your pet out,
+  talk to the groomer and pick a colour, free, from the dyers' palette. A pet body can have **two colour areas** (the
+  drachnid's torso and its spider body), each dyed apart; every other pet is dyed whole.
+- Each form of a pet keeps its own colours. Everyone playing this client sees your pet's dyes; a PS2 sees its own colours.
+- **An item can be such a hat too**: the first is the **Turban of Twisted Virtue**, the efreeti lord's turban, drawn
+  on your head while you wear it in your helm's place.
+## 2026-11-16 · Dryad helms
+- **A Dryad's helm now sits right**: her locks, and the long tail down her back, no longer stick out of the top, the
+  sides and the back of every helm. Under a helm her hair is tucked away, as a human's is, and the helm sits on her head
+  as on a woman's.
+- The Erych guardian, Haliai and Erych arbiter bodies too: their hair goes under the helm, and the helm sits a little
+  larger and higher, so their heads no longer show through its top. Horns and fins still come out, as a gnoll's ears do.
+
 ## 2026-11-16 · See more players and creatures, farther
 - **NPC/PC Display now starts at 48** (it was the game's 24) and **NPC/PC Distance at 200** (it was 100), in
   Options > Extended. You see more of the people and creatures round you, and farther out.
@@ -36,6 +85,19 @@ is put on the page by `.github/workflows/notes.yml`.
   **Icingdeath** carries the Sword of Virtue's glow and sparkles in blue together with its freezing drip, and
   **Twinkle** the Sword of Virtue's glow with the monk staff's twinkle at the blade's tip.
 - Other players see both on your weapon too. An older client shows a weapon's first aura alone, as before.
+
+## 2026-11-16 · The Wisp at character creation
+- **Choosing the Wisp on the race page now shows the wisp**, glowing where a human's head would be, as character select
+  and the world draw it. The page showed a plain human, face and all.
+- **A Wisp's Color on the appearance page changes the wisp at once.** It kept the colour it was first drawn in until the
+  review page.
+
+## 2026-11-16 · The mouse on character select's scroll bar
+- **Character select's scroll bar now takes the mouse**, on a server that keeps more than eight characters: click
+  its top or bottom end to scroll a character, click above or below the handle to scroll a whole page, or drag the
+  handle. The selected character stays selected while the list moves, as with the wheel.
+- The mouse wheel over the list no longer ignores a trackpad's small turns: they add up to a row.
+- The keyboard and the controller work as before.
 
 ## 2026-11-16 · The server's own account pages, and why a login is refused
 - **The Station pages before the server list are now your server's own**, as a PlayStation 2 shows them after its

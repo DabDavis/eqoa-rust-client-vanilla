@@ -474,6 +474,26 @@ impl Mouse {
         self.press = None;
     }
 
+    /// The window lost the focus (alt-tab, minimised, another window
+    /// clicked) or was covered: everything held let go as its release would
+    /// be (it may never come), the drag, its look and the wheel since the
+    /// last frame dropped, and a held pointer given up. True when the window
+    /// is to give the pointer back (`give_pointer`, without putting the
+    /// cursor home: it is another window's now). The look is taken again
+    /// only by a new press dragged in front (`grab_change`), never by the
+    /// focus coming back.
+    pub fn lose_focus(&mut self) -> bool {
+        self.release_all();
+        self.discard();
+        self.warp = None;
+        self.warp_age = 0;
+        self.asked_at = None;
+        self.counted = false;
+        let held = matches!(self.grab, Grab::Asked | Grab::Held | Grab::Confined);
+        self.grab = Grab::Free;
+        held
+    }
+
     /// The window's answer (`take_pointer`), or a page's lock seen granted.
     pub fn set_grab(&mut self, g: Grab) {
         self.grab = g;
@@ -796,14 +816,57 @@ pub fn put_pointer(window: &winit::window::Window, at: (f64, f64)) {
 }
 
 /// Gives the pointer back, shown again at `home` (natively put there; a
-/// page's browser puts it back where its lock began itself).
-pub fn give_pointer(window: &winit::window::Window, home: (f64, f64)) {
+/// page's browser puts it back where its lock began itself). `None` puts it
+/// nowhere: the window has lost the focus, and the cursor is the window in
+/// front's (put back into this one, it would be taken from the player's
+/// other window).
+pub fn give_pointer(window: &winit::window::Window, home: Option<(f64, f64)>) {
     let _ = window.set_cursor_grab(winit::window::CursorGrabMode::None);
     window.set_cursor_visible(true);
+    #[cfg(windows)]
+    unclip(window);
     #[cfg(not(target_arch = "wasm32"))]
-    let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(home.0, home.1));
+    if let Some(home) = home {
+        let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(home.0, home.1));
+    }
     #[cfg(target_arch = "wasm32")]
     let _ = home;
+}
+
+/// Windows: the cursor's clip (`ClipCursor`, the whole desktop's, not the
+/// window's) taken off when it is this window's. winit (0.30.13,
+/// `refresh_os_cursor`) sets and clears the clip only while the window is
+/// the active one, and by the time `Focused(false)` comes another window
+/// is: so `CursorGrabMode::None` then cleared winit's flag and left the
+/// clip, a point inside this window (`Locked`, or `Confined` hidden), and
+/// the cursor stayed held in it while the player was in another window
+/// (alt-tab, 2026-11-16). Only a clip inside this window's rectangle is
+/// taken off: one the window in front has set since is its own.
+#[cfg(windows)]
+fn unclip(window: &winit::window::Window) {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ClipCursor, GetClipCursor};
+    let (Ok(at), size) = (window.outer_position(), window.outer_size()) else { return };
+    let ours = (at.x, at.y, at.x + size.width as i32, at.y + size.height as i32);
+    let mut clip = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    // SAFETY: GetClipCursor writes the RECT it is given; ClipCursor(null)
+    // frees the cursor.
+    unsafe {
+        if GetClipCursor(&mut clip) == 0 {
+            return;
+        }
+        if clip_is_ours((clip.left, clip.top, clip.right, clip.bottom), ours) {
+            ClipCursor(std::ptr::null());
+        }
+    }
+}
+
+/// Whether a cursor clip (left, top, right, bottom, screen pixels) lies
+/// within a window's rectangle: the clip a grab of that window set (a point
+/// or its client area), not the desktop's (no clip) nor another window's.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn clip_is_ours(clip: (i32, i32, i32, i32), window: (i32, i32, i32, i32)) -> bool {
+    clip.0 >= window.0 && clip.1 >= window.1 && clip.2 <= window.2 && clip.3 <= window.3 && clip != window
 }
 
 /// `EQOA_MOUSE`, for headless runs: `;`-separated steps at a time in ms,
@@ -959,6 +1022,68 @@ mod tests {
     /// confined one's moves do not count. Let go, no click, the pointer back
     /// where the press was. The control: a still press takes nothing and
     /// clicks.
+    /// Alt-tab mid-look (2026-11-16, Windows: the cursor stayed held in the
+    /// window while the player was in another): the focus lost lets go of
+    /// both buttons, the drag and its look, and says the held pointer is to
+    /// be given back; the look is not taken again when the focus returns,
+    /// only by a new press dragged.
+    #[test]
+    fn losing_the_focus_gives_the_pointer_back_and_lets_go_of_everything() {
+        let t0 = Instant::now();
+        for grab in [Grab::Held, Grab::Confined, Grab::Asked] {
+            let mut m = Mouse::default();
+            m.moved(100.0, 100.0);
+            m.button(false, true, t0);
+            m.button(true, true, t0);
+            assert!(m.running(), "both held: the run");
+            m.moved(130.0, 100.0);
+            assert_eq!(m.grab_change(true), Some(true));
+            m.set_grab(grab);
+            m.recentre((200, 200));
+            m.wheel(1.0, 1.0);
+            m.steered = true;
+            assert!(m.lose_focus(), "{grab:?}: given back");
+            assert_eq!(m.grab, Grab::Free);
+            assert!(m.idle(), "no button held, no gesture");
+            assert!(!m.running() && !m.steer(3) && !m.steer(0), "no run, no steer");
+            assert_eq!(m.look, (0.0, 0.0), "the drag's look dropped");
+            assert_eq!(m.take_wheel(), 0.0);
+            assert!(m.warp.is_none() && !m.steered);
+            // back in front: nothing taken until a press drags again
+            assert_eq!(m.grab_change(true), None, "{grab:?}: the focus alone takes nothing");
+            m.moved(150.0, 120.0);
+            m.motion(20.0, 20.0);
+            assert_eq!(m.grab_change(true), None, "a move with no button takes nothing");
+            assert_eq!(m.look, (0.0, 0.0));
+            // the releases that never came, arriving late, click nothing
+            assert_eq!(m.button(false, false, t0), None);
+            assert_eq!(m.button(true, false, t0), None);
+            m.button(true, true, t0);
+            m.moved(170.0, 120.0);
+            assert_eq!(m.grab_change(true), Some(true), "a new drag takes it again");
+        }
+        // nothing held: nothing to give back
+        let mut m = Mouse::default();
+        assert!(!m.lose_focus());
+        m.set_grab(Grab::Refused);
+        assert!(!m.lose_focus(), "a refused grab holds nothing");
+        assert_eq!(m.grab, Grab::Free);
+    }
+
+    /// Windows' clip is taken off only when it lies inside the window: a
+    /// grab's point or client area, not the desktop (no clip) nor another
+    /// window's.
+    #[test]
+    fn a_clip_inside_the_window_is_its_own() {
+        let win = (100, 100, 900, 700);
+        assert!(clip_is_ours((500, 400, 501, 401), win), "Locked: a point");
+        assert!(clip_is_ours((108, 131, 892, 692), win), "Confined: the client area");
+        assert!(!clip_is_ours((0, 0, 1920, 1080), win), "the desktop: no clip");
+        assert!(!clip_is_ours((1000, 200, 1001, 201), win), "another window's point");
+        assert!(!clip_is_ours((50, 100, 400, 400), win), "across the edge");
+        assert!(!clip_is_ours(win, win), "the window whole: a fullscreen's desktop");
+    }
+
     #[test]
     fn a_drag_takes_the_pointer_and_rides_the_mouse_s_own_motion() {
         let t0 = Instant::now();

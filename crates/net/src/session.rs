@@ -196,6 +196,14 @@ pub const LIVE_LOOK_HANDS: u32 = 64;
 /// 2026-11-16: "so we can have 2 auras now"). A server that knows no such bit
 /// sends the 335.
 pub const LIVE_LOOK_SECOND: u32 = 128;
+/// Bit 8 of this client's answer to [`OP_LIVE_LOOK`] (with
+/// [`LIVE_LOOK_SECOND`]): it draws the helm's hat apart from the helm's aura,
+/// the hat after the hands' seconds and the other aura (a shell, particles)
+/// in the helm's place, drawn on the hat ([`crate::entity::HAT_AURA_STATE_SIZE`],
+/// 365 bytes; the owner, 2026-11-16: "when i put /aura on dusts turban turns
+/// it into a cloth cap"). A server that knows no such bit sends the 355, the
+/// hat in the helm's place.
+pub const LIVE_LOOK_HAT: u32 = 256;
 /// CLIENT's character select: eight (`CharacterList`, `m_chars[8]`).
 pub const CLIENT_CHAR_SLOTS: u32 = 8;
 /// The most characters a list is read of, whatever a server says.
@@ -559,6 +567,17 @@ pub const OP_POWER_BARS: u16 = 0x7E01;
 /// u8 power of 255. Each is the whole set: an id it leaves out has no bar.
 /// Sent only when the set changed, at most twice a second.
 pub const OP_POWER_BARS_DATA: u16 = 0x7E02;
+/// go-eqoa-server's own, no retail message: the regional weather (board
+/// entries #1549/#1550). A u32 after the opcode, both ways, as
+/// [`OP_POWER_BARS`]: the server offers it (1) once the player is in the
+/// world, the client answers 1 while Options' Weather is above 0 and 0 to
+/// stop (`agree_weather`); answered 1, it is sent [`OP_WEATHER_DATA`]. A PS2
+/// ignores the offer; the retail rain and snow (0x00C5/0x00C7) come to every
+/// client either way.
+pub const OP_WEATHER: u16 = 0x7E93;
+/// The regional weather's timelines, from a server the client asked
+/// ([`OP_WEATHER`]): `crate::weather`'s layout.
+pub const OP_WEATHER_DATA: u16 = 0x7E94;
 /// The marks, from a server the client asked ([`OP_QUEST_MARKERS`]): a u8
 /// count, then each its u8 kind ([`QuestMark::kind`]), u8 world, f32 x and z,
 /// the NPC's name and a u8 count of quests, each its name, u8 lowest and
@@ -789,6 +808,19 @@ pub const OP_DECOR_LIGHTS_ANSWER: u16 = 0x7E81;
 /// The decorations, from a server the client answered, at once and whenever a
 /// season turns or a GM edits them: the whole set (`crate::decor::read`).
 pub const OP_DECOR_LIGHTS: u16 = 0x7E82;
+/// go-eqoa-server's own: a pet's dyes, two colours on two areas of its body
+/// (the server owner, 2026-11-16; its Pet Groomers put them on: `crate::petdye`).
+/// The offer, server to client once the player is in the world: a u8, the
+/// layout (1). CLIENT has no such case, so a PS2 ignores it and draws every
+/// pet in its body's own colours.
+pub const OP_PET_DYES_OFFER: u16 = 0x7E90;
+/// The answer to [`OP_PET_DYES_OFFER`], client to server, at once: a u8, the
+/// layout this client reads (`crate::petdye::LAYOUT`), 0 to stop.
+pub const OP_PET_DYES_ANSWER: u16 = 0x7E91;
+/// The dyed pets this client sees, by the id it knows each by
+/// (`crate::petdye::read`), the whole set each time: when it changes, and at
+/// each MemoryDump and world change.
+pub const OP_PET_DYES: u16 = 0x7E92;
 
 /// go-eqoa-server's own: a monster's name and level, shown when the player
 /// talks to it (□, Q) and it has nothing to say (the GM Jibrish's petition 1459,
@@ -1167,8 +1199,17 @@ pub enum Event {
     AbilityRemove { token: u32, index: i32 },
     AbilityLockout { index: u8, token: u32, lockout: i32 },
     /// 0x00C5 (fades) and 0x00C7 (instant): the weather byte
-    /// (`VIClient::SetWeather`).
+    /// (`VIClient::SetWeather`). The decomp's CLIENT: case 0x00C5 calls
+    /// `SetWeather(w, 0)`, which starts a fade (`m_p608 = 1e-5`), case 0x00C7
+    /// `SetWeather(w, 1)`, at once (`m_p608 = 1`); the atmosphere's
+    /// `lv[7] = {0, .15, .5, 1, .15, .5, 1}` and its `st` split make 1-3 rain
+    /// light to heavy and 4-6 snow, whatever `vi.h`'s enum names them
+    /// (`vi::atmosphere::WX_CLEAR`).
     Weather { weather: u8, instant: bool },
+    /// [`OP_WEATHER_DATA`]: the regional weather's zones, each replacing
+    /// what was last sent of it; their times count from this event's
+    /// receipt.
+    WeatherZones(Vec<crate::weather::Zone>),
     /// 0x00FF (`Msg00FF`): every ability (display index below 252) off
     /// the bar; the answer to 0x00FE.
     AbilityClearBar { token: u32 },
@@ -1295,6 +1336,11 @@ pub struct Session {
     /// takes them (`decorlights`): the empty set at its offer and at a new
     /// connection, this client holding none then.
     pub decor: Option<crate::decor::Decor>,
+    /// The dyed pets the server last sent ([`OP_PET_DYES`], by the id this
+    /// client knows each by), until the game takes them (`petdye`): the empty
+    /// set at its offer and at a new connection, this client holding none
+    /// then.
+    pub pet_dyes: Option<Vec<(u32, crate::petdye::PetDye)>>,
     /// The server has this client's character flying ([`OP_FLY`]); gone with
     /// the connection, as the server's goes with its login. A dump (a respawn,
     /// a restart of the server's) leaves it.
@@ -1313,6 +1359,10 @@ pub struct Session {
     pub power_bars_offer: bool,
     power_bars_asked: Option<bool>,
     pub power_bars: Vec<(u32, u8)>,
+    /// Whether the server offered the regional weather on this connection
+    /// ([`OP_WEATHER`]) and what it was last told (none since the offer).
+    pub weather_offer: bool,
+    weather_asked: Option<bool>,
     /// The offer said each member's group comes too, when asked (2).
     raid_roster_groups: bool,
     /// The offer said each member's kind comes too, after its group (3).
@@ -1579,6 +1629,7 @@ impl Session {
             npc_tints: None,
             npc_tints_layout: 1,
             decor: None,
+            pet_dyes: None,
             flying: false,
             noclip: false,
             raid_roster_offer: false,
@@ -1586,6 +1637,8 @@ impl Session {
             power_bars_offer: false,
             power_bars_asked: None,
             power_bars: Vec::new(),
+            weather_offer: false,
+            weather_asked: None,
             raid_roster_groups: false,
             raid_roster_kinds: false,
             combat_record: false,
@@ -1813,6 +1866,17 @@ impl Session {
         }
         self.power_bars_asked = Some(want);
         self.send_op_int(OP_POWER_BARS, want as u32);
+    }
+
+    /// The regional weather: a server that offered it ([`OP_WEATHER`]) is
+    /// told whether to send it (`want`: Options' Weather above 0), at once
+    /// and whenever that changes; one that made no offer is told nothing.
+    pub fn agree_weather(&mut self, want: bool) {
+        if !self.weather_offer || self.weather_asked == Some(want) {
+            return;
+        }
+        self.weather_asked = Some(want);
+        self.send_op_int(OP_WEATHER, want as u32);
     }
 
     /// The power of 255 the server last sent for entity `id`
@@ -2431,6 +2495,8 @@ impl Session {
                 self.npc_tints = Some(Vec::new());
                 // and the decorations (offered again)
                 self.decor = Some(Default::default());
+                // and the pets' dyes (the next world entry offers them)
+                self.pet_dyes = Some(Vec::new());
                 // the mercs and the group search's standing (offered again)
                 self.mercs = None;
                 self.merc_windows = false;
@@ -2443,6 +2509,9 @@ impl Session {
                 self.power_bars_offer = false;
                 self.power_bars_asked = None;
                 self.power_bars.clear();
+                // the regional weather: offered again at the next world entry
+                self.weather_offer = false;
+                self.weather_asked = None;
                 self.quest_marks.clear();
                 self.quest_progress_offer = false;
                 self.quest_progress_asked = None;
@@ -2633,7 +2702,7 @@ impl Session {
             OP_LIVE_LOOK => {
                 if r.u32() & 1 != 0 && !r.error {
                     // the server's armour with the live look alone (its trims ride the live channel)
-                    let live = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS | LIVE_LOOK_BODY | LIVE_LOOK_CAPE | LIVE_LOOK_HANDS | LIVE_LOOK_SECOND } else { 0 };
+                    let live = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS | LIVE_LOOK_BODY | LIVE_LOOK_CAPE | LIVE_LOOK_HANDS | LIVE_LOOK_SECOND | LIVE_LOOK_HAT } else { 0 };
                     self.send_op_int(OP_LIVE_LOOK, live | LIVE_LOOK_MANY_CHARS);
                 }
             }
@@ -2797,6 +2866,21 @@ impl Session {
                 Some(t) => self.npc_tints = Some(t),
                 None => debug_line(&format!("[net] NPC tints: {} bytes not read", m.data.len())),
             },
+            // the pets' dyes offered (each world entry): taken at once, what
+            // was held dropped (`petdye`)
+            OP_PET_DYES_OFFER => {
+                let layout = r.u8();
+                if !r.error && layout != 0 {
+                    self.pet_dyes = Some(Vec::new());
+                    let mut w = Writer::op(OP_PET_DYES_ANSWER);
+                    w.u8(crate::petdye::LAYOUT);
+                    self.send(&w.data);
+                }
+            }
+            OP_PET_DYES => match crate::petdye::read(&m.data[2.min(m.data.len())..]) {
+                Some(t) => self.pet_dyes = Some(t),
+                None => debug_line(&format!("[net] pet dyes: {} bytes not read", m.data.len())),
+            },
             // a monster's name and level offered (each world entry): taken at
             // once, in the layout this client reads, for the target's details
             // box (`Play::mob_info`); another layout is left to the box
@@ -2929,6 +3013,18 @@ impl Session {
                     self.power_bars_asked = None;
                 }
             }
+            OP_WEATHER => {
+                // an offer (again at every world entry): told afresh
+                r.u32();
+                if !r.error {
+                    self.weather_offer = true;
+                    self.weather_asked = None;
+                }
+            }
+            OP_WEATHER_DATA => match crate::weather::read(&m.data[2.min(m.data.len())..]) {
+                Some(zones) => ev.push(Event::WeatherZones(zones)),
+                None => eprintln!("net: a weather message of {} bytes refused", m.data.len()),
+            },
             OP_POWER_BARS_DATA => {
                 let n = r.u8() as usize;
                 let set: Vec<(u32, u8)> = (0..n).map(|_| (r.u32(), r.u8())).collect();
@@ -4715,6 +4811,51 @@ mod tests {
         assert_eq!(answers(&mut s), [], "and nothing asked");
     }
 
+    // go-eqoa-server's 0x7E93 weather offer: nothing asked before it, the
+    // answer once a change of mind (1 while Options' Weather is above 0, 0 at
+    // 0), a new offer answered afresh, a new connection none. Its 0x7E94
+    // zones come as an event; a bad one is refused whole.
+    #[test]
+    fn weather_offer_answer_and_zones() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x93, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_weather(true);
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x93, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty(), "{ev:?}");
+        assert!(s.weather_offer);
+        s.agree_weather(true);
+        s.agree_weather(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x93, 0x7E, 1, 0, 0, 0])], "asked once");
+        s.agree_weather(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x93, 0x7E, 0, 0, 0, 0])], "the slider at 0: stopped");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x93, 0x7E, 1, 0, 0, 0]);
+        s.agree_weather(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x93, 0x7E, 0, 0, 0, 0])], "a new offer, answered again");
+
+        use crate::weather::{Phase, Timeline, Zone};
+        let z = Zone { world: 0, col: 3, row: 2, timelines: vec![Timeline { squares: 1, revision: 1, seed: 2, wind: [1.0, 0.0], phases: vec![Phase { at_ms: 0, kind: 3, strength: 255 }, Phase { at_ms: 10, kind: 0, strength: 0 }] }] };
+        let mut body = vec![0x94, 0x7E];
+        body.extend(crate::weather::write(std::slice::from_ref(&z)));
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, body.clone());
+        assert!(matches!(ev.as_slice(), [Event::WeatherZones(zs)] if zs == &[z.clone()]), "{ev:?}");
+        let at = body.len() - 2;
+        body[at] = 3; // the last phase sand: refused
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, body);
+        assert!(ev.is_empty(), "{ev:?}");
+
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.weather_offer, "a new connection, no offer yet");
+        s.agree_weather(true);
+        assert_eq!(answers(&mut s), [], "and nothing asked");
+    }
+
     // A GM's map travel (go-eqoa-server's 0x7E34/0x7E35): nothing asked without
     // the offer; offered, the spot sent as the world, x and z; a 0 ends it, and
     // so does a new connection.
@@ -4967,6 +5108,38 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, marks);
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert_eq!(s.head_mark(100_001), None, "a new connection: none held");
+    }
+
+    /// The pet dyes' offer is answered at once with this client's layout, and
+    /// drops what was held; the set is the session's until the game takes it;
+    /// one cut short is nothing new (the control), and an offer of 0 is no
+    /// offer.
+    #[test]
+    fn pet_dyes_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x91, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x90, 0x7E, 0]);
+        assert_eq!((answers(&mut s), s.pet_dyes.take()), (vec![], None), "an offer of 0 is no offer");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x90, 0x7E, 1]);
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x91, 0x7E, crate::petdye::LAYOUT])], "answered at once, a u8 1");
+        assert_eq!(s.pet_dyes.take(), Some(vec![]), "what was held dropped");
+        let mut m = vec![0x92, 0x7E, 1];
+        for x in [0x0300_0001u32, 0x1576_4DA8, 0xD100_00FF, 0x0080_00FF] {
+            m.extend_from_slice(&x.to_le_bytes());
+        }
+        m.extend_from_slice(&0b110u64.to_le_bytes());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        assert_eq!(s.pet_dyes.take(), Some(vec![(0x0300_0001, crate::petdye::PetDye { look: 0x1576_4DA8, area: [0xD100_00FF, 0x0080_00FF], mask: 0b110 })]));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 2].to_vec());
+        assert_eq!(s.pet_dyes, None, "the control: a set cut short is nothing new");
+        assert_eq!(answers(&mut s), [], "the set answered nothing");
     }
 
     #[test]
@@ -5314,8 +5487,9 @@ mod tests {
         s.state = State::Shard;
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "a first list: the disc's");
         assert!(deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x0C, 0x7E, 1, 0, 0, 0]).is_empty());
-        let bits = if wants_live_look() { 1 | LIVE_LOOK_ARMOR as u8 | LIVE_LOOK_AURAS as u8 | LIVE_LOOK_BODY as u8 | LIVE_LOOK_CAPE as u8 | LIVE_LOOK_HANDS as u8 | LIVE_LOOK_SECOND as u8 } else { 0 } | LIVE_LOOK_MANY_CHARS as u8;
-        assert_eq!(answers(&mut s), [(251, vec![0x0C, 0x7E, bits, 0, 0, 0])], "the offer answered with 1, every character listed (2) and the server's armour drawn (4)");
+        let bits = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS | LIVE_LOOK_BODY | LIVE_LOOK_CAPE | LIVE_LOOK_HANDS | LIVE_LOOK_SECOND | LIVE_LOOK_HAT } else { 0 } | LIVE_LOOK_MANY_CHARS;
+        let [b0, b1, b2, b3] = bits.to_le_bytes();
+        assert_eq!(answers(&mut s), [(251, vec![0x0C, 0x7E, b0, b1, b2, b3])], "the offer answered with 1, every character listed (2) and the server's armour drawn (4)");
         assert!(!s.live_look, "not in force until the server says so");
         assert_eq!(gear_of(&deliver(&mut s, drdp::TYPE_GUARANTEED, list(DISC_GEAR_SIZE))), [32], "the control: a list before the server's answer");
 
@@ -5864,7 +6038,7 @@ mod tests {
         };
         answers(&mut s);
         deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK, &[1]));
-        let want = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS | LIVE_LOOK_BODY | LIVE_LOOK_CAPE | LIVE_LOOK_HANDS | LIVE_LOOK_SECOND | 2 } else { 2 };
+        let want = if wants_live_look() { 1 | LIVE_LOOK_ARMOR | LIVE_LOOK_AURAS | LIVE_LOOK_BODY | LIVE_LOOK_CAPE | LIVE_LOOK_HANDS | LIVE_LOOK_SECOND | LIVE_LOOK_HAT | 2 } else { 2 };
         assert_eq!(answers(&mut s), [(251, words(OP_LIVE_LOOK, &[want]))]);
         assert_eq!(s.char_slots, CLIENT_CHAR_SLOTS);
         deliver(&mut s, drdp::TYPE_GUARANTEED, words(OP_LIVE_LOOK_IN_FORCE, &[1]));
