@@ -190,7 +190,12 @@ pub fn guess(a: &Ability) -> Option<Kind> {
     }
     let heal = has(&d, &["heal", "increase hitpoints by", "increase hp by", "restores health", "restore health", "mend"]) && !has(&d, &["pet heal"]);
     let timed = has(&d, &["min", "buff", "30m", "hour"]);
-    if heal && !timed {
+    // a heal the player wears, set off by a hit on it (a damage shield, a
+    // defensive proc): a buff, kept up, not cast at half health (petition
+    // 5183: the paladin's Fervor, "A damage shield that heals you over time
+    // when you are hit", a 5 minute self buff on the server)
+    let worn = has(&d, &["damage shield", "when you are hit", "when hit", "when struck", "defensive proc"]);
+    if heal && !timed && !worn {
         return Some(Kind::Heal);
     }
     if a.scope == 0 || a.scope == 2 || (a.scope == 1 && lasting) {
@@ -816,6 +821,8 @@ mod tests {
         assert_eq!(g("Alesthenies' Mercy", "CM: A buff that increases the target's armor.", 1), Some(Kind::Buff));
         assert_eq!(g("Healing", "Heals the target. Modified by CHA.", 1), Some(Kind::Heal));
         assert_eq!(g("Mend", "Heal some of your wounds. Modified by WIS.", 0), Some(Kind::Heal));
+        // a heal set off by a hit on its wearer is a buff (petition 5183)
+        assert_eq!(g("Fervor", "A damage shield that heals you over time when you are hit. Modified by CHA and level.", 0), Some(Kind::Buff));
         assert_eq!(g("Fire Elementaling", "MAG Pet Summon - Fire Elemental to fight by your side.", 0), Some(Kind::Pet));
         assert_eq!(g("Decaying Flesh", "Summons a zombie to aid you.", 0), Some(Kind::Pet));
         assert_eq!(g("Primal Spirit", "Summons Pet", 0), Some(Kind::Pet));

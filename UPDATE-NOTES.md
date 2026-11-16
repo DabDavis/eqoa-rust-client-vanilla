@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · Auto-cast keeps Fervor up as a buff
+- **Auto-cast now reads a paladin's Fervor as a buff**, not a heal: it is a damage shield you wear that heals you when
+  you are hit, so auto-cast keeps it on you (casting it again when it wears off) instead of waiting for you to drop
+  below half health. Other spells that heal their wearer when struck are read the same way.
+- A Fervor slot you already set to auto as a heal keeps that until you change it: switch its auto off and on again,
+  or type **/autocast Fervor buff**.
+
 ## 2026-11-16 · The server's own account pages, and why a login is refused
 - **The Station pages before the server list are now your server's own**, as a PlayStation 2 shows them after its
   patch: on eqoaclassic.com, Create User Name asks only for a name, a password twice and your e-mail address, Forgot
