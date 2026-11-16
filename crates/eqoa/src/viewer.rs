@@ -478,6 +478,11 @@ pub fn shot_with(
         // no server, as though one had offered it and the walk stood
         let jump_at: Vec<i64> = std::env::var("EQOA_JUMP").map(|s| s.split(';').filter_map(|ms| ms.trim().parse().ok()).collect()).unwrap_or_default();
         let walk = walk_script();
+        // `EQOA_FIRST_PERSON`: the walk seen in first person (P's
+        // `InitCameraStyle` from the orbit), as a player sees it so
+        if std::env::var_os("EQOA_FIRST_PERSON").is_some() {
+            crate::camstyle::cycle(&mut walker.cam, false, None, &mut walker.scene);
+        }
         // `EQOA_FRAME_MS=n`: frames of n ms instead of 16 (a display's rate:
         // 6 is about 165 a second, 33 the console's 30)
         let frame_ms: i64 = std::env::var("EQOA_FRAME_MS").ok().and_then(|v| v.parse().ok()).filter(|&v: &i64| v > 0).unwrap_or(16);
