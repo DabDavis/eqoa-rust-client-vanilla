@@ -2534,6 +2534,8 @@ mod name_plates {
     #[test]
     fn the_walkers_view_of_the_plates() {
         crate::settings::testing::reset(false);
+        // the game's 24 slots (the default is 48 since 2026-11-16)
+        crate::settings::set_client(crate::settings::ClientOptions { entity_slots: NAME_PLATES_GAME as u8, ..crate::settings::client() });
         let mut cam = vi::camera::WalkCamera::<Ee> { camera_mode: 3, target_height: F::new(1.68), ..Default::default() };
         cam.walk.phys.position = Vect3::of(1000.0, 50.0, 2000.0);
         let back = |d: f32| Vect3::of(1000.0, 51.68, 2000.0 - d);
@@ -12230,7 +12232,7 @@ mod commands {
 
         p.session.entity_view_offer = Some((204, 1000));
         p.agree_entity_view();
-        assert_eq!(asked(&mut p), [vec![0x00, 0x7E, 128, 0, 0, 0, 100, 0, 0, 0]], "128 within the game's 100");
+        assert_eq!(asked(&mut p), [vec![0x00, 0x7E, 128, 0, 0, 0, 200, 0, 0, 0]], "128 within the default 200");
         assert_eq!(p.entities.limit, 128);
         assert_eq!(p.options_wnd.server_note.as_deref(), Some("This server: 204 within 1000"));
         p.agree_entity_view();
