@@ -52,9 +52,6 @@ thread_local! {
 /// The set the server sent (`net::session::OP_DECOR_LIGHTS`), the last one
 /// standing.
 pub fn set(d: Decor) {
-    if std::env::var_os("EQOA_DECOR_TRACE").is_some() {
-        eprintln!("decor: {} strings, art {:?}", d.strings.len(), d.art);
-    }
     DECOR.with_borrow_mut(|x| *x = d);
 }
 
@@ -78,9 +75,6 @@ pub fn sink(model: u32) -> Option<f32> {
 
 /// `model` lowered by `sink(id)`, if the art is a decoration's that is.
 pub fn lower(id: u32, model: &mut esf::Model) {
-    if std::env::var_os("EQOA_DECOR_TRACE").is_some() {
-        eprintln!("decor: build {id:#010x}: sink {:?}, {} verts", sink(id), model.pos.len());
-    }
     if let Some(s) = sink(id) {
         for p in &mut model.pos {
             p[1] -= s;
