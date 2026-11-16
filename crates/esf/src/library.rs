@@ -506,6 +506,11 @@ impl Library {
         &self.files[i].1
     }
 
+    /// The name file `i` was added under.
+    pub fn file_name(&self, i: usize) -> &str {
+        &self.files[i].0
+    }
+
     /// The file named `name` (any case) as the view sees it: in 2002's, the
     /// file standing in for it if one does. A stand-in is never found by name
     /// in Frontiers' view.

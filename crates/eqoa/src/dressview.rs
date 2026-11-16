@@ -185,6 +185,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                     d.area[i] = if h.len() == 6 { c << 8 | 0xFF } else { c };
                 }
             }
+            "petmask" if v == "rule" => petdye.get_or_insert_with(Default::default).rule = true,
             "petmask" => {
                 let d = petdye.get_or_insert_with(Default::default);
                 d.mask = 0;
@@ -480,10 +481,25 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     }
     // a pet's dyes, each on its area (`petdye`), and the body's materials
     if words.petareas {
-        eprint!("{}", crate::petdye::areas_report(&mesh));
+        eprint!("{}", crate::petdye::areas_report(lib, &mesh, Some(&cs.text_slots)));
+        // `EQOA_TEXDUMP=<dir>`: each material's textures written there as
+        // <DictID>.ppm (what the rule's table was read off by eye)
+        if let Ok(dir) = std::env::var("EQOA_TEXDUMP") {
+            for t in mesh.batches.iter().flat_map(|b| b.layers.iter().map(|l| l.texture)) {
+                if let Some(img) = lib.surface(t).and_then(|(c, s)| s.decode(&c.data)) {
+                    let mut ppm = format!("P6 {} {} 255\n", img.width, img.height).into_bytes();
+                    ppm.extend(img.rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]));
+                    let _ = std::fs::write(format!("{dir}/{:08X}.ppm", t as u32), ppm);
+                }
+            }
+        }
     }
     if let Some(d) = words.petdye {
-        crate::petdye::apply(&mut mesh, d);
+        if d.rule {
+            crate::petdye::apply_rule(&mut mesh, d, &|id| lib.lookup(id).is_some());
+        } else {
+            crate::petdye::apply(&mut mesh, d);
+        }
     }
     // the auras as the world makes them (`play::build_puppet_in`): the
     // body's own and each worn piece's, their particles and their shells

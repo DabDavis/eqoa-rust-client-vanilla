@@ -1194,7 +1194,12 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     // and a pet's dyes, each on its area (`petdye`)
                     let petdye = petdye_of(e);
                     if let Some(d) = petdye {
-                        crate::petdye::apply(&mut model, d);
+                        if d.rule {
+                            // the rule's areas: its clothing and the rest
+                            crate::petdye::apply_rule(&mut model, d, &|id| lib.lookup(id).is_some());
+                        } else {
+                            crate::petdye::apply(&mut model, d);
+                        }
                     }
                     let wisp = crate::wisp::is(lib, e.drawn_model, race_look.as_deref());
                     // its auras (`aura`): an NPC's whole body's (its tint's) and

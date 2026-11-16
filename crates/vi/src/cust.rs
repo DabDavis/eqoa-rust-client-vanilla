@@ -48,6 +48,12 @@ pub fn is_face(id: u32) -> bool {
     id != 0 && RACE.iter().flatten().flatten().any(|&f| f == id)
 }
 
+/// Whether `id` is one of the armour sets' or robes' textures (`$Armor`,
+/// `$Robe`, set 9's [`ORNATE`]): a garment a body wears.
+pub fn is_garment(id: u32) -> bool {
+    id != 0 && (ARMOR.iter().flatten().any(|&t| t == id) || ROBE.iter().flatten().any(|&t| t == id) || ORNATE.contains(&id))
+}
+
 /// `Helm[set]`: the helm sprites.
 const HELM: [u32; 9] = [0, 0x0C6F2FDA, 0x330D43A7, 0x079EAC92, 0x03B8E453, 0x5A51ACC1, 0x7184EC3D, 0x91E411BB, 0x1E25A25F];
 
