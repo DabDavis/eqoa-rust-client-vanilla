@@ -579,6 +579,18 @@ pub fn worn_emitters(lib: &esf::Library, holder: i32, cs: &vi::csprite::CSprite<
 pub const MAIN_HAND: usize = net::entity::MAIN_HAND_AURA;
 pub const OFF_HAND: usize = net::entity::OFF_HAND_AURA;
 
+/// The held items' second auras (go-eqoa-server's itemaura second columns on
+/// the held item's record, the channel's twelfth and thirteenth; the owner,
+/// 2026-11-16: "also give icing death the sword of virtue aura blue and also
+/// the freezing so we can have 2 auras now"): drawn on the held item beside
+/// its first, of the same kinds.
+pub const MAIN_HAND2: usize = net::entity::MAIN_HAND_AURA2;
+pub const OFF_HAND2: usize = net::entity::OFF_HAND_AURA2;
+
+/// Added to a second aura's borrowed particles' emitter index (past
+/// [`HAND_AURA_FIRST`]), so a hand's two auras never share a key.
+pub const HAND_AURA_SECOND: usize = 1 << 15;
+
 /// The emitter index (the `particles::InHand` key's fourth) a hand's borrowed
 /// particles are counted from, apart from the held item's own.
 pub const HAND_AURA_FIRST: usize = 1 << 16;
@@ -597,6 +609,25 @@ pub const SICKLE_OF_AVHI_ESCRON: u32 = 0x5FD4_AE7C;
 pub fn hand_aura(auras: &[net::entity::PieceAura; net::entity::AURAS], hand: usize) -> Option<net::entity::PieceAura> {
     let a = auras[if hand == 0 { MAIN_HAND } else { OFF_HAND }];
     matches!(a.kind, net::npctint::Aura::EPIC | net::npctint::Aura::PARTICLES | net::npctint::Aura::ENERGY).then_some(a)
+}
+
+/// A held item's auras, by its hand (as [`hand_aura`]): its first, then its
+/// second (`MAIN_HAND2`, `OFF_HAND2`), each of a hand's kinds; with the
+/// emitter offset its particles are keyed by ([`hand_emitters`] + this).
+pub fn hand_auras(auras: &[net::entity::PieceAura; net::entity::AURAS], hand: usize) -> Vec<(net::entity::PieceAura, usize)> {
+    let second = auras[if hand == 0 { MAIN_HAND2 } else { OFF_HAND2 }];
+    let second = matches!(second.kind, net::npctint::Aura::EPIC | net::npctint::Aura::PARTICLES | net::npctint::Aura::ENERGY).then_some(second);
+    hand_aura(auras, hand).map(|a| (a, 0)).into_iter().chain(second.map(|a| (a, HAND_AURA_SECOND))).collect()
+}
+
+/// A hand's aura's borrowed particles ([`hand_emitters`]), keyed past `off`
+/// (a second aura's [`HAND_AURA_SECOND`]).
+pub fn hand_emitters_at(lib: &esf::Library, holder: i32, hand: usize, item: u32, at: &Matrix44<Ee>, a: &net::entity::PieceAura, drawn: bool, off: usize) -> Vec<crate::particles::InHand> {
+    let mut v = hand_emitters(lib, holder, hand, item, at, a, drawn);
+    for e in &mut v {
+        e.key.3 += off;
+    }
+    v
 }
 
 /// The model a hand's aura borrows from: its source, 0 the Sword of Virtue.
@@ -1701,5 +1732,27 @@ mod tests {
         let sparkles = PieceAura { source: SWORD_OF_VIRTUE, ..freezing };
         let g = hand_emitters(&lib, 1, 0, 0x361D_AC84, &at, &sparkles, true)[0].world.m[3];
         assert!(g.x.0.abs() + g.y.0.abs() + g.z.0.abs() < 1e-5, "an item's sparkles at the bow's grip");
+    }
+
+    /// A hand's two auras (the channel's 12th and 13th, 2026-11-16): the
+    /// first, then the second keyed past [`HAND_AURA_SECOND`]; a kind no hand
+    /// draws (a shell) left out; a second alone still drawn.
+    #[test]
+    fn a_hands_two_auras() {
+        use net::entity::{AURAS, PieceAura};
+        use net::npctint::Aura;
+        let sov = PieceAura { color: [0x30, 0x60, 0xFF, 0xFF], kind: Aura::EPIC, source: SWORD_OF_VIRTUE, nodes: 0 };
+        let freeze = PieceAura { kind: Aura::PARTICLES, source: 0x6C15_1A60, ..sov };
+        let mut a = [PieceAura::default(); AURAS];
+        assert!(hand_auras(&a, 0).is_empty());
+        a[MAIN_HAND] = sov;
+        a[MAIN_HAND2] = freeze;
+        a[OFF_HAND2] = PieceAura { kind: Aura::SHELL, ..sov };
+        assert_eq!(hand_auras(&a, 0), vec![(sov, 0), (freeze, HAND_AURA_SECOND)]);
+        assert!(hand_auras(&a, 1).is_empty(), "a shell is no hand's");
+        assert!(hand_auras(&a, 2).is_empty(), "a shield's is the off hand's");
+        a[MAIN_HAND] = PieceAura::default();
+        assert_eq!(hand_auras(&a, 0), vec![(freeze, HAND_AURA_SECOND)], "a second alone");
+        assert!(HAND_AURA_SECOND < HAND_AURA_FIRST);
     }
 }

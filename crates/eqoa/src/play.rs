@@ -1340,7 +1340,8 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
                 crate::aura::recolor(&mut m, color);
             }
             // its hand's aura's look lent it: an epic's, or an energy skin (`aura::lend_hand`)
-            if let Some(a) = crate::aura::hand_aura(&auras, i) {
+            // (and its second's: `aura::hand_auras`)
+            for (a, _) in crate::aura::hand_auras(&auras, i) {
                 crate::aura::lend_hand(lib, &mut m, &a, id);
             }
             attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
@@ -10467,8 +10468,9 @@ impl Play {
                     out.push(InHand { key: (holder, hand, item, k), world: Matrix44::mul(&e.member, &at), def: e.def, how: How::Sprite(e.flags), drawn, tint });
                 }
                 // its hand's aura's particles (`aura::hand_emitters`): an epic's, lent
-                if let Some(a) = crate::aura::hand_aura(&p.pieces, hand) {
-                    out.extend(lib.with_view(p.era, || crate::aura::hand_emitters(lib, holder, hand, item, &at, &a, drawn)));
+                // (and its second's: `aura::hand_auras`)
+                for (a, off) in crate::aura::hand_auras(&p.pieces, hand) {
+                    out.extend(lib.with_view(p.era, || crate::aura::hand_emitters_at(lib, holder, hand, item, &at, &a, drawn, off)));
                 }
             }
             let player = holder == crate::spells::SELF;
