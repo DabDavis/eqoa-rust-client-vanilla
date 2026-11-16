@@ -21,6 +21,7 @@ pub mod lightshadow;
 pub mod lit;
 pub mod map;
 pub mod overlay;
+pub mod petart;
 pub mod recolor;
 pub mod scale;
 pub mod shadow;
@@ -2671,6 +2672,30 @@ impl TextureSource for LibraryTextures<'_> {
                             Some(t) => recolor::trim_mask_of(&l.rgba, l.width, l.height, t),
                             None => recolor::trim_mask_of(&l.rgba, l.width, l.height, trimart::Trim::Parts(&[])),
                         };
+                    }
+                    levels
+                }
+                Some((source, r)) if matches!(r >> 24, recolor::CLOTH | recolor::BARE) => {
+                    // a pet's clothing or body dye: the clothing read off the
+                    // texture it was made from at the first (`petart`)
+                    let mut levels = self.levels(source);
+                    let root = recolor::root_of(source);
+                    let Some(cloth) = petart::cloth_of(root as u32) else {
+                        // a texture of no clothing: all body
+                        if r >> 24 == recolor::BARE {
+                            let mut rgba: Vec<Vec<u8>> = levels.iter_mut().map(|l| std::mem::take(&mut l.rgba)).collect();
+                            recolor::recolor_levels(&mut rgba, recolor::MUL << 24 | (r & 0xFF_FFFF));
+                            for (l, px) in levels.iter_mut().zip(rgba) {
+                                l.rgba = px;
+                            }
+                        }
+                        return levels;
+                    };
+                    let base: Vec<(Vec<u8>, u32)> = if root == source { levels.iter().map(|l| (l.rgba.clone(), l.width)).collect() } else { self.levels(root).into_iter().map(|l| (l.rgba, l.width)).collect() };
+                    let mut rgba: Vec<Vec<u8>> = levels.iter_mut().map(|l| std::mem::take(&mut l.rgba)).collect();
+                    recolor::cloth_levels(&mut rgba, &base, r, cloth);
+                    for (l, px) in levels.iter_mut().zip(rgba) {
+                        l.rgba = px;
                     }
                     levels
                 }

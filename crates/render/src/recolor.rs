@@ -60,10 +60,18 @@ pub const TRIM_MASK: u32 = 7;
 /// hair, a gnome's cap and glasses, whose layers are tinted: the glasses 36
 /// grey). The layer's half is `eqoa`'s `raceopts`.
 pub const PAINT: u32 = 8;
+/// A pet's clothing dye: the texels a pet texture's clothing is
+/// (`crate::petart`, read off the texture it was made from at the first,
+/// [`root_of`]) times a colour (RGB in the low three bytes, as [`MUL`]), every
+/// other texel as it is ([`cloth_levels`]; go-eqoa-server's Pet Groomers).
+pub const CLOTH: u32 = 0x40;
+/// A pet's body dye: the texels that are not the texture's clothing times a
+/// colour, the clothing as it is ([`CLOTH`]'s other half).
+pub const BARE: u32 = 0x41;
 
 /// Whether `r` changes anything (a known mode).
 pub fn changes(r: u32) -> bool {
-    matches!(r >> 24, DYE | TONE | SKIN | TATTOO | MUL | TRIM | TRIM_MASK | PAINT)
+    matches!(r >> 24, DYE | TONE | SKIN | TATTOO | MUL | TRIM | TRIM_MASK | PAINT | CLOTH | BARE)
 }
 
 /// How much of a texel is a plate piece's gold trim, 0 to 1: its hue between
@@ -243,6 +251,32 @@ pub fn trim_levels(levels: &mut [Vec<u8>], root: &[(Vec<u8>, u32)], r: u32, trim
     }
 }
 
+/// Every level of a pet texture with its clothing ([`CLOTH`]) or the rest of it
+/// ([`BARE`]) times `r`'s colour, the clothing (`cloth`'s texels) read off
+/// `root`'s levels as [`trim_levels`] reads a trim (each level `width` texels
+/// across, the sizes `levels`' own; a level without its root's left as it is).
+pub fn cloth_levels(levels: &mut [Vec<u8>], root: &[(Vec<u8>, u32)], r: u32, cloth: crate::petart::Cloth) {
+    let c = rgb_of(r);
+    let bare = r >> 24 == BARE;
+    for (l, (rl, rw)) in levels.iter_mut().zip(root) {
+        let w = *rw as usize;
+        if l.len() != rl.len() || w == 0 || rl.len() % (4 * w) != 0 {
+            continue;
+        }
+        let mask = cloth.mask(rl, w, rl.len() / 4 / w);
+        for (px, &m) in l.chunks_exact_mut(4).zip(&mask) {
+            let k = if bare { 1.0 - m } else { m };
+            if k <= 0.0 {
+                continue;
+            }
+            for (v, c) in px[..3].iter_mut().zip(c) {
+                let dyed = (*v as u32 * c as u32 + 127) / 255;
+                *v = (*v as f32 + (dyed as f32 - *v as f32) * k).round() as u8;
+            }
+        }
+    }
+}
+
 fn rgb_of(r: u32) -> [u8; 3] {
     [(r >> 16) as u8, (r >> 8) as u8, r as u8]
 }
@@ -266,7 +300,7 @@ pub fn alpha_source(id: i32) -> i32 {
     let mut at = id;
     for _ in 0..16 {
         match source_of(at) {
-            Some((source, r)) if matches!(r >> 24, MUL | TRIM) => at = source,
+            Some((source, r)) if matches!(r >> 24, MUL | TRIM | CLOTH | BARE) => at = source,
             Some(_) => return id,
             None => return at,
         }
@@ -421,6 +455,8 @@ pub fn recolor_rgb(c: [u8; 3], r: u32) -> [u8; 3] {
         }
         // the texel its own root
         TRIM => return trim_texel(c, c, rgb_of(r)),
+        // no texture to read the clothing off: as it is
+        CLOTH | BARE => return c,
         _ => {}
     }
     let (a, b, d) = (((r >> 16) & 0xFF) as f32, ((r >> 8) & 0xFF) as f32, (r & 0xFF) as f32);

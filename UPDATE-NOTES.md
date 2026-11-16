@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · Pet dyes: clothing and body
+- **The Pet Groomer now dyes a pet's clothing one colour and its body another**, as the Equipment Dyer two-tones
+  armour: a djinn's vest and trousers, an efreet's kilt and bracers, a construct's plating, a zombie's rags, the
+  drachnid's plated bodice apart from her spider body and skin.
+- A pet that wears no clothing (a skeleton, an elemental, a spirit) is dyed whole.
+
 ## 2026-11-16 · Alt-Tab lets go of the mouse
 - **On Windows, alt-tabbing (or minimising) while you look round with the mouse no longer leaves your cursor stuck in
   the game's window.** The game now hands the cursor back as soon as it loses the focus, and leaves it where it is

@@ -788,11 +788,12 @@ pub const OP_NPC_TINTS: u16 = 0x7E40;
 /// go-eqoa-server's own: a pet's dyes, two colours on two areas of its body
 /// (the server owner, 2026-11-16; its Pet Groomers put them on: `crate::petdye`).
 /// The offer, server to client once the player is in the world: a u8, the
-/// layout (1). CLIENT has no such case, so a PS2 ignores it and draws every
+/// newest layout it sends (1; 2 a rule byte after each pet's mask). CLIENT has no such case, so a PS2 ignores it and draws every
 /// pet in its body's own colours.
 pub const OP_PET_DYES_OFFER: u16 = 0x7E90;
 /// The answer to [`OP_PET_DYES_OFFER`], client to server, at once: a u8, the
-/// layout this client reads (`crate::petdye::LAYOUT`), 0 to stop.
+/// layout this client reads (the offer's, at most `crate::petdye::LAYOUT`), 0
+/// to stop.
 pub const OP_PET_DYES_ANSWER: u16 = 0x7E91;
 /// The dyed pets this client sees, by the id it knows each by
 /// (`crate::petdye::read`), the whole set each time: when it changes, and at
@@ -1314,6 +1315,9 @@ pub struct Session {
     /// set at its offer and at a new connection, this client holding none
     /// then.
     pub pet_dyes: Option<Vec<(u32, crate::petdye::PetDye)>>,
+    /// The layout of [`OP_PET_DYES`] this client answered the offer with (2: a
+    /// rule byte after each pet's mask, `crate::petdye::read`).
+    pub pet_dyes_layout: u8,
     /// The server has this client's character flying ([`OP_FLY`]); gone with
     /// the connection, as the server's goes with its login. A dump (a respawn,
     /// a restart of the server's) leaves it.
@@ -1602,6 +1606,7 @@ impl Session {
             npc_tints: None,
             npc_tints_layout: 1,
             pet_dyes: None,
+            pet_dyes_layout: 1,
             flying: false,
             noclip: false,
             raid_roster_offer: false,
@@ -2824,15 +2829,16 @@ impl Session {
             // the pets' dyes offered (each world entry): taken at once, what
             // was held dropped (`petdye`)
             OP_PET_DYES_OFFER => {
-                let layout = r.u8();
+                let layout = r.u8().min(crate::petdye::LAYOUT);
                 if !r.error && layout != 0 {
                     self.pet_dyes = Some(Vec::new());
+                    self.pet_dyes_layout = layout;
                     let mut w = Writer::op(OP_PET_DYES_ANSWER);
-                    w.u8(crate::petdye::LAYOUT);
+                    w.u8(layout);
                     self.send(&w.data);
                 }
             }
-            OP_PET_DYES => match crate::petdye::read(&m.data[2.min(m.data.len())..]) {
+            OP_PET_DYES => match crate::petdye::read(&m.data[2.min(m.data.len())..], self.pet_dyes_layout) {
                 Some(t) => self.pet_dyes = Some(t),
                 None => debug_line(&format!("[net] pet dyes: {} bytes not read", m.data.len())),
             },
@@ -5083,7 +5089,7 @@ mod tests {
         assert_eq!((answers(&mut s), s.pet_dyes.take()), (vec![], None), "an offer of 0 is no offer");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x90, 0x7E, 1]);
         assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
-        assert_eq!(answers(&mut s), [(251, vec![0x91, 0x7E, crate::petdye::LAYOUT])], "answered at once, a u8 1");
+        assert_eq!(answers(&mut s), [(251, vec![0x91, 0x7E, 1])], "answered at once, the offer's 1");
         assert_eq!(s.pet_dyes.take(), Some(vec![]), "what was held dropped");
         let mut m = vec![0x92, 0x7E, 1];
         for x in [0x0300_0001u32, 0x1576_4DA8, 0xD100_00FF, 0x0080_00FF] {
@@ -5091,10 +5097,19 @@ mod tests {
         }
         m.extend_from_slice(&0b110u64.to_le_bytes());
         deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
-        assert_eq!(s.pet_dyes.take(), Some(vec![(0x0300_0001, crate::petdye::PetDye { look: 0x1576_4DA8, area: [0xD100_00FF, 0x0080_00FF], mask: 0b110 })]));
+        assert_eq!(s.pet_dyes.take(), Some(vec![(0x0300_0001, crate::petdye::PetDye { look: 0x1576_4DA8, area: [0xD100_00FF, 0x0080_00FF], mask: 0b110, rule: false })]));
         deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 2].to_vec());
         assert_eq!(s.pet_dyes, None, "the control: a set cut short is nothing new");
         assert_eq!(answers(&mut s), [], "the set answered nothing");
+        // an offer of 2 or newer: answered 2, a rule byte read after each mask
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x90, 0x7E, 7]);
+        assert_eq!(answers(&mut s), [(251, vec![0x91, 0x7E, crate::petdye::LAYOUT])], "a newer offer: the newest this client reads");
+        assert_eq!(crate::petdye::LAYOUT, 2);
+        let mut m2 = m.clone();
+        m2.push(crate::petdye::BY_RULE);
+        s.pet_dyes = None;
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m2);
+        assert_eq!(s.pet_dyes.take(), Some(vec![(0x0300_0001, crate::petdye::PetDye { look: 0x1576_4DA8, area: [0xD100_00FF, 0x0080_00FF], mask: 0b110, rule: true })]));
     }
 
     #[test]

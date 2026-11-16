@@ -610,6 +610,28 @@ fn run(args: &[String]) -> Result<()> {
             }
             dressview::shot(&lib, model, &words, out)?;
         }
+        // `eqoa petclothes`: every body of CHAR.ESF that wears clothing by the
+        // pet dyes' rule (`petdye::clothed`), as go-eqoa-server's
+        // `internal/entity/petclothes.go` lists them (its Pet Groomers' menu)
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("petclothes") => {
+            let mut iso = disc(None)?;
+            let mut lib = esf::Library::new();
+            for f in dressview::FILES {
+                lib.add(*f, esf::Container::open(iso.read(f)?)?);
+            }
+            let char_esf = lib.file_named("CHAR.ESF").ok_or("no CHAR.ESF")?;
+            let mut ids: Vec<u32> = lib
+                .file(char_esf)
+                .models()
+                .iter()
+                .filter(|m| lib.lookup(m.dict_id).is_some_and(|r| r.file == char_esf))
+                .filter_map(|m| lib.build_model(esf::Ref { file: char_esf, node: m.node }).filter(petdye::clothed).map(|_| m.dict_id as u32))
+                .collect();
+            ids.sort_unstable();
+            ids.dedup();
+            println!("{}", petdye::go_list(&ids));
+        }
         // `eqoa emotes <body> <out.png> [pose...]`: the body's emotes as a
         // race's player plays them (`raceemote`), or its own actions, or the
         // human's carried onto it, a row each (`emoteview`)
