@@ -155,6 +155,9 @@ struct Shared {
     /// how many calls the driver was run on for (`run_on`): the tests'
     /// witness of it
     ran_on: u64,
+    /// Not the game's: the regional weather's wind (`weather_zones::
+    /// WindBed`), added to what the driver mixes (no disc wind sound exists)
+    wind: crate::weather_zones::WindBed,
 }
 
 /// How far `catch_up` mixes past what was last handed to the device (100
@@ -165,7 +168,7 @@ const CATCH_UP_MAX: u64 = 4800;
 
 impl Shared {
     fn new(disc: Box<dyn Disc>) -> Self {
-        Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new(), handed: None, called: None, wall: None, ran_on: 0 }
+        Shared { drv: Driver::new(disc), status: [0; 128], pcm: Vec::new(), handed: None, called: None, wall: None, ran_on: 0, wind: Default::default() }
     }
 
     /// The driver onto the wall clock from `now`: no device takes its frames.
@@ -219,10 +222,12 @@ impl Shared {
     /// Mix `frames` more 48 kHz frames into `pcm`.
     fn pump(&mut self, frames: u64) {
         let until = self.drv.now + frames;
+        let from = self.pcm.len();
         while self.drv.now < until {
             self.drv.step(until, &mut self.pcm);
             self.take_answer();
         }
+        self.wind.mix(&mut self.pcm[from..]);
     }
 }
 
@@ -787,6 +792,12 @@ impl Audio {
 
     /// The sound device's uploads against the SPU2's RAM (`check_ram`), under
     /// the driver's lock.
+    /// The regional weather's wind bed's loudness (`weather_zones::
+    /// wind_target`), eased toward from the next frames mixed on.
+    pub fn set_wind(&self, target: f32) {
+        game_lock(&self.shared).wind.target = target;
+    }
+
     pub fn check_ram<M: vi::Model>(&self, dev: &snd::device::SoundDevice<M>) -> Option<snd::device::RamCheck> {
         let g = game_lock(&self.shared);
         dev.check_ram(g.drv.io.spu.ram(), g.drv.busy())

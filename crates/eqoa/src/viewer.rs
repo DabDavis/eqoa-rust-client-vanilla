@@ -103,7 +103,32 @@ pub fn lit(
         } else {
             crate::fog::distances(crate::settings::fog(), fog.near.0, fog.far.0).map(|(n, f)| (n, f, color))
         };
-        let c = tod.sky(hour, o, b);
+        // a server's regional weather (`weather_zones`, board entry #1550):
+        // the storms' fog, never farther than the fog it replaces, its colour
+        // moved to by the weather's intensity, the sun dimmed; under a roof
+        // nearer fog is kept off and the far is four times; none in a liquid
+        let storm = weather.as_deref().filter(|_| flags & 0xF == 0).and_then(|w| crate::weather_zones::fog(&w.regional, hour_now).map(|f| (f, w.roof)));
+        if let Some((f, roof)) = storm {
+            let (mut near, mut far) = (f.near, f.far);
+            if roof {
+                near = near.max(6.0);
+                far *= 4.0;
+            }
+            let wc = Vec3::from(f.color);
+            v.fog = Some(match v.fog {
+                Some((n, fa, c)) => (n.min(near), fa.min(far), c.lerp(wc, f.intensity)),
+                None => (near, far, wc),
+            });
+            v.sun *= 1.0 - 0.8 * f.intensity;
+        }
+        let mut c = tod.sky(hour, o, b);
+        // the sky (the dome's colour and the clear) toward the storm's by its
+        // sand and whiteout
+        if let Some((f, _)) = storm {
+            for i in 0..3 {
+                c[i] = (c[i] as f32 + (f.color[i] * 255.0 - c[i] as f32) * f.sky).round().clamp(0.0, 255.0) as u8;
+            }
+        }
         v.clear = Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32) / 255.0;
         // the sky through a far plane of its own: the world's is the fog's
         v.sky_view_proj = Some(crate::fog::with_far(proj, crate::fog::SKY_FAR) * rot);
@@ -1160,6 +1185,11 @@ pub fn shot_with(
             }
             // the atmosphere every frame; the last frame's lights and render
             // are the shot's
+            let e = walker.eye.position;
+            weather.set_regional(play.as_ref().map(|p| p.weather_sample(e.x.0, e.z.0)), t);
+            if let Some(p) = play.as_mut() {
+                p.weather_fog = crate::weather_zones::fog(&weather.regional, game_hour(Some(&*p), Instant::now())).map(|f| (f.near, f.far));
+            }
             weather.frame(&mut walker.scene, None, &walker.eye, t, game_hour(play.as_ref(), Instant::now()));
             // the effect volumes, stepped as the scene rasters them
             if let Some(fx) = fx.as_mut().filter(|_| crate::settings::client().environment > 0) {
@@ -1177,6 +1207,7 @@ pub fn shot_with(
             }
         }
         if script.ms == 0 {
+            weather.set_regional(None, 0);
             weather.frame(&mut walker.scene, None, &walker.eye, 0, game_hour(play.as_ref(), Instant::now()));
         }
         eprintln!("{}", parts.describe());
@@ -1355,6 +1386,7 @@ pub fn shot_with(
                 // the walker's camera's (`PlateView::of`), or from the offset's
                 // eye at the game's size
                 let mut pv = crate::play::PlateView::of(&walker.cam, &walker.eye.position, (w, h));
+                pv.fog = p.weather_fog;
                 if shot_override {
                     (pv.eye, pv.scale) = (shot_eye, 1.0);
                 }
@@ -6370,6 +6402,12 @@ impl App {
                     g.set_title(title(play.as_ref().map(|p| p.player.name.as_str())));
                     mark(perf, 5);
                     if let Some(wx) = weather.as_mut() {
+                        // the server's regional weather at the camera (`weather_zones`)
+                        let e = w.eye.position;
+                        wx.set_regional(play.as_ref().map(|p| p.weather_sample(e.x.0, e.z.0)), now);
+                        if let Some(p) = play.as_mut() {
+                            p.weather_fog = crate::weather_zones::fog(&wx.regional, game_hour(Some(&*p), clock)).map(|f| (f.near, f.far));
+                        }
                         wx.frame(&mut w.scene, sound.as_mut(), &w.eye, now, game_hour(play.as_ref(), clock));
                     }
                     mark(perf, 6);
@@ -6577,7 +6615,8 @@ impl App {
                     }
                     let plates = p.plates();
                     if let Some(t) = g.renderer.text.as_mut() {
-                        let pv = crate::play::PlateView::of(&w.cam, &w.eye.position, (g.config.width, g.config.height));
+                        let mut pv = crate::play::PlateView::of(&w.cam, &w.eye.position, (g.config.width, g.config.height));
+                        pv.fog = p.weather_fog;
                         t.plates = crate::play::labels(&plates, &pv, view.view_proj, t);
                         t.plate_scale = pv.scale;
                         t.labels = crate::play::chat_labels(p, t, (g.config.width, g.config.height));
