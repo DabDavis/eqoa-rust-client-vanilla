@@ -119,30 +119,48 @@ const HAND_SEATS: &[HandSeats] = &[
 pub const MERFOLK: &[u32] = &[0xA316_EB78, 0x74BA_7C3D, 0xBF21_FEF5, 0x1740_427C, 0xD275_EE8F];
 
 /// Bodies whose hair is a part of their mesh that comes out through a helm, and
-/// where it lies in their one texture (palette entry 0, a rect of texture
-/// coordinates each: u0, v0, u1, v1): the merman's, the mermaid's and the two sirens'
-/// (go-eqoa-server's race 32; the owner, 2026-11-12: "the mermaid helms arent
-/// sitting right"), whose long hair streamed out of the back of every helm and
-/// whose crown showed through the top of the smaller ones. Under a helm their
-/// hair is left out, as a player race's `$Hair` is (the sea king has none).
+/// where it lies: a palette entry and a rect of texture coordinates in its
+/// texture (u0, v0, u1, v1; `ALL` the whole entry) each. The merman's, the
+/// mermaid's and the two sirens' (go-eqoa-server's race 32; the owner,
+/// 2026-11-12: "the mermaid helms arent sitting right"), whose long hair
+/// streamed out of the back of every helm and whose crown showed through the top
+/// of the smaller ones: a rect of their one texture, entry 0. The dryads' (race
+/// 26; the owner, 2026-11-16: "cll is a dryad with the helm not sitting
+/// right"), whose locks and long tail stood out of the top, the sides and the
+/// back of every helm: the dryad's own body's a rect of her body's atlas
+/// (entry 0: the box of hair beside the bark, 289 triangles) and her two strands
+/// in a hair strip (entry 6); her kin's (the Erych guardian, the Haliai, the
+/// Erych arbiter) every entry drawn in their hair strip (`87BFA9B5` white,
+/// `9F87C7AF` sea green, `D499494B` red), the fringe at the brow too. Under a
+/// helm their hair is left out, as a player race's `$Hair` is (the sea king has
+/// none).
 const HAIR: [f32; 4] = [0.0, 0.0, 63.0 / 255.0, 128.0 / 255.0];
-const HAIR_UNDER_HELM: &[(u32, &[[f32; 4]])] = &[
-    (0xA316_EB78, &[HAIR]),
-    (0x74BA_7C3D, &[HAIR]),
-    (0xBF21_FEF5, &[HAIR]),
+const ALL: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+const HAIR_UNDER_HELM: &[(u32, &[(i32, [f32; 4])])] = &[
+    (0xA316_EB78, &[(0, HAIR)]),
+    (0x74BA_7C3D, &[(0, HAIR)]),
+    (0xBF21_FEF5, &[(0, HAIR)]),
     // the enchanting siren's tiara too (a strip below the hair, on her head and
     // neck alone), which stood out of the front of every helm
-    (0x1740_427C, &[HAIR, [0.0, 128.0 / 255.0, 63.0 / 255.0, 150.0 / 255.0]]),
+    (0x1740_427C, &[(0, HAIR), (0, [0.0, 128.0 / 255.0, 63.0 / 255.0, 150.0 / 255.0])]),
+    (0x70EF_CE05, &[(0, [0.0, 0.30, 0.69, 0.93]), (6, ALL)]),
+    (0x21F3_11BB, &[(0, ALL), (1, ALL), (6, ALL)]),
+    (0xACE7_1E26, &[(1, ALL), (6, ALL)]),
+    (0xB90A_DDD2, &[(0, ALL), (1, ALL), (8, ALL), (9, ALL), (10, ALL)]),
 ];
 
 /// Takes body `id`'s hair (`HAIR_UNDER_HELM`) out of `model`, a player's
-/// character's wearing a helm: each triangle of entry 0 whose texture
-/// coordinates' centre (its first layer's) lies in the hair's rect.
+/// character's wearing a helm: each triangle of a listed entry whose texture
+/// coordinates' centre (its first layer's) lies in that entry's rect.
 pub fn hide_hair(model: &mut esf::Model, id: u32) {
-    let Some(&(_, rects)) = HAIR_UNDER_HELM.iter().find(|(b, _)| *b == id) else { return };
+    let Some(&(_, parts)) = HAIR_UNDER_HELM.iter().find(|(b, _)| *b == id) else { return };
     let uv = model.uv.clone();
     let mut gone = 0;
-    for b in model.batches.iter_mut().filter(|b| b.material == 0) {
+    for b in model.batches.iter_mut() {
+        let rects: Vec<[f32; 4]> = parts.iter().filter(|(e, _)| *e == b.material).map(|(_, r)| *r).collect();
+        if rects.is_empty() {
+            continue;
+        }
         let Some(l) = b.layers.first().cloned() else { continue };
         let before = b.indices.len();
         b.indices = b
@@ -572,6 +590,54 @@ mod tests {
             assert!((lo..=hi).contains(&gone), "{id:08X}: {gone} triangles of hair");
             let left: usize = h.batches.iter().map(|b| b.indices.len() / 3).sum();
             assert_eq!(left, h.triangles as usize, "{id:08X}: the count kept");
+        }
+    }
+
+    /// A dryad player's hair is left out under a helm (`hide_hair`; the owner,
+    /// 2026-11-16: "cll is a dryad with the helm not sitting right"): on the dryad
+    /// her locks and tail (289 triangles of her atlas's hair box and her two
+    /// strands), on her kin every triangle in their hair strips; nine in ten of the
+    /// vertices gone are on the head or the neck (nodes 2 to 7, by the vertex's
+    /// heaviest weight; the rest the dryad's tail, down her back to her shoulders),
+    /// so nothing of the bark or the leaves goes. Needs `run/eqoa.iso`.
+    #[test]
+    fn dryad_hair_goes_under_a_helm() {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&p) else {
+            eprintln!("SKIP: no disc at run/eqoa.iso");
+            return;
+        };
+        let mut lib = esf::Library::new();
+        lib.add("CHAR.ESF", esf::Container::open(iso.read("CHAR.ESF").unwrap()).unwrap());
+        for (id, n) in [(0x70EF_CE05u32, 291), (0x21F3_11BB, 128), (0xACE7_1E26, 80), (0xB90A_DDD2, 418)] {
+            let mut on = std::collections::BTreeMap::new();
+            let m = lib.build_model(lib.lookup(id as i32).unwrap()).unwrap();
+            let mut h = m.clone();
+            hide_hair(&mut h, id);
+            let gone = (m.triangles - h.triangles) as usize;
+            assert_eq!(gone, n, "{id:08X}: triangles of hair");
+            let left: usize = h.batches.iter().map(|b| b.indices.len() / 3).sum();
+            assert_eq!(left, h.triangles as usize, "{id:08X}: the count kept");
+            // each triangle gone, on the head or the neck
+            for (a, b) in m.batches.iter().zip(&h.batches) {
+                let mut kept: Vec<&[u32]> = b.indices.chunks_exact(3).collect();
+                for t in a.indices.chunks_exact(3) {
+                    if let Some(i) = kept.iter().position(|k| *k == t) {
+                        kept.swap_remove(i);
+                        continue;
+                    }
+                    for &v in t {
+                        let (bo, w) = (m.bones[v as usize], m.weights[v as usize]);
+                        let k = (0..4).max_by_key(|&k| w[k]).unwrap();
+                        *on.entry(bo[k]).or_insert(0) += 1;
+                    }
+                }
+            }
+            // the dryad's tail lies on her shoulders (11, 20) and upper arms (12, 21)
+            let all: usize = on.values().sum();
+            let head: usize = on.range(2..=7).map(|(_, n)| n).sum();
+            eprintln!("{id:08X}: the hair's vertices by node {on:?}");
+            assert!(head * 100 >= all * 90, "{id:08X}: {head} of {all} of the hair's vertices on the head and the neck");
         }
     }
 

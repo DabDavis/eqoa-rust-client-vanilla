@@ -190,8 +190,17 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     // the brownies, on HumanMale's skeleton (the 2002 disc's on its own 2002
     // HumanMale's), a head more than half again a human's
     HeadSeat { bodies: &[0x4376_EB52, 0x4946_8331], anchor: Anchor::Named, scale: [1.7; 3], offset: [0.0, 0.16, -0.02] },
-    // the dryads, on HumanFemale's
-    HeadSeat { bodies: &[0x70EF_CE05, 0x21F3_11BB, 0xACE7_1E26, 0xB90A_DDD2], anchor: Anchor::Named, scale: [1.0; 3], offset: [0.0, 0.0, 0.0] },
+    // the dryads, on HumanFemale's, their hair left out under a helm
+    // (`racebody::hide_hair`; the owner, 2026-11-16: "cll is a dryad with the
+    // helm not sitting right": it stood out of every helm, and once it was gone
+    // the brow stood out of the front of the helm, a woman's seat hanging the
+    // helm 2 cm behind it, and her temples touched the sides of the narrower
+    // helms): the dryad's head is a woman's, the helm stretched 5%, 1 cm up and
+    // 2 cm forward; her kin's (the Erych guardian, the Haliai, the Erych
+    // arbiter) crowns rise higher and came out of the top of every helm:
+    // stretched a tenth, 3 cm up and 2 cm forward (`a_dryads_helm_covers_her_crown`)
+    HeadSeat { bodies: &[0x70EF_CE05], anchor: Anchor::Named, scale: [1.05; 3], offset: [0.0, 0.01, 0.02] },
+    HeadSeat { bodies: &[0x21F3_11BB, 0xACE7_1E26, 0xB90A_DDD2], anchor: Anchor::Named, scale: [1.1; 3], offset: [0.0, 0.03, 0.02] },
     // the lizardmen, gnolls and minotaurs, one skeleton
     HeadSeat { bodies: &[0x9112_20E2, 0xD45B_9F1F, 0x2C1D_8724, 0x7468_EAE7, 0x16BB_9E24, 0xEEBF_6DA5], anchor: Anchor::Head, scale: [1.4; 3], offset: [0.0, 0.36, 0.10] },
     HeadSeat {
@@ -3101,6 +3110,61 @@ mod tests {
         }
     }
 
+    /// A dryad's helm covers her crown and her brow (the owner, 2026-11-16: "cll is
+    /// a dryad with the helm not sitting right"): with her hair left out under it
+    /// (`racebody::hide_hair`), from every vertex of the top quarter of what is
+    /// left of her head, standing, a ray straight up meets each of the eight helms
+    /// seated as `HEAD_SEATS` has it, on the dryad and her three kin; but for what
+    /// lies more than 9.5 cm to a side (the guardian's horns, from 10.7 cm, out
+    /// through the helm's sides as a satyr's are) and the Haliai's fins (its crest,
+    /// out of the top as a lizardman's spines are). The controls: with the hair kept
+    /// it comes out of the top of most helms on the dryad (Cll's sight) and the two
+    /// Erych (the Haliai's falls by its cheeks); and hung on the named node alone
+    /// (the seat before), the dryad's brow stood out of the front of some (above
+    /// the brim, with no helm over it) and her kin's crowns out of the top.
+    #[test]
+    fn a_dryads_helm_covers_her_crown() {
+        let Some(lib) = disc() else { return };
+        for id in [0x70EF_CE05u32, 0x21F3_11BB, 0xACE7_1E26, 0xB90A_DDD2] {
+            let cs = sprite_of(&lib, id);
+            assert!(head_fit(id, &cs, true).is_some(), "{id:#010x}: a seat");
+            let mut model = lib.build_model(lib.lookup(id as i32).unwrap()).unwrap();
+            let before = model.triangles;
+            crate::racebody::hide_hair(&mut model, id);
+            // the Haliai's fins (entry 7), a crest out of the top as a lizardman's spines are
+            let fins: std::collections::HashSet<u32> = model.batches.iter().filter(|b| id == 0xACE7_1E26 && b.material == 7).flat_map(|b| b.indices.iter().copied()).collect();
+            let kept: std::collections::HashSet<u32> = model.batches.iter().flat_map(|b| b.indices.iter().copied()).filter(|v| !fins.contains(v)).collect();
+            let verts = skull_verts(&lib, id, 0, 0);
+            let crown = |hair: bool| -> Vec<Vec3> {
+                let head: Vec<Vec3> = verts.iter().filter(|(v, _, _)| (hair && !fins.contains(&(*v as u32))) || kept.contains(&(*v as u32))).map(|(_, p, _)| *p).collect();
+                let (lo, hi) = head.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
+                head.into_iter().filter(|p| p.y >= hi - 0.25 * (hi - lo)).collect()
+            };
+            // a woman's head is 8 to 9 cm a side; the guardian's horns start 10.7 cm out
+            const SIDE: f32 = 0.095;
+            let open = |crown: &[Vec3], fit: bool| -> Vec<(u8, usize)> {
+                helms_on(&lib, id, &cs, fit)
+                    .iter()
+                    .map(|(set, tris)| (*set, crown.iter().filter(|&&p| p.x.abs() <= SIDE && meets(tris, p, Vec3::Y).2 == 0).count()))
+                    .filter(|x| x.1 > 0)
+                    .collect()
+            };
+            let (bare, haired) = (crown(false), crown(true));
+            let (seated, with_hair, alone) = (open(&bare, true), open(&haired, true), open(&bare, false));
+            eprintln!(
+                "{id:#010x}: {} triangles of hair; out of the top seated {seated:?}, with the hair {with_hair:?}, on the named node alone {alone:?}",
+                before - model.triangles
+            );
+            assert!(before - model.triangles >= 60, "{id:#010x}: its hair left out");
+            assert!(seated.is_empty(), "{id:#010x}: the crown out of the top of helms {seated:?}");
+            // (the Haliai's hair falls by its cheeks, out of the sides of the face's opening, not the top)
+            if id != 0xACE7_1E26 {
+                assert!(with_hair.len() >= 5, "{id:#010x}: the control, the hair out of the top of helms {with_hair:?}");
+            }
+            assert!(!alone.is_empty(), "{id:#010x}: the control, hung on the named node alone");
+        }
+    }
+
     /// The Jal'Raeth's crossed legs wear leggings and boots (the owner, 2026-11-11:
     /// "lets fit the armor onto the jal raethe legs and feet also"): in plate every
     /// one of their two legs' triangles is fitted (`crossed_legs`), mostly to the
@@ -3428,6 +3492,11 @@ mod tests {
 
     /// `skull`'s vertices, each with the node it is weighted most to.
     fn skull_bones(lib: &Library, id: u32, action: i32, at: i64) -> Vec<(Vec3, usize)> {
+        skull_verts(lib, id, action, at).into_iter().map(|(_, p, b)| (p, b)).collect()
+    }
+
+    /// `skull_bones`, each vertex with its index in the body's model.
+    fn skull_verts(lib: &Library, id: u32, action: i32, at: i64) -> Vec<(usize, Vec3, usize)> {
         let r = lib.lookup(id as i32).unwrap();
         let model = lib.build_model(r).unwrap();
         let mut anims = vi::hsprite::AnimScene::<Ee>::default();
@@ -3471,7 +3540,7 @@ mod tests {
                     sum += w[k] as f32;
                 }
                 let k = (0..4).max_by_key(|&k| w[k]).unwrap();
-                (to_node.transform_point3(q / sum), b[k] as usize)
+                (v, to_node.transform_point3(q / sum), b[k] as usize)
             })
             .collect()
     }
