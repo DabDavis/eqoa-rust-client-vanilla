@@ -1028,6 +1028,17 @@ impl Client {
         }
     }
 
+    /// The mouse moved to frame point `p` with its button down: character
+    /// select's scroll bar thumb, when it is held, dragged there.
+    pub fn drag_to(&mut self, p: [f32; 2]) -> bool {
+        self.active == Wnd::Select && self.select.drag_to(p, self.chars.len() as i32)
+    }
+
+    /// The mouse's button let go: the thumb let go.
+    pub fn release(&mut self) -> bool {
+        self.select.release()
+    }
+
     /// A pointer at frame point `p`: the keys the window under it asks for.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
         let mut keys = match self.active {
