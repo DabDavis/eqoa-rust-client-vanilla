@@ -219,6 +219,7 @@ mod wndlist;
 mod walker;
 mod weather;
 mod weather_zones;
+mod sanddust;
 mod winplace;
 // Windows' Xbox controllers, read in the background (its mapping checked
 // natively by its tests)

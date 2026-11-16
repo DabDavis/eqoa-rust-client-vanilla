@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · Sandstorms blow fine dust, not discs
+- **A sandstorm now looks like blowing sand**: thousands of fine, faint grains streaking past on the wind, sand
+  skimming low over the ground, and soft sheets of dust drifting across, all in the storm's colour. The round flakes
+  that flew at your face are gone, and nothing pops up right in front of the camera.
+
 ## 2026-11-16 · Christmas lights
 - **Seasonal decorations from the server**: when a GM puts the Christmas season up on eqoaclassic.com, a great fir
   stands lit in Freeport's north plaza, wound with **twinkling lights in many colours** on a dark green cord, and a **gold star** on top.

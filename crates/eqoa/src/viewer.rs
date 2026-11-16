@@ -1366,6 +1366,10 @@ pub fn shot_with(
         }
         renderer.strips = shot_bolts;
         renderer.strips.append(&mut shot_trails);
+        // the sandstorm's dust (`sanddust`), in the storm's colour
+        if let Some(f) = crate::weather_zones::fog(&weather.regional, shot_hour) {
+            renderer.strips.extend(weather.dust_strips(shot_eye, f.color));
+        }
         // the volumes as the shot's camera sees them (the walk's clock does
         // not move: nothing steps again)
         if let Some(fx) = fx.as_mut().filter(|_| crate::settings::client().environment > 0) {
@@ -6499,6 +6503,12 @@ impl App {
                     g.renderer.strips = bolts;
                     if let Some(p) = play.as_mut() {
                         g.renderer.strips.append(&mut p.trail_strips);
+                    }
+                    // the sandstorm's dust (`sanddust`), in the storm's colour
+                    if let Some(wx) = weather.as_ref()
+                        && let Some(f) = crate::weather_zones::fog(&wx.regional, hour_now)
+                    {
+                        g.renderer.strips.extend(wx.dust_strips(w.eye_position(), f.color));
                     }
                     // a server's decorations' cords (`decorlights`), lit as matte wire
                     if let Some(p) = play.as_ref() {
