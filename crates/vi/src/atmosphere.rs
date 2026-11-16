@@ -282,6 +282,110 @@ fn vmax<M: Model>(a: F<M>, b: F<M>) -> F<M> {
     if a > b { a } else { b }
 }
 
+/// The raster material of [`Sand`]'s drops: after the game's five (rain,
+/// snow, splash, star, lightning patch).
+pub const SAND_MAT: i32 = 5;
+
+/// Not the game's: a third kind of drop in the weather's box, for a server's
+/// sandstorm (go-eqoa-server's regional weather, board entry #1550), which the
+/// retail byte cannot ask for (a sandstorm is byte 0 on the wire). Driven by
+/// the sand's weight the client samples, not by the atmosphere's intensity:
+/// 200 x sand drops in the same 10-unit box following the camera, carried by
+/// the wind and not falling (the game's `p68` y 0), no splashes and no sound.
+/// Its own random numbers (xorshift), so the game's `rand()` and every one of
+/// its particles are as they were: at sand 0 nothing here runs.
+#[derive(Clone, Debug)]
+pub struct Sand {
+    /// each drop's place in the box (relative to `camera`) and alpha
+    pub drops: Vec<([f32; 3], f32)>,
+    /// the box's centre, as the game's `camera`
+    pub camera: [f32; 3],
+    /// how many drop now (200 x the sand's weight)
+    pub count: usize,
+    rng: u32,
+    last: Option<i64>,
+}
+
+impl Default for Sand {
+    fn default() -> Self {
+        Sand { drops: Vec::new(), camera: [0.0; 3], count: 0, rng: 0x2545_F491, last: None }
+    }
+}
+
+impl Sand {
+    /// The drops' tint (snow.tga's white made sand) and size.
+    pub const TINT: [f32; 3] = [0.67, 0.47, 0.25];
+    pub const SIZE: f32 = 0.11;
+    const RANGE: f32 = 10.0;
+    const MOST: usize = 200;
+
+    fn unit(&mut self) -> f32 {
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.rng = x;
+        (x >> 8) as f32 / (1u32 << 24) as f32
+    }
+
+    /// One frame at `time` (ms): `sand` the weight (0 to 1), the wind in
+    /// units a second, the box round the point 5 ahead of the camera (as the
+    /// game's: `ProcessWeather`'s `a`).
+    pub fn update(&mut self, eye: [f32; 3], dir: [f32; 3], sand: f32, wind: [f32; 2], time: i64) {
+        let dt = self.last.map_or(0.0, |t| ((time - t).max(0) as f32 / 1000.0).min(0.25));
+        self.last = Some(time);
+        self.count = ((sand.clamp(0.0, 1.0) * Self::MOST as f32) as usize).min(Self::MOST);
+        if self.count == 0 {
+            return;
+        }
+        let half = Self::RANGE * 0.5;
+        let c = [eye[0] + dir[0] * 5.0, eye[1] + dir[1] * 5.0, eye[2] + dir[2] * 5.0];
+        let d = [c[0] - self.camera[0], c[1] - self.camera[1], c[2] - self.camera[2]];
+        let jump = self.drops.is_empty() || d.iter().any(|v| v.abs() > Self::RANGE);
+        self.camera = c;
+        if jump {
+            self.drops.clear();
+            for _ in 0..Self::MOST {
+                let p = [self.unit() * Self::RANGE - half, self.unit() * Self::RANGE - half, self.unit() * Self::RANGE - half];
+                let a = 0.2 + self.unit() * 0.2;
+                self.drops.push((p, a));
+            }
+            return;
+        }
+        for i in 0..self.drops.len() {
+            // a little flutter on the wind, each drop its own
+            let flutter = ((i as f32) * 0.37 + time as f32 / 700.0).sin() * 0.3;
+            let p = &mut self.drops[i].0;
+            p[0] += wind[0] * dt - d[0];
+            p[1] += flutter * dt - d[1];
+            p[2] += wind[1] * dt - d[2];
+            for v in p.iter_mut() {
+                if *v < -half {
+                    *v += Self::RANGE;
+                } else if *v >= half {
+                    *v -= Self::RANGE;
+                }
+            }
+        }
+    }
+
+    /// The first `count` drops on the raster, under [`SAND_MAT`], tinted; a
+    /// drop closer than 1.5 behind the near plane a zero-sized quad, as the
+    /// game's.
+    pub fn render<M: Model>(&self, cam: &Camera<M>, r: &mut Raster<M>) {
+        if self.count == 0 {
+            return;
+        }
+        r.material(SAND_MAT);
+        for (p, a) in self.drops.iter().take(self.count) {
+            let loc = Vect3::of(p[0] + self.camera[0], p[1] + self.camera[1], p[2] + self.camera[2]);
+            let sz = if f::<M>(-1.5) < cam.near.distance(&loc) { F::ZERO } else { f(Self::SIZE) };
+            let [tr, tg, tb] = Self::TINT;
+            r.bb(Billboard { location: loc, frame: 0, width: sz, height: sz, color: Color { r: f(tr), g: f(tg), b: f(tb), a: f(*a) } });
+        }
+    }
+}
+
 /// `VIAtmosphere`. Field names follow the decomp's where it names them; the
 /// rest keep its offsets.
 #[derive(Clone, Debug)]
@@ -383,6 +487,8 @@ pub struct Atmosphere<M: Model> {
     pub pals: HashMap<i32, Pal>,
     /// `s_skyType`, `VIScene::SetSky`'s static: the sky type last seen
     pub seen_sky: i32,
+    /// Not the game's: a server's sandstorm's drops ([`Sand`]).
+    pub sand: Sand,
 }
 
 impl<M: Model> Atmosphere<M> {
@@ -474,6 +580,7 @@ impl<M: Model> Atmosphere<M> {
             p11a8: z,
             pals: HashMap::new(),
             seen_sky: 0,
+            sand: Sand::default(),
         };
         for i in 0..64 {
             let ang = F::<M>::from_int(i) * f(6.2831855) / f(64.0) * f(2.0);
@@ -1300,5 +1407,46 @@ impl<M: Model> Atmosphere<M> {
                 self.splash_free.push(n);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fpu::Ieee;
+
+    fn cam() -> Camera<Ieee> {
+        // looking down +z from the origin; the near plane 0.3 ahead
+        Camera { position: Vect3::of(0.0, 0.0, 0.0), dir: Vect3::of(0.0, 0.0, 1.0), view: Matrix44::identity(), near: Plane { n: Vect3::of(0.0, 0.0, -1.0), d: f(-0.3) } }
+    }
+
+    /// The sand's drops: 200 x the weight, under their own material, carried
+    /// by the wind and not falling; at 0 none, and the raster untouched.
+    #[test]
+    fn sand_drifts_on_the_wind_and_does_not_fall() {
+        let mut s = Sand::default();
+        s.update([0.0; 3], [0.0, 0.0, 1.0], 0.0, [4.0, 0.0], 0);
+        let mut r = Raster::<Ieee>::default();
+        s.render(&cam(), &mut r);
+        assert!(r.runs.is_empty(), "no sand, nothing rastered");
+        s.update([0.0; 3], [0.0, 0.0, 1.0], 0.5, [4.0, 0.0], 0);
+        assert_eq!(s.count, 100);
+        let before: Vec<[f32; 3]> = s.drops.iter().map(|d| d.0).collect();
+        s.update([0.0; 3], [0.0, 0.0, 1.0], 0.5, [4.0, 0.0], 100);
+        let mut moved_x = 0;
+        for (a, b) in before.iter().zip(s.drops.iter().map(|d| d.0)) {
+            // 0.4 east in 0.1 s, unless it wrapped round the box
+            if (b[0] - a[0] - 0.4).abs() < 1e-4 {
+                moved_x += 1;
+            }
+            assert!((b[1] - a[1]).abs() < 0.05, "no fall: {a:?} -> {b:?}");
+            assert!((b[2] - a[2]).abs() < 1e-5, "no wind in z");
+        }
+        assert!(moved_x > 180, "the wind carries them: {moved_x}");
+        let mut r = Raster::<Ieee>::default();
+        s.render(&cam(), &mut r);
+        assert_eq!(r.runs.len(), 1);
+        assert_eq!((r.runs[0].0, r.runs[0].1.len()), (SAND_MAT, 100));
+        assert_eq!(r.runs[0].1[0].color.r, f(0.67));
     }
 }
