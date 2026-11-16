@@ -1361,6 +1361,7 @@ pub fn shot_with(
         // a server's decorations' cords (`decorlights`), lit as matte wire
         if let Some(p) = play.as_ref() {
             let mut cords = p.decor_cords(walker.eye_position().to_array());
+            cords.extend(p.decor_presents(walker.eye_position().to_array()));
             crate::decorlights::light_cords(&mut cords, &view);
             shot_bolts.append(&mut cords);
         }
@@ -6503,6 +6504,7 @@ impl App {
                     // a server's decorations' cords (`decorlights`), lit as matte wire
                     if let Some(p) = play.as_ref() {
                         let mut cords = p.decor_cords(w.eye_position().to_array());
+                        cords.extend(p.decor_presents(w.eye_position().to_array()));
                         crate::decorlights::light_cords(&mut cords, &lights.0);
                         g.renderer.strips.append(&mut cords);
                     }

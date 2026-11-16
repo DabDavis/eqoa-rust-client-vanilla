@@ -10661,6 +10661,15 @@ impl Play {
         crate::decorlights::cords(&holders, self.player.world, eye)
     }
 
+    /// The decorations' presents this frame (`decorlights::presents`), unlit.
+    pub fn decor_presents(&self, eye: [f32; 3]) -> Vec<render::billboard::Strips> {
+        if !crate::decorlights::any() {
+            return Vec::new();
+        }
+        let holders = self.decor_holders();
+        crate::decorlights::presents(&holders, self.player.world, eye)
+    }
+
     /// The creatures drawn a string may hang on (`decorlights::Holder`).
     fn decor_holders(&self) -> Vec<crate::decorlights::Holder<'_>> {
         let mut holders = Vec::new();

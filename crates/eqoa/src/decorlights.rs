@@ -57,7 +57,7 @@ pub fn set(d: Decor) {
 
 /// Whether any string is lit.
 pub fn any() -> bool {
-    DECOR.with_borrow(|d| !d.strings.is_empty())
+    DECOR.with_borrow(|d| !d.strings.is_empty() || !d.presents.is_empty())
 }
 
 /// The zones of world `world` whose art a decoration wears: for the walk's
@@ -250,7 +250,104 @@ fn matte(strips: &mut [Strips], ambient: glam::Vec3, sun: glam::Vec3, sun_dir: g
     for s in strips {
         let c = s.color;
         s.color = [c[0] * light.x, c[1] * light.y, c[2] * light.z, c[3]];
+        for strip in &mut s.colors {
+            for c in strip {
+                *c = [c[0] * light.x, c[1] * light.y, c[2] * light.z, c[3]];
+            }
+        }
     }
+}
+
+/// The presents of every set (`net::decor::Presents`) on the NPCs in
+/// `holders` and in world `world`, within [`REACH`] of `eye`: each box its
+/// paper's five faces (the bottom on the ground unseen), shaded by the face's
+/// facing, its ribbon a cross of bands over the top and down the sides, and a
+/// bow of two crossed loops on top; opaque world-space strips, a colour a
+/// vertex, unlit (lit as the cords are: [`light_cords`]).
+pub fn presents(holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Strips> {
+    DECOR.with_borrow(|d| presents_of(d, holders, world, eye))
+}
+
+fn presents_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Strips> {
+    use glam::Vec3;
+    let e = Vec3::from(eye);
+    let mut out = Vec::new();
+    for set in &d.presents {
+        let frames: Vec<([f32; 3], f32, f32)> = match &set.anchor {
+            Anchor::Npc(key) => holders.iter().filter(|h| net::npctint::key(h.name) == *key).map(|h| (h.at, h.heading, h.scale)).collect(),
+            Anchor::World(w) if *w as i64 == world => vec![([0.0; 3], 0.0, 1.0)],
+            Anchor::World(_) => Vec::new(),
+        };
+        let mut strips: Vec<Vec<([f32; 2], [f32; 3])>> = Vec::new();
+        let mut colors: Vec<Vec<[f32; 4]>> = Vec::new();
+        for (at, heading, scale) in frames {
+            let (sin, cos) = heading.sin_cos();
+            let frame = |p: Vec3| Vec3::new(at[0] + scale * (p.z * sin + p.x * cos), at[1] + scale * p.y, at[2] + scale * (p.z * cos - p.x * sin));
+            for b in &set.boxes {
+                let centre = frame(Vec3::from(b.at));
+                if (centre - e).length() > REACH {
+                    continue;
+                }
+                let (ys, yc) = b.yaw.sin_cos();
+                // the box's own corner (x, y, z) in its anchor's frame, then the world's
+                let place = |x: f32, y: f32, z: f32| frame(Vec3::new(b.at[0] + z * ys + x * yc, b.at[1] + y, b.at[2] + z * yc - x * ys));
+                let rgba = |c: u32, k: f32| [((c >> 24) & 0xFF) as f32 / 255.0 * k, ((c >> 16) & 0xFF) as f32 / 255.0 * k, ((c >> 8) & 0xFF) as f32 / 255.0 * k, 1.0];
+                let (w, h, dp) = (b.size[0] / 2.0, b.size[1], b.size[2] / 2.0);
+                let mut quad = |q: [Vec3; 4], c: [f32; 4]| {
+                    // a quad as a strip: its corners in order round it, the strip 0 1 3 2
+                    strips.push(vec![([0.0, 0.0], q[0].to_array()), ([0.0, 1.0], q[1].to_array()), ([1.0, 0.0], q[3].to_array()), ([1.0, 1.0], q[2].to_array())]);
+                    colors.push(vec![c; 4]);
+                };
+                // the paper: the top, then the four sides, each shaded by its facing
+                let shade = [1.0, 0.82, 0.68, 0.74, 0.88];
+                let faces: [[(f32, f32, f32); 4]; 5] = [
+                    [(-w, h, -dp), (w, h, -dp), (w, h, dp), (-w, h, dp)],
+                    [(-w, 0.0, dp), (w, 0.0, dp), (w, h, dp), (-w, h, dp)],
+                    [(w, 0.0, -dp), (w, 0.0, dp), (w, h, dp), (w, h, -dp)],
+                    [(-w, 0.0, -dp), (w, 0.0, -dp), (w, h, -dp), (-w, h, -dp)],
+                    [(-w, 0.0, -dp), (-w, 0.0, dp), (-w, h, dp), (-w, h, -dp)],
+                ];
+                for (f, k) in faces.iter().zip(shade) {
+                    quad(f.map(|(x, y, z)| place(x, y, z)), rgba(b.color, k));
+                }
+                if b.ribbon & 0xFF == 0 {
+                    continue;
+                }
+                // the ribbon: a band across the top and down two sides each way, a little proud of the paper
+                let rw = 0.09 * b.size[0].min(b.size[2]);
+                let o = 0.012;
+                let (wo, ho, dpo) = (w + o, h + o, dp + o);
+                for (f, k) in [
+                    // along x: over the top and down the +x and -x sides
+                    ([(-wo, ho, -rw), (wo, ho, -rw), (wo, ho, rw), (-wo, ho, rw)], 1.0),
+                    ([(wo, 0.0, -rw), (wo, 0.0, rw), (wo, ho, rw), (wo, ho, -rw)], 0.68),
+                    ([(-wo, 0.0, -rw), (-wo, 0.0, rw), (-wo, ho, rw), (-wo, ho, -rw)], 0.88),
+                    // along z: over the top and down the +z and -z sides
+                    ([(-rw, ho + 0.002, -dpo), (rw, ho + 0.002, -dpo), (rw, ho + 0.002, dpo), (-rw, ho + 0.002, dpo)], 1.0),
+                    ([(-rw, 0.0, dpo), (rw, 0.0, dpo), (rw, ho, dpo), (-rw, ho, dpo)], 0.82),
+                    ([(-rw, 0.0, -dpo), (rw, 0.0, -dpo), (rw, ho, -dpo), (-rw, ho, -dpo)], 0.74),
+                ] {
+                    quad(f.map(|(x, y, z)| place(x, y, z)), rgba(b.ribbon, k));
+                }
+                if !b.bow {
+                    continue;
+                }
+                // the bow: two loops crossed on top, each a pair of tilted petals
+                let bw = 0.32 * b.size[0].min(b.size[2]);
+                let bh = 0.55 * bw;
+                for (dx, dz) in [(1.0f32, 0.0f32), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                    let tip = (dx * bw, ho + bh, dz * bw);
+                    let side = (dz * bw * 0.35, 0.0, dx * bw * 0.35);
+                    let q = [(0.0, ho, 0.0), (tip.0 + side.0, tip.1, tip.2 + side.2), (tip.0 * 1.15, ho + bh * 0.4, tip.2 * 1.15), (tip.0 - side.0, tip.1, tip.2 - side.2)];
+                    quad(q.map(|(x, y, z)| place(x, y, z)), rgba(b.ribbon, 0.95));
+                }
+            }
+        }
+        if !strips.is_empty() {
+            out.push(Strips { texture: 0, blend: 0, ztest: true, zwrite: true, color: [1.0; 4], strips, colors });
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -278,6 +375,7 @@ mod tests {
                 ],
             }],
             art: Vec::new(),
+            presents: Vec::new(),
         }
     }
 
@@ -342,6 +440,32 @@ mod tests {
         let mut lit = cords_of(&tree(Effect::Steady), &h, 0, [0.0; 3]);
         matte(&mut lit, glam::Vec3::splat(0.3), glam::Vec3::ZERO, glam::Vec3::NEG_Y);
         assert!(lit[0].color[1] < 0x3F as f32 / 255.0 && lit[0].color[1] > 0.0);
+    }
+
+    /// Presents: five faces a box, six ribbon bands with a ribbon and four bow
+    /// petals with a bow, placed in the holder's frame; none past the reach.
+    #[test]
+    fn the_presents_are_wrapped() {
+        let mut d = tree(Effect::Steady);
+        d.presents.push(net::decor::Presents {
+            anchor: Anchor::Npc("christmas tree".into()),
+            boxes: vec![
+                net::decor::GiftBox { at: [2.0, 0.0, 0.0], size: [1.0, 0.8, 1.0], yaw: 0.0, color: 0xC020_20FF, ribbon: 0xFFD0_40FF, bow: true },
+                net::decor::GiftBox { at: [-2.0, 0.0, 0.0], size: [0.6, 0.6, 0.6], yaw: 0.3, color: 0x2050_C0FF, ribbon: 0, bow: false },
+            ],
+        });
+        let h = [Holder { name: "Christmas Tree", at: [100.0, 50.0, 200.0], heading: 0.0, scale: 2.0 }];
+        let p = presents_of(&d, &h, 0, [100.0, 52.0, 190.0]);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].strips.len(), (5 + 6 + 4) + 5, "the red box wrapped and bowed, the blue plain");
+        assert_eq!(p[0].colors.len(), p[0].strips.len());
+        // the red box's top at 50 + 2 x 0.8, its middle at x 100 + 2 x 2
+        let top = &p[0].strips[0];
+        assert!(top.iter().all(|(_, v)| (v[1] - 51.6).abs() < 1e-4), "{top:?}");
+        let mid_x = top.iter().map(|(_, v)| v[0]).sum::<f32>() / 4.0;
+        assert!((mid_x - 104.0).abs() < 1e-4);
+        assert!(p[0].colors[0][0][0] > 0.7, "red paper");
+        assert!(presents_of(&d, &h, 0, [100.0 + REACH + 10.0, 50.0, 200.0]).is_empty());
     }
 
     /// A twinkle changes each bulb's light over time, out of step.

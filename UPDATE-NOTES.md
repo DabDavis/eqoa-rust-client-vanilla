@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+
+## 2026-11-16 · Presents under the Christmas tree
+- **Presents under Freeport's Christmas tree**: wrapped boxes in red, green, blue, gold, silver and purple, some
+  stacked, with ribbons and bows, round the foot of the tree.
+- The tree's lights now follow its boughs.
 ## 2026-11-16 · Christmas lights
 - **Seasonal decorations from the server**: when a GM puts the Christmas season up on eqoaclassic.com, a great fir
   stands lit in Freeport's north plaza, wound with **twinkling lights in many colours** on a dark green cord, and a **gold star** on top.

@@ -110,6 +110,30 @@ pub struct Art {
 pub struct Decor {
     pub strings: Vec<LightString>,
     pub art: Vec<Art>,
+    /// Presents under a tree (the owner, 2026-11-16: "we need some different
+    /// color presents under the tree"), each set hung as a string is
+    pub presents: Vec<Presents>,
+}
+
+/// A set of gift boxes, hung on an NPC's name or placed in a world as a
+/// string is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Presents {
+    pub anchor: Anchor,
+    pub boxes: Vec<GiftBox>,
+}
+
+/// One present: its bottom's middle and its size (in its anchor's frame), its
+/// turn (radians), its paper's colour 0xRRGGBBAA, its ribbon's (0 none) and
+/// whether a bow sits on top.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GiftBox {
+    pub at: [f32; 3],
+    pub size: [f32; 3],
+    pub yaw: f32,
+    pub color: u32,
+    pub ribbon: u32,
+    pub bow: bool,
 }
 
 /// [`crate::session::OP_DECOR_LIGHTS`]'s body (after the opcode); none if it
@@ -155,6 +179,37 @@ pub fn read(data: &[u8]) -> Option<Decor> {
                 return None;
             }
             out.art.push(a);
+        }
+    }
+    // the presents (a server before them sends none)
+    if r.pos < data.len() {
+        let ns = r.u16() as usize;
+        for _ in 0..ns {
+            let anchor = match r.u8() {
+                1 => {
+                    let len = r.u8() as usize;
+                    Anchor::Npc(crate::npctint::key(&String::from_utf8_lossy(r.bytes(len))))
+                }
+                _ => Anchor::World(r.u8()),
+            };
+            let nb = r.u16() as usize;
+            let mut boxes = Vec::with_capacity(nb.min(64));
+            for _ in 0..nb {
+                let at = [r.f32(), r.f32(), r.f32()];
+                let size = [r.f32(), r.f32(), r.f32()];
+                let yaw = r.f32();
+                let (color, ribbon, bow) = (r.u32(), r.u32(), r.u8() != 0);
+                if r.error {
+                    return None;
+                }
+                if at.iter().chain(size.iter()).all(|v| v.is_finite()) && yaw.is_finite() {
+                    boxes.push(GiftBox { at, size, yaw, color, ribbon, bow });
+                }
+            }
+            if r.error {
+                return None;
+            }
+            out.presents.push(Presents { anchor, boxes });
         }
     }
     (!r.error).then_some(out)
@@ -241,6 +296,24 @@ mod tests {
         assert_eq!(d.strings[1].anchor, Anchor::World(3));
         assert_eq!(d.strings[1].effect, Effect::Chase);
         assert_eq!(d.art, vec![Art { model: 0x0E31_8233, world: 0, zone: 32, sink: 9.5 }]);
+        assert!(d.presents.is_empty(), "a server before the presents sends none");
+        // and a set of presents after the art
+        let mut p = b.clone();
+        p.extend(1u16.to_le_bytes());
+        p.extend([1, 3]);
+        p.extend(b"elf");
+        p.extend(1u16.to_le_bytes());
+        for v in [1.0f32, 0.0, 2.0, 1.0, 0.8, 1.0, 0.5] {
+            p.extend(v.to_le_bytes());
+        }
+        p.extend(0xC020_20FFu32.to_le_bytes());
+        p.extend(0u32.to_le_bytes());
+        p.push(1);
+        let d = read(&p).expect("read with presents");
+        assert_eq!(d.presents.len(), 1);
+        assert_eq!(d.presents[0].anchor, Anchor::Npc("elf".into()));
+        assert_eq!(d.presents[0].boxes[0], GiftBox { at: [1.0, 0.0, 2.0], size: [1.0, 0.8, 1.0], yaw: 0.5, color: 0xC020_20FF, ribbon: 0, bow: true });
+        assert_eq!(read(&p[..p.len() - 3]), None, "cut short");
         // with no art after them (none to read), and cut short: nothing
         assert_eq!(read(&body()).map(|d| d.art.len()), Some(0));
         let cut = &b[..b.len() - 7];
