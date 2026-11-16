@@ -55,6 +55,8 @@
 //! channel's `net::entity::PieceAura` does (`aura::pieces`); kind `trim` or
 //! `trimshell` lights the plate's trim (`aura::piece_trims`), and a black or
 //! near-black colour (000000FF) is a dark aura (`net::npctint::dark`).
+//! `pieceaura=helm:0:hat:F0FAB933` puts a hat another body has built in on
+//! the head in place of the helm (`hat`: the kappa's straw hat).
 //! `helm=N` puts on armour set N's helm (`SetHelm`, on the node and seated
 //! as a player's character wears it: `slotless::helm_on`), in the helm's
 //! tint (`tint=T`); `helmfit=0` seats it as the PS2 does, without this
@@ -176,7 +178,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             "pieceaura" => {
                 // slot:RRGGBBAA[:kind[:source[:nodes]]]
                 let parts: Vec<&str> = v.split(':').collect();
-                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body|cape|main|off|main2|off2:RRGGBBAA[:shell|particles|both|none|trim|trimshell|epic|energy|circlet[:DictID[:nodes]]]");
+                let usage = || format!("{w}: pieceaura=chest|bracer|gloves|legs|boots|helm|robe|body|cape|main|off|main2|off2:RRGGBBAA[:shell|particles|both|none|trim|trimshell|epic|energy|circlet|hat[:DictID[:nodes]]]");
                 let slot = ["chest", "bracer", "gloves", "legs", "boots", "helm", "robe", "body", "cape", "main", "off", "main2", "off2"].iter().position(|s| Some(s) == parts.first()).ok_or_else(usage)?;
                 let c = u32::from_str_radix(parts.get(1).ok_or_else(usage)?.trim_start_matches('#'), 16).map_err(|e| format!("{w}: {e}"))?;
                 let kind = match parts.get(2).copied() {
@@ -190,6 +192,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                     Some("epic") => net::npctint::Aura::EPIC,
                     Some("energy") => net::npctint::Aura::ENERGY,
                     Some("circlet") => net::npctint::Aura::CIRCLET,
+                    Some("hat") => net::npctint::Aura::HAT,
                     _ => return Err(usage()),
                 };
                 let source = parts.get(3).map(|v| hex(w, v)).transpose()?.unwrap_or(0);
@@ -392,6 +395,18 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
                 }
             ),
             None => eprintln!("helm {}: none on this body", look.armor[5]),
+        }
+    }
+    // a hat another body has built in (`pieceaura=helm:0:hat[:DictID]`,
+    // `hat::hat_on`), in place of the helm, as the world's `attach` hangs it
+    if let Some((src, hue)) = crate::hat::hat_of(&words.pieces) {
+        let made = crate::hat::hat_on(lib, model as u32, &cs, true, src, hue);
+        match &made {
+            Some((node, m)) => eprintln!("hat of {src:#010X} on node {node}: {} triangles", m.triangles),
+            None => eprintln!("hat of {src:#010X}: none on this body"),
+        }
+        if made.is_some() {
+            helm = made;
         }
     }
     crate::play::dress_look(lib, model, &mut mesh, &cs, look, helm.is_some(), &t, true);

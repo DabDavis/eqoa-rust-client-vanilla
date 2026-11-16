@@ -511,8 +511,8 @@ pub fn body_aura(model: &esf::Model, cs: &vi::csprite::CSprite<Ee>, auras: &[net
 /// particles on the helm's node `node`. (The helm the plate wears, set 4's,
 /// is plain steel: no trim.)
 pub fn helm_aura(auras: &[net::entity::PieceAura; net::entity::AURAS], node: i32) -> (Option<render::shell::PartOf>, Option<Worn>) {
-    if auras[HELM].kind == net::npctint::Aura::CIRCLET {
-        return (None, None); // a circlet is drawn while no helm is ([`circlet`])
+    if auras[HELM].kind == net::npctint::Aura::CIRCLET || auras[HELM].kind == net::npctint::Aura::HAT {
+        return (None, None); // a circlet is drawn while no helm is ([`circlet`]), a hat in its place (`hat`)
     }
     let t = piece_tint(&auras[HELM]);
     (npc_shell_part(t), npc_particles(t).map(|particles| Worn { nodes: vec![node], particles, first: 64 * (HELM + 1) }))

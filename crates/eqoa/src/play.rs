@@ -1351,7 +1351,12 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
     // the server's patch's tables (`s2`), retail's without one
     let t = crate::s2::get().cust();
     let mut helm_aura = None;
-    if let Some((node, mut m)) = crate::slotless::helm_on(lib, model, cs, player, c.armor[5], look_of(c).helm_color(&t), &t, true) {
+    // a hat another body has built in (the helm's aura of kind hat, `hat`): in
+    // place of the helm, and the hair dressed as under one
+    if let Some((node, m)) = c.colors.and_then(|l| crate::hat::hat_of(&l.auras)).and_then(|(src, hue)| crate::hat::hat_on(lib, model, cs, player, src, hue)) {
+        attached.push((node, g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures)));
+        helm_worn = true;
+    } else if let Some((node, mut m)) = crate::slotless::helm_on(lib, model, cs, player, c.armor[5], look_of(c).helm_color(&t), &t, true) {
         helm_worn = true;
         let look = look_of(c);
         crate::slotless::helm_trim(lib, &mut m, look.helm_color(&t), look.trim_color.map(|c| c[5]), &t);

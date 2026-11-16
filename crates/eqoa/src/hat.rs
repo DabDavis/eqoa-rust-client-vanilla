@@ -1,0 +1,281 @@
+//! A hat another body has built in, worn on a character's head (go-eqoa-server's
+//! aura kind hat, `net::npctint::Aura::HAT`, the helm's aura alone; the owner,
+//! 2026-11-16, of Hoofbite: "for his monk hat lets use the kappas built in hat
+//! that is wide brimmed for his model").
+//!
+//! No helm on the disc is a hat: the kappa's wide-brimmed straw hat, with its
+//! steel spike, is part of a kappa's own mesh (CHAR.ESF 0xF0FAB933), skinned to
+//! its head. [`cut`] takes it out of the source body: the triangles every
+//! vertex of which rides the head (its head node, `node_ids[7]`, or a node
+//! under it) that are not of the face's texture (the texture most of the
+//! head's triangles are in: the face, the eyes and the mouth), in the bind
+//! pose, as a rigid model. [`hat_on`] seats it on the wearer: from the source
+//! body's head to the wearer's, as each wears armour set 4's helm (the measure
+//! the circlet takes, `aura::CIRCLET_MEASURE_SET`, seated as worn:
+//! `slotless::helm_on`), its middle on the helm's middle and scaled by the
+//! helms' widths, then into the frame of the node the wearer's helm hangs on.
+//! Drawn in place of the helm (`play::attach`): a hat counts as a helm worn,
+//! so the hair is dressed as under one.
+//!
+//! Everything is measured in the bind pose's model space, upright and facing
+//! the same way for every body, never in a head node's own frame, whose axes
+//! differ from skeleton to skeleton.
+
+use esf::Library;
+use glam::{Mat4, Vec3};
+use vi::csprite::CSprite;
+use vi::fpu::Ee;
+
+/// The kappa whose straw hat go-eqoa-server's named look "kappa hat" wears.
+pub const KAPPA_HAT: u32 = 0xF0FA_B933;
+
+/// A node's bind-pose world matrix (model space), glam's.
+fn bind_world(cs: &CSprite<Ee>, node: i32) -> Option<Mat4> {
+    let n = cs.h.nodes.get(usize::try_from(node).ok()?)?;
+    Some(Mat4::from_cols_array_2d(&n.inv_bind_world.to_cols()).inverse())
+}
+
+/// Whether `node` is `head` or a node under it.
+fn under(cs: &CSprite<Ee>, mut node: i32, head: i32) -> bool {
+    for _ in 0..cs.h.nodes.len() {
+        if node == head {
+            return true;
+        }
+        match usize::try_from(node).ok().and_then(|i| cs.h.nodes.get(i)) {
+            Some(n) => node = n.parent,
+            None => return false,
+        }
+    }
+    false
+}
+
+/// The hat `src` (the source body's model, skinned, as `build_model` gives it;
+/// `cs` its sprite) has built in, in its bind pose's model space, as a rigid
+/// model: see the module. None when the body has no head node or nothing on
+/// its head but its face. Of a body with levels of detail, the nearest level.
+pub fn cut(src: &esf::Model, cs: &CSprite<Ee>) -> Option<esf::Model> {
+    let head = cs.node_ids[7];
+    if head < 0 || src.bones.len() != src.pos.len() || src.weights.len() != src.pos.len() {
+        return None;
+    }
+    // a vertex rides the head when most of its weight is on the head's nodes
+    let rides = |v: usize| {
+        let (b, w) = (src.bones[v], src.weights[v]);
+        let on: u32 = (0..4).filter(|&k| b[k] != 255 && under(cs, b[k] as i32, head)).map(|k| w[k] as u32).sum();
+        let all: u32 = w.iter().map(|&x| x as u32).sum();
+        all > 0 && on * 2 > all
+    };
+    let near = |b: &esf::Batch| b.lod.is_none_or(|l| l == 0);
+    let on_head = |b: &esf::Batch| b.indices.chunks_exact(3).filter(|t| t.iter().all(|&v| rides(v as usize))).count();
+    // the face's texture: the one most of the head's triangles are in
+    let mut by_tex: Vec<(i32, usize)> = Vec::new();
+    for b in src.batches.iter().filter(|b| near(b)) {
+        let n = on_head(b);
+        match by_tex.iter_mut().find(|(t, _)| *t == b.texture()) {
+            Some(e) => e.1 += n,
+            None => by_tex.push((b.texture(), n)),
+        }
+    }
+    let face = by_tex.iter().max_by_key(|e| e.1).map(|e| e.0)?;
+    let mut m = esf::Model { skinned: false, parts: 1, ..Default::default() };
+    let mut map = std::collections::HashMap::new();
+    for b in src.batches.iter().filter(|b| near(b) && b.texture() != face) {
+        let mut out = esf::Batch { lod: None, indices: Vec::new(), ..b.clone() };
+        for t in b.indices.chunks_exact(3).filter(|t| t.iter().all(|&v| rides(v as usize))) {
+            for &v in t {
+                let o = v as usize;
+                let i = *map.entry(o).or_insert_with(|| {
+                    m.pos.push(src.pos[o]);
+                    if let Some(uv) = src.uv.get(o) {
+                        m.uv.push(*uv);
+                    }
+                    if let Some(n) = src.normal.get(o) {
+                        m.normal.push(*n);
+                    }
+                    if let Some(c) = src.color.get(o) {
+                        m.color.push(*c);
+                    }
+                    m.pos.len() as u32 - 1
+                });
+                out.indices.push(i);
+            }
+        }
+        if !out.indices.is_empty() {
+            m.batches.push(out);
+        }
+    }
+    m.triangles = m.batches.iter().map(|b| b.indices.len() as u32 / 3).sum();
+    (m.triangles > 0).then_some(m)
+}
+
+/// The bounds of a helm (`slotless::helm_on`'s, in its node's frame) in the
+/// bind pose's model space: its lowest and highest corners.
+fn helm_bounds(cs: &CSprite<Ee>, node: i32, helm: &esf::Model) -> Option<(Vec3, Vec3)> {
+    let w = bind_world(cs, node)?;
+    let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for p in &helm.pos {
+        let q = w.transform_point3(Vec3::from(*p));
+        lo = lo.min(q);
+        hi = hi.max(q);
+    }
+    (lo.x < hi.x).then_some((lo, hi))
+}
+
+/// `hat` (a [`cut`], in the source body's bind-pose model space) moved from a
+/// head measured `from` to one measured `to` (each the bounds of the same
+/// helm as worn, [`helm_bounds`]): its middle on the helm's, scaled by the
+/// helms' widths (across, x), every axis alike.
+pub fn moved(hat: &mut esf::Model, from: (Vec3, Vec3), to: (Vec3, Vec3)) {
+    let (fc, tc) = ((from.0 + from.1) * 0.5, (to.0 + to.1) * 0.5);
+    let s = (to.1.x - to.0.x) / (from.1.x - from.0.x).max(1e-4);
+    for p in &mut hat.pos {
+        *p = (tc + (Vec3::from(*p) - fc) * s).to_array();
+    }
+}
+
+/// The hat of body `src` on body `id` (`cs` its sprite, `player` a player's
+/// character): the node it hangs on (the helm's) and the hat in that node's
+/// frame, seated as the module says; `hue` recolours it (`aura::recolor`), none
+/// its own colours. None when either body wears no helm (no measure), the
+/// source is not a loaded body, or it has no hat.
+pub fn hat_on(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, src: u32, hue: Option<[u8; 3]>) -> Option<(i32, esf::Model)> {
+    let r = lib.lookup(src as i32)?;
+    if lib.file(r.file).node(r.node).ty != 0x2700 {
+        return None;
+    }
+    let scs: CSprite<Ee> = vi::character::load_csprite(lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut vi::csprite::Rand(1))?;
+    let mut hat = cut(&lib.build_model(r)?, &scs)?;
+    let t = crate::s2::get().cust();
+    let set = crate::aura::CIRCLET_MEASURE_SET;
+    let (snode, shelm) = crate::slotless::helm_on(lib, src, &scs, true, set, [255; 4], &t, true)?;
+    let (node, helm) = crate::slotless::helm_on(lib, id, cs, player, set, [255; 4], &t, true)?;
+    moved(&mut hat, helm_bounds(&scs, snode, &shelm)?, helm_bounds(cs, node, &helm)?);
+    // into the frame of the node it hangs on
+    let local = bind_world(cs, node)?.inverse();
+    for p in &mut hat.pos {
+        *p = local.transform_point3(Vec3::from(*p)).to_array();
+    }
+    for n in &mut hat.normal {
+        *n = local.transform_vector3(Vec3::from(*n)).normalize_or_zero().to_array();
+    }
+    if let Some(c) = hue {
+        crate::aura::recolor(&mut hat, c);
+    }
+    Some((node, hat))
+}
+
+/// The hat a body's helm aura names (kind hat), if it names one: its source
+/// body (0: the kappa's, [`KAPPA_HAT`]) and its hue (`aura::hand_hue`: the
+/// colour when it lights, else none, its own colours).
+pub fn hat_of(auras: &[net::entity::PieceAura; net::entity::AURAS]) -> Option<(u32, Option<[u8; 3]>)> {
+    let a = auras[crate::aura::HELM];
+    (a.kind == net::npctint::Aura::HAT).then(|| (if a.source == 0 { KAPPA_HAT } else { a.source }, crate::aura::hand_hue(&a)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vi::character::{AnimCache, load_csprite};
+    use vi::csprite::Rand;
+
+    const HALFLING: u32 = 0xA3DB_3FE2;
+
+    fn disc_lib() -> Option<Library> {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let mut iso = iso::Iso::open(&p).ok()?;
+        let mut lib = Library::new();
+        for f in crate::dressview::FILES {
+            lib.add(*f, esf::Container::open(iso.read(f).ok()?).ok()?);
+        }
+        Some(lib)
+    }
+
+    fn body(lib: &Library, id: u32) -> (esf::Model, CSprite<Ee>) {
+        let r = lib.lookup(id as i32).unwrap();
+        let cs = load_csprite(lib, r, &mut vi::hsprite::AnimScene::default(), &mut AnimCache::new(), &mut Rand(1)).unwrap();
+        (lib.build_model(r).unwrap(), cs)
+    }
+
+    fn bounds(m: &esf::Model) -> (Vec3, Vec3) {
+        m.pos.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(Vec3::from(*p)), hi.max(Vec3::from(*p))))
+    }
+
+    /// On the disc: the kappa's hat cut out is the straw hat (44 triangles of
+    /// its body's second material) and its steel spike (4 of the bracers'
+    /// and belt's): none of the face's texture, wide and flat, over the
+    /// head's root. (A body with hair of its own texture would give its hair:
+    /// a hat's source is named by a GM, a body known to wear one.)
+    #[test]
+    fn the_kappas_hat_cut_out() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let (m, cs) = body(&lib, KAPPA_HAT);
+        let hat = cut(&m, &cs).expect("the kappa's hat");
+        let (lo, hi) = bounds(&hat);
+        eprintln!("hat: {} triangles in {} batches, {lo} .. {hi}", hat.triangles, hat.batches.len());
+        for b in &hat.batches {
+            let pm = esf::Model { pos: b.indices.iter().map(|&v| hat.pos[v as usize]).collect(), ..Default::default() };
+            let (l, h) = bounds(&pm);
+            eprintln!("  batch tex {:#010X} mat {}: {} triangles, {l} .. {h}", b.texture() as u32, b.material, b.indices.len() / 3);
+        }
+        assert!(!hat.skinned && hat.batches.iter().all(|b| b.texture() != m.batches[2].texture()), "no face");
+        assert!(hi.x - lo.x > 0.4 && hi.y - lo.y < 0.3, "wide and flat: {lo} .. {hi}");
+        let head = bind_world(&cs, cs.node_ids[7]).unwrap().w_axis.truncate();
+        assert!(hi.y > head.y + 0.1 && (lo.y + hi.y) / 2.0 > head.y, "on top of the head's root ({head}): {lo} .. {hi}");
+        assert_eq!(hat.batches.iter().map(|b| b.indices.len() / 3).collect::<Vec<_>>(), [44, 4], "the straw and the spike");
+        assert!(hat.triangles < m.triangles / 4, "the hat alone: {} of {}", hat.triangles, m.triangles);
+    }
+
+    /// On the disc: the kappa's hat on a halfling hangs on the node a helm
+    /// hangs on, a halfling's head across and more (a brim), its middle over
+    /// the helm's; moved and scaled as the helms are; a hue recolours it.
+    #[test]
+    fn the_hat_on_a_halfling() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let (_, cs) = body(&lib, HALFLING);
+        let (node, hat) = hat_on(&lib, HALFLING, &cs, true, KAPPA_HAT, None).expect("a hat");
+        let t = crate::s2::get().cust();
+        let (hn, helm) = crate::slotless::helm_on(&lib, HALFLING, &cs, true, crate::aura::CIRCLET_MEASURE_SET, [255; 4], &t, true).unwrap();
+        assert_eq!(node, hn, "the helm's node");
+        let w = bind_world(&cs, node).unwrap();
+        let world = esf::Model { pos: hat.pos.iter().map(|p| w.transform_point3(Vec3::from(*p)).to_array()).collect(), ..Default::default() };
+        let (lo, hi) = bounds(&world);
+        let (hlo, hhi) = helm_bounds(&cs, node, &helm).unwrap();
+        eprintln!("hat on the halfling: {lo} .. {hi}; helm {hlo} .. {hhi}");
+        assert!(hi.x - lo.x > 1.5 * (hhi.x - hlo.x), "a brim past the head");
+        assert!(((lo.x + hi.x) / 2.0 - (hlo.x + hhi.x) / 2.0).abs() < 0.02, "centred across");
+        assert!(hi.y > hhi.y && lo.y > hlo.y, "on top of the head: {lo} .. {hi} over {hlo} .. {hhi}");
+        let (_, red) = hat_on(&lib, HALFLING, &cs, true, KAPPA_HAT, Some([0xFF, 0x20, 0x20])).unwrap();
+        assert_eq!(red.pos, hat.pos);
+        assert_ne!(format!("{:?}", red.batches[0].layers[0].color), format!("{:?}", hat.batches[0].layers[0].color));
+        // the controls: no hat on an item, none of a body with none
+        assert!(hat_on(&lib, HALFLING, &cs, true, 0x88EC_092D, None).is_none());
+    }
+
+    /// `moved`: the middle to the middle, scaled by the widths.
+    #[test]
+    fn moved_by_the_helms() {
+        let mut m = esf::Model { pos: vec![[0.0, 1.0, 0.0], [2.0, 3.0, 0.0]], ..Default::default() };
+        moved(&mut m, (Vec3::new(0.0, 0.0, 0.0), Vec3::new(2.0, 2.0, 2.0)), (Vec3::new(10.0, 10.0, 10.0), Vec3::new(11.0, 11.0, 11.0)));
+        assert_eq!(m.pos, vec![[10.0, 10.5, 10.0], [11.0, 11.5, 10.0]]);
+    }
+
+    /// `hat_of` reads kind hat alone: its source (0 the kappa's) and hue.
+    #[test]
+    fn hat_of_reads_the_helms_aura() {
+        use net::entity::PieceAura;
+        let mut auras = [PieceAura::default(); net::entity::AURAS];
+        assert_eq!(hat_of(&auras), None);
+        auras[crate::aura::HELM] = PieceAura { kind: net::npctint::Aura::HAT, ..Default::default() };
+        assert_eq!(hat_of(&auras), Some((KAPPA_HAT, None)));
+        auras[crate::aura::HELM] = PieceAura { kind: net::npctint::Aura::HAT, source: 0x1234, color: [0x20, 0xC0, 0x20, 0xFF], ..Default::default() };
+        assert_eq!(hat_of(&auras), Some((0x1234, Some([0x20, 0xC0, 0x20]))));
+        auras[crate::aura::HELM].kind = net::npctint::Aura::CIRCLET;
+        assert_eq!(hat_of(&auras), None);
+    }
+}

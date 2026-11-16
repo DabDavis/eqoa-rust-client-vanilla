@@ -161,6 +161,7 @@ mod seabody;
 mod racelabel;
 mod raceopts;
 mod wisp;
+mod hat;
 mod record;
 mod alarm;
 mod startmenu;

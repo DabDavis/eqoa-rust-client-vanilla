@@ -7,6 +7,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · Hats worn from other bodies
+- **A character can now wear a hat another body has built in**, given by a GM on eqoaclassic.com: the first is the
+  kappa's wide-brimmed straw hat with its steel spike, sized to your head and worn in place of your helm (the hair
+  is dressed as under a helm). Others see it on you; a PS2 shows your helm as before.
+
 ## 2026-11-16 · See more players and creatures, farther
 - **NPC/PC Display now starts at 48** (it was the game's 24) and **NPC/PC Distance at 200** (it was 100), in
   Options > Extended. You see more of the people and creatures round you, and farther out.
