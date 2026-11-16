@@ -241,6 +241,20 @@ impl Figure {
         Some(Figure { model, look, race_look, scale, sprite, anims, rand, gpu, attached, items, at, hpr, centre: Matrix44::identity(), held: None, fx: Vec::new(), body: id, cape: None, asked: Vec::new(), cape_asked: Vec::new() })
     }
 
+    /// Dressed as `n` is (the same model made again in another look,
+    /// `create::redress_dressed`): its body, the look, and what hangs on its
+    /// nodes (the items, the helm and a Wisp's wisp, in its colour), with what
+    /// the build asked of the library; the sprite, its animation and clock,
+    /// the place and the cape kept. The wisp is an attachment: a colour chosen
+    /// on the appearance page left the old one hanging (2026-11-16).
+    pub fn dress_as(&mut self, n: Figure) {
+        self.gpu = n.gpu;
+        self.attached = n.attached;
+        self.look = n.look;
+        self.race_look = n.race_look;
+        self.asked = n.asked;
+    }
+
     /// Puts on the cape `want` (`cape`: a character's on a server with capes),
     /// or takes it off, when it changes: fitted to the figure's skeleton, in
     /// Frontiers' art, drawn on its palette. A cape no art or body fits is kept
