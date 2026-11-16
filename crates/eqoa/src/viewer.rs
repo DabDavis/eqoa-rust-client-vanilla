@@ -88,9 +88,11 @@ pub fn lit(
         point: None,
         clear: Vec3::new(0.18, 0.2, 0.24),
         sky_view_proj: None,
+        sky_fog: 0.0,
         lights: None,
     };
     let mut sky = None;
+    let mut storm_far = None;
     if let Some((b, at, w)) = &blend {
         let at = vi::vect::Vect3::of(at.x, at.y, at.z);
         let flags = w.env_flags(&at);
@@ -119,7 +121,12 @@ pub fn lit(
                 Some((n, fa, c)) => (n.min(near), fa.min(far), c.lerp(wc, f.intensity)),
                 None => (near, far, wc),
             });
+            // the far plane in to the storm's fog (`fog::set_storm_far`)
+            storm_far = v.fog.map(|(_, fa, _)| fa);
             v.sun *= 1.0 - 0.8 * f.intensity;
+            // the sky into the storm too: its horizon is not the world's,
+            // past the far plane, and the distance fog leaves it be
+            v.sky_fog = f.sky;
         }
         let mut c = tod.sky(hour, o, b);
         // the sky (the dome's colour and the clear) toward the storm's by its
@@ -143,6 +150,7 @@ pub fn lit(
             });
         }
     }
+    crate::fog::set_storm_far(storm_far);
     (v, sky)
 }
 

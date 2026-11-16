@@ -7,6 +7,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · Sandstorms in third person, and no hills through the storm
+- **A sandstorm's blowing sand now shows in third person too**, not only in first person, filling the air round you
+  and your character whichever camera you use, and it reads better against the dunes.
+- **In a sandstorm or a whiteout the distant hills now disappear into the storm** (Freeport's mountains stood dark
+  against a sand-coloured sky). The far horizon is the storm's colour, as everything nearer already was.
+- **/weatherpreview whiteout** now brings the heavy snow with it, as a real whiteout does.
+
 ## 2026-11-16 · Alt-Tab lets go of the mouse
 - **On Windows, alt-tabbing (or minimising) while you look round with the mouse no longer leaves your cursor stuck in
   the game's window.** The game now hands the cursor back as soon as it loses the focus, and leaves it where it is
