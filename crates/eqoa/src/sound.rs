@@ -440,6 +440,11 @@ impl Sound {
 
     /// The device's sound for a resident wave's name, or -1 (what
     /// `VIDictionary::Find` hands `SetResources`).
+    /// The regional weather's wind (`Audio::set_wind`).
+    pub fn set_wind(&self, target: f32) {
+        self.audio.set_wind(target);
+    }
+
     pub fn sound_named(&self, name: &str) -> i32 {
         self.dict.get(&vi::hash::hash_resource_id(name)).copied().unwrap_or(-1)
     }

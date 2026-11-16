@@ -7,6 +7,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · Sandstorms, whiteouts and fog in storms
+- **Weather: the server's sandstorms and whiteouts, and fog in storms (Options -> Weather turns it down or off).**
+  On eqoaclassic.com the weather now follows the ground: sandstorms blow over the deserts, snow and whiteouts on the
+  icy lands, rain elsewhere, and none over lava, unless a GM calls a storm. Sand blows past you on the wind, a
+  whiteout closes in to a few steps, names fade into the storm, and you hear the wind (quieter under a roof).
+- **/weatherpreview sand** (or rain, snow, whiteout, clear; light, moderate or heavy) shows a weather on your own
+  screen only, until **/weatherpreview off** or you travel to another world.
+
 ## 2026-11-16 · A hill giant's shadow is his shape
 - **With Light Shadows on, a hill giant's lantern now throws his own shape on the ground round his feet**, as
   everyone else's does. His lantern rides inside him (he is taller than it), and his shadow was a dark square at his
