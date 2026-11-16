@@ -7,6 +7,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · The Wisp at character creation
+- **Choosing the Wisp on the race page now shows the wisp**, glowing where a human's head would be, as character select
+  and the world draw it. The page showed a plain human, face and all.
+- **A Wisp's Color on the appearance page changes the wisp at once.** It kept the colour it was first drawn in until the
+  review page.
+
 ## 2026-11-16 · The server's own account pages, and why a login is refused
 - **The Station pages before the server list are now your server's own**, as a PlayStation 2 shows them after its
   patch: on eqoaclassic.com, Create User Name asks only for a name, a password twice and your e-mail address, Forgot
