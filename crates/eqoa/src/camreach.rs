@@ -132,7 +132,9 @@ pub struct Reach {
     speed: f32,
     /// the mouse steers this frame (`controls::Client::steer`, set by
     /// `Walker::frame_with`): the camera is kept behind the body, so no
-    /// swing round is begun (`come_in`)
+    /// swing round is begun (`come_in`); so too while the walk keeps a view
+    /// (`controls::Client::walk_view`), the camera kept where the left
+    /// button's look or its ease back put it
     pub steered: bool,
 }
 

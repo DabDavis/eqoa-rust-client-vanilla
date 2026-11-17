@@ -641,7 +641,7 @@ impl Walker {
         let dt_s = (now_ms - self.scene.time).clamp(0, 100) as f32 / 1000.0;
         self.frame_s = dt_s;
         if self.flying {
-            self.fly_pitch();
+            self.fly_pitch(c.walk_view.map(|v| v.tilt));
         }
         let changed = crate::controls::update_controls(self, keys, &c);
         if self.flying {
@@ -657,9 +657,10 @@ impl Walker {
         if !game_frame {
             self.cam.effect.sample = self.shake;
         }
-        // steered, the camera kept behind the body: no swing round; and the
-        // camera's sweeps go on past what is thin (`camreach`)
-        self.reach.steered = c.steer;
+        // steered, the camera kept behind the body, or kept where the left
+        // button's look on the move put it: no swing round; and the camera's
+        // sweeps go on past what is thin (`camreach`)
+        self.reach.steered = c.steer || c.walk_view.is_some();
         self.eye = self.reach.process(&mut self.cam, &mut crate::camreach::PastThin { scene: &mut self.scene }, dt_s);
         if game_frame {
             self.shake = next;
@@ -904,12 +905,14 @@ impl Walker {
     /// direction left out: it looks down by the tilt, and by a race's look-at
     /// height with the zoom; and in mode 3 the tilt read is the default the
     /// player's look moves (`mouse::tilt`), not the pitch the camera's own snaps
-    /// swing it to when it meets a wall. Before `UpdateControls`, on the walk put
+    /// swing it to when it meets a wall; while the mouse's left button looks round
+    /// on the move, the tilt the walk keeps (`kept`, `controls::WalkView`), so the
+    /// look's tilt does not climb or dive. Before `UpdateControls`, on the walk put
     /// back; the body is drawn upright whatever its pitch (`pose_sounding`).
-    fn fly_pitch(&mut self) {
+    fn fly_pitch(&mut self, kept: Option<F<Ee>>) {
         let cam = &mut self.cam;
         let pitch = match cam.camera_mode {
-            3 => cam.def_orbit_pitch - F::new(crate::camreach::GAME_PITCH),
+            3 => kept.unwrap_or(cam.def_orbit_pitch) - F::new(crate::camreach::GAME_PITCH),
             1 => cam.cur.orbit.y - F::new(crate::camstyle::ORBIT_PITCH),
             _ => return,
         };

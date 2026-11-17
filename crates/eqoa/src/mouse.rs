@@ -40,11 +40,26 @@
 //!   needs (`camreach::come_in`: in Freeport's well the roof's posts and
 //!   eaves had taken it all the way in to the character).
 //! - while the player moves (the keys, a stick, autorun: `moving`), the
-//!   left button in the follow orbit steers as the right does (`held_as`),
-//!   the body turned to the view as the run begins; standing still it looks
-//!   round again (F3 20261025-044637).
+//!   left button in the follow orbit looks round as it does standing, and
+//!   the run goes on the way it went (the GM Jibrish's ask of 2026-11-17, as
+//!   World of Warcraft's left button: "character retains the direction that
+//!   was moving when started"). The follow orbit's walk goes the way the
+//!   camera looks, so the view it goes by is kept as the look began
+//!   (`walk_view`, `controls::Client::walk_view`) and the camera looks round
+//!   free of it; a run begun with the button held goes the way the camera
+//!   looks then. Let go on the move, the camera eases back behind the walk's
+//!   way (`ease_back`: what is left of the way shrinking by e every
+//!   `EASE_BACK_S`, at least `EASE_BACK_MIN` a second; about a quarter
+//!   second from half a turn) and the walk takes the camera's view again;
+//!   a stop, the right button, a window or another camera ends it at once,
+//!   the camera left where it is. From 2026-10-25 until then the left
+//!   button on the move steered as the right does (F3 20261025-044637).
 //! - both buttons run forward (the left stick all the way up), steered as
-//!   the right button steers; A and D add a sidestep, a diagonal.
+//!   the right button steers, and nothing else walks meanwhile: the keys'
+//!   and the sticks' walk are left out (`both_run`; the GM Jibrish's ask of
+//!   2026-11-17, "It should override other movement keys"; A and D had
+//!   added a sidestep, a diagonal, which the right button with W and A still
+//!   runs).
 //! - a body the mouse turns (the steer, first person, the follow camera:
 //!   `set_heading`) takes its run round with it: on a floor or in a liquid
 //!   its velocity turns as it does, so half a turn at a run runs on the new
@@ -110,6 +125,12 @@ const TILT_PER_PIXEL: f32 = 0.008;
 /// meet flat ground with its 0.5 sphere: past 52 degrees.
 pub const MIN_TILT: f32 = -std::f32::consts::FRAC_PI_4;
 pub const MAX_TILT: f32 = 1.3089969;
+/// The left button let go on the move (`ease_back`): what is left of the
+/// orbit's way back behind the walk shrinks by e in this many seconds...
+const EASE_BACK_S: f32 = 0.06;
+/// ...and goes at least this fast (radians a second), so it ends: from half
+/// a turn about 0.27 s, from a quarter about 0.23 s. Both are ours.
+const EASE_BACK_MIN: f32 = 1.5;
 /// The walk camera's pi and two pi (`viwalkcamera.cpp`'s literals).
 const PI: f32 = std::f32::consts::PI;
 const TWO_PI: f32 = std::f32::consts::TAU;
@@ -129,6 +150,21 @@ pub enum Zoom {
 /// `keys` the keyboard's, `pad` the controller's), or autorun.
 pub fn moving(keys: &[f32; 4], pad: &[f32; 4], autorun: bool) -> bool {
     autorun || [keys[2], keys[3], pad[2], pad[3]].iter().any(|v| *v != 0.0)
+}
+
+/// Both buttons held (`Mouse::running`): the sticks (rx, ry, lx, ly, the
+/// keys', the controller's and the touch screen's together) walk forward
+/// alone, the left stick all the way up and nothing to the side; the look's
+/// right stick is left as it is.
+pub fn both_run(sticks: &mut [f32; 4]) {
+    sticks[2] = 0.0;
+    sticks[3] = -1.0;
+}
+
+/// An angle as the shortest way round: within (-pi, pi].
+fn shortest(a: f32) -> f32 {
+    let a = a.rem_euclid(TWO_PI);
+    if a > PI { a - TWO_PI } else { a }
 }
 
 /// The wheel's `lines` (in positive) on `cam`: whether it changes the
@@ -322,9 +358,25 @@ pub struct Mouse {
     /// to the view first)
     steered: bool,
     /// the player moves this frame by the keys, a stick or autorun (the
-    /// caller's, before `look` and `steer`): the left button then steers in
-    /// the follow orbit as the right does (`held_as`)
+    /// caller's, before `look`): the left button's look in the follow orbit
+    /// then keeps the walk on the view it began with (`walk_view`)
     pub moving: bool,
+    /// the view the follow orbit's walk keeps (`walk_view`), the orbit's
+    /// angle it was taken at, and whether the camera is easing back there
+    kept: Option<Kept>,
+}
+
+/// The view the walk keeps while the left button looks round on the move
+/// (`Mouse::walk_view`), and the orbit's angle as it was taken: the camera
+/// eases back there once the button is let go (`easing`).
+#[derive(Clone, Copy, Debug)]
+struct Kept {
+    view: crate::controls::WalkView,
+    orbit: F<Ee>,
+    /// the orbit's angle as the look (or the ease) last left it, where it
+    /// is held against the game's drag round behind the run
+    look: F<Ee>,
+    easing: bool,
 }
 
 impl Mouse {
@@ -445,25 +497,82 @@ impl Mouse {
     }
 
     /// Whether the mouse steers the body in camera `mode` this frame
-    /// (`controls::Client::steer`): the right button in the follow orbit,
-    /// and the left there too while the player moves (`held_as`), either in
-    /// first person and the follow camera, which it turns itself.
+    /// (`controls::Client::steer`): the right button in the follow orbit
+    /// (alone or with the left), either in first person and the follow
+    /// camera, which it turns itself. The left alone in the follow orbit
+    /// looks round, on the move too (`walk_view`).
     pub fn steer(&self, mode: i32) -> bool {
         match mode {
-            3 => self.held_as(mode)[1],
+            3 => self.held[1],
             0 | 2 => self.held[0] || self.held[1],
             _ => false,
         }
     }
 
-    /// The buttons as the look takes them in camera `mode`: in the follow
-    /// orbit the left one, held while the player moves (`moving`), steers as
-    /// the right does (F3 20261025-044637: "Moving should make it work
-    /// similar to holding right click"); standing still it looks round the
-    /// player without turning it.
-    fn held_as(&self, mode: i32) -> [bool; 2] {
-        let left_steers = mode == 3 && self.held[0] && self.moving;
-        [self.held[0], self.held[1] || left_steers]
+    /// The view the follow orbit's walk keeps this frame
+    /// (`controls::Client::walk_view`, the module's doc): while the left
+    /// button alone looks round on the move, and while the camera eases
+    /// back behind the walk's way after it.
+    pub fn walk_view(&self) -> Option<crate::controls::WalkView> {
+        self.kept.map(|k| k.view)
+    }
+
+    /// Before the look moves the camera: the view the walk keeps taken, or
+    /// kept, or let go. The left button alone held on the move in the follow
+    /// orbit takes `eye` (the camera's direction as last drawn, which the
+    /// walk went by) and the default tilt as they are, once; and holds the
+    /// orbit where the look left it, as the game's camera, re-derived from
+    /// where it was, would drag round behind a run going another way (the
+    /// right button's steer puts it back behind the body for the same
+    /// reason). Let go on the move, the camera eases back (`ease_back`); a
+    /// stop, the right button or another camera lets the view go at once,
+    /// the camera where it is.
+    fn keep_view(&mut self, cam: &mut WalkCamera<Ee>, eye: Vect3<Ee>) {
+        if cam.camera_mode != 3 || !self.moving || self.held[1] {
+            self.kept = None;
+            return;
+        }
+        let looking = self.held[0];
+        match self.kept.as_mut() {
+            Some(k) => {
+                k.easing = !looking;
+                if looking {
+                    cam.set_orbit_angle(k.look);
+                    end_swing(cam);
+                }
+            }
+            None if looking => {
+                let view = crate::controls::WalkView { dir: eye, tilt: cam.def_orbit_pitch };
+                let a = cam.cur.orbit.x;
+                self.kept = Some(Kept { view, orbit: a, look: a, easing: false });
+            }
+            None => {}
+        }
+    }
+
+    /// After the look: the orbit as the left button's look left it (held
+    /// there next frame, `keep_view`); or, the button let go on the move, the
+    /// orbit a frame `frame_s` seconds long nearer the angle the view was
+    /// taken at, behind the walk's way (`EASE_BACK_S`, `EASE_BACK_MIN`). The
+    /// frame after it is there the view is let go, the camera's direction
+    /// as drawn then the walk's own again.
+    fn ease_back(&mut self, cam: &mut WalkCamera<Ee>, frame_s: f32) {
+        let Some(k) = self.kept.as_mut() else { return };
+        if !k.easing {
+            k.look = cam.cur.orbit.x;
+            return;
+        }
+        let left = shortest(k.orbit.0 - k.look.0);
+        if left == 0.0 {
+            self.kept = None;
+            return;
+        }
+        let step = (left.abs() * (1.0 - (-frame_s / EASE_BACK_S).exp())).max(EASE_BACK_MIN * frame_s);
+        k.look = if step >= left.abs() { k.orbit } else { k.look + F::new(step.copysign(left)) };
+        cam.set_orbit_angle(k.look);
+        // the camera kept where the ease puts it: no swing round (the
+        // camera comes in as far as it must: `camreach`, as steered)
+        end_swing(cam);
     }
 
     /// The window lost the pointer or the focus, or the look was taken
@@ -596,12 +705,15 @@ impl Mouse {
         look
     }
 
-    /// This frame's drag and wheel let go of (a window up, the camera held).
+    /// This frame's drag and wheel let go of (a window up, the camera held),
+    /// and the view the walk kept (`walk_view`) with them: the walk goes by
+    /// the camera's own again.
     pub fn discard(&mut self) {
         self.look = (0.0, 0.0);
         self.wheel = 0.0;
         self.steps = 0.0;
         self.steered = false;
+        self.kept = None;
     }
 
     /// This frame's look and wheel on the walker (`look_held`, `zoom`), for a
@@ -609,26 +721,39 @@ impl Mouse {
     /// `UpdateControls` (first person's pitch at a liquid's surface), and
     /// what the wheel asks of the camera's style (`zoom_step`, which the
     /// caller carries out: `Play::wheel_style`); a wheel that does is no
-    /// zoom.
+    /// zoom. The view the walk keeps (`walk_view`) is taken off the camera
+    /// as last drawn (`Walker::eye`), before the look moves it.
     pub fn look(&mut self, w: &mut Walker, inverted: bool, frame_s: f32) -> ([f32; 2], Zoom) {
         let (dx, dy) = std::mem::take(&mut self.look);
         let wheel = std::mem::take(&mut self.wheel);
         self.steps = 0.0;
         let zoom = zoom_step(&w.cam, wheel);
-        let held = self.held_as(w.cam.camera_mode);
-        let stick = look_held(&mut w.cam, held, dx as f32, dy as f32, inverted, frame_s, self.steered);
-        self.steered = held[1] && w.cam.camera_mode == 3;
+        let stick = self.look_on(&mut w.cam, w.eye.direction, dx as f32, dy as f32, inverted, frame_s);
         if zoom == Zoom::None && wheel != 0.0 {
             self::zoom(&mut w.cam, &mut w.reach, wheel);
         }
         (stick, zoom)
+    }
+
+    /// The buttons' look of (dx, dy) pixels on `cam`, `eye` the camera's
+    /// direction as last drawn: the view the walk keeps taken or held
+    /// (`keep_view`), the look (`look_held`), then the hold's angle noted
+    /// or the ease back stepped (`ease_back`).
+    fn look_on(&mut self, cam: &mut WalkCamera<Ee>, eye: Vect3<Ee>, dx: f32, dy: f32, inverted: bool, frame_s: f32) -> [f32; 2] {
+        self.keep_view(cam, eye);
+        let stick = look_held(cam, self.held, dx, dy, inverted, frame_s, self.steered);
+        self.steered = self.held[1] && cam.camera_mode == 3;
+        self.ease_back(cam, frame_s);
+        stick
     }
 }
 
 /// An angle snap the game began (`MoveCamera`'s `FindOrbitAngle` found a
 /// clear angle: flag 1) ends where it is: the client's own, where swinging
 /// round would turn the player with it (the right button's steer, and a
-/// tilt under the game's pitch). Its target is the orbit as it is, so the
+/// tilt under the game's pitch), or take the camera off where the left
+/// button's look on the move holds it (`Mouse::keep_view`, `ease_back`).
+/// Its target is the orbit as it is, so the
 /// game's own snap ends it at its next tick (clearing the no-turn bit with
 /// it); the camera then comes in only as far as what is in the way needs
 /// (`camreach::come_in`), never to its closest for it (F3 2026-11-09, in
@@ -1507,42 +1632,129 @@ mod tests {
         assert_eq!(cam.walk.phys.angles.x, h1, "no turn");
     }
 
-    /// The left button held while the player moves steers the follow orbit
-    /// as the right does (F3 20261025-044637: "Moving should make it work
-    /// similar to holding right click"), through `Mouse::look` and `steer`
-    /// on a walk on Freeport's ground: the body turned to the view as the run
-    /// begins, then the body and the camera behind it turned by the mouse.
-    /// The controls: standing still, before and after, the same hold and
-    /// drag swing the camera round alone, the body left as it faced.
+    /// The left button held while the player moves looks round the follow
+    /// orbit as it does standing, and the run goes on as it went (the GM
+    /// Jibrish's ask of 2026-11-17): the view the walk goes by kept as the
+    /// look began (`walk_view`), the camera held where the look put it; let
+    /// go, the camera eases back behind the run in about a quarter second,
+    /// the same at 30 and 165 frames a second, the run going on its way all
+    /// along and after, when the walk goes by the camera's own view again.
+    /// The control: the same look with the view not handed to the walk, and
+    /// the run turns with the camera (the game's follow orbit, as it was
+    /// before F3 20261025-044637 made the left button steer).
     #[test]
-    fn the_left_button_steers_while_the_player_moves() {
-        let Some(world) = crate::walker::tests::tunaria_round(25390.0, 15750.0) else { return };
-        let mut w = Walker::arrive(world, crate::walker::Spawn::ground(25390.0, 15750.0, 0.5));
-        assert_eq!(w.cam.camera_mode, 3, "the follow orbit");
-        let mut m = Mouse::default();
-        m.held = [true, false];
-        let h0 = w.cam.walk.phys.angles.x;
-        m.look = (-100.0, 0.0);
-        m.look(&mut w, false, 1.0 / 60.0);
-        assert!(!m.steer(3), "standing still the left button does not steer");
-        assert_eq!(w.cam.walk.phys.angles.x, h0, "standing still the body stays");
-        let view = w.cam.cur.orbit.x + F::new(PI);
-        assert!(wrapped((view - h0).0).abs() > 0.7, "the camera swung round");
+    fn the_left_button_looks_round_on_the_move_and_the_run_goes_on() {
+        let run = [0.0, 0.0, 0.0, -1.0];
+        let mut eased = Vec::new();
+        for ms in [33i64, 6] {
+            for control in [false, true] {
+                let frames = |s: f32| (s * 1000.0 / ms as f32).round() as usize;
+                let case = format!("{ms} ms frames, control {control}");
+                let mut r = Rig::new();
+                let mut m = Mouse { moving: true, ..Default::default() };
+                for _ in 0..frames(1.0) {
+                    r.mouse_frame(&mut m, run, (0.0, 0.0), ms, control);
+                }
+                let way0 = r.way(&mut m, run, frames(0.5), ms, control);
+                // the left button, the view swung 1.6 radians round
+                m.held = [true, false];
+                r.mouse_frame(&mut m, run, (-200.0, 0.0), ms, control);
+                assert!(m.walk_view().is_some() && !m.steer(3), "the left button looks: {case}");
+                let looked = r.cam.cur.orbit.x.0;
+                let behind = m.kept.unwrap().orbit.0;
+                assert!(wrapped(looked - behind).abs() > 1.5, "the camera swung round: {case}");
+                for _ in 0..frames(0.5) {
+                    r.mouse_frame(&mut m, run, (0.0, 0.0), ms, control);
+                }
+                let way = r.way(&mut m, run, frames(0.5), ms, control);
+                let case = format!("{case}: the run's way {way0} -> {way}");
+                if control {
+                    assert!(wrapped(way - way0).abs() > 1.0, "the run turns with the camera: {case}");
+                    continue;
+                }
+                assert!(wrapped(way - way0).abs() < 0.03, "the run goes on: {case}");
+                assert!(wrapped(r.cam.cur.orbit.x.0 - looked).abs() < 0.02, "the camera held where the look put it: {case}, {looked} -> {}", r.cam.cur.orbit.x.0);
+                // let go: the camera eases back behind the run, the run on
+                m.held = [false, false];
+                let p0 = r.cam.walk.phys.position;
+                let mut n = 0;
+                while m.walk_view().is_some() {
+                    r.mouse_frame(&mut m, run, (0.0, 0.0), ms, false);
+                    n += 1;
+                    assert!(n < frames(1.0), "the ease ends: {case}");
+                }
+                let p = r.cam.walk.phys.position;
+                let during = (p.x.0 - p0.x.0).atan2(p.z.0 - p0.z.0);
+                assert!(wrapped(during - way0).abs() < 0.03, "the run goes on as the camera eases back: {case}, {during}");
+                assert!(wrapped(r.cam.cur.orbit.x.0 - behind).abs() < 0.02, "the camera behind the run: {case}");
+                // the frame the camera got there (the view let go the next)
+                eased.push((n - 1) as f32 * ms as f32 / 1000.0);
+                let after = r.way(&mut m, run, frames(0.5), ms, false);
+                assert!(wrapped(after - way0).abs() < 0.03, "the run goes on, on the camera's view: {case}, {after}");
+            }
+        }
+        assert!(eased.iter().all(|t| (0.15..0.35).contains(t)), "about a quarter second: {eased:?}");
+        assert!((eased[0] - eased[1]).abs() <= 0.034, "the same at 30 and 165 a second, within a frame: {eased:?}");
+    }
+
+    /// Standing still the left button looks round and keeps no view; a run
+    /// begun under it goes the way the camera looks then, and that view is
+    /// kept. The right button lets it go at once (and steers), as do a stop,
+    /// a window (`discard`) and another camera: none of them eases back.
+    #[test]
+    fn a_view_is_kept_from_the_run_under_the_left_button_and_let_go_at_once() {
+        let run = [0.0, 0.0, 0.0, -1.0];
+        let mut r = Rig::new();
+        let mut m = Mouse { held: [true, false], ..Default::default() };
+        r.mouse_frame(&mut m, [0.0; 4], (150.0, 0.0), 16, false);
+        assert!(m.walk_view().is_none(), "standing still nothing is kept");
+        let looked = r.cam.cur.orbit.x.0;
+        // W under the held button: the camera's view as it is now
         m.moving = true;
-        assert!(m.steer(3), "moving, the left button steers");
-        m.look(&mut w, false, 1.0 / 60.0);
-        let h = w.cam.walk.phys.angles.x;
-        assert_eq!(h, view.fmodf(F::new(TWO_PI)), "the body to the view");
-        m.look = (50.0, 0.0);
-        m.look(&mut w, false, 1.0 / 60.0);
-        let h1 = (h + F::new(-(50.0 * LOOK_PER_PIXEL))).fmodf(F::new(TWO_PI));
-        assert_eq!(w.cam.walk.phys.angles.x, h1, "turned by the mouse");
-        assert_eq!(w.cam.cur.orbit.x, (h1 + F::new(PI)).fmodf(F::new(TWO_PI)), "the camera behind");
-        m.moving = false;
-        m.look = (-100.0, 0.0);
-        m.look(&mut w, false, 1.0 / 60.0);
-        assert_eq!(w.cam.walk.phys.angles.x, h1, "still again, the body stays");
-        assert!(wrapped((w.cam.cur.orbit.x - (h1 + F::new(PI))).0).abs() > 0.7, "and the camera swings round");
+        let eye = r.eye.direction;
+        r.mouse_frame(&mut m, run, (0.0, 0.0), 16, false);
+        assert_eq!(m.walk_view().map(|v| v.dir), Some(eye), "kept as the run begins");
+        for _ in 0..60 {
+            r.mouse_frame(&mut m, run, (0.0, 0.0), 16, false);
+        }
+        let way = r.way(&mut m, run, 30, 16, false);
+        assert!(wrapped(way - (looked + PI)).abs() < 0.05, "the run the camera's way: {way}, the camera looking {}", looked + PI);
+        // the right button: let go, steered
+        m.held = [true, true];
+        r.mouse_frame(&mut m, run, (0.0, 0.0), 16, false);
+        assert!(m.walk_view().is_none() && m.steer(3), "the right button steers");
+        // a stop, a window, another camera
+        for end in ["a stop", "a window", "another camera"] {
+            m.held = [true, false];
+            m.moving = true;
+            r.mouse_frame(&mut m, run, (40.0, 0.0), 16, false);
+            assert!(m.walk_view().is_some(), "{end}: kept");
+            m.held = [false, false];
+            match end {
+                "a stop" => m.moving = false,
+                "a window" => m.discard(),
+                _ => crate::camstyle::set_style(&mut r.cam, 2, None, &mut r.room),
+            }
+            let orbit = r.cam.cur.orbit.x;
+            m.look_on(&mut r.cam, r.eye.direction, 0.0, 0.0, false, 0.016);
+            assert!(m.walk_view().is_none(), "{end}: let go");
+            assert_eq!(r.cam.cur.orbit.x, orbit, "{end}: no ease back");
+            if end == "another camera" {
+                crate::camstyle::set_style(&mut r.cam, 3, None, &mut r.room);
+            }
+        }
+    }
+
+    /// Both buttons: forward alone (`both_run`), whatever the keys and the
+    /// sticks walk (A, S, the controller's left stick); the look's right
+    /// stick left as it is.
+    #[test]
+    fn both_buttons_run_forward_alone() {
+        for walk in [[0.0, 0.0, -1.0, 1.0], [0.3, -0.2, 0.7, 0.0], [0.0; 4], [0.0, 0.0, 1.0, -1.0]] {
+            let mut s = walk;
+            both_run(&mut s);
+            assert_eq!(s, [walk[0], walk[1], 0.0, -1.0], "{walk:?}");
+        }
     }
 
     /// What counts as moving: the keys' or a stick's walk (axes 2 and 3), or
@@ -1786,10 +1998,35 @@ mod tests {
         /// The rest of a frame `ms` long after its look: `UpdateControls` on
         /// `sticks`, `Process`.
         fn step(&mut self, sticks: [f32; 4], steer: bool, ms: i64) {
-            let c = crate::controls::Client { steer, ..Default::default() };
+            self.step_with(sticks, crate::controls::Client { steer, ..Default::default() }, ms);
+        }
+
+        fn step_with(&mut self, sticks: [f32; 4], c: crate::controls::Client, ms: i64) {
             crate::controls::update_controls(self, sticks, &c);
             self.room.t += ms;
             self.eye = self.cam.process(&mut self.room);
+        }
+
+        /// A frame `ms` long with the mouse `m`: its look of `drag` pixels
+        /// (`Mouse::look_on`), then `UpdateControls` on `sticks` with its
+        /// steer and the view it keeps (none, `blind`: the control), and
+        /// `Process`.
+        fn mouse_frame(&mut self, m: &mut Mouse, sticks: [f32; 4], drag: (f32, f32), ms: i64, blind: bool) {
+            m.look_on(&mut self.cam, self.eye.direction, drag.0, drag.1, false, ms as f32 / 1000.0);
+            let walk_view = if blind { None } else { m.walk_view() };
+            let c = crate::controls::Client { steer: m.steer(self.cam.camera_mode), walk_view, ..Default::default() };
+            self.step_with(sticks, c, ms);
+        }
+
+        /// `n` frames of `mouse_frame` with no drag: the way the body went
+        /// across the ground (as a heading: 0 along z, a quarter turn along x).
+        fn way(&mut self, m: &mut Mouse, sticks: [f32; 4], n: usize, ms: i64, blind: bool) -> f32 {
+            let p0 = self.cam.walk.phys.position;
+            for _ in 0..n {
+                self.mouse_frame(m, sticks, (0.0, 0.0), ms, blind);
+            }
+            let p = self.cam.walk.phys.position;
+            (p.x.0 - p0.x.0).atan2(p.z.0 - p0.z.0)
         }
     }
 
@@ -1860,19 +2097,20 @@ mod tests {
     }
 
     /// The right button and A: a sidestep along a line (the strafe's
-    /// animation), the body facing as it was, the camera behind it; both
-    /// buttons and A run the diagonal, forward and left at once. The
+    /// animation), the body facing as it was, the camera behind it; with W
+    /// too (`both`) the diagonal, forward and left at once (both buttons
+    /// leave A out: `both_run`). The
     /// controls: unsteered the game turns the body to its way (and back
     /// runs it round), and steered with the camera not put back behind it,
     /// the camera is dragged round.
     #[test]
-    fn steered_a_sidesteps_in_a_line_and_both_buttons_run_the_diagonal() {
+    fn steered_a_sidesteps_in_a_line_and_w_and_a_run_the_diagonal() {
         for (both, steer, behind) in [(false, true, true), (true, true, true), (false, false, false), (false, true, false)] {
             let mut r = Rig::new();
             let (h0, p0) = (r.cam.walk.phys.angles.x.0, r.cam.walk.phys.position);
             let sticks = [0.0, 0.0, -1.0, if both { -1.0 } else { 0.0 }];
             for f in 0..90 {
-                r.frame(sticks, steer, behind.then_some(([both, true], f > 0)));
+                r.frame(sticks, steer, behind.then_some(([false, true], f > 0)));
             }
             let (h, p) = (r.cam.walk.phys.angles.x.0, r.cam.walk.phys.position);
             let (dx, dz) = (p.x.0 - p0.x.0, p.z.0 - p0.z.0);

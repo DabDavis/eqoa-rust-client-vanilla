@@ -53,6 +53,15 @@
 //! it off (the pad, the keys, the touch screen) every call is the game's.
 //! While it steers, follow paces the player but does not turn it.
 //!
+//! Also the client's own: `Client::walk_view`, the view the follow orbit's walk
+//! keeps while the mouse's left button looks round on the move (`mouse.rs`).
+//! Mode 3's `ViewRelativeMove` and `ViewRelativeWalk`, which read nothing of the
+//! camera but the direction they are handed, are handed the camera's direction
+//! as that look began instead of the camera's own: the run goes on as it went,
+//! the sticks, the keys and autorun all as the game takes them, on a camera
+//! that stopped where the look began. A follow, which steers by turning the
+//! camera, walks on the camera's own as ever.
+//!
 //! A jump (`Client::jumps`, go-eqoa-server's `world.jump`), the client's own: the
 //! jump key asks `Walker` for one, which takes off between console frames when
 //! `Client::may_jump` and the walk itself allow (on a floor, out of any liquid),
@@ -107,6 +116,9 @@ pub struct Client {
     pub keys: [f32; 8],
     /// the client's own (the module's doc): the mouse steers the body
     pub steer: bool,
+    /// the client's own (the module's doc): the view the follow orbit's walk
+    /// keeps while the mouse's left button looks round on the move
+    pub walk_view: Option<WalkView>,
     /// `m_p00078`: following the group member `m_p0007C`
     pub follow: Follow,
     /// `UpdateGame`'s `m_walkCam.m_runSpeed`, which `Walker::frame_with`
@@ -135,7 +147,7 @@ pub struct Client {
 
 impl Default for Client {
     fn default() -> Self {
-        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0, modal: false, flying: false, noclip: false, jumps: false, stood_sent: false, step: true }
+        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, walk_view: None, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0, modal: false, flying: false, noclip: false, jumps: false, stood_sent: false, step: true }
     }
 }
 
@@ -149,6 +161,18 @@ impl Client {
     pub fn may_jump(&self) -> bool {
         self.jumps && self.stood_sent && self.move_ok && !self.rooted && !self.modal && !self.casting && !self.flying && !self.timed_out && Fe::ZERO < Fe::new(self.run_speed)
     }
+}
+
+/// The view the follow orbit's walk keeps (`Client::walk_view`, the module's
+/// doc), the client's own: taken off the camera as the mouse's left button
+/// began to look round on the move (`mouse::Mouse::walk_view`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WalkView {
+    /// `m_camera.m_dir` then: what `ViewRelativeMove` is handed
+    pub dir: Vect3<Ee>,
+    /// the orbit's default pitch then, which a GM's flight climbs by
+    /// (`Walker::fly_pitch`), where the look's tilt would move it
+    pub tilt: Fe,
 }
 
 /// Following (`m_p00078`), and the member followed (`m_p0007C`) as
@@ -439,7 +463,12 @@ pub fn update_controls(w: &mut impl Walk, keys: [f32; 4], c: &Client) -> Changed
                     w.walk(fwd, strafe);
                 }
             } else {
-                let dir = w.camera_dir();
+                // the client's own: the view the left button's look on the
+                // move keeps (`Client::walk_view`); a follow steers by the camera
+                let dir = match c.walk_view {
+                    Some(v) if !following => v.dir,
+                    _ => w.camera_dir(),
+                };
                 if !walking {
                     w.view_relative_move(&dir, fwd, strafe);
                 } else {
@@ -478,11 +507,13 @@ mod tests {
         /// the camera effect's `ManualTerp` and `ManualHpr`
         terp: f32,
         look: Vect3<Ee>,
+        /// the views `ViewRelativeMove` and `ViewRelativeWalk` were handed
+        views: Vec<Vect3<Ee>>,
     }
 
     impl Log {
         fn new(mode: i32) -> Self {
-            Log { mode, heading: 0.0, orbit: PI, liquid: false, calls: Vec::new(), terp: 0.0, look: Vect3::default() }
+            Log { mode, heading: 0.0, orbit: PI, liquid: false, calls: Vec::new(), terp: 0.0, look: Vect3::default(), views: Vec::new() }
         }
     }
 
@@ -523,10 +554,12 @@ mod tests {
         fn swim_up(&mut self, t: Fe) {
             self.calls.push(format!("swim {}", t.0));
         }
-        fn view_relative_move(&mut self, _: &Vect3<Ee>, x: Fe, y: Fe) {
+        fn view_relative_move(&mut self, r: &Vect3<Ee>, x: Fe, y: Fe) {
+            self.views.push(*r);
             self.calls.push(format!("vmove {} {}", x.0, y.0));
         }
-        fn view_relative_walk(&mut self, _: &Vect3<Ee>, x: Fe, y: Fe) {
+        fn view_relative_walk(&mut self, r: &Vect3<Ee>, x: Fe, y: Fe) {
+            self.views.push(*r);
             self.calls.push(format!("vwalk {} {}", x.0, y.0));
         }
         fn set_target_heading(&mut self, h: Fe) {
@@ -815,8 +848,40 @@ mod tests {
         assert_eq!(run(3, [0.0; 4], Client { steer: true, ..fight }).0, ["move 0 0", "in -0", "right -0"]);
         assert_eq!(run(0, [0.0; 4], fight).0[1], "turn 1");
         assert_eq!(run(0, [0.0; 4], Client { steer: true, ..fight }).0[1], "turn 0");
-        // both buttons (the stick's y all the way up) with A: forward and left
+        // the right button with W and A: forward and left
         assert_eq!(run(3, [0.0, 0.0, -1.0, -1.0], steer).0[0], "move 1 -1");
+    }
+
+    /// The view the left button's look on the move keeps (`Client::walk_view`):
+    /// mode 3's view-relative move and walk are handed it, with the game's own
+    /// calls (the stick's zoom and orbit, a fight's turn to the target); a
+    /// follow walks on the camera's own, which it steers by. The controls: the
+    /// same sticks without it are handed the camera's direction, and steered
+    /// (the right button) the body's own axes take no view at all.
+    #[test]
+    fn a_kept_view_is_the_one_the_walk_goes_by() {
+        let camera = Vect3::<Ee>::of(0.0, 0.0, 1.0);
+        let kept = WalkView { dir: Vect3::of(-1.0, -0.2, 0.0), tilt: Fe::new(0.3) };
+        let c = Client { walk_view: Some(kept), ..Client::default() };
+        for (client, view) in [(c, kept.dir), (Client::default(), camera)] {
+            let mut w = Log::new(3);
+            update_controls(&mut w, STICKS, &client);
+            assert_eq!(w.calls, ["vmove 1 -0.75", "in -0.25", "right 0.5"]);
+            assert_eq!(w.views, [view]);
+        }
+        let mut w = Log::new(3);
+        update_controls(&mut w, STICKS, &Client { casting: true, ..c });
+        assert_eq!((w.calls[0].as_str(), w.views[0]), ("vwalk 1 -0.75", kept.dir), "a cast walks on it too");
+        let me = [10.0, 0.0, 10.0];
+        let mut w = Log::new(3);
+        update_controls(&mut w, [0.0; 4], &Client { auto_attack: true, target: Some(([20.0, 3.0, 10.0], me)), ..c });
+        assert_eq!(w.calls, ["vmove 0 0", "heading 1.571", "in -0", "right -0"], "a fight still turns to the target");
+        let mut w = Log::new(3);
+        update_controls(&mut w, [0.0; 4], &Client { follow: Follow::At([30.0, 0.0, 10.0], me), ..c });
+        assert_eq!(w.views, [camera], "a follow steers by the camera");
+        let mut w = Log::new(3);
+        update_controls(&mut w, STICKS, &Client { steer: true, ..c });
+        assert_eq!((w.calls[0].as_str(), w.views.len()), ("move 1 -0.75", 0), "steered: the body's axes");
     }
 
     #[test]

@@ -763,9 +763,10 @@ pub fn shot_with(
                         }
                     }
                 }
-                // both mouse buttons: run forward (`Mouse::running`)
+                // both mouse buttons: run forward, the keys' and the sticks'
+                // walk left out (`Mouse::running`, `mouse::both_run`)
                 if mouse.running() {
-                    sticks[3] = -1.0;
+                    crate::mouse::both_run(&mut sticks);
                 }
             } else {
                 // a window up: the wheel and a finger's drag are its up and down
@@ -777,6 +778,9 @@ pub fn shot_with(
             }
             let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
             client.steer = look_free && mouse.steer(walker.cam.camera_mode);
+            // the view the walk keeps while the left button looks round on
+            // the move (`Mouse::walk_view`)
+            client.walk_view = mouse.walk_view().filter(|_| look_free);
             if play.is_none() && !jump_at.is_empty() {
                 (client.jumps, client.stood_sent) = (true, true);
             }
@@ -3289,10 +3293,6 @@ impl App {
             self.run_hold.apply(&mut a);
             return a;
         }
-        // both mouse buttons: run forward (`Mouse::running`)
-        if free && self.mouse.running() {
-            a[3] = -1.0;
-        }
         for (i, a) in a.iter_mut().enumerate() {
             let (m, t) = if i < 2 { (look[i], feel[i]) } else { (0.0, 0.0) };
             for v in [pad[i], m, t] {
@@ -3300,6 +3300,11 @@ impl App {
                     *a = v;
                 }
             }
+        }
+        // both mouse buttons: run forward, the keys' and the sticks' walk
+        // left out (`Mouse::running`, `mouse::both_run`)
+        if free && self.mouse.running() {
+            crate::mouse::both_run(&mut a);
         }
         // a stick that ran runs until it comes back well under the threshold
         self.run_hold.apply(&mut a);
@@ -6272,6 +6277,9 @@ impl App {
                 // the mouse steering the body (`controls::Client::steer`)
                 let look_free = !self.play.as_ref().is_some_and(|p| p.is_dead()) && self.play.as_ref().is_none_or(|p| p.look_free());
                 let steer = look_free && self.walker.as_ref().is_some_and(|w| self.mouse.steer(w.cam.camera_mode));
+                // the view the walk keeps while the left button looks round
+                // on the move (`Mouse::walk_view`)
+                let walk_view = self.mouse.walk_view().filter(|_| look_free);
                 let game_keys = self.game_keys();
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
@@ -6318,6 +6326,7 @@ impl App {
                     let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
                     client.keys = game_keys;
                     client.steer = steer;
+                    client.walk_view = walk_view;
                     // a frame come late while following (`follow_catch_up`)
                     if let Some(p) = play.as_mut() {
                         client = follow_catch_up(w, p, sticks, now, client);
