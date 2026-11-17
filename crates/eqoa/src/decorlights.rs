@@ -399,7 +399,7 @@ pub const TINSEL_PIECE: f32 = 0.7;
 /// its own and its texture in one of four turns, both from `seed` and the
 /// piece (the same every frame): a bushy, twisted garland from any side, where
 /// one band turned to the eye read as a flat strip.
-fn tinsel_pieces(line: &[glam::Vec3], width: f32, seed: u32, strips: &mut Vec<Vec<([f32; 2], [f32; 3])>>) {
+fn tinsel_pieces(line: &[glam::Vec3], width: f32, seed: u32, eye: glam::Vec3, strips: &mut Vec<Vec<([f32; 2], [f32; 3])>>) {
     use glam::Vec3;
     let len = (width * TINSEL_PIECE).max(0.05);
     // the line's length to each point
@@ -433,7 +433,17 @@ fn tinsel_pieces(line: &[glam::Vec3], width: f32, seed: u32, strips: &mut Vec<Ve
         let side = if dir.y.abs() < 0.9 { dir.cross(Vec3::Y) } else { dir.cross(Vec3::X) }.normalize();
         let up = dir.cross(side);
         let h = hash(k);
-        let twist = (h & 0xFFFF) as f32 / 65536.0 * std::f32::consts::PI;
+        // each piece an eighth of a turn on from the last, give or take a
+        // twenty-fourth (the owner, 2026-11-17: "the christmas tree ribbon and
+        // tinsel ... are Z fighting"): two neighbours' overlapping ends are
+        // never one plane, which a free twist made them now and then
+        let jitter = ((h & 0xFFFF) as f32 / 65536.0 - 0.5) * (std::f32::consts::PI / 6.0);
+        let twist = k as f32 * std::f32::consts::FRAC_PI_4 + jitter;
+        // and the piece a little toward the eye, every other one a little
+        // more, so where two overlap one is always in front, and the boughs
+        // under the garland never fight it for the depth
+        let d = eye - c;
+        let c = c + d.normalize_or_zero() * ((NUDGE + NUDGE_PER * d.length()) * if k % 2 == 0 { 1.0 } else { 1.25 });
         // pieces overlap a little, so the garland has no gaps
         let along = dir * (0.6 * total / n as f32);
         for q in 0..2 {
@@ -517,16 +527,20 @@ fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Str
                 // tinsel (`Look::tinsel`): pieces along the wire, each its own
                 // twist, crossed, bushy from any side; no band, no nudge
                 if s.look.tinsel {
-                    tinsel_pieces(&line, 2.0 * half, si as u32, &mut strips);
+                    tinsel_pieces(&line, 2.0 * half, si as u32, e, &mut strips);
                     continue;
                 }
                 // a little toward the eye, more the farther (the depth's own
                 // steps grow with it): a band laid on the boughs never fights
                 // them for the depth (the owner: "the tree red cloth wrap is z
                 // fighting")
-                for p in &mut line {
+                // and more along the run, so where a wide ribbon's coils
+                // overlap round the tree the later is always in front (at one
+                // nudge the coils fought each other)
+                let n = line.len().max(1) as f32;
+                for (i, p) in line.iter_mut().enumerate() {
                     let d = e - *p;
-                    *p += d.normalize_or_zero() * (NUDGE + NUDGE_PER * d.length());
+                    *p += d.normalize_or_zero() * ((NUDGE + NUDGE_PER * d.length()) * (1.0 + 0.5 * i as f32 / n));
                 }
                 // a ribbon turned to the eye; a textured one a strip a span,
                 // the texture once across it (the sampler clamps)
@@ -687,6 +701,13 @@ fn presents_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<
                 let place = |x: f32, y: f32, z: f32| frame(Vec3::new(b.at[0] + z * ys + x * yc, b.at[1] + y, b.at[2] + z * yc - x * ys));
                 let rgba = |c: u32, k: f32| [((c >> 24) & 0xFF) as f32 / 255.0 * k, ((c >> 16) & 0xFF) as f32 / 255.0 * k, ((c >> 8) & 0xFF) as f32 / 255.0 * k, 1.0];
                 let (w, h, dp) = (b.size[0] / 2.0, b.size[1], b.size[2] / 2.0);
+                // toward the eye by `lift` nudges (`NUDGE`, more the farther):
+                // the ribbon over the paper and the second band over the first
+                // at any distance, where 0.002 apart fought far off
+                let toward = |p: Vec3, lift: f32| {
+                    let d = e - p;
+                    p + d.normalize_or_zero() * (lift * (NUDGE + NUDGE_PER * d.length()))
+                };
                 let mut quad = |q: [Vec3; 4], c: [f32; 4]| {
                     // a quad as a strip: its corners in order round it, the strip 0 1 3 2
                     strips.push(vec![([0.0, 0.0], q[0].to_array()), ([0.0, 1.0], q[1].to_array()), ([1.0, 0.0], q[3].to_array()), ([1.0, 1.0], q[2].to_array())]);
@@ -728,7 +749,7 @@ fn presents_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<
                 let rw = 0.09 * b.size[0].min(b.size[2]);
                 let o = 0.012;
                 let (wo, ho, dpo) = (w + o, h + o, dp + o);
-                for (f, k) in [
+                for (n, (f, k)) in [
                     // along x: over the top and down the +x and -x sides
                     ([(-wo, ho, -rw), (wo, ho, -rw), (wo, ho, rw), (-wo, ho, rw)], 1.0),
                     ([(wo, 0.0, -rw), (wo, 0.0, rw), (wo, ho, rw), (wo, ho, -rw)], 0.68),
@@ -737,8 +758,12 @@ fn presents_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<
                     ([(-rw, ho + 0.002, -dpo), (rw, ho + 0.002, -dpo), (rw, ho + 0.002, dpo), (-rw, ho + 0.002, dpo)], 1.0),
                     ([(-rw, 0.0, dpo), (rw, 0.0, dpo), (rw, ho, dpo), (-rw, ho, dpo)], 0.82),
                     ([(-rw, 0.0, -dpo), (rw, 0.0, -dpo), (rw, ho, -dpo), (-rw, ho, -dpo)], 0.74),
-                ] {
-                    quad(f.map(|(x, y, z)| place(x, y, z)), rgba(b.ribbon, k));
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let lift = if n < 3 { 0.5 } else { 1.0 };
+                    quad(f.map(|(x, y, z)| toward(place(x, y, z), lift)), rgba(b.ribbon, k));
                 }
                 if !b.bow {
                     continue;
@@ -750,7 +775,7 @@ fn presents_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<
                     let tip = (dx * bw, ho + bh, dz * bw);
                     let side = (dz * bw * 0.35, 0.0, dx * bw * 0.35);
                     let q = [(0.0, ho, 0.0), (tip.0 + side.0, tip.1, tip.2 + side.2), (tip.0 * 1.15, ho + bh * 0.4, tip.2 * 1.15), (tip.0 - side.0, tip.1, tip.2 - side.2)];
-                    quad(q.map(|(x, y, z)| place(x, y, z)), rgba(b.ribbon, 0.95));
+                    quad(q.map(|(x, y, z)| toward(place(x, y, z), 1.0)), rgba(b.ribbon, 0.95));
                 }
             }
         }

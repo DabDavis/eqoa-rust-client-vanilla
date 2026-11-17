@@ -11,6 +11,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Smoother sleigh, no flicker on the tree
+- **Santa and his riders stay in the sleigh**: on the sleigh tour, Santa at the reins and the players riding along
+  are no longer dropped through the sleigh, or onto a roof it flies over, between the server's updates.
+- **A smoother flight**: the sleigh, its team, Santa and its riders now glide along together between updates
+  instead of being set down and lifted again.
+- **No more flicker on the decorations**: the tree's ribbon and tinsel, and the ribbons on the presents, no longer
+  flicker where they overlap the boughs, the paper or each other.
+
 ## 2026-11-17 · No stars through a sandstorm
 - **The stars, moon and sun no longer shine through a storm**: a heavy sandstorm, whiteout or snowstorm now hides
   them completely, and a lighter one dims them in proportion. By day the sun no longer glows through a heavy
