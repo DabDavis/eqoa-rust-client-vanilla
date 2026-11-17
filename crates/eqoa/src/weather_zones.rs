@@ -302,11 +302,12 @@ pub fn gust(seed: u32, t: f32) -> f32 {
 }
 
 /// The wind bed's loudness: the snow, sand and whiteout's weight in gusts,
-/// by the effects' volume, half in the open and 0.07 under a roof or by a
-/// wall upwind, at most 0.7. No disc wind sound exists.
-pub fn wind_target(s: &Sample, fx_volume: f32, sheltered: bool) -> f32 {
+/// by the ambience's volume (the Music Volume, `sound::AMBIENCE_CLASS`), half
+/// in the open and 0.07 under a roof or by a wall upwind, at most 0.7. No disc
+/// wind sound exists.
+pub fn wind_target(s: &Sample, volume: f32, sheltered: bool) -> f32 {
     let open = if sheltered { 0.07 } else { 0.5 };
-    ((s.snow + s.sand + s.whiteout) * gust(s.seed, s.time_s) * fx_volume * open).clamp(0.0, 0.7)
+    ((s.snow + s.sand + s.whiteout) * gust(s.seed, s.time_s) * volume * open).clamp(0.0, 0.7)
 }
 
 /// A synthesised wind: per channel, white noise (xorshift32) low-passed, added

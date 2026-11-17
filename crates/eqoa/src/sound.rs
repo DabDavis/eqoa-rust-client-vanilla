@@ -11,12 +11,19 @@
 //! The weather's intensity dims the track (`weather` is the atmosphere's), and
 //! so does the outdoors intensity (`m_p30`, `outdoors`, set each frame from
 //! the weather's probe); the rain and thunder are the atmosphere's own
-//! (`weather.rs`). The track plays on the effects' class (`SetSoundTrack`'s
-//! VISOUNDCLASS_SFX), so the options' Fx Volume sets it, not their Music
-//! Volume, as on a PS2. The sound sprites' half of `UpdateSoundEmitters` is
+//! (`weather.rs`). The track plays on the MUSIC's class (`AMBIENCE_CLASS`),
+//! so the options' Music Volume sets it, not their Fx Volume: the client's
+//! own, the owner's (2026-11-17: "move the ambience to the music slider");
+//! `SetSoundTrack` plays it on VISOUNDCLASS_SFX, so on a PS2 Music at 0 left
+//! the ambience playing. The sound sprites' half of `UpdateSoundEmitters` is
 //! `spells.rs`'s (no world places one; SPELLFX does).
 
 use crate::audio::{Audio, AudioLink};
+
+/// The sound class the zone ambience (AMBTRACK.ESF's tracks) and the storms'
+/// wind bed play on: 1, the music's (Music Volume), not the game's 0 (the
+/// effects', VISOUNDCLASS_SFX), the owner's choice (2026-11-17).
+pub const AMBIENCE_CLASS: i32 = 1;
 use snd::device::SoundDevice;
 use std::collections::HashMap;
 use vi::camera::Eye;
@@ -296,7 +303,7 @@ impl Sound {
 
     fn describe_play(&self, st: [u32; 128], t: &SoundTrack, free: i32, largest: i32, pool: i32) -> String {
         format!(
-            "battle {}, region music {} (bgm {} {:?}), ambient track {:08x}/{:08x} (states {}/{}; terrain profile {}, music {}, played as effects), voices {:06x} {:06x}; volumes: effects {:.2}, music {:.2}; sounds {} of 128, sound RAM {} of {} KB (largest free {} KB), failed creates {} (no slot {}, no memory {})",
+            "battle {}, region music {} (bgm {} {:?}), ambient track {:08x}/{:08x} (states {}/{}; terrain profile {}, music {}, played as music), voices {:06x} {:06x}; volumes: effects {:.2}, music {:.2}; sounds {} of 128, sound RAM {} of {} KB (largest free {} KB), failed creates {} (no slot {}, no memory {})",
             self.battle.1,
             self.stream_best,
             if st[6] != 0 { "streaming" } else { "off" },
@@ -840,7 +847,7 @@ impl Sound {
             if !self.dev.sounds.get(idx as usize).and_then(|s| s.as_ref()).is_some_and(|s| s.is_cached()) {
                 continue;
             }
-            let h = self.dev.play(idx, 0, 0);
+            let h = self.dev.play(idx, 0, AMBIENCE_CLASS);
             let t = &mut self.track;
             t.state[j].p1c = h;
             if t.p00 != 0 {
@@ -864,7 +871,7 @@ impl Sound {
 
         if env & 0xF != 0 {
             if self.track.p24 == -1 && self.track.p20 != -1 {
-                self.track.p24 = self.dev.play(self.track.p20, 0, 0);
+                self.track.p24 = self.dev.play(self.track.p20, 0, AMBIENCE_CLASS);
                 self.dev.set_volume(self.track.p24, 0.7);
             }
         } else if self.track.p24 != -1 {
@@ -991,6 +998,14 @@ mod tests {
     /// the two classes' volumes (Fx, Music) as the options set them: the
     /// sound's line once the track plays, and its samples.
     fn ambience_at(path: &std::path::Path, world: &str, x: f32, z: f32, hour: f32, fx: f32, music: f32) -> (String, Vec<i16>) {
+        let (line, pcm, _) = ambience_over_a_change(path, world, x, z, hour, (fx, music), (fx, music));
+        (line, pcm)
+    }
+
+    /// The same, then the volumes set to `after` (Fx, Music) and the world
+    /// changed (`world_changed`: the track stopped, a new one started by the
+    /// frames after): the samples of the three seconds after the change too.
+    fn ambience_over_a_change(path: &std::path::Path, world: &str, x: f32, z: f32, hour: f32, before: (f32, f32), after: (f32, f32)) -> (String, Vec<i16>, Vec<i16>) {
         // the world's zones off this disc image (the game's `disc_path` is
         // the player's, which a test does not have)
         let image = path.to_path_buf();
@@ -1003,31 +1018,38 @@ mod tests {
         let w = vi::world::World::<Ee>::load(&lib, f).unwrap();
         let mut walker = crate::walker::Walker::new(w, x, z, 0.0);
         let mut s = Sound::offline(path).unwrap();
-        s.dev.set_sound_class_volume(0, fx);
-        s.dev.set_sound_class_volume(1, music);
-        let (mut line, mut pcm) = (String::new(), Vec::new());
-        for k in 0..90 {
+        s.dev.set_sound_class_volume(0, before.0);
+        s.dev.set_sound_class_volume(1, before.1);
+        let (mut line, mut pcm, mut later) = (String::new(), Vec::new(), Vec::new());
+        for k in 0..180 {
+            if k == 90 {
+                s.dev.set_sound_class_volume(0, after.0);
+                s.dev.set_sound_class_volume(1, after.1);
+                s.world_changed();
+            }
             let now = k * 1000 / 30;
             walker.frame(crate::walker::Controls::default(), now);
             let eye = walker.eye;
             s.frame(&mut walker.scene, &eye, hour, now);
-            pcm.extend(s.audio.render(1600));
+            let out = s.audio.render(1600);
+            if k < 90 { pcm.extend(out) } else { later.extend(out) }
             if k == 60 {
                 line = s.describe();
             }
         }
-        (line, pcm)
+        (line, pcm, later)
     }
 
     /// Bird's spot in Lavastorm (F3 20261023-140759): the terrain's profile
     /// there is 19, the world's own storm profile, whose music is the eighth
     /// (`VIWorld::SetProfiles`), so its day track plays, as on a PS2. The
-    /// track is the effects' (`SetSoundTrack` plays it on VISOUNDCLASS_SFX):
-    /// the options' Fx Volume at 0 makes it silent, their Music Volume at 0
-    /// leaves it as loud as it was. Each half is the other's control: a
-    /// track on the music's class fails both.
+    /// track is the MUSIC's here (`AMBIENCE_CLASS`, the owner's 2026-11-17;
+    /// a PS2 plays it on VISOUNDCLASS_SFX): the options' Music Volume at 0
+    /// makes it silent, their Fx Volume at 0 leaves it as loud as it was.
+    /// Each half is the other's control: a track on the effects' class (the
+    /// game's) fails both.
     #[test]
-    fn the_ambience_is_the_effects_class() {
+    fn the_ambience_is_the_music_class() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
         if !path.exists() {
             eprintln!("SKIP: no run/eqoa.iso");
@@ -1039,11 +1061,40 @@ mod tests {
         assert!(line.contains("volumes: effects 1.00, music 1.00"), "{line}");
         let n = loud(&full);
         assert!(n > full.len() / 4, "the track plays: {n} of {}", full.len());
-        let (_, no_fx) = ambience_at(&path, "LAVASTM.ESF", 5239.9, 4431.2, 6.49, 0.0, 1.0);
-        assert_eq!(loud(&no_fx), 0, "Fx Volume 0: the ambience is silent");
-        let (line, no_music) = ambience_at(&path, "LAVASTM.ESF", 5239.9, 4431.2, 6.49, 1.0, 0.0);
-        assert!(line.contains("volumes: effects 1.00, music 0.00"), "{line}");
-        assert_eq!(no_music, full, "Music Volume 0: the ambience as it was");
+        let (_, no_music) = ambience_at(&path, "LAVASTM.ESF", 5239.9, 4431.2, 6.49, 1.0, 0.0);
+        assert_eq!(loud(&no_music), 0, "Music Volume 0: the ambience is silent");
+        let (line, no_fx) = ambience_at(&path, "LAVASTM.ESF", 5239.9, 4431.2, 6.49, 0.0, 1.0);
+        assert!(line.contains("volumes: effects 0.00, music 1.00"), "{line}");
+        assert_eq!(no_fx, full, "Fx Volume 0: the ambience as it was, at the Music Volume");
+        let (_, low) = ambience_at(&path, "LAVASTM.ESF", 5239.9, 4431.2, 6.49, 1.0, 0.3);
+        let peak = |pcm: &[i16]| pcm.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0);
+        assert!(peak(&low) > 0 && peak(&low) < peak(&full), "Music 0.3: quieter ({} of {})", peak(&low), peak(&full));
+    }
+
+    /// A zone change's new track at the Music Volume: Music turned to 0 as
+    /// the world changes, the track the next frames start is silent; Fx
+    /// turned to 0 instead, it plays. The control: neither turned down, the
+    /// new track is heard after the change.
+    #[test]
+    fn a_new_track_after_a_change_keeps_the_music_volume() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !path.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        let loud = |pcm: &[i16]| pcm.iter().filter(|v| v.unsigned_abs() > 16).count();
+        let at = |after| ambience_over_a_change(&path, "LAVASTM.ESF", 5239.9, 4431.2, 6.49, (1.0, 1.0), after);
+        let (_, before, control) = at((1.0, 1.0));
+        assert!(loud(&before) > before.len() / 4, "the track plays before the change");
+        assert!(loud(&control) > control.len() / 8, "the control: a new track after it ({} of {})", loud(&control), control.len());
+        let (_, _, no_music) = at((1.0, 0.0));
+        // the old track's last samples, mixed before the frame that turned it
+        // down and stopped it reached the driver, end within a few frames
+        let settled = &no_music[no_music.len() / 90 * 3..];
+        assert_eq!(loud(settled), 0, "Music Volume 0: the new track is silent");
+        assert!(loud(&no_music) < no_music.len() / 90, "the old track's tail only: {}", loud(&no_music));
+        let (_, _, no_fx) = at((0.0, 1.0));
+        assert_eq!(no_fx, control, "Fx Volume 0: the new track as the control's");
     }
 
     /// A creature's continuous sound (a loop) stops when its sprite goes,
