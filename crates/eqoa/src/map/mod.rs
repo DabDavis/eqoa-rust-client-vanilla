@@ -2001,14 +2001,14 @@ impl Map {
         // under the group and the player; the quests to take first, so a step
         // of the player's own ("?") is drawn over a "!" beside it
         let (lo, hi) = ([-40.0, -40.0], [size.0 as f32 + 40.0, size.1 as f32 + 40.0]);
-        let mut marks: Vec<(u8, [f32; 2])> = self
+        let mut marks: Vec<(u8, bool, [f32; 2])> = self
             .quests
             .of_world(w.index)
-            .map(|(_, m)| (m.kind, v.to_window(size, [m.x, m.z])))
-            .filter(|(_, p)| p[0] >= lo[0] && p[1] >= lo[1] && p[0] <= hi[0] && p[1] <= hi[1])
-            .map(|(kind, p)| (kind, f(p)))
+            .map(|(_, m)| (m.kind, m.ability(), v.to_window(size, [m.x, m.z])))
+            .filter(|(_, _, p)| p[0] >= lo[0] && p[1] >= lo[1] && p[0] <= hi[0] && p[1] <= hi[1])
+            .map(|(kind, ability, p)| (kind, ability, f(p)))
             .collect();
-        marks.sort_by_key(|&(kind, _)| kind != 1);
+        marks.sort_by_key(|&(kind, _, _)| kind != 1);
         let (r, o) = view::quest_radius(size);
         quests::draw_marks(ui, &l.assets, vui, white, &marks, r * k, o * k);
         // the group's members, their compass colours (1 green, 2 blue, 3 cyan, the rest yellow)

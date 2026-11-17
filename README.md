@@ -161,6 +161,15 @@ or a browser (each described where it lives below):
   it lies on its pictures: 2026-11-09, the owner's "they are everywhere", a
   level 60's dozens rang the rim; the tooltip under the mouse); a "?" drawn
   over a "!" beside it; J or R3 (or the map's Quests button) hides them, kept.
+  **An ability quest's mark is green** (petition 2285, the owner's yes of
+  2026-11-17): a quest that gives the player's class an ability, as the server
+  flags it (go-eqoa-server's u8 a quest after 0x7E04's set and 0x7E06's
+  tracker, `net::session::QUEST_FLAG_ABILITY`: a spell among its rewards for
+  the class, by-class rewards and a choice's options too) or the guide's table
+  has it (`questguide::Quest::ability`), its "!" or "?" ringed and lettered
+  green (`map::quests::ABILITY`) on the map, green on the minimap, its name
+  green on the card with " - Ability" after it and green on the tracker; a
+  set with no flags (an older server) is read as before, none of them green.
 - **A GM travels by the map**: a server that offers it (go-eqoa-server, to a
   GM's client alone with the GM's channel: 0x7E34, `Session::map_travel`) has
   the map take Ctrl and a click (⌘, or the Super key, as well) for a trip to

@@ -201,7 +201,7 @@ pub fn map_marks(world: i32) -> Vec<Mark> {
                 super::markers::Marker::Camp(_) => MarkKind::Camp,
                 super::markers::Marker::Coach(_) => MarkKind::Coach,
             };
-            Mark { kind, world: m.world(), at: m.at(), tip: m.card() }
+            Mark { kind, world: m.world(), at: m.at(), tip: m.card(), ability: false }
         })
         .collect()
 }
@@ -246,6 +246,9 @@ pub struct Mark {
     pub world: i32,
     pub at: [f32; 2],
     pub tip: Vec<(String, [f32; 4])>,
+    /// a quest's mark of an ability quest (petition 2285): its glyph drawn
+    /// green (`quests::ABILITY`) in place of the gold
+    pub ability: bool,
 }
 
 impl Mark {
@@ -253,7 +256,7 @@ impl Mark {
     /// in a title's colour (`TIP_TITLE`), the rest in `TIP_TEXT`.
     pub fn text(kind: MarkKind, world: i32, at: [f32; 2], text: &str) -> Mark {
         let tip = text.lines().enumerate().map(|(i, l)| (l.to_string(), if i == 0 { TIP_TITLE } else { TIP_TEXT })).collect();
-        Mark { kind, world, at, tip }
+        Mark { kind, world, at, tip, ability: false }
     }
 }
 
@@ -661,7 +664,8 @@ impl Map {
             for &(q, m) in placed.iter().filter(|(_, m)| m.kind.quest()) {
                 let s = if m.kind == MarkKind::QuestOffer { "!" } else { "?" };
                 let p = f(q);
-                vui.draw_centered_string_ex(&mut r, &vi::ui::wide(s), p[0].round() as i32, p[1].round() as i32, QUEST, 3, true);
+                let color = if m.ability { super::quests::ABILITY } else { QUEST };
+                vui.draw_centered_string_ex(&mut r, &vi::ui::wide(s), p[0].round() as i32, p[1].round() as i32, color, 3, true);
             }
             for q in &mut r.ui.quads[from..] {
                 q.clip = cut;
@@ -874,7 +878,7 @@ mod tests {
     /// on the pictures and a step on them, which stay where they lie.
     #[test]
     fn the_quests_steps_point_the_way_from_the_rim() {
-        let mark = |kind, world, at: [f32; 2]| Mark { kind, world, at, tip: Vec::new() };
+        let mark = |kind, world, at: [f32; 2]| Mark { kind, world, at, tip: Vec::new(), ability: false };
         let marks = [
             mark(MarkKind::QuestStep, 0, [1000.0, 0.0]),
             mark(MarkKind::QuestOffer, 0, [-1000.0, 0.0]),

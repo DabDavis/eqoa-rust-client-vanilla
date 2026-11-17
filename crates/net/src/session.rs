@@ -582,8 +582,16 @@ pub const OP_WEATHER_DATA: u16 = 0x7E94;
 /// count, then each its u8 kind ([`QuestMark::kind`]), u8 world, f32 x and z,
 /// the NPC's name and a u8 count of quests, each its name, u8 lowest and
 /// highest levels, a line and a detail; every text a u8 byte count and UTF-8.
-/// Each is the whole set.
+/// After the set, from a server that sends them, each of its marks' quests'
+/// u8 flags in order ([`QUEST_FLAG_ABILITY`]); a set without them is read as
+/// before, every flag clear. Each is the whole set.
 pub const OP_QUEST_MARKERS_DATA: u16 = 0x7E04;
+/// A quest's flag after [`OP_QUEST_MARKERS_DATA`]'s set and
+/// [`OP_QUEST_PROGRESS_DATA`]'s tracker: the quest gives the player's class an
+/// ability (go-eqoa-server's `questFlagAbility`, petition 2285: a spell among
+/// its rewards for the class), which the map, the minimap and the tracker mark
+/// in their own colour.
+pub const QUEST_FLAG_ABILITY: u8 = 1;
 /// go-eqoa-server's own too: the quest tracker the HUD draws (each quest
 /// under way and what its step asks, counted: "Bat Eye 0/3"), offered and
 /// answered as [`OP_QUEST_MARKERS`] is (`agree_quest_progress`).
@@ -591,8 +599,9 @@ pub const OP_QUEST_PROGRESS: u16 = 0x7E05;
 /// The tracker, from a server the client asked ([`OP_QUEST_PROGRESS`]): a u8
 /// count of quests (the journal's, in its order), each its name and a u8
 /// count of objectives, each its text, u16 had and u16 needed (needed 0:
-/// nothing to count); every text a u8 byte count and UTF-8. Each is the
-/// whole tracker.
+/// nothing to count); every text a u8 byte count and UTF-8. After it, from a
+/// server that sends them, each quest's u8 flags ([`QUEST_FLAG_ABILITY`]).
+/// Each is the whole tracker.
 pub const OP_QUEST_PROGRESS_DATA: u16 = 0x7E06;
 /// go-eqoa-server's own: the effects on the player's pet, for the row under
 /// the pet's bar (the user, 2026-11-09: "put the buff icons under the pet name
@@ -896,10 +905,12 @@ pub const OP_ITEM_LINK_RECORD: u16 = 0x7E53;
 
 /// One quest on the tracker ([`OP_QUEST_PROGRESS_DATA`]): its name and its
 /// step's objectives.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrackedQuest {
     pub name: String,
     pub goals: Vec<QuestGoal>,
+    /// it gives the player's class an ability ([`QUEST_FLAG_ABILITY`])
+    pub ability: bool,
 }
 
 /// One objective: its words, and how many the player has of how many are
@@ -935,9 +946,18 @@ fn read_quest_progress(r: &mut Reader) -> Option<Vec<TrackedQuest>> {
                 QuestGoal { text, have: r.u16(), need: r.u16() }
             })
             .collect();
-        out.push(TrackedQuest { name, goals });
+        out.push(TrackedQuest { name, goals, ability: false });
     }
-    (!r.error).then_some(out)
+    if r.error {
+        return None;
+    }
+    // each quest's flags, from a server that sends them
+    if r.data.len() >= r.pos + out.len() {
+        for q in &mut out {
+            q.ability = r.u8() & QUEST_FLAG_ABILITY != 0;
+        }
+    }
+    Some(out)
 }
 
 /// One quest mark ([`OP_QUEST_MARKERS_DATA`]).
@@ -958,12 +978,22 @@ pub struct QuestMark {
 /// One quest on a mark: its name and levels, a line (the start of the
 /// giver's offer, or the step's journal line) and a detail (its rewards, or
 /// what the step needs).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MarkQuest {
     pub name: String,
     pub levels: (u8, u8),
     pub line: String,
     pub detail: String,
+    /// it gives the player's class an ability ([`QUEST_FLAG_ABILITY`])
+    pub ability: bool,
+}
+
+impl QuestMark {
+    /// Whether a quest on it gives the player's class an ability: the mark
+    /// is drawn in the ability quests' colour (`map::quests::ABILITY`).
+    pub fn ability(&self) -> bool {
+        self.quests.iter().any(|q| q.ability)
+    }
 }
 
 /// [`OP_QUEST_MARKERS_DATA`]'s body, or None when it is short.
@@ -982,12 +1012,22 @@ fn read_quest_marks(r: &mut Reader) -> Option<Vec<QuestMark>> {
             .map(|_| {
                 let name = text(r);
                 let levels = (r.u8(), r.u8());
-                MarkQuest { name, levels, line: text(r), detail: text(r) }
+                MarkQuest { name, levels, line: text(r), detail: text(r), ability: false }
             })
             .collect();
         out.push(QuestMark { kind, world, x, z, npc, quests });
     }
-    (!r.error).then_some(out)
+    if r.error {
+        return None;
+    }
+    // each quest's flags after the set, from a server that sends them
+    let n: usize = out.iter().map(|m| m.quests.len()).sum();
+    if r.data.len() >= r.pos + n {
+        for q in out.iter_mut().flat_map(|m| m.quests.iter_mut()) {
+            q.ability = r.u8() & QUEST_FLAG_ABILITY != 0;
+        }
+    }
+    Some(out)
 }
 
 #[derive(Clone, Debug)]
@@ -4947,9 +4987,19 @@ mod tests {
                 x: 25403.5,
                 z: 15725.5,
                 npc: "Malsis".into(),
-                quests: vec![MarkQuest { name: "The pincers".into(), levels: (1, 10), line: "You there.".into(), detail: "430 XP, Smoldering Aura".into() }],
+                quests: vec![MarkQuest { name: "The pincers".into(), levels: (1, 10), line: "You there.".into(), detail: "430 XP, Smoldering Aura".into(), ability: false }],
             }]
         );
+        assert!(!s.quest_marks[0].ability(), "a set without flags: none an ability quest");
+        // the flags after the set (petition 2285): its quest an ability quest
+        let mut flagged = m.clone();
+        flagged.push(QUEST_FLAG_ABILITY);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, flagged);
+        assert!(s.quest_marks[0].quests[0].ability && s.quest_marks[0].ability(), "flagged after the set");
+        let mut clear = m.clone();
+        clear.push(0);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, clear);
+        assert!(!s.quest_marks[0].ability(), "the control: a clear flag");
         deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 4].to_vec());
         assert_eq!(s.quest_marks.len(), 1, "a short set is not taken");
         s.agree_quest_marks(false);
@@ -5422,8 +5472,16 @@ mod tests {
         text(&mut m, "Give to Kellina");
         m.extend_from_slice(&[0, 0, 0, 0]);
         deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
-        let want = [TrackedQuest { name: "Bat eyes".into(), goals: vec![QuestGoal { text: "Bat Eye".into(), have: 1, need: 3 }, QuestGoal { text: "Give to Kellina".into(), have: 0, need: 0 }] }];
+        let want = [TrackedQuest { name: "Bat eyes".into(), goals: vec![QuestGoal { text: "Bat Eye".into(), have: 1, need: 3 }, QuestGoal { text: "Give to Kellina".into(), have: 0, need: 0 }], ability: false }];
         assert_eq!(s.quest_progress, want);
+        // its flags after it (petition 2285): an ability quest; the control,
+        // a clear flag
+        for (flag, ability) in [(QUEST_FLAG_ABILITY, true), (0, false)] {
+            let mut f = m.clone();
+            f.push(flag);
+            deliver(&mut s, drdp::TYPE_GUARANTEED, f);
+            assert_eq!(s.quest_progress[0].ability, ability, "flag {flag}");
+        }
         assert!(!s.quest_progress[0].goals[0].done() && !s.quest_progress[0].goals[1].done(), "1 of 3, and nothing counted");
         assert!(QuestGoal { text: String::new(), have: 3, need: 3 }.done());
         deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 2].to_vec());

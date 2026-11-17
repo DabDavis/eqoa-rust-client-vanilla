@@ -5,7 +5,8 @@
 //! Sandstorm), in the HUD's frame under the minimap (`map::mini::FRAME`) and
 //! above the chat box at its tallest, out at a wide window's right and up a
 //! tall one's top with the quick menus as the minimap is. No backing: the
-//! words outlined so they read over the world, each quest's name in gold, its
+//! words outlined so they read over the world, each quest's name in gold (an
+//! ability quest's green, `map::quests::ABILITY`, petition 2285), its
 //! objectives under it ("Bat Eye: 0/3"), one counted whole dimmed, a line too
 //! wide for the column wrapped onto a second row (cut there, never its count
 //! or the guide's label); as many quests as fit, whole, then "+N more". A
@@ -129,7 +130,8 @@ pub fn lines(quests: &[TrackedQuest], rows: usize, most: f32, width: impl Fn(&st
             Some(n) => (n, GUIDE),
             None => (q.name.as_str(), ""),
         };
-        let mut mine: Vec<Line> = wrap(name, label, most, &width, WRAP).into_iter().map(|text| Line { text, color: NAME, indent: false }).collect();
+        let color = if q.ability { crate::map::quests::ABILITY } else { NAME };
+        let mut mine: Vec<Line> = wrap(name, label, most, &width, WRAP).into_iter().map(|text| Line { text, color, indent: false }).collect();
         for g in &q.goals {
             let color = if g.done() { DONE } else { GOAL };
             // a long name is cut, never its count
@@ -190,7 +192,7 @@ mod tests {
     use net::session::QuestGoal;
 
     fn quest(name: &str, goals: &[(&str, u16, u16)]) -> TrackedQuest {
-        TrackedQuest { name: name.into(), goals: goals.iter().map(|&(t, have, need)| QuestGoal { text: t.into(), have, need }).collect() }
+        TrackedQuest { name: name.into(), goals: goals.iter().map(|&(t, have, need)| QuestGoal { text: t.into(), have, need }).collect(), ability: false }
     }
 
     /// Each quest's name, then its objectives indented, counted ("Bat Eye:
@@ -205,6 +207,21 @@ mod tests {
         assert_eq!(got.iter().map(|l| l.indent).collect::<Vec<_>>(), [false, true, true, false, true]);
         assert_eq!([got[0].color, got[1].color, got[4].color], [NAME, GOAL, DONE], "the whole one dimmed");
         assert_eq!(goal_text("Bat Eye", 5, 3), "Bat Eye: 3/3", "never more than needed");
+    }
+
+    /// An ability quest's name (petition 2285) is green, every row of it,
+    /// its objectives as any quest's; the control: another quest's name gold.
+    #[test]
+    fn an_ability_quests_name_is_green() {
+        let mut kick = quest("Learning to kick properly", &[("Go", 0, 0)]);
+        kick.ability = true;
+        let qs = [kick, quest("Pawns", &[("Orc Pawn", 1, 3)])];
+        let got = lines(&qs, 20, 14.0, |s| s.len() as f32);
+        let colors: Vec<_> = got.iter().map(|l| (l.text.as_str(), l.color)).collect();
+        let green = crate::map::quests::ABILITY;
+        assert_eq!(colors[..2], [("Learning to", green), ("kick properly", green)], "both rows");
+        assert_eq!(colors[2].1, GOAL, "its objective as ever");
+        assert_eq!(colors[3], ("Pawns", NAME), "the control");
     }
 
     /// Short of room the quests that fit go whole and "+N more" counts the

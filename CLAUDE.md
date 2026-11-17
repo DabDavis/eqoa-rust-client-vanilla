@@ -79,7 +79,8 @@ current.
   town names and the community's markers (suggested from the map, accepted by a GM, the list asked of
   eqoaclassic.com on any server), the waypoints and the group's waypoint, the minimap on N; the quest marks on
   the map and the minimap and the quest tracker from a server that sends them, else the client's own quest
-  guide's, labelled "(guide)"; the Map and the Quest Helper off are the game without them, exactly. The Stats
+  guide's, labelled "(guide)", an ability quest's in green (petition 2285, the owner's yes of 2026-11-17:
+  go-eqoa-server's flags after 0x7E04's set and 0x7E06's tracker, `map::quests::ABILITY`); the Map and the Quest Helper off are the game without them, exactly. The Stats
   Box, the target's mana bar and Target of Target stay out (others' power came back to the group's bars on
   2026-11-12, below); the owner's "they are everywhere" the same day: the
   minimap's rim keeps only the player's own steps' "?", a "!" only where it lies, and the server marks a quest's

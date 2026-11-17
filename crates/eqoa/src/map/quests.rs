@@ -13,7 +13,13 @@
 //! mouse, for a finger that tapped the mark (tapped again, the waypoint goes
 //! on it; a click puts it there at once) and under the pad's middle cross once
 //! the map is panned. Quest Markers (Extended's Quests page, and the map's own
-//! J or R3) hides them, and then the server is asked for none.
+//! J or R3) hides them, and then the server is asked for none. An ability
+//! quest's mark (petition 2285, Zerkziee's "highlights the ability quest
+//! differently compared to other quest", the owner's yes of 2026-11-17: a
+//! quest the server flags as giving the player's class an ability,
+//! `net::session::QUEST_FLAG_ABILITY`, or the guide's own `ability`) is ringed
+//! and lettered green ([`ABILITY`]) whatever its kind, its name on the card in
+//! green with " - Ability" after it, as on the minimap and the tracker.
 
 use super::view::View;
 use net::session::QuestMark;
@@ -25,6 +31,12 @@ pub const TAKE: [f32; 4] = [1.0, 0.82, 0.25, 1.0];
 pub const STEP: [f32; 4] = [0.85, 0.9, 1.0, 1.0];
 /// A hunt's: the creatures a step kills or loots, warmer.
 pub const HUNT: [f32; 4] = [1.0, 0.6, 0.35, 1.0];
+/// An ability quest's mark, whatever its kind, and its name on a card and
+/// the tracker: green, apart from the gold, the pale, the orange and the
+/// waypoints' magenta.
+pub const ABILITY: [f32; 4] = [0.4, 1.0, 0.55, 1.0];
+/// What an ability quest's name says after it on a card.
+pub const ABILITY_TAG: &str = " - Ability";
 /// A badge's inside under its glyph, and its outline.
 const BADGE: [f32; 4] = [0.08, 0.07, 0.05, 0.92];
 const OUTLINE: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
@@ -71,13 +83,14 @@ impl QuestMarks {
     }
 }
 
-/// A mark's glyph and colour.
-pub fn look(kind: u8) -> (&'static str, [f32; 4]) {
-    match kind {
+/// A mark's glyph and colour: its kind's, green for an ability quest's.
+pub fn look(kind: u8, ability: bool) -> (&'static str, [f32; 4]) {
+    let (glyph, color) = match kind {
         1 => ("!", TAKE),
         3 => ("?", HUNT),
         _ => ("?", STEP),
-    }
+    };
+    (glyph, if ability { ABILITY } else { color })
 }
 
 /// Mark `m`'s card: its lines and their colours (wrapped when drawn,
@@ -91,7 +104,11 @@ pub fn card(m: &QuestMark) -> Vec<(String, [f32; 4])> {
             (a, b) if a == b => format!(" (level {a})"),
             (a, b) => format!(" (levels {a}-{b})"),
         };
-        out.push((format!("{}{levels}", q.name), NAME));
+        if q.ability {
+            out.push((format!("{}{levels}{ABILITY_TAG}", q.name), ABILITY));
+        } else {
+            out.push((format!("{}{levels}", q.name), NAME));
+        }
         for (text, color) in [(&q.line, LINE), (&q.detail, DETAIL)] {
             if !text.trim().is_empty() {
                 out.push((text.clone(), color));
@@ -102,29 +119,33 @@ pub fn card(m: &QuestMark) -> Vec<(String, [f32; 4])> {
 }
 
 /// The marks as the minimap's (`mini::Mark`): a quest to take a gold "!"
-/// (`QuestOffer`), a step to do a "?" (`QuestStep`), each with its card for
-/// a tooltip.
+/// (`QuestOffer`), a step to do a "?" (`QuestStep`), an ability quest's
+/// green, each with its card for a tooltip.
 pub fn mini_marks(marks: &[QuestMark]) -> Vec<super::mini::Mark> {
     use super::mini::{Mark, MarkKind};
-    marks.iter().map(|m| Mark { kind: if m.kind == 1 { MarkKind::QuestOffer } else { MarkKind::QuestStep }, world: m.world as i32, at: [m.x, m.z], tip: card(m) }).collect()
+    marks
+        .iter()
+        .map(|m| Mark { kind: if m.kind == 1 { MarkKind::QuestOffer } else { MarkKind::QuestStep }, world: m.world as i32, at: [m.x, m.z], tip: card(m), ability: m.ability() })
+        .collect()
 }
 
 fn rect(ui: &mut Ui, white: usize, r: [f32; 4], color: [f32; 4]) {
     ui.push(Quad { tex: white, blend: 3, pos: [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]], uv: [[0.5, 0.5]; 4], color, clip: None });
 }
 
-/// The marks at their frame points (their kinds), `r` frame pixels from a
-/// badge's middle to its edge and `o` its ring: dark inside a ring of the
-/// mark's colour, its glyph over it in the map's words.
-pub fn draw_marks(ui: &mut Ui, assets: &crate::ui::UiAssets, vui: &vi::ui::Vui, white: usize, shown: &[(u8, [f32; 2])], r: f32, o: f32) {
-    for &(kind, p) in shown {
-        for (grow, color) in [(o * 2.0, OUTLINE), (o, look(kind).1), (0.0, BADGE)] {
+/// The marks at their frame points (their kinds, and whether an ability
+/// quest's), `r` frame pixels from a badge's middle to its edge and `o` its
+/// ring: dark inside a ring of the mark's colour, its glyph over it in the
+/// map's words.
+pub fn draw_marks(ui: &mut Ui, assets: &crate::ui::UiAssets, vui: &vi::ui::Vui, white: usize, shown: &[(u8, bool, [f32; 2])], r: f32, o: f32) {
+    for &(kind, ability, p) in shown {
+        for (grow, color) in [(o * 2.0, OUTLINE), (o, look(kind, ability).1), (0.0, BADGE)] {
             rect(ui, white, [p[0] - r - grow, p[1] - r - grow, p[0] + r + grow, p[1] + r + grow], color);
         }
     }
     let mut raster = assets.raster(ui);
-    for &(kind, p) in shown {
-        let (glyph, color) = look(kind);
+    for &(kind, ability, p) in shown {
+        let (glyph, color) = look(kind, ability);
         vui.draw_centered_string_ex(&mut raster, &vi::ui::wide(glyph), p[0].round() as i32, p[1].round() as i32, color, 0, true);
     }
 }
@@ -141,7 +162,7 @@ mod tests {
             x,
             z,
             npc: "Malsis".into(),
-            quests: vec![MarkQuest { name: "The pincers".into(), levels: (1, 10), line: "You there, will you prove your worth?".into(), detail: "430 XP, Smoldering Aura".into() }],
+            quests: vec![MarkQuest { name: "The pincers".into(), levels: (1, 10), line: "You there, will you prove your worth?".into(), detail: "430 XP, Smoldering Aura".into(), ability: false }],
         }
     }
 
@@ -185,14 +206,36 @@ mod tests {
     /// detail; the control: an empty detail adds no line.
     #[test]
     fn the_card_is_the_marks_quests() {
-        assert_eq!(look(1), ("!", TAKE));
-        assert_eq!(look(2), ("?", STEP));
-        assert_eq!(look(3), ("?", HUNT));
+        assert_eq!(look(1, false), ("!", TAKE));
+        assert_eq!(look(2, false), ("?", STEP));
+        assert_eq!(look(3, false), ("?", HUNT));
         let mut m = mark(1, 0, 0.0, 0.0);
-        m.quests.push(MarkQuest { name: "Kellina's ring".into(), levels: (4, 4), line: "Find my ring.".into(), detail: String::new() });
+        m.quests.push(MarkQuest { name: "Kellina's ring".into(), levels: (4, 4), line: "Find my ring.".into(), detail: String::new(), ability: false });
         let lines = card(&m);
         let text: Vec<&str> = lines.iter().map(|(s, _)| s.as_str()).collect();
         assert_eq!(text, ["Malsis", "The pincers (levels 1-10)", "You there, will you prove your worth?", "430 XP, Smoldering Aura", "Kellina's ring (level 4)", "Find my ring."]);
         assert_eq!([lines[0].1, lines[1].1, lines[2].1, lines[3].1], [NPC, NAME, LINE, DETAIL]);
+    }
+
+    /// An ability quest's mark (petition 2285) is green whatever its kind,
+    /// its glyph the kind's; its name on the card green with the tag, the
+    /// mark's other quests as they were; on the minimap it is an ability
+    /// quest's. The controls: a mark of no ability quest keeps its kind's
+    /// colour, on the map and the minimap.
+    #[test]
+    fn an_ability_quest_is_marked_apart() {
+        for kind in [1, 2, 3] {
+            assert_eq!(look(kind, true), (look(kind, false).0, ABILITY), "kind {kind}");
+            assert_ne!(look(kind, false).1, ABILITY);
+        }
+        let mut m = mark(1, 0, 0.0, 0.0);
+        assert!(!m.ability());
+        m.quests.push(MarkQuest { name: "Kick".into(), levels: (5, 5), line: "Learn to kick.".into(), detail: "Kick".into(), ability: true });
+        assert!(m.ability(), "one ability quest on it");
+        let lines = card(&m);
+        assert_eq!(lines[1], ("The pincers (levels 1-10)".to_string(), NAME), "the other quest as it was");
+        assert_eq!(lines[4], (format!("Kick (level 5){ABILITY_TAG}"), ABILITY));
+        let mini = mini_marks(&[m, mark(2, 0, 1.0, 1.0)]);
+        assert_eq!(mini.iter().map(|k| k.ability).collect::<Vec<_>>(), [true, false]);
     }
 }
