@@ -17,6 +17,7 @@ is put on the page by `.github/workflows/notes.yml`.
 - **The Candy Cane Staff** is striped red and white, with a twinkle at its tip.
 - **The Gingerbread Man**: become a gingerbread man with white icing eyes, a smile, three buttons and wavy icing at the
   wrists and ankles.
+- **The Santa Hat's white ball no longer glows at night**: it is lit like the rest of the hat.
 ## 2026-11-17 · Volumes stay where you set them
 - **Fx Volume and Music Volume are kept the moment you change them**: before, a volume turned down or off was only
   kept with Save Changes, so backing out of Options with Triangle put the old volume back, and a window closed any
