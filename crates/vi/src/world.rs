@@ -424,6 +424,9 @@ fn read_tree<M: Model>(c: &Container, id: NodeId, leaf_words: usize) -> (Vec<Nod
 
 const LEAF: u32 = 0x4000_0000;
 
+/// Not the game's: an actor's `m_p40` bit for [`World::set_actor_floor_only`].
+pub const FLOOR_ONLY: u32 = 0x100;
+
 impl<M: Model> World<M> {
     /// Loads the world in `lib.file(file)`: its tree and every loaded zone's
     /// base, resources and actors (`ParseWorldObj` with i == 0 when the whole
@@ -1079,6 +1082,17 @@ impl<M: Model> World<M> {
         self.update_actor(i);
     }
 
+    /// Not the game's: an actor the walk's sweep and the camera pass through
+    /// whose top the walk's floor probe stands on (`FLOOR_ONLY` in `m_p40`; a
+    /// vehicle's deck walked onto: go-eqoa-server's walk-ons).
+    pub fn set_actor_floor_only(&mut self, i: usize, on: bool) {
+        if on {
+            self.actors[i].flags |= FLOOR_ONLY;
+        } else {
+            self.actors[i].flags &= !FLOOR_ONLY;
+        }
+    }
+
     /// `VIScene::SetActorCollideable`: `m_p40`'s 0x10, which every collide
     /// passes over.
     pub fn set_actor_collideable(&mut self, i: usize, on: bool) {
@@ -1404,11 +1418,14 @@ impl<M: Model> World<M> {
     }
 
     /// `FilterActor`: the filter's own actor, or (the walk filters) a CSprite.
+    /// An actor `FLOOR_ONLY` (not the game's) is passed by the scene's and the
+    /// camera's filters and stood on by the floor's.
     fn filtered(&self, f: &Filter, i: usize, sprite: usize) -> bool {
+        let floor_only = self.actors[i].flags & FLOOR_ONLY != 0;
         match f.kind {
-            FilterKind::Scene => i as i32 == f.actor,
+            FilterKind::Scene => i as i32 == f.actor || floor_only,
             FilterKind::WalkFloor => self.sprites[sprite].sprite_type == 5,
-            FilterKind::WalkCamera => self.sprites[sprite].sprite_type == 5 || i as i32 == f.actor,
+            FilterKind::WalkCamera => self.sprites[sprite].sprite_type == 5 || i as i32 == f.actor || floor_only,
         }
     }
 

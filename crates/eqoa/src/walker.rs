@@ -499,6 +499,14 @@ impl Walker {
         self.eye = self.cam.process(&mut self.scene);
     }
 
+    /// A rider's place this frame (`ride`): the walk set at `at` with its own
+    /// heading kept, nothing of its own moving it (`SetLocation`'s still
+    /// body); the camera follows it as it follows a walk.
+    pub fn ride_at(&mut self, at: [f32; 3]) {
+        let angles = self.cam.walk.phys.angles;
+        self.cam.walk.set_location(Vect3::of(at[0], at[1], at[2]), angles, &mut self.scene);
+    }
+
     /// The character put back at `at` (no floor looked for), facing
     /// `heading`, the camera behind, when it has moved off it at all: what
     /// the loading screen holds the walk at while the game's frame would
@@ -1474,6 +1482,61 @@ pub(crate) mod tests {
     /// controls: the same run with no signpost goes on past where it stood;
     /// the player's own actor at its feet, moved with it as `UpdateGame`
     /// moves it, changes nothing of its run.
+    /// Santa's sleigh, Tunaria's sled (zone 22's 0x0B3BA520) where the server
+    /// stands it in Freeport, run at from the west 6 off (the server owner,
+    /// 2026-11-17: "let players run onto the sled without jumping"): as a
+    /// solid actor (the game's: its sweep stops at the sled's side) the run
+    /// stops short of it on the sand; `FLOOR_ONLY` (a deck the server names,
+    /// go-eqoa-server's npcwalkon) the run goes on and the body stands on the
+    /// sled, over the sand; not collideable at all (a team's `pass`) it runs
+    /// through on the sand.
+    #[test]
+    fn the_sleigh_is_run_onto() {
+        let (x, z) = (25285.1f32, 15768.9f32);
+        let Some((mut lib, file)) = tunaria_and_chars(x, z) else { return };
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+        crate::stream::fill(&mut lib, file, 5859.8, 6663.8, &mut src);
+        let Some(r) = lib.lookup(0x0B3B_A520u32 as i32) else {
+            eprintln!("SKIP: no sled in the library");
+            return;
+        };
+        let run = |how: u8| {
+            let mut w = Walker::arrive(World::load(&lib, file).unwrap(), Spawn::ground(x - 6.0, z, std::f32::consts::FRAC_PI_2));
+            let sand = w.cam.walk.phys.position.y.0;
+            let s = w.scene.find_sprite(&lib, r).unwrap();
+            let a = w.scene.create_actor(Vect3::of(x, 54.1, z), Vect3::of(std::f32::consts::PI, 0.0, 0.0), F::ONE, s);
+            match how {
+                1 => w.scene.set_actor_floor_only(a, true),
+                2 => w.scene.set_actor_collideable(a, false),
+                _ => {}
+            }
+            let t0 = w.scene.time;
+            let mut top = f32::MIN;
+            let mut on = None;
+            for i in 1..=36 {
+                w.frame(Controls { fwd: 1.0, ..Default::default() }, t0 + i * 33);
+                let p = w.cam.walk.phys.position.to_array();
+                top = top.max(p[1]);
+                if (p[0] - x).abs() < 1.5 && on.is_none() {
+                    on = Some(p[1]);
+                }
+            }
+            let p = w.cam.walk.phys.position.to_array();
+            eprintln!("sleigh {how}: from x {:.2} to ({:.2}, {:.2}), over it at {on:?}, highest {top:.2} (sand {sand:.2})", x - 6.0, p[0], p[1]);
+            (p, on, top, sand)
+        };
+        let (solid, _, _, sand) = run(0);
+        let (deck, on, top, _) = run(1);
+        let (pass, on_pass, top_pass, _) = run(2);
+        assert!(solid[0] < x - 1.0, "the control: a solid sled stops the run short of its middle, at x {}", solid[0]);
+        let on = on.expect("the run reaches the sled's middle");
+        assert!(on > sand + 0.3 && top < sand + 1.6, "over the sled's middle the body stands on it, at {on} (sand {sand}, highest {top})");
+        assert!(deck[0] > x - 1.5, "the run goes on onto it: x {}", deck[0]);
+        assert!(on_pass.is_some_and(|y| (y - sand).abs() < 0.2) && top_pass < sand + 0.3, "passed through on the sand: {on_pass:?}, highest {top_pass}");
+        assert!(pass[0] > x, "and on past it: x {}", pass[0]);
+    }
+
     #[test]
     fn the_player_stops_at_a_creature_in_its_way() {
         let (x, z) = (25275.115f32, 15766.627f32);

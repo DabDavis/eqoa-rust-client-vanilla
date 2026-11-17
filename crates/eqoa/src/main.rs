@@ -115,6 +115,7 @@ mod dpsmeter;
 #[cfg(not(target_arch = "wasm32"))]
 mod decorfit;
 mod decorlights;
+mod ride;
 mod npctint;
 mod petdye;
 mod display;
