@@ -282,7 +282,7 @@ impl Renderer {
             fog_color: view.fog.map_or([0.0; 4], |(_, _, c)| c.extend(1.0).to_array()),
             fog: {
                 let [n, fa] = view.fog.map_or([0.0, 1.0], |(n, fa, _)| [n, fa.max(n + 1e-3)]);
-                [n, fa, k, 0.0]
+                [n, fa, k, view.storm_fog as i32 as f32]
             },
             bias: [s.bias.clip_z, s.bias.k, s.bias.behind, 0.0],
         };

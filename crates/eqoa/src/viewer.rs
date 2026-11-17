@@ -89,6 +89,7 @@ pub fn lit(
         clear: Vec3::new(0.18, 0.2, 0.24),
         sky_view_proj: None,
         sky_fog: 0.0,
+        storm_fog: false,
         lights: None,
     };
     let mut sky = None;
@@ -123,6 +124,8 @@ pub fn lit(
             });
             // the far plane in to the storm's fog (`fog::set_storm_far`)
             storm_far = v.fog.map(|(_, fa, _)| fa);
+            // and measured from the eye, per fragment (`View::storm_fog`)
+            v.storm_fog = true;
             v.sun *= 1.0 - 0.8 * f.intensity;
             // the sky into the storm too: its horizon is not the world's,
             // past the far plane, and the distance fog leaves it be
@@ -1206,12 +1209,12 @@ pub fn shot_with(
             }
             // the atmosphere every frame; the last frame's lights and render
             // are the shot's
-            let e = walker.eye.position;
+            let e = walker.cam.walk.phys.position;
             weather.set_regional(play.as_ref().map(|p| p.weather_sample(e.x.0, e.z.0)), t);
             if let Some(p) = play.as_mut() {
                 p.weather_fog = crate::weather_zones::fog(&weather.regional, game_hour(Some(&*p), Instant::now())).map(|f| (f.near, f.far));
             }
-            weather.frame(&mut walker.scene, None, &walker.eye, t, game_hour(play.as_ref(), Instant::now()));
+            weather.frame(&mut walker.scene, None, &walker.eye, &e, t, game_hour(play.as_ref(), Instant::now()));
             // the effect volumes, stepped as the scene rasters them
             if let Some(fx) = fx.as_mut().filter(|_| crate::settings::client().environment > 0) {
                 fx.stream(Vec3::from(walker.cam.walk.phys.position.to_array()), &walker.scene, lib);
@@ -1229,7 +1232,8 @@ pub fn shot_with(
         }
         if script.ms == 0 {
             weather.set_regional(None, 0);
-            weather.frame(&mut walker.scene, None, &walker.eye, 0, game_hour(play.as_ref(), Instant::now()));
+            let at = walker.cam.walk.phys.position;
+            weather.frame(&mut walker.scene, None, &walker.eye, &at, 0, game_hour(play.as_ref(), Instant::now()));
         }
         eprintln!("{}", parts.describe());
         eprintln!("{}", weather.describe());
@@ -6443,13 +6447,15 @@ impl App {
                     g.set_title(title(play.as_ref().map(|p| p.player.name.as_str())));
                     mark(perf, 5);
                     if let Some(wx) = weather.as_mut() {
-                        // the server's regional weather at the camera (`weather_zones`)
-                        let e = w.eye.position;
+                        // the server's regional weather where the character stands
+                        // (`weather_zones`), as the server sends its byte: not at the
+                        // camera, which a turn swings across a square's edge
+                        let e = w.cam.walk.phys.position;
                         wx.set_regional(play.as_ref().map(|p| p.weather_sample(e.x.0, e.z.0)), now);
                         if let Some(p) = play.as_mut() {
                             p.weather_fog = crate::weather_zones::fog(&wx.regional, game_hour(Some(&*p), clock)).map(|f| (f.near, f.far));
                         }
-                        wx.frame(&mut w.scene, sound.as_mut(), &w.eye, now, game_hour(play.as_ref(), clock));
+                        wx.frame(&mut w.scene, sound.as_mut(), &w.eye, &e, now, game_hour(play.as_ref(), clock));
                     }
                     mark(perf, 6);
                     let (proj, v) = w.view(g.config.width as f32 / g.config.height as f32);

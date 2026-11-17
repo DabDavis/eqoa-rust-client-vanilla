@@ -162,6 +162,7 @@ pub fn slice_view(rect: [f32; 4], cut: f32, y: f32) -> render::View {
         clear: Vec3::from(DARK),
         sky_view_proj: None,
         sky_fog: 0.0,
+        storm_fog: false,
         lights: None,
     }
 }

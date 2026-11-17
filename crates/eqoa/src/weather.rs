@@ -281,7 +281,9 @@ impl Weather {
     /// profiles, then `Update` (the clock, the sky's rotations, the weather
     /// field, the transitions and the rain's and thunder's voices). Leaves
     /// the weather's intensity on `sound` for its track (`SetSoundTrack`).
-    pub fn frame(&mut self, world: &mut World<Ee>, sound: Option<&mut crate::sound::Sound>, eye: &vi::camera::Eye<Ee>, time: i64, hour: f32) {
+    /// `at` is the character's place (its feet), which the roof is probed
+    /// over: not the camera's, which a turn swings under a tree or an awning.
+    pub fn frame(&mut self, world: &mut World<Ee>, sound: Option<&mut crate::sound::Sound>, eye: &vi::camera::Eye<Ee>, at: &Vect3<Ee>, time: i64, hour: f32) {
         if time + self.offset < self.last {
             self.offset = self.last - time;
         }
@@ -308,10 +310,17 @@ impl Weather {
             (self.roof, self.upwind_wall, self.probed, self.dust.ground) = (false, false, None, None);
         } else if self.probed.is_none_or(|t| time - t >= 100 || time < t) {
             self.probed = Some(time);
-            let p = eye.position;
+            // the roof over the character, from a little over its feet: probed
+            // over the camera, a third-person camera swung under a palm, an
+            // awning or an arch as it turned and the storm's fog went out to
+            // four times its distance (heavy snow 100 to 400: clear), and came
+            // back as it swung out (the owner, 2026-11-16: "when players rotate
+            // camera the fog will not be seen so looks clear")
             let mut up = CollRay::default();
-            up.init(p, Vect3::new(p.x, p.y + F::new(120.0), p.z));
+            let head = Vect3::new(at.x, at.y + F::new(1.0), at.z);
+            up.init(head, Vect3::new(at.x, at.y + F::new(121.0), at.z));
             self.roof = atmosphere::Scene::collide_ray(&mut Rays(world), &mut up);
+            let p = eye.position;
             // the ground under the eye, which the dust skims
             let mut down = CollRay::default();
             down.init(p, Vect3::new(p.x, p.y - F::new(200.0), p.z));

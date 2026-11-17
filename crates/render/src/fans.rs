@@ -401,7 +401,7 @@ impl Renderer {
             // bias), or the base level's with the mip levels off
             fog: {
                 let [n, fa] = view.fog.map_or([0.0, 1.0], |(n, fa, _)| [n, fa.max(n + 1e-3)]);
-                [n, fa, crate::effects_lod_k(), 0.0]
+                [n, fa, crate::effects_lod_k(), view.storm_fog as i32 as f32]
             },
             point: view.point.map_or([0.0; 4], |(p, r, _)| (p - view.eye).extend(r).to_array()),
             point_color: view.point.map_or([0.0; 4], |(_, _, c)| c.extend(1.0).to_array()),

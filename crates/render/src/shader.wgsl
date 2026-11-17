@@ -48,11 +48,28 @@ struct Frame {
     sun: vec4<f32>,      // w: time in seconds
     ambient: vec4<f32>,
     fog_color: vec4<f32>,  // w: on
-    fog: vec4<f32>,        // near, far
+    fog: vec4<f32>,        // near, far, 0, w: 1 a storm's (storm_fog)
     point: vec4<f32>,      // the point light: xyz, range (0: none)
     point_color: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
+
+// A storm's fog (`View::storm_fog`, fog.w 1): by the distance from the eye,
+// per fragment. A storm fogs everything within a few tens of units (heavy
+// whiteout 20, sand 40), so a ground triangle reaches from behind the camera
+// to past the fog: per vertex, its corner behind the camera was clear (w < 0)
+// and its far corner all fog, and the clamped values between them made the
+// ground near the eye clear or fogged by which corners the view had behind
+// it, so the storm came and went as the camera turned (the owner, 2026-11-16:
+// "when players rotate camera the fog will not be seen so looks clear"). The
+// distance from the eye, unlike the depth, is the same whichever way the
+// camera faces. The game's own fog (fog.w 0) stays the strip programs' value.
+fn storm_fog(per_vertex: f32, rel: vec3<f32>) -> f32 {
+    if (frame.fog.w > 0.5) {
+        return clamp((frame.fog.y - length(rel)) / (frame.fog.y - frame.fog.x), 0.0, 1.0);
+    }
+    return per_vertex;
+}
 
 struct Layer {
     tint: vec4<f32>,
@@ -99,6 +116,8 @@ struct VsOut {
     @location(4) depth: f32,
     // the vertex alpha a flora plant's fade is (1 for the rest)
     @location(5) fade: f32,
+    // the vertex less the eye, in the world (storm_fog)
+    @location(6) rel: vec3<f32>,
 };
 
 @vertex
@@ -134,6 +153,7 @@ fn vs_main(v: VsIn) -> VsOut {
     o.clip = frame.view_proj * vec4<f32>(rel, 1.0);
     o.fog = clamp((frame.fog.y - o.clip.w) / (frame.fog.y - frame.fog.x), 0.0, 1.0);
     o.depth = o.clip.w;
+    o.rel = rel;
     // The layer's UV transform, and its scroll (VIMaterial::Process: the
     // offset grows at the rate and drops its whole part past ±1).
     let s = layer.uv1.zw * frame.sun.w;
@@ -185,7 +205,7 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     }
     var rgb = texel.rgb * layer.tint.rgb * i.light;
     if (frame.fog_color.w > 0.5) {
-        rgb = mix(frame.fog_color.rgb, rgb, i.fog);
+        rgb = mix(frame.fog_color.rgb, rgb, storm_fog(i.fog, i.rel));
     }
     return vec4<f32>(rgb, alpha);
 }

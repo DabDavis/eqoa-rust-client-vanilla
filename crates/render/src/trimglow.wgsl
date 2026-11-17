@@ -20,6 +20,23 @@ struct Frame {
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 
+// A storm's fog (`View::storm_fog`, fog.w 1): by the distance from the eye,
+// per fragment. A storm fogs everything within a few tens of units (heavy
+// whiteout 20, sand 40), so a ground triangle reaches from behind the camera
+// to past the fog: per vertex, its corner behind the camera was clear (w < 0)
+// and its far corner all fog, and the clamped values between them made the
+// ground near the eye clear or fogged by which corners the view had behind
+// it, so the storm came and went as the camera turned (the owner, 2026-11-16:
+// "when players rotate camera the fog will not be seen so looks clear"). The
+// distance from the eye, unlike the depth, is the same whichever way the
+// camera faces. The game's own fog (fog.w 0) stays the strip programs' value.
+fn storm_fog(per_vertex: f32, rel: vec3<f32>) -> f32 {
+    if (frame.fog.w > 0.5) {
+        return clamp((frame.fog.y - length(rel)) / (frame.fog.y - frame.fog.x), 0.0, 1.0);
+    }
+    return per_vertex;
+}
+
 @group(1) @binding(0) var mask: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
 
@@ -104,6 +121,7 @@ fn noise(p: vec3<f32>) -> f32 {
 
 @fragment
 fn fs_trim(i: VsOut) -> @location(0) vec4<f32> {
+    let fog = storm_fog(i.fog, i.rel);
     let m = textureSample(mask, samp, i.uv);
     let core = m.r * m.a;
     let halo = m.g * m.a;
@@ -119,19 +137,19 @@ fn fs_trim(i: VsOut) -> @location(0) vec4<f32> {
         // dark: the trim taken toward black (a glint of sheen where it turns
         // from the eye), smoke off it darker at the silhouette
         let smoke = halo * (0.35 + 0.55 * rim) * (0.6 + 0.8 * shimmer);
-        let a = clamp((core * 0.95 + smoke * (1.0 - core) * pulse) * trim.color.a * i.fog, 0.0, 0.95);
+        let a = clamp((core * 0.95 + smoke * (1.0 - core) * pulse) * trim.color.a * fog, 0.0, 0.95);
         let hi = max(trim.color.r, max(trim.color.g, trim.color.b));
         var sheen = vec3<f32>(0.16, 0.12, 0.24);
         if (hi >= 0.01) {
             sheen = trim.color.rgb / hi * 0.22;
         }
         let glint = core * (0.18 + 0.82 * pow(1.0 - facing, 2.0)) * (0.6 + 0.6 * shimmer) * 0.55;
-        return vec4<f32>(sheen * (glint + 0.4 * smoke * rim) * i.fog, a);
+        return vec4<f32>(sheen * (glint + 0.4 * smoke * rim) * fog, a);
     }
     // glowing: the trim lit at its gold's own brightness and more, its halo
     // fainter, brighter at the silhouette
     let lit = core * (0.1 + 0.65 * m.b) * (0.8 + 0.4 * shimmer);
     let glow = (halo - core * 0.5) * (0.3 + 0.7 * rim) * (0.6 + 0.8 * shimmer);
-    let a = clamp((lit + max(glow, 0.0)) * pulse * trim.color.a * i.fog, 0.0, 1.0);
+    let a = clamp((lit + max(glow, 0.0)) * pulse * trim.color.a * fog, 0.0, 1.0);
     return vec4<f32>(trim.color.rgb, a);
 }

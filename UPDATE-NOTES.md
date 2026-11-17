@@ -8,6 +8,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Storms no longer clear as the camera turns
+- **Snow, whiteouts and sandstorms stay put when you turn the camera**: turning the camera could swing it under a
+  tree, an awning or an arch, and the storm then thinned to almost nothing (heavy snow looked clear) until it
+  swung out again. The storm now goes by where your character stands, not where the camera is.
+- **A storm's fog is as thick whichever way you face**: it is now measured from your eyes in every direction, so
+  the ground at your feet no longer shows clear or fogged by which way the camera points.
+
 ## 2026-11-16 · Name plates in front of the presents
 - **Names no longer disappear behind the presents**: the presents and the lights' cord round the Christmas tree were
   drawn over the names of players and NPCs standing among them. They are now drawn with the world, so a name in

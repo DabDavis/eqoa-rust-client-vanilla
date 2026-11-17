@@ -157,6 +157,7 @@ pub fn view(size: (u32, u32)) -> render::View {
         clear: glam::Vec3::ZERO,
         sky_view_proj: None,
         sky_fog: 0.0,
+        storm_fog: false,
         lights: None,
     }
 }

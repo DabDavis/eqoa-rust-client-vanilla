@@ -20,6 +20,23 @@ struct Frame {
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 
+// A storm's fog (`View::storm_fog`, fog.w 1): by the distance from the eye,
+// per fragment. A storm fogs everything within a few tens of units (heavy
+// whiteout 20, sand 40), so a ground triangle reaches from behind the camera
+// to past the fog: per vertex, its corner behind the camera was clear (w < 0)
+// and its far corner all fog, and the clamped values between them made the
+// ground near the eye clear or fogged by which corners the view had behind
+// it, so the storm came and went as the camera turned (the owner, 2026-11-16:
+// "when players rotate camera the fog will not be seen so looks clear"). The
+// distance from the eye, unlike the depth, is the same whichever way the
+// camera faces. The game's own fog (fog.w 0) stays the strip programs' value.
+fn storm_fog(per_vertex: f32, rel: vec3<f32>) -> f32 {
+    if (frame.fog.w > 0.5) {
+        return clamp((frame.fog.y - length(rel)) / (frame.fog.y - frame.fog.x), 0.0, 1.0);
+    }
+    return per_vertex;
+}
+
 struct Shell {
     color: vec4<f32>,   // rgb the glow, a its strength
     params: vec4<f32>,  // x: inflation, y: shimmer frequency, z: 1 dark
@@ -102,6 +119,7 @@ fn noise(p: vec3<f32>) -> f32 {
 
 @fragment
 fn fs_shell(i: VsOut) -> @location(0) vec4<f32> {
+    let fog = storm_fog(i.fog, i.rel);
     let n = normalize(i.normal);
     let v = normalize(-i.rel);
     let facing = abs(dot(n, v));
@@ -114,9 +132,9 @@ fn fs_shell(i: VsOut) -> @location(0) vec4<f32> {
     let shimmer = 0.55 + 0.9 * noise(p + vec3<f32>(0.0, -0.6 * t, 0.25 * t)) * noise(p * 2.1 + vec3<f32>(0.4 * t, 0.0, -0.3 * t));
     let pulse = 0.85 + 0.15 * sin(t * 2.2);
     if (shell.params.z > 0.5) {
-        return dark_shell(facing, rim, shimmer, pulse, i.fog);
+        return dark_shell(facing, rim, shimmer, pulse, fog);
     }
-    let a = (0.08 + 0.92 * rim) * shimmer * pulse * shell.color.a * i.fog;
+    let a = (0.08 + 0.92 * rim) * shimmer * pulse * shell.color.a * fog;
     return vec4<f32>(shell.color.rgb, clamp(a, 0.0, 1.0));
 }
 

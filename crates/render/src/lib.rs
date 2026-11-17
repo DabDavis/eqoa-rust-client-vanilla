@@ -837,6 +837,12 @@ pub struct View {
     /// sandstorm that had turned everything else sand (the owner,
     /// 2026-11-16). 0: the sky as the distance fog leaves it, the game's.
     pub sky_fog: f32,
+    /// The fog is a storm's (the client's regional weather): measured per
+    /// fragment by the distance from the eye (the shaders' `storm_fog`), the
+    /// same whichever way the camera faces. A storm's is a few tens of units,
+    /// shorter than a ground triangle, and per vertex it came and went as the
+    /// camera turned. false: the game's, per vertex in view depth.
+    pub storm_fog: bool,
     /// Dynamic Lighting's point lights (`lit`): with them (and it on), the
     /// models drawn lit per fragment; `None`, the PS2's way.
     pub lights: Option<Lights>,
@@ -865,6 +871,7 @@ impl View {
             clear: Vec3::new(0.18, 0.2, 0.24),
             sky_view_proj: None,
             sky_fog: 0.0,
+            storm_fog: false,
             lights: None,
         }
     }
@@ -1601,7 +1608,7 @@ impl Renderer {
                 None => [0.0; 4],
             },
             fog: match view.fog {
-                Some((n, f, _)) => [n, f.max(n + 1e-3), 0.0, 0.0],
+                Some((n, f, _)) => [n, f.max(n + 1e-3), 0.0, view.storm_fog as i32 as f32],
                 None => [0.0, 1.0, 0.0, 0.0],
             },
             point: match view.point {
@@ -1617,6 +1624,8 @@ impl Renderer {
         if let Some(vp) = view.sky_view_proj {
             // the sky's view has no translation: its eye is the origin
             let mut sky = FrameUniform { view_proj: vp.to_cols_array_2d(), eye: [0.0, 0.0, 0.0, uniform.eye[3]], ..uniform };
+            // the dome is fogged by its share below, never by its distance
+            sky.fog[3] = 0.0;
             // a storm's share of the fog's colour at every depth: the linear
             // fog over a span so long the dome's few units are nothing in it
             if let (Some((_, _, c)), s) = (view.fog, view.sky_fog.clamp(0.0, 1.0))

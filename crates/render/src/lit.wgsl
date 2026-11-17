@@ -184,7 +184,7 @@ fn lit_fragment(i: LitOut, baked: bool) -> vec4<f32> {
     }
     var rgb = texel.rgb * layer.tint.rgb * shade(i, baked);
     if (frame.fog_color.w > 0.5) {
-        rgb = mix(frame.fog_color.rgb, rgb, i.misc.x);
+        rgb = mix(frame.fog_color.rgb, rgb, storm_fog(i.misc.x, i.rel));
     }
     return vec4<f32>(rgb, alpha);
 }

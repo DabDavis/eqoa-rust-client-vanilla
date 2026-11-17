@@ -365,7 +365,8 @@ fn listen(file: &str, x: f32, z: f32, secs: f32, out: &str, hour: f32, walk: boo
         sound.battle_music(Some(fight && (60..240).contains(&k)));
         let eye = walker.eye;
         sound.frame(&mut walker.scene, &eye, hour, now);
-        weather.frame(&mut walker.scene, Some(&mut sound), &eye, now, hour);
+        let at = walker.cam.walk.phys.position;
+        weather.frame(&mut walker.scene, Some(&mut sound), &eye, &at, now, hour);
         weather.lightning();
         let _ = weather.render(&eye);
         pcm.extend(sound.audio().render(1600));

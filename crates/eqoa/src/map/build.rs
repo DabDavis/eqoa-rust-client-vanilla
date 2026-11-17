@@ -73,6 +73,7 @@ pub fn tile_view(rect: [f32; 4]) -> render::View {
         clear: Vec3::from(VOID),
         sky_view_proj: None,
         sky_fog: 0.0,
+        storm_fog: false,
         // the PS2's light: Dynamic Lighting never on a tile
         lights: None,
     }
