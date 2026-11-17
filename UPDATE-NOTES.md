@@ -11,6 +11,14 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · No stars through a sandstorm
+- **The stars, moon and sun no longer shine through a storm**: a heavy sandstorm, whiteout or snowstorm now hides
+  them completely, and a lighter one dims them in proportion. By day the sun no longer glows through a heavy
+  sandstorm.
+- **No more sky where the walls should be**: in a storm, distant walls and cliffs fade into the storm itself, not
+  into a starry sky. Low down, the sky is always the storm's colour.
+- **Heavy snow fills the sky too**: a heavy snowstorm's sky now turns the colour of the storm, as a sandstorm's does.
+
 ## 2026-11-17 · Zone ambience now follows the Music volume
 - **Zone ambience now follows the Music volume**: the background sounds of each place (and the wind in snow and
   sandstorms) are turned down by Music Volume, not Fx Volume, so Music at 0 makes the world quiet of everything but

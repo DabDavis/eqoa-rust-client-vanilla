@@ -377,7 +377,9 @@ impl Weather {
             let Some(d) = self.sys.defs[def].as_ref() else { continue };
             out.push(Batch { texture: d.texture as i32, blend: d.blend.clamp(0, 4) as usize, ztest: d.ztest, zwrite: d.zwrite, quads: quads(&bbs) });
         }
-        (self.batches(&sky, crate::settings::SHARE_FULL), out)
+        let mut sky = self.batches(&sky, crate::settings::SHARE_FULL);
+        storm_stars(&mut sky, self.tex[3], &self.regional);
+        (sky, out)
     }
 
     /// The sandstorm's dust as strips seen from `eye`, in `color` (the
@@ -425,6 +427,29 @@ fn weathered(mut q: Vec<Quad>, k: usize, share: u8) -> Vec<Quad> {
     q
 }
 
+/// The stars (`star`, material 3) through a storm: each faded by the share
+/// of the storm's colour the sky takes where it stands (`render::
+/// storm_sky_share`: all of it low, the storm's share overhead), so none show
+/// through a heavy one (the owner, 2026-11-17: "i can see the stars through
+/// the sandstorm"); the atmosphere draws them under a sandstorm as on a clear
+/// night (its retail byte is 0). They are placed round the eye.
+fn storm_stars(sky: &mut Vec<Batch>, star: i32, regional: &crate::weather_zones::Sample) {
+    if regional.intensity() <= 0.0 {
+        return;
+    }
+    let s = crate::weather_zones::sky_share(regional);
+    for b in sky.iter_mut().filter(|b| b.texture == star) {
+        b.quads.retain_mut(|q| {
+            let [x, y, z] = q.center;
+            let len = (x * x + y * y + z * z).sqrt();
+            let keep = 1.0 - render::storm_sky_share(s, if len > 0.0 { y / len } else { 1.0 });
+            q.color = q.color.map(|c| c * keep);
+            keep > 0.0
+        });
+    }
+    sky.retain(|b| !b.quads.is_empty());
+}
+
 fn quads(bbs: &[Billboard<Ee>]) -> Vec<Quad> {
     bbs.iter()
         .map(|b| Quad { center: [b.location.x.0, b.location.y.0, b.location.z.0], half: [b.width.0, b.height.0], frame: b.frame, color: [b.color.r.0, b.color.g.0, b.color.b.0, b.color.a.0] })
@@ -469,6 +494,32 @@ mod tests {
         crate::stream::fill(&mut lib, w, 25275.0, 15766.0, &mut src);
         let world = World::load(&lib, w)?;
         Some((lib, world))
+    }
+
+    /// The stars through a storm (`storm_stars`): none low (where the storm's
+    /// far plane left a wall out) whatever the storm, overhead faded by its
+    /// share, none at heavy; the control: no storm, every star as it was, and
+    /// another texture's billboards (the lightning) untouched.
+    #[test]
+    fn a_storm_hides_its_stars() {
+        let star = |x: f32, y: f32| Quad { center: [x, y, 0.0], half: [0.5, 0.5], frame: 0, color: [1.0; 4] };
+        let sky = || vec![
+            Batch { texture: 7, blend: 1, ztest: false, zwrite: false, quads: vec![star(100.0, 5.0), star(10.0, 100.0)] },
+            Batch { texture: 9, blend: 1, ztest: false, zwrite: false, quads: vec![star(100.0, 5.0)] },
+        ];
+        let run = |r: crate::weather_zones::Sample| {
+            let mut b = sky();
+            storm_stars(&mut b, 7, &r);
+            b
+        };
+        let clear = run(Default::default());
+        assert_eq!((clear[0].quads.len(), clear[0].quads[1].color), (2, [1.0; 4]), "the control: no storm");
+        let moderate = run(crate::weather_zones::Sample { sand: 0.5, ..Default::default() });
+        assert_eq!(moderate[0].quads.len(), 1, "the low star gone");
+        assert!((moderate[0].quads[0].color[3] - 0.5).abs() < 1e-3, "overhead at half: {:?}", moderate[0].quads[0].color);
+        assert_eq!(moderate[1].quads.len(), 1, "the lightning's left be");
+        let heavy = run(crate::weather_zones::Sample { sand: 1.0, ..Default::default() });
+        assert_eq!((heavy.len(), heavy[0].texture), (1, 9), "a heavy storm: no stars");
     }
 
     /// Weather at all of it is every billboard as the raster gave it; below,

@@ -29,6 +29,12 @@ pub enum Sprites {
 pub struct SkyFrame {
     pub plane: i32,
     pub lights: bool,
+    /// A storm's share of the sky overhead (`weather_zones::sky_share`, 0
+    /// none): the sun, corona and moon fade out by it, none at heavy. The
+    /// atmosphere draws them as on a clear day under a sandstorm (its retail
+    /// byte is 0), and the fog's colour mixed into an added layer would only
+    /// brighten it.
+    pub storm: f32,
     pub rot: SkyRotations<Ee>,
     pub pals: Vec<Pal>,
 }
@@ -81,12 +87,19 @@ pub fn update(r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, gpu:
         if !g.visible {
             continue;
         }
+        // the sun, corona and moon out by a storm's share
+        let keep = if k >= 2 { 1.0 - f.storm.clamp(0.0, 1.0) } else { 1.0 };
+        if keep <= 0.0 {
+            g.visible = false;
+            continue;
+        }
         let Some(first) = pal.first() else { continue };
         g.passes_used = first.n;
         for (b, m) in (0..g.batch_count()).map(|b| (b, pal.get(b).unwrap_or(first))) {
             for (j, l) in m.used().iter().enumerate() {
                 let uv = usize::try_from(l.uv).ok();
-                r.set_layer(device, queue, g, b, j, l.texture, l.blend.clamp(0, 4) as usize, l.color.map(|c| c as f32 / 255.0), uv, textures);
+                let c = l.color.map(|c| c as f32 / 255.0 * keep);
+                r.set_layer(device, queue, g, b, j, l.texture, l.blend.clamp(0, 4) as usize, c, uv, textures);
             }
         }
     }

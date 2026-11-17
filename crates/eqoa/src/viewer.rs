@@ -140,6 +140,12 @@ pub fn lit(
             }
         }
         v.clear = Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32) / 255.0;
+        // in a storm, past the far plane its fog pulled in (a wall left out)
+        // is fog, not sky: the clear is the fog's colour (the dome, drawn over
+        // it, is all fog low: `render::storm_sky_share`)
+        if let (Some(_), Some((_, _, fc))) = (storm, v.fog) {
+            v.clear = fc;
+        }
         // the sky through a far plane of its own: the world's is the fog's
         v.sky_view_proj = Some(crate::fog::with_far(proj, crate::fog::SKY_FAR) * rot);
         if let Some(wx) = weather {
@@ -148,6 +154,7 @@ pub fn lit(
             sky = Some(crate::sky::SkyFrame {
                 plane: a.p618,
                 lights: a.p618 == 0 && a.overcast != 0,
+                storm: storm.map_or(0.0, |(f, _)| f.sky),
                 rot: vi::atmosphere::SkyRotations { sun: a.sky_rot, corona: a.corona_rot, moon: a.moon_rot },
                 pals: (0..5).map(|k| a.pals.get(&k).cloned().unwrap_or_default()).collect(),
             });

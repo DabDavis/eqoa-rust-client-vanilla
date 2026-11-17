@@ -65,6 +65,14 @@ struct Frame {
 // distance from the eye, unlike the depth, is the same whichever way the
 // camera faces. The game's own fog (fog.w 0) stays the strip programs' value.
 fn storm_fog(per_vertex: f32, rel: vec3<f32>) -> f32 {
+    // the sky in a storm (fog.w 2, fog.z the storm's share): by elevation,
+    // all fog low and the share overhead (`render::storm_sky_share`), the
+    // stars and the moon with it, and where the storm's far plane left a
+    // wall out, fog, not sky
+    if (frame.fog.w > 1.5) {
+        let t = smoothstep(0.34, 0.57, normalize(rel).y);
+        return 1.0 - mix(1.0, frame.fog.z, t);
+    }
     if (frame.fog.w > 0.5) {
         return clamp((frame.fog.y - length(rel)) / (frame.fog.y - frame.fog.x), 0.0, 1.0);
     }

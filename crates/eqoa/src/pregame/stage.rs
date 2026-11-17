@@ -293,6 +293,7 @@ fn sky(lib: &Library, world: &mut World<Ee>, eye: &Eye<Ee>, g: &mut Gpu) -> Opti
     let frame = crate::sky::SkyFrame {
         plane: a.p618,
         lights: a.p618 == 0 && a.overcast != 0,
+        storm: 0.0,
         rot: vi::atmosphere::SkyRotations { sun: a.sky_rot, corona: a.corona_rot, moon: a.moon_rot },
         pals: (0..5).map(|k| a.pals.get(&k).cloned().unwrap_or_default()).collect(),
     };

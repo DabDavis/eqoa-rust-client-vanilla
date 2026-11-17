@@ -919,6 +919,25 @@ pub struct View {
     pub lights: Option<Lights>,
 }
 
+/// Where a storm's sky changes from all fog to its share (`storm_sky_share`):
+/// the sine of the elevation, about 20° and 35°. The storm's fog pulls the
+/// far plane in (eqoa's `fog::set_storm_far`), so a wall or a cliff past it
+/// is not drawn, and the sky behind it showed through where it stood (the
+/// owner, 2026-11-17: "i can see the stars through the sandstorm also where
+/// the walls would be also"). Below the band the sky is the storm's whole.
+pub const STORM_SKY_BAND: (f32, f32) = (0.34, 0.57);
+
+/// How much of a storm's fog colour the sky takes at a direction of sine
+/// `elevation` (its y over its length), for the storm's share `s` (0 to 1,
+/// `View::sky_fog`): all of it to the band's foot, `s` above its top, a
+/// smoothstep between (shader.wgsl's `storm_fog`, fog.w 2, computes the same).
+pub fn storm_sky_share(s: f32, elevation: f32) -> f32 {
+    let (lo, hi) = STORM_SKY_BAND;
+    let t = ((elevation - lo) / (hi - lo)).clamp(0.0, 1.0);
+    let t = t * t * (3.0 - 2.0 * t);
+    1.0 + (s.clamp(0.0, 1.0) - 1.0) * t
+}
+
 /// The sky's fog (near, far) for `View::sky_fog` share `s`: a linear fog over
 /// a span so long that the shader's (far - depth) / (far - near) is 1 - s for
 /// any depth the dome is drawn at.
@@ -1781,13 +1800,19 @@ impl Renderer {
             let mut sky = FrameUniform { view_proj: vp.to_cols_array_2d(), eye: [0.0, 0.0, 0.0, uniform.eye[3]], ..uniform };
             // the dome is fogged by its share below, never by its distance
             sky.fog[3] = 0.0;
-            // a storm's share of the fog's colour at every depth: the linear
-            // fog over a span so long the dome's few units are nothing in it
-            if let (Some((_, _, c)), s) = (view.fog, view.sky_fog.clamp(0.0, 1.0))
-                && s > 0.0
-            {
-                sky.fog = sky_fog_span(s);
-                sky.fog_color = c.extend(1.0).to_array();
+            // a storm's share of the fog's colour by elevation (fog.w 2,
+            // `storm_sky_share`): the whole of it low, where what the storm's
+            // far plane left out stood, its share overhead; without a storm,
+            // a share at every depth (the linear fog over a span so long the
+            // dome's few units are nothing in it)
+            if let (Some((_, _, c)), s) = (view.fog, view.sky_fog.clamp(0.0, 1.0)) {
+                if view.storm_fog {
+                    sky.fog = [0.0, 1.0, s, 2.0];
+                    sky.fog_color = c.extend(1.0).to_array();
+                } else if s > 0.0 {
+                    sky.fog = sky_fog_span(s);
+                    sky.fog_color = c.extend(1.0).to_array();
+                }
             }
             queue.write_buffer(&self.sky_frame_buf, 0, bytemuck::bytes_of(&sky));
         }
@@ -3162,5 +3187,27 @@ mod sky_fog_tests {
             }
         }
         assert!(factor([3.2, 40.0, 0.0, 0.0], 5.0) > 0.9, "the control");
+    }
+
+    /// A storm's sky: all fog at the horizon and low (where a wall the far
+    /// plane left out stood) whatever the share, the share overhead, between
+    /// them rising smoothly; at a heavy storm's share (1) all fog everywhere.
+    #[test]
+    fn a_storms_sky_is_all_fog_low_and_its_share_overhead() {
+        let share = super::storm_sky_share;
+        for s in [0.0, 0.3, 1.0] {
+            assert_eq!(share(s, -0.2), 1.0, "below the horizon at {s}");
+            assert_eq!(share(s, 0.0), 1.0, "the horizon at {s}");
+            assert_eq!(share(s, 0.3), 1.0, "a wall's height at {s}");
+            assert!((share(s, 0.8) - s).abs() < 1e-6, "overhead at {s}");
+            assert!((share(s, 1.0) - s).abs() < 1e-6, "the zenith at {s}");
+        }
+        let mut last = 1.0;
+        for k in 0..=20 {
+            let v = share(0.2, 0.3 + k as f32 * 0.015);
+            assert!(v <= last + 1e-6, "rising smoothly: {v} after {last}");
+            last = v;
+        }
+        assert!((0..=10).all(|k| share(1.0, k as f32 / 10.0) == 1.0), "a heavy storm: all fog");
     }
 }

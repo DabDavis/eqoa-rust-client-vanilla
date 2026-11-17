@@ -240,8 +240,8 @@ pub struct Fog {
     pub far: f32,
     pub color: [f32; 3],
     pub intensity: f32,
-    /// the sky's and the clear colour's move toward `color`: sand and
-    /// whiteout, at most 1
+    /// the sky's move toward `color` overhead (`sky_share`: sand, whiteout
+    /// and snow, at most 1); low it is all `color` (`render::storm_sky_share`)
     pub sky: f32,
 }
 
@@ -284,7 +284,15 @@ pub fn fog(s: &Sample, hour: f32) -> Option<Fog> {
         }
     }
     let dim = 1.0 - 0.78 * night(hour);
-    Some(Fog { near: 0.08 * far, far, color: color.map(|c| c * dim), intensity, sky: (s.sand + s.whiteout).min(1.0) })
+    Some(Fog { near: 0.08 * far, far, color: color.map(|c| c * dim), intensity, sky: sky_share(s) })
+}
+
+/// How much of a storm's fog colour its sky takes overhead (`Fog::sky`,
+/// `render::storm_sky_share`): sand, whiteout and snow by their strengths, all
+/// of it at heavy (no stars, sun or moon through it); rain none (its retail
+/// byte gives the game's overcast sky).
+pub fn sky_share(s: &Sample) -> f32 {
+    (s.sand + s.whiteout + s.snow).clamp(0.0, 1.0)
 }
 
 /// A name plate's alpha at `distance` in the storms' fog (near, far): fading
@@ -430,6 +438,12 @@ mod tests {
         assert_eq!(f(Sample::default()), None, "clear: no fog");
         let sand = f(Sample { sand: 1.0, ..Default::default() }).unwrap();
         assert_eq!((sand.color, sand.sky), ([0.65, 0.49, 0.29], 1.0));
+        // the sky's share overhead: heavy sand, whiteout and snow all of it (no
+        // stars through them), moderate in proportion, rain none (the control)
+        assert_eq!(f(Sample { snow: 1.0, ..Default::default() }).unwrap().sky, 1.0);
+        assert_eq!(f(Sample { whiteout: 1.0, ..Default::default() }).unwrap().sky, 1.0);
+        assert_eq!(f(Sample { sand: 0.5, ..Default::default() }).unwrap().sky, 0.5);
+        assert_eq!(f(Sample { rain: 1.0, ..Default::default() }).unwrap().sky, 0.0);
         let night = fog(&Sample { sand: 1.0, ..Default::default() }, 0.0).unwrap();
         assert!((night.color[0] - 0.65 * 0.22).abs() < 1e-6);
     }
