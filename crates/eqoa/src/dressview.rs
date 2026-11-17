@@ -438,7 +438,7 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     if let Some((src, hue, style)) = crate::hat::hat_of(&words.pieces).or(npc_hat) {
         let made = crate::hat::hat_on_styled(lib, model as u32, &cs, true, src, hue, style).map(|(n, mut m)| {
             // in the helm's colour (`dye=`, `tint=`), as the world dyes it
-            crate::hat::dress(&mut m, style, look.helm_color(&t), lib);
+            crate::hat::dress(&mut m, style, look.helm_color(&t), look.trim_color.map(|c| c[5]), lib);
             crate::hat::two_sided(&mut m);
             (n, m)
         });

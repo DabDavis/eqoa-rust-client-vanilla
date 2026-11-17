@@ -11,6 +11,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+
+## 2026-11-17 · Two-tone hats
+- **Hats take two dyes**, as two-tone armour does: the helm dye colours the hat, the **helm trim** dye its trim: the
+  kappa straw hat's steel spike, the Santa Hat's white band and bobble, the turban's tail. Without a trim dye the trim
+  keeps its own colours. The Equipment Dyer's "Helm trim" (and a GM's #dye helmtrim) sets it.
+
 ## 2026-11-17 · Volumes stay where you set them
 - **Fx Volume and Music Volume are kept the moment you change them**: before, a volume turned down or off was only
   kept with Save Changes, so backing out of Options with Triangle put the old volume back, and a window closed any
