@@ -185,6 +185,31 @@ pub fn save(o: &GameOptions) -> bool {
     game.is_ok() && client.is_ok() && keys.is_ok()
 }
 
+/// The Fx and Music Volume kept the moment the Options window changes them
+/// (the client's own; the game keeps them only with Save Changes): into this
+/// window's game.opt and the account's, every other setting there as it was
+/// kept (an unsaved change to another row stays unsaved), the defaults'
+/// where nothing was kept. Whether both were kept; a failure is said.
+pub fn keep_volumes(fx: F<Ee>, music: F<Ee>) -> bool {
+    let set = |b: &mut [u8]| {
+        b[0x08..0x0C].copy_from_slice(&fx.0.to_le_bytes());
+        b[0x0C..0x10].copy_from_slice(&music.0.to_le_bytes());
+    };
+    let defaults = || GameOptions { compact: 1, ..Default::default() }.to_card();
+    let mut card = game_card().unwrap_or_else(|| with_login(defaults()).to_vec());
+    set(&mut card);
+    let game = write_game(&card);
+    let mut acct = account_read("game").and_then(|b| GameOptions::from_card(&b)).or_else(|| GameOptions::from_card(&card)).map_or_else(defaults, |o| o.to_card());
+    set(&mut acct);
+    let account = account_write("game", &acct);
+    for r in [&game, &account] {
+        if let Err(e) = r {
+            crate::say(&format!("the volumes were not kept: {e}"));
+        }
+    }
+    game.is_ok() && account.is_ok()
+}
+
 /// The login STATION's Save Account kept (`VIGameOptions::m_username`,
 /// `m_password`, `m_x90`), from the card's whole record (`Load`): empty and
 /// off when there is none.
@@ -2891,6 +2916,45 @@ mod tests {
         let mut loud = b;
         loud[8..12].copy_from_slice(&f32::NAN.to_le_bytes());
         assert_eq!(GameOptions::from_card(&loud).unwrap().fx_volume, F::ONE);
+    }
+
+    /// The volumes kept on their own (`keep_volumes`): with nothing kept, the
+    /// defaults with them; over a kept record, every other setting and the
+    /// saved login as they were; with an account known, the account's record
+    /// too (what `game_options` reads), its other settings its own; 0 read
+    /// back as 0, never as unset.
+    #[test]
+    fn volumes_kept_on_their_own() {
+        testing::reset(false);
+        assert!(keep_volumes(F::ZERO, F::new(0.3)));
+        let o = game_options();
+        assert_eq!((o.fx_volume, o.music_volume, o.compact), (F::ZERO, F::new(0.3), 1));
+        assert_eq!(GameOptions { fx_volume: F::ONE, music_volume: F::ONE, ..o }, GameOptions { compact: 1, ..Default::default() });
+        // a kept record and a saved login
+        testing::reset(false);
+        let mut card = GameOptions { battle: 4, no_damage: 1, ..Default::default() }.to_card();
+        card[0x10..0x13].copy_from_slice(b"dab");
+        card[0x90] = 1;
+        testing::put(GAME_FILE, &card);
+        assert!(keep_volumes(F::new(0.3), F::ZERO));
+        let o = game_options();
+        assert_eq!((o.battle, o.no_damage, o.fx_volume, o.music_volume), (4, 1, F::new(0.3), F::ZERO));
+        assert_eq!(saved_login(), ("dab".to_string(), String::new(), true), "the saved login stays");
+        // an account with its own record
+        set_account("eqoaclassic.com", "dab");
+        let acct = account_file("eqoaclassic.com+dab", "game");
+        testing::put(&acct, &GameOptions { battle: 7, ..Default::default() }.to_card());
+        assert_eq!(game_options().fx_volume, F::ONE, "the control: the account's own");
+        assert!(keep_volumes(F::ZERO, F::ZERO));
+        let o = game_options();
+        assert_eq!((o.battle, o.fx_volume, o.music_volume), (7, F::ZERO, F::ZERO));
+        assert!(testing::kept(&acct).unwrap()[0x10..0x91].iter().all(|&b| b == 0), "never the login");
+        let w = GameOptions::from_card(&testing::kept(GAME_FILE).unwrap()).unwrap();
+        assert_eq!((w.battle, w.fx_volume), (4, F::ZERO), "the window's too");
+        set_account_now(None);
+        testing::reset(true);
+        assert!(!keep_volumes(F::ZERO, F::ZERO), "a store that refuses: said");
+        testing::reset(false);
     }
 
     /// Saved, then loaded as the next run loads them: every setting as it

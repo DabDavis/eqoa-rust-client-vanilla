@@ -11,6 +11,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Volumes stay where you set them
+- **Fx Volume and Music Volume are kept the moment you change them**: before, a volume turned down or off was only
+  kept with Save Changes, so backing out of Options with Triangle put the old volume back, and a window closed any
+  other way lost it at the next zone into a new world, login or start. The volumes are now kept as you move the
+  slider, at 0 silent.
+
 ## 2026-11-17 · Santa wears his hat
 - **Santa Claus now wears his Santa Hat** by the tree: the hat a creature is given by its name was dropped because
   it changes none of its colours, so he showed his own red cloth cap.
