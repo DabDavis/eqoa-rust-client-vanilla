@@ -8,6 +8,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-16 · Santa's sleigh stays on the ground
+- **Decorations stay where they are placed**: a decoration made of a zone's art (Santa's sleigh) no longer drifts up
+  into the sky; it stands on the sand where the server puts it.
+
 ## 2026-11-16 · Name plates in front of the presents
 - **Names no longer disappear behind the presents**: the presents and the lights' cord round the Christmas tree were
   drawn over the names of players and NPCs standing among them. They are now drawn with the world, so a name in

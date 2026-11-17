@@ -4155,6 +4155,14 @@ impl Play {
                 e.hpr = [w.committed.angles.x.0, 0.0, 0.0];
                 continue;
             }
+            // a decoration's art (a sleigh, a tree: `decorlights`) stands where
+            // the server puts it: never stood on a floor of the scene, which
+            // a zone's sprite (the sled) climbed, step by step, onto its own
+            // top, 600 up in the air
+            if crate::decorlights::is_art(e.model) {
+                e.extrapolated = game_ms;
+                continue;
+            }
             let skel = self.puppets[slot].as_ref().and_then(|p| p.sprite.as_ref()).map_or(0, |s| s.skel_type);
             let dt = F::<Ee>::new((game_ms - e.extrapolated) as i32 as f32) * F::new(0.001);
             let (mut pos, mut hpr) = (v3(e.pos), v3(e.hpr));

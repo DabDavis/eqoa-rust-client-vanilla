@@ -73,6 +73,12 @@ pub fn sink(model: u32) -> Option<f32> {
     DECOR.with_borrow(|d| d.art.iter().find(|a| a.model == model && a.sink != 0.0).map(|a| a.sink))
 }
 
+/// Whether `model` is a decoration's art (`net::decor::Art`): scenery the
+/// server places, which the client never moves.
+pub fn is_art(model: u32) -> bool {
+    model != 0 && DECOR.with_borrow(|d| d.art.iter().any(|a| a.model == model))
+}
+
 /// `model` lowered by `sink(id)`, if the art is a decoration's that is.
 pub fn lower(id: u32, model: &mut esf::Model) {
     if let Some(s) = sink(id) {
@@ -466,6 +472,18 @@ mod tests {
         assert!((mid_x - 104.0).abs() < 1e-4);
         assert!(p[0].colors[0][0][0] > 0.7, "red paper");
         assert!(presents_of(&d, &h, 0, [100.0 + REACH + 10.0, 50.0, 200.0]).is_empty());
+    }
+
+    /// A decoration's art is known by its model, nothing else is.
+    #[test]
+    fn the_art_is_scenery() {
+        let mut d = tree(Effect::Steady);
+        d.art.push(net::decor::Art { model: 0x0B3B_A520, world: 0, zone: 22, sink: 0.0 });
+        set(d);
+        assert!(is_art(0x0B3B_A520));
+        assert!(!is_art(0x84807490) && !is_art(0));
+        set(Decor::default());
+        assert!(!is_art(0x0B3B_A520));
     }
 
     /// A twinkle changes each bulb's light over time, out of step.
