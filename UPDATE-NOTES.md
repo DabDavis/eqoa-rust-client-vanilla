@@ -21,6 +21,9 @@ is put on the page by `.github/workflows/notes.yml`.
   when the illusion starts and ends; before, the turban could float over a troll's or a gnome's head or sit forward
   on an ogre's.
 - A were's beast form, which wears no helm, now shows the hat too.
+## 2026-11-16 · Santa's sleigh stays on the ground
+- **Decorations stay where they are placed**: a decoration made of a zone's art (Santa's sleigh) no longer drifts up
+  into the sky; it stands on the sand where the server puts it.
 
 ## 2026-11-16 · Name plates in front of the presents
 - **Names no longer disappear behind the presents**: the presents and the lights' cord round the Christmas tree were
