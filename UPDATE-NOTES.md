@@ -15,6 +15,13 @@ is put on the page by `.github/workflows/notes.yml`.
 - **A storm's fog is as thick whichever way you face**: it is now measured from your eyes in every direction, so
   the ground at your feet no longer shows clear or fogged by which way the camera points.
 
+## 2026-11-17 · Hats fit illusions
+- **A hat (the Turban of Twisted Virtue, the kappa's straw hat) now sits on whatever body you wear**: an ogre pill,
+  an illusion, a were form or a custom race's body. It is fitted as a helm would be, to that head, and fitted again
+  when the illusion starts and ends; before, the turban could float over a troll's or a gnome's head or sit forward
+  on an ogre's.
+- A were's beast form, which wears no helm, now shows the hat too.
+
 ## 2026-11-16 · Name plates in front of the presents
 - **Names no longer disappear behind the presents**: the presents and the lights' cord round the Christmas tree were
   drawn over the names of players and NPCs standing among them. They are now drawn with the world, so a name in
