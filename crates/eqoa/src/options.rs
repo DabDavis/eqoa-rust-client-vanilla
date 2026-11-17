@@ -866,14 +866,8 @@ impl WndOptions {
             0 => o.follow = (o.follow != 1) as u8,
             1 => o.inverted = (o.inverted == 0) as u8,
             2 => o.battle = ((o.battle as i32 + if d < 0 { tracks - 1 } else { 1 }) % tracks) as u8,
-            3 => {
-                volume(&mut o.fx_volume, cues);
-                ups.push(OptionsUp::Volume(0, o.fx_volume));
-            }
-            4 => {
-                volume(&mut o.music_volume, cues);
-                ups.push(OptionsUp::Volume(1, o.music_volume));
-            }
+            3 => volume(&mut o.fx_volume, cues),
+            4 => volume(&mut o.music_volume, cues),
             5 => {
                 o.stereo ^= 1;
                 ups.push(OptionsUp::Output(o.stereo != 0));
@@ -1192,6 +1186,21 @@ impl WndOptions {
             if F::new(0.95) < o.music_volume {
                 o.music_volume = F::ONE;
             }
+        }
+        // a volume: on the device as snapped (0 silent), and kept the moment
+        // it changes (`settings::keep_volumes`), the client's own: the game
+        // keeps it only with Save Changes and Triangle on the menu puts it
+        // back, so a volume turned down came back at the menu's Triangle, or
+        // at the next world entry or start when the window closed another
+        // way (the owner, 2026-11-17: "players turn off sound or turn it down
+        // and the sounds or music comes back"). What Triangle puts back is
+        // the volume kept.
+        if matches!(self.item, 3 | 4) {
+            let (cls, v) = if self.item == 3 { (0, o.fx_volume) } else { (1, o.music_volume) };
+            ups.push(OptionsUp::Volume(cls, v));
+            self.saved.fx_volume = o.fx_volume;
+            self.saved.music_volume = o.music_volume;
+            crate::settings::keep_volumes(o.fx_volume, o.music_volume);
         }
     }
 
@@ -4169,6 +4178,66 @@ mod tests {
         let game = GameOptions::from_card(&testing::kept("game.opt").expect("saved")).unwrap();
         assert_eq!((game.no_faction, game.no_damage), (1, 1));
         assert!(settings::auto_save());
+        testing::reset(false);
+    }
+
+    /// The volumes are kept the moment they change (the owner, 2026-11-17:
+    /// "players turn off sound or turn it down and the sounds or music comes
+    /// back"): with Auto Save off, the Sound page's Fx Volume to 0 and Music
+    /// Volume to 30%, then Triangle out with no Save Changes: the device keeps
+    /// them (no volume put back), the window's game.opt holds them for the
+    /// next world entry and start, and the next open's Triangle keeps them.
+    #[test]
+    fn volumes_kept_without_save_changes() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::settings::{self, testing};
+        testing::reset(false);
+        let vui = vui();
+        let mut o = GameOptions::default();
+        let mut w = WndOptions::default();
+        let mut ups = Vec::new();
+        let press = |w: &mut WndOptions, o: &mut GameOptions, k: i32, ups: &mut Vec<OptionsUp>| {
+            w.key(&vui, &mut NullRaster, o, k, 0, &mut Vec::new(), ups);
+            w.draw(&vui, &mut NullRaster, o, ups);
+        };
+        assert!(!settings::auto_save());
+        w.open(&vui, &NullRaster, &o);
+        for k in [key::DOWN, key::DOWN, key::CROSS, key::DOWN] {
+            press(&mut w, &mut o, k, &mut ups);
+        }
+        assert_eq!(w.item, 3, "Fx Volume");
+        for _ in 0..10 {
+            press(&mut w, &mut o, key::LEFT, &mut ups);
+        }
+        press(&mut w, &mut o, key::DOWN, &mut ups);
+        assert_eq!(w.item, 4, "Music Volume");
+        for _ in 0..7 {
+            press(&mut w, &mut o, key::LEFT, &mut ups);
+        }
+        assert_eq!(o.fx_volume, F::ZERO, "0 is silent");
+        let music = o.music_volume;
+        assert!((music.0 - 0.3).abs() < 1e-5, "{music:?}");
+        assert_eq!(ups.iter().filter(|u| matches!(u, OptionsUp::Volume(0, _))).last(), Some(&OptionsUp::Volume(0, F::ZERO)));
+        assert_eq!(ups.last(), Some(&OptionsUp::Volume(1, music)));
+        let kept = GameOptions::from_card(&testing::kept("game.opt").expect("kept at the change")).unwrap();
+        assert_eq!((kept.fx_volume, kept.music_volume), (F::ZERO, music));
+        assert_eq!(settings::game_options().fx_volume, F::ZERO, "what the next world entry reads");
+        // Triangle to the menu and out: no Save Changes, nothing louder put back
+        ups.clear();
+        press(&mut w, &mut o, key::TRIANGLE, &mut ups);
+        press(&mut w, &mut o, key::TRIANGLE, &mut ups);
+        assert_eq!(ups.last(), Some(&OptionsUp::Apply));
+        assert_eq!((o.fx_volume, o.music_volume), (F::ZERO, music), "as turned down");
+        assert!(ups.iter().all(|u| !matches!(u, OptionsUp::Volume(..)) || *u == OptionsUp::Volume(0, F::ZERO) || *u == OptionsUp::Volume(1, music)), "{ups:?}");
+        // a new run: the options read back as kept; another open and Triangle keeps them
+        let mut o = settings::game_options();
+        assert_eq!((o.fx_volume, o.music_volume), (F::ZERO, music));
+        w.open(&vui, &NullRaster, &o);
+        ups.clear();
+        press(&mut w, &mut o, key::TRIANGLE, &mut ups);
+        assert_eq!((o.fx_volume, o.music_volume), (F::ZERO, music));
+        // the other settings' unsaved changes stay unsaved
+        assert_eq!(GameOptions::from_card(&testing::kept("game.opt").unwrap()).unwrap().no_damage, GameOptions::default().no_damage);
         testing::reset(false);
     }
 }
