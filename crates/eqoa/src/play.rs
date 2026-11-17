@@ -1387,9 +1387,14 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
     // helm, and the hair dressed as under one; the helm's other aura (a GM's
     // shell or particles round the hat, a server that sends the hat apart:
     // `net::entity::HELM_HAT_AURA`) drawn on it as on a helm
-    if let Some((node, mut m)) = c.colors.and_then(|l| crate::hat::hat_of(&l.auras)).and_then(|(src, hue)| crate::hat::hat_on(lib, model, cs, player, src, hue)) {
-        // in the helm's dye (the Equipment Dyer's, a GM's #dye): white, its own colours
-        crate::hat::dyed(&mut m, look_of(c).helm_color(&t), lib);
+    // (an NPC's by its name's tint: Santa Claus's Santa Hat, `hat::npc_hat`)
+    let hat = c.colors.and_then(|l| crate::hat::hat_of(&l.auras)).or_else(|| {
+        (!player).then(|| crate::npctint::of(&c.name)).flatten().and_then(|t| crate::hat::npc_hat(&t)).map(|(src, style)| (src, None, style))
+    });
+    if let Some(((node, mut m), style)) = hat.and_then(|(src, hue, style)| crate::hat::hat_on_styled(lib, model, cs, player, src, hue, style).map(|h| (h, style))) {
+        // in the helm's dye (the Equipment Dyer's, a GM's #dye): white, its own
+        // colours (Santa's: red, its band and ball white)
+        crate::hat::dress(&mut m, style, look_of(c).helm_color(&t), lib);
         let mut gpu = g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures);
         if let Some(a) = c.colors.map(|l| l.auras).filter(|a| a[crate::aura::HELM] != Default::default()) {
             let (shell, worn) = crate::aura::helm_aura(&a, node);

@@ -9,6 +9,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+
+## 2026-11-17 · The Santa Hat
+- **Santa's hat**: a red pointed cap with a white band and a white bobble on the end, cut from the gnome's cap and
+  fitted to any head (every race, illusions and were forms too). Santa Claus wears one; Toymaker Tinsel sells them
+  for Holly Tokens. A helm dye colours the red, the white stays white.
+
 ## 2026-11-17 · Dark dyes on hats
 - **A dark or black helm dye now darkens a hat** (the kappa's straw hat in black is black): before, a black dye only
   greyed it, so it looked undyed. Bright dyes still colour a dark hat (the turban), a little more softly.
