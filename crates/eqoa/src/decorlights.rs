@@ -819,6 +819,18 @@ mod tests {
         assert!((p[1].colors[0][0][0] - 2.0 * 0x80 as f32 / 255.0).abs() < 1e-4, "its colour times its gain");
     }
 
+    /// A decoration's art is known by its model, nothing else is.
+    #[test]
+    fn the_art_is_scenery() {
+        let mut d = tree(Effect::Steady);
+        d.art.push(net::decor::Art { model: 0x0B3B_A520, world: 0, zone: 22, sink: 0.0 });
+        set(d);
+        assert!(is_art(0x0B3B_A520));
+        assert!(!is_art(0x84807490) && !is_art(0));
+        set(Decor::default());
+        assert!(!is_art(0x0B3B_A520));
+    }
+
     /// A twinkle changes each bulb's light over time, out of step.
     #[test]
     fn the_bulbs_twinkle() {
