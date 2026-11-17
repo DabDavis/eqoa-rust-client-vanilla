@@ -205,7 +205,9 @@
 //!   saying when this server keeps no meter; Auto-Cast (2026-11-11: On, the
 //!   quick bars' slots marked auto used by the client itself, `autocast`; Off,
 //!   none) and Auto Target (Off by default; On: with no target or a dead one,
-//!   the nearest creature fighting the player targeted);
+//!   the nearest creature fighting the player targeted); Weapon Swap Back (Off
+//!   by default; On: a weapon set used again puts back what it took off, the
+//!   server's, work board 1581: `gear::use_message`);
 //! - Chat (2026-11-10, the GM Jibrish's petition 1463: "This should be off by
 //!   default for ps2 players and a toggle option"): Item Links (On by default:
 //!   items linked from the inventory into the chat line, drawn purple in the
@@ -1074,6 +1076,9 @@ impl WndOptions {
                     // game frame
                     78 => c.auto_cast = !c.auto_cast,
                     79 => c.auto_target = !c.auto_target,
+                    // Weapon Swap Back (work board 1581): a weapon set's next
+                    // 0x0022 (`gear::use_message`)
+                    WEAPON_SWAP_BACK => c.weapon_swap_back = !c.weapon_swap_back,
                     // Move Touch Pad: the pad's parts dragged and pinched once
                     // the menu is left (`touch::editing`); a mode, not kept
                     MOVE_TOUCH => crate::touch::set_editing(!crate::touch::editing()),
@@ -1744,7 +1749,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 94] = [
+const EXTENDED_ITEMS: [(i32, &str); 95] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1839,6 +1844,7 @@ const EXTENDED_ITEMS: [(i32, &str); 94] = [
     (TOUCH_LAYOUT, "Button Layout"),
     (TARGET_LEVEL, "Target Level"),
     (WEATHER, "Weather"),
+    (WEAPON_SWAP_BACK, "Weapon Swap Back"),
 ];
 
 /// The Chat Tabs rows' first item (ticket 1951): one a kind of line, in
@@ -1870,6 +1876,9 @@ const TARGET_LEVEL: i32 = 120;
 /// Weather's item (2026-11-15, with Flora's and Environment's sliders). 130,
 /// not the next free, is this lane's, as Target Level's 120.
 const WEATHER: i32 = 130;
+/// Weapon Swap Back's item (jibrish, 2026-11-16, work board 1581). 140, not
+/// the next free, as Weather's 130.
+const WEAPON_SWAP_BACK: i32 = 140;
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -1975,7 +1984,7 @@ const ALL_CATEGORIES: [Category; 24] = [
     Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
     Category { name: "Chat", items: &[73, 89], note: Note::Links, group: Group::Ui },
     Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE], note: Note::Shortcuts, group: Group::Other },
-    Category { name: "Combat", items: &[78, 79, PETS_PASS], note: Note::None, group: Group::Other },
+    Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None, group: Group::Other },
     Category { name: "Size & Look", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Touch },
     Category { name: "Sound", items: &[32], note: Note::Output, group: Group::Other },
@@ -2182,6 +2191,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         90 => on_off(c.stacked_bars),
         78 => on_off(c.auto_cast),
         79 => on_off(c.auto_target),
+        WEAPON_SWAP_BACK => on_off(c.weapon_swap_back),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         39 => wide(&format!("x{}", c.render_scale)),
@@ -3214,6 +3224,15 @@ mod tests {
         assert_eq!((settings::auto_target(), cues.last()), (true, Some(&11)), "on");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::auto_target(), "and back");
+        // Weapon Swap Back Off by default (work board 1581), two values
+        goto!(WEAPON_SWAP_BACK);
+        assert_eq!(w.item, WEAPON_SWAP_BACK, "Weapon Swap Back");
+        assert!(!settings::weapon_swap_back(), "off by default");
+        assert_eq!(value_text(&vui, WEAPON_SWAP_BACK), Some(wide(vui.words.get(552, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::weapon_swap_back(), cues.last()), (true, Some(&11)), "on");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::weapon_swap_back(), "and back");
         // Chat: Item Links On by default, then Off and back (the petition 1463's
         // toggle), the page saying where the server has none
         goto!(73);
@@ -3496,7 +3515,7 @@ mod tests {
             of(2),
             vec![
                 ("General", vec!["Update Notices", "Loading Screens", "Loading Tips", "Same Shortcuts", "Auto Save Options"]),
-                ("Combat", vec!["Auto-Cast", "Auto Target", "Pets Pass Through"]),
+                ("Combat", vec!["Auto-Cast", "Auto Target", "Pets Pass Through", "Weapon Swap Back"]),
                 ("Camera", vec!["Camera Distance", "Camera Turn Speed", "Screen Shake"]),
                 ("Sound", vec!["Output Device"]),
             ],

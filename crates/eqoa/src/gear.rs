@@ -155,6 +155,25 @@ pub struct View {
     pub empty: [bool; SETS],
 }
 
+/// 0x0022's byte after the set (work board 1581): bit 0 asks the server to put
+/// back what the set took off when it is pressed again (Extended > Other >
+/// Combat > Weapon Swap Back). An old server reads the set alone.
+pub const SWAP_BACK: u8 = 1;
+
+/// The 0x0022 that takes set up (0..=BARE_HANDS), with the swap-back byte
+/// when asked; None for any other set.
+pub fn use_message(set: i64, swap_back: bool) -> Option<Vec<u8>> {
+    if !(0..=BARE_HANDS).contains(&set) {
+        return None;
+    }
+    let mut w = net::stream::Writer::op(0x0022);
+    w.u8(set as u8);
+    if swap_back {
+        w.u8(SWAP_BACK);
+    }
+    Some(w.data)
+}
+
 /// The wear slots Prepare makes a set of (the live `AssignSlot`'s jump table
 /// at 0x013FCE20, wear 12-27): a primary, one-handed or two-handed weapon, a
 /// bow, an item held, a fishing pole and the tools; not a shield, a thrown
@@ -167,6 +186,16 @@ pub fn preparable(wear: i64) -> bool {
 mod tests {
     use super::*;
     use net::dump::Item;
+
+    #[test]
+    fn use_message_adds_the_swap_back_byte() {
+        assert_eq!(use_message(1, false), Some(vec![0x22, 0x00, 0x01]));
+        assert_eq!(use_message(4, false), Some(vec![0x22, 0x00, 0x04]));
+        assert_eq!(use_message(1, true), Some(vec![0x22, 0x00, 0x01, 0x01]));
+        assert_eq!(use_message(4, true), Some(vec![0x22, 0x00, 0x04, 0x01]));
+        assert_eq!(use_message(5, false), None);
+        assert_eq!(use_message(-1, true), None);
+    }
 
     fn item(id: i64, wear: i64, attack: i64) -> NetItem {
         NetItem { equip_slot: -1, quick_slot: -1, item: Item { id, wear_slot: wear, attack_type: attack, ..Default::default() }, ..Default::default() }

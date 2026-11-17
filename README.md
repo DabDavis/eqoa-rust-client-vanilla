@@ -105,7 +105,7 @@ or a browser (each described where it lives below):
   (Texture Packs, Dump Textures, and on a computer Texture Folder), Map (Map,
   Minimap, Map Markers, Quest Helper, Quest Tracker), Number Colors (Your Damage,
   Your Procs, Your Heals, Pet Damage, Pet Procs, Pet Heals) and Combat (DPS Meter, DPS
-  Meter Shows, Reset DPS Meter, Auto-Cast, Auto Target), and the rows below.
+  Meter Shows, Reset DPS Meter, Auto-Cast, Auto Target, Weapon Swap Back), and the rows below.
 - **The map and the quest helper** (the user's of 2026-11-09: "also add the map and
   quest helper we had in a former update"; they were taken out on 2026-10-27 with the
   others below that are not the game's, and only these two came back): Extended > Map,
@@ -454,6 +454,14 @@ or a browser (each described where it lives below):
   new goes on the wire (any server, a PS2's too). The auto slots are kept per character
   (`autocast.opt`, by the ability's id); Extended > Combat: Auto-Cast (on: no slot is auto
   until marked) and Auto Target.
+- **Weapon Swap Back** (jibrish's of 2026-11-16, "I have 2 swords equipped / I hit button to
+  switch to bow, I now have bow / I go and hit the same button again, and now its those same 2
+  swords"; work board 1581; `gear::use_message`): with Extended > Other > Combat > Weapon Swap
+  Back on (off by default), a weapon set used from the HUD sends 0x0022 with one more byte,
+  `0x01`, and the server (go-eqoa-server's `gearswap.go`) puts back exactly the rows the set
+  took off when the same set is used again while the hands are as it left them; bare hands
+  sheathes and draws. The server moves rows, never copies them: one sold, banked or traded
+  since is left out. An old server reads the set alone.
 - **A render scale and a sharp HUD**: Render Scale (off unless chosen) x2 or
   x4 draws the whole picture, the world and everything over it, two or
   four times the window's size each way and averages it down, which smooths

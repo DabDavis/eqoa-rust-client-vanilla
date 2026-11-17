@@ -8600,11 +8600,10 @@ impl Play {
     /// The live client's `UseGearSet` (0x012C3418): 0x0022 with the set
     /// (4 bare hands).
     fn use_gear_set(&mut self, set: i64) {
-        if (0..=crate::gear::BARE_HANDS).contains(&set) {
-            eprintln!("play: weapon set {set} taken up (0x0022)");
-            let mut w = net::stream::Writer::op(0x0022);
-            w.u8(set as u8);
-            self.session.send(&w.data);
+        let back = crate::settings::weapon_swap_back();
+        if let Some(data) = crate::gear::use_message(set, back) {
+            eprintln!("play: weapon set {set} taken up (0x0022{})", if back { ", swap back" } else { "" });
+            self.session.send(&data);
         }
     }
 

@@ -11,6 +11,15 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Weapon Swap Back
+- **Press a weapon set again to swap back**: with Extended > Other > Combat > Weapon Swap Back on, using a weapon set
+  from the HUD switches to it as before, and using the same set again puts back exactly what you had in your hands.
+  Two swords, the bow's set, the bow; the bow's set again, the same two swords. Bare hands works the same way, to
+  sheathe and draw your weapons.
+- Off by default. Your items are moved by the server, never copied: an item you sold, banked or traded since is
+  simply left out.
+
+
 ## 2026-11-17 · Zone ambience now follows the Music volume
 - **Zone ambience now follows the Music volume**: the background sounds of each place (and the wind in snow and
   sandstorms) are turned down by Music Volume, not Fx Volume, so Music at 0 makes the world quiet of everything but
