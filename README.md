@@ -332,6 +332,19 @@ or a browser (each described where it lives below):
   R2 let go hands it back), on a keyboard C held, the arrows and Enter. The answer goes as 0x7E56
   (u32 id, u8 1 ready) and closes the strip; the server tells the asker who is not ready. On any other
   server nothing is drawn or sent; a PS2 is told in a line to type `/t ready` or `/t notready`.
+- **The dyers' colour picker** (the server owner's of 2026-11-17, "lets upgrade the dyer NPCs to show a RGB
+  color picker"; `net::dyepick`, `dyepicker.rs`, `dyeplay.rs`): on a server that offers it (go-eqoa-server's
+  0x7E95 kind 0; answered 0x7E96 kind 0 with version 1) its Equipment Dyers, Pet Groomers and Weapon Enchanters
+  add "Pick any colour..." after their families; the server's open (0x7E95 kind 1: token, target, alpha flag,
+  colour now, title, slots, the pet or aura to preview on, the palette) brings up the client's window (mode 63):
+  a saturation/value square, a hue strip, H S V R G B (and A for a pet) sliders with their numbers, hex, new
+  beside old, ten recent colours (`dyecolours.opt`) and the dyer's palette, OK and Cancel. The pad: up and down
+  a row, left and right a step (held, faster), L1/R1 by ten, ✕ a swatch or a button, Start OK, △ Cancel; the
+  keyboard's arrows, Tab, Enter, Escape, Page Up/Down and hex typed; a press and a drag (mouse or finger,
+  `Play::hud_press`) on the square, strip and sliders. While it is up the colour is drawn on the player's own
+  character (its dye slots in the live channel's colours, or the hand's aura) or its pet (`petdye::preview`),
+  every 100 ms at most; Cancel takes it off, OK keeps it 2.5 s for the server's own. OK answers 0x7E96 kind 1
+  (token, RGBA), Cancel kind 2; a server's kind 2 closes it. On any other server nothing is offered or drawn.
 - **The buff window** (the GM Jibrish's petition 1761, 2026-11-12; `net::buffs`, `buffwnd.rs`,
   `buffplay.rs`): on a server that offers it (go-eqoa-server's 0x7E57, a u8 both ways; the answer is
   Extended > UI > HUD's Buff Window, on by default) the set comes as 0x7E58 (each line whose, removable,

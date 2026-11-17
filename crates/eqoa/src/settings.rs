@@ -329,6 +329,27 @@ pub fn save_quest_guide(text: &str) -> bool {
     }
 }
 
+// ---- the dyers' colour picker's recent colours (`dyepicker`) -----------------------
+
+/// The picker's recent colours' file: hex words, newest first.
+const DYE_RECENT_FILE: &str = "dyecolours.opt";
+
+/// The recent colours as text (empty when there are none).
+pub fn dye_recent() -> String {
+    store::read(DYE_RECENT_FILE).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+}
+
+/// Keeps the recent colours: whether they were kept.
+pub fn save_dye_recent(text: &str) -> bool {
+    match store::write(DYE_RECENT_FILE, text.as_bytes()) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::say(&format!("the picker's recent colours were not kept: {e}"));
+            false
+        }
+    }
+}
+
 // ---- the auto slots (`autocast`) --------------------------------------------------
 
 /// The auto slots' file as text (empty when there is none): a line a

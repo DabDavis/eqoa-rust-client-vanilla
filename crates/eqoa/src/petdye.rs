@@ -25,6 +25,14 @@ pub use net::petdye::PetDye;
 
 thread_local! {
     static DYES: RefCell<HashMap<u32, PetDye>> = RefCell::default();
+    /// The dyers' colour picker's preview (`dyeplay`): a pet's dyes while
+    /// its colour is picked, over the server's.
+    static PREVIEW: RefCell<Option<(u32, PetDye)>> = const { RefCell::new(None) };
+}
+
+/// The picker's preview of a pet's dyes (by its id), or none.
+pub fn preview(p: Option<(u32, PetDye)>) {
+    PREVIEW.with_borrow_mut(|v| *v = p);
 }
 
 /// The dyed pets the server sent (`net::session::OP_PET_DYES`), by id: the
@@ -35,6 +43,9 @@ pub fn set(dyes: Vec<(u32, PetDye)>) {
 
 /// The dyes the creature of this id is drawn in while in body `look`, if any.
 pub fn of(id: u32, look: u32) -> Option<PetDye> {
+    if let Some(p) = PREVIEW.with_borrow(|v| v.filter(|(i, p)| *i == id && p.look == look)) {
+        return Some(p.1);
+    }
     DYES.with_borrow(|d| if d.is_empty() { None } else { d.get(&id).copied().filter(|p| p.look == look) })
 }
 

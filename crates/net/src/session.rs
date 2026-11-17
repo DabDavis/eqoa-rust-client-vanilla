@@ -1342,6 +1342,9 @@ pub struct Session {
     /// set at its offer and at a new connection, this client holding none
     /// then.
     pub pet_dyes: Option<Vec<(u32, crate::petdye::PetDye)>>,
+    /// Whether the server offered the dyers' colour picker and was answered
+    /// (`crate::dyepick`).
+    pub dye_picker: bool,
     /// The layout of [`OP_PET_DYES`] this client answered the offer with (2: a
     /// rule byte after each pet's mask, `crate::petdye::read`).
     pub pet_dyes_layout: u8,
@@ -1634,6 +1637,7 @@ impl Session {
             npc_tints_layout: 1,
             decor: None,
             pet_dyes: None,
+            dye_picker: false,
             pet_dyes_layout: 1,
             flying: false,
             noclip: false,
@@ -2881,6 +2885,15 @@ impl Session {
                     let mut w = Writer::op(OP_PET_DYES_ANSWER);
                     w.u8(layout);
                     self.send(&w.data);
+                }
+            }
+            // the dyers' colour picker offered (each world entry): answered at
+            // once with this client's version (`dyepick`); its opens and
+            // closes are the game's (`Event::Opcode`)
+            crate::dyepick::OP_DYE_PICKER if m.data.get(2) == Some(&crate::dyepick::OFFER) => {
+                if m.data.get(3).is_some_and(|&v| v >= 1) {
+                    self.dye_picker = true;
+                    self.send(&crate::dyepick::offer_answer());
                 }
             }
             OP_PET_DYES => match crate::petdye::read(&m.data[2.min(m.data.len())..], self.pet_dyes_layout) {
@@ -6173,5 +6186,29 @@ mod tests {
         let m = messages(&sent.borrow()[0]);
         let kinds: Vec<(u8, u16)> = m.iter().map(|(t, d)| (*t, if *t == 251 { u16::from_le_bytes([d[0], d[1]]) } else { 0 })).collect();
         assert_eq!(kinds, [(251, 0x00C9), (251, 0x00CA)], "{m:02x?}");
+    }
+
+    /// The dyers' colour picker: an offer of version 1 or newer is answered at
+    /// once with this client's version and is the session's; a picker's open
+    /// and close go to the game as `Event::Opcode`. The control: an offer of
+    /// 0 is no offer.
+    #[test]
+    fn dye_picker_offer_answer_and_open() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x96, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x95, 0x7E, 0, 0]);
+        assert_eq!((answers(&mut s), s.dye_picker), (vec![], false), "an offer of 0 is no offer");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x95, 0x7E, 0, 3]);
+        assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0x96, 0x7E, 0, crate::dyepick::VERSION])]);
+        assert!(s.dye_picker);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x95, 0x7E, 2, 1, 0, 0, 0]);
+        assert!(matches!(&ev[..], [Event::Opcode { op: 0x7E95, data }] if data[..] == [2, 1, 0, 0, 0]), "{ev:?}");
     }
 }

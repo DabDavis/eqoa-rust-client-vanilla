@@ -4222,6 +4222,41 @@ impl App {
                 return;
             }
         }
+        // The dyers' colour picker (`dyeplay`), while it is up: the arrows
+        // (the d-pad), Enter (OK on its buttons, a swatch taken), Escape
+        // (Cancel), Tab (a row down), Page Up and Page Down (L1, R1: by ten),
+        // and hex digits, '#' and Backspace (the colour typed). Every key is
+        // its while it is up; held arrows repeat in the picker, not here.
+        if let Some(p) = self.play.as_mut()
+            && p.typing.is_none()
+            && p.dyepick_owns()
+        {
+            let down = event.state == ElementState::Pressed;
+            let k = match &event.logical_key {
+                Key::Named(NamedKey::ArrowUp) => Some(19),
+                Key::Named(NamedKey::ArrowDown) => Some(20),
+                Key::Named(NamedKey::ArrowLeft) => Some(17),
+                Key::Named(NamedKey::ArrowRight) => Some(18),
+                Key::Named(NamedKey::Enter) => Some(13),
+                Key::Named(NamedKey::Escape) => Some(27),
+                Key::Named(NamedKey::Tab) => Some(9),
+                Key::Named(NamedKey::PageUp) => Some(140),
+                Key::Named(NamedKey::PageDown) => Some(142),
+                _ => None,
+            };
+            if let Some(k) = k {
+                if !(down && event.repeat) {
+                    p.dyepick_key(k, down);
+                }
+            } else if down && matches!(&event.logical_key, Key::Named(NamedKey::Backspace)) {
+                p.dyepick_char('\u{8}');
+            } else if down && let Some(t) = &event.text {
+                for c in t.chars().filter(|c| c.is_ascii_hexdigit() || *c == '#') {
+                    p.dyepick_char(c);
+                }
+            }
+            return;
+        }
         // A server's player search (`searchwnd`), while it is up: the
         // arrows, Enter or E (X: Search, a tell), Escape or Backspace
         // (it closes), Q (square: an invite), ` and Tab (L1 and R1:

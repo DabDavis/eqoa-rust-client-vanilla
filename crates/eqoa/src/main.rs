@@ -104,6 +104,7 @@ mod livewords;
 mod hud;
 mod raidlist;
 mod readywnd;
+mod dyepicker;
 mod buffwnd;
 mod tips;
 mod rollwnd;
