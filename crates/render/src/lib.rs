@@ -2623,6 +2623,30 @@ pub const IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
 /// its Frontiers namesake are two textures, and an unchanged one is one.
 pub struct LibraryTextures<'a>(pub &'a esf::Library);
 
+/// Textures a server's decorations use that no file of the library holds (a
+/// tent's cloth of another world's zone as a present's paper, a tree's leaves
+/// as tinsel: `decorlights`'s assets), by DictID: their levels, decoded once.
+/// A texture the library has is the library's; one of these is drawn only
+/// where nothing loaded names its id, and keyed apart from any that does.
+static DECOR_TEXTURES: std::sync::Mutex<Vec<(i32, std::sync::Arc<Vec<esf::Image>>)>> = std::sync::Mutex::new(Vec::new());
+
+/// Keeps `levels` as decoration texture `id` (`DECOR_TEXTURES`); a second for
+/// the same id takes the first's place.
+pub fn set_decor_texture(id: i32, levels: Vec<esf::Image>) {
+    let mut g = DECOR_TEXTURES.lock().unwrap_or_else(|e| e.into_inner());
+    g.retain(|(i, _)| *i != id);
+    g.push((id, std::sync::Arc::new(levels)));
+}
+
+/// Decoration texture `id`'s levels, if one is kept.
+pub fn decor_texture(id: i32) -> Option<std::sync::Arc<Vec<esf::Image>>> {
+    DECOR_TEXTURES.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(i, _)| *i == id).map(|(_, l)| l.clone())
+}
+
+/// The bit a decoration texture's key carries (`DECOR_TEXTURES`): never a
+/// library texture's key.
+const DECOR_KEY: u64 = 1 << 62;
+
 /// The tattoos' patterns read so far, by pattern (`tattoo::Woad::of`, off the
 /// disc's own face: never a texture pack's).
 static WOADS: std::sync::Mutex<Vec<(u8, std::sync::Arc<tattoo::Woad>)>> = std::sync::Mutex::new(Vec::new());
@@ -2756,7 +2780,8 @@ impl TextureSource for LibraryTextures<'_> {
                     }
                     levels
                 }
-                None => Vec::new(),
+                // a decoration's texture no file holds (`DECOR_TEXTURES`)
+                None => decor_texture(id).map(|l| l.as_ref().clone()).unwrap_or_default(),
             };
         };
         if let Some(l) = pack().and_then(|p| p.levels(c, &s, era)).filter(|l| !l.is_empty()) {
@@ -2770,6 +2795,9 @@ impl TextureSource for LibraryTextures<'_> {
         {
             return recolor::key_of(self.key(source), r);
         }
+        if self.surface(id).is_none() && decor_texture(id).is_some() {
+            return id as u32 as u64 | DECOR_KEY;
+        }
         let key = self.0.texture_key(id);
         let Some(p) = pack() else { return key };
         match self.surface(id) {
@@ -2781,7 +2809,10 @@ impl TextureSource for LibraryTextures<'_> {
         if let Some((_, s)) = self.0.surface(id) {
             return Some((s.width.max(0) as u32, s.height.max(0) as u32));
         }
-        recolor::source_of(id).and_then(|(source, _)| self.native_size(source))
+        if let Some((source, _)) = recolor::source_of(id) {
+            return self.native_size(source);
+        }
+        decor_texture(id).and_then(|l| l.first().map(|i| (i.width, i.height)))
     }
     fn pending(&self, id: i32, key: u64) -> Option<(u32, u32, u32)> {
         let (c, s, era) = self.surface(id)?;

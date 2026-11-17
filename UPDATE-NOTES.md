@@ -8,6 +8,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Globe bulbs, tinsel and wrapped presents
+- **New Christmas decorations**: strings of glass globes in many colours, garlands of gold and silver tinsel and of red
+  rope, and presents wrapped in patterned cloth, where a server puts them (Freeport's tree and its square). Their art
+  is read from your own disc, whatever world it comes from.
+
 ## 2026-11-16 · Name plates in front of the presents
 - **Names no longer disappear behind the presents**: the presents and the lights' cord round the Christmas tree were
   drawn over the names of players and NPCs standing among them. They are now drawn with the world, so a name in

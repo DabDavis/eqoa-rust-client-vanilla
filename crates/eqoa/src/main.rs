@@ -112,6 +112,8 @@ mod damage;
 mod numcolor;
 mod autocast;
 mod dpsmeter;
+#[cfg(not(target_arch = "wasm32"))]
+mod decorfit;
 mod decorlights;
 mod npctint;
 mod petdye;
@@ -493,6 +495,33 @@ fn run(args: &[String]) -> Result<()> {
                     lo[2]
                 );
             }
+        }
+        // `eqoa actormesh <WORLD.ESF> <x> <z> <radius> [0xDictID]`: the zone actors
+        // placed within radius of (x, z) (of that sprite), each with its
+        // triangles in world coordinates, as JSON on stdout: what a server's tool
+        // fits decoration lights to (a wall's top, a well's rim, a post)
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("actormesh") => {
+            let usage = "usage: eqoa actormesh <WORLD.ESF> <x> <z> <radius> [0xDictID]";
+            let file = args.get(1).ok_or(usage)?;
+            let num = |i: usize| -> Result<f32> { Ok(args.get(i).ok_or(usage)?.parse::<f32>()?) };
+            let (x, z, r) = (num(2)?, num(3)?, num(4)?);
+            let only = args.get(5).map(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).map(|v| v as i32)).transpose()?;
+            print!("{}", decorfit::actor_meshes(&disc_path(None), file, x, z, r, only)?);
+        }
+        // `eqoa dictzones <WORLD.ESF> 0xID...`: which zones hold each DictID;
+        // `eqoa texpng <WORLD.ESF> <zone|-1> 0xID <out.png>`: a texture as a PNG
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("dictzones") => {
+            let ids = args[2..].iter().map(|v| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).map(|v| v as i32)).collect::<std::result::Result<Vec<_>, _>>()?;
+            print!("{}", decorfit::dict_zones(&disc_path(None), args.get(1).ok_or("usage: eqoa dictzones <WORLD.ESF> 0xID...")?, &ids)?);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Some("texpng") => {
+            let usage = "usage: eqoa texpng <WORLD.ESF> <zone|-1> 0xID <out.png>";
+            let zone: i64 = args.get(2).ok_or(usage)?.parse()?;
+            let id = u32::from_str_radix(args.get(3).ok_or(usage)?.trim_start_matches("0x").trim_start_matches("0X"), 16)? as i32;
+            say(&decorfit::texture_png(&disc_path(None), args.get(1).ok_or(usage)?, zone, id, args.get(4).ok_or(usage)?)?);
         }
         Some("volumes") => {
             let file = args.get(1).ok_or("usage: eqoa volumes <world.esf>")?;
