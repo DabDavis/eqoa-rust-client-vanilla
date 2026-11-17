@@ -103,6 +103,21 @@ const ARM_ALONG: f32 = 0.25;
 /// skin (the dryad's hands and feet).
 const KEPT: &[(u32, &[i32])] = &[(0x4A4D88FB, &[0, 2])];
 
+/// Bodies that stand on a trunk, not on legs: the treants (the treant
+/// defender's body 0x5271A1F5, which the druid's Spirit Form wears, the
+/// treants' 0x66262F1C and Oakhollow's 0x46392747). Their skeletons name two
+/// feet, so two of their roots read as legs and the trunk, down to the roots,
+/// as the spine. Fitted as any body, a robe (the server owner, 2026-11-17:
+/// "wolfmoon in treant form has a robe, but it needs work to fit better") laid
+/// the human's chest from the shoulders to the roots, its sash at the foot of
+/// the trunk and its undershirt's stripe down the whole of it, and its skirt
+/// stretched out along one root as far as the root's tip. In a robe such a
+/// body wears it as a gown (`fit`'s `trunk`): the trunk below the shoulders is
+/// carried onto the human from the shoulders down to the skirt's hem, so its
+/// upper part takes the robe's chest and sash and its lower part the skirt,
+/// and the roots wear nothing.
+const TRUNKS: &[u32] = &[0x5271_A1F5, 0x6626_2F1C, 0x4639_2747];
+
 /// The palette entries body `id` keeps its own look on (`KEPT`).
 fn kept(id: i32) -> &'static [i32] {
     KEPT.iter().find(|(b, _)| *b == id as u32).map_or(&[], |(_, e)| e)
@@ -666,7 +681,7 @@ fn crossed_legs(lib: &Library, id: i32, model: &esf::Model, cs: &CSprite<Ee>, ar
         return None;
     }
     let alpha: [Option<Rc<Alpha>>; SLOTS] = std::array::from_fn(|i| alpha_of(lib, art[i].map_or(r.own[i], |t| t as i32)));
-    let mut f = fit(&r, &Carried { tris }, &alpha, false);
+    let mut f = fit(&r, &Carried { tris }, &alpha, false, false);
     // the legs and boots alone (a thigh's top may land on the human's tunic)
     for slot in 0..NAMED_SLOTS {
         f.tris[slot].clear();
@@ -1496,7 +1511,7 @@ pub fn fit_of(lib: &Library, id: i32, model: &esf::Model, cs: &CSprite<Ee>, art:
             made
         })?;
         let alpha: [Option<Rc<Alpha>>; SLOTS] = std::array::from_fn(|i| alpha_of(lib, art[i].map_or(r.own[i], |t| t as i32)));
-        Some(Rc::new(fit(&r, &c, &alpha, robed)))
+        Some(Rc::new(fit(&r, &c, &alpha, robed, TRUNKS.contains(&(id as u32)))))
     });
     FITS.with(|f| {
         let mut f = f.borrow_mut();
@@ -2235,8 +2250,12 @@ impl Carried {
 /// With `robed`, a leg's triangles are fitted to what a human in the robe
 /// shows round its legs: above the skirt's hem the skirt (the legs slot's
 /// triangles no skin shows on: the legs are inside it), below it the legs
-/// and feet a knee-length robe leaves out, or the skirt.
-fn fit(r: &Reference, c: &Carried, alpha: &[Option<Rc<Alpha>>; SLOTS], robed: bool) -> Fit {
+/// and feet a knee-length robe leaves out, or the skirt. With `trunk` as well
+/// (a body of `TRUNKS`), the robe is a gown: the body's triangles below the
+/// human's shoulders are carried down, in proportion, so that the foot of its
+/// trunk lands on the skirt's hem, and are fitted to the human's torso and the
+/// skirt alike; its legs (roots) wear nothing.
+fn fit(r: &Reference, c: &Carried, alpha: &[Option<Rc<Alpha>>; SLOTS], robed: bool, trunk: bool) -> Fit {
     let shown: HashMap<Group, Vec<&Target>> = r.targets.iter().map(|(&g, ts)| (g, ts.iter().filter(|t| t.skin || shows(&alpha[t.slot], &t.uv)).collect())).collect();
     // (the groups in order: which of two targets at one distance is nearest
     // goes by their order)
@@ -2251,10 +2270,20 @@ fn fit(r: &Reference, c: &Carried, alpha: &[Option<Rc<Alpha>>; SLOTS], robed: bo
         .filter(|(g, _)| matches!(g, Group::Limb(Limb::Leg(_))))
         .map(|(&g, ts)| (g, ts.iter().copied().filter(|t| mid(t).y < hem).chain(skirt.iter().copied()).collect()))
         .collect();
+    // a trunk in a robe: along the human's spine, from its shoulders down,
+    // the trunk's foot carried to the hem (`TRUNKS`)
+    let gown = (trunk && !skirt.is_empty()).then(|| gown_of(r, c, hem)).flatten();
+    let gowned: Vec<&Target> = if gown.is_some() { shown.get(&Group::Body).into_iter().flatten().copied().chain(skirt.iter().copied()).collect() } else { Vec::new() };
     let mut out: [Vec<Tri>; SLOTS] = Default::default();
     for CarriedTri { v: t, group: g, lod, q } in &c.tris {
+        let q = &match (&gown, g) {
+            (Some(_), Group::Limb(Limb::Leg(_))) => continue,
+            (Some(gown), Group::Body) => q.map(|p| gown.carry(p)),
+            _ => *q,
+        };
         let c = (q[0] + q[1] + q[2]) / 3.0;
         let targets = match g {
+            Group::Body if gown.is_some() => &gowned,
             Group::Limb(Limb::Leg(_)) if !skirt.is_empty() => {
                 if c.y >= hem {
                     &skirt
@@ -2286,6 +2315,37 @@ fn fit(r: &Reference, c: &Carried, alpha: &[Option<Rc<Alpha>>; SLOTS], robed: bo
         out[best.slot].push(Tri { v: t.map(|v| v as u32), uv, lod: *lod });
     }
     Fit { tris: out, layers: r.layers.clone() }
+}
+
+/// How a trunk's triangles are carried down onto a robe's skirt (`fit`'s
+/// `trunk`): along the human's spine (its frame, in fractions of its length),
+/// below the shoulders (`top`), each point's way down from them times `k`.
+struct Gown {
+    spine: Frame,
+    top: f32,
+    k: f32,
+}
+
+impl Gown {
+    fn carry(&self, p: Vec3) -> Vec3 {
+        let mut l = self.spine.local(p);
+        if l.x < self.top {
+            l.x = self.top - (self.top - l.x) * self.k;
+        }
+        self.spine.world(l)
+    }
+}
+
+/// The gown that takes the lowest of a body's carried torso corners down to
+/// the human's skirt's hem at height `hem`, keeping its shoulders (the top of
+/// the human's upper arms) where they are; None when the body reaches no lower
+/// than the hem already, or the human has no spine or arms.
+fn gown_of(r: &Reference, c: &Carried, hem: f32) -> Option<Gown> {
+    let spine = *r.frames.get(&Seg::Body)?;
+    let shoulder = [0, 1].iter().filter_map(|&s| r.frames.get(&Seg::Limb(Limb::Arm(s), 0))).map(|f| spine.local(f.a).x).fold(f32::MIN, f32::max);
+    let foot = c.tris.iter().filter(|t| t.group == Group::Body).flat_map(|t| t.q).map(|p| spine.local(p).x).fold(f32::MAX, f32::min);
+    let to = spine.local(Vec3::new(spine.a.x, hem, spine.a.z)).x;
+    (shoulder > f32::MIN && foot < shoulder && to < foot).then(|| Gown { spine, top: shoulder, k: (shoulder - to) / (shoulder - foot) })
 }
 
 /// Where a skirt stops hiding the legs: going down from its top, the first
@@ -2849,7 +2909,7 @@ mod tests {
         let r0 = REFS.with(|r| r.borrow().get(&(lib.view(), false)).cloned()).flatten().expect("the human");
         let all = Carried::of(&r0, &model, &cs, &wearing(&model, &[], |t| colours_of(&lib, t))).unwrap();
         let alpha: [Option<Rc<Alpha>>; SLOTS] = std::array::from_fn(|i| alpha_of(&lib, art[i].map_or(r0.own[i], |t| t as i32)));
-        let bare = fit(&r0, &all, &alpha, false);
+        let bare = fit(&r0, &all, &alpha, false, false);
         assert!(of(&bare, 2).iter().sum::<usize>() > 40 && of(&bare, 0).iter().sum::<usize>() > 100);
         // the upper arms: their skin's triangles out along the arm, by their
         // weights the torso's, are the arms'
@@ -4521,5 +4581,63 @@ mod tests {
             }
         }
     }
-}
 
+    /// A treant in a robe (the server owner, 2026-11-17: "wolfmoon in treant
+    /// form has a robe, but it needs work to fit better") wears it as a gown
+    /// (`TRUNKS`): its roots, two of which its skeleton names as legs, wear
+    /// nothing, and the lower part of its trunk wears the robe's skirt. The
+    /// control, the same fit as any other body's: a root wears the skirt, and
+    /// the whole trunk the robe's chest.
+    #[test]
+    fn a_treant_wears_a_robe_as_a_gown() {
+        let Some(lib) = disc() else { return };
+        let t = Tables::retail();
+        for &id in TRUNKS {
+            let r = lib.lookup(id as i32).unwrap();
+            let model = lib.build_model(r).unwrap();
+            let cs = sprite_of(&lib, id);
+            let art = worn(&vi::cust::apply_look_slots(&slots(), cs.race, cs.sex, &Look { robe: 0, ..Default::default() }, false, |i| lib.surface(i as i32).is_some(), &t)).map(|(t, _)| t);
+            assert!(art[0].is_some() && art[3].is_some(), "{id:08X}: the robe's chest and skirt");
+            let human = Reference::of(&lib, &Human::load(&lib, cs.sex != 0).unwrap()).unwrap();
+            let carried = Carried::of(&human, &model, &cs, &wearing(&model, kept(id as i32), |t| colours_of(&lib, t))).unwrap();
+            let alpha: [Option<Rc<Alpha>>; SLOTS] = std::array::from_fn(|i| alpha_of(&lib, art[i].map_or(human.own[i], |t| t as i32)));
+            let mut rig = Rig::of_sprite(&cs).unwrap();
+            rig.neck();
+            // each triangle's group, as it was carried
+            let group: HashMap<[usize; 3], Group> = carried.tris.iter().map(|c| (c.v, c.group)).collect();
+            // the trunk: from its lowest vertex on the spine up to the shoulders
+            let foot = (0..model.pos.len()).filter(|&v| part_of(&model, &rig, v) == Part::Body).map(|v| pos(&model, v).y).fold(f32::MAX, f32::min);
+            let shoulder = rig.segs.iter().filter(|(s, _)| matches!(s, Seg::Limb(Limb::Arm(_), 0))).map(|(_, (a, _))| a.y).fold(f32::MIN, f32::max);
+            let (low, high) = (foot + (shoulder - foot) * 0.15, foot + (shoulder - foot) * 0.45);
+            // a fit's triangles on the roots, and the share of the trunk's
+            // between `low` and `high` (above the foot the human's hips took
+            // before, below the sash) in the skirt (the legs slot)
+            let measure = |f: &Fit| {
+                let (mut roots, mut lower, mut skirt) = (0, 0, 0);
+                for (slot, tris) in f.tris.iter().enumerate() {
+                    for tri in tris {
+                        let v = tri.v.map(|v| v as usize);
+                        match group.get(&v) {
+                            Some(Group::Limb(Limb::Leg(_))) => roots += 1,
+                            Some(Group::Body) if (low..high).contains(&(v.iter().map(|&v| pos(&model, v).y).sum::<f32>() / 3.0)) => {
+                                lower += 1;
+                                skirt += usize::from(slot == 3);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                (roots, skirt as f32 / lower.max(1) as f32, lower)
+            };
+            let (roots, share, lower) = measure(&fit(&human, &carried, &alpha, true, true));
+            let (roots0, share0, _) = measure(&fit(&human, &carried, &alpha, true, false));
+            eprintln!("{id:08X}: {roots} triangles on the roots (before {roots0}); {:.0}% of the trunk's lower part ({lower} triangles) in the skirt (before {:.0}%)", share * 100.0, share0 * 100.0);
+            assert!(lower > 0, "{id:08X}: no trunk between {low:.2} and {high:.2}");
+            assert!(roots == 0 && roots0 > 0, "{id:08X}: {roots} on the roots, before {roots0}");
+            assert!(share > 0.8 && share0 < 0.2, "{id:08X}: {share:.2} of the lower trunk in the skirt, before {share0:.2}");
+            // and as a player's is made
+            let made = fit_of(&lib, id as i32, &model, &cs, art, true).unwrap();
+            assert_eq!(measure(&made).0, 0, "{id:08X}");
+        }
+    }
+}

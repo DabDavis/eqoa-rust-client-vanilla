@@ -11,6 +11,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Robes on treants
+- **A robe fits a treant**: in a treant's form (the druid's Spirit Form), a robe is now worn as a long gown: the
+  robe's chest and sash over the upper trunk and its skirt down to the roots, which keep their bark. Before, the
+  sash sat at the foot of the trunk and the skirt was stretched out along one of the roots.
+
 ## 2026-11-17 · Smoother sleigh, no flicker on the tree
 - **Santa and his riders stay in the sleigh**: on the sleigh tour, Santa at the reins and the players riding along
   are no longer dropped through the sleigh, or onto a roof it flies over, between the server's updates.
