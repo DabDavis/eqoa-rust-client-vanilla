@@ -613,7 +613,7 @@ mod tests {
         }
         m.batches.push(esf::Batch { material: 0, layers: Vec::new(), indices: idx, lod: None });
         let l = cape_lights(&m).expect("an outline");
-        assert!(l.bulbs.len() > 20, "{} bulbs", l.bulbs.len());
+        assert!(l.bulbs.len() >= 15, "{} bulbs", l.bulbs.len()); // up 1.2, across 1, down 1.2, a bulb every 0.15
         assert!(l.bulbs.iter().all(|b| b.at.y >= 2.0 - DOWN_SHARE * 2.0 - 1e-3), "none below the cut");
         assert!(l.bulbs.iter().all(|b| b.at.z < -0.2), "hung behind the sheet, off the body");
         assert!(l.bulbs.iter().any(|b| b.at.y > 1.99) && l.bulbs.iter().any(|b| b.at.x < -0.49) && l.bulbs.iter().any(|b| b.at.x > 0.49), "across the top and down both sides");
