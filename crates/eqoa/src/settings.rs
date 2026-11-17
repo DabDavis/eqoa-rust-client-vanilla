@@ -1028,6 +1028,11 @@ pub struct ClientOptions {
     /// target or a dead one, the nearest creature fighting the player (else
     /// its pet or group) targeted. Off by default.
     pub auto_target: bool,
+    /// Weapon Swap Back (jibrish, 2026-11-16, work board 1581): a weapon set
+    /// used from the HUD asks the server to put back what it took off when
+    /// pressed again (0x0022's swap-back byte, `gear::use_message`). Off by
+    /// default.
+    pub weapon_swap_back: bool,
     /// Chat Always Shown (Jibwiz's ticket 1914: "allows your chat box to stay
     /// fully visible without auto collapse"): the chat box open at its five
     /// rows with the last lines in it, never sliding away (`chat::WndChat::
@@ -1449,6 +1454,7 @@ impl Default for ClientOptions {
             item_links: true,
             auto_cast: true,
             auto_target: false,
+            weapon_swap_back: false,
             chat_always: false,
             stacked_bars: false,
             spell_bar_opacity: 100,
@@ -1607,6 +1613,10 @@ impl ClientOptions {
         }
         if self.auto_target {
             s.push_str("auto_target=on\n");
+        }
+        // Weapon Swap Back only when on
+        if self.weapon_swap_back {
+            s.push_str("weapon_swap_back=on\n");
         }
         // Chat Always Shown and Stacked Spell Bars only when on
         if self.chat_always {
@@ -1845,6 +1855,8 @@ impl ClientOptions {
                 ("auto_cast", "off") => c.auto_cast = false,
                 ("auto_target", "on") => c.auto_target = true,
                 ("auto_target", "off") => c.auto_target = false,
+                ("weapon_swap_back", "on") => c.weapon_swap_back = true,
+                ("weapon_swap_back", "off") => c.weapon_swap_back = false,
                 ("chat_always", "on") => c.chat_always = true,
                 ("chat_always", "off") => c.chat_always = false,
                 ("stacked_bars", "on") => c.stacked_bars = true,
@@ -2298,6 +2310,11 @@ pub fn auto_cast() -> bool {
 /// Auto Target (`autocast`).
 pub fn auto_target() -> bool {
     client().auto_target
+}
+
+/// Weapon Swap Back (work board 1581).
+pub fn weapon_swap_back() -> bool {
+    client().weapon_swap_back
 }
 
 /// Chat Always Shown (Extended > UI > Chat; ticket 1914).
@@ -3689,6 +3706,21 @@ mod tests {
         // out of range: left at the default
         let bad = ClientOptions::from_text("spell_bar_opacity=45\nchat_tab.loot=4\nchat_tab.nonsense=1\nchat_tab_name.4=x");
         assert_eq!(bad, d);
+    }
+
+    /// Weapon Swap Back (work board 1581): off by default, written only when
+    /// on, read back, an unknown value left at the default.
+    #[test]
+    fn weapon_swap_back_is_kept_only_when_on() {
+        let d = ClientOptions::default();
+        assert!(!d.weapon_swap_back, "off by default");
+        assert!(!d.to_text().contains("weapon_swap_back"));
+        let c = ClientOptions { weapon_swap_back: true, ..Default::default() };
+        let t = c.to_text();
+        assert!(t.contains("weapon_swap_back=on\n"), "{t}");
+        assert_eq!(ClientOptions::from_text(&t), c, "round trip");
+        assert!(!ClientOptions::from_text("weapon_swap_back=off").weapon_swap_back);
+        assert!(!ClientOptions::from_text("weapon_swap_back=maybe").weapon_swap_back, "the default");
     }
 
     /// Item Links: on by default and written only when off.
