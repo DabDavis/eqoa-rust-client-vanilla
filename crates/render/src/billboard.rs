@@ -163,6 +163,11 @@ struct Kept {
 }
 
 impl Billboards {
+    /// The slots' kept vertex buffers, in bytes.
+    pub(crate) fn kept_bytes(&self) -> u64 {
+        self.slots.iter().flatten().map(|k| k.capacity).sum()
+    }
+
     pub(crate) fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("billboard.wgsl"));
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

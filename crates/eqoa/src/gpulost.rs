@@ -64,11 +64,21 @@ pub fn watch(device: &wgpu::Device, recovered: bool) {
             mark(&format!("{reason:?}: {message}"));
         }
     });
-    if recovered {
-        device.on_uncaptured_error(std::sync::Arc::new(move |e: wgpu::Error| {
-            if DEVICE.load(Ordering::SeqCst) != me || lost() {
-                return;
-            }
+    device.on_uncaptured_error(std::sync::Arc::new(move |e: wgpu::Error| {
+        if DEVICE.load(Ordering::SeqCst) != me || lost() {
+            return;
+        }
+        // out of graphics memory (Hoofbite's Iris Xe in Freeport, three
+        // crashes of 2026-11-17, `wgpu error: Out of Memory` in
+        // `create_texture`): taken as the device lost, made again with a
+        // texture pack's budget halved (`render::out_of_memory`), never
+        // wgpu's default panic
+        if let wgpu::Error::OutOfMemory { .. } = e {
+            let n = render::out_of_memory();
+            mark(&format!("out of graphics memory ({n} times this run; a texture pack's budget now {} MB)", render::pack_limits().budget >> 20));
+            return;
+        }
+        if recovered {
             let text = e.to_string();
             let line = text.lines().take(3).collect::<Vec<_>>().join(" ");
             if let Ok(mut r) = REFUSED.lock()
@@ -77,8 +87,11 @@ pub fn watch(device: &wgpu::Device, recovered: bool) {
                 crate::say(&format!("graphics: the new device refused something: {line}"));
                 *r = Some(line);
             }
-        }));
-    }
+            return;
+        }
+        // anything else as wgpu's default handler takes it
+        panic!("wgpu error: {e}\n");
+    }));
 }
 
 /// The device taken as lost, said in the log once a loss.

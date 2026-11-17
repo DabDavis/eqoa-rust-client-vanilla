@@ -869,4 +869,68 @@ mod tests {
         assert_ne!(a, b, "lit differently 0.4 s on");
         assert_ne!(a[0], a[2], "two red bulbs out of step");
     }
+
+    /// The server sends its decorations again at every touch of the panel
+    /// (Hoofbite's crashes of 2026-11-17 came on a night of many): 50 sets,
+    /// each drawn, keep the renderer's GPU memory where the first left it
+    /// (no texture, no buffer more): a set is data, the strips' buffer the
+    /// renderer's one kept slot, the textures by key. A scene of Freeport's
+    /// size (32 strings of 32 bulbs, a cord each, 40 presents). Needs a
+    /// graphics adapter (any backend); without one it says so and passes.
+    #[test]
+    fn fifty_reloads_keep_the_gpu_memory_flat() {
+        use render::wgpu;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut r = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let (w, h) = (320, 180);
+        let target = device.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: render::TARGET_FORMAT, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+        let depth = device.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: render::DEPTH_FORMAT, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+        let (tv, dv) = (target.create_view(&Default::default()), depth.create_view(&Default::default()));
+        // a paper's texture and a tinsel's, as `poll_assets` keeps them
+        let pic = |c: u8| esf::Image { width: 64, height: 64, rgba: vec![c; 64 * 64 * 4], alpha: false };
+        render::set_decor_texture(0x1234_5678, vec![pic(200)]);
+        render::set_decor_texture(grey_id(0x1234_5679), vec![pic(128)]);
+        let textures = |id: i32| render::decor_texture(id).and_then(|l| l.first().cloned());
+        let scene = |k: usize| {
+            let mut d = Decor::default();
+            for i in 0..32 {
+                let mut st = tree(Effect::Twinkle).strings.remove(0);
+                st.anchor = Anchor::World(0);
+                st.look.cord_texture = if i % 2 == 0 { 0x1234_5679 } else { 0 };
+                st.bulbs = (0..32).map(|b| net::decor::Bulb { at: [i as f32 * 2.0 + b as f32 * 0.3, 2.0 + (b % 5) as f32 + k as f32 * 0.01, 10.0], color: (b % 3) as u8, phase: b as u8 }).collect();
+                d.strings.push(st);
+            }
+            d.presents.push(net::decor::Presents {
+                anchor: Anchor::World(0),
+                boxes: (0..40).map(|b| net::decor::GiftBox { at: [b as f32, 0.0, 5.0], size: [0.8, 0.6, 0.8], yaw: 0.1 * b as f32, color: 0xC020_20FF, ribbon: 0xFFD0_40FF, bow: true, paper: if b % 2 == 0 { 0x1234_5678 } else { 0 }, paper_gain: 1.0 }).collect(),
+            });
+            d
+        };
+        let view = glam::camera::rh::view::look_at_mat4(glam::Vec3::new(30.0, 5.0, -20.0), glam::Vec3::new(30.0, 3.0, 10.0), glam::Vec3::Y);
+        let proj = glam::camera::rh::proj::directx::perspective(1.0, w as f32 / h as f32, 0.5, 500.0);
+        let mut first = None;
+        for reload in 0..50 {
+            set(scene(reload % 2));
+            let mut strips = cords(&[], 0, [30.0, 5.0, -20.0]);
+            strips.extend(presents(&[], 0, [30.0, 5.0, -20.0]));
+            assert!(!strips.is_empty());
+            r.decor = strips;
+            let mut enc = device.create_command_encoder(&Default::default());
+            r.draw_decor(&device, &queue, &mut enc, &tv, &dv, view, proj, &textures);
+            queue.submit([enc.finish()]);
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            let now = (r.texture_memory(), r.billboard_memory());
+            match first {
+                None => first = Some(now),
+                Some(f) => assert_eq!(now, f, "reload {reload}: the GPU memory grew"),
+            }
+        }
+        let ((n, bytes, _, _), buffers) = first.unwrap();
+        eprintln!("50 reloads: {n} textures {bytes} bytes, strips' buffers {buffers} bytes, flat");
+    }
 }

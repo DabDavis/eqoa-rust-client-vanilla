@@ -16,6 +16,17 @@ is put on the page by `.github/workflows/notes.yml`.
   kept with Save Changes, so backing out of Options with Triangle put the old volume back, and a window closed any
   other way lost it at the next zone into a new world, login or start. The volumes are now kept as you move the
   slider, at 0 silent.
+## 2026-11-17 · No more "Out of Memory" crashes with texture packs
+- **The game no longer crashes with "wgpu error: Out of Memory"** on graphics chips with little memory of their own
+  (laptops' Intel Iris Xe and other integrated graphics), most of all with a texture pack on in a busy place like
+  Freeport. A texture pack's pictures are now kept within a graphics memory budget (256 MB on integrated graphics,
+  1 GB on a graphics card); past it, the rest show the game's own textures. A pack's pictures larger than 1024
+  (integrated) or 2048 (a card) a side are drawn at that size. If the graphics memory still runs out, the game makes
+  its graphics again with a smaller budget and plays on, instead of closing.
+
+## 2026-11-17 · Brighter Christmas globes, a steady ribbon
+- **The Christmas tree's glass globes are brighter**: each shows its colour clearly by day and glows at night.
+- **The tree's red ribbon no longer flickers** against the boughs, near or far.
 
 ## 2026-11-17 · Santa wears his hat
 - **Santa Claus now wears his Santa Hat** by the tree: the hat a creature is given by its name was dropped because

@@ -78,6 +78,11 @@ pub fn source_level(own: (u32, u32), to: (u32, u32)) -> f32 {
     if r <= 1.0 { 0.0 } else { r.log2().round() }
 }
 
+/// The bytes of a texture `w` x `h` with `n` levels at 4 a texel.
+pub fn texture_bytes((w, h, n): (u32, u32, u32)) -> u64 {
+    (0..n.max(1)).map(|k| level_size(w, h, k)).map(|(w, h)| u64::from(w) * u64::from(h) * 4).sum()
+}
+
 /// A level's size in a texture of base `w` x `h`.
 pub fn level_size(w: u32, h: u32, k: u32) -> (u32, u32) {
     ((w >> k).max(1), (h >> k).max(1))
