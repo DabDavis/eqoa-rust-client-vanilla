@@ -11,6 +11,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · A pet in a siege catapult
+- **Pets in a prop's body**: a server can dress a pet as a piece of scenery, such as Tunaria's siege catapult. It
+  rams forward at each of its swings and, at its strikes, hurls a boulder from its arm in an arc onto its target.
+  It keeps its name, can be targeted, and never blocks your way.
+
 ## 2026-11-17 · Rudolph's nose, moved
 - **Rudolph's nose glows where the GMs put it**: moving the glow now shows at once, without restarting the game.
 

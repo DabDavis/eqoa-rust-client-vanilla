@@ -118,6 +118,7 @@ mod decorfit;
 mod decorlights;
 mod ride;
 mod npctint;
+mod petart;
 mod petdye;
 mod display;
 mod hudlayout;
