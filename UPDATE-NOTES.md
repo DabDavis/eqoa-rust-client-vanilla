@@ -10,6 +10,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+
+## 2026-11-17 · Santa wears his hat
+- **Santa Claus now wears his Santa Hat** by the tree: the hat a creature is given by its name was dropped because
+  it changes none of its colours, so he showed his own red cloth cap.
+
 ## 2026-11-17 · The Santa Hat
 - **Santa's hat**: a red pointed cap with a white band and a white bobble on the end, cut from the gnome's cap and
   fitted to any head (every race, illusions and were forms too). Santa Claus wears one; Toymaker Tinsel sells them

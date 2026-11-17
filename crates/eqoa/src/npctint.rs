@@ -42,10 +42,13 @@ pub fn set(tints: Vec<(String, Tint)>) {
 
 /// Whether a tint draws anything: its colour changes the body, its glow
 /// lights it (go-eqoa-server's `NPCTint.Shows`) or it names particles
-/// (`net::npctint::Aura::particles`, which need no glow) or a dark aura (a
-/// black glow with a shell or trim named, `net::npctint::Aura::lit`).
+/// (`net::npctint::Aura::particles`, which need no glow), a dark aura (a
+/// black glow with a shell or trim named, `net::npctint::Aura::lit`) or a hat
+/// (`net::npctint::Aura::HAT`: `hat::npc_hat`, Santa Claus's Santa Hat, with no
+/// tint or glow of its own: left out, he drew his own cap; the owner,
+/// 2026-11-17, "santas hat still looks like cloth cap").
 pub fn shows(t: Tint) -> bool {
-    changes(t.color) || net::npctint::glows(t.glow) || net::npctint::Aura::particles(&t) || net::npctint::Aura::lit(&t)
+    changes(t.color) || net::npctint::glows(t.glow) || net::npctint::Aura::particles(&t) || net::npctint::Aura::lit(&t) || t.aura.kind == net::npctint::Aura::HAT
 }
 
 /// The tint the NPCs of this name (as their channel carries it) are drawn in,
@@ -212,6 +215,12 @@ mod tests {
         assert_eq!(of("Uzrathixius"), None, "a white tint is none");
         set(Vec::new());
         assert_eq!(of("Yhafiran"), None);
+        // a hat alone (no tint, no glow) is kept: Santa Claus's Santa Hat
+        let santa = Tint { color: 0, glow: 0, aura: net::npctint::Aura { kind: net::npctint::Aura::HAT, source: 0xA205_90E3, nodes: 1 } };
+        set(vec![("Santa Claus".into(), santa)]);
+        assert_eq!(of("santa claus"), Some(santa), "a hat alone is kept");
+        assert_eq!(crate::hat::npc_hat(&of("Santa Claus").unwrap()), Some((0xA205_90E3, 1)));
+        set(Vec::new());
     }
 
     /// The green oriental dragon in Yhafiran's tint, as `eqoa shot ...
