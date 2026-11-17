@@ -198,37 +198,37 @@ pub fn moved(hat: &mut esf::Model, from: (Vec3, Vec3), to: (Vec3, Vec3)) {
 }
 
 /// The hat of body `src` on body `id` (`cs` its sprite, `player` a player's
-/// character): the node it hangs on (the helm's) and the hat in that node's
-/// frame, seated as the module says; `hue` recolours it (`aura::recolor`), none
-/// its own colours. None when either body wears no helm (no measure), the
-/// source is not a loaded body, or it has no hat.
+/// character): the node it hangs on (the helm's, or the head's on a body that
+/// wears no helm) and the hat in that node's frame; `hue` recolours it
+/// (`aura::recolor`), none its own colours. `id` is the body DRAWN (an
+/// illusion's, a pill's, a were form's, a custom race's: `play::attach` hangs
+/// it on the drawn body, made again whenever that changes): the hat is
+/// measured on [`REFERENCE`] ([`measured_hat`]) and moved to this body's helm
+/// as it wears one, so it sits as a helm would. None when the source is no
+/// loaded body or has no hat, or this body has neither a helm nor a head.
 pub fn hat_on(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, src: u32, hue: Option<[u8; 3]>) -> Option<(i32, esf::Model)> {
-    let r = lib.lookup(src as i32)?;
-    if lib.file(r.file).node(r.node).ty != 0x2700 {
-        return None;
-    }
-    let scs: CSprite<Ee> = vi::character::load_csprite(lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut vi::csprite::Rand(1))?;
-    let mut hat = cut(&lib.build_model(r)?, &scs, hat_textures(src))?;
+    let (mut hat, from) = measured_hat(lib, src)?;
     let t = crate::s2::get().cust();
     let set = crate::aura::CIRCLET_MEASURE_SET;
-    let (node, helm) = crate::slotless::helm_on(lib, id, cs, player, set, [255; 4], &t, true)?;
-    match crate::slotless::helm_on(lib, src, &scs, true, set, [255; 4], &t, true) {
-        // both heads measured by the same helm as each wears it
-        Some((snode, shelm)) => moved(&mut hat, helm_bounds(&scs, snode, &shelm)?, helm_bounds(cs, node, &helm)?),
-        // a source that wears no helm (the efreeti lord): the source's head by its
-        // own triangles but the hat's (its face, ears and beard), the hat's
-        // top-of-the-head place kept; the wearer's by its own triangles, but its
-        // width the helm's as it wears one (its skull's: a dark elf's ears, a
-        // head across and half again, are no measure of what a hat sits on)
-        None => {
-            let skip = hat_textures(src).unwrap_or(&[]);
-            let from = head_bounds(&lib.build_model(r)?, &scs, skip)?;
-            let (mut lo, mut hi) = head_bounds(&lib.build_model(lib.lookup(id as i32)?)?, cs, &[])?;
-            let (hlo, hhi) = helm_bounds(cs, node, &helm)?;
-            (lo.x, hi.x) = (hlo.x, hhi.x);
-            moved_on_top(&mut hat, from, (lo, hi));
+    let node = match crate::slotless::helm_on(lib, id, cs, player, set, [255; 4], &t, true) {
+        // the body drawn (an illusion's, a were's, a pill's, a custom race's)
+        // wears a helm: the hat moved from the helm it was measured by to that
+        // helm as this body wears it (its seat, its stretch: a giant's 4.2), as
+        // the helm itself would be
+        Some((node, helm)) => {
+            moved(&mut hat, from, helm_bounds(cs, node, &helm)?);
+            node
         }
-    }
+        // a body that wears no helm (a were's beast): a helm stood in for, on
+        // its head node where the reference's helm sits from the reference's,
+        // scaled by the heads' widths ([`unhelmed_seat`])
+        None => {
+            let node = cs.node_ids[7];
+            let to = unhelmed_seat(lib, id, cs, from)?;
+            moved(&mut hat, from, to);
+            node
+        }
+    };
     // into the frame of the node it hangs on
     let local = bind_world(cs, node)?.inverse();
     for p in &mut hat.pos {
@@ -241,6 +241,68 @@ pub fn hat_on(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, src: u32, 
         crate::aura::recolor(&mut hat, c);
     }
     Some((node, hat))
+}
+
+/// The body a hat whose source wears no helm (the efreeti lord's turban) is
+/// first seated on, by the heads ([`moved_on_top`]), to measure it by a helm:
+/// the dark elf male (Dust's, the seat the owner saw first). Every other body
+/// then takes it from that helm to its own, as a helm moves, so a body's
+/// jaw, tusks, ears, hair or cap never moves it (on an ogre the turban stood
+/// forward of the brow, by the jaw; on a troll and a gnome above the head, by
+/// the ears and the cap: the owner, 2026-11-17, "dust used an ogre pill and
+/// the turban is not sitting on the ogres head correctly").
+pub const REFERENCE: u32 = 0x7ED8_9DAA;
+
+/// Body `src`'s hat ([`cut`]) seated on [`REFERENCE`], in its bind-pose model
+/// space, and the bounds of the reference's helm (armour set 4's,
+/// `aura::CIRCLET_MEASURE_SET`, as worn) it is measured by: from the source's
+/// own helm to the reference's when the source wears one (the kappa), else by
+/// the heads (the source's head by its own triangles but the hat's; the
+/// reference's by its own, its width its helm's). None when `src` is no loaded body or has no
+/// hat, or the reference is not loaded.
+pub fn measured_hat(lib: &Library, src: u32) -> Option<(esf::Model, (Vec3, Vec3))> {
+    let r = lib.lookup(src as i32)?;
+    if lib.file(r.file).node(r.node).ty != 0x2700 {
+        return None;
+    }
+    let load = |r| vi::character::load_csprite::<Ee>(lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut vi::csprite::Rand(1));
+    let scs = load(r)?;
+    let mut hat = cut(&lib.build_model(r)?, &scs, hat_textures(src))?;
+    let t = crate::s2::get().cust();
+    let set = crate::aura::CIRCLET_MEASURE_SET;
+    let rr = lib.lookup(REFERENCE as i32)?;
+    let rcs = load(rr)?;
+    let (rnode, rhelm) = crate::slotless::helm_on(lib, REFERENCE, &rcs, true, set, [255; 4], &t, true)?;
+    let helm = helm_bounds(&rcs, rnode, &rhelm)?;
+    // a source that wears a helm: from its helm to the reference's, so every
+    // hat is measured on the reference (a body with no helm, `unhelmed_seat`,
+    // is measured from the reference's head)
+    if let Some((snode, shelm)) = crate::slotless::helm_on(lib, src, &scs, true, set, [255; 4], &t, true) {
+        moved(&mut hat, helm_bounds(&scs, snode, &shelm)?, helm);
+        return Some((hat, helm));
+    }
+    let skip = hat_textures(src).unwrap_or(&[]);
+    let from = head_bounds(&lib.build_model(r)?, &scs, skip)?;
+    let (mut lo, mut hi) = head_bounds(&lib.build_model(rr)?, &rcs, &[])?;
+    (lo.x, hi.x) = (helm.0.x, helm.1.x);
+    moved_on_top(&mut hat, from, (lo, hi));
+    Some((hat, helm))
+}
+
+/// The helm a body that wears none would wear (a were's beast: the
+/// werewolf), stood in for in its bind-pose model space: `helm` (the bounds
+/// [`measured_hat`] measured by, on [`REFERENCE`]) moved from the reference's
+/// head node to this body's (`node_ids[7]`), its place past the node and its
+/// size scaled by the heads' widths ([`head_bounds`]). None when either body
+/// has no head node or no head.
+pub fn unhelmed_seat(lib: &Library, id: u32, cs: &CSprite<Ee>, helm: (Vec3, Vec3)) -> Option<(Vec3, Vec3)> {
+    let rr = lib.lookup(REFERENCE as i32)?;
+    let rcs = vi::character::load_csprite::<Ee>(lib, rr, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut vi::csprite::Rand(1))?;
+    let rhead = head_bounds(&lib.build_model(rr)?, &rcs, &[])?;
+    let head = head_bounds(&lib.build_model(lib.lookup(id as i32)?)?, cs, &[])?;
+    let s = (head.1.x - head.0.x) / (rhead.1.x - rhead.0.x).max(1e-4);
+    let (rn, n) = (bind_world(&rcs, rcs.node_ids[7])?.w_axis.truncate(), bind_world(cs, cs.node_ids[7])?.w_axis.truncate());
+    Some((n + (helm.0 - rn) * s, n + (helm.1 - rn) * s))
 }
 
 /// The recolour ([`render::recolor::DYE`]) a hat takes in the helm's dye `c`
@@ -449,6 +511,71 @@ mod tests {
         let t = m.batches[0].layers[0].texture;
         assert_eq!(render::recolor::source_of(t), Some((0x0808_CC05, red)));
         assert_eq!(m.batches[0].layers[1].texture, 0, "a layer with no texture keeps none");
+    }
+
+    /// The hat fits the body drawn (the owner, 2026-11-17: "dust used an ogre
+    /// pill and the turban is not sitting on the ogres head correctly"): on
+    /// the ogres, a troll, a barbarian, a gnome, a halfling and a hill giant
+    /// the turban and the kappa's hat sit as a helm would, centred across over
+    /// the helm, their lowest point below the helm's top (on the head, not over
+    /// it: before, the turban floated over the troll's ears and the gnome's
+    /// cap) and their middle front to back over the helm's (before, on the
+    /// ogre, the turban stood forward by the jaw); on the werewolf, which wears
+    /// no helm, on its head node, centred, above its brow and not below its
+    /// chest (the kappa's hat once hung at its chest). The dark elf, the
+    /// reference, wears the turban as it did.
+    #[test]
+    fn the_hat_fits_the_body_drawn() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let t = crate::s2::get().cust();
+        let world = |cs: &CSprite<Ee>, node: i32, m: &esf::Model| {
+            let w = bind_world(cs, node).unwrap();
+            bounds(&esf::Model { pos: m.pos.iter().map(|p| w.transform_point3(Vec3::from(*p)).to_array()).collect(), ..Default::default() })
+        };
+        for id in [0x8480_7490u32, 0xACC0_0B4F, 0x4C6F_A532, 0x61CA_3EDF, 0xA99C_6B15, 0xA3DB_3FE2, 0xFFB1_EA2C, REFERENCE] {
+            let (_, cs) = body(&lib, id);
+            let (hn, helm) = crate::slotless::helm_on(&lib, id, &cs, true, crate::aura::CIRCLET_MEASURE_SET, [255; 4], &t, true).unwrap();
+            let (hlo, hhi) = helm_bounds(&cs, hn, &helm).unwrap();
+            for src in [EFREETI_LORD, KAPPA_HAT] {
+                let (node, hat) = hat_on(&lib, id, &cs, true, src, None).unwrap_or_else(|| panic!("{id:#010X} {src:#010X}"));
+                assert_eq!(node, hn, "{id:#010X}: the helm's node");
+                let (lo, hi) = world(&cs, node, &hat);
+                let mid = (lo + hi) * 0.5;
+                let across = hhi.x - hlo.x;
+                assert!((mid.x - (hlo.x + hhi.x) * 0.5).abs() < 0.02 * across.max(0.2), "{id:#010X} {src:#010X}: centred: {lo} .. {hi}");
+                assert!(lo.y < hhi.y, "{id:#010X} {src:#010X}: on the head, not over it: {lo} .. {hi}, helm {hlo} .. {hhi}");
+                assert!((mid.z - (hlo.z + hhi.z) * 0.5).abs() < 0.35 * across, "{id:#010X} {src:#010X}: over the helm front to back, not forward by the jaw: {lo} .. {hi}, helm {hlo} .. {hhi}");
+            }
+        }
+        // the reference wears the turban as it was first seated (by the heads)
+        let (m, ecs) = body(&lib, EFREETI_LORD);
+        let mut seated = cut(&m, &ecs, hat_textures(EFREETI_LORD)).unwrap();
+        let (_, rcs) = body(&lib, REFERENCE);
+        let (rn, rh) = crate::slotless::helm_on(&lib, REFERENCE, &rcs, true, crate::aura::CIRCLET_MEASURE_SET, [255; 4], &t, true).unwrap();
+        let rhelm = helm_bounds(&rcs, rn, &rh).unwrap();
+        let (mut lo, mut hi) = head_bounds(&lib.build_model(lib.lookup(REFERENCE as i32).unwrap()).unwrap(), &rcs, &[]).unwrap();
+        (lo.x, hi.x) = (rhelm.0.x, rhelm.1.x);
+        moved_on_top(&mut seated, head_bounds(&m, &ecs, hat_textures(EFREETI_LORD).unwrap()).unwrap(), (lo, hi));
+        let (_, on_ref) = hat_on(&lib, REFERENCE, &rcs, true, EFREETI_LORD, None).unwrap();
+        let (a, b) = (bounds(&seated), world(&rcs, rn, &on_ref));
+        assert!((a.0 - b.0).length() < 1e-3 && (a.1 - b.1).length() < 1e-3, "the reference: {a:?} vs {b:?}");
+        // the werewolf: no helm, on its head node
+        const WEREWOLF: u32 = 0xDBED_A323;
+        let (wm, wcs) = body(&lib, WEREWOLF);
+        assert!(crate::slotless::helm_on(&lib, WEREWOLF, &wcs, true, crate::aura::CIRCLET_MEASURE_SET, [255; 4], &t, true).is_none());
+        let head = head_bounds(&wm, &wcs, &[]).unwrap();
+        let hnode = bind_world(&wcs, wcs.node_ids[7]).unwrap().w_axis.truncate();
+        for src in [EFREETI_LORD, KAPPA_HAT] {
+            let (node, hat) = hat_on(&lib, WEREWOLF, &wcs, true, src, None).expect("a hat on the werewolf");
+            assert_eq!(node, wcs.node_ids[7]);
+            let (lo, hi) = world(&wcs, node, &hat);
+            eprintln!("werewolf {src:#010X}: {lo} .. {hi}; head {head:?}; node {hnode}");
+            assert!(((lo.x + hi.x) * 0.5).abs() < 0.02, "centred");
+            assert!(hi.y > head.1.y - 0.05 && lo.y > hnode.y - 0.25, "{src:#010X}: on the head, not at the chest: {lo} .. {hi}");
+        }
     }
 
     /// `moved`: the middle to the middle, scaled by the widths.
