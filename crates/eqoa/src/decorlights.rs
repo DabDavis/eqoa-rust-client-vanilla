@@ -249,6 +249,18 @@ pub fn set(d: Decor) {
     DECOR.with_borrow_mut(|x| *x = d);
 }
 
+/// How a walk meets an NPC of `name` (`net::decor::WalkOn`'s mode: a deck
+/// walked onto, or passed through), if the server named it.
+pub fn walk_on(name: &str) -> Option<u8> {
+    DECOR.with_borrow(|d| {
+        if d.walk_ons.is_empty() {
+            return None;
+        }
+        let k = net::npctint::key(name);
+        d.walk_ons.iter().find(|w| w.key == k).map(|w| w.mode)
+    })
+}
+
 /// Whether any string is lit.
 pub fn any() -> bool {
     DECOR.with_borrow(|d| !d.strings.is_empty() || !d.presents.is_empty())
@@ -780,6 +792,7 @@ mod tests {
             art: Vec::new(),
             presents: Vec::new(),
             assets: Vec::new(),
+            walk_ons: Vec::new(),
         }
     }
 

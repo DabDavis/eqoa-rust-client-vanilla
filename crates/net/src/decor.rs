@@ -14,8 +14,10 @@
 
 use crate::stream::Reader;
 
-/// The layout of [`crate::session::OP_DECOR_LIGHTS`] this client reads.
-pub const LAYOUT: u8 = 1;
+/// The layout of [`crate::session::OP_DECOR_LIGHTS`] this client reads: 2,
+/// the walk-ons after the papers ([`WalkOn`]), and the server's rides
+/// (`eqoa`'s `ride`: a vehicle's riders kept on its deck).
+pub const LAYOUT: u8 = 2;
 
 /// How a string's bulbs light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,7 +151,28 @@ pub struct Decor {
     pub presents: Vec<Presents>,
     /// The art the looks draw ([`Asset`])
     pub assets: Vec<Asset>,
+    /// The NPCs a walk goes onto or through (layout 2)
+    pub walk_ons: Vec<WalkOn>,
 }
+
+/// An NPC (by name) whose body a player's walk does not stop at (the server
+/// owner, 2026-11-17: "let players run onto the sled without jumping"):
+/// [`WALK_DECK`] walked into and stood on (Santa's sleigh: its sides pass the
+/// walk, its top is a floor), [`WALK_PASS`] walked through (his team). The
+/// server's movement check takes a deck as a floor `radius` across, up to
+/// `height` over its feet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WalkOn {
+    pub key: String,
+    pub mode: u8,
+    pub radius: f32,
+    pub height: f32,
+}
+
+/// [`WalkOn::mode`]: walked into and stood on.
+pub const WALK_DECK: u8 = 1;
+/// [`WalkOn::mode`]: walked through.
+pub const WALK_PASS: u8 = 2;
 
 /// A set of gift boxes, hung on an NPC's name or placed in a world as a
 /// string is.
@@ -323,6 +346,22 @@ pub fn read(data: &[u8]) -> Option<Decor> {
             }
         }
     }
+    // the walk-ons (layout 2; a server before them sends none): a u16 count,
+    // each the NPC's name (u8 byte count), u8 mode, f32 radius, f32 height
+    if r.pos < data.len() {
+        let n = r.u16() as usize;
+        for _ in 0..n {
+            let len = r.u8() as usize;
+            let key = crate::npctint::key(&String::from_utf8_lossy(r.bytes(len)));
+            let (mode, radius, height) = (r.u8(), r.f32(), r.f32());
+            if r.error {
+                return None;
+            }
+            if (mode == WALK_DECK || mode == WALK_PASS) && radius.is_finite() && height.is_finite() {
+                out.walk_ons.push(WalkOn { key, mode, radius, height });
+            }
+        }
+    }
     (!r.error).then_some(out)
 }
 
@@ -385,6 +424,30 @@ mod tests {
         b.extend(0xFFFF_FFFFu32.to_le_bytes());
         b.extend(0u16.to_le_bytes());
         b
+    }
+
+    /// The walk-ons after the looks (layout 2): the sleigh a deck, a horse
+    /// passed through; a mode it does not know dropped.
+    #[test]
+    fn reads_the_walk_ons() {
+        let mut b = body();
+        b.extend(0u16.to_le_bytes()); // no art
+        b.extend(0u16.to_le_bytes()); // no presents
+        b.extend([0u8; 6]); // no assets, looks or papers
+        b.extend(0u16.to_le_bytes()); // no tinsel cords: the server writes their section before the walk-ons
+        b.extend(3u16.to_le_bytes());
+        for (name, mode, r, h) in [("Santa's Sleigh", 1u8, 2.6f32, 1.0f32), ("rudolph", 2, 3.0, 1.0), ("odd", 9, 1.0, 1.0)] {
+            b.push(name.len() as u8);
+            b.extend(name.as_bytes());
+            b.push(mode);
+            b.extend(r.to_le_bytes());
+            b.extend(h.to_le_bytes());
+        }
+        let d = read(&b).expect("read");
+        assert_eq!(d.walk_ons, vec![WalkOn { key: crate::npctint::key("santa's sleigh"), mode: WALK_DECK, radius: 2.6, height: 1.0 }, WalkOn { key: crate::npctint::key("Rudolph"), mode: WALK_PASS, radius: 3.0, height: 1.0 }]);
+        // a server before them: none
+        b.truncate(b.len() - (2 + 3 * 10 + "Santa's Sleigh".len() + "rudolph".len() + "odd".len()));
+        assert!(read(&b).expect("read").walk_ons.is_empty());
     }
 
     #[test]

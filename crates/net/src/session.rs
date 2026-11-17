@@ -5183,7 +5183,7 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x80, 0x7E]);
         assert_eq!((answers(&mut s), s.decor.take()), (vec![], None), "a short offer is no offer");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x80, 0x7E, 3]);
-        assert_eq!(answers(&mut s), [(251, vec![0x81, 0x7E, 1])], "answered at once with the layout read");
+        assert_eq!(answers(&mut s), [(251, vec![0x81, 0x7E, crate::decor::LAYOUT])], "answered at once with the layout read (an offer of 3: this client's own)");
         assert_eq!(s.decor.take(), Some(Default::default()), "what was held dropped");
         // one string in world 0, one bulb; one art
         let mut m = vec![0x82, 0x7E, 1, 0, 0, 0, 0];
