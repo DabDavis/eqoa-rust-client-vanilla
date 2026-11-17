@@ -316,8 +316,9 @@ pub struct Bones {
 thread_local! {
     /// Each bone-riding bulb's bone and its place in that bone's frame, as
     /// taken the first time its holder was seen standing (`Bones::follow`),
-    /// by the holder's name, the string and the bulb.
-    static RIDES: RefCell<std::collections::HashMap<(String, usize, usize), (usize, glam::Vec3)>> = RefCell::new(Default::default());
+    /// by the holder's name, the string, the bulb and where it was laid (a
+    /// GM's move of the point lays it anew).
+    static RIDES: RefCell<std::collections::HashMap<(String, usize, usize, [u32; 3]), (usize, glam::Vec3)>> = RefCell::new(Default::default());
 }
 
 impl Bones {
@@ -328,8 +329,8 @@ impl Bones {
     /// then on it goes where that bone goes: Rudolph's nose on his nose as
     /// his head moves (the owner, 2026-11-17: "rudolphs nose glow needs
     /// attached to his nose skeleton"). Before that, where it was laid.
-    pub fn follow(&self, key: (&str, usize, usize), p: glam::Vec3) -> glam::Vec3 {
-        let k = (key.0.to_string(), key.1, key.2);
+    pub fn follow(&self, key: (&str, usize, usize, [f32; 3]), p: glam::Vec3) -> glam::Vec3 {
+        let k = (key.0.to_string(), key.1, key.2, key.3.map(f32::to_bits));
         if let Some((n, off)) = RIDES.with_borrow(|r| r.get(&k).copied())
             && let Some(m) = self.drawn.get(n)
         {
@@ -408,7 +409,7 @@ fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64)
                 let [x, y, z] = b.at;
                 let mut p = [at[0] + scale * (z * sin + x * cos), at[1] + scale * y, at[2] + scale * (z * cos - x * sin)];
                 if let (Some(bn), Anchor::Npc(key)) = (bones, &s.anchor) {
-                    p = bn.follow((key, si, bi), glam::Vec3::from(p)).to_array();
+                    p = bn.follow((key, si, bi, b.at), glam::Vec3::from(p)).to_array();
                 }
                 if matches!(s.anchor, Anchor::World(_)) && !near(p) {
                     continue;
@@ -671,7 +672,7 @@ fn globes_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64, 
                 let [x, y, z] = b.at;
                 let mut p = Vec3::new(at[0] + scale * (z * sin + x * cos), at[1] + scale * y, at[2] + scale * (z * cos - x * sin));
                 if let (Some(bn), Anchor::Npc(key)) = (bones, &s.anchor) {
-                    p = bn.follow((key, si, bi), p);
+                    p = bn.follow((key, si, bi, b.at), p);
                 }
                 if (p - e).length() > REACH {
                     continue;
@@ -1042,7 +1043,7 @@ mod tests {
         use glam::{Mat4, Vec3};
         let at = Vec3::new(0.0, 2.85, 1.1);
         let head = Mat4::from_translation(Vec3::new(0.0, 2.6, 0.8));
-        let key = ("rudolph-test", 0, 0);
+        let key = ("rudolph-test", 0, 0, at.to_array());
         let running = Bones { drawn: vec![Mat4::IDENTITY, head], still: false };
         assert_eq!(running.follow(key, at), at, "not yet seen standing: where it was laid");
         let standing = Bones { drawn: vec![Mat4::IDENTITY, head], still: true };
@@ -1052,6 +1053,10 @@ mod tests {
         let q = Bones { drawn: vec![Mat4::IDENTITY, moved], still: false }.follow(key, at);
         let want = moved.transform_point3(head.inverse().transform_point3(at));
         assert!(q.distance(want) < 1e-5 && q.distance(at) > 0.4, "with the head: {q}");
+        // a GM moves the point: laid anew where it now is, the next time he stands
+        let higher = at + Vec3::Y * 0.15;
+        let key2 = ("rudolph-test", 0, 0, higher.to_array());
+        assert_eq!(Bones { drawn: vec![Mat4::IDENTITY, moved], still: true }.follow(key2, higher), higher);
         let mut nose = tree(Effect::Steady).strings[0].clone();
         nose.anchor = Anchor::Npc("rudolph".into());
         nose.bulbs = vec![Bulb { at: at.to_array(), color: 0, phase: 0 }];

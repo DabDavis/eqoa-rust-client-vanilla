@@ -11,6 +11,9 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Rudolph's nose, moved
+- **Rudolph's nose glows where the GMs put it**: moving the glow now shows at once, without restarting the game.
+
 ## 2026-11-17 · Weather where you stand, a smooth sleigh ride
 - **The weather goes by where your character stands**, not where the camera is: swinging the camera under an
   awning, through a wall or across a region's edge no longer changes the sky, how hard it rains or the wind.
