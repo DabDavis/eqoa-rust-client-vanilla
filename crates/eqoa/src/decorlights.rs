@@ -301,6 +301,46 @@ pub struct Holder<'a> {
     pub at: [f32; 3],
     pub heading: f32,
     pub scale: f32,
+    /// Its body's bones as drawn this frame, for a string that rides them
+    /// ([`rides_bones`]); none for a holder no such string hangs on.
+    pub bones: Option<Bones>,
+}
+
+/// A holder's body as drawn: its placement's inverse (the world to the body's
+/// bind pose), each bone's skin matrix (`toys::skins`) and each bone's place in
+/// the bind pose.
+pub struct Bones {
+    pub inv_centre: glam::Mat4,
+    pub skins: Vec<glam::Mat4>,
+    pub nodes: Vec<glam::Vec3>,
+}
+
+impl Bones {
+    /// `p` (where the bulb hangs off the body at rest) carried by the body's
+    /// nearest bone as it is posed now: Rudolph's nose on his nose as his
+    /// head moves (the owner, 2026-11-17: "rudolphs nose glow needs attached
+    /// to his nose skeleton").
+    pub fn follow(&self, p: glam::Vec3) -> glam::Vec3 {
+        let l = self.inv_centre.transform_point3(p);
+        let near = self.nodes.iter().enumerate().min_by(|a, b| a.1.distance_squared(l).total_cmp(&b.1.distance_squared(l))).map(|(i, _)| i);
+        match near.and_then(|i| self.skins.get(i)) {
+            Some(m) => m.transform_point3(l),
+            None => p,
+        }
+    }
+}
+
+/// A string that rides its holder's bones: a few bulbs and no cord (a red
+/// nose, a lantern held), never a tree's strings, whose cords are laid
+/// between bulbs at rest.
+pub fn rides_bones(s: &net::decor::LightString) -> bool {
+    matches!(s.anchor, Anchor::Npc(_)) && s.bulbs.len() <= 4 && (s.cord & 0xFF == 0 || s.cord_width <= 0.0)
+}
+
+/// The names (`npctint::key`) a string riding bones hangs on: the holders to
+/// give [`Holder::bones`].
+pub fn boned_keys() -> Vec<String> {
+    DECOR.with_borrow(|d| d.strings.iter().filter(|s| rides_bones(s)).filter_map(|s| match &s.anchor { Anchor::Npc(k) => Some(k.clone()), _ => None }).collect())
 }
 
 /// The bulbs of every string, as particle batches: those on the NPCs in
@@ -333,16 +373,17 @@ fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64)
     };
     for s in &d.strings {
         // where it hangs: each NPC of its name's frame, or the world's own
-        let frames: Vec<([f32; 3], f32, f32)> = match &s.anchor {
-            Anchor::Npc(key) => holders.iter().filter(|h| net::npctint::key(h.name) == *key).map(|h| (h.at, h.heading, h.scale)).collect(),
-            Anchor::World(w) if *w as i64 == world => vec![([0.0; 3], 0.0, 1.0)],
+        let boned = rides_bones(s);
+        let frames: Vec<([f32; 3], f32, f32, Option<&Bones>)> = match &s.anchor {
+            Anchor::Npc(key) => holders.iter().filter(|h| net::npctint::key(h.name) == *key).map(|h| (h.at, h.heading, h.scale, h.bones.as_ref().filter(|_| boned))).collect(),
+            Anchor::World(w) if *w as i64 == world => vec![([0.0; 3], 0.0, 1.0, None)],
             Anchor::World(_) => Vec::new(),
         };
         if frames.is_empty() {
             continue;
         }
         let first = out.len();
-        for (at, heading, scale) in frames {
+        for (at, heading, scale, bones) in frames {
             if matches!(s.anchor, Anchor::Npc(_)) && !near(at) {
                 continue;
             }
@@ -350,7 +391,10 @@ fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64)
             for b in &s.bulbs {
                 // the NPC's frame as a zone actor's (`esf::zone::Actor::matrix`)
                 let [x, y, z] = b.at;
-                let p = [at[0] + scale * (z * sin + x * cos), at[1] + scale * y, at[2] + scale * (z * cos - x * sin)];
+                let mut p = [at[0] + scale * (z * sin + x * cos), at[1] + scale * y, at[2] + scale * (z * cos - x * sin)];
+                if let Some(bn) = bones {
+                    p = bn.follow(glam::Vec3::from(p)).to_array();
+                }
                 if matches!(s.anchor, Anchor::World(_)) && !near(p) {
                     continue;
                 }
@@ -600,16 +644,20 @@ fn globes_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64, 
         }
         let Some(m) = model(s.look.bulb_model) else { continue };
         let (g, m, mid, across) = (&*m, &m.model, m.mid, m.across);
-        let frames: Vec<([f32; 3], f32, f32)> = match &s.anchor {
-            Anchor::Npc(key) => holders.iter().filter(|h| net::npctint::key(h.name) == *key).map(|h| (h.at, h.heading, h.scale)).collect(),
-            Anchor::World(w) if *w as i64 == world => vec![([0.0; 3], 0.0, 1.0)],
+        let boned = rides_bones(s);
+        let frames: Vec<([f32; 3], f32, f32, Option<&Bones>)> = match &s.anchor {
+            Anchor::Npc(key) => holders.iter().filter(|h| net::npctint::key(h.name) == *key).map(|h| (h.at, h.heading, h.scale, h.bones.as_ref().filter(|_| boned))).collect(),
+            Anchor::World(w) if *w as i64 == world => vec![([0.0; 3], 0.0, 1.0, None)],
             Anchor::World(_) => Vec::new(),
         };
-        for (at, heading, scale) in frames {
+        for (at, heading, scale, bones) in frames {
             let (sin, cos) = heading.sin_cos();
             for b in s.bulbs.iter().filter(|b| b.color & TOP == 0) {
                 let [x, y, z] = b.at;
-                let p = Vec3::new(at[0] + scale * (z * sin + x * cos), at[1] + scale * y, at[2] + scale * (z * cos - x * sin));
+                let mut p = Vec3::new(at[0] + scale * (z * sin + x * cos), at[1] + scale * y, at[2] + scale * (z * cos - x * sin));
+                if let Some(bn) = bones {
+                    p = bn.follow(p);
+                }
                 if (p - e).length() > REACH {
                     continue;
                 }
@@ -827,7 +875,7 @@ mod tests {
     #[test]
     fn the_bulbs_hang_on_the_tree() {
         let d = tree(Effect::Steady);
-        let h = [Holder { name: "Christmas Tree", at: [100.0, 50.0, 200.0], heading: 0.0, scale: 2.0 }];
+        let h = [Holder { name: "Christmas Tree", at: [100.0, 50.0, 200.0], heading: 0.0, scale: 2.0, bones: None }];
         let b = batches_of(&d, &h, 0, [100.0, 55.0, 190.0], 0);
         let quads: usize = b.iter().map(|b| b.quads.len()).sum();
         assert_eq!(quads, 4);
@@ -843,12 +891,12 @@ mod tests {
         let red = b.iter().find(|b| b.texture == BULB && b.quads[0].color[0] > 0.9).unwrap();
         assert_eq!(red.quads.len(), 2);
         // turned half round: x 1 goes to x -1
-        let h2 = [Holder { name: "christmas tree", at: [0.0; 3], heading: std::f32::consts::PI, scale: 1.0 }];
+        let h2 = [Holder { name: "christmas tree", at: [0.0; 3], heading: std::f32::consts::PI, scale: 1.0, bones: None }];
         let b2 = batches_of(&d, &h2, 0, [0.0; 3], 0);
         let low = b2.iter().flat_map(|b| b.quads.iter()).find(|q| (q.center[1] - 2.0).abs() < 1e-4).unwrap();
         assert!((low.center[0] + 1.0).abs() < 1e-4, "{:?}", low.center);
         // another name, or past the reach: nothing
-        assert!(batches_of(&d, &[Holder { name: "Christmas Bush", at: [0.0; 3], heading: 0.0, scale: 1.0 }], 0, [0.0; 3], 0).is_empty());
+        assert!(batches_of(&d, &[Holder { name: "Christmas Bush", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None }], 0, [0.0; 3], 0).is_empty());
         assert!(batches_of(&d, &h, 0, [100.0 + REACH + 10.0, 50.0, 200.0], 0).is_empty());
     }
 
@@ -858,7 +906,7 @@ mod tests {
     #[test]
     fn the_cord_hangs_from_bulb_to_bulb() {
         let mut d = tree(Effect::Steady);
-        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0 }];
+        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None }];
         let c = cords_of(&d, &h, 0, [0.0, 3.0, -20.0]);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].strips.len(), 1, "three bulbs, the star off it: one run");
@@ -899,7 +947,7 @@ mod tests {
                 net::decor::GiftBox { at: [-2.0, 0.0, 0.0], size: [0.6, 0.6, 0.6], yaw: 0.3, color: 0x2050_C0FF, ribbon: 0, bow: false, paper: 0, paper_gain: 1.0 },
             ],
         });
-        let h = [Holder { name: "Christmas Tree", at: [100.0, 50.0, 200.0], heading: 0.0, scale: 2.0 }];
+        let h = [Holder { name: "Christmas Tree", at: [100.0, 50.0, 200.0], heading: 0.0, scale: 2.0, bones: None }];
         let p = presents_of(&d, &h, 0, [100.0, 52.0, 190.0]);
         assert_eq!(p.len(), 1);
         assert_eq!(p[0].strips.len(), (5 + 6 + 4) + 5, "the red box wrapped and bowed, the blue plain");
@@ -927,7 +975,7 @@ mod tests {
         m.uv = vec![[0.0; 2]; 3];
         m.batches.push(esf::Batch { material: 0, layers: Vec::new(), indices: vec![0, 1, 2], lod: None });
         let rc = std::rc::Rc::new(Globe { model: m, mid: glam::Vec3::new(1.0, 1.0, 0.0), across: 2.0, tinted: 0 });
-        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0 }];
+        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None }];
         let g = globes_of(&d, &h, 0, [0.0, 3.0, -20.0], 0, &|id| (id == 0xF8E6_C045).then(|| rc.clone()));
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].strips.len(), 3, "a triangle a bulb, the star none");
@@ -971,6 +1019,29 @@ mod tests {
         assert!(!is_art(0x0B3B_A520));
     }
 
+    /// A red nose rides the nearest bone: at rest where it was laid, and
+    /// moved with the head as the head turns; a tree's corded strings do not.
+    #[test]
+    fn a_nose_rides_the_head() {
+        use glam::{Mat4, Vec3};
+        let at = Vec3::new(0.0, 2.85, 1.1);
+        let rest = Bones { inv_centre: Mat4::IDENTITY, skins: vec![Mat4::IDENTITY; 2], nodes: vec![Vec3::ZERO, Vec3::new(0.0, 2.6, 0.8)] };
+        assert!(rest.follow(at).distance(at) < 1e-5, "at rest: where it was laid");
+        // the head (node 1) dropped half a unit and turned a quarter about its own place
+        let head = Vec3::new(0.0, 2.6, 0.8);
+        let m = Mat4::from_translation(head - Vec3::Y * 0.5) * Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2) * Mat4::from_translation(-head);
+        let turned = Bones { skins: vec![Mat4::IDENTITY, m], ..rest };
+        let q = turned.follow(at);
+        assert!(q.distance(m.transform_point3(at)) < 1e-5 && q.distance(at) > 0.4, "with the head: {q}");
+        let mut nose = tree(Effect::Steady).strings[0].clone();
+        nose.anchor = Anchor::Npc("rudolph".into());
+        nose.bulbs = vec![Bulb { at: at.to_array(), color: 0, phase: 0 }];
+        nose.cord = 0;
+        assert!(rides_bones(&nose));
+        nose.cord = 0x1E3F_1EFF;
+        assert!(!rides_bones(&nose), "a corded string is laid at rest");
+    }
+
     /// Tinsel: crossed pairs of quads along the cord, each pair at its own
     /// twist (the same each time), none a band; the control, a plain textured
     /// cord, is strips of the line's length.
@@ -979,7 +1050,7 @@ mod tests {
         let mut d = tree(Effect::Steady);
         d.strings[0].cord_width = 0.5;
         d.strings[0].look = net::decor::Look { cord_texture: 0x9196_DAC4, tinsel: true, ..Default::default() };
-        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0 }];
+        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None }];
         let c = cords_of(&d, &h, 0, [0.0, 3.0, -20.0]);
         let s = &c[0].strips;
         assert!(s.len() >= 8 && s.len() % 2 == 0, "{} quads", s.len());
@@ -998,7 +1069,7 @@ mod tests {
     #[test]
     fn the_bulbs_twinkle() {
         let d = tree(Effect::Twinkle);
-        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0 }];
+        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None }];
         let light = |ms| -> Vec<f32> {
             let mut v: Vec<(f32, f32)> = batches_of(&d, &h, 0, [0.0; 3], ms).iter().filter(|b| b.texture == BULB).flat_map(|b| b.quads.iter().map(|q| (q.center[1], q.color[0] + q.color[1] + q.color[2]))).collect();
             v.sort_by(|a, b| a.0.total_cmp(&b.0));

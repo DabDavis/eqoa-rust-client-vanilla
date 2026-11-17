@@ -11,6 +11,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Rudolph's nose, a steadier sleigh ride
+- **Rudolph's nose glows on his nose**: the red glow now moves with his head as he runs, instead of hanging where
+  his nose would be standing still.
+- **A steadier sleigh ride**: each correction from the server now eases in over a third of a second, so the
+  sleigh, its team and its riders no longer shake, and the view from the deck is smooth.
+
 ## 2026-11-17 · Smoother sleigh, no flicker on the tree
 - **Santa and his riders stay in the sleigh**: on the sleigh tour, Santa at the reins and the players riding along
   are no longer dropped through the sleigh, or onto a roof it flies over, between the server's updates.
