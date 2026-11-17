@@ -246,6 +246,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
                             "both" => Aura::BOTH,
                             "trim" => Aura::TRIM,
                             "trimshell" => Aura::TRIM_SHELL,
+                            "hat" => Aura::HAT,
                             _ => return Err(format!("{w}: default, none, shell, particles, both, trim or trimshell")),
                         }
                     }
@@ -433,10 +434,11 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     }
     // a hat another body has built in (`pieceaura=helm:0:hat[:DictID]`,
     // `hat::hat_on`), in place of the helm, as the world's `attach` hangs it
-    if let Some((src, hue)) = crate::hat::hat_of(&words.pieces) {
-        let made = crate::hat::hat_on(lib, model as u32, &cs, true, src, hue).map(|(n, mut m)| {
+    let npc_hat = words.npc.and_then(|t| crate::hat::npc_hat(&t)).map(|(src, style)| (src, None, style));
+    if let Some((src, hue, style)) = crate::hat::hat_of(&words.pieces).or(npc_hat) {
+        let made = crate::hat::hat_on_styled(lib, model as u32, &cs, true, src, hue, style).map(|(n, mut m)| {
             // in the helm's colour (`dye=`, `tint=`), as the world dyes it
-            crate::hat::dyed(&mut m, look.helm_color(&t), |id| lib.lookup(id).is_some());
+            crate::hat::dress(&mut m, style, look.helm_color(&t), lib);
             (n, m)
         });
         match &made {

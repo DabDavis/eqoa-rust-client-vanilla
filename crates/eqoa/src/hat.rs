@@ -43,6 +43,31 @@ pub const EFREETI_LORD: u32 = 0xAA48_9CBB;
 /// (0808CC05, the atlas his shorts and arm bands share; his face is FB130901).
 pub const HATS: &[(u32, &[u32])] = &[(KAPPA_HAT, &[0xE81D_726E, 0x3E30_193D]), (EFREETI_LORD, &[0x0808_CC05])];
 
+/// The dressed gnome man (CHAR.ESF #139, unused as a body) whose red pointed
+/// cap the Santa Hat is (go-eqoa-server's `GnomeCap`; the owner, 2026-11-17:
+/// "for santa clause lets cut the gnome cap to be usuable for all and make it
+/// red and white with a white ball on the end").
+pub const GNOME_CAP: u32 = 0xA205_90E3;
+
+/// The bodies whose hats are their materials, not their textures: the gnome's
+/// cap is its material 10, the head's own texture (0xD499494B: the hair's and
+/// face's too) in a red layer colour.
+pub const HAT_MATERIALS: &[(u32, &[i32])] = &[(GNOME_CAP, &[10])];
+
+/// The materials body `src`'s hat is, when [`HAT_MATERIALS`] knows it.
+pub fn hat_materials(src: u32) -> Option<&'static [i32]> {
+    HAT_MATERIALS.iter().find(|(b, _)| *b == src).map(|(_, m)| *m)
+}
+
+/// A hat aura's nodes byte that dresses the hat as Santa's (go-eqoa-server's
+/// `HatSanta`): a white band round its base and a white ball at its tip, the
+/// rest red ([`SANTA_RED`]) or the helm's dye ([`dress`]). 0 is the hat as cut.
+pub const STYLE_SANTA: u8 = 1;
+
+/// The Santa Hat's red, undyed (the record's colour, go-eqoa-server's Santa
+/// Hat: 0xC01818).
+pub const SANTA_RED: [u8; 4] = [0xC0, 0x18, 0x18, 0xFF];
+
 /// The textures body `src`'s hat is in, when [`HATS`] knows it.
 pub fn hat_textures(src: u32) -> Option<&'static [u32]> {
     HATS.iter().find(|(b, _)| *b == src).map(|(_, t)| *t)
@@ -75,6 +100,12 @@ fn under(cs: &CSprite<Ee>, mut node: i32, head: i32) -> bool {
 /// nothing on its head but its face. Of a body with levels of detail, the
 /// nearest level.
 pub fn cut(src: &esf::Model, cs: &CSprite<Ee>, textures: Option<&[u32]>) -> Option<esf::Model> {
+    cut_where(src, cs, textures, None)
+}
+
+/// [`cut`], the hat a body's materials (`materials`: [`hat_materials`]) when
+/// it names them, before its textures.
+pub fn cut_where(src: &esf::Model, cs: &CSprite<Ee>, textures: Option<&[u32]>, materials: Option<&[i32]>) -> Option<esf::Model> {
     let head = cs.node_ids[7];
     if head < 0 || src.bones.len() != src.pos.len() || src.weights.len() != src.pos.len() {
         return None;
@@ -100,7 +131,11 @@ pub fn cut(src: &esf::Model, cs: &CSprite<Ee>, textures: Option<&[u32]>) -> Opti
     let face = by_tex.iter().max_by_key(|e| e.1).map(|e| e.0)?;
     let mut m = esf::Model { skinned: false, parts: 1, ..Default::default() };
     let mut map = std::collections::HashMap::new();
-    let hat = |b: &esf::Batch| textures.map_or(b.texture() != face, |t| t.contains(&(b.texture() as u32)));
+    let hat = |b: &esf::Batch| match (materials, textures) {
+        (Some(m), _) => m.contains(&b.material),
+        (None, Some(t)) => t.contains(&(b.texture() as u32)),
+        (None, None) => b.texture() != face,
+    };
     for b in src.batches.iter().filter(|b| near(b) && hat(b)) {
         let mut out = esf::Batch { lod: None, indices: Vec::new(), ..b.clone() };
         for t in b.indices.chunks_exact(3).filter(|t| t.iter().all(|&v| rides(v as usize))) {
@@ -207,6 +242,13 @@ pub fn moved(hat: &mut esf::Model, from: (Vec3, Vec3), to: (Vec3, Vec3)) {
 /// as it wears one, so it sits as a helm would. None when the source is no
 /// loaded body or has no hat, or this body has neither a helm nor a head.
 pub fn hat_on(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, src: u32, hue: Option<[u8; 3]>) -> Option<(i32, esf::Model)> {
+    hat_on_styled(lib, id, cs, player, src, hue, 0)
+}
+
+/// [`hat_on`] in a style: [`STYLE_SANTA`] Santa's ([`santa`], its band and
+/// ball made in the bind pose, before it goes into the node's frame).
+#[allow(clippy::too_many_arguments)]
+pub fn hat_on_styled(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, src: u32, hue: Option<[u8; 3]>, style: u8) -> Option<(i32, esf::Model)> {
     let (mut hat, from) = measured_hat(lib, src)?;
     let t = crate::s2::get().cust();
     let set = crate::aura::CIRCLET_MEASURE_SET;
@@ -229,6 +271,9 @@ pub fn hat_on(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, src: u32, 
             node
         }
     };
+    if style == STYLE_SANTA {
+        santa(&mut hat);
+    }
     // into the frame of the node it hangs on
     let local = bind_world(cs, node)?.inverse();
     for p in &mut hat.pos {
@@ -267,13 +312,22 @@ pub fn measured_hat(lib: &Library, src: u32) -> Option<(esf::Model, (Vec3, Vec3)
     }
     let load = |r| vi::character::load_csprite::<Ee>(lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut vi::csprite::Rand(1));
     let scs = load(r)?;
-    let mut hat = cut(&lib.build_model(r)?, &scs, hat_textures(src))?;
+    let mut hat = cut_where(&lib.build_model(r)?, &scs, hat_textures(src), hat_materials(src))?;
     let t = crate::s2::get().cust();
     let set = crate::aura::CIRCLET_MEASURE_SET;
     let rr = lib.lookup(REFERENCE as i32)?;
     let rcs = load(rr)?;
     let (rnode, rhelm) = crate::slotless::helm_on(lib, REFERENCE, &rcs, true, set, [255; 4], &t, true)?;
     let helm = helm_bounds(&rcs, rnode, &rhelm)?;
+    // a hat that is a material of its body (the gnome's cap,
+    // [`HAT_MATERIALS`]): seated by its own rim ([`rim_seat`]): the gnome's
+    // helm sits high on its small face (moved by it the cap came down over the
+    // wearer's face) and its scalp is under the cap (moved by the heads it
+    // stood off the head)
+    if hat_materials(src).is_some() {
+        rim_seat(&mut hat, helm);
+        return Some((hat, helm));
+    }
     // a source that wears a helm: from its helm to the reference's, so every
     // hat is measured on the reference (a body with no helm, `unhelmed_seat`,
     // is measured from the reference's head)
@@ -287,6 +341,35 @@ pub fn measured_hat(lib: &Library, src: u32) -> Option<(esf::Model, (Vec3, Vec3)
     (lo.x, hi.x) = (helm.0.x, helm.1.x);
     moved_on_top(&mut hat, from, (lo, hi));
     Some((hat, helm))
+}
+
+/// How high on a helm (its share from the chin of set 4's great helm) a cap's
+/// rim sits ([`rim_seat`]): the brow, where a circlet sits too.
+pub const RIM_HEIGHT: f32 = 0.6;
+
+/// How wide a cap's rim is against the helm it is seated by ([`rim_seat`]):
+/// round the head, the head inside it as in a helm.
+pub const RIM_WIDTH: f32 = 1.05;
+
+/// `hat` (a cap, in its body's bind-pose model space) seated on a head by its
+/// own rim, the head measured by `helm` (set 4's as worn, its bounds): the
+/// rim (its lowest fifth of height) scaled to [`RIM_WIDTH`] of the helm's
+/// width, every axis alike, its middle over the helm's across and front to
+/// back, its bottom at [`RIM_HEIGHT`] of the helm's height.
+pub fn rim_seat(hat: &mut esf::Model, helm: (Vec3, Vec3)) {
+    let (lo, hi) = hat.pos.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[1]), hi.max(p[1])));
+    if lo >= hi {
+        return;
+    }
+    let line = lo + 0.2 * (hi - lo);
+    let rim: Vec<Vec3> = hat.pos.iter().map(|p| Vec3::from(*p)).filter(|p| p.y <= line).collect();
+    let (rlo, rhi) = rim.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(a, b), p| (a.min(*p), b.max(*p)));
+    let s = RIM_WIDTH * (helm.1.x - helm.0.x) / (rhi.x - rlo.x).max(1e-4);
+    let from = Vec3::new((rlo.x + rhi.x) * 0.5, lo, (rlo.z + rhi.z) * 0.5);
+    let to = Vec3::new((helm.0.x + helm.1.x) * 0.5, helm.0.y + RIM_HEIGHT * (helm.1.y - helm.0.y), (helm.0.z + helm.1.z) * 0.5);
+    for p in &mut hat.pos {
+        *p = (to + (Vec3::from(*p) - from) * s).to_array();
+    }
 }
 
 /// The helm a body that wears none would wear (a were's beast: the
@@ -305,13 +388,19 @@ pub fn unhelmed_seat(lib: &Library, id: u32, cs: &CSprite<Ee>, helm: (Vec3, Vec3
     Some((n + (helm.0 - rn) * s, n + (helm.1 - rn) * s))
 }
 
-/// The recolour ([`render::recolor::DYE`]) a hat takes in the helm's dye `c`
-/// (the owner, 2026-11-16: "also turban should be abled to be dyed"): the
-/// dye's hue and saturation over the hat's own shading, its lightness raised
-/// with the dye's (a hat's art is dark: the efreeti lord's turban is a deep
-/// teal, which a plain multiply, an armour piece's MUL, turns black). None for
-/// white or near it (no dye: the hat's own colours) or no colour.
-pub fn dye_of(c: [u8; 4]) -> Option<u32> {
+/// The recolour ([`render::recolor::DYE`]) a hat's texture takes in the
+/// helm's dye `c` (the owner, 2026-11-16: "also turban should be abled to be
+/// dyed"): the dye's hue and saturation over the texture's own shading, and
+/// its lightness moved so the texture's mean (`mean`, 0-1: [`mean_lightness`])
+/// lands on the dye's (lightening by the square root of that): a dark dye
+/// darkens it, a black one (no hue) to near black, a bright one lightens a dark texture (the efreeti lord's turban, a
+/// deep teal, which a plain multiply, an armour piece's MUL, turns black).
+/// Before, the lightness was raised with the dye's whatever the texture, so a
+/// black dye (Hoofbite's 101010) left the pale straw of the kappa's hat a pale
+/// grey: it seemed undyed (the owner, 2026-11-17: "the kappa hat that hoofbie
+/// has isnt being dyed yet"). The scale is at most twice (the DYE byte's 255).
+/// None for white or near it (no dye: the hat's own colours) or no colour.
+pub fn dye_code(c: [u8; 4], mean: f32) -> Option<u32> {
     let [r, g, b, a] = c.map(|v| v as f32 / 255.0);
     if a == 0.0 || (r > 0.94 && g > 0.94 && b > 0.94) {
         return None;
@@ -330,20 +419,148 @@ pub fn dye_of(c: [u8; 4]) -> Option<u32> {
         ((r - g) / d + 4.0) / 6.0
     };
     let byte = |x: f32| (x.round().clamp(0.0, 255.0)) as u32;
-    // the hat's lightness times 1 + 2 L (128 keeps it): a dark dye darkens less
-    // than it brightens a light one, black (L 0) keeps the hat's own shading
-    Some(render::recolor::DYE << 24 | byte(h * 256.0).min(255) << 16 | byte(s.clamp(0.0, 1.0) * 255.0) << 8 | byte(128.0 * (1.0 + 2.0 * l)).min(255))
+    // the texture's lightness times the dye's over the texture's mean (128
+    // keeps it): darkening in full, lightening by its square root (the full
+    // ratio washed a red over pale straw to pink, its light streaks white)
+    let ratio = l / mean.max(0.02);
+    let scale = 128.0 * if ratio < 1.0 { ratio } else { ratio.sqrt() };
+    Some(render::recolor::DYE << 24 | byte(h * 256.0).min(255) << 16 | byte(s.clamp(0.0, 1.0) * 255.0) << 8 | byte(scale).clamp(1, 255))
 }
 
-/// `hat` dyed `c` ([`dye_of`]): every layer's texture recoloured, a texture
-/// `taken` names never reused; none when the colour is no dye.
-pub fn dyed(hat: &mut esf::Model, c: [u8; 4], taken: impl Fn(i32) -> bool) {
-    let Some(r) = dye_of(c) else { return };
+/// The mean HSL lightness (0-1) of a texture's opaque texels (alpha over
+/// half; every texel when none is), its base level decoded; none for a
+/// texture the library cannot decode.
+pub fn mean_lightness(lib: &Library, texture: i32) -> Option<f32> {
+    let img = lib.surface(texture).and_then(|(c, s)| s.decode(&c.data))?;
+    let px: Vec<&[u8]> = img.rgba.chunks_exact(4).collect();
+    let opaque: Vec<&&[u8]> = px.iter().filter(|p| p[3] > 64).collect();
+    let pick: Vec<&[u8]> = if opaque.is_empty() { px.clone() } else { opaque.into_iter().copied().collect() };
+    if pick.is_empty() {
+        return None;
+    }
+    let sum: f32 = pick.iter().map(|p| (p[0].max(p[1]).max(p[2]) as f32 + p[0].min(p[1]).min(p[2]) as f32) / 510.0).sum();
+    Some(sum / pick.len() as f32)
+}
+
+/// `hat` dyed `c` ([`dye_code`]): every layer's texture recoloured by its own
+/// mean lightness (a character's own hat, charaura's, and a worn hat item's
+/// alike: both are the helm's hat, the colour the helm's dye); a texture the
+/// library names never reused; nothing when the colour is no dye.
+pub fn dyed(hat: &mut esf::Model, c: [u8; 4], lib: &Library) {
+    if dye_code(c, 0.5).is_none() {
+        return;
+    }
+    let taken = |id: i32| lib.lookup(id).is_some();
     for l in hat.batches.iter_mut().flat_map(|b| b.layers.iter_mut()) {
-        if l.texture != 0 {
-            l.texture = render::recolor::recolored(l.texture, r, &taken);
+        if l.texture != 0
+            && let Some(r) = dye_code(c, mean_lightness(lib, l.texture).unwrap_or(0.5))
+        {
+            l.texture = render::recolor::recolored(l.texture, r, taken);
         }
     }
+}
+
+/// `hat` (in a bind-pose model space, up +y) made Santa's: the triangles of
+/// its lowest [`SANTA_BAND`] of height moved into a batch of their own with no
+/// texture (white; a triangle by its middle), and a white ball ([`SANTA_BALL`] of its height across) at
+/// its tip, the vertex farthest from the middle of its base (the gnome's cap
+/// bends over at the top, so not the highest). [`dress`] colours the rest.
+pub fn santa(hat: &mut esf::Model) {
+    let (lo, hi) = hat.pos.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[1]), hi.max(p[1])));
+    if lo >= hi || hat.batches.is_empty() {
+        return;
+    }
+    let line = lo + SANTA_BAND * (hi - lo);
+    let mut white = esf::Batch { indices: Vec::new(), ..hat.batches[0].clone() };
+    for l in &mut white.layers {
+        l.texture = 0;
+        l.color = [255; 4];
+    }
+    let mut base = Vec3::ZERO;
+    let mut n = 0.0;
+    for b in &mut hat.batches {
+        let mut keep = Vec::new();
+        for t in b.indices.chunks_exact(3) {
+            if t.iter().map(|&v| hat.pos[v as usize][1]).sum::<f32>() / 3.0 <= line {
+                white.indices.extend_from_slice(t);
+                for &v in t {
+                    base += Vec3::from(hat.pos[v as usize]);
+                    n += 1.0;
+                }
+            } else {
+                keep.extend_from_slice(t);
+            }
+        }
+        b.indices = keep;
+    }
+    let base = if n > 0.0 { base / n } else { Vec3::new(0.0, lo, 0.0) };
+    let tip = hat.pos.iter().map(|p| Vec3::from(*p)).max_by(|a, b| (*a - base).length().total_cmp(&(*b - base).length())).unwrap_or(base);
+    // the ball: a UV sphere of 8 rings by 10 segments
+    let r = SANTA_BALL * (hi - lo) * 0.5;
+    let (rings, segs) = (8u32, 10u32);
+    let first = hat.pos.len() as u32;
+    for i in 0..=rings {
+        let th = std::f32::consts::PI * i as f32 / rings as f32;
+        for j in 0..=segs {
+            let ph = std::f32::consts::TAU * j as f32 / segs as f32;
+            let d = Vec3::new(th.sin() * ph.cos(), th.cos(), th.sin() * ph.sin());
+            hat.pos.push((tip + d * r).to_array());
+            if !hat.uv.is_empty() {
+                hat.uv.push([0.0, 0.0]);
+            }
+            if !hat.normal.is_empty() {
+                hat.normal.push(d.to_array());
+            }
+            if !hat.color.is_empty() {
+                hat.color.push([1.0; 4]);
+            }
+        }
+    }
+    for i in 0..rings {
+        for j in 0..segs {
+            let a = first + i * (segs + 1) + j;
+            let b = a + segs + 1;
+            white.indices.extend_from_slice(&[a, b, a + 1, a + 1, b, b + 1]);
+        }
+    }
+    hat.batches.retain(|b| !b.indices.is_empty());
+    hat.batches.push(white);
+    hat.triangles = hat.batches.iter().map(|b| b.indices.len() as u32 / 3).sum();
+}
+
+/// How much of a Santa hat's height, from its base, is its white band.
+pub const SANTA_BAND: f32 = 0.2;
+
+/// A Santa hat's ball across, as a share of its height.
+pub const SANTA_BALL: f32 = 0.2;
+
+/// A hat dressed in the helm's colour `c` (`look.helm_color`): Santa's
+/// ([`STYLE_SANTA`]) its textured layers in the dye's colour, else in
+/// [`SANTA_RED`] (no dye: white), their layer colours made white (the gnome's
+/// cap is red by its layer colour over the head's own texture), its band and
+/// ball left white; any other hat [`dyed`].
+pub fn dress(hat: &mut esf::Model, style: u8, c: [u8; 4], lib: &Library) {
+    if style != STYLE_SANTA {
+        dyed(hat, c, lib);
+        return;
+    }
+    let colour = if dye_code(c, 0.5).is_some() { c } else { SANTA_RED };
+    let taken = |id: i32| lib.lookup(id).is_some();
+    for l in hat.batches.iter_mut().flat_map(|b| b.layers.iter_mut()) {
+        if l.texture != 0
+            && let Some(r) = dye_code(colour, mean_lightness(lib, l.texture).unwrap_or(0.5))
+        {
+            l.texture = render::recolor::recolored(l.texture, r, taken);
+            l.color = [255; 4];
+        }
+    }
+}
+
+/// The hat an NPC's tint names by its name (`npctint`, go-eqoa-server's
+/// npctint aura of kind hat: Santa Claus's Santa Hat): its source (0 the
+/// kappa's) and its style; none for a tint with no hat.
+pub fn npc_hat(t: &net::npctint::Tint) -> Option<(u32, u8)> {
+    (t.aura.kind == net::npctint::Aura::HAT).then(|| (if t.aura.source == 0 { KAPPA_HAT } else { t.aura.source }, t.aura.nodes))
 }
 
 /// The hat a body's helm aura names (kind hat), if it names one: its source
@@ -355,8 +572,8 @@ pub fn dyed(hat: &mut esf::Model, c: [u8; 4], taken: impl Fn(i32) -> bool) {
 /// shell, particles or a trim, drawn on the hat: [`crate::aura::helm_aura`]),
 /// else the helm's own aura when that is a hat (an older server's, or a
 /// channel with no place for it).
-pub fn hat_of(auras: &[net::entity::PieceAura; net::entity::AURAS]) -> Option<(u32, Option<[u8; 3]>)> {
-    let hat = |a: net::entity::PieceAura| (a.kind == net::npctint::Aura::HAT).then(|| (if a.source == 0 { KAPPA_HAT } else { a.source }, crate::aura::hand_hue(&a)));
+pub fn hat_of(auras: &[net::entity::PieceAura; net::entity::AURAS]) -> Option<(u32, Option<[u8; 3]>, u8)> {
+    let hat = |a: net::entity::PieceAura| (a.kind == net::npctint::Aura::HAT).then(|| (if a.source == 0 { KAPPA_HAT } else { a.source }, crate::aura::hand_hue(&a), a.nodes));
     hat(auras[net::entity::HELM_HAT_AURA]).or_else(|| hat(auras[crate::aura::HELM]))
 }
 
@@ -489,28 +706,54 @@ mod tests {
         assert_eq!(m.pos, vec![[10.0, 6.0, 10.5], [11.0, 6.5, 10.0]]);
     }
 
-    /// `dye_of`: white and near it, or no colour, no dye; crimson a red hue,
-    /// full, its lightness raised; dark blue a blue hue; black keeps the
-    /// shading. `dyed` names a recoloured texture for every layer with one.
+    /// `dye_code`: white and near it, or no colour, no dye; crimson a red
+    /// hue, full; dark blue a blue hue; the lightness moved to the dye's from
+    /// the texture's mean: a black dye (Hoofbite's 101010) on the pale straw
+    /// (mean 0.3) darkens it to a fifth, a crimson on the dark turban (0.15)
+    /// lightens it (at most twice). On the disc: the kappa's straw dyed black
+    /// is near black, red is red, and white leaves the texture as it was.
     #[test]
     fn a_hat_dyed() {
-        assert_eq!(dye_of([255, 255, 255, 255]), None);
-        assert_eq!(dye_of([250, 250, 245, 255]), None);
-        assert_eq!(dye_of([0xD1, 0, 0, 0]), None, "alpha 0: none");
-        let red = dye_of([0xD1, 0, 0, 0xFF]).unwrap();
+        assert_eq!(dye_code([255, 255, 255, 255], 0.5), None);
+        assert_eq!(dye_code([250, 250, 245, 255], 0.5), None);
+        assert_eq!(dye_code([0xD1, 0, 0, 0], 0.5), None, "alpha 0: none");
+        let red = dye_code([0xD1, 0, 0, 0xFF], 0.15).unwrap();
         assert_eq!((red >> 24, (red >> 16) & 0xFF, (red >> 8) & 0xFF), (render::recolor::DYE, 0, 255));
-        assert!((red & 0xFF) > 128, "a crimson brightens a dark hat");
-        let blue = dye_of([0x10, 0x20, 0x80, 0xFF]).unwrap();
+        assert!((200..=215).contains(&(red & 0xFF)), "a crimson lightens a dark hat by the root: {}", red & 0xFF);
+        let blue = dye_code([0x10, 0x20, 0x80, 0xFF], 0.6).unwrap();
         assert!(((blue >> 16) & 0xFF).abs_diff(160) < 8, "a blue hue: {:#x}", blue);
-        assert_eq!(dye_of([0, 0, 0, 0xFF]).map(|r| r & 0xFF), Some(128), "black keeps the shading");
-        let layer = |texture: i32| esf::Layer { flags: 1, texture, wrap: 0, blend: 0, color: [255; 4], uv_transform: [0.0; 9], lod_bias: 0.0, uv_rate: [0.0; 2], emissive: [0; 4] };
-        let mut m = esf::Model { batches: vec![esf::Batch { material: 0, layers: vec![layer(0x0808_CC05), layer(0)], indices: Vec::new(), lod: None }], ..Default::default() };
-        dyed(&mut m, [255; 4], |_| false);
-        assert_eq!(m.batches[0].layers[0].texture, 0x0808_CC05, "white: as it was");
-        dyed(&mut m, [0xD1, 0, 0, 0xFF], |_| false);
-        let t = m.batches[0].layers[0].texture;
-        assert_eq!(render::recolor::source_of(t), Some((0x0808_CC05, red)));
-        assert_eq!(m.batches[0].layers[1].texture, 0, "a layer with no texture keeps none");
+        let black = dye_code([0x10, 0x10, 0x10, 0xFF], 0.6).unwrap();
+        assert!((black >> 8) & 0xFF == 0 && (black & 0xFF) < 16, "black darkens the straw, no hue: {black:#x}");
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let (m, cs) = body(&lib, KAPPA_HAT);
+        let straw = cut(&m, &cs, hat_textures(KAPPA_HAT)).unwrap();
+        let tex = straw.batches[0].texture();
+        let mean = mean_lightness(&lib, tex).unwrap();
+        assert!(mean > 0.2, "the straw is lighter than the dye: {mean}");
+        let lightness_of = |m: &esf::Model| {
+            let t = m.batches[0].texture();
+            let (src, r) = render::recolor::source_of(t).unwrap_or((t, 0));
+            let img = lib.surface(src).and_then(|(c, s)| s.decode(&c.data)).unwrap();
+            let mut px = img.rgba.clone();
+            render::recolor::recolor_rgba(&mut px, r);
+            let n = px.len() / 4;
+            (px.chunks_exact(4).map(|p| (p[0].max(p[1]).max(p[2]) as f32 + p[0].min(p[1]).min(p[2]) as f32) / 510.0).sum::<f32>() / n as f32,
+             px.chunks_exact(4).map(|p| p[0] as f32 - p[2] as f32).sum::<f32>() / n as f32)
+        };
+        let mut white = straw.clone();
+        dyed(&mut white, [255; 4], &lib);
+        assert_eq!(white.batches[0].texture(), tex, "white: as it was");
+        let mut dark = straw.clone();
+        dyed(&mut dark, [0x10, 0x10, 0x10, 0xFF], &lib);
+        let (l, _) = lightness_of(&dark);
+        assert!(l < 0.12, "Hoofbite's black darkens the straw: {l}");
+        let mut redden = straw.clone();
+        dyed(&mut redden, [0xD1, 0, 0, 0xFF], &lib);
+        let (l, rb) = lightness_of(&redden);
+        assert!(rb > 60.0 && l > 0.2, "red is red: lightness {l}, red over blue {rb}");
     }
 
     /// The hat fits the body drawn (the owner, 2026-11-17: "dust used an ogre
@@ -578,6 +821,48 @@ mod tests {
         }
     }
 
+    /// On the disc: the gnome's cap (the dressed gnome man's material 10, the
+    /// head's own texture in a red layer colour) cut out alone, its point well
+    /// above the head; made Santa's on a dark elf and an ogre: a white batch
+    /// (no texture, white) of its band and a ball at its tip, the rest red;
+    /// dressed in a dye, the red part takes the dye and the white stays white.
+    /// The NPC's hat by name (npctint kind hat) reads its source and style.
+    #[test]
+    fn the_santa_hat() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let (m, cs) = body(&lib, GNOME_CAP);
+        let cap = cut_where(&m, &cs, hat_textures(GNOME_CAP), hat_materials(GNOME_CAP)).expect("the gnome's cap");
+        assert!(cap.batches.iter().all(|b| b.material == 10), "material 10 alone");
+        assert_eq!(cap.batches[0].layers[0].color[..3], [128, 0, 1], "red by its layer colour");
+        let (lo, hi) = bounds(&cap);
+        assert!(hi.y - lo.y > 0.4, "a tall cap: {lo} .. {hi}");
+        for body_id in [REFERENCE, 0x8480_7490] {
+            let (_, wcs) = body(&lib, body_id);
+            let (_, plain) = hat_on(&lib, body_id, &wcs, true, GNOME_CAP, None).unwrap();
+            let (_, mut hat) = hat_on_styled(&lib, body_id, &wcs, true, GNOME_CAP, None, STYLE_SANTA).unwrap();
+            let white = hat.batches.last().unwrap();
+            assert!(white.layers.iter().all(|l| l.texture == 0 && l.color == [255; 4]), "the band and ball: white");
+            assert!(hat.triangles > plain.triangles + 100, "a ball added: {} vs {}", hat.triangles, plain.triangles);
+            assert_eq!(hat.batches.iter().map(|b| b.indices.len()).sum::<usize>() / 3, hat.triangles as usize);
+            dress(&mut hat, STYLE_SANTA, [255; 4], &lib);
+            let red = hat.batches[0].layers[0].clone();
+            assert_eq!(red.color, [255; 4], "its red by its texture now");
+            let (src, r) = render::recolor::source_of(red.texture).unwrap();
+            assert_eq!((src as u32, (r >> 16) & 0xFF, (r >> 8) & 0xFF), (0xD499_494B, 0, 198), "undyed: Santa's red");
+            let (_, mut blue) = hat_on_styled(&lib, body_id, &wcs, true, GNOME_CAP, None, STYLE_SANTA).unwrap();
+            dress(&mut blue, STYLE_SANTA, [0x20, 0x30, 0xC0, 0xFF], &lib);
+            let (_, rb) = render::recolor::source_of(blue.batches[0].layers[0].texture).unwrap();
+            assert!(((rb >> 16) & 0xFF).abs_diff(163) < 8, "dyed blue: {rb:#x}");
+            assert!(blue.batches.last().unwrap().layers.iter().all(|l| l.texture == 0), "the white stays white");
+        }
+        let t = net::npctint::Tint { color: 0, glow: 0, aura: net::npctint::Aura { kind: net::npctint::Aura::HAT, source: GNOME_CAP, nodes: STYLE_SANTA } };
+        assert_eq!(npc_hat(&t), Some((GNOME_CAP, STYLE_SANTA)));
+        assert_eq!(npc_hat(&net::npctint::Tint::color(0xFF0000FF)), None);
+    }
+
     /// `moved`: the middle to the middle, scaled by the widths.
     #[test]
     fn moved_by_the_helms() {
@@ -593,14 +878,14 @@ mod tests {
         let mut auras = [PieceAura::default(); net::entity::AURAS];
         assert_eq!(hat_of(&auras), None);
         auras[crate::aura::HELM] = PieceAura { kind: net::npctint::Aura::HAT, ..Default::default() };
-        assert_eq!(hat_of(&auras), Some((KAPPA_HAT, None)));
+        assert_eq!(hat_of(&auras), Some((KAPPA_HAT, None, 0)));
         auras[crate::aura::HELM] = PieceAura { kind: net::npctint::Aura::HAT, source: 0x1234, color: [0x20, 0xC0, 0x20, 0xFF], ..Default::default() };
-        assert_eq!(hat_of(&auras), Some((0x1234, Some([0x20, 0xC0, 0x20]))));
+        assert_eq!(hat_of(&auras), Some((0x1234, Some([0x20, 0xC0, 0x20]), 0)));
         auras[crate::aura::HELM].kind = net::npctint::Aura::CIRCLET;
         assert_eq!(hat_of(&auras), None);
         // the helm's hat apart (a 365-byte channel): the hat there, a shell in the helm's place
         auras[crate::aura::HELM] = PieceAura { kind: net::npctint::Aura::SHELL, color: [0xFF, 0x20, 0x20, 0xFF], ..Default::default() };
         auras[net::entity::HELM_HAT_AURA] = PieceAura { kind: net::npctint::Aura::HAT, source: EFREETI_LORD, ..Default::default() };
-        assert_eq!(hat_of(&auras), Some((EFREETI_LORD, None)), "the hat's own colours: the shell's colour is the shell's");
+        assert_eq!(hat_of(&auras), Some((EFREETI_LORD, None, 0)), "the hat's own colours: the shell's colour is the shell's");
     }
 }
