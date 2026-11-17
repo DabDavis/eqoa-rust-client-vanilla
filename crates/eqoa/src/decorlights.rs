@@ -298,6 +298,18 @@ pub fn batches(holders: &[Holder], world: i64, eye: [f32; 3], ms: i64) -> Vec<Ba
     DECOR.with_borrow(|d| batches_of(d, holders, world, eye, ms))
 }
 
+/// The bulbs of `d`'s strings placed in world `world` (a worn String of
+/// Lights', `toys::placed`), as [`batches`] draws a server's.
+pub fn batches_in(d: &Decor, world: i64, eye: [f32; 3], ms: i64) -> Vec<Batch> {
+    batches_of(d, &[], world, eye, ms)
+}
+
+/// The cords of `d`'s strings placed in world `world`, as [`cords`] draws a
+/// server's.
+pub fn cords_in(d: &Decor, world: i64, eye: [f32; 3]) -> Vec<Strips> {
+    cords_of(d, &[], world, eye)
+}
+
 fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64) -> Vec<Batch> {
     let t = ms as f64 / 1000.0;
     let mut out: Vec<Batch> = Vec::new();

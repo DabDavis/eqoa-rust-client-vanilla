@@ -1215,6 +1215,8 @@ pub fn shot_with(
                 batches.extend(held.frame(lib, &p.in_hand(lib, &walker, self_m), &walker.eye.position, t));
                 // a server's decorations' lights (`decorlights`)
                 batches.extend(p.decor_batches(walker.eye_position().to_array(), t));
+                // the Strings of Lights worn (`toys`)
+                batches.extend(p.worn_light_batches(&walker, self_m, walker.eye_position().to_array(), t));
             }
             // the weapon trails (VITrailFxRender) after them
             if let Some(p) = play.as_mut() {
@@ -1385,6 +1387,9 @@ pub fn shot_with(
         // a server's decorations' cords (`decorlights`), lit as matte wire
         if let Some(p) = play.as_ref() {
             let mut cords = p.decor_cords(walker.eye_position().to_array());
+            let (pose, _) = walker.pose();
+            let eye = walker.eye_position().to_array();
+            cords.extend(p.worn_light_cords(&walker, pose, eye));
             cords.extend(p.decor_presents(walker.eye_position().to_array()));
             crate::decorlights::light_cords(&mut cords, &view);
             // the model bulbs, unlit: a bulb is its own light
@@ -6536,6 +6541,8 @@ impl App {
                         batches.extend(held.frame(lib, &p.in_hand(lib, w, m), &w.eye.position, now));
                         // a server's decorations' lights (`decorlights`)
                         batches.extend(p.decor_batches(w.eye_position().to_array(), now));
+                        // the Strings of Lights worn (`toys`)
+                        batches.extend(p.worn_light_batches(w, m, w.eye_position().to_array(), now));
                     }
                     mark(perf, 7);
                     let hour_now = game_hour(play.as_ref(), clock);
@@ -6582,6 +6589,7 @@ impl App {
                     // a server's decorations' cords (`decorlights`), lit as matte wire
                     if let Some(p) = play.as_ref() {
                         let mut cords = p.decor_cords(w.eye_position().to_array());
+                        cords.extend(p.worn_light_cords(w, m, w.eye_position().to_array()));
                         cords.extend(p.decor_presents(w.eye_position().to_array()));
                         crate::decorlights::light_cords(&mut cords, &lights.0);
                         // the model bulbs, unlit: a bulb is its own light

@@ -608,7 +608,7 @@ pub const SICKLE_OF_AVHI_ESCRON: u32 = 0x5FD4_AE7C;
 /// other (a server never sends another there).
 pub fn hand_aura(auras: &[net::entity::PieceAura; net::entity::AURAS], hand: usize) -> Option<net::entity::PieceAura> {
     let a = auras[if hand == 0 { MAIN_HAND } else { OFF_HAND }];
-    matches!(a.kind, net::npctint::Aura::EPIC | net::npctint::Aura::PARTICLES | net::npctint::Aura::ENERGY).then_some(a)
+    matches!(a.kind, net::npctint::Aura::EPIC | net::npctint::Aura::PARTICLES | net::npctint::Aura::ENERGY | net::npctint::Aura::STRIPES).then_some(a)
 }
 
 /// A held item's auras, by its hand (as [`hand_aura`]): its first, then its
@@ -616,7 +616,7 @@ pub fn hand_aura(auras: &[net::entity::PieceAura; net::entity::AURAS], hand: usi
 /// emitter offset its particles are keyed by ([`hand_emitters`] + this).
 pub fn hand_auras(auras: &[net::entity::PieceAura; net::entity::AURAS], hand: usize) -> Vec<(net::entity::PieceAura, usize)> {
     let second = auras[if hand == 0 { MAIN_HAND2 } else { OFF_HAND2 }];
-    let second = matches!(second.kind, net::npctint::Aura::EPIC | net::npctint::Aura::PARTICLES | net::npctint::Aura::ENERGY).then_some(second);
+    let second = matches!(second.kind, net::npctint::Aura::EPIC | net::npctint::Aura::PARTICLES | net::npctint::Aura::ENERGY | net::npctint::Aura::STRIPES).then_some(second);
     hand_aura(auras, hand).map(|a| (a, 0)).into_iter().chain(second.map(|a| (a, HAND_AURA_SECOND))).collect()
 }
 
@@ -774,6 +774,11 @@ pub fn energy_skin(m: &mut esf::Model, src: &esf::Model, hue: Option<[u8; 3]>) {
 /// ([`energy_skin`]); nothing for particles alone or a source not loaded.
 /// Whether it lent anything.
 pub fn lend_hand(lib: &esf::Library, m: &mut esf::Model, a: &net::entity::PieceAura, item: u32) -> bool {
+    // a candy cane's stripes (`toys::stripe`): its own, borrowed from nothing
+    if a.kind == net::npctint::Aura::STRIPES {
+        crate::toys::stripe(m, hand_hue(a), a.nodes);
+        return true;
+    }
     if !matches!(a.kind, net::npctint::Aura::EPIC | net::npctint::Aura::ENERGY) {
         return false;
     }
@@ -804,7 +809,8 @@ pub fn lend_hand(lib: &esf::Library, m: &mut esf::Model, a: &net::entity::PieceA
 /// hand) or has none.
 pub fn hand_emitters(lib: &esf::Library, holder: i32, hand: usize, item: u32, at: &Matrix44<Ee>, a: &net::entity::PieceAura, drawn: bool) -> Vec<crate::particles::InHand> {
     let src = hand_source(a);
-    if src == item {
+    // a candy cane's stripes carry no particles
+    if src == item || a.kind == net::npctint::Aura::STRIPES {
         return Vec::new();
     }
     let tint = hand_hue(a);

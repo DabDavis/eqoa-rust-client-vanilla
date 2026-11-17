@@ -623,6 +623,15 @@ pub fn santa(hat: &mut esf::Model) {
     }
     let base = if n > 0.0 { base / n } else { Vec3::new(0.0, lo, 0.0) };
     let tip = hat.pos.iter().map(|p| Vec3::from(*p)).max_by(|a, b| (*a - base).length().total_cmp(&(*b - base).length())).unwrap_or(base);
+    // the ball's vertex colour: the hat's own mean (the share of the light
+    // its vertices carry), so the ball is lit as the cap is; white (1.0) lit
+    // it full by night, a lamp on the tip
+    let shade = if hat.color.is_empty() {
+        [1.0; 4]
+    } else {
+        let n = hat.color.len() as f32;
+        hat.color.iter().fold([0.0f32; 4], |a, c| std::array::from_fn(|k| a[k] + c[k])).map(|x| x / n)
+    };
     // the ball: a UV sphere of 8 rings by 10 segments
     let r = SANTA_BALL * (hi - lo) * 0.5;
     let (rings, segs) = (8u32, 10u32);
@@ -640,7 +649,7 @@ pub fn santa(hat: &mut esf::Model) {
                 hat.normal.push(d.to_array());
             }
             if !hat.color.is_empty() {
-                hat.color.push([1.0; 4]);
+                hat.color.push(shade);
             }
         }
     }
@@ -1001,6 +1010,40 @@ mod tests {
             assert!(((lo.x + hi.x) * 0.5).abs() < 0.02, "centred");
             assert!(hi.y > head.1.y - 0.05 && lo.y > hnode.y - 0.25, "{src:#010X}: on the head, not at the chest: {lo} .. {hi}");
         }
+    }
+
+    /// Santa's ball takes the cap's own vertex colour (the share of the light
+    /// its vertices carry), so by night it is no brighter than the cap: with
+    /// white (1.0) it was drawn full bright, a lamp on the tip.
+    #[test]
+    fn santas_ball_is_lit_as_the_cap() {
+        // a cone of 8 sides, 1 high, its vertices carrying half the light (as
+        // a body's do), in one textured batch: the ball's vertices take the
+        // cap's own colour, so by night it is no brighter than the cap; the
+        // control: a hat with no vertex colours gains none
+        let mut hat = esf::Model::default();
+        let layer = esf::Layer { flags: 0, texture: 77, wrap: 0, blend: 0, color: [128; 4], uv_transform: [0.0; 9], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] };
+        let mut idx = Vec::new();
+        for k in 0..8u32 {
+            let a = k as f32 * std::f32::consts::TAU / 8.0;
+            hat.pos.push([a.cos() * 0.3, 0.0, a.sin() * 0.3]);
+            hat.color.push([0.5, 0.4, 0.3, 0.5]);
+        }
+        hat.pos.push([0.0, 1.0, 0.0]);
+        hat.color.push([0.5, 0.4, 0.3, 0.5]);
+        for k in 0..8u32 {
+            idx.extend_from_slice(&[k, (k + 1) % 8, 8]);
+        }
+        hat.batches.push(esf::Batch { material: 10, layers: vec![layer], indices: idx, lod: None });
+        let mut bare = hat.clone();
+        let n = hat.pos.len();
+        santa(&mut hat);
+        assert!(hat.pos.len() > n + 50, "a ball added");
+        assert_eq!(hat.color.len(), hat.pos.len());
+        assert!(hat.color[n..].iter().all(|c| c.iter().zip([0.5, 0.4, 0.3, 0.5]).all(|(a, b)| (a - b).abs() < 1e-6)), "the ball lit as the cap: {:?}", hat.color[n]);
+        bare.color.clear();
+        santa(&mut bare);
+        assert!(bare.color.is_empty(), "no colours made up");
     }
 
     /// On the disc: the gnome's cap (the dressed gnome man's material 10, the

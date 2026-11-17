@@ -107,6 +107,9 @@ struct Puppet {
     /// its skeleton and drawn on its palette; none where no art or body
     /// fits. None while it wears none: nothing more is drawn.
     cape: Option<(net::cape::Cape, Option<GpuModel>)>,
+    /// The String of Lights along its cape (`toys::cape_lights`: the cape's
+    /// aura of kind lights), laid on the cape as fitted; none without.
+    lights: Option<crate::toys::Lights>,
     /// A server's race's look its body took (`raceopts`: a player's, by its
     /// name): another, or one gone, rebuilds it.
     race_look: Option<std::rc::Rc<net::raceopts::Look>>,
@@ -1205,6 +1208,13 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                             crate::petdye::apply(&mut model, d);
                         }
                     }
+                    // a gingerbread man's icing (`toys::ice`: the body's aura, while the
+                    // Gingerbread Man's illusion is shown)
+                    if let Some(cs) = &sprite
+                        && crate::toys::iced(&pieces_of(e))
+                    {
+                        crate::toys::ice(&mut model, cs);
+                    }
                     let wisp = crate::wisp::is(lib, e.drawn_model, race_look.as_deref());
                     // its auras (`aura`): an NPC's whole body's (its tint's) and
                     // each worn piece's, their particles' nodes and their shells
@@ -1240,7 +1250,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if !trims.is_empty() {
                         g.renderer.set_trims(g.device, g.queue, &mut gpu, &model, &trims, &textures);
                     }
-                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, race_look, tint, petdye, aura, pieces, wisp };
+                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, lights: None, race_look, tint, petdye, aura, pieces, wisp };
                     p.set_casts();
                     Some(p)
                 })
@@ -1270,9 +1280,14 @@ fn wear_cape(lib: &Library, g: &mut Gpu, p: &mut Puppet, want: Option<net::cape:
     p.aura.retain(|w| w.first != 64 * (crate::aura::CAPE + 1));
     let pieces = p.pieces;
     let mut worn = None;
+    let mut lights = None;
     p.cape = want.map(|c| {
         let cs = p.sprite.as_ref();
         let m = cs.and_then(|cs| crate::cape::model(lib, c, p.model, cs));
+        // the String of Lights along it (`toys::cape_lights`)
+        if crate::toys::lights_worn(&pieces) {
+            lights = m.as_ref().and_then(crate::toys::cape_lights);
+        }
         let gpu = m.map(|m| {
             lib.with_view(esf::Era::Frontiers, || {
                 let textures = render::library_textures(lib);
@@ -1296,6 +1311,7 @@ fn wear_cape(lib: &Library, g: &mut Gpu, p: &mut Puppet, want: Option<net::cape:
         (c, gpu)
     });
     p.aura.extend(worn);
+    p.lights = lights;
     p.set_casts();
 }
 
@@ -10718,6 +10734,44 @@ impl Play {
         }
         let holders = self.decor_holders();
         crate::decorlights::presents(&holders, self.player.world, eye)
+    }
+
+    /// The Strings of Lights worn this frame (`toys::placed`): each drawn
+    /// character's along its cape, skinned where its body is now, the
+    /// player's own on its walker's pose (`matrix`, as `in_hand` takes it).
+    pub fn worn_lights(&self, walker: &Walker, matrix: [[f32; 4]; 4]) -> net::decor::Decor {
+        let world = self.player.world as u8;
+        let mut strings = Vec::new();
+        for p in self.puppets.iter().flatten() {
+            if let (Some(l), Some(cs), true) = (&p.lights, &p.sprite, p.shown) {
+                strings.push(crate::toys::placed(l, cs, &p.centre, world));
+            }
+        }
+        if let (Some(p), Some(cs), true) = (&self.self_puppet, walker.sprite.as_ref(), self.self_shown)
+            && let Some(l) = &p.lights
+        {
+            strings.push(crate::toys::placed(l, cs, &glam_to_matrix(matrix), world));
+        }
+        net::decor::Decor { strings, ..Default::default() }
+    }
+
+    /// The Strings of Lights' bulbs this frame (`worn_lights`), as the
+    /// decorations' are drawn.
+    pub fn worn_light_batches(&self, walker: &Walker, matrix: [[f32; 4]; 4], eye: [f32; 3], ms: i64) -> Vec<render::billboard::Batch> {
+        let d = self.worn_lights(walker, matrix);
+        if d.strings.is_empty() {
+            return Vec::new();
+        }
+        crate::decorlights::batches_in(&d, self.player.world, eye, ms)
+    }
+
+    /// The Strings of Lights' cords this frame, unlit.
+    pub fn worn_light_cords(&self, walker: &Walker, matrix: [[f32; 4]; 4], eye: [f32; 3]) -> Vec<render::billboard::Strips> {
+        let d = self.worn_lights(walker, matrix);
+        if d.strings.is_empty() {
+            return Vec::new();
+        }
+        crate::decorlights::cords_in(&d, self.player.world, eye)
     }
 
     /// The creatures drawn a string may hang on (`decorlights::Holder`).

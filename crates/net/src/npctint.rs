@@ -91,6 +91,21 @@ impl Aura {
     /// on the head (`eqoa`'s `hat::hat_on`); a colour that lights recolours
     /// it. Never sent on any other piece.
     pub const HAT: u8 = 10;
+    /// A string of twinkling Christmas lights along the worn cape's edges
+    /// (go-eqoa-server's `AuraLights`, the cape's aura alone: the String of
+    /// Lights, `eqoa`'s `toys::cape_lights`); its nodes the string's style (0
+    /// the multicoloured). Never sent on any other piece.
+    pub const LIGHTS: u8 = 11;
+    /// A held item striped as a candy cane, red and white along its length
+    /// (go-eqoa-server's `AuraStripes`, a hand's aura: the Candy Cane Staff's
+    /// second, `eqoa`'s `toys::stripe`); its colour the stripes' when it
+    /// lights (else candy red), its nodes how many (0 the client's own).
+    pub const STRIPES: u8 = 12;
+    /// A gingerbread man's icing on the body (go-eqoa-server's `AuraIcing`,
+    /// the body's aura while the Gingerbread Man's illusion is shown: `eqoa`'s
+    /// `toys::ice`): the body baked brown, white eyes, a smile, buttons and
+    /// wavy cuffs. Never sent on a piece.
+    pub const ICING: u8 = 13;
 
     /// Whether a kind names a shell or a trim outright (not the default): a
     /// black glow, which lights nothing, is then a dark aura ([`dark`]).
@@ -107,7 +122,7 @@ impl Aura {
     /// Whether a body in tint `t` wears the shell: asked for (the default
     /// included) and the glow lights (or is dark, [`Aura::lit`]).
     pub fn shell(t: &Tint) -> bool {
-        Self::lit(t) && !matches!(t.aura.kind, Self::NONE | Self::PARTICLES | Self::TRIM)
+        Self::lit(t) && !matches!(t.aura.kind, Self::NONE | Self::PARTICLES | Self::TRIM | Self::LIGHTS | Self::STRIPES | Self::ICING)
     }
 
     /// Whether a body in tint `t` wears the trim's aura: asked for, and the
