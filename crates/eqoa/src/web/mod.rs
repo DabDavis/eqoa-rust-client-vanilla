@@ -1035,7 +1035,7 @@ pub fn lose_device() {
 /// `remake`), the game going on.
 #[wasm_bindgen]
 pub fn gpu_threw(what: String) {
-    crate::gpulost::mark(&crate::gpulost::threw_why(&what));
+    crate::gpulost::browser_threw_call(&what);
 }
 
 /// Files every scene loads after its own (main.rs's `SHARED`).

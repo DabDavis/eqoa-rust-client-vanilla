@@ -14,7 +14,8 @@
 // recovered from the loss in place (crates/eqoa/src/gpulost.rs).
 //
 // Here every method of the objects a device makes is wrapped: an
-// InvalidStateError from one takes that device as dead, the call gives a
+// InvalidStateError from one (or createBuffer's RangeError, the memory for a
+// buffer mapped at its making not found) takes that device as dead, the call gives a
 // stand-in (an object whose every method does nothing and gives another
 // stand-in; a promise that never settles where the call gives a promise; an
 // ArrayBuffer of the bytes asked for from getMappedRange), every later call
@@ -97,7 +98,7 @@ function told(dev, where, e) {
   dead.add(dev);
   if (dev !== newest) return;
   lossesTold++;
-  const said = e && e.message ? e.message : String(e);
+  const said = e && e.message ? (e.name === 'RangeError' ? `RangeError: ${e.message}` : e.message) : String(e);
   // Safari's words name the call already
   const text = said.startsWith(where) ? said : `${where}: ${said}`;
   console.warn(`graphics: the browser threw from a WebGPU call (${text}): the device is taken as lost`);
@@ -132,8 +133,16 @@ function wrap(cls, proto, name) {
       r = orig.apply(this, args);
     } catch (e) {
       // only on a device known: an unconfigured canvas's getCurrentTexture
-      // throws an InvalidStateError by the spec, which wgpu takes itself
-      if (!dev || !e || e.name !== 'InvalidStateError') throw e;
+      // throws an InvalidStateError by the spec, which wgpu takes itself.
+      // And a buffer mapped at its making that the browser could not find the
+      // memory for: by the spec a RangeError ("createBuffer failed, size
+      // (204064) is too large for the implementation when mappedAtCreation ==
+      // true", Chrome short of memory: crash reports of Threnody and Dust,
+      // 2026-11-16/17), which wgpu unwraps (webgpu.rs:2461) as it did Safari's:
+      // taken as the graphics memory run out, the device lost and made again
+      // with a texture pack's budget halved (crates/eqoa/src/gpulost.rs)
+      const outOfMemory = name === 'createBuffer' && e && e.name === 'RangeError';
+      if (!dev || !e || (e.name !== 'InvalidStateError' && !outOfMemory)) throw e;
       told(dev, `${cls}.${name}`, e);
       return standIn(name, args, this.size);
     }

@@ -31,7 +31,8 @@
 //! a controller's or a touch screen's play keeps the carousel). The first bar
 //! (menu 0, its packed 252-255 too) and the second (menu 1) are drawn as two
 //! rows of their slots' frames, the first over the second, just above the
-//! chat box's full height and moving with it (`draw_stacked`, `Piece::Chat`),
+//! chat box's full height, a piece of their own to move (`draw_stacked`,
+//! `Piece::SpellBars`; with the chat box's, `Piece::Chat`, until petition 5229),
 //! at 95% (`STACKED_SCALE`), with no title bar: no name pops up. A click on a
 //! slot uses it, a right click turns its auto (`stacked_at`), and each slot
 //! of both can be given a key on the Controls page (`binds::bar_slot`,
