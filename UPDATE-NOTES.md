@@ -10,6 +10,9 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Brighter Christmas globes, a steady ribbon
+- **The Christmas tree's glass globes are brighter**: each shows its colour clearly by day and glows at night.
+- **The tree's red ribbon no longer flickers** against the boughs, near or far.
 
 ## 2026-11-17 · Santa wears his hat
 - **Santa Claus now wears his Santa Hat** by the tree: the hat a creature is given by its name was dropped because

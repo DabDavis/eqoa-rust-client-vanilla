@@ -90,21 +90,29 @@ pub struct Globe {
     pub tinted: usize,
 }
 
+/// How light a globe's tinted glass is at its darkest (`greyed`): bright
+/// baubles by day, which at night glow (they are drawn unlit).
+const GLOBE_FLOOR: f32 = 0.6;
+/// A cord's texture's (tinsel, a ribbon) darkest: its pattern kept.
+const CORD_FLOOR: f32 = 0.15;
+
 /// The id a texture's grey copy is kept under (`render::set_decor_texture`).
 pub fn grey_id(id: i32) -> i32 {
     id ^ 0x4752_4559
 }
 
 /// `levels` made grey by each texel's brightest channel, stretched so the
-/// brightest tenth is white: a pattern that takes any tint.
-fn greyed(mut levels: Vec<esf::Image>) -> Vec<esf::Image> {
+/// brightest tenth is white and lifted so its darkest is `floor` (0 to 1): a
+/// pattern that takes any tint (a globe's glass, mostly black, lifted to show
+/// its colour bright: the owner, 2026-11-17, "make the globes brighter").
+fn greyed(mut levels: Vec<esf::Image>, floor: f32) -> Vec<esf::Image> {
     for l in &mut levels {
         let mut v: Vec<u8> = l.rgba.chunks(4).map(|p| p[0].max(p[1]).max(p[2])).collect();
         let mut sorted = v.clone();
         sorted.sort_unstable();
         let top = sorted.get(sorted.len() * 9 / 10).copied().unwrap_or(255).max(16) as f32;
         for x in &mut v {
-            *x = ((*x as f32 / top) * 255.0).min(255.0) as u8;
+            *x = ((floor + (1.0 - floor) * (*x as f32 / top).min(1.0)) * 255.0) as u8;
         }
         for (p, g) in l.rgba.chunks_mut(4).zip(v) {
             p[0] = g;
@@ -195,7 +203,7 @@ fn keep_assets(models: &mut std::collections::HashMap<u32, std::rc::Rc<Globe>>, 
     let texture = |id: i32| {
         if let Some(s) = c.surface(id) {
             let levels = s.decode_levels(&c.data);
-            render::set_decor_texture(grey_id(id), greyed(levels.clone()));
+            render::set_decor_texture(grey_id(id), greyed(levels.clone(), CORD_FLOOR));
             render::set_decor_texture(id, levels);
         }
     };
@@ -216,7 +224,7 @@ fn keep_assets(models: &mut std::collections::HashMap<u32, std::rc::Rc<Globe>>, 
         }
         let tinted = (0..m.batches.len()).max_by_key(|&i| m.batches[i].indices.len()).unwrap_or(0);
         if let Some(s) = m.batches.get(tinted).and_then(|b| c.surface(b.texture())) {
-            render::set_decor_texture(grey_id(m.batches[tinted].texture()), greyed(s.decode_levels(&c.data)));
+            render::set_decor_texture(grey_id(m.batches[tinted].texture()), greyed(s.decode_levels(&c.data), GLOBE_FLOOR));
         }
         let (mut lo, mut hi) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
         for p in &m.pos {
@@ -353,6 +361,11 @@ fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64)
     out
 }
 
+/// How far a cord is drawn toward the eye from where it is laid, and that
+/// more a unit of the eye's distance (`cords`).
+pub const NUDGE: f32 = 0.05;
+pub const NUDGE_PER: f32 = 0.004;
+
 /// How many pieces a cord's span between two bulbs is drawn in (its sag).
 pub const CORD_PIECES: usize = 4;
 
@@ -416,6 +429,14 @@ fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Str
                         let f = k as f32 / CORD_PIECES as f32;
                         line.push(a.lerp(b, f) - Vec3::Y * (sag * 4.0 * f * (1.0 - f)));
                     }
+                }
+                // a little toward the eye, more the farther (the depth's own
+                // steps grow with it): a band laid on the boughs never fights
+                // them for the depth (the owner: "the tree red cloth wrap is z
+                // fighting")
+                for p in &mut line {
+                    let d = e - *p;
+                    *p += d.normalize_or_zero() * (NUDGE + NUDGE_PER * d.length());
                 }
                 // a ribbon turned to the eye; a textured one a strip a span,
                 // the texture once across it (the sampler clamps)
@@ -492,7 +513,7 @@ fn globes_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64, 
                 let lit = net::decor::lit(s.effect, s.period, b.phase, t);
                 // a tint over the model's own texture, lifted so a dark glass
                 // shows the colour (the shader keeps it to 1)
-                let k = 1.6 * (0.55 + 0.45 * lit) * s.bright.max(0.2);
+                let k = 1.5 * (0.75 + 0.25 * lit);
                 let color = [((c >> 24) & 0xFF) as f32 / 255.0 * k, ((c >> 16) & 0xFF) as f32 / 255.0 * k, ((c >> 8) & 0xFF) as f32 / 255.0 * k, 1.0];
                 // the rest (a stand) as it is, lit a little with it
                 let plain = [0.75 + 0.25 * lit, 0.75 + 0.25 * lit, 0.75 + 0.25 * lit, 1.0];
@@ -731,7 +752,10 @@ mod tests {
         let mid = |i: usize| (glam::Vec3::from(s[2 * i].1) + glam::Vec3::from(s[2 * i + 1].1)) / 2.0;
         let straight = (glam::Vec3::new(1.0, 2.0, 0.0) + glam::Vec3::new(0.0, 4.0, 1.0)) / 2.0;
         assert!(mid(CORD_PIECES / 2).y < straight.y - 0.01, "{:?} vs {straight:?}", mid(CORD_PIECES / 2));
-        assert!((mid(0) - glam::Vec3::new(1.0, 2.0, 0.0)).length() < 1e-4, "it starts at the first bulb");
+        // at the first bulb, drawn a little toward the eye (NUDGE)
+        let eye_d = (glam::Vec3::new(0.0, 3.0, -20.0) - glam::Vec3::new(1.0, 2.0, 0.0)).length();
+        assert!((mid(0) - glam::Vec3::new(1.0, 2.0, 0.0)).length() < NUDGE + NUDGE_PER * eye_d + 1e-3, "it starts at the first bulb");
+        assert!(mid(0).z < -0.05, "drawn toward the eye: {:?}", mid(0));
         // a break: two runs, the second too short for a wire
         d.strings[0].bulbs[1].color |= net::decor::BREAK;
         assert_eq!(cords_of(&d, &h, 0, [0.0; 3])[0].strips.len(), 1, "a run of one bulb has no wire");
