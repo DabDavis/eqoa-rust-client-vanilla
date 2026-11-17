@@ -166,6 +166,7 @@ mod racelabel;
 mod raceopts;
 mod wisp;
 mod hat;
+mod toys;
 mod record;
 mod alarm;
 mod startmenu;
