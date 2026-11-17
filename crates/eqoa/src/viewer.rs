@@ -354,6 +354,19 @@ fn report(renderer: &Renderer) {
     }
 }
 
+/// `EQOA_GPU_REPORT`: what the renderer keeps on the GPU (its textures,
+/// a pack's among them, the particles' and strips' buffers) and, where the
+/// backend keeps one (Vulkan, DX12), the device's own allocator's count.
+pub fn gpu_report(renderer: &Renderer, device: &wgpu::Device) -> String {
+    let mb = |b: u64| b as f64 / (1 << 20) as f64;
+    let (n, bytes, pn, pbytes) = renderer.texture_memory();
+    let mut s = format!("gpu: {n} textures {:.1} MB (a pack's larger: {pn}, {:.1} MB), billboard buffers {:.1} MB", mb(bytes), mb(pbytes), mb(renderer.billboard_memory()));
+    if let Some(r) = device.generate_allocator_report() {
+        s += &format!(", device allocated {:.1} MB reserved {:.1} MB in {} blocks", mb(r.total_allocated_bytes), mb(r.total_reserved_bytes), r.blocks.len());
+    }
+    s
+}
+
 /// A scripted walk for `shot`: hold `controls` for `ms` of game time.
 #[derive(Clone, Copy, Debug)]
 pub struct Script {
@@ -1497,6 +1510,9 @@ pub fn shot_with(
     enc.write_header()?.write_image_data(&rgba)?;
     eprintln!("{out}: {} ({cam:?})", s.summary);
     report(&renderer);
+    if std::env::var_os("EQOA_GPU_REPORT").is_some() {
+        eprintln!("{}", gpu_report(&renderer, &device));
+    }
     crate::texpack::flush();
     Ok(())
 }

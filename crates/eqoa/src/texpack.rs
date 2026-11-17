@@ -577,7 +577,7 @@ impl Drop for Reader {
 fn read_stand_in(path: &Path, s: &esf::Surface) -> Option<Arc<Found>> {
     match read(path) {
         Ok(levels) => {
-            let levels = with_levels(levels, s);
+            let levels = fit(with_levels(levels, s), render::pack_limits().max_side);
             // `EQOA_TEXTURES_LOG`: each stand-in said as it is read
             if std::env::var_os("EQOA_TEXTURES_LOG").is_some() {
                 crate::say(&format!("textures: {:08x} drawn as {} ({}x{})", s.dict_id as u32, path.display(), levels[0].width, levels[0].height));
@@ -730,7 +730,8 @@ impl Pack {
         if first {
             let _ = reader.tx.lock().unwrap_or_else(|e| e.into_inner()).send((k, path, s.clone()));
         }
-        Some((size.0, size.1, level_count(size, s) as u32))
+        let (size, n) = fitted(size, level_count(size, s), render::pack_limits().max_side);
+        Some((size.0, size.1, n as u32))
     }
 }
 
@@ -1276,6 +1277,41 @@ pub fn level_count(base: (u32, u32), s: &esf::Surface) -> usize {
     ((s.levels() as f32 + shift).round().max(1.0) as usize).min(chain)
 }
 
+/// How many levels a stand-in of base `base` drops to be at most `max` a
+/// side (`render::PackLimits`).
+fn over(base: (u32, u32), max: u32) -> usize {
+    let mut k = 0;
+    while (base.0 >> k).max(1).max((base.1 >> k).max(1)) > max.max(1) {
+        k += 1;
+    }
+    k
+}
+
+/// A stand-in's base size and level count once `fit` has made it at most
+/// `max` a side: its levels past it dropped, one level at least.
+pub fn fitted(base: (u32, u32), n: usize, max: u32) -> ((u32, u32), usize) {
+    let k = over(base, max);
+    (((base.0 >> k).max(1), (base.1 >> k).max(1)), n.saturating_sub(k).max(1))
+}
+
+/// `levels` (a stand-in's, each half the one before: `with_levels`) at most
+/// `max` a side: the larger levels dropped, the last halved on where none is
+/// small enough; as `fitted` says (Hoofbite's Iris Xe, 2026-11-17: a pack's
+/// largest textures past what a small graphics chip can keep).
+pub fn fit(mut levels: Vec<esf::Image>, max: u32) -> Vec<esf::Image> {
+    let Some(first) = levels.first() else { return levels };
+    let k = over((first.width, first.height), max);
+    if k == 0 {
+        return levels;
+    }
+    levels.drain(..k.min(levels.len() - 1));
+    while over((levels[0].width, levels[0].height), max) > 0 {
+        let h = half(&levels[0]);
+        levels = vec![h];
+    }
+    levels
+}
+
 /// A level half the size of `l` each way (one texel at least): each texel
 /// the mean of the 2 x 2 (or 2 x 1) it covers, rounded.
 fn half(l: &esf::Image) -> esf::Image {
@@ -1302,6 +1338,29 @@ fn half(l: &esf::Image) -> esf::Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stand-in past the pack's largest side (`render::PackLimits`) is
+    /// drawn halved until it fits: its larger levels dropped, the size and
+    /// level count `fitted` gives (what its texture is made at before it is
+    /// read, `ask`) the levels `fit` leaves, so the read stand-in is written
+    /// into it (`render::standin::fits`). One within it is as it was.
+    #[test]
+    fn a_stand_in_past_the_largest_side_is_halved_to_fit() {
+        let chain = |w: u32, h: u32, n: usize| -> Vec<esf::Image> { (0..n).map(|k| image_of((w >> k).max(1), (h >> k).max(1), vec![7; ((w >> k).max(1) * (h >> k).max(1) * 4) as usize])).collect() };
+        for (w, h, n, max) in [(4096, 4096, 7, 1024), (2048, 1024, 5, 1024), (4096, 2048, 2, 512), (1024, 1024, 1, 256), (512, 512, 6, 1024), (8, 8, 4, 1)] {
+            let ((fw, fh), fnum) = fitted((w, h), n, max);
+            let got = fit(chain(w, h, n), max);
+            assert!(fw.max(fh) <= max && got[0].width.max(got[0].height) <= max, "{w}x{h} at most {max}");
+            assert!(render::standin::fits(&got, (fw, fh, fnum as u32)), "{w}x{h}x{n} at {max}: {}x{}x{} vs {fw}x{fh}x{fnum}", got[0].width, got[0].height, got.len());
+        }
+        // within it: untouched
+        assert_eq!(fitted((512, 512), 6, 1024), ((512, 512), 6));
+        assert_eq!(fit(chain(512, 512, 6), 1024).len(), 6);
+        // the bytes: a 4096 stand-in with its levels 85 MB, fitted to 1024 5.3 MB
+        let ((fw, fh), fnum) = fitted((4096, 4096), 13, 1024);
+        assert_eq!(render::standin::texture_bytes((4096, 4096, 13)) >> 20, 85);
+        assert_eq!(render::standin::texture_bytes((fw, fh, fnum as u32)) * 10 >> 20, 53);
+    }
 
     /// A surface record's body: `w` x `h` at 8 bits with `levels` levels,
     /// each a row length and its rows; palette entry i is (i, 255 - i, i / 2,
