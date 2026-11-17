@@ -11,6 +11,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Bushy tinsel
+- **The Christmas tree's gold tinsel is real tinsel now**: short twisted pieces along the garland, bushy from every side,
+  where it was a flat strip.
+
 ## 2026-11-17 · Volumes stay where you set them
 - **Fx Volume and Music Volume are kept the moment you change them**: before, a volume turned down or off was only
   kept with Save Changes, so backing out of Options with Triangle put the old volume back, and a window closed any
