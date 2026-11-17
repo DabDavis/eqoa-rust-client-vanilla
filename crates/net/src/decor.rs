@@ -110,6 +110,10 @@ pub struct Look {
     pub cord_texture: u32,
     /// how long one repeat of it runs along the cord, in the string's units
     pub cord_repeat: f32,
+    /// the cord drawn as tinsel (the owner, 2026-11-17: "the tinsel should be
+    /// rotated per piece"): short pieces along it, each a pair of crossed
+    /// quads at a twist of its own, not one band turned to the eye
+    pub tinsel: bool,
 }
 
 /// Art a decoration draws that the player need not have loaded: the
@@ -277,7 +281,7 @@ pub fn read(data: &[u8]) -> Option<Decor> {
         let nl = r.u16() as usize;
         for _ in 0..nl {
             let i = r.u16() as usize;
-            let look = Look { bulb_model: r.u32(), bulb_scale: r.f32(), cord_texture: r.u32(), cord_repeat: r.f32() };
+            let look = Look { bulb_model: r.u32(), bulb_scale: r.f32(), cord_texture: r.u32(), cord_repeat: r.f32(), tinsel: false };
             if r.error {
                 return None;
             }
@@ -302,6 +306,20 @@ pub fn read(data: &[u8]) -> Option<Decor> {
                     let g = &mut out.presents[set].boxes[*k];
                     (g.paper, g.paper_gain) = (paper, gain);
                 }
+            }
+        }
+    }
+    // the cords' styles (a server before them sends none): a u16 count, each
+    // the u16 index of a string among those sent and a u8 style (1 tinsel)
+    if r.pos < data.len() {
+        let n = r.u16() as usize;
+        for _ in 0..n {
+            let (i, style) = (r.u16() as usize, r.u8());
+            if r.error {
+                return None;
+            }
+            if let Some(Some(s)) = kept_strings.get(i) {
+                out.strings[*s].look.tinsel = style == 1;
             }
         }
     }
@@ -436,10 +454,18 @@ mod tests {
         l.extend(2.0f32.to_le_bytes());
         let d = read(&l).expect("read with looks");
         assert_eq!(d.assets, vec![Asset { world: 2, zone: 15, ids: vec![0x4BC0_D7FA, 0x7B3D_8677] }]);
-        assert_eq!(d.strings[0].look, Look { bulb_model: 0xF8E6_C045, bulb_scale: 0.35, cord_texture: 0x7B3D_8677, cord_repeat: 1.5 });
+        assert_eq!(d.strings[0].look, Look { bulb_model: 0xF8E6_C045, bulb_scale: 0.35, cord_texture: 0x7B3D_8677, cord_repeat: 1.5, tinsel: false });
         assert_eq!(d.strings[1].look, Look::default());
         assert_eq!((d.presents[0].boxes[0].paper, d.presents[0].boxes[0].paper_gain), (0x4BC0_D7FA, 2.0));
         assert_eq!(read(&l[..l.len() - 2]), None, "cut short");
+        // and the cords' styles after them: the first string's tinsel
+        let mut t = l.clone();
+        t.extend(1u16.to_le_bytes());
+        t.extend(0u16.to_le_bytes());
+        t.push(1);
+        let d = read(&t).expect("read with styles");
+        assert!(d.strings[0].look.tinsel && !d.strings[1].look.tinsel);
+        assert_eq!(read(&t[..t.len() - 1]), None, "cut short");
     }
 
     #[test]

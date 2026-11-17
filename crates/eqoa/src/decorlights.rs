@@ -378,6 +378,66 @@ fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64)
 pub const NUDGE: f32 = 0.05;
 pub const NUDGE_PER: f32 = 0.004;
 
+/// A tinsel piece's length, of the cord's width (`tinsel_pieces`).
+pub const TINSEL_PIECE: f32 = 0.7;
+
+/// A tinsel cord as pieces (the owner, 2026-11-17: "the tinsel should be
+/// rotated per piece"): along `line`, a piece every `TINSEL_PIECE` of `width`,
+/// each two quads `width` across crossed about the line, turned by a twist of
+/// its own and its texture in one of four turns, both from `seed` and the
+/// piece (the same every frame): a bushy, twisted garland from any side, where
+/// one band turned to the eye read as a flat strip.
+fn tinsel_pieces(line: &[glam::Vec3], width: f32, seed: u32, strips: &mut Vec<Vec<([f32; 2], [f32; 3])>>) {
+    use glam::Vec3;
+    let len = (width * TINSEL_PIECE).max(0.05);
+    // the line's length to each point
+    let mut at = vec![0.0f32];
+    for w in line.windows(2) {
+        at.push(at[at.len() - 1] + (w[1] - w[0]).length());
+    }
+    let total = *at.last().unwrap_or(&0.0);
+    let point = |d: f32| -> (Vec3, Vec3) {
+        let i = at.partition_point(|&x| x <= d).clamp(1, line.len().max(2) - 1);
+        let (a, b) = (line[i - 1], line[i]);
+        let f = if at[i] > at[i - 1] { (d - at[i - 1]) / (at[i] - at[i - 1]) } else { 0.0 };
+        (a.lerp(b, f.clamp(0.0, 1.0)), (b - a).normalize_or_zero())
+    };
+    let hash = |k: u32| {
+        let mut x = seed.wrapping_mul(0x9E37_79B9) ^ k.wrapping_mul(0x85EB_CA6B);
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x2C1B_3C6D);
+        x ^= x >> 12;
+        x
+    };
+    let uvs = [[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], [[1.0, 0.0], [1.0, 1.0], [0.0, 0.0], [0.0, 1.0]],
+        [[1.0, 1.0], [0.0, 1.0], [1.0, 0.0], [0.0, 0.0]], [[0.0, 1.0], [0.0, 0.0], [1.0, 1.0], [1.0, 0.0]]];
+    let n = (total / len).ceil().max(1.0) as u32;
+    for k in 0..n {
+        let (c, dir) = point((k as f32 + 0.5) * total / n as f32);
+        if dir == Vec3::ZERO {
+            continue;
+        }
+        // a frame about the line: any side, then the twist
+        let side = if dir.y.abs() < 0.9 { dir.cross(Vec3::Y) } else { dir.cross(Vec3::X) }.normalize();
+        let up = dir.cross(side);
+        let h = hash(k);
+        let twist = (h & 0xFFFF) as f32 / 65536.0 * std::f32::consts::PI;
+        // pieces overlap a little, so the garland has no gaps
+        let along = dir * (0.6 * total / n as f32);
+        for q in 0..2 {
+            let t = twist + q as f32 * std::f32::consts::FRAC_PI_2;
+            let across = (side * t.cos() + up * t.sin()) * (0.5 * width);
+            let uv = uvs[((h >> (16 + 2 * q)) & 3) as usize];
+            strips.push(vec![
+                (uv[0], (c - along - across).to_array()),
+                (uv[1], (c + along - across).to_array()),
+                (uv[2], (c - along + across).to_array()),
+                (uv[3], (c + along + across).to_array()),
+            ]);
+        }
+    }
+}
+
 /// How many pieces a cord's span between two bulbs is drawn in (its sag).
 pub const CORD_PIECES: usize = 4;
 
@@ -393,7 +453,7 @@ fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Str
     use glam::Vec3;
     let e = Vec3::from(eye);
     let mut out = Vec::new();
-    for s in &d.strings {
+    for (si, s) in d.strings.iter().enumerate() {
         if s.cord & 0xFF == 0 || s.cord_width <= 0.0 {
             continue;
         }
@@ -441,6 +501,12 @@ fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Str
                         let f = k as f32 / CORD_PIECES as f32;
                         line.push(a.lerp(b, f) - Vec3::Y * (sag * 4.0 * f * (1.0 - f)));
                     }
+                }
+                // tinsel (`Look::tinsel`): pieces along the wire, each its own
+                // twist, crossed, bushy from any side; no band, no nudge
+                if s.look.tinsel {
+                    tinsel_pieces(&line, 2.0 * half, si as u32, &mut strips);
+                    continue;
                 }
                 // a little toward the eye, more the farther (the depth's own
                 // steps grow with it): a band laid on the boughs never fights
@@ -816,7 +882,7 @@ mod tests {
     #[test]
     fn the_looks_draw_models_ropes_and_garlands() {
         let mut d = tree(Effect::Steady);
-        d.strings[0].look = net::decor::Look { bulb_model: 0xF8E6_C045, bulb_scale: 0.5, cord_texture: 0x7B3D_8677, cord_repeat: 1.0 };
+        d.strings[0].look = net::decor::Look { bulb_model: 0xF8E6_C045, bulb_scale: 0.5, cord_texture: 0x7B3D_8677, cord_repeat: 1.0, tinsel: false };
         // a model of one triangle, 2 across, its middle at (1, 1, 0)
         let mut m = esf::Model::default();
         m.pos = vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 2.0, 0.0]];
@@ -865,6 +931,29 @@ mod tests {
         assert!(!is_art(0x84807490) && !is_art(0));
         set(Decor::default());
         assert!(!is_art(0x0B3B_A520));
+    }
+
+    /// Tinsel: crossed pairs of quads along the cord, each pair at its own
+    /// twist (the same each time), none a band; the control, a plain textured
+    /// cord, is strips of the line's length.
+    #[test]
+    fn tinsel_is_twisted_pieces() {
+        let mut d = tree(Effect::Steady);
+        d.strings[0].cord_width = 0.5;
+        d.strings[0].look = net::decor::Look { cord_texture: 0x9196_DAC4, tinsel: true, ..Default::default() };
+        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0 }];
+        let c = cords_of(&d, &h, 0, [0.0, 3.0, -20.0]);
+        let s = &c[0].strips;
+        assert!(s.len() >= 8 && s.len() % 2 == 0, "{} quads", s.len());
+        assert!(s.iter().all(|q| q.len() == 4));
+        // two pieces' first quads: not the same turn
+        let across = |q: &Vec<([f32; 2], [f32; 3])>| (glam::Vec3::from(q[2].1) - glam::Vec3::from(q[0].1)).normalize();
+        assert!(across(&s[0]).dot(across(&s[2])).abs() < 0.999, "each piece its own twist");
+        // a pair crossed: square to each other
+        assert!(across(&s[0]).dot(across(&s[1])).abs() < 1e-3);
+        assert_eq!(cords_of(&d, &h, 0, [0.0, 3.0, -20.0])[0].strips[0], s[0], "the same each time");
+        d.strings[0].look.tinsel = false;
+        assert_eq!(cords_of(&d, &h, 0, [0.0, 3.0, -20.0])[0].strips.len(), 2, "a plain textured cord: a strip a span");
     }
 
     /// A twinkle changes each bulb's light over time, out of step.
