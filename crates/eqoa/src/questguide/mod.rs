@@ -141,6 +141,9 @@ pub struct Quest {
     /// the first line of the giver's offer, and the rewards in all
     pub offer: &'static str,
     pub rewards: &'static str,
+    /// an ability quest: a spell among its rewards (petition 2285), marked
+    /// in the ability quests' colour as a server's flag is
+    pub ability: bool,
     pub steps: &'static [Step],
 }
 
@@ -690,7 +693,7 @@ pub fn estimate(input: &Input, matches: &[Option<Match>], kept: &Kept, cities: &
     let mut under_way: Vec<usize> = Vec::new();
     for (line, m) in input.journal.iter().zip(matches.iter().chain(std::iter::repeat(&None))) {
         let Some(m) = m.filter(|m| !under_way.contains(&m.quest)) else {
-            tracker.push(TrackedQuest { name: line.clone(), goals: Vec::new() });
+            tracker.push(TrackedQuest { name: line.clone(), goals: Vec::new(), ability: false });
             continue;
         };
         under_way.push(m.quest);
@@ -700,7 +703,7 @@ pub fn estimate(input: &Input, matches: &[Option<Match>], kept: &Kept, cities: &
         // the step's words: the game's own line for the step it names, the
         // guide's for one after it
         let said = if m.step == m.named { line.clone() } else { s.journal.to_string() };
-        let mq = |detail: String| MarkQuest { name: clip(q.name, MAX_TEXT), levels: q.levels, line: clip(&said, MAX_TEXT), detail: clip(&detail, MAX_TEXT) };
+        let mq = |detail: String| MarkQuest { name: clip(q.name, MAX_TEXT), levels: q.levels, line: clip(&said, MAX_TEXT), detail: clip(&detail, MAX_TEXT), ability: q.ability };
         let mut goals = Vec::new();
         let u16_of = |v: i64| v.clamp(0, u16::MAX as i64) as u16;
         match s.kind {
@@ -741,7 +744,7 @@ pub fn estimate(input: &Input, matches: &[Option<Match>], kept: &Kept, cities: &
                 }
             }
         }
-        tracker.push(TrackedQuest { name: format!("{}{GUIDE}", q.name), goals });
+        tracker.push(TrackedQuest { name: format!("{}{GUIDE}", q.name), goals, ability: q.ability });
     }
     // the quests to take: the player's own, at its level, the quests they
     // need finished, of its home city or a chain begun elsewhere
@@ -756,7 +759,7 @@ pub fn estimate(input: &Input, matches: &[Option<Match>], kept: &Kept, cities: &
             && (home.is_none_or(|h| h == q.city) || !q.requires.is_empty());
         if open {
             let giver = &NPCS[q.giver as usize];
-            add(1, giver.name, giver.places, MarkQuest { name: clip(q.name, MAX_TEXT), levels: q.levels, line: q.offer.to_string(), detail: q.rewards.to_string() });
+            add(1, giver.name, giver.places, MarkQuest { name: clip(q.name, MAX_TEXT), levels: q.levels, line: q.offer.to_string(), detail: q.rewards.to_string(), ability: q.ability });
         }
     }
     // the steps' first, then the player's world, nearest first

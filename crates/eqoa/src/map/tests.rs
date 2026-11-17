@@ -915,7 +915,7 @@ fn the_quest_marks_answer_the_pointer_over_the_markers() {
     let ronks = COACHES.iter().position(|c| c.coachman == "Coachman Ronks").unwrap();
     let at = COACHES[ronks].at;
     let p = v.to_window(size, at);
-    let giver = QuestMark { kind: 1, world: 0, x: at[0] + 1.0, z: at[1], npc: "Commander Nothard".into(), quests: vec![MarkQuest { name: "The Militia Bracer".into(), levels: (1, 60), line: "Every recruit wears our bracer.".into(), detail: "430 XP".into() }] };
+    let giver = QuestMark { kind: 1, world: 0, x: at[0] + 1.0, z: at[1], npc: "Commander Nothard".into(), quests: vec![MarkQuest { name: "The Militia Bracer".into(), levels: (1, 60), line: "Every recruit wears our bracer.".into(), detail: "430 XP".into(), ability: false }] };
     m.quests.set(std::slice::from_ref(&giver));
     m.mouse_moved(p);
     assert_eq!(m.cards(true), (Some(0), None), "the mark's card over the coach's");

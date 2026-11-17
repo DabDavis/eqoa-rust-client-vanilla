@@ -203,7 +203,7 @@ fn the_tracker_counts_what_is_held() {
     assert_eq!(e.tracker.len(), 2);
     assert_eq!(e.tracker[0].name, format!("The Militia Bracer{GUIDE}"));
     assert_eq!(e.tracker[0].goals, [QuestGoal { text: "Militia Bracer".into(), have: 1, need: 1 }, QuestGoal { text: "Show to Commander Nothard".into(), have: 0, need: 0 }], "worn, it counts");
-    assert_eq!(e.tracker[1], TrackedQuest { name: journal[1].clone(), goals: Vec::new() }, "the game's line as it is");
+    assert_eq!(e.tracker[1], TrackedQuest { name: journal[1].clone(), goals: Vec::new(), ability: false }, "the game's line as it is");
     // the control: not held, 0 of 1
     let bare = Input { items: &[], ..input };
     assert_eq!(estimate(&bare, &matches, &kept, &[1]).tracker[0].goals[0].have, 0);

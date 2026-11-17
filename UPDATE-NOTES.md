@@ -11,6 +11,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Ability quests in green
+- **Ability quests stand out on the map**: a quest that teaches your class a new ability now has a **green** "!"
+  or "?" on the map and the minimap, its name green with "- Ability" after it on the mark's card, and green in the
+  quest tracker, so you can tell it from the other quests at a glance (thanks, Zerkziee). Needs the Heirloom Test
+  Server's update; elsewhere the client's own quest guide marks its class quests the same way.
+
 ## 2026-11-17 · Rudolph's nose, moved
 - **Rudolph's nose glows where the GMs put it**: moving the glow now shows at once, without restarting the game.
 

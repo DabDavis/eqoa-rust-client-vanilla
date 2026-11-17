@@ -11,7 +11,10 @@ the tracker need:
   - each quest's key, name, city, classes, races, levels, the quests it
     requires (indices), its giver, the first line of the giver's offer (as
     the server's own marks clip it: 140 bytes) and its rewards in all
-    ("2200 XP, Kick", as the server words them);
+    ("2200 XP, Kick", as the server words them), and whether it is an
+    ability quest (a spell among any step's rewards, its by-class rewards or
+    a choice's options: go-eqoa-server's `questText.abilityFor`, petition
+    2285);
   - each step's kind, its NPC or creature, the items it needs and how many,
     the items it hands over when done (its `give` events), a kill step's
     count, a give step's tunar, a reach step's place, and the guide's
@@ -120,6 +123,21 @@ def rewards_text(steps):
     return clip(", ".join(out + got))
 
 
+def gives_ability(steps):
+    """Whether a step's rewards, by-class rewards or a choice's options hold a spell."""
+    for st in steps:
+        r = st.get("rewards") or {}
+        if r.get("spells"):
+            return True
+        for cr in (r.get("byclass") or {}).values():
+            if (cr or {}).get("spells"):
+                return True
+        for o in (st.get("choices") or {}).values() if isinstance(st.get("choices"), dict) else st.get("choices") or []:
+            if isinstance(o, dict) and o.get("spells") and not o.get("stay"):
+                return True
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--server", default="../go-eqoa-server")
@@ -201,6 +219,7 @@ def main():
             "giver": npc(q["giver"]),
             "offer": offer_line(q.get("offer", "")),
             "rewards": rewards_text(q["steps"]),
+            "ability": gives_ability(q["steps"]),
             "steps": steps,
         })
     unplaced = [n for n, p in npcs if not p]
@@ -277,7 +296,7 @@ def render(cities, npcs, quests, homes):
             f"    Quest {{ key: {rust_str(q['key'])}, name: {rust_str(q['name'])}, city: {q['city']}, "
             f"classes: {q['classes']:#06x}, races: {q['races']:#06x}, levels: ({q['levels'][0]}, {q['levels'][1]}), "
             f"requires: &[{req}], giver: {q['giver']}, offer: {rust_str(q['offer'])}, rewards: {rust_str(q['rewards'])}, "
-            f"steps: &[{', '.join(steps)}] }},"
+            f"ability: {'true' if q['ability'] else 'false'}, steps: &[{', '.join(steps)}] }},"
         )
     o.append("];")
     o.append("")
