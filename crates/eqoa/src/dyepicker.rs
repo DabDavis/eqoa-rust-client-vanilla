@@ -221,6 +221,9 @@ pub struct Picker {
     pub typed: String,
     /// a key held (its code, when it went down, when it last stepped)
     held_key: Option<(i32, i64, i64)>,
+    /// the frames (`tick`s) the key has been held: a repeat waits for a few,
+    /// so one slow frame between a press and its release is no hold
+    held_ticks: u32,
     /// a pointer press held
     held: Option<Held>,
     hits: Hits,
@@ -370,11 +373,13 @@ impl Picker {
             136 | 17 | 137 | 18 => {
                 self.sideways(if matches!(key, 136 | 17) { -1 } else { 1 });
                 self.held_key = Some((key, now, now));
+                self.held_ticks = 0;
                 cues.push(11);
             }
             140 | 142 => {
                 self.sideways(if key == 140 { -10 } else { 10 });
                 self.held_key = Some((key, now, now));
+                self.held_ticks = 0;
                 cues.push(11);
             }
             138 | 19 => {
@@ -420,11 +425,13 @@ impl Picker {
         None
     }
 
-    /// A held left, right, L1 or R1 at `now` (ms): stepped again after 300 ms,
-    /// every 50 ms, by five after a second and a half.
+    /// A held left, right, L1 or R1 at `now` (ms), a frame: stepped again
+    /// after 300 ms and four frames, every 50 ms, by five after a second and a
+    /// half.
     pub fn tick(&mut self, now: i64) {
         let Some((key, at, last)) = self.held_key else { return };
-        if now - at < 300 || now - last < 50 {
+        self.held_ticks = self.held_ticks.saturating_add(1);
+        if now - at < 300 || now - last < 50 || self.held_ticks < 4 {
             return;
         }
         let mut by = if now - at > 1500 { 5 } else { 1 };
@@ -808,8 +815,10 @@ mod tests {
         assert_eq!(p.row, Row::Slider(Slider::Red));
         p.key(137, true, 0, &mut cues);
         assert_eq!(p.rgba(), 0x8100_00FF);
+        p.tick(100);
         p.tick(200);
         assert_eq!(p.rgba(), 0x8100_00FF, "not yet repeating");
+        p.tick(250);
         p.tick(320);
         p.tick(380);
         assert_eq!(p.rgba(), 0x8300_00FF, "held: repeating");
@@ -817,8 +826,9 @@ mod tests {
         p.tick(500);
         assert_eq!(p.rgba(), 0x8300_00FF, "let go");
         p.key(140, true, 600, &mut cues);
-        p.key(140, false, 610, &mut cues);
-        assert_eq!(p.rgba(), 0x7900_00FF, "L1: ten less");
+        p.tick(1500);
+        p.key(140, false, 1510, &mut cues);
+        assert_eq!(p.rgba(), 0x7900_00FF, "L1: ten less; one slow frame before its release is no hold");
         for _ in 0..9 {
             p.key(139, true, 0, &mut cues);
         }
