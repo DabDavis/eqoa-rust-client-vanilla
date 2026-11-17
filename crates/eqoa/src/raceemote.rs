@@ -56,7 +56,10 @@
 //! king: `race_of`, the body worn), on a server with jumps (`grant_air`): the
 //! jumper's own and every other player's on this client, a jump and a fall off
 //! a ledge alike; a PS2 still stands them in the air, as every body is
-//! elsewhere.
+//! elsewhere. The froglok's are its own instead (the owner, 2026-11-17: "the
+//! froglok jump needs work on the animation"): cut from its creature's leap
+//! (`AIR_LEAP`, `put_leap`), the spring and the legs thrown out for the fall,
+//! the crouch for the landing, the leap's own rise taken off for the walk's.
 //!
 //! The swim, the same way (petition 1456, a gargoyle player's: "gargs fly in
 //! the water instead of swim"). A body in liquid plays its play list's entry
@@ -767,6 +770,190 @@ pub fn put_air(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, pose
     put_over(lib, cs, sc, &AIR, &poses, &[0, ONCE])
 }
 
+/// The bodies whose fall and landing are cut from a leap of their own (the
+/// owner, 2026-11-17: "the froglok jump needs work on the animation"): the
+/// race's body and the play list slot the leap is in. The froglok's 42 (its
+/// creature's leaping attack, CHAR.ESF) crouches, springs up with its legs
+/// thrown out straight below it, comes down reaching with them and lands in
+/// a deep crouch, standing again after: a frog's jump. The human's fall and
+/// landing carried onto it (`put_air`'s `Pose::Human`), which it had since
+/// 2026-11-09, are one short clip of a man bending his knees, and on the
+/// froglok's skeleton (14 of the human's bone names, none of its spine; its
+/// root a node the human lacks over both the spine and the hips) they stood
+/// it stiff through the rise and stretched it tall at the landing.
+pub const AIR_LEAP: &[(u32, i32)] = &[(0x141B_FE0C, 42)];
+
+/// The leap slot of the body `model` stands for, if its race jumps by a leap
+/// of its own (`AIR_LEAP`): the froglok's six bodies (`slotless::FROGLOKS`,
+/// the robed, the spiked and the ghouls' on its skeleton, each with the same
+/// leap in 42) whether or not the server sent the race's options, else the one
+/// `race_of` names. Of eqoaclassic's froglok players (Heirloom's copy of
+/// 2026-11-16) 5 wore the plain body, 5 the robed, 4 the spiked and 4 a
+/// ghoul's: and `race_of` knows those only from the server's options.
+pub fn leap_slot(model: u32) -> Option<i32> {
+    let race = if crate::slotless::FROGLOKS.contains(&model) { AIR_LEAP[0].0 } else { race_of(model)? };
+    AIR_LEAP.iter().find(|(b, _)| *b == race).map(|(_, s)| *s)
+}
+
+/// How far (model units) a leap's lowest node must be off the ground it
+/// stands on for the frame to be in the air.
+pub const LEAP_CLEAR: f32 = 0.08;
+
+/// How long a jump is in the air on flat ground (`walker::JUMP_SPEED`'s doc,
+/// 0.62 s): what the leap's air part is played over.
+pub const JUMP_AIR_MS: f32 = 620.0;
+
+/// A leap cut at its take-off and its landing (`leap_cut`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Leap {
+    /// The last frame with the feet down before the air (the push off).
+    pub take_off: i32,
+    /// The first frame with the feet down again after it.
+    pub land: i32,
+    /// Each frame's lowest node over the ground (the lowest any frame has).
+    pub lift: Vec<f32>,
+}
+
+/// Each node's local frame at frame `f` of `clips` (the nodes they drive),
+/// else `rig`'s rest.
+fn frames_at(rig: &Rig, clips: &[&Anim<Ee>], f: i32) -> Vec<Frame<Ee>> {
+    let mut out = rig.rest.clone();
+    let mut set = vec![false; out.len()];
+    for a in clips {
+        for &(rid, first) in &a.nodes {
+            if let Some(&n) = rig.by_ref.get(&rid)
+                && !set[n]
+            {
+                out[n] = frame_of(a, first, f);
+                set[n] = true;
+            }
+        }
+    }
+    out
+}
+
+/// Where a leap (`clips`, on `rig`) leaves the ground and comes back to it:
+/// its frames' lowest node over the lowest any frame puts it, the frames
+/// `LEAP_CLEAR` or more up being the air. `None` for a clip that never leaves
+/// the ground, or leaves it at its first frame or lands at its last.
+pub fn leap_cut(rig: &Rig, clips: &[&Anim<Ee>]) -> Option<Leap> {
+    let n = clips.iter().map(|a| a.num_frames).max()?;
+    let low: Vec<f32> = (0..n).map(|f| places(rig, &frames_at(rig, clips, f)).iter().map(|p| p.y).fold(f32::MAX, f32::min)).collect();
+    let ground = low.iter().copied().fold(f32::MAX, f32::min);
+    let lift: Vec<f32> = low.iter().map(|y| y - ground).collect();
+    let up = lift.iter().position(|&l| l >= LEAP_CLEAR)? as i32;
+    let land = (up..n).find(|&f| lift[f as usize] < LEAP_CLEAR)?;
+    (up >= 1 && land < n - 1).then(|| Leap { take_off: up - 1, land, lift })
+}
+
+/// Frames `from..=to` of `a` as a clip of their own: its nodes of `rig` at
+/// the top of those the leap drives (`driven`: none of their parents among
+/// them) lowered by `lower[f]`.
+fn cut(a: &Anim<Ee>, rig: &Rig, driven: &std::collections::HashSet<usize>, from: i32, to: i32, lower: &[f32], rate: F<Ee>) -> Anim<Ee> {
+    let n = to - from + 1;
+    let top = |b: usize| {
+        let mut p = rig.parent[b];
+        for _ in 0..256 {
+            if p < 0 || p as usize == b {
+                return true;
+            }
+            if driven.contains(&(p as usize)) {
+                return false;
+            }
+            p = rig.parent[p as usize];
+        }
+        true
+    };
+    let mut full = Vec::with_capacity(a.nodes.len() * n as usize);
+    let mut nodes = Vec::with_capacity(a.nodes.len());
+    for (j, &(rid, first)) in a.nodes.iter().enumerate() {
+        nodes.push((rid, j as i32 * n));
+        let node = rig.by_ref.get(&rid).copied().filter(|&b| top(b));
+        for f in from..=to {
+            let mut fr = frame_of(a, first, f);
+            if let Some(b) = node {
+                // in the parent's space: the rest's turns and scale above it
+                let up = rest_world(rig, rig.parent[b]);
+                let d = up.inverse().transform_vector3(Vec3::new(0.0, -lower[f as usize], 0.0));
+                fr.trans = ev(gv(&fr.trans) + d);
+            }
+            full.push(fr);
+        }
+    }
+    Anim { num_nodes: nodes.len() as i32, num_frames: n, play_rate: rate, play_speed: F::ONE, playback_type: ONCE, nodes, frames: Frames::Full(full), triggers: Vec::new() }
+}
+
+/// Node `b`'s rest in the model (the identity for none).
+fn rest_world(rig: &Rig, b: i32) -> glam::Mat4 {
+    let mut m = glam::Mat4::IDENTITY;
+    let mut b = b;
+    for _ in 0..256 {
+        if b < 0 || b as usize >= rig.parent.len() {
+            break;
+        }
+        let l = &rig.rest[b as usize];
+        m = glam::Mat4::from_scale_rotation_translation(Vec3::splat(l.scale.0), gq(&l.rot), gv(&l.trans)) * m;
+        let p = rig.parent[b as usize];
+        if p == b {
+            break;
+        }
+        b = p;
+    }
+    m
+}
+
+/// The fall and the landing cut from the body's own leap in `slot` (`AIR_LEAP`,
+/// `leap_cut`) over `cs`'s entries 6 and 7 (its clips added to `sc`): the fall
+/// its push off to its touch down, played once over `JUMP_AIR_MS` and held at
+/// its last (the legs reaching down) for a longer fall; the landing the crouch
+/// from the touch down on, once, at the leap's own speed. The leap's own rise
+/// is taken off (each frame lowered by its lift, so the lowest foot stays
+/// where the walk puts the body: the jump's arc is the walk's). Both at their entries' own
+/// priority and channel, silent. Whether it did: not when the body's 6 or 7 is
+/// no longer `SetDefaultEntries`' idle (its own, or put already), or the slot
+/// is not a leap.
+pub fn put_leap(cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, slot: i32) -> bool {
+    if AIR.iter().any(|&e| cs.entries[e as usize].animation != cs.entries[0].animation) {
+        return false;
+    }
+    let src = cs.entries[slot as usize];
+    let ids: Vec<usize> = src.animation.iter().filter_map(|&i| usize::try_from(i).ok().filter(|&i| i < sc.anims.len())).collect();
+    if ids.is_empty() || src.animation == cs.entries[0].animation {
+        return false;
+    }
+    let rig = Rig::of(cs, &sc.ref_maps[cs.h.ref_map]);
+    let clips: Vec<Anim<Ee>> = ids.iter().map(|&i| sc.anims[i].clone()).collect();
+    let Some(leap) = leap_cut(&rig, &clips.iter().collect::<Vec<_>>()) else { return false };
+    // the air's frames over the jump's time in the air; the landing at the
+    // leap's own rate and play speed
+    let air = (leap.land - leap.take_off) as f32;
+    let fall_rate = F::new(air * 1000.0 / JUMP_AIR_MS);
+    let land_rate = F::new(clips[0].play_rate.0 * clips[0].play_speed.0 * src.weight.0);
+    let last = clips[0].num_frames - 1;
+    let driven: std::collections::HashSet<usize> = clips.iter().flat_map(|a| a.nodes.iter().filter_map(|(r, _)| rig.by_ref.get(r).copied())).collect();
+    let mut put = |from: i32, to: i32, rate: F<Ee>| -> [i32; 2] {
+        let mut out = [-1, -1];
+        for (k, a) in clips.iter().enumerate().take(2) {
+            sc.anims.push(cut(a, &rig, &driven, from, to, &leap.lift, rate));
+            out[k] = sc.anims.len() as i32 - 1;
+        }
+        if cs.skel_type != 1 {
+            out[1] = -1;
+        }
+        out
+    };
+    let fall = put(leap.take_off, leap.land, fall_rate);
+    let landing = put(leap.land, last, land_rate);
+    for (e, animation) in [(AIR[0], fall), (AIR[1], landing)] {
+        let dst = &mut cs.entries[e as usize];
+        dst.animation = animation;
+        dst.weight = F::ONE;
+        dst.sound = [0, 0];
+        dst.sync = ONCE;
+    }
+    true
+}
+
 /// Puts `poses` over `cs`'s `entries` (its clips in `sc`), each entry's
 /// `syncs` its own (0 looping, `ONCE`): an own slot's clips and speed, or the
 /// human's for that entry carried onto it (its clips added to `sc`, once for
@@ -888,10 +1075,20 @@ pub fn grant_swim(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, m
 /// in `sc`) when it is a player's character (`player`) on a server with jumps
 /// (`jumps`) in a body `TABLE` lists or another its race's options offer
 /// (`race_of`); anything else is left as the game made it, and a body with a
-/// fall and a landing of its own keeps them (`put_air`). Whether its fall and
+/// fall and a landing of its own keeps them (`put_air`). A froglok's body
+/// takes its own leap instead (`leap_slot`, `put_leap`). Whether its fall and
 /// landing are the table's.
 pub fn grant_air(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, model: u32, player: bool, jumps: bool) -> bool {
-    let Some(p) = air_poses(model).filter(|_| player && jumps) else { return false };
+    if !(player && jumps) {
+        return false;
+    }
+    // a race that leaps (the froglok): its own leap, else the table's
+    if let Some(slot) = leap_slot(model)
+        && put_leap(cs, sc, slot)
+    {
+        return true;
+    }
+    let Some(p) = air_poses(model) else { return false };
     put_air(lib, cs, sc, p);
     true
 }
@@ -1185,6 +1382,64 @@ mod tests {
         let mut sc = AnimScene::default();
         let cs = load_csprite(lib, lib.lookup(id as i32).expect("on the disc"), &mut sc, &mut AnimCache::new(), &mut Rand(1)).expect("a CSprite");
         (cs, sc)
+    }
+
+    /// The froglok's jump (`AIR_LEAP`): its leap (42) leaves the ground after
+    /// its crouch and comes back to it before its end, its feet well up in the
+    /// air between (the clip's own rise); each of its six bodies, a player's
+    /// on a server with jumps, takes the leap's air for its fall and the rest
+    /// for its landing, both once, the fall over the jump's time in the air,
+    /// and in every frame of both the lowest node is on the ground the leap
+    /// stands on (its rise taken off: the walk's arc lifts it). The controls:
+    /// an NPC froglok and a player's froglok on a server without jumps keep
+    /// the idle; the hill giant (no leap) still takes the human's fall and
+    /// landing. Needs `run/eqoa.iso`.
+    #[test]
+    fn the_froglok_leaps() {
+        let Some(lib) = disc() else { return };
+        let (cs, sc) = load(&lib, 0x141B_FE0C);
+        let rig = Rig::of(&cs, &sc.ref_maps[cs.h.ref_map]);
+        let leap: Vec<&Anim<Ee>> = cs.entries[42].animation.iter().filter_map(|&i| usize::try_from(i).ok()).map(|i| &sc.anims[i]).collect();
+        let cut = leap_cut(&rig, &leap).expect("a leap");
+        let top = cut.lift.iter().copied().fold(0.0f32, f32::max);
+        eprintln!("froglok leap: take off {} land {} of {}; lift {:?}", cut.take_off, cut.land, leap[0].num_frames, cut.lift);
+        assert!(cut.take_off >= 1 && cut.land > cut.take_off + 1 && cut.land < leap[0].num_frames - 1, "{cut:?}");
+        assert!(top > 0.3, "the leap's own rise {top}");
+        for &id in crate::slotless::FROGLOKS {
+            let (mut cs, mut sc) = load(&lib, id);
+            assert_eq!(leap_slot(id), Some(42), "{id:#010x}");
+            assert!(grant_air(&lib, &mut cs, &mut sc, id, true, true), "{id:#010x}");
+            let rig = Rig::of(&cs, &sc.ref_maps[cs.h.ref_map]);
+            for (e, frames) in [(AIR[0], cut.land - cut.take_off + 1), (AIR[1], leap[0].num_frames - cut.land)] {
+                let en = cs.entries[e as usize];
+                assert_ne!(en.animation, cs.entries[0].animation, "{id:#010x}: {e} the idle");
+                assert_eq!(en.sync, ONCE, "{id:#010x}: {e} once");
+                let clips: Vec<&Anim<Ee>> = en.animation.iter().filter_map(|&i| usize::try_from(i).ok()).map(|i| &sc.anims[i]).collect();
+                assert_eq!(clips.len(), 2, "{id:#010x}: both layers");
+                assert_eq!(clips[0].num_frames, frames, "{id:#010x}: {e}");
+                let ground = places(&rig, &frames_at(&rig, &leap, cut.land)).iter().map(|p| p.y).fold(f32::MAX, f32::min) - cut.lift[cut.land as usize];
+                for f in 0..frames {
+                    let low = places(&rig, &frames_at(&rig, &clips, f)).iter().map(|p| p.y).fold(f32::MAX, f32::min);
+                    assert!((low - ground).abs() < 1e-3, "{id:#010x}: {e} frame {f} lowest {low}, the ground {ground}");
+                }
+                if e == AIR[0] {
+                    let ms = (frames - 1) as f32 * 1000.0 / clips[0].play_rate.0;
+                    assert!((ms - JUMP_AIR_MS).abs() < 1.0, "{id:#010x}: the fall over {ms} ms");
+                }
+            }
+            for (player, jumps) in [(false, true), (true, false)] {
+                let (mut cs, mut sc) = load(&lib, id);
+                assert!(!grant_air(&lib, &mut cs, &mut sc, id, player, jumps));
+                assert!(AIR.iter().all(|&e| cs.entries[e as usize].animation == cs.entries[0].animation), "{id:#010x}: the control");
+            }
+        }
+        // the control: no leap, the human's
+        let (mut cs, mut sc) = load(&lib, HILL_GIANT);
+        assert_eq!(leap_slot(HILL_GIANT), None);
+        let had = sc.anims.len();
+        assert!(grant_air(&lib, &mut cs, &mut sc, HILL_GIANT, true, true));
+        assert!(sc.anims.len() > had && AIR.iter().all(|&e| cs.entries[e as usize].animation != cs.entries[0].animation), "the human's carried");
+        assert_eq!((cs.entries[AIR[0] as usize].sync, cs.entries[AIR[1] as usize].sync), (0, ONCE), "the human's fall looping, its landing once");
     }
 
     /// Every body the table lists, on the disc: its play list has no emote

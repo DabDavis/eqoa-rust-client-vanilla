@@ -669,7 +669,7 @@ fn run(args: &[String]) -> Result<()> {
         // human's carried onto it, a row each (`emoteview`)
         #[cfg(not(target_arch = "wasm32"))]
         Some("emotes") => {
-            let usage = "usage: eqoa emotes <body DictID> <out.png> [wave bow point cheer N human:N cols=N size=WxH]";
+            let usage = "usage: eqoa emotes <body DictID> <out.png> [wave bow point cheer N human:N jump runjump humanjump humanrunjump cols=N size=WxH]";
             let model = args.get(1).and_then(|m| fxview::parse_visual(m)).ok_or(usage)? as i32;
             let out = args.get(2).filter(|o| o.ends_with(".png")).ok_or(usage)?;
             let words = emoteview::parse(&args[3..])?;

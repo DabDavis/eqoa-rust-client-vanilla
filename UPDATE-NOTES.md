@@ -11,6 +11,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · The froglok's jump
+- **Frogloks jump like frogs**: a froglok player now springs off with its legs thrown out straight below it, reaches
+  down with them coming back, and lands in a deep crouch, from the froglok's own leap. Before, it borrowed the
+  human's knee bend, which stood it stiff through the jump and stretched it tall as it landed. Every froglok body
+  (the robed and spiked ones too), as its own player sees it and as other players on this client see it.
+
 ## 2026-11-17 · Santa wears his hat
 - **Santa Claus now wears his Santa Hat** by the tree: the hat a creature is given by its name was dropped because
   it changes none of its colours, so he showed his own red cloth cap.
