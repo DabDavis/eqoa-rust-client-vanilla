@@ -266,14 +266,24 @@ pub fn hat_on_styled(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, src
         // scaled by the heads' widths ([`unhelmed_seat`])
         None => {
             let node = cs.node_ids[7];
-            let to = unhelmed_seat(lib, id, cs, from)?;
-            moved(&mut hat, from, to);
+            match animal_seat(id) {
+                // a body whose seat is set down ([`ANIMAL_SEATS`]): between the ears
+                Some(seat) => {
+                    let head = head_bounds(&lib.build_model(lib.lookup(id as i32)?)?, cs, &[])?;
+                    seat_on(&mut hat, head, seat);
+                }
+                None => {
+                    let to = unhelmed_seat(lib, id, cs, from)?;
+                    moved(&mut hat, from, to);
+                }
+            }
             node
         }
     };
     if style == STYLE_SANTA {
         santa(&mut hat);
     }
+    mark_trim(&mut hat, src);
     // into the frame of the node it hangs on
     let local = bind_world(cs, node)?.inverse();
     for p in &mut hat.pos {
@@ -372,6 +382,57 @@ pub fn rim_seat(hat: &mut esf::Model, helm: (Vec3, Vec3)) {
     }
 }
 
+/// The white winged horse (CHAR.ESF 0x2F8721C0), Santa's reindeer (the
+/// owner, 2026-11-17: "give the reindeer santa hats too").
+pub const PEGASUS: u32 = 0x2F87_21C0;
+
+/// Where a hat sits on a body that wears no helm and whose head the helm's
+/// stand-in ([`unhelmed_seat`]) does not fit (a horse's long head: the hat
+/// floated above and behind it), as shares of its head ([`head_bounds`], in
+/// its bind pose): `back`, how far from the back of the head toward the muzzle
+/// the rim's middle is; `down`, how far below the head's top; `width`, the
+/// rim across against the head's width; `tilt`, degrees to the side (a jaunty
+/// lean); `lean`, degrees back.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnimalSeat {
+    pub back: f32,
+    pub down: f32,
+    pub width: f32,
+    pub tilt: f32,
+    pub lean: f32,
+}
+
+/// The bodies with a seat of their own ([`AnimalSeat`]).
+pub const ANIMAL_SEATS: &[(u32, AnimalSeat)] = &[(PEGASUS, AnimalSeat { back: 0.22, down: 0.2, width: 0.65, tilt: 18.0, lean: 0.0 })];
+
+/// The seat body `id` has of its own, if any.
+pub fn animal_seat(id: u32) -> Option<AnimalSeat> {
+    ANIMAL_SEATS.iter().find(|(b, _)| *b == id).map(|(_, s)| *s)
+}
+
+/// `hat` (seated on [`REFERENCE`]) moved to a head bounded `head` (its bind
+/// pose) by `seat`: its rim (its lowest fifth) across [`AnimalSeat::width`]
+/// of the head, its rim's middle at the seat's place, then turned about it,
+/// [`AnimalSeat::tilt`] to the side and [`AnimalSeat::lean`] back.
+pub fn seat_on(hat: &mut esf::Model, head: (Vec3, Vec3), seat: AnimalSeat) {
+    let (lo, hi) = hat.pos.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[1]), hi.max(p[1])));
+    if lo >= hi {
+        return;
+    }
+    let line = lo + 0.2 * (hi - lo);
+    let (rlo, rhi) = hat.pos.iter().map(|p| Vec3::from(*p)).filter(|p| p.y <= line).fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(a, b), p| (a.min(p), b.max(p)));
+    let s = seat.width * (head.1.x - head.0.x) / (rhi.x - rlo.x).max(1e-4);
+    let from = Vec3::new((rlo.x + rhi.x) * 0.5, lo, (rlo.z + rhi.z) * 0.5);
+    let at = Vec3::new((head.0.x + head.1.x) * 0.5, head.1.y - seat.down * (head.1.y - head.0.y), head.0.z + seat.back * (head.1.z - head.0.z));
+    let turn = glam::Quat::from_rotation_z(-seat.tilt.to_radians()) * glam::Quat::from_rotation_x(-seat.lean.to_radians());
+    for p in &mut hat.pos {
+        *p = (at + turn * ((Vec3::from(*p) - from) * s)).to_array();
+    }
+    for n in &mut hat.normal {
+        *n = (turn * Vec3::from(*n)).to_array();
+    }
+}
+
 /// The helm a body that wears none would wear (a were's beast: the
 /// werewolf), stood in for in its bind-pose model space: `helm` (the bounds
 /// [`measured_hat`] measured by, on [`REFERENCE`]) moved from the reference's
@@ -451,10 +512,77 @@ pub fn dyed(hat: &mut esf::Model, c: [u8; 4], lib: &Library) {
         return;
     }
     let taken = |id: i32| lib.lookup(id).is_some();
-    for l in hat.batches.iter_mut().flat_map(|b| b.layers.iter_mut()) {
+    for l in hat.batches.iter_mut().filter(|b| b.material != TRIM_PART).flat_map(|b| b.layers.iter_mut()) {
         if l.texture != 0
             && let Some(r) = dye_code(c, mean_lightness(lib, l.texture).unwrap_or(0.5))
         {
+            l.texture = render::recolor::recolored(l.texture, r, taken);
+        }
+    }
+}
+
+/// The material a hat's trim part is marked with ([`mark_trim`]): no material
+/// of a body is negative but -1 (none).
+pub const TRIM_PART: i32 = -2;
+
+/// How low a turban's tail is cut from its dome ([`mark_trim`]): its lowest
+/// share of the turban's height, behind its middle.
+pub const TAIL_LINE: f32 = 0.45;
+
+/// `hat` (in a bind-pose model space, up +y and forward +z) with its trim part
+/// marked ([`TRIM_PART`]), the part the helm's TRIM dye colours (two tones as
+/// two-tone armour: the owner, 2026-11-17, "lets add two tone to kappa hat"),
+/// by the hat's own rule: the kappa's steel spike (its texture 0x3E30193D,
+/// the atlas the kappa's bracers share), the Santa Hat's white band and ball
+/// (`santa` marks them), the turban's tail (its triangles in its lowest
+/// [`TAIL_LINE`] behind its middle). Any other hat has none.
+pub fn mark_trim(hat: &mut esf::Model, src: u32) {
+    match src {
+        KAPPA_HAT => {
+            for b in &mut hat.batches {
+                if b.texture() as u32 == 0x3E30_193D {
+                    b.material = TRIM_PART;
+                }
+            }
+        }
+        EFREETI_LORD => {
+            let (lo, hi) = hat.pos.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(a, b), p| (a.min(Vec3::from(*p)), b.max(Vec3::from(*p))));
+            if lo.y >= hi.y {
+                return;
+            }
+            let (line, mid) = (lo.y + TAIL_LINE * (hi.y - lo.y), (lo.z + hi.z) * 0.5);
+            let mut tails = Vec::new();
+            for b in &mut hat.batches {
+                let mut tail = esf::Batch { indices: Vec::new(), material: TRIM_PART, ..b.clone() };
+                let mut keep = Vec::new();
+                for t in b.indices.chunks_exact(3) {
+                    let c = t.iter().map(|&v| Vec3::from(hat.pos[v as usize])).sum::<Vec3>() / 3.0;
+                    if c.y < line && c.z < mid { tail.indices.extend_from_slice(t) } else { keep.extend_from_slice(t) }
+                }
+                b.indices = keep;
+                if !tail.indices.is_empty() {
+                    tails.push(tail);
+                }
+            }
+            hat.batches.retain(|b| !b.indices.is_empty());
+            hat.batches.extend(tails);
+        }
+        _ => {}
+    }
+}
+
+/// A hat's trim part ([`TRIM_PART`]) in the helm's trim dye `trim`
+/// (go-eqoa-server's chardyes `helmtrim`; alpha 0, or none, its own colours):
+/// a textured layer recoloured as the hat's dye is ([`dye_code`] by its
+/// texture's lightness), an untextured one (the Santa Hat's white) taking the
+/// colour as its layer colour.
+pub fn trim_dyed(hat: &mut esf::Model, trim: Option<[u8; 4]>, lib: &Library) {
+    let Some(c) = trim.filter(|c| c[3] != 0) else { return };
+    let taken = |id: i32| lib.lookup(id).is_some();
+    for l in hat.batches.iter_mut().filter(|b| b.material == TRIM_PART).flat_map(|b| b.layers.iter_mut()) {
+        if l.texture == 0 {
+            l.color = [c[0], c[1], c[2], 255];
+        } else if let Some(r) = dye_code(c, mean_lightness(lib, l.texture).unwrap_or(0.5)) {
             l.texture = render::recolor::recolored(l.texture, r, taken);
         }
     }
@@ -471,7 +599,7 @@ pub fn santa(hat: &mut esf::Model) {
         return;
     }
     let line = lo + SANTA_BAND * (hi - lo);
-    let mut white = esf::Batch { indices: Vec::new(), ..hat.batches[0].clone() };
+    let mut white = esf::Batch { indices: Vec::new(), material: TRIM_PART, ..hat.batches[0].clone() };
     for l in &mut white.layers {
         l.texture = 0;
         l.color = [255; 4];
@@ -542,14 +670,15 @@ pub const SANTA_BALL: f32 = 0.2;
 /// [`SANTA_RED`] (no dye: white), their layer colours made white (the gnome's
 /// cap is red by its layer colour over the head's own texture), its band and
 /// ball left white; any other hat [`dyed`].
-pub fn dress(hat: &mut esf::Model, style: u8, c: [u8; 4], lib: &Library) {
+pub fn dress(hat: &mut esf::Model, style: u8, c: [u8; 4], trim: Option<[u8; 4]>, lib: &Library) {
+    trim_dyed(hat, trim, lib);
     if style != STYLE_SANTA {
         dyed(hat, c, lib);
         return;
     }
     let colour = if dye_code(c, 0.5).is_some() { c } else { SANTA_RED };
     let taken = |id: i32| lib.lookup(id).is_some();
-    for l in hat.batches.iter_mut().flat_map(|b| b.layers.iter_mut()) {
+    for l in hat.batches.iter_mut().filter(|b| b.material != TRIM_PART).flat_map(|b| b.layers.iter_mut()) {
         if l.texture != 0
             && let Some(r) = dye_code(colour, mean_lightness(lib, l.texture).unwrap_or(0.5))
         {
@@ -900,13 +1029,13 @@ mod tests {
             assert!(white.layers.iter().all(|l| l.texture == 0 && l.color == [255; 4]), "the band and ball: white");
             assert!(hat.triangles > plain.triangles + 100, "a ball added: {} vs {}", hat.triangles, plain.triangles);
             assert_eq!(hat.batches.iter().map(|b| b.indices.len()).sum::<usize>() / 3, hat.triangles as usize);
-            dress(&mut hat, STYLE_SANTA, [255; 4], &lib);
+            dress(&mut hat, STYLE_SANTA, [255; 4], None, &lib);
             let red = hat.batches[0].layers[0].clone();
             assert_eq!(red.color, [255; 4], "its red by its texture now");
             let (src, r) = render::recolor::source_of(red.texture).unwrap();
             assert_eq!((src as u32, (r >> 16) & 0xFF, (r >> 8) & 0xFF), (0xD499_494B, 0, 198), "undyed: Santa's red");
             let (_, mut blue) = hat_on_styled(&lib, body_id, &wcs, true, GNOME_CAP, None, STYLE_SANTA).unwrap();
-            dress(&mut blue, STYLE_SANTA, [0x20, 0x30, 0xC0, 0xFF], &lib);
+            dress(&mut blue, STYLE_SANTA, [0x20, 0x30, 0xC0, 0xFF], None, &lib);
             let (_, rb) = render::recolor::source_of(blue.batches[0].layers[0].texture).unwrap();
             assert!(((rb >> 16) & 0xFF).abs_diff(163) < 8, "dyed blue: {rb:#x}");
             assert!(blue.batches.last().unwrap().layers.iter().all(|l| l.texture == 0), "the white stays white");
@@ -943,12 +1072,75 @@ mod tests {
         let (_, cs) = body(&lib, REFERENCE);
         for (src, style) in [(GNOME_CAP, STYLE_SANTA), (KAPPA_HAT, 0), (EFREETI_LORD, 0)] {
             let (_, mut hat) = hat_on_styled(&lib, REFERENCE, &cs, true, src, None, style).unwrap();
-            dress(&mut hat, style, [255; 4], &lib);
+            dress(&mut hat, style, [255; 4], None, &lib);
             let (t, b) = (hat.triangles, bounds(&hat));
             two_sided(&mut hat);
             assert_eq!(hat.triangles, 2 * t, "{src:#010X}");
             assert_eq!(bounds(&hat), b, "{src:#010X}: the same place");
         }
+    }
+
+    /// Two tones (2026-11-17): each hat's trim part marked by its own rule (the
+    /// kappa's spike, the Santa Hat's band and ball, the turban's tail behind
+    /// and below), the rest not; the helm's dye colours the rest alone, the
+    /// trim dye the trim part alone; no trim dye leaves it its own colours.
+    #[test]
+    fn a_hat_in_two_tones() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let (_, cs) = body(&lib, REFERENCE);
+        let trim_tris = |m: &esf::Model| m.batches.iter().filter(|b| b.material == TRIM_PART).map(|b| b.indices.len() / 3).sum::<usize>();
+        let textures = |m: &esf::Model, trim: bool| m.batches.iter().filter(|b| (b.material == TRIM_PART) == trim).flat_map(|b| b.layers.iter().map(|l| (l.texture, l.color))).collect::<Vec<_>>();
+        // the kappa: the spike (4 triangles) the trim
+        let (_, kappa) = hat_on(&lib, REFERENCE, &cs, true, KAPPA_HAT, None).unwrap();
+        assert_eq!(trim_tris(&kappa), 4, "the spike");
+        let mut red_gold = kappa.clone();
+        dress(&mut red_gold, 0, [0xC0, 0x18, 0x18, 0xFF], Some([0xFF, 0xC0, 0x40, 0xFF]), &lib);
+        let mut red = kappa.clone();
+        dress(&mut red, 0, [0xC0, 0x18, 0x18, 0xFF], None, &lib);
+        assert_eq!(textures(&red_gold, false), textures(&red, false), "the straw by the helm's dye alone");
+        assert_eq!(textures(&red, true), textures(&kappa, true), "no trim dye: the spike as it was");
+        assert_ne!(textures(&red_gold, true), textures(&kappa, true), "the trim dye colours the spike");
+        let mut alpha0 = kappa.clone();
+        dress(&mut alpha0, 0, [255; 4], Some([0xFF, 0xC0, 0x40, 0]), &lib);
+        assert_eq!(textures(&alpha0, true), textures(&kappa, true), "alpha 0 is no trim dye");
+        // the Santa Hat: its white band and ball, white undyed, the trim's colour dyed
+        let (_, santa) = hat_on_styled(&lib, REFERENCE, &cs, true, GNOME_CAP, None, STYLE_SANTA).unwrap();
+        assert!(trim_tris(&santa) > 100, "the band and the ball");
+        let mut green = santa.clone();
+        dress(&mut green, STYLE_SANTA, [255; 4], Some([0x20, 0xA0, 0x40, 0xFF]), &lib);
+        assert!(textures(&green, true).iter().all(|&(t, c)| t == 0 && c == [0x20, 0xA0, 0x40, 255]));
+        // the turban: a tail apart from the dome
+        let (_, turban) = hat_on(&lib, REFERENCE, &cs, true, EFREETI_LORD, None).unwrap();
+        let (t, all) = (trim_tris(&turban), turban.triangles as usize);
+        assert!(t > 10 && t < all / 2, "the tail, not the dome: {t} of {all}");
+    }
+
+    /// Santa's reindeer (the white winged horse, which wears no helm): the
+    /// Santa Hat on its head node, its rim between the ears (within the
+    /// head's width, below its top, toward its back), leaning to the side.
+    #[test]
+    fn a_reindeer_wears_a_santa_hat() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let (m, cs) = body(&lib, PEGASUS);
+        let t = crate::s2::get().cust();
+        assert!(crate::slotless::helm_on(&lib, PEGASUS, &cs, false, 4, [255; 4], &t, true).is_none(), "no helm");
+        let (node, hat) = hat_on_styled(&lib, PEGASUS, &cs, false, GNOME_CAP, None, STYLE_SANTA).expect("a hat");
+        assert_eq!(node, cs.node_ids[7], "on the head: it follows the head bone");
+        let head = head_bounds(&m, &cs, &[]).unwrap();
+        let w = bind_world(&cs, node).unwrap();
+        let world: Vec<Vec3> = hat.pos.iter().map(|p| w.transform_point3(Vec3::from(*p))).collect();
+        let lowest = world.iter().map(|p| p.y).fold(f32::MAX, f32::min);
+        let (lo, hi) = world.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(a, b), p| (a.min(*p), b.max(*p)));
+        eprintln!("reindeer hat {lo} .. {hi}, head {head:?}");
+        assert!(lowest < head.1.y && lowest > head.1.y - 0.4 * (head.1.y - head.0.y), "its rim on the head's top: {lowest} vs {head:?}");
+        assert!((hi.x - lo.x) < 1.2 * (head.1.x - head.0.x), "no wider than the head and its lean");
+        assert!(hi.z < head.1.z && lo.z > head.0.z - 0.5 * (head.1.z - head.0.z), "between the ears, not over the muzzle: {lo} .. {hi}");
     }
 
     /// `moved`: the middle to the middle, scaled by the widths.
