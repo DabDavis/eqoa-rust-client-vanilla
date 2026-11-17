@@ -520,7 +520,10 @@ pub fn santa(hat: &mut esf::Model) {
         for j in 0..segs {
             let a = first + i * (segs + 1) + j;
             let b = a + segs + 1;
-            white.indices.extend_from_slice(&[a, b, a + 1, a + 1, b, b + 1]);
+            // wound to face out (wound the other way the ball showed its far
+            // side's inside, flat and unlit: the owner's "the ball is a white
+            // disc" before two_sided turned that inside grey)
+            white.indices.extend_from_slice(&[a, a + 1, b, a + 1, b + 1, b]);
         }
     }
     hat.batches.retain(|b| !b.indices.is_empty());
@@ -561,6 +564,56 @@ pub fn dress(hat: &mut esf::Model, style: u8, c: [u8; 4], lib: &Library) {
 /// kappa's) and its style; none for a tint with no hat.
 pub fn npc_hat(t: &net::npctint::Tint) -> Option<(u32, u8)> {
     (t.aura.kind == net::npctint::Aura::HAT).then(|| (if t.aura.source == 0 { KAPPA_HAT } else { t.aura.source }, t.aura.nodes))
+}
+
+/// How dark a hat's inside is against its outside ([`two_sided`]): the same
+/// art in shade, as the inside of a cap is.
+pub const INSIDE_SHADE: f32 = 0.6;
+
+/// `hat` drawn from both sides (the owner, 2026-11-17: "when you look under
+/// santas hat up the backface culling makes it look bad"): a cut hat is the
+/// outside of a cap alone, its inside culled, so from below it was not
+/// there. Every triangle again, wound the other way on its own copies of
+/// the vertices with the normals turned in (lit as an inside is), each batch's
+/// layers' colours times [`INSIDE_SHADE`] (the Santa Hat's white band a light
+/// grey inside, its red a deeper red). The white ball is closed and comes out
+/// the same from any side. Called once a hat is dressed (`dress`), so the shade
+/// is over its dye.
+pub fn two_sided(hat: &mut esf::Model) {
+    let n = hat.pos.len() as u32;
+    let k = hat.pos.len();
+    hat.pos.extend_from_within(..k);
+    if hat.uv.len() == k {
+        hat.uv.extend_from_within(..k);
+    }
+    if hat.normal.len() == k {
+        let inward: Vec<[f32; 3]> = hat.normal[..k].iter().map(|v| [-v[0], -v[1], -v[2]]).collect();
+        hat.normal.extend(inward);
+    }
+    if hat.color.len() == k {
+        hat.color.extend_from_within(..k);
+    }
+    if hat.bones.len() == k {
+        hat.bones.extend_from_within(..k);
+    }
+    if hat.weights.len() == k {
+        hat.weights.extend_from_within(..k);
+    }
+    let shade = |c: u8| (c as f32 * INSIDE_SHADE).round() as u8;
+    let insides: Vec<esf::Batch> = hat
+        .batches
+        .iter()
+        .map(|b| {
+            let mut inside = b.clone();
+            inside.indices = b.indices.chunks_exact(3).flat_map(|t| [t[0] + n, t[2] + n, t[1] + n]).collect();
+            for l in &mut inside.layers {
+                l.color = [shade(l.color[0]), shade(l.color[1]), shade(l.color[2]), l.color[3]];
+            }
+            inside
+        })
+        .collect();
+    hat.batches.extend(insides);
+    hat.triangles = hat.batches.iter().map(|b| b.indices.len() as u32 / 3).sum();
 }
 
 /// The hat a body's helm aura names (kind hat), if it names one: its source
@@ -861,6 +914,41 @@ mod tests {
         let t = net::npctint::Tint { color: 0, glow: 0, aura: net::npctint::Aura { kind: net::npctint::Aura::HAT, source: GNOME_CAP, nodes: STYLE_SANTA } };
         assert_eq!(npc_hat(&t), Some((GNOME_CAP, STYLE_SANTA)));
         assert_eq!(npc_hat(&net::npctint::Tint::color(0xFF0000FF)), None);
+    }
+
+    /// `two_sided`: every triangle again, wound the other way on copies of its
+    /// vertices, normals turned in, layers in shade; on the disc, each hat
+    /// (the Santa Hat, the kappa's, the turban) doubled, the same bounds.
+    #[test]
+    fn a_hat_has_an_inside() {
+        let layer = |texture: i32| esf::Layer { flags: 1, texture, wrap: 0, blend: 0, color: [255, 200, 100, 255], uv_transform: [0.0; 9], lod_bias: 0.0, uv_rate: [0.0; 2], emissive: [0; 4] };
+        let mut m = esf::Model {
+            pos: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            uv: vec![[0.0; 2]; 3],
+            normal: vec![[0.0, 0.0, 1.0]; 3],
+            batches: vec![esf::Batch { material: 0, layers: vec![layer(7)], indices: vec![0, 1, 2], lod: None }],
+            triangles: 1,
+            ..Default::default()
+        };
+        two_sided(&mut m);
+        assert_eq!((m.pos.len(), m.uv.len(), m.normal.len(), m.triangles), (6, 6, 6, 2));
+        assert_eq!(m.batches[1].indices, [3, 5, 4], "the other winding, on the copies");
+        assert_eq!(m.normal[3], [0.0, 0.0, -1.0], "turned in");
+        assert_eq!(m.batches[1].layers[0].color, [153, 120, 60, 255], "in shade, alpha kept");
+        assert_eq!(m.batches[0].layers[0].color, [255, 200, 100, 255], "the outside as it was");
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let (_, cs) = body(&lib, REFERENCE);
+        for (src, style) in [(GNOME_CAP, STYLE_SANTA), (KAPPA_HAT, 0), (EFREETI_LORD, 0)] {
+            let (_, mut hat) = hat_on_styled(&lib, REFERENCE, &cs, true, src, None, style).unwrap();
+            dress(&mut hat, style, [255; 4], &lib);
+            let (t, b) = (hat.triangles, bounds(&hat));
+            two_sided(&mut hat);
+            assert_eq!(hat.triangles, 2 * t, "{src:#010X}");
+            assert_eq!(bounds(&hat), b, "{src:#010X}: the same place");
+        }
     }
 
     /// `moved`: the middle to the middle, scaled by the widths.

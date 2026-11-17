@@ -28,6 +28,10 @@ is put on the page by `.github/workflows/notes.yml`.
 - **The Christmas tree's glass globes are brighter**: each shows its colour clearly by day and glows at night.
 - **The tree's red ribbon no longer flickers** against the boughs, near or far.
 
+## 2026-11-17 · Hats have an inside
+- **Looking up under a hat** (the Santa Hat, the kappa's straw hat, the turban) now shows its inside, a shade darker,
+  instead of seeing straight through it. The Santa Hat's white bobble is now round from every side.
+
 ## 2026-11-17 · Santa wears his hat
 - **Santa Claus now wears his Santa Hat** by the tree: the hat a creature is given by its name was dropped because
   it changes none of its colours, so he showed his own red cloth cap.

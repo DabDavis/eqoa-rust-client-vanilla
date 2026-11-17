@@ -1395,6 +1395,8 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
         // in the helm's dye (the Equipment Dyer's, a GM's #dye): white, its own
         // colours (Santa's: red, its band and ball white)
         crate::hat::dress(&mut m, style, look_of(c).helm_color(&t), lib);
+        // its inside too, in shade (from below it was not there)
+        crate::hat::two_sided(&mut m);
         let mut gpu = g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures);
         if let Some(a) = c.colors.map(|l| l.auras).filter(|a| a[crate::aura::HELM] != Default::default()) {
             let (shell, worn) = crate::aura::helm_aura(&a, node);
