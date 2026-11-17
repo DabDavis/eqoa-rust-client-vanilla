@@ -90,6 +90,36 @@ pub struct LightString {
     /// 0xRRGGBBAA
     pub colors: Vec<u32>,
     pub bulbs: Vec<Bulb>,
+    /// How it looks past its glows (a server before the looks sends none:
+    /// [`Look::default`])
+    pub look: Look,
+}
+
+/// A string's look past its glows and plain cord (the owner, 2026-11-16:
+/// "where dust is standing this model the magic globe can be used for bulbs
+/// and made different colors"; "the rope hanging also can be used to
+/// decorate the tree"): each bulb drawn as a model too, tinted its colour,
+/// and the cord drawn with a texture, tinted the cord's colour.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Look {
+    /// a model (DictID, one of the set's [`Asset`]s) drawn at each bulb, 0 none
+    pub bulb_model: u32,
+    /// its size across, in the string's units
+    pub bulb_scale: f32,
+    /// the cord's texture (DictID), 0 a plain wire
+    pub cord_texture: u32,
+    /// how long one repeat of it runs along the cord, in the string's units
+    pub cord_repeat: f32,
+}
+
+/// Art a decoration draws that the player need not have loaded: the
+/// textures and models `ids` of zone `zone` of world `world`'s file, read off
+/// the player's own disc (a tent's cloth of Odus for a present in Freeport).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Asset {
+    pub world: u8,
+    pub zone: u16,
+    pub ids: Vec<u32>,
 }
 
 /// Art a decoration's NPC wears that lives in a zone of a world's file: the
@@ -113,6 +143,8 @@ pub struct Decor {
     /// Presents under a tree (the owner, 2026-11-16: "we need some different
     /// color presents under the tree"), each set hung as a string is
     pub presents: Vec<Presents>,
+    /// The art the looks draw ([`Asset`])
+    pub assets: Vec<Asset>,
 }
 
 /// A set of gift boxes, hung on an NPC's name or placed in a world as a
@@ -134,6 +166,11 @@ pub struct GiftBox {
     pub color: u32,
     pub ribbon: u32,
     pub bow: bool,
+    /// its paper's texture (DictID, an [`Asset`]'s; 0 plain paper), tinted
+    /// its colour times `paper_gain` (a dark cloth made as bright as plain
+    /// paper)
+    pub paper: u32,
+    pub paper_gain: f32,
 }
 
 /// [`crate::session::OP_DECOR_LIGHTS`]'s body (after the opcode); none if it
@@ -142,6 +179,8 @@ pub fn read(data: &[u8]) -> Option<Decor> {
     let mut r = Reader::new(data);
     let n = r.u16() as usize;
     let mut out = Decor::default();
+    // each string sent: where it is in `out.strings`, if it was kept
+    let mut kept_strings: Vec<Option<usize>> = Vec::with_capacity(n);
     for _ in 0..n {
         let anchor = match r.u8() {
             1 => {
@@ -167,7 +206,10 @@ pub fn read(data: &[u8]) -> Option<Decor> {
         }
         let ok = |v: f32| v.is_finite();
         if ok(period) && ok(size) && ok(bright) && ok(cord_width) && ok(cord_sag) && bulbs.iter().all(|b| b.at.iter().all(|v| v.is_finite())) && !colors.is_empty() {
-            out.strings.push(LightString { anchor, effect, period, size, bright, cord, cord_width, cord_sag, colors, bulbs });
+            kept_strings.push(Some(out.strings.len()));
+            out.strings.push(LightString { anchor, effect, period, size, bright, cord, cord_width, cord_sag, colors, bulbs, look: Look::default() });
+        } else {
+            kept_strings.push(None);
         }
     }
     // the art (a server before it sends none)
@@ -181,7 +223,9 @@ pub fn read(data: &[u8]) -> Option<Decor> {
             out.art.push(a);
         }
     }
-    // the presents (a server before them sends none)
+    // the presents (a server before them sends none): each set's boxes sent,
+    // where each is in its set, if kept
+    let mut kept_boxes: Vec<Vec<Option<usize>>> = Vec::new();
     if r.pos < data.len() {
         let ns = r.u16() as usize;
         for _ in 0..ns {
@@ -194,6 +238,7 @@ pub fn read(data: &[u8]) -> Option<Decor> {
             };
             let nb = r.u16() as usize;
             let mut boxes = Vec::with_capacity(nb.min(64));
+            let mut kept = Vec::with_capacity(nb.min(64));
             for _ in 0..nb {
                 let at = [r.f32(), r.f32(), r.f32()];
                 let size = [r.f32(), r.f32(), r.f32()];
@@ -203,13 +248,61 @@ pub fn read(data: &[u8]) -> Option<Decor> {
                     return None;
                 }
                 if at.iter().chain(size.iter()).all(|v| v.is_finite()) && yaw.is_finite() {
-                    boxes.push(GiftBox { at, size, yaw, color, ribbon, bow });
+                    kept.push(Some(boxes.len()));
+                    boxes.push(GiftBox { at, size, yaw, color, ribbon, bow, paper: 0, paper_gain: 1.0 });
+                } else {
+                    kept.push(None);
                 }
             }
             if r.error {
                 return None;
             }
             out.presents.push(Presents { anchor, boxes });
+            kept_boxes.push(kept);
+        }
+    }
+    // the looks (a server before them sends none): the assets (u16 count,
+    // each u8 world, u16 zone, u8 count of u32 DictIDs), the strings' (u16
+    // count, each u16 string sent, u32 bulb model, f32 its scale, u32 cord
+    // texture, f32 its repeat) and the papers (u16 count of sets, as sent,
+    // each u16 count of boxes, each u32 paper, f32 its gain)
+    if r.pos < data.len() {
+        let na = r.u16() as usize;
+        for _ in 0..na {
+            let (world, zone) = (r.u8(), r.u16());
+            let k = r.u8() as usize;
+            let ids = (0..k).map(|_| r.u32()).collect();
+            out.assets.push(Asset { world, zone, ids });
+        }
+        let nl = r.u16() as usize;
+        for _ in 0..nl {
+            let i = r.u16() as usize;
+            let look = Look { bulb_model: r.u32(), bulb_scale: r.f32(), cord_texture: r.u32(), cord_repeat: r.f32() };
+            if r.error {
+                return None;
+            }
+            let ok = look.bulb_scale.is_finite() && look.cord_repeat.is_finite();
+            if let Some(Some(s)) = kept_strings.get(i)
+                && ok
+            {
+                out.strings[*s].look = look;
+            }
+        }
+        let ns = r.u16() as usize;
+        for set in 0..ns {
+            let nb = r.u16() as usize;
+            for b in 0..nb {
+                let (paper, gain) = (r.u32(), r.f32());
+                if r.error {
+                    return None;
+                }
+                if let Some(Some(k)) = kept_boxes.get(set).and_then(|v| v.get(b))
+                    && gain.is_finite()
+                {
+                    let g = &mut out.presents[set].boxes[*k];
+                    (g.paper, g.paper_gain) = (paper, gain);
+                }
+            }
         }
     }
     (!r.error).then_some(out)
@@ -312,13 +405,41 @@ mod tests {
         let d = read(&p).expect("read with presents");
         assert_eq!(d.presents.len(), 1);
         assert_eq!(d.presents[0].anchor, Anchor::Npc("elf".into()));
-        assert_eq!(d.presents[0].boxes[0], GiftBox { at: [1.0, 0.0, 2.0], size: [1.0, 0.8, 1.0], yaw: 0.5, color: 0xC020_20FF, ribbon: 0, bow: true });
+        assert_eq!(d.presents[0].boxes[0], GiftBox { at: [1.0, 0.0, 2.0], size: [1.0, 0.8, 1.0], yaw: 0.5, color: 0xC020_20FF, ribbon: 0, bow: true, paper: 0, paper_gain: 1.0 });
         assert_eq!(read(&p[..p.len() - 3]), None, "cut short");
         // with no art after them (none to read), and cut short: nothing
         assert_eq!(read(&body()).map(|d| d.art.len()), Some(0));
         let cut = &b[..b.len() - 7];
         assert_eq!(read(cut), None);
         assert_eq!(read(&body()[..30]), None);
+        // and the looks after the presents: an asset, the first string's
+        // globe bulbs and rope cord, the box's paper
+        let mut l = p.clone();
+        l.extend(1u16.to_le_bytes());
+        l.push(2);
+        l.extend(15u16.to_le_bytes());
+        l.push(2);
+        l.extend(0x4BC0_D7FAu32.to_le_bytes());
+        l.extend(0x7B3D_8677u32.to_le_bytes());
+        l.extend(2u16.to_le_bytes());
+        l.extend(0u16.to_le_bytes());
+        l.extend(0xF8E6_C045u32.to_le_bytes());
+        l.extend(0.35f32.to_le_bytes());
+        l.extend(0x7B3D_8677u32.to_le_bytes());
+        l.extend(1.5f32.to_le_bytes());
+        // one for a string never sent: let go
+        l.extend(9u16.to_le_bytes());
+        l.extend([0u8; 16]);
+        l.extend(1u16.to_le_bytes());
+        l.extend(1u16.to_le_bytes());
+        l.extend(0x4BC0_D7FAu32.to_le_bytes());
+        l.extend(2.0f32.to_le_bytes());
+        let d = read(&l).expect("read with looks");
+        assert_eq!(d.assets, vec![Asset { world: 2, zone: 15, ids: vec![0x4BC0_D7FA, 0x7B3D_8677] }]);
+        assert_eq!(d.strings[0].look, Look { bulb_model: 0xF8E6_C045, bulb_scale: 0.35, cord_texture: 0x7B3D_8677, cord_repeat: 1.5 });
+        assert_eq!(d.strings[1].look, Look::default());
+        assert_eq!((d.presents[0].boxes[0].paper, d.presents[0].boxes[0].paper_gain), (0x4BC0_D7FA, 2.0));
+        assert_eq!(read(&l[..l.len() - 2]), None, "cut short");
     }
 
     #[test]

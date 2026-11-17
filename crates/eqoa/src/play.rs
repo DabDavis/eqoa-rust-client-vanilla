@@ -10656,8 +10656,20 @@ impl Play {
         if !crate::decorlights::any() {
             return Vec::new();
         }
+        // the art the looks draw, read once (`decorlights::poll_assets`)
+        crate::decorlights::poll_assets();
         let holders = self.decor_holders();
         crate::decorlights::batches(&holders, self.player.world, eye, ms)
+    }
+
+    /// The decorations' model bulbs this frame (`decorlights::globes`), drawn
+    /// as they are (a bulb is its own light).
+    pub fn decor_globes(&self, eye: [f32; 3], ms: i64) -> Vec<render::billboard::Strips> {
+        if !crate::decorlights::any() {
+            return Vec::new();
+        }
+        let holders = self.decor_holders();
+        crate::decorlights::globes(&holders, self.player.world, eye, ms)
     }
 
     /// The decorations' cords this frame (`decorlights::cords`), unlit.

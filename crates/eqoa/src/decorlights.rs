@@ -29,6 +29,20 @@
 //! `stream::Streamer::want`), as it would were the player walking there, so
 //! the sprite is in the library when the NPC is built.
 //!
+//! A string may look like more than glows (`net::decor::Look`; the owner,
+//! 2026-11-16: "the magic globe can be used for bulbs and made different
+//! colors", "the rope hanging also can be used to decorate the tree", "these
+//! tents as wrapping paper for presents"): a model at each bulb, tinted its
+//! colour ([`globes`]), a cord drawn with a texture, a span a repeat (a rope,
+//! tinsel), and a present's paper a texture tinted its colour. That art may be
+//! of a zone the player is nowhere near, or of another world's file (Odus's
+//! tents for Freeport's presents): the server names it ([`net::decor::Asset`]),
+//! and each zone named is read off the player's own disc once ([`poll_assets`]:
+//! natively at once, in a page through `set_asset_reader`), its textures kept
+//! for the decorations alone (`render::set_decor_texture`: never the library's,
+//! so nothing of another world's dictionary stands in for this world's), its
+//! models here.
+//!
 //! A server that sends none, and a PS2, draw nothing of it.
 
 use net::decor::{Anchor, Decor};
@@ -47,6 +61,178 @@ pub const REACH: f32 = 300.0;
 
 thread_local! {
     static DECOR: RefCell<Decor> = RefCell::default();
+    static ASSETS: RefCell<Assets> = RefCell::default();
+    static READER: RefCell<Option<AssetReader>> = const { RefCell::new(None) };
+}
+
+/// A zone's bytes, read (or failed) at some frame: what an [`AssetReader`]
+/// hands back at once and fills when the read is done.
+pub type ZoneBytes = std::rc::Rc<RefCell<Option<Result<Vec<u8>, String>>>>;
+
+/// How a page reads zone `zone` of the disc's world file `name`
+/// (`set_asset_reader`); natively it is read at once ([`read_zone_now`]).
+pub type AssetReader = Box<dyn Fn(&str, u16) -> ZoneBytes>;
+
+/// Makes `f` the way the decorations' assets are read (a page's disc).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn set_asset_reader(f: AssetReader) {
+    READER.with_borrow_mut(|r| *r = Some(f));
+}
+
+/// A model the bulbs wear: its middle and size across, and the batch that
+/// takes the bulb's colour (its largest: the globe's glass, not its stand),
+/// drawn with its texture made grey ([`grey_id`]) so any colour shows through
+/// its pattern (the globe's glass is all blue: red over blue is black).
+pub struct Globe {
+    pub model: esf::Model,
+    pub mid: glam::Vec3,
+    pub across: f32,
+    pub tinted: usize,
+}
+
+/// The id a texture's grey copy is kept under (`render::set_decor_texture`).
+pub fn grey_id(id: i32) -> i32 {
+    id ^ 0x4752_4559
+}
+
+/// `levels` made grey by each texel's brightest channel, stretched so the
+/// brightest tenth is white: a pattern that takes any tint.
+fn greyed(mut levels: Vec<esf::Image>) -> Vec<esf::Image> {
+    for l in &mut levels {
+        let mut v: Vec<u8> = l.rgba.chunks(4).map(|p| p[0].max(p[1]).max(p[2])).collect();
+        let mut sorted = v.clone();
+        sorted.sort_unstable();
+        let top = sorted.get(sorted.len() * 9 / 10).copied().unwrap_or(255).max(16) as f32;
+        for x in &mut v {
+            *x = ((*x as f32 / top) * 255.0).min(255.0) as u8;
+        }
+        for (p, g) in l.rgba.chunks_mut(4).zip(v) {
+            p[0] = g;
+            p[1] = g;
+            p[2] = g;
+        }
+    }
+    levels
+}
+
+/// The assets read and being read.
+#[derive(Default)]
+struct Assets {
+    /// (world, zone) -> its read, while under way
+    reading: Vec<((u8, u16), ZoneBytes)>,
+    /// (world, zone) read (or failed), never read again
+    read: std::collections::HashSet<(u8, u16)>,
+    /// the models read, by DictID, with their middle and size across
+    models: std::collections::HashMap<u32, std::rc::Rc<Globe>>,
+}
+
+/// Zone `zone` of world file `name` off the player's disc, read now.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_zone_now(name: &str, zone: u16) -> Result<Vec<u8>, String> {
+    let iso_path = crate::disc_path(None);
+    let disc = iso::Iso::open(std::path::Path::new(&iso_path)).map_err(|e| e.to_string())?;
+    let e = disc.find(name).ok_or_else(|| format!("{name}: not on the disc"))?.clone();
+    let f = iso::open_file(std::path::Path::new(&iso_path)).map_err(|e| e.to_string())?;
+    let mut w = esf::Window::new(f, e.lba as u64 * iso::SECTOR, e.size as u64);
+    let def = esf::Container::open_deferred(&mut w).map_err(|e| e.to_string())?;
+    let zn = *def.zones().get(zone as usize).ok_or_else(|| format!("{name}: no zone {zone}"))?;
+    let (off, len) = def.node(zn).deferred.ok_or_else(|| format!("{name}: zone {zone} is not deferred"))?;
+    let mut b = vec![0u8; len];
+    esf::ReadAt::read_at(&mut w, off, &mut b).map_err(|e| e.to_string())?;
+    Ok(b)
+}
+
+/// Begins reading every asset zone of the set not yet read, and keeps what
+/// has come of each: its textures for the decorations (`render`), its models
+/// here. Called each frame the decorations are drawn.
+pub fn poll_assets() {
+    let wanted: Vec<(u8, u16, Vec<u32>)> = DECOR.with_borrow(|d| d.assets.iter().map(|a| (a.world, a.zone, a.ids.clone())).collect());
+    if wanted.is_empty() {
+        return;
+    }
+    ASSETS.with_borrow_mut(|st| {
+        for (world, zone, _) in &wanted {
+            let k = (*world, *zone);
+            if st.read.contains(&k) || st.reading.iter().any(|(r, _)| *r == k) {
+                continue;
+            }
+            let Some(name) = crate::play::WORLD_FILES.get(*world as usize) else {
+                st.read.insert(k);
+                continue;
+            };
+            let bytes = READER.with_borrow(|r| r.as_ref().map(|f| f(name, *zone)));
+            #[cfg(not(target_arch = "wasm32"))]
+            let bytes = bytes.unwrap_or_else(|| std::rc::Rc::new(RefCell::new(Some(read_zone_now(name, *zone)))));
+            #[cfg(target_arch = "wasm32")]
+            let Some(bytes) = bytes else { continue };
+            st.reading.push((k, bytes));
+        }
+        let mut i = 0;
+        while i < st.reading.len() {
+            let Some(r) = st.reading[i].1.borrow_mut().take() else {
+                i += 1;
+                continue;
+            };
+            let (k, _) = st.reading.swap_remove(i);
+            st.read.insert(k);
+            let ids: Vec<u32> = wanted.iter().filter(|w| (w.0, w.1) == k).flat_map(|w| w.2.iter().copied()).collect();
+            match r {
+                Ok(b) => {
+                    let n = keep_assets(&mut st.models, esf::Container::parse_records(b), &ids);
+                    eprintln!("decorations: world {} zone {}: {n} of {} assets kept", k.0, k.1, ids.len());
+                }
+                Err(e) => eprintln!("decorations: world {} zone {}: {e}", k.0, k.1),
+            }
+        }
+    });
+}
+
+/// The textures and models `ids` of the zone `c`: each texture's levels for
+/// the decorations, each model with the textures it is drawn with.
+fn keep_assets(models: &mut std::collections::HashMap<u32, std::rc::Rc<Globe>>, c: esf::Container, ids: &[u32]) -> usize {
+    let mut kept = 0;
+    // each texture as it is and grey (a cord's: tinsel, a rope, tinted its colour)
+    let texture = |id: i32| {
+        if let Some(s) = c.surface(id) {
+            let levels = s.decode_levels(&c.data);
+            render::set_decor_texture(grey_id(id), greyed(levels.clone()));
+            render::set_decor_texture(id, levels);
+        }
+    };
+    for &id in ids {
+        let id32 = id as i32;
+        if c.surface(id32).is_some() {
+            texture(id32);
+            kept += 1;
+            continue;
+        }
+        let Some(&n) = c.dict.get(&id32) else {
+            eprintln!("decorations: {id:#010X} is not in its zone");
+            continue;
+        };
+        let Some(m) = c.build_model(n) else { continue };
+        for b in &m.batches {
+            texture(b.texture());
+        }
+        let tinted = (0..m.batches.len()).max_by_key(|&i| m.batches[i].indices.len()).unwrap_or(0);
+        if let Some(s) = m.batches.get(tinted).and_then(|b| c.surface(b.texture())) {
+            render::set_decor_texture(grey_id(m.batches[tinted].texture()), greyed(s.decode_levels(&c.data)));
+        }
+        let (mut lo, mut hi) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
+        for p in &m.pos {
+            lo = lo.min(glam::Vec3::from(*p));
+            hi = hi.max(glam::Vec3::from(*p));
+        }
+        let across = (hi - lo).max_element().max(1e-3);
+        models.insert(id, std::rc::Rc::new(Globe { model: m, mid: (lo + hi) / 2.0, across, tinted }));
+        kept += 1;
+    }
+    kept
+}
+
+/// Model `id` of the assets, once read.
+fn asset_model(id: u32) -> Option<std::rc::Rc<Globe>> {
+    ASSETS.with_borrow(|st| st.models.get(&id).cloned())
 }
 
 /// The set the server sent (`net::session::OP_DECOR_LIGHTS`), the last one
@@ -137,6 +323,10 @@ fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64)
                     continue;
                 }
                 let top = b.color & TOP != 0;
+                // a string of no glow (a garland: its cord alone)
+                if s.size <= 0.0 && !top {
+                    continue;
+                }
                 let ci = (b.color & net::decor::COLOR) as usize;
                 let c = s.colors.get(ci).copied().unwrap_or(0xFFFF_FFFF);
                 let rgb = [(c >> 24) as u8, (c >> 16) as u8, (c >> 8) as u8];
@@ -205,6 +395,7 @@ fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Str
                 }
             }
             let half = 0.5 * s.cord_width * scale.max(0.1);
+            let textured = s.look.cord_texture != 0;
             for mut run in runs {
                 if run.len() < 2 || (run[0] - e).length() > REACH {
                     continue;
@@ -226,22 +417,106 @@ fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Str
                         line.push(a.lerp(b, f) - Vec3::Y * (sag * 4.0 * f * (1.0 - f)));
                     }
                 }
-                // a ribbon turned to the eye
+                // a ribbon turned to the eye; a textured one a strip a span,
+                // the texture once across it (the sampler clamps)
                 let mut strip = Vec::with_capacity(line.len() * 2);
                 for (i, &p) in line.iter().enumerate() {
                     let dir = if i + 1 < line.len() { line[i + 1] - p } else { p - line[i - 1] };
                     let side = dir.cross(e - p).normalize_or_zero() * half;
+                    if textured {
+                        let k = i % CORD_PIECES;
+                        let u = k as f32 / CORD_PIECES as f32;
+                        // a span's last point closes it and opens the next
+                        if k == 0 && i > 0 {
+                            strip.push(([1.0, 0.0], (p - side).to_array()));
+                            strip.push(([1.0, 1.0], (p + side).to_array()));
+                            strips.push(std::mem::take(&mut strip));
+                        }
+                        strip.push(([u, 0.0], (p - side).to_array()));
+                        strip.push(([u, 1.0], (p + side).to_array()));
+                        continue;
+                    }
                     strip.push(([0.0, 0.0], (p - side).to_array()));
                     strip.push(([0.0, 1.0], (p + side).to_array()));
                 }
-                strips.push(strip);
+                if strip.len() >= 4 {
+                    strips.push(strip);
+                }
             }
         }
         if !strips.is_empty() {
-            out.push(Strips { texture: 0, blend: 0, ztest: true, zwrite: true, color, strips, colors: Vec::new() });
+            // a textured cord drawn grey, tinted its colour (gold or silver tinsel, a red rope)
+            let texture = if s.look.cord_texture != 0 { grey_id(s.look.cord_texture as i32) } else { 0 };
+            out.push(Strips { texture, blend: 0, ztest: true, zwrite: true, color, strips, colors: Vec::new() });
         }
     }
     out
+}
+
+/// The model bulbs of every string with one (`Look::bulb_model`, once read:
+/// [`poll_assets`]), as world-space strips: at each bulb but the star, the
+/// model `bulb_scale` across, its middle on the bulb, tinted the bulb's colour
+/// as lit now, a strip a triangle, a Strips a texture. Drawn as they are, not
+/// lit by the scene: a bulb is its own light.
+pub fn globes(holders: &[Holder], world: i64, eye: [f32; 3], ms: i64) -> Vec<Strips> {
+    DECOR.with_borrow(|d| globes_of(d, holders, world, eye, ms, &asset_model))
+}
+
+#[allow(clippy::type_complexity)]
+fn globes_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64, model: &dyn Fn(u32) -> Option<std::rc::Rc<Globe>>) -> Vec<Strips> {
+    use glam::Vec3;
+    let t = ms as f64 / 1000.0;
+    let e = Vec3::from(eye);
+    // by texture: its strips and their colours
+    let mut by: Vec<(i32, Vec<Vec<([f32; 2], [f32; 3])>>, Vec<Vec<[f32; 4]>>)> = Vec::new();
+    for s in &d.strings {
+        if s.look.bulb_model == 0 {
+            continue;
+        }
+        let Some(m) = model(s.look.bulb_model) else { continue };
+        let (g, m, mid, across) = (&*m, &m.model, m.mid, m.across);
+        let frames: Vec<([f32; 3], f32, f32)> = match &s.anchor {
+            Anchor::Npc(key) => holders.iter().filter(|h| net::npctint::key(h.name) == *key).map(|h| (h.at, h.heading, h.scale)).collect(),
+            Anchor::World(w) if *w as i64 == world => vec![([0.0; 3], 0.0, 1.0)],
+            Anchor::World(_) => Vec::new(),
+        };
+        for (at, heading, scale) in frames {
+            let (sin, cos) = heading.sin_cos();
+            for b in s.bulbs.iter().filter(|b| b.color & TOP == 0) {
+                let [x, y, z] = b.at;
+                let p = Vec3::new(at[0] + scale * (z * sin + x * cos), at[1] + scale * y, at[2] + scale * (z * cos - x * sin));
+                if (p - e).length() > REACH {
+                    continue;
+                }
+                let c = s.colors.get((b.color & net::decor::COLOR) as usize).copied().unwrap_or(0xFFFF_FFFF);
+                let lit = net::decor::lit(s.effect, s.period, b.phase, t);
+                // a tint over the model's own texture, lifted so a dark glass
+                // shows the colour (the shader keeps it to 1)
+                let k = 1.6 * (0.55 + 0.45 * lit) * s.bright.max(0.2);
+                let color = [((c >> 24) & 0xFF) as f32 / 255.0 * k, ((c >> 16) & 0xFF) as f32 / 255.0 * k, ((c >> 8) & 0xFF) as f32 / 255.0 * k, 1.0];
+                // the rest (a stand) as it is, lit a little with it
+                let plain = [0.75 + 0.25 * lit, 0.75 + 0.25 * lit, 0.75 + 0.25 * lit, 1.0];
+                let f = s.look.bulb_scale.max(0.01) * scale.max(0.1) / across;
+                let place = |v: [f32; 3]| (p + (Vec3::from(v) - mid) * f).to_array();
+                for (bi, bt) in m.batches.iter().enumerate() {
+                    let (tex, color) = if bi == g.tinted { (grey_id(bt.texture()), color) } else { (bt.texture(), plain) };
+                    let i = match by.iter().position(|x| x.0 == tex) {
+                        Some(i) => i,
+                        None => {
+                            by.push((tex, Vec::new(), Vec::new()));
+                            by.len() - 1
+                        }
+                    };
+                    for tri in bt.indices.chunks(3).filter(|t| t.len() == 3) {
+                        let v = |k: usize| (m.uv.get(tri[k] as usize).copied().unwrap_or([0.0; 2]), place(m.pos[tri[k] as usize]));
+                        by[i].1.push(vec![v(0), v(1), v(2)]);
+                        by[i].2.push(vec![color; 3]);
+                    }
+                }
+            }
+        }
+    }
+    by.into_iter().map(|(texture, strips, colors)| Strips { texture, blend: 0, ztest: true, zwrite: true, color: [1.0; 4], strips, colors }).collect()
 }
 
 /// The cords lit as the world's own matte geometry is: their colour times the
@@ -286,6 +561,8 @@ fn presents_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<
         };
         let mut strips: Vec<Vec<([f32; 2], [f32; 3])>> = Vec::new();
         let mut colors: Vec<Vec<[f32; 4]>> = Vec::new();
+        // the papers' faces, by texture
+        let mut papers: Vec<(i32, Vec<Vec<([f32; 2], [f32; 3])>>, Vec<Vec<[f32; 4]>>)> = Vec::new();
         for (at, heading, scale) in frames {
             let (sin, cos) = heading.sin_cos();
             let frame = |p: Vec3| Vec3::new(at[0] + scale * (p.z * sin + p.x * cos), at[1] + scale * p.y, at[2] + scale * (p.z * cos - p.x * sin));
@@ -313,8 +590,25 @@ fn presents_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<
                     [(-w, 0.0, -dp), (w, 0.0, -dp), (w, h, -dp), (-w, h, -dp)],
                     [(-w, 0.0, -dp), (-w, 0.0, dp), (-w, h, dp), (-w, h, -dp)],
                 ];
-                for (f, k) in faces.iter().zip(shade) {
-                    quad(f.map(|(x, y, z)| place(x, y, z)), rgba(b.color, k));
+                if b.paper != 0 {
+                    // the paper a texture, tinted its colour: each face the
+                    // texture once over it, the long way along its width
+                    let i = match papers.iter().position(|x| x.0 == b.paper as i32) {
+                        Some(i) => i,
+                        None => {
+                            papers.push((b.paper as i32, Vec::new(), Vec::new()));
+                            papers.len() - 1
+                        }
+                    };
+                    for (f, k) in faces.iter().zip(shade) {
+                        let q = f.map(|(x, y, z)| place(x, y, z));
+                        papers[i].1.push(vec![([0.0, 0.0], q[0].to_array()), ([0.0, 1.0], q[1].to_array()), ([1.0, 0.0], q[3].to_array()), ([1.0, 1.0], q[2].to_array())]);
+                        papers[i].2.push(vec![rgba(b.color, k * b.paper_gain.max(0.0)); 4]);
+                    }
+                } else {
+                    for (f, k) in faces.iter().zip(shade) {
+                        quad(f.map(|(x, y, z)| place(x, y, z)), rgba(b.color, k));
+                    }
                 }
                 if b.ribbon & 0xFF == 0 {
                     continue;
@@ -352,6 +646,9 @@ fn presents_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<
         if !strips.is_empty() {
             out.push(Strips { texture: 0, blend: 0, ztest: true, zwrite: true, color: [1.0; 4], strips, colors });
         }
+        for (texture, strips, colors) in papers {
+            out.push(Strips { texture, blend: 0, ztest: true, zwrite: true, color: [1.0; 4], strips, colors });
+        }
     }
     out
 }
@@ -379,9 +676,11 @@ mod tests {
                     Bulb { at: [-1.0, 6.0, 0.0], color: 0, phase: 128 },
                     Bulb { at: [0.0, 9.0, 0.0], color: 2 | TOP, phase: 0 },
                 ],
+                look: Default::default(),
             }],
             art: Vec::new(),
             presents: Vec::new(),
+            assets: Vec::new(),
         }
     }
 
@@ -456,8 +755,8 @@ mod tests {
         d.presents.push(net::decor::Presents {
             anchor: Anchor::Npc("christmas tree".into()),
             boxes: vec![
-                net::decor::GiftBox { at: [2.0, 0.0, 0.0], size: [1.0, 0.8, 1.0], yaw: 0.0, color: 0xC020_20FF, ribbon: 0xFFD0_40FF, bow: true },
-                net::decor::GiftBox { at: [-2.0, 0.0, 0.0], size: [0.6, 0.6, 0.6], yaw: 0.3, color: 0x2050_C0FF, ribbon: 0, bow: false },
+                net::decor::GiftBox { at: [2.0, 0.0, 0.0], size: [1.0, 0.8, 1.0], yaw: 0.0, color: 0xC020_20FF, ribbon: 0xFFD0_40FF, bow: true, paper: 0, paper_gain: 1.0 },
+                net::decor::GiftBox { at: [-2.0, 0.0, 0.0], size: [0.6, 0.6, 0.6], yaw: 0.3, color: 0x2050_C0FF, ribbon: 0, bow: false, paper: 0, paper_gain: 1.0 },
             ],
         });
         let h = [Holder { name: "Christmas Tree", at: [100.0, 50.0, 200.0], heading: 0.0, scale: 2.0 }];
@@ -472,6 +771,52 @@ mod tests {
         assert!((mid_x - 104.0).abs() < 1e-4);
         assert!(p[0].colors[0][0][0] > 0.7, "red paper");
         assert!(presents_of(&d, &h, 0, [100.0 + REACH + 10.0, 50.0, 200.0]).is_empty());
+    }
+
+    /// A string's look: a model at each bulb but the star, its middle on the
+    /// bulb and `bulb_scale` across, tinted the bulb's colour; a textured cord
+    /// a strip a span, the texture once across each; no glow with a size of
+    /// 0 but the star's.
+    #[test]
+    fn the_looks_draw_models_ropes_and_garlands() {
+        let mut d = tree(Effect::Steady);
+        d.strings[0].look = net::decor::Look { bulb_model: 0xF8E6_C045, bulb_scale: 0.5, cord_texture: 0x7B3D_8677, cord_repeat: 1.0 };
+        // a model of one triangle, 2 across, its middle at (1, 1, 0)
+        let mut m = esf::Model::default();
+        m.pos = vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 2.0, 0.0]];
+        m.uv = vec![[0.0; 2]; 3];
+        m.batches.push(esf::Batch { material: 0, layers: Vec::new(), indices: vec![0, 1, 2], lod: None });
+        let rc = std::rc::Rc::new(Globe { model: m, mid: glam::Vec3::new(1.0, 1.0, 0.0), across: 2.0, tinted: 0 });
+        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0 }];
+        let g = globes_of(&d, &h, 0, [0.0, 3.0, -20.0], 0, &|id| (id == 0xF8E6_C045).then(|| rc.clone()));
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].strips.len(), 3, "a triangle a bulb, the star none");
+        // the first bulb at (1, 2, 0): the corners a quarter of their way from the middle
+        let first = &g[0].strips[0];
+        assert!((glam::Vec3::from(first[0].1) - glam::Vec3::new(0.75, 1.75, 0.0)).length() < 1e-4, "{first:?}");
+        assert!(g[0].colors[0][0][0] > 1.0 && g[0].colors[0][0][1] < 0.3, "red, lifted");
+        // no model read: none
+        assert!(globes_of(&d, &h, 0, [0.0; 3], 0, &|_| None).is_empty());
+        // the textured cord: two spans, a strip each, u 0 to 1 along it
+        let c = cords_of(&d, &h, 0, [0.0, 3.0, -20.0]);
+        assert_eq!(c[0].texture, grey_id(0x7B3D_8677u32 as i32));
+        assert_eq!(c[0].strips.len(), 2);
+        assert!(c[0].strips.iter().all(|s| s.len() == 2 * (CORD_PIECES + 1) && s[0].0[0] == 0.0 && s[s.len() - 1].0[0] == 1.0));
+        // a garland: no glow but the star
+        d.strings[0].size = 0.0;
+        let b = batches_of(&d, &h, 0, [0.0; 3], 0);
+        assert_eq!(b.iter().map(|b| b.quads.len()).sum::<usize>(), 1);
+        assert_eq!(b[0].texture, STAR);
+        // a present of paper: its faces a Strips of the paper's texture, tinted
+        d.presents.push(net::decor::Presents {
+            anchor: Anchor::Npc("christmas tree".into()),
+            boxes: vec![net::decor::GiftBox { at: [2.0, 0.0, 0.0], size: [1.0, 0.8, 1.0], yaw: 0.0, color: 0x8020_20FF, ribbon: 0xFFD0_40FF, bow: false, paper: 0x58B4_1D37, paper_gain: 2.0 }],
+        });
+        let p = presents_of(&d, &h, 0, [0.0, 3.0, -20.0]);
+        assert_eq!(p.len(), 2, "the ribbons plain, the paper its own");
+        assert_eq!((p[0].texture, p[0].strips.len()), (0, 6));
+        assert_eq!((p[1].texture, p[1].strips.len()), (0x58B4_1D37, 5));
+        assert!((p[1].colors[0][0][0] - 2.0 * 0x80 as f32 / 255.0).abs() < 1e-4, "its colour times its gain");
     }
 
     /// A decoration's art is known by its model, nothing else is.

@@ -198,6 +198,30 @@ impl WebDisc {
         Ok(c)
     }
 
+    /// How a page reads a decoration's asset zone (`decorlights::set_asset_reader`):
+    /// on a reader of its own, the world file's headers, then the zone's bytes,
+    /// a frame or more later.
+    pub fn asset_reader(&self) -> crate::decorlights::AssetReader {
+        let (file, len, entries) = (self.file.clone(), self.len, self.entries.clone());
+        Box::new(move |name, zone| {
+            let out: crate::decorlights::ZoneBytes = Default::default();
+            let mut d = WebDisc { file: file.clone(), len, entries: entries.clone(), sparse: Sparse::new(len) };
+            let (o, name) = (out.clone(), name.to_string());
+            wasm_bindgen_futures::spawn_local(async move {
+                let r = async {
+                    let c = d.container(&name).await?;
+                    let zn = *c.zones().get(zone as usize).ok_or_else(|| format!("{name}: no zone {zone}"))?;
+                    let (off, n) = c.node(zn).deferred.ok_or_else(|| format!("{name}: zone {zone} is not deferred"))?;
+                    let base = d.find(&name).ok_or("the world left the disc")?.lba as u64 * iso::SECTOR;
+                    d.read_at(base + off, n).await
+                }
+                .await;
+                *o.borrow_mut() = Some(r);
+            });
+            out
+        })
+    }
+
     /// `stream::open_world` in a page (`stream::set_world_opener`): on a
     /// reader of its own, the world file opened with its zones left on the
     /// disc and the zones round the arrival read, as the first world was

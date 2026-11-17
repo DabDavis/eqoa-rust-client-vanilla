@@ -21,6 +21,11 @@ is put on the page by `.github/workflows/notes.yml`.
   when the illusion starts and ends; before, the turban could float over a troll's or a gnome's head or sit forward
   on an ogre's.
 - A were's beast form, which wears no helm, now shows the hat too.
+## 2026-11-17 · Globe bulbs, tinsel and wrapped presents
+- **New Christmas decorations**: strings of glass globes in many colours, garlands of gold and silver tinsel and of red
+  rope, and presents wrapped in patterned cloth, where a server puts them (Freeport's tree and its square). Their art
+  is read from your own disc, whatever world it comes from.
+
 ## 2026-11-16 · Santa's sleigh stays on the ground
 - **Decorations stay where they are placed**: a decoration made of a zone's art (Santa's sleigh) no longer drifts up
   into the sky; it stands on the sand where the server puts it.
