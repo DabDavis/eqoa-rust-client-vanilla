@@ -11,6 +11,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Zone ambience now follows the Music volume
+- **Zone ambience now follows the Music volume**: the background sounds of each place (and the wind in snow and
+  sandstorms) are turned down by Music Volume, not Fx Volume, so Music at 0 makes the world quiet of everything but
+  its effects; Fx at 0 silences only the effects (swings, spells, the interface).
+
 ## 2026-11-17 · Volumes stay where you set them
 - **Fx Volume and Music Volume are kept the moment you change them**: before, a volume turned down or off was only
   kept with Save Changes, so backing out of Options with Triangle put the old volume back, and a window closed any

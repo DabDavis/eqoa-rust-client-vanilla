@@ -335,8 +335,9 @@ impl Weather {
         if let Some(s) = sound.as_deref_mut() {
             s.weather = self.atm.intensity;
             s.outdoors = o;
-            let fx = s.dev.sound_class_volume(0);
-            s.set_wind(crate::weather_zones::wind_target(&r, fx, self.roof || self.upwind_wall));
+            // the wind bed is ambience: by the Music Volume (`sound::AMBIENCE_CLASS`)
+            let volume = s.dev.sound_class_volume(crate::sound::AMBIENCE_CLASS);
+            s.set_wind(crate::weather_zones::wind_target(&r, volume, self.roof || self.upwind_wall));
         }
         let cam = camera(eye);
         let mut voices = Voices(sound, &mut self.silent_handles);
