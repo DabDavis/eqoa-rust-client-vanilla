@@ -911,8 +911,8 @@ mod tests {
             });
             d
         };
-        let view = glam::Mat4::look_at_rh(glam::Vec3::new(30.0, 5.0, -20.0), glam::Vec3::new(30.0, 3.0, 10.0), glam::Vec3::Y);
-        let proj = glam::Mat4::perspective_rh(1.0, w as f32 / h as f32, 0.5, 500.0);
+        let view = glam::camera::rh::view::look_at_mat4(glam::Vec3::new(30.0, 5.0, -20.0), glam::Vec3::new(30.0, 3.0, 10.0), glam::Vec3::Y);
+        let proj = glam::camera::rh::proj::directx::perspective(1.0, w as f32 / h as f32, 0.5, 500.0);
         let mut first = None;
         for reload in 0..50 {
             set(scene(reload % 2));
