@@ -266,8 +266,17 @@ pub fn hat_on_styled(lib: &Library, id: u32, cs: &CSprite<Ee>, player: bool, src
         // scaled by the heads' widths ([`unhelmed_seat`])
         None => {
             let node = cs.node_ids[7];
-            let to = unhelmed_seat(lib, id, cs, from)?;
-            moved(&mut hat, from, to);
+            match animal_seat(id) {
+                // a body whose seat is set down ([`ANIMAL_SEATS`]): between the ears
+                Some(seat) => {
+                    let head = head_bounds(&lib.build_model(lib.lookup(id as i32)?)?, cs, &[])?;
+                    seat_on(&mut hat, head, seat);
+                }
+                None => {
+                    let to = unhelmed_seat(lib, id, cs, from)?;
+                    moved(&mut hat, from, to);
+                }
+            }
             node
         }
     };
@@ -370,6 +379,57 @@ pub fn rim_seat(hat: &mut esf::Model, helm: (Vec3, Vec3)) {
     let to = Vec3::new((helm.0.x + helm.1.x) * 0.5, helm.0.y + RIM_HEIGHT * (helm.1.y - helm.0.y), (helm.0.z + helm.1.z) * 0.5);
     for p in &mut hat.pos {
         *p = (to + (Vec3::from(*p) - from) * s).to_array();
+    }
+}
+
+/// The white winged horse (CHAR.ESF 0x2F8721C0), Santa's reindeer (the
+/// owner, 2026-11-17: "give the reindeer santa hats too").
+pub const PEGASUS: u32 = 0x2F87_21C0;
+
+/// Where a hat sits on a body that wears no helm and whose head the helm's
+/// stand-in ([`unhelmed_seat`]) does not fit (a horse's long head: the hat
+/// floated above and behind it), as shares of its head ([`head_bounds`], in
+/// its bind pose): `back`, how far from the back of the head toward the muzzle
+/// the rim's middle is; `down`, how far below the head's top; `width`, the
+/// rim across against the head's width; `tilt`, degrees to the side (a jaunty
+/// lean); `lean`, degrees back.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnimalSeat {
+    pub back: f32,
+    pub down: f32,
+    pub width: f32,
+    pub tilt: f32,
+    pub lean: f32,
+}
+
+/// The bodies with a seat of their own ([`AnimalSeat`]).
+pub const ANIMAL_SEATS: &[(u32, AnimalSeat)] = &[(PEGASUS, AnimalSeat { back: 0.22, down: 0.2, width: 0.65, tilt: 18.0, lean: 0.0 })];
+
+/// The seat body `id` has of its own, if any.
+pub fn animal_seat(id: u32) -> Option<AnimalSeat> {
+    ANIMAL_SEATS.iter().find(|(b, _)| *b == id).map(|(_, s)| *s)
+}
+
+/// `hat` (seated on [`REFERENCE`]) moved to a head bounded `head` (its bind
+/// pose) by `seat`: its rim (its lowest fifth) across [`AnimalSeat::width`]
+/// of the head, its rim's middle at the seat's place, then turned about it,
+/// [`AnimalSeat::tilt`] to the side and [`AnimalSeat::lean`] back.
+pub fn seat_on(hat: &mut esf::Model, head: (Vec3, Vec3), seat: AnimalSeat) {
+    let (lo, hi) = hat.pos.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[1]), hi.max(p[1])));
+    if lo >= hi {
+        return;
+    }
+    let line = lo + 0.2 * (hi - lo);
+    let (rlo, rhi) = hat.pos.iter().map(|p| Vec3::from(*p)).filter(|p| p.y <= line).fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(a, b), p| (a.min(p), b.max(p)));
+    let s = seat.width * (head.1.x - head.0.x) / (rhi.x - rlo.x).max(1e-4);
+    let from = Vec3::new((rlo.x + rhi.x) * 0.5, lo, (rlo.z + rhi.z) * 0.5);
+    let at = Vec3::new((head.0.x + head.1.x) * 0.5, head.1.y - seat.down * (head.1.y - head.0.y), head.0.z + seat.back * (head.1.z - head.0.z));
+    let turn = glam::Quat::from_rotation_z(-seat.tilt.to_radians()) * glam::Quat::from_rotation_x(-seat.lean.to_radians());
+    for p in &mut hat.pos {
+        *p = (at + turn * ((Vec3::from(*p) - from) * s)).to_array();
+    }
+    for n in &mut hat.normal {
+        *n = (turn * Vec3::from(*n)).to_array();
     }
 }
 
@@ -1056,6 +1116,31 @@ mod tests {
         let (_, turban) = hat_on(&lib, REFERENCE, &cs, true, EFREETI_LORD, None).unwrap();
         let (t, all) = (trim_tris(&turban), turban.triangles as usize);
         assert!(t > 10 && t < all / 2, "the tail, not the dome: {t} of {all}");
+    }
+
+    /// Santa's reindeer (the white winged horse, which wears no helm): the
+    /// Santa Hat on its head node, its rim between the ears (within the
+    /// head's width, below its top, toward its back), leaning to the side.
+    #[test]
+    fn a_reindeer_wears_a_santa_hat() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let (m, cs) = body(&lib, PEGASUS);
+        let t = crate::s2::get().cust();
+        assert!(crate::slotless::helm_on(&lib, PEGASUS, &cs, false, 4, [255; 4], &t, true).is_none(), "no helm");
+        let (node, hat) = hat_on_styled(&lib, PEGASUS, &cs, false, GNOME_CAP, None, STYLE_SANTA).expect("a hat");
+        assert_eq!(node, cs.node_ids[7], "on the head: it follows the head bone");
+        let head = head_bounds(&m, &cs, &[]).unwrap();
+        let w = bind_world(&cs, node).unwrap();
+        let world: Vec<Vec3> = hat.pos.iter().map(|p| w.transform_point3(Vec3::from(*p))).collect();
+        let lowest = world.iter().map(|p| p.y).fold(f32::MAX, f32::min);
+        let (lo, hi) = world.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(a, b), p| (a.min(*p), b.max(*p)));
+        eprintln!("reindeer hat {lo} .. {hi}, head {head:?}");
+        assert!(lowest < head.1.y && lowest > head.1.y - 0.4 * (head.1.y - head.0.y), "its rim on the head's top: {lowest} vs {head:?}");
+        assert!((hi.x - lo.x) < 1.2 * (head.1.x - head.0.x), "no wider than the head and its lean");
+        assert!(hi.z < head.1.z && lo.z > head.0.z - 0.5 * (head.1.z - head.0.z), "between the ears, not over the muzzle: {lo} .. {hi}");
     }
 
     /// `moved`: the middle to the middle, scaled by the widths.

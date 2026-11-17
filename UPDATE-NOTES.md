@@ -12,6 +12,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+
+## 2026-11-17 · Santa's reindeer in Santa Hats
+- **Santa's reindeer can wear Santa Hats**, sitting between their ears and moving with their heads as they rear and
+  fly (they floated above their heads before).
+
 ## 2026-11-17 · Two-tone hats
 - **Hats take two dyes**, as two-tone armour does: the helm dye colours the hat, the **helm trim** dye its trim: the
   kappa straw hat's steel spike, the Santa Hat's white band and bobble, the turban's tail. Without a trim dye the trim
