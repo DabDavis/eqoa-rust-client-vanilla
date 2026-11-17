@@ -76,6 +76,9 @@ is put on the page by `.github/workflows/notes.yml`.
   down with them coming back, and lands in a deep crouch, from the froglok's own leap. Before, it borrowed the
   human's knee bend, which stood it stiff through the jump and stretched it tall as it landed. Every froglok body
   (the robed and spiked ones too), as its own player sees it and as other players on this client see it.
+## 2026-11-17 · A robe's hem takes its trim
+- **The dark robe's skirt now has a trimmed hem**: a trim dye on the legs colours the robe's lower band too, so Santa's
+  robe has a white hem like a Santa suit.
 
 ## 2026-11-17 · Santa wears his hat
 - **Santa Claus now wears his Santa Hat** by the tree: the hat a creature is given by its name was dropped because

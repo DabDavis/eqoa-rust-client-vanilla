@@ -26,7 +26,7 @@
 //!   plate (gloves), the boots' cuff;
 //! - set 7, scale: the leather edging and straps;
 //! - set 8: the riveted bands; the boots have none;
-//! - the robes: robe 0's red bands and gold panels, robe 1's steel-studded
+//! - the robes: robe 0's red bands and gold panels and its skirt's hem, robe 1's steel-studded
 //!   strips (top and hem), robe 2's red bands (its skirt has none), robe 3's studded
 //!   straps (its skirt has none);
 //! - the helms: each its set's (1 cream, 2 the steel bands, 3 the studded band,
@@ -335,7 +335,10 @@ pub const TRIMS: &[(u32, Trim)] = &[
     (0xB179_23D2, Trim::Gold),
     // the robes, top and skirt (robe 2's and robe 3's skirts have none)
     (0x455F_0D60, Trim::Parts(&[RED, ROBE_GOLD])),
-    (0x7DDA_79FA, Trim::Parts(&[RED, ROBE_GOLD])),
+    // robe 0's skirt: its gold and its hem (the black band and the purple
+    // below it, the skirt's lowest 0.3: the owner, 2026-11-17, "make santas
+    // robe trim white too": a Santa suit's white hem)
+    (0x7DDA_79FA, Trim::Parts(&[RED, ROBE_GOLD, band(&[[0.0, 0.7, 1.0, 1.0]])])),
     (0xA89B_E30B, Trim::Parts(&[ROBE_STEEL])),
     (0x0D44_77B3, Trim::Parts(&[TrimPart { rects: &[[0.0, 0.75, 1.0, 1.0]], ..ROBE_STEEL }])),
     (0x5D2F_97E1, Trim::Parts(&[RED])),
