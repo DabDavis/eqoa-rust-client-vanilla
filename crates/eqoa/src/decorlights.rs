@@ -714,6 +714,7 @@ mod tests {
             art: Vec::new(),
             presents: Vec::new(),
             assets: Vec::new(),
+            walk_ons: Vec::new(),
         }
     }
 
