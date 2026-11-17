@@ -10,6 +10,7 @@ pub mod cape;
 pub mod creation;
 pub mod decor;
 pub mod dump;
+pub mod dyepick;
 pub mod entity;
 pub mod headmarks;
 pub mod hidelook;

@@ -42,6 +42,15 @@ is put on the page by `.github/workflows/notes.yml`.
   kappa straw hat's steel spike, the Santa Hat's white band and bobble, the turban's tail. Without a trim dye the trim
   keeps its own colours. The Equipment Dyer's "Helm trim" (and a GM's #dye helmtrim) sets it.
 
+## 2026-11-17 · Any colour at the dyers
+- **The Equipment Dyer, the Pet Groomer and the Weapon Enchanter now offer "Pick any colour..."** after their
+  colour families: a colour picker opens with a colour square, a hue strip, hue, saturation, value and red, green,
+  blue sliders with their numbers (and how strong a pet's dye is), the colour in hex, the colour before beside the
+  new one, your recent colours and the dyer's own as swatches, and OK and Cancel. Your character (or pet, or weapon's
+  aura) shows the colour while you pick it; Cancel puts it back. It works with the mouse (drag the square, the strip
+  or a slider), a controller (up and down a row, left and right its value, L1 and R1 by ten, Start or OK to dye,
+  Triangle to cancel), the keyboard (arrows, Tab, Enter, Escape, and typing a hex colour such as 3FA7D6) and a
+  touch screen.
 ## 2026-11-17 · Volumes stay where you set them
 - **Fx Volume and Music Volume are kept the moment you change them**: before, a volume turned down or off was only
   kept with Save Changes, so backing out of Options with Triangle put the old volume back, and a window closed any
