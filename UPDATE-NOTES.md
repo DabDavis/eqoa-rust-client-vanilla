@@ -11,6 +11,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · A robe's hem takes its trim
+- **The dark robe's skirt now has a trimmed hem**: a trim dye on the legs colours the robe's lower band too, so Santa's
+  robe has a white hem like a Santa suit.
+
 ## 2026-11-17 · Santa wears his hat
 - **Santa Claus now wears his Santa Hat** by the tree: the hat a creature is given by its name was dropped because
   it changes none of its colours, so he showed his own red cloth cap.

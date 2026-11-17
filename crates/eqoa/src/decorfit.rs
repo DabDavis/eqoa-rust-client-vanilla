@@ -104,7 +104,12 @@ pub fn texture_png(iso: &str, world: &str, zone: i64, id: i32, out: &str) -> Res
     let e = disc.find(world).ok_or("no such world on the disc")?.clone();
     let mut w = esf::Window::new(iso::open_file(std::path::Path::new(iso))?, e.lba as u64 * iso::SECTOR, e.size as u64);
     let def = esf::Container::open_deferred(&mut w)?;
-    let c = if zone < 0 {
+    let c = if zone == -2 {
+        // a resource file (CHAR.ESF) read whole
+        let mut b = vec![0u8; e.size as usize];
+        esf::ReadAt::read_at(&mut w, 0, &mut b)?;
+        esf::Container::open(b)?
+    } else if zone < 0 {
         def
     } else {
         let zn = *def.zones().get(zone as usize).ok_or("no such zone")?;
