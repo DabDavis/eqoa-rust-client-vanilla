@@ -56,10 +56,14 @@ pub enum Piece {
     Breath,
     /// the quick menus (`hudmenu`)
     QuickMenus,
+    /// the Stacked Spell Bars (`hudmenu::draw_stacked`): over the chat box
+    /// unmoved, but a piece of their own (Jibrish's petition 5229: they moved
+    /// with the chat box)
+    SpellBars,
 }
 
 /// Each piece, in `Piece`'s order.
-pub const PIECES: [Piece; 11] = [Piece::Player, Piece::Group, Piece::Pet, Piece::Target, Piece::Minimap, Piece::Quests, Piece::Meter, Piece::Effects, Piece::Chat, Piece::Breath, Piece::QuickMenus];
+pub const PIECES: [Piece; 12] = [Piece::Player, Piece::Group, Piece::Pet, Piece::Target, Piece::Minimap, Piece::Quests, Piece::Meter, Piece::Effects, Piece::Chat, Piece::Breath, Piece::QuickMenus, Piece::SpellBars];
 const N: usize = PIECES.len();
 
 /// Where on an axis a piece is measured from: the screen's left (top), its
@@ -122,6 +126,7 @@ impl Piece {
             Piece::Chat => "chat",
             Piece::Breath => "breath",
             Piece::QuickMenus => "quickbars",
+            Piece::SpellBars => "spellbars",
         }
     }
 
@@ -139,6 +144,7 @@ impl Piece {
             Piece::Chat => "Chat",
             Piece::Breath => "Breath",
             Piece::QuickMenus => "Quick Bars",
+            Piece::SpellBars => "Spell Bars",
         }
     }
 
@@ -148,7 +154,7 @@ impl Piece {
         match self {
             Piece::Player | Piece::Group | Piece::Pet | Piece::Effects => (Edge::Start, Edge::Start),
             Piece::Target => (Edge::Start, Edge::End),
-            Piece::Chat => (Edge::End, Edge::End),
+            Piece::Chat | Piece::SpellBars => (Edge::End, Edge::End),
             Piece::Minimap | Piece::Quests | Piece::Meter | Piece::Breath | Piece::QuickMenus => (Edge::End, Edge::Start),
         }
     }
@@ -786,6 +792,43 @@ mod tests {
         assert_eq!(crate::settings::hud_layout(), "", "kept so");
         assert_eq!(press([300.0, 8.0], FOUR), Press::Button(Button::Lock));
         assert!(!unlocked());
+    }
+
+    /// Petition 5229: the Stacked Spell Bars are a piece of their own. Drawn
+    /// just over the chat box, a press on them picks them up (the smaller),
+    /// and dragged they move alone: the chat box stays; the chat box dragged
+    /// leaves them. The control: a press on the chat box below them is the
+    /// chat box's.
+    #[test]
+    fn the_stacked_spell_bars_move_apart_from_the_chat_box() {
+        testing_reset();
+        crate::settings::testing::reset(false);
+        let frame = || {
+            frame_begin();
+            for (p, r) in [(Piece::Chat, [200.0, 331.0, 640.0, 448.0]), (Piece::SpellBars, [400.0, 260.0, 640.0, 330.0])] {
+                let s = shift(p, FOUR);
+                note(p, [r[0] + s[0], r[1] + s[1], r[2] + s[0], r[3] + s[1]], s);
+            }
+            frame_end();
+        };
+        frame();
+        set_unlocked(true);
+        assert_eq!(press([300.0, 400.0], FOUR), Press::Piece(Piece::Chat), "the control: the chat box");
+        assert!(release());
+        assert_eq!(press([500.0, 300.0], FOUR), Press::Piece(Piece::SpellBars));
+        drag_to([300.0, 200.0], FOUR);
+        assert!(release());
+        assert_eq!(shift(Piece::SpellBars, FOUR), [-200.0, -100.0]);
+        assert_eq!(shift(Piece::Chat, FOUR), [0.0, 0.0], "the chat box stays");
+        frame();
+        assert_eq!(press([300.0, 400.0], FOUR), Press::Piece(Piece::Chat));
+        drag_to([250.0, 380.0], FOUR);
+        assert!(release());
+        assert_eq!(shift(Piece::Chat, FOUR), [-50.0, -20.0]);
+        assert_eq!(shift(Piece::SpellBars, FOUR), [-200.0, -100.0], "the bars stay");
+        assert!(crate::settings::hud_layout().contains("spellbars "), "kept: {:?}", crate::settings::hud_layout());
+        set_unlocked(false);
+        reset();
     }
 
     /// The quick bar moved, its selected ability's name scrolled in its box

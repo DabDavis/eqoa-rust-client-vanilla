@@ -100,6 +100,18 @@ impl Play {
         self.session.mercs.as_ref().and_then(|m| m.owner(name)).is_some_and(|o| !o.is_empty() && o == self.player.name)
     }
 
+    /// Whether `TargetCentre` (the crosshair: the manual camera all the way
+    /// in, first person's controller targeting) passes the creature over as
+    /// one of a player's side (`m_p256` 3, a pet's): every pet, as the game
+    /// does, but a merc (the GM Jibwiz's petition 2270, 2026-11-17: "players
+    /// need to be able to mouse target or first person view controller target
+    /// mercenaries", to heal and buff them as a group's member is): one whose
+    /// name is drawn as a merc's (`Play::name_color`, the server's 0x7E5B).
+    /// Tab's cycle passes them over still, as it does the group's members.
+    pub(super) fn centre_skips_side(&self, c: &net::entity::Creature) -> bool {
+        c.p256 == 3 && self.name_color(c) != super::MERC_COLOR
+    }
+
     /// The menus came again (a CLIENT image read): the entry is put in again.
     pub(super) fn merc_menu_again(&mut self) {
         self.merc.menu = None;
@@ -373,6 +385,21 @@ mod tests {
         p.merc_action(MSG_DISMISS_MERC);
         assert_eq!(sent(&mut p), vec![vec![0x5C, 0x7E, 1]]);
         assert!(!p.merc_action(crate::record::MSG_RECORD), "another entry's message is not its");
+    }
+
+    /// Petition 2270: the crosshair (`TargetCentre`) takes a merc, where it
+    /// passes a pet over (a player's side, `m_p256` 3). The controls: a pet
+    /// (a side creature of no merc's name) is passed over, and from a server
+    /// that told no mercs a merc's name is a pet's.
+    #[test]
+    fn the_crosshair_takes_a_merc_but_not_a_pet() {
+        let mut p = play();
+        let side = |name: &str| net::entity::Creature { name: name.into(), p256: 3, ..Default::default() };
+        assert!(p.centre_skips_side(&side("Ralthas")), "the control: no server's word, a pet's");
+        p.session.mercs = Some(Mercs { own: false, names: vec!["Ralthas".into()], ..Default::default() });
+        assert!(!p.centre_skips_side(&side("Ralthas")), "a merc: taken");
+        assert!(p.centre_skips_side(&side("Fluffy")), "the control: a pet, passed over");
+        assert!(!p.centre_skips_side(&net::entity::Creature { name: "Gnoll".into(), ..Default::default() }), "not a side creature at all");
     }
 
     /// Group > Dismiss Mercenary (petition 1475) is in every Group menu while

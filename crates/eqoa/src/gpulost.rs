@@ -115,17 +115,41 @@ pub fn threw_why(what: &str) -> String {
     format!("the browser refused the device's calls, its graphics process gone ({what})")
 }
 
+/// Whether the browser's throw (`what`, web/gpuguard.js's words: the call and
+/// its error) was createBuffer's RangeError, a buffer mapped at its making
+/// that the browser found no memory for (Chrome's "createBuffer failed, size
+/// (204064) is too large for the implementation when mappedAtCreation ==
+/// true": Threnody's and Dust's crash reports, 2026-11-16/17): the graphics
+/// memory run out, not the graphics process gone.
+pub fn threw_out_of_memory(what: &str) -> bool {
+    what.contains("createBuffer") && what.contains("RangeError")
+}
+
+/// The browser threw from a WebGPU call (web/gpuguard.js, `what` its words):
+/// the device taken as lost; out of memory (`threw_out_of_memory`) a texture
+/// pack's budget halved too (`render::out_of_memory`), as wgpu's own
+/// out-of-memory error is taken (`watch`).
+pub fn browser_threw_call(what: &str) {
+    if threw_out_of_memory(what) {
+        let n = render::out_of_memory();
+        let what: String = what.lines().next().unwrap_or("").chars().take(200).collect();
+        mark(&format!("out of graphics memory, the browser refused a buffer ({what}; {n} times this run; a texture pack's budget now {} MB)", render::pack_limits().budget >> 20));
+    } else {
+        mark(&threw_why(what));
+    }
+}
+
 /// Whether a panic's text is wgpu's WebGPU backend unwrapping a call the
 /// browser threw from with an InvalidStateError: a lost device's
 /// (`threw_why`), where web/gpuguard.js did not stand in for it.
 pub fn browser_threw(panic: &str) -> bool {
-    panic.contains("backend/webgpu.rs") && panic.contains("InvalidStateError")
+    panic.contains("backend/webgpu.rs") && (panic.contains("InvalidStateError") || (panic.contains("RangeError") && panic.contains("createBuffer")))
 }
 
 /// The page's notice for such a panic: the browser's words (the notice says
 /// to reload).
 pub fn threw_detail(panic: &str) -> String {
-    let at = panic.find("InvalidStateError").unwrap_or(0);
+    let at = panic.find("InvalidStateError").or_else(|| panic.find("RangeError")).unwrap_or(0);
     let words: String = panic[at..].lines().next().unwrap_or("").chars().take(160).collect();
     let words = words.split(" @").next().unwrap_or("").trim().to_string();
     format!("the browser's graphics stopped answering ({words}): its graphics process ended, as a browser's does when it runs short of memory")
@@ -435,6 +459,16 @@ mod tests {
         assert!(!browser_threw("panicked at crates/eqoa/src/web/mod.rs:1:1: InvalidStateError"), "the control: not wgpu's");
         let w = threw_why("GPUDevice.createBuffer: Unable to create buffer.\nmore");
         assert_eq!(w, "the browser refused the device's calls, its graphics process gone (GPUDevice.createBuffer: Unable to create buffer.)");
+        // Threnody's and Dust's (2026-11-16/17): Chrome's RangeError from a
+        // buffer mapped at its making, short of memory: the same notice; and
+        // gpuguard.js's words for it are out of memory, Safari's not
+        let range = "panicked at src/index.crates.io-1949cf8c6b5b557f/wgpu-30.0.1/src/backend/webgpu.rs:2461:63:\ncalled `Result::unwrap()` on an `Err` value: JsValue(RangeError: createBuffer failed, size (204064) is too large for the implementation when mappedAtCreation == true\nRangeError: createBuffer failed";
+        assert!(browser_threw(range));
+        assert!(threw_detail(range).starts_with("the browser's graphics stopped answering (RangeError: createBuffer failed, size (204064)"), "{}", threw_detail(range));
+        assert!(threw_out_of_memory("GPUDevice.createBuffer: RangeError: createBuffer failed, size (204064) is too large for the implementation when mappedAtCreation == true"));
+        assert!(threw_out_of_memory("GPUDevice.createBuffer: RangeError: Failed to execute 'createBuffer' on 'GPUDevice': createBuffer failed, size (1099511627776) is too large for the implementation when mappedAtCreation == true"), "Chrome's words in the page test");
+        assert!(!threw_out_of_memory("GPUDevice.createBuffer: Unable to create buffer."), "the control: Safari's lost device");
+        assert!(!threw_out_of_memory("GPUQueue.writeTexture: RangeError: offset"), "the control: not createBuffer's");
     }
 
     #[test]

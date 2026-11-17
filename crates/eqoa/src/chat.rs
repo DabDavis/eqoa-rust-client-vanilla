@@ -523,7 +523,23 @@ pub fn kind_of(text: &str, color: [f32; 4]) -> Kind {
     if text.split_once(" shouts: ").is_some_and(|(n, _)| !n.is_empty() && !n.contains(':')) {
         return Kind::Shouts;
     }
-    if c == [255, 215, 64] || c == [255, 140, 0] || has(&[" rolls ", "you roll ", " roll for ", " need roll", " greed roll", " rolled "]) {
+    if c == [255, 215, 64] || c == [255, 140, 0] {
+        return Kind::Rolls;
+    }
+    // a say before the words: what someone says ("Jibrish: incoming, mez
+    // resisted", a quick chat's line) is theirs whatever words are in it
+    // (petitions 2271 and 5262: says and the quick chat's lines with a
+    // combat word in them went to the Combat tab)
+    if c == [255, 255, 255]
+        && let Some((name, _)) = text.split_once(": ")
+        && !name.is_empty()
+        && name.len() <= 40
+        && name.split(' ').count() <= 4
+        && name.chars().all(|ch| ch.is_alphabetic() || matches!(ch, ' ' | '\'' | '-' | '`' | '.'))
+    {
+        return Kind::Say;
+    }
+    if has(&[" rolls ", "you roll ", " roll for ", " need roll", " greed roll", " rolled "]) {
         return Kind::Rolls;
     }
     if has(&[" xp", "experience"]) {
@@ -534,15 +550,6 @@ pub fn kind_of(text: &str, color: [f32; 4]) -> Kind {
     }
     if has(&[" hits you", "you hit ", " hit you", " hits ", "damage", " slain", " slays ", " misses", "you miss", "resist", "has died", " dies.", " critical", "stunned", "interrupted", "out of range", "too far away"]) {
         return Kind::Combat;
-    }
-    if c == [255, 255, 255]
-        && let Some((name, _)) = text.split_once(": ")
-        && !name.is_empty()
-        && name.len() <= 40
-        && name.split(' ').count() <= 4
-        && name.chars().all(|ch| ch.is_alphabetic() || matches!(ch, ' ' | '\'' | '-' | '`' | '.'))
-    {
-        return Kind::Say;
     }
     Kind::System
 }
@@ -1323,6 +1330,15 @@ mod tests {
         // another colour are still a tell
         assert_eq!(kind_of("Bob: Ann shouts: hi", white), Kind::Say);
         assert_eq!(kind_of("Ann tells you, 'hi'", white), Kind::Tells);
+        // petitions 2271 and 5262: a say (or a quick chat's line said) with
+        // a combat, loot or experience word in it is a say; the controls:
+        // the same words in a line of no speaker are what they were
+        for say in ["Jibrish: mez resisted, it hits hard", "Jibrish: loot is yours", "Jibrish: 20 xp a kill", "Jibrish: you roll first"] {
+            assert_eq!(kind_of(say, white), Kind::Say, "{say:?}");
+        }
+        assert_eq!(kind_of("Your Mesmerize was resisted.", white), Kind::Combat);
+        assert_eq!(kind_of("You have looted a Rusty Sword.", white), Kind::Loot);
+        assert_eq!(kind_of("You roll 12 (1 to 100).", white), Kind::Rolls);
     }
 
     /// Ticket 1951: a kind sent to a tab goes there and not to Main; the tab

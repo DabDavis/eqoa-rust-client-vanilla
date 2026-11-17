@@ -338,7 +338,18 @@ async def gpuguard(page, check, url):
         const b2 = dev2.createBuffer({ size: 8, usage: GPUBufferUsage.VERTEX });
         out.newReal = b2 instanceof GPUBuffer && !g.isStub(b2);
         out.lossesTold = g.lossesTold;
-        try { dev.destroy(); dev2.destroy(); } catch (e) { out.threw = out.threw || `${e.name}: ${e.message} (destroy)`; }
+        // Chrome short of memory (Threnody's and Dust's crash reports): a
+        // buffer mapped at its making it finds no memory for is a RangeError;
+        // taken as the device lost, a stand-in given, the client told so
+        const dev3 = await (await navigator.gpu.requestAdapter()).requestDevice();
+        const told3 = told.length;
+        try {
+          const big = dev3.createBuffer({ size: 2 ** 40, usage: GPUBufferUsage.VERTEX, mappedAtCreation: true });
+          out.rangeStub = g.isStub(big);
+        } catch (e) { out.rangeThrew = `${e.name}: ${e.message}`; }
+        await new Promise((r) => setTimeout(r, 50));
+        out.rangeTold = told.slice(told3);
+        try { dev.destroy(); dev2.destroy(); dev3.destroy(); } catch (e) { out.threw = out.threw || `${e.name}: ${e.message} (destroy)`; }
         return out;
       } finally { window.eqoaGpuThrew = before; }
     })()""") or {}
@@ -353,6 +364,12 @@ async def gpuguard(page, check, url):
     told = r.get("told") or []
     check("gpuguard: the client told once, with the call", len(told) == 1 and told[0].startswith("GPUDevice.createBuffer: ") and r.get("lossesTold") == 1, str(told))
     check("gpuguard: a new device after it is the browser's", r.get("newReal") is True, str(r))
+    if r.get("rangeStub") is False and not r.get("rangeTold"):
+        check("gpuguard: skipped the RangeError (this browser made the huge buffer an error object, no throw)", True)
+    else:
+        rt = r.get("rangeTold") or []
+        check("gpuguard: createBuffer's RangeError (no memory) gives a stand-in, nothing thrown", r.get("rangeStub") is True and "rangeThrew" not in r, str(r))
+        check("gpuguard: the client told of it as a RangeError", len(rt) == 1 and rt[0].startswith("GPUDevice.createBuffer: RangeError: "), str(rt))
 
 
 async def tests(a, site, base, page):

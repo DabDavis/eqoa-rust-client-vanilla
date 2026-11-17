@@ -26,6 +26,15 @@ is put on the page by `.github/workflows/notes.yml`.
 - Off by default. Your items are moved by the server, never copied: an item you sold, banked or traded since is
   simply left out.
 
+## 2026-11-17 · Chat tabs, stacked spell bars, targeting mercenaries
+- **What someone says stays in the tab for says**: a /say, an NPC's words or a quick chat line with a word like
+  "hit", "resist", "loot" or "xp" in it went to the Combat (or Loot, Experience) tab; it goes where you send says now.
+- **The Stacked Spell Bars move on their own** with Move HUD on: they were part of the chat box and moved with it.
+  They start where they were, over the chat box; drag either one and the other stays put.
+- **The crosshair targets mercenaries**: in first person (and with the camera all the way in) aiming at a mercenary
+  targets it, as it does a creature, to heal or buff it. Pets are still passed over, as on the PS2.
+- **The web page survives the browser running short of graphics memory** when making a buffer: it makes its
+  graphics again, with a texture pack given less memory, where it stopped with a crash before.
 
 ## 2026-11-17 · Zone ambience now follows the Music volume
 - **Zone ambience now follows the Music volume**: the background sounds of each place (and the wind in snow and

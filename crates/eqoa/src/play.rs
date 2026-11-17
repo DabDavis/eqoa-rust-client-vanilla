@@ -5131,7 +5131,7 @@ impl Play {
                 let e = e.as_ref().filter(|e| self.in_scene(e))?;
                 let at = self.slot4_of(k).unwrap_or(e.actor_pos);
                 let d2 = (glam::Vec3::from(e.actor_pos) - eye).length_squared();
-                let side = e.creature.as_ref().is_some_and(|c| c.p256 == 3) && !self.is_dueling(e.id);
+                let side = e.creature.as_ref().is_some_and(|c| self.centre_skips_side(c)) && !self.is_dueling(e.id);
                 Some(Seen { id: e.id, at, selectable: e.p18 & 1 != 0, side, d2 })
             })
             .collect();
@@ -5561,8 +5561,8 @@ impl Play {
             // a right click on a bar's ability: its auto turned (`autocast`);
             // anywhere else, the world's as ever
             if matches!(c, Click::Right(..)) {
-                let chat = moved(crate::hudlayout::Piece::Chat);
-                let bars_at = if self.hud_menus.stacked { [f[0] - side - chat[0], f[1] - up - chat[1]] } else { [f[0] - side - menus[0], f[1] + up - menus[1]] };
+                let stacked = moved(crate::hudlayout::Piece::SpellBars);
+                let bars_at = if self.hud_menus.stacked { [f[0] - side - stacked[0], f[1] - up - stacked[1]] } else { [f[0] - side - menus[0], f[1] + up - menus[1]] };
                 return self.auto_point(bars_at);
             }
             // the compass opens the map, with the Map on (the touch screen's
@@ -5571,9 +5571,11 @@ impl Play {
                 self.map.show();
                 return true;
             }
-            // the stacked bars (ticket 1913) are in the chat box's place
+            // the stacked bars (ticket 1913) where they were put, a piece of
+            // their own (petition 5229)
             let chat = moved(crate::hudlayout::Piece::Chat);
-            let bars_at = if self.hud_menus.stacked { [f[0] - side - chat[0], f[1] - up - chat[1]] } else { [f[0] - side - menus[0], f[1] + up - menus[1]] };
+            let stacked = moved(crate::hudlayout::Piece::SpellBars);
+            let bars_at = if self.hud_menus.stacked { [f[0] - side - stacked[0], f[1] - up - stacked[1]] } else { [f[0] - side - menus[0], f[1] + up - menus[1]] };
             if let Some(k) = self.hud_menus.point(bars_at) {
                 // the pad key it stands for in S2's record, let go at once
                 self.note_hud_key(k, true);
@@ -10050,13 +10052,14 @@ impl Play {
                     }
                 };
                 // Stacked Spell Bars (ticket 1913): the first two bars in two
-                // rows above the chat box, moving with it, no name bar
+                // rows above the chat box, no name bar; a piece of their own
+                // to move (petition 5229), not the chat box's
                 self.hud_menus.stacked = self.stacked_bars();
                 if self.hud_menus.stacked {
                     let (anchor, vertical) = (r.ui.anchor, r.ui.vertical);
                     r.ui.anchor = Anchor::Right;
                     r.ui.vertical = Vertical::Bottom;
-                    let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Chat);
+                    let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::SpellBars);
                     let [left, top] = crate::chat::WndChat::full_top_left(vui, &r);
                     self.hud_menus.draw_stacked(vui, &mut r, top, left, bars);
                     crate::hudlayout::end(r.ui, m);
