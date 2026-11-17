@@ -436,7 +436,7 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
     if let Some((src, hue)) = crate::hat::hat_of(&words.pieces) {
         let made = crate::hat::hat_on(lib, model as u32, &cs, true, src, hue).map(|(n, mut m)| {
             // in the helm's colour (`dye=`, `tint=`), as the world dyes it
-            crate::hat::dyed(&mut m, look.helm_color(&t), |id| lib.lookup(id).is_some());
+            crate::hat::dyed(&mut m, look.helm_color(&t), lib);
             (n, m)
         });
         match &made {

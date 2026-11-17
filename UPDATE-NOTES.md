@@ -8,6 +8,11 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+
+## 2026-11-17 · Dark dyes on hats
+- **A dark or black helm dye now darkens a hat** (the kappa's straw hat in black is black): before, a black dye only
+  greyed it, so it looked undyed. Bright dyes still colour a dark hat (the turban), a little more softly.
+
 ## 2026-11-17 · Storms no longer clear as the camera turns
 - **Snow, whiteouts and sandstorms stay put when you turn the camera**: turning the camera could swing it under a
   tree, an awning or an arch, and the storm then thinned to almost nothing (heavy snow looked clear) until it

@@ -305,13 +305,19 @@ pub fn unhelmed_seat(lib: &Library, id: u32, cs: &CSprite<Ee>, helm: (Vec3, Vec3
     Some((n + (helm.0 - rn) * s, n + (helm.1 - rn) * s))
 }
 
-/// The recolour ([`render::recolor::DYE`]) a hat takes in the helm's dye `c`
-/// (the owner, 2026-11-16: "also turban should be abled to be dyed"): the
-/// dye's hue and saturation over the hat's own shading, its lightness raised
-/// with the dye's (a hat's art is dark: the efreeti lord's turban is a deep
-/// teal, which a plain multiply, an armour piece's MUL, turns black). None for
-/// white or near it (no dye: the hat's own colours) or no colour.
-pub fn dye_of(c: [u8; 4]) -> Option<u32> {
+/// The recolour ([`render::recolor::DYE`]) a hat's texture takes in the
+/// helm's dye `c` (the owner, 2026-11-16: "also turban should be abled to be
+/// dyed"): the dye's hue and saturation over the texture's own shading, and
+/// its lightness moved so the texture's mean (`mean`, 0-1: [`mean_lightness`])
+/// lands on the dye's (lightening by the square root of that): a dark dye
+/// darkens it, a black one (no hue) to near black, a bright one lightens a dark texture (the efreeti lord's turban, a
+/// deep teal, which a plain multiply, an armour piece's MUL, turns black).
+/// Before, the lightness was raised with the dye's whatever the texture, so a
+/// black dye (Hoofbite's 101010) left the pale straw of the kappa's hat a pale
+/// grey: it seemed undyed (the owner, 2026-11-17: "the kappa hat that hoofbie
+/// has isnt being dyed yet"). The scale is at most twice (the DYE byte's 255).
+/// None for white or near it (no dye: the hat's own colours) or no colour.
+pub fn dye_code(c: [u8; 4], mean: f32) -> Option<u32> {
     let [r, g, b, a] = c.map(|v| v as f32 / 255.0);
     if a == 0.0 || (r > 0.94 && g > 0.94 && b > 0.94) {
         return None;
@@ -330,18 +336,43 @@ pub fn dye_of(c: [u8; 4]) -> Option<u32> {
         ((r - g) / d + 4.0) / 6.0
     };
     let byte = |x: f32| (x.round().clamp(0.0, 255.0)) as u32;
-    // the hat's lightness times 1 + 2 L (128 keeps it): a dark dye darkens less
-    // than it brightens a light one, black (L 0) keeps the hat's own shading
-    Some(render::recolor::DYE << 24 | byte(h * 256.0).min(255) << 16 | byte(s.clamp(0.0, 1.0) * 255.0) << 8 | byte(128.0 * (1.0 + 2.0 * l)).min(255))
+    // the texture's lightness times the dye's over the texture's mean (128
+    // keeps it): darkening in full, lightening by its square root (the full
+    // ratio washed a red over pale straw to pink, its light streaks white)
+    let ratio = l / mean.max(0.02);
+    let scale = 128.0 * if ratio < 1.0 { ratio } else { ratio.sqrt() };
+    Some(render::recolor::DYE << 24 | byte(h * 256.0).min(255) << 16 | byte(s.clamp(0.0, 1.0) * 255.0) << 8 | byte(scale).clamp(1, 255))
 }
 
-/// `hat` dyed `c` ([`dye_of`]): every layer's texture recoloured, a texture
-/// `taken` names never reused; none when the colour is no dye.
-pub fn dyed(hat: &mut esf::Model, c: [u8; 4], taken: impl Fn(i32) -> bool) {
-    let Some(r) = dye_of(c) else { return };
+/// The mean HSL lightness (0-1) of a texture's opaque texels (alpha over
+/// half; every texel when none is), its base level decoded; none for a
+/// texture the library cannot decode.
+pub fn mean_lightness(lib: &Library, texture: i32) -> Option<f32> {
+    let img = lib.surface(texture).and_then(|(c, s)| s.decode(&c.data))?;
+    let px: Vec<&[u8]> = img.rgba.chunks_exact(4).collect();
+    let opaque: Vec<&&[u8]> = px.iter().filter(|p| p[3] > 64).collect();
+    let pick: Vec<&[u8]> = if opaque.is_empty() { px.clone() } else { opaque.into_iter().copied().collect() };
+    if pick.is_empty() {
+        return None;
+    }
+    let sum: f32 = pick.iter().map(|p| (p[0].max(p[1]).max(p[2]) as f32 + p[0].min(p[1]).min(p[2]) as f32) / 510.0).sum();
+    Some(sum / pick.len() as f32)
+}
+
+/// `hat` dyed `c` ([`dye_code`]): every layer's texture recoloured by its own
+/// mean lightness (a character's own hat, charaura's, and a worn hat item's
+/// alike: both are the helm's hat, the colour the helm's dye); a texture the
+/// library names never reused; nothing when the colour is no dye.
+pub fn dyed(hat: &mut esf::Model, c: [u8; 4], lib: &Library) {
+    if dye_code(c, 0.5).is_none() {
+        return;
+    }
+    let taken = |id: i32| lib.lookup(id).is_some();
     for l in hat.batches.iter_mut().flat_map(|b| b.layers.iter_mut()) {
-        if l.texture != 0 {
-            l.texture = render::recolor::recolored(l.texture, r, &taken);
+        if l.texture != 0
+            && let Some(r) = dye_code(c, mean_lightness(lib, l.texture).unwrap_or(0.5))
+        {
+            l.texture = render::recolor::recolored(l.texture, r, taken);
         }
     }
 }
@@ -489,28 +520,54 @@ mod tests {
         assert_eq!(m.pos, vec![[10.0, 6.0, 10.5], [11.0, 6.5, 10.0]]);
     }
 
-    /// `dye_of`: white and near it, or no colour, no dye; crimson a red hue,
-    /// full, its lightness raised; dark blue a blue hue; black keeps the
-    /// shading. `dyed` names a recoloured texture for every layer with one.
+    /// `dye_code`: white and near it, or no colour, no dye; crimson a red
+    /// hue, full; dark blue a blue hue; the lightness moved to the dye's from
+    /// the texture's mean: a black dye (Hoofbite's 101010) on the pale straw
+    /// (mean 0.3) darkens it to a fifth, a crimson on the dark turban (0.15)
+    /// lightens it (at most twice). On the disc: the kappa's straw dyed black
+    /// is near black, red is red, and white leaves the texture as it was.
     #[test]
     fn a_hat_dyed() {
-        assert_eq!(dye_of([255, 255, 255, 255]), None);
-        assert_eq!(dye_of([250, 250, 245, 255]), None);
-        assert_eq!(dye_of([0xD1, 0, 0, 0]), None, "alpha 0: none");
-        let red = dye_of([0xD1, 0, 0, 0xFF]).unwrap();
+        assert_eq!(dye_code([255, 255, 255, 255], 0.5), None);
+        assert_eq!(dye_code([250, 250, 245, 255], 0.5), None);
+        assert_eq!(dye_code([0xD1, 0, 0, 0], 0.5), None, "alpha 0: none");
+        let red = dye_code([0xD1, 0, 0, 0xFF], 0.15).unwrap();
         assert_eq!((red >> 24, (red >> 16) & 0xFF, (red >> 8) & 0xFF), (render::recolor::DYE, 0, 255));
-        assert!((red & 0xFF) > 128, "a crimson brightens a dark hat");
-        let blue = dye_of([0x10, 0x20, 0x80, 0xFF]).unwrap();
+        assert!((200..=215).contains(&(red & 0xFF)), "a crimson lightens a dark hat by the root: {}", red & 0xFF);
+        let blue = dye_code([0x10, 0x20, 0x80, 0xFF], 0.6).unwrap();
         assert!(((blue >> 16) & 0xFF).abs_diff(160) < 8, "a blue hue: {:#x}", blue);
-        assert_eq!(dye_of([0, 0, 0, 0xFF]).map(|r| r & 0xFF), Some(128), "black keeps the shading");
-        let layer = |texture: i32| esf::Layer { flags: 1, texture, wrap: 0, blend: 0, color: [255; 4], uv_transform: [0.0; 9], lod_bias: 0.0, uv_rate: [0.0; 2], emissive: [0; 4] };
-        let mut m = esf::Model { batches: vec![esf::Batch { material: 0, layers: vec![layer(0x0808_CC05), layer(0)], indices: Vec::new(), lod: None }], ..Default::default() };
-        dyed(&mut m, [255; 4], |_| false);
-        assert_eq!(m.batches[0].layers[0].texture, 0x0808_CC05, "white: as it was");
-        dyed(&mut m, [0xD1, 0, 0, 0xFF], |_| false);
-        let t = m.batches[0].layers[0].texture;
-        assert_eq!(render::recolor::source_of(t), Some((0x0808_CC05, red)));
-        assert_eq!(m.batches[0].layers[1].texture, 0, "a layer with no texture keeps none");
+        let black = dye_code([0x10, 0x10, 0x10, 0xFF], 0.6).unwrap();
+        assert!((black >> 8) & 0xFF == 0 && (black & 0xFF) < 16, "black darkens the straw, no hue: {black:#x}");
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let (m, cs) = body(&lib, KAPPA_HAT);
+        let straw = cut(&m, &cs, hat_textures(KAPPA_HAT)).unwrap();
+        let tex = straw.batches[0].texture();
+        let mean = mean_lightness(&lib, tex).unwrap();
+        assert!(mean > 0.2, "the straw is lighter than the dye: {mean}");
+        let lightness_of = |m: &esf::Model| {
+            let t = m.batches[0].texture();
+            let (src, r) = render::recolor::source_of(t).unwrap_or((t, 0));
+            let img = lib.surface(src).and_then(|(c, s)| s.decode(&c.data)).unwrap();
+            let mut px = img.rgba.clone();
+            render::recolor::recolor_rgba(&mut px, r);
+            let n = px.len() / 4;
+            (px.chunks_exact(4).map(|p| (p[0].max(p[1]).max(p[2]) as f32 + p[0].min(p[1]).min(p[2]) as f32) / 510.0).sum::<f32>() / n as f32,
+             px.chunks_exact(4).map(|p| p[0] as f32 - p[2] as f32).sum::<f32>() / n as f32)
+        };
+        let mut white = straw.clone();
+        dyed(&mut white, [255; 4], &lib);
+        assert_eq!(white.batches[0].texture(), tex, "white: as it was");
+        let mut dark = straw.clone();
+        dyed(&mut dark, [0x10, 0x10, 0x10, 0xFF], &lib);
+        let (l, _) = lightness_of(&dark);
+        assert!(l < 0.12, "Hoofbite's black darkens the straw: {l}");
+        let mut redden = straw.clone();
+        dyed(&mut redden, [0xD1, 0, 0, 0xFF], &lib);
+        let (l, rb) = lightness_of(&redden);
+        assert!(rb > 60.0 && l > 0.2, "red is red: lightness {l}, red over blue {rb}");
     }
 
     /// The hat fits the body drawn (the owner, 2026-11-17: "dust used an ogre

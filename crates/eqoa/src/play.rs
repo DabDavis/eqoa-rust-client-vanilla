@@ -1389,7 +1389,7 @@ fn attach(lib: &Library, g: &mut Gpu, cs: &CSprite<Ee>, c: &net::entity::Creatur
     // `net::entity::HELM_HAT_AURA`) drawn on it as on a helm
     if let Some((node, mut m)) = c.colors.and_then(|l| crate::hat::hat_of(&l.auras)).and_then(|(src, hue)| crate::hat::hat_on(lib, model, cs, player, src, hue)) {
         // in the helm's dye (the Equipment Dyer's, a GM's #dye): white, its own colours
-        crate::hat::dyed(&mut m, look_of(c).helm_color(&t), |id| lib.lookup(id).is_some());
+        crate::hat::dyed(&mut m, look_of(c).helm_color(&t), lib);
         let mut gpu = g.renderer.upload(g.device, g.queue, &m, &[render::IDENTITY], &textures);
         if let Some(a) = c.colors.map(|l| l.auras).filter(|a| a[crate::aura::HELM] != Default::default()) {
             let (shell, worn) = crate::aura::helm_aura(&a, node);
