@@ -306,27 +306,42 @@ pub struct Holder<'a> {
     pub bones: Option<Bones>,
 }
 
-/// A holder's body as drawn: its placement's inverse (the world to the body's
-/// bind pose), each bone's skin matrix (`toys::skins`) and each bone's place in
-/// the bind pose.
+/// A holder's body as drawn: each bone's transform this frame (its node's
+/// world times the body's centre), and whether it stands still now.
 pub struct Bones {
-    pub inv_centre: glam::Mat4,
-    pub skins: Vec<glam::Mat4>,
-    pub nodes: Vec<glam::Vec3>,
+    pub drawn: Vec<glam::Mat4>,
+    pub still: bool,
+}
+
+thread_local! {
+    /// Each bone-riding bulb's bone and its place in that bone's frame, as
+    /// taken the first time its holder was seen standing (`Bones::follow`),
+    /// by the holder's name, the string and the bulb.
+    static RIDES: RefCell<std::collections::HashMap<(String, usize, usize), (usize, glam::Vec3)>> = RefCell::new(Default::default());
 }
 
 impl Bones {
-    /// `p` (where the bulb hangs off the body at rest) carried by the body's
-    /// nearest bone as it is posed now: Rudolph's nose on his nose as his
-    /// head moves (the owner, 2026-11-17: "rudolphs nose glow needs attached
-    /// to his nose skeleton").
-    pub fn follow(&self, p: glam::Vec3) -> glam::Vec3 {
-        let l = self.inv_centre.transform_point3(p);
-        let near = self.nodes.iter().enumerate().min_by(|a, b| a.1.distance_squared(l).total_cmp(&b.1.distance_squared(l))).map(|(i, _)| i);
-        match near.and_then(|i| self.skins.get(i)) {
-            Some(m) => m.transform_point3(l),
-            None => p,
+    /// `p` (where the bulb hangs off the holder's frame) carried by the bone
+    /// nearest it as the body is drawn: the first time the holder stands
+    /// still, the bulb's place on that bone is taken (the pose it was laid
+    /// on, not the bind pose, which put Rudolph's nose over his head); from
+    /// then on it goes where that bone goes: Rudolph's nose on his nose as
+    /// his head moves (the owner, 2026-11-17: "rudolphs nose glow needs
+    /// attached to his nose skeleton"). Before that, where it was laid.
+    pub fn follow(&self, key: (&str, usize, usize), p: glam::Vec3) -> glam::Vec3 {
+        let k = (key.0.to_string(), key.1, key.2);
+        if let Some((n, off)) = RIDES.with_borrow(|r| r.get(&k).copied())
+            && let Some(m) = self.drawn.get(n)
+        {
+            return m.transform_point3(off);
         }
+        if self.still
+            && let Some((n, m)) = self.drawn.iter().enumerate().min_by(|a, b| a.1.w_axis.truncate().distance_squared(p).total_cmp(&b.1.w_axis.truncate().distance_squared(p)))
+            && m.determinant().abs() > 1e-12
+        {
+            RIDES.with_borrow_mut(|r| r.insert(k, (n, m.inverse().transform_point3(p))));
+        }
+        p
     }
 }
 
@@ -371,7 +386,7 @@ fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64)
         let (dx, dy, dz) = (p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]);
         dx * dx + dy * dy + dz * dz < REACH * REACH
     };
-    for s in &d.strings {
+    for (si, s) in d.strings.iter().enumerate() {
         // where it hangs: each NPC of its name's frame, or the world's own
         let boned = rides_bones(s);
         let frames: Vec<([f32; 3], f32, f32, Option<&Bones>)> = match &s.anchor {
@@ -388,12 +403,12 @@ fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64)
                 continue;
             }
             let (sin, cos) = heading.sin_cos();
-            for b in &s.bulbs {
+            for (bi, b) in s.bulbs.iter().enumerate() {
                 // the NPC's frame as a zone actor's (`esf::zone::Actor::matrix`)
                 let [x, y, z] = b.at;
                 let mut p = [at[0] + scale * (z * sin + x * cos), at[1] + scale * y, at[2] + scale * (z * cos - x * sin)];
-                if let Some(bn) = bones {
-                    p = bn.follow(glam::Vec3::from(p)).to_array();
+                if let (Some(bn), Anchor::Npc(key)) = (bones, &s.anchor) {
+                    p = bn.follow((key, si, bi), glam::Vec3::from(p)).to_array();
                 }
                 if matches!(s.anchor, Anchor::World(_)) && !near(p) {
                     continue;
@@ -638,7 +653,7 @@ fn globes_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64, 
     let e = Vec3::from(eye);
     // by texture: its strips and their colours
     let mut by: Vec<(i32, Vec<Vec<([f32; 2], [f32; 3])>>, Vec<Vec<[f32; 4]>>)> = Vec::new();
-    for s in &d.strings {
+    for (si, s) in d.strings.iter().enumerate() {
         if s.look.bulb_model == 0 {
             continue;
         }
@@ -652,11 +667,11 @@ fn globes_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64, 
         };
         for (at, heading, scale, bones) in frames {
             let (sin, cos) = heading.sin_cos();
-            for b in s.bulbs.iter().filter(|b| b.color & TOP == 0) {
+            for (bi, b) in s.bulbs.iter().enumerate().filter(|(_, b)| b.color & TOP == 0) {
                 let [x, y, z] = b.at;
                 let mut p = Vec3::new(at[0] + scale * (z * sin + x * cos), at[1] + scale * y, at[2] + scale * (z * cos - x * sin));
-                if let Some(bn) = bones {
-                    p = bn.follow(p);
+                if let (Some(bn), Anchor::Npc(key)) = (bones, &s.anchor) {
+                    p = bn.follow((key, si, bi), p);
                 }
                 if (p - e).length() > REACH {
                     continue;
@@ -1019,20 +1034,24 @@ mod tests {
         assert!(!is_art(0x0B3B_A520));
     }
 
-    /// A red nose rides the nearest bone: at rest where it was laid, and
-    /// moved with the head as the head turns; a tree's corded strings do not.
+    /// A red nose rides the nearest bone: where it was laid until its holder
+    /// is first seen standing, then on that bone as the bone moves; a tree's
+    /// corded strings do not ride.
     #[test]
     fn a_nose_rides_the_head() {
         use glam::{Mat4, Vec3};
         let at = Vec3::new(0.0, 2.85, 1.1);
-        let rest = Bones { inv_centre: Mat4::IDENTITY, skins: vec![Mat4::IDENTITY; 2], nodes: vec![Vec3::ZERO, Vec3::new(0.0, 2.6, 0.8)] };
-        assert!(rest.follow(at).distance(at) < 1e-5, "at rest: where it was laid");
-        // the head (node 1) dropped half a unit and turned a quarter about its own place
-        let head = Vec3::new(0.0, 2.6, 0.8);
-        let m = Mat4::from_translation(head - Vec3::Y * 0.5) * Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2) * Mat4::from_translation(-head);
-        let turned = Bones { skins: vec![Mat4::IDENTITY, m], ..rest };
-        let q = turned.follow(at);
-        assert!(q.distance(m.transform_point3(at)) < 1e-5 && q.distance(at) > 0.4, "with the head: {q}");
+        let head = Mat4::from_translation(Vec3::new(0.0, 2.6, 0.8));
+        let key = ("rudolph-test", 0, 0);
+        let running = Bones { drawn: vec![Mat4::IDENTITY, head], still: false };
+        assert_eq!(running.follow(key, at), at, "not yet seen standing: where it was laid");
+        let standing = Bones { drawn: vec![Mat4::IDENTITY, head], still: true };
+        assert!(standing.follow(key, at).distance(at) < 1e-5, "standing: where it was laid");
+        // the head dropped half a unit and turned a quarter: the nose with it
+        let moved = head * Mat4::from_translation(-Vec3::Y * 0.5) * Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let q = Bones { drawn: vec![Mat4::IDENTITY, moved], still: false }.follow(key, at);
+        let want = moved.transform_point3(head.inverse().transform_point3(at));
+        assert!(q.distance(want) < 1e-5 && q.distance(at) > 0.4, "with the head: {q}");
         let mut nose = tree(Effect::Steady).strings[0].clone();
         nose.anchor = Anchor::Npc("rudolph".into());
         nose.bulbs = vec![Bulb { at: at.to_array(), color: 0, phase: 0 }];

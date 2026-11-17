@@ -11,6 +11,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Weather where you stand, a smooth sleigh ride
+- **The weather goes by where your character stands**, not where the camera is: swinging the camera under an
+  awning, through a wall or across a region's edge no longer changes the sky, how hard it rains or the wind.
+- **A smooth sleigh ride**: the sleigh, its team, Santa and its riders now glide along a smooth curve through the
+  server's updates, a fraction of a second behind them, turning smoothly too, with no nudge as each update comes.
+- **Rudolph's nose sits on his nose**: the glow was above his head; it now starts on his nose and moves with it.
+
 ## 2026-11-17 · Rudolph's nose, a steadier sleigh ride
 - **Rudolph's nose glows on his nose**: the red glow now moves with his head as he runs, instead of hanging where
   his nose would be standing still.

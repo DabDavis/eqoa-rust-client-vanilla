@@ -281,21 +281,30 @@ impl Weather {
     /// profiles, then `Update` (the clock, the sky's rotations, the weather
     /// field, the transitions and the rain's and thunder's voices). Leaves
     /// the weather's intensity on `sound` for its track (`SetSoundTrack`).
-    /// `at` is the character's place (its feet), which the roof is probed
-    /// over: not the camera's, which a turn swings under a tree or an awning.
+    /// `at` is the character's place (its feet): the sky's profiles, how
+    /// much it is outdoors, the roof, the upwind wall and the dust's ground
+    /// are all judged from its head, not the camera's place, which a turn
+    /// swings under a tree or an awning; the drops still fall round the eye.
     pub fn frame(&mut self, world: &mut World<Ee>, sound: Option<&mut crate::sound::Sound>, eye: &vi::camera::Eye<Ee>, at: &Vect3<Ee>, time: i64, hour: f32) {
         if time + self.offset < self.last {
             self.offset = self.last - time;
         }
         let time = time + self.offset;
         self.last = time;
+        // the character's head: where the weather is judged from, not the
+        // camera (the owner, 2026-11-17: "the weather effects are using the
+        // camera position instead of the player model position"): a camera
+        // swung under an awning, through a wall or across a profile's edge
+        // changed the sky, the rain's strength and the wind for a player who
+        // had not moved
+        let head = Vect3::new(at.x, at.y + F::new(JUDGED_AT), at.z);
         if let Some(g) = &world.grid {
-            let b = g.profile_blend(&eye.position);
+            let b = g.profile_blend(&head);
             self.atm.set_sky(&b, self.first);
             self.first = false;
         }
         // CalcOutdoorsIntensity, ahead of the atmosphere's Update
-        let o = self.outdoors.update(world, &eye.position, time);
+        let o = self.outdoors.update(world, &head, time);
         let mut sound = sound;
         if !self.sounds_attached
             && let Some(s) = sound.as_deref()
@@ -320,8 +329,8 @@ impl Weather {
             let head = Vect3::new(at.x, at.y + F::new(1.0), at.z);
             up.init(head, Vect3::new(at.x, at.y + F::new(121.0), at.z));
             self.roof = atmosphere::Scene::collide_ray(&mut Rays(world), &mut up);
-            let p = eye.position;
-            // the ground under the eye, which the dust skims
+            let p = head;
+            // the ground under the character, which the dust skims
             let mut down = CollRay::default();
             down.init(p, Vect3::new(p.x, p.y - F::new(200.0), p.z));
             self.dust.ground = atmosphere::Scene::collide_ray(&mut Rays(world), &mut down).then(|| down.hit_point().y.0);
@@ -460,6 +469,9 @@ fn quads(bbs: &[Billboard<Ee>]) -> Vec<Quad> {
 /// frustum's near plane (normal out of the frustum, 0.3 ahead of the eye,
 /// as the client's projection has it). The view matrix only places the sky
 /// sprites, which `sky.rs` places itself.
+/// How far over a character's feet the weather is judged from (its head).
+const JUDGED_AT: f32 = 1.5;
+
 fn camera(eye: &vi::camera::Eye<Ee>) -> Camera<Ee> {
     let mut d = eye.direction;
     d.normalize();

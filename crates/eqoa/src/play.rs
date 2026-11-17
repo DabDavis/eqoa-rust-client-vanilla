@@ -286,11 +286,9 @@ pub struct Play {
     /// sleigh's team, Santa at the reins, its riders. Carried along their
     /// velocity like the vehicle, never stood on a floor.
     carried: Vec<bool>,
-    /// Each carried slot's correction still to ease out (`CARRY_EASE`): where
-    /// it was drawn when an update came, less where the update put it.
-    carry_off: Vec<[f32; 3]>,
-    /// The game's clock at the last frame's easing.
-    carry_ms: i64,
+    /// Each carried slot's last updates (`CarrySample`), drawn `CARRY_DELAY`
+    /// behind the newest along a curve through them (`carry_at`).
+    carry_buf: Vec<std::collections::VecDeque<CarrySample>>,
     /// Each entity's actor in the walker's collision world (`m_actor`), by
     /// slot (`place_actors`), and the player's own (`place_self_actor`): what
     /// a walk stops at. The scene they are in (`World::serial`), and the
@@ -868,16 +866,55 @@ fn carried_by(movers: &[([f32; 3], [f32; 3])], pos: [f32; 3], vel: [f32; 3]) -> 
     })
 }
 
-/// How long a carried creature's correction takes to ease out (the time
-/// constant: about two thirds gone in it).
-const CARRY_EASE: f32 = 0.35;
+/// How far behind its newest update a carried creature is drawn (ms): a
+/// little over the server's 100 ms between updates, so there is nearly always
+/// an update on each side of the moment drawn.
+const CARRY_DELAY: i64 = 150;
 
-/// A correction past this is a move, taken at once.
+/// An update past this is a move, taken at once.
 const CARRY_SNAP: f32 = 25.0;
 
-/// The share of a correction left `dt` seconds on (`CARRY_EASE`).
-fn carry_left(dt: f32) -> f32 {
-    (-dt.max(0.0) / CARRY_EASE).exp()
+/// One update of a carried creature: when it came (the game's ms), where,
+/// its velocity and its heading.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CarrySample {
+    ms: i64,
+    pos: [f32; 3],
+    vel: [f32; 3],
+    heading: f32,
+}
+
+/// Where `buf`'s creature is at `t`: between two updates on the cubic through
+/// both with their velocities (Hermite: no corner at an update), the heading
+/// turned the short way between theirs; past the newest, carried on along its
+/// velocity; before the oldest, at the oldest. None with no update.
+fn carry_at(buf: &std::collections::VecDeque<CarrySample>, t: i64) -> Option<([f32; 3], f32)> {
+    let last = buf.back()?;
+    if t >= last.ms {
+        let dt = ((t - last.ms) as f32 * 0.001).min(1.0);
+        return Some(([last.pos[0] + last.vel[0] * dt, last.pos[1] + last.vel[1] * dt, last.pos[2] + last.vel[2] * dt], last.heading));
+    }
+    let first = buf.front()?;
+    if t <= first.ms {
+        return Some((first.pos, first.heading));
+    }
+    let k = buf.iter().position(|b| b.ms > t)?;
+    let (a, b) = (buf[k - 1], buf[k]);
+    let span = (b.ms - a.ms) as f32 * 0.001;
+    let u = (t - a.ms) as f32 * 0.001 / span;
+    let (u2, u3) = (u * u, u * u * u);
+    let (h00, h10, h01, h11) = (2.0 * u3 - 3.0 * u2 + 1.0, u3 - 2.0 * u2 + u, -2.0 * u3 + 3.0 * u2, u3 - u2);
+    let mut pos = [0.0; 3];
+    for i in 0..3 {
+        pos[i] = h00 * a.pos[i] + h10 * span * a.vel[i] + h01 * b.pos[i] + h11 * span * b.vel[i];
+    }
+    let mut turn = (b.heading - a.heading) % std::f32::consts::TAU;
+    if turn > std::f32::consts::PI {
+        turn -= std::f32::consts::TAU;
+    } else if turn < -std::f32::consts::PI {
+        turn += std::f32::consts::TAU;
+    }
+    Some((pos, a.heading + turn * u))
 }
 
 /// How far from a flying vehicle a creature at its speed is carried with it:
@@ -901,15 +938,26 @@ mod carried {
         assert!(!carried_by(&[], [101.0, 80.0, 100.0], [12.0, 0.5, 0.0]), "no vehicle flying");
     }
 
-    /// A correction eases out: whole at once, two thirds gone in
-    /// `CARRY_EASE`, nearly all in a second, and a frame's worth smoothly.
+    /// The curve through the updates passes through each, carries on along
+    /// the newest's velocity past it, and keeps a steady speed between two
+    /// updates on a straight line; the heading turns the short way.
     #[test]
-    fn a_correction_eases_out() {
-        assert!((carry_left(0.0) - 1.0).abs() < 1e-6);
-        assert!((carry_left(CARRY_EASE) - (-1.0f32).exp()).abs() < 1e-5);
-        assert!(carry_left(1.0) < 0.06);
-        let frames: f32 = (0..60).fold(1.0, |k, _| k * carry_left(1.0 / 60.0));
-        assert!((frames - carry_left(1.0)).abs() < 1e-4, "the same at any frame rate");
+    fn carried_along_the_updates() {
+        let mut buf = std::collections::VecDeque::new();
+        assert_eq!(carry_at(&buf, 0), None);
+        for k in 0..3 {
+            buf.push_back(CarrySample { ms: 1000 + 100 * k, pos: [2.0 * k as f32, 50.0, 0.0], vel: [20.0, 0.0, 0.0], heading: 6.2 + 0.1 * k as f32 });
+        }
+        let at = |t| carry_at(&buf, t).unwrap();
+        assert_eq!(at(1100).0, [2.0, 50.0, 0.0], "through each update");
+        assert!((at(1150).0[0] - 3.0).abs() < 1e-4, "steady between: {:?}", at(1150));
+        assert!((at(1250).0[0] - 5.0).abs() < 1e-4, "on past the newest");
+        assert_eq!(at(500).0, [0.0, 50.0, 0.0], "before the oldest: there");
+        // 6.4 (past 2 pi) to 0.1: a turn of -0.017 across the wrap, not -6.3 the long way round
+        buf.push_back(CarrySample { ms: 1300, pos: [6.0, 50.0, 0.0], vel: [20.0, 0.0, 0.0], heading: 0.1 });
+        let h = carry_at(&buf, 1250).unwrap().1;
+        let want = 6.4 + (0.1 - 6.4 + std::f32::consts::TAU) / 2.0;
+        assert!((h - want).abs() < 1e-4, "the short way: {h} against {want}");
     }
 }
 
@@ -3394,7 +3442,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_off: vec![[0.0; 3]; MAX_SLOTS], carry_ms: 0, actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -4041,23 +4089,32 @@ impl Play {
                         e.extrapolated = game_ms;
                     });
                     self.carried[slot] = carry;
-                    // a flying vehicle and what it carries: the update's
-                    // correction eased out over `CARRY_EASE` from where it was
-                    // drawn (the owner, 2026-11-17: "the sleigh jitteryness is
-                    // still bad"), not in the channel's 0.2 s or at once (an
-                    // unchanged velocity), which shook a rider's whole view
-                    self.carry_off[slot] = [0.0; 3];
-                    if carry
-                        && let Some(e) = self.entities.slots[slot].as_mut()
-                        && let Some((id, drawn, _)) = was
-                        && e.id == id
-                    {
-                        let off = [drawn[0] - e.pos[0], drawn[1] - e.pos[1], drawn[2] - e.pos[2]];
-                        // a jump the size of a teleport is taken at once
-                        if off.iter().map(|d| d * d).sum::<f32>() < CARRY_SNAP * CARRY_SNAP {
-                            self.carry_off[slot] = off;
+                    // a flying vehicle and what it carries: each update kept,
+                    // and drawn `CARRY_DELAY` behind along a curve through
+                    // them (the owner, 2026-11-17: "the sleigh ride is still
+                    // not smooth enough"): no correction ever shows, where
+                    // easing each one in still nudged a rider's whole view
+                    let buf = &mut self.carry_buf[slot];
+                    match self.entities.slots[slot].as_mut().filter(|e| carry && was.is_none_or(|w| w.0 == e.id)) {
+                        Some(e) => {
+                            let v = e.creature.as_ref().map_or([0.0; 3], |c| c.velocity);
+                            let sample = CarrySample { ms: game_ms, pos: e.pos, vel: v, heading: e.hpr[0] };
+                            // a jump the size of a teleport, or a long silence: anew
+                            if buf.back().is_some_and(|b| game_ms - b.ms > 2000 || game_ms < b.ms || (0..3).map(|i| (b.pos[i] - e.pos[i]).powi(2)).sum::<f32>() > CARRY_SNAP * CARRY_SNAP) {
+                                buf.clear();
+                            }
+                            // two in one frame: the newer stands for both
+                            if buf.back().is_some_and(|b| b.ms == game_ms) {
+                                buf.pop_back();
+                            }
+                            buf.push_back(sample);
+                            while buf.len() > 8 {
+                                buf.pop_front();
+                            }
+                            e.vel = [0.0; 3];
+                            e.rot = [0.0; 3];
                         }
-                        e.vel = [0.0; 3];
+                        None => buf.clear(),
                     }
                     // a player aloft goes on from where it was drawn though its
                     // speed came unchanged (`jump::keeps_its_blend`)
@@ -4334,7 +4391,7 @@ impl Play {
             e.extrapolated = game_ms;
         }
         self.entities.extrapolate(self_id, now, UPDATE_RATE);
-        self.ease_carried(game_ms);
+        self.draw_carried(game_ms);
         // a rider on its vehicle's deck as the vehicle is drawn (`ride`)
         self.ride_frame(walker);
         self.admin_hold_glide();
@@ -5385,29 +5442,17 @@ impl Play {
         walker.ride_at(at);
     }
 
-    /// The carried creatures' corrections (`carry_off`) eased by the time
-    /// since the last frame, each drawn that far from where it is carried.
-    fn ease_carried(&mut self, game_ms: i64) {
-        let dt = if self.carry_ms == 0 { 0.0 } else { (game_ms - self.carry_ms) as i32 as f32 * 0.001 };
-        self.carry_ms = game_ms;
-        let k = carry_left(dt);
+    /// The carried creatures drawn `CARRY_DELAY` behind their newest update,
+    /// on the curve through their updates (`carry_at`).
+    fn draw_carried(&mut self, game_ms: i64) {
         for (slot, e) in self.entities.slots.iter_mut().enumerate() {
-            let off = &mut self.carry_off[slot];
-            if *off == [0.0; 3] {
+            let Some(e) = e else { continue };
+            if !self.carried[slot] {
                 continue;
             }
-            for i in 0..3 {
-                off[i] *= k;
-                if off[i].abs() < 1e-4 {
-                    off[i] = 0.0;
-                }
-            }
-            if let Some(e) = e
-                && self.carried[slot]
-            {
-                for i in 0..3 {
-                    e.actor_pos[i] += off[i];
-                }
+            if let Some((pos, heading)) = carry_at(&self.carry_buf[slot], game_ms - CARRY_DELAY) {
+                e.actor_pos = pos;
+                e.actor_hpr[0] = heading;
             }
         }
     }
@@ -10988,13 +11033,9 @@ impl Play {
             let (Some(e), Some(Some(p))) = (e.as_ref(), self.puppets.get(slot)) else { continue };
             let Some(c) = e.creature.as_ref().filter(|_| !a_player(e)) else { continue };
             // the body's bones as drawn, for a string riding them (a red nose)
-            let bones = p.sprite.as_ref().filter(|_| !boned.is_empty() && boned.contains(&net::npctint::key(&c.name))).map(|cs| {
-                let centre = glam::Mat4::from_cols_array_2d(&p.centre.to_cols());
-                crate::decorlights::Bones {
-                    inv_centre: centre.inverse(),
-                    skins: crate::toys::skins(cs, &p.centre),
-                    nodes: cs.h.nodes.iter().map(|n| glam::Mat4::from_cols_array_2d(&n.inv_bind_world.to_cols()).inverse().w_axis.truncate()).collect(),
-                }
+            let bones = p.sprite.as_ref().filter(|_| !boned.is_empty() && boned.contains(&net::npctint::key(&c.name))).map(|cs| crate::decorlights::Bones {
+                drawn: cs.h.nodes.iter().map(|n| glam::Mat4::from_cols_array_2d(&Matrix44::mul(&n.world, &p.centre).to_cols())).collect(),
+                still: c.velocity.iter().all(|v| v.abs() < 0.05),
             });
             holders.push(crate::decorlights::Holder { name: &c.name, at: e.actor_pos, heading: e.actor_hpr[0], scale: if e.scale > 0.0 { e.scale } else { 1.0 }, bones });
         }
