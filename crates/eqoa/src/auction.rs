@@ -486,6 +486,9 @@ enum SellChild {
     Form,
     Edit,
     MBox,
+    /// the selected item's whole description, stats too (`Info::inspect_item`)
+    /// in the item menu's `VIWndInspect` (□), △ back
+    Inspect,
 }
 
 /// `VIWndAuction`: the bank's items (80 rows, or the bank's on a server that
@@ -495,6 +498,14 @@ enum SellChild {
 /// Yes/No box before the sale is sent. A pointer (`pointer`) takes the
 /// list's rows, then the form's (a click on another row selects it, on the
 /// selected one edits it or asks), then the editor's and the box's.
+///
+/// □ (the keyboard's Q), from the list or the form, opens the selected
+/// item's whole description with its stat bonuses and its text (what a loot
+/// roll's Inspect shows, `Info::inspect_item`) in the item menu's
+/// `VIWndInspect`; △ closes it. A click or a tap on the item's text beside
+/// the list, or on the form's item row, does the same (Zerkziee's petition
+/// 2134: the stats before the item is put up). The client's own: the disc's
+/// window shows only `DescribeBankItem`'s lines.
 pub struct SellWnd {
     bank: WndList,
     edit: EditBox,
@@ -514,13 +525,20 @@ pub struct SellWnd {
     sell: Window,
     /// the form's rows where they were drawn, by field, for a pointer
     hits: Hits,
+    /// the selection's whole description as last drawn (`Info::inspect_item`),
+    /// for □
+    whole: String,
+    inspect: crate::itemmenu::Inspect,
+    /// the inspect window is to be sized to its text at the next draw (the
+    /// keys have no raster to measure with)
+    inspect_new: bool,
 }
 
 impl Default for SellWnd {
     fn default() -> Self {
         let mut bank = WndList::with_rows([16, 37], 0, 80);
         bank.set_x64(true);
-        SellWnd { bank, edit: EditBox::default(), mbox: MBox::default(), child: SellChild::Form, selling: false, field: 0, qty: 1, price: 0, buyout: 0, duration: 0, window: Window::default(), sell: Window::default(), hits: Hits::default() }
+        SellWnd { bank, edit: EditBox::default(), mbox: MBox::default(), child: SellChild::Form, selling: false, field: 0, qty: 1, price: 0, buyout: 0, duration: 0, window: Window::default(), sell: Window::default(), hits: Hits::default(), whole: String::new(), inspect: Default::default(), inspect_new: false }
     }
 }
 
@@ -551,6 +569,21 @@ impl SellWnd {
         self.selling = false;
         self.field = 0;
         self.child = SellChild::Form;
+        self.inspect.visible = false;
+    }
+
+    /// □: the selected item's whole description in the inspect window, when
+    /// one is selected (sound 13); else nothing (sound 9).
+    fn open_inspect(&mut self, cues: &mut Vec<i32>) {
+        if self.whole.is_empty() {
+            cues.push(9);
+            return;
+        }
+        cues.push(13);
+        self.inspect.set(1, -1, &self.whole);
+        self.inspect.visible = true;
+        self.inspect_new = true;
+        self.child = SellChild::Inspect;
     }
 
     /// The editor is up (it takes the keyboard's characters).
@@ -562,17 +595,27 @@ impl SellWnd {
     /// editor, the box); else, the form down, a row of the bank's list
     /// selected or its selection taken (Enter: the form); the form up, one
     /// of its rows selected (not the item's, which the keys skip) or the
-    /// selected one edited or confirmed (Enter). The keys to press.
+    /// selected one edited or confirmed (Enter). The item's text beside the
+    /// list, and the form's item row, □ (its whole description); the
+    /// inspect window up, a click off it △. The keys to press.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
         match self.child {
             SellChild::Edit => return self.edit.point(p).flatten().into_iter().collect(),
             SellChild::MBox => return self.mbox.point(p).then_some(key::CROSS).into_iter().collect(),
+            // its legend's △ is a glyph; off the window, △
+            SellChild::Inspect => return if self.inspect.at(p) { Vec::new() } else { vec![key::TRIANGLE] },
             SellChild::Form => {}
         }
         if !self.selling {
-            return self.bank.row_at(p).map(|row| self.bank.pick(row)).into_iter().collect();
+            if let Some(row) = self.bank.row_at(p) {
+                return vec![self.bank.pick(row)];
+            }
+            let (tl, br) = (self.window.top_left(), self.window.bottom_right());
+            let on_text = (tl[0] as f32..br[0] as f32).contains(&p[0]) && (tl[1] as f32..br[1] as f32).contains(&p[1]);
+            return if on_text && !self.whole.is_empty() { vec![key::SQUARE] } else { Vec::new() };
         }
         match self.hits.at(p) {
+            Some(0) => vec![key::SQUARE],
             Some(f) if f == self.field => vec![key::CROSS],
             Some(f) if f >= Fields::now().first() => {
                 self.field = f;
@@ -712,7 +755,19 @@ impl SellWnd {
                 }
                 return;
             }
+            SellChild::Inspect => {
+                if self.inspect.key(key, down, cues) {
+                    self.inspect.visible = false;
+                    self.child = SellChild::Form;
+                }
+                return;
+            }
             SellChild::Form => {}
+        }
+        if down && matches!(key, 81 | 113 | 133) {
+            // □ (the keyboard's Q): the item's stats, the list's or the form's
+            self.open_inspect(cues);
+            return;
         }
         if !down {
             if !self.selling {
@@ -821,12 +876,22 @@ impl SellWnd {
         vui.blit_studded_horz(r, [165, 37], 37, 38, 310, 2, 0, 1.0, 0);
         vui.blit_studded_horz(r, [165, 313], 40, 41, 310, 2, 0, 1.0, 0);
         vui.blit_horz(r, [16, 322], 60, 608, 0, 1.0, 0);
-        let text = bank.items.get(self.bank.sel.max(0) as usize).map_or_else(String::new, |it| info.bank_item(it));
+        let sel = bank.items.get(self.bank.sel.max(0) as usize);
+        let text = sel.map_or_else(String::new, |it| info.bank_item(it));
+        self.whole = sel.map_or_else(String::new, |it| info.inspect_item(it));
         self.window.init(vui, r, [390, 180], 470, 14, 0);
         self.window.set_title(Some(&[]));
         self.window.draw(vui, r);
         let ww = self.window.size[0];
-        self.window.text_box(vui, r, &wide(&text), 20, 0, ww - 40, 14, [1.0, 1.0, 1.0, self.window.open], 2);
+        let color = [1.0, 1.0, 1.0, self.window.open];
+        if self.whole.is_empty() {
+            self.window.text_box(vui, r, &wide(&text), 20, 0, ww - 40, 14, color, 2);
+        } else {
+            // the last row says □ shows the stats (petition 2134)
+            self.window.text_box(vui, r, &wide(&text), 20, 0, ww - 40, 13, color, 2);
+            let legend = wide(&format!("|s{}", vui.words.get(122, vui.language)));
+            self.window.text_box(vui, r, &legend, 20, 13, ww - 40, 1, color, 0);
+        }
         self.bank.x84 = !self.selling;
         self.bank.draw(vui, r, now, cues);
         if self.selling {
@@ -836,6 +901,12 @@ impl SellWnd {
             SellChild::Edit => self.edit.draw(vui, r, now, cues),
             SellChild::MBox => {
                 self.mbox.draw(vui, r, now);
+            }
+            SellChild::Inspect => {
+                if std::mem::take(&mut self.inspect_new) {
+                    self.inspect.focus(vui, r);
+                }
+                self.inspect.draw(vui, r, cues);
             }
             SellChild::Form => {}
         }
@@ -886,7 +957,7 @@ impl SellWnd {
         let line = wide(&format!("*{}: {} {}", vui.words.get(1788, vui.language), fee, vui.words.get(479, vui.language)));
         let width = s.size[0] - 30 - cols[0];
         Self::draw_row(s, vui, r, f.rows() - 2, Some(&line), cols[0], None, width, None, cols[2], false, false);
-        let legend = wide(&format!("|x{}   |t{}", vui.words.get(212, vui.language), vui.words.get(161, vui.language)));
+        let legend = wide(&format!("|x{}   |s{}   |t{}", vui.words.get(212, vui.language), vui.words.get(122, vui.language), vui.words.get(161, vui.language)));
         s.text_box(vui, r, &legend, 20, f.rows() - 1, s.size[0] - 40, 1, [1.0, 1.0, 1.0, s.open], 0);
     }
 }
@@ -1325,7 +1396,7 @@ mod tests {
         assert_eq!(s.field, 3, "the duration");
         assert_eq!(s.point(p), vec![key::CROSS]);
         let p = field(&s, 0);
-        assert!(s.point(p).is_empty(), "the item's row");
+        assert_eq!(s.point(p), vec![key::SQUARE], "the item's row: its stats");
         assert!(s.point(row(0)).is_empty(), "the list behind the form");
         assert_eq!(s.field, 3);
         // Enter on the duration: the editor, which then takes the clicks
@@ -1335,5 +1406,76 @@ mod tests {
         let want: Vec<i32> = s.edit.point(p).flatten().into_iter().collect();
         assert_eq!(s.point(p), want, "the editor's answer");
         assert_eq!(s.field, 3, "Ok is behind the editor");
+    }
+
+    /// Petition 2134: the item's stats before it is put up. □ (or the
+    /// keyboard's Q) from the list, or from the form, opens the selected
+    /// item's whole description (its stat bonuses and its text, which the
+    /// text beside the list leaves out) in the inspect window; △ closes it
+    /// back where it was, the form's numbers kept, nothing sold. A click on
+    /// the text beside the list, or on the form's item row, is □; a click off
+    /// the window △. The legends name □. The control: an empty bank, □ is
+    /// refused (sound 9) and no window opens.
+    #[test]
+    fn the_stats_before_listing() {
+        use crate::pointer::testing::mid;
+        use net::dump::{Item, ItemStat};
+        let vui = Vui::new(numbered(), Default::default(), Vec::new());
+        let mut bank = ItemList::default();
+        let stats = vec![ItemStat { id: 0, value: 5 }, ItemStat { id: 12, value: 9 }];
+        let item = Item { name: "Sword".into(), rent: 1, value: 40, stats, desc: "A blade.".into(), ..Default::default() };
+        bank.items.push(NetItem { quantity: 1, equip_slot: -1, quick_slot: -1, item, ..Default::default() });
+        let base = [0; 29];
+        let inv = ItemList::default();
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let (mut cues, mut out) = (Vec::new(), Vec::new());
+        let mut s = SellWnd::default();
+        let mut r = Rec::default();
+        s.focus(&vui, &r);
+        s.draw(&vui, &mut r, &info, &bank, &|_| 1, 0, &mut cues);
+        let said = r.0.join("\n");
+        assert!(r.0.iter().any(|l| l == "w122"), "the list's text names □ (its glyph, then the word): {said}");
+        assert!(!said.contains("w226: 5"), "the text beside the list has no stats");
+        // a click on the text beside the list: □
+        let (tl, br) = (s.window.top_left(), s.window.bottom_right());
+        let on_text = [((tl[0] + br[0]) / 2) as f32, ((tl[1] + br[1]) / 2) as f32];
+        assert_eq!(s.point(on_text), vec![key::SQUARE]);
+        cues.clear();
+        s.key(&vui, &r, &bank, 133, true, 0, &mut cues, &mut out);
+        assert_eq!((s.child, cues.clone()), (SellChild::Inspect, vec![13]));
+        let mut r = Rec::default();
+        s.draw(&vui, &mut r, &info, &bank, &|_| 1, 0, &mut cues);
+        let said = r.0.join("\n");
+        for want in ["Sword", "w226: 5", "w240: 9", "A blade."] {
+            assert!(said.contains(want), "{want} in the inspect window: {said}");
+        }
+        assert_eq!(s.point([2.0, 2.0]), vec![key::TRIANGLE], "off the window: △");
+        s.key(&vui, &r, &bank, 132, true, 0, &mut cues, &mut out);
+        assert_eq!(s.child, SellChild::Form, "△: back to the list");
+        assert!(out.is_empty() && !s.selling, "△ closed the window, not the list");
+        // the form: Enter, a price typed, □ from it, △ back with the price kept
+        s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+        assert!(s.selling);
+        s.price = 77;
+        let mut r = Rec::default();
+        s.draw(&vui, &mut r, &info, &bank, &|_| 1, 0, &mut cues);
+        assert!(r.0.iter().any(|l| l.contains("w122")), "the form's legend names □: {:?}", r.0);
+        let item_row = mid(rows_rect(&s.sell, &vui, &r, 40, 1, s.sell.size[0] - 70, 1));
+        assert_eq!(s.point(item_row), vec![key::SQUARE], "the form's item row");
+        s.key(&vui, &r, &bank, 81, true, 0, &mut cues, &mut out);
+        assert_eq!(s.child, SellChild::Inspect, "Q from the form");
+        s.key(&vui, &r, &bank, 27, true, 0, &mut cues, &mut out);
+        assert_eq!((s.child, s.selling, s.price), (SellChild::Form, true, 77), "back to the form as it was");
+        assert!(out.is_empty(), "nothing sold");
+        // the control: an empty bank
+        let empty = ItemList::default();
+        let mut s = SellWnd::default();
+        let mut r = Rec::default();
+        s.focus(&vui, &r);
+        s.draw(&vui, &mut r, &info, &empty, &|_| 1, 0, &mut cues);
+        assert!(!r.0.iter().any(|l| l.contains("w122")), "no item, no legend");
+        cues.clear();
+        s.key(&vui, &r, &empty, 133, true, 0, &mut cues, &mut out);
+        assert_eq!((s.child, cues), (SellChild::Form, vec![9]));
     }
 }

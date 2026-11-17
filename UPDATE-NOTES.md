@@ -11,6 +11,12 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · An item's stats before you auction it
+- **See an item's stats before you put it up for auction**: in the bank's auction page, press □ (Q on the
+  keyboard), or click or tap the item's text, to see everything about the selected item, its stat bonuses and
+  its description too; it works from the sell form as well (click its Item row). △ closes it, and your prices
+  stay as you typed them.
+
 ## 2026-11-17 · Rudolph's nose, moved
 - **Rudolph's nose glows where the GMs put it**: moving the glow now shows at once, without restarting the game.
 
