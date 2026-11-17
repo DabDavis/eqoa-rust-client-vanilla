@@ -10,6 +10,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 
 
+## 2026-11-17 · Brighter Christmas globes, a steady ribbon
+- **The Christmas tree's glass globes are brighter**: each shows its colour clearly by day and glows at night.
+- **The tree's red ribbon no longer flickers** against the boughs, near or far.
+
 ## 2026-11-17 · The Santa Hat
 - **Santa's hat**: a red pointed cap with a white band and a white bobble on the end, cut from the gnome's cap and
   fitted to any head (every race, illusions and were forms too). Santa Claus wears one; Toymaker Tinsel sells them
