@@ -11,7 +11,11 @@
 //! body's own action N, as `SetAction` plays it), `human:N` (the human's
 //! action N carried onto the body's skeleton, `raceemote::retarget`, from the
 //! two bind poses), `idle:N` (the same from the poses the two idles stand
-//! in, `raceemote::Base::Idle`). None: the four emotes. `cols=N` moments of each (default 3, at 1/4, 1/2 and 3/4
+//! in, `raceemote::Base::Idle`), `jump` and `runjump` (a jump standing or
+//! running as a race's player makes it, `raceemote::grant_air`, the body raised
+//! by the walk's arc, `arc`), `humanjump` and `humanrunjump` (the same with the
+//! human's fall and landing carried, what every race had before the froglok's
+//! leap: a before and after). None: the four emotes. `cols=N` moments of each (default 3, at 1/4, 1/2 and 3/4
 //! of the action), `size=WxH` one view's, `yaw=R` the view's turn round the
 //! body (radians from its front; 0.6 unless said), `tight` framed on the body
 //! standing rather than on every moment (for one that flies about). Every
@@ -42,12 +46,25 @@ pub enum Row {
     /// The human's action carried onto the body, measured from the bind
     /// poses or (`idle:`) the idles' stances.
     Human(i32, raceemote::Base),
+    /// A jump as a race's player on a server with jumps makes it
+    /// (`raceemote::grant_air`), standing (`run` false) or running, in the
+    /// air the walk's arc (`arc`): or (`human`) with the human's fall and
+    /// landing carried, as every race's was before the froglok's leap.
+    Jump { run: bool, human: bool },
 }
 
 impl Row {
     pub fn parse(w: &str) -> Option<Row> {
         if let Some(k) = raceemote::NAMES.iter().position(|n| *n == w) {
             return Some(Row::Emote(k));
+        }
+        let jump = |run, human| Some(Row::Jump { run, human });
+        match w {
+            "jump" => return jump(false, false),
+            "runjump" => return jump(true, false),
+            "humanjump" => return jump(false, true),
+            "humanrunjump" => return jump(true, true),
+            _ => {}
         }
         if let Some(n) = w.strip_prefix("human:") {
             return n.parse().ok().filter(|n| (0..66).contains(n)).map(|n| Row::Human(n, raceemote::Base::Bind));
@@ -64,6 +81,7 @@ impl Row {
             Row::Slot(n) => format!("{n}"),
             Row::Human(n, raceemote::Base::Bind) => format!("human:{n}"),
             Row::Human(n, raceemote::Base::Idle) => format!("idle:{n}"),
+            Row::Jump { run, human } => format!("{}{}jump", if *human { "human" } else { "" }, if *run { "run" } else { "" }),
         }
     }
 }
@@ -94,7 +112,7 @@ pub fn parse(words: &[String]) -> Result<Words, String> {
             let (a, b) = v.split_once('x').ok_or_else(|| format!("{w}: WxH"))?;
             size = (a.parse().map_err(|e| format!("{w}: {e}"))?, b.parse().map_err(|e| format!("{w}: {e}"))?);
         } else {
-            rows.push(Row::parse(w).ok_or_else(|| format!("{w}: wave, bow, point, cheer, a slot 0-65, human:<slot>, idle:<slot> or tight"))?);
+            rows.push(Row::parse(w).ok_or_else(|| format!("{w}: wave, bow, point, cheer, a slot 0-65, human:<slot>, idle:<slot>, jump, runjump, humanjump, humanrunjump or tight"))?);
         }
     }
     if rows.is_empty() {
@@ -132,6 +150,14 @@ fn sprite_for(lib: &Library, model: i32, row: &Row) -> Result<(CSprite<Ee>, Anim
             e.sync = ONCE;
             56
         }
+        Row::Jump { human, .. } => {
+            if *human {
+                raceemote::put_air(lib, &mut cs, &mut anims, [raceemote::Pose::Human; 2]);
+            } else {
+                raceemote::grant_air(lib, &mut cs, &mut anims, model as u32, true, true);
+            }
+            raceemote::AIR[0]
+        }
     };
     Ok((cs, anims, action))
 }
@@ -146,6 +172,9 @@ struct Posed {
 /// received emote is): its length (ms, to where the action is complete or
 /// 4 s), and the moments `cols` across it.
 fn play(lib: &Library, model: i32, row: &Row, cols: usize) -> Result<(i64, Posed, Vec<(i64, Posed)>), String> {
+    if let Row::Jump { run, .. } = row {
+        return play_jump(lib, model, row, *run, cols);
+    }
     let step = 16;
     // its length
     let (mut cs, anims, action) = sprite_for(lib, model, row)?;
@@ -197,6 +226,81 @@ fn play(lib: &Library, model: i32, row: &Row, cols: usize) -> Result<(i64, Posed
         }
         if times.iter().any(|&m| m / step * step == t) {
             out.push((t - lead, pose(&mut cs, &sc)));
+        }
+        t += step;
+    }
+    Ok((len, standing.ok_or("no standing pose")?, out))
+}
+
+/// The walk's arc over a jump on flat ground (`walker::JUMP_SPEED`'s doc):
+/// the feet's height `ms` after leaving it, 0.9 at the top 0.29 s in, down
+/// again 0.62 s after (`raceemote::JUMP_AIR_MS`).
+pub fn arc(ms: i64) -> f32 {
+    let (t, top, all) = (ms as f32, 290.0, raceemote::JUMP_AIR_MS);
+    if t <= 0.0 || t >= all {
+        return 0.0;
+    }
+    let k = if t <= top { (top - t) / top } else { (t - top) / (all - top) };
+    crate::walker::JUMP_TOP * (1.0 - k * k)
+}
+
+/// A jump (`Row::Jump`) as the walk drives the sprite: a moment of the
+/// ground's gait (standing, or the run), the air's gait (6) for the time in
+/// the air, raised by `arc`, the landing (7) told on the frame it comes
+/// down (`UpdateSprite`) and the ground's gait after, to where the landing
+/// is done or a second on: its length (ms from leaving the ground) and the
+/// moments `cols` across it.
+fn play_jump(lib: &Library, model: i32, row: &Row, run: bool, cols: usize) -> Result<(i64, Posed, Vec<(i64, Posed)>), String> {
+    let step = 16;
+    let (lead, air) = (480i64, raceemote::JUMP_AIR_MS as i64);
+    let ground = if run { 2 } else { 0 };
+    let gait = |t: i64| if t < lead { ground } else if t < lead + air { 6 } else if t < lead + air + step { 7 } else { ground };
+    // its length: until the landing is done
+    let (mut cs, mut sc, _) = sprite_for(lib, model, row)?;
+    let mut rand = Rand(1);
+    let (mut t, mut end, mut landing) = (0, lead + air + 1000, -1);
+    while t <= lead + air + 1000 {
+        sc.time = t;
+        let g = gait(t);
+        if g == 7 {
+            landing = cs.set_action(7, &sc, &mut rand);
+        } else {
+            cs.set_locomotion(g, &sc, &mut rand);
+        }
+        cs.h.process(0, &sc);
+        if t > lead + air && cs.is_action_complete(landing) {
+            end = t + 160;
+            break;
+        }
+        t += step;
+    }
+    let len = end - lead;
+    let times: Vec<i64> = (0..cols).map(|k| lead + len * k as i64 / (cols as i64 - 1).max(1)).collect();
+    let (mut cs, mut sc, _) = sprite_for(lib, model, row)?;
+    let mut rand = Rand(1);
+    let (mut out, mut standing) = (Vec::new(), None);
+    let last = *times.last().unwrap_or(&0);
+    let mut t = 0;
+    while t <= last {
+        sc.time = t;
+        let g = gait(t);
+        if g == 7 {
+            cs.set_action(7, &sc, &mut rand);
+        } else {
+            cs.set_locomotion(g, &sc, &mut rand);
+        }
+        cs.h.process(0, &sc);
+        let pose = |cs: &mut CSprite<Ee>, sc: &AnimScene<Ee>, up: f32| {
+            let mut centre = cs.h.calc_trans_about_center(&Matrix44::identity(), sc);
+            centre.m[3].y = centre.m[3].y + F::new(up);
+            cs.h.set_blend_matrices();
+            Posed { centre, palette: cs.h.blend.iter().map(|m| m.to_cols()).collect() }
+        };
+        if t == lead - step {
+            standing = Some(pose(&mut cs, &sc, 0.0));
+        }
+        if times.iter().any(|&m| m / step * step == t) {
+            out.push((t - lead, pose(&mut cs, &sc, arc(t - lead))));
         }
         t += step;
     }
@@ -298,6 +402,11 @@ mod tests {
         assert_eq!(w.rows, vec![Row::Emote(0), Row::Slot(37), Row::Human(57, raceemote::Base::Bind), Row::Human(61, raceemote::Base::Idle)]);
         assert_eq!((w.cols, w.size, w.tight, w.yaw), (5, (100, 120), true, -0.3));
         assert_eq!(w.rows.iter().map(Row::label).collect::<Vec<_>>(), ["wave", "37", "human:57", "idle:61"]);
+        let j = parse(&words("jump runjump humanjump humanrunjump")).unwrap();
+        assert_eq!(j.rows.iter().map(Row::label).collect::<Vec<_>>(), ["jump", "runjump", "humanjump", "humanrunjump"]);
+        assert_eq!(j.rows[1], Row::Jump { run: true, human: false });
+        assert_eq!((arc(0), arc(raceemote::JUMP_AIR_MS as i64)), (0.0, 0.0));
+        assert!((arc(290) - crate::walker::JUMP_TOP).abs() < 1e-6, "the top 0.29 s in");
         let none = parse(&[]).unwrap();
         assert_eq!((none.rows, none.cols, none.tight), ((0..4).map(Row::Emote).collect::<Vec<_>>(), 3, false));
         assert!(parse(&words("wav")).is_err());
