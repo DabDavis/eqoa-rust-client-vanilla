@@ -213,6 +213,15 @@ fn mark_size(w: f32) -> f32 {
     MARK_SIZE * (MARK_NEAR / w.max(1e-3)).clamp(MARK_SCALE.0, MARK_SCALE.1)
 }
 
+/// Out of the world, nothing the server turned off stays off
+/// (`settings::qol`): the pregame's Extended, and the next server until it
+/// says, have every addition.
+impl Drop for Play {
+    fn drop(&mut self) {
+        crate::settings::qol::set_off(0);
+    }
+}
+
 pub struct Play {
     pub session: Session,
     pub player: Player,
@@ -3567,6 +3576,13 @@ impl Play {
         }
     }
 
+    /// The client's own additions the server turns off for the session
+    /// (`settings::qol`, go-eqoa-server's `world.vanilla_ui`), each frame:
+    /// none until it says, and none from a server that never does.
+    fn server_ui(&self) {
+        crate::settings::qol::set_off(self.session.qol_off);
+    }
+
     pub fn frame(&mut self, walker: &mut Walker, lib: &Library, mut g: Gpu, game_ms: i64, game_frame: bool, mut sound: Option<&mut crate::sound::Sound>) -> Option<u32> {
         self.take_modules(sound.as_deref_mut());
         self.drawn = self.drawn.wrapping_add(1);
@@ -3582,6 +3598,7 @@ impl Play {
         // the pack's and the bank's records, as the server last said before a
         // dump (`inventory::pack_cap`; CLIENT's 40 where none says)
         crate::inventory::set_caps(self.session.item_lists);
+        self.server_ui();
         // a server's races' own options and the looks chosen (`raceopts`): the
         // creatures in a look made again in it (`apply`)
         crate::raceopts::set_options(self.session.race_options.as_ref());
@@ -12716,6 +12733,32 @@ mod commands {
         assert_eq!(p.target_level(true), None, "no creature");
         p.target = u32::MAX;
         assert_eq!(p.target_level(true), None, "no target");
+    }
+
+    /// The game's own UI (go-eqoa-server's 0x7EA0): what the session was told
+    /// is off is off each frame, the target's level with it; a session told
+    /// nothing (any other server) turns nothing off; out of the world nothing
+    /// stays off.
+    #[test]
+    fn the_server_turns_the_additions_off_for_its_session() {
+        use crate::settings::qol;
+        crate::settings::testing::reset(false);
+        let mut p = play();
+        let creature = net::entity::Creature { level: 32, ..Default::default() };
+        p.entities.slots[2] = Some(net::entity::Entity { id: 0x22, kind: net::entity::TYPE_CREATURE, creature: Some(creature), ..Default::default() });
+        p.target = 0x22;
+        p.session.con_level_offer = true;
+        p.server_ui();
+        assert!(!qol::off(qol::MAP) && crate::settings::map(), "nothing said: the map");
+        assert_eq!(p.target_level(crate::settings::client().target_level), Some(32), "and the level");
+        p.session.qol_off = 0x3FF;
+        p.server_ui();
+        assert!(qol::off(qol::MAP) && !crate::settings::map() && !crate::settings::quest_tracker(), "told: none");
+        assert_eq!(p.target_level(crate::settings::client().target_level), None, "nor the level");
+        assert_eq!(crate::trainer::stat_text(343, 435), "343", "the stat's value alone");
+        drop(p);
+        assert!(!qol::off(qol::MAP) && crate::settings::map(), "out of the world: back");
+        assert_eq!(crate::trainer::stat_text(343, 435), "343/435");
     }
 
     /// The choice made the target: a change stops the attack and drops the

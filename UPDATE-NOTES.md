@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-18 · The game's own screens on the Vanilla Test server
+- **On a server that asks for the game as it was** (the Vanilla Test server), the extras this client adds are
+  off while you play there: the map and minimap, the quest helper (its tracker, the quest marks on the map and
+  the "!" and "?" over quest givers), a target's level in the target box, the DPS meter, Number Colors and Merc
+  Colors (every number in the game's own colour), the stat caps in Character > Summary (the value alone, as on a
+  PS2), the group's power bars, the buff window (the game's own effects strip instead), the pet's effects under
+  its bar, and auto-cast and auto target. Their rows in Extended say "Off on this server" and do not change.
+- **Your own choices are kept**: on any other server everything is back exactly as you set it.
+
 ## 2026-11-18 · Texture packs load all their textures again
 - **Texture packs show all their textures again**: since the last update a large pack could stop loading
   textures once it had filled the memory set aside for it, most of all in busy places like Freeport, and the

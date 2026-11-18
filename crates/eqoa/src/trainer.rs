@@ -131,6 +131,19 @@ pub(crate) fn value_of_cap(value: i32, cap: i32) -> String {
     format!("{value}/{cap}")
 }
 
+/// The left column's caption and value widths: `LEFT_CAPTION` and
+/// `LEFT_VALUE` for a stat's cap after it, the game's 200 and 75 where the
+/// server turns the caps off (`settings::qol::STAT_CAPS`).
+fn left_widths() -> (i32, i32) {
+    if crate::settings::qol::off(crate::settings::qol::STAT_CAPS) { (200, 75) } else { (LEFT_CAPTION, LEFT_VALUE) }
+}
+
+/// A stat's value as Summary shows it: with its cap after it
+/// (`value_of_cap`), or alone, the game's, where the server turns the caps off.
+pub(crate) fn stat_text(value: i32, cap: i32) -> String {
+    if crate::settings::qol::off(crate::settings::qol::STAT_CAPS) { value.to_string() } else { value_of_cap(value, cap) }
+}
+
 /// What the trainer asks of the game.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TrainUp {
@@ -512,19 +525,20 @@ impl Trainer {
     /// `DrawStats`.
     fn draw_stats(&mut self, vui: &Vui, r: &mut dyn Raster, d: &Data) {
         let w = |id: i32| wide(vui.words.get(id, vui.language));
+        let (caption_w, value_w) = left_widths();
         let p0 = [25, 15];
         let mut p1 = [p0[0], p0[1] + 25];
         let mut p2 = [p1[0] + 300, p1[1]];
-        let mut p3 = [p1[0] + LEFT_CAPTION, p1[1]];
+        let mut p3 = [p1[0] + caption_w, p1[1]];
         let mut p4 = [p2[0] + 220, p2[1]];
         Self::draw_header(vui, r, d, p0);
         if self.mode == 4 {
-            Self::bar(vui, r, &w(665), BLACK, p1, LEFT_CAPTION, true);
-            Self::bar(vui, r, &[], BLACK, p3, LEFT_VALUE, false);
+            Self::bar(vui, r, &w(665), BLACK, p1, caption_w, true);
+            Self::bar(vui, r, &[], BLACK, p3, value_w, false);
         } else {
             let c = if self.points < 1 { BLACK } else { self.color };
-            Self::bar(vui, r, &w(489), c, p1, LEFT_CAPTION, true);
-            Self::bar(vui, r, &wide(&self.points.to_string()), c, p3, LEFT_VALUE, false);
+            Self::bar(vui, r, &w(489), c, p1, caption_w, true);
+            Self::bar(vui, r, &wide(&self.points.to_string()), c, p3, value_w, false);
         }
         p1[1] += 25;
         p3[1] += 25;
@@ -537,19 +551,19 @@ impl Trainer {
             } else {
                 BLACK
             };
-            Self::bar(vui, r, &w(caption), c, p1, LEFT_CAPTION, true);
+            Self::bar(vui, r, &w(caption), c, p1, caption_w, true);
             let v = d.cur[stat as usize] + self.add[stat as usize];
-            Self::bar(vui, r, &wide(&value_of_cap(v, d.cap(stat))), c, p3, LEFT_VALUE, false);
+            Self::bar(vui, r, &wide(&stat_text(v, d.cap(stat))), c, p3, value_w, false);
             let i = i as i32;
-            let half = LEFT_VALUE / 2;
+            let half = value_w / 2;
             self.hits.push([p1[0], p1[1], p3[0], p1[1] + ROW_H], STAT + i);
             self.hits.push([p3[0], p3[1], p3[0] + half, p3[1] + ROW_H], LESS + i);
-            self.hits.push([p3[0] + half, p3[1], p3[0] + LEFT_VALUE, p3[1] + ROW_H], MORE + i);
+            self.hits.push([p3[0] + half, p3[1], p3[0] + value_w, p3[1] + ROW_H], MORE + i);
             if lit {
                 let y = Self::arrow_y(vui, p1[1]);
                 vui.blit_ex(r, vui.entry(85).x00, [p1[0], y], 3, self.fade, 0);
                 vui.blit_ex(r, 128, [p3[0] + 2, y], 3, self.fade, 1);
-                vui.blit_ex(r, 128, [p3[0] + LEFT_VALUE - 13, y], 3, self.fade, 0);
+                vui.blit_ex(r, 128, [p3[0] + value_w - 13, y], 3, self.fade, 0);
             }
             p1[1] += 25;
             p3[1] += 25;

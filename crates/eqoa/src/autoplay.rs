@@ -173,6 +173,11 @@ impl Play {
     /// the whole on or off (the Extended row, kept by Save Changes).
     pub(super) fn autocast_command(&mut self, arg: &str) {
         use crate::autocast::Command;
+        // off on a server with the game's own UI (`settings::qol`)
+        if crate::settings::qol::off(crate::settings::qol::AUTO_CAST) {
+            self.add_chat(AUTO_OFF_HERE.to_string(), [1.0; 4]);
+            return;
+        }
         self.autocast.character(self.player.server_id, &self.dump.player.name);
         let lines: Vec<String> = match crate::autocast::command(arg) {
             Command::Help => vec![crate::autocast::HELP.to_string()],
@@ -224,6 +229,10 @@ impl Play {
     /// `/autotarget` (`on`, `off`, or none: the other): Extended > Combat >
     /// Auto Target, kept by Save Changes.
     pub(super) fn autotarget_command(&mut self, arg: &str) {
+        if crate::settings::qol::off(crate::settings::qol::AUTO_CAST) {
+            self.add_chat(AUTO_OFF_HERE.to_string(), [1.0; 4]);
+            return;
+        }
         let on = match arg.trim().to_ascii_lowercase().as_str() {
             "on" => true,
             "off" => false,
@@ -234,6 +243,10 @@ impl Play {
         self.add_chat(line.to_string(), [1.0; 4]);
     }
 }
+
+/// What `/autocast` and `/autotarget` say on a server that turns them off
+/// (`settings::qol::AUTO_CAST`).
+const AUTO_OFF_HERE: &str = "Auto-cast and auto target are off on this server.";
 
 #[cfg(test)]
 mod tests {

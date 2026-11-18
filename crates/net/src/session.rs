@@ -860,6 +860,16 @@ pub const OP_MOB_INFO: u16 = 0x7E4E;
 /// type /con ("/t con") for a line of it.
 pub const OP_CON_LEVEL_OFFER: u16 = 0x7E70;
 
+/// go-eqoa-server's own: the game's own UI on a shard (`world.vanilla_ui`; the
+/// owner, 2026-11-18, for the Vanilla Test shard: "disable all quality of life
+/// settings like map, minimap, level display, dps meter, custom colors, the
+/// character stats showing 350/500", "also no quest helper"). Server to client,
+/// sent only to a client that answered the bug report offer (so never to a
+/// PS2), at each world entry: a u8 version (1) and a u32, the client's own
+/// additions off for the session, a bit each (`eqoa`'s `settings::qol`). A
+/// server that never sends it leaves everything as it was.
+pub const OP_VANILLA_UI: u16 = 0x7EA0;
+
 /// go-eqoa-server's own: how many answers an NPC's box (0x0034) may hold (the
 /// owner, 2026-11-15: "lets increase the dialog box for heroic dungeons,
 /// coachmen etc. to stack higher before pagination"). Both ways, a u32: the
@@ -1526,6 +1536,10 @@ pub struct Session {
     /// Whether the server offered its players their target's level
     /// ([`OP_CON_LEVEL_OFFER`]) on this connection: the target box draws it.
     pub con_level_offer: bool,
+    /// What the server turns off of this client's own additions
+    /// ([`OP_VANILLA_UI`]) on this connection, a bit each; 0, everything on,
+    /// until it says.
+    pub qol_off: u32,
     /// The worn looks the character hides, as the server told them
     /// (`crate::hidelook`): none offered until it does.
     pub hide_look: crate::hidelook::State,
@@ -1734,6 +1748,7 @@ impl Session {
             profanity_offer: false,
             profanity_asked: None,
             con_level_offer: false,
+            qol_off: 0,
             hide_look: crate::hidelook::State::default(),
             user: user.to_string(),
             token,
@@ -2587,6 +2602,7 @@ impl Session {
                 self.profanity_offer = false;
                 self.profanity_asked = None;
                 self.con_level_offer = false;
+                self.qol_off = 0;
                 self.hide_look = crate::hidelook::State::default();
                 ev.push(Event::Promoted);
             }
@@ -2963,6 +2979,16 @@ impl Session {
                 let layout = r.u8();
                 if !r.error && layout == 1 {
                     self.con_level_offer = true;
+                }
+            }
+            // the game's own UI (each world entry, a server with
+            // `world.vanilla_ui`): the additions it names off for the
+            // session; another version is left alone
+            OP_VANILLA_UI => {
+                let version = r.u8();
+                let off = r.u32();
+                if !r.error && version == 1 {
+                    self.qol_off = off;
                 }
             }
             // the server's most answers in a box offered (each world entry):
@@ -3881,6 +3907,28 @@ mod tests {
         assert_eq!(s.record.as_ref().unwrap().len(), 0, "answered with nothing");
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert!(!s.con_level_offer, "a new connection forgets it");
+    }
+
+    /// The game's own UI (go-eqoa-server's 0x7EA0, `world.vanilla_ui`): taken
+    /// from version 1 as the server writes it (go-eqoa-server's
+    /// TestVanillaUIToAClientThatAnswered's bytes), answering nothing. The
+    /// controls: nothing before it (everything on), one cut short or of another
+    /// version is not taken, a new connection forgets it.
+    #[test]
+    fn the_game_s_own_ui_is_taken_only_as_the_server_says_it() {
+        let mut s = session();
+        s.record = Some(Vec::new());
+        assert_eq!(s.qol_off, 0, "nothing before the message");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xA0, 0x7E, 1, 0xFF, 0x03]);
+        assert_eq!(s.qol_off, 0, "a short message is none");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xA0, 0x7E, 2, 0xFF, 0x03, 0, 0]);
+        assert_eq!(s.qol_off, 0, "another version is not taken");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xA0, 0x7E, 1, 0xFF, 0x03, 0, 0]);
+        assert!(ev.is_empty(), "the message is the session's: {ev:?}");
+        assert_eq!(s.qol_off, 0x3FF);
+        assert_eq!(s.record.as_ref().unwrap().len(), 0, "answered with nothing");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(s.qol_off, 0, "a new connection forgets it");
     }
 
     /// More answers in an NPC's box (go-eqoa-server's 0x7E71): an offer of

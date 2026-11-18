@@ -2122,7 +2122,7 @@ fn read_client() -> ClientOptions {
 /// this one read them).
 fn save_client() -> Result<(), String> {
     let me = place();
-    let mine = client();
+    let mine = kept_client();
     let mut shared = read_shared();
     shared.controller[me] = mine.controller[me];
     shared.slow_unfocused[me] = mine.slow_unfocused[me];
@@ -2157,8 +2157,14 @@ thread_local! {
 }
 
 /// The client's settings now: what this window kept (`read_client`), as the
-/// page changed them since.
+/// page changed them since, less what the server turns off (`qol`).
 pub fn client() -> ClientOptions {
+    qol::masked(kept_client())
+}
+
+/// The client's settings as this window keeps them, whatever the server
+/// turns off (`qol`): what Save Changes writes.
+fn kept_client() -> ClientOptions {
     let me = cache_key();
     CLIENT.with(|c| match c.get() {
         Some((p, v)) if p == me => v,
@@ -2174,8 +2180,155 @@ pub fn client() -> ClientOptions {
 /// Changes them (the Extended page, as its rows move); kept only by Save
 /// Changes (`save`).
 pub fn set_client(v: ClientOptions) {
+    let v = qol::unmasked(v, kept_client());
     let me = cache_key();
     CLIENT.with(|c| c.set(Some((me, v))));
+}
+
+/// The game's own UI on a server that asks for it (go-eqoa-server's
+/// `world.vanilla_ui`, `net::session::OP_VANILLA_UI`; the owner, 2026-11-18,
+/// for the Vanilla Test shard: "disable all quality of life settings like
+/// map, minimap, level display, dps meter, custom colors, the character stats
+/// showing 350/500", "also no quest helper"). The server names, a bit each,
+/// which of this client's own additions are off for the session (`set_off`,
+/// from `Play::frame`); `client()` then reads each one's rows as off (the
+/// numbers' colours Default), while what the player chose is kept as it was
+/// (`set_client` keeps a row that is off as it stood; Save Changes writes the
+/// player's own), so another server, or the next connection before the server
+/// says, has them back. Extended's rows that are off say so ("Off on this
+/// server") and do not change. A server that never sends the message turns
+/// nothing off.
+pub mod qol {
+    use super::ClientOptions;
+    use std::cell::Cell;
+
+    /// The map (M) and the minimap (N): their waypoints, markers, the
+    /// community's marks and the GM's travel with them.
+    pub const MAP: u32 = 1 << 0;
+    /// The Quest Helper: the guide, the tracker, the map's and the minimap's
+    /// quest marks and the marks over quest NPCs' heads.
+    pub const QUEST_HELPER: u32 = 1 << 1;
+    /// A target's level in the target box (Target Level).
+    pub const TARGET_LEVEL: u32 = 1 << 2;
+    /// The DPS meter.
+    pub const DPS_METER: u32 = 1 << 3;
+    /// Number Colors and Merc Colors: every number the game's colour.
+    pub const NUMBER_COLORS: u32 = 1 << 4;
+    /// Character > Summary's stat caps ("346/435"): the value alone and the
+    /// game's column widths (`trainer`).
+    pub const STAT_CAPS: u32 = 1 << 5;
+    /// Others' power under their health (Power Bars).
+    pub const POWER_BARS: u32 = 1 << 6;
+    /// The buff window: the game's effects strip.
+    pub const BUFF_WINDOW: u32 = 1 << 7;
+    /// The pet's effects under its bar (Pet Effects).
+    pub const PET_EFFECTS: u32 = 1 << 8;
+    /// Auto-cast on the quick bars and Auto Target.
+    pub const AUTO_CAST: u32 = 1 << 9;
+
+    thread_local! {
+        static OFF: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// What the server turns off now (the session's, `Play::frame`); 0 with
+    /// none said, and out of the world.
+    pub fn set_off(bits: u32) {
+        OFF.with(|o| o.set(bits));
+    }
+
+    /// Whether the server turns `bit` off.
+    pub fn off(bit: u32) -> bool {
+        OFF.with(|o| o.get()) & bit != 0
+    }
+
+    /// The bit an Extended row (its item) belongs to, none for a row the
+    /// server never turns off.
+    pub fn of_item(item: i32) -> Option<u32> {
+        Some(match item {
+            41 | 42 | 43 | 87 | 91 => MAP,
+            44 | 45 | 85 => QUEST_HELPER,
+            70..=72 => DPS_METER,
+            64..=69 | 80 | 81 => NUMBER_COLORS,
+            86 => POWER_BARS,
+            83 => BUFF_WINDOW,
+            58 => PET_EFFECTS,
+            78 | 79 => AUTO_CAST,
+            _ => return None,
+        })
+    }
+
+    /// Whether Extended's row `item` is off on this server.
+    pub fn item_off(item: i32, target_level: i32) -> bool {
+        if item == target_level {
+            return off(TARGET_LEVEL);
+        }
+        of_item(item).is_some_and(off)
+    }
+
+    /// `c` as the server leaves it: each addition it turns off read as off.
+    pub fn masked(mut c: ClientOptions) -> ClientOptions {
+        if off(MAP) {
+            (c.map, c.minimap, c.map_markers) = (false, false, false);
+        }
+        if off(QUEST_HELPER) {
+            (c.quest_helper, c.quest_markers, c.quest_tracker, c.head_marks) = (false, false, false, false);
+        }
+        if off(TARGET_LEVEL) {
+            c.target_level = false;
+        }
+        if off(DPS_METER) {
+            c.dps_meter = false;
+        }
+        if off(NUMBER_COLORS) {
+            c.number_colors = [0; crate::numcolor::ROWS];
+        }
+        if off(POWER_BARS) {
+            c.power_bars = false;
+        }
+        if off(BUFF_WINDOW) {
+            c.buff_window = false;
+        }
+        if off(PET_EFFECTS) {
+            c.pet_effects = false;
+        }
+        if off(AUTO_CAST) {
+            (c.auto_cast, c.auto_target) = (false, false);
+        }
+        c
+    }
+
+    /// `v`, a change made to `masked` settings, with each row the server
+    /// turns off put back as `kept` has it: the player's own choice stays.
+    pub fn unmasked(mut v: ClientOptions, kept: ClientOptions) -> ClientOptions {
+        if off(MAP) {
+            (v.map, v.minimap, v.map_markers) = (kept.map, kept.minimap, kept.map_markers);
+        }
+        if off(QUEST_HELPER) {
+            (v.quest_helper, v.quest_markers, v.quest_tracker, v.head_marks) = (kept.quest_helper, kept.quest_markers, kept.quest_tracker, kept.head_marks);
+        }
+        if off(TARGET_LEVEL) {
+            v.target_level = kept.target_level;
+        }
+        if off(DPS_METER) {
+            v.dps_meter = kept.dps_meter;
+        }
+        if off(NUMBER_COLORS) {
+            v.number_colors = kept.number_colors;
+        }
+        if off(POWER_BARS) {
+            v.power_bars = kept.power_bars;
+        }
+        if off(BUFF_WINDOW) {
+            v.buff_window = kept.buff_window;
+        }
+        if off(PET_EFFECTS) {
+            v.pet_effects = kept.pet_effects;
+        }
+        if off(AUTO_CAST) {
+            (v.auto_cast, v.auto_target) = (kept.auto_cast, kept.auto_target);
+        }
+        v
+    }
 }
 
 /// The frame rate when the player chose none: a page on WebGL2 keeps 30
@@ -2905,6 +3058,7 @@ pub mod testing {
         super::FRAME_DUE.with(|d| d.set(0.0));
         super::DISPLAY_GAP.with(|g| g.set(1000.0 / 60.0));
         super::FILE_SHARED.with(|f| f.set(None));
+        super::qol::set_off(0);
     }
 
     /// Writes `name` in the store as another window's save would.
@@ -3562,6 +3716,42 @@ mod tests {
         let text = c.to_text();
         assert!(!text.contains("voice"), "{text}");
         assert!(text.contains("flora=off\n") && text.contains("loading=instant\n"), "{text}");
+    }
+
+    /// The game's own UI (`qol`, go-eqoa-server's `world.vanilla_ui`): with
+    /// every bit off, each addition reads as off and the numbers Default; a
+    /// change made meanwhile to another row is kept, the player's own choice of
+    /// a row that is off kept as it was (in the settings and in client.opt);
+    /// with none off (another server, or none said), all of it is back. The
+    /// control: nothing off, `client()` is the settings as kept.
+    #[test]
+    fn the_server_turns_additions_off_and_the_choices_stay() {
+        testing::reset(false);
+        let chosen = ClientOptions { dps_meter: true, auto_target: true, number_colors: [3; crate::numcolor::ROWS], ..Default::default() };
+        set_client(chosen);
+        assert_eq!(client(), chosen, "nothing off: as kept");
+        let all = qol::MAP | qol::QUEST_HELPER | qol::TARGET_LEVEL | qol::DPS_METER | qol::NUMBER_COLORS | qol::STAT_CAPS | qol::POWER_BARS | qol::BUFF_WINDOW | qol::PET_EFFECTS | qol::AUTO_CAST;
+        assert_eq!(all, 0x3FF, "go-eqoa-server's QoLAllOff");
+        qol::set_off(all);
+        let c = client();
+        assert!(!(c.map || c.minimap || c.map_markers || map() || minimap()), "the map");
+        assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
+        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.buff_window || c.pet_effects || c.auto_cast || c.auto_target), "the rest");
+        assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
+        let d = ClientOptions::default();
+        assert!((c.raid_list, c.item_links, c.flora) == (d.raid_list, d.item_links, d.flora), "what is not an addition stays");
+        // a change to another row while they are off (Extended's, or a key's)
+        set_client(ClientOptions { flora: 30, map: true, ..client() });
+        assert_eq!(client().flora, 30, "the change made");
+        assert!(!client().map, "a row that is off stays off");
+        save_client().unwrap();
+        let kept = ClientOptions::from_text(&String::from_utf8(store::read(CLIENT_FILE).unwrap()).unwrap());
+        assert_eq!(kept, ClientOptions { flora: 30, ..chosen }, "client.opt keeps the player's own choices");
+        qol::set_off(0);
+        assert_eq!(client(), ClientOptions { flora: 30, ..chosen }, "none off: all back as chosen");
+        qol::set_off(qol::DPS_METER);
+        assert!(!client().dps_meter && client().auto_target && client().map, "one bit, one addition");
+        qol::set_off(0);
     }
 
     /// The options kept by a build with the Stats Box, others' mana bars

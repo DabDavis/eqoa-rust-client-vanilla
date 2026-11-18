@@ -867,6 +867,12 @@ impl WndOptions {
                 cues.push(9);
             }
         };
+        // a row the server turns off (`settings::qol`) does not change: its
+        // page says so (`page_note`)
+        if crate::settings::qol::item_off(self.item, TARGET_LEVEL) {
+            cues.push(9);
+            return;
+        }
         match self.item {
             0 => o.follow = (o.follow != 1) as u8,
             1 => o.inverted = (o.inverted == 0) as u8,
@@ -1670,6 +1676,9 @@ impl WndOptions {
     /// What category `c`'s page says beside its Back legend (`Note`), its
     /// row being the one drawn last (`item`).
     fn page_note(&self, c: usize) -> Option<String> {
+        if crate::settings::qol::item_off(self.item, TARGET_LEVEL) && CATEGORIES[c].items.contains(&self.item) {
+            return Some(OFF_HERE.to_string());
+        }
         match CATEGORIES[c].note {
             Note::Reads => Some(touch_note(self.item, &crate::settings::client().touch_opts(), crate::touch::drawn_here).unwrap_or_else(crate::input::reads)),
             Note::Server => self.server_note.clone().filter(|_| matches!(self.item, 23 | 24)),
@@ -1861,6 +1870,10 @@ const EXTENDED_ITEMS: [(i32, &str); 97] = [
     (R2_CHANNELS, "R2 Channel Switch"),
     (PACK_MEMORY, "Texture Pack Memory"),
 ];
+
+/// What a page says beside Back while a row the server turns off is chosen
+/// (`settings::qol`, go-eqoa-server's `world.vanilla_ui`).
+const OFF_HERE: &str = "Off on this server";
 
 /// The Chat Tabs rows' first item (ticket 1951): one a kind of line, in
 /// `chat::Kind::ALL`'s order, 92 to 101.
@@ -4023,6 +4036,59 @@ mod tests {
         assert_eq!((cues, testing::shown()), (vec![9], vec![]), "the control: no folder");
         crate::settings::testing::reset(false);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The rows a server turns off (`settings::qol`, go-eqoa-server's
+    /// `world.vanilla_ui`): each reads Off, says "Off on this server" beside
+    /// Back and does not change (sound 9); every row of each addition is one
+    /// of them, and no other row is. With none off, the same row turns and
+    /// says nothing, the player's choice there as it was.
+    #[test]
+    fn rows_the_server_turns_off_say_so_and_do_not_change() {
+        use crate::pointer::testing::{NullRaster, vui};
+        use crate::settings::{self, qol, testing};
+        testing::reset(false);
+        let vui = vui();
+        let mut o = GameOptions { auto_attack: 0, ..GameOptions::default() };
+        let mut w = WndOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        w.open(&vui, &NullRaster, &o);
+        w.draw(&vui, &mut NullRaster, &o, &mut Vec::new());
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
+            w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
+        }
+        let off_rows = [41, 42, 43, 87, 91, 44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, 83, 58, 78, 79];
+        qol::set_off(0x3FF);
+        for &(item, _) in EXTENDED_ITEMS.iter() {
+            assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
+        }
+        let off_text = Some(wide(vui.words.get(552, vui.language)));
+        for item in [41, 44, TARGET_LEVEL, 70, 86, 83, 58, 78] {
+            for k in path_to(&w, item) {
+                w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
+                w.draw(&vui, &mut NullRaster, &o, &mut ups);
+            }
+            assert_eq!(w.item, item);
+            assert_eq!(value_text(&vui, item), off_text, "row {item} reads Off");
+            assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some(OFF_HERE), "row {item} says so");
+            let before = settings::client();
+            for k in [key::RIGHT, key::LEFT] {
+                cues.clear();
+                w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
+                assert_eq!((settings::client(), cues.as_slice()), (before, &[9][..]), "row {item} does not change");
+            }
+        }
+        assert_eq!(value_text(&vui, 64), Some(wide("Default")), "a number's colour the game's");
+        // none off: the Map row (the last reached is Auto-Cast's) turns again
+        qol::set_off(0);
+        for k in path_to(&w, 41) {
+            w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
+            w.draw(&vui, &mut NullRaster, &o, &mut ups);
+        }
+        assert!(settings::map(), "the player's choice, on, as it was");
+        assert_eq!(w.page_note(w.cat.unwrap()), None, "nothing said");
+        w.key(&vui, &mut NullRaster, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
+        assert!(!settings::map(), "it turns");
     }
 
     /// Sun Shadows' note: only while they are on and Dynamic Lighting is
