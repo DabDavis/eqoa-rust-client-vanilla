@@ -867,7 +867,9 @@ pub const OP_CON_LEVEL_OFFER: u16 = 0x7E70;
 /// sent only to a client that answered the bug report offer (so never to a
 /// PS2), at each world entry: a u8 version (1) and a u32, the client's own
 /// additions off for the session, a bit each (`eqoa`'s `settings::qol`). A
-/// server that never sends it leaves everything as it was.
+/// server that never sends it leaves everything as it was. An [OG] account's
+/// session (`world.og_accounts`) is sent bits 12 to 14 too: the map and links
+/// locked, no mouse, no touch.
 pub const OP_VANILLA_UI: u16 = 0x7EA0;
 
 /// go-eqoa-server's own: how many answers an NPC's box (0x0034) may hold (the

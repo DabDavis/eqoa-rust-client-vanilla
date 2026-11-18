@@ -4100,6 +4100,22 @@ mod tests {
             assert_eq!(cues, [11], "row {item} turns");
         }
         assert!(settings::map() && settings::minimap() && settings::item_links(), "on here, as turned");
+        // an [OG] account's (qol::LOCKED): the three read Off, say "Off on
+        // this server" and do not turn
+        qol::set_off(0x7FFF);
+        for item in [41, 42, 73] {
+            for k in path_to(&w, item) {
+                w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
+                w.draw(&vui, &mut NullRaster, &o, &mut ups);
+            }
+            assert_eq!(value_text(&vui, item), off_text, "row {item} Off, locked");
+            assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some(OFF_HERE), "row {item} says so");
+            let before = settings::client();
+            cues.clear();
+            w.key(&vui, &mut NullRaster, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
+            assert_eq!((settings::client(), cues.as_slice()), (before, &[9][..]), "row {item} does not turn");
+        }
+        qol::set_off(0xFFF);
         // the next connection's server says nothing: the player's own, on,
         // and no note
         qol::set_off(0);

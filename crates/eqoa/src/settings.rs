@@ -2261,6 +2261,20 @@ pub mod qol {
     /// Ability Bars 3 and 4 and Stacked Spell Bars: the game's two bars, its
     /// carousel.
     pub const SPELL_BARS: u32 = 1 << 11;
+    /// An [OG] account's (go-eqoa-server's `world.og_accounts`; the owner,
+    /// 2026-11-18: "[OG] tag shows players you opt-out of the QoL changes to
+    /// EQOA and only use the most basic upgrades like FPS, widescreen, no
+    /// touchscreen, no mouse"): `MAP` and `ITEM_LINKS` LOCKED off, not off by
+    /// default: their rows read Off on this server and do not turn, M and N
+    /// open nothing.
+    pub const LOCKED: u32 = 1 << 12;
+    /// No mouse in the world (an [OG] account's): its buttons, its motion and
+    /// its wheel do nothing there (`viewer`); the keyboard and the
+    /// controllers play.
+    pub const NO_MOUSE: u32 = 1 << 13;
+    /// No touch in the world (an [OG] account's): the touch pad is not drawn
+    /// and a finger does nothing there (`viewer`).
+    pub const NO_TOUCH: u32 = 1 << 14;
 
     thread_local! {
         static OFF: Cell<u32> = const { Cell::new(0) };
@@ -2296,13 +2310,17 @@ pub mod qol {
     /// Whether Extended's row `item` is the map's, the minimap's or Item Links', off
     /// by default on this server (`MAP`) but the player's to turn.
     pub fn item_default_off(item: i32) -> bool {
-        (off(MAP) && matches!(item, 41 | 42)) || (off(ITEM_LINKS) && item == 73)
+        !off(LOCKED) && ((off(MAP) && matches!(item, 41 | 42)) || (off(ITEM_LINKS) && item == 73))
     }
 
-    /// Whether Extended's row `item` is off on this server.
+    /// Whether Extended's row `item` is off on this server (the map's, the
+    /// minimap's and Item Links' too where they are `LOCKED`).
     pub fn item_off(item: i32, target_level: i32) -> bool {
         if item == target_level {
             return off(TARGET_LEVEL);
+        }
+        if off(LOCKED) && ((off(MAP) && matches!(item, 41 | 42)) || (off(ITEM_LINKS) && item == 73)) {
+            return true;
         }
         of_item(item).is_some_and(off)
     }
@@ -2310,7 +2328,7 @@ pub mod qol {
     /// `c` as the server leaves it: each addition it turns off read as off.
     pub fn masked(mut c: ClientOptions) -> ClientOptions {
         if off(MAP) {
-            (c.map, c.minimap) = (c.map_here, c.minimap_here);
+            (c.map, c.minimap) = if off(LOCKED) { (false, false) } else { (c.map_here, c.minimap_here) };
         }
         if off(QUEST_HELPER) {
             (c.quest_helper, c.quest_markers, c.quest_tracker, c.head_marks) = (false, false, false, false);
@@ -2337,7 +2355,7 @@ pub mod qol {
             (c.auto_cast, c.auto_target) = (false, false);
         }
         if off(ITEM_LINKS) {
-            c.item_links = c.item_links_here;
+            c.item_links = c.item_links_here && !off(LOCKED);
         }
         if off(SPELL_BARS) {
             (c.ability_bars, c.stacked_bars) = (super::ABILITY_BARS_GAME, false);
@@ -2349,8 +2367,9 @@ pub mod qol {
     /// turns off put back as `kept` has it: the player's own choice stays.
     pub fn unmasked(mut v: ClientOptions, kept: ClientOptions) -> ClientOptions {
         if off(MAP) {
-            // the rows turned here are this server's kind's own
-            (v.map_here, v.minimap_here) = (v.map, v.minimap);
+            // the rows turned here are this server's kind's own; locked, none
+            // turns and each stays as kept
+            (v.map_here, v.minimap_here) = if off(LOCKED) { (kept.map_here, kept.minimap_here) } else { (v.map, v.minimap) };
             (v.map, v.minimap) = (kept.map, kept.minimap);
         }
         if off(QUEST_HELPER) {
@@ -2378,7 +2397,8 @@ pub mod qol {
             (v.auto_cast, v.auto_target) = (kept.auto_cast, kept.auto_target);
         }
         if off(ITEM_LINKS) {
-            (v.item_links_here, v.item_links) = (v.item_links, kept.item_links);
+            v.item_links_here = if off(LOCKED) { kept.item_links_here } else { v.item_links };
+            v.item_links = kept.item_links;
         }
         if off(SPELL_BARS) {
             (v.ability_bars, v.stacked_bars) = (kept.ability_bars, kept.stacked_bars);
@@ -3827,6 +3847,38 @@ mod tests {
         qol::set_off(qol::ITEM_LINKS);
         assert!(item_links(), "and the links");
         qol::set_off(0);
+    }
+
+    /// An [OG] account's (`qol::LOCKED`, go-eqoa-server's `QoLOGOff`, 0x7FFF):
+    /// the map, the minimap and item links are off whatever the player chose,
+    /// here or elsewhere, and turning them changes nothing, kept or here; every
+    /// other addition off as `vanilla_ui`'s. The control: the same choices
+    /// without LOCKED (`vanilla_ui`'s 0xFFF), the map turned on here is on.
+    #[test]
+    fn an_og_account_has_the_map_and_links_locked_off() {
+        testing::reset(false);
+        let chosen = ClientOptions { map_here: true, minimap_here: true, item_links_here: true, dps_meter: true, ..Default::default() };
+        set_client(chosen);
+        qol::set_off(0xFFF);
+        assert!(map() && minimap() && item_links(), "the control: turned on here, on");
+        let og = 0xFFF | qol::LOCKED | qol::NO_MOUSE | qol::NO_TOUCH;
+        assert_eq!(og, 0x7FFF, "go-eqoa-server's QoLOGOff");
+        qol::set_off(og);
+        let c = client();
+        assert!(!(c.map || c.minimap || c.item_links || map() || minimap() || item_links()), "locked off");
+        assert!(!(c.dps_meter || c.quest_tracker || c.target_level), "and every addition");
+        for item in [41, 42, 73] {
+            assert!(qol::item_off(item, 999) && !qol::item_default_off(item), "row {item} off, not off by default");
+        }
+        set_client(ClientOptions { map: true, minimap: true, item_links: true, ..client() });
+        set_minimap(true).unwrap();
+        assert!(!(map() || minimap() || item_links()), "turning them changes nothing");
+        let kept = kept_client();
+        assert!(kept.map_here && kept.minimap_here && kept.item_links_here && kept.map && kept.item_links, "the player's own kept: {kept:?}");
+        qol::set_off(0xFFF);
+        assert!(map() && minimap() && item_links(), "a vanilla_ui server: the choices made here");
+        qol::set_off(0);
+        assert_eq!(client().dps_meter, true, "another server: as chosen");
     }
 
     /// The options kept by a build with the Stats Box, others' mana bars

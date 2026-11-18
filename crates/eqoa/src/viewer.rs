@@ -3366,6 +3366,54 @@ impl App {
         }
     }
 
+    /// Whether `event`, the mouse's or a finger's, does nothing: in the world
+    /// of a server that says so for the session (`settings::qol::NO_MOUSE`,
+    /// `NO_TOUCH`: go-eqoa-server's [OG] accounts; the owner, 2026-11-18:
+    /// "only use the most basic upgrades like FPS, widescreen, no
+    /// touchscreen, no mouse"), the keyboard and the controllers play. A
+    /// button's press or release lets go of what the mouse held and gives
+    /// the pointer back. A finger is `finger`'s (`touch_shut`). Before the
+    /// world (the login, character select), out of it, and on the update's
+    /// question, both work as ever.
+    fn pointer_shut(&mut self, event: &WindowEvent) -> bool {
+        use crate::settings::qol;
+        if self.play.is_none() {
+            return false;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::update::offer_shown() {
+            return false;
+        }
+        match event {
+            WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } | WindowEvent::CursorMoved { .. } if qol::off(qol::NO_MOUSE) => {
+                if matches!(event, WindowEvent::MouseInput { .. }) {
+                    self.mouse.release_all();
+                    self.mouse.discard();
+                    self.grab_pointer(false);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a finger does nothing (`settings::qol::NO_TOUCH`, an [OG]
+    /// account's world; `pointer_shut`'s rule): the touch pad hidden and every
+    /// finger let go.
+    fn touch_shut(&mut self) -> bool {
+        use crate::settings::qol;
+        if self.play.is_none() || !qol::off(qol::NO_TOUCH) {
+            return false;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::update::offer_shown() {
+            return false;
+        }
+        self.touch.hide();
+        self.fingers.clear();
+        true
+    }
+
     /// A finger's event (`WindowEvent::Touch`, or `EQOA_TOUCHES`'s) at
     /// window pixels `at`, to whose it is from where it came down: the touch
     /// screen's pad's, in the world and on the game's screens before it (a
@@ -3376,6 +3424,9 @@ impl App {
     /// there does.
     fn finger(&mut self, id: u64, phase: crate::touch::Phase, at: [f32; 2], size: (u32, u32)) {
         use crate::touch::Phase;
+        if self.touch_shut() {
+            return;
+        }
         let p = render::ui::frame_from_window(size, at);
         let whose = match phase {
             Phase::Started => {
@@ -5327,7 +5378,10 @@ impl ApplicationHandler for App {
     fn device_event(&mut self, _: &ActiveEventLoop, _: winit::event::DeviceId, event: winit::event::DeviceEvent) {
         self.stall.enter(Instant::now());
         let what = if let winit::event::DeviceEvent::MouseMotion { delta } = event {
-            self.mouse.motion(delta.0, delta.1);
+            // none in an [OG] account's world (`pointer_shut`)
+            if !(self.play.is_some() && crate::settings::qol::off(crate::settings::qol::NO_MOUSE)) {
+                self.mouse.motion(delta.0, delta.1);
+            }
             "the mouse's motion"
         } else {
             "a device's event"
@@ -5793,6 +5847,10 @@ impl App {
             }
             let k = KeyIn::of(e);
             self.key_input(el, k, *is_synthetic);
+            return;
+        }
+        // an [OG] account's world: no mouse, no touch (`pointer_shut`)
+        if self.pointer_shut(&event) {
             return;
         }
         match event {
@@ -6270,6 +6328,10 @@ impl App {
                 // the controllers (XInput, HID, gilrs) and the windows they
                 // are shared with (`multibox`), and the touch pad's clicks
                 self.poll_pad(el);
+                // an [OG] account's world: no touch pad (`touch_shut`)
+                if self.touch.shown {
+                    self.touch_shut();
+                }
                 for c in self.touch.take_clicks() {
                     self.click(c, true);
                 }

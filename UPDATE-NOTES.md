@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-18 · [OG] accounts on the Vanilla Test server
+- **An [OG] account plays the game as it was** on the Vanilla Test server: every extra this client adds is off
+  (as below), the map, the minimap and item links included and locked off, and the mouse and the touch screen
+  do nothing in the world (the keyboard and controllers play). Your frame rate, widescreen and graphics
+  settings stay. Everywhere else, and before you enter the world, nothing changes. An account is made [OG]
+  when it is created, and its characters show as "[OG] Name" there.
+
 ## 2026-11-18 · The game's own screens on the Vanilla Test server
 - **On a server that asks for the game as it was** (the Vanilla Test server), the extras this client adds are
   off while you play there: the quest helper (its tracker, the quest marks on the map and the "!" and "?" over
