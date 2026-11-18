@@ -131,6 +131,9 @@ struct Puppet {
     /// (`shadow_casters`) nor any of its models into the shadow maps
     /// (`set_casts`).
     wisp: bool,
+    /// A pet in a zone's prop (`petart`): its moving parts, the wheels and
+    /// the arm, its model made skinned by them; none for every other.
+    prop: Option<crate::petart::Rig>,
 }
 
 impl Puppet {
@@ -1298,14 +1301,27 @@ fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Optio
 #[allow(clippy::too_many_arguments)]
 fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Puppet> {
     let textures = render::library_textures(lib);
-    lib.lookup(e.drawn_model as i32).and_then(|r| {
-                    let mut model = lib.build_model(r)?;
+    // a pet's look no zone of this world holds: off the decorations' assets
+    // (`decorlights::pet_asset_model`: the catapult in Odus)
+    let found = lib.lookup(e.drawn_model as i32);
+    let kept = if found.is_none() { crate::decorlights::pet_asset_model(e.drawn_model) } else { None };
+    if found.is_none() && kept.is_none() {
+        return None;
+    }
+    Some(()).and_then(|()| {
+                    let mut model = match found {
+                        Some(r) => lib.build_model(r)?,
+                        None => kept?,
+                    };
                     // a server's decoration's art drawn lower than its NPC stands
                     // (`decorlights::sink`: a fir's bare stem in the ground)
                     crate::decorlights::lower(e.drawn_model, &mut model);
                     let mut anims = AnimScene { time: game_ms, ..Default::default() };
                     let mut rand = Rand(slot as u64 + 1);
-                    let mut sprite = load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand);
+                    let mut sprite = found.and_then(|r| load_csprite(lib, r, &mut anims, &mut AnimCache::new(), &mut rand));
+                    // a pet in a zone's prop: its wheels and arm parts of a
+                    // skinned model of their own (`petart::rig`)
+                    let prop = if sprite.is_none() && crate::decorlights::pet_art(e.drawn_model).is_some() { crate::petart::rig(&mut model) } else { None };
                     let player = a_player(e);
                     if let Some(cs) = sprite.as_mut() {
                         crate::racebody::grant(cs, e.drawn_model, player, races);
@@ -1393,7 +1409,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if !trims.is_empty() {
                         g.renderer.set_trims(g.device, g.queue, &mut gpu, &model, &trims, &textures);
                     }
-                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, lights: None, race_look, tint, petdye, aura, pieces, wisp };
+                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, lights: None, race_look, tint, petdye, aura, pieces, wisp, prop };
                     p.set_casts();
                     Some(p)
                 })
@@ -4581,7 +4597,21 @@ impl Play {
                     if prop.is_some() {
                         p.name_at = self.pet_tops.of(lib, e.drawn_model).map(|(_, top)| [e.actor_pos[0] + off[0], e.actor_pos[1] + top * scale + 0.6, e.actor_pos[2] + off[2]]);
                     }
-                    (actor.to_cols(), Vec::new())
+                    // its wheels turned by how far it has rolled, its arm by
+                    // its throw (`petart`)
+                    let palette = match &p.prop {
+                        Some(rig) => {
+                            let fwd = actor.to_cols()[2];
+                            let rolled = self.petart.roll(slot, e.actor_pos, [fwd[0], fwd[1], fwd[2]]) / scale.max(1e-3);
+                            let arm = rig.arm.map_or(0.0, |a| self.petart.arm(slot, game_ms, a.release));
+                            // where a throw would let its boulder go, in the world
+                            let tip = rig.release_tip().map(|t| actor.mul_point(&Vect3::of(t[0], t[1], t[2])).to_array());
+                            self.petart.set_tip(slot, tip);
+                            rig.palette(rolled, arm)
+                        }
+                        None => Vec::new(),
+                    };
+                    (actor.to_cols(), palette)
                 }
             };
             p.actor_m = actor;
@@ -4888,7 +4918,9 @@ impl Play {
             let k = pet_scale(&art, e);
             let (length, top) = self.pet_tops.of(lib, e.drawn_model).unwrap_or((4.0, 2.0));
             let to = if Some(c.target) == me { self.self_at.map(|(p, _)| [p[0], p[1] + 1.2, p[2]]) } else { chest(&self.entities.slots, c.target) };
-            self.petart.cast(*a as usize, &art, e.actor_pos, length * k, top * k, c.target, to, c.time, game_ms);
+            // the boulder leaves the arm's tip at its release (`petart::rig`)
+            let release = self.petart.tip(*a as usize).map(|t| (crate::petart::ARM_UP, t));
+            self.petart.cast(*a as usize, &art, e.actor_pos, length * k, top * k, c.target, to, c.time, game_ms, release);
         }
         {
             let slots = &self.entities.slots;
@@ -4918,7 +4950,12 @@ impl Play {
             if !crate::lod::within(&m.m[3].xyz(), &eye, crate::lod::OFF_DIST) {
                 continue;
             }
-            let (model, pool) = self.projectiles.entry(*id).or_insert_with(|| (lib.lookup(*id as i32).and_then(|r| lib.build_model(r)), Vec::new()));
+            // (a pet's shot no zone of this world holds: off the assets, tried
+            // again until they are read)
+            if self.projectiles.get(id).is_some_and(|(m, _)| m.is_none()) && crate::decorlights::pet_art_shot(*id) {
+                self.projectiles.remove(id);
+            }
+            let (model, pool) = self.projectiles.entry(*id).or_insert_with(|| (lib.lookup(*id as i32).and_then(|r| lib.build_model(r)).or_else(|| crate::decorlights::asset_built(*id)), Vec::new()));
             let Some(model) = model.as_ref() else { continue };
             let n = used.entry(*id).or_default();
             if *n == pool.len() {
@@ -11041,11 +11078,12 @@ impl Play {
     /// drawn whose names a string hangs on, and in the player's world, seen
     /// from `eye`, at the game's `ms`.
     pub fn decor_batches(&self, eye: [f32; 3], ms: i64) -> Vec<render::billboard::Batch> {
+        // the art the looks and the pets' looks draw, read once
+        // (`decorlights::poll_assets`)
+        crate::decorlights::poll_assets();
         if !crate::decorlights::any() {
             return Vec::new();
         }
-        // the art the looks draw, read once (`decorlights::poll_assets`)
-        crate::decorlights::poll_assets();
         let holders = self.decor_holders();
         crate::decorlights::batches(&holders, self.player.world, eye, ms)
     }

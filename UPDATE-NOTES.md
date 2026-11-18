@@ -5,6 +5,14 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-18 · The catapult's wheels and arm, two-tone dyes, everywhere
+- **The catapult pet stays a catapult in every world**: after a teleport to Odus or any land whose ground has no
+  catapult it no longer turns back into its old body; the catapult is read off your disc wherever you are.
+- **Its wheels roll**: they turn as it moves, forward and back, and stop when it stands.
+- **Its arm throws**: at each shot the arm swings up fast, lets the boulder go from its tip at the top of the swing,
+  and winds back down slowly. The ram still lunges at each swing.
+- **Two colours at the Pet Groomer**: its wood and stone take one dye, its iron the other.
+
 ## 2026-11-17 · Look around while you run
 - **Hold the left mouse button while running to look around**: the camera swings freely and your character keeps
   running the way it was going. Let go and the camera eases back behind you in about a quarter second. (Before,

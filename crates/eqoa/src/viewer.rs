@@ -190,6 +190,16 @@ impl Source {
                 if let Some(t) = tint {
                     crate::npctint::apply(&mut m, *t);
                 }
+                // `EQOA_PROP_POSE=<arm radians>,<rolled>[,<dye 1>,<dye 2>]`: a pet
+                // prop's parts posed (`petart::posed`), and dyed in its two
+                // areas (`petart::dye`, RRGGBBAA; the catapult's)
+                if let Ok(v) = std::env::var("EQOA_PROP_POSE") {
+                    let w: Vec<&str> = v.split(',').map(str::trim).collect();
+                    let num = |i: usize| w.get(i).and_then(|t| t.parse::<f32>().ok()).unwrap_or(0.0);
+                    let hex = |i: usize| w.get(i).and_then(|t| u32::from_str_radix(t, 16).ok()).unwrap_or(0);
+                    crate::petart::dye(&mut m, [hex(2), hex(3)], crate::petart::CATAPULT_IRON);
+                    crate::petart::posed(&mut m, num(1), num(0));
+                }
                 scene::model(id, m)
             }
             Source::Zone { file, zone, index } => scene::zone(lib, *file, *zone, *index),
