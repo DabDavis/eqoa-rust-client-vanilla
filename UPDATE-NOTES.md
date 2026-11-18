@@ -30,6 +30,10 @@ is put on the page by `.github/workflows/notes.yml`.
   or "?" on the map and the minimap, its name green with "- Ability" after it on the mark's card, and green in the
   quest tracker, so you can tell it from the other quests at a glance (thanks, Zerkziee). Needs the Heirloom Test
   Server's update; elsewhere the client's own quest guide marks its class quests the same way.
+## 2026-11-17 · A pet in a siege catapult
+- **Pets in a prop's body**: a server can dress a pet as a piece of scenery, such as Tunaria's siege catapult. It
+  rams forward at each of its swings and, at its strikes, hurls a boulder from its arm in an arc onto its target.
+  It keeps its name, can be targeted, and never blocks your way.
 
 ## 2026-11-17 · Rudolph's nose, moved
 - **Rudolph's nose glows where the GMs put it**: moving the glow now shows at once, without restarting the game.

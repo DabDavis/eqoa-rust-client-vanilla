@@ -280,9 +280,20 @@ pub fn sink(model: u32) -> Option<f32> {
 }
 
 /// Whether `model` is a decoration's art (`net::decor::Art`): scenery the
-/// server places, which the client never moves.
+/// server places, which the client never moves. A pet's art ([`pet_art`])
+/// is not: it walks as a creature.
 pub fn is_art(model: u32) -> bool {
-    model != 0 && DECOR.with_borrow(|d| d.art.iter().any(|a| a.model == model))
+    model != 0 && DECOR.with_borrow(|d| d.art.iter().any(|a| a.model == model) && !d.pets.iter().any(|p| p.model == model))
+}
+
+/// The pet's look `model` is, if the server named it one (`net::decor::
+/// PetArt`: Zerkziee's catapult): a prop worn by a pet, which rams at its
+/// swings and fires its shot at its casts (`petart`).
+pub fn pet_art(model: u32) -> Option<net::decor::PetArt> {
+    if model == 0 {
+        return None;
+    }
+    DECOR.with_borrow(|d| d.pets.iter().find(|p| p.model == model).copied())
 }
 
 /// `model` lowered by `sink(id)`, if the art is a decoration's that is.
@@ -882,6 +893,7 @@ mod tests {
             presents: Vec::new(),
             assets: Vec::new(),
             walk_ons: Vec::new(),
+            pets: Vec::new(),
         }
     }
 

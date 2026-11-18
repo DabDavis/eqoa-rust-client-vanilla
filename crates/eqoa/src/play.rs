@@ -649,6 +649,10 @@ pub struct Play {
     /// next.
     projectiles: std::collections::BTreeMap<u32, (Option<esf::Model>, Vec<GpuModel>)>,
     casts: Vec<crate::spells::Cast>,
+    /// The pets in a zone's prop (`petart`: Zerkziee's catapult): their rams
+    /// and shots, and each prop's drawn bounds.
+    petart: crate::petart::State,
+    pet_tops: crate::petart::Tops,
     spell_ids: Vec<Option<u32>>,
     spell_rand: Rand,
     /// The corpse, merchant and trade windows (modes 1, 10, 15, 16).
@@ -837,6 +841,13 @@ pub fn login_world_file(player: &net::session::Player) -> String {
         return path();
     }
     crate::s2::get().world_file(player.world).unwrap_or_else(path)
+}
+
+/// The size a pet in a zone's prop is drawn at (`petart`): its row's scale
+/// times the pet's size.
+fn pet_scale(art: &net::decor::PetArt, e: &net::entity::Entity) -> f32 {
+    let base = if e.scale > 0.0 { e.scale } else { 1.0 };
+    base * if art.scale > 0.0 { art.scale } else { 1.0 }
 }
 
 /// The vehicles flying now: each decoration's art moving (`decorlights::is_art`,
@@ -3442,7 +3453,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -4448,10 +4459,22 @@ impl Play {
             let Some(p) = self.puppets[slot].as_mut() else { continue };
             wear_cape(lib, &mut g, p, cape_of(&self.session, e));
             let f = F::<Ee>::new;
+            // a pet in a zone's prop (`petart`): at its row's scale, moved by
+            // its rams and a shot's recoil
+            let prop = crate::decorlights::pet_art(e.drawn_model).filter(|_| p.sprite.is_none());
+            let (scale, off) = match &prop {
+                Some(art) => {
+                    let slots = &self.entities.slots;
+                    let me_at = self.self_at.map(|(p, _)| p);
+                    let place = |id: u32| if Some(id) == me { me_at } else { slots.iter().flatten().find(|t| t.id == id).map(|t| t.actor_pos) };
+                    (pet_scale(art, e), self.petart.offset(slot, e.actor_pos, game_ms, place))
+                }
+                None => (if e.scale > 0.0 { e.scale } else { 1.0 }, [0.0; 3]),
+            };
             let actor = Matrix44::transform(
                 &Vect3::new(f(e.actor_hpr[0]), f(e.actor_hpr[1]), F::ZERO),
-                f(if e.scale > 0.0 { e.scale } else { 1.0 }),
-                &Vect3::new(f(e.actor_pos[0]), f(e.actor_pos[1]), f(e.actor_pos[2])),
+                f(scale),
+                &Vect3::new(f(e.actor_pos[0] + off[0]), f(e.actor_pos[1] + off[1]), f(e.actor_pos[2] + off[2])),
             );
             // As the game rasters it: past its off distance not at all
             // (`VIScene::RasterActor`, at the actor's place), and of an LOD
@@ -4553,7 +4576,13 @@ impl Play {
                     p.slot4_at = slot_point(cs, 4, &m);
                     (m.to_cols(), if pose { cs.h.blend.iter().map(|m| m.to_cols()).collect::<Vec<_>>() } else { Vec::new() })
                 }
-                None => (actor.to_cols(), Vec::new()),
+                None => {
+                    // a prop's plate over its top (`petart`)
+                    if prop.is_some() {
+                        p.name_at = self.pet_tops.of(lib, e.drawn_model).map(|(_, top)| [e.actor_pos[0] + off[0], e.actor_pos[1] + top * scale + 0.6, e.actor_pos[2] + off[2]]);
+                    }
+                    (actor.to_cols(), Vec::new())
+                }
             };
             p.actor_m = actor;
             p.centre = glam_to_matrix(matrix);
@@ -4720,7 +4749,9 @@ impl Play {
                     Some(p) => (p.model, p.era, p.sprite.as_ref().is_some_and(|cs| cs.dead)),
                     None => (e.drawn_model, lib.view_for(e.drawn_model as i32), false),
                 };
-                ActorAt { id: e.id, model, era, at: v3(e.actor_pos), hpr: v3(hpr), scale: actor_scale(e.scale), dead }
+                // a pet in a zone's prop at the size it is drawn (`petart`)
+                let scale = crate::decorlights::pet_art(model).map_or(e.scale, |art| pet_scale(&art, e));
+                ActorAt { id: e.id, model, era, at: v3(e.actor_pos), hpr: v3(hpr), scale: actor_scale(scale), dead }
             });
             let (a, made) = place_actor(&mut walker.scene, lib, self.actors[slot], want);
             self.actors[slot] = a;
@@ -4728,7 +4759,9 @@ impl Play {
             // the server's walk-ons (`decorlights::walk_on`): a deck walked onto
             // (its sides passed, its top a floor), a team walked through
             let walk_on = e.and_then(|e| e.creature.as_ref()).and_then(|c| crate::decorlights::walk_on(&c.name));
-            let passes = passes || walk_on == Some(net::decor::WALK_PASS);
+            // and a pet in a zone's prop (`petart`): its mesh, not a capsule,
+            // walked through always (it would hem its owner in)
+            let passes = passes || walk_on == Some(net::decor::WALK_PASS) || e.is_some_and(|e| crate::decorlights::pet_art(e.drawn_model).is_some());
             if let Some(a) = a {
                 let deck = walk_on == Some(net::decor::WALK_DECK);
                 if (walker.scene.actors[a.actor].flags & vi::world::FLOOR_ONLY != 0) != deck {
@@ -4816,6 +4849,7 @@ impl Play {
             let now = self.entities.slots[slot].as_ref().map(|e| e.id).filter(|&id| Some(id) != me);
             if self.spell_ids[slot].is_some() && self.spell_ids[slot] != now {
                 spells.actor_gone(slot as i32, &mut bodies, game_ms);
+                self.petart.forget(slot);
             }
             self.spell_ids[slot] = now;
         }
@@ -4840,6 +4874,27 @@ impl Play {
                 (c, a, t, ts)
             })
             .collect();
+        // a pet in a zone's prop (`petart`): its swing a ram, its other casts
+        // at another a shot from its arm
+        let chest = |slots: &[Option<net::entity::Entity>], id: u32| {
+            slots.iter().flatten().find(|e| e.id == id).map(|e| [e.actor_pos[0], e.actor_pos[1] + 1.2, e.actor_pos[2]])
+        };
+        for (c, a, _, _) in &casts {
+            let Some(e) = usize::try_from(*a).ok().and_then(|a| self.entities.slots.get(a)).and_then(|e| e.as_ref()) else { continue };
+            let Some(art) = crate::decorlights::pet_art(e.drawn_model) else { continue };
+            if c.target == c.caster {
+                continue;
+            }
+            let k = pet_scale(&art, e);
+            let (length, top) = self.pet_tops.of(lib, e.drawn_model).unwrap_or((4.0, 2.0));
+            let to = if Some(c.target) == me { self.self_at.map(|(p, _)| [p[0], p[1] + 1.2, p[2]]) } else { chest(&self.entities.slots, c.target) };
+            self.petart.cast(*a as usize, &art, e.actor_pos, length * k, top * k, c.target, to, c.time, game_ms);
+        }
+        {
+            let slots = &self.entities.slots;
+            let me_at = self.self_at.map(|(p, _)| [p[0], p[1] + 1.2, p[2]]);
+            self.petart.drawn = self.petart.flying(game_ms, |id| if Some(id) == me { me_at } else { chest(slots, id) });
+        }
         spells.frame(&mut bodies, &casts, if has_self { SELF } else { -1 }, Some(&mut walker.cam.effect), game_ms, &walker.eye, lib, sound);
         self.rumbles.append(&mut spells.rumbles);
     }
@@ -4857,7 +4912,8 @@ impl Play {
         let eye = crate::lod::eye(&walker.cam, &walker.eye.position);
         let textures = render::library_textures(lib);
         let mut used: std::collections::BTreeMap<u32, usize> = Default::default();
-        let all = flying.iter().map(|(id, m)| (id, m, &[][..])).chain(meshes.iter().map(|(id, m, p)| (id, m, &p[..])));
+        let pets = &self.petart.drawn;
+        let all = flying.iter().map(|(id, m)| (id, m, &[][..])).chain(meshes.iter().map(|(id, m, p)| (id, m, &p[..]))).chain(pets.iter().map(|(id, m)| (id, m, &[][..])));
         for (id, m, palette) in all {
             if !crate::lod::within(&m.m[3].xyz(), &eye, crate::lod::OFF_DIST) {
                 continue;

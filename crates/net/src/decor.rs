@@ -14,10 +14,11 @@
 
 use crate::stream::Reader;
 
-/// The layout of [`crate::session::OP_DECOR_LIGHTS`] this client reads: 2,
+/// The layout of [`crate::session::OP_DECOR_LIGHTS`] this client reads: 3,
+/// the pets' looks after the walk-ons ([`PetArt`]), and pets sent in them; 2
 /// the walk-ons after the papers ([`WalkOn`]), and the server's rides
 /// (`eqoa`'s `ride`: a vehicle's riders kept on its deck).
-pub const LAYOUT: u8 = 2;
+pub const LAYOUT: u8 = 3;
 
 /// How a string's bulbs light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,7 +154,28 @@ pub struct Decor {
     pub assets: Vec<Asset>,
     /// The NPCs a walk goes onto or through (layout 2)
     pub walk_ons: Vec<WalkOn>,
+    /// The art a pet may wear (layout 3)
+    pub pets: Vec<PetArt>,
 }
+
+/// Art the server may dress a player's pet in (its `decorart` rows of kind
+/// pet; the owner, 2026-11-17: "where dust is is a catapult prop ... lets
+/// give it to zerkziee. it can ram for attack and we can make the catapult
+/// fire"): a zone's prop, one of [`Decor::art`] (whose zone the walk reads),
+/// that walks as a creature, rams at its swings and fires `shot` (a sprite of
+/// the same zone, 0 none) at its casts, drawn `shot_scale` its size; the art
+/// itself `scale` times the pet's size (0 as 1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PetArt {
+    pub model: u32,
+    pub kind: u8,
+    pub shot: u32,
+    pub shot_scale: f32,
+    pub scale: f32,
+}
+
+/// [`PetArt::kind`]: a pet (walked, rams, fires).
+pub const PET_ART: u8 = 1;
 
 /// An NPC (by name) whose body a player's walk does not stop at (the server
 /// owner, 2026-11-17: "let players run onto the sled without jumping"):
@@ -362,6 +384,20 @@ pub fn read(data: &[u8]) -> Option<Decor> {
             }
         }
     }
+    // the pets' looks (layout 3; a server before them sends none): a u16
+    // count, each u32 model, u8 kind, u32 shot, f32 its size, f32 the art's
+    if r.pos < data.len() {
+        let n = r.u16() as usize;
+        for _ in 0..n {
+            let a = PetArt { model: r.u32(), kind: r.u8(), shot: r.u32(), shot_scale: r.f32(), scale: r.f32() };
+            if r.error {
+                return None;
+            }
+            if a.kind == PET_ART && a.model != 0 && a.shot_scale.is_finite() && a.scale.is_finite() {
+                out.pets.push(a);
+            }
+        }
+    }
     (!r.error).then_some(out)
 }
 
@@ -448,6 +484,31 @@ mod tests {
         // a server before them: none
         b.truncate(b.len() - (2 + 3 * 10 + "Santa's Sleigh".len() + "rudolph".len() + "odd".len()));
         assert!(read(&b).expect("read").walk_ons.is_empty());
+    }
+
+    /// The pets' looks after the walk-ons (layout 3): the catapult kept, a kind
+    /// it does not know dropped; a server before them sends none; cut short,
+    /// nothing.
+    #[test]
+    fn reads_the_pets_looks() {
+        let mut b = body();
+        b.extend(0u16.to_le_bytes()); // no art
+        b.extend(0u16.to_le_bytes()); // no presents
+        b.extend([0u8; 6]); // no assets, looks or papers
+        b.extend(0u16.to_le_bytes()); // no tinsel cords
+        b.extend(0u16.to_le_bytes()); // no walk-ons
+        assert!(read(&b).expect("read").pets.is_empty());
+        b.extend(2u16.to_le_bytes());
+        for (model, kind) in [(0xE64B_8D78u32, 1u8), (0x1234_5678, 7)] {
+            b.extend(model.to_le_bytes());
+            b.push(kind);
+            b.extend(0xBFEE_4CCDu32.to_le_bytes());
+            b.extend(0.3f32.to_le_bytes());
+            b.extend(0.35f32.to_le_bytes());
+        }
+        let d = read(&b).expect("read");
+        assert_eq!(d.pets, vec![PetArt { model: 0xE64B_8D78, kind: PET_ART, shot: 0xBFEE_4CCD, shot_scale: 0.3, scale: 0.35 }]);
+        assert_eq!(read(&b[..b.len() - 3]), None);
     }
 
     #[test]
