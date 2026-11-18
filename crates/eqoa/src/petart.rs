@@ -65,8 +65,10 @@ pub const ARM_BACK: i64 = 1600;
 /// across (its own units), and over the frame's lowest by [`ARM_OVER_DECK`].
 pub const ARM_HALF: f32 = 0.75;
 pub const ARM_OVER_DECK: f32 = 1.05;
-/// How near the arm's tip a piece of its own must come to be its spoon (the
-/// cup the boulder sits in), which swings with it.
+/// How near the arm's tip a piece of its own must come to be its bracket,
+/// which swings with it; and how far short of the tip (along z from the
+/// pivot) the frame's triangles joined to the arm's end begin to be its cup
+/// (the broad plate the boulder sits in).
 pub const SPOON_REACH: f32 = 0.75;
 /// And no longer nor higher than this (the catapult's spoon is 0.44 long and
 /// 1.45 high; the deck's rod under the arm's end runs its whole length).
@@ -265,6 +267,9 @@ impl Rig {
 /// lowest. Its pivot is the centre of the crossbar (another piece wider
 /// across than [`ARM_HALF`] twice, nearly level) nearest (within 2) one of the arm's two
 /// ends along z, that end then; its tip the arm's corner farthest from it.
+/// The arm also carries its cup (the frame's triangles joined to its end and
+/// wholly past its tip less [`SPOON_REACH`]) and any compact piece by its tip
+/// (an iron bracket); the boulder leaves from the cup's middle.
 pub fn rig(m: &mut esf::Model) -> Option<Rig> {
     // every triangle: (batch, first index's place in it)
     let tris: Vec<(usize, usize)> = m.batches.iter().enumerate().flat_map(|(b, bt)| (0..bt.indices.len() / 3).map(move |t| (b, t * 3))).collect();
@@ -381,6 +386,36 @@ pub fn rig(m: &mut esf::Model) -> Option<Rig> {
                 for &t in &beam {
                     part[t] = PART_ARM;
                 }
+                // the cup: the broad wooden plate the arm's end carries (the
+                // owner's spoon, 2026-11-18), the frame's own triangles (it
+                // shares the beam's end corners but none of the deck's, which
+                // it rests just over), grown from the beam through shared
+                // corners over the frame's triangles lying wholly at the tip's
+                // end: every corner past the tip less SPOON_REACH, along z
+                // from the pivot
+                let dir = (tip[2] - pivot[2]).signum();
+                let past = (tip[2] - pivot[2]).abs() - SPOON_REACH;
+                let key = |p: [f32; 3]| [p[0].to_bits(), p[1].to_bits(), p[2].to_bits()];
+                let mut by_corner: HashMap<[u32; 3], Vec<usize>> = HashMap::new();
+                for &t in frame.iter() {
+                    for k in 0..3 {
+                        by_corner.entry(key(m.pos[corner(&tris[t], k)])).or_default().push(t);
+                    }
+                }
+                let at_end = |t: usize| (0..3).all(|k| (m.pos[corner(&tris[t], k)][2] - pivot[2]) * dir >= past);
+                let mut cup: Vec<usize> = Vec::new();
+                let mut grow: Vec<usize> = beam.clone();
+                while let Some(t) = grow.pop() {
+                    for k in 0..3 {
+                        for &n in by_corner.get(&key(m.pos[corner(&tris[t], k)])).map_or(&[][..], |v| &v[..]) {
+                            if part[n] != PART_ARM && at_end(n) {
+                                part[n] = PART_ARM;
+                                cup.push(n);
+                                grow.push(n);
+                            }
+                        }
+                    }
+                }
                 // the spoon: a piece of its own at the arm's end (the owner,
                 // 2026-11-18: "the catapult end part that looks like a spoon
                 // is not firing with the arm"), any piece but the frame and
@@ -404,7 +439,11 @@ pub fn rig(m: &mut esf::Model) -> Option<Rig> {
                         });
                     }
                 }
-                if let Some((l, h)) = spoon {
+                // the boulder leaves from the cup's middle, else the bracket's
+                if cup.len() >= 4 {
+                    let (l, h) = box_of(&cup);
+                    tip = [(l[0] + h[0]) * 0.5, (l[1] + h[1]) * 0.5, (l[2] + h[2]) * 0.5];
+                } else if let Some((l, h)) = spoon {
                     tip = [(l[0] + h[0]) * 0.5, (l[1] + h[1]) * 0.5, (l[2] + h[2]) * 0.5];
                 }
                 let release = (-(tip[2] - pivot[2])).atan2(tip[1] - pivot[1]);
@@ -804,21 +843,30 @@ mod disc_tests {
         eprintln!("{r:?}");
         assert_eq!(r.wheels.len(), 2, "two axles");
         let a = r.arm.expect("an arm");
-        // the parts' triangles: the frame, the arm (its beam's 48 and the
-        // spoon's 24, the owner, 2026-11-18: "the catapult end part that
-        // looks like a spoon is not firing with the arm"), each axle's 160
-        assert_eq!(r.tris, vec![171, 72, 160, 160], "frame, arm with its spoon, two axles");
-        // the spoon (the piece at the arm's end, behind the rear axle) is
-        // the arm's: every corner there over the deck turns with it, and no
-        // corner of the frame's far from the arm does
+        // the parts' triangles: the frame, the arm (its beam's 48, the cup's
+        // 34 and the iron bracket's 24, the owner, 2026-11-18: "the catapult
+        // end part that looks like a spoon is not firing with the arm"), each
+        // axle's 160
+        assert_eq!(r.tris, vec![137, 106, 160, 160], "frame, arm with its cup and bracket, two axles");
+        // the iron bracket (a piece of its own at the arm's end, behind the
+        // rear axle) is the arm's: every corner there over the deck turns
+        // with it, and no corner of the frame's far from the arm does
         let at = |v: usize| m.pos[v];
         let arm_corner = |v: usize| m.bones[v][0] == PART_ARM;
         let spoon: Vec<usize> = (0..m.pos.len()).filter(|&v| at(v)[2] < -4.85 && at(v)[2] > -5.35 && at(v)[1] > 1.85 && at(v)[0].abs() < 0.9 && !arm_corner(v)).collect();
         assert!(spoon.iter().all(|&v| at(v)[1] < 2.7), "a corner of the spoon's left behind: {:?}", spoon.iter().map(|&v| at(v)).collect::<Vec<_>>());
-        assert!((0..m.pos.len()).filter(|&v| arm_corner(v)).all(|v| at(v)[0].abs() < 1.0), "nothing wide (an upright, a wheel) on the arm");
+        // nothing wide (an upright, a wheel) on the arm but the cup, 1.64
+        // across, past the deck's end at its top
+        assert!((0..m.pos.len()).filter(|&v| arm_corner(v)).all(|v| at(v)[0].abs() < 1.0 || (at(v)[0].abs() < 1.7 && at(v)[2] < -5.7 && at(v)[1] > 2.05 && at(v)[1] < 2.6)), "nothing wide on the arm but its cup");
         assert!((0..m.pos.len()).filter(|&v| m.bones[v][0] >= PART_WHEEL0).all(|v| at(v)[1] < 3.1), "the wheels' alone on the axles");
-        // the boulder leaves from the spoon
-        assert!(a.tip[2] < -4.8 && a.tip[2] > -5.4, "{:?}", a.tip);
+        // the cup (the broad wooden plate past the deck's end, over its top
+        // at 2.03) is wholly the arm's, and the deck under it wholly the
+        // frame's
+        let cup: Vec<usize> = (0..m.pos.len()).filter(|&v| at(v)[2] < -5.7 && at(v)[1] > 2.05 && at(v)[1] < 2.6).collect();
+        assert!(cup.len() >= 12 && cup.iter().all(|&v| arm_corner(v)), "a corner of the cup's left behind: {:?}", cup.iter().filter(|&&v| !arm_corner(v)).map(|&v| at(v)).collect::<Vec<_>>());
+        assert!((0..m.pos.len()).filter(|&v| at(v)[1] < 2.04 && at(v)[0].abs() > 1.1).all(|v| !arm_corner(v)), "the deck stays");
+        // the boulder leaves from the cup's middle
+        assert!(a.tip[2] < -6.7 && a.tip[2] > -7.2 && a.tip[1] < 2.7, "{:?}", a.tip);
         // the boulder leaves from above the pivot, over the frame's top
         let tip = r.release_tip().unwrap();
         assert!((tip[2] - a.pivot[2]).abs() < 1e-3 && tip[1] > a.pivot[1] + 5.0, "{tip:?} over {:?}", a.pivot);
