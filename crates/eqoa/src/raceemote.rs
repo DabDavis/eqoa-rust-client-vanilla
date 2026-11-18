@@ -229,8 +229,25 @@ fn race_of(model: u32) -> Option<u32> {
 /// or one of its bone names (the great skeletons' the troll's, 37 of the
 /// human's), and the fungusmen's three share the slots `Own` names.
 pub fn poses_of(model: u32) -> Option<[Pose; 4]> {
-    race_of(model).and_then(poses)
+    race_of(model).and_then(poses).or_else(|| FORMS.contains(&model).then_some(H))
 }
+
+/// The bodies a player is shown in by an illusion or a form, not a race's,
+/// that wave, bow, point and cheer as the human (the server owner, 2026-11-18:
+/// "the gingerbread man cant emote. also the other golems should emote"): the
+/// golems', whose play lists have no emote (`SetDefaultEntries` filled each
+/// with the idle, once: nothing to see), on skeletons of the human's bone
+/// names, so the human's emote carries onto them cleanly (`eqoa emotes <body>
+/// <out.png> wave bow point cheer`). Their emotes alone: a form's moves, fall
+/// and swim stay the game's (`race_of` does not list them). The disc's two
+/// other golem bodies (the rusted iron golem 0x35D27E31, a stone golem
+/// 0xBF00816A) have no animation at all, statues: not listed.
+pub const FORMS: &[u32] = &[
+    0xEC6A_0604, // the clay golem (the Gingerbread Man's body, `toys::ice`)
+    0x1432_8B36, // the stone golem (granite, night, thulite golems; golem workers)
+    0xED39_70FB, // the iron golem (sturdy iron golems, golem statues)
+    0xABCC_4DF2, // the strong iron golem
+];
 
 /// The merfolk's skeleton (go-eqoa-server's race 32, the Mermaid, petition
 /// 1620: the merman's, the mermaid's and the two sirens' bodies, one skeleton
@@ -1497,6 +1514,41 @@ mod tests {
         assert!(!arms.iter().all(|r| sc.ref_maps[pixie.h.ref_map].contains_key(r)), "the control: the pixie's arms are its own");
     }
 
+    /// The golem bodies a player is shown in (`FORMS`: the Gingerbread Man's
+    /// clay golem among them) have no emote of their own (each the idle) and
+    /// the human's arms; granted, as a player's character on a server with
+    /// races, each of the four is the human's carried (not the idle); their
+    /// moves stay the game's (`moves_body` false). The controls: the same body
+    /// as an NPC, and on a server with no races, keeps the idle. Needs
+    /// `run/eqoa.iso`.
+    #[test]
+    fn the_golems_emote() {
+        let Some(lib) = disc() else { return };
+        let human = Rig::load(&lib, HUMAN).unwrap();
+        let arms: Vec<i32> = [12, 13, 21, 22].iter().map(|&n| human.refs[n].unwrap()).collect();
+        let listed = races(&[HILL_GIANT]);
+        for &id in FORMS {
+            assert_eq!(poses_of(id), Some(H), "{id:#010x}");
+            assert!(poses(id).is_none() && !moves_body(id), "{id:#010x}: a form, not a race");
+            let (mut cs, mut sc) = load(&lib, id);
+            for e in EMOTES {
+                assert!(row(&lib, id, e).is_none(), "{id:#010x} has emote {e}");
+                assert_eq!(cs.entries[e as usize].animation, cs.entries[0].animation, "{id:#010x}: emote {e} is the idle");
+            }
+            let rig = Rig::of(&cs, &sc.ref_maps[cs.h.ref_map]);
+            assert!(arms.iter().all(|r| rig.by_ref.contains_key(r)), "{id:#010x}: the human's arms");
+            assert!(grant(&lib, &mut cs, &mut sc, id, true, Some(&listed)), "{id:#010x}");
+            for e in EMOTES {
+                assert_ne!(cs.entries[e as usize].animation, cs.entries[0].animation, "{id:#010x}: emote {e} carried");
+            }
+            for (player, races) in [(false, Some(&listed)), (true, None)] {
+                let (mut cs, mut sc) = load(&lib, id);
+                assert!(!grant(&lib, &mut cs, &mut sc, id, player, races), "{id:#010x}: the control");
+                assert!(EMOTES.iter().all(|&e| cs.entries[e as usize].animation == cs.entries[0].animation), "{id:#010x}: the control keeps the idle");
+            }
+        }
+    }
+
     /// The 2002 disc's brownie and skeleton (the 2002 art) have no emotes,
     /// and take the 2002 human's, carried onto them; the Frontiers disc's
     /// keep their own (`the_listed_bodies_on_the_disc`). The control: the
@@ -1748,7 +1800,8 @@ mod tests {
     /// server with no races, no sprite's entries change (byte for byte); for
     /// a player on a server with races, exactly the bodies the table lists
     /// change, but the two whose emotes are their own (the brownie's, the
-    /// skeleton's), and every player race's body stays as it was. The control: the table's own poses put on every body that
+    /// skeleton's), and the golems `FORMS` lists, and every player race's
+    /// body stays as it was. The control: the table's own poses put on every body that
     /// has the human's arms and no emote of its own change those too, so
     /// the sweep sees a change where there is one. Needs `run/eqoa.iso`.
     #[test]
@@ -1781,7 +1834,10 @@ mod tests {
         let mut want: Vec<u32> = TABLE.iter().map(|(b, _)| *b).filter(|&b| row(&lib, b, 56).is_none()).collect();
         want.sort_unstable();
         assert_eq!(want.len(), TABLE.len() - 2, "the brownie's and skeleton's are their own");
-        assert_eq!(changed(true, Some(&listed), false), want, "a player's: the listed bodies with no emote of their own");
+        // and the golems a player is shown in (`FORMS`)
+        want.extend(FORMS);
+        want.sort_unstable();
+        assert_eq!(changed(true, Some(&listed), false), want, "a player's: the listed bodies with no emote of their own, and the golems");
         let every = changed(true, None, true);
         assert!(every.len() > want.len() + 100, "the control: {} bodies change with the human's emotes on all", every.len());
     }
