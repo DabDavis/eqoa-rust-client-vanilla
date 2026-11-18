@@ -12,7 +12,7 @@ is put on the page by `.github/workflows/notes.yml`.
 - **Several textures load at once**: a pack's files are now read by several helpers at a time, and what is
   on screen always goes first.
 - **Precache Textures** (Extended > Texture Cache): on, the whole pack is loaded into memory in the
-  background as you play, nearest needs first, and it stops by itself before it takes too much memory. Off
+  background as you play, nearest needs first, and it stops by itself before it takes too much memory. On
   by default.
 - **Pack Compression** (Extended > Texture Cache): on a graphics card that supports it, a pack's textures
   can be kept compressed, four times smaller, so far more of a large pack fits in the card's memory before

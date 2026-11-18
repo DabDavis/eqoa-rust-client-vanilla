@@ -1553,7 +1553,7 @@ impl Default for ClientOptions {
             texture_packs: false,
             dump_textures: false,
             pack_memory: 0,
-            pack_precache: false,
+            pack_precache: true,
             pack_compress: 0,
         }
     }
@@ -1840,8 +1840,8 @@ impl ClientOptions {
             s.push_str(&format!("pack_memory={}\n", self.pack_memory));
         }
         // Precache Textures only on, Pack Compression only off Auto
-        if self.pack_precache {
-            s.push_str("pack_precache=on\n");
+        if !self.pack_precache {
+            s.push_str("pack_precache=off\n");
         }
         if self.pack_compress != 0 {
             s.push_str(if self.pack_compress == 1 { "pack_compress=off\n" } else { "pack_compress=on\n" });
@@ -3273,15 +3273,15 @@ mod tests {
         }
     }
 
-    /// Precache Textures kept only on, Pack Compression only off Auto; the
+    /// Precache Textures kept only off (on by default, the owner 2026-11-18), Pack Compression only off Auto; the
     /// defaults not written, anything else read as the default.
     #[test]
     fn pack_precache_and_compression_kept() {
         let d = ClientOptions::default();
-        assert!(!d.pack_precache && d.pack_compress == 0);
+        assert!(d.pack_precache && d.pack_compress == 0);
         assert!(!d.to_text().contains("pack_"));
         for (c, text) in [
-            (ClientOptions { pack_precache: true, ..Default::default() }, "pack_precache=on\n"),
+            (ClientOptions { pack_precache: false, ..Default::default() }, "pack_precache=off\n"),
             (ClientOptions { pack_compress: 1, ..Default::default() }, "pack_compress=off\n"),
             (ClientOptions { pack_compress: 2, ..Default::default() }, "pack_compress=on\n"),
         ] {
@@ -3290,7 +3290,7 @@ mod tests {
         }
         for bad in ["pack_precache=1", "pack_compress=bc3", "pack_compress=", "pack_precache=yes"] {
             let c = ClientOptions::from_text(bad);
-            assert!(!c.pack_precache && c.pack_compress == 0, "{bad}: the default");
+            assert!(c.pack_precache && c.pack_compress == 0, "{bad}: the default");
         }
     }
 

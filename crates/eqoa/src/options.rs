@@ -165,7 +165,7 @@
 //!   folder cannot be written to, which the page then says, and on
 //!   Android), and on a computer Texture Folder (Open) shows it in the
 //!   system's file manager, the page saying where it is
-//!   (`texpack::open_folder`); Precache Textures (Off; On: every file of a
+//!   (`texpack::open_folder`); Precache Textures (On by default; On: every file of a
 //!   pack made ready in memory as the pack is read, within its budget, the
 //!   zones' and what is drawn first, `texcache`), Pack Compression (Auto, a
 //!   pack larger than the card's budget kept as BC3; Off; On) and Rebuild
@@ -3169,15 +3169,15 @@ mod tests {
         assert_eq!(settings::client().pack_memory, 4096, "and the other way");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!(settings::client().pack_memory, 0);
-        // Precache Textures under it: Off, then On; Pack Compression: Auto,
-        // Off, On and round; Rebuild Pack Cache: Rebuild, the cache (none
-        // in a test) said beside Back
+        // Precache Textures under it: On (the default, the owner 2026-11-18),
+        // then Off; Pack Compression: Auto, Off, On and round; Rebuild Pack
+        // Cache: Rebuild, the cache (none in a test) said beside Back
         goto!(PACK_PRECACHE);
-        assert_eq!((w.item, value_text(&vui, PACK_PRECACHE)), (PACK_PRECACHE, Some(wide(vui.words.get(552, vui.language)))), "Precache Textures, Off");
+        assert_eq!((w.item, value_text(&vui, PACK_PRECACHE)), (PACK_PRECACHE, Some(wide(vui.words.get(551, vui.language)))), "Precache Textures, On");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert!(settings::client().pack_precache);
+        assert!(!settings::client().pack_precache);
         press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert!(!settings::client().pack_precache, "two values");
+        assert!(settings::client().pack_precache, "two values");
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.item, value_text(&vui, PACK_COMPRESS)), (PACK_COMPRESS, Some(wide("Auto"))));
         for (v, text) in [(1, "Off"), (2, "On"), (0, "Auto")] {
