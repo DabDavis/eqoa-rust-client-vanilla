@@ -5,6 +5,19 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-18 · Texture packs load all their textures again
+- **Texture packs show all their textures again**: since the last update a large pack could stop loading
+  textures once it had filled the memory set aside for it, most of all in busy places like Freeport, and the
+  game's own textures showed instead. Now the pack's textures you have not seen for the longest are let go to
+  make room and load again when you come back to them. Only if what is on screen alone is more than the memory
+  allows are some drawn at half size or smaller, and the game's own texture is the last resort.
+- **More memory for packs on a graphics card**: it now takes a third of the card's own memory (from 1 GB up to
+  4 GB) where the card says how much it has. Built-in graphics keep the smaller amount that stops them running out.
+- **Texture Pack Memory** (Extended > Textures, beside Texture Packs): Auto, or 512 MB, 1 GB, 2 GB or 4 GB. The
+  page says what the pack's textures take, such as "Pack textures: 812 of 1024 MB", with "(held)" when some
+  were let go or drawn smaller to stay within it. If your graphics still run out of memory the game recovers
+  with a smaller amount, as before.
+
 ## 2026-11-18 · The catapult's spoon throws with its arm
 - **The catapult's spoon swings with its arm**: the cup at the end of the arm now goes up with it on every throw,
   and the boulder leaves from the spoon.

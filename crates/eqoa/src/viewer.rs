@@ -6822,6 +6822,9 @@ impl App {
                 render::ui::set_text_filter(crate::settings::client().text);
                 render::ui::set_hud_filter(crate::settings::client().hud);
                 render::set_mipmaps(crate::settings::client().mipmaps);
+                // its Texture Pack Memory: a pack's budget from the next
+                // texture made (`render::packmem`)
+                render::set_pack_memory(u64::from(crate::settings::client().pack_memory));
                 g.renderer.scale.set(crate::settings::client().render_scale as u32);
                 let f = g.renderer.scale.targets(&g.device, &target, &g.depth, (g.config.width, g.config.height));
                 // the ground fog a PS2 frame keeps reads the frame: a target

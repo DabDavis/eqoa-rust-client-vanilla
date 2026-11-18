@@ -1028,9 +1028,14 @@ pub const ROW_FOLDER: i32 = 55;
 /// chosen: on Dump Textures, while it is on, how many textures have been
 /// dumped; on Texture Folder where the folder is, or why it is the
 /// settings' (`Beside::folder`); on Texture Packs, while it is on, how many
-/// replacements the packs hold and where (`Beside::packs`).
+/// replacements the packs hold and where (`Beside::packs`), or while the
+/// pack is held to its memory what its textures take of it
+/// (`memory_note`); on Texture Pack Memory, while packs are on, that always.
 pub fn note(item: i32) -> Option<String> {
     let c = crate::settings::client();
+    if item == crate::options::PACK_MEMORY {
+        return c.texture_packs.then(|| memory_note(&render::pack_memory()));
+    }
     if item == ROW_DUMPS {
         return c.dump_textures.then(|| format!("{} dumped", pack().map_or(0, |p| p.dumped())));
     }
@@ -1044,11 +1049,25 @@ pub fn note(item: i32) -> Option<String> {
     if reading() {
         return Some(format!("Reading {}", place.beside.packs()));
     }
+    let m = render::pack_memory();
+    if m.held() {
+        return Some(memory_note(&m));
+    }
     // (none read yet in the frame it was turned on: `sync` reads them next)
     Some(match pack().map_or(0, |p| p.count(esf::Era::Frontiers)) {
         0 => format!("None in {}", place.beside.packs()),
         n => format!("{n} in {}", place.beside.packs()),
     })
+}
+
+/// What a pack's textures take of its memory (`render::packmem`), in MB:
+/// "Pack textures: 812 of 1024 MB", "(held)" after it once one was let go or
+/// made smaller for want of room. Before the game's renderer has said, the
+/// budget as it stands.
+pub fn memory_note(m: &render::packmem::PackMemory) -> String {
+    let budget = if m.budget > 0 { m.budget } else { render::pack_limits().budget };
+    let held = if m.held() { " (held)" } else { "" };
+    format!("Pack textures: {} of {} MB{held}", m.used >> 20, budget >> 20)
 }
 
 // ---- reading a replacement -----------------------------------------------------
@@ -1338,6 +1357,18 @@ fn half(l: &esf::Image) -> esf::Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Texture Pack Memory's note: what the pack's textures take of the
+    /// budget in MB, "(held)" once one was let go or made smaller for room.
+    #[test]
+    fn memory_note_says_what_the_pack_takes() {
+        use render::packmem::PackMemory;
+        let mb = 1u64 << 20;
+        let m = PackMemory { used: 812 * mb + 5, budget: 1024 * mb, textures: 150, reduced: 0, evicted: 0 };
+        assert_eq!(memory_note(&m), "Pack textures: 812 of 1024 MB");
+        assert_eq!(memory_note(&PackMemory { evicted: 3, ..m }), "Pack textures: 812 of 1024 MB (held)");
+        assert_eq!(memory_note(&PackMemory { reduced: 1, ..m }), "Pack textures: 812 of 1024 MB (held)");
+    }
 
     /// A stand-in past the pack's largest side (`render::PackLimits`) is
     /// drawn halved until it fits: its larger levels dropped, the size and

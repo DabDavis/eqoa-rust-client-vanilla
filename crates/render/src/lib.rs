@@ -21,6 +21,7 @@ pub mod lightshadow;
 pub mod lit;
 pub mod map;
 pub mod overlay;
+pub mod packmem;
 pub mod petart;
 pub mod recolor;
 pub mod scale;
@@ -272,8 +273,9 @@ pub fn pack() -> Option<std::sync::Arc<dyn Pack>> {
 /// cacheing"): every texture a renderer makes is kept for the run, and a
 /// pack's are many times a surface's (a 2048 x 2048 one with its levels is
 /// 22 MB, the surface it stands for 0.09). A larger stand-in is drawn halved
-/// until it fits (its file's levels past it, `eqoa`'s `texpack`); one past
-/// the budget is drawn as the surface's own. Set by the adapter
+/// until it fits (its file's levels past it, `eqoa`'s `texpack`); past the
+/// budget the least recently drawn are let go, and where what is drawn
+/// fills it a new one is made smaller (`packmem`). Set by the adapter
 /// (`set_pack_limits`): a graphics chip sharing the system's memory (an
 /// integrated one, a page's) gets the small ones. Each time the device runs
 /// out of memory the budget halves (`out_of_memory`).
@@ -289,8 +291,20 @@ impl PackLimits {
     /// 256 MB and 1024. `EQOA_PACK_BUDGET_MB` and `EQOA_PACK_MAX_SIDE` set
     /// either.
     pub fn for_device(kind: wgpu::DeviceType) -> PackLimits {
+        PackLimits::for_adapter(kind, None)
+    }
+
+    /// `for_device`, with the card's own memory where its driver says it
+    /// (`device_memory`: Vulkan's largest device-local heap): a discrete
+    /// card's budget a third of it, from 1 GB to 4 GB (a 4 GB card 1.3 GB,
+    /// an 8 GB one 2.7 GB, 12 GB and more 4 GB). An integrated chip's memory
+    /// is the system's, so it keeps 256 MB whatever it says.
+    pub fn for_adapter(kind: wgpu::DeviceType, memory: Option<u64>) -> PackLimits {
         let discrete = kind == wgpu::DeviceType::DiscreteGpu && cfg!(not(target_arch = "wasm32"));
         let mut l = if discrete { PackLimits { budget: 1 << 30, max_side: 2048 } } else { PackLimits { budget: 256 << 20, max_side: 1024 } };
+        if discrete && let Some(m) = memory {
+            l.budget = (m / 3).clamp(1 << 30, 4 << 30);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(mb) = std::env::var("EQOA_PACK_BUDGET_MB").ok().and_then(|v| v.parse::<u64>().ok()) {
@@ -304,20 +318,65 @@ impl PackLimits {
     }
 }
 
+/// The card's own memory where its driver says it: on Vulkan the largest
+/// heap local to the device (its VRAM on a discrete card); `None` on any
+/// other backend, or where it cannot be asked.
+pub fn device_memory(device: &wgpu::Device) -> Option<u64> {
+    #[cfg(all(not(target_arch = "wasm32"), not(target_vendor = "apple")))]
+    {
+        // SAFETY: the device's own Vulkan handles, only read from (a
+        // physical device's memory properties), nothing made or destroyed
+        let hal = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }?;
+        let instance = hal.shared_instance().raw_instance();
+        let props = unsafe { instance.get_physical_device_memory_properties(hal.raw_physical_device()) };
+        // VK_MEMORY_HEAP_DEVICE_LOCAL_BIT
+        props.memory_heaps[..props.memory_heap_count as usize].iter().filter(|h| h.flags.as_raw() & 1 != 0).map(|h| h.size).max()
+    }
+    #[cfg(any(target_arch = "wasm32", target_vendor = "apple"))]
+    {
+        let _ = device;
+        None
+    }
+}
+
 static PACK_LIMITS: std::sync::Mutex<PackLimits> = std::sync::Mutex::new(PackLimits { budget: 256 << 20, max_side: 1024 });
 /// How many times the device has run out of memory this run.
 static OUT_OF_MEMORY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// The options' Texture Pack Memory in MB (`set_pack_memory`): 0 for Auto,
+/// the device's (`PackLimits::for_adapter`).
+static PACK_MEMORY_MB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Sets the pack limits for the device `Renderer::new` is made on.
 pub fn set_pack_limits(l: PackLimits) {
     *PACK_LIMITS.lock().unwrap_or_else(|e| e.into_inner()) = l;
 }
 
-/// The limits now: the budget halved for each time the memory ran out.
+/// The options' Texture Pack Memory: the pack's budget `mb` MB whatever the
+/// device, or with 0 (Auto) the device's. From the next stand-in made.
+pub fn set_pack_memory(mb: u64) {
+    PACK_MEMORY_MB.store(mb, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The limits now: the options' budget or the device's, halved for each
+/// time the memory ran out.
 pub fn pack_limits() -> PackLimits {
     let l = *PACK_LIMITS.lock().unwrap_or_else(|e| e.into_inner());
     let n = OUT_OF_MEMORY.load(std::sync::atomic::Ordering::Relaxed).min(16);
-    PackLimits { budget: l.budget >> n, max_side: l.max_side }
+    let budget = match PACK_MEMORY_MB.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => l.budget,
+        mb => mb << 20,
+    };
+    PackLimits { budget: budget >> n, max_side: l.max_side }
+}
+
+/// The main renderer's pack memory as it last was (`Renderer::publish_pack_memory`),
+/// for the Textures page.
+static PACK_MEMORY: std::sync::Mutex<packmem::PackMemory> = std::sync::Mutex::new(packmem::PackMemory { used: 0, budget: 0, textures: 0, reduced: 0, evicted: 0 });
+
+/// What a texture pack's stand-ins take now, as the game's renderer last
+/// said (`Renderer::publish_pack_memory`).
+pub fn pack_memory() -> packmem::PackMemory {
+    *PACK_MEMORY.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The device ran out of memory (a texture refused, or `eqoa`'s `gpulost`
@@ -490,6 +549,9 @@ pub struct GpuModel {
     /// Its armour trims' auras (`trimglow`, `Renderer::set_trims`), drawn
     /// after its blended layers; none for every other model.
     pub trim: Option<trimglow::Trim>,
+    /// The pack's stand-ins it is drawn with, kept while it is and stamped
+    /// at each draw (`packmem`): never let go under it.
+    holds: Vec<packmem::Hold>,
 }
 
 impl GpuModel {
@@ -550,6 +612,8 @@ pub struct GpuGroup {
     /// they are the same ones (`lightshadow`).
     id: u64,
     bounds: Option<(Vec3, Vec3)>,
+    /// The pack's stand-ins its members are drawn with (`GpuModel::holds`).
+    holds: Vec<packmem::Hold>,
 }
 
 /// The next group's id (`GpuGroup::id`).
@@ -803,14 +867,19 @@ pub struct Renderer {
     /// key (`Pass::alpha_min`).
     texture_alpha: std::collections::HashMap<u64, u8>,
     /// The textures of stand-ins being read, by key, with the size and level
-    /// count each was made at (`standin`), and the stand-ins read and not
-    /// yet written into them, in order (`take_stand_ins`).
-    stand_ins: std::collections::HashMap<u64, (wgpu::Texture, (u32, u32, u32))>,
+    /// count each was made at (`standin`) and how many levels smaller than
+    /// the pack's it is (`packmem::step_down`), and the stand-ins read and
+    /// not yet written into them, in order (`take_stand_ins`).
+    stand_ins: std::collections::HashMap<u64, (wgpu::Texture, (u32, u32, u32), u32)>,
     stand_ins_ready: std::collections::VecDeque<(u64, std::sync::Arc<Vec<esf::Image>>)>,
     /// What draws a placeholder's levels, made with the first.
     blit: Option<standin::Blit>,
-    /// The bytes of the pack's stand-ins made so far (`PackLimits`).
-    pack_bytes: u64,
+    /// The pack's stand-ins made, their bytes and when each was last drawn,
+    /// kept within the budget by what is drawn (`packmem`, `PackLimits`).
+    pack: packmem::Budget,
+    /// While a model or group is uploaded, the stand-ins it is made with,
+    /// for it to hold (`GpuModel::holds`).
+    collecting: Option<std::collections::HashMap<u64, packmem::Hold>>,
     /// Whether `ran_out` has said so.
     said_out_of_memory: bool,
     /// DictIDs a batch asked for that no loaded file holds.
@@ -1060,7 +1129,7 @@ pub(crate) fn model_pipeline(
 
 impl Renderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        set_pack_limits(PackLimits::for_device(device.adapter_info().device_type));
+        set_pack_limits(PackLimits::for_adapter(device.adapter_info().device_type, device_memory(device)));
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("frame"),
@@ -1176,7 +1245,8 @@ impl Renderer {
             stand_ins: Default::default(),
             stand_ins_ready: Default::default(),
             blit: None,
-            pack_bytes: 0,
+            pack: Default::default(),
+            collecting: None,
             said_out_of_memory: false,
             missing_textures: Default::default(),
             start: web_time::Instant::now(),
@@ -1217,23 +1287,105 @@ impl Renderer {
             return None;
         }
         let key = src.key(id);
+        // a stand-in made smaller, or as the game's own, for want of room,
+        // that nothing holds now: made again, at its size if there is room
+        if self.pack.retry(key, pack_limits().budget) {
+            self.let_go(key);
+        }
         if let Some(t) = self.textures.get(&key) {
-            return t.clone();
+            let t = t.clone();
+            self.collect(key);
+            return t;
         }
         if self.blit.is_none() && pack().is_some() {
             self.blit = Some(standin::Blit::new(device));
         }
         let made = self.make_texture(device, queue, id, key, src);
         self.textures.insert(key, made.clone());
+        self.collect(key);
         made
     }
 
+    /// The stand-in under `key`, if it is one, stamped as asked for this
+    /// frame and, while a model or group is uploaded, held by it.
+    fn collect(&mut self, key: u64) {
+        if let Some(h) = self.pack.touch(key)
+            && let Some(c) = self.collecting.as_mut()
+        {
+            c.entry(key).or_insert(h);
+        }
+    }
+
+    /// The stand-in `id` names, if it is one, held by `m` (a layer or trim
+    /// bound to it after `m` was made).
+    fn hold_in(&mut self, m: &mut GpuModel, id: i32, src: &Textures) {
+        if let Some(h) = self.pack.touch(src.key(id))
+            && !m.holds.iter().any(|x| std::sync::Arc::ptr_eq(x, &h))
+        {
+            m.holds.push(h);
+        }
+    }
+
+    /// The stand-ins a model or group being uploaded is made with gathered
+    /// from now (`end_holds`), any gathering already going on kept aside.
+    fn begin_holds(&mut self) -> Option<std::collections::HashMap<u64, packmem::Hold>> {
+        self.collecting.replace(Default::default())
+    }
+
+    /// The stand-ins gathered since `begin_holds`, the gathering before it
+    /// (`outer`) going on with them too.
+    fn end_holds(&mut self, outer: Option<std::collections::HashMap<u64, packmem::Hold>>) -> Vec<packmem::Hold> {
+        let got = std::mem::replace(&mut self.collecting, outer).unwrap_or_default();
+        if let Some(o) = self.collecting.as_mut() {
+            for (k, h) in &got {
+                o.entry(*k).or_insert_with(|| h.clone());
+            }
+        }
+        got.into_values().collect()
+    }
+
+    /// The texture under `key` let go (a stand-in past the budget, nothing
+    /// holding it: `packmem`): out of every cache that keeps it, so that its
+    /// memory is the GPU's again once the work already recorded with it is
+    /// done. Dropped, never destroyed: anything still bound to it keeps it
+    /// valid. Asked for again, it is made again.
+    fn let_go(&mut self, key: u64) {
+        self.pack.remove(key);
+        self.textures.remove(&key);
+        self.texture_alpha.remove(&key);
+        self.stand_ins.remove(&key);
+        self.materials.retain(|k, _| k.0 != key);
+        if let Some(b) = self.billboards.as_mut() {
+            b.forget_texture(key);
+        }
+        if let Some(f) = self.fans.as_mut() {
+            f.forget_textures();
+        }
+        if let Some(s) = self.shadows.as_mut() {
+            s.forget_texture(key);
+        }
+    }
+
+    /// Room made in the pack's budget for `need` more bytes: the least
+    /// recently drawn stand-ins nothing holds let go (`packmem::Budget::make_room`),
+    /// then how many levels smaller each way the new one is made to fit
+    /// (`bytes(k)` its bytes so), no more than `most`; `None`: the game's own.
+    fn room_for(&mut self, most: u32, bytes: impl Fn(u32) -> u64) -> Option<u32> {
+        let budget = pack_limits().budget;
+        for key in self.pack.make_room(bytes(0), budget) {
+            self.let_go(key);
+        }
+        self.pack.choose_step(budget, most, bytes)
+    }
+
     /// The texture `texture_shifted` keeps under `key`: a pack's stand-in
-    /// while the pack's budget allows (`PackLimits`; made now at its size
-    /// and written once read, `standin`), else the surface's own; nothing
-    /// for an id of no levels. A texture the device has no memory for is
-    /// the surface's own instead, or nothing (`made_safely`), never the
-    /// panic wgpu raises by default.
+    /// within the pack's budget (`PackLimits`; made now at its size and
+    /// written once read, `standin`), room made for it by letting go of the
+    /// least recently drawn (`packmem`), made a level smaller each way at a
+    /// time where what is held fills it, the surface's own only past its own
+    /// size; nothing for an id of no levels. A texture the device has no
+    /// memory for is the surface's own instead, or nothing (`made_safely`),
+    /// never the panic wgpu raises by default.
     fn make_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: i32, key: u64, src: &Textures) -> Option<(wgpu::TextureView, f32)> {
         // a pack's stand-in still being read: its texture made at its size
         // now, the surface's own drawn into it, written over once read
@@ -1245,33 +1397,48 @@ impl Renderer {
             self.missing_textures.insert(id);
             return None;
         }
-        let budget = pack_limits().budget;
         let native = src.native_size(id);
-        if let (Some(size), Some(blit)) = (pending, self.blit.as_ref()) {
-            let bytes = standin::texture_bytes(size);
-            if self.pack_bytes + bytes <= budget {
-                let made = made_safely(device, || standin::placeholder(device, queue, blit, &levels, size));
+        // how many levels a stand-in may be made smaller: to its surface's size
+        let most = |base: (u32, u32)| level_shift(base, native).max(0.0).floor() as u32;
+        // the game's own drawn for want of room: the stand-in's bytes
+        let mut reduced = None;
+        if let Some(size) = pending.filter(|_| self.blit.is_some()) {
+            if let Some(k) = self.room_for(most((size.0, size.1)), |k| packmem::bytes(packmem::stepped(size, k))) {
+                let made_at = packmem::stepped(size, k);
+                let blit = self.blit.as_ref().expect("made above");
+                let made = made_safely(device, || standin::placeholder(device, queue, blit, &levels, made_at));
                 if let Some((tex, view)) = made {
-                    self.pack_bytes += bytes;
+                    self.pack.insert(key, packmem::bytes(made_at), packmem::bytes(size));
                     // its texels unknown until read: never drawn as one no
                     // texel of which fails its alpha test (Sun Shadows)
                     self.texture_alpha.insert(key, 0);
-                    self.stand_ins.insert(key, (tex, size));
-                    return Some((view, level_shift((size.0, size.1), native)));
+                    self.stand_ins.insert(key, (tex, made_at, k));
+                    return Some((view, level_shift((made_at.0, made_at.1), native)));
                 }
                 self.ran_out("a texture pack's stand-in");
             }
-            // past the budget, or refused: the surface's own (the stand-in,
-            // read, is let go: `take_stand_ins` finds no texture for it)
+            // past even its own size, or refused: the surface's own (the
+            // stand-in, read, is let go: `take_stand_ins` finds no texture
+            // for it), tried again once nothing holds it
             levels = src.own_levels(id);
+            reduced = Some(packmem::bytes(size));
         } else if level_shift((levels[0].width, levels[0].height), native) > 0.0 {
             // a stand-in read already (larger than its surface)
-            let bytes = levels.iter().map(|l| u64::from(l.width) * u64::from(l.height) * 4).sum::<u64>();
-            if self.pack_bytes + bytes <= budget {
-                self.pack_bytes += bytes;
-            } else {
-                levels = src.own_levels(id);
+            let size = (levels[0].width, levels[0].height, levels.len() as u32);
+            match self.room_for(most((size.0, size.1)), |k| packmem::bytes(packmem::stepped(size, k))) {
+                Some(k) => {
+                    levels = packmem::step_down(levels, k);
+                    self.pack.insert(key, packmem::bytes((levels[0].width, levels[0].height, levels.len() as u32)), packmem::bytes(size));
+                }
+                None => {
+                    levels = src.own_levels(id);
+                    reduced = Some(packmem::bytes(size));
+                }
             }
+        }
+        if let Some(want) = reduced {
+            // counted as nothing, kept to be tried again (`packmem::Budget::retry`)
+            self.pack.insert(key, 0, want);
         }
         if levels.is_empty() {
             self.missing_textures.insert(id);
@@ -1289,10 +1456,13 @@ impl Renderer {
             if !own.is_empty()
                 && let Some(view) = made_safely(device, || upload_levels(device, queue, &own))
             {
+                let want = levels.iter().map(|l| u64::from(l.width) * u64::from(l.height) * 4).sum();
+                self.pack.insert(key, 0, want);
                 self.texture_alpha.insert(key, own.iter().flat_map(|l| l.rgba.chunks_exact(4).map(|p| p[3])).min().unwrap_or(255));
                 return Some((view, 0.0));
             }
         }
+        self.pack.remove(key);
         self.texture_alpha.remove(&key);
         None
     }
@@ -1319,12 +1489,20 @@ impl Renderer {
         let sizes: Vec<usize> = self.stand_ins_ready.iter().map(|(_, l)| standin::bytes(l)).collect();
         let n = standin::due(&sizes, standin::BUDGET);
         for (key, levels) in self.stand_ins_ready.drain(..n) {
-            if let Some((tex, size)) = self.stand_ins.remove(&key)
-                && standin::fits(&levels, size)
-            {
-                standin::write(queue, &tex, &levels);
+            let Some((tex, size, k)) = self.stand_ins.remove(&key) else { continue };
+            // made smaller for want of room (`make_texture`): its levels so
+            let smaller;
+            let levels = if k > 0 {
+                smaller = packmem::step_down(levels.as_ref().clone(), k);
+                &smaller
+            } else {
+                levels.as_ref()
+            };
+            if standin::fits(levels, size) {
+                standin::write(queue, &tex, levels);
             }
         }
+        self.publish_pack_memory();
         n
     }
 
@@ -1371,6 +1549,7 @@ impl Renderer {
         textures: &Textures,
         flora: bool,
     ) -> GpuModel {
+        let outer = self.begin_holds();
         let verts = vertices_of(m);
         let vertices = device.buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vertices"),
@@ -1439,6 +1618,7 @@ impl Renderer {
             contents: bytemuck::cast_slice(&vec![[0.0f32, 0.0, 0.0, 1.0]; instances.len().max(1)]),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
+        let holds = self.end_holds(outer);
         GpuModel {
             vertices,
             palette,
@@ -1460,6 +1640,7 @@ impl Renderer {
             core: std::cell::Cell::new(sunshadow::world_box((lo, hi), false, instances)),
             shell: None,
             trim: None,
+            holds,
         }
     }
 
@@ -1474,7 +1655,7 @@ impl Renderer {
             view.texture().destroy();
         }
         self.textures.clear();
-        self.pack_bytes = 0;
+        self.pack.clear();
         self.missing_textures.clear();
         self.materials.clear();
     }
@@ -1494,6 +1675,17 @@ impl Renderer {
             }
         }
         (n, bytes, pn, pbytes)
+    }
+
+    /// What the pack's stand-ins take now against the budget (`packmem`).
+    pub fn pack_memory(&self) -> packmem::PackMemory {
+        self.pack.memory(pack_limits().budget)
+    }
+
+    /// `pack_memory` made what `render::pack_memory` says (for the Textures
+    /// page): the game's renderer's, each frame (`take_stand_ins`).
+    pub fn publish_pack_memory(&self) {
+        *PACK_MEMORY.lock().unwrap_or_else(|e| e.into_inner()) = self.pack_memory();
     }
 
     /// The kept buffers of the particles' and strips' slots, in bytes
@@ -1527,6 +1719,9 @@ impl Renderer {
         let rebind = p.texture != texture || p.sampler != si;
         let (view, shift) = if rebind { self.texture_shifted(device, queue, texture, textures).unzip() } else { (None, None) };
         let alpha_min = if view.is_some() { self.alpha_min(texture, textures) } else { 255 };
+        if rebind && view.is_some() {
+            self.hold_in(m, texture, textures);
+        }
         let Some(p) = m.batches.get_mut(batch).and_then(|b| b.2.get_mut(pass)) else { return };
         if rebind {
             let shift = shift.unwrap_or(0.0);
@@ -1695,6 +1890,9 @@ impl Renderer {
         }
         let Some(p) = self.trim.take() else { return };
         let views: std::collections::HashMap<i32, Option<wgpu::TextureView>> = trimglow::by_mask(trims).into_iter().map(|(_, id, _)| (id, self.texture(device, queue, id, textures))).collect();
+        for &id in views.keys() {
+            self.hold_in(m, id, textures);
+        }
         m.trim = p.trim(device, &self.material_layout, &self.samplers[0], model, m.bounds, trims, |id| views.get(&id).cloned().flatten());
         self.trim = Some(p);
     }
@@ -1767,6 +1965,19 @@ impl Renderer {
 
     #[allow(clippy::too_many_arguments)]
     fn draw_in(&self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, depth: &wgpu::TextureView, view: &View, items: &[Draw], rect: Option<[u32; 4]>) {
+        // a new frame for the pack's budget, and every stand-in the models
+        // and groups drawn hold stamped as drawn in it (`packmem`)
+        self.pack.next_frame();
+        let frame = self.pack.frame();
+        for item in items {
+            let holds = match item {
+                Draw::Model(m) | Draw::Instances(m, _) => &m.holds,
+                Draw::Group(g) => &g.holds,
+            };
+            for h in holds {
+                h.store(frame, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         // The view-projection relative to the eye, in doubles: `view_proj`'s
         // translation is the projection of the eye's world position, which
         // the eye's own translation here cancels (shader.wgsl, vs_main).
@@ -2134,6 +2345,7 @@ impl Renderer {
     /// Uploads `parts` as one [`GpuGroup`], drawn as `draw` would draw them
     /// one by one as models, in this order.
     pub fn upload_group(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, parts: &[GroupPart], textures: &Textures) -> GpuGroup {
+        let outer = self.begin_holds();
         // The buffers are sized first and each part written as it is built: a
         // whole zone's vertices at once (and the copies made of them on the
         // way to the GPU) would stay in a page's wasm heap, which never shrinks.
@@ -2197,7 +2409,8 @@ impl Renderer {
         }
         let bounds = members.iter().filter_map(|m| m.bounds).reduce(|(a, b), (c, d)| (a.min(c), b.max(d)));
         let id = GROUP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut g = GpuGroup { vertices, indices, instances, statics, members, runs: Vec::new(), sun: None, id, bounds };
+        let holds = self.end_holds(outer);
+        let mut g = GpuGroup { vertices, indices, instances, statics, members, runs: Vec::new(), sun: None, id, bounds, holds };
         for at in (0..parts.len()).step_by(RUN) {
             let span = at..(at + RUN).min(parts.len());
             let bounds = parts[span.clone()].iter().filter_map(part_bounds).reduce(|(a, b), (c, d)| (a.min(c), b.max(d)));
@@ -3074,14 +3287,24 @@ mod tests {
         assert_eq!(raised.load(Ordering::SeqCst), 0, "caught, not raised");
     }
 
-    /// A pack's stand-ins (larger than their surfaces) are made while the
-    /// pack's budget allows and the rest drawn as their surfaces' own, at
-    /// their own size (Hoofbite's Iris Xe out of memory, 2026-11-17); the
-    /// surfaces' own textures count nothing against it. The control: with
-    /// a budget for all four, all four are the pack's. Needs a graphics
+    /// A pack's stand-ins (larger than their surfaces) within the pack's
+    /// budget (the owner's report of 2026-11-18, "some textures are not
+    /// being loaded from texture packs": past the budget of 2026-11-17 every
+    /// new one was the game's own for the rest of the run). Needs a graphics
     /// adapter (any backend); without one it says so and passes.
+    ///
+    /// - All in use (none drawn since: this frame's): what fits is the
+    ///   pack's at its size, the next a level smaller each way (128), the
+    ///   last, with no room even at its surface's 64, the game's own; the
+    ///   surfaces' own textures count nothing. With room for all four, all
+    ///   four the pack's at their size.
+    /// - A frame on, nothing holding them: a new one lets the least recently
+    ///   drawn go and is the pack's at its size, and the one let go, asked
+    ///   for again, is the pack's again, letting the next go.
+    /// - One a model or group holds (`begin_holds`) is never let go: the
+    ///   other goes.
     #[test]
-    fn a_pack_past_its_budget_is_drawn_as_the_game_s_own() {
+    fn a_pack_s_textures_are_kept_within_its_budget_by_what_is_drawn() {
         struct Src;
         impl super::TextureSource for Src {
             fn image(&self, id: i32) -> Option<esf::Image> {
@@ -3106,17 +3329,108 @@ mod tests {
         };
         let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
         let one: u64 = (256 * 256 + 128 * 128 + 64 * 64) * 4;
-        for (budget, packed) in [(2 * one + 100, 2), (4 * one, 4)] {
+        let half: u64 = (128 * 128 + 64 * 64) * 4;
+        let own: u64 = 64 * 64 * 4;
+        let side = |r: &super::Renderer, id: i32| r.textures.get(&(id as u64)).cloned().flatten().map(|(v, _)| v.texture().width());
+        // all in use
+        for (budget, sides, pbytes) in [(2 * one + half, [256, 256, 128, 64], 2 * one + half), (4 * one, [256; 4], 4 * one)] {
             let mut r = super::Renderer::new(&device, &queue, super::TARGET_FORMAT);
             super::set_pack_limits(super::PackLimits { budget, max_side: 4096 });
             for id in 1..=5 {
                 assert!(r.texture(&device, &queue, id, &Src).is_some());
             }
-            let (n, bytes, pn, pbytes) = r.texture_memory();
-            assert_eq!((n, pn, pbytes), (5, packed, packed as u64 * one), "budget {budget}");
-            assert_eq!(bytes, pbytes + (5 - packed as u64) * 64 * 64 * 4, "the rest at their own 64");
-            assert!(r.pack_bytes <= budget);
+            assert_eq!([1, 2, 3, 4].map(|id| side(&r, id).unwrap()), sides, "budget {budget}");
+            let (n, bytes, _, pb) = r.texture_memory();
+            assert_eq!((n, pb), (5, pbytes), "budget {budget}");
+            let owns = sides.iter().filter(|&&s| s == 64).count() as u64;
+            assert_eq!(bytes, pbytes + (1 + owns) * own, "the rest at their own 64");
+            let m = r.pack_memory();
+            assert_eq!((m.used, m.evicted, m.held()), (pbytes, 0, budget != 4 * one));
+            assert!(m.used <= budget);
         }
+        // a frame on, nothing holding them
+        let mut r = super::Renderer::new(&device, &queue, super::TARGET_FORMAT);
+        super::set_pack_limits(super::PackLimits { budget: 2 * one, max_side: 4096 });
+        r.texture(&device, &queue, 1, &Src);
+        r.texture(&device, &queue, 2, &Src);
+        r.pack.next_frame();
+        r.texture(&device, &queue, 2, &Src);
+        r.pack.next_frame();
+        r.texture(&device, &queue, 3, &Src);
+        assert_eq!([1, 2, 3].map(|id| side(&r, id)), [None, Some(256), Some(256)], "1, drawn longest ago, let go for 3");
+        r.pack.next_frame();
+        r.texture(&device, &queue, 1, &Src);
+        assert_eq!([1, 2, 3].map(|id| side(&r, id)), [Some(256), None, Some(256)], "1 the pack's again, 2 let go");
+        assert_eq!((r.pack_memory().used, r.pack_memory().evicted), (2 * one, 2));
+        // held
+        r.pack.next_frame();
+        let outer = r.begin_holds();
+        r.texture(&device, &queue, 3, &Src);
+        let holds = r.end_holds(outer);
+        assert_eq!(holds.len(), 1);
+        for _ in 0..3 {
+            r.pack.next_frame();
+        }
+        r.texture(&device, &queue, 4, &Src);
+        assert_eq!([1, 3, 4].map(|id| side(&r, id)), [None, Some(256), Some(256)], "3 held though drawn before 1: 1 let go");
+        // and with nothing to let go but what is held, smaller
+        r.pack.next_frame();
+        let outer = r.begin_holds();
+        r.texture(&device, &queue, 4, &Src);
+        let more = r.end_holds(outer);
+        r.pack.next_frame();
+        r.texture(&device, &queue, 2, &Src);
+        assert_eq!(side(&r, 2), Some(64), "no room: the game's own");
+        drop((holds, more));
+        r.pack.next_frame();
+        r.texture(&device, &queue, 2, &Src);
+        assert_eq!(side(&r, 2), Some(256), "made again at its size once there is room");
+        // the options' Texture Pack Memory over the device's
+        super::set_pack_memory(512);
+        assert_eq!(super::pack_limits().budget, 512 << 20);
+        super::set_pack_memory(0);
+        assert_eq!(super::pack_limits().budget, 2 * one, "Auto: the device's");
+    }
+
+    /// The card's memory as its Vulkan driver says it (`device_memory`),
+    /// and Auto's budget from it: said where there is a Vulkan adapter
+    /// (this machine's RX 580: 7,936 MB, a budget of 2,645 MB), `None` on any other
+    /// backend. Needs a graphics adapter; without one it says so and passes.
+    #[test]
+    fn device_memory_where_vulkan_says_it() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let info = adapter.get_info();
+        let m = super::device_memory(&device);
+        eprintln!("{} ({:?}, {:?}): device memory {:?} MB, Auto budget {} MB", info.name, info.backend, info.device_type, m.map(|m| m >> 20), super::PackLimits::for_adapter(info.device_type, m).budget >> 20);
+        if info.backend == wgpu::Backend::Vulkan {
+            assert!(m.is_some_and(|m| m > 0));
+        } else {
+            assert_eq!(m, None);
+        }
+    }
+
+    /// Auto's budget: a discrete card's a third of its memory where the
+    /// driver says it, 1 GB to 4 GB; 1 GB where it does not; an integrated
+    /// chip's 256 MB whatever it says.
+    #[test]
+    fn auto_pack_budget_by_the_card() {
+        use wgpu::DeviceType::*;
+        let gb = 1u64 << 30;
+        if std::env::var_os("EQOA_PACK_BUDGET_MB").is_some() {
+            return;
+        }
+        let b = |kind, m| super::PackLimits::for_adapter(kind, m).budget;
+        assert_eq!(b(DiscreteGpu, None), gb);
+        assert_eq!(b(DiscreteGpu, Some(2 * gb)), gb, "at least 1 GB");
+        assert_eq!(b(DiscreteGpu, Some(8 * gb)), 8 * gb / 3);
+        assert_eq!(b(DiscreteGpu, Some(24 * gb)), 4 * gb, "at most 4 GB");
+        assert_eq!(b(IntegratedGpu, Some(16 * gb)), 256 << 20);
+        assert_eq!(b(Cpu, None), 256 << 20);
     }
 
     /// One level of an LOD body at a time, none past the last; a batch in no

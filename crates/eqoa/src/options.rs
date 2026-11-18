@@ -974,6 +974,14 @@ impl WndOptions {
                     // `viewer`'s `retexture`)
                     50 => c.texture_packs = !c.texture_packs,
                     51 => c.dump_textures = !c.dump_textures,
+                    // Texture Pack Memory: the pack's budget from the next
+                    // texture made (`viewer`, `render::set_pack_memory`),
+                    // round Auto, 512 MB, 1, 2 and 4 GB
+                    PACK_MEMORY => {
+                        let all = crate::settings::PACK_MEMORIES;
+                        let at = all.iter().position(|&k| k == c.pack_memory).unwrap_or(0);
+                        c.pack_memory = all[(at + if d < 0 { all.len() - 1 } else { 1 }) % all.len()];
+                    }
                     // Texture Folder: shown either way, as ✕ shows it
                     // (`select`)
                     55 => cues.push(if crate::texpack::open_folder() { 8 } else { 9 }),
@@ -1754,7 +1762,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 96] = [
+const EXTENDED_ITEMS: [(i32, &str); 97] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1851,6 +1859,7 @@ const EXTENDED_ITEMS: [(i32, &str); 96] = [
     (WEATHER, "Weather"),
     (WEAPON_SWAP_BACK, "Weapon Swap Back"),
     (R2_CHANNELS, "R2 Channel Switch"),
+    (PACK_MEMORY, "Texture Pack Memory"),
 ];
 
 /// The Chat Tabs rows' first item (ticket 1951): one a kind of line, in
@@ -1888,6 +1897,10 @@ const WEAPON_SWAP_BACK: i32 = 140;
 /// R2 Channel Switch's item (the server owner, 2026-11-18). 150, not the next
 /// free, as Weapon Swap Back's 140.
 const R2_CHANNELS: i32 = 150;
+/// Texture Pack Memory's item (the owner's report of 2026-11-18, "some
+/// textures are not being loaded from texture packs"). 160, not the next
+/// free, as R2 Channel Switch's 150.
+pub(crate) const PACK_MEMORY: i32 = 160;
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -2055,9 +2068,18 @@ const MULTIBOX: &[i32] = &[16, 19, 21];
 /// program (`texpack::open_folder`); an Android app's is in its own
 /// storage, which no file manager shows.
 #[cfg(not(target_os = "android"))]
-const TEXTURES: &[i32] = &[50, 51, 55];
+const TEXTURES: &[i32] = &[50, PACK_MEMORY, 51, 55];
 #[cfg(target_os = "android")]
-const TEXTURES: &[i32] = &[50, 51];
+const TEXTURES: &[i32] = &[50, PACK_MEMORY, 51];
+
+/// Texture Pack Memory's value: Auto, or its MB as "512 MB", "1 GB".
+fn pack_memory_text(mb: u16) -> String {
+    match mb {
+        0 => "Auto".to_string(),
+        mb if mb % 1024 == 0 => format!("{} GB", mb / 1024),
+        mb => format!("{mb} MB"),
+    }
+}
 
 /// The most a menu of Extended's lists (a group's categories): its rows and
 /// legend as tall as the fifteen categories' one menu was, which fit.
@@ -2166,6 +2188,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         84 => on_off(c.loading_tips),
         50 => on_off(c.texture_packs),
         51 => on_off(c.dump_textures),
+        PACK_MEMORY => wide(&pack_memory_text(c.pack_memory)),
         55 => wide("Open"),
         35 => on_off(c.mipmaps),
         46 => on_off(c.shadows),
@@ -3096,6 +3119,19 @@ mod tests {
         assert!(settings::client().texture_packs);
         assert_eq!((value_text(&vui, 50), cues.last()), (Some(wide(vui.words.get(551, vui.language))), Some(&11)));
         assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some("No folder here"));
+        // Texture Pack Memory, beside it: Auto, then round 512 MB, 1, 2 and
+        // 4 GB and back; beside Back, what the pack's textures take of it
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, PACK_MEMORY)), (PACK_MEMORY, Some(wide("Auto"))), "Texture Pack Memory, Auto");
+        assert!(w.page_note(w.cat.unwrap()).is_some_and(|n| n.starts_with("Pack textures: 0 of ")), "{:?}", w.page_note(w.cat.unwrap()));
+        for (mb, text) in [(512, "512 MB"), (1024, "1 GB"), (2048, "2 GB"), (4096, "4 GB"), (0, "Auto")] {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((settings::client().pack_memory, value_text(&vui, PACK_MEMORY), cues.last()), (mb, Some(wide(text)), Some(&11)));
+        }
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::client().pack_memory, 4096, "and the other way");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!(settings::client().pack_memory, 0);
         goto!(51);
         assert_eq!(w.item, 51, "Dump Textures");
         press(&mut w, &mut o, key::LEFT, &mut cues);
@@ -3499,7 +3535,7 @@ mod tests {
     #[test]
     fn each_group_holds_its_kind() {
         let of = |g: usize| group_categories(g).into_iter().map(|c| (CATEGORIES[c].name, CATEGORIES[c].items.iter().map(|&i| label_of(i)).collect::<Vec<_>>())).collect::<Vec<_>>();
-        let textures: Vec<&str> = if cfg!(target_os = "android") { vec!["Texture Packs", "Dump Textures"] } else { vec!["Texture Packs", "Dump Textures", "Texture Folder"] };
+        let textures: Vec<&str> = if cfg!(target_os = "android") { vec!["Texture Packs", "Texture Pack Memory", "Dump Textures"] } else { vec!["Texture Packs", "Texture Pack Memory", "Dump Textures", "Texture Folder"] };
         assert_eq!(
             of(0),
             vec![
@@ -3919,7 +3955,7 @@ mod tests {
             // Textures: nothing to say while both are off (a test keeps no
             // folder, so with Texture Packs on there is none to read)
             assert_eq!(CATEGORIES[by_name("Textures")].note, Note::Textures);
-            assert_eq!(CATEGORIES[by_name("Textures")].items, &[50, 51, 55]);
+            assert_eq!(CATEGORIES[by_name("Textures")].items, &[50, PACK_MEMORY, 51, 55]);
             assert_eq!(note(&w, by_name("Textures")), None, "both off: no note");
             crate::settings::set_client(crate::settings::ClientOptions { texture_packs: true, ..crate::settings::client() });
             assert_eq!(note(&w, by_name("Textures")).as_deref(), Some("No folder here"), "on, with no folder to read");
@@ -3965,11 +4001,11 @@ mod tests {
         w.sel = 3;
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         go(&mut w, &vui, &mut o, "Textures");
-        for _ in 0..2 {
+        for _ in 0..3 {
             w.key(&vui, &mut r, &mut o, key::DOWN, 0, &mut cues, &mut ups);
             w.draw(&vui, &mut r, &o, &mut ups);
         }
-        assert_eq!((w.cat, w.item), (Some(textures), 55), "Texture Folder, the third row");
+        assert_eq!((w.cat, w.item), (Some(textures), 55), "Texture Folder, the fourth row");
         assert_eq!(w.page_note(textures).as_deref(), Some("Beside eqoa.exe"));
         for k in [key::RIGHT, key::LEFT, key::CROSS] {
             cues.clear();

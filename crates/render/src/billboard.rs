@@ -122,7 +122,7 @@ pub(crate) struct Billboards {
     /// what each of a frame's draws keeps from frame to frame (`Slot`)
     slots: [Option<Kept>; 5],
     /// a texture's bind group by its key (`Textures::key`; none: white),
-    /// made once: the renderer's textures are never let go
+    /// made once, until the texture is let go (`forget_texture`)
     groups: std::collections::HashMap<Option<u64>, wgpu::BindGroup>,
     /// the PS2 particles' sums (`fs_sums`, into `fog16`'s two targets) and
     /// their colours' spread over those sums (`fs_spread`), by whether they
@@ -163,6 +163,12 @@ struct Kept {
 }
 
 impl Billboards {
+    /// The texture under `key` let go (`Renderer::let_go`, a pack's past
+    /// its budget): its bind group made again when next drawn.
+    pub(crate) fn forget_texture(&mut self, key: u64) {
+        self.groups.remove(&Some(key));
+    }
+
     /// The slots' kept vertex buffers, in bytes.
     pub(crate) fn kept_bytes(&self) -> u64 {
         self.slots.iter().flatten().map(|k| k.capacity).sum()

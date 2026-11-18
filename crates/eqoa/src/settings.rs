@@ -1333,7 +1333,18 @@ pub struct ClientOptions {
     /// `textures/SLUS-20744/dumps` under the names PCSX2 gives it
     /// (`texpack`), for a pack to be made from. Off by default.
     pub dump_textures: bool,
+    /// Texture Pack Memory, in MB (the owner's report of 2026-11-18, "some
+    /// textures are not being loaded from texture packs"): how much graphics
+    /// memory a pack's textures may take before the least recently drawn
+    /// are let go and, past what is drawn, made smaller
+    /// (`render::packmem`); 0, Auto, the device's (`render::PackLimits`:
+    /// 256 MB on an integrated chip, a third of a card's memory from 1 to 4
+    /// GB). One of `PACK_MEMORIES`.
+    pub pack_memory: u16,
 }
+
+/// Texture Pack Memory's steps in MB, Auto (0) first.
+pub const PACK_MEMORIES: [u16; 5] = [0, 512, 1024, 2048, 4096];
 
 /// Render Scale's steps, the first the game's picture as drawn.
 pub const RENDER_SCALES: [u8; 3] = [1, 2, 4];
@@ -1531,6 +1542,7 @@ impl Default for ClientOptions {
             touch_low_start: false,
             texture_packs: false,
             dump_textures: false,
+            pack_memory: 0,
         }
     }
 }
@@ -1811,6 +1823,10 @@ impl ClientOptions {
         if self.dump_textures {
             s.push_str("dump_textures=on\n");
         }
+        // Texture Pack Memory only off Auto
+        if self.pack_memory != 0 {
+            s.push_str(&format!("pack_memory={}\n", self.pack_memory));
+        }
         s
     }
 
@@ -1995,6 +2011,12 @@ impl ClientOptions {
                 ("texture_packs", "off") => c.texture_packs = false,
                 ("dump_textures", "on") => c.dump_textures = true,
                 ("dump_textures", "off") => c.dump_textures = false,
+                ("pack_memory", "auto") => c.pack_memory = 0,
+                ("pack_memory", v) => {
+                    if let Some(mb) = v.parse::<u16>().ok().filter(|mb| PACK_MEMORIES.contains(mb)) {
+                        c.pack_memory = mb;
+                    }
+                }
                 ("hud", "nearest") => c.hud = render::ui::HudFilter::Nearest,
                 ("hud", "sharp") => c.hud = render::ui::HudFilter::Sharp,
                 ("output", v) if !v.is_empty() => c.output = Some(DeviceName::new(v)),
@@ -3207,6 +3229,23 @@ mod tests {
         for bad in ["texture_packs=1", "texture_packs=yes", "dump_textures=", "dump_textures=true"] {
             let c = ClientOptions::from_text(bad);
             assert!(!c.texture_packs && !c.dump_textures, "{bad}: off, the default");
+        }
+    }
+
+    /// Texture Pack Memory: Auto (0) by default and then not kept; each step
+    /// kept and read back; anything else Auto.
+    #[test]
+    fn pack_memory_kept_only_off_auto() {
+        let d = ClientOptions::default();
+        assert_eq!(d.pack_memory, 0, "Auto");
+        assert!(!d.to_text().contains("pack_memory"));
+        for mb in PACK_MEMORIES.into_iter().skip(1) {
+            let c = ClientOptions { pack_memory: mb, ..Default::default() };
+            assert!(c.to_text().ends_with(&format!("pack_memory={mb}\n")));
+            assert_eq!(ClientOptions::from_text(&c.to_text()), c);
+        }
+        for bad in ["pack_memory=300", "pack_memory=-1", "pack_memory=1GB", "pack_memory=", "pack_memory=auto"] {
+            assert_eq!(ClientOptions::from_text(bad).pack_memory, 0, "{bad}: Auto");
         }
     }
 

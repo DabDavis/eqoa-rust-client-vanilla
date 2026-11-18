@@ -80,6 +80,9 @@ pub(crate) struct Shadows {
     verts: Option<(wgpu::Buffer, u64)>,
     /// the texture's bind group, by its key
     group: Option<(u64, wgpu::BindGroup)>,
+    /// Its texture let go since (`Renderer::let_go`): `group` made again at
+    /// the next `set_shadows`.
+    stale: bool,
     /// what `draw_shadows` draws: this many vertices, made for this eye with
     /// this Z bias
     count: u32,
@@ -88,6 +91,14 @@ pub(crate) struct Shadows {
 }
 
 impl Shadows {
+    /// The texture under `key` let go (`Renderer::let_go`): its bind group
+    /// made again at the next `set_shadows`.
+    pub(crate) fn forget_texture(&mut self, key: u64) {
+        if self.group.as_ref().is_some_and(|(k, _)| *k == key) {
+            self.stale = true;
+        }
+    }
+
     fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shadow.wgsl"));
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -171,7 +182,7 @@ impl Shadows {
             multiview_mask: None,
             cache: None,
         });
-        Shadows { pipeline, tex_layout, sampler, frame_buf, frame_bg, verts: None, group: None, count: 0, eye: glam::Vec3::ZERO, bias: Bias::default() }
+        Shadows { pipeline, tex_layout, sampler, frame_buf, frame_bg, verts: None, group: None, stale: false, count: 0, eye: glam::Vec3::ZERO, bias: Bias::default() }
     }
 }
 
@@ -209,7 +220,7 @@ impl Renderer {
         let key = textures.key(texture);
         let format = self.format;
         let s = self.shadows.get_or_insert_with(|| Shadows::new(device, format));
-        if s.group.as_ref().is_none_or(|(k, _)| *k != key) {
+        if std::mem::take(&mut s.stale) || s.group.as_ref().is_none_or(|(k, _)| *k != key) {
             let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("shadows texture"),
                 layout: &s.tex_layout,

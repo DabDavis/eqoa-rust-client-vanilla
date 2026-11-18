@@ -80,6 +80,10 @@ pub(crate) struct Fans {
     instances: Option<(wgpu::Buffer, u64)>,
     /// each texture's bind group, by DictID
     groups: HashMap<i32, wgpu::BindGroup>,
+    /// A texture let go since (`Renderer::let_go`, a pack's past its
+    /// budget): `groups` made again at the next `set_fans`, not left
+    /// holding it.
+    stale: bool,
     /// what `draw_fans` draws: each run's key, texture, quads and whether a
     /// PS2 frame keeps it (`fog16`)
     pending: Vec<(Key, i32, std::ops::Range<u32>, bool)>,
@@ -95,6 +99,12 @@ pub(crate) struct Fans {
 }
 
 impl Fans {
+    /// A texture let go (`Renderer::let_go`): the texture bind groups made
+    /// again at the next `set_fans`.
+    pub(crate) fn forget_textures(&mut self) {
+        self.stale = true;
+    }
+
     fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("fans.wgsl"));
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -153,6 +163,7 @@ impl Fans {
             frame_bg,
             instances: None,
             groups: HashMap::new(),
+            stale: false,
             pending: Vec::new(),
             eye: glam::Vec3::ZERO,
             ps2_corners: Vec::new(),
@@ -320,6 +331,9 @@ impl Renderer {
         let format = self.format;
         let white = self.white.clone();
         let f = self.fans.get_or_insert_with(|| Fans::new(device));
+        if std::mem::take(&mut f.stale) {
+            f.groups.clear();
+        }
         for (id, view) in views {
             if !f.groups.contains_key(&id) {
                 let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {

@@ -997,7 +997,26 @@ or a browser (each described where it lives below):
   as GS blocks, its CLUT), reproduced from the surface record as
   `VIEESurfCache` uploads it; held to PCSX2's dumps of the game (below, the
   `esf` row). Off, every texture is the game's own, byte for byte; a change to
-  either row makes every texture again (`App::retexture`). The `textures`
+  either row makes every texture again (`App::retexture`). A pack's textures
+  are kept within a budget of graphics memory (`render::PackLimits`; the
+  owner's report of 2026-11-18, "some textures are not being loaded from
+  texture packs": the budget of 2026-11-17 counted every one ever made and
+  let none go, so past it every new one was the game's own for the rest of
+  the run) by what is drawn (`render::packmem`): a model or zone group holds
+  the stand-ins it was made with and stamps them at each draw, and a new one
+  past the budget lets go of the least recently drawn nothing holds (dropped,
+  not destroyed: anything still bound keeps it valid), which is made again
+  from what the pack read when next wanted; where what is held fills the
+  budget the new one is made a level smaller each way at a time down to its
+  surface's size, and only past that is the game's own (made again at its
+  size once nothing holds it and there is room). Extended > Textures'
+  Texture Pack Memory sets the budget (Auto, 512 MB, 1, 2 or 4 GB); Auto is
+  256 MB on an integrated chip and on a card a third of its memory where
+  Vulkan says it (`render::device_memory`), 1 to 4 GB, else 1 GB; each
+  out-of-memory error halves it (`gpulost`). Its note says what the pack
+  takes ("Pack textures: 812 of 1024 MB", "(held)" once one was let go or
+  made smaller); a 4x pack of the textures a run to Freeport makes (1,391)
+  is about 2 to 2.6 GB with its levels. The `textures`
   folder is beside the program (the user, 2026-11-09: "lets put the
   dumps/replacements in a folder next to the binary, so players can find it
   easy"; `texpack::place`): the program's own folder (the release's archive's
