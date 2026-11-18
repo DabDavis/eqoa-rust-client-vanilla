@@ -14,11 +14,15 @@
 
 use crate::stream::Reader;
 
-/// The layout of [`crate::session::OP_DECOR_LIGHTS`] this client reads: 3,
-/// the pets' looks after the walk-ons ([`PetArt`]), and pets sent in them; 2
+/// The layout of [`crate::session::OP_DECOR_LIGHTS`] this client reads: 4,
+/// pets sent in their looks in every world, the look's zone among the
+/// [`Asset`]s (read off the disc whatever the world: the owner, 2026-11-18,
+/// "zerkziee construct is turning back into a spider and not a catapult",
+/// after the Teleporter to Odus); 3 the pets' looks after the walk-ons
+/// ([`PetArt`]), and pets sent in them where the world's zones hold them; 2
 /// the walk-ons after the papers ([`WalkOn`]), and the server's rides
 /// (`eqoa`'s `ride`: a vehicle's riders kept on its deck).
-pub const LAYOUT: u8 = 3;
+pub const LAYOUT: u8 = 4;
 
 /// How a string's bulbs light.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

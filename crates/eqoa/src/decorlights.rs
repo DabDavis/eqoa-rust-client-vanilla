@@ -238,6 +238,27 @@ fn keep_assets(models: &mut std::collections::HashMap<u32, std::rc::Rc<Globe>>, 
     kept
 }
 
+/// A pet's look's model off the assets (`net::decor::Asset`: its zone read
+/// off the disc whatever world the player is in), once read: what a pet in
+/// a prop is built from where the world's library has no such model (Odus
+/// has no catapult); its textures are the decorations' (`render::
+/// decor_texture`), which the library's textures fall back on.
+pub fn pet_asset_model(id: u32) -> Option<esf::Model> {
+    pet_art(id)?;
+    poll_assets();
+    asset_model(id).map(|g| g.model.clone())
+}
+
+/// Whether `id` is a pet's look's shot (`net::decor::PetArt::shot`).
+pub fn pet_art_shot(id: u32) -> bool {
+    id != 0 && DECOR.with_borrow(|d| d.pets.iter().any(|p| p.shot == id))
+}
+
+/// Model `id` of the assets, once read, built.
+pub fn asset_built(id: u32) -> Option<esf::Model> {
+    asset_model(id).map(|g| g.model.clone())
+}
+
 /// Model `id` of the assets, once read.
 fn asset_model(id: u32) -> Option<std::rc::Rc<Globe>> {
     ASSETS.with_borrow(|st| st.models.get(&id).cloned())
