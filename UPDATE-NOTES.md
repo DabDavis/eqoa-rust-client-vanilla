@@ -25,6 +25,25 @@ is put on the page by `.github/workflows/notes.yml`.
   you can turn them on in Extended. What you choose there is kept for that server and does not change your
   choice anywhere else.
 - **Your own choices are kept**: on any other server everything is back exactly as you set it.
+## 2026-11-18 · Texture packs: precache, compression, a cache that makes later starts fast
+- **Texture packs load ahead of you**: when a zone comes into range its pack textures are loaded before you
+  reach it, so walking into a town shows the pack's textures at once far more often instead of the game's
+  own first.
+- **Several textures load at once**: a pack's files are now read by several helpers at a time, and what is
+  on screen always goes first.
+- **Precache Textures** (Extended > Texture Cache): on, the whole pack is loaded into memory in the
+  background as you play, nearest needs first, and it stops by itself before it takes too much memory. On
+  by default.
+- **Pack Compression** (Extended > Texture Cache): on a graphics card that supports it, a pack's textures
+  can be kept compressed, four times smaller, so far more of a large pack fits in the card's memory before
+  any is let go or drawn smaller. Auto (the default) compresses only a pack too large for the card's memory;
+  On always; Off never. DDS packs that are already compressed are now kept compressed as they are.
+- **Faster starts with a pack**: the first time a PNG texture is loaded it is also saved, ready to use, in
+  the game's cache folder (never in your pack's folder), so the next time the game starts it loads far
+  faster. Rebuild Pack Cache (Extended > Texture Cache) clears it if you ever need to.
+- **Several game windows share**: windows open together share the saved textures on disk and in memory,
+  and with Texture Pack Memory on Auto they split the graphics card's memory between them instead of each
+  taking a third of it.
 
 ## 2026-11-18 · Texture packs load all their textures again
 - **Texture packs show all their textures again**: since the last update a large pack could stop loading

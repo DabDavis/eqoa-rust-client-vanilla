@@ -1352,6 +1352,16 @@ pub struct ClientOptions {
     /// 256 MB on an integrated chip, a third of a card's memory from 1 to 4
     /// GB). One of `PACK_MEMORIES`.
     pub pack_memory: u16,
+    /// Precache Textures (the owner's of 2026-11-18, "lets look at PCSX2 how
+    /// they do texture packs like precaching and we can make a better
+    /// version"): on, every file of a pack is made ready in memory as it is
+    /// read, within its budget (`texcache`), the zones' and what is drawn
+    /// first. Off by default, as PCSX2's.
+    pub pack_precache: bool,
+    /// Pack Compression: 0 Auto (a pack larger than the card's budget kept
+    /// as BC3), 1 Off, 2 On; only ever on a card that draws BCn
+    /// (`texcache`).
+    pub pack_compress: u8,
 }
 
 /// Texture Pack Memory's steps in MB, Auto (0) first.
@@ -1557,6 +1567,8 @@ impl Default for ClientOptions {
             texture_packs: false,
             dump_textures: false,
             pack_memory: 0,
+            pack_precache: true,
+            pack_compress: 0,
         }
     }
 }
@@ -1847,6 +1859,13 @@ impl ClientOptions {
         if self.pack_memory != 0 {
             s.push_str(&format!("pack_memory={}\n", self.pack_memory));
         }
+        // Precache Textures only on, Pack Compression only off Auto
+        if !self.pack_precache {
+            s.push_str("pack_precache=off\n");
+        }
+        if self.pack_compress != 0 {
+            s.push_str(if self.pack_compress == 1 { "pack_compress=off\n" } else { "pack_compress=on\n" });
+        }
         s
     }
 
@@ -2037,6 +2056,11 @@ impl ClientOptions {
                 ("texture_packs", "off") => c.texture_packs = false,
                 ("dump_textures", "on") => c.dump_textures = true,
                 ("dump_textures", "off") => c.dump_textures = false,
+                ("pack_precache", "on") => c.pack_precache = true,
+                ("pack_precache", "off") => c.pack_precache = false,
+                ("pack_compress", "auto") => c.pack_compress = 0,
+                ("pack_compress", "off") => c.pack_compress = 1,
+                ("pack_compress", "on") => c.pack_compress = 2,
                 ("pack_memory", "auto") => c.pack_memory = 0,
                 ("pack_memory", v) => {
                     if let Some(mb) = v.parse::<u16>().ok().filter(|mb| PACK_MEMORIES.contains(mb)) {
@@ -3476,6 +3500,27 @@ mod tests {
         }
         for bad in ["pack_memory=300", "pack_memory=-1", "pack_memory=1GB", "pack_memory=", "pack_memory=auto"] {
             assert_eq!(ClientOptions::from_text(bad).pack_memory, 0, "{bad}: Auto");
+        }
+    }
+
+    /// Precache Textures kept only off (on by default, the owner 2026-11-18), Pack Compression only off Auto; the
+    /// defaults not written, anything else read as the default.
+    #[test]
+    fn pack_precache_and_compression_kept() {
+        let d = ClientOptions::default();
+        assert!(d.pack_precache && d.pack_compress == 0);
+        assert!(!d.to_text().contains("pack_"));
+        for (c, text) in [
+            (ClientOptions { pack_precache: false, ..Default::default() }, "pack_precache=off\n"),
+            (ClientOptions { pack_compress: 1, ..Default::default() }, "pack_compress=off\n"),
+            (ClientOptions { pack_compress: 2, ..Default::default() }, "pack_compress=on\n"),
+        ] {
+            assert!(c.to_text().ends_with(text), "{text}");
+            assert_eq!(ClientOptions::from_text(&c.to_text()), c);
+        }
+        for bad in ["pack_precache=1", "pack_compress=bc3", "pack_compress=", "pack_precache=yes"] {
+            let c = ClientOptions::from_text(bad);
+            assert!(c.pack_precache && c.pack_compress == 0, "{bad}: the default");
         }
     }
 

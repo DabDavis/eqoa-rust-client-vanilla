@@ -21,6 +21,7 @@ pub mod lightshadow;
 pub mod lit;
 pub mod map;
 pub mod overlay;
+pub mod packed;
 pub mod packmem;
 pub mod petart;
 pub mod recolor;
@@ -242,13 +243,23 @@ pub trait Pack: Send + Sync {
     /// give them, its read asked for under the texture key `key`
     /// (`take_ready` hands its levels back under it); `None` when the pack
     /// has none for the surface, or has its levels already (`levels`).
-    fn request(&self, _key: u64, _c: &esf::Container, _s: &esf::Surface, _era: esf::Era) -> Option<(u32, u32, u32)> {
+    /// With `defer`, one the pack has ready is handed back the same way
+    /// (`take_ready`), its texture made now as a placeholder: the frame has
+    /// made as many as it may at once (`Renderer::make_texture`).
+    fn request(&self, _key: u64, _c: &esf::Container, _s: &esf::Surface, _era: esf::Era, _defer: bool) -> Option<(u32, u32, u32)> {
         None
     }
     /// The stand-ins read since the last call, by the key each was asked
     /// for under (`request`).
     fn take_ready(&self) -> standin::Ready {
         Vec::new()
+    }
+    /// The stand-in for the surface already in the pack's memory in a
+    /// compressed form (`packed`), its levels as `levels` would give them:
+    /// made a texture of that form where the device has it, never decoded.
+    /// `None` when there is none, or it is RGBA (`levels` then).
+    fn packed(&self, _c: &esf::Container, _s: &esf::Surface, _era: esf::Era) -> Option<std::sync::Arc<packed::Packed>> {
+        None
     }
 }
 
@@ -357,13 +368,32 @@ pub fn set_pack_memory(mb: u64) {
     PACK_MEMORY_MB.store(mb, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// The limits now: the options' budget or the device's, halved for each
-/// time the memory ran out.
+/// How many game windows share the graphics card (`set_pack_sharers`).
+static PACK_SHARERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// The game windows open on this computer, this one with them (`eqoa`'s
+/// `multibox`: each a program of its own, whose textures no other can draw
+/// with): Auto's budget is the device's split between them, so four windows
+/// do not each take a third of the card (the owner's of 2026-11-18, "if
+/// multiple vanilla clients open they should share the same texture cache
+/// so not duplicating vram"). A budget the options set is each window's.
+pub fn set_pack_sharers(n: u64) {
+    PACK_SHARERS.store(n.max(1), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How many game windows share the card now (`set_pack_sharers`).
+pub fn pack_sharers() -> u64 {
+    PACK_SHARERS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The limits now: the options' budget or the device's (split between the
+/// windows open, `set_pack_sharers`), halved for each time the memory ran
+/// out.
 pub fn pack_limits() -> PackLimits {
     let l = *PACK_LIMITS.lock().unwrap_or_else(|e| e.into_inner());
     let n = OUT_OF_MEMORY.load(std::sync::atomic::Ordering::Relaxed).min(16);
     let budget = match PACK_MEMORY_MB.load(std::sync::atomic::Ordering::Relaxed) {
-        0 => l.budget,
+        0 => (l.budget / PACK_SHARERS.load(std::sync::atomic::Ordering::Relaxed).clamp(1, 16)).max(128 << 20).min(l.budget),
         mb => mb << 20,
     };
     PackLimits { budget: budget >> n, max_side: l.max_side }
@@ -803,7 +833,9 @@ pub trait TextureSource {
     /// texture is made at at once, the surface's own levels drawn into it
     /// (`standin::placeholder`) until it is read (`Renderer::take_stand_ins`).
     /// `None`: `levels` are the texture's now.
-    fn pending(&self, _id: i32, _key: u64) -> Option<(u32, u32, u32)> {
+    /// With `defer`, a stand-in the pack has ready is pending too (the
+    /// frame's direct uploads are spent: `Pack::request`).
+    fn pending(&self, _id: i32, _key: u64, _defer: bool) -> Option<(u32, u32, u32)> {
         None
     }
     /// The game's own levels for `id`, never a pack's: what is drawn in
@@ -811,6 +843,11 @@ pub trait TextureSource {
     /// device had no memory for.
     fn own_levels(&self, id: i32) -> Vec<esf::Image> {
         self.levels(id)
+    }
+    /// A pack's stand-in for `id` in a compressed form (`Pack::packed`),
+    /// made a texture as it is where the device has BCn.
+    fn packed(&self, _id: i32) -> Option<std::sync::Arc<packed::Packed>> {
+        None
     }
 }
 
@@ -882,6 +919,15 @@ pub struct Renderer {
     collecting: Option<std::collections::HashMap<u64, packmem::Hold>>,
     /// Whether `ran_out` has said so.
     said_out_of_memory: bool,
+    /// Whether the device makes BCn textures (`packed::bc_supported`): a
+    /// pack's compressed stand-ins made as they are.
+    bc: bool,
+    /// The bytes of stand-ins made at once (ready when asked for) this
+    /// frame: past `standin::BUDGET` the rest are made as placeholders and
+    /// written over later frames, so a zone whose stand-ins were all ready
+    /// (prefetched, off the disk cache) does not upload them in one frame.
+    /// A compressed one counts a quarter of its bytes (`make_packed`).
+    direct: u64,
     /// DictIDs a batch asked for that no loaded file holds.
     pub missing_textures: std::collections::BTreeSet<i32>,
     start: web_time::Instant,
@@ -1130,6 +1176,8 @@ pub(crate) fn model_pipeline(
 impl Renderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         set_pack_limits(PackLimits::for_adapter(device.adapter_info().device_type, device_memory(device)));
+        let bc = packed::bc_supported(device);
+        packed::set_compressed_textures(bc);
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("frame"),
@@ -1248,6 +1296,8 @@ impl Renderer {
             pack: Default::default(),
             collecting: None,
             said_out_of_memory: false,
+            bc,
+            direct: 0,
             missing_textures: Default::default(),
             start: web_time::Instant::now(),
             scroll_time: None,
@@ -1391,7 +1441,17 @@ impl Renderer {
         // now, the surface's own drawn into it, written over once read
         // (`standin`); asked first, so that a stand-in read meanwhile is
         // still written in
-        let pending = src.pending(id, key);
+        let pending = src.pending(id, key, self.direct >= standin::BUDGET as u64);
+        // a compressed stand-in ready (`packed`): made as it is, its blocks
+        // written as they are (no decode, no copy: counted a quarter of its
+        // bytes against the frame's)
+        if pending.is_none()
+            && self.bc
+            && let Some(p) = src.packed(id).filter(|p| p.format.compressed())
+            && let Some(made) = self.make_packed(device, queue, key, &p, src.native_size(id))
+        {
+            return Some(made);
+        }
         let mut levels = src.levels(id);
         if levels.is_empty() {
             self.missing_textures.insert(id);
@@ -1428,7 +1488,9 @@ impl Renderer {
             match self.room_for(most((size.0, size.1)), |k| packmem::bytes(packmem::stepped(size, k))) {
                 Some(k) => {
                     levels = packmem::step_down(levels, k);
-                    self.pack.insert(key, packmem::bytes((levels[0].width, levels[0].height, levels.len() as u32)), packmem::bytes(size));
+                    let made = packmem::bytes((levels[0].width, levels[0].height, levels.len() as u32));
+                    self.pack.insert(key, made, packmem::bytes(size));
+                    self.direct += made;
                 }
                 None => {
                     levels = src.own_levels(id);
@@ -1467,6 +1529,29 @@ impl Renderer {
         None
     }
 
+    /// A pack's stand-in in its compressed form (`packed`) made a texture of
+    /// that form: room made for it as for any (`room_for`), made a level
+    /// smaller each way at a time by dropping its first levels where what is
+    /// held fills the budget, no smaller than its surface and no further than
+    /// its blocks allow (`Packed::droppable`). `None` past that, or refused:
+    /// `make_texture` goes on as for an RGBA one (decoded, then smaller still
+    /// or the game's own).
+    fn make_packed(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, key: u64, p: &packed::Packed, native: Option<(u32, u32)>) -> Option<(wgpu::TextureView, f32)> {
+        let (w, h, _) = p.size();
+        let most = (level_shift((w, h), native).max(0.0).floor() as u32).min(p.droppable());
+        let k = self.room_for(most, |k| p.bytes_without(k))?;
+        let q = p.without(k);
+        let Some(view) = made_safely(device, || packed::upload(device, queue, &q)) else {
+            self.ran_out("a texture pack's compressed stand-in");
+            return None;
+        };
+        self.pack.insert(key, q.bytes(), p.bytes());
+        self.direct += q.bytes() / 4;
+        self.texture_alpha.insert(key, p.alpha_min);
+        let (qw, qh, _) = q.size();
+        Some((view, level_shift((qw, qh), native)))
+    }
+
     /// The device refused `what` for want of memory: the pack's budget
     /// halved (`out_of_memory`), said once a renderer.
     fn ran_out(&mut self, what: &str) {
@@ -1483,8 +1568,13 @@ impl Renderer {
     /// bytes allow (one at least), the rest left for the next frame: called
     /// once a frame, before it is drawn. How many were written.
     pub fn take_stand_ins(&mut self, queue: &wgpu::Queue) -> usize {
+        self.direct = 0;
         if let Some(p) = pack() {
             self.stand_ins_ready.extend(p.take_ready());
+            // an earlier pack's stand-ins nothing holds any more let go
+            for key in self.pack.stale(p.generation()) {
+                self.let_go(key);
+            }
         }
         let sizes: Vec<usize> = self.stand_ins_ready.iter().map(|(_, l)| standin::bytes(l)).collect();
         let n = standin::due(&sizes, standin::BUDGET);
@@ -3238,9 +3328,13 @@ impl TextureSource for LibraryTextures<'_> {
         }
         decor_texture(id).and_then(|l| l.first().map(|i| (i.width, i.height)))
     }
-    fn pending(&self, id: i32, key: u64) -> Option<(u32, u32, u32)> {
+    fn pending(&self, id: i32, key: u64, defer: bool) -> Option<(u32, u32, u32)> {
         let (c, s, era) = self.surface(id)?;
-        pack()?.request(key, c, &s, era)
+        pack()?.request(key, c, &s, era, defer)
+    }
+    fn packed(&self, id: i32) -> Option<std::sync::Arc<packed::Packed>> {
+        let (c, s, era) = self.surface(id)?;
+        pack()?.packed(c, &s, era)
     }
     fn own_levels(&self, id: i32) -> Vec<esf::Image> {
         match self.surface(id) {

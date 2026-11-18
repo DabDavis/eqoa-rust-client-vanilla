@@ -170,6 +170,15 @@ impl Budget {
         (0..=most).find(|&k| self.used + bytes(k) <= budget)
     }
 
+    /// The stand-ins of another pack than generation `generation` (a
+    /// stand-in's key carries its pack's from bit 40: `LibraryTextures::key`)
+    /// that nothing holds and were not drawn this frame: a pack made again
+    /// (`eqoa`'s `texpack`) leaves its old ones to be let go at once, not
+    /// only as room is wanted.
+    pub fn stale(&self, generation: u64) -> Vec<u64> {
+        self.entries.iter().filter(|(k, e)| (*k >> 40) & 0xFF_FFFF != generation && self.free(e)).map(|(k, _)| *k).collect()
+    }
+
     /// The memory as the Textures page says it.
     pub fn memory(&self, budget: u64) -> PackMemory {
         PackMemory {
@@ -356,6 +365,24 @@ mod tests {
         assert_eq!(step_down(chain.clone(), 1)[0].rgba[0], 1, "level 1 kept as it is");
         let img = esf::Image { width: 2, height: 2, rgba: vec![0, 0, 0, 255, 10, 10, 10, 255, 20, 20, 20, 255, 31, 31, 31, 255], alpha: false };
         assert_eq!(halve(&img).rgba, vec![15, 15, 15, 255], "(0 + 10 + 20 + 31) / 4, rounded");
+    }
+
+    /// A pack made again: the old pack's stand-ins nothing holds are stale,
+    /// a held one and the new pack's are not (the control).
+    #[test]
+    fn an_old_packs_stand_ins_are_stale() {
+        let mut b = Budget::default();
+        let old = |k: u64| k | 1 << 40;
+        let new = |k: u64| k | 2 << 40;
+        drop(b.insert(old(1), MB, 0));
+        let held = b.insert(old(2), MB, 0);
+        drop(b.insert(new(3), MB, 0));
+        b.next_frame();
+        assert_eq!(b.stale(2), vec![old(1)]);
+        drop(held);
+        let mut s = b.stale(2);
+        s.sort();
+        assert_eq!(s, vec![old(1), old(2)]);
     }
 
     /// A stand-in made smaller is made again once nothing holds it; one at

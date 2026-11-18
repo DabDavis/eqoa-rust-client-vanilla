@@ -38,6 +38,7 @@ glam = "0.34.1"
 png = "0.18.1"
 # A texture pack's DDS files (`texpack`): BC1, BC2, BC3 and BC7, as PCSX2 reads them
 bcdec_rs = "0.2.1"
+xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
 cpal = "0.16"
 
 # The gamepads natively (SDL's layout, force feedback); a page reads the
@@ -49,6 +50,11 @@ gilrs = "0.11.2"
 # names.
 ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
 sha2 = "0.10.9"
+# Texture packs' cache (`texcache`): a PNG's levels compressed to BC3 for a
+# card that draws BCn (texpresso, pure Rust, libsquish's range fit), and the
+# cache's files mapped read-only so that every client open shares one copy.
+texpresso = "2.0.2"
+memmap2 = "0.9.11"
 
 # The disc image's picker (`discs::settle`): the desktop's own file dialog,
 # Windows' common dialog, a Mac's open panel, on Linux the XDG desktop portal

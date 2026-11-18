@@ -1041,6 +1041,46 @@ or a browser (each described where it lives below):
   worst frame is ~50 ms. A shot reads them as it asks (`texpack::sync_now`),
   and `EQOA_TEXTURES_SYNC=1` does so in a live run, to measure against.
   A dump is always the surface's own record's texture, never a stand-in.
+  Since 2026-11-18 (the owner: "lets look at PCSX2 how they do texture packs
+  like precaching and we can make a better version"; PCSX2's read in
+  `../claude-notes/texture-pack-precache-20261118.md`) a pack's files are
+  made ready by `texcache`: each file once, as its whole level chain (its own
+  levels, then each half the last), every surface it stands in for a run of
+  that chain (texel for texel the levels before); by a pool of workers (the
+  processors less one, 1 to 4) taking the most wanted first: what a frame
+  is drawing, then the zones coming in, then the precache. A zone's stand-ins
+  are queued as its bytes arrive (`stream::install`, at 1,050; it is drawn
+  at 900), so most are ready when its models are made, and a ready one is
+  made a texture at its size at once, no placeholder (a file the disk cache
+  holds is mapped on the spot when a zone comes in or a frame asks: tens of
+  microseconds), up to 8 MB a frame (a compressed one counted a quarter);
+  past that a frame makes placeholders that workers fill, so a zone all
+  ready does not upload in one frame. Extended > Texture
+  Cache: **Precache Textures** (off by default, as PCSX2's) queues every
+  file of the pack behind those, kept in memory within a budget (an eighth
+  of the system's, 256 MB to 2 GB, split between the windows open;
+  `EQOA_PACK_RAM_MB`), the least wanted and least recently used let go
+  first; the precache stops, and says so, where the budget is full of what
+  was drawn (PCSX2's keeps the whole pack in memory, unbounded). The device
+  is asked for BCn where the adapter has it (`render::packed`): a BC1, BC2,
+  BC3 or BC7 DDS whose chain reaches one texel is kept as its blocks (never
+  decoded; slices of the file mapped read-only) and made a BCn texture, a
+  level dropped at a time where the budget is short; **Pack Compression**
+  (Auto, Off, On; Auto when the pack at its size is more than the card's
+  budget) makes a decoded PNG BC3 (texpresso's range fit; BC3's alpha keeps
+  the GS's 0x80 exact): a quarter of the memory, so four times as much of a
+  pack fits. A card without BCn (a page's, most phones) is given RGBA as
+  before. A file decoded is written to a disk cache (`eqoa-rs/texpack` in
+  the platform's cache folder, never the pack's; keyed by its path, size,
+  time of change and form) and mapped from it in later runs instead of
+  decoded; **Rebuild Pack Cache** deletes it. Several windows (each a
+  program, `multibox`) share what can be shared: the mapped files are one
+  copy in the system's page cache, one window writes the cache at a time
+  (`.writer.lock`), and Texture Pack Memory's Auto, and the memory budget,
+  are split between the windows open. The cards' memory itself cannot be
+  shared between programs through wgpu. Its notes: "In memory: 300 of
+  1024 MB" (or "Precaching", "(full)"), "40 BCn; 812 cached, 10 decoded",
+  "Cache: 1840 MB on disk". `EQOA_TEXTURES_LOG=1` says each file made ready.
 - **A merc's inventory and spell windows** on a server that offers them (the
   server owner's of 2026-11-15; go-eqoa-server's 0x7E72-0x7E77, `net::mercwin`,
   `mercwnd`, `play::mercplay`): the merc's menu's Items > Inventory and

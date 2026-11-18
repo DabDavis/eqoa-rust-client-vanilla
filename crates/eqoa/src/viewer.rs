@@ -416,7 +416,7 @@ pub fn shot_with(
 ) -> Result<(), Error> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&render::packed::device_descriptor(&adapter)))?;
     let mut renderer = Renderer::new(&device, &queue, render::TARGET_FORMAT);
     // Dynamic Lighting (kept only under `$EQOA_CONFIG` for a shot), before
     // a zone is uploaded
@@ -2229,6 +2229,14 @@ impl Perf {
                 self.drawn.1,
                 phases.join(", ")
             ));
+            // a texture pack's memory with it (`texpack`)
+            if let Some(p) = crate::texpack::pack() {
+                let (m, s) = (render::pack_memory(), p.stats());
+                crate::say(&format!(
+                    "perf: pack textures {} MB ({} of them, {} let go), memory {} MB ({} files, {} BCn, {} MB mapped), {} cached, {} decoded, {} queued",
+                    m.used >> 20, m.textures, m.evicted, s.ram_used >> 20, s.ram_files, s.compressed, s.ram_shared >> 20, s.cached, s.decoded, s.queued
+                ));
+            }
         }
         self.restart(Instant::now());
     }
@@ -3766,7 +3774,7 @@ impl App {
         let instance = self.instance.clone().ok_or("no instance")?;
         if g.surface.is_none() && g.offscreen.is_some() {
             let adapter = pollster::block_on(instance.request_adapter(&Default::default())).map_err(|e| format!("adapter: {e}"))?;
-            let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).map_err(|e| format!("device: {e}"))?;
+            let (device, queue) = pollster::block_on(adapter.request_device(&render::packed::device_descriptor(&adapter))).map_err(|e| format!("device: {e}"))?;
             let info = adapter.get_info();
             crate::say(&format!("graphics: a new device on {} ({:?}), offscreen", info.name, info.backend));
             return Ok((None, g.config.clone(), device, queue, render::fog16::supported(&adapter), Vec::new()));
@@ -3775,7 +3783,7 @@ impl App {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: Some(&surface), ..Default::default() })).map_err(|e| format!("adapter: {e}"))?;
         let info = adapter.get_info();
         crate::bugnote::set_graphics(&info.name, &format!("{:?}", info.backend));
-        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).map_err(|e| format!("device: {e}"))?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&render::packed::device_descriptor(&adapter))).map_err(|e| format!("device: {e}"))?;
         let size = g.window.inner_size();
         let mut config = surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)).ok_or("the surface cannot be configured")?;
         config.format = config.format.remove_srgb_suffix();
@@ -5251,7 +5259,7 @@ impl ApplicationHandler for App {
             let info = adapter.get_info();
             eprintln!("offscreen {w}x{h} on {:?}", info.name);
             crate::bugnote::set_graphics(&info.name, &format!("{:?}", info.backend));
-            let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
+            let (device, queue) = pollster::block_on(adapter.request_device(&render::packed::device_descriptor(&adapter))).expect("device");
             let ps2_sums = render::fog16::supported(&adapter);
             self.instance = Some(instance);
             let config = wgpu::SurfaceConfiguration {
@@ -5305,7 +5313,7 @@ impl ApplicationHandler for App {
                 crate::gpustart::step(&format!("{} draws without the graphics card (software): the game will be slow; the graphics card's driver may need installing or updating", info.name));
             }
         }
-        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("device");
+        let (device, queue) = pollster::block_on(adapter.request_device(&render::packed::device_descriptor(&adapter))).expect("device");
         let size = window.inner_size();
         let mut config = surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)).expect("surface config");
         // The bytes go out as the GS's do: no sRGB encode (render::TARGET_FORMAT).
