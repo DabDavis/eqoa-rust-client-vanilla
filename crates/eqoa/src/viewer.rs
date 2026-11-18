@@ -1398,6 +1398,8 @@ pub fn shot_with(
             crate::decorlights::light_cords(&mut cords, &view);
             // the model bulbs, unlit: a bulb is its own light
             cords.extend(p.decor_globes(walker.eye_position().to_array(), t));
+            // and the Strings of Lights' glass (`toys::glass`)
+            cords.extend(p.worn_light_glass(&walker, pose, t));
             // with the world, before the name plates (`draw_decor`)
             renderer.decor = cords;
         }
@@ -6603,6 +6605,8 @@ impl App {
                         crate::decorlights::light_cords(&mut cords, &lights.0);
                         // the model bulbs, unlit: a bulb is its own light
                         cords.extend(p.decor_globes(w.eye_position().to_array(), now));
+                        // and the Strings of Lights' glass (`toys::glass`)
+                        cords.extend(p.worn_light_glass(w, m, now));
                         // with the world, before the name plates (`draw_decor`)
                         g.renderer.decor = cords;
                     }

@@ -7,14 +7,16 @@
 //!
 //! - **The String of Lights** ([`Aura::LIGHTS`] on the worn cape's aura,
 //!   `aura::CAPE`): a cape item that is a string of twinkling bulbs as well.
-//!   The bulbs are laid along the cape as fitted to the wearer (`cape::model`,
-//!   every body that wears one, illusions too): up one side edge, across the
-//!   collar over the shoulders and down the other side, to a little past half
-//!   the cape's height ([`cape_lights`]). Each bulb takes the skin of the cape
-//!   vertex it lies by, so it moves with the wearer's bones; each frame its
-//!   place is skinned there ([`placed`]) and it is drawn as a decoration's bulb
-//!   is (`decorlights`: the soft flare, additive, in the "Christmas lights"
-//!   template's colours and twinkle, on a thin green cord).
+//!   The bulbs are laid on the cape as fitted to the wearer (`cape::model`,
+//!   every body that wears one, illusions too): round its whole outline (up
+//!   one side, across the collar over the shoulders, down the other side and
+//!   back along the hem), down its middle and in a zigzag across it
+//!   ([`cape_lights`]). Each bulb takes the skin of the cape vertex it lies
+//!   by, so it moves with the wearer's bones; each frame its place is skinned
+//!   there ([`placed`]) and it is drawn as a decoration's bulb is
+//!   (`decorlights`: the soft flare, additive, in the "Christmas lights"
+//!   template's colours and twinkle, on a thin green cord), over a solid bead
+//!   of its colour ([`glass`]) that shows by day.
 //! - **The Candy Cane Staff** ([`Aura::STRIPES`], a held item's aura, the
 //!   staff's second: its first the monk staff's twinkle at its tip): the held
 //!   model cut fine and each piece painted red or white by where it lies on a
@@ -42,20 +44,33 @@ pub const PERIOD: f32 = 1.8;
 pub const BRIGHT: f32 = 1.5;
 
 /// A bulb's glow across, as a share of the cape's height (a long knight's cape
-/// some 1.3 high: 0.1 across).
-pub const BULB_SHARE: f32 = 0.075;
+/// some 1.6 high: 0.19 across). The owner (2026-11-18), of the first string
+/// (0.075, its sides' top 60% alone): "looks like a normal cape. should look
+/// like a cape with the christmas lights outline it and in the middle".
+pub const BULB_SHARE: f32 = 0.12;
+/// Each bulb's glass, a solid bead under its glow ([`glass`]), as a share of
+/// the glow across: its half width (its length 1.7 times it).
+pub const GLASS_SHARE: f32 = 0.16;
 /// The cord's thickness and the spacing of the bulbs, the same way.
-pub const CORD_SHARE: f32 = 0.008;
-pub const SPACING_SHARE: f32 = 0.075;
-/// How far down the cape's sides the string runs, as a share of its height
-/// from its top.
-pub const DOWN_SHARE: f32 = 0.6;
+pub const CORD_SHARE: f32 = 0.009;
+pub const SPACING_SHARE: f32 = 0.07;
 /// How far off the cape a bulb is hung (out from the body), of its height.
-pub const OFF_SHARE: f32 = 0.02;
+pub const OFF_SHARE: f32 = 0.025;
+/// The middle's string: its centre line from this far under the cape's top
+/// to this far over its hem, and its zigzag between these two depths (each
+/// of the height, from the top), across [`ZIG_SPAN`] of the cape's width there
+/// in [`ZIGS`] legs.
+pub const CENTRE_FROM: f32 = 0.12;
+pub const CENTRE_TO: f32 = 0.06;
+pub const ZIG_TOP: f32 = 0.38;
+pub const ZIG_BOTTOM: f32 = 0.56;
+pub const ZIG_SPAN: f32 = 0.84;
+pub const ZIGS: usize = 6;
 
 /// One bulb of a worn string: its place in the wearer's bind pose (model
-/// space), the nodes and weights it is skinned by, its colour (of [`COLORS`])
-/// and its phase.
+/// space), the nodes and weights it is skinned by, its colour (of [`COLORS`],
+/// with `net::decor::BREAK` where a new run of the cord starts) and its
+/// phase.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bulb {
     pub at: Vec3,
@@ -93,15 +108,21 @@ fn nearest(b: &esf::Batch) -> bool {
     b.lod.is_none_or(|l| l == 0)
 }
 
-/// The string of lights along `cape` (a cape as `cape::model` fits it: in the
-/// wearer's bind pose, skinned to its nodes, hanging behind the body, -z): its
-/// outline as seen from behind, from where its left side is [`DOWN_SHARE`] of
-/// the way down, up that side, across its top over the shoulders and down the
-/// right side as far ([`outline`]: the cape's own vertices, so a cape cut
-/// with its lining, or drawn from both sides, is one), a bulb every
-/// [`SPACING_SHARE`] of its height along it; each bulb skinned as the cape
-/// vertex it lies by, and off the cape, out from the body, by [`OFF_SHARE`].
-/// None for a cape of no height.
+/// A point on the cape a bulb hangs by: where, the cape's normal there, and
+/// the cape vertex whose skin it takes.
+type On = (Vec3, Vec3, usize);
+
+/// The string of lights on `cape` (a cape as `cape::model` fits it: in the
+/// wearer's bind pose, skinned to its nodes, hanging behind the body, -z), in
+/// three runs of one cord: its whole outline as seen from behind ([`outline`]:
+/// up its left side, across its top over the shoulders, down its right side
+/// and back along its hem; the cape's own vertices, so a cape cut with its
+/// lining, or drawn from both sides, is one), a line down its middle from
+/// under the collar to over the hem, and a zigzag across its middle, side to
+/// side (both on the cape's outer face, [`back_hit`]). A bulb every
+/// [`SPACING_SHARE`] of its height along each; each skinned as the cape vertex
+/// it lies by, and off the cape, out from the body, by [`OFF_SHARE`]. None for
+/// a cape of no height.
 pub fn cape_lights(cape: &Model) -> Option<Lights> {
     let used = used_vertices(cape);
     let (lo, hi) = used.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &v| (lo.min(cape.pos[v][1]), hi.max(cape.pos[v][1])));
@@ -109,40 +130,126 @@ pub fn cape_lights(cape: &Model) -> Option<Lights> {
     if !(h > 0.0) {
         return None;
     }
-    let run = outline(cape, &used, hi - DOWN_SHARE * h, hi, h);
-    if run.len() < 2 {
-        return None;
-    }
-    let at = |v: usize| Vec3::from(cape.pos[v]);
+    let normal = |v: usize| cape.normal.get(v).map(|n| Vec3::from(*n)).unwrap_or(Vec3::NEG_Z);
+    let at = |v: usize| -> On { (Vec3::from(cape.pos[v]), normal(v), v) };
+    let tris: Vec<[u32; 3]> = cape.batches.iter().filter(|b| nearest(b)).flat_map(|b| b.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect::<Vec<_>>()).collect();
     let step = SPACING_SHARE * h;
+    let mut runs: Vec<Vec<On>> = Vec::new();
+    // the outline, a vertex path: a bulb every step along it
+    let ring: Vec<On> = outline(cape, &used, lo, hi, h).into_iter().map(at).collect();
+    runs.push(spaced(&ring, step));
+    // the middle: points laid in the plane seen from behind, then put on
+    // the cape's outer face there
+    // the cape's width at a height: where its triangles' edges cross it
+    let span = |y: f32| {
+        let mut r: Option<(f32, f32)> = None;
+        for t in &tris {
+            for k in 0..3 {
+                let (a, b) = (cape.pos[t[k] as usize], cape.pos[t[(k + 1) % 3] as usize]);
+                if (a[1] - y) * (b[1] - y) > 0.0 || a[1] == b[1] {
+                    continue;
+                }
+                let x = a[0] + (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]);
+                r = Some(r.map_or((x, x), |(lo, hi)| (lo.min(x), hi.max(x))));
+            }
+        }
+        r
+    };
+    let onto = |pts: &[(f32, f32)]| -> Vec<On> { pts.iter().filter_map(|&(x, y)| back_hit(cape, &tris, x, y)).collect() };
+    let (top, bottom) = (hi - CENTRE_FROM * h, lo + CENTRE_TO * h);
+    let mut centre = Vec::new();
+    let n = ((top - bottom) / (0.25 * step)).ceil().max(1.0) as usize;
+    for k in 0..=n {
+        let y = top + (bottom - top) * k as f32 / n as f32;
+        if let Some((a, b)) = span(y) {
+            centre.push(((a + b) * 0.5, y));
+        }
+    }
+    runs.push(spaced(&onto(&centre), step));
+    let mut zig = Vec::new();
+    for k in 0..=ZIGS {
+        let y = hi - h * if k % 2 == 0 { ZIG_TOP } else { ZIG_BOTTOM };
+        let Some((a, b)) = span(y) else { continue };
+        let f = k as f32 / ZIGS as f32;
+        zig.push(((a + b) * 0.5 + (b - a) * ZIG_SPAN * (f - 0.5), y));
+    }
+    // each leg cut fine, so its points follow the cape's face
+    let mut fine = Vec::new();
+    for w in zig.windows(2) {
+        for k in 0..8 {
+            let f = k as f32 / 8.0;
+            fine.push((w[0].0 + (w[1].0 - w[0].0) * f, w[0].1 + (w[1].1 - w[0].1) * f));
+        }
+    }
+    fine.extend(zig.last().copied());
+    runs.push(spaced(&onto(&fine), step));
     let off = OFF_SHARE * h;
     let skin = |v: usize| (cape.bones.get(v).copied().unwrap_or([0, 255, 255, 255]), cape.weights.get(v).copied().unwrap_or([127, 0, 0, 0]));
-    let normal = |v: usize| cape.normal.get(v).map(|n| Vec3::from(*n)).unwrap_or(Vec3::NEG_Z);
     let mut bulbs = Vec::new();
-    let mut left = 0.0f32;
-    for pair in run.windows(2) {
-        let (a, b) = (at(pair[0]), at(pair[1]));
-        let len = (b - a).length();
-        let mut d = left;
-        while d <= len {
-            let f = if len > 0.0 { d / len } else { 0.0 };
-            let p = a.lerp(b, f);
-            let near = if f < 0.5 { pair[0] } else { pair[1] };
+    for run in runs.iter().filter(|r| r.len() >= 2) {
+        for (k, &(p, nrm, near)) in run.iter().enumerate() {
             // out from the body: the cape's normal turned away from the spine
             // (behind it, -z; over the shoulders, up and back)
-            let mut nrm = normal(near).normalize_or(Vec3::NEG_Z);
+            let mut nrm = nrm.normalize_or(Vec3::NEG_Z);
             let out = Vec3::new(p.x, 0.0, p.z).normalize_or(Vec3::NEG_Z) + Vec3::NEG_Z;
             if nrm.dot(out) < 0.0 {
                 nrm = -nrm;
             }
             let i = bulbs.len() as u32;
             let (bones, weights) = skin(near);
-            bulbs.push(Bulb { at: p + nrm * off, bones, weights, color: (hash(i, 7) % COLORS.len() as u32) as u8, phase: hash(i, 13) as u8 });
+            let brk = if k == 0 { net::decor::BREAK } else { 0 };
+            bulbs.push(Bulb { at: p + nrm * off, bones, weights, color: (hash(i, 7) % COLORS.len() as u32) as u8 | brk, phase: hash(i, 13) as u8 });
+        }
+    }
+    (bulbs.len() >= 2).then_some(Lights { bulbs, size: BULB_SHARE * h, cord: CORD_SHARE * h })
+}
+
+/// Points every `step` along a path (its first, then each `step` on): each
+/// skinned as the nearer of the two path points it lies between.
+fn spaced(path: &[On], step: f32) -> Vec<On> {
+    let mut out = Vec::new();
+    let mut left = 0.0f32;
+    for pair in path.windows(2) {
+        let ((a, na, va), (b, nb, vb)) = (pair[0], pair[1]);
+        let len = (b - a).length();
+        let mut d = left;
+        while d <= len {
+            let f = if len > 0.0 { d / len } else { 0.0 };
+            out.push(if f < 0.5 { (a.lerp(b, f), na, va) } else { (a.lerp(b, f), nb, vb) });
             d += step;
         }
         left = d - len;
     }
-    (bulbs.len() >= 2).then_some(Lights { bulbs, size: BULB_SHARE * h, cord: CORD_SHARE * h })
+    out
+}
+
+/// The back-most hit (least z: the cape hangs behind a body facing +z, and
+/// its outer face is the one seen from behind) of a ray from behind at
+/// (x, y) on the triangles `tris` of `m`: the place, the triangle's normal,
+/// and its vertex nearest the hit.
+fn back_hit(m: &Model, tris: &[[u32; 3]], x: f32, y: f32) -> Option<On> {
+    let mut best: Option<On> = None;
+    for t in tris {
+        let p: [Vec3; 3] = t.map(|i| Vec3::from(m.pos[i as usize]));
+        let d = (p[1].y - p[2].y) * (p[0].x - p[2].x) + (p[2].x - p[1].x) * (p[0].y - p[2].y);
+        if d.abs() < 1e-9 {
+            continue;
+        }
+        let a = ((p[1].y - p[2].y) * (x - p[2].x) + (p[2].x - p[1].x) * (y - p[2].y)) / d;
+        let b = ((p[2].y - p[0].y) * (x - p[2].x) + (p[0].x - p[2].x) * (y - p[2].y)) / d;
+        let c = 1.0 - a - b;
+        if a < -1e-4 || b < -1e-4 || c < -1e-4 {
+            continue;
+        }
+        let z = a * p[0].z + b * p[1].z + c * p[2].z;
+        if best.is_some_and(|(q, _, _)| q.z <= z) {
+            continue;
+        }
+        let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
+        let near = if a >= b && a >= c { t[0] } else if b >= c { t[1] } else { t[2] };
+        best = Some((Vec3::new(x, y, z), n, near as usize));
+    }
+    best
 }
 
 /// The vertices the nearest level's triangles use, once each, in order.
@@ -158,19 +265,20 @@ fn used_vertices(m: &Model) -> Vec<usize> {
     (0..m.pos.len()).filter(|&v| seen[v]).collect()
 }
 
-/// How many bands a cape's sides are read in, and its top.
-const SIDE_BANDS: usize = 10;
+/// How many bands a cape's sides are read in, and its top and hem.
+const SIDE_BANDS: usize = 16;
 const TOP_BINS: usize = 9;
 
-/// A cape's outline seen from behind, as its vertices in order: its left
-/// side (least x) a vertex a band of height from `cut` up, its top (the
-/// highest vertex of each of [`TOP_BINS`] across, of those in its top fifth)
-/// from left to right, then its right side (most x) down to `cut`; a vertex
-/// never twice in a row.
-fn outline(m: &Model, used: &[usize], cut: f32, hi: f32, h: f32) -> Vec<usize> {
+/// A cape's whole outline seen from behind, as its vertices in order, round:
+/// its left side (least x, a vertex a band of height) from its hem up, its
+/// top (the highest vertex of each of [`TOP_BINS`] across, of those in its
+/// top fifth) from left to right, its right side (most x) down, and its hem
+/// (the lowest of each bin across, of those in its bottom fifth) from right
+/// to left; a vertex never twice in a row.
+fn outline(m: &Model, used: &[usize], lo: f32, hi: f32, h: f32) -> Vec<usize> {
     let p = |v: usize| m.pos[v];
     let band = |k: usize| {
-        let (a, b) = (cut + (hi - cut) * k as f32 / SIDE_BANDS as f32, cut + (hi - cut) * (k + 1) as f32 / SIDE_BANDS as f32);
+        let (a, b) = (lo + h * k as f32 / SIDE_BANDS as f32, lo + h * (k + 1) as f32 / SIDE_BANDS as f32);
         used.iter().copied().filter(move |&v| p(v)[1] >= a && p(v)[1] <= b)
     };
     let mut left = Vec::new();
@@ -183,24 +291,71 @@ fn outline(m: &Model, used: &[usize], cut: f32, hi: f32, h: f32) -> Vec<usize> {
             right.push(v);
         }
     }
-    let top: Vec<usize> = used.iter().copied().filter(|&v| p(v)[1] >= hi - 0.2 * h).collect();
-    let (x0, x1) = top.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(p(v)[0]), b.max(p(v)[0])));
-    let mut across = Vec::new();
-    if x1 > x0 {
-        for k in 0..TOP_BINS {
-            let (a, b) = (x0 + (x1 - x0) * k as f32 / TOP_BINS as f32, x0 + (x1 - x0) * (k + 1) as f32 / TOP_BINS as f32);
-            if let Some(v) = top.iter().copied().filter(|&v| p(v)[0] >= a && p(v)[0] <= b).max_by(|&a, &b| p(a)[1].total_cmp(&p(b)[1])) {
-                across.push(v);
+    // the highest (the top's) or lowest (the hem's) vertex of each bin across
+    let across = |near: &dyn Fn(usize) -> bool, top: bool| {
+        let pick: Vec<usize> = used.iter().copied().filter(|&v| near(v)).collect();
+        let (x0, x1) = pick.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(p(v)[0]), b.max(p(v)[0])));
+        let mut out = Vec::new();
+        if x1 > x0 {
+            for k in 0..TOP_BINS {
+                let (a, b) = (x0 + (x1 - x0) * k as f32 / TOP_BINS as f32, x0 + (x1 - x0) * (k + 1) as f32 / TOP_BINS as f32);
+                let bin = pick.iter().copied().filter(|&v| p(v)[0] >= a && p(v)[0] <= b);
+                let v = if top { bin.max_by(|&a, &b| p(a)[1].total_cmp(&p(b)[1])) } else { bin.min_by(|&a, &b| p(a)[1].total_cmp(&p(b)[1])) };
+                out.extend(v);
             }
         }
-    }
+        out
+    };
+    let top = across(&|v| p(v)[1] >= hi - 0.2 * h, true);
+    let hem = across(&|v| p(v)[1] <= lo + 0.2 * h, false);
     let mut out: Vec<usize> = Vec::new();
-    for v in left.into_iter().chain(across).chain(right.into_iter().rev()) {
+    for v in left.into_iter().chain(top).chain(right.into_iter().rev()).chain(hem.into_iter().rev()) {
         if out.last() != Some(&v) {
             out.push(v);
         }
     }
+    // round: back to where it began
+    if let Some(&first) = out.first()
+        && out.last() != Some(&first)
+    {
+        out.push(first);
+    }
     out
+}
+
+/// Each bulb's glass of the strings of `d` (`placed`'s): a solid bead, its
+/// colour (as lit now, `ms`), standing where its glow is, so the string
+/// reads as a string of bulbs by day as well as by night (its glow, additive,
+/// fades into a bright sky). Drawn as the decorations' model bulbs are: not
+/// lit by the scene, a bulb is its own light.
+pub fn glass(d: &net::decor::Decor, ms: i64) -> Vec<render::billboard::Strips> {
+    let t = ms as f64 / 1000.0;
+    let mut strips = Vec::new();
+    let mut colors = Vec::new();
+    for s in &d.strings {
+        let r = GLASS_SHARE * s.size;
+        for b in &s.bulbs {
+            let c = s.colors.get((b.color & net::decor::COLOR) as usize).copied().unwrap_or(0xFFFF_FFFF);
+            let lit = net::decor::lit(s.effect, s.period, b.phase, t);
+            let k = 0.7 + 0.5 * lit;
+            let col = [((c >> 24) & 0xFF) as f32 / 255.0 * k, ((c >> 16) & 0xFF) as f32 / 255.0 * k, ((c >> 8) & 0xFF) as f32 / 255.0 * k, 1.0];
+            let p = Vec3::from(b.at);
+            // an eight-sided bead, longer than wide: two tips and a ring of four
+            let (up, down) = (p + Vec3::Y * r * 1.0, p - Vec3::Y * r * 1.7);
+            let ring = [Vec3::X, Vec3::Z, Vec3::NEG_X, Vec3::NEG_Z].map(|d| p + d * r - Vec3::Y * r * 0.2);
+            for k in 0..4 {
+                let (a, bq) = (ring[k], ring[(k + 1) % 4]);
+                for tri in [[up, a, bq], [down, bq, a]] {
+                    strips.push(tri.iter().map(|q| ([0.0, 0.0], q.to_array())).collect());
+                    colors.push(vec![col; 3]);
+                }
+            }
+        }
+    }
+    if strips.is_empty() {
+        return Vec::new();
+    }
+    vec![render::billboard::Strips { texture: 0, blend: 0, ztest: true, zwrite: true, color: [1.0; 4], strips, colors }]
 }
 
 /// The skin palette's matrices of `cs` placed by `centre` (glam's): a node's
@@ -348,6 +503,19 @@ pub const GINGER_GAIN: [u8; 3] = [150, 118, 82];
 /// The icing's white.
 pub const ICING: [u8; 4] = [0xFA, 0xF8, 0xF2, 0xFF];
 
+/// Where the face's icing goes (`ice`), read off the clay golem's face (its
+/// dark eye sockets under the brow, its mouth over the chin: the owner,
+/// 2026-11-18, "the gingerbread man face needs to move down and be in his eye
+/// sockets and mouth area"): the eyes this far under the head node, of the
+/// head node's height over the jaw's, and this far out, of the face's half
+/// width there; the smile's middle this far over the jaw, its corners curled
+/// up this much more, across this much of the half width.
+pub const EYES_UNDER: f32 = 0.15;
+pub const EYES_APART: f32 = 0.5;
+pub const SMILE_OVER: f32 = 0.0;
+pub const SMILE_CURL: f32 = 0.2;
+pub const SMILE_WIDE: f32 = 0.38;
+
 /// A node's bind-pose world place.
 fn node_at(cs: &CSprite<Ee>, node: i32) -> Option<Vec3> {
     let n = cs.h.nodes.get(usize::try_from(node).ok()?)?;
@@ -411,6 +579,97 @@ fn front_hit(m: &Model, tris: &[[u32; 3]], keep: &dyn Fn(usize) -> bool, x: f32,
     best
 }
 
+/// The wrist (the ankle) a hand's item node (a foot's toe node) `tip` hangs
+/// from, and the node over it (the forearm, the shin).
+fn wrist(cs: &CSprite<Ee>, tip: i32) -> Option<(i32, i32)> {
+    let joint = cs.h.nodes.get(usize::try_from(tip).ok()?)?.parent;
+    let up = cs.h.nodes.get(usize::try_from(joint).ok()?)?.parent;
+    (up >= 0).then_some((joint, up))
+}
+
+/// How far along the bone into a wrist (an ankle) its ring is looked for, of
+/// the bone's length: from this far above the joint to this far past it.
+const RING_FROM: f32 = 0.45;
+const RING_TO: f32 = 0.05;
+const RING_BINS: usize = 12;
+/// How far off the bone a vertex of another node may be and still be the
+/// limb's skin, of the bone's length.
+const LIMB_REACH: f32 = 0.6;
+
+/// Where round the limb into `joint` (at `j`, from `up` at `u`) a ring of
+/// icing goes: the limb's skin (the vertices of the two nodes and those
+/// under the joint, or any as near the bone as [`LIMB_REACH`]) read in [`RING_BINS`] slices along the bone, from
+/// [`RING_FROM`] of it above the joint to [`RING_TO`] past it, each slice's
+/// radius its farthest vertex off the bone; the narrowest slice (the wrist
+/// above the fist, the ankle above the foot). Its middle, the bone's
+/// direction and that radius.
+fn narrowest(m: &Model, cs: &CSprite<Ee>, joint: i32, up: i32, j: Vec3, u: Vec3) -> Option<(Vec3, Vec3, f32)> {
+    let len = (j - u).length();
+    let axis = (j - u).normalize_or_zero();
+    if axis == Vec3::ZERO {
+        return None;
+    }
+    let (from, to) = (-RING_FROM * len, RING_TO * len);
+    let mut far = [0.0f32; RING_BINS];
+    let mut count = [0usize; RING_BINS];
+    for (v, p) in m.pos.iter().enumerate() {
+        let d = Vec3::from(*p) - j;
+        let along = d.dot(axis);
+        if along < from || along >= to {
+            continue;
+        }
+        // the limb's own skin: its two nodes' and the hand's (the foot's),
+        // or (a low body's shin skinned to its hips) any vertex as near the
+        // bone as the limb is thick
+        let b = heaviest(m, v);
+        let own = b != 255 && (b as i32 == up || under(cs, b as i32, joint));
+        if !own && (d - axis * along).length() > LIMB_REACH * len {
+            continue;
+        }
+        let k = (((along - from) / (to - from)) * RING_BINS as f32) as usize;
+        let k = k.min(RING_BINS - 1);
+        far[k] = far[k].max((d - axis * along).length());
+        count[k] += 1;
+    }
+    let k = (0..RING_BINS).filter(|&k| count[k] >= 2).min_by(|&a, &b| far[a].total_cmp(&far[b]))?;
+    let along = from + (to - from) * (k as f32 + 0.5) / RING_BINS as f32;
+    Some((j + axis * along, axis, far[k]))
+}
+
+/// How far above the joint a ring goes on a limb with no vertex by it, of
+/// the bone's length.
+const RING_ABOVE: f32 = 0.2;
+
+/// The nearest hit, as its distance, of a ray from `from` along `dir` on the
+/// triangles `tris` of `m` (the limb's skin seen from inside it).
+fn ray_out(m: &Model, tris: &[[u32; 3]], from: Vec3, dir: Vec3) -> Option<f32> {
+    let mut best: Option<f32> = None;
+    for t in tris {
+        let p: [Vec3; 3] = t.map(|i| Vec3::from(m.pos[i as usize]));
+        let (e1, e2) = (p[1] - p[0], p[2] - p[0]);
+        let q = dir.cross(e2);
+        let det = e1.dot(q);
+        if det.abs() < 1e-9 {
+            continue;
+        }
+        let o = from - p[0];
+        let u = o.dot(q) / det;
+        if !(-1e-4..=1.0 + 1e-4).contains(&u) {
+            continue;
+        }
+        let r = o.cross(e1);
+        let v = dir.dot(r) / det;
+        if v < -1e-4 || u + v > 1.0 + 1e-4 {
+            continue;
+        }
+        let d = e2.dot(r) / det;
+        if d > 1e-5 && best.is_none_or(|b| d < b) {
+            best = Some(d);
+        }
+    }
+    best
+}
+
 /// A white bead (a ball `r` across `scale` times flatter along `n`) at `at`
 /// on `m`, skinned wholly to `node`, into `into` (a batch's indices).
 fn bead(m: &mut Model, into: &mut Vec<u32>, at: Vec3, n: Vec3, r: f32, flat: f32, node: u8, color: [f32; 4]) {
@@ -451,9 +710,11 @@ fn bead(m: &mut Model, into: &mut Vec<u32>, at: Vec3, n: Vec3, r: f32, flat: f32
 
 /// `model` (a body, `cs` its sprite, in its bind pose) as a gingerbread man:
 /// its layers baked by [`GINGER_GAIN`] (each layer's colour times it, the texture's own
-/// shading kept) and iced ([`ICING`]): on the face two round eyes and a smile,
-/// down the chest three buttons, round each wrist and ankle a wavy ring of
-/// beads. Each bead is skinned wholly to the node the body is under it there,
+/// shading kept) and iced ([`ICING`]): two round eyes in the face's eye
+/// sockets and a smile at its mouth (by the head node and the jaw's,
+/// [`EYES_UNDER`]), down the chest three buttons, round each wrist and ankle
+/// (just above the hand's and the foot's joint, where the limb is narrowest:
+/// [`narrowest`]) a wavy ring of beads. Each bead is skinned wholly to the node the body is under it there,
 /// so the icing moves as the cookie does. False (and `model` only browned)
 /// where the body has no head node or no face to put the eyes on.
 pub fn ice(model: &mut Model, cs: &CSprite<Ee>) -> bool {
@@ -502,12 +763,29 @@ pub fn ice(model: &mut Model, cs: &CSprite<Ee>) -> bool {
     }
     white.lod = None;
     let mut idx = Vec::new();
-    let keep_head = |v: usize| on_head[v];
     let r_eye = 0.12 * w;
     let mut iced = false;
+    // the face: the head's front, the neck's skin with it (a golem's brow,
+    // eye sockets, jaw and chin hang on its neck as much as on its head);
+    // its eye sockets are at the head node's own height, a little under it,
+    // its mouth at the jaw's (the head's lowest child node, at the chin's
+    // front; without one, a third of the way down under the head node)
+    let neck_node = usize::try_from(head).ok().and_then(|i| cs.h.nodes.get(i)).map_or(-1, |n| n.parent);
+    let on_face: Vec<bool> = (0..model.pos.len()).map(|v| {
+        let b = heaviest(model, v);
+        on_head[v] || (b != 255 && neck_node >= 0 && b as i32 == neck_node)
+    }).collect();
+    let keep_face = |v: usize| on_face[v];
+    let head_y = node_at(cs, head).map_or(lo.y + 0.5 * h, |p| p.y);
+    let jaw_y = cs.h.nodes.iter().enumerate().filter(|(_, n)| n.parent == head).filter_map(|(i, _)| node_at(cs, i as i32)).map(|p| p.y).filter(|&y| y < head_y).fold(None, |m: Option<f32>, y| Some(m.map_or(y, |m| m.min(y)))).unwrap_or(head_y - 0.33 * h);
+    let span = head_y - jaw_y;
+    let eye_y = head_y - EYES_UNDER * span;
+    // the face's half width at the eyes: its front vertices that high
+    let half = model.pos.iter().enumerate().filter(|(v, p)| on_face[*v] && (p[1] - eye_y).abs() <= 0.15 * span && p[2] > 0.0).map(|(_, p)| (p[0] - cx).abs()).fold(0.0f32, f32::max);
+    let half = if half > 0.0 { half } else { 0.5 * w };
     // the eyes
     for side in [-1.0f32, 1.0] {
-        if let Some((p, n, b)) = front_hit(model, &tris, &keep_head, cx + side * 0.21 * w, lo.y + 0.62 * h) {
+        if let Some((p, n, b)) = front_hit(model, &tris, &keep_face, cx + side * EYES_APART * half, eye_y) {
             bead(model, &mut idx, p + n * r_eye * 0.2, n, r_eye, 0.45, if b == 255 { head as u8 } else { b }, shade);
             iced = true;
         }
@@ -515,19 +793,21 @@ pub fn ice(model: &mut Model, cs: &CSprite<Ee>) -> bool {
     if !iced {
         return false;
     }
-    // the smile: beads on an upturned arc under the eyes
+    // the smile: beads on an upturned arc at the mouth
     let smile = 9;
     for k in 0..smile {
         let f = k as f32 / (smile - 1) as f32 * 2.0 - 1.0;
-        let x = cx + f * 0.24 * w;
-        let y = lo.y + (0.3 + 0.12 * f * f) * h;
-        if let Some((p, n, b)) = front_hit(model, &tris, &keep_head, x, y) {
+        let x = cx + f * SMILE_WIDE * half;
+        let y = jaw_y + (SMILE_OVER + SMILE_CURL * f * f) * span;
+        // the front-most skin there, whichever node it hangs on (the clay
+        // golem's chin and mouth are its chest's)
+        if let Some((p, n, b)) = front_hit(model, &tris, &|_| true, x, y) {
             bead(model, &mut idx, p + n * r_eye * 0.1, n, r_eye * 0.4, 0.5, if b == 255 { head as u8 } else { b }, shade);
         }
     }
     // the buttons, down the chest from under the head to the waist
     let waist = node_at(cs, 0).map_or(lo.y - h, |p| p.y);
-    let neck = lo.y;
+    let neck = lo.y.min(jaw_y);
     let off_head = |v: usize| !on_head[v];
     for k in 0..3 {
         let y = neck - (neck - waist) * (0.32 + 0.24 * k as f32);
@@ -535,41 +815,41 @@ pub fn ice(model: &mut Model, cs: &CSprite<Ee>) -> bool {
             bead(model, &mut idx, p + n * r_eye * 0.2, n, r_eye * 1.1, 0.45, if b == 255 { 0 } else { b }, shade);
         }
     }
-    // wavy icing round the wrists and ankles: a ring of beads round the limb at
-    // the hand's (the foot's) node, out to the limb's own skin there
+    // wavy icing round the wrists and ankles: the wrist (the ankle) is the
+    // node the hand's item node (the toe's) hangs from, the forearm (the
+    // shin) the bone into it; the ring goes round the limb where it is
+    // narrowest just above that joint, out to the limb's own skin there
     for &slot in &[0usize, 1, 5, 6] {
-        let node = cs.node_ids[slot];
-        let Some(n) = usize::try_from(node).ok().and_then(|i| cs.h.nodes.get(i)) else { continue };
-        let (Some(j), Some(up)) = (node_at(cs, node), node_at(cs, n.parent)) else { continue };
-        let axis = (j - up).normalize_or_zero();
+        let Some((joint, up)) = wrist(cs, cs.node_ids[slot]) else { continue };
+        let (Some(j), Some(u)) = (node_at(cs, joint), node_at(cs, up)) else { continue };
+        // where along the limb: its narrowest slice by the joint; a limb
+        // with no vertex there (the clay golem's shins are one long box from
+        // knee to foot) a little above the joint
+        let axis = (j - u).normalize_or_zero();
         if axis == Vec3::ZERO {
             continue;
         }
-        // the limb's radius: its vertices near the joint, off the axis
-        let reach = 0.25 * (j - up).length();
-        let mut rs: Vec<f32> = model.pos.iter().enumerate().filter(|(v, _)| {
-            let b = heaviest(model, *v);
-            b != 255 && (b as i32 == node || b as i32 == n.parent)
-        }).filter_map(|(_, p)| {
-            let d = Vec3::from(*p) - j;
-            let along = d.dot(axis);
-            (along.abs() < reach && along <= 0.0).then(|| (d - axis * along).length())
-        }).collect();
-        if rs.len() < 3 {
-            continue;
-        }
-        rs.sort_by(f32::total_cmp);
-        let r = rs[rs.len() * 3 / 4];
-        let centre = j - axis * reach * 0.5;
+        let (centre, r) = match narrowest(model, cs, joint, up, j, u) {
+            Some((c, _, r)) => (c, Some(r)),
+            None => (j - axis * RING_ABOVE * (j - u).length(), None),
+        };
+        // each bead out to the limb's skin that way, a ray from the bone
+        // onto the body's own triangles
         let t = axis.any_orthonormal_vector();
         let s = axis.cross(t);
         let beads = 22;
-        let br = (0.2 * r).max(0.004);
-        for k in 0..beads {
+        let outs: Vec<Vec3> = (0..beads).map(|k| {
             let a = std::f32::consts::TAU * k as f32 / beads as f32;
-            let out = t * a.cos() + s * a.sin();
+            t * a.cos() + s * a.sin()
+        }).collect();
+        let hits: Vec<Option<f32>> = outs.iter().map(|&o| ray_out(model, &tris, centre, o)).collect();
+        let mut found: Vec<f32> = hits.iter().flatten().copied().collect();
+        found.sort_by(f32::total_cmp);
+        let Some(r) = found.get(found.len() / 2).copied().or(r) else { continue };
+        let br = (0.2 * r).max(0.004);
+        for (k, (&out, hit)) in outs.iter().zip(&hits).enumerate() {
             let wave = if k % 2 == 0 { 1.0 } else { -1.0 } * br * 0.7;
-            bead(model, &mut idx, centre + out * (r + br * 0.3) + axis * wave, out, br, 0.7, n.parent.max(0) as u8, shade);
+            bead(model, &mut idx, centre + out * (hit.unwrap_or(r) + br * 0.3) + axis * wave, out, br, 0.7, up as u8, shade);
         }
     }
     white.indices = idx;
@@ -588,11 +868,12 @@ mod tests {
     use super::*;
 
     /// A strip of a cape: a 1 by 2 sheet in the xy plane behind the body
-    /// (z -0.2), cut in quads; its outline's top run (above 60% down) carries
-    /// the bulbs, none below; each bulb off the sheet away from the spine.
-    /// The control: a sheet of no height, none.
+    /// (z -0.2), cut in quads; the bulbs go round its whole outline (its
+    /// sides top to bottom, its top and its hem), down its middle and across
+    /// it, three runs of the cord (each begun with a break), each bulb off the
+    /// sheet away from the spine. The control: a sheet of no height, none.
     #[test]
-    fn lights_along_a_sheets_edges() {
+    fn lights_round_a_sheet_and_across_it() {
         let mut m = Model::default();
         let (cols, rows) = (4u32, 8u32);
         for r in 0..=rows {
@@ -613,13 +894,25 @@ mod tests {
         }
         m.batches.push(esf::Batch { material: 0, layers: Vec::new(), indices: idx, lod: None });
         let l = cape_lights(&m).expect("an outline");
-        assert!(l.bulbs.len() >= 15, "{} bulbs", l.bulbs.len()); // up 1.2, across 1, down 1.2, a bulb every 0.15
-        assert!(l.bulbs.iter().all(|b| b.at.y >= 2.0 - DOWN_SHARE * 2.0 - 1e-3), "none below the cut");
+        // round 6 (a bulb every 0.14), down 1.64, across some 2: 70 or so
+        assert!(l.bulbs.len() >= 55, "{} bulbs", l.bulbs.len());
         assert!(l.bulbs.iter().all(|b| b.at.z < -0.2), "hung behind the sheet, off the body");
-        assert!(l.bulbs.iter().any(|b| b.at.y > 1.99) && l.bulbs.iter().any(|b| b.at.x < -0.49) && l.bulbs.iter().any(|b| b.at.x > 0.49), "across the top and down both sides");
+        let near = |x: f32, y: f32| l.bulbs.iter().any(|b| (b.at.x - x).abs() < 0.08 && (b.at.y - y).abs() < 0.08);
+        assert!(near(-0.5, 1.0) && near(0.5, 1.0), "down both sides");
+        assert!(near(-0.5, 0.1) && near(0.5, 0.1), "the sides to the hem");
+        assert!(near(0.0, 2.0) && near(0.0, 0.0), "the top and the hem");
+        assert!(near(0.0, 1.3) && near(0.0, 0.5), "down the middle");
+        let mid: Vec<&Bulb> = l.bulbs.iter().filter(|b| b.at.x.abs() > 0.15 && b.at.x.abs() < 0.35 && b.at.y > 0.8 && b.at.y < 1.4).collect();
+        assert!(mid.len() >= 4, "the zigzag across the middle: {}", mid.len());
+        assert_eq!(l.bulbs.iter().filter(|b| b.color & net::decor::BREAK != 0).count(), 3, "three runs");
         assert!(l.bulbs.iter().all(|b| b.bones[0] == 1));
-        let colours: std::collections::HashSet<u8> = l.bulbs.iter().map(|b| b.color).collect();
+        let colours: std::collections::HashSet<u8> = l.bulbs.iter().map(|b| b.color & net::decor::COLOR).collect();
         assert!(colours.len() >= 4, "many colours: {colours:?}");
+        // each bulb a solid bead too, of its colour
+        let s = net::decor::LightString { anchor: net::decor::Anchor::World(0), effect: net::decor::Effect::Twinkle, period: PERIOD, size: l.size, bright: BRIGHT, cord: CORD, cord_width: l.cord, cord_sag: 0.0, colors: COLORS.to_vec(), bulbs: l.bulbs.iter().map(|b| net::decor::Bulb { at: b.at.to_array(), color: b.color, phase: b.phase }).collect(), look: Default::default() };
+        let g = glass(&net::decor::Decor { strings: vec![s], ..Default::default() }, 0);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].strips.len(), 8 * l.bulbs.len());
         // the control: a flat sheet of no height has none
         let mut flat = Model::default();
         flat.pos = vec![[0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 1.0]];

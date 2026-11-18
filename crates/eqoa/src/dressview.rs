@@ -937,6 +937,8 @@ pub fn shot(lib: &Library, model: i32, words: &Words, out: &str) -> Result<(), S
         if let Some(d) = &lit {
             let mut cords = crate::decorlights::cords_in(d, 0, eye.to_array());
             crate::decorlights::light_cords(&mut cords, &view);
+            // and each bulb's glass, unlit (`toys::glass`)
+            cords.extend(crate::toys::glass(d, words.at));
             r.decor = cords;
         }
         let draws: Vec<render::Draw> = std::iter::once(render::Draw::Model(&gpu)).chain(items.iter().map(|(g, _)| render::Draw::Model(g))).chain(cape.iter().map(render::Draw::Model)).chain(follower.iter().map(|(g, _)| render::Draw::Model(g))).collect();

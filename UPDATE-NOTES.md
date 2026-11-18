@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-18 · Christmas lights on the cape, a tidier Gingerbread Man, golems emote
+- **The String of Lights looks like a string of lights**: the bulbs now run all the way round the cape's edge
+  (both sides, across the shoulders and along the hem), straight down its middle and in a zigzag across it, and
+  each bulb is a bigger, solid coloured bulb that shows by day as well as glowing by night.
+- **The Gingerbread Man's face sits in its face**: its icing eyes are in the golem's eye sockets and its smile at
+  its mouth, and the icing round its wrists sits at the wrists (it was round the hands).
+- **Golems emote**: in the Gingerbread Man's look, or as a clay, stone or iron golem, your character now waves,
+  bows, points and cheers as everyone else does (before, it only stood there).
+
 ## 2026-11-17 · Look around while you run
 - **Hold the left mouse button while running to look around**: the camera swings freely and your character keeps
   running the way it was going. Let go and the camera eases back behind you in about a quarter second. (Before,

@@ -11083,6 +11083,15 @@ impl Play {
         crate::decorlights::cords_in(&d, self.player.world, eye)
     }
 
+    /// The Strings of Lights' glass this frame (`toys::glass`), unlit.
+    pub fn worn_light_glass(&self, walker: &Walker, matrix: [[f32; 4]; 4], ms: i64) -> Vec<render::billboard::Strips> {
+        let d = self.worn_lights(walker, matrix);
+        if d.strings.is_empty() {
+            return Vec::new();
+        }
+        crate::toys::glass(&d, ms)
+    }
+
     /// The creatures drawn a string may hang on (`decorlights::Holder`).
     fn decor_holders(&self) -> Vec<crate::decorlights::Holder<'_>> {
         let boned = crate::decorlights::boned_keys();
