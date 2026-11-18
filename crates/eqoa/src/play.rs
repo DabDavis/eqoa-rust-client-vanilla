@@ -5966,6 +5966,19 @@ impl Play {
                 self.note_hud_key(k, false);
                 return true;
             }
+            // the Utility Bars (2026-11-18) where they were put, a piece of
+            // their own, at the side Utility Bar Layout draws them at
+            let utility = moved(crate::hudlayout::Piece::UtilityBars);
+            let utility_at = match crate::settings::utility_layout() {
+                crate::hudmenu::UtilityLayout::UpperLeft => [f[0] + side - utility[0], f[1] + up - utility[1]],
+                crate::hudmenu::UtilityLayout::Below => [f[0] - side - utility[0], f[1] - up - utility[1]],
+            };
+            if let Some(k) = self.hud_menus.point_utility(utility_at) {
+                self.note_hud_key(k, true);
+                self.hud_key(k);
+                self.note_hud_key(k, false);
+                return true;
+            }
             // the chat box: the chat line, as R3 opens it
             if self.wnd_chat.as_ref().is_some_and(|w| w.contains([f[0] - side - chat[0], f[1] - up - chat[1]])) {
                 self.open_chat_line();
@@ -9108,15 +9121,23 @@ impl Play {
     /// `hudmenu::BAR_MENUS`), and in S2's record as the click's circle,
     /// pressed and let go (`note_hud_key`; a 0x0032 carries it where the S2
     /// asks); nothing for an empty slot, a bar Ability Bars does not show, or
-    /// with a window up.
+    /// with a window up. The Utility Bars' keys the same (the same day:
+    /// "otherwise work the same way"): an item quick slot's item used as a
+    /// click on it uses it (`hudmenu::ITEMS_BAR`), a weapon set taken up
+    /// (`hudmenu::SETS_BAR`, on a server that keeps them).
     pub fn bar_slot_key(&mut self, bar: usize, slot: usize) {
         if (self.mode != 0 && self.mode != 38) || self.typing.is_some() || self.map.open {
             return;
         }
-        if bar >= self.ability_bars() as usize {
+        let shown = match bar {
+            crate::hudmenu::ITEMS_BAR => true,
+            crate::hudmenu::SETS_BAR => self.gear.on,
+            b => b < self.ability_bars() as usize,
+        };
+        if !shown {
             return;
         }
-        let Some(&menu) = crate::hudmenu::BAR_MENUS.get(bar) else { return };
+        let Some(menu) = crate::hudmenu::key_menu(bar) else { return };
         let Some((msg, id)) = self.hud_menus.slot_entry(bar, slot) else { return };
         self.hud_menus.menus[menu].sel = slot as i32;
         eprintln!("play: bar {} slot {} key: {msg:#x} {id}", bar + 1, slot + 1);
@@ -10505,17 +10526,36 @@ impl Play {
                     let (anchor, vertical) = (r.ui.anchor, r.ui.vertical);
                     r.ui.anchor = Anchor::Right;
                     r.ui.vertical = Vertical::Bottom;
-                    let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::SpellBars);
                     let [left, top] = crate::chat::WndChat::full_top_left(vui, &r);
-                    self.hud_menus.draw_stacked(vui, &mut r, top, left, bars, crate::settings::spell_bar_layout());
+                    // the Utility Bars (2026-11-18): the item quick slots and
+                    // the weapon sets the carousel held, a piece of their own,
+                    // at the upper left or on the chat box under the spell
+                    // bars (Utility Bar Layout)
+                    let utility = crate::settings::utility_layout();
+                    let lift = crate::hudmenu::HudMenus::utility_height(bars, utility);
+                    let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::SpellBars);
+                    self.hud_menus.draw_stacked(vui, &mut r, top - lift, left, bars, crate::settings::spell_bar_layout());
+                    crate::hudlayout::end(r.ui, m);
+                    if utility == crate::hudmenu::UtilityLayout::UpperLeft {
+                        r.ui.anchor = Anchor::Left;
+                        r.ui.vertical = Vertical::Top;
+                    }
+                    let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::UtilityBars);
+                    let at = match utility {
+                        crate::hudmenu::UtilityLayout::UpperLeft => crate::hudmenu::UPPER_LEFT_AT,
+                        crate::hudmenu::UtilityLayout::Below => [left, top],
+                    };
+                    self.hud_menus.draw_utility(vui, &mut r, bars, utility, at);
                     crate::hudlayout::end(r.ui, m);
                     (r.ui.anchor, r.ui.vertical) = (anchor, vertical);
                 } else {
+                    self.hud_menus.hide_utility();
                     let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::QuickMenus);
                     self.hud_menus.draw(vui, &mut r, now as i64, &name);
                     crate::hudlayout::end(r.ui, m);
                 }
             } else {
+                self.hud_menus.hide_utility();
                 self.hud_menus.stacked = false;
             }
             // Move HUD (`hudlayout`): the pieces outlined and named, the bar
@@ -13194,6 +13234,31 @@ mod commands {
         let mut p = fresh();
         assert_eq!(key(&mut p, 2, 0, retail()), None, "two bars shown: no third");
         assert_eq!(key(&mut p, 1, 2, retail()), used(7), "the control: bar 2's third slot (7)");
+
+        // the Utility Bars' keys (2026-11-18): an item quick slot's item used
+        // as a click uses it (0x003E with 1), a weapon set taken up (0x0022);
+        // nothing for an empty slot, nor for the sets on a server without them
+        let sends = |p: &mut Play, bar: usize, slot: usize| -> Vec<Vec<u8>> {
+            p.session.flush();
+            sent.borrow_mut().clear();
+            p.bar_slot_key(bar, slot);
+            p.session.flush();
+            guaranteed(&sent.borrow())
+        };
+        let op = |m: Vec<Vec<u8>>, code: u8| m.into_iter().find(|m| m.starts_with(&[code, 0x00]));
+        let (items, sets) = (crate::hudmenu::ITEMS_BAR, crate::hudmenu::SETS_BAR);
+        let mut p = fresh();
+        p.dump.inventory.items.push(net::dump::NetItem { quick_slot: 1, inv_index: 9, quantity: 1, item: net::dump::Item { name: "Healing Potion".into(), p4c: 2, ..Default::default() }, ..Default::default() });
+        let bars = p.hud_bars();
+        p.hud_menus.build(&p.abilities, &p.dump.inventory, &p.gear, bars);
+        assert_eq!(op(sends(&mut p, items, 0), 0x3E), None, "an empty item slot");
+        assert_eq!(op(sends(&mut p, sets, 4), 0x22), None, "no weapon sets on this server");
+        assert_eq!(op(sends(&mut p, items, 1), 0x3E), Some(vec![0x3E, 0x00, 9, 0, 0, 0, 0x42, 0x42, 0, 0, 1]), "the second item slot's potion used");
+        assert_eq!(p.hud_menus.menus[2].sel, 1);
+        p.gear.on = true;
+        let bars = p.hud_bars();
+        p.hud_menus.build(&p.abilities, &p.dump.inventory, &p.gear, bars);
+        assert_eq!(op(sends(&mut p, sets, 4), 0x22), Some(vec![0x22, 0x00, 4]), "bare hands taken up");
         crate::settings::testing::reset(false);
     }
 

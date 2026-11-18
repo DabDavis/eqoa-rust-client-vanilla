@@ -1085,6 +1085,12 @@ pub struct ClientOptions {
     /// (Stacked, the default) or columns of two side by side
     /// (`hudmenu::Layout`, `hudmenu::HudMenus::draw_stacked`).
     pub spell_bar_layout: crate::hudmenu::Layout,
+    /// Utility Bar Layout (the server owner, 2026-11-18: "They can go in the
+    /// upper left, side by side vertical, or down below and the player
+    /// decides"): where the item quick slots and the weapon sets stand while
+    /// the spell bars are stacked, Upper Left (the default) or Below
+    /// (`hudmenu::UtilityLayout`, `hudmenu::HudMenus::draw_utility`).
+    pub utility_layout: crate::hudmenu::UtilityLayout,
     /// Chat Tabs (Jibwiz's ticket 1951): which of the chat box's tabs each
     /// kind of line goes to (`chat::Kind`, by its index): 0 the box's own,
     /// Main; 1 to 3 a tab of its own, which exists while a kind goes to it and
@@ -1527,6 +1533,7 @@ impl Default for ClientOptions {
             stacked_bars: false,
             spell_bar_opacity: 100,
             spell_bar_layout: crate::hudmenu::Layout::Stacked,
+            utility_layout: crate::hudmenu::UtilityLayout::UpperLeft,
             chat_tabs: [0; crate::chat::KINDS],
             chat_tab_names: [['\0'; crate::chat::TAB_NAME_MOST]; crate::chat::TABS],
             pets_pass: true,
@@ -1710,6 +1717,10 @@ impl ClientOptions {
         // Spell Bar Layout only when not Stacked
         if self.spell_bar_layout != crate::hudmenu::Layout::Stacked {
             s.push_str(&format!("spell_bar_layout={}\n", self.spell_bar_layout.opt()));
+        }
+        // Utility Bar Layout only when not Upper Left
+        if self.utility_layout != crate::hudmenu::UtilityLayout::UpperLeft {
+            s.push_str(&format!("utility_bars={}\n", self.utility_layout.opt()));
         }
         for (k, &t) in self.chat_tabs.iter().enumerate() {
             if t != 0 {
@@ -1971,6 +1982,11 @@ impl ClientOptions {
                 ("spell_bar_layout", v) => {
                     if let Some(l) = crate::hudmenu::Layout::from_opt(v) {
                         c.spell_bar_layout = l;
+                    }
+                }
+                ("utility_bars", v) => {
+                    if let Some(l) = crate::hudmenu::UtilityLayout::from_opt(v) {
+                        c.utility_layout = l;
                     }
                 }
                 ("pets_pass", "on") => c.pets_pass = true,
@@ -2343,7 +2359,7 @@ pub mod qol {
             83 => BUFF_WINDOW,
             58 => PET_EFFECTS,
             78 | 79 => AUTO_CAST,
-            22 | 90 | crate::options::SPELL_BAR_LAYOUT => SPELL_BARS,
+            22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT => SPELL_BARS,
             _ => return None,
         })
     }
@@ -2399,7 +2415,7 @@ pub mod qol {
             c.item_links = c.item_links_here && !off(LOCKED);
         }
         if off(SPELL_BARS) {
-            (c.ability_bars, c.stacked_bars, c.spell_bar_layout) = (super::ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked);
+            (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) = (super::ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft);
         }
         c
     }
@@ -2442,7 +2458,7 @@ pub mod qol {
             v.item_links = kept.item_links;
         }
         if off(SPELL_BARS) {
-            (v.ability_bars, v.stacked_bars, v.spell_bar_layout) = (kept.ability_bars, kept.stacked_bars, kept.spell_bar_layout);
+            (v.ability_bars, v.stacked_bars, v.spell_bar_layout, v.utility_layout) = (kept.ability_bars, kept.stacked_bars, kept.spell_bar_layout, kept.utility_layout);
         }
         v
     }
@@ -2684,6 +2700,11 @@ pub fn stacked_bars() -> bool {
 /// Spell Bar Layout (Extended > UI > HUD Layout; 2026-11-18).
 pub fn spell_bar_layout() -> crate::hudmenu::Layout {
     client().spell_bar_layout
+}
+
+/// Utility Bar Layout (Extended > UI > HUD Layout; 2026-11-18).
+pub fn utility_layout() -> crate::hudmenu::UtilityLayout {
+    client().utility_layout
 }
 
 /// Profanity Filter (Options > Interface).
@@ -3870,7 +3891,7 @@ mod tests {
     #[test]
     fn the_server_turns_additions_off_and_the_choices_stay() {
         testing::reset(false);
-        let chosen = ClientOptions { dps_meter: true, auto_target: true, number_colors: [3; crate::numcolor::ROWS], ability_bars: 4, stacked_bars: true, spell_bar_layout: crate::hudmenu::Layout::Columns, ..Default::default() };
+        let chosen = ClientOptions { dps_meter: true, auto_target: true, number_colors: [3; crate::numcolor::ROWS], ability_bars: 4, stacked_bars: true, spell_bar_layout: crate::hudmenu::Layout::Columns, utility_layout: crate::hudmenu::UtilityLayout::Below, ..Default::default() };
         set_client(chosen);
         assert_eq!(client(), chosen, "nothing off: as kept");
         let all = qol::MAP | qol::QUEST_HELPER | qol::TARGET_LEVEL | qol::DPS_METER | qol::NUMBER_COLORS | qol::STAT_CAPS | qol::POWER_BARS | qol::BUFF_WINDOW | qol::PET_EFFECTS | qol::AUTO_CAST | qol::ITEM_LINKS | qol::SPELL_BARS;
@@ -3882,7 +3903,7 @@ mod tests {
         assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
         assert!(!(c.target_level || c.dps_meter || c.power_bars || c.buff_window || c.pet_effects || c.auto_cast || c.auto_target), "the rest");
         assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
-        assert!(!c.item_links && (c.ability_bars, c.stacked_bars, c.spell_bar_layout) == (ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked), "item links off by default, the game's two bars");
+        assert!(!c.item_links && (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) == (ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft), "item links off by default, the game's two bars");
         let d = ClientOptions::default();
         assert!((c.raid_list, c.overlapping_names, c.loading_tips, c.flora) == (d.raid_list, d.overlapping_names, d.loading_tips, d.flora), "what is not an addition stays");
         // a change to another row while they are off (Extended's, or a key's)
@@ -4230,6 +4251,24 @@ mod tests {
         assert_eq!(ClientOptions::from_text("spell_bar_layout=stacked").spell_bar_layout, Layout::Stacked);
         assert_eq!(ClientOptions::from_text("spell_bar_layout=sideways").spell_bar_layout, Layout::Stacked, "the default");
         assert_eq!(qol::of_item(crate::options::SPELL_BAR_LAYOUT), Some(qol::SPELL_BARS), "off where the game's two bars are");
+    }
+
+    /// Utility Bar Layout (2026-11-18): Upper Left by default and then not
+    /// written; Below kept and read back; a word it does not know leaves the
+    /// default; its row off with the stacked bars where the server keeps the
+    /// game's bars.
+    #[test]
+    fn utility_layout_is_kept_only_when_below() {
+        use crate::hudmenu::UtilityLayout;
+        let d = ClientOptions::default();
+        assert_eq!(d.utility_layout, UtilityLayout::UpperLeft, "upper left by default");
+        assert!(!d.to_text().contains("utility_bars"));
+        let t = ClientOptions { utility_layout: UtilityLayout::Below, ..Default::default() }.to_text();
+        assert!(t.contains("utility_bars=below\n"), "{t}");
+        assert_eq!(ClientOptions::from_text(&t).utility_layout, UtilityLayout::Below, "round trip");
+        assert_eq!(ClientOptions::from_text("utility_bars=upper_left").utility_layout, UtilityLayout::UpperLeft);
+        assert_eq!(ClientOptions::from_text("utility_bars=middle").utility_layout, UtilityLayout::UpperLeft, "the default");
+        assert_eq!(qol::of_item(crate::options::UTILITY_LAYOUT), Some(qol::SPELL_BARS));
     }
 
     #[test]

@@ -60,10 +60,14 @@ pub enum Piece {
     /// unmoved, but a piece of their own (Jibrish's petition 5229: they moved
     /// with the chat box)
     SpellBars,
+    /// the Utility Bars (`hudmenu::HudMenus::draw_utility`: the item quick
+    /// slots and the weapon sets, while the spell bars are stacked), at the
+    /// upper left or on the chat box as Utility Bar Layout has them
+    UtilityBars,
 }
 
 /// Each piece, in `Piece`'s order.
-pub const PIECES: [Piece; 12] = [Piece::Player, Piece::Group, Piece::Pet, Piece::Target, Piece::Minimap, Piece::Quests, Piece::Meter, Piece::Effects, Piece::Chat, Piece::Breath, Piece::QuickMenus, Piece::SpellBars];
+pub const PIECES: [Piece; 13] = [Piece::Player, Piece::Group, Piece::Pet, Piece::Target, Piece::Minimap, Piece::Quests, Piece::Meter, Piece::Effects, Piece::Chat, Piece::Breath, Piece::QuickMenus, Piece::SpellBars, Piece::UtilityBars];
 const N: usize = PIECES.len();
 
 /// Where on an axis a piece is measured from: the screen's left (top), its
@@ -127,6 +131,7 @@ impl Piece {
             Piece::Breath => "breath",
             Piece::QuickMenus => "quickbars",
             Piece::SpellBars => "spellbars",
+            Piece::UtilityBars => "utilitybars",
         }
     }
 
@@ -145,6 +150,7 @@ impl Piece {
             Piece::Breath => "Breath",
             Piece::QuickMenus => "Quick Bars",
             Piece::SpellBars => "Spell Bars",
+            Piece::UtilityBars => "Utility Bars",
         }
     }
 
@@ -156,6 +162,11 @@ impl Piece {
             Piece::Target => (Edge::Start, Edge::End),
             Piece::Chat | Piece::SpellBars => (Edge::End, Edge::End),
             Piece::Minimap | Piece::Quests | Piece::Meter | Piece::Breath | Piece::QuickMenus => (Edge::End, Edge::Start),
+            // the side Utility Bar Layout draws them at (`Play::draw_hud`)
+            Piece::UtilityBars => match crate::settings::utility_layout() {
+                crate::hudmenu::UtilityLayout::UpperLeft => (Edge::Start, Edge::Start),
+                crate::hudmenu::UtilityLayout::Below => (Edge::End, Edge::End),
+            },
         }
     }
 }
@@ -362,6 +373,18 @@ pub fn reset() {
     with(|s| {
         s.layout = Layout::default();
         s.drag = None;
+    });
+    keep();
+}
+
+/// One piece where the game (or the client, for its own) puts it, kept so:
+/// Utility Bar Layout turned puts the Utility Bars where it has them.
+pub fn reset_piece(piece: Piece) {
+    with(|s| {
+        s.layout.set(piece, None);
+        if s.drag.is_some_and(|d| d.piece == piece) {
+            s.drag = None;
+        }
     });
     keep();
 }
@@ -829,6 +852,48 @@ mod tests {
         assert!(crate::settings::hud_layout().contains("spellbars "), "kept: {:?}", crate::settings::hud_layout());
         set_unlocked(false);
         reset();
+    }
+
+    /// The Utility Bars (2026-11-18, "free move these in freemove mode like
+    /// the others"): a piece of their own, picked up and moved apart from the
+    /// spell bars, to the screen's left for one, and kept; their side is
+    /// Utility Bar Layout's (the upper left's, or the chat box's below);
+    /// `reset_piece` puts them back alone, the spell bars where they were put
+    /// (the control).
+    #[test]
+    fn the_utility_bars_move_on_their_own() {
+        use crate::hudmenu::UtilityLayout;
+        testing_reset();
+        crate::settings::testing::reset(false);
+        assert_eq!(Piece::UtilityBars.own(), (Edge::Start, Edge::Start), "upper left");
+        crate::settings::set_client(crate::settings::ClientOptions { utility_layout: UtilityLayout::Below, ..crate::settings::client() });
+        assert_eq!(Piece::UtilityBars.own(), (Edge::End, Edge::End), "below, on the chat box");
+        let frame = || {
+            frame_begin();
+            for (p, r) in [(Piece::SpellBars, [216.0, 230.0, 390.0, 290.0]), (Piece::UtilityBars, [216.0, 292.0, 390.0, 330.0])] {
+                let s = shift(p, FOUR);
+                note(p, [r[0] + s[0], r[1] + s[1], r[2] + s[0], r[3] + s[1]], s);
+            }
+            frame_end();
+        };
+        frame();
+        set_unlocked(true);
+        assert_eq!(press([300.0, 250.0], FOUR), Press::Piece(Piece::SpellBars), "the control: the spell bars");
+        drag_to([300.0, 200.0], FOUR);
+        assert!(release());
+        frame();
+        assert_eq!(press([300.0, 310.0], FOUR), Press::Piece(Piece::UtilityBars));
+        drag_to([100.0, 110.0], FOUR);
+        assert!(release());
+        assert_eq!(shift(Piece::UtilityBars, FOUR), [-200.0, -200.0], "to the screen's left");
+        assert_eq!(shift(Piece::SpellBars, FOUR), [0.0, -50.0], "the spell bars stay");
+        assert!(crate::settings::hud_layout().contains("utilitybars "), "kept: {:?}", crate::settings::hud_layout());
+        reset_piece(Piece::UtilityBars);
+        assert_eq!(shift(Piece::UtilityBars, FOUR), [0.0, 0.0], "back where their layout puts them");
+        assert_eq!(shift(Piece::SpellBars, FOUR), [0.0, -50.0], "the spell bars where they were put");
+        set_unlocked(false);
+        reset();
+        crate::settings::testing::reset(false);
     }
 
     /// The quick bar moved, its selected ability's name scrolled in its box
