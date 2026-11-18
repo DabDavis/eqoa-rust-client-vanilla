@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-18 · Auto Target leaves a healer alone
+- **Auto Target no longer takes a creature that heals you** (a familiar such as Healbot) for one fighting you:
+  only a hit on you or your side counts, never a heal.
+
 ## 2026-11-18 · Small bodies' shields and weapons at a distance
 - **A fairy's or a pixie's shield and weapons stay their size as you zoom out**: a Druid in Fey Mask (or a
   Fairy) held a shield that grew three times larger once the camera was a few steps back, and its weapons did

@@ -7794,8 +7794,13 @@ impl Play {
             let paint = rgb.map_or_else(|| "game".to_string(), |c| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2]));
             eprintln!("damage: {attacker:08x} {amount:+} {defender:08x} after [{after}] colour {paint}");
         }
-        // who fights whom, for auto-cast and auto targeting (`autocast`)
-        self.auto_hit(attacker, defender);
+        // who fights whom, for auto-cast and auto targeting (`autocast`): a
+        // hit alone (a damage figure is negative, a heal's positive), so a
+        // creature that heals the player (a familiar, the server's Healbot) is
+        // never taken for one fighting it (petition 2378)
+        if amount < 0 {
+            self.auto_hit(attacker, defender);
+        }
         let me = self.self_id32();
         // the player's or its pet's hit: the guide's kill when it dies
         if amount > 0 && (Some(attacker) == me || (attacker == self.pet_id && self.pet_id != u32::MAX)) {

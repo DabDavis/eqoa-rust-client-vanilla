@@ -443,6 +443,30 @@ mod tests {
         crate::settings::set_client(crate::settings::ClientOptions::default());
     }
 
+    /// Auto Target, from 0x00DB as it comes: a creature whose figure on the
+    /// player is a heal (positive: a familiar's, petition 2378, Healbot) is
+    /// never taken, the one that hit it (negative) is.
+    #[test]
+    fn auto_target_never_takes_a_healer() {
+        crate::settings::set_client(crate::settings::ClientOptions { auto_target: true, ..Default::default() });
+        let (mut p, sent) = rig(&[]);
+        let me = p.self_id32().expect("the player's id");
+        p.entities.slots[5] = Some(creature(0x300, 0, [1.0, 0.0, 0.0]));
+        p.entities.slots[6] = Some(creature(0x301, 0, [8.0, 0.0, 0.0]));
+        let figure = |attacker: u32, amount: i64| {
+            let mut w = net::stream::Writer::default();
+            w.u32(attacker).signed(amount).u32(me);
+            w.data
+        };
+        p.damage_indication_tagged(&figure(0x300, 130), 0, false);
+        p.auto_frame_at(glam::Vec3::ZERO);
+        assert!(targets(&mut p, &sent).is_empty() && p.target == u32::MAX, "the healer was taken");
+        p.damage_indication_tagged(&figure(0x301, -40), 0, false);
+        p.auto_frame_at(glam::Vec3::ZERO);
+        assert_eq!((targets(&mut p, &sent), p.target), (vec![0x301], 0x301), "the attacker, farther, is the one taken");
+        crate::settings::set_client(crate::settings::ClientOptions::default());
+    }
+
     /// The typed commands: `/autotarget` (longer than the game's ten
     /// characters of a command word) and `/at` turn Auto Target; `/autocast 1
     /// buff` names a slot's kind, `/autocast 1 off` takes it off.
