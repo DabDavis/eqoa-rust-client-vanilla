@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-18 · Small bodies' shields and weapons at a distance
+- **A fairy's or a pixie's shield and weapons stay their size as you zoom out**: a Druid in Fey Mask (or a
+  Fairy) held a shield that grew three times larger once the camera was a few steps back, and its weapons did
+  the same farther out. They are now drawn at the hands' size at every distance (and the fairy's shield is no
+  longer shrunk too small up close). The original game drew them this way too; this client puts it right.
+
 ## 2026-11-18 · The keyboard in a mercenary's windows
 - **A mercenary's spell window and inventory take the keyboard** like your own spell book and item menu: the
   arrow keys move through them, Enter (or E) picks and Escape closes, and Page Up/Down turns a spell's

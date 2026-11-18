@@ -54,15 +54,23 @@ pub fn worn_by_a_race(model: u32, races: Option<&Creation>) -> bool {
     model != 0 && (races.is_some_and(|c| c.races.iter().any(|r| r.body.contains(&model))) || crate::raceopts::offered_body(model))
 }
 
-/// Bodies whose shield node their own animations leave at another size than
-/// their other item nodes, and the FixScale that puts it right: the fairy's
-/// (go-eqoa-server's race 19, 0x7A85646C, on both discs). The pixie and the
-/// fairy are a hand high on a skeleton two metres tall, and their animations
-/// draw what they hold at 0.3 by scaling the item nodes; the pixie's do so on
-/// all three, the fairy's on its two hands' and not on its shield's, node 16
-/// (no vertex is skinned to it), so a shield hung there was drawn three and a
-/// third times the size of the fairy (`eqoa dress 7A85646C ... shield=...`).
-const SHIELD_FIX: &[(u32, f32)] = &[(0x7A85_646C, 0.3)];
+/// Keeps `cs`'s item nodes posed by its animations at every distance (petition
+/// 2310, the owner, 2026-11-18: "Fix it in vanilla", a departure from the
+/// game, which drew it so too). `ProcessPlayList` gives a node at or past the
+/// skeleton's level its rest frame, at its art's scale; the pixie and the
+/// fairy (a hand high on a skeleton two metres tall) draw what they hold at
+/// 0.3 by scaling their item nodes, so past a node's level what it held was
+/// drawn at 1.0, three and a third times the body: the fairy's shield (node
+/// 16, level 0) from 5 away, its weapons (nodes 8 and 15, level 1) from 15,
+/// zooming out on a Druid in Fey Mask. An item node's level is made one no
+/// skeleton's level reaches; every other node rests as the game rests it.
+pub fn keep_items_posed(cs: &mut CSprite<Ee>) {
+    for &n in &cs.item_nodes[..3] {
+        if let Some(node) = usize::try_from(n).ok().and_then(|i| cs.h.nodes.get_mut(i)) {
+            node.lod = i32::MAX;
+        }
+    }
+}
 
 /// Where a body whose item nodes are no hands holds a player's items: for
 /// each item slot (main hand, off hand, shield) the node it hangs from and the
@@ -284,12 +292,13 @@ fn seat_hands(cs: &mut CSprite<Ee>, seats: &HandSeats) {
 
 /// `cs`, made of `model`, holds items when it is a player's character
 /// (`player`) in a body one of the server's races wears (`races`), its shield
-/// on the off hand's hand when it names no node for one, and its shield node
-/// at its hands' size where its animations leave it at another
-/// (`SHIELD_FIX`); otherwise it keeps its header's word and its nodes.
+/// on the off hand's hand when it names no node for one; otherwise it keeps
+/// its header's word and its nodes. Either way its item nodes stay posed by
+/// its animations at any distance (`keep_items_posed`).
 /// Whether it holds items after.
 pub fn grant(cs: &mut CSprite<Ee>, model: u32, player: bool, races: Option<&Creation>) -> bool {
     if !player || !worn_by_a_race(model, races) {
+        keep_items_posed(cs);
         return cs.holds_items;
     }
     if !cs.holds_items {
@@ -307,11 +316,7 @@ pub fn grant(cs: &mut CSprite<Ee>, model: u32, player: bool, races: Option<&Crea
     if let Some(seats) = hand_seats(model) {
         seat_hands(cs, seats);
     }
-    if let Some(&(_, fix)) = SHIELD_FIX.iter().find(|(b, _)| *b == model)
-        && let Some(n) = usize::try_from(cs.item_nodes[2]).ok().and_then(|i| cs.h.nodes.get_mut(i))
-    {
-        n.fix_scale = vi::vect::Vect3::of(fix, fix, fix);
-    }
+    keep_items_posed(cs);
     cs.holds_items
 }
 
@@ -420,14 +425,15 @@ mod tests {
         assert_eq!([human.item_node(0), human.item_node(1), human.item_node(2)], [Some(18), Some(27), Some(28)], "the human as before");
     }
 
-    /// The fairy's shield, as a player of the Fairy race holds it, at its hands'
-    /// size: on the disc its animations draw its two hands' item nodes at 0.3
-    /// and leave its shield node, 16, at 1.0, three and a third times larger;
-    /// `grant` gives that node a FixScale of 0.3, so posed in its idle and its
-    /// walk the shield node is drawn at the off hand's size. The controls: an
-    /// NPC fairy's node keeps the art's 1.0, and the pixie, whose animations
-    /// already draw its shield node at 0.3, is left as it is. Needs
-    /// `run/eqoa.iso`.
+    /// What the fairy and the pixie hold, at their hands' size at every
+    /// distance (petition 2310: a Druid in Fey Mask, whose shield grew as the
+    /// camera pulled back): their animations draw their three item nodes at
+    /// 0.3, and posed at each of the skeleton's levels (-1, nearer than its
+    /// first, to 3, past its last) after `grant` every one of them stays at
+    /// 0.3, a player's and an NPC's alike. The control: the body as loaded,
+    /// without `grant`, draws the fairy's shield node (level 0) at its art's
+    /// 1.0 from level 0 and its hands' (level 1) from level 1, three and a
+    /// third times the body. Needs `run/eqoa.iso`.
     #[test]
     fn the_fairys_shield_at_its_hands_size() {
         let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
@@ -440,11 +446,15 @@ mod tests {
         const FAIRY: u32 = 0x7A85_646C;
         const PIXIE: u32 = 0x94BA_77CD;
         let listed = races(&[[FAIRY, FAIRY], [PIXIE, PIXIE]]);
-        // the world scale of item nodes `nodes` posed in action (None: standing)
-        let scales = |id: u32, player: bool, action: Option<i32>| {
+        // the world scale of the main hand's, the off hand's and the shield's
+        // item nodes posed at level `lod` in action (None: standing); `granted`
+        // false: the body as loaded (the control)
+        let scales = |id: u32, player: bool, granted: bool, lod: i32, action: Option<i32>| {
             let (mut sc, mut cache, mut rand) = (AnimScene::<Ee>::default(), AnimCache::new(), Rand(1));
             let mut cs = load_csprite(&lib, lib.lookup(id as i32).unwrap(), &mut sc, &mut cache, &mut rand).unwrap();
-            grant(&mut cs, id, player, Some(&listed));
+            if granted {
+                grant(&mut cs, id, player, Some(&listed));
+            }
             let mut t = 0;
             while t <= 900 {
                 sc.time = t;
@@ -455,22 +465,30 @@ mod tests {
                     Some(_) => {}
                     None => cs.set_locomotion(0, &sc, &mut rand),
                 }
-                cs.h.process(0, &sc);
+                cs.h.process(lod, &sc);
                 t += 16;
             }
             let s = |n: i32| {
                 let m = cs.h.nodes[n as usize].world.to_cols();
                 (m[0][0] * m[0][0] + m[0][1] * m[0][1] + m[0][2] * m[0][2]).sqrt()
             };
-            (s(cs.item_nodes[1]), s(cs.item_nodes[2]))
+            [s(cs.item_nodes[0]), s(cs.item_nodes[1]), s(cs.item_nodes[2])]
         };
         for action in [None, Some(1)] {
-            let (off, shield) = scales(FAIRY, true, action);
-            assert!((off - 0.3).abs() < 0.01 && (shield - off).abs() < 0.01, "{action:?}: the fairy's shield at its off hand's size ({shield:.3} against {off:.3})");
-            let (_, npc) = scales(FAIRY, false, action);
-            assert!((npc - 1.0).abs() < 0.01, "{action:?}: the control, an NPC's at the art's {npc:.3}");
-            let (off, shield) = scales(PIXIE, true, action);
-            assert!((off - 0.3).abs() < 0.01 && (shield - 0.3).abs() < 0.01, "{action:?}: the pixie's as its art has them");
+            for lod in -1..=3 {
+                for (id, name) in [(FAIRY, "fairy"), (PIXIE, "pixie")] {
+                    for player in [true, false] {
+                        let got = scales(id, player, true, lod, action);
+                        assert!(got.iter().all(|s| (s - 0.3).abs() < 0.01), "{name} (player {player}) at level {lod}, {action:?}: {got:.3?}, each 0.3");
+                    }
+                }
+            }
+            let near = scales(FAIRY, false, false, -1, action);
+            assert!(near.iter().all(|s| (s - 0.3).abs() < 0.01), "the control near, {action:?}: {near:.3?}");
+            let [_, _, shield] = scales(FAIRY, false, false, 0, action);
+            assert!((shield - 1.0).abs() < 0.01, "the control: the shield node rests at its art's 1.0 from level 0 ({shield:.3}), {action:?}");
+            let [main, off, _] = scales(FAIRY, false, false, 1, action);
+            assert!((main - 1.0).abs() < 0.01 && (off - 1.0).abs() < 0.01, "the control: the hands rest at 1.0 from level 1 ({main:.3}, {off:.3}), {action:?}");
         }
     }
 
