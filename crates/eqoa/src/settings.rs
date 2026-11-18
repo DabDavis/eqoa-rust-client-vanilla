@@ -1066,9 +1066,10 @@ pub struct ClientOptions {
     /// Guild) instead of walking the item links (`Play::chat_channel_step`).
     /// Off by default, the game's R2.
     pub r2_channels: bool,
-    /// Stacked Spell Bars (Jibwiz's ticket 1913): on a computer, the first two
-    /// ability bars drawn as two rows of five stacked above the chat box at
-    /// 95%, with no name bar, each slot a key of its own on the Controls page
+    /// Stacked Spell Bars (Jibwiz's ticket 1913): on a computer, the ability
+    /// bars shown (two, or Ability Bars' three or four) drawn as rows of five
+    /// above the chat box at 95%, as Spell Bar Layout stands them, with no
+    /// name bar, each slot a key of its own on the Controls page
     /// (`hudmenu::Stacked`, `binds`' bar rows). Off by default, the game's
     /// carousel; a controller or a touch screen keeps the carousel.
     pub stacked_bars: bool,
@@ -1078,6 +1079,12 @@ pub struct ClientOptions {
     /// icons always whole (`hudmenu::HudMenus::draw_stacked`). 100 by default,
     /// the frames as before.
     pub spell_bar_opacity: u8,
+    /// Spell Bar Layout (the server owner, 2026-11-18: "When players turn on
+    /// 4 they need to be able to stack 4 spell bars, or 2 columns of 2, side
+    /// by side"): with Ability Bars at 3 or 4, the stacked bars in one column
+    /// (Stacked, the default) or columns of two side by side
+    /// (`hudmenu::Layout`, `hudmenu::HudMenus::draw_stacked`).
+    pub spell_bar_layout: crate::hudmenu::Layout,
     /// Chat Tabs (Jibwiz's ticket 1951): which of the chat box's tabs each
     /// kind of line goes to (`chat::Kind`, by its index): 0 the box's own,
     /// Main; 1 to 3 a tab of its own, which exists while a kind goes to it and
@@ -1519,6 +1526,7 @@ impl Default for ClientOptions {
             r2_channels: false,
             stacked_bars: false,
             spell_bar_opacity: 100,
+            spell_bar_layout: crate::hudmenu::Layout::Stacked,
             chat_tabs: [0; crate::chat::KINDS],
             chat_tab_names: [['\0'; crate::chat::TAB_NAME_MOST]; crate::chat::TABS],
             pets_pass: true,
@@ -1698,6 +1706,10 @@ impl ClientOptions {
         }
         if self.spell_bar_opacity != 100 {
             s.push_str(&format!("spell_bar_opacity={}\n", self.spell_bar_opacity));
+        }
+        // Spell Bar Layout only when not Stacked
+        if self.spell_bar_layout != crate::hudmenu::Layout::Stacked {
+            s.push_str(&format!("spell_bar_layout={}\n", self.spell_bar_layout.opt()));
         }
         for (k, &t) in self.chat_tabs.iter().enumerate() {
             if t != 0 {
@@ -1954,6 +1966,11 @@ impl ClientOptions {
                 ("spell_bar_opacity", v) => {
                     if let Some(o) = v.parse::<u8>().ok().filter(|o| *o <= 100 && o % 10 == 0) {
                         c.spell_bar_opacity = o;
+                    }
+                }
+                ("spell_bar_layout", v) => {
+                    if let Some(l) = crate::hudmenu::Layout::from_opt(v) {
+                        c.spell_bar_layout = l;
                     }
                 }
                 ("pets_pass", "on") => c.pets_pass = true,
@@ -2326,7 +2343,7 @@ pub mod qol {
             83 => BUFF_WINDOW,
             58 => PET_EFFECTS,
             78 | 79 => AUTO_CAST,
-            22 | 90 => SPELL_BARS,
+            22 | 90 | crate::options::SPELL_BAR_LAYOUT => SPELL_BARS,
             _ => return None,
         })
     }
@@ -2382,7 +2399,7 @@ pub mod qol {
             c.item_links = c.item_links_here && !off(LOCKED);
         }
         if off(SPELL_BARS) {
-            (c.ability_bars, c.stacked_bars) = (super::ABILITY_BARS_GAME, false);
+            (c.ability_bars, c.stacked_bars, c.spell_bar_layout) = (super::ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked);
         }
         c
     }
@@ -2425,7 +2442,7 @@ pub mod qol {
             v.item_links = kept.item_links;
         }
         if off(SPELL_BARS) {
-            (v.ability_bars, v.stacked_bars) = (kept.ability_bars, kept.stacked_bars);
+            (v.ability_bars, v.stacked_bars, v.spell_bar_layout) = (kept.ability_bars, kept.stacked_bars, kept.spell_bar_layout);
         }
         v
     }
@@ -2662,6 +2679,11 @@ pub fn account_known() -> bool {
 /// Stacked Spell Bars (Extended > UI > HUD; ticket 1913).
 pub fn stacked_bars() -> bool {
     client().stacked_bars
+}
+
+/// Spell Bar Layout (Extended > UI > HUD Layout; 2026-11-18).
+pub fn spell_bar_layout() -> crate::hudmenu::Layout {
+    client().spell_bar_layout
 }
 
 /// Profanity Filter (Options > Interface).
@@ -3848,7 +3870,7 @@ mod tests {
     #[test]
     fn the_server_turns_additions_off_and_the_choices_stay() {
         testing::reset(false);
-        let chosen = ClientOptions { dps_meter: true, auto_target: true, number_colors: [3; crate::numcolor::ROWS], ability_bars: 4, stacked_bars: true, ..Default::default() };
+        let chosen = ClientOptions { dps_meter: true, auto_target: true, number_colors: [3; crate::numcolor::ROWS], ability_bars: 4, stacked_bars: true, spell_bar_layout: crate::hudmenu::Layout::Columns, ..Default::default() };
         set_client(chosen);
         assert_eq!(client(), chosen, "nothing off: as kept");
         let all = qol::MAP | qol::QUEST_HELPER | qol::TARGET_LEVEL | qol::DPS_METER | qol::NUMBER_COLORS | qol::STAT_CAPS | qol::POWER_BARS | qol::BUFF_WINDOW | qol::PET_EFFECTS | qol::AUTO_CAST | qol::ITEM_LINKS | qol::SPELL_BARS;
@@ -3860,7 +3882,7 @@ mod tests {
         assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
         assert!(!(c.target_level || c.dps_meter || c.power_bars || c.buff_window || c.pet_effects || c.auto_cast || c.auto_target), "the rest");
         assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
-        assert!(!c.item_links && (c.ability_bars, c.stacked_bars) == (ABILITY_BARS_GAME, false), "item links off by default, the game's two bars");
+        assert!(!c.item_links && (c.ability_bars, c.stacked_bars, c.spell_bar_layout) == (ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked), "item links off by default, the game's two bars");
         let d = ClientOptions::default();
         assert!((c.raid_list, c.overlapping_names, c.loading_tips, c.flora) == (d.raid_list, d.overlapping_names, d.loading_tips, d.flora), "what is not an addition stays");
         // a change to another row while they are off (Extended's, or a key's)
@@ -4191,6 +4213,23 @@ mod tests {
         assert!(back.chat_always && back.stacked_bars, "round trip");
         assert!(!ClientOptions::from_text("chat_always=off").chat_always);
         assert!(!ClientOptions::from_text("stacked_bars=maybe").stacked_bars, "the default");
+    }
+
+    /// Spell Bar Layout (2026-11-18): Stacked by default and then not
+    /// written; 2 Columns kept and read back; a word it does not know leaves
+    /// the default; its row off where the server keeps the game's two bars.
+    #[test]
+    fn spell_bar_layout_is_kept_only_when_columns() {
+        use crate::hudmenu::Layout;
+        let d = ClientOptions::default();
+        assert_eq!(d.spell_bar_layout, Layout::Stacked, "stacked by default");
+        assert!(!d.to_text().contains("spell_bar_layout"));
+        let t = ClientOptions { spell_bar_layout: Layout::Columns, ..Default::default() }.to_text();
+        assert!(t.contains("spell_bar_layout=columns\n"), "{t}");
+        assert_eq!(ClientOptions::from_text(&t).spell_bar_layout, Layout::Columns, "round trip");
+        assert_eq!(ClientOptions::from_text("spell_bar_layout=stacked").spell_bar_layout, Layout::Stacked);
+        assert_eq!(ClientOptions::from_text("spell_bar_layout=sideways").spell_bar_layout, Layout::Stacked, "the default");
+        assert_eq!(qol::of_item(crate::options::SPELL_BAR_LAYOUT), Some(qol::SPELL_BARS), "off where the game's two bars are");
     }
 
     #[test]
