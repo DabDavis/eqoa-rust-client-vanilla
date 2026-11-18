@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-18 · The keyboard in a mercenary's windows
+- **A mercenary's spell window and inventory take the keyboard** like your own spell book and item menu: the
+  arrow keys move through them, Enter (or E) picks and Escape closes, and Page Up/Down turns a spell's
+  description. Before, only a controller or the mouse worked there.
+
 ## 2026-11-18 · Hardcore characters
 - **Make a Hardcore character** on a server that has them: the last page of character creation has a
   Hardcore row (left or right turns it on), and creating with it on asks you to confirm. It is for good: a
