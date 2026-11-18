@@ -165,7 +165,12 @@
 //!   folder cannot be written to, which the page then says, and on
 //!   Android), and on a computer Texture Folder (Open) shows it in the
 //!   system's file manager, the page saying where it is
-//!   (`texpack::open_folder`);
+//!   (`texpack::open_folder`); Precache Textures (Off; On: every file of a
+//!   pack made ready in memory as the pack is read, within its budget, the
+//!   zones' and what is drawn first, `texcache`), Pack Compression (Auto, a
+//!   pack larger than the card's budget kept as BC3; Off; On) and Rebuild
+//!   Pack Cache (Rebuild: the disk cache's files taken away and the pack
+//!   read anew);
 //! - Map (2026-11-09, the user's "also add the map and quest helper we had in
 //!   a former update"): Map (On: the client's own map on M and the compass's
 //!   click, the minimap, the waypoints on the compass and the group's
@@ -985,6 +990,15 @@ impl WndOptions {
                     // Texture Folder: shown either way, as ✕ shows it
                     // (`select`)
                     55 => cues.push(if crate::texpack::open_folder() { 8 } else { 9 }),
+                    // Precache Textures and Pack Compression: the pack made
+                    // again from the next frame (`texpack::sync`)
+                    PACK_PRECACHE => c.pack_precache = !c.pack_precache,
+                    PACK_COMPRESS => c.pack_compress = (c.pack_compress + if d < 0 { 2 } else { 1 }) % 3,
+                    // Rebuild Pack Cache: done either way, as ✕ does it
+                    PACK_REBUILD => {
+                        crate::texpack::rebuild_cache();
+                        cues.push(8);
+                    }
                     // Text: every font drawn from the next frame (`viewer`)
                     30 => c.text = c.text.other(),
                     // Loading Screens: the next long trip's (`loading`)
@@ -1255,6 +1269,12 @@ impl WndOptions {
         // any other row of a page it does nothing, as on the game's
         if self.page == 3 && self.cat.is_some() && self.item == 55 {
             cues.push(if crate::texpack::open_folder() { 8 } else { 9 });
+            return false;
+        }
+        // and on Rebuild Pack Cache rebuilds it
+        if self.page == 3 && self.cat.is_some() && self.item == PACK_REBUILD {
+            crate::texpack::rebuild_cache();
+            cues.push(8);
             return false;
         }
         // and on Reset DPS Meter it resets, as left and right do
@@ -1762,7 +1782,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 97] = [
+const EXTENDED_ITEMS: [(i32, &str); 100] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1860,6 +1880,9 @@ const EXTENDED_ITEMS: [(i32, &str); 97] = [
     (WEAPON_SWAP_BACK, "Weapon Swap Back"),
     (R2_CHANNELS, "R2 Channel Switch"),
     (PACK_MEMORY, "Texture Pack Memory"),
+    (PACK_PRECACHE, "Precache Textures"),
+    (PACK_COMPRESS, "Pack Compression"),
+    (PACK_REBUILD, "Rebuild Pack Cache"),
 ];
 
 /// The Chat Tabs rows' first item (ticket 1951): one a kind of line, in
@@ -1901,6 +1924,13 @@ const R2_CHANNELS: i32 = 150;
 /// textures are not being loaded from texture packs"). 160, not the next
 /// free, as R2 Channel Switch's 150.
 pub(crate) const PACK_MEMORY: i32 = 160;
+/// Precache Textures, Pack Compression and Rebuild Pack Cache's items (the
+/// owner's of 2026-11-18, "lets look at PCSX2 how they do texture packs like
+/// precaching and we can make a better version"). 170, 180 and 190, as
+/// Texture Pack Memory's 160.
+pub(crate) const PACK_PRECACHE: i32 = 170;
+pub(crate) const PACK_COMPRESS: i32 = 180;
+pub(crate) const PACK_REBUILD: i32 = 190;
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -1986,7 +2016,7 @@ const GROUPS: [(Group, &str); 5] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// Capture Controller and Sound in Background the Multi-boxing settings',
 /// Controller's touch rows Other's Touch; petition 2084, 2026-11-14: Touch a
 /// group of its own, Touch Controls, its rows Size & Look and Layout).
-const ALL_CATEGORIES: [Category; 24] = [
+const ALL_CATEGORIES: [Category; 25] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
@@ -2021,6 +2051,10 @@ const ALL_CATEGORIES: [Category; 24] = [
     // the rain and the snow (2026-11-15, with Flora's and Environment's
     // sliders): World's page is full
     Category { name: "Weather", items: &[WEATHER], note: Note::None, group: Group::Graphics },
+    // a pack's files made ready (2026-11-18, the owner's "lets look at PCSX2
+    // how they do texture packs like precaching"): Textures' page is full;
+    // natively, as Textures (a page's list ends before it)
+    Category { name: "Texture Cache", items: &[PACK_PRECACHE, PACK_COMPRESS, PACK_REBUILD], note: Note::Textures, group: Group::Graphics },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -2189,6 +2223,9 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         50 => on_off(c.texture_packs),
         51 => on_off(c.dump_textures),
         PACK_MEMORY => wide(&pack_memory_text(c.pack_memory)),
+        PACK_PRECACHE => on_off(c.pack_precache),
+        PACK_COMPRESS => wide(["Auto", "Off", "On"][c.pack_compress.min(2) as usize]),
+        PACK_REBUILD => wide("Rebuild"),
         55 => wide("Open"),
         35 => on_off(c.mipmaps),
         46 => on_off(c.shadows),
@@ -3132,6 +3169,29 @@ mod tests {
         assert_eq!(settings::client().pack_memory, 4096, "and the other way");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!(settings::client().pack_memory, 0);
+        // Precache Textures under it: Off, then On; Pack Compression: Auto,
+        // Off, On and round; Rebuild Pack Cache: Rebuild, the cache (none
+        // in a test) said beside Back
+        goto!(PACK_PRECACHE);
+        assert_eq!((w.item, value_text(&vui, PACK_PRECACHE)), (PACK_PRECACHE, Some(wide(vui.words.get(552, vui.language)))), "Precache Textures, Off");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert!(settings::client().pack_precache);
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::client().pack_precache, "two values");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, PACK_COMPRESS)), (PACK_COMPRESS, Some(wide("Auto"))));
+        for (v, text) in [(1, "Off"), (2, "On"), (0, "Auto")] {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((settings::client().pack_compress, value_text(&vui, PACK_COMPRESS)), (v, Some(wide(text))));
+        }
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::client().pack_compress, 2, "and the other way");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, PACK_REBUILD)), (PACK_REBUILD, Some(wide("Rebuild"))));
+        assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some("Cache: 0 MB on disk"));
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert_eq!(cues.last(), Some(&8), "rebuilt");
         goto!(51);
         assert_eq!(w.item, 51, "Dump Textures");
         press(&mut w, &mut o, key::LEFT, &mut cues);
@@ -3545,6 +3605,7 @@ mod tests {
                 ("Characters", vec!["Level of Detail", "NPC/PC Display", "NPC/PC Distance", "Shadows"]),
                 ("Textures", textures),
                 ("Weather", vec!["Weather"]),
+                ("Texture Cache", vec!["Precache Textures", "Pack Compression", "Rebuild Pack Cache"]),
             ],
             "Graphics: how the world is drawn"
         );
@@ -3949,7 +4010,8 @@ mod tests {
         assert_eq!(CATEGORIES[by_name("DPS Meter")].note, Note::Meter);
         assert_eq!(CATEGORIES[by_name("Chat")].note, Note::Links);
         assert_eq!(CATEGORIES[by_name("HUD Layout")].note, Note::Hud);
-        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 12 } else { 14 }, "the notes only");
+        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 12 } else { 15 }, "the notes only");
+        assert_eq!(CATEGORIES.iter().find(|c| c.name == "Texture Cache").map(|c| c.note), if cfg!(target_arch = "wasm32") { None } else { Some(Note::Textures) });
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Textures: nothing to say while both are off (a test keeps no

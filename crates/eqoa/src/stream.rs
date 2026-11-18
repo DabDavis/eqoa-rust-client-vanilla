@@ -325,7 +325,11 @@ pub fn install(lib: &mut Library, file: usize, zi: usize, bytes: Vec<u8>) -> Res
     if bytes.len() != len || bytes.len() < 12 || u16::from_le_bytes([bytes[0], bytes[1]]) != esf::zone::ZONE {
         return Err(format!("zone {zi}: {} bytes that are not its record", bytes.len()));
     }
-    lib.add_zone(file, zi, Container::parse_records(bytes)).map(|_| ()).ok_or_else(|| format!("zone {zi}: not added"))
+    let f = lib.add_zone(file, zi, Container::parse_records(bytes)).ok_or_else(|| format!("zone {zi}: not added"))?;
+    // its textures' stand-ins queued before the zone is drawn (900 in, it
+    // comes in at 1,050: `PREFETCH`)
+    crate::texpack::prefetch(lib.file(f), lib.era_of(f));
+    Ok(())
 }
 
 /// Each zone's bounds, out of the world base's proxies.

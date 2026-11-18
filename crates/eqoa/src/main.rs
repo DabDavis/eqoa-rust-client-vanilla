@@ -182,6 +182,7 @@ mod options;
 // the system's browser, a page's new tab, Android's intent
 mod openurl;
 mod settings;
+mod texcache;
 mod texpack;
 mod social;
 mod wholist;

@@ -61,6 +61,7 @@
 //! (`generation`): the world's zones, the sky, the creatures, the effects
 //! and the 2D layer (`App::retexture`).
 
+use crate::texcache::{self, Prio};
 use esf::pcsx2::Name;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -462,7 +463,7 @@ impl Index {
 }
 
 /// What a file is read as: by its extension, `png` or `dds` in any case.
-fn loader(p: &Path) -> Option<&'static str> {
+pub(crate) fn loader(p: &Path) -> Option<&'static str> {
     let e = p.extension()?.to_string_lossy().to_ascii_lowercase();
     match e.as_str() {
         "png" => Some("png"),
@@ -486,12 +487,7 @@ pub fn header_size(p: &Path) -> Option<(u32, u32)> {
     (size.0 > 0 && size.1 > 0 && size.0 < 32768 && size.1 < 32768).then_some(size)
 }
 
-/// A stand-in read for a surface: its levels, the base first.
-struct Found {
-    levels: Arc<Vec<esf::Image>>,
-}
-
-/// What a surface is known by in `Pack::found`: its DictID, its disc, where
+/// What a surface is known by in `Pack::looked`: its DictID, its disc, where
 /// its palette is in its container's bytes and how long they are (one
 /// DictID is one record in a view, but a file's own surfaces are also read
 /// straight off it: `UiAssets`).
@@ -502,129 +498,236 @@ fn key(d: &[u8], s: &esf::Surface, era: esf::Era) -> Key {
 }
 
 /// A surface's stand-in file and its base's size (`Index::find`), or none.
-type StandIn = Option<(PathBuf, (u32, u32))>;
+type StandIn = Option<(Arc<Path>, (u32, u32))>;
 
-/// Each stand-in read, by surface: its levels, or `None` when it would not
-/// read (the surface's own is drawn).
-type Read = Arc<Mutex<HashMap<Key, Option<Arc<Found>>>>>;
+/// How the pack's files are made ready (`texcache`): the rows' Precache
+/// Textures and Pack Compression (0 Auto, 1 Off, 2 On), and what the card
+/// takes (`render::packed::compressed_textures`, `render::PackLimits`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Opts {
+    pub precache: bool,
+    pub compress: u8,
+    pub bc: bool,
+    pub max_side: u32,
+}
 
-/// The thread that reads and decodes stand-ins (the owner's 2026-11-09 "lets
-/// make texture packs load async"): a frame asks (`Pack::request`) and goes
-/// on drawing the surface's own; the levels come back through `ready`.
-struct Reader {
-    tx: Mutex<std::sync::mpsc::Sender<(Key, PathBuf, esf::Surface)>>,
-    /// The surfaces asked for and not yet read, each with the texture keys
-    /// waiting on it (none for the 2D layer's: `Wanted`).
-    asked: Arc<Mutex<HashMap<Key, Vec<u64>>>>,
-    /// Stand-ins read, by the texture key each was asked for under.
-    ready: Arc<Mutex<render::standin::Ready>>,
-    /// Off once the pack is let go: what it had not read yet is not read.
-    alive: Arc<std::sync::atomic::AtomicBool>,
-    /// A test's hold on the thread: nothing is read while it is taken.
+impl Default for Opts {
+    fn default() -> Self {
+        Opts { precache: false, compress: 0, bc: false, max_side: render::pack_limits().max_side }
+    }
+}
+
+/// A surface waiting for its file: the texture key its placeholder was made
+/// under, and how many levels it keeps (`level_count`).
+struct Waiter {
+    texkey: u64,
+    want: usize,
+}
+
+/// The files being made ready and those made (`texcache::Ram`).
+#[derive(Default)]
+struct Loads {
+    /// Queued, with the most any asker wants each.
+    queued: HashMap<Arc<Path>, Prio>,
+    /// Being made ready by a worker now.
+    loading: HashSet<Arc<Path>>,
+    waiting: HashMap<Arc<Path>, Vec<Waiter>>,
+    /// Those that would not read (the surface's own drawn).
+    failed: HashSet<Arc<Path>>,
+    ram: texcache::Ram<Arc<Path>>,
+    /// The precache stopped for want of memory.
+    full: bool,
+}
+
+/// What the pack's workers and the frame share.
+struct Shared {
+    loads: Mutex<Loads>,
+    /// Stand-ins made ready, by the texture key each placeholder was made
+    /// under (`render::Pack::take_ready`).
+    ready: Mutex<render::standin::Ready>,
+    queue: texcache::Queue<Arc<Path>>,
+    want: texcache::Want,
+    disk: Option<texcache::Disk>,
+    ram_budget: u64,
+    /// How the files came, this pack: off the disk cache, a DDS's own
+    /// blocks, decoded now; and the milliseconds the workers spent.
+    cached: AtomicUsize,
+    blocks: AtomicUsize,
+    decoded: AtomicUsize,
+    busy_ms: AtomicU64,
+    /// A test's hold on the workers: nothing is made ready while it is taken.
     #[cfg(test)]
-    hold: Arc<Mutex<()>>,
+    hold: Mutex<()>,
 }
 
-impl Reader {
-    fn new(found: &Read) -> Option<Reader> {
-        let (tx, rx) = std::sync::mpsc::channel::<(Key, PathBuf, esf::Surface)>();
-        let asked: Arc<Mutex<HashMap<Key, Vec<u64>>>> = Default::default();
-        let ready: Arc<Mutex<render::standin::Ready>> = Default::default();
-        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let (found, a, r, live) = (found.clone(), asked.clone(), ready.clone(), alive.clone());
-        #[cfg(test)]
-        let (hold, held) = { let h: Arc<Mutex<()>> = Default::default(); (h.clone(), h) };
-        std::thread::Builder::new()
-            .name("texture packs".into())
-            .spawn(move || {
-                for (k, path, s) in rx {
-                    if !live.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    #[cfg(test)]
-                    let _held = held.lock().unwrap_or_else(|e| e.into_inner());
-                    let f = read_stand_in(&path, &s);
-                    // the asking side checks `found` under `asked`'s lock
-                    let mut asked = a.lock().unwrap_or_else(|e| e.into_inner());
-                    found.lock().unwrap_or_else(|e| e.into_inner()).insert(k, f.clone());
-                    let keys = asked.remove(&k).unwrap_or_default();
-                    drop(asked);
-                    if let Some(f) = f {
-                        r.lock().unwrap_or_else(|e| e.into_inner()).extend(keys.into_iter().map(|key| (key, f.levels.clone())));
-                    }
-                }
-            })
-            .ok()?;
-        Some(Reader {
-            tx: Mutex::new(tx),
-            asked,
-            ready,
-            alive,
-            #[cfg(test)]
-            hold,
-        })
+impl Shared {
+    /// `path` made ready (`texcache::prepare`), timed and counted.
+    fn prepare(&self, path: &Path) -> Result<Arc<texcache::Prepared>, String> {
+        let t = web_time::Instant::now();
+        let p = texcache::prepare(path, self.want, self.disk.as_ref());
+        self.busy_ms.fetch_add(t.elapsed().as_millis() as u64, Ordering::Relaxed);
+        let p = p?;
+        match p.how {
+            texcache::How::Cached => &self.cached,
+            texcache::How::Blocks => &self.blocks,
+            texcache::How::Decoded => &self.decoded,
+        }
+        .fetch_add(1, Ordering::Relaxed);
+        // `EQOA_TEXTURES_LOG`: each stand-in said as it is made ready
+        if std::env::var_os("EQOA_TEXTURES_LOG").is_some() {
+            let (w, h, n) = p.packed.size();
+            crate::say(&format!("textures: {} ready, {w}x{h}x{n} {:?} ({:?})", path.display(), p.packed.format, p.how));
+        }
+        Ok(Arc::new(p))
     }
-}
 
-impl Drop for Reader {
-    fn drop(&mut self) {
-        self.alive.store(false, Ordering::Relaxed);
-    }
-}
-
-/// A stand-in read and given its levels for the surface `s` (`with_levels`),
-/// or `None` (said) when it does not read.
-fn read_stand_in(path: &Path, s: &esf::Surface) -> Option<Arc<Found>> {
-    match read(path) {
-        Ok(levels) => {
-            let levels = fit(with_levels(levels, s), render::pack_limits().max_side);
-            // `EQOA_TEXTURES_LOG`: each stand-in said as it is read
-            if std::env::var_os("EQOA_TEXTURES_LOG").is_some() {
-                crate::say(&format!("textures: {:08x} drawn as {} ({}x{})", s.dict_id as u32, path.display(), levels[0].width, levels[0].height));
+    /// A worker's job: `path` made ready unless it is already (or another
+    /// worker has it), kept in memory at the most any asker wants it, and
+    /// handed to every placeholder waiting for it.
+    fn run(&self, path: Arc<Path>) {
+        {
+            let mut l = self.loads.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(p) = l.ram.get(&path, Prio::Drawn) {
+                // ready already: handed to placeholders made meanwhile
+                // (deferred, `ask_full`)
+                let waiters = l.waiting.remove(&path).unwrap_or_default();
+                drop(l);
+                self.serve(&p, &waiters);
+                return;
             }
-            Some(Arc::new(Found { levels: Arc::new(levels) }))
+            if !l.queued.contains_key(&path) || l.loading.contains(&path) {
+                return;
+            }
+            l.loading.insert(path.clone());
         }
-        Err(e) => {
-            crate::say(&format!("textures: {}: {e}", path.display()));
-            None
+        #[cfg(test)]
+        let _held = self.hold.lock().unwrap_or_else(|e| e.into_inner());
+        let made = self.prepare(&path);
+        let mut l = self.loads.lock().unwrap_or_else(|e| e.into_inner());
+        l.loading.remove(&path);
+        let prio = l.queued.remove(&path).unwrap_or(Prio::Background);
+        let waiters = l.waiting.remove(&path).unwrap_or_default();
+        let p = match made {
+            Ok(p) => p,
+            Err(e) => {
+                crate::say(&format!("textures: {}: {e}", path.display()));
+                l.failed.insert(path);
+                return;
+            }
+        };
+        let prio = if waiters.is_empty() { prio } else { Prio::Drawn };
+        if !l.ram.insert(path, p.clone(), prio, self.ram_budget) && prio == Prio::Background && !l.full {
+            // memory full of what is wanted more: the rest of the precache
+            // waits to be asked for
+            l.full = true;
+            let n = self.queue.drop_all(Prio::Background);
+            l.queued.retain(|_, p| *p != Prio::Background);
+            crate::say(&format!("textures: precache stopped at {} MB of memory, {n} files left to read as they are wanted", l.ram.used() >> 20));
         }
+        drop(l);
+        self.serve(&p, &waiters);
+    }
+
+    /// Each placeholder waiting for `p` handed its levels (`take_ready`).
+    fn serve(&self, p: &texcache::Prepared, waiters: &[Waiter]) {
+        if waiters.is_empty() {
+            return;
+        }
+        let ready: Vec<(u64, Arc<Vec<esf::Image>>)> = waiters.iter().filter_map(|w| Some((w.texkey, Arc::new(texcache::images(&p.slice(w.want, self.want.max_side)?))))).collect();
+        self.ready.lock().unwrap_or_else(|e| e.into_inner()).extend(ready);
+    }
+
+    /// `path` off the disk cache at once, kept in memory at `prio`, if the
+    /// cache has it (a header read and a mapping: tens of microseconds,
+    /// so a frame asking for it, or a zone coming in, finds it ready).
+    fn from_disk(&self, path: &Arc<Path>, prio: Prio) -> Option<Arc<texcache::Prepared>> {
+        let d = self.disk.as_ref()?;
+        let p = Arc::new(d.load(path, &std::fs::metadata(path).ok()?, self.want)?);
+        self.cached.fetch_add(1, Ordering::Relaxed);
+        self.loads.lock().unwrap_or_else(|e| e.into_inner()).ram.insert(path.clone(), p.clone(), prio, self.ram_budget);
+        Some(p)
+    }
+
+    /// `path` queued at `prio` unless it is in memory, would not read, or is
+    /// queued at that or more already. Whether it was.
+    fn queue(&self, l: &mut Loads, path: &Arc<Path>, prio: Prio) -> bool {
+        if l.ram.contains(path) || l.failed.contains(path) || l.queued.get(path).is_some_and(|&q| q >= prio) {
+            return false;
+        }
+        l.queued.insert(path.clone(), prio);
+        self.queue.push(path.clone(), prio);
+        true
     }
 }
 
 /// The options' Texture Packs and Dump Textures, as set (`sync`): the packs'
-/// files by name for each disc, the stand-ins found and read so far, the
-/// reader and the dumper.
+/// files by name for each disc, each surface's file once looked up, the
+/// files made ready (`texcache`) and the workers making them, and the
+/// dumper.
 pub struct Pack {
     generation: u64,
     packs: Option<[Index; 2]>,
     /// Each surface's stand-in file, looked up once.
     looked: Mutex<HashMap<Key, StandIn>>,
-    found: Read,
-    /// Off: each stand-in read on the thread that asks, as it is asked for
-    /// (a shot's one frame, `sync_now`).
-    reader: Option<Reader>,
+    shared: Arc<Shared>,
+    /// No workers: each file made ready on the thread that asks, as it is
+    /// asked for (a shot's one frame, `sync_now`).
+    blocking: bool,
+    /// How many files the precache was given.
+    precache: usize,
+    /// The packs' textures' bytes at their size (RGBA, every level), what
+    /// Pack Compression's Auto weighs against the card's budget.
+    total: u64,
     dumper: Option<Dumper>,
+}
+
+impl Drop for Pack {
+    fn drop(&mut self) {
+        // what it had not made ready is not made
+        self.shared.queue.close();
+    }
 }
 
 /// Each `Pack` made, from 1 (its key bits: `render::LibraryTextures::key`).
 static MADE: AtomicU64 = AtomicU64::new(0);
 
+/// What a pack's memory and files are, for the Textures page (`Pack::stats`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stats {
+    /// Files in memory, their bytes, the budget, the bytes of them mapped
+    /// (the page cache's, every client's), and how many are compressed.
+    pub ram_files: usize,
+    pub ram_used: u64,
+    pub ram_budget: u64,
+    pub ram_shared: u64,
+    pub compressed: usize,
+    /// The precache: files given to it, and still queued; stopped full.
+    pub precache: usize,
+    pub queued: usize,
+    pub full: bool,
+    /// How the files came: off the disk cache, a DDS's own blocks, decoded.
+    pub cached: usize,
+    pub blocks: usize,
+    pub decoded: usize,
+    pub busy_ms: u64,
+}
+
 impl Pack {
     /// The packs' folders read (`load`, every file's header with them) and
     /// the dumps' made ready (`dump`) in this run's (`place`); `None` when it
-    /// has none. Its stand-ins read on a thread of their own unless
+    /// has none. Its files made ready by workers of their own unless
     /// `blocking`.
-    pub fn new(load: bool, dump: bool, blocking: bool) -> Option<Pack> {
+    pub fn new(load: bool, dump: bool, blocking: bool, opts: Opts) -> Option<Pack> {
         if !(load || dump) {
             return None;
         }
-        Some(Pack::at(&place()?, load, dump, blocking))
+        Some(Pack::at(&place()?, load, dump, blocking, opts))
     }
 
     /// The packs read and the dumps made ready in `place`'s folders: each
     /// disc's `replacements` in `dir`, then in `also` (the first's file
     /// standing for a name both have), its `dumps` in `dir` alone.
-    fn at(place: &Place, load: bool, dump: bool, blocking: bool) -> Pack {
+    fn at(place: &Place, load: bool, dump: bool, blocking: bool, opts: Opts) -> Pack {
         let eras = [esf::Era::Frontiers, esf::Era::Y2002];
         let packs = load.then(|| {
             eras.map(|era| {
@@ -645,14 +748,79 @@ impl Pack {
                 }))
             })
             .flatten();
-        Pack::of(packs, dumper, blocking)
+        Pack::with(packs, dumper, blocking, opts, texcache::dir().and_then(texcache::Disk::open))
     }
 
-    /// A pack of these indexes and dumper.
+    /// A pack of these indexes and dumper (no disk cache, the defaults' form).
+    #[cfg(test)]
     fn of(packs: Option<[Index; 2]>, dumper: Option<Dumper>, blocking: bool) -> Pack {
-        let found = Read::default();
-        let reader = if blocking || packs.is_none() { None } else { Reader::new(&found) };
-        Pack { generation: (MADE.fetch_add(1, Ordering::Relaxed) + 1) & 0xFF_FFFF, packs, looked: Mutex::new(HashMap::new()), found, reader, dumper }
+        Pack::with(packs, dumper, blocking, Opts::default(), None)
+    }
+
+    /// A pack of these indexes and dumper, its files made ready as `opts`
+    /// says and kept in `disk`: compressed with Pack Compression On, or Auto
+    /// where the packs' textures at their size are more than the card's
+    /// budget (`render::PackLimits`), on a card that draws BCn; the precache
+    /// given every file, the Frontiers disc's first.
+    fn with(packs: Option<[Index; 2]>, dumper: Option<Dumper>, blocking: bool, opts: Opts, disk: Option<texcache::Disk>) -> Pack {
+        let total: u64 = packs.iter().flatten().flat_map(|ix| ix.sizes.values()).map(|&s| {
+            let (b, n) = fitted(s, 32 - s.0.max(s.1).leading_zeros() as usize, opts.max_side);
+            render::standin::texture_bytes((b.0, b.1, n as u32))
+        }).sum();
+        let compress = opts.bc && (opts.compress == 2 || (opts.compress == 0 && total > render::pack_limits().budget));
+        let want = texcache::Want { max_side: opts.max_side, compress, bc: opts.bc };
+        let shared = Arc::new(Shared {
+            loads: Default::default(),
+            ready: Default::default(),
+            queue: Default::default(),
+            want,
+            disk,
+            ram_budget: texcache::ram_budget(render::pack_sharers()),
+            cached: Default::default(),
+            blocks: Default::default(),
+            decoded: Default::default(),
+            busy_ms: Default::default(),
+            #[cfg(test)]
+            hold: Default::default(),
+        });
+        let mut blocking = blocking || packs.is_none();
+        if !blocking {
+            for i in 0..texcache::workers() {
+                let s = shared.clone();
+                let ok = std::thread::Builder::new().name(format!("texture packs {i}")).spawn(move || {
+                    texcache::lower_priority();
+                    while let Some((path, _)) = s.queue.pop() {
+                        s.run(path);
+                    }
+                });
+                if ok.is_err() && i == 0 {
+                    blocking = true;
+                }
+            }
+        }
+        let mut precache = 0;
+        if opts.precache && !blocking && let Some(p) = &packs {
+            let mut l = shared.loads.lock().unwrap_or_else(|e| e.into_inner());
+            for ix in p {
+                let mut files: Vec<&PathBuf> = ix.files.values().collect();
+                files.sort();
+                for f in files {
+                    let path: Arc<Path> = Arc::from(f.as_path());
+                    precache += shared.queue(&mut l, &path, Prio::Background) as usize;
+                }
+            }
+        }
+        if load_log() {
+            crate::say(&format!("textures: pack {} MB at its size, {}", total >> 20, if compress { "compressed to BC3 (Pack Compression)" } else { "uncompressed" }));
+        }
+        Pack { generation: (MADE.fetch_add(1, Ordering::Relaxed) + 1) & 0xFF_FFFF, packs, looked: Mutex::new(HashMap::new()), shared, blocking, precache, total, dumper }
+    }
+
+    /// Whether Pack Compression's Auto would choose otherwise now than
+    /// when the pack was made (the card's budget changed: another window
+    /// opened or closed, `render::set_pack_sharers`).
+    fn auto_changed(&self, opts: Opts) -> bool {
+        opts.bc && opts.compress == 0 && self.packs.is_some() && (self.total > render::pack_limits().budget) != self.shared.want.compress
     }
 
     /// How many replacements the packs hold (for the disc of `era`).
@@ -665,6 +833,25 @@ impl Pack {
         self.dumper.as_ref().map_or(0, |d| d.written.load(Ordering::Relaxed))
     }
 
+    /// The memory and files as the Textures page says them.
+    pub fn stats(&self) -> Stats {
+        let l = self.shared.loads.lock().unwrap_or_else(|e| e.into_inner());
+        Stats {
+            ram_files: l.ram.len(),
+            ram_used: l.ram.used(),
+            ram_budget: self.shared.ram_budget,
+            ram_shared: l.ram.shared(),
+            compressed: l.ram.compressed(),
+            precache: self.precache,
+            queued: l.queued.len(),
+            full: l.full,
+            cached: self.shared.cached.load(Ordering::Relaxed),
+            blocks: self.shared.blocks.load(Ordering::Relaxed),
+            decoded: self.shared.decoded.load(Ordering::Relaxed),
+            busy_ms: self.shared.busy_ms.load(Ordering::Relaxed),
+        }
+    }
+
     /// The stand-in file for a surface and its base's size, if a pack has
     /// one: looked up once (a texture's CLUT first, then its names), no file
     /// read.
@@ -675,69 +862,131 @@ impl Pack {
             return f.clone();
         }
         let ix = &packs[(era == esf::Era::Y2002) as usize];
-        let f = s.gs_clut_hash(d).filter(|h| ix.cluts.contains(h)).and_then(|_| ix.find(&s.gs(d)?.names())).map(|(path, _, size)| (path, size));
+        let f = s.gs_clut_hash(d).filter(|h| ix.cluts.contains(h)).and_then(|_| ix.find(&s.gs(d)?.names())).map(|(path, _, size)| (Arc::from(path.as_path()), size));
         self.looked.lock().unwrap_or_else(|e| e.into_inner()).insert(k, f.clone());
         f
     }
 
-    /// The stand-in for a surface read: at once while blocking (read now,
-    /// once), else only once the reader has read it (`request`).
-    fn found(&self, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<Arc<Found>> {
-        let k = key(d, s, era);
-        if let Some(f) = self.found.lock().unwrap_or_else(|e| e.into_inner()).get(&k) {
-            return f.clone();
+    /// The file standing in for a surface made ready, from memory (its use
+    /// stamped), or made now while blocking; `None` while it is being made
+    /// (`ask`) or when it would not read.
+    fn prepared(&self, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<(Arc<texcache::Prepared>, usize)> {
+        let (path, size) = self.stand_in(d, s, era)?;
+        let want = level_count(size, s);
+        let mut l = self.shared.loads.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(p) = l.ram.get(&path, Prio::Drawn) {
+            return Some((p, want));
         }
-        if self.reader.is_some() {
+        if !self.blocking || l.failed.contains(&path) {
             return None;
         }
-        let f = self.stand_in(d, s, era).and_then(|(path, _)| read_stand_in(&path, s));
-        self.found.lock().unwrap_or_else(|e| e.into_inner()).insert(k, f.clone());
-        f
+        drop(l);
+        match self.shared.prepare(&path) {
+            Ok(p) => {
+                self.shared.loads.lock().unwrap_or_else(|e| e.into_inner()).ram.insert(path, p.clone(), Prio::Drawn, self.shared.ram_budget);
+                Some((p, want))
+            }
+            Err(e) => {
+                crate::say(&format!("textures: {}: {e}", path.display()));
+                self.shared.loads.lock().unwrap_or_else(|e| e.into_inner()).failed.insert(path);
+                None
+            }
+        }
     }
 
     /// The levels to draw for a surface now (the pack's, or `None` for its
     /// own; its record's bytes are `d`), dumping it first while Dump Textures
-    /// is on: a stand-in still being read is `None` (`request`).
+    /// is on: a stand-in still being made ready is `None` (`request`).
     pub fn levels_for(&self, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<Vec<esf::Image>> {
         if let Some(dumper) = &self.dumper {
             dumper.dump(d, s, era);
         }
-        self.found(d, s, era).map(|f| f.levels.to_vec())
+        let (p, want) = self.prepared(d, s, era)?;
+        Some(texcache::images(&p.slice(want, self.shared.want.max_side)?))
     }
 
-    /// A stand-in not yet read, given to the reader (once a surface) with
-    /// `key` to hand it back under (`render::Pack::take_ready`; none for the
-    /// 2D layer, which asks by `Wanted`): its size and level count, as its
-    /// levels will be. `None` when there is none, it is read already, or the
-    /// pack reads on the asking thread.
-    fn ask(&self, key: Option<u64>, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<(u32, u32, u32)> {
-        let reader = self.reader.as_ref()?;
-        let (path, size) = self.stand_in(d, s, era)?;
-        let k = key_of(d, s, era);
-        let mut asked = reader.asked.lock().unwrap_or_else(|e| e.into_inner());
-        if self.found.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&k) {
+    /// A stand-in not yet made ready, queued for the workers before every
+    /// zone's and the precache's, with `key` to hand it back under
+    /// (`render::Pack::take_ready`; none for the 2D layer, which asks by
+    /// `Wanted`): its size and level count, as its levels will be, its file
+    /// and how many levels it keeps. `None` when there is none, it is ready
+    /// already, or the pack makes them on the asking thread.
+    fn ask_full(&self, key: Option<u64>, d: &[u8], s: &esf::Surface, era: esf::Era, defer: bool) -> Option<((u32, u32, u32), Arc<Path>, usize)> {
+        if self.blocking {
             return None;
         }
-        let first = !asked.contains_key(&k);
-        let keys = asked.entry(k).or_default();
-        // each key once, however often it asks
-        if let Some(key) = key
-            && !keys.contains(&key)
-        {
-            keys.push(key);
+        let (path, size) = self.stand_in(d, s, era)?;
+        let want = level_count(size, s);
+        let mut l = self.shared.loads.lock().unwrap_or_else(|e| e.into_inner());
+        if l.failed.contains(&path) {
+            return None;
         }
-        drop(asked);
-        if first {
-            let _ = reader.tx.lock().unwrap_or_else(|e| e.into_inner()).send((k, path, s.clone()));
+        if !l.ram.contains(&path) && !l.loading.contains(&path) && self.shared.disk.is_some() {
+            drop(l);
+            self.shared.from_disk(&path, Prio::Drawn);
+            l = self.shared.loads.lock().unwrap_or_else(|e| e.into_inner());
         }
-        let (size, n) = fitted(size, level_count(size, s), render::pack_limits().max_side);
-        Some((size.0, size.1, n as u32))
+        if l.ram.contains(&path) {
+            // ready: made now, unless the frame has made enough (`defer`):
+            // then a worker hands it back as one read would be
+            let Some(texkey) = key.filter(|_| defer) else { return None };
+            let w = l.waiting.entry(path.clone()).or_default();
+            if !w.iter().any(|x| x.texkey == texkey) {
+                w.push(Waiter { texkey, want });
+            }
+            drop(l);
+            self.shared.queue.push(path.clone(), Prio::Drawn);
+            let (size, n) = fitted(size, want, self.shared.want.max_side);
+            return Some(((size.0, size.1, n as u32), path, want));
+        }
+        if let Some(texkey) = key {
+            let w = l.waiting.entry(path.clone()).or_default();
+            // each key once, however often it asks
+            if !w.iter().any(|x| x.texkey == texkey) {
+                w.push(Waiter { texkey, want });
+            }
+        }
+        self.shared.queue(&mut l, &path, Prio::Drawn);
+        let (size, n) = fitted(size, want, self.shared.want.max_side);
+        Some(((size.0, size.1, n as u32), path, want))
+    }
+
+    #[cfg(test)]
+    fn ask(&self, key: Option<u64>, d: &[u8], s: &esf::Surface, era: esf::Era) -> Option<(u32, u32, u32)> {
+        self.ask_full(key, d, s, era, false).map(|(size, _, _)| size)
+    }
+
+    /// The stand-ins of every surface in `c` (a zone just come in, off the
+    /// disc of `era`) queued for the workers, before the precache's and
+    /// after anything a frame asks for: so that they are ready, or nearly,
+    /// when the zone is first drawn. How many were queued.
+    pub fn prefetch(&self, c: &esf::Container, era: esf::Era) -> usize {
+        if self.blocking || self.packs.is_none() {
+            return 0;
+        }
+        let paths: Vec<Arc<Path>> = c.surfaces.iter().filter_map(|s| self.stand_in(&c.data, s, era)).map(|(p, _)| p).collect();
+        let mut n = 0;
+        for p in paths {
+            let l = self.shared.loads.lock().unwrap_or_else(|e| e.into_inner());
+            if l.ram.contains(&p) || l.failed.contains(&p) || l.queued.contains_key(&p) {
+                continue;
+            }
+            // a file the disk cache has is mapped at once (a header read
+            // and a mapping: microseconds), so a zone filled as it is first
+            // drawn, as at a world's entry, finds it ready
+            drop(l);
+            if self.shared.from_disk(&p, Prio::Zone).is_none() {
+                let mut l = self.shared.loads.lock().unwrap_or_else(|e| e.into_inner());
+                n += self.shared.queue(&mut l, &p, Prio::Zone) as usize;
+            }
+        }
+        n
     }
 }
 
-/// `key`, by another name where `key` is a parameter.
-fn key_of(d: &[u8], s: &esf::Surface, era: esf::Era) -> Key {
-    key(d, s, era)
+/// Whether `EQOA_TEXTURES_LOG` asks for each step said.
+fn load_log() -> bool {
+    std::env::var_os("EQOA_TEXTURES_LOG").is_some()
 }
 
 impl render::Pack for Pack {
@@ -756,12 +1005,26 @@ impl render::Pack for Pack {
         self.generation
     }
 
-    fn request(&self, key: u64, c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<(u32, u32, u32)> {
-        self.ask(Some(key), &c.data, s, era)
+    fn request(&self, key: u64, c: &esf::Container, s: &esf::Surface, era: esf::Era, defer: bool) -> Option<(u32, u32, u32)> {
+        self.ask_full(Some(key), &c.data, s, era, defer).map(|(size, _, _)| size)
     }
 
     fn take_ready(&self) -> render::standin::Ready {
-        self.reader.as_ref().map(|r| std::mem::take(&mut *r.ready.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default()
+        std::mem::take(&mut *self.shared.ready.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// A stand-in in memory compressed (BCn), as `levels` would give its
+    /// levels: made a texture as it is (the dump made first, as `levels`
+    /// makes it).
+    fn packed(&self, c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<Arc<render::packed::Packed>> {
+        if let Some(dumper) = &self.dumper {
+            dumper.dump(&c.data, s, era);
+        }
+        let (p, want) = self.prepared(&c.data, s, era)?;
+        if !p.packed.format.compressed() {
+            return None;
+        }
+        Some(Arc::new(p.slice(want, self.shared.want.max_side)?))
     }
 }
 
@@ -872,12 +1135,41 @@ pub fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), String>
 /// The pack set (`sync`), the rows it was made for, and a pack being made
 /// on a thread of its own for the rows as they are now (its folder read).
 struct State {
-    applied: (bool, bool),
+    applied: Rows,
     pack: Option<Arc<Pack>>,
-    building: Option<((bool, bool), std::sync::mpsc::Receiver<Option<Pack>>)>,
+    building: Option<(Rows, std::sync::mpsc::Receiver<Option<Pack>>)>,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { applied: (false, false), pack: None, building: None });
+/// What a pack is made for: Texture Packs, Dump Textures, and how its files
+/// are made ready (`Opts`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Rows {
+    load: bool,
+    dump: bool,
+    opts: Opts,
+}
+
+const NO_ROWS: Rows = Rows { load: false, dump: false, opts: Opts { precache: false, compress: 0, bc: false, max_side: 0 } };
+
+static STATE: Mutex<State> = Mutex::new(State { applied: NO_ROWS, pack: None, building: None });
+
+/// The rows as they are now, and the card's form (a new pack when either
+/// changes: a device of another kind takes other forms).
+fn rows() -> Rows {
+    let c = crate::settings::client();
+    let opts = Opts { precache: c.pack_precache, compress: c.pack_compress, bc: render::packed::compressed_textures(), max_side: render::pack_limits().max_side };
+    Rows { load: c.texture_packs, dump: c.dump_textures, opts: if c.texture_packs { opts } else { NO_ROWS.opts } }
+}
+
+/// Every client open shares the card (`render::set_pack_sharers`): the
+/// windows `multibox` sees, looked at no more than twice a second.
+fn share_the_card() {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let seat = crate::multibox::seat();
+        render::set_pack_sharers(1 + seat.others.len() as u64);
+    }
+}
 
 /// Moves on each time what stands in for the game's textures changes: what
 /// is drawn is made again then (`App::retexture`).
@@ -908,8 +1200,10 @@ pub fn pack() -> Option<Arc<Pack>> {
 /// set at the first frame after it is read, if the rows still want it;
 /// Dump Textures alone, and both off, at once.
 pub fn sync() {
-    let c = crate::settings::client();
-    let want = (c.texture_packs, c.dump_textures);
+    let want = rows();
+    if want.load {
+        share_the_card();
+    }
     let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((rows, rx)) = st.building.take() {
         match rx.try_recv() {
@@ -917,6 +1211,11 @@ pub fn sync() {
             Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
             Err(std::sync::mpsc::TryRecvError::Empty) => st.building = Some((rows, rx)),
         }
+    }
+    // Auto compression weighed again when the windows sharing the card change
+    if st.applied == want && st.building.is_none() && st.pack.as_ref().is_some_and(|p| p.auto_changed(want.opts)) {
+        crate::say("textures: the card's budget changed (windows opened or closed): the pack made again");
+        st.applied = NO_ROWS;
     }
     if st.applied == want {
         return;
@@ -926,18 +1225,18 @@ pub fn sync() {
     // `EQOA_TEXTURES_SYNC`: read as before 2026-11-09, the folder and each
     // stand-in on the frame that wants it (to measure the two against
     // each other)
-    if !want.0 || std::env::var_os("EQOA_TEXTURES_SYNC").is_some() {
-        let blocking = want.0;
-        install(&mut st, Pack::new(want.0, want.1, blocking));
+    if !want.load || std::env::var_os("EQOA_TEXTURES_SYNC").is_some() {
+        let blocking = want.load;
+        install(&mut st, Pack::new(want.load, want.dump, blocking, want.opts));
         return;
     }
     let (tx, rx) = std::sync::mpsc::channel();
     let built = std::thread::Builder::new().name("texture pack folder".into()).spawn(move || {
-        let _ = tx.send(Pack::new(want.0, want.1, false));
+        let _ = tx.send(Pack::new(want.load, want.dump, false, want.opts));
     });
     match built {
         Ok(_) => st.building = Some((want, rx)),
-        Err(_) => install(&mut st, Pack::new(want.0, want.1, false)),
+        Err(_) => install(&mut st, Pack::new(want.load, want.dump, false, want.opts)),
     }
 }
 
@@ -945,12 +1244,27 @@ pub fn sync() {
 /// one frame takes (`viewer::shot_with`), and how packs were read before
 /// 2026-11-09.
 pub fn sync_now() {
-    let c = crate::settings::client();
-    let want = (c.texture_packs, c.dump_textures);
+    let want = rows();
     let mut st = STATE.lock().unwrap_or_else(|e| e.into_inner());
     st.applied = want;
     st.building = None;
-    install(&mut st, Pack::new(want.0, want.1, true));
+    install(&mut st, Pack::new(want.load, want.dump, true, want.opts));
+}
+
+/// Extended > Textures > Rebuild Pack Cache: the disk cache's files taken
+/// away and the pack made again (its memory emptied), every file read from
+/// the pack's folder anew. How many cache files went.
+pub fn rebuild_cache() -> usize {
+    let n = texcache::dir().and_then(texcache::Disk::open).map_or(0, |d| d.clear());
+    crate::say(&format!("textures: the pack cache rebuilt ({n} files taken away)"));
+    STATE.lock().unwrap_or_else(|e| e.into_inner()).applied = NO_ROWS;
+    n
+}
+
+/// A zone just come in (`stream::install`): its surfaces' stand-ins queued
+/// ahead of being drawn (`Pack::prefetch`).
+pub fn prefetch(c: &esf::Container, era: esf::Era) -> usize {
+    pack().map_or(0, |p| p.prefetch(c, era))
 }
 
 /// `pack` set for the renderer and said, and `generation` moved on.
@@ -997,16 +1311,18 @@ pub fn image(c: &esf::Container, s: &esf::Surface, era: esf::Era) -> Option<(esf
     if let Some(l) = p.as_ref().and_then(|p| p.levels_for(&c.data, s, era)).and_then(|l| l.into_iter().next()) {
         return Some((l, None));
     }
-    let wanted = p.and_then(|p| p.ask(None, &c.data, s, era).map(|_| Wanted { generation: p.generation, k: key(&c.data, s, era) }));
+    let wanted = p.and_then(|p| p.ask_full(None, &c.data, s, era, false).map(|(_, path, want)| Wanted { generation: p.generation, path, want }));
     Some((s.decode(&c.data)?, wanted))
 }
 
 /// A stand-in the 2D layer drew a surface's own for while it is read
-/// (`image`), asked again for each frame (`ready_image`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// (`image`), asked again for each frame (`ready_image`): its file and how
+/// many levels the surface keeps.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wanted {
     generation: u64,
-    k: Key,
+    path: Arc<Path>,
+    want: usize,
 }
 
 /// The base level of a stand-in the 2D layer is waiting for, once read:
@@ -1015,8 +1331,17 @@ pub struct Wanted {
 /// is being read.
 pub fn ready_image(w: &Wanted) -> Option<Option<esf::Image>> {
     let Some(p) = pack().filter(|p| p.generation == w.generation) else { return Some(None) };
-    let f = p.found.lock().unwrap_or_else(|e| e.into_inner()).get(&w.k).cloned()?;
-    Some(f.and_then(|f| f.levels.first().cloned()))
+    let mut l = p.shared.loads.lock().unwrap_or_else(|e| e.into_inner());
+    if l.failed.contains(&w.path) {
+        return Some(None);
+    }
+    let Some(f) = l.ram.get(&w.path, Prio::Drawn) else {
+        // let go of memory before it was taken: asked for again
+        p.shared.queue(&mut l, &w.path, Prio::Drawn);
+        return None;
+    };
+    drop(l);
+    Some(f.slice(w.want, p.shared.want.max_side).and_then(|s| texcache::images(&s).into_iter().next()))
 }
 
 /// Extended's rows of Textures (`options`) with a note of their own: Dump
@@ -1033,6 +1358,12 @@ pub const ROW_FOLDER: i32 = 55;
 /// (`memory_note`); on Texture Pack Memory, while packs are on, that always.
 pub fn note(item: i32) -> Option<String> {
     let c = crate::settings::client();
+    if item == crate::options::PACK_PRECACHE || item == crate::options::PACK_COMPRESS {
+        return c.texture_packs.then(|| pack().map(|p| files_note(item, &p.stats()))).flatten();
+    }
+    if item == crate::options::PACK_REBUILD {
+        return Some(disk_note());
+    }
     if item == crate::options::PACK_MEMORY {
         return c.texture_packs.then(|| memory_note(&render::pack_memory()));
     }
@@ -1060,6 +1391,36 @@ pub fn note(item: i32) -> Option<String> {
     })
 }
 
+/// What Precache Textures and Pack Compression say of the pack's files: in
+/// memory and of how much ("Precaching: 300 of 1024 MB" while the precache
+/// is at work, "In memory: 812 of 1024 MB" after, "(full)" once it stopped
+/// for room); how they came ("812 cached, 40 BC, 10 decoded": off the disk
+/// cache, kept as a DDS's blocks, decoded now) and how many are compressed.
+pub fn files_note(item: i32, s: &Stats) -> String {
+    if item == crate::options::PACK_COMPRESS {
+        return format!("{} BCn; {} cached, {} decoded", s.compressed, s.cached, s.decoded);
+    }
+    let what = if s.queued > 0 && s.precache > 0 && !s.full { "Precaching" } else { "In memory" };
+    let full = if s.full { " (full)" } else { "" };
+    format!("{what}: {} of {} MB{full}", s.ram_used >> 20, s.ram_budget >> 20)
+}
+
+/// Rebuild Pack Cache's note: what the disk cache holds ("Cache: 1840 MB on
+/// disk"), looked at no more than every two seconds.
+pub fn disk_note() -> String {
+    static LOOKED: Mutex<Option<(web_time::Instant, u64)>> = Mutex::new(None);
+    let mut l = LOOKED.lock().unwrap_or_else(|e| e.into_inner());
+    let bytes = match *l {
+        Some((t, b)) if t.elapsed().as_secs() < 2 => b,
+        _ => {
+            let b = texcache::dir().and_then(texcache::Disk::open).map_or(0, |d| d.size().0);
+            *l = Some((web_time::Instant::now(), b));
+            b
+        }
+    };
+    format!("Cache: {} MB on disk", bytes >> 20)
+}
+
 /// What a pack's textures take of its memory (`render::packmem`), in MB:
 /// "Pack textures: 812 of 1024 MB", "(held)" after it once one was let go or
 /// made smaller for want of room. Before the game's renderer has said, the
@@ -1073,6 +1434,7 @@ pub fn memory_note(m: &render::packmem::PackMemory) -> String {
 // ---- reading a replacement -----------------------------------------------------
 
 /// A replacement file's levels, the base first, as RGBA8.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn read(path: &Path) -> Result<Vec<esf::Image>, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     match loader(path) {
@@ -1084,7 +1446,7 @@ pub fn read(path: &Path) -> Result<Vec<esf::Image>, String> {
 
 /// An image whose alpha flag is set as `esf::Image`'s is: some texel's alpha
 /// is not 255.
-fn image_of(width: u32, height: u32, rgba: Vec<u8>) -> esf::Image {
+pub(crate) fn image_of(width: u32, height: u32, rgba: Vec<u8>) -> esf::Image {
     let alpha = rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 255);
     esf::Image { width, height, rgba, alpha }
 }
@@ -1114,16 +1476,39 @@ pub fn read_png(bytes: &[u8]) -> Result<esf::Image, String> {
     Ok(image_of(w, h, rgba))
 }
 
-fn u32_at(b: &[u8], at: usize) -> Option<u32> {
+pub(crate) fn u32_at(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
 }
 
-/// A DDS's levels as RGBA8, as PCSX2's `DDSLoader` reads the file: BC1
-/// (DXT1), BC2 (DXT2, DXT3), BC3 (DXT4, DXT5) and BC7 by their FourCC or a
-/// DX10 header's format; A8R8G8B8, X8R8G8B8 (alpha 0xFF), A8B8G8R8,
-/// X8B8G8R8 (alpha 0x80) and R8G8B8 (alpha 0xFF) uncompressed; its own mip
-/// levels while the file holds them whole.
-pub fn read_dds(b: &[u8]) -> Result<Vec<esf::Image>, String> {
+/// How a DDS's texels are kept (`dds_layout`): BCn blocks by their number,
+/// or one of the uncompressed orders PCSX2 reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DdsFmt {
+    Bc(u8),
+    Rgba,
+    Bgra,
+    Bgrx,
+    Rgbx,
+    Bgr,
+}
+
+/// A DDS's level: its size, where its bytes are in the file and how long a
+/// row (of blocks) is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DdsLevel {
+    pub width: u32,
+    pub height: u32,
+    pub at: usize,
+    pub row: u32,
+    pub rows: u32,
+}
+
+/// A DDS's format and the levels the file holds whole, as PCSX2's
+/// `ParseDDSHeader` reads them: BC1 (DXT1), BC2 (DXT2, DXT3), BC3 (DXT4,
+/// DXT5) and BC7 by their FourCC or a DX10 header's format; A8R8G8B8,
+/// X8R8G8B8, A8B8G8R8, X8B8G8R8 and R8G8B8 uncompressed; the base and as
+/// many of the levels the header names as the file holds whole.
+pub fn dds_layout(b: &[u8]) -> Result<(DdsFmt, Vec<DdsLevel>), String> {
     let bad = |s: &str| Err(format!("DDS: {s}"));
     if u32_at(b, 0) != Some(0x2053_4444) {
         return bad("no DDS magic");
@@ -1140,15 +1525,6 @@ pub fn read_dds(b: &[u8]) -> Result<Vec<esf::Image>, String> {
     let pf = |i: usize| u32_at(b, 4 + 72 + i * 4).unwrap_or(0);
     let (pf_size, pf_flags, fourcc, bits, rm, gm, bm, am) = (pf(0), pf(1), pf(2), pf(3), pf(4), pf(5), pf(6), pf(7));
     let mut at = 128;
-    #[derive(Clone, Copy, PartialEq)]
-    enum Fmt {
-        Bc(u8),
-        Rgba,
-        Bgra,
-        Bgrx,
-        Rgbx,
-        Bgr,
-    }
     let fmt = if pf_flags & 4 != 0 {
         let mut dx10 = 0;
         if fourcc == u32::from_le_bytes(*b"DX10") {
@@ -1160,33 +1536,33 @@ pub fn read_dds(b: &[u8]) -> Result<Vec<esf::Image>, String> {
             at += 20;
         }
         match (&fourcc.to_le_bytes(), dx10) {
-            (b"DXT1", _) | (_, 71) => Fmt::Bc(1),
-            (b"DXT2", _) | (b"DXT3", _) | (_, 74) => Fmt::Bc(2),
-            (b"DXT4", _) | (b"DXT5", _) | (_, 77) => Fmt::Bc(3),
-            (_, 98) => Fmt::Bc(7),
+            (b"DXT1", _) | (_, 71) => DdsFmt::Bc(1),
+            (b"DXT2", _) | (b"DXT3", _) | (_, 74) => DdsFmt::Bc(2),
+            (b"DXT4", _) | (b"DXT5", _) | (_, 77) => DdsFmt::Bc(3),
+            (_, 98) => DdsFmt::Bc(7),
             _ => return bad("a compression PCSX2 does not read"),
         }
     } else {
         // `DDSPixelFormatMatches`: size, flags, FourCC, bit count, masks
         let m = |f: u32, n: u32, r: u32, g: u32, bb: u32, a: u32| (pf_size, pf_flags, fourcc, bits, rm, gm, bm, am) == (32, f, 0, n, r, g, bb, a);
         if m(0x41, 32, 0x00ff_0000, 0x0000_ff00, 0x0000_00ff, 0xff00_0000) {
-            Fmt::Bgra
+            DdsFmt::Bgra
         } else if m(0x40, 32, 0x00ff_0000, 0x0000_ff00, 0x0000_00ff, 0) {
-            Fmt::Bgrx
+            DdsFmt::Bgrx
         } else if m(0x40, 32, 0x0000_00ff, 0x0000_ff00, 0x00ff_0000, 0) {
-            Fmt::Rgbx
+            DdsFmt::Rgbx
         } else if m(0x40, 24, 0x00ff_0000, 0x0000_ff00, 0x0000_00ff, 0) {
-            Fmt::Bgr
+            DdsFmt::Bgr
         } else if m(0x41, 32, 0x0000_00ff, 0x0000_ff00, 0x00ff_0000, 0xff00_0000) {
-            Fmt::Rgba
+            DdsFmt::Rgba
         } else {
             return bad("a pixel format PCSX2 does not read");
         }
     };
     let (block, bytes_per_block) = match fmt {
-        Fmt::Bc(1) => (4u32, 8u32),
-        Fmt::Bc(_) => (4, 16),
-        Fmt::Bgr => (1, 3),
+        DdsFmt::Bc(1) => (4u32, 8u32),
+        DdsFmt::Bc(_) => (4, 16),
+        DdsFmt::Bgr => (1, 3),
         _ => (1, 4),
     };
     if block > 1 && (width % block != 0 || height % block != 0) {
@@ -1212,18 +1588,38 @@ pub fn read_dds(b: &[u8]) -> Result<Vec<esf::Image>, String> {
         } else {
             bw * bytes_per_block
         };
-        let Some(data) = b.get(at..at + (row * bh) as usize) else {
+        if b.len() < at + (row * bh) as usize {
             if level == 0 {
                 return bad("short of its base");
             }
             break;
-        };
+        }
+        out.push(DdsLevel { width: w, height: h, at, row, rows: bh });
         at += (row * bh) as usize;
+    }
+    Ok((fmt, out))
+}
+
+/// A DDS's levels as RGBA8, as PCSX2's `DDSLoader` reads the file
+/// (`dds_layout`): X8R8G8B8 and R8G8B8 with alpha 0xFF, X8B8G8R8 with 0x80.
+pub fn read_dds(b: &[u8]) -> Result<Vec<esf::Image>, String> {
+    let (fmt, levels) = dds_layout(b)?;
+    let bytes_per_block = match fmt {
+        DdsFmt::Bc(1) => 8u32,
+        DdsFmt::Bc(_) => 16,
+        DdsFmt::Bgr => 3,
+        _ => 4,
+    };
+    let mut out = Vec::new();
+    for l in levels {
+        let (w, h, row) = (l.width, l.height, l.row);
+        let data = &b[l.at..l.at + (row * l.rows) as usize];
         let mut rgba = vec![0u8; (w * h * 4) as usize];
         match fmt {
-            Fmt::Bc(k) => {
+            DdsFmt::Bc(k) => {
+                let bw = w.div_ceil(4);
                 let mut px = [0u8; 64];
-                for by in 0..bh {
+                for by in 0..l.rows {
                     for bx in 0..bw {
                         let src = &data[(by * row + bx * bytes_per_block) as usize..][..bytes_per_block as usize];
                         match k {
@@ -1250,10 +1646,10 @@ pub fn read_dds(b: &[u8]) -> Result<Vec<esf::Image>, String> {
                         let s = &data[(y * row + x * bytes_per_block) as usize..];
                         let d = ((y * w + x) * 4) as usize;
                         rgba[d..d + 4].copy_from_slice(&match fmt {
-                            Fmt::Rgba => [s[0], s[1], s[2], s[3]],
-                            Fmt::Bgra => [s[2], s[1], s[0], s[3]],
-                            Fmt::Bgrx => [s[2], s[1], s[0], 0xFF],
-                            Fmt::Rgbx => [s[0], s[1], s[2], 0x80],
+                            DdsFmt::Rgba => [s[0], s[1], s[2], s[3]],
+                            DdsFmt::Bgra => [s[2], s[1], s[0], s[3]],
+                            DdsFmt::Bgrx => [s[2], s[1], s[0], 0xFF],
+                            DdsFmt::Rgbx => [s[0], s[1], s[2], 0x80],
                             _ => [s[2], s[1], s[0], 0xFF],
                         });
                     }
@@ -1270,6 +1666,7 @@ pub fn read_dds(b: &[u8]) -> Result<Vec<esf::Image>, String> {
 /// rounded; fewer for a smaller one), down to one texel a side at most; the
 /// file's own while it has them, each after them half the one before (the
 /// mean of each 2 x 2, as the levels on the disc are made).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn with_levels(mut levels: Vec<esf::Image>, s: &esf::Surface) -> Vec<esf::Image> {
     let base = (levels[0].width, levels[0].height);
     let want = level_count(base, s);
@@ -1298,7 +1695,7 @@ pub fn level_count(base: (u32, u32), s: &esf::Surface) -> usize {
 
 /// How many levels a stand-in of base `base` drops to be at most `max` a
 /// side (`render::PackLimits`).
-fn over(base: (u32, u32), max: u32) -> usize {
+pub(crate) fn over(base: (u32, u32), max: u32) -> usize {
     let mut k = 0;
     while (base.0 >> k).max(1).max((base.1 >> k).max(1)) > max.max(1) {
         k += 1;
@@ -1317,6 +1714,7 @@ pub fn fitted(base: (u32, u32), n: usize, max: u32) -> ((u32, u32), usize) {
 /// `max` a side: the larger levels dropped, the last halved on where none is
 /// small enough; as `fitted` says (Hoofbite's Iris Xe, 2026-11-17: a pack's
 /// largest textures past what a small graphics chip can keep).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn fit(mut levels: Vec<esf::Image>, max: u32) -> Vec<esf::Image> {
     let Some(first) = levels.first() else { return levels };
     let k = over((first.width, first.height), max);
@@ -1333,7 +1731,7 @@ pub fn fit(mut levels: Vec<esf::Image>, max: u32) -> Vec<esf::Image> {
 
 /// A level half the size of `l` each way (one texel at least): each texel
 /// the mean of the 2 x 2 (or 2 x 1) it covers, rounded.
-fn half(l: &esf::Image) -> esf::Image {
+pub(crate) fn half(l: &esf::Image) -> esf::Image {
     let (w, h) = ((l.width / 2).max(1), (l.height / 2).max(1));
     let mut rgba = vec![0u8; (w * h * 4) as usize];
     for y in 0..h {
@@ -1833,7 +2231,7 @@ mod tests {
             let p = resolve(Some((&game, "eqoa")), &config);
             assert_eq!((&p.dir, &p.also, &p.moved), (&new, &Some(old.clone()), &None));
             assert!(p.why.as_deref().is_some_and(|w| w.contains("was not moved")), "{:?}", p.why);
-            let pack = Pack::at(&p, true, true, true);
+            let pack = Pack::at(&p, true, true, true, Opts::default());
             assert_eq!(pack.count(esf::Era::Frontiers), 1, "its pack read");
             assert_eq!(pack.dumper.as_ref().unwrap().dirs[0], Some(new.join(esf::pcsx2::SERIAL).join("dumps")), "dumps to the new one");
         }
@@ -1867,7 +2265,7 @@ mod tests {
         std::os::unix::fs::symlink(&real, config.join("textures")).unwrap();
         let p = resolve(Some((&game, "eqoa")), &config);
         assert_eq!((&p.also, &p.moved), (&Some(config.join("textures")), &None), "a link left");
-        assert_eq!(Pack::at(&p, true, false, true).count(esf::Era::Frontiers), 1, "and read");
+        assert_eq!(Pack::at(&p, true, false, true, Opts::default()).count(esf::Era::Frontiers), 1, "and read");
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -1900,7 +2298,7 @@ mod tests {
         std::fs::create_dir_all(y2002.parent().unwrap()).unwrap();
         std::fs::write(&y2002, png_bytes(1, 1, png::ColorType::Rgba, png::BitDepth::Eight, &[4, 4, 4, 255])).unwrap();
         let place = Place { dir: new.clone(), also: Some(old.clone()), beside: Beside::Program("eqoa".into()), moved: None, why: None };
-        let pack = Pack::at(&place, true, true, true);
+        let pack = Pack::at(&place, true, true, true, Opts::default());
         let packs = pack.packs.as_ref().unwrap();
         let file = |era: usize, n: &str| packs[era].files.get(&Name::parse(n).unwrap()).cloned();
         assert_eq!(file(0, "1-2-00001993.png"), Some(mine), "the new folder's");
@@ -1909,7 +2307,7 @@ mod tests {
         let dirs = &pack.dumper.as_ref().unwrap().dirs;
         assert_eq!(dirs, &[Some(new.join(esf::pcsx2::SERIAL).join("dumps")), Some(new.join(SERIAL_2002).join("dumps"))]);
         assert!(new.join(esf::pcsx2::SERIAL).join("dumps").is_dir() && !old.join(esf::pcsx2::SERIAL).join("dumps").exists());
-        let alone = Pack::at(&Place { also: None, ..place }, true, false, true);
+        let alone = Pack::at(&Place { also: None, ..place }, true, false, true, Opts::default());
         assert_eq!((alone.count(esf::Era::Frontiers), alone.count(esf::Era::Y2002)), (1, 0), "the control: the new folder's alone");
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -1984,8 +2382,7 @@ mod tests {
     fn a_stand_in_is_read_off_the_frame() {
         let (c, s) = surface(64, 64, 3);
         let (pack, dir) = one_stand_in("async", &c, &s, (256, 256), 7, false, None);
-        let reader = pack.reader.as_ref().unwrap();
-        let held = reader.hold.lock().unwrap();
+        let held = pack.shared.hold.lock().unwrap();
         let want = (256, 256, level_count((256, 256), &s) as u32);
         assert_eq!(want.2, 5, "the surface's 3 and the 2 it is larger by");
         for frame in 0..30 {
@@ -2017,6 +2414,88 @@ mod tests {
         let (sync, dir) = one_stand_in("sync", &c, &s, (256, 256), 7, true, None);
         assert_eq!(sync.ask(Some(42), &c.data, &s, esf::Era::Frontiers), None, "nothing to ask: read as it is wanted");
         assert_eq!(sync.levels_for(&c.data, &s, esf::Era::Frontiers).map(|l| (l.len(), l[0].width)), Some((5, 256)), "the control: at the first ask");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A zone's stand-ins made ready before it is drawn (`prefetch`): once
+    /// the workers have them, a frame's ask finds it ready (no placeholder)
+    /// and its levels are there at once; a second prefetch queues nothing.
+    /// The control: without the prefetch, the first ask makes a placeholder.
+    #[test]
+    fn a_zone_prefetched_is_ready_when_drawn() {
+        let (c, s) = surface(64, 64, 3);
+        let (pack, dir) = one_stand_in("prefetch", &c, &s, (256, 256), 5, false, None);
+        assert_eq!(pack.prefetch(&c, esf::Era::Frontiers), 1);
+        assert_eq!(pack.prefetch(&c, esf::Era::Frontiers), 0, "queued already");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while pack.stats().ram_files == 0 {
+            assert!(std::time::Instant::now() < until, "never made ready");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(pack.ask(Some(7), &c.data, &s, esf::Era::Frontiers), None, "ready: no placeholder");
+        assert_eq!(pack.levels_for(&c.data, &s, esf::Era::Frontiers).map(|l| (l.len(), l[0].width, l[0].rgba[0])), Some((5, 256, 5)));
+        assert!(render::Pack::take_ready(&pack).is_empty(), "nothing to write in");
+        assert_eq!(pack.prefetch(&c, esf::Era::Frontiers), 0, "in memory");
+        // ready, but the frame has made enough at once: a placeholder, its
+        // levels handed back by a worker as a read one's are
+        assert_eq!(render::Pack::request(&pack, 9, &c, &s, esf::Era::Frontiers, true), Some((256, 256, 5)));
+        let ready = loop {
+            let r = render::Pack::take_ready(&pack);
+            if !r.is_empty() {
+                break r;
+            }
+            assert!(std::time::Instant::now() < until, "never handed back");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!((ready[0].0, ready[0].1.len()), (9, 5));
+        // a pack made again over a disk cache that has the file: prefetched
+        // at once, nothing queued
+        let cache = temp("prefetch-cache");
+        let opts = Opts::default();
+        let disk = || texcache::Disk::open(cache.clone());
+        let first = Pack::with(Some([Index::scan(&dir), Index::default()]), None, true, opts, disk());
+        assert!(first.levels_for(&c.data, &s, esf::Era::Frontiers).is_some(), "made and written to the cache");
+        drop(first);
+        let again = Pack::with(Some([Index::scan(&dir), Index::default()]), None, false, opts, disk());
+        assert_eq!(again.prefetch(&c, esf::Era::Frontiers), 0, "none queued");
+        assert_eq!((again.stats().ram_files, again.stats().cached), (1, 1), "mapped off the cache at once");
+        assert_eq!(again.ask(Some(7), &c.data, &s, esf::Era::Frontiers), None, "ready when drawn");
+        let _ = std::fs::remove_dir_all(&cache);
+        let _ = std::fs::remove_dir_all(&dir);
+        let (cold, dir) = one_stand_in("prefetch-cold", &c, &s, (256, 256), 5, false, None);
+        assert!(cold.ask(Some(7), &c.data, &s, esf::Era::Frontiers).is_some(), "the control: a placeholder");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// On a card that draws BCn with Pack Compression on, a stand-in in
+    /// memory is handed to the renderer compressed (`render::Pack::packed`),
+    /// the run of levels `levels` gives, its texels near them; with it off
+    /// (the control) none is, and `levels` gives the RGBA.
+    #[test]
+    fn compressed_stand_ins_handed_over_as_blocks() {
+        let (c, s) = surface(64, 64, 3);
+        let dir = temp("packed");
+        let n = s.gs(&c.data).unwrap().names()[0].0;
+        let px: Vec<u8> = (0..256 * 256).flat_map(|i| [(i % 256) as u8, (i / 256) as u8, 40, 0x80]).collect();
+        std::fs::write(dir.join(n.file_name(0)), png_bytes(256, 256, png::ColorType::Rgba, png::BitDepth::Eight, &px)).unwrap();
+        for compress in [2u8, 1] {
+            let opts = Opts { precache: false, compress, bc: true, max_side: 2048 };
+            let pack = Pack::with(Some([Index::scan(&dir), Index::default()]), None, true, opts, None);
+            let rgba = pack.levels_for(&c.data, &s, esf::Era::Frontiers).unwrap();
+            let packed = render::Pack::packed(&pack, &c, &s, esf::Era::Frontiers);
+            if compress == 1 {
+                assert!(packed.is_none(), "the control: RGBA, handed over as levels");
+                continue;
+            }
+            let p = packed.expect("compressed");
+            assert_eq!(p.format, render::packed::Format::Bc3);
+            assert_eq!(p.size(), (256, 256, rgba.len() as u32), "the levels `levels` gives");
+            assert_eq!(p.alpha_min, 0x80);
+            let back = texcache::images(&p);
+            let err = back[0].rgba.iter().zip(&rgba[0].rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+            assert!(err <= 8, "near: {err}");
+            assert_eq!(pack.stats().compressed, 1);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

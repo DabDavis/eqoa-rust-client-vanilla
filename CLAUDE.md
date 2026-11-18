@@ -192,7 +192,10 @@ current.
   Hold a change to the names to PCSX2's dumps: `EQOA_PCSX2_DUMPS=<its dumps> cargo test --release -p esf --test pcsx2`
   (the tracer with a hardware renderer, Renderer 14, and DumpReplaceableTextures, under a `HOME` of its own, writes
   them). A change to either row makes every texture again (`App::retexture`: the zones in place, the creatures by
-  `Puppet::textures`, the HUD's layer, the pregame's).
+  `Puppet::textures`, the HUD's layer, the pregame's). Files are made ready by `texcache` (2026-11-18: workers by
+  priority, a RAM budget, BCn kept or made, a disk cache in the platform's cache folder, never the pack's; a test
+  has none unless `texcache::testing::set_dir`); a stand-in's levels stay texel for texel `fit(with_levels(..))`'s
+  (`texcache::tests::a_slice_is_what_fit_with_levels_gives`).
 - The 2002 art (`era.rs`, README "The 2002 art"; the user, 2026-10-24: "texture/model swapping of the eqoa
   2002 era", on F9, "same with loading screens, title screen", and Tunaria keeping Frontiers' "ambient
   sounds and the fog/dust/leaf/flock effects"): a file off the player's USA disc of 2002 stands in for its
