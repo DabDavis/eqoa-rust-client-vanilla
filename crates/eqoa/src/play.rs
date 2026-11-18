@@ -6809,6 +6809,8 @@ impl Play {
             keys: [0.0; 8],
             // the mouse steering the body: the viewer's (`Mouse::steer`)
             steer: false,
+            // the view the walk keeps: the viewer's (`Mouse::walk_view`)
+            walk_view: None,
             // `IsModal`: the manual camera
             modal: self.mode == 38,
             // the server's word (`Session::flying`, `walker`)

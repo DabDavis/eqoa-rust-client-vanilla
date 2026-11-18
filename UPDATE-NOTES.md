@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-17 · Look around while you run
+- **Hold the left mouse button while running to look around**: the camera swings freely and your character keeps
+  running the way it was going. Let go and the camera eases back behind you in about a quarter second. (Before,
+  the left button turned your character while you moved, as the right button does.)
+- **Both mouse buttons run straight ahead where the camera faces**, and the movement keys and the controller's
+  stick are ignored while both are held. To run diagonally, hold the right button with W and A or D.
+- Standing still the left button looks around as before, and the right button still turns your character with the
+  camera.
+
 
 
 
