@@ -1612,6 +1612,27 @@ fn write_png(path: &str, w: u32, h: u32, rgba: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
+/// A mercenary's windows' keys on the keyboard (`mercplay`): its spell book
+/// (mode 62) as the player's spell book (mode 5) takes them, the arrows
+/// left and right its tabs and Page Up and Down the description's lines;
+/// its inventory (mode 61) as the start menu's item menu does.
+pub(crate) fn merc_key_of(key: &Key, mode: i32) -> Option<i32> {
+    use crate::startmenu::keys as K;
+    let spells = mode == 62; // mercplay::SPELLS_MODE
+    match key {
+        Key::Named(NamedKey::ArrowUp) => Some(K::UP),
+        Key::Named(NamedKey::ArrowDown) => Some(K::DOWN),
+        Key::Named(NamedKey::ArrowLeft) => Some(K::LEFT),
+        Key::Named(NamedKey::ArrowRight) => Some(K::RIGHT),
+        Key::Named(NamedKey::PageUp) if spells => Some(142),
+        Key::Named(NamedKey::PageDown) if spells => Some(143),
+        Key::Named(NamedKey::Enter) => Some(K::CROSS),
+        Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
+        Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+        _ => None,
+    }
+}
+
 /// The corpse, merchant and trade windows' keys (modes 1, 10, 15, 16) on
 /// the keyboard, as the game's keys and pad buttons: the arrows the d-pad,
 /// Enter or E ✕, Escape or Backspace △, Q □ (a trade's accept, as the
@@ -4663,6 +4684,23 @@ impl App {
             }
             return;
         }
+        // A mercenary's windows (`mercplay`: its inventory, mode 61, and its
+        // spell book over the player's, 62): the keys the player's own item
+        // menu and spell book take on the keyboard (petition 2342: the
+        // arrows did nothing in the merc's spell menu; only the pad's d-pad
+        // and the pointer reached it).
+        if let Some(p) = self.play.as_mut()
+            && p.typing.is_none()
+            && p.merc_win_owns()
+        {
+            let down = event.state == ElementState::Pressed;
+            if let Some(k) = merc_key_of(&event.logical_key, p.mode)
+                && !(down && event.repeat)
+            {
+                p.merc_win_key(k, down);
+            }
+            return;
+        }
         // The start menu (mode 13) takes the arrows, Enter or E (X) and
         // Escape (back), down and up (its auto-repeat); Escape in play
         // opens it (`OnKeyDown` 27).
@@ -7021,6 +7059,26 @@ mod tests {
         };
         assert_eq!(frames(true), 2);
         assert_eq!(frames(false), 5, "the control: every frame counted");
+    }
+
+    /// A mercenary's windows on the keyboard (petition 2342): the arrows are
+    /// the d-pad's codes in both (the spell book scrolled with the pad
+    /// alone before), Enter and E ✕, Escape and Backspace △; Page Up and
+    /// Down the spell book's description lines, nothing in the inventory.
+    #[test]
+    fn a_mercs_windows_take_the_arrows() {
+        for mode in [61, 62] {
+            let k = |key: Key| merc_key_of(&key, mode);
+            assert_eq!(
+                [k(Key::Named(NamedKey::ArrowUp)), k(Key::Named(NamedKey::ArrowDown)), k(Key::Named(NamedKey::ArrowLeft)), k(Key::Named(NamedKey::ArrowRight))],
+                [Some(138), Some(139), Some(136), Some(137)],
+                "mode {mode}"
+            );
+            assert_eq!((k(Key::Named(NamedKey::Enter)), k(Key::Character("E".into()))), (Some(134), Some(134)));
+            assert_eq!((k(Key::Named(NamedKey::Escape)), k(Key::Named(NamedKey::Backspace))), (Some(27), Some(27)));
+        }
+        assert_eq!(merc_key_of(&Key::Named(NamedKey::PageDown), 62), Some(143));
+        assert_eq!(merc_key_of(&Key::Named(NamedKey::PageDown), 61), None);
     }
 
     /// The corpse, merchant and trade windows' keys: the attack's key (G,
