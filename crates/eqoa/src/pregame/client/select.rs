@@ -50,6 +50,36 @@ pub fn info_lines(c: &CharRecord, word: &dyn Fn(i32) -> Vec<u16>, race_name: &dy
         out.push(if info.race_name.is_empty() { race_name(info.race as i32) } else { wide(&info.race_name) });
     }
     out.push(word(get_class(c.class).name));
+    // Hardcore (`net::hardcore`): its mark under them, a fallen one's death
+    match &c.hc {
+        // (its level and masteries then only where the lines above lack them)
+        Some(h) if h.fall.is_some() => out.extend(fallen_lines(h, c.info.is_none()).iter().map(|l| wide(l))),
+        Some(h) if h.hardcore => out.push(wide(HARDCORE_LINE)),
+        _ => {}
+    }
+    out
+}
+
+/// A Hardcore character's line at select.
+pub const HARDCORE_LINE: &str = "Hardcore";
+/// What Enter on a fallen character says (ours).
+pub const FALLEN_REFUSAL: &str = "This Hardcore character has fallen and cannot enter the world.";
+
+/// A fallen character's lines under the game's: when (UTC), with `counts` its
+/// level and masteries then, by what and where, each line left out that has
+/// nothing.
+pub fn fallen_lines(h: &net::hardcore::Char, counts: bool) -> Vec<String> {
+    let Some(f) = &h.fall else { return Vec::new() };
+    let mut out = vec![format!("Fallen {}", net::hardcore::stamp(f.at))];
+    if counts {
+        out.push(format!("At level {}, {} CM{}", f.level, f.cms, if f.cms == 1 { "" } else { "s" }));
+    }
+    if !f.killer.is_empty() {
+        out.push(format!("Slain by {}", f.killer));
+    }
+    if !f.place.is_empty() {
+        out.push(format!("In {}", f.place));
+    }
     out
 }
 
@@ -428,7 +458,13 @@ impl CharSelect {
             let (l, m, rr) = bar(slot == self.sel);
             match chars.get(slot as usize) {
                 Some(c) => {
-                    let colour = if slot == self.sel { yellow } else { white };
+                    // a fallen Hardcore character greyed (`net::hardcore`)
+                    let colour = match (slot == self.sel, c.fallen()) {
+                        (true, false) => yellow,
+                        (false, false) => white,
+                        (true, true) => [0.7, 0.7, 0.35, 1.0],
+                        (false, true) => [0.5, 0.5, 0.5, 1.0],
+                    };
                     if c.server_id == -1 {
                         let mut t = word(878);
                         t.extend(std::iter::repeat_n(b'.' as u16, (self.dots + 1) as usize));
@@ -913,6 +949,12 @@ impl CharSelect {
         } else if self.sel >= count && self.sel < self.slots(count) {
             reqs.push(Req::Select(self.sel as usize));
             self.figure = None;
+        } else if chars.get(self.sel as usize).is_some_and(|c| c.fallen()) {
+            // a fallen Hardcore character is a memorial: never played (the
+            // server refuses it too); Delete still takes it
+            cues.pop();
+            cues.push(10);
+            self.show_text(&wide(FALLEN_REFUSAL), now);
         } else if chars.get(self.sel as usize).is_some_and(|c| c.server_id != -1) {
             if !on && expansion & 2 != 0 {
                 self.choice = 0;
@@ -1012,6 +1054,43 @@ mod tests {
         c.level = 60;
         c.info = Some(net::selectinfo::Info { race: 31, race_name: "Wisp".into(), cms: 1500, rows: vec!["wispcolor".into()] });
         assert_eq!(text(&c), ["w503 60", "1500 CMs", "Wisp", &alchemist]);
+        // Hardcore (`net::hardcore`): its mark, or a fallen one's death
+        c.hc = Some(net::hardcore::Char { name: "Squeak".into(), hardcore: true, ..Default::default() });
+        assert_eq!(text(&c), ["w503 60", "1500 CMs", "Wisp", &alchemist, "Hardcore"]);
+        let fall = net::hardcore::Fall { at: 1_794_991_500, level: 52, cms: 140, killer: "a Zek sentry".into(), place: "Tallon's fortress".into() };
+        c.hc = Some(net::hardcore::Char { name: "Squeak".into(), hardcore: true, open: false, fall: Some(fall.clone()) });
+        assert_eq!(text(&c), ["w503 60", "1500 CMs", "Wisp", &alchemist, "Fallen 2026-11-18 08:45 UTC", "Slain by a Zek sentry", "In Tallon's fortress"]);
+        c.info = None;
+        c.hc = Some(net::hardcore::Char { name: "Squeak".into(), hardcore: true, open: false, fall: Some(net::hardcore::Fall { place: String::new(), ..fall }) });
+        assert_eq!(text(&c), ["w503 60", &alchemist, "Fallen 2026-11-18 08:45 UTC", "At level 52, 140 CMs", "Slain by a Zek sentry"], "no select info: the counts; no place: no line");
+    }
+
+    /// Enter on a fallen Hardcore character: refused with our line, nothing sent,
+    /// a buzz; Delete still takes it. The control: a living Hardcore one plays.
+    #[test]
+    fn a_fallen_character_is_never_played() {
+        let fallen = net::hardcore::Char { name: "B".into(), hardcore: true, open: false, fall: Some(Default::default()) };
+        let alive = net::hardcore::Char { name: "A".into(), hardcore: true, ..Default::default() };
+        let chars = vec![CharRecord { hc: Some(alive), ..rec("A", 1) }, CharRecord { hc: Some(fallen), ..rec("B", 2) }];
+        let (mut cues, mut reqs) = (Vec::new(), Vec::new());
+        let mut s = CharSelect::default();
+        s.sel = 1;
+        s.key(134, true, 0, &chars, 1, &mut cues, &mut reqs);
+        assert!(reqs.is_empty() && !s.busy, "refused: {reqs:?}");
+        assert_eq!(cues, vec![10]);
+        assert_eq!(s.pending().2, true, "the refusal's box up");
+        let mut t = CharSelect::default();
+        t.key(134, true, 0, &chars, 1, &mut cues, &mut reqs);
+        assert_eq!(reqs, vec![Req::Select(0)], "the control: a living Hardcore character plays");
+        // Delete: the slot past the characters, then the fallen one, then yes
+        let mut d = CharSelect::default();
+        reqs.clear();
+        d.sel = d.slots(2);
+        d.key(134, true, 0, &chars, 1, &mut cues, &mut reqs);
+        assert!(d.deleting);
+        d.key(139, true, 0, &chars, 1, &mut cues, &mut reqs);
+        d.key(134, true, 0, &chars, 1, &mut cues, &mut reqs);
+        assert_eq!(d.pending().2, true, "the delete question for the fallen one");
     }
 
     /// `ShowCharacter`'s place: the race's, or the capped hall for the

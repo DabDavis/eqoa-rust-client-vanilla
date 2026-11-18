@@ -5,6 +5,12 @@
 //! race's review camera turning round it; the starting city over the scene
 //! (the humans' by city; a human ranger or druid's is Surefall Glade).
 //! Enter creates (267), back is 260.
+//!
+//! On a server that offers Hardcore (go-eqoa-server's 0x7EB0, `net::hardcore`;
+//! the server owner's of 2026-11-18) a "Hardcore" row under the stats, off until
+//! chosen: left or right (the d-pad, the arrow keys, a click on the row) turns it
+//! on or off. Created on, a question first: Hardcore is for good, and the
+//! character's first death its last; cross creates, triangle goes back to the page.
 
 use super::tables;
 use super::{Env, Msg, create_model_dressed, frame_camera, legend, word};
@@ -13,12 +19,25 @@ use crate::pregame::Ctx;
 use crate::pregame::stage::Stage;
 use net::session::NewChar;
 use vi::fpu::{Ee, F};
-use vi::ui::FrameParam;
+use vi::ui::{FrameParam, Window};
 
 const TRIANGLE: i32 = 1;
 const CROSS: i32 = 2;
+const HARDCORE_ROW: i32 = 3;
+
+/// The Hardcore row's words and the question's (ours).
+pub const HARDCORE_LABEL: &str = "Hardcore";
+pub const HARDCORE_EXPLAIN: [&str; 2] = ["Death is final: no respawn, no", "resurrection. Cannot be undone."];
+pub const HARDCORE_ASK: &str = "Create %s as a Hardcore character? Death is final: no respawn, no resurrection. It can never be undone.";
+pub const HARDCORE_YES: &str = "Yes, create a Hardcore character";
+pub const HARDCORE_NO: &str = "No, go back";
 
 pub struct ReviewPage {
+    /// the Hardcore row on (a server that offered it)
+    pub hardcore: bool,
+    /// the question up over the page (Create with Hardcore on)
+    pub asking: bool,
+    window: Window,
     /// counts down to the model's next flourish (`m_idle`)
     idle: i64,
     /// the clock at the last frame, -1 before the first (`m_time`)
@@ -28,7 +47,7 @@ pub struct ReviewPage {
 
 impl Default for ReviewPage {
     fn default() -> Self {
-        ReviewPage { idle: -1, time: -1, hits: Hits::default() }
+        ReviewPage { hardcore: false, asking: false, window: Window::default(), idle: -1, time: -1, hits: Hits::default() }
     }
 }
 
@@ -54,14 +73,47 @@ pub fn shown_stats(form: &NewChar) -> [i32; 7] {
 impl ReviewPage {
     /// `Reset`.
     pub fn reset(&mut self, env: &mut Env) {
+        self.hardcore = false;
+        self.asking = false;
         self.idle = 0;
         self.time = 0;
         env.release();
     }
 
-    /// `OnKeyDown`: Enter creates (267), back is 260.
+    /// `OnKeyDown`: Enter creates (267), back is 260; on a server that offers
+    /// Hardcore left and right turn its row, and Create with it on asks first.
     pub fn key(&mut self, k: i32, env: &mut Env, sounds: &mut Vec<i32>) -> Option<Msg> {
+        let offered = super::hardcore_offered();
+        if !offered {
+            self.hardcore = false;
+        }
+        if self.asking {
+            match k {
+                13 | key::CROSS => {
+                    self.asking = false;
+                    sounds.push(13);
+                    env.release();
+                    return Some(Msg::Create);
+                }
+                27 | key::TRIANGLE => {
+                    self.asking = false;
+                    sounds.push(8);
+                }
+                _ => {}
+            }
+            return None;
+        }
         match k {
+            17 | 18 | key::LEFT | key::RIGHT if offered => {
+                self.hardcore = !self.hardcore;
+                sounds.push(11);
+                None
+            }
+            13 | key::CROSS if self.hardcore => {
+                self.asking = true;
+                sounds.push(13);
+                None
+            }
             13 | key::CROSS => {
                 sounds.push(13);
                 env.release();
@@ -123,6 +175,18 @@ impl ReviewPage {
                 r.draw_string([tp[0] + 140, tp[1]], black, &vi::ui::wide(&v.to_string()));
                 tp[1] += 19;
             }
+            // the Hardcore row, on a server that offers it: "< On >", and why
+            if super::hardcore_offered() {
+                let red = [0.6, 0.0, 0.0, 1.0];
+                let at = [tp[0], tp[1] + 6];
+                r.draw_string(at, black, &vi::ui::wide(HARDCORE_LABEL));
+                let v = vi::ui::wide(if self.hardcore { "< On >" } else { "< Off >" });
+                r.draw_string([at[0] + 140, at[1]], if self.hardcore { red } else { black }, &v);
+                self.hits.push([at[0] - 4, at[1] - 2, at[0] + 220, at[1] + 18], HARDCORE_ROW);
+                for (i, l) in HARDCORE_EXPLAIN.iter().enumerate() {
+                    r.draw_string([at[0], at[1] + 19 * (i as i32 + 1)], black, &vi::ui::wide(l));
+                }
+            }
         }
         // the model, its flourish, the camera, the scene
         if let Some(stage) = stage {
@@ -173,6 +237,27 @@ impl ReviewPage {
             let y = r.point_size() + 345;
             vui.draw_centered_string_ex(r, &h, 490, y, white, 0, true);
         }
+        // the question, over everything (Create with Hardcore on)
+        if self.asking {
+            self.window.init(vui, r, [320, 224], 420, 7, 0);
+            self.window.set_title(Some(&vi::ui::wide(HARDCORE_LABEL)));
+            self.window.open(false);
+            self.window.draw(vui, r);
+            let w = self.window.size[0];
+            let ask = HARDCORE_ASK.replacen("%s", &form.name, 1);
+            self.window.text_box(vui, r, &vi::ui::wide(&ask), 30, 1, w - 60, 3, vi::ui::UI_COLORS[0], 0);
+            let mut yes = vi::ui::wide("|x");
+            yes.extend(vi::ui::wide(HARDCORE_YES));
+            let mut no = vi::ui::wide("|t");
+            no.extend(vi::ui::wide(HARDCORE_NO));
+            self.window.text_box(vui, r, &yes, 30, 5, w - 60, 1, vi::ui::UI_COLORS[0], 0);
+            self.window.text_box(vui, r, &no, 30, 6, w - 60, 1, vi::ui::UI_COLORS[0], 0);
+            self.hits.clear();
+            self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 30, 5, w - 60, 1), CROSS);
+            self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 30, 6, w - 60, 1), TRIANGLE);
+        } else {
+            self.window.close(true);
+        }
     }
 
     /// A pointer: the legend's glyphs.
@@ -180,6 +265,7 @@ impl ReviewPage {
         match self.hits.at(p) {
             Some(TRIANGLE) => vec![key::TRIANGLE],
             Some(CROSS) => vec![key::CROSS],
+            Some(HARDCORE_ROW) => vec![key::RIGHT],
             _ => Vec::new(),
         }
     }
@@ -233,6 +319,36 @@ mod tests {
         assert_eq!(p.key(27, &mut env, &mut s), Some(Msg::Back));
         assert_eq!(s, vec![13, 8]);
         assert_eq!(p.key(key::UP, &mut env, &mut s), None, "the control: nothing else");
+    }
+
+    /// Hardcore on a server that offers it: left/right turn the row, Create asks
+    /// first (cross creates, triangle stays); a reset turns it off. The control:
+    /// no offer, no row, Enter creates at once.
+    #[test]
+    fn hardcore_is_turned_and_asked() {
+        let mut p = ReviewPage::default();
+        let mut env = Env::default();
+        let mut s = Vec::new();
+        super::super::set_hardcore_offered(false);
+        assert_eq!(p.key(key::RIGHT, &mut env, &mut s), None);
+        assert!(!p.hardcore, "the control: no offer, no row");
+        assert_eq!(p.key(key::CROSS, &mut env, &mut s), Some(Msg::Create), "the control: created at once");
+        super::super::set_hardcore_offered(true);
+        assert_eq!(p.key(key::RIGHT, &mut env, &mut s), None);
+        assert!(p.hardcore);
+        assert_eq!(p.key(key::CROSS, &mut env, &mut s), None, "asked first");
+        assert!(p.asking);
+        assert_eq!(p.key(key::TRIANGLE, &mut env, &mut s), None, "no: back to the page");
+        assert!(!p.asking && p.hardcore);
+        assert_eq!(p.key(13, &mut env, &mut s), None);
+        assert_eq!(p.key(13, &mut env, &mut s), Some(Msg::Create), "yes: created");
+        assert_eq!(p.key(17, &mut env, &mut s), None);
+        assert!(!p.hardcore, "left turns it off again");
+        assert_eq!(p.key(key::CROSS, &mut env, &mut s), Some(Msg::Create), "off: no question");
+        p.hardcore = true;
+        p.reset(&mut env);
+        assert!(!p.hardcore && !p.asking, "a reset: off");
+        super::super::set_hardcore_offered(false);
     }
 
     #[test]
