@@ -18,7 +18,7 @@ is put on the page by `.github/workflows/notes.yml`.
   window shows the buttons.
 - **No more preset colours at the dyers**: choosing what to dye now opens the colour picker straight away
   (the Weapon Enchanter asks "Its own colours" or "Pick any colour..."). Your recent colours are still in the
-  picker.
+  picker, and its new **No dye** button, between OK and Cancel, takes the dye off just the piece you chose.
 - **R2 Channel Switch** (Extended > UI > Chat, off unless you turn it on): hold R2 and press left or right on
   the d-pad to switch the chat channel (Say, Group, Shout, Guild); the new channel is shown in the chat box.
   On a keyboard, hold C and press the arrows.

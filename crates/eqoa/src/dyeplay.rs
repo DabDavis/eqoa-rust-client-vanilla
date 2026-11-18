@@ -234,6 +234,11 @@ impl Play {
                 self.dyepick.open = Some(o);
                 self.dyepick_close(true);
             }
+            PickerUp::NoDye => {
+                eprintln!("play: the dyers' picker {:08X}: No dye (0x7E96)", o.token);
+                self.session.send(&net::dyepick::no_dye(o.token));
+                self.dyepick_close(false);
+            }
             PickerUp::Cancel => {
                 eprintln!("play: the dyers' picker {:08X} cancelled (0x7E96)", o.token);
                 self.session.send(&net::dyepick::cancelled(o.token));
@@ -254,7 +259,10 @@ impl Play {
             }
             let recent = self.dyepick.recent.get_or_insert_with(|| crate::dyepicker::read_recent(&crate::settings::dye_recent())).clone();
             // the dyer's palette not shown (the server owner, 2026-11-18)
-            self.dyepick.picker.open(&o.title, o.current, o.alpha, recent);
+            // No dye where the server takes it (version 2) and it is a dye:
+            // a character's or a pet's (the server owner, 2026-11-18)
+            let no_dye = self.session.dye_picker_version >= 2 && o.target != Target::Aura;
+            self.dyepick.picker.open(&o.title, o.current, o.alpha, no_dye, recent);
             self.dyepick.open = Some(o);
             self.dyepick.keys.clear();
             self.mode = MODE;
@@ -459,6 +467,27 @@ mod tests {
         tap(&mut p, 135);
         p.run_dyepick(&vui, &mut r);
         assert_eq!((p.mode, sent(&p)), (0, vec![net::dyepick::cancelled(0x7E95_000A)]), "○: cancelled");
+        assert!(!p.dyepick.picker.no_dye_on, "a server of version 1: no No dye");
+        // a server of version 2: No dye on the foot, between OK and Cancel
+        p.session.dye_picker_version = 2;
+        p.session.record = Some(Vec::new());
+        let o3 = Open { token: 0x7E95_000B, ..o2.clone() };
+        p.dyepick_opcode(&open_bytes(&o3));
+        p.run_dyepick(&vui, &mut r);
+        assert!(p.dyepick.picker.no_dye_on);
+        // to the foot (past the recent colours' row)
+        for _ in 0..9 {
+            tap(&mut p, 139);
+        }
+        tap(&mut p, 137);
+        tap(&mut p, 134);
+        p.run_dyepick(&vui, &mut r);
+        assert_eq!((p.mode, sent(&p)), (0, vec![net::dyepick::no_dye(0x7E95_000B)]), "No dye");
+        // an aura's picker: none
+        let o4 = Open { token: 0x7E95_000C, target: Target::Aura, aura: Some((7, 1, 0)), ..o2 };
+        p.dyepick_opcode(&open_bytes(&o4));
+        p.run_dyepick(&vui, &mut r);
+        assert!(p.dyepick.picker.open && !p.dyepick.picker.no_dye_on, "an aura's: no No dye");
     }
 
     /// An aura's picker previews the aura of its place, its kind and source

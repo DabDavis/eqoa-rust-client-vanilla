@@ -341,7 +341,9 @@ or a browser (each described where it lives below):
   an enchanter asks its own colours or the picker alone); the server's open (0x7E95 kind 1: token, target, alpha flag,
   colour now, title, slots, the pet or aura to preview on, the palette) brings up the client's window (mode 63):
   a saturation/value square, a hue strip, H S V R G B (and A for a pet) sliders with their numbers, hex, new
-  beside old, ten recent colours (`dyecolours.opt`), OK and Cancel; the dyer's palette is not shown. The pad
+  beside old, ten recent colours (`dyecolours.opt`), OK and Cancel, and between them No dye where the server
+  speaks the picker's version 2 and it is a character's or a pet's picker (0x7E96 kind 3, the token alone: the
+  dye off what it dyes); the dyer's palette is not shown. The pad
   (2026-11-18, the owner's "the rgb dye selector only works for mouse, lets make controller friendly"): the
   d-pad or the left stick, up and down a row (held, repeating), left and right a step (held, faster; the stick
   all the way, by five), L1/R1 and L2/R2 by ten, the row lit framed in yellow (the hue strip or the square too),
