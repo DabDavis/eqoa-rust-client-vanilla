@@ -50,7 +50,10 @@
 //! ten, and bars 3 and 4's ten more (the server owner, 2026-11-18: "They need
 //! to be able to be keybound in the keybinding menu"), each used while
 //! Ability Bars shows its bar, whether the bars are drawn stacked or as the
-//! game's carousel. Nothing is on them until the player puts a key there.
+//! game's carousel; and the Utility Bars' (the same day: "otherwise work the
+//! same way"), the four item quick slots and the weapon sets with bare hands
+//! (on a server that keeps them). Nothing is on them until the player puts a
+//! key there.
 //!
 //! With nothing moved every key is itself and every button its own field
 //! (`Binds::default`, the tests). Kept per device in `keys.opt` beside the
@@ -166,6 +169,15 @@ pub const ROWS: &[Row] = &[
     row("bar4_slot3", "Bar 4: slot 3", &[], Pad::KeysOnly, BAR_HELP),
     row("bar4_slot4", "Bar 4: slot 4", &[], Pad::KeysOnly, BAR_HELP),
     row("bar4_slot5", "Bar 4: slot 5", &[], Pad::KeysOnly, BAR_HELP),
+    row("items_slot1", "Item slot 1", &[], Pad::KeysOnly, ITEM_HELP),
+    row("items_slot2", "Item slot 2", &[], Pad::KeysOnly, ITEM_HELP),
+    row("items_slot3", "Item slot 3", &[], Pad::KeysOnly, ITEM_HELP),
+    row("items_slot4", "Item slot 4", &[], Pad::KeysOnly, ITEM_HELP),
+    row("sets_slot1", "Weapon set 1", &[], Pad::KeysOnly, SET_HELP),
+    row("sets_slot2", "Weapon set 2", &[], Pad::KeysOnly, SET_HELP),
+    row("sets_slot3", "Weapon set 3", &[], Pad::KeysOnly, SET_HELP),
+    row("sets_slot4", "Weapon set 4", &[], Pad::KeysOnly, SET_HELP),
+    row("sets_slot5", "Weapon set: bare hands", &[], Pad::KeysOnly, SET_HELP),
     row("cycle_target", "Target: {1405}, group, {418}", &["`", "~"], b(bit::L1), "Each press the next of the player, the group and the pet; held, aim as with Tab. On the map |7 zooms out."),
     row("quick_chat", "Quick chat", &["z"], b(bit::L2), "Again, it closes the quick chat."),
     row("next_target", "Target: the next (hold: aim)", &["tab"], b(bit::R1), "Held: the view at the eyes, the target the one nearest the crosshair. In a window Tab is |8; on the map |8 zooms in."),
@@ -207,14 +219,30 @@ pub const ROWS: &[Row] = &[
 /// What a key on an ability bar's slot row does (`bar_slot`).
 const BAR_HELP: &str = "Uses the ability on this slot, as clicking it does. No key until you give it one. Bars 3 and 4 are there with Extended > UI > HUD > Ability Bars at 3 or 4. Stacked Spell Bars (the same page) shows the bars above the chat box, Spell Bar Layout (HUD Layout) stacks them or stands them in two columns, and Move HUD moves them.";
 
-/// The ability bar and its slot (each from 0) a row is the key of: every
+/// What a key on an item quick slot's row does (`bar_slot`).
+const ITEM_HELP: &str = "Uses the item on this quick slot, as clicking it on the Utility Bars does (Extended > UI > HUD > Stacked Spell Bars shows them). No key until you give it one.";
+
+/// What a key on a weapon set's row does (`bar_slot`).
+const SET_HELP: &str = "Takes up this weapon set, on a server that keeps weapon sets, as clicking it on the Utility Bars does. No key until you give it one.";
+
+/// The bar and its slot (each from 0) a row is the key of: every ability
 /// bar's (`bar1_slot1` .. `bar4_slot5`), bars 3 and 4 the client's own
-/// (`hudmenu::BAR_MENUS`).
+/// (`hudmenu::BAR_MENUS`); then the Utility Bars', the item quick slots'
+/// (`items_slot1` .. 4, bar `hudmenu::ITEMS_BAR`) and the weapon sets'
+/// (`sets_slot1` .. 5, the fifth bare hands, bar `hudmenu::SETS_BAR`).
 pub fn bar_slot(row: usize) -> Option<(usize, usize)> {
-    let id = ROWS.get(row)?.id.strip_prefix("bar")?;
+    let id = ROWS.get(row)?.id;
     let (bar, slot) = id.split_once("_slot")?;
-    let (bar, slot) = (bar.parse::<usize>().ok()?, slot.parse::<usize>().ok()?);
-    ((1..=crate::hudmenu::MAX_BARS as usize).contains(&bar) && (1..=5).contains(&slot)).then(|| (bar - 1, slot - 1))
+    let slot = slot.parse::<usize>().ok()?;
+    let (bar, most) = match bar {
+        "items" => (crate::hudmenu::ITEMS_BAR, 4),
+        "sets" => (crate::hudmenu::SETS_BAR, crate::gear::ENTRIES),
+        _ => {
+            let bar = bar.strip_prefix("bar")?.parse::<usize>().ok()?;
+            ((1..=crate::hudmenu::MAX_BARS as usize).contains(&bar).then_some(bar - 1)?, 5)
+        }
+    };
+    (1..=most).contains(&slot).then_some((bar, slot - 1))
 }
 
 /// A row's index by its name.
@@ -1810,7 +1838,10 @@ mod tests {
     #[test]
     fn a_bars_slot_takes_a_key() {
         let slots: Vec<usize> = (0..ROWS.len()).filter(|&k| bar_slot(k).is_some()).collect();
-        assert_eq!(slots.len(), 20);
+        assert_eq!(slots.len(), 29, "four bars of five, four item slots, four sets and bare hands");
+        assert_eq!(bar_slot(row_named("items_slot1").unwrap()), Some((crate::hudmenu::ITEMS_BAR, 0)));
+        assert_eq!(bar_slot(row_named("items_slot4").unwrap()), Some((crate::hudmenu::ITEMS_BAR, 3)));
+        assert_eq!(bar_slot(row_named("sets_slot5").unwrap()), Some((crate::hudmenu::SETS_BAR, 4)));
         assert_eq!(bar_slot(row_named("bar1_slot1").unwrap()), Some((0, 0)));
         assert_eq!(bar_slot(row_named("bar2_slot5").unwrap()), Some((1, 4)));
         assert_eq!(bar_slot(row_named("bar3_slot1").unwrap()), Some((2, 0)));

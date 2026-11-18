@@ -5,7 +5,7 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
-## 2026-11-18 · Four stacked spell bars, in one column or two
+## 2026-11-18 · Four stacked spell bars, in one column or two, and Utility Bars
 - **Stacked Spell Bars show every bar you have**: with Extended > UI > HUD > Ability Bars at 3 or 4, bars 3
   and 4 stand above the chat box too, not only the first two.
 - **Spell Bar Layout** (Extended > UI > HUD Layout): Stacked puts them in one column, bar 1 on top; 2 Columns
@@ -16,6 +16,12 @@ is put on the page by `.github/workflows/notes.yml`.
 - **Move them anywhere**: turn on Move HUD (Extended > UI > HUD Layout, or /hud) and drag the Spell Bars, to
   the left of the screen for example; they stay where you put them. They move as one block, even with Spell
   Bar Opacity at 0.
+- **Utility Bars**: with Stacked Spell Bars on, your item quick slots (and your weapon sets with bare hands,
+  on a server that has them) are bars of their own too, no longer hidden away in the carousel. Utility Bar
+  Layout (Extended > UI > HUD Layout) puts them at the upper left, side by side as columns, or below, as rows
+  on the chat box under your spell bars. A click uses a slot, Move HUD moves them on their own, and the
+  Controls page has a key row for each item slot (Item slot 1 to 4) and each weapon set (Weapon set 1 to 4,
+  and bare hands).
 
 ## 2026-11-18 · Hardcore characters
 - **Make a Hardcore character** on a server that has them: the last page of character creation has a
