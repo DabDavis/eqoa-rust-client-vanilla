@@ -37,6 +37,8 @@ pub struct DyePlay {
     /// an open waiting for the game to be where it may come up
     pending: Option<Open>,
     keys: Vec<(i32, bool)>,
+    /// the left stick (lx, ly) as the pad last read it
+    stick: [f32; 2],
     /// the colour previewed and when it was set; whether it is in force
     shown: Option<(u32, i64)>,
     pub active: bool,
@@ -102,6 +104,12 @@ impl Play {
     /// A key for the picker, handled with the next HUD frame.
     pub fn dyepick_key(&mut self, key: i32, down: bool) {
         self.dyepick.keys.push((key, down));
+    }
+
+    /// The pad's sticks this frame (`Console::sticks`: rx, ry, lx, ly): the
+    /// left one walks the picker as the d-pad does.
+    pub fn dyepick_pad(&mut self, sticks: [f32; 4]) {
+        self.dyepick.stick = [sticks[2], sticks[3]];
     }
 
     /// A character typed at the picker (hex digits, '#', Backspace as '\u{8}').
@@ -245,7 +253,8 @@ impl Play {
                 self.session.send(&net::dyepick::cancelled(old.token));
             }
             let recent = self.dyepick.recent.get_or_insert_with(|| crate::dyepicker::read_recent(&crate::settings::dye_recent())).clone();
-            self.dyepick.picker.open(&o.title, o.current, o.alpha, o.palette.clone(), recent);
+            // the dyer's palette not shown (the server owner, 2026-11-18)
+            self.dyepick.picker.open(&o.title, o.current, o.alpha, recent);
             self.dyepick.open = Some(o);
             self.dyepick.keys.clear();
             self.mode = MODE;
@@ -261,6 +270,8 @@ impl Play {
             for (k, down) in std::mem::take(&mut self.dyepick.keys) {
                 ups.extend(self.dyepick.picker.key(k, down, now, &mut cues));
             }
+            let [lx, ly] = self.dyepick.stick;
+            self.dyepick.picker.stick(lx, ly, now, &mut cues);
             self.dyepick.picker.tick(now);
             self.dyepick.picker.draw(vui, r);
             self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
@@ -406,6 +417,48 @@ mod tests {
         p.run_dyepick(&vui, &mut r);
         p.dyepick_opcode(&[net::dyepick::CLOSE, 3, 0, 0x95, 0x7E]);
         assert!(!p.dyepick.picker.open && p.mode == 0);
+    }
+
+    /// The pad through the game's key path (`window_key`, as `set_key` hands
+    /// it a press): down to the red, right twice and the left stick once
+    /// more, ✕ picks the colour and the server is told it; ○ on a second
+    /// cancels. The control: the d-pad with no picker up changes nothing.
+    #[test]
+    fn the_pad_changes_the_colour_and_picks() {
+        let (vui, mut r) = (crate::pointer::testing::vui(), crate::pointer::testing::NullRaster);
+        let mut p = play();
+        assert!(!p.window_key(137, true), "no picker: play's");
+        let o = Open { token: 0x7E95_0009, target: Target::Character, current: 0x8000_00FF, title: "Dye chest".into(), slots: vec![0], ..Default::default() };
+        p.dyepick_opcode(&open_bytes(&o));
+        p.run_dyepick(&vui, &mut r);
+        assert_eq!(p.mode, MODE);
+        let tap = |p: &mut Play, k: i32| {
+            assert!(p.window_key(k, true), "the picker's");
+            p.window_key(k, false);
+        };
+        for _ in 0..3 {
+            tap(&mut p, 139);
+        }
+        tap(&mut p, 137);
+        tap(&mut p, 137);
+        p.run_dyepick(&vui, &mut r);
+        assert_eq!(p.dyepick.picker.rgba(), 0x8200_00FF, "red two up");
+        p.dyepick_pad([0.0, 0.0, 0.9, 0.0]);
+        p.run_dyepick(&vui, &mut r);
+        p.dyepick_pad([0.0; 4]);
+        p.run_dyepick(&vui, &mut r);
+        assert_eq!(p.dyepick.picker.rgba(), 0x8300_00FF, "the stick: one more");
+        tap(&mut p, 134);
+        p.run_dyepick(&vui, &mut r);
+        assert_eq!(p.mode, 0);
+        assert_eq!(sent(&p), vec![net::dyepick::picked(0x7E95_0009, 0x8300_00FF)]);
+        p.session.record = Some(Vec::new());
+        let o2 = Open { token: 0x7E95_000A, ..o };
+        p.dyepick_opcode(&open_bytes(&o2));
+        p.run_dyepick(&vui, &mut r);
+        tap(&mut p, 135);
+        p.run_dyepick(&vui, &mut r);
+        assert_eq!((p.mode, sent(&p)), (0, vec![net::dyepick::cancelled(0x7E95_000A)]), "○: cancelled");
     }
 
     /// An aura's picker previews the aura of its place, its kind and source
