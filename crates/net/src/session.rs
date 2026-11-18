@@ -251,6 +251,20 @@ pub const OP_SELECT_INFO: u16 = 0x7E67;
 /// rows its Customize re-chooses (`selectinfo::read`), by server id, the whole
 /// list each time ([`Session::select_info`]).
 pub const OP_SELECT_INFO_DATA: u16 = 0x7E68;
+/// go-eqoa-server's own, no retail message either: Hardcore characters
+/// (`hardcore`), a u32 after the opcode, both ways. The server offers it (1) after
+/// the session's first character list where it has Hardcore; this client answers 1
+/// at once ([`Session::hardcore`]), writes the choice in every creation after it
+/// and is sent [`OP_HARDCORE_CHARS`] after every list. A PS2 ignores the offer.
+pub const OP_HARDCORE: u16 = 0x7EB0;
+/// Each listed character's plain name and Hardcore standing, fallen with its
+/// death (`hardcore::read_chars`), the whole list each time
+/// ([`Session::hardcore_chars`]).
+pub const OP_HARDCORE_CHARS: u16 = 0x7EB1;
+/// The player's own Hardcore character fell (`hardcore::read_fall`): when, by
+/// what, where, and the seconds until the server ends the connection (0x0777)
+/// ([`Session::hardcore_fall`]).
+pub const OP_HARDCORE_FALL: u16 = 0x7EB2;
 /// The most bytes of a crash report this client sends, whatever an offer says.
 pub const CRASH_REPORT_MOST: usize = 12_000;
 /// go-eqoa-server's own, no retail message either: any member of a group may
@@ -1117,6 +1131,10 @@ pub struct NewChar {
     /// sent after 0x002B's own fields, only when there are some, which there
     /// are only from a server that sent the race's options.
     pub options: Vec<(String, u8)>,
+    /// Hardcore chosen (`hardcore`): written after 0x002B's own fields, before
+    /// the race options, when Some, which [`Session::create_character`] makes it
+    /// only for a server that offered it (None, or unchecked, is Some(false)).
+    pub hardcore: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -1466,6 +1484,15 @@ pub struct Session {
     /// own race and its name, its mastery points, the rows Customize re-chooses;
     /// empty from a server that sends none.
     pub select_info: std::collections::HashMap<i64, crate::selectinfo::Info>,
+    /// The server offered Hardcore and this client took it ([`OP_HARDCORE`]): a
+    /// creation carries the choice (`hardcore::block`).
+    pub hardcore: bool,
+    /// Each listed character's Hardcore standing, by server id
+    /// ([`OP_HARDCORE_CHARS`]); empty from a server that sends none.
+    pub hardcore_chars: std::collections::HashMap<i64, crate::hardcore::Char>,
+    /// The player's Hardcore character's fall, told at its death
+    /// ([`OP_HARDCORE_FALL`]), for the world's screen to take.
+    pub hardcore_fall: Option<crate::hardcore::FallNotice>,
     pub capes_in_view: std::collections::HashMap<u32, crate::cape::Cape>,
     pub capes_changed: u64,
     /// The server offered the jump ([`OP_JUMP`]) and this client took it (the
@@ -1715,6 +1742,9 @@ impl Session {
             item_lists: [ITEM_LIST_DISC; 2],
             cape_list: Default::default(),
             select_info: Default::default(),
+            hardcore: false,
+            hardcore_chars: Default::default(),
+            hardcore_fall: None,
             capes_in_view: Default::default(),
             capes_changed: 0,
             jumps: false,
@@ -2341,7 +2371,9 @@ impl Session {
     /// `SendNewChar(43, c)`: the creation form as 0x002B. `m_p18` is 1, as
     /// `VIWndCharCreateBlank::Reset` leaves it; the stats go raw.
     pub fn create_character(&mut self, c: &NewChar) {
-        self.send(&new_char_message(c));
+        // the choice goes only to a server that offered it (`hardcore`)
+        let c = NewChar { hardcore: self.hardcore.then(|| c.hardcore.unwrap_or(false)), ..c.clone() };
+        self.send(&new_char_message(&c));
     }
 
     /// `DeleteCharacter`: `SendOpSigned(45, serverId)`.
@@ -2857,6 +2889,22 @@ impl Session {
             OP_SELECT_INFO_DATA => match crate::selectinfo::read(&m.data[2.min(m.data.len())..]) {
                 Some(list) => self.select_info = list.into_iter().map(|(id, i)| (id as i64, i)).collect(),
                 None => debug_line(&format!("[net] select info: {} bytes not read", m.data.len())),
+            },
+            // Hardcore offered: taken (the create pages offer the choice, select
+            // shows the fallen: `hardcore`)
+            OP_HARDCORE => {
+                if r.u32() != 0 && !r.error {
+                    self.hardcore = true;
+                    self.send_op_int(OP_HARDCORE, 1);
+                }
+            }
+            OP_HARDCORE_CHARS => match crate::hardcore::read_chars(&m.data[2.min(m.data.len())..]) {
+                Some(list) => self.hardcore_chars = list.into_iter().map(|(id, c)| (id as i64, c)).collect(),
+                None => debug_line(&format!("[net] hardcore list: {} bytes not read", m.data.len())),
+            },
+            OP_HARDCORE_FALL => match crate::hardcore::read_fall(&m.data[2.min(m.data.len())..]) {
+                Some(f) => self.hardcore_fall = Some(f),
+                None => debug_line(&format!("[net] hardcore fall: {} bytes not read", m.data.len())),
             },
             // creation's races offered: taken (the create pages offer them)
             OP_CREATION_OFFER => {
@@ -3611,6 +3659,9 @@ pub fn new_char_message(c: &NewChar) -> Vec<u8> {
     }
     for v in c.stats {
         w.u32(v as u32);
+    }
+    if let Some(h) = c.hardcore {
+        w.bytes(&crate::hardcore::block(h));
     }
     if let Some(b) = crate::raceopts::choices_block(&c.options) {
         w.bytes(&b);
@@ -6069,6 +6120,55 @@ mod tests {
         m.truncate(m.len() - 1);
         deliver(&mut s, drdp::TYPE_GUARANTEED, m);
         assert_eq!(s.select_info.len(), 3, "the control: one cut short leaves the last");
+    }
+
+    // Hardcore (0x7EB0): the offer answered with 1 and kept; the list's entries
+    // kept by server id, a fall kept for the world; a creation carries the choice
+    // ('H', 1, choice) before the race options' 'R' only once the offer was taken.
+    // The controls: an offer cut short or of 0, a list of another version.
+    #[test]
+    fn hardcore_is_answered_kept_and_chosen_at_creation() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let out = |s: &mut Session, hi: u8| -> Vec<Vec<u8>> {
+            // DRDP's rate limiter lets the second creation go a moment on
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&hi)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        out(&mut s, 0x7E);
+        let form = NewChar { name: "Brakk".into(), race: 4, class: 0, options: vec![("skin".into(), 2)], hardcore: Some(true), ..Default::default() };
+        s.create_character(&form);
+        let plain = out(&mut s, 0x00);
+        assert_eq!(plain, [new_char_message(&NewChar { hardcore: None, ..form.clone() })], "never offered: 0x002B as it was, no 'H'");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xB0, 0x7E, 1, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xB0, 0x7E, 0, 0, 0, 0]);
+        assert!(!s.hardcore, "the controls: cut short, or 0");
+        assert_eq!(out(&mut s, 0x7E), Vec::<Vec<u8>>::new());
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xB0, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty() && s.hardcore, "{ev:?}");
+        assert_eq!(out(&mut s, 0x7E), [vec![0xB0, 0x7E, 1, 0, 0, 0]]);
+        s.create_character(&form);
+        let with = out(&mut s, 0x00).pop().unwrap();
+        let tail = [vec![b'H', 1, 1], crate::raceopts::choices_block(&form.options).unwrap()].concat();
+        assert!(with.ends_with(&tail), "'H' then 'R': {with:?}");
+        assert_eq!(with.len(), plain[0].len() + 3);
+        assert!(new_char_message(&NewChar { hardcore: Some(false), options: vec![], ..form.clone() }).ends_with(&[b'H', 1, 0]), "taken but not chosen: 0, still written");
+        let mut m = OP_HARDCORE_CHARS.to_le_bytes().to_vec();
+        m.extend(crate::hardcore::tests::sample());
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        assert_eq!(s.hardcore_chars.len(), 2);
+        assert_eq!(s.hardcore_chars.get(&9).and_then(|c| c.fall.as_ref()).map(|f| f.level), Some(52));
+        m[2] = 9;
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m);
+        assert_eq!(s.hardcore_chars.len(), 2, "the control: another version leaves the last");
+        let mut f = OP_HARDCORE_FALL.to_le_bytes().to_vec();
+        f.extend(1_794_991_500u32.to_le_bytes());
+        f.extend([1, b'X', 1, b'Y', 12, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, f);
+        assert_eq!(s.hardcore_fall.as_ref().map(|f| (f.killer.as_str(), f.place.as_str(), f.secs)), Some(("X", "Y", 12)));
     }
 
     #[test]

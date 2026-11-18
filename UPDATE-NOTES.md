@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-18 · Hardcore characters
+- **Make a Hardcore character** on a server that has them: the last page of character creation has a
+  Hardcore row (left or right turns it on), and creating with it on asks you to confirm. It is for good: a
+  Hardcore character's first death is its last, with no respawn and no resurrection, and it shows as
+  "[HC] Name" to everyone in the world.
+- **When a Hardcore character falls**, the screen says what slew it and where, and a few seconds later you are
+  back at the server list (your login kept). Its slot stays on character select as a memorial, greyed, with
+  when it fell ("Fallen 2026-11-18 08:45 UTC"), what slew it and where; it cannot enter the world again, and
+  Delete removes it as any character.
+
 ## 2026-11-18 · [OG] accounts on the Vanilla Test server
 - **An [OG] account plays the game as it was** on the Vanilla Test server: every extra this client adds is off
   (as below), the map, the minimap and item links included and locked off, and the mouse and the touch screen

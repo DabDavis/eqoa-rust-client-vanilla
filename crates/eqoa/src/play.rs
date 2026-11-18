@@ -531,6 +531,10 @@ pub struct Play {
     /// (`net::session::disconnect_word`); the viewer leaves, and a page
     /// shows the reason on its login screen.
     pub disconnected: Option<i32>,
+    /// The player's Hardcore character fell (go-eqoa-server's 0x7EB2,
+    /// `net::hardcore`): its words drawn over the death's black until the server
+    /// ends the connection (0x0777, `msg_0777`).
+    hc_fall: Option<net::hardcore::FallNotice>,
     /// Start-menu work waiting for the HUD's raster (the font): an open
     /// (with its reset) and keys (code, down).
     start_open: Option<bool>,
@@ -3478,7 +3482,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -3593,6 +3597,15 @@ impl Play {
         let mut new_model = None;
         self.actors_scene(walker);
         let events = self.session.pump();
+        // the player's Hardcore character fell (`net::hardcore`): its words in
+        // the chat and over the death's screen
+        if let Some(f) = self.session.hardcore_fall.take() {
+            for l in hardcore_fall_lines(&f) {
+                self.add_chat(l, [1.0, 0.35, 0.35, 1.0]);
+            }
+            eprintln!("play: Hardcore: fell to {:?} in {:?} at {}; the server ends the connection in {} s", f.killer, f.place, f.at, f.secs);
+            self.hc_fall = Some(f);
+        }
         // capes in their slot while the server's offer is taken (`cape`)
         crate::cape::set_offered(self.session.capes);
         // the pack's and the bank's records, as the server last said before a
@@ -3661,6 +3674,9 @@ impl Play {
                 }
                 Event::DialogBox { id, text, options } => self.dialog_box(id, &text, &options),
                 Event::Opcode { op: 0x005E, .. } => self.msg_005e(walker),
+                // Msg0777 in the world: the server ended the connection quietly
+                // (a Hardcore character's fall, `net::hardcore`)
+                Event::Opcode { op: 0x0777, .. } => self.msg_0777(),
                 // the live game's duel (`duelplay`): 0x1502 (the feature word
                 // with `liveplay`'s, below)
                 Event::Opcode { op: op @ crate::duel::OP_IN, data } => {
@@ -6706,6 +6722,23 @@ impl Play {
             }
         }
         self.cam_saved = crate::camstyle::save(&walker.cam);
+    }
+
+    /// `Msg0777` in the world: a quiet disconnect (no notice), back to the server
+    /// list (`Msg0777Done(2)`, as a logout goes) with the login kept; what the
+    /// server sends a Hardcore character's client once it has fallen
+    /// (`net::hardcore`). Nothing is sent: the server has let the connection go.
+    fn msg_0777(&mut self) {
+        let text = match self.hc_fall.as_ref() {
+            Some(_) => "Your Hardcore character has fallen. Its journey is over.".to_string(),
+            None => "Disconnected.".to_string(),
+        };
+        eprintln!("play: 0x0777 (Msg0777): {text}");
+        #[cfg(target_arch = "wasm32")]
+        if !self.booted {
+            crate::web::disconnected(&text);
+        }
+        self.quit = true;
     }
 
     /// Quit answered yes (`m_p2EC28`, `Process`'s LOGOUT): 0x09B0 to the
@@ -10489,6 +10522,15 @@ impl Play {
                 let (x0, y0, x1, y1) = (-2000.0, -1.0, 2640.0, 449.0);
                 r.ui.push_whole(render::ui::Quad { tex, blend: 3, pos: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], uv: [[0.5, 0.5]; 4], color: [0.0, 0.0, 0.0, a], clip: None });
             }
+            // a Hardcore character's fall (`net::hardcore`), over the black:
+            // its lines in the middle, the first in red
+            if let Some(f) = self.hc_fall.as_ref() {
+                r.ui.anchor = Anchor::Middle;
+                for (i, l) in hardcore_fall_lines(f).iter().enumerate() {
+                    let c = if i == 0 { [1.0, 0.3, 0.3, 1.0] } else { [0.9, 0.9, 0.9, 1.0] };
+                    vui.draw_centered_string_ex(&mut r, &crate::ui::wide(l), 320, 190 + 24 * i as i32, c, 0, true);
+                }
+            }
             r.ui.end();
             self.hud = Some((vui_o, assets, hud_o));
         } else {
@@ -14067,5 +14109,33 @@ mod commands {
         crate::hideui::toggle();
         let _ = play();
         assert!(!crate::hideui::hidden(), "a world entry shows it");
+    }
+}
+
+/// A Hardcore character's fall as its player is told (`net::hardcore`): the
+/// first line, then what took it and where (each left out that is empty), then
+/// that it is over.
+pub fn hardcore_fall_lines(f: &net::hardcore::FallNotice) -> Vec<String> {
+    let mut out = vec!["You have fallen.".to_string()];
+    match (f.killer.is_empty(), f.place.is_empty()) {
+        (false, false) => out.push(format!("Slain by {} in {}.", f.killer, f.place)),
+        (false, true) => out.push(format!("Slain by {}.", f.killer)),
+        (true, false) => out.push(format!("In {}.", f.place)),
+        (true, true) => {}
+    }
+    out.push("This Hardcore character's journey is over.".to_string());
+    out
+}
+
+#[cfg(test)]
+mod hardcore_tests {
+    use super::*;
+
+    #[test]
+    fn the_fall_reads() {
+        let f = net::hardcore::FallNotice { at: 0, killer: "a Zek sentry".into(), place: "Tallon's fortress".into(), secs: 12 };
+        assert_eq!(hardcore_fall_lines(&f), ["You have fallen.", "Slain by a Zek sentry in Tallon's fortress.", "This Hardcore character's journey is over."]);
+        let none = net::hardcore::FallNotice { killer: String::new(), place: String::new(), ..f };
+        assert_eq!(hardcore_fall_lines(&none), ["You have fallen.", "This Hardcore character's journey is over."], "nothing known: no middle line");
     }
 }

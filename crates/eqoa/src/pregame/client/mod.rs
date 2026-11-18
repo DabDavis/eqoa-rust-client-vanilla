@@ -67,6 +67,18 @@ impl ShardEntry {
     }
 }
 
+/// Each character's Hardcore standing from the server's list (`net::hardcore`,
+/// by server id), and its own name where the list's carries a mark meant for a
+/// PS2 ("[HC] Name", a fallen one's date after it).
+pub fn apply_hardcore(chars: &mut [CharRecord], list: &std::collections::HashMap<i64, net::hardcore::Char>) {
+    for c in chars {
+        c.hc = list.get(&c.server_id).cloned();
+        if let Some(h) = c.hc.as_ref().filter(|h| !h.name.is_empty()) {
+            c.name.clone_from(&h.name);
+        }
+    }
+}
+
 /// `VICharRecord`: a character as 0x002C lists it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CharRecord {
@@ -104,9 +116,18 @@ pub struct CharRecord {
     /// id, after the list): its own race and the race's name, its mastery
     /// points, the rows Customize re-chooses; none from any other.
     pub info: Option<net::selectinfo::Info>,
+    /// Its Hardcore standing from a server that has Hardcore (`net::hardcore`,
+    /// by its server id, after the list): Hardcore, fallen and how; none from any
+    /// other.
+    pub hc: Option<net::hardcore::Char>,
 }
 
 impl CharRecord {
+    /// A Hardcore character that has fallen: a memorial, never played again.
+    pub fn fallen(&self) -> bool {
+        self.hc.as_ref().is_some_and(|h| h.fall.is_some())
+    }
+
     /// Its own race: the server's (`net::selectinfo`), else the list's.
     pub fn own_race(&self) -> i32 {
         self.info.as_ref().map_or(self.race, |i| i.race as i32)
@@ -149,6 +170,7 @@ impl CharRecord {
             cape: None,
             options: Vec::new(),
             info: None,
+            hc: None,
         }
     }
 
@@ -190,6 +212,7 @@ impl CharRecord {
             cape: None,
             options: Vec::new(),
             info: None,
+            hc: None,
         }
     }
 
@@ -830,6 +853,10 @@ impl Client {
             // and more of each, on a server that sends it (`net::selectinfo`)
             c.info = s.select_info.get(&c.server_id).cloned();
         }
+        // and their Hardcore standing (`net::hardcore`)
+        apply_hardcore(&mut self.chars, &s.hardcore_chars);
+        // and creation's Hardcore row, where the server offered it
+        create::set_hardcore_offered(s.hardcore);
         // and its races' own options and the looks chosen (`raceopts`)
         crate::raceopts::set_options(s.race_options.as_ref());
         if let Some(b) = s.race_looks.take() {
@@ -1071,6 +1098,18 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The server's Hardcore list by server id: the standing kept and the name
+    /// its own; the control: a character the list lacks keeps the list's name.
+    #[test]
+    fn hardcore_names_by_server_id() {
+        let mut chars = vec![CharRecord { name: "[HC] Brakk".into(), server_id: 7, ..Default::default() }, CharRecord { name: "Squeak RIP 11/18".into(), server_id: 9, ..Default::default() }, CharRecord { name: "Plain".into(), server_id: 3, ..Default::default() }];
+        let fall = net::hardcore::Fall { at: 1, level: 5, cms: 0, killer: "a rat".into(), place: "Qeynos".into() };
+        let list = [(7, net::hardcore::Char { name: "Brakk".into(), hardcore: true, ..Default::default() }), (9, net::hardcore::Char { name: "Squeak".into(), hardcore: true, open: false, fall: Some(fall) })].into_iter().collect();
+        apply_hardcore(&mut chars, &list);
+        assert_eq!(chars.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Brakk", "Squeak", "Plain"]);
+        assert!(!chars[0].fallen() && chars[1].fallen() && chars[2].hc.is_none());
+    }
 
     fn character(name: &str, id: i64, gear: Vec<u8>) -> net::session::Character {
         net::session::Character { name: name.into(), server_id: id, model: 0x70D898C6, class: 11, race: 2, level: 7, hair_color: 1, hair_length: 2, hair_style: 3, face: 1, gear, options: Vec::new() }
@@ -1372,7 +1411,7 @@ mod tests {
         c.chars = vec![CharRecord::of(&character("A", 1, vec![7; 32]))];
         (c.top, c.active) = (Wnd::Create, Wnd::Create);
         c.select.set_pending();
-        let form = net::session::NewChar { name: "Brakk".into(), race: 4, class: 9, sex: 1, hair_color: 2, hair_length: 1, hair_style: 3, face: 2, city: 0, stats: [0; 7], options: vec![] };
+        let form = net::session::NewChar { name: "Brakk".into(), race: 4, class: 9, sex: 1, hair_color: 2, hair_length: 1, hair_style: 3, face: 2, city: 0, stats: [0; 7], options: vec![], hardcore: None };
         c.create_character(&form);
         assert_eq!(c.chars.len(), 2);
         let n = &c.chars[1];
@@ -1402,7 +1441,7 @@ mod tests {
         let race = net::creation::Race { id: 28, like: 1, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [0x4A4D_88FB; 2], name: "Fungusman".into(), short: "FNG".into(), desc: String::new() };
         create::tables::set_offer(Some(&net::creation::Creation { all_classes: true, races: vec![race] }));
         crate::raceopts::set_options(Some(&crate::raceopts::tests::fungus_options()));
-        let mut form = net::session::NewChar { name: "Spore".into(), race: 28, class: 9, sex: 0, hair_color: 0, hair_length: 0, hair_style: 0, face: 0, city: 0, stats: [0; 7], options: vec![("body".into(), 1)] };
+        let mut form = net::session::NewChar { name: "Spore".into(), race: 28, class: 9, sex: 0, hair_color: 0, hair_length: 0, hair_style: 0, face: 0, city: 0, stats: [0; 7], options: vec![("body".into(), 1)], hardcore: None };
         let mut c = Client::new();
         c.create_character(&form);
         assert_eq!(c.chars[0].model, 0x5874_ACFC, "the red body chosen");

@@ -12,6 +12,7 @@ pub mod decor;
 pub mod dump;
 pub mod dyepick;
 pub mod entity;
+pub mod hardcore;
 pub mod headmarks;
 pub mod hidelook;
 pub mod itemlink;
