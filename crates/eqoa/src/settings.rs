@@ -1059,6 +1059,13 @@ pub struct ClientOptions {
     /// rows with the last lines in it, never sliding away (`chat::WndChat::
     /// always`). Off by default, the game's box.
     pub chat_always: bool,
+    /// R2 Channel Switch (the server owner, 2026-11-18: "for switching chat
+    /// channels hold r2 then dpad left/right can switch channels if players
+    /// have that on"): with R2 held (the chat box's history, mode 33) left
+    /// and right step the channel plain text goes to (Say, Group, Shout,
+    /// Guild) instead of walking the item links (`Play::chat_channel_step`).
+    /// Off by default, the game's R2.
+    pub r2_channels: bool,
     /// Stacked Spell Bars (Jibwiz's ticket 1913): on a computer, the first two
     /// ability bars drawn as two rows of five stacked above the chat box at
     /// 95%, with no name bar, each slot a key of its own on the Controls page
@@ -1477,6 +1484,7 @@ impl Default for ClientOptions {
             auto_target: false,
             weapon_swap_back: false,
             chat_always: false,
+            r2_channels: false,
             stacked_bars: false,
             spell_bar_opacity: 100,
             chat_tabs: [0; crate::chat::KINDS],
@@ -1638,6 +1646,10 @@ impl ClientOptions {
         // Weapon Swap Back only when on
         if self.weapon_swap_back {
             s.push_str("weapon_swap_back=on\n");
+        }
+        // R2 Channel Switch only when on
+        if self.r2_channels {
+            s.push_str("r2_channels=on\n");
         }
         // Chat Always Shown and Stacked Spell Bars only when on
         if self.chat_always {
@@ -1879,6 +1891,8 @@ impl ClientOptions {
                 ("weapon_swap_back", "on") => c.weapon_swap_back = true,
                 ("weapon_swap_back", "off") => c.weapon_swap_back = false,
                 ("chat_always", "on") => c.chat_always = true,
+                ("r2_channels", "on") => c.r2_channels = true,
+                ("r2_channels", "off") => c.r2_channels = false,
                 ("chat_always", "off") => c.chat_always = false,
                 ("stacked_bars", "on") => c.stacked_bars = true,
                 ("stacked_bars", "off") => c.stacked_bars = false,
@@ -2336,6 +2350,11 @@ pub fn auto_target() -> bool {
 /// Weapon Swap Back (work board 1581).
 pub fn weapon_swap_back() -> bool {
     client().weapon_swap_back
+}
+
+/// R2 Channel Switch (Extended > UI > Chat; the server owner, 2026-11-18).
+pub fn r2_channels() -> bool {
+    client().r2_channels
 }
 
 /// Chat Always Shown (Extended > UI > Chat; ticket 1914).
@@ -3742,6 +3761,21 @@ mod tests {
         assert_eq!(ClientOptions::from_text(&t), c, "round trip");
         assert!(!ClientOptions::from_text("weapon_swap_back=off").weapon_swap_back);
         assert!(!ClientOptions::from_text("weapon_swap_back=maybe").weapon_swap_back, "the default");
+    }
+
+    /// R2 Channel Switch: off by default, written only when on, read back, an
+    /// unknown value left at the default.
+    #[test]
+    fn r2_channels_is_kept_only_when_on() {
+        let d = ClientOptions::default();
+        assert!(!d.r2_channels, "off by default");
+        assert!(!d.to_text().contains("r2_channels"));
+        let c = ClientOptions { r2_channels: true, ..Default::default() };
+        let t = c.to_text();
+        assert!(t.contains("r2_channels=on\n"), "{t}");
+        assert_eq!(ClientOptions::from_text(&t), c, "round trip");
+        assert!(!ClientOptions::from_text("r2_channels=off").r2_channels);
+        assert!(!ClientOptions::from_text("r2_channels=maybe").r2_channels, "the default");
     }
 
     /// Item Links: on by default and written only when off.

@@ -5020,6 +5020,16 @@ impl Play {
         if self.buff_key(key, down) {
             return;
         }
+        // R2 Channel Switch (Extended > UI > Chat, off by default; the server
+        // owner, 2026-11-18): left and right step the chat channel, and do
+        // nothing else, unless a loot roll's or a ready check's strip is up
+        // (right still gives it the d-pad)
+        if crate::settings::r2_channels() && matches!(key, 136 | 137 | 17 | 18) && !self.rolls_focused() && !self.rolls_up() {
+            if down {
+                self.chat_channel_step(if matches!(key, 136 | 17) { -1 } else { 1 });
+            }
+            return;
+        }
         // the walk through the item links (`itemlink`), unless a loot roll's
         // strips have the d-pad
         if down && !self.rolls_focused() && self.link_key(key) {
@@ -7181,6 +7191,29 @@ impl Play {
         if state <= 4 {
             self.show_word(595 + state as i32);
         }
+    }
+
+    /// R2 Channel Switch's step (`dir` -1 back, 1 on): the next channel plain
+    /// text may go to, in the quick chat's order, Say, Group (in a group of
+    /// two or more), Shout, Guild (in a guild), round; set as the quick
+    /// chat's entries set it (0x000E, its "Chat Mode" word in the box).
+    fn chat_channel_step(&mut self, dir: i32) {
+        let mut ways = vec![0u8];
+        if self.group.in_group && self.group.count() >= 2 {
+            ways.push(2);
+        }
+        ways.push(3);
+        if crate::guild::Cmds::can_member(&self.guild) == 0 {
+            ways.push(4);
+        }
+        let n = ways.len() as i32;
+        let i = match ways.iter().position(|&c| c == self.channel) {
+            Some(i) => (i as i32 + dir).rem_euclid(n),
+            None if dir > 0 => 0,
+            None => n - 1,
+        };
+        self.cues.push(crate::sound::Cue::Ui(11));
+        self.group_changed(ways[i as usize]);
     }
 
     /// `Reset`: every other invitation refused (0x0624, 2).
@@ -13519,6 +13552,55 @@ mod commands {
         assert_eq!((p.channel, last_line(&p)), (4, "(word 599)"));
         p.do_action(0x0B01_0000, 0);
         assert_eq!((p.channel, last_line(&p)), (0, "(word 595)"), "Say takes it back");
+    }
+
+    /// R2 Channel Switch (the server owner, 2026-11-18): off, as by default,
+    /// R2 held with left and right changes no channel (the controls: R2 alone
+    /// opens and closes the history as ever); on, right steps Say, Shout,
+    /// Guild (in a guild), Say, left back, each said in the box (words 595+),
+    /// and R2 let go is the game's; a loot roll's strip up keeps right.
+    #[test]
+    fn r2_with_left_and_right_steps_the_channel_when_on() {
+        crate::settings::testing::reset(false);
+        let mut p = play();
+        let r2 = |p: &mut Play, down: bool| {
+            if down {
+                p.chat_history_key(99, true);
+            } else {
+                p.chat_history_key(143, false);
+            }
+        };
+        let tap = |p: &mut Play, k: i32| {
+            p.window_key(k, true);
+            p.window_key(k, false);
+        };
+        // off: R2 alone opens the history and lets it go
+        r2(&mut p, true);
+        assert_eq!(p.mode, 33, "R2: the history");
+        tap(&mut p, 137);
+        tap(&mut p, 136);
+        assert_eq!(p.channel, 0, "off: no channel stepped");
+        r2(&mut p, false);
+        assert_eq!(p.mode, 0, "R2 let go");
+        // on
+        crate::settings::set_client(crate::settings::ClientOptions { r2_channels: true, ..crate::settings::client() });
+        p.guild.in_guild = true;
+        r2(&mut p, true);
+        tap(&mut p, 137);
+        assert_eq!((p.channel, last_line(&p)), (3, "(word 598)"), "right: Shout (no group)");
+        tap(&mut p, 137);
+        assert_eq!((p.channel, last_line(&p)), (4, "(word 599)"), "right: Guild");
+        tap(&mut p, 137);
+        assert_eq!((p.channel, last_line(&p)), (0, "(word 595)"), "right: round to Say");
+        tap(&mut p, 136);
+        assert_eq!(p.channel, 4, "left: back to Guild");
+        assert_eq!(p.mode, 33, "the history still held");
+        r2(&mut p, false);
+        assert_eq!(p.mode, 0, "R2 let go as ever");
+        // with R2 not held the d-pad is play's: no channel
+        p.window_key(137, true);
+        assert_eq!(p.channel, 4);
+        crate::settings::testing::reset(false);
     }
 
     /// The run speed is the server's, as `UpdateGame` hands `m_speed` to

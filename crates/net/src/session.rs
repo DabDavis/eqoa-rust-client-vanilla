@@ -1385,6 +1385,9 @@ pub struct Session {
     /// Whether the server offered the dyers' colour picker and was answered
     /// (`crate::dyepick`).
     pub dye_picker: bool,
+    /// The picker's version both ends speak: the server's offer's, at most
+    /// this client's (`crate::dyepick::VERSION`); 2 has No dye.
+    pub dye_picker_version: u8,
     /// The layout of [`OP_PET_DYES`] this client answered the offer with (2: a
     /// rule byte after each pet's mask, `crate::petdye::read`).
     pub pet_dyes_layout: u8,
@@ -1678,6 +1681,7 @@ impl Session {
             decor: None,
             pet_dyes: None,
             dye_picker: false,
+            dye_picker_version: 0,
             pet_dyes_layout: 1,
             flying: false,
             noclip: false,
@@ -2931,8 +2935,9 @@ impl Session {
             // once with this client's version (`dyepick`); its opens and
             // closes are the game's (`Event::Opcode`)
             crate::dyepick::OP_DYE_PICKER if m.data.get(2) == Some(&crate::dyepick::OFFER) => {
-                if m.data.get(3).is_some_and(|&v| v >= 1) {
+                if let Some(&v) = m.data.get(3).filter(|&&v| v >= 1) {
                     self.dye_picker = true;
+                    self.dye_picker_version = v.min(crate::dyepick::VERSION);
                     self.send(&crate::dyepick::offer_answer());
                 }
             }
@@ -6266,6 +6271,9 @@ mod tests {
         assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
         assert_eq!(answers(&mut s), [(251, vec![0x96, 0x7E, 0, crate::dyepick::VERSION])]);
         assert!(s.dye_picker);
+        assert_eq!(s.dye_picker_version, crate::dyepick::VERSION, "an offer of 3: this client's 2");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x95, 0x7E, 0, 1]);
+        assert_eq!(s.dye_picker_version, 1, "an old server's 1: no No dye");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x95, 0x7E, 2, 1, 0, 0, 0]);
         assert!(matches!(&ev[..], [Event::Opcode { op: 0x7E95, data }] if data[..] == [2, 1, 0, 0, 0]), "{ev:?}");
     }

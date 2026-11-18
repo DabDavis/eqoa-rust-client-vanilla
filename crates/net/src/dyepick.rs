@@ -18,8 +18,9 @@ pub const OP_DYE_PICKER: u16 = 0x7E95;
 /// Client to server: the offer's answer, a colour picked, a picker cancelled.
 pub const OP_DYE_PICKER_ANSWER: u16 = 0x7E96;
 
-/// The version of the picker's messages this client speaks.
-pub const VERSION: u8 = 1;
+/// The version of the picker's messages this client speaks: 2 adds
+/// [`no_dye`] (the server owner, 2026-11-18).
+pub const VERSION: u8 = 2;
 
 /// The messages' kinds (each one's first byte).
 pub const OFFER: u8 = 0;
@@ -27,6 +28,7 @@ pub const OPEN: u8 = 1;
 pub const CLOSE: u8 = 2;
 pub const PICKED: u8 = 1;
 pub const CANCELLED: u8 = 2;
+pub const NO_DYE: u8 = 3;
 
 /// What a picker dyes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -134,6 +136,13 @@ pub fn offer_answer() -> Vec<u8> {
 pub fn picked(token: u32, rgba: u32) -> Vec<u8> {
     let mut w = crate::stream::Writer::op(OP_DYE_PICKER_ANSWER);
     w.u8(PICKED).u32(token).u32(rgba);
+    w.data
+}
+
+/// No dye (version 2): the dye taken off what the picker of `token` dyes.
+pub fn no_dye(token: u32) -> Vec<u8> {
+    let mut w = crate::stream::Writer::op(OP_DYE_PICKER_ANSWER);
+    w.u8(NO_DYE).u32(token);
     w.data
 }
 

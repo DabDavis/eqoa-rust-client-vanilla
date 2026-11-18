@@ -215,7 +215,10 @@
 //!   `Session::agree_item_links`; Off: none, the server sends the plain names a
 //!   PS2 gets), the page saying when this server has no links; Chat Always
 //!   Shown (2026-11-13, Jibwiz's ticket 1914, Off by default: On, the chat box
-//!   stays open at its five rows, the last lines in it, never sliding away).
+//!   stays open at its five rows, the last lines in it, never sliding away);
+//!   R2 Channel Switch (2026-11-18, the server owner's, Off by default: On,
+//!   with R2 held the d-pad's left and right step the chat channel, Say,
+//!   Group, Shout, Guild, `Play::chat_channel_step`, not the item links).
 //! - Multi-boxing settings (2026-11-11, petition 1634): natively Slow When Not
 //!   Focused (Off by default: a window covered or minimised takes its frames
 //!   at its Frame Rate as in front; On: at the game's 30 a second, as every
@@ -1079,6 +1082,8 @@ impl WndOptions {
                     // Weapon Swap Back (work board 1581): a weapon set's next
                     // 0x0022 (`gear::use_message`)
                     WEAPON_SWAP_BACK => c.weapon_swap_back = !c.weapon_swap_back,
+                    // R2 Channel Switch: R2's next hold (`Play::chat_channel_step`)
+                    R2_CHANNELS => c.r2_channels = !c.r2_channels,
                     // Move Touch Pad: the pad's parts dragged and pinched once
                     // the menu is left (`touch::editing`); a mode, not kept
                     MOVE_TOUCH => crate::touch::set_editing(!crate::touch::editing()),
@@ -1749,7 +1754,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 95] = [
+const EXTENDED_ITEMS: [(i32, &str); 96] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1845,6 +1850,7 @@ const EXTENDED_ITEMS: [(i32, &str); 95] = [
     (TARGET_LEVEL, "Target Level"),
     (WEATHER, "Weather"),
     (WEAPON_SWAP_BACK, "Weapon Swap Back"),
+    (R2_CHANNELS, "R2 Channel Switch"),
 ];
 
 /// The Chat Tabs rows' first item (ticket 1951): one a kind of line, in
@@ -1879,6 +1885,9 @@ const WEATHER: i32 = 130;
 /// Weapon Swap Back's item (jibrish, 2026-11-16, work board 1581). 140, not
 /// the next free, as Weather's 130.
 const WEAPON_SWAP_BACK: i32 = 140;
+/// R2 Channel Switch's item (the server owner, 2026-11-18). 150, not the next
+/// free, as Weapon Swap Back's 140.
+const R2_CHANNELS: i32 = 150;
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -1982,7 +1991,7 @@ const ALL_CATEGORIES: [Category; 24] = [
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
-    Category { name: "Chat", items: &[73, 89], note: Note::Links, group: Group::Ui },
+    Category { name: "Chat", items: &[73, 89, R2_CHANNELS], note: Note::Links, group: Group::Ui },
     Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE], note: Note::Shortcuts, group: Group::Other },
     Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None, group: Group::Other },
@@ -2192,6 +2201,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         78 => on_off(c.auto_cast),
         79 => on_off(c.auto_target),
         WEAPON_SWAP_BACK => on_off(c.weapon_swap_back),
+        R2_CHANNELS => on_off(c.r2_channels),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
         39 => wide(&format!("x{}", c.render_scale)),
@@ -3233,6 +3243,15 @@ mod tests {
         assert_eq!((settings::weapon_swap_back(), cues.last()), (true, Some(&11)), "on");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::weapon_swap_back(), "and back");
+        // R2 Channel Switch Off by default (the server owner, 2026-11-18), two values
+        goto!(R2_CHANNELS);
+        assert_eq!(w.item, R2_CHANNELS, "R2 Channel Switch");
+        assert!(!settings::r2_channels(), "off by default");
+        assert_eq!(value_text(&vui, R2_CHANNELS), Some(wide(vui.words.get(552, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::r2_channels(), cues.last()), (true, Some(&11)), "on");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::r2_channels(), "and back");
         // Chat: Item Links On by default, then Off and back (the petition 1463's
         // toggle), the page saying where the server has none
         goto!(73);
@@ -3505,7 +3524,7 @@ mod tests {
                 ("Number Colors", n[..6].to_vec()),
                 ("Merc Colors", n[6..8].to_vec()),
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "Reset DPS Meter"]),
-                ("Chat", vec!["Item Links", "Chat Always Shown"]),
+                ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs: Talk", vec!["Say", "Tells", "Group", "Guild", "Shouts"]),
                 ("Chat Tabs: Game", vec!["Combat", "Loot", "Rolls", "Experience", "System"]),
             ],

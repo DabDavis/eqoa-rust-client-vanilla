@@ -105,7 +105,8 @@ or a browser (each described where it lives below):
   (Texture Packs, Dump Textures, and on a computer Texture Folder), Map (Map,
   Minimap, Map Markers, Quest Helper, Quest Tracker), Number Colors (Your Damage,
   Your Procs, Your Heals, Pet Damage, Pet Procs, Pet Heals) and Combat (DPS Meter, DPS
-  Meter Shows, Reset DPS Meter, Auto-Cast, Auto Target, Weapon Swap Back), and the rows below.
+  Meter Shows, Reset DPS Meter, Auto-Cast, Auto Target, Weapon Swap Back), Chat (Item Links, Chat Always
+  Shown, R2 Channel Switch), and the rows below.
 - **The map and the quest helper** (the user's of 2026-11-09: "also add the map and
   quest helper we had in a former update"; they were taken out on 2026-10-27 with the
   others below that are not the game's, and only these two came back): Extended > Map,
@@ -344,12 +345,19 @@ or a browser (each described where it lives below):
 - **The dyers' colour picker** (the server owner's of 2026-11-17, "lets upgrade the dyer NPCs to show a RGB
   color picker"; `net::dyepick`, `dyepicker.rs`, `dyeplay.rs`): on a server that offers it (go-eqoa-server's
   0x7E95 kind 0; answered 0x7E96 kind 0 with version 1) its Equipment Dyers, Pet Groomers and Weapon Enchanters
-  add "Pick any colour..." after their families; the server's open (0x7E95 kind 1: token, target, alpha flag,
+  add "Pick any colour..." after their families (since 2026-11-18, the owner's "lets remove the color presets
+  from the dyer simplify with the rgb picker", a dyer or groomer opens it as soon as the piece is chosen, and
+  an enchanter asks its own colours or the picker alone); the server's open (0x7E95 kind 1: token, target, alpha flag,
   colour now, title, slots, the pet or aura to preview on, the palette) brings up the client's window (mode 63):
   a saturation/value square, a hue strip, H S V R G B (and A for a pet) sliders with their numbers, hex, new
-  beside old, ten recent colours (`dyecolours.opt`) and the dyer's palette, OK and Cancel. The pad: up and down
-  a row, left and right a step (held, faster), L1/R1 by ten, ✕ a swatch or a button, Start OK, △ Cancel; the
-  keyboard's arrows, Tab, Enter, Escape, Page Up/Down and hex typed; a press and a drag (mouse or finger,
+  beside old, ten recent colours (`dyecolours.opt`), OK and Cancel, and between them No dye where the server
+  speaks the picker's version 2 and it is a character's or a pet's picker (0x7E96 kind 3, the token alone: the
+  dye off what it dyes); the dyer's palette is not shown. The pad
+  (2026-11-18, the owner's "the rgb dye selector only works for mouse, lets make controller friendly"): the
+  d-pad or the left stick, up and down a row (held, repeating), left and right a step (held, faster; the stick
+  all the way, by five), L1/R1 and L2/R2 by ten, the row lit framed in yellow (the hue strip or the square too),
+  ✕ on a slider or OK picks, on a swatch takes it, on Cancel cancels, Start OK, △ or ○ Cancel, a legend in the
+  pad's glyphs along the bottom; the keyboard's arrows, Tab, Enter, Escape, Page Up/Down and hex typed; a press and a drag (mouse or finger,
   `Play::hud_press`) on the square, strip and sliders. While it is up the colour is drawn on the player's own
   character (its dye slots in the live channel's colours, or the hand's aura) or its pet (`petdye::preview`),
   every 100 ms at most; Cancel takes it off, OK keeps it 2.5 s for the server's own. OK answers 0x7E96 kind 1
@@ -484,6 +492,13 @@ or a browser (each described where it lives below):
   took off when the same set is used again while the hands are as it left them; bare hands
   sheathes and draws. The server moves rows, never copies them: one sold, banked or traded
   since is left out. An old server reads the set alone.
+- **R2 Channel Switch** (the server owner's of 2026-11-18, "for switching chat channels hold r2 then dpad
+  left/right can switch channels if players have that on"; `Play::chat_channel_step`): with Extended > UI >
+  Chat > R2 Channel Switch on (off by default), R2 held (the chat box's history, mode 33) with the d-pad's
+  left or right steps the channel plain text goes to, Say, Group (in a group), Shout, Guild (in a guild),
+  round, as the quick chat's entries set it (0x000E, its "Chat Mode" line in the box); left and right then
+  walk no item links. A loot roll's or a ready check's strip up keeps right as it was (the strip's). On a
+  keyboard: C held and the arrows. Off, R2 is the game's.
 - **A render scale and a sharp HUD**: Render Scale (off unless chosen) x2 or
   x4 draws the whole picture, the world and everything over it, two or
   four times the window's size each way and averages it down, which smooths

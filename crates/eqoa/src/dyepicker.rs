@@ -8,14 +8,25 @@
 //! hue, saturation, value, red, green and blue (and the alpha, where the
 //! server says it is the player's: a pet's dye) as sliders with their numbers,
 //! the colour as hex, the new colour beside the old, the colours picked last
-//! and the dyer's palette as swatches, and OK and Cancel. The colour is
-//! previewed on the character or the pet while it is picked (`dyeplay`).
+//! as swatches, and OK and Cancel. The colour is previewed on the character
+//! or the pet while it is picked (`dyeplay`). No preset colours (the server
+//! owner, 2026-11-18: "lets remove the color presets from the dyer simplify
+//! with the rgb picker"): the dyer's palette the server still sends is not
+//! shown.
 //!
-//! - The pad: up and down a row, left and right the row's value by one (held,
-//!   faster), L1 and R1 by ten; on the swatches left and right a swatch and ✕
-//!   takes it; ✕ on OK or Start picks, △ (or Cancel) cancels. The keyboard's
-//!   arrows, Enter and Escape as those, Tab a row down, and hex digits typed
-//!   anywhere the colour ("3FA7D6", Backspace to take one back).
+//! - The pad (the server owner, 2026-11-18: "the rgb dye selector only works
+//!   for mouse, lets make controller friendly"): the d-pad or the left stick,
+//!   up and down a row (held, repeating), left and right the row's value by
+//!   one (held, repeating and faster; the stick pushed further, faster), L1
+//!   and R1 (and L2, R2) by ten; the row lit is framed in yellow, and the hue
+//!   strip or the square too while its row is; on the recent colours left and
+//!   right a swatch and ✕ takes it; ✕ anywhere else (or Start) picks, Cancel's
+//!   ✕, △ or ○ cancel; No dye (between OK and Cancel, on a server of the
+//!   picker's version 2, not an aura's) takes the dye off what is being dyed.
+//!   A legend along the bottom says so in the pad's glyphs.
+//!   The keyboard's arrows, Enter and Escape as those, Tab a row down,
+//!   Page Up and Page Down by ten, and hex digits typed anywhere the colour
+//!   ("3FA7D6", Backspace to take one back).
 //! - A pointer (the mouse, a finger): a press on the square, the strip or a
 //!   slider sets it there and a drag goes on setting it; a swatch, OK and
 //!   Cancel act where they are let go.
@@ -26,7 +37,7 @@ use vi::ui::{FrameParam, Raster, Vui, icon_id, wide};
 /// The window's top left and size, in the game's 640x448 frame.
 pub const AT: [i32; 2] = [116, 76];
 pub const W: i32 = 408;
-pub const H: i32 = 290;
+pub const H: i32 = 276;
 
 /// The square, the hue strip, the right column, the rows and the swatches,
 /// from the window's top left.
@@ -40,10 +51,32 @@ const ROWS_Y: i32 = 70;
 const ROW_H: i32 = 18;
 const BAR: [i32; 2] = [COLUMN + 18, 140];
 const CELL: i32 = 14;
-const CELLS_ROW: usize = 20;
 const SWATCHES_Y: i32 = 204;
+const LEGEND_Y: i32 = H - 46;
 const BUTTONS_Y: i32 = H - 22;
 const BUTTON_X: [i32; 2] = [W / 2 - 60, W / 2 + 60];
+/// The buttons' centres with No dye between OK and Cancel.
+const BUTTON_X3: [i32; 3] = [W / 2 - 120, W / 2, W / 2 + 120];
+
+/// A button along the foot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    Ok,
+    /// the dye taken off what is being dyed (a server of the picker's
+    /// version 2, a character's or a pet's picker)
+    NoDye,
+    Cancel,
+}
+
+impl Button {
+    fn label(self) -> &'static str {
+        match self {
+            Button::Ok => "OK",
+            Button::NoDye => "No dye",
+            Button::Cancel => "Cancel",
+        }
+    }
+}
 
 /// How many colours picked last are kept.
 pub const RECENT: usize = 10;
@@ -104,6 +137,8 @@ pub enum PickerUp {
     /// OK: the colour, 0xRRGGBBAA
     Pick(u32),
     Cancel,
+    /// No dye: the dye taken off
+    NoDye,
 }
 
 /// HSV (hue 0..360, saturation and value 0..1) to RGB, rounded.
@@ -210,9 +245,10 @@ pub struct Picker {
     alpha: u8,
     /// the colour it opened on (0: none), drawn beside the new
     pub old: u32,
-    /// the swatches: the colours picked last, then the dyer's palette
+    /// the swatches: the colours picked last
     pub recent: Vec<u32>,
-    pub palette: Vec<u32>,
+    /// whether No dye is among the buttons
+    pub no_dye_on: bool,
     /// the pad's row, the swatch it is on, the button it is on
     pub row: Row,
     swatch: usize,
@@ -224,6 +260,10 @@ pub struct Picker {
     /// the frames (`tick`s) the key has been held: a repeat waits for a few,
     /// so one slow frame between a press and its release is no hold
     held_ticks: u32,
+    /// the left stick's way as a d-pad key (136-139) while it is pushed
+    /// past half, and how far (0.5..1) it is pushed
+    stick_key: Option<i32>,
+    stick_push: f32,
     /// a pointer press held
     held: Option<Held>,
     hits: Hits,
@@ -237,9 +277,10 @@ impl Default for Row {
 
 impl Picker {
     /// Opened on colour `current` (0 none: white), the alpha the player's
-    /// when `alpha_on`, with the palette's and the recent colours' swatches.
-    pub fn open(&mut self, title: &str, current: u32, alpha_on: bool, palette: Vec<u32>, recent: Vec<u32>) {
-        *self = Picker { open: true, title: title.to_string(), alpha_on, old: current, palette, recent, ..Default::default() };
+    /// when `alpha_on`, with the recent colours' swatches, and No dye among
+    /// the buttons when `no_dye_on`.
+    pub fn open(&mut self, title: &str, current: u32, alpha_on: bool, no_dye_on: bool, recent: Vec<u32>) {
+        *self = Picker { open: true, title: title.to_string(), alpha_on, old: current, recent, no_dye_on, ..Default::default() };
         let c = if current == 0 { 0xFFFF_FFFF } else { current };
         self.set_rgba(c);
         if !alpha_on {
@@ -251,6 +292,7 @@ impl Picker {
         self.open = false;
         self.held = None;
         self.held_key = None;
+        self.stick_key = None;
         self.hits.clear();
     }
 
@@ -289,7 +331,9 @@ impl Picker {
     /// The rows the pad walks, top to bottom.
     fn rows(&self) -> Vec<Row> {
         let mut out: Vec<Row> = Slider::ALL.iter().filter(|&&s| s != Slider::Alpha || self.alpha_on).map(|&s| Row::Slider(s)).collect();
-        out.push(Row::Swatches);
+        if !self.recent.is_empty() {
+            out.push(Row::Swatches);
+        }
         out.push(Row::Buttons);
         out
     }
@@ -331,9 +375,9 @@ impl Picker {
         self.set_value(s, v);
     }
 
-    /// Every swatch, the recent first.
+    /// Every swatch: the recent colours.
     fn swatches(&self) -> Vec<u32> {
-        self.recent.iter().chain(self.palette.iter()).copied().collect()
+        self.recent.clone()
     }
 
     fn row_step(&mut self, by: i32) {
@@ -352,7 +396,7 @@ impl Picker {
                     self.swatch = (self.swatch as i32 + by.signum()).clamp(0, n as i32 - 1) as usize;
                 }
             }
-            Row::Buttons => self.button = (self.button as i32 + by.signum()).clamp(0, 1) as usize,
+            Row::Buttons => self.button = (self.button as i32 + by.signum()).clamp(0, self.buttons().len() as i32 - 1) as usize,
         }
     }
 
@@ -376,18 +420,19 @@ impl Picker {
                 self.held_ticks = 0;
                 cues.push(11);
             }
-            140 | 142 => {
-                self.sideways(if key == 140 { -10 } else { 10 });
+            // L1, R1 (Page Up, Page Down) and L2, R2: by ten
+            140 | 142 | 141 | 143 => {
+                self.sideways(if matches!(key, 140 | 141) { -10 } else { 10 });
                 self.held_key = Some((key, now, now));
                 self.held_ticks = 0;
                 cues.push(11);
             }
-            138 | 19 => {
-                self.row_step(-1);
-                cues.push(11);
-            }
-            139 | 20 | 9 => {
-                self.row_step(1);
+            138 | 19 | 139 | 20 | 9 => {
+                self.row_step(if matches!(key, 138 | 19) { -1 } else { 1 });
+                if key != 9 {
+                    self.held_key = Some((key, now, now));
+                    self.held_ticks = 0;
+                }
                 cues.push(11);
             }
             134 | 13 => match self.row {
@@ -397,26 +442,27 @@ impl Picker {
                         cues.push(13);
                     }
                 }
-                Row::Buttons if self.button == 1 => {
+                Row::Buttons if self.button_at() == Button::Cancel => {
                     cues.push(8);
                     return self.finish(false);
                 }
-                Row::Buttons => {
+                Row::Buttons if self.button_at() == Button::NoDye => {
+                    cues.push(13);
+                    self.close();
+                    return Some(PickerUp::NoDye);
+                }
+                // ✕ on OK or on a slider: the colour picked
+                Row::Buttons | Row::Slider(_) => {
                     cues.push(13);
                     return self.finish(true);
-                }
-                Row::Slider(_) => {
-                    // ✕ on a slider: to OK
-                    self.row = Row::Buttons;
-                    self.button = 0;
-                    cues.push(11);
                 }
             },
             144 => {
                 cues.push(13);
                 return self.finish(true);
             }
-            132 | 27 => {
+            // △, ○ and Escape: cancelled
+            132 | 135 | 27 => {
                 cues.push(8);
                 return self.finish(false);
             }
@@ -425,20 +471,60 @@ impl Picker {
         None
     }
 
-    /// A held left, right, L1 or R1 at `now` (ms), a frame: stepped again
-    /// after 300 ms and four frames, every 50 ms, by five after a second and a
-    /// half.
+    /// The left stick (`lx`, `ly`: -1..1, +y down) at `now` (ms), a frame:
+    /// pushed past half one way it is that way's d-pad key held (a row up or
+    /// down, the value left or right, repeating as the d-pad's), let back it
+    /// is let go. The further it is pushed sideways the faster the value
+    /// runs (`tick`).
+    pub fn stick(&mut self, lx: f32, ly: f32, now: i64, cues: &mut Vec<i32>) {
+        if !self.open {
+            self.stick_key = None;
+            return;
+        }
+        let (ax, ay) = (lx.abs(), ly.abs());
+        let way = if ax.max(ay) < 0.5 {
+            None
+        } else if ay > ax {
+            Some(if ly < 0.0 { 138 } else { 139 })
+        } else {
+            Some(if lx < 0.0 { 136 } else { 137 })
+        };
+        self.stick_push = ax.max(ay);
+        if way == self.stick_key {
+            return;
+        }
+        if let Some(k) = self.stick_key.take() {
+            self.key(k, false, now, cues);
+        }
+        if let Some(k) = way {
+            self.key(k, true, now, cues);
+            self.stick_key = Some(k);
+        }
+    }
+
+    /// A held left, right, L1 or R1 (or up or down, or the stick) at `now`
+    /// (ms), a frame: stepped again after 300 ms and four frames, every 50 ms
+    /// (a row every 150), by five after a second and a half (the stick
+    /// pushed all the way, by five at once).
     pub fn tick(&mut self, now: i64) {
         let Some((key, at, last)) = self.held_key else { return };
         self.held_ticks = self.held_ticks.saturating_add(1);
-        if now - at < 300 || now - last < 50 || self.held_ticks < 4 {
+        let rows = matches!(key, 138 | 19 | 139 | 20);
+        let every = if rows { 150 } else { 50 };
+        if now - at < 300 || now - last < every || self.held_ticks < 4 {
             return;
         }
-        let mut by = if now - at > 1500 { 5 } else { 1 };
-        if matches!(key, 140 | 142) {
+        if rows {
+            self.row_step(if matches!(key, 138 | 19) { -1 } else { 1 });
+            self.held_key = Some((key, at, now));
+            return;
+        }
+        let pushed = self.stick_key == Some(key) && self.stick_push > 0.95;
+        let mut by = if now - at > 1500 || pushed { 5 } else { 1 };
+        if matches!(key, 140 | 142 | 141 | 143) {
             by = 10;
         }
-        self.sideways(if matches!(key, 136 | 17 | 140) { -by } else { by });
+        self.sideways(if matches!(key, 136 | 17 | 140 | 141) { -by } else { by });
         self.held_key = Some((key, at, now));
     }
 
@@ -468,6 +554,16 @@ impl Picker {
     }
 
     /// OK (the colour picked, kept among the recent) or Cancel: closed.
+    /// The buttons along the foot, left to right.
+    pub fn buttons(&self) -> Vec<Button> {
+        if self.no_dye_on { vec![Button::Ok, Button::NoDye, Button::Cancel] } else { vec![Button::Ok, Button::Cancel] }
+    }
+
+    /// The button the pad is on.
+    fn button_at(&self) -> Button {
+        self.buttons().get(self.button).copied().unwrap_or(Button::Ok)
+    }
+
     fn finish(&mut self, ok: bool) -> Option<PickerUp> {
         let c = self.rgba();
         self.close();
@@ -491,7 +587,7 @@ impl Picker {
             Some(HIT_STRIP) => Some(Held::Strip),
             Some(k) if (HIT_SLIDER..HIT_SLIDER + 7).contains(&k) => Some(Held::Slider(Slider::ALL[(k - HIT_SLIDER) as usize])),
             Some(k) if (HIT_SWATCH..HIT_BUTTON).contains(&k) => Some(Held::Swatch((k - HIT_SWATCH) as usize)),
-            Some(k) if (HIT_BUTTON..HIT_BUTTON + 2).contains(&k) => Some(Held::Button((k - HIT_BUTTON) as usize)),
+            Some(k) if (HIT_BUTTON..HIT_BUTTON + 3).contains(&k) => Some(Held::Button((k - HIT_BUTTON) as usize)),
             _ => None,
         };
         self.drag(p);
@@ -537,10 +633,18 @@ impl Picker {
                 }
                 None
             }
-            Held::Button(b) if at == Some(HIT_BUTTON + b as i32) => {
-                cues.push(if b == 0 { 13 } else { 8 });
-                self.finish(b == 0)
-            }
+            Held::Button(b) if at == Some(HIT_BUTTON + b as i32) => match self.buttons().get(b) {
+                Some(Button::NoDye) => {
+                    cues.push(13);
+                    self.close();
+                    Some(PickerUp::NoDye)
+                }
+                Some(&k) => {
+                    cues.push(if k == Button::Ok { 13 } else { 8 });
+                    self.finish(k == Button::Ok)
+                }
+                None => None,
+            },
             _ => None,
         }
     }
@@ -577,6 +681,10 @@ impl Picker {
             }
         }
         self.hits.push([sx, sy, sx + sz, sy + sz], HIT_SQUARE);
+        // the pad's row on the square (saturation, value) framed with it
+        if matches!(self.row, Row::Slider(Slider::Sat | Slider::Val)) {
+            frame(r, yellow, [sx - 2, sy - 2, sz + 4, sz + 4]);
+        }
         let (cx, cy) = (sx + (self.sat * sz as f32) as i32, sy + ((1.0 - self.val) * sz as f32) as i32);
         ring(r, cx, cy, if self.val > 0.5 && self.sat < 0.5 { [0.0, 0.0, 0.0, 1.0] } else { white });
 
@@ -588,6 +696,9 @@ impl Picker {
             fill(r, rgb_f(c), [hx, hy + j * hcell, hw, hcell]);
         }
         self.hits.push([hx - 3, hy, hx + hw + 3, hy + sz], HIT_STRIP);
+        if self.row == Row::Slider(Slider::Hue) {
+            frame(r, yellow, [hx - 2, hy - 2, hw + 4, sz + 4]);
+        }
         let my = hy + (self.hue / 360.0 * sz as f32) as i32;
         fill(r, [0.0, 0.0, 0.0, 1.0], [hx - 3, my - 2, hw + 6, 4]);
         fill(r, white, [hx - 2, my - 1, hw + 4, 2]);
@@ -609,6 +720,9 @@ impl Picker {
                 vui.blit_ex(r, 89, [x - 22, y + 2], 3, 1.0, 0);
             }
             let (bx, by) = (at[0] + BAR[0], y + 5);
+            if lit {
+                frame(r, yellow, [bx - 3, by - 4, BAR[1] + 6, 16]);
+            }
             for i in 0..BAR_CELLS {
                 let f = (i as f32 + 0.5) / BAR_CELLS as f32;
                 fill(r, self.slider_colour(s, f), [bx + i * BAR[1] / BAR_CELLS, by, BAR[1] / BAR_CELLS + 1, 8]);
@@ -624,31 +738,31 @@ impl Picker {
             vui.draw_string_ex(r, &num, at[0] + W - 12 - nw, y, if lit { yellow } else { white }, true);
         }
 
-        // the swatches: the recent on their row, the palette under them
+        // the swatches: the recent colours on their row
         let sw_lit = self.row == Row::Swatches;
-        let mut k = 0usize;
-        let mut y = at[1] + SWATCHES_Y;
-        vui.draw_string_ex(r, &wide("Recent"), at[0] + 12, y - 2, grey, true);
-        for (i, c) in self.recent.clone().into_iter().enumerate() {
-            let x = at[0] + 72 + i as i32 * (CELL + 2);
+        let y = at[1] + SWATCHES_Y;
+        if !self.recent.is_empty() {
+            vui.draw_string_ex(r, &wide("Recent"), at[0] + 12, y - 2, if sw_lit { yellow } else { grey }, true);
+        }
+        for (k, c) in self.recent.clone().into_iter().enumerate() {
+            let x = at[0] + 72 + k as i32 * (CELL + 2);
             self.swatch_cell(r, [x, y], c, k, sw_lit);
-            k += 1;
-        }
-        y += CELL + 6;
-        for (i, c) in self.palette.clone().into_iter().enumerate() {
-            let (col, line) = ((i % CELLS_ROW) as i32, (i / CELLS_ROW) as i32);
-            let x = at[0] + 12 + col * (CELL + 2) + 60;
-            self.swatch_cell(r, [x, y + line * (CELL + 2)], c, k, sw_lit);
-            k += 1;
-        }
-        if !self.palette.is_empty() {
-            vui.draw_string_ex(r, &wide("Dyes"), at[0] + 12, y - 2, grey, true);
         }
 
-        // OK and Cancel
-        for (b, label) in ["OK", "Cancel"].iter().enumerate() {
-            let (x, y) = (at[0] + BUTTON_X[b], at[1] + BUTTONS_Y);
-            let s = wide(label);
+        // the pad's legend, in its glyphs
+        let legend = wide(legend(self.row, self.button_at()));
+        let mut win = vi::ui::Window::default();
+        let lw = win.text_width(vui, r, &legend);
+        win.init(vui, r, at, W, 1, 0);
+        win.open(true);
+        win.draw_text_internal(vui, r, &legend, at[0] + (W - lw) / 2, at[1] + LEGEND_Y, grey, 1);
+
+        // OK (No dye) and Cancel
+        let buttons = self.buttons();
+        for (b, k) in buttons.iter().enumerate() {
+            let cx = if buttons.len() == 3 { BUTTON_X3[b] } else { BUTTON_X[b] };
+            let (x, y) = (at[0] + cx, at[1] + BUTTONS_Y);
+            let s = wide(k.label());
             let lit = self.row == Row::Buttons && self.button == b;
             let half = vui.string_width(r, &s) / 2;
             let pressed = self.held == Some(Held::Button(b));
@@ -700,6 +814,26 @@ fn fill(r: &mut dyn Raster, c: [f32; 4], [x, y, w, h]: [i32; 4]) {
 }
 
 /// A swatch with an edge (the new colour's lighter).
+/// A rectangle's edge, two pixels wide (the pad's focus).
+fn frame(r: &mut dyn Raster, c: [f32; 4], [x, y, w, h]: [i32; 4]) {
+    fill(r, c, [x, y, w, 2]);
+    fill(r, c, [x, y + h - 2, w, 2]);
+    fill(r, c, [x, y, 2, h]);
+    fill(r, c, [x + w - 2, y, 2, h]);
+}
+
+/// The legend along the bottom for the pad's row (and button): what ✕ does
+/// there, the steps, the cancel.
+pub fn legend(row: Row, button: Button) -> &'static str {
+    match (row, button) {
+        (Row::Slider(_), _) => "|7|8 By 10   |x OK   |t Cancel",
+        (Row::Swatches, _) => "|x Take   |t Cancel",
+        (Row::Buttons, Button::Cancel) => "|x Cancel",
+        (Row::Buttons, Button::NoDye) => "|x Take the dye off   |t Cancel",
+        (Row::Buttons, Button::Ok) => "|x OK   |t Cancel",
+    }
+}
+
 fn swatch(r: &mut dyn Raster, [x, y, w, h]: [i32; 4], c: u32, bright: bool) {
     fill(r, if bright { [0.9, 0.9, 0.9, 1.0] } else { [0.4, 0.4, 0.4, 1.0] }, [x - 1, y - 1, w + 2, h + 2]);
     fill(r, rgba_f(c | 0xFF), [x, y, w, h]);
@@ -777,7 +911,7 @@ mod tests {
     #[test]
     fn the_sliders_move_the_colour() {
         let mut p = Picker::default();
-        p.open("Dye chest", 0x3FA7_D6FF, false, vec![], vec![]);
+        p.open("Dye chest", 0x3FA7_D6FF, false, false, vec![]);
         assert_eq!(p.rgba(), 0x3FA7_D6FF);
         assert_eq!((p.value(Slider::Hue), p.value(Slider::Sat), p.value(Slider::Val)), (199, 71, 84));
         p.set_value(Slider::Red, 255);
@@ -790,27 +924,29 @@ mod tests {
         p.set_value(Slider::Alpha, 0x40);
         assert_eq!(p.rgba() & 0xFF, 0xFF, "the alpha is not the player's");
         let mut q = Picker::default();
-        q.open("Dye your pet", 0x3FA7_D680, true, vec![], vec![]);
+        q.open("Dye your pet", 0x3FA7_D680, true, false, vec![]);
         assert_eq!(q.rgba(), 0x3FA7_D680);
         q.set_value(Slider::Alpha, 0);
         assert_eq!(q.rgba() & 0xFF, 1, "never 0");
         q.set_value(Slider::Hue, 400);
         assert_eq!(q.value(Slider::Hue), 40, "the hue wraps");
         let mut w = Picker::default();
-        w.open("", 0, false, vec![], vec![]);
+        w.open("", 0, false, false, vec![]);
         assert_eq!(w.rgba(), 0xFFFF_FFFF, "none: white");
     }
 
-    /// The pad: down the rows, a slider stepped and held, L1/R1 by ten, the
-    /// swatches taken, ✕ on OK picks, △ cancels; hex typed sets it.
+    /// The pad: down the rows (held, repeating), a slider stepped and held,
+    /// L1/R1 and L2/R2 by ten, the recent swatches taken (no palette's), ✕ on
+    /// OK or a slider picks, △, ○ and Cancel's ✕ cancel; hex typed sets it.
     #[test]
     fn the_pad_and_the_keyboard() {
         let mut cues = Vec::new();
         let mut p = Picker::default();
-        p.open("Dye chest", 0x8000_00FF, false, vec![0x1010_10FF, 0xD100_00FF], vec![0x3FA7_D6FF]);
+        p.open("Dye chest", 0x8000_00FF, false, false, vec![0x3FA7_D6FF, 0xD100_00FF]);
         assert_eq!(p.row, Row::Slider(Slider::Hue));
         for _ in 0..3 {
             p.key(139, true, 0, &mut cues);
+            p.key(139, false, 0, &mut cues);
         }
         assert_eq!(p.row, Row::Slider(Slider::Red));
         p.key(137, true, 0, &mut cues);
@@ -829,18 +965,33 @@ mod tests {
         p.tick(1500);
         p.key(140, false, 1510, &mut cues);
         assert_eq!(p.rgba(), 0x7900_00FF, "L1: ten less; one slow frame before its release is no hold");
+        p.key(143, true, 1600, &mut cues);
+        p.key(143, false, 1610, &mut cues);
+        assert_eq!(p.rgba(), 0x8300_00FF, "R2: ten more");
+        // up held: a row, then a row every 150 ms after 300 ms and four frames
+        p.key(138, true, 2000, &mut cues);
+        assert_eq!(p.row, Row::Slider(Slider::Val));
+        for t in [2100, 2200, 2250, 2320] {
+            p.tick(t);
+        }
+        assert_eq!(p.row, Row::Slider(Slider::Sat), "held up: repeating");
+        p.tick(2400);
+        assert_eq!(p.row, Row::Slider(Slider::Sat), "not before 150 ms");
+        p.tick(2480);
+        assert_eq!(p.row, Row::Slider(Slider::Hue));
+        p.key(138, false, 2500, &mut cues);
         for _ in 0..9 {
             p.key(139, true, 0, &mut cues);
         }
         assert_eq!(p.row, Row::Buttons, "the alpha's row is not there: the bottom");
         p.key(138, true, 0, &mut cues);
-        assert_eq!(p.row, Row::Swatches);
+        assert_eq!(p.row, Row::Swatches, "the recent colours");
         p.key(134, true, 0, &mut cues);
-        assert_eq!(p.rgba(), 0x3FA7_D6FF, "the first swatch: the recent");
+        assert_eq!(p.rgba(), 0x3FA7_D6FF, "the first swatch");
         p.key(137, true, 0, &mut cues);
         p.key(137, true, 0, &mut cues);
         p.key(134, true, 0, &mut cues);
-        assert_eq!(p.rgba(), 0xD100_00FF, "the palette's second");
+        assert_eq!(p.rgba(), 0xD100_00FF, "the second, the last: no further");
         for c in "#00ff7f".chars() {
             p.type_char(c);
         }
@@ -851,23 +1002,105 @@ mod tests {
         p.key(139, true, 0, &mut cues);
         assert_eq!(p.key(134, true, 0, &mut cues), Some(PickerUp::Pick(0x00FF_7FFF)), "✕ on OK");
         assert!(!p.open);
-        p.open("x", 0, false, vec![], vec![]);
-        assert_eq!(p.key(132, true, 0, &mut cues), Some(PickerUp::Cancel));
-        p.open("x", 0, false, vec![], vec![]);
+        p.open("x", 0x8000_00FF, false, false, vec![]);
+        assert_eq!(p.key(134, true, 0, &mut cues), Some(PickerUp::Pick(0x8000_00FF)), "✕ on a slider: picked");
+        p.open("x", 0, false, false, vec![]);
+        assert_eq!(p.rows().last(), Some(&Row::Buttons));
+        assert!(!p.rows().contains(&Row::Swatches), "no recent colours: no swatches' row");
+        assert_eq!(p.key(132, true, 0, &mut cues), Some(PickerUp::Cancel), "△");
+        p.open("x", 0, false, false, vec![]);
+        assert_eq!(p.key(135, true, 0, &mut cues), Some(PickerUp::Cancel), "○");
+        p.open("x", 0, false, false, vec![]);
+        for _ in 0..7 {
+            p.key(139, true, 0, &mut cues);
+        }
+        p.key(137, true, 0, &mut cues);
+        assert_eq!(p.key(134, true, 0, &mut cues), Some(PickerUp::Cancel), "✕ on Cancel");
+        p.open("x", 0, false, false, vec![]);
         assert_eq!(p.key(144, true, 0, &mut cues), Some(PickerUp::Pick(0xFFFF_FFFF)), "Start: OK");
         assert_eq!(p.key(134, true, 0, &mut cues), None, "closed: nothing");
+        // the legend: what ✕ does where the pad is
+        assert_eq!(legend(Row::Slider(Slider::Red), Button::Ok), "|7|8 By 10   |x OK   |t Cancel");
+        assert_eq!(legend(Row::Swatches, Button::Ok), "|x Take   |t Cancel");
+        assert_eq!(legend(Row::Buttons, Button::Cancel), "|x Cancel");
     }
 
-    /// A pointer: the square sets saturation and value where it is pressed
-    /// and dragged, the strip the hue, a slider its value; a swatch and the
-    /// buttons act where they are let go. Nothing before a draw noted where
-    /// (the control), and a press off the window is not the window's.
+    /// No dye (a server of version 2): between OK and Cancel, reached on the
+    /// pad by down to the foot and right once, ✕ takes it; a pointer's press
+    /// on it too. The control: without it the foot's second is Cancel.
+    #[test]
+    fn no_dye_between_ok_and_cancel() {
+        let (vui, mut nr) = (vui(), NullRaster);
+        let mut cues = Vec::new();
+        let mut p = Picker::default();
+        p.open("Dye chest", 0x8000_00FF, false, true, vec![]);
+        assert_eq!(p.buttons(), vec![Button::Ok, Button::NoDye, Button::Cancel]);
+        for _ in 0..6 {
+            p.key(139, true, 0, &mut cues);
+        }
+        assert_eq!(p.row, Row::Buttons);
+        p.key(137, true, 0, &mut cues);
+        assert_eq!(legend(p.row, p.button_at()), "|x Take the dye off   |t Cancel");
+        assert_eq!(p.key(134, true, 0, &mut cues), Some(PickerUp::NoDye));
+        assert!(!p.open);
+        p.open("Dye chest", 0x8000_00FF, false, true, vec![]);
+        for _ in 0..6 {
+            p.key(139, true, 0, &mut cues);
+        }
+        p.key(137, true, 0, &mut cues);
+        p.key(137, true, 0, &mut cues);
+        p.key(137, true, 0, &mut cues);
+        assert_eq!(p.key(134, true, 0, &mut cues), Some(PickerUp::Cancel), "right as far as it goes: Cancel");
+        p.open("Dye chest", 0x8000_00FF, false, true, vec![]);
+        p.draw(&vui, &mut nr);
+        let mid = [(AT[0] + BUTTON_X3[1]) as f32, (AT[1] + BUTTONS_Y) as f32];
+        assert!(p.press(mid));
+        assert_eq!(p.release(mid, &mut cues), Some(PickerUp::NoDye), "pressed");
+        p.open("Dye chest", 0x8000_00FF, false, false, vec![]);
+        assert_eq!(p.buttons(), vec![Button::Ok, Button::Cancel], "no No dye");
+    }
+
+    /// The left stick as the d-pad: pushed past half up or down a row, left
+    /// or right the value, held repeating (all the way, by five), let back
+    /// let go; the control: within half, nothing.
+    #[test]
+    fn the_left_stick_as_the_d_pad() {
+        let mut cues = Vec::new();
+        let mut p = Picker::default();
+        p.open("x", 0x8000_00FF, false, false, vec![]);
+        p.stick(0.3, -0.4, 0, &mut cues);
+        assert_eq!((p.row, p.rgba()), (Row::Slider(Slider::Hue), 0x8000_00FF), "within half: nothing");
+        for t in [0, 16, 33] {
+            p.stick(0.0, 0.8, t, &mut cues);
+        }
+        assert_eq!(p.row, Row::Slider(Slider::Sat), "down: one row while held a moment");
+        p.stick(0.0, 0.0, 50, &mut cues);
+        p.stick(0.0, 0.8, 60, &mut cues);
+        p.stick(0.0, 0.0, 70, &mut cues);
+        p.stick(0.0, 0.8, 80, &mut cues);
+        p.stick(0.0, 0.0, 90, &mut cues);
+        assert_eq!(p.row, Row::Slider(Slider::Red), "pushed again: a row each");
+        p.stick(0.9, 0.1, 100, &mut cues);
+        assert_eq!(p.rgba(), 0x8100_00FF, "right: one up");
+        p.stick(-1.0, 0.0, 200, &mut cues);
+        assert_eq!(p.rgba(), 0x8000_00FF, "left: one down");
+        for t in [250, 320, 400, 460, 520] {
+            p.stick(-1.0, 0.0, t, &mut cues);
+            p.tick(t);
+        }
+        assert_eq!(p.rgba(), 0x7B00_00FF, "all the way left, held: by five");
+        p.stick(0.0, 0.0, 540, &mut cues);
+        p.tick(600);
+        p.tick(700);
+        assert_eq!(p.rgba(), 0x7B00_00FF, "let back: let go");
+    }
+
     #[test]
     fn a_pointer_drags_and_clicks_where_it_was_drawn() {
         let (vui, mut nr) = (vui(), NullRaster);
         let mut cues = Vec::new();
         let mut p = Picker::default();
-        p.open("Dye chest", 0xFF00_00FF, false, vec![0x1010_10FF], vec![]);
+        p.open("Dye chest", 0xFF00_00FF, false, false, vec![0x1010_10FF]);
         let sq = |fx: f32, fy: f32| [(AT[0] + SQUARE[0]) as f32 + fx * SQUARE[2] as f32, (AT[1] + SQUARE[1]) as f32 + fy * SQUARE[2] as f32];
         assert!(p.press(sq(0.5, 0.5)), "on the window");
         assert_eq!(p.rgba(), 0xFF00_00FF, "not drawn: nothing set");
@@ -896,8 +1129,8 @@ mod tests {
         assert_eq!(p.value(Slider::Blue), 128);
         assert_eq!(p.row, Row::Slider(Slider::Blue));
         p.draw(&vui, &mut nr);
-        // the palette's swatch: let go elsewhere, nothing; on it, taken
-        let cell = [(AT[0] + 72) as f32 + 3.0, (AT[1] + SWATCHES_Y + CELL + 6) as f32 + 3.0];
+        // the recent swatch: let go elsewhere, nothing; on it, taken
+        let cell = [(AT[0] + 72) as f32 + 3.0, (AT[1] + SWATCHES_Y) as f32 + 3.0];
         p.press(cell);
         p.release([cell[0] + 100.0, cell[1]], &mut cues);
         assert_ne!(p.rgba(), 0x1010_10FF, "let go off it");

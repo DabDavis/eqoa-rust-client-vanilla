@@ -589,6 +589,7 @@ pub fn shot_with(
                 if let Some(p) = play.as_mut() {
                     p.pad_mode(console.mode());
                     p.fishing_pad(console.sticks());
+                    p.dyepick_pad(console.sticks());
                     for (k, down) in keys {
                         eprintln!("pad key {k} {}", if down { "down" } else { "up" });
                         p.set_key(k, down, &mut walker, aspect);
@@ -3210,6 +3211,7 @@ impl App {
         if let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut()) {
             p.pad_mode(self.console.mode());
             p.fishing_pad(self.console.sticks());
+            p.dyepick_pad(self.console.sticks());
             for (k, down) in keys {
                 p.set_key(k, down, w, aspect);
             }
@@ -4981,6 +4983,10 @@ impl App {
                 Key::Named(NamedKey::ArrowRight) if p.mode == 33 && p.rolls_up() => Some(18),
                 Key::Named(NamedKey::ArrowLeft) if p.mode == 33 && p.rolls_focused() => Some(17),
                 Key::Named(NamedKey::Enter) if p.mode == 33 && p.rolls_focused() => Some(13),
+                // R2 Channel Switch on (Extended > UI > Chat): left and right
+                // step the chat channel, as the d-pad's with R2 held
+                Key::Named(NamedKey::ArrowLeft) if p.mode == 33 && crate::settings::r2_channels() => Some(17),
+                Key::Named(NamedKey::ArrowRight) if p.mode == 33 && crate::settings::r2_channels() => Some(18),
                 // the item links (`itemlink`): left walks up through them, right
                 // back down and Enter opens the one lit while one is
                 Key::Named(NamedKey::ArrowLeft) if p.links_walkable() => Some(17),
