@@ -3923,9 +3923,9 @@ mod tests {
         assert_eq!(s.qol_off, 0, "a short message is none");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xA0, 0x7E, 2, 0xFF, 0x03, 0, 0]);
         assert_eq!(s.qol_off, 0, "another version is not taken");
-        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xA0, 0x7E, 1, 0xFF, 0x03, 0, 0]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xA0, 0x7E, 1, 0xFF, 0x0F, 0, 0]);
         assert!(ev.is_empty(), "the message is the session's: {ev:?}");
-        assert_eq!(s.qol_off, 0x3FF);
+        assert_eq!(s.qol_off, 0xFFF);
         assert_eq!(s.record.as_ref().unwrap().len(), 0, "answered with nothing");
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert_eq!(s.qol_off, 0, "a new connection forgets it");

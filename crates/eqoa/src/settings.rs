@@ -1126,6 +1126,17 @@ pub struct ClientOptions {
     /// Minimap (on by default): the map's pictures round the player under
     /// the quick menus' name plate (`map::mini`); off, none.
     pub minimap: bool,
+    /// Map and Minimap on a server with the game's own UI (`qol::MAP`: the
+    /// Vanilla Test server; the owner, 2026-11-18: "minimap and map can work
+    /// but make it toggled off by default in extended"): off until the
+    /// player turns them on there, kept apart from `map` and `minimap`, which
+    /// every other server reads.
+    pub map_here: bool,
+    pub minimap_here: bool,
+    /// Item Links on such a server (`qol::ITEM_LINKS`; the owner, 2026-11-18:
+    /// "for item links they can be on in vanilla test but they are toggled
+    /// off by default"): off until turned on there, apart from `item_links`.
+    pub item_links_here: bool,
     /// Minimap Scroll Frame (the owner, 2026-11-13: "make the minimap have
     /// the borders like the spell bar the scroll, with the rollers on top and
     /// bottom"; on by default): the minimap framed as the quick menu's
@@ -1506,6 +1517,9 @@ impl Default for ClientOptions {
             profanity_filter: Profanity::High,
             map: true,
             minimap: true,
+            map_here: false,
+            minimap_here: false,
+            item_links_here: false,
             minimap_scroll: true,
             map_pointer: crate::map::Pointer::Facing,
             map_markers: true,
@@ -1714,6 +1728,12 @@ impl ClientOptions {
         ] {
             if !on {
                 s.push_str(&format!("{key}=off\n"));
+            }
+        }
+        // the game's own UI's Map and Minimap only when on (`qol::MAP`)
+        for (on, key) in [(self.map_here, "map_here"), (self.minimap_here, "minimap_here"), (self.item_links_here, "item_links_here")] {
+            if on {
+                s.push_str(&format!("{key}=on\n"));
             }
         }
         // Map Pointer only when Camera
@@ -1943,6 +1963,12 @@ impl ClientOptions {
                 ("map", "off") => c.map = false,
                 ("minimap", "on") => c.minimap = true,
                 ("minimap", "off") => c.minimap = false,
+                ("map_here", "on") => c.map_here = true,
+                ("map_here", "off") => c.map_here = false,
+                ("minimap_here", "on") => c.minimap_here = true,
+                ("minimap_here", "off") => c.minimap_here = false,
+                ("item_links_here", "on") => c.item_links_here = true,
+                ("item_links_here", "off") => c.item_links_here = false,
                 ("minimap_scroll", "on") => c.minimap_scroll = true,
                 ("minimap_scroll", "off") => c.minimap_scroll = false,
                 ("map_pointer", v) => {
@@ -2202,8 +2228,12 @@ pub mod qol {
     use super::ClientOptions;
     use std::cell::Cell;
 
-    /// The map (M) and the minimap (N): their waypoints, markers, the
-    /// community's marks and the GM's travel with them.
+    /// The map (M) and the minimap (N) OFF BY DEFAULT, not locked: read
+    /// from `map_here` and `minimap_here`, which Extended's rows and N turn
+    /// and Save Changes keeps (the owner, 2026-11-18: "minimap and map can
+    /// work but make it toggled off by default in extended"). Waypoints, Map
+    /// Markers, the community's marks and the pointer go with the map; its
+    /// quest marks are the Quest Helper's (`QUEST_HELPER`, locked off).
     pub const MAP: u32 = 1 << 0;
     /// The Quest Helper: the guide, the tracker, the map's and the minimap's
     /// quest marks and the marks over quest NPCs' heads.
@@ -2225,6 +2255,12 @@ pub mod qol {
     pub const PET_EFFECTS: u32 = 1 << 8;
     /// Auto-cast on the quick bars and Auto Target.
     pub const AUTO_CAST: u32 = 1 << 9;
+    /// Item links in chat (Item Links) OFF BY DEFAULT, not locked: read from
+    /// `item_links_here`, the player's to turn there (plain names until then).
+    pub const ITEM_LINKS: u32 = 1 << 10;
+    /// Ability Bars 3 and 4 and Stacked Spell Bars: the game's two bars, its
+    /// carousel.
+    pub const SPELL_BARS: u32 = 1 << 11;
 
     thread_local! {
         static OFF: Cell<u32> = const { Cell::new(0) };
@@ -2245,7 +2281,6 @@ pub mod qol {
     /// server never turns off.
     pub fn of_item(item: i32) -> Option<u32> {
         Some(match item {
-            41 | 42 | 43 | 87 | 91 => MAP,
             44 | 45 | 85 => QUEST_HELPER,
             70..=72 => DPS_METER,
             64..=69 | 80 | 81 => NUMBER_COLORS,
@@ -2253,8 +2288,15 @@ pub mod qol {
             83 => BUFF_WINDOW,
             58 => PET_EFFECTS,
             78 | 79 => AUTO_CAST,
+            22 | 90 => SPELL_BARS,
             _ => return None,
         })
+    }
+
+    /// Whether Extended's row `item` is the map's, the minimap's or Item Links', off
+    /// by default on this server (`MAP`) but the player's to turn.
+    pub fn item_default_off(item: i32) -> bool {
+        (off(MAP) && matches!(item, 41 | 42)) || (off(ITEM_LINKS) && item == 73)
     }
 
     /// Whether Extended's row `item` is off on this server.
@@ -2268,7 +2310,7 @@ pub mod qol {
     /// `c` as the server leaves it: each addition it turns off read as off.
     pub fn masked(mut c: ClientOptions) -> ClientOptions {
         if off(MAP) {
-            (c.map, c.minimap, c.map_markers) = (false, false, false);
+            (c.map, c.minimap) = (c.map_here, c.minimap_here);
         }
         if off(QUEST_HELPER) {
             (c.quest_helper, c.quest_markers, c.quest_tracker, c.head_marks) = (false, false, false, false);
@@ -2294,6 +2336,12 @@ pub mod qol {
         if off(AUTO_CAST) {
             (c.auto_cast, c.auto_target) = (false, false);
         }
+        if off(ITEM_LINKS) {
+            c.item_links = c.item_links_here;
+        }
+        if off(SPELL_BARS) {
+            (c.ability_bars, c.stacked_bars) = (super::ABILITY_BARS_GAME, false);
+        }
         c
     }
 
@@ -2301,7 +2349,9 @@ pub mod qol {
     /// turns off put back as `kept` has it: the player's own choice stays.
     pub fn unmasked(mut v: ClientOptions, kept: ClientOptions) -> ClientOptions {
         if off(MAP) {
-            (v.map, v.minimap, v.map_markers) = (kept.map, kept.minimap, kept.map_markers);
+            // the rows turned here are this server's kind's own
+            (v.map_here, v.minimap_here) = (v.map, v.minimap);
+            (v.map, v.minimap) = (kept.map, kept.minimap);
         }
         if off(QUEST_HELPER) {
             (v.quest_helper, v.quest_markers, v.quest_tracker, v.head_marks) = (kept.quest_helper, kept.quest_markers, kept.quest_tracker, kept.head_marks);
@@ -2326,6 +2376,12 @@ pub mod qol {
         }
         if off(AUTO_CAST) {
             (v.auto_cast, v.auto_target) = (kept.auto_cast, kept.auto_target);
+        }
+        if off(ITEM_LINKS) {
+            (v.item_links_here, v.item_links) = (v.item_links, kept.item_links);
+        }
+        if off(SPELL_BARS) {
+            (v.ability_bars, v.stacked_bars) = (kept.ability_bars, kept.stacked_bars);
         }
         v
     }
@@ -3727,30 +3783,49 @@ mod tests {
     #[test]
     fn the_server_turns_additions_off_and_the_choices_stay() {
         testing::reset(false);
-        let chosen = ClientOptions { dps_meter: true, auto_target: true, number_colors: [3; crate::numcolor::ROWS], ..Default::default() };
+        let chosen = ClientOptions { dps_meter: true, auto_target: true, number_colors: [3; crate::numcolor::ROWS], ability_bars: 4, stacked_bars: true, ..Default::default() };
         set_client(chosen);
         assert_eq!(client(), chosen, "nothing off: as kept");
-        let all = qol::MAP | qol::QUEST_HELPER | qol::TARGET_LEVEL | qol::DPS_METER | qol::NUMBER_COLORS | qol::STAT_CAPS | qol::POWER_BARS | qol::BUFF_WINDOW | qol::PET_EFFECTS | qol::AUTO_CAST;
-        assert_eq!(all, 0x3FF, "go-eqoa-server's QoLAllOff");
+        let all = qol::MAP | qol::QUEST_HELPER | qol::TARGET_LEVEL | qol::DPS_METER | qol::NUMBER_COLORS | qol::STAT_CAPS | qol::POWER_BARS | qol::BUFF_WINDOW | qol::PET_EFFECTS | qol::AUTO_CAST | qol::ITEM_LINKS | qol::SPELL_BARS;
+        assert_eq!(all, 0xFFF, "go-eqoa-server's QoLAllOff");
         qol::set_off(all);
         let c = client();
-        assert!(!(c.map || c.minimap || c.map_markers || map() || minimap()), "the map");
+        assert!(!(c.map || c.minimap || map() || minimap()), "the map, off by default");
+        assert!(c.map_markers, "its markers the player's, with it");
         assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
         assert!(!(c.target_level || c.dps_meter || c.power_bars || c.buff_window || c.pet_effects || c.auto_cast || c.auto_target), "the rest");
         assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
+        assert!(!c.item_links && (c.ability_bars, c.stacked_bars) == (ABILITY_BARS_GAME, false), "item links off by default, the game's two bars");
         let d = ClientOptions::default();
-        assert!((c.raid_list, c.item_links, c.flora) == (d.raid_list, d.item_links, d.flora), "what is not an addition stays");
+        assert!((c.raid_list, c.overlapping_names, c.loading_tips, c.flora) == (d.raid_list, d.overlapping_names, d.loading_tips, d.flora), "what is not an addition stays");
         // a change to another row while they are off (Extended's, or a key's)
-        set_client(ClientOptions { flora: 30, map: true, ..client() });
+        set_client(ClientOptions { flora: 30, dps_meter: false, ..client() });
         assert_eq!(client().flora, 30, "the change made");
-        assert!(!client().map, "a row that is off stays off");
+        assert!(!client().dps_meter, "a row that is off stays off");
+        // the map turned on here: on here, and kept apart
+        set_client(ClientOptions { map: true, ..client() });
+        set_minimap(true).unwrap();
+        set_client(ClientOptions { item_links: true, ..client() });
+        assert!(map() && minimap() && item_links(), "turned on on this server");
         save_client().unwrap();
         let kept = ClientOptions::from_text(&String::from_utf8(store::read(CLIENT_FILE).unwrap()).unwrap());
-        assert_eq!(kept, ClientOptions { flora: 30, ..chosen }, "client.opt keeps the player's own choices");
+        let here = ClientOptions { flora: 30, map_here: true, minimap_here: true, item_links_here: true, ..chosen };
+        assert_eq!(kept, here, "client.opt keeps the player's own choices, the map's here apart");
+        set_client(ClientOptions { minimap: false, ..client() });
+        assert!(map() && !minimap() && kept_client().minimap, "the minimap off here alone");
+        set_minimap(true).unwrap();
         qol::set_off(0);
-        assert_eq!(client(), ClientOptions { flora: 30, ..chosen }, "none off: all back as chosen");
+        assert_eq!(client(), here, "none off: all back as chosen");
+        assert!(map() && minimap(), "the map everywhere else as it was");
+        set_client(ClientOptions { map: false, ..client() });
+        assert!(kept_client().map_here, "turned off elsewhere: still on here");
+        set_client(ClientOptions { map: true, ..client() });
         qol::set_off(qol::DPS_METER);
         assert!(!client().dps_meter && client().auto_target && client().map, "one bit, one addition");
+        qol::set_off(qol::MAP);
+        assert!(map() && minimap(), "the map's on here: remembered");
+        qol::set_off(qol::ITEM_LINKS);
+        assert!(item_links(), "and the links");
         qol::set_off(0);
     }
 

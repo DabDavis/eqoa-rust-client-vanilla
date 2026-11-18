@@ -12748,16 +12748,21 @@ mod commands {
         p.entities.slots[2] = Some(net::entity::Entity { id: 0x22, kind: net::entity::TYPE_CREATURE, creature: Some(creature), ..Default::default() });
         p.target = 0x22;
         p.session.con_level_offer = true;
+        p.session.expansion = 2;
+        crate::settings::set_client(crate::settings::ClientOptions { ability_bars: 4, ..crate::settings::client() });
         p.server_ui();
         assert!(!qol::off(qol::MAP) && crate::settings::map(), "nothing said: the map");
+        assert_eq!(p.ability_bars(), 4, "and four bars");
         assert_eq!(p.target_level(crate::settings::client().target_level), Some(32), "and the level");
-        p.session.qol_off = 0x3FF;
+        p.session.qol_off = 0xFFF;
         p.server_ui();
-        assert!(qol::off(qol::MAP) && !crate::settings::map() && !crate::settings::quest_tracker(), "told: none");
+        assert_eq!(p.ability_bars(), 2, "the game's two bars");
+        assert!(qol::off(qol::MAP) && !crate::settings::map() && !crate::settings::quest_tracker(), "told: none (the map off by default)");
         assert_eq!(p.target_level(crate::settings::client().target_level), None, "nor the level");
         assert_eq!(crate::trainer::stat_text(343, 435), "343", "the stat's value alone");
         drop(p);
         assert!(!qol::off(qol::MAP) && crate::settings::map(), "out of the world: back");
+        assert_eq!(crate::settings::ability_bars(), 4, "the four bars chosen");
         assert_eq!(crate::trainer::stat_text(343, 435), "343/435");
     }
 

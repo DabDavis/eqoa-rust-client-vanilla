@@ -7,11 +7,16 @@ is put on the page by `.github/workflows/notes.yml`.
 
 ## 2026-11-18 · The game's own screens on the Vanilla Test server
 - **On a server that asks for the game as it was** (the Vanilla Test server), the extras this client adds are
-  off while you play there: the map and minimap, the quest helper (its tracker, the quest marks on the map and
-  the "!" and "?" over quest givers), a target's level in the target box, the DPS meter, Number Colors and Merc
-  Colors (every number in the game's own colour), the stat caps in Character > Summary (the value alone, as on a
-  PS2), the group's power bars, the buff window (the game's own effects strip instead), the pet's effects under
-  its bar, and auto-cast and auto target. Their rows in Extended say "Off on this server" and do not change.
+  off while you play there: the quest helper (its tracker, the quest marks on the map and the "!" and "?" over
+  quest givers), a target's level in the target box, the DPS meter, Number Colors and Merc Colors (every number
+  in the game's own colour), the stat caps in Character > Summary (the value alone, as on a PS2), the group's
+  power bars, the buff window (the game's own effects strip instead), the pet's effects under its bar,
+  auto-cast and auto target, and the third and fourth ability bars and Stacked Spell Bars (the game's two
+  bars). Their rows in Extended say "Off on this server" and do not change. The server's /con, which named a
+  creature's level, is off there too.
+- **The map, the minimap and item links start off there**: their rows say "Off by default on this server", and
+  you can turn them on in Extended. What you choose there is kept for that server and does not change your
+  choice anywhere else.
 - **Your own choices are kept**: on any other server everything is back exactly as you set it.
 
 ## 2026-11-18 · Texture packs load all their textures again

@@ -1679,6 +1679,9 @@ impl WndOptions {
         if crate::settings::qol::item_off(self.item, TARGET_LEVEL) && CATEGORIES[c].items.contains(&self.item) {
             return Some(OFF_HERE.to_string());
         }
+        if crate::settings::qol::item_default_off(self.item) && CATEGORIES[c].items.contains(&self.item) {
+            return Some(DEFAULT_OFF_HERE.to_string());
+        }
         match CATEGORIES[c].note {
             Note::Reads => Some(touch_note(self.item, &crate::settings::client().touch_opts(), crate::touch::drawn_here).unwrap_or_else(crate::input::reads)),
             Note::Server => self.server_note.clone().filter(|_| matches!(self.item, 23 | 24)),
@@ -1874,6 +1877,9 @@ const EXTENDED_ITEMS: [(i32, &str); 97] = [
 /// What a page says beside Back while a row the server turns off is chosen
 /// (`settings::qol`, go-eqoa-server's `world.vanilla_ui`).
 const OFF_HERE: &str = "Off on this server";
+/// And while the Map or the Minimap is, where they are off until turned on
+/// (`settings::qol::MAP`).
+const DEFAULT_OFF_HERE: &str = "Off by default on this server";
 
 /// The Chat Tabs rows' first item (ticket 1951): one a kind of line, in
 /// `chat::Kind::ALL`'s order, 92 to 101.
@@ -4057,13 +4063,13 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [41, 42, 43, 87, 91, 44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, 83, 58, 78, 79];
-        qol::set_off(0x3FF);
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, 83, 58, 78, 79, 22, 90];
+        qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
         }
         let off_text = Some(wide(vui.words.get(552, vui.language)));
-        for item in [41, 44, TARGET_LEVEL, 70, 86, 83, 58, 78] {
+        for item in [44, TARGET_LEVEL, 70, 86, 83, 58, 78, 90] {
             for k in path_to(&w, item) {
                 w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
                 w.draw(&vui, &mut NullRaster, &o, &mut ups);
@@ -4079,16 +4085,31 @@ mod tests {
             }
         }
         assert_eq!(value_text(&vui, 64), Some(wide("Default")), "a number's colour the game's");
-        // none off: the Map row (the last reached is Auto-Cast's) turns again
-        qol::set_off(0);
-        for k in path_to(&w, 41) {
-            w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
-            w.draw(&vui, &mut NullRaster, &o, &mut ups);
+        assert_eq!(value_text(&vui, 22), Some(wide("2")), "the game's two bars");
+        // the Map, the Minimap and Item Links: off by default here, said, and
+        // turned
+        for item in [41, 42, 73] {
+            for k in path_to(&w, item) {
+                w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
+                w.draw(&vui, &mut NullRaster, &o, &mut ups);
+            }
+            assert_eq!(value_text(&vui, item), off_text, "row {item} Off by default");
+            assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some(DEFAULT_OFF_HERE), "row {item} says so");
+            cues.clear();
+            w.key(&vui, &mut NullRaster, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
+            assert_eq!(cues, [11], "row {item} turns");
         }
-        assert!(settings::map(), "the player's choice, on, as it was");
+        assert!(settings::map() && settings::minimap() && settings::item_links(), "on here, as turned");
+        // the next connection's server says nothing: the player's own, on,
+        // and no note
+        qol::set_off(0);
+        assert!(settings::map() && settings::minimap() && settings::item_links(), "the player's choices, on, as they were");
         assert_eq!(w.page_note(w.cat.unwrap()), None, "nothing said");
         w.key(&vui, &mut NullRaster, &mut o, key::RIGHT, 0, &mut cues, &mut ups);
-        assert!(!settings::map(), "it turns");
+        assert!(!settings::item_links(), "Item Links turns");
+        qol::set_off(qol::ITEM_LINKS);
+        assert!(settings::item_links(), "here they are still on");
+        qol::set_off(0);
     }
 
     /// Sun Shadows' note: only while they are on and Dynamic Lighting is
