@@ -65,6 +65,12 @@ pub const ARM_BACK: i64 = 1600;
 /// across (its own units), and over the frame's lowest by [`ARM_OVER_DECK`].
 pub const ARM_HALF: f32 = 0.75;
 pub const ARM_OVER_DECK: f32 = 1.05;
+/// How near the arm's tip a piece of its own must come to be its spoon (the
+/// cup the boulder sits in), which swings with it.
+pub const SPOON_REACH: f32 = 0.75;
+/// And no longer nor higher than this (the catapult's spoon is 0.44 long and
+/// 1.45 high; the deck's rod under the arm's end runs its whole length).
+pub const SPOON_SIZE: f32 = 2.0;
 /// A move longer than this in one frame (a teleport, a new place) turns no
 /// wheel.
 pub const ROLL_JUMP: f32 = 6.0;
@@ -374,6 +380,32 @@ pub fn rig(m: &mut esf::Model) -> Option<Rig> {
             if far > 0.25 {
                 for &t in &beam {
                     part[t] = PART_ARM;
+                }
+                // the spoon: a piece of its own at the arm's end (the owner,
+                // 2026-11-18: "the catapult end part that looks like a spoon
+                // is not firing with the arm"), any piece but the frame and
+                // the wheels whose box comes within SPOON_REACH of the tip
+                // (in y and z), compact (no longer nor higher than
+                // SPOON_SIZE: not the deck's long rod under it) and no wider
+                // across than the arm's beam twice; it goes with the arm, and
+                // the boulder leaves from its middle
+                let mut spoon: Option<([f32; 3], [f32; 3])> = None;
+                for p in rest.iter().skip(1) {
+                    let (l, h) = box_of(p);
+                    let gap = |v: f32, lo: f32, hi: f32| if v < lo { lo - v } else if v > hi { v - hi } else { 0.0 };
+                    let d = (gap(tip[1], l[1], h[1]).powi(2) + gap(tip[2], l[2], h[2]).powi(2)).sqrt();
+                    if d <= SPOON_REACH && h[0] - l[0] <= 4.0 * ARM_HALF && h[1] - l[1] <= SPOON_SIZE && h[2] - l[2] <= SPOON_SIZE {
+                        for &t in p.iter() {
+                            part[t] = PART_ARM;
+                        }
+                        spoon = Some(match spoon {
+                            Some((a, b)) => ([a[0].min(l[0]), a[1].min(l[1]), a[2].min(l[2])], [b[0].max(h[0]), b[1].max(h[1]), b[2].max(h[2])]),
+                            None => (l, h),
+                        });
+                    }
+                }
+                if let Some((l, h)) = spoon {
+                    tip = [(l[0] + h[0]) * 0.5, (l[1] + h[1]) * 0.5, (l[2] + h[2]) * 0.5];
                 }
                 let release = (-(tip[2] - pivot[2])).atan2(tip[1] - pivot[1]);
                 arm = Some(Arm { pivot, tip, release });
@@ -742,7 +774,11 @@ mod disc_tests {
 
     /// Tunaria zone `zone`'s sprite `id`, built, if the disc is there.
     pub(crate) fn zone_model(zone: usize, id: u32) -> Option<esf::Model> {
-        let iso = std::env::var("EQOA_ISO").ok()?;
+        // `EQOA_ISO`, else the checkout's `run/eqoa.iso`
+        let iso = std::env::var("EQOA_ISO").ok().or_else(|| {
+            let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+            p.exists().then(|| p.to_string_lossy().into_owned())
+        })?;
         let disc = iso::Iso::open(std::path::Path::new(&iso)).ok()?;
         let e = disc.find("TUNARIA.ESF")?.clone();
         let mut w = esf::Window::new(iso::open_file(std::path::Path::new(&iso)).ok()?, e.lba as u64 * iso::SECTOR, e.size as u64);
@@ -768,7 +804,21 @@ mod disc_tests {
         eprintln!("{r:?}");
         assert_eq!(r.wheels.len(), 2, "two axles");
         let a = r.arm.expect("an arm");
-        assert!(r.tris[PART_ARM as usize] > 20, "the beam");
+        // the parts' triangles: the frame, the arm (its beam's 48 and the
+        // spoon's 24, the owner, 2026-11-18: "the catapult end part that
+        // looks like a spoon is not firing with the arm"), each axle's 160
+        assert_eq!(r.tris, vec![171, 72, 160, 160], "frame, arm with its spoon, two axles");
+        // the spoon (the piece at the arm's end, behind the rear axle) is
+        // the arm's: every corner there over the deck turns with it, and no
+        // corner of the frame's far from the arm does
+        let at = |v: usize| m.pos[v];
+        let arm_corner = |v: usize| m.bones[v][0] == PART_ARM;
+        let spoon: Vec<usize> = (0..m.pos.len()).filter(|&v| at(v)[2] < -4.85 && at(v)[2] > -5.35 && at(v)[1] > 1.85 && at(v)[0].abs() < 0.9 && !arm_corner(v)).collect();
+        assert!(spoon.iter().all(|&v| at(v)[1] < 2.7), "a corner of the spoon's left behind: {:?}", spoon.iter().map(|&v| at(v)).collect::<Vec<_>>());
+        assert!((0..m.pos.len()).filter(|&v| arm_corner(v)).all(|v| at(v)[0].abs() < 1.0), "nothing wide (an upright, a wheel) on the arm");
+        assert!((0..m.pos.len()).filter(|&v| m.bones[v][0] >= PART_WHEEL0).all(|v| at(v)[1] < 3.1), "the wheels' alone on the axles");
+        // the boulder leaves from the spoon
+        assert!(a.tip[2] < -4.8 && a.tip[2] > -5.4, "{:?}", a.tip);
         // the boulder leaves from above the pivot, over the frame's top
         let tip = r.release_tip().unwrap();
         assert!((tip[2] - a.pivot[2]).abs() < 1e-3 && tip[1] > a.pivot[1] + 5.0, "{tip:?} over {:?}", a.pivot);
