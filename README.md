@@ -514,7 +514,10 @@ or a browser (each described where it lives below):
   only use for UI, Text").
 - **More ability bars**: the Extended page's Ability Bars adds a third and a
   fourth, five abilities each, on the HUD and in the spell book, on a server
-  that keeps abilities past the game's ten slots.
+  that keeps abilities past the game's ten slots. On a computer, Stacked Spell
+  Bars draws every bar as a row above the chat box, in one column or in two
+  columns of two (Spell Bar Layout), each slot a key of its own on the
+  Controls page and the block moved wherever the player puts it (Move HUD).
 - **SOE's final toolbars**, on a server that keeps weapon sets (go-eqoa-server
   does): the item quick slots take two potions and two gems, and a fourth HUD
   menu holds four named weapon sets and bare hands, a set made by Prepare on a

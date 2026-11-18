@@ -46,9 +46,11 @@
 //! The ability bars' slots (Jibwiz's ticket 1913, "allow you to keybind each
 //! key", for PC players: `hudmenu::Stacked`) are rows of no key and no button
 //! (`Pad::KeysOnly`): a key the player puts on one uses that slot's ability
-//! (`Alias::Slot`, `Play::bar_slot_key`), the first two bars' ten, whether the
-//! bars are drawn stacked or as the game's carousel. Nothing is on them until
-//! the player puts a key there.
+//! (`Alias::Slot`, `Play::bar_slot_key`), every bar's: the first two bars'
+//! ten, and bars 3 and 4's ten more (the server owner, 2026-11-18: "They need
+//! to be able to be keybound in the keybinding menu"), each used while
+//! Ability Bars shows its bar, whether the bars are drawn stacked or as the
+//! game's carousel. Nothing is on them until the player puts a key there.
 //!
 //! With nothing moved every key is itself and every button its own field
 //! (`Binds::default`, the tests). Kept per device in `keys.opt` beside the
@@ -154,6 +156,16 @@ pub const ROWS: &[Row] = &[
     row("bar2_slot3", "Bar 2: slot 3", &[], Pad::KeysOnly, BAR_HELP),
     row("bar2_slot4", "Bar 2: slot 4", &[], Pad::KeysOnly, BAR_HELP),
     row("bar2_slot5", "Bar 2: slot 5", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar3_slot1", "Bar 3: slot 1", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar3_slot2", "Bar 3: slot 2", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar3_slot3", "Bar 3: slot 3", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar3_slot4", "Bar 3: slot 4", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar3_slot5", "Bar 3: slot 5", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar4_slot1", "Bar 4: slot 1", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar4_slot2", "Bar 4: slot 2", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar4_slot3", "Bar 4: slot 3", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar4_slot4", "Bar 4: slot 4", &[], Pad::KeysOnly, BAR_HELP),
+    row("bar4_slot5", "Bar 4: slot 5", &[], Pad::KeysOnly, BAR_HELP),
     row("cycle_target", "Target: {1405}, group, {418}", &["`", "~"], b(bit::L1), "Each press the next of the player, the group and the pet; held, aim as with Tab. On the map |7 zooms out."),
     row("quick_chat", "Quick chat", &["z"], b(bit::L2), "Again, it closes the quick chat."),
     row("next_target", "Target: the next (hold: aim)", &["tab"], b(bit::R1), "Held: the view at the eyes, the target the one nearest the crosshair. In a window Tab is |8; on the map |8 zooms in."),
@@ -193,15 +205,16 @@ pub const ROWS: &[Row] = &[
 ];
 
 /// What a key on an ability bar's slot row does (`bar_slot`).
-const BAR_HELP: &str = "Uses the ability on this slot, as clicking it does. No key until you give it one. Extended > UI > HUD > Stacked Spell Bars shows the first two bars above the chat box.";
+const BAR_HELP: &str = "Uses the ability on this slot, as clicking it does. No key until you give it one. Bars 3 and 4 are there with Extended > UI > HUD > Ability Bars at 3 or 4. Stacked Spell Bars (the same page) shows the bars above the chat box, Spell Bar Layout (HUD Layout) stacks them or stands them in two columns, and Move HUD moves them.";
 
-/// The ability bar and its slot (each from 0) a row is the key of: the
-/// first two bars' ten (`bar1_slot1` .. `bar2_slot5`).
+/// The ability bar and its slot (each from 0) a row is the key of: every
+/// bar's (`bar1_slot1` .. `bar4_slot5`), bars 3 and 4 the client's own
+/// (`hudmenu::BAR_MENUS`).
 pub fn bar_slot(row: usize) -> Option<(usize, usize)> {
     let id = ROWS.get(row)?.id.strip_prefix("bar")?;
     let (bar, slot) = id.split_once("_slot")?;
     let (bar, slot) = (bar.parse::<usize>().ok()?, slot.parse::<usize>().ok()?);
-    ((1..=2).contains(&bar) && (1..=5).contains(&slot)).then(|| (bar - 1, slot - 1))
+    ((1..=crate::hudmenu::MAX_BARS as usize).contains(&bar) && (1..=5).contains(&slot)).then(|| (bar - 1, slot - 1))
 }
 
 /// A row's index by its name.
@@ -1788,18 +1801,27 @@ mod tests {
         assert!(ROWS.iter().enumerate().all(|(k, r)| !r.keys.is_empty() || matches!(r.pad, Pad::Button(_)) || bar_slot(k).is_some()));
     }
 
-    /// The bars' slots (ticket 1913): ten rows, none with a key until given
-    /// one; a key put on one sends that bar's slot (and is let go as it), is
-    /// kept in `keys.opt` and read back; a slot moved onto another slot's key
-    /// swaps; a row's own key put there leaves that row with none. The
-    /// control: with nothing moved the key is itself.
+    /// The bars' slots (ticket 1913; bars 3 and 4, the server owner's of
+    /// 2026-11-18): twenty rows, none with a key until given one; a key put
+    /// on one sends that bar's slot (and is let go as it), is kept in
+    /// `keys.opt` and read back; a slot moved onto another slot's key swaps;
+    /// a row's own key put there leaves that row with none. The control: with
+    /// nothing moved the key is itself.
     #[test]
     fn a_bars_slot_takes_a_key() {
         let slots: Vec<usize> = (0..ROWS.len()).filter(|&k| bar_slot(k).is_some()).collect();
-        assert_eq!(slots.len(), 10);
+        assert_eq!(slots.len(), 20);
         assert_eq!(bar_slot(row_named("bar1_slot1").unwrap()), Some((0, 0)));
         assert_eq!(bar_slot(row_named("bar2_slot5").unwrap()), Some((1, 4)));
+        assert_eq!(bar_slot(row_named("bar3_slot1").unwrap()), Some((2, 0)));
+        assert_eq!(bar_slot(row_named("bar4_slot5").unwrap()), Some((3, 4)));
         assert_eq!(bar_slot(row_named("attack").unwrap()), None);
+        assert_eq!(ROWS[row_named("bar4_slot2").unwrap()].label, "Bar 4: slot 2");
+        let mut b4 = Binds::default();
+        assert_eq!(b4.bind_key(row_named("bar4_slot2").unwrap(), "shift+2"), Moved::Freed(None));
+        assert_eq!(b4.alias("shift+2"), Alias::Slot(3, 1));
+        assert_eq!(KeyEdge::default().key("shift+2", true, false, false, &b4), Some(Sent::Slot(3, 1)));
+        assert_eq!(Binds::from_text(&b4.to_text()).alias("shift+2"), Alias::Slot(3, 1), "kept: {}", b4.to_text());
         let mut b = Binds::default();
         assert!(slots.iter().all(|&k| b.key(k).is_none()), "no key by default");
         assert_eq!(b.alias("7"), Alias::Same, "the control");

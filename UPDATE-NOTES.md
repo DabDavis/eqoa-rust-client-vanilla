@@ -5,6 +5,18 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-18 · Four stacked spell bars, in one column or two
+- **Stacked Spell Bars show every bar you have**: with Extended > UI > HUD > Ability Bars at 3 or 4, bars 3
+  and 4 stand above the chat box too, not only the first two.
+- **Spell Bar Layout** (Extended > UI > HUD Layout): Stacked puts them in one column, bar 1 on top; 2 Columns
+  puts bars 1 and 2 at the left and bars 3 and 4 beside them, side by side.
+- **Bars 3 and 4 take keys**: the Controls page has a row for each of their slots (Bar 3: slot 1 to Bar 4:
+  slot 5), as bars 1 and 2 have. A key put on one casts what is on that slot, whether the bars are stacked or
+  not.
+- **Move them anywhere**: turn on Move HUD (Extended > UI > HUD Layout, or /hud) and drag the Spell Bars, to
+  the left of the screen for example; they stay where you put them. They move as one block, even with Spell
+  Bar Opacity at 0.
+
 ## 2026-11-18 · Auto Target leaves a healer alone
 - **Auto Target no longer takes a creature that heals you** (a familiar such as Healbot) for one fighting you:
   only a hit on you or your side counts, never a heal.

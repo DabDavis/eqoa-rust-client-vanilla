@@ -93,9 +93,10 @@
 //!   weather's own);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Stacked Spell Bars (2026-11-13,
-//!   Jibwiz's ticket 1913, Off by default: On, on a computer, the first two
-//!   bars as two rows of five above the chat box at 95% with no name bar,
-//!   each slot a key on the Controls page; `hudmenu::Stacked`), Update Notices (one setting for
+//!   Jibwiz's ticket 1913, Off by default: On, on a computer, every bar shown
+//!   as a row of five above the chat box at 95% with no name bar, in one
+//!   column or two (HUD Layout's Spell Bar Layout), each slot a key on the
+//!   Controls page; `hudmenu::Stacked`), Update Notices (one setting for
 //!   every window: off, the game never asks to restart into a newer build,
 //!   which starts the next time the game does; `update::asks`, and a page's
 //!   Reload notice, `web/main.js`), Text (Sharp or Smooth: the game's font
@@ -109,7 +110,11 @@
 //!   left, the HUD's pieces outlined and dragged with the mouse or a finger,
 //!   a bar at the top with Lock and Reset, `hudlayout`; not kept, as it is a
 //!   mode, and Triangle leaves it) and Reset HUD (Reset: every piece back
-//!   where the game puts it at once, kept, by ✕, left or right);
+//!   where the game puts it at once, kept, by ✕, left or right); Spell Bar
+//!   Layout (2026-11-18, the server owner's "stack 4 spell bars, or 2 columns
+//!   of 2, side by side": Stacked, the default, or 2 Columns, how the Stacked
+//!   Spell Bars stand with Ability Bars at 3 or 4, `hudmenu::Layout`; off
+//!   where the server keeps the game's two bars);
 //! - Controller: Controller Focus (which controllers this window reads:
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
 //!   the client open, `multibox`; what it reads now is said beside Back),
@@ -1085,6 +1090,10 @@ impl WndOptions {
                     // Spell Bar Opacity (ticket 1953): the stacked bars' frames
                     // from the next frame (`hudmenu::HudMenus::draw_stacked`)
                     SPELL_BAR_OPACITY => slide(&mut c.spell_bar_opacity, 0, 100, 10),
+                    // Spell Bar Layout (2026-11-18): Stacked or 2 Columns, the
+                    // stacked bars from the next frame
+                    // (`hudmenu::HudMenus::draw_stacked`)
+                    SPELL_BAR_LAYOUT => c.spell_bar_layout = c.spell_bar_layout.other(),
                     // Pets Pass Through (ticket 1977): every creature's capsule
                     // set again from the next frame (`Play::place_actors`)
                     PETS_PASS => c.pets_pass = !c.pets_pass,
@@ -1794,7 +1803,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 100] = [
+const EXTENDED_ITEMS: [(i32, &str); 101] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1895,6 +1904,7 @@ const EXTENDED_ITEMS: [(i32, &str); 100] = [
     (PACK_PRECACHE, "Precache Textures"),
     (PACK_COMPRESS, "Pack Compression"),
     (PACK_REBUILD, "Rebuild Pack Cache"),
+    (SPELL_BAR_LAYOUT, "Spell Bar Layout"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -1950,6 +1960,11 @@ pub(crate) const PACK_MEMORY: i32 = 160;
 pub(crate) const PACK_PRECACHE: i32 = 170;
 pub(crate) const PACK_COMPRESS: i32 = 180;
 pub(crate) const PACK_REBUILD: i32 = 190;
+/// Spell Bar Layout's item (the server owner, 2026-11-18: "When players turn
+/// on 4 they need to be able to stack 4 spell bars, or 2 columns of 2, side by
+/// side"). 200, not the next free, as Rebuild Pack Cache's 190; the server's
+/// `qol::SPELL_BARS` turns it off with the bars.
+pub(crate) const SPELL_BAR_LAYOUT: i32 = 200;
 
 /// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -2047,7 +2062,7 @@ const ALL_CATEGORIES: [Category; 25] = [
     Category { name: "Group & Raid", items: &[49, 86, 88], note: Note::None, group: Group::Ui },
     // Minimap Scroll Frame (2026-11-13) here: Map's page was full
     // Spell Bar Opacity (2026-11-13, ticket 1953) here: HUD's page is full
-    Category { name: "HUD Layout", items: &[76, 77, 91, SPELL_BAR_OPACITY], note: Note::Hud, group: Group::Ui },
+    Category { name: "HUD Layout", items: &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT], note: Note::Hud, group: Group::Ui },
     Category { name: "Name Plates", items: &[27, 34, 85, TARGET_LEVEL], note: Note::None, group: Group::Ui },
     Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
@@ -2277,6 +2292,9 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
             }
         }
         90 => on_off(c.stacked_bars),
+        // Spell Bar Layout: Off where the server keeps the game's two bars
+        SPELL_BAR_LAYOUT if crate::settings::qol::off(crate::settings::qol::SPELL_BARS) => on_off(false),
+        SPELL_BAR_LAYOUT => wide(c.spell_bar_layout.name()),
         78 => on_off(c.auto_cast),
         79 => on_off(c.auto_target),
         WEAPON_SWAP_BACK => on_off(c.weapon_swap_back),
@@ -3634,7 +3652,7 @@ mod tests {
             vec![
                 ("HUD", vec!["Ability Bars", "Stacked Spell Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
                 ("Group & Raid", vec!["Raid List", "Power Bars", "Raid Mercenaries"]),
-                ("HUD Layout", vec!["Move HUD", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity"]),
+                ("HUD Layout", vec!["Move HUD", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity", "Spell Bar Layout"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers", "Target Level"]),
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
                 ("Number Colors", n[..6].to_vec()),
@@ -4125,13 +4143,13 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, 83, 58, 78, 79, 22, 90];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, 83, 58, 78, 79, 22, 90, SPELL_BAR_LAYOUT];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
         }
         let off_text = Some(wide(vui.words.get(552, vui.language)));
-        for item in [44, TARGET_LEVEL, 70, 86, 83, 58, 78, 90] {
+        for item in [44, TARGET_LEVEL, 70, 86, 83, 58, 78, 90, SPELL_BAR_LAYOUT] {
             for k in path_to(&w, item) {
                 w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
                 w.draw(&vui, &mut NullRaster, &o, &mut ups);

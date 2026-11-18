@@ -9102,9 +9102,13 @@ impl Play {
     }
 
     /// A key on an ability bar's slot (`binds::bar_slot`, Jibwiz's ticket
-    /// 1913): in play (and the manual camera), the ability on it used as a
-    /// click on it uses it, its bar lit; nothing for an empty slot, a bar
-    /// the carousel does not hold, or with a window up.
+    /// 1913; bars 3 and 4, the server owner's of 2026-11-18): in play (and the
+    /// manual camera), the ability on it used as a click on it uses it, its
+    /// bar's selection on it (bars 3 and 4 are menus 4 and 5,
+    /// `hudmenu::BAR_MENUS`), and in S2's record as the click's circle,
+    /// pressed and let go (`note_hud_key`; a 0x0032 carries it where the S2
+    /// asks); nothing for an empty slot, a bar Ability Bars does not show, or
+    /// with a window up.
     pub fn bar_slot_key(&mut self, bar: usize, slot: usize) {
         if (self.mode != 0 && self.mode != 38) || self.typing.is_some() || self.map.open {
             return;
@@ -9112,10 +9116,20 @@ impl Play {
         if bar >= self.ability_bars() as usize {
             return;
         }
+        let Some(&menu) = crate::hudmenu::BAR_MENUS.get(bar) else { return };
         let Some((msg, id)) = self.hud_menus.slot_entry(bar, slot) else { return };
-        self.hud_menus.menus[bar].sel = slot as i32;
+        self.hud_menus.menus[menu].sel = slot as i32;
         eprintln!("play: bar {} slot {} key: {msg:#x} {id}", bar + 1, slot + 1);
+        // circle (135) as the click's, without its hold (`auto_use_held`
+        // reads the menu up, not this bar)
+        let noted = !self.is_dead();
+        if noted {
+            self.presses.key(135, true, self.session.timer() as u32, crate::input::from_device());
+        }
         self.use_hud_entry(msg, id);
+        if noted {
+            self.presses.key(135, false, self.session.timer() as u32, crate::input::from_device());
+        }
     }
 
     /// Stacked Spell Bars are drawn (`hudmenu`'s doc, ticket 1913): the
@@ -10482,9 +10496,10 @@ impl Play {
                         _ => Vec::new(),
                     }
                 };
-                // Stacked Spell Bars (ticket 1913): the first two bars in two
-                // rows above the chat box, no name bar; a piece of their own
-                // to move (petition 5229), not the chat box's
+                // Stacked Spell Bars (ticket 1913): every bar shown in rows
+                // above the chat box, stacked or in two columns (Spell Bar
+                // Layout, 2026-11-18), no name bar; a piece of their own to
+                // move (petition 5229), not the chat box's
                 self.hud_menus.stacked = self.stacked_bars();
                 if self.hud_menus.stacked {
                     let (anchor, vertical) = (r.ui.anchor, r.ui.vertical);
@@ -10492,7 +10507,7 @@ impl Play {
                     r.ui.vertical = Vertical::Bottom;
                     let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::SpellBars);
                     let [left, top] = crate::chat::WndChat::full_top_left(vui, &r);
-                    self.hud_menus.draw_stacked(vui, &mut r, top, left, bars);
+                    self.hud_menus.draw_stacked(vui, &mut r, top, left, bars, crate::settings::spell_bar_layout());
                     crate::hudlayout::end(r.ui, m);
                     (r.ui.anchor, r.ui.vertical) = (anchor, vertical);
                 } else {
@@ -13102,6 +13117,84 @@ mod commands {
         assert_eq!(live.len(), 22);
         assert_eq!(live[..11], retail[..]);
         assert_eq!(live[21] & !1, 0x76, "circle, the pad read, pressed this frame");
+    }
+
+    /// A key put on a bar's slot (the server owner, 2026-11-18: "When players
+    /// cast their keybinded spell, it should cast"): with Ability Bars at 4,
+    /// bar 3's first slot's key uses slot 10's ability and bar 4's fifth slot
+    /// 19's, each 0x0032 the game's with that slot, the selection put on that
+    /// bar's own menu (4, 5) and the items' left; on a patch with S2's record
+    /// it carries circle pressed this frame, as a click's does. A bar Ability
+    /// Bars does not show, an empty slot and a window up send nothing.
+    #[test]
+    fn a_bar_slots_key_casts_its_spell() {
+        struct Rec(std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>);
+        impl net::session::Datagrams for Rec {
+            fn send_to(&mut self, d: &[u8], _: [u8; 4], _: u16) {
+                self.0.borrow_mut().push(d.to_vec());
+            }
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        crate::settings::testing::reset(false);
+        crate::settings::set_client(crate::settings::ClientOptions { ability_bars: 4, ..crate::settings::client() });
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        // a session of its own for each case (its first sends; nothing
+        // acknowledges them here), the bars built as a frame builds them
+        let fresh = || -> Play {
+            let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+            s.self_id = Some(0x100);
+            s.expansion = 2;
+            let mut p = Play::new(s, Player::default(), Box::default());
+            p.mode = 0;
+            for (id, slot, name) in [(1, 0, "Fire Bolt"), (2, 10, "Ice Comet"), (3, 19, "Lightning Strike"), (4, 7, "Gate")] {
+                p.abilities.insert(id, net::dump::Ability { id, valid: 1, slot, name: name.into(), icon_front: 100 + id, ..Default::default() });
+            }
+            p.ability_token = 0x55;
+            p.target = 0x4242;
+            let bars = p.hud_bars();
+            p.hud_menus.build(&p.abilities, &p.dump.inventory, &p.gear, bars);
+            p
+        };
+        let key = |p: &mut Play, bar: usize, slot: usize, r: crate::s2::Rules| -> Option<Vec<u8>> {
+            crate::s2::with_rules(r, || {
+                p.session.flush();
+                sent.borrow_mut().clear();
+                p.bar_slot_key(bar, slot);
+                p.session.flush();
+            });
+            guaranteed(&sent.borrow()).into_iter().find(|m| m.starts_with(&[0x32, 0x00]))
+        };
+        let retail = crate::s2::Rules::retail;
+        let used = |slot: u8| Some(vec![0x32, 0x00, 0x55, 0, 0, 0, slot, 0x42, 0x42, 0, 0]);
+
+        let mut p = fresh();
+        p.hud_menus.menus[2].sel = 3;
+        assert_eq!(key(&mut p, 0, 0, retail()), used(0), "the control: bar 1's first slot");
+        assert_eq!(key(&mut p, 2, 0, retail()), used(10), "bar 3's first slot: slot 10");
+        assert_eq!((p.hud_menus.menus[4].sel, p.hud_menus.menus[2].sel), (0, 3), "bar 3's menu selected, the items' left");
+        assert_eq!(key(&mut p, 3, 4, retail()), used(19), "bar 4's fifth slot: slot 19");
+        assert_eq!(p.hud_menus.menus[5].sel, 4);
+
+        let mut p = fresh();
+        let live = key(&mut p, 2, 0, crate::s2::Rules { use_skill_record: true, ..retail() }).expect("0x0032 sent");
+        assert_eq!(live.len(), 22);
+        assert_eq!(live[21] & !1, 0x76, "circle, the pad read, pressed this frame, as a click's");
+
+        // nothing sent, each followed by the same session's control
+        let mut p = fresh();
+        assert_eq!(key(&mut p, 2, 1, retail()), None, "an empty slot");
+        p.mode = 1;
+        assert_eq!(key(&mut p, 2, 0, retail()), None, "a window up");
+        p.mode = 0;
+        assert_eq!(key(&mut p, 2, 0, retail()), used(10), "the control: in play");
+
+        crate::settings::set_client(crate::settings::ClientOptions { ability_bars: 2, ..crate::settings::client() });
+        let mut p = fresh();
+        assert_eq!(key(&mut p, 2, 0, retail()), None, "two bars shown: no third");
+        assert_eq!(key(&mut p, 1, 2, retail()), used(7), "the control: bar 2's third slot (7)");
+        crate::settings::testing::reset(false);
     }
 
     /// ConnectShard's hello: the patch's bytes after the opcode when it has
