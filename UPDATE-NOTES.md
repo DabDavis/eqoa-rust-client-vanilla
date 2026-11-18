@@ -13,6 +13,18 @@ is put on the page by `.github/workflows/notes.yml`.
   and winds back down slowly. The ram still lunges at each swing.
 - **Two colours at the Pet Groomer**: its wood and stone take one dye, its iron the other.
 
+## 2026-11-18 · The colour picker on a controller, R2 to change chat channels
+- **The dyers' colour picker works on a controller**: the d-pad or the left stick moves between the sliders,
+  the recent colours and OK/Cancel (held, it keeps going), left and right change the value (L1/R1 or L2/R2 by
+  ten), ✕ picks the colour, △ or ○ cancels. The row you are on is framed in yellow, and the bottom of the
+  window shows the buttons.
+- **No more preset colours at the dyers**: choosing what to dye now opens the colour picker straight away
+  (the Weapon Enchanter asks "Its own colours" or "Pick any colour..."). Your recent colours are still in the
+  picker, and its new **No dye** button, between OK and Cancel, takes the dye off just the piece you chose.
+- **R2 Channel Switch** (Extended > UI > Chat, off unless you turn it on): hold R2 and press left or right on
+  the d-pad to switch the chat channel (Say, Group, Shout, Guild); the new channel is shown in the chat box.
+  On a keyboard, hold C and press the arrows.
+
 ## 2026-11-17 · Look around while you run
 - **Hold the left mouse button while running to look around**: the camera swings freely and your character keeps
   running the way it was going. Let go and the camera eases back behind you in about a quarter second. (Before,
@@ -42,18 +54,6 @@ is put on the page by `.github/workflows/notes.yml`.
 - **Pets in a prop's body**: a server can dress a pet as a piece of scenery, such as Tunaria's siege catapult. It
   rams forward at each of its swings and, at its strikes, hurls a boulder from its arm in an arc onto its target.
   It keeps its name, can be targeted, and never blocks your way.
-## 2026-11-18 · The colour picker on a controller, R2 to change chat channels
-- **The dyers' colour picker works on a controller**: the d-pad or the left stick moves between the sliders,
-  the recent colours and OK/Cancel (held, it keeps going), left and right change the value (L1/R1 or L2/R2 by
-  ten), ✕ picks the colour, △ or ○ cancels. The row you are on is framed in yellow, and the bottom of the
-  window shows the buttons.
-- **No more preset colours at the dyers**: choosing what to dye now opens the colour picker straight away
-  (the Weapon Enchanter asks "Its own colours" or "Pick any colour..."). Your recent colours are still in the
-  picker, and its new **No dye** button, between OK and Cancel, takes the dye off just the piece you chose.
-- **R2 Channel Switch** (Extended > UI > Chat, off unless you turn it on): hold R2 and press left or right on
-  the d-pad to switch the chat channel (Say, Group, Shout, Guild); the new channel is shown in the chat box.
-  On a keyboard, hold C and press the arrows.
-
 ## 2026-11-17 · Rudolph's nose, moved
 - **Rudolph's nose glows where the GMs put it**: moving the glow now shows at once, without restarting the game.
 
