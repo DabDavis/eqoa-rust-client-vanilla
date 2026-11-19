@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-19 · A tidier Hardcore and [OG] choice
+- The Hardcore and [OG] rows on the last page of character creation no longer spill past the panel. Each row
+  is now just its name and On or Off, with one short line under them saying what the row you are on means,
+  fitted to the panel. Creating with either on still asks you to confirm first and says it all.
+
 ## 2026-11-19 · [OG] is chosen for each character
 - On a server with [OG] characters, the last page of character creation now has an "[OG]" row under the
   stats (and under "Hardcore" where that is offered too): turn it on for a character that plays the game as

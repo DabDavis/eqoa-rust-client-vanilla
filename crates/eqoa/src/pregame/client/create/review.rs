@@ -38,15 +38,36 @@ const OG_KEY: i32 = -1004;
 
 /// The Hardcore row's words and the question's (ours).
 pub const HARDCORE_LABEL: &str = "Hardcore";
-pub const HARDCORE_EXPLAIN: [&str; 2] = ["Death is final: no respawn, no", "resurrection. Cannot be undone."];
+/// The hint under the rows for the chosen one (the question says it all).
+pub const HARDCORE_HINT: &str = "Death is final. Cannot be undone.";
 pub const HARDCORE_ASK: &str = "Create %s as a Hardcore character? Death is final: no respawn, no resurrection. It can never be undone.";
 pub const HARDCORE_YES: &str = "Yes, create a Hardcore character";
 pub const HARDCORE_NO: &str = "No, go back";
-/// Hardcore's one line when the [OG] row stands under it.
-pub const HARDCORE_SHORT: &str = "Final death. Cannot be undone.";
 /// The [OG] row's words and the question's (ours).
 pub const OG_LABEL: &str = "[OG]";
-pub const OG_EXPLAIN: [&str; 2] = ["No map, minimap or item links,", "no mouse or touch: basics only."];
+pub const OG_HINT: &str = "Basics only: no map, minimap, item links, mouse or touch. Cannot be undone.";
+/// The hints' right edge: the left panel's inside (it spans 1..285, its frame
+/// about 20 wide).
+const HINT_RIGHT: i32 = 262;
+
+/// `text` in lines no wider than `width` by `measure`, broken at spaces (a
+/// word wider than the width alone on its line).
+fn wrap(text: &str, width: i32, measure: &dyn Fn(&str) -> i32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let more = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+        if line.is_empty() || measure(&more) <= width {
+            line = more;
+        } else {
+            lines.push(std::mem::replace(&mut line, word.to_string()));
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
 pub const OG_ASK: &str = "Create %s as an [OG] character? The basic upgrades only: no map, minimap or item links, and no mouse or touch in the world. It can never be undone.";
 pub const OG_YES: &str = "Yes, create an [OG] character";
 pub const BOTH_TITLE: &str = "Hardcore [OG]";
@@ -241,21 +262,23 @@ impl ReviewPage {
                 tp[1] += 19;
             }
             // the Hardcore row and the [OG] row, on a server that offers them:
-            // "< On >" (the arrows on the row left and right turn), and why
+            // "< On >" on the row left and right turn, then one short hint for
+            // that row, wrapped to the panel (a row's own two lines ran past
+            // the panel's right edge and into its bottom frame with both up)
             let (hc_offered, og_offered) = (super::hardcore_offered(), super::og_offered());
             let both = hc_offered && og_offered;
             let red = [0.6, 0.0, 0.0, 1.0];
-            let step = if both { 17 } else { 19 };
-            let mut at = [tp[0], tp[1] + if both { 4 } else { 6 }];
-            let mut rows: Vec<(&str, bool, bool, &[&str], i32)> = Vec::new();
+            let grey = [0.25, 0.25, 0.25, 1.0];
+            let mut at = [tp[0], tp[1] + 4];
+            let mut rows: Vec<(&str, bool, bool, &str, i32)> = Vec::new();
             if hc_offered {
-                let lines: &[&str] = if both { &[HARDCORE_SHORT] } else { &HARDCORE_EXPLAIN };
-                rows.push((HARDCORE_LABEL, self.hardcore, !self.og_row || !both, lines, HARDCORE_ROW));
+                rows.push((HARDCORE_LABEL, self.hardcore, !self.og_row || !both, HARDCORE_HINT, HARDCORE_ROW));
             }
             if og_offered {
-                rows.push((OG_LABEL, self.og, self.og_row || !both, &OG_EXPLAIN, OG_ROW));
+                rows.push((OG_LABEL, self.og, self.og_row || !both, OG_HINT, OG_ROW));
             }
-            for (label, on, chosen, lines, id) in rows {
+            let mut hint = None;
+            for (label, on, chosen, h, id) in rows {
                 r.draw_string(at, black, &vi::ui::wide(label));
                 let v = match (on, chosen) {
                     (true, true) => "< On >",
@@ -265,10 +288,17 @@ impl ReviewPage {
                 };
                 r.draw_string([at[0] + 140, at[1]], if on { red } else { black }, &vi::ui::wide(v));
                 self.hits.push([at[0] - 4, at[1] - 2, at[0] + 220, at[1] + 18], id);
-                for (i, l) in lines.iter().enumerate() {
-                    r.draw_string([at[0], at[1] + step * (i as i32 + 1)], black, &vi::ui::wide(l));
+                if chosen {
+                    hint = Some(h);
                 }
-                at[1] += step * (lines.len() as i32 + 1) + 4;
+                at[1] += 19;
+            }
+            if let Some(h) = hint {
+                at[1] += 3;
+                for line in wrap(h, HINT_RIGHT - at[0], &|t| r.string_width(&vi::ui::wide(t))).iter().take(3) {
+                    r.draw_string(at, grey, &vi::ui::wide(line));
+                    at[1] += 16;
+                }
             }
         }
         // the model, its flourish, the camera, the scene
@@ -493,7 +523,7 @@ mod tests {
             assert!(ask.contains("no map, minimap or item links") && ask.contains("no mouse or touch"), "{ask}");
         }
         assert_eq!(question(true, false), (HARDCORE_LABEL, HARDCORE_ASK, HARDCORE_YES, 3), "the control: Hardcore's question");
-        assert!(OG_EXPLAIN.join(" ").contains("No map, minimap or item links") && OG_EXPLAIN.join(" ").contains("no mouse or touch"));
+        assert!(OG_HINT.contains("no map, minimap, item links, mouse or touch"));
         super::super::set_hardcore_offered(false);
         super::super::set_og_offered(false);
     }
@@ -524,6 +554,19 @@ mod tests {
         super::super::set_og_offered(false);
         p.draw(&mut cx, &mut env, None, &form);
         assert!((300..420).step_by(2).all(|y| p.point([100.0, y as f32]).iter().all(|k| *k >= 0)), "the control: no rows");
+    }
+
+    /// The hints wrap at spaces to the width (8 a letter here); a word wider
+    /// than the width stands alone. The control: a short text is one line.
+    #[test]
+    fn a_hint_wraps_to_the_panel() {
+        let m = |t: &str| t.len() as i32 * 8;
+        assert_eq!(wrap("Death is final. Cannot be undone.", 140, &m), vec!["Death is final.", "Cannot be undone."]);
+        assert_eq!(wrap("a verylongwordindeed b", 40, &m), vec!["a", "verylongwordindeed", "b"]);
+        assert_eq!(wrap("Short.", 400, &m), vec!["Short."]);
+        for l in wrap(OG_HINT, HINT_RIGHT - 60, &m) {
+            assert!(m(&l) <= HINT_RIGHT - 60 || !l.contains(' '), "{l:?} past the panel");
+        }
     }
 
     #[test]
