@@ -212,7 +212,7 @@ is put on the page by `.github/workflows/notes.yml`.
 ## 2026-11-17 · Ability quests in green
 - **Ability quests stand out on the map**: a quest that teaches your class a new ability now has a **green** "!"
   or "?" on the map and the minimap, its name green with "- Ability" after it on the mark's card, and green in the
-  quest tracker, so you can tell it from the other quests at a glance (thanks, Zerkziee). Needs the Heirloom Test
+  quest tracker, so you can tell it from the other quests at a glance (thanks to a player). Needs the Heirloom Test
   Server's update; elsewhere the client's own quest guide marks its class quests the same way.
 ## 2026-11-17 · A pet in a siege catapult
 - **Pets in a prop's body**: a server can dress a pet as a piece of scenery, such as Tunaria's siege catapult. It
@@ -1509,7 +1509,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   the green of his scales showing, though he wears the same green dragon as the Plane of Disease's twins. Each
   creature of the name is coloured, whichever spawn it is, a respawn too; what it holds keeps its own colours,
   and the light, the time of day and the fog fall on it as on any other.
-- Every other creature and character looks exactly as before. On a server that colours none (Sandstorm, or one
+- Every other creature and character looks exactly as before. On a server that colours none (the reference server, or one
   not updated) nothing changes, and a PS2 on the same server sees the plain green dragon.
 
 ## 2026-11-10 · Macros on a page of their own, as PCSX2 has them
@@ -1609,7 +1609,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   Default, so nothing changes until you pick a colour. Numbers on you that others made (a hit you take, a heal
   someone else gives you) always keep the game's colours.
 - It needs a server that marks its numbers: eqoaclassic's does from its update of the same day. On any other
-  server (Sandstorm, or one not updated) your numbers stay the game's colours whatever the rows say.
+  server (the reference server, or one not updated) your numbers stay the game's colours whatever the rows say.
 
 ## 2026-11-09 · No cape on a four-legged form
 - A cape is no longer drawn on a character turned into a four-legged animal (Leopard Form, the bear, wolf,
@@ -1632,7 +1632,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   row is your own buffs only again.
 - Clicking your pet's buff row targets your pet, as clicking its name does.
 - It is in Options > Extended > UI as Pet Effects, on by default. Off, your pet's buffs show nowhere, as on a
-  PS2. On a server that does not send them (Sandstorm), there is no row.
+  PS2. On a server that does not send them (the reference server), there is no row.
 
 ## 2026-11-09 · The Red Swarming Death's swarm looks as it does on a PS2
 - A necromancer's Red Swarming Death (and the Swarming Death, the Construct of Sorrows) is a cloud of red puffs
@@ -1745,7 +1745,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - The quest helper is back: a gold "!" on the map and the minimap at each quest giver you can take a quest from
   now, a "?" where a step of a quest you have is to be done, each with a card of the quest, and the quest tracker
   under the minimap ("slashed pawn belt: 0/2"); click the tracker to open your quest journal. On a server that
-  does not send quest marks (Sandstorm), the client works them out itself, marked "(guide)".
+  does not send quest marks (the reference server), the client works them out itself, marked "(guide)".
 - Both are in Options > Extended > Map, on by default: Map (the map, the minimap and the waypoints), Minimap,
   Map Markers, Quest Helper (the quest marks, the tracker and the guide) and Quest Tracker. Turn the Map and the
   Quest Helper off and the game is as it was without them.
@@ -1808,7 +1808,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - Space jumps now, on a server that has jumps (the Heirloom Test Server), and V still does. The attack (hold to
   attack, Auto Attack's toggle, a corpse's loot) is on G.
 - Wherever Space makes no jump it still does what it always did: on a server without jumps (the Live Server,
-  Sandstorm, eqoa.live) Space attacks, and with a window up it takes from a corpse, opens a trade's chat line and
+  the reference server, eqoa.live) Space attacks, and with a window up it takes from a corpse, opens a trade's chat line and
   casts a fishing line, as before.
 - Keys you moved on the Controls page (F1) stay where you put them. A macro you had put on G keeps G; the attack
   then has no key until you give it one there.
@@ -1850,7 +1850,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - The jump is on the Controls page (F1), where you can move it to another key. Every button of a controller is
   already one of the game's, so a controller has no jump button until you give it one there.
 - No jump in the water, in the air, while casting, frozen or rooted, or with a window up. A server without jumps
-  (Sandstorm, eqoa.live) never offers one, and there V does nothing. A PlayStation 2 cannot jump: it shows a
+  (the reference server, eqoa.live) never offers one, and there V does nothing. A PlayStation 2 cannot jump: it shows a
   jumping player on the ground, playing the fall for a moment.
 
 ## 2026-11-09 · Customise the new races
@@ -2138,7 +2138,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - A GM answers in Support's inbox in the start menu, and you are told in chat when one has.
 - With the report goes a short note of this program's own: its build, your system and graphics card,
   the frame rate, and where it showed you and your target. Nothing else, and no account name. A
-  server that does not take bug reports (Sandstorm, eqoa.live) is sent nothing, and F3 does nothing
+  server that does not take bug reports (the reference server, eqoa.live) is sent nothing, and F3 does nothing
   there.
 
 ## 2026-11-04 · 8BitDo controllers in the browser
@@ -2235,14 +2235,14 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - A problem report (F3) now says, for each creature round you, whether the server lets it be
   targeted: press F3 next to something you cannot target.
 
-## 2026-10-31 · Sound in a crowd, Sandstorm's boon, walking while casting
+## 2026-10-31 · Sound in a crowd, the reference server's boon, walking while casting
 - Sounds no longer cut out in a big fight or a crowd. When many creatures swing, get hit or cast
   at once, the game used to lose the sounds that did not fit its one message a frame to the sound
   chip (a PS2 does too, about one frame in ten of a 24-creature fight), and with more than the
   game's 24 creatures shown (NPC/PC Display) many more of them. Every sound now plays.
 - As on a PS2, creatures behind the camera or a wall no longer make their swing, hit and step
   sounds, and with more than 24 creatures shown only the 24 nearest you are heard.
-- When Sandstorm's boon throws everyone in Freeport into the sky, you fall at once now, as on a
+- When the reference server's boon throws everyone in Freeport into the sky, you fall at once now, as on a
   PS2. The game kept a second's loading screen for any trip of 200 or more, which held you in the
   air with nothing sent: to everyone else you hung there, and players thrown up after you landed
   on you and stood in the air. A long trip that loads a new place (Return Home, a coach to another
@@ -2291,11 +2291,11 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   the game's, and now matches it; the world's models, the sky's dome, water and the HUD are drawn
   as before.
 
-## 2026-10-30 · SOE's final patch features, recovered from the Corsten and Lostologist save states!
+## 2026-10-30 · SOE's final patch features, recovered from two retail characters' save states!
 - The game kept changing after the Frontiers disc, and its final client went with SOE's servers: no
-  disc ever had it. Two save states made in the live game, Corsten's and Lostologist's, still held it
+  disc ever had it. Two save states made in the live game by two retail characters still held it
   in the console's memory, and the features below were read out of it and rebuilt, as they worked
-  when the servers closed. They need a server that runs them (eqoaclassic does); on Sandstorm and
+  when the servers closed. They need a server that runs them (eqoaclassic does); on the reference server and
   other servers nothing changes, except for the lines that say "on every server".
 - **How close is it to SOE's?** Everything you see is SOE's own: each window's layout, text, keys and
   rules, and every message the client sends and reads, were read instruction by instruction out of
@@ -2339,7 +2339,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   end (on eqoaclassic a game master sets them). Each dyed piece is drawn in its colour on your
   character, on everyone near you and on the character select screen. Armour that is not dyed looks
   exactly as before.
-- **On every server, Sandstorm included:** buying a second Master Class while you have one is
+- **On every server, the reference server included:** buying a second Master Class while you have one is
   refused at once, with "You cannot possess more than one Master Class at a time." in red, where it
   used to only warn and then let you ask the server anyway.
 - On every server: destroying an item asks 'Destroy item "<its name>"?', so you can see which one
@@ -2356,9 +2356,9 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   everyone else is: on eqoaclassic a gnome is a little smaller than before (9 tenths). How you walk
   and what you bump into are as before.
 
-## 2026-10-29 · The who list in CM order on Sandstorm, as on a PS2
-- On Sandstorm the who list now shows players in the server's own order, highest combat masteries
-  first, whenever you open it again or press Update and nobody has come or gone since: Sandstorm's
+## 2026-10-29 · The who list in CM order on the reference server, as on a PS2
+- On the reference server the who list now shows players in the server's own order, highest combat masteries
+  first, whenever you open it again or press Update and nobody has come or gone since: the reference server's
   patch keeps the server's order then, as it does on a PS2. The first time you open it, and after
   L1 or R1 (left or right), it is sorted by the column as before.
 
@@ -2416,7 +2416,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 
 ## 2026-10-29 · Invisible walls stop you again
 - An invisible wall that the server puts up as a creature now stops you, as on the PS2.
-  Sandstorm uses them to keep players out of a place until a quest lets them through, and this
+  The reference server uses them to keep players out of a place until a quest lets them through, and this
   client let you walk straight through them: it made a creature solid only once it had a body
   to draw, and these have none.
 
@@ -2635,7 +2635,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - It goes where □ would put yours: the middle of the map once you have moved the map, else on
   your target, else where you stand, to call the group to you.
 - It reaches your group as a line in the group's chat, so it works on any server and a player
-  on a PS2 reads it too: "Dairine tells the group: Waypoint in Tunaria at x 24611, z 15502 near
+  on a PS2 reads it too: "Someone tells the group: Waypoint in Tunaria at x 24611, z 15502 near
   Freeport". One every few seconds.
 - The group's waypoint goes when you reach it, when the one who put it leaves the group or you
   do, or when you click it on the map. A newer one replaces it.
@@ -2688,7 +2688,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 
 ## 2026-10-26 · A server's patch in the browser too
 - In the browser the game now takes the server's patch, as the program does: on
-  Sandstorm, its damage colours, robes and armour, menus, words and the rest, where the
+  the reference server, its damage colours, robes and armour, menus, words and the rest, where the
   page played every server as the plain disc before. The patch comes from the server's
   own website (https), so a server whose site serves its patch files gives it; one that
   does not is played as before.
@@ -2754,7 +2754,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   show beside your own frame. Click a mark to mute someone, again to hear them.
 - The voices go through the server, never from player to player, so nobody sees your
   address. The keys are on the Controls page, to move as you like.
-- On a server without voice (Sandstorm), Voice Demo (same page) uses eqoaclassic's
+- On a server without voice (the reference server), Voice Demo (same page) uses eqoaclassic's
   voice server instead: a demo, open to anyone who knows your group's names or your
   room's name.
 - In the game itself (not the page) there is no echo cancelling yet: wear headphones
@@ -2772,8 +2772,8 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   kinds of sound commands were lost, and the log says when a voice played on with
   nothing left to stop it.
 
-## 2026-10-26 · Quest markers and the tracker on Sandstorm too
-- On a server that sends no quest markers or tracker of its own (Sandstorm), the game now
+## 2026-10-26 · Quest markers and the tracker on the reference server too
+- On a server that sends no quest markers or tracker of its own (the reference server), the game now
   makes its own from a guide built in: the quests of levels 1 to 20 of every home city's
   classes. A "!" at the NPC with your next quest, a "?" at whoever your quest wants next or
   where its creatures are, and the tracker under the minimap.
@@ -2803,7 +2803,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 ## 2026-10-26 · A quest tracker
 - Under the minimap, the quests you are on and what each one wants next, counted as you go:
   "Bat Eye: 1/3", "Orc Pawn: 2/3", "Speak with Kellina". A goal you have all of turns grey.
-  On a server that sends it (ours does; Sandstorm sends none).
+  On a server that sends it (ours does; the reference server sends none).
 - It has no box behind it, so the world shows through; when there is not room for all your
   quests it shows the first ones and how many more there are.
 - Click it to open your quest journal. Turn it off under Options > Extended > Quests >
@@ -2811,7 +2811,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 
 ## 2026-10-26 · Quest markers on the map
 - The map shows where your quests are, on a server that sends them (ours does;
-  Sandstorm sends none): a gold "!" at each NPC with a quest you can take now,
+  the reference server sends none): a gold "!" at each NPC with a quest you can take now,
   for your class, race and level, and a "?" where a quest you are on needs
   you: the NPC to see next, or the nearest places of the creatures to hunt.
 - Point at a mark (or tap it, or pan the map's cross onto it with a
@@ -2926,7 +2926,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 ## 2026-10-25 · Mana bars, rumble for PlayStation controllers, and multiboxing fixes
 - Mana bars: on a server that sends them (eqoaclassic does), each group member,
   your target and your target's target show a power bar under their health.
-  Options > Extended > UI > Mana Bars turns them off. Sandstorm doesn't send
+  Options > Extended > UI > Mana Bars turns them off. The reference server doesn't send
   anyone's power, so you won't see them there.
 - Target of Target now shows its health and power beside its name.
 - PS4 and PS5 controllers rumble on Windows now, as on a PlayStation 2: when you
@@ -3022,10 +3022,10 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   steers you as the right button does: you turn to where the camera looks and run
   that way. Standing still, it still looks round you without turning you.
 
-## 2026-10-25 · Vampires can go to Sanctuary on Sandstorm
-- On Sandstorm, a vampire's Sanctuary no longer answers "You can't go to Sanctuary
-  (memcard patch 0 outdated)". The game now tells Sandstorm it plays with
-  Sandstorm's own patch, as a PlayStation 2 with that patch does.
+## 2026-10-25 · Vampires can go to Sanctuary on the reference server
+- On the reference server, a vampire's Sanctuary no longer answers "You can't go to Sanctuary
+  (memcard patch 0 outdated)". The game now tells the reference server it plays with
+  the reference server's own patch, as a PlayStation 2 with that patch does.
 - What it sends with that is what the patch sends: no network adapter's address,
   an id the game makes once and keeps in that server's folder, and, with each
   ability you use, when you pressed its button and how long you held it the time
@@ -3058,9 +3058,9 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - Creatures with no body of their own, like the Ice Statue in Geyvax Cave, can be
   targeted with R1 (or the mouse), as on a PS2, and show their target rings.
 
-## 2026-10-25 · Coaches and ports no longer disconnect you on Sandstorm
+## 2026-10-25 · Coaches and ports no longer disconnect you on the reference server
 - A coach or a harbor to another world, a port, or Return Home no longer
-  disconnects you on Sandstorm with "This character has been modified by a
+  disconnects you on the reference server with "This character has been modified by a
   customer service representative". While the new place loaded, the game went on
   telling the server it stood where it had left; it now tells the server it has
   arrived only once it stands at the new place, as a PS2 does.
@@ -3102,7 +3102,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   controller button.
 - Options > Extended > UI > Target of Target (off unless you turn it on): beside your
   target's bar a second bar shows who your target is targeting. On eqoaclassic it
-  shows for players and monsters alike; Sandstorm sends it for players only, so
+  shows for players and monsters alike; the reference server sends it for players only, so
   there it shows when you target a player (your tank, say), not a monster.
 - Press F to target your target's target: the game's own Assist Target, the server
   telling the game whom to target. Clicking the Target of Target bar does the same.
@@ -3149,7 +3149,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - They go with the weapon sets: on eqoaclassic, pressing right goes through
   your ability bars, then the items, then the weapon sets.
 - The server keeps which ability is on which slot: eqoaclassic keeps the
-  extra bars, Sandstorm keeps only the game's two. If the server does not
+  extra bars, the reference server keeps only the game's two. If the server does not
   take an ability onto bar 3 or 4, the chat says so in red.
 
 ## 2026-10-24 · SOE's final toolbars: weapon sets, two potions and two gems
@@ -3207,11 +3207,11 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - A problem report (F3) now lists the controllers connected, how each is read
   and which game window reads it.
 
-## 2026-10-24 · Sandstorm: stacks at auction, guilds of 255
-- On Sandstorm, gems, crafting materials and anything else that stacks can
-  now be put up for auction from the bank, as Sandstorm's own patch lets a
+## 2026-10-24 · The reference server: stacks at auction, guilds of 255
+- On the reference server, gems, crafting materials and anything else that stacks can
+  now be put up for auction from the bank, as the reference server's own patch lets a
   PlayStation 2 do. The original game refuses anything that stacks.
-- On Sandstorm a guild can invite members until it has 255, as its patch
+- On the reference server a guild can invite members until it has 255, as its patch
   allows; the original game stops at 128.
 
 ## 2026-10-24 · Fixes from your reports
@@ -3316,7 +3316,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   (the game's) up to 1000, is how far away they are drawn: the game stops
   drawing a player race's body (most townsfolk) 100 away.
 - Who is in view is the server's choice, so NPC/PC Display works only on a
-  server that offers more: eqoaclassic does, up to 204 within 1000. Sandstorm
+  server that offers more: eqoaclassic does, up to 204 within 1000. The reference server
   and eqoa.live keep the game's 24. The view distance draws whatever the
   server sends that far on any server. In the world, with either row chosen,
   the line at the bottom of the page says what this server gives you.
@@ -3349,7 +3349,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   bar's title). The spell book's Memorize offers their slots too: its list of
   slots shows ten at a time, and moving past the tenth shows the next ten.
 - The server keeps which ability is on which slot, so the extra bars work
-  only on a server that keeps them: eqoaclassic does, Sandstorm keeps only
+  only on a server that keeps them: eqoaclassic does, the reference server keeps only
   the game's two bars. If the server does not take an ability onto bar 3 or
   4, the chat says so in red.
 - When the game offers a crash report as it starts, it now says how long ago
@@ -3359,14 +3359,14 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
 - A crash report waits until you send it or delete it (Not now keeps it), so
   one offered right after you restart for an update can be from hours before.
 
-## 2026-10-23 · The Who list as Sandstorm sorts it
-- On Sandstorm, the Who list sorts the way Sandstorm's patch does. L1 and R1
+## 2026-10-23 · The Who list as the reference server sorts it
+- On the reference server, the Who list sorts the way the reference server's patch does. L1 and R1
   (or left and right) change the column, and arrows mark the column it is
   sorted by. The highlight stays at its place in the list instead of
   jumping to follow the player.
 
-## 2026-10-23 · Sandstorm's player search, tall windows, a touch screen crash
-- On Sandstorm, the Group menu's Search opens Sandstorm's own search window.
+## 2026-10-23 · The reference server's player search, tall windows, a touch screen crash
+- On the reference server, the Group menu's Search opens the reference server's own search window.
   It starts on levels around your own (45 to 60 at level 60), not every
   level. Change the race, the class or the levels, then pick Search.
 - In the search window, pick a player to see where they are and their group.
@@ -3413,7 +3413,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   are kept in that server's own folder, so switching servers never mixes
   them. If a server's update service doesn't answer, the game plays with the
   files that server sent last time and says so.
-- On a server that sends its own patch, such as Sandstorm, the game plays as
+- On a server that sends its own patch, such as the reference server, the game plays as
   that patch makes it: its 30 armour colours, armour set 9 with its helm,
   robes 4 and 5, coloured damage numbers, the auction search up to level 60,
   and Search, Register and Unregister in the Group menu.
@@ -3489,7 +3489,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   search's rows are the game's black on parchment, the selected one blue.
 - When a new version comes out while you're playing, the game tells you in its
   own message box and asks whether to restart now. It works on any server,
-  Sandstorm included. Yes logs you out cleanly and starts the new version (sign
+  the reference server included. Yes logs you out cleanly and starts the new version (sign
   in again); No keeps you playing, and it asks again in half an hour. The box
   starts on No and never comes up while you're typing, fighting or in a menu.
 - In a browser, "Later" on the new-version notice asks again after half an hour.
@@ -3532,7 +3532,7 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   back from the dead, and arriving in another world, stand you where the
   server says too.
 - Speed spells work: Spirit of the Wolf makes you run faster, and a snare
-  slows you, by what the server says, as on a PS2 (on Sandstorm a run is
+  slows you, by what the server says, as on a PS2 (on the reference server a run is
   8.8 and 11.5 under Spirit of the Wolf). Before, you always ran at the same
   speed.
 - Invisibility shows: an invisible character's body is not drawn, yours too;
