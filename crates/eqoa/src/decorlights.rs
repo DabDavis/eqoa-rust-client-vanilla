@@ -336,6 +336,10 @@ pub struct Holder<'a> {
     /// Its body's bones as drawn this frame, for a string that rides them
     /// ([`rides_bones`]); none for a holder no such string hangs on.
     pub bones: Option<Bones>,
+    /// It wears a decoration's art ([`is_art`]: the Christmas fir): its
+    /// cords are laid on it from its axis, never moved by the eye
+    /// ([`OUTWARD`]).
+    pub art: bool,
 }
 
 /// A holder's body as drawn: each bone's transform this frame (its node's
@@ -482,6 +486,21 @@ fn batches_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64)
 pub const NUDGE: f32 = 0.05;
 pub const NUDGE_PER: f32 = 0.004;
 
+/// How far a cord on a decoration's art ([`Holder::art`]: the Christmas fir)
+/// is laid out from the art's axis, in the art's units, its tinsel pieces
+/// every other one [`OUTWARD_ALT`] more: the boughs' surface wanders round the
+/// fitted paths (the ribbon's middle a median 0.47 out, the gold tinsel's
+/// 0.23), and a band the eye turned and nudged cut into them along a line
+/// that crawled as the eye moved (the owner, 2026-11-19: "lots of zfighting
+/// on xmas tree when player is moving"). Laid from the axis, the cut is
+/// where it is whatever the eye does.
+pub const OUTWARD: f32 = 0.2;
+pub const OUTWARD_ALT: f32 = 0.06;
+
+/// A cord on a decoration's art wider than this is laid flat on it (the
+/// tree's ribbon, 1.5) rather than turned to the eye (its lights' cord, 0.07).
+pub const FLAT_WIDTH: f32 = 0.3;
+
 /// A tinsel piece's length, of the cord's width (`tinsel_pieces`).
 pub const TINSEL_PIECE: f32 = 0.7;
 
@@ -491,7 +510,7 @@ pub const TINSEL_PIECE: f32 = 0.7;
 /// its own and its texture in one of four turns, both from `seed` and the
 /// piece (the same every frame): a bushy, twisted garland from any side, where
 /// one band turned to the eye read as a flat strip.
-fn tinsel_pieces(line: &[glam::Vec3], width: f32, seed: u32, eye: glam::Vec3, strips: &mut Vec<Vec<([f32; 2], [f32; 3])>>) {
+fn tinsel_pieces(line: &[glam::Vec3], width: f32, seed: u32, eye: glam::Vec3, axis: Option<glam::Vec3>, strips: &mut Vec<Vec<([f32; 2], [f32; 3])>>) {
     use glam::Vec3;
     let len = (width * TINSEL_PIECE).max(0.05);
     // the line's length to each point
@@ -534,8 +553,15 @@ fn tinsel_pieces(line: &[glam::Vec3], width: f32, seed: u32, eye: glam::Vec3, st
         // and the piece a little toward the eye, every other one a little
         // more, so where two overlap one is always in front, and the boughs
         // under the garland never fight it for the depth
-        let d = eye - c;
-        let c = c + d.normalize_or_zero() * ((NUDGE + NUDGE_PER * d.length()) * if k % 2 == 0 { 1.0 } else { 1.25 });
+        // on a decoration's art, out from its axis instead, the same whatever
+        // the eye does ([`OUTWARD`])
+        let c = match axis {
+            Some(a) => c + outward(c, a) * (OUTWARD + if k % 2 == 0 { 0.0 } else { OUTWARD_ALT }),
+            None => {
+                let d = eye - c;
+                c + d.normalize_or_zero() * ((NUDGE + NUDGE_PER * d.length()) * if k % 2 == 0 { 1.0 } else { 1.25 })
+            }
+        };
         // pieces overlap a little, so the garland has no gaps
         let along = dir * (0.6 * total / n as f32);
         for q in 0..2 {
@@ -550,6 +576,11 @@ fn tinsel_pieces(line: &[glam::Vec3], width: f32, seed: u32, eye: glam::Vec3, st
             ]);
         }
     }
+}
+
+/// The way out from `axis` (a vertical line through it) at `p`, level.
+fn outward(p: glam::Vec3, axis: glam::Vec3) -> glam::Vec3 {
+    glam::Vec3::new(p.x - axis.x, 0.0, p.z - axis.z).normalize_or_zero()
 }
 
 /// How many pieces a cord's span between two bulbs is drawn in (its sag).
@@ -571,14 +602,16 @@ fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Str
         if s.cord & 0xFF == 0 || s.cord_width <= 0.0 {
             continue;
         }
-        let frames: Vec<([f32; 3], f32, f32)> = match &s.anchor {
-            Anchor::Npc(key) => holders.iter().filter(|h| net::npctint::key(h.name) == *key).map(|h| (h.at, h.heading, h.scale)).collect(),
-            Anchor::World(w) if *w as i64 == world => vec![([0.0; 3], 0.0, 1.0)],
+        let frames: Vec<([f32; 3], f32, f32, bool)> = match &s.anchor {
+            Anchor::Npc(key) => holders.iter().filter(|h| net::npctint::key(h.name) == *key).map(|h| (h.at, h.heading, h.scale, h.art)).collect(),
+            Anchor::World(w) if *w as i64 == world => vec![([0.0; 3], 0.0, 1.0, false)],
             Anchor::World(_) => Vec::new(),
         };
         let color = [(s.cord >> 24) as f32 / 255.0, ((s.cord >> 16) & 0xFF) as f32 / 255.0, ((s.cord >> 8) & 0xFF) as f32 / 255.0, 1.0];
         let mut strips = Vec::new();
-        for (at, heading, scale) in frames {
+        for (at, heading, scale, art) in frames {
+            // a decoration's art's axis: its cords laid out from it ([`OUTWARD`])
+            let axis = art.then(|| Vec3::from(at));
             let (sin, cos) = heading.sin_cos();
             let place = |b: &net::decor::Bulb| {
                 let [x, y, z] = b.at;
@@ -619,7 +652,7 @@ fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Str
                 // tinsel (`Look::tinsel`): pieces along the wire, each its own
                 // twist, crossed, bushy from any side; no band, no nudge
                 if s.look.tinsel {
-                    tinsel_pieces(&line, 2.0 * half, si as u32, e, &mut strips);
+                    tinsel_pieces(&line, 2.0 * half, si as u32, e, axis, &mut strips);
                     continue;
                 }
                 // a little toward the eye, more the farther (the depth's own
@@ -631,6 +664,11 @@ fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Str
                 // nudge the coils fought each other)
                 let n = line.len().max(1) as f32;
                 for (i, p) in line.iter_mut().enumerate() {
+                    if let Some(a) = axis {
+                        // on a decoration's art: out from its axis, the eye no part of it
+                        *p += outward(*p, a) * (OUTWARD * scale.max(0.1));
+                        continue;
+                    }
                     let d = e - *p;
                     *p += d.normalize_or_zero() * ((NUDGE + NUDGE_PER * d.length()) * (1.0 + 0.5 * i as f32 / n));
                 }
@@ -639,7 +677,14 @@ fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Str
                 let mut strip = Vec::with_capacity(line.len() * 2);
                 for (i, &p) in line.iter().enumerate() {
                     let dir = if i + 1 < line.len() { line[i + 1] - p } else { p - line[i - 1] };
-                    let side = dir.cross(e - p).normalize_or_zero() * half;
+                    // a band turned to the eye; a wide one on a decoration's
+                    // art (the tree's ribbon) laid flat on it, across the way
+                    // out from its axis, so it never turns into the boughs
+                    let flat = axis.filter(|_| 2.0 * half > FLAT_WIDTH);
+                    let side = match flat {
+                        Some(a) => dir.cross(outward(p, a)).normalize_or_zero() * half,
+                        None => dir.cross(e - p).normalize_or_zero() * half,
+                    };
                     if textured {
                         let k = i % CORD_PIECES;
                         let u = k as f32 / CORD_PIECES as f32;
@@ -924,7 +969,7 @@ mod tests {
     #[test]
     fn the_bulbs_hang_on_the_tree() {
         let d = tree(Effect::Steady);
-        let h = [Holder { name: "Christmas Tree", at: [100.0, 50.0, 200.0], heading: 0.0, scale: 2.0, bones: None }];
+        let h = [Holder { name: "Christmas Tree", at: [100.0, 50.0, 200.0], heading: 0.0, scale: 2.0, bones: None, art: false }];
         let b = batches_of(&d, &h, 0, [100.0, 55.0, 190.0], 0);
         let quads: usize = b.iter().map(|b| b.quads.len()).sum();
         assert_eq!(quads, 4);
@@ -940,12 +985,12 @@ mod tests {
         let red = b.iter().find(|b| b.texture == BULB && b.quads[0].color[0] > 0.9).unwrap();
         assert_eq!(red.quads.len(), 2);
         // turned half round: x 1 goes to x -1
-        let h2 = [Holder { name: "christmas tree", at: [0.0; 3], heading: std::f32::consts::PI, scale: 1.0, bones: None }];
+        let h2 = [Holder { name: "christmas tree", at: [0.0; 3], heading: std::f32::consts::PI, scale: 1.0, bones: None, art: false }];
         let b2 = batches_of(&d, &h2, 0, [0.0; 3], 0);
         let low = b2.iter().flat_map(|b| b.quads.iter()).find(|q| (q.center[1] - 2.0).abs() < 1e-4).unwrap();
         assert!((low.center[0] + 1.0).abs() < 1e-4, "{:?}", low.center);
         // another name, or past the reach: nothing
-        assert!(batches_of(&d, &[Holder { name: "Christmas Bush", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None }], 0, [0.0; 3], 0).is_empty());
+        assert!(batches_of(&d, &[Holder { name: "Christmas Bush", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None, art: false }], 0, [0.0; 3], 0).is_empty());
         assert!(batches_of(&d, &h, 0, [100.0 + REACH + 10.0, 50.0, 200.0], 0).is_empty());
     }
 
@@ -955,7 +1000,7 @@ mod tests {
     #[test]
     fn the_cord_hangs_from_bulb_to_bulb() {
         let mut d = tree(Effect::Steady);
-        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None }];
+        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None, art: false }];
         let c = cords_of(&d, &h, 0, [0.0, 3.0, -20.0]);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].strips.len(), 1, "three bulbs, the star off it: one run");
@@ -996,7 +1041,7 @@ mod tests {
                 net::decor::GiftBox { at: [-2.0, 0.0, 0.0], size: [0.6, 0.6, 0.6], yaw: 0.3, color: 0x2050_C0FF, ribbon: 0, bow: false, paper: 0, paper_gain: 1.0 },
             ],
         });
-        let h = [Holder { name: "Christmas Tree", at: [100.0, 50.0, 200.0], heading: 0.0, scale: 2.0, bones: None }];
+        let h = [Holder { name: "Christmas Tree", at: [100.0, 50.0, 200.0], heading: 0.0, scale: 2.0, bones: None, art: false }];
         let p = presents_of(&d, &h, 0, [100.0, 52.0, 190.0]);
         assert_eq!(p.len(), 1);
         assert_eq!(p[0].strips.len(), (5 + 6 + 4) + 5, "the red box wrapped and bowed, the blue plain");
@@ -1024,7 +1069,7 @@ mod tests {
         m.uv = vec![[0.0; 2]; 3];
         m.batches.push(esf::Batch { material: 0, layers: Vec::new(), indices: vec![0, 1, 2], lod: None });
         let rc = std::rc::Rc::new(Globe { model: m, mid: glam::Vec3::new(1.0, 1.0, 0.0), across: 2.0, tinted: 0 });
-        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None }];
+        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None, art: false }];
         let g = globes_of(&d, &h, 0, [0.0, 3.0, -20.0], 0, &|id| (id == 0xF8E6_C045).then(|| rc.clone()));
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].strips.len(), 3, "a triangle a bulb, the star none");
@@ -1107,7 +1152,7 @@ mod tests {
         let mut d = tree(Effect::Steady);
         d.strings[0].cord_width = 0.5;
         d.strings[0].look = net::decor::Look { cord_texture: 0x9196_DAC4, tinsel: true, ..Default::default() };
-        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None }];
+        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None, art: false }];
         let c = cords_of(&d, &h, 0, [0.0, 3.0, -20.0]);
         let s = &c[0].strips;
         assert!(s.len() >= 8 && s.len() % 2 == 0, "{} quads", s.len());
@@ -1122,11 +1167,43 @@ mod tests {
         assert_eq!(cords_of(&d, &h, 0, [0.0, 3.0, -20.0])[0].strips.len(), 2, "a plain textured cord: a strip a span");
     }
 
+    /// On a decoration's art (the Christmas fir) a cord is laid from the
+    /// art's axis, the eye no part of it (the owner, 2026-11-19: "lots of
+    /// zfighting on xmas tree when player is moving"): a wide ribbon and
+    /// tinsel the same seen from anywhere, the ribbon flat on the tree
+    /// (across square to the way out from its axis). The control: the same strings on a holder that is not art
+    /// still turn and nudge to the eye.
+    #[test]
+    fn a_cord_on_art_is_the_same_from_any_eye() {
+        let (a, b) = ([0.0, 3.0, -20.0], [15.0, 8.0, 6.0]);
+        let mut ribbon = tree(Effect::Steady);
+        ribbon.strings[0].cord_width = 1.5;
+        ribbon.strings[0].look = net::decor::Look { cord_texture: 0x6A41_D388, ..Default::default() };
+        let mut tinsel = ribbon.clone();
+        tinsel.strings[0].look.tinsel = true;
+        let art = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None, art: true }];
+        let plain = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None, art: false }];
+        for d in [&ribbon, &tinsel] {
+            assert_eq!(cords_of(d, &art, 0, a)[0].strips, cords_of(d, &art, 0, b)[0].strips, "the same from any eye");
+            assert_ne!(cords_of(d, &plain, 0, a)[0].strips, cords_of(d, &plain, 0, b)[0].strips, "the control moves with the eye");
+        }
+        // the ribbon flat on the tree: each pair across the way out from its axis
+        let c = cords_of(&ribbon, &art, 0, a);
+        for strip in &c[0].strips {
+            for pair in strip.chunks(2) {
+                let (l, r) = (glam::Vec3::from(pair[0].1), glam::Vec3::from(pair[1].1));
+                let mid = (l + r) * 0.5;
+                let out = mid.with_y(0.0).normalize();
+                assert!((r - l).normalize().dot(out).abs() < 1e-3, "across the way out, not into the tree");
+            }
+        }
+    }
+
     /// A twinkle changes each bulb's light over time, out of step.
     #[test]
     fn the_bulbs_twinkle() {
         let d = tree(Effect::Twinkle);
-        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None }];
+        let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None, art: false }];
         let light = |ms| -> Vec<f32> {
             let mut v: Vec<(f32, f32)> = batches_of(&d, &h, 0, [0.0; 3], ms).iter().filter(|b| b.texture == BULB).flat_map(|b| b.quads.iter().map(|q| (q.center[1], q.color[0] + q.color[1] + q.color[2]))).collect();
             v.sort_by(|a, b| a.0.total_cmp(&b.0));

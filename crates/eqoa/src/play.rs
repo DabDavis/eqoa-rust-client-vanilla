@@ -11294,7 +11294,7 @@ impl Play {
                 drawn: cs.h.nodes.iter().map(|n| glam::Mat4::from_cols_array_2d(&Matrix44::mul(&n.world, &p.centre).to_cols())).collect(),
                 still: c.velocity.iter().all(|v| v.abs() < 0.05),
             });
-            holders.push(crate::decorlights::Holder { name: &c.name, at: e.actor_pos, heading: e.actor_hpr[0], scale: if e.scale > 0.0 { e.scale } else { 1.0 }, bones });
+            holders.push(crate::decorlights::Holder { name: &c.name, at: e.actor_pos, heading: e.actor_hpr[0], scale: if e.scale > 0.0 { e.scale } else { 1.0 }, bones, art: crate::decorlights::is_art(e.drawn_model) });
         }
         holders
     }

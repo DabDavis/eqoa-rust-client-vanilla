@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-19 · The Christmas tree holds still
+- The Christmas tree's red ribbon and gold tinsel no longer flicker through the boughs as you move. They used
+  to turn with your view and cut into the tree along a line that crawled as you walked; now the ribbon lies flat
+  round the tree and both sit just outside its boughs, the same from wherever you look.
+
 ## 2026-11-19 · Fungusmen show their armour
 - A fungusman who chose a skin (the bark) on the character page now shows the armour they wear again, on every
   fungusman body: blue, red and pale. Until now the chosen skin was drawn over the armour and hid it, so only
