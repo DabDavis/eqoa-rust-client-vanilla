@@ -5,7 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
-## 2026-11-18 · Four stacked spell bars, in one column or two, and Utility Bars
+## 2026-11-19 · White dye is white
+- Armour dyed White by an Armor Dyer now shows white, keeping its stitching, plates and trim. Until now White
+  left the armour exactly as undyed, in its own browns and greys. Undyed armour and every other dye look as
+  before. It needs the server's half too: on a server without it, White still looks undyed.
+
+## 2026-11-19 · Four stacked spell bars, in one column or two, and Utility Bars
 - **Stacked Spell Bars show every bar you have**: with Extended > UI > HUD > Ability Bars at 3 or 4, bars 3
   and 4 stand above the chat box too, not only the first two.
 - **Spell Bar Layout** (Extended > UI > HUD Layout): Stacked puts them in one column, bar 1 on top; 2 Columns
@@ -1819,11 +1824,6 @@ Every loading tip is now a plain sentence ("You can type /stuck to return to you
   its tall collar, and the same with Dread's fur mantle over the shoulders. Some come in other colours.
 - Every race can wear one, the server's own races too, but those with wings (pixies, fairies and gargoyles).
   On a server without capes nothing changes.
-
-## 2026-11-09 · White dye is white
-- Armour dyed White by an Armor Dyer now shows white, keeping its stitching, plates and trim. Until now White
-  left the armour exactly as undyed, in its own browns and greys. Undyed armour and every other dye look as
-  before. It needs the server's half too: on a server without it, White still looks undyed.
 
 ## 2026-11-09 · A Skeleton's helm shows in the 2002 art
 - With the 2002 disc's art on (F9), a Skeleton now wears its helm in the world, as character select
