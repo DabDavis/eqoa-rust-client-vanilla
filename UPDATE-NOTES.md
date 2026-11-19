@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-19 · Stacked Spell Bars stay stacked with a controller
+- With Stacked Spell Bars on, pressing anything on a controller no longer turns the bars back into the old
+  five-slot carousel: they stay stacked, and the d-pad walks and uses them as the arrow keys do. Only a finger
+  on a touch screen still brings back the carousel.
+
 ## 2026-11-19 · Mail carries items and tunar
 - On a server that offers it, the mail's Compose window has two more rows: Attach, to pick an item from your pack
   (and how many of a stack), and Tunar, to send coin with the letter. A letter that carries something goes to one
