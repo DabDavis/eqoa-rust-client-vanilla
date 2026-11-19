@@ -407,9 +407,17 @@ current.
   the click's activation up: ask for it after anything else that click needs (asked first, it broke
   Start with a remembered disc the browser had to ask for).
   It installs as an app (`web/manifest.json`, the icons `tools/webicons` draws off `icon_art.rs`).
-- No problem or crash reports to a report server (taken out 2026-10-31, the user: "lets also remove
-  the F3 report and crash report system from vanilla"; the report server on eqoaclassic was shut down
-  the same day), and no telemetry. Bug reports go to the server the player plays on, as petitions
+- No problem reports to a report server (taken out 2026-10-31, the user: "lets also remove
+  the F3 report and crash report system from vanilla"), and no telemetry. **Crash reports go to
+  eqoaclassic's report server again since 2026-11-19** (the server owner: "add crash reports back so we
+  can find what the issue is", a page that stopped before it ever logged in): natively each kept
+  `crashes/` file is POSTed at the next start (`crashfile::post_to_board`, `reports_url`: `EQOA_REPORTS`
+  or https://eqoaclassic.com/eqoa/reports, `/crash`; a `.posted` file beside it so it goes once; channel
+  `native`; `EQOA_NO_REPORTS` sends none); in a page `web/notices.js` sends a crash at once (and a problem
+  before the game ran: a file that would not load), with the console's last 200 lines, the browser and its
+  graphics and `eqoa.crashReport`, channel `web`, account names and passwords taken out (`web::secret` tells the
+  page each one sent to Station; `?reports=<url>` for a test's reportd). Read them on the box:
+  `ls -t ~/eqoareports/crashes`. Test against a local reportd, never the live board. Bug reports go to the server the player plays on, as petitions
   over the game's own connection (the user, 2026-11-05), so a server hears only its own players: on
   a server that offers them (go-eqoa-server's 0x7E0E, `net::session::OP_BUG_REPORTS`) F3 opens
   Support's request form on Bug Report (`Play::open_bug_report`), and each petition the player files

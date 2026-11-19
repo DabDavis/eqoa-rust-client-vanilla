@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-19 · Crash reports are back
+- When the game crashes, a crash report goes to the eqoaclassic team so the crash can be found and fixed. In
+  the browser it is sent at once, even when the page stops before you log in, and the crash notice says it
+  was sent; the downloaded game sends it the next time it starts. A report holds the error, the game's last
+  log lines, your system and browser and its graphics: never your account name or password.
+
 ## 2026-11-19 · White dye is white
 - Armour dyed White by an Armor Dyer now shows white, keeping its stitching, plates and trim. Until now White
   left the armour exactly as undyed, in its own browns and greys. Undyed armour and every other dye look as

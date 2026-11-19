@@ -788,6 +788,8 @@ fn boot(image: Option<&str>, server: Option<String>) -> Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         logfile::start();
+        // the crashes kept from earlier runs, to the report server
+        crashfile::post_to_board();
         gpulost::begin();
         // a window in the back kept at its pace by the system too (multiboxing)
         nothrottle::keep_pace();

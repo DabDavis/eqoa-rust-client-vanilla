@@ -156,6 +156,7 @@ fn write_in(d: &std::path::Path, stamp: &str, text: &str) -> Option<std::path::P
     let path = d.join(format!("crash-{stamp}.txt"));
     std::fs::write(&path, text).ok()?;
     for old in files_in(d).into_iter().skip(KEPT) {
+        let _ = std::fs::remove_file(old.with_extension("posted"));
         let _ = std::fs::remove_file(old);
     }
     Some(path)
@@ -190,10 +191,82 @@ pub fn answered(number: u32) -> bool {
 fn answered_in(d: &std::path::Path, number: u32) -> bool {
     for p in files_in(d) {
         if p.file_name().and_then(|n| n.to_str()).is_some_and(|n| number_of(n) == number) {
+            let _ = std::fs::remove_file(p.with_extension("posted"));
             return std::fs::remove_file(p).is_ok();
         }
     }
     false
+}
+
+/// Where crash reports go besides the game server (the server owner,
+/// 2026-11-19: "add crash reports back so we can find what the issue is"):
+/// eqoaclassic's report server, `EQOA_REPORTS` in place of it (a local
+/// reportd in tests, never the live board).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn reports_url() -> String {
+    std::env::var("EQOA_REPORTS").ok().filter(|u| !u.trim().is_empty()).unwrap_or_else(|| "https://eqoaclassic.com/eqoa/reports".into())
+}
+
+/// Every kept report not yet sent to the report server, sent on a thread of
+/// its own at the start (`main`'s boot): each a POST to `/crash`, its file
+/// marked `.posted` beside it once the server took it (sent once). It stays
+/// kept for the game server's login offer as before (`send_pending`). A run
+/// with `EQOA_NO_REPORTS` set sends nothing.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn post_to_board() {
+    if std::env::var_os("EQOA_NO_REPORTS").is_some() {
+        return;
+    }
+    let Some(d) = dir() else { return };
+    let _ = std::thread::Builder::new().name("crash-reports".into()).spawn(move || {
+        let base = reports_url();
+        for p in files_in(&d) {
+            let mark = p.with_extension("posted");
+            if mark.exists() {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&p) else { continue };
+            match post_one(&base, &text) {
+                Ok(id) => {
+                    let _ = std::fs::write(&mark, &id);
+                    eprintln!("[eqoa] crash report sent to the report server: {id}");
+                }
+                Err(e) => {
+                    eprintln!("[eqoa] crash report not sent to the report server ({e}): kept for the next start");
+                    break;
+                }
+            }
+        }
+    });
+}
+
+/// One report POSTed to `base`/crash: its id, or why not.
+#[cfg(not(target_arch = "wasm32"))]
+fn post_one(base: &str, text: &str) -> Result<String, String> {
+    let body = serde_json::json!({
+        "report": text,
+        "note": "",
+        "version": crate::bugnote::build().chars().take(64).collect::<String>(),
+        "platform": crate::bugnote::platform().chars().take(64).collect::<String>(),
+        "channel": "native",
+    });
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(10)))
+        .timeout_global(Some(std::time::Duration::from_secs(30)))
+        .build()
+        .into();
+    let mut r = agent
+        .post(format!("{}/crash", base.trim_end_matches('/')))
+        .header("Content-Type", "application/json")
+        .send(body.to_string())
+        .map_err(|e| e.to_string())?;
+    let answer = r.body_mut().read_to_string().map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&answer).map_err(|e| e.to_string())?;
+    if v.get("ok").and_then(|o| o.as_bool()) == Some(true) {
+        Ok(v.get("id").and_then(|i| i.as_str()).unwrap_or("?").to_string())
+    } else {
+        Err(v.get("error").and_then(|e| e.as_str()).unwrap_or("refused").to_string())
+    }
 }
 
 // ---- in a page: localStorage ----------------------------------------------

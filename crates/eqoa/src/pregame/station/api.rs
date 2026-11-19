@@ -236,11 +236,15 @@ impl Api {
 
     /// Type 36, `ValidateLogin(name, password)`.
     pub fn validate_login(&mut self, name: &str, password: &str, now: i64, events: &mut Vec<Event>) -> i32 {
+        #[cfg(target_arch = "wasm32")]
+        crate::web::secret(name, password);
         self.request(auth::login_request(name, password).to_vec(), now, events)
     }
 
     /// Type 56, `CreateAccount(account)`.
     pub fn create_account(&mut self, a: &auth::Account, now: i64, events: &mut Vec<Event>) -> i32 {
+        #[cfg(target_arch = "wasm32")]
+        crate::web::secret(&a.name, &a.password);
         self.request(auth::create_account(a), now, events)
     }
 
@@ -248,6 +252,11 @@ impl Api {
     pub fn change_password(&mut self, id: i32, old: &str, new: &str, now: i64, events: &mut Vec<Event>) -> i32 {
         if id < 0 {
             return 1;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            crate::web::secret("", old);
+            crate::web::secret("", new);
         }
         self.request(auth::change_password(id, old, new), now, events)
     }

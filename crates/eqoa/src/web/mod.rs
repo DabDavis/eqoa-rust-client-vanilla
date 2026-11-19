@@ -469,6 +469,13 @@ pub fn update_notices() -> bool {
     crate::settings::update_notices()
 }
 
+/// An account name and a password the client sends Station (either may be
+/// empty): the page takes them out of every crash report it sends
+/// (`window.eqoaSecret`, web/notices.js).
+pub fn secret(account: &str, password: &str) {
+    call_page("eqoaSecret", &js_sys::Array::of2(&account.into(), &password.into()));
+}
+
 /// The client has stopped (`title`; `detail` says why): the page's notice
 /// (`window.eqoaCrash`, web/notices.js).
 pub(crate) fn crash(title: &str, detail: &str) {

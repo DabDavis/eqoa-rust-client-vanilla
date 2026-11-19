@@ -32,6 +32,7 @@ let softwareTold = false; // its notice was raised (once a page)
 const status = (t) => {
   if (t.startsWith('graphics: ')) {
     clientGraphics = t.slice(10);
+    window.eqoaClientGraphics = clientGraphics; // a crash report's (notices.js)
     if (SOFTWARE.test(clientGraphics)) noteSoftware(/\(Gl\)$/.test(clientGraphics) ? 'WebGL2' : 'WebGPU');
   }
   // in the world the status line keeps saying it

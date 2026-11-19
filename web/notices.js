@@ -9,6 +9,17 @@
 // This file is a module of its own, loaded before main.js and importing
 // nothing, so that it runs when the client's files do not: the page's errors
 // are its to catch.
+//
+// Crash reports (the server owner, 2026-11-19: "add crash reports back so we
+// can find what the issue is", a player whose page stopped before it ever
+// logged in): a crash, and a problem that leaves the page unable to start, is
+// sent at once to eqoaclassic's report server (`REPORTS`/crash, the board's
+// crashes/), with the console's last lines (`ring`), the browser and its
+// graphics and the build. Never an account name or a password: the client
+// tells the page each one it sends Station (window.eqoaSecret, web::secret)
+// and every report has them taken out (`scrub`). The kept report of the
+// client's own panic (localStorage eqoa.crashReport, crashfile.rs) rides
+// along; it is still sent to the game server at the next login too.
 
 const $ = (id) => document.getElementById(id);
 
@@ -22,6 +33,125 @@ let dead = false;    // the client stopped: its exports are not called again
 let leavingAt = -Infinity; // the page's last beforeunload (performance.now())
 addEventListener('beforeunload', () => { leavingAt = performance.now(); });
 let running = false; // in the world, or the viewer: the canvas has the keys
+
+// ---- crash reports
+
+// ?reports=<url> sends them to another report server (a test's, never the
+// live board's): only crash reports go there
+const REPORTS = (() => {
+  try { return new URLSearchParams(location.search).get('reports') || 'https://eqoaclassic.com/eqoa/reports'; } catch { return 'https://eqoaclassic.com/eqoa/reports'; }
+})();
+const CRASH_MAX = 250 * 1024; // the report server takes 256 KiB of text
+const LOG_LINES = 200;
+const LOG_LINE_MAX = 500;
+const opened = Date.now();
+
+// the console's last lines: a report carries them, the only copy a player has
+const ring = [];
+for (const level of ['log', 'info', 'warn', 'error']) {
+  const to = console[level].bind(console);
+  console[level] = (...args) => {
+    try {
+      const text = args.map((a) => {
+        if (typeof a === 'string') return a;
+        if (a instanceof Error) return a.stack || String(a);
+        try { return JSON.stringify(a); } catch { return String(a); }
+      }).join(' ');
+      const t = ((Date.now() - opened) / 1000).toFixed(1);
+      ring.push(`[${t}] ${level === 'log' || level === 'info' ? '' : level + ': '}${text.slice(0, LOG_LINE_MAX)}`);
+      if (ring.length > LOG_LINES) ring.shift();
+    } catch { /* never in the way of the console */ }
+    to(...args);
+  };
+}
+
+// the account names and passwords the client sent Station (web::secret)
+const accounts = new Set();
+const passwords = new Set();
+window.eqoaSecret = (account, password) => {
+  if (account && account.trim()) accounts.add(account.trim());
+  // under four characters a password is as likely to be part of a word
+  if (password && password.length >= 4) passwords.add(password);
+};
+
+function scrub(text) {
+  for (const p of passwords) text = text.split(p).join('<password>');
+  // as a word, case kept: a character named after the account keeps its name
+  for (const user of accounts) text = text.replace(new RegExp(`\\b${user.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g'), '<account>');
+  return text;
+}
+
+let build = { build: window.eqoaBuild || 'dev', commit: '' };
+const buildKnown = fetch(new URL('build.json', import.meta.url))
+  .then((r) => (r.ok ? r.json() : null))
+  .then((b) => { if (b && b.build) build = b; })
+  .catch(() => {});
+
+function version() {
+  return 'web-' + (build.commit || build.build || window.eqoaBuild || 'dev');
+}
+
+function graphics() {
+  const g = String(window.eqoaClientGraphics || '');
+  if (/\(Gl\)$/.test(g)) return 'WebGL2';
+  if (g) return 'WebGPU';
+  return navigator.gpu ? 'WebGPU?' : 'WebGL2?';
+}
+
+// the board's OS column: the system, the browser and how it draws, in 64
+function platform() {
+  const ua = navigator.userAgent;
+  const os = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad|iPod/.test(ua) ? 'iOS'
+    : /CrOS/.test(ua) ? 'ChromeOS' : /Mac OS X/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : 'other';
+  const b = ua.match(/(Edg|OPR|Firefox|Chrome|Version)\/(\d+)/);
+  const name = !b ? 'browser' : { Edg: 'Edge', OPR: 'Opera', Version: 'Safari' }[b[1]] || b[1];
+  return `${os} ${name}${b ? ' ' + b[2] : ''} ${graphics()}`.slice(0, 64);
+}
+
+function pageFacts() {
+  const c = $('eqoa');
+  let kept = '';
+  try { kept = localStorage.getItem('eqoa.crashReport') || ''; } catch { /* a private window */ }
+  return [
+    `version: ${version()}`,
+    `build: ${build.build}, commit ${build.commit || '-'}`,
+    `page open ${((Date.now() - opened) / 1000).toFixed(0)} s: ${location.origin}${location.pathname}`,
+    `browser: ${navigator.userAgent}`,
+    `graphics: ${window.eqoaClientGraphics || '-'} (navigator.gpu ${navigator.gpu ? 'yes' : 'no'})`,
+    `window ${innerWidth}x${innerHeight}, device pixel ratio ${devicePixelRatio}, canvas ${c ? c.width + 'x' + c.height : '-'}`,
+    `memory: ${navigator.deviceMemory ? navigator.deviceMemory + ' GB (device)' : '-'}${performance.memory ? `, JS heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)} MB` : ''}`,
+    `in the world: ${running ? 'yes' : 'no'}`,
+    ...(kept ? ['', '[the client\'s own report of its panic]', kept.trimEnd()] : []),
+  ];
+}
+
+// at most one report of each kind a page: a crash, and each problem's key
+const sent = new Set();
+
+// a crash (or a problem that stops the page) sent to the report server;
+// `done` hears its id, or why it was not sent
+async function sendCrash(kind, title, detail, done) {
+  if (sent.has(kind)) return;
+  sent.add(kind);
+  await Promise.race([buildKnown, new Promise((r) => setTimeout(r, 2000))]);
+  let text = `EQOA web client crash report\n${title}\n${String(detail).trimEnd()}\n\n${pageFacts().join('\n')}\n\n[log] last ${ring.length} lines\n${ring.join('\n')}\n`;
+  text = scrub(text);
+  if (text.length > CRASH_MAX) text = text.slice(0, CRASH_MAX - 40) + '\n(cut to fit the report server)\n';
+  try {
+    const r = await fetch(`${REPORTS}/crash`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: text.length < 60000,
+      body: JSON.stringify({ report: text, note: kind === 'crash' ? '' : kind, version: version(), platform: platform(), channel: 'web' }),
+    });
+    let j = {};
+    try { j = await r.json(); } catch { /* not JSON */ }
+    if (r.ok && j.ok) {
+      console.log(`crash report sent: ${j.id}`);
+      if (done) done(j.id, '');
+    } else if (done) done('', j.error || `the report server answered ${r.status}`);
+  } catch (e) {
+    if (done) done('', 'the report server could not be reached');
+  }
+}
 
 function notice(key, kind, text, actions = []) {
   const box = $('notices');
@@ -52,6 +182,10 @@ function notice(key, kind, text, actions = []) {
 function problem(key, text) {
   console.warn(`problem (${key}): ${text}`);
   notice('problem:' + key, 'bad', text, [['Dismiss', () => notice('problem:' + key)]]);
+  // a problem that stops the page before the game runs (a file that did not
+  // load, the client that would not start) is a crash report too: nothing
+  // else of it would ever reach anyone
+  if (!running && !leaving()) sendCrash('problem:' + key, `A problem before the game ran (${key})`, text);
 }
 
 // The client stopped: `title`, and `detail` (the panic, web::crash; or the
@@ -71,9 +205,10 @@ function crash(title, detail) {
     const lines = String(detail).split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 2).join(' ');
     localStorage.setItem('eqoa.lastCrash', `${new Date().toISOString().slice(0, 19)}Z, page ${window.eqoaBuild || 'unbuilt'}: ${title}: ${lines}`.slice(0, 600));
   } catch { /* a private window: nothing kept */ }
-  notice('crash', 'bad', `${title}: ${String(detail).split('\n')[0]}\n\nThe client cannot go on: reload the page to play again.`, [
-    ['Reload', () => location.reload(), true],
-  ]);
+  const head = `${title}: ${String(detail).split('\n')[0]}\n\nThe client cannot go on: reload the page to play again.`;
+  const say = (more) => notice('crash', 'bad', head + more, [['Reload', () => location.reload(), true]]);
+  say('\nSending a crash report...');
+  sendCrash('crash', title, detail, (id, why) => say(id ? `\nA crash report was sent (${id}): thank you.` : `\nThe crash report could not be sent (${why}).`));
 }
 
 // ---- what the page catches
