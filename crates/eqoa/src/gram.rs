@@ -30,6 +30,8 @@ use crate::editbox::{EditBox, EditUp};
 use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::startmenu::KeyFlash;
 use crate::textlist::{Message, PROMPT_OK};
+use crate::mailattach::PackItem;
+use crate::quantity::{Quantity, QuantityUp};
 use crate::wholist::OptionList;
 use net::stream::{Reader, Writer};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
@@ -136,6 +138,8 @@ pub struct Grams {
     pub codes: Vec<i8>,
     /// live: someone got the gram (+0x18)
     pub delivered: bool,
+    /// what grams carry, on a server that offers it (`mailattach`)
+    pub attach: crate::mailattach::Attach,
 }
 
 /// go-eqoa-server's own, no retail message: the server takes the live
@@ -153,7 +157,7 @@ pub const RECIPIENTS: usize = 512;
 
 impl Default for Grams {
     fn default() -> Self {
-        Grams { state: 0, x08: 0, count: -1, headers: Vec::new(), message: Header::default(), text: Vec::new(), out: Vec::new(), shown: Vec::new(), live: false, to: Vec::new(), names: Vec::new(), codes: Vec::new(), delivered: false }
+        Grams { state: 0, x08: 0, count: -1, headers: Vec::new(), message: Header::default(), text: Vec::new(), out: Vec::new(), shown: Vec::new(), live: false, to: Vec::new(), names: Vec::new(), codes: Vec::new(), delivered: false, attach: Default::default() }
     }
 }
 
@@ -314,6 +318,14 @@ impl Grams {
         }
         w.wide(&String::from_utf16_lossy(subject)).wide(&String::from_utf16_lossy(text));
         self.out.push(w.data);
+    }
+
+    /// A live send that carries tunar and a pack record (`mailattach`): its
+    /// answer is the live send's.
+    pub fn send_gram_attached(&mut self, names: &[Vec<u8>], subject: &[u16], text: &[u16], tunar: u32, item: Option<(u32, i64)>) {
+        self.state = 3;
+        self.attach.refusal = None;
+        self.out.push(crate::mailattach::send(names, subject, text, tunar, item));
     }
 
     /// The names of a live answer (a zigzag count, then each
@@ -778,6 +790,20 @@ pub struct Compose {
     /// what the window puts in the chat (`ShowText`, `AddText`): its
     /// owner's to add
     pub said: Vec<(String, [f32; 4])>,
+    /// the server's mail carries items and tunar (`mailattach`, a live
+    /// window): the Attach and Tunar rows, as each key and frame find it;
+    /// `laid`: the window laid out with them
+    attaching: bool,
+    laid: bool,
+    /// what the gram is to carry: a pack record (its key, how many, its
+    /// name) and tunar
+    pub item: Option<(u32, i64, String)>,
+    pub tunar: u32,
+    /// Attach's pick of the pack's records, and how many of a stack
+    picker: OptionList,
+    picks: Vec<PackItem>,
+    qty: Quantity,
+    qty_pick: Option<PackItem>,
 }
 
 /// `AddText`'s red (1, .25, .25, 1), as the game's warnings are.
@@ -809,7 +835,34 @@ impl Compose {
         let mut mbox = MBox::default();
         mbox.kind = 1;
         mbox.pos = [100, 100];
-        Compose { reply, visible: false, sel: 0, to: Vec::new(), subject: Vec::new(), body: Vec::new(), x7b4: 0, window: Window::default(), status: Window::default(), edit: EditBox::default(), editing: false, message: Message::default(), mbox, mbox_up: false, dots: Dots::default(), hits: Hits::default(), time: 0, busy: false, live: false, said: Vec::new() }
+        Compose { reply, visible: false, sel: 0, to: Vec::new(), subject: Vec::new(), body: Vec::new(), x7b4: 0, window: Window::default(), status: Window::default(), edit: EditBox::default(), editing: false, message: Message::default(), mbox, mbox_up: false, dots: Dots::default(), hits: Hits::default(), time: 0, busy: false, live: false, said: Vec::new(), attaching: false, laid: false, item: None, tunar: 0, picker: OptionList::default(), picks: Vec::new(), qty: Quantity::default(), qty_pick: None }
+    }
+
+    /// The Send row: after Attach and Tunar when the gram may carry
+    /// something.
+    fn send_row(&self) -> i32 {
+        if self.attaching { 5 } else { 3 }
+    }
+
+    /// The window: 14 rows, 18 with Attach and Tunar.
+    fn lay_out(&mut self, vui: &Vui, r: &dyn Raster) {
+        self.window.init(vui, r, [320, 180], 500, if self.laid { 18 } else { 14 }, 0);
+        let title = wide(&word(vui, if self.reply { 894 } else { 895 }));
+        self.window.set_title(Some(&title));
+        self.window.open(true);
+    }
+
+    /// Attach: the pick of the pack's records the server may take (the
+    /// first line, nothing), opened.
+    fn open_picker(&mut self, vui: &Vui, r: &dyn Raster, grams: &Grams) {
+        self.picks = grams.attach.pack.clone();
+        let mut lines = vec![wide("(nothing)")];
+        for p in &self.picks {
+            lines.push(wide(&if p.quantity > 1 { format!("{} ({})", p.name, p.quantity) } else { p.name.clone() }));
+        }
+        self.picker.setup(vui, r, &wide("Attach"), lines, [320, 180], 300);
+        self.picker.visible = true;
+        self.picker.focus(vui, r);
     }
 
     /// `m_to`'s size in characters: the live client's 512, the disc's 24.
@@ -824,6 +877,15 @@ impl Compose {
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
         if self.editing {
             return self.edit.point(p).flatten().into_iter().collect();
+        }
+        if self.qty.visible {
+            return self.qty.point(p);
+        }
+        if self.picker.visible {
+            return match self.picker.point(p) {
+                Some(k) => k.into_iter().collect(),
+                None => vec![key::TRIANGLE],
+            };
         }
         if self.mbox_up {
             return self.mbox.point(p).then_some(key::CROSS).into_iter().collect();
@@ -840,10 +902,12 @@ impl Compose {
     /// 295, the focus from elsewhere: the windows, the cursor (a reply's on
     /// the body), the fields emptied.
     pub fn focus(&mut self, vui: &Vui, r: &dyn Raster) {
-        self.window.init(vui, r, [320, 180], 500, 14, 0);
-        let title = wide(&word(vui, if self.reply { 894 } else { 895 }));
-        self.window.set_title(Some(&title));
-        self.window.open(true);
+        self.lay_out(vui, r);
+        self.item = None;
+        self.tunar = 0;
+        self.picker.visible = false;
+        self.qty.visible = false;
+        self.qty_pick = None;
         self.status.init(vui, r, [320, 180], 375, 4, 0);
         self.status.set_title(Some(&wide(&word(vui, 271))));
         self.status.open(true);
@@ -880,6 +944,43 @@ impl Compose {
 
     pub fn key(&mut self, vui: &Vui, r: &mut dyn Raster, grams: &mut Grams, key: i32, down: bool, now: i64, cues: &mut Vec<i32>) -> Option<ComposeUp> {
         self.live = grams.live;
+        self.attaching = grams.live && grams.attach.offer.is_some();
+        if self.qty.visible {
+            match self.qty.key(key, down, cues) {
+                Some(QuantityUp::Value(n, _)) => {
+                    self.qty.visible = false;
+                    if let Some(p) = self.qty_pick.take()
+                        && n > 0
+                    {
+                        self.item = Some((p.key, n as i64, p.name));
+                    }
+                }
+                Some(QuantityUp::Cancel) => {
+                    self.qty.visible = false;
+                    self.qty_pick = None;
+                }
+                None => {}
+            }
+            return None;
+        }
+        if self.picker.visible {
+            if !down {
+                return None;
+            }
+            if let Some((line, true)) = self.picker.key(key, now, cues) {
+                match self.picks.get((line - 1).max(0) as usize).cloned() {
+                    _ if line == 0 => self.item = None,
+                    Some(p) if p.quantity > 1 => {
+                        // how many of the stack (four digits, as the trade's)
+                        self.qty.open(vui, r, p.quantity.min(9999) as i32, 0, -1);
+                        self.qty_pick = Some(p);
+                    }
+                    Some(p) => self.item = Some((p.key, 1, p.name)),
+                    None => {}
+                }
+            }
+            return None;
+        }
         if self.editing {
             if !down {
                 self.edit.key_up(key);
@@ -892,6 +993,10 @@ impl Compose {
                         0 => self.to = capped(&self.edit.text, self.to_size()),
                         1 => self.subject = capped(&self.edit.text, 64),
                         2 => self.body = capped(&self.edit.text, 512),
+                        4 if self.attaching => {
+                            let digits: String = String::from_utf16_lossy(&self.edit.text).chars().filter(|c| c.is_ascii_digit()).collect();
+                            self.tunar = digits.parse::<u64>().unwrap_or(0).min(i32::MAX as u64) as u32;
+                        }
                         _ => {}
                     }
                     self.editing = false;
@@ -935,7 +1040,7 @@ impl Compose {
                 }
             }
             20 | 139 if !busy => {
-                if self.sel < 3 {
+                if self.sel < self.send_row() {
                     self.sel += 1;
                     self.window.reset_tick_pulse(now);
                     cues.push(11);
@@ -943,7 +1048,7 @@ impl Compose {
                     cues.push(9);
                 }
             }
-            13 | 134 if !busy => return self.select(grams, now),
+            13 | 134 if !busy => return self.select(vui, r, grams, now),
             27 | 132 => {
                 if self.body.is_empty() {
                     return Some(self.cancel(cues));
@@ -962,9 +1067,15 @@ impl Compose {
     /// `Select`; the live one (0x0133D8D0) edits a To of 512 and a body of
     /// 511 (the disc's 24 and 512), and sends to every name `ParseRecipients`
     /// finds, none found refused as an empty To is.
-    fn select(&mut self, grams: &mut Grams, now: i64) -> Option<ComposeUp> {
+    fn select(&mut self, vui: &Vui, r: &mut dyn Raster, grams: &mut Grams, now: i64) -> Option<ComposeUp> {
         let center = self.window.center;
         match self.sel {
+            3 if self.attaching => self.open_picker(vui, r, grams),
+            4 if self.attaching => {
+                let t = if self.tunar > 0 { wide(&self.tunar.to_string()) } else { Vec::new() };
+                edit_field(&mut self.edit, 1, false, 10, center, &t, now);
+                self.editing = true;
+            }
             0 => {
                 let (t, size) = (self.to.clone(), self.to_size());
                 edit_field(&mut self.edit, 1, false, size, center, &t, now);
@@ -992,6 +1103,11 @@ impl Compose {
                     let names = parse_recipients(&self.to);
                     if names.is_empty() {
                         return Some(ComposeUp::Warn(1632));
+                    }
+                    if self.attaching && (self.item.is_some() || self.tunar > 0) {
+                        let item = self.item.as_ref().map(|(k, n, _)| (*k, *n));
+                        grams.send_gram_attached(&names, &self.subject, &self.body, self.tunar, item);
+                        return None;
                     }
                     grams.send_gram_live(&names, &self.subject, &self.body);
                     return None;
@@ -1048,6 +1164,11 @@ impl Compose {
     /// and -2 and -3 are no state of its.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, grams: &Grams, now: i64, cues: &mut Vec<i32>) -> Option<ComposeUp> {
         self.live = grams.live;
+        self.attaching = grams.live && grams.attach.offer.is_some();
+        if self.attaching != self.laid {
+            self.laid = self.attaching;
+            self.lay_out(vui, r);
+        }
         self.dots.step();
         let c = |on: bool| UI_COLORS[on as usize];
         crate::ui::window_backdrop(vui, r, 641);
@@ -1059,16 +1180,36 @@ impl Compose {
         self.window.text_box(vui, r, &self.subject, 140, 3, w - 180, 1, c(false), 6);
         self.window.text(vui, r, &wide(&format!("{}:", word(vui, 522))), 40, 5, c(self.sel == 2), 0);
         self.window.text_box(vui, r, &self.body, 140, 5, w - 180, 5, c(false), 6);
-        self.window.text(vui, r, &wide(&word(vui, 885)), 40, 11, c(self.sel == 3), 0);
+        // the rows: To, Subject, the body, (Attach, Tunar,) Send, the legend
+        let rows: &[(i32, i32, i32)] = if self.attaching { &[(0, 1, 1), (1, 3, 1), (2, 5, 5), (3, 11, 1), (4, 13, 1), (5, 15, 1)] } else { &[(0, 1, 1), (1, 3, 1), (2, 5, 5), (3, 11, 1)] };
+        let send = self.send_row();
+        if self.attaching {
+            self.window.text(vui, r, &wide("Attach:"), 40, 11, c(self.sel == 3), 0);
+            let item = match &self.item {
+                Some((_, n, name)) if *n > 1 => format!("{n} {name}"),
+                Some((_, _, name)) => name.clone(),
+                None => "(nothing)".to_string(),
+            };
+            self.window.text_box(vui, r, &wide(&item), 140, 11, w - 180, 1, c(false), 6);
+            self.window.text(vui, r, &wide("Tunar:"), 40, 13, c(self.sel == 4), 0);
+            let postage = grams.attach.offer.map(|o| o.postage).unwrap_or(0);
+            let mut t = self.tunar.to_string();
+            if postage > 0 {
+                t += &format!("   (postage {postage} tunar with anything attached)");
+            }
+            self.window.text_box(vui, r, &wide(&t), 140, 13, w - 180, 1, c(false), 6);
+        }
+        let send_at = rows[send as usize].1;
+        self.window.text(vui, r, &wide(&word(vui, 885)), 40, send_at, c(self.sel == send), 0);
         let legend = wide(&format!("|x{}   |t{}", word(vui, 212), word(vui, 213)));
-        self.window.text(vui, r, &legend, 40, 13, c(false), 0);
-        let row = [1, 3, 5, 11][self.sel.clamp(0, 3) as usize];
+        self.window.text(vui, r, &legend, 40, send_at + 2, c(false), 0);
+        let row = rows[self.sel.clamp(0, send) as usize].1;
         self.window.tick_r(vui, r, 36, row, true);
         self.time = now;
         self.busy = grams.state > 0;
         self.hits.clear();
-        for (field, row, rows) in [(0, 1, 1), (1, 3, 1), (2, 5, 5), (3, 11, 1)] {
-            self.hits.push(rows_rect(&self.window, vui, r, 40, row, w - 80, rows), field);
+        for &(field, row, n) in rows {
+            self.hits.push(rows_rect(&self.window, vui, r, 40, row, w - 80, n), field);
         }
         let mut up = None;
         let fail = |me: &mut Self, vui: &Vui, r: &mut dyn Raster, id: i32, x: i32| {
@@ -1107,6 +1248,15 @@ impl Compose {
                     up = Some(ComposeUp::Sent);
                 }
             }
+            // a send that carried something, refused: the server's words
+            -4 if grams.attach.refusal.is_some() => {
+                if self.x7b4 == 1 {
+                    self.x7b4 = -4;
+                    let t = wide(&word(vui, 889));
+                    let s = wide(grams.attach.refusal.as_deref().unwrap_or_default());
+                    self.message.setup(vui, r, &t, &s, PROMPT_OK, [320, 180], 300);
+                }
+            }
             -1 => fail(self, vui, r, 890, -1),
             -2 => fail(self, vui, r, 891, -2),
             -3 => fail(self, vui, r, 892, -3),
@@ -1126,6 +1276,12 @@ impl Compose {
         }
         if self.editing {
             self.edit.draw(vui, r, now, cues);
+        }
+        if self.picker.visible {
+            self.picker.draw(vui, r);
+        }
+        if self.qty.visible {
+            self.qty.draw(vui, r, cues);
         }
         if self.message.visible {
             self.message.draw(vui, r);
@@ -1177,11 +1333,26 @@ pub struct Read {
     pub compose: Compose,
     keys: KeyFlash,
     dots: Dots,
+    /// what the option list's lines do (Take among them while the gram
+    /// carries something: `mailattach`)
+    acts: Vec<ReadAct>,
+    /// the line under the text saying what the gram carries, as drawn
+    carried: String,
+}
+
+/// What a line of the reader's option list does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ReadAct {
+    Reply,
+    ReplyAll,
+    Delete,
+    /// take what the gram carries (`mailattach`)
+    Take,
 }
 
 impl Default for Read {
     fn default() -> Self {
-        Read { visible: false, from: Vec::new(), subject: Vec::new(), date: Vec::new(), text: Vec::new(), to: Vec::new(), id: 0, me: Vec::new(), live: false, full: Vec::new(), dirty: true, rows: 0, top: 0, deleting: 0, window: Window::default(), status: Window::default(), options: OptionList::default(), message: Message::default(), compose: Compose::new(true), keys: KeyFlash::default(), dots: Dots::default() }
+        Read { visible: false, from: Vec::new(), subject: Vec::new(), date: Vec::new(), text: Vec::new(), to: Vec::new(), id: 0, me: Vec::new(), live: false, full: Vec::new(), dirty: true, rows: 0, top: 0, deleting: 0, window: Window::default(), status: Window::default(), options: OptionList::default(), message: Message::default(), compose: Compose::new(true), keys: KeyFlash::default(), dots: Dots::default(), acts: Vec::new(), carried: String::new() }
     }
 }
 
@@ -1248,8 +1419,7 @@ impl Read {
         self.window.init(vui, r, [320, 180], 440, 10, 0);
         self.window.set_title(Some(&wide(&word(vui, 935))));
         self.window.open(false);
-        let lines = if self.live { vec![wide(&word(vui, 534)), wide(&live_word(vui, 1871)), wide(&word(vui, 986))] } else { vec![wide(&word(vui, 534)), wide(&word(vui, 986))] };
-        self.options.setup(vui, r, &wide(&word(vui, 422)), lines, [320, 180], 256);
+        self.set_options(vui, r, false);
         self.status.init(vui, r, [320, 180], 375, 4, 0);
         self.status.set_title(Some(&wide(&word(vui, 271))));
         self.status.open(true);
@@ -1262,6 +1432,31 @@ impl Read {
 
     pub fn typing(&self) -> bool {
         self.compose.visible && self.compose.typing()
+    }
+
+    /// The option list: Reply, Delete (the live one's Reply, Reply All,
+    /// Delete, 0x01397E1C), and Take first while the gram carries something.
+    fn set_options(&mut self, vui: &Vui, r: &dyn Raster, take: bool) {
+        let mut acts = Vec::new();
+        if take {
+            acts.push(ReadAct::Take);
+        }
+        acts.push(ReadAct::Reply);
+        if self.live {
+            acts.push(ReadAct::ReplyAll);
+        }
+        acts.push(ReadAct::Delete);
+        let lines = acts
+            .iter()
+            .map(|a| match a {
+                ReadAct::Take => wide("Take"),
+                ReadAct::Reply => wide(&word(vui, 534)),
+                ReadAct::ReplyAll => wide(&live_word(vui, 1871)),
+                ReadAct::Delete => wide(&word(vui, 986)),
+            })
+            .collect();
+        self.options.setup(vui, r, &wide(&word(vui, 422)), lines, [320, 180], 256);
+        self.acts = acts;
     }
 
     /// A pointer at frame point `p`, where the keys go: the reply's compose,
@@ -1314,17 +1509,18 @@ impl Read {
             if let Some((line, enter)) = self.options.key(key, now, cues)
                 && enter
             {
-                match (line, self.live) {
-                    (1, false) | (2, true) => grams.delete_message(self.id),
-                    (0, _) => {
+                match self.acts.get(line.max(0) as usize) {
+                    Some(ReadAct::Delete) => grams.delete_message(self.id),
+                    Some(ReadAct::Reply) => {
                         let from = self.from.clone();
                         self.start_reply(vui, r, &from);
                     }
-                    (1, true) => {
+                    Some(ReadAct::ReplyAll) => {
                         let to = self.reply_all_to();
                         self.start_reply(vui, r, &to);
                     }
-                    _ => {}
+                    Some(ReadAct::Take) => grams.out.push(crate::mailattach::take(self.id)),
+                    None => {}
                 }
             }
             return None;
@@ -1337,6 +1533,8 @@ impl Read {
             20 | 139 => self.keys.press(139),
             13 | 134 => {
                 cues.push(11);
+                let take = grams.attach.carried_by(self.id).is_some();
+                self.set_options(vui, r, take);
                 self.options.visible = true;
                 self.options.focus(vui, r);
             }
@@ -1355,6 +1553,16 @@ impl Read {
         self.dots.step();
         self.window.draw(vui, r);
         let w = self.window.size[0];
+        // what it carries, under the text (`mailattach`)
+        let carried = match grams.attach.carried_by(self.id) {
+            Some(c) if c.returned => format!("\n\nAttached: {}. It came back to you: take it before you delete this mail.", c.words()),
+            Some(c) => format!("\n\nAttached: {}. Take it from the options; deleting this mail sends it back.", c.words()),
+            None => String::new(),
+        };
+        if carried != self.carried {
+            self.carried = carried;
+            self.dirty = true;
+        }
         if self.dirty {
             let from = format!("{}: {}\n", word(vui, 882), String::from_utf16_lossy(&self.from));
             // live (0x01397730): the To line under From, in 2,480 bytes
@@ -1365,7 +1573,7 @@ impl Read {
                 String::from_utf16_lossy(&self.subject),
                 word(vui, 884),
                 String::from_utf16_lossy(&self.date),
-                String::from_utf16_lossy(&self.text)
+                String::from_utf16_lossy(&self.text) + &self.carried
             );
             self.full = wide(&s).into_iter().take(size / 2 - 1).collect();
             self.rows = self.window.count_lines(vui, r, &self.full, 360);
@@ -1583,7 +1791,9 @@ impl Inbox {
             self.hits.push(rows_rect(&self.window, vui, r, x[0], row, w - 44 - x[0], 1), i);
             let from: Vec<u16> = h.from.iter().map(|&b| b as u16).collect();
             self.window.text_box(vui, r, &from, x[0], row, x[1] - x[0] - 10, 1, c, 2);
-            self.window.text_box(vui, r, &h.subject, x[1], row, x[2] - x[1] - 10, 1, c, 2);
+            // "+": the gram carries something (`mailattach`)
+            let subject = if grams.attach.marked(h.id) { [wide("+ "), h.subject.clone()].concat() } else { h.subject.clone() };
+            self.window.text_box(vui, r, &subject, x[1], row, x[2] - x[1] - 10, 1, c, 2);
             let date: Vec<u16> = wide(&h.date.format()).into_iter().take(10).collect();
             self.window.text_box(vui, r, &date, x[2], row, w - 44 - x[2], 1, c, 2);
             if self.sel == i {
@@ -2047,6 +2257,93 @@ mod tests {
         assert_eq!(c.body, wide("one\ntwo +"));
         pasted(&mut c, &mut g, &mut r, &mut cues, 1);
         assert_eq!(c.subject, wide("one two +"));
+    }
+
+    #[test]
+    fn a_compose_attaches_a_stack_and_tunar() {
+        let (vui, mut r) = (mail_vui(), NullRaster);
+        let mut cues = Vec::new();
+        let mut g = live();
+        g.attach.offer = Some(crate::mailattach::Offer { items: 1, postage: 0 });
+        g.attach.pack = vec![PackItem { key: 7, name: "Bone Arrow".into(), quantity: 10 }, PackItem { key: 9, name: "Keen Sword".into(), quantity: 1 }];
+        let mut c = Compose::new(false);
+        c.visible = true;
+        c.focus(&vui, &NullRaster);
+        c.draw(&vui, &mut r, &g, 0, &mut cues);
+        assert_eq!(c.send_row(), 5, "Attach and Tunar before Send");
+        c.set_to(&wide("Bob"));
+        c.subject = wide("Hi");
+        c.body = wide("yo");
+        // Attach: the second line (the arrows), then how many: 3
+        c.sel = 3;
+        c.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        c.key(&vui, &mut r, &mut g, 20, true, 0, &mut cues);
+        c.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        assert!(c.qty.visible, "a stack asks how many");
+        c.qty.digits = [0, 0, 0, 3];
+        c.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        assert_eq!(c.item, Some((7, 3, "Bone Arrow".to_string())));
+        // Tunar: typed
+        c.sel = 4;
+        c.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        assert!(c.editing);
+        c.edit.set_text(&wide("5x00"));
+        c.key(&vui, &mut r, &mut g, 143, true, 0, &mut cues);
+        assert!(!c.editing);
+        assert_eq!(c.tunar, 500, "the digits alone");
+        c.sel = 5;
+        c.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        assert_eq!(g.out.pop().unwrap(), crate::mailattach::send(&[b"Bob".to_vec()], &wide("Hi"), &wide("yo"), 500, Some((7, 3))));
+        assert_eq!(g.state, 3);
+        // refused: the server's line in the box
+        c.draw(&vui, &mut r, &g, 16, &mut cues);
+        g.attach.recv(&{
+            let mut w = net::stream::Writer::default();
+            w.u8(5).wide("Bob already has Lore Gem, which is Lore: one at a time.");
+            w.data
+        });
+        g.recv(&[1, 12]);
+        c.draw(&vui, &mut r, &g, 32, &mut cues);
+        let (_, text) = c.message.texts();
+        assert_eq!(String::from_utf16_lossy(text), "Bob already has Lore Gem, which is Lore: one at a time.");
+        // the control: nothing attached goes the live way; without the offer, no rows
+        let mut g2 = live();
+        let mut d = Compose::new(false);
+        d.visible = true;
+        d.focus(&vui, &NullRaster);
+        d.draw(&vui, &mut r, &g2, 0, &mut cues);
+        assert_eq!(d.send_row(), 3);
+        d.set_to(&wide("Bob"));
+        d.subject = wide("Hi");
+        d.body = wide("yo");
+        d.sel = 3;
+        d.key(&vui, &mut r, &mut g2, 13, true, 0, &mut cues);
+        assert_eq!(g2.out.pop().unwrap()[..3], [0x01, 0x0D, 1]);
+    }
+
+    /// The reader shows what a gram carries and offers Take first; Take asks
+    /// the server; the inbox marks the gram.
+    #[test]
+    fn the_reader_takes_what_a_gram_carries() {
+        let (vui, mut r) = (mail_vui(), NullRaster);
+        let mut cues = Vec::new();
+        let mut g = live();
+        g.attach.offer = Some(crate::mailattach::Offer { items: 1, postage: 0 });
+        g.attach.carried = Some(crate::mailattach::Carried { id: 9, tunar: 75, items: Vec::new(), returned: false });
+        g.attach.marks = vec![(9, 75, 0)];
+        let mut rd = Read { live: true, id: 9, ..Default::default() };
+        rd.focus(&vui, &NullRaster);
+        rd.draw(&vui, &mut r, &g, 0, &mut cues);
+        assert!(String::from_utf16_lossy(&rd.full).contains("Attached: 75 tunar."));
+        rd.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        assert_eq!(rd.acts, [ReadAct::Take, ReadAct::Reply, ReadAct::ReplyAll, ReadAct::Delete]);
+        rd.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        assert_eq!(g.out.pop().unwrap(), crate::mailattach::take(9));
+        // the control: a gram that carries nothing has no Take
+        let mut rd = Read { live: true, id: 8, ..Default::default() };
+        rd.focus(&vui, &NullRaster);
+        rd.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        assert_eq!(rd.acts, [ReadAct::Reply, ReadAct::ReplyAll, ReadAct::Delete]);
     }
 
     #[test]

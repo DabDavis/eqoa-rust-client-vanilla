@@ -111,6 +111,15 @@ impl Play {
         eprintln!("mail: the live client's forms {} (0x7E0A {v})", if v != 0 { "on" } else { "off" });
     }
 
+    /// go-eqoa-server's mail attachments (`mailattach::OP_MAIL_ATTACH`): its
+    /// offer taken and answered, the rest kept for the windows.
+    pub(super) fn mail_attach(&mut self, data: &[u8]) {
+        if self.mail.grams.attach.recv(data) {
+            self.session.send(&crate::mailattach::answer());
+            eprintln!("mail: the server's mail carries items and tunar ({:?})", self.mail.grams.attach.offer);
+        }
+    }
+
     /// The pump's 0xFF: a new connection (`OnConnect`).
     pub(super) fn mail_connect(&mut self) {
         self.mail.grams.on_connect();
@@ -146,6 +155,10 @@ impl Play {
     /// The windows' opening, keys, drawing and what they ask.
     pub(super) fn run_mail(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster) {
         let now = vui.time;
+        // the pack's records a gram may carry, for a compose's Attach (`mailattach`)
+        if self.mail.grams.attach.offer.is_some() && self.mail_owns() {
+            self.mail.grams.attach.pack = self.dump.inventory.items.iter().filter(|it| crate::mailattach::mailable(it)).map(|it| crate::mailattach::PackItem { key: it.inv_index, name: it.item.name.clone(), quantity: it.quantity }).collect();
+        }
         if let Some(mode) = self.mail.opening.take() {
             match mode {
                 23 => {

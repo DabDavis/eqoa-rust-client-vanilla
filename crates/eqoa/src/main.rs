@@ -98,6 +98,7 @@ mod bugnote;
 mod crashfile;
 mod gear;
 mod gram;
+mod mailattach;
 mod hideui;
 mod jump;
 mod livewords;

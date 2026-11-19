@@ -5,6 +5,16 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-19 · Mail carries items and tunar
+- On a server that offers it, the mail's Compose window has two more rows: Attach, to pick an item from your pack
+  (and how many of a stack), and Tunar, to send coin with the letter. A letter that carries something goes to one
+  name. The server decides what can be mailed: No Trade, No Rent and worn items cannot, and a Lore item only to
+  someone who has none.
+- A letter that carries something shows "+" before its subject in the Inbox, and says what it carries under its
+  text. Choose Take from its options to put the item in your pack and the tunar in your purse; with a full pack it
+  stays on the letter. Deleting a letter before taking what it carries sends it back to whoever sent it.
+- On any other server the mail is as before.
+
 ## 2026-11-19 · A tidier Hardcore and [OG] choice
 - The Hardcore and [OG] rows on the last page of character creation no longer spill past the panel. Each row
   is now just its name and On or Off, with one short line under them saying what the row you are on means,
