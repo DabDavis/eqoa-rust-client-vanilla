@@ -504,8 +504,10 @@ enum SellChild {
 /// roll's Inspect shows, `Info::inspect_item`) in the item menu's
 /// `VIWndInspect`; △ closes it. A click or a tap on the item's text beside
 /// the list, or on the form's item row, does the same (Zerkziee's petition
-/// 2134: the stats before the item is put up). The client's own: the disc's
-/// window shows only `DescribeBankItem`'s lines.
+/// 2134: the stats before the item is put up). The text beside the list
+/// has the stat bonuses too (`Info::sell_item`, Zerkziee's petition 2424:
+/// no Inspect needed). The client's own: the disc's window shows only
+/// `DescribeBankItem`'s lines.
 pub struct SellWnd {
     bank: WndList,
     edit: EditBox,
@@ -877,12 +879,13 @@ impl SellWnd {
         vui.blit_studded_horz(r, [165, 313], 40, 41, 310, 2, 0, 1.0, 0);
         vui.blit_horz(r, [16, 322], 60, 608, 0, 1.0, 0);
         let sel = bank.items.get(self.bank.sel.max(0) as usize);
-        let text = sel.map_or_else(String::new, |it| info.bank_item(it));
         self.whole = sel.map_or_else(String::new, |it| info.inspect_item(it));
         self.window.init(vui, r, [390, 180], 470, 14, 0);
         self.window.set_title(Some(&[]));
         self.window.draw(vui, r);
         let ww = self.window.size[0];
+        // the stats beside the list, as many to a row as fit (petition 2424)
+        let text = sel.map_or_else(String::new, |it| info.sell_item(it, &|row| vui.string_width(&*r, &wide(row)) <= ww - 40));
         let color = [1.0, 1.0, 1.0, self.window.open];
         if self.whole.is_empty() {
             self.window.text_box(vui, r, &wide(&text), 20, 0, ww - 40, 14, color, 2);
@@ -1410,8 +1413,9 @@ mod tests {
 
     /// Petition 2134: the item's stats before it is put up. □ (or the
     /// keyboard's Q) from the list, or from the form, opens the selected
-    /// item's whole description (its stat bonuses and its text, which the
-    /// text beside the list leaves out) in the inspect window; △ closes it
+    /// item's whole description (its stat bonuses and its text; since
+    /// petition 2424 the text beside the list has the stats but not the
+    /// item's text) in the inspect window; △ closes it
     /// back where it was, the form's numbers kept, nothing sold. A click on
     /// the text beside the list, or on the form's item row, is □; a click off
     /// the window △. The legends name □. The control: an empty bank, □ is
@@ -1435,7 +1439,9 @@ mod tests {
         s.draw(&vui, &mut r, &info, &bank, &|_| 1, 0, &mut cues);
         let said = r.0.join("\n");
         assert!(r.0.iter().any(|l| l == "w122"), "the list's text names □ (its glyph, then the word): {said}");
-        assert!(!said.contains("w226: 5"), "the text beside the list has no stats");
+        // petition 2424: the stats show beside the list too; the text is still Inspect's
+        assert!(said.contains("w226: 5") && said.contains("w240: 9"), "the text beside the list has the stats: {said}");
+        assert!(!said.contains("A blade."), "the item's text stays behind □: {said}");
         // a click on the text beside the list: □
         let (tl, br) = (s.window.top_left(), s.window.bottom_right());
         let on_text = [((tl[0] + br[0]) / 2) as f32, ((tl[1] + br[1]) / 2) as f32];

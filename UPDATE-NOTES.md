@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-19 · Item stats while you sell at the auction
+- When you put an item up for auction, the text beside your bank's list now shows the item's stat bonuses
+  (Strength, Stamina, AC and the rest) under its usual lines, so you can see what you are selling without
+  opening Inspect first. □ (Q on a keyboard) still opens the whole description with the item's text.
+
 ## 2026-11-19 · The Christmas tree holds still
 - The Christmas tree's red ribbon and gold tinsel no longer flicker through the boughs as you move. They used
   to turn with your view and cut into the tree along a line that crawled as you walked; now the ribbon lies flat

@@ -533,28 +533,7 @@ impl Info<'_> {
     pub fn link_item(&self, it: &NetItem, fits: &dyn Fn(&str) -> bool) -> String {
         let full = self.list_item(it, 0, false);
         let mut d = full.split_once('\n').map_or(String::new(), |(_, rest)| rest.to_string());
-        let stats: Vec<String> = it
-            .item
-            .stats
-            .iter()
-            .map(|s| match find(&STAT_WORDS, s.id) {
-                Some(w) => format!("{}: {}", self.w(w), s.value),
-                None => format!("{}: {}", s.id, s.value),
-            })
-            .collect();
-        let mut row = String::new();
-        for st in stats {
-            let more = format!("{row}  {st}");
-            if row.is_empty() {
-                row = st;
-            } else if fits(&more) {
-                row = more;
-            } else {
-                d += "\n";
-                d += &std::mem::replace(&mut row, st);
-            }
-        }
-        if !row.is_empty() {
+        for row in self.stat_rows(it, fits) {
             d += "\n";
             d += &row;
         }
@@ -563,6 +542,48 @@ impl Info<'_> {
             d += &it.item.desc;
         }
         d
+    }
+
+    /// The client's own, for the auction's sell window (Zerkziee's petition
+    /// 2424: the stats beside the list, no Inspect needed): `DescribeBankItem`'s
+    /// lines, then the stat bonuses as many to a row as fit (`stat_rows`); the
+    /// item's text stays behind □'s Inspect.
+    pub fn sell_item(&self, it: &NetItem, fits: &dyn Fn(&str) -> bool) -> String {
+        let mut d = self.list_item(it, 0, false);
+        let rows = self.stat_rows(it, fits);
+        if !rows.is_empty() {
+            d += "\n";
+        }
+        for row in rows {
+            d += "\n";
+            d += &row;
+        }
+        d
+    }
+
+    /// The stat bonuses as `DescribeInvStats` names them, as many to a row as
+    /// `fits` lets (one at least).
+    fn stat_rows(&self, it: &NetItem, fits: &dyn Fn(&str) -> bool) -> Vec<String> {
+        let mut rows = Vec::new();
+        let mut row = String::new();
+        for s in &it.item.stats {
+            let st = match find(&STAT_WORDS, s.id) {
+                Some(w) => format!("{}: {}", self.w(w), s.value),
+                None => format!("{}: {}", s.id, s.value),
+            };
+            let more = format!("{row}  {st}");
+            if row.is_empty() {
+                row = st;
+            } else if fits(&more) {
+                row = more;
+            } else {
+                rows.push(std::mem::replace(&mut row, st));
+            }
+        }
+        if !row.is_empty() {
+            rows.push(row);
+        }
+        rows
     }
 
     /// `DescribeMerchantItem`.
@@ -1027,6 +1048,26 @@ mod tests {
         assert!(narrow.ends_with("\nw226: 5\nw227: 3\nw242: 20\n \nA blade."), "one a row: {narrow:?}");
         let i = info.inspect_item(&it);
         assert!(i.starts_with("Sword\n") && i.contains("\nw226: 5\nw227: 3\n"), "the control: {i:?}");
+    }
+
+    /// The auction's sell window (petition 2424): the bank's lines, a blank
+    /// row, then the stats packed as a link packs them, and no text. The
+    /// control: a record with no stats is the bank's lines alone.
+    #[test]
+    fn the_sell_window_shows_the_stats_beside_the_list() {
+        let words = numbered();
+        let (inv, base) = (ItemList::default(), [0; 29]);
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 0, attack_words: &[(500, 1)] };
+        let stats = vec![ItemStat { id: 0, value: 5 }, ItemStat { id: 1, value: 3 }, ItemStat { id: 14, value: 20 }];
+        let sword = Item { name: "Sword".into(), damage: 12, wear_slot: 14, race_mask: 0x3FF, class_mask: 0b101, level_req: 30, stats, desc: "A blade.".into(), ..Default::default() };
+        let it = NetItem { quantity: 1, cur_hp: 0, item: sword, ..Default::default() };
+        let d = info.sell_item(&it, &|row| row.len() <= 16);
+        let bank = info.bank_item(&it);
+        assert!(d.starts_with(&bank), "the bank's lines first: {d:?}");
+        assert_eq!(&d[bank.len()..], "\n\nw226: 5  w227: 3\nw242: 20", "{d:?}");
+        assert!(!d.contains("A blade."), "the text stays behind Inspect: {d:?}");
+        let plain = NetItem { item: Item { stats: Vec::new(), ..it.item.clone() }, ..it.clone() };
+        assert_eq!(info.sell_item(&plain, &|_| true), info.bank_item(&plain));
     }
 
     /// `AddRaceMask`/`AddClassMask` on a server that sends the live client's
