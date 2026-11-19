@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-19 · Fungusmen show their armour
+- A fungusman who chose a skin (the bark) on the character page now shows the armour they wear again, on every
+  fungusman body: blue, red and pale. Until now the chosen skin was drawn over the armour and hid it, so only
+  fungusmen on the plain skin showed theirs. The same holds for any race whose chosen colours cover part of a
+  body.
+
 ## 2026-11-19 · Crash reports are back
 - When the game crashes, a crash report goes to the eqoaclassic team so the crash can be found and fixed. In
   the browser it is sent at once, even when the page stops before you log in, and the crash notice says it

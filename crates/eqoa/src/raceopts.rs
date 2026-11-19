@@ -248,37 +248,51 @@ fn apply_with(lib: &esf::Library, model: &mut esf::Model, parts: &[(Kind, u32, P
     let mut changed = false;
     for (kind, value, part) in parts {
         let Some(change) = Change::of(lib, *kind, *value) else { continue };
-        let n = model.batches.len();
-        for bi in 0..n {
-            if !part.entries.iter().any(|&e| e as i32 == model.batches[bi].material) {
+        // the batches there before this part (a batch it splits off is not
+        // looked at again for it)
+        let mut left = model.batches.len();
+        let mut bi = 0;
+        while left > 0 {
+            left -= 1;
+            let at = bi;
+            bi += 1;
+            if !part.entries.iter().any(|&e| e as i32 == model.batches[at].material) {
                 continue;
             }
             // a shade on the body's own skin (`skin_layer`): never on an
             // armour's, a robe's or a helm's (a tattoo picks its layers itself)
             if matches!(change, Change::Skin(_))
-                && !model.batches[bi].layers.first().is_some_and(|l| skin_layer(model.batches[bi].material, l.texture))
+                && !model.batches[at].layers.first().is_some_and(|l| skin_layer(model.batches[at].material, l.texture))
             {
                 continue;
             }
-            let picked = picked(model, bi, &part.rects);
+            let picked = picked(model, at, &part.rects);
             if !picked.contains(&true) {
                 continue;
             }
-            let bi = if picked.contains(&false) {
-                // the part's triangles into a batch of their own
-                let b = &mut model.batches[bi];
+            let at = if picked.contains(&false) {
+                // the part's triangles into a batch of their own, right after
+                // the one it came from: drawn where the body's own is, before
+                // what is laid over the body (a slotless body's armour,
+                // `slotless::apply`, the batches after the body's own; pushed
+                // at the end, the skin row's bark drew over the armour on its
+                // triangles and every fungusman with a skin chosen showed none,
+                // the owner, 2026-11-19: "some fungusman like sporefarts aren't
+                // showing armor display")
+                let b = &mut model.batches[at];
                 let (mut mine, mut rest) = (Vec::new(), Vec::new());
                 for (t, &p) in b.indices.chunks_exact(3).zip(&picked) {
                     if p { mine.extend_from_slice(t) } else { rest.extend_from_slice(t) }
                 }
                 b.indices = rest;
                 let split = esf::Batch { indices: mine, ..b.clone() };
-                model.batches.push(split);
-                model.batches.len() - 1
+                model.batches.insert(at + 1, split);
+                bi += 1;
+                at + 1
             } else {
-                bi
+                at
             };
-            change.lay(lib, &mut model.batches[bi]);
+            change.lay(lib, &mut model.batches[at]);
             changed = true;
         }
     }
@@ -455,8 +469,9 @@ pub(crate) mod tests {
         assert!(apply(&lib(), &mut m, &[(Kind::Colour, red, Part { entries: vec![0], rects: vec![[128, 128, 255, 255]] })]));
         assert_eq!(m.batches.len(), 3, "the right triangle split off");
         assert_eq!((m.batches[0].indices.clone(), m.batches[0].layers[0].texture), (vec![0, 1, 2], 7), "the left one kept");
-        assert_eq!((m.batches[2].material, m.batches[2].indices.clone()), (0, vec![3, 4, 5]), "the same entry's");
-        assert_eq!(render::recolor::source_of(m.batches[2].layers[0].texture), Some((7, red)));
+        assert_eq!((m.batches[1].material, m.batches[1].indices.clone()), (0, vec![3, 4, 5]), "the same entry's, right after it");
+        assert_eq!(render::recolor::source_of(m.batches[1].layers[0].texture), Some((7, red)));
+        assert_eq!(m.batches[2].material, 1, "entry 1 after it, as it was");
 
         let before = model();
         for (kind, value, entries) in [(Kind::Colour, 0, vec![0]), (Kind::Texture, 0x9999, vec![0]), (Kind::Colour, red, vec![5])] {
@@ -464,6 +479,54 @@ pub(crate) mod tests {
             assert!(!apply(&lib(), &mut m, &[(kind, value, Part { entries, rects: vec![] })]));
             assert_eq!(format!("{:?}", m.batches), format!("{:?}", before.batches), "the control");
         }
+    }
+
+    /// A part's triangles split off go right after the batch they came from,
+    /// before what was laid over the body after its own batches (a slotless
+    /// body's armour, `slotless::apply`'s made-up entries): drawn after them,
+    /// the skin row's bark covered the armour on its triangles (the owner,
+    /// 2026-11-19: "some fungusman like sporefarts aren't showing armor
+    /// display"). Two parts each splitting entry 0 still take each triangle
+    /// once; the control: a part on all of an entry splits nothing.
+    #[test]
+    fn a_split_part_stays_under_what_is_laid_over_the_body() {
+        let red = render::recolor::DYE << 24 | 0x00_C080;
+        let blue = render::recolor::DYE << 24 | 0x00_80C0;
+        let over = slotless_armour();
+        let mut m = model();
+        m.batches.push(over.clone());
+        assert!(apply(&lib(), &mut m, &[(Kind::Colour, red, Part { entries: vec![0], rects: vec![[128, 128, 255, 255]] })]));
+        assert_eq!(m.batches.len(), 4);
+        assert_eq!(m.batches.last().unwrap().material, over.material, "the armour still drawn last");
+        assert_eq!((m.batches[1].material, m.batches[1].indices.clone()), (0, vec![3, 4, 5]), "the split right after its batch");
+
+        let mut m = model();
+        m.batches.push(over.clone());
+        assert!(apply(
+            &lib(),
+            &mut m,
+            &[
+                (Kind::Colour, red, Part { entries: vec![0], rects: vec![[128, 128, 255, 255]] }),
+                (Kind::Colour, blue, Part { entries: vec![0], rects: vec![[0, 0, 127, 127]] }),
+            ]
+        ));
+        assert_eq!(m.batches.last().unwrap().material, over.material, "two splits: the armour still last");
+        let mut tris: Vec<Vec<u32>> = m.batches.iter().filter(|b| b.material == 0).map(|b| b.indices.clone()).filter(|i| !i.is_empty()).collect();
+        tris.sort();
+        assert_eq!(tris, vec![vec![0, 1, 2], vec![3, 4, 5]], "each triangle once");
+
+        let mut m = model();
+        m.batches.push(over.clone());
+        assert!(apply(&lib(), &mut m, &[(Kind::Colour, red, Part { entries: vec![1], rects: vec![] })]));
+        assert_eq!(m.batches.len(), 3, "the control: all of entry 1, nothing split");
+        assert_eq!(m.batches[2].material, over.material);
+    }
+
+    /// A batch laid over the body as `slotless::apply` lays a worn piece: a
+    /// made-up entry's, one triangle.
+    fn slotless_armour() -> esf::Batch {
+        let layer = esf::Layer { flags: 0, texture: 9, wrap: 0, blend: 0, color: [255; 4], uv_transform: [0.0; 9], lod_bias: 0.8, uv_rate: [0.0; 2], emissive: [0; 4] };
+        esf::Batch { material: crate::slotless::ENTRY, layers: vec![layer], indices: vec![6, 7, 8], lod: None }
     }
 
     /// A paint (go-eqoa-server's GM looks: a gnome's glasses, whose layer is
