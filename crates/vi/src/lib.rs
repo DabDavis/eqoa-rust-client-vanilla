@@ -1,7 +1,7 @@
 //! The VI engine's game logic, ported from the matching decomp
 //! ([eqoa-decomp](https://github.com/DabDavis/eqoa-decomp)) one class at a
 //! time, each checked against the decomp compiled for the host
-//! (`tests/oracle.rs`, eqoa-port's `build/oracle`).
+//! (`tests/oracle.rs`, the oracle (built from the decomp)).
 //!
 //! The structs are `#[repr(C)]` and laid out as the EE lays them out, so the
 //! oracle can be handed their bytes; the field names follow the decomp's.

@@ -2,7 +2,7 @@
 //! and `Http_get` (`http_get.cpp`): what is done with the body (the gzip
 //! header skipped, raw deflate, the trailer never checked).
 //!
-//! The rules, as the decomp has them (`claude-notes/go-client-patcher-20261016.md`):
+//! The rules, as the decomp has them (the maintainer's notes):
 //! the request is `GET /<path> HTTP/1.1\r\nHost: <server>\r\n\r\n` and
 //! nothing else; the header ends at the first CR after an LF; a header line
 //! that contains `Content-Length` (case-sensitively) gives the length as

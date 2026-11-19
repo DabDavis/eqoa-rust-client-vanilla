@@ -1,4 +1,4 @@
-//! Item links in chat (the GM Jibrish's petition 1463, 2026-11-10: "shift click
+//! Item links in chat (a GM's petition 1463, 2026-11-10: "shift click
 //! an item and if your chat is open it puts a link to that item. If people
 //! click it, they can view the items stats, name, icon ... When an item is
 //! clicked on it should be succint but show all relevant stats in a window

@@ -17,7 +17,7 @@
 //!   target a living creature (an NPC's plate, not a merchant's) within the
 //!   ability's range: off its recast, it fires;
 //! - Buff: its effect (by its name in the player's effects, channel 0x43:
-//!   go-eqoa-server and Sandstorm put a spell's name there) is not on the
+//!   go-eqoa-server and the reference server put a spell's name there) is not on the
 //!   player, or a long one ([`REFRESH_LONGER`]) is within [`REFRESH_BEFORE`]
 //!   of the end the client last saw it run to (a server sends no time left of
 //!   the player's own effects, so the length is learned, the longest seen);
@@ -124,7 +124,7 @@ impl Kind {
 /// The least time between two auto casts.
 pub const GAP_MS: i64 = 1500;
 /// What the server keeps a cast busy past its cast time (go-eqoa-server's
-/// `castBusy`, Sandstorm's 0.37-0.55 s).
+/// `castBusy`, the reference server's 0.37-0.55 s).
 pub const BUSY_MS: i64 = 400;
 /// A hit given or taken this recently keeps a fight on.
 pub const FIGHT_MS: i64 = 10_000;

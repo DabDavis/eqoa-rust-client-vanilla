@@ -1,4 +1,4 @@
-//! The particle system against the decomp, bit for bit: eqoa-port's
+//! The particle system against the decomp, bit for bit: the decomp's native build's
 //! `build/oracle_particle` runs SUPPORT's particle TUs over a recording
 //! raster with newlib's rand(), and every step here is run on it and on
 //! `vi::particle` under `Ieee`. Every billboard (where, which frame, how big,
@@ -9,7 +9,7 @@
 //! fountains), on still and moving emitters, through a frame-time hitch past
 //! the 0.1 s cap and a purge.
 //!
-//! SKIPs without the oracle (`make oracle` in eqoa-port) or the disc.
+//! SKIPs without the oracle (`make oracle` in the decomp's native build) or the disc.
 
 mod common;
 use common::Oracle;

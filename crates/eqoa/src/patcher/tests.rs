@@ -96,7 +96,7 @@ struct F<'a> {
     extra: &'a str,
 }
 
-/// The manifest as go-eqoa-server and Sandstorm write it: one
+/// The manifest as go-eqoa-server and the reference server write it: one
 /// Distribution, files at the port's root, the release notes beside it.
 fn manifest(use_crc: bool, files: &[F]) -> String {
     let mut s = format!("<VerantPatcher Version=\"1\"><Product Version=\"7\"><Distribution Name=\"Spire\"{} >", if use_crc { " UseCRC=\"True\"" } else { "" });

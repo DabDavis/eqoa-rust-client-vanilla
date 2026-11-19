@@ -2,7 +2,7 @@
 //! memory within a budget and on the disk between runs (the owner's of
 //! 2026-11-18: "for texture packs lets look at PCSX2 how they do texture packs
 //! like precaching and we can make a better version"; PCSX2's own, read
-//! against this, `../claude-notes/texture-pack-precache-20261118.md`).
+//! against this, the maintainer's notes).
 //!
 //! - **Prepared** (`prepare`): a file's whole level chain, as `texpack`'s
 //!   `with_levels` makes a stand-in's (its own levels while each is half the

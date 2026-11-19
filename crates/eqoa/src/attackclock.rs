@@ -23,13 +23,13 @@
 //! client's own, the user's choice (the game has nothing like it).
 
 /// How long before a round's first hit arrives a fresh press swings:
-/// Sandstorm's first hit came 0.56-0.76 s after the 0x000F in 17 of 20
-/// fights (`claude-notes/training-dummies-20261021.md`).
+/// The reference server's first hit came 0.56-0.76 s after the 0x000F in 17 of 20
+/// fights (the maintainer's notes).
 pub const PRESS_TO_FIRST_HIT: u32 = 660;
 
 /// The least gap between a round's first hit and the hit before it: a
 /// round's hits are at most 1 s apart (Attack2's at 0.5 and 1.5 s) and
-/// rounds at least 3 s (an Attack2 round of 4 s), as Sandstorm lands them.
+/// rounds at least 3 s (an Attack2 round of 4 s), as the reference server lands them.
 pub const ROUND_GAP: u32 = 2000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -106,7 +106,7 @@ impl AttackClock {
 mod tests {
     use super::*;
 
-    /// A fight against a server that lands rounds as Sandstorm does: the
+    /// A fight against a server that lands rounds as the reference server does: the
     /// 0x000F at 0 starts the first round `first` ms later, each round's hits
     /// at 0.5 and 1.5 s into it (Attack2's), a round every 5 s (a bow's
     /// Range2) until `swap_at`, after which the server's next round comes

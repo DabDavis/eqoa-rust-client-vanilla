@@ -6,7 +6,7 @@
 //! does change is the word: the server tells it, by character name, who reads
 //! differently and what their race's words are, and every place that shows a named
 //! character's race asks here first ([`long`], [`short`]). A name not on the list
-//! shows the game's word, and a server that sends no list (Sandstorm's, eqoa.live's,
+//! shows the game's word, and a server that sends no list (the reference server's, eqoa.live's,
 //! a PS2's view of any) is the game as it was. A second race needs nothing new: the
 //! words come from the list.
 //!

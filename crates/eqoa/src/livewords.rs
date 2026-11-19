@@ -13,7 +13,7 @@
 //! text with `live`.
 //!
 //! Read off the live client's `VIStringTable` (`VIClient+4`, 0x01FAD924 in
-//! Corsten's retail state: 1,890 rows by 2 columns, the second empty; its
+//! a retail character's savestate: 1,890 rows by 2 columns, the second empty; its
 //! cells' pointers at 0x01107340, the text at 0x010F0920). `GetString` does
 //! `row--`, so ids count from 1, as `vi::strtab` takes them. The disc's
 //! table has 1,814 rows (1,815 with its last, empty one).

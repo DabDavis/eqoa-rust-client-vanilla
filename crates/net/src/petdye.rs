@@ -1,5 +1,5 @@
 //! go-eqoa-server's own, no retail message: a pet's dyes, two colours on two
-//! areas of its body (the server owner, 2026-11-16: Zerkziee's drachnid pet
+//! areas of its body (the server owner, 2026-11-16: a player's drachnid pet
 //! should "have 2 different color areas that can be changed like armor dye
 //! (will be a template for pet color dye)"; the server's Pet Groomers put them
 //! on). The server offers them once the player is in the world

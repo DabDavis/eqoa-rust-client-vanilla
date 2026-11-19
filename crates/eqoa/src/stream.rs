@@ -293,7 +293,7 @@ pub fn open_file(iso_path: &std::path::Path, name: &str) -> Result<Container, Bo
             return Ok(Container::open_deferred(&mut src)?);
         }
         // a world a server's patch adds that no disc carries (`s2`:
-        // Sandstorm's world 6), out of the server's folder, whole
+        // the reference server's world 6), out of the server's folder, whole
         if let Some(path) = crate::s2::get().folder_file(name) {
             return Ok(Container::open(std::fs::read(path)?)?);
         }

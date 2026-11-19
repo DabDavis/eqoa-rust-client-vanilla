@@ -48,8 +48,8 @@ fn a_line_s_words_meet_their_singulars() {
     assert!(!same("norgxyz", "norgam") && !same("zole", "zola"), "the control: two letters off, or a short word");
 }
 
-/// Sandstorm's own journal lines for a Freeport warrior's first quests
-/// (`../claude-notes/quests-sandstorm-20261025.md`), worded as the guide's
+/// The reference server's own journal lines for a Freeport warrior's first quests
+/// (as recorded on it, 2026-10-25), worded as the guide's
 /// never are, each found as its quest's step; a step whose handed-over item
 /// is held, or a loot step whose drops all are, gives way to the next.
 #[test]
@@ -219,7 +219,7 @@ fn the_tracker_counts_what_is_held() {
 }
 
 /// Items held: by name in any case, a stack's count and every stack's,
-/// worn ones, and a name with more words (Sandstorm's) holding all of the
+/// worn ones, and a name with more words (the reference server's) holding all of the
 /// guide's; the controls another item and one word short.
 #[test]
 fn items_held_are_counted() {
@@ -263,7 +263,7 @@ fn the_record_is_kept_per_character() {
     assert_eq!(junk, Kept { finished: ["1-20/freeport/warrior/L1".to_string()].into(), ..Default::default() }, "what does not read is left out");
 }
 
-/// A game as Sandstorm runs it: a quest's last line goes and the game says
+/// A game as the reference server runs it: a quest's last line goes and the game says
 /// "You have finished a quest!": the quest is finished and kept; a middle
 /// step's line replaced by the next's is not (the control); a quest matched
 /// says the chain before it is done.

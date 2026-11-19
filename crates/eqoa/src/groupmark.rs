@@ -106,7 +106,7 @@ mod tests {
     use net::session::{Player, Session};
 
     /// Play on a session nothing answers, its messages recorded, its map up
-    /// over Tunaria's layout (`map::testing::up`), the player Dairine.
+    /// over Tunaria's layout (`map::testing::up`), a test player.
     fn play() -> Play {
         struct Nowhere;
         impl net::session::Datagrams for Nowhere {
@@ -124,7 +124,7 @@ mod tests {
         p
     }
 
-    /// Dairine and Bob in a group (Bob's name as a roster's fixed field).
+    /// The player and Bob in a group (Bob's name as a roster's fixed field).
     fn grouped(p: &mut Play) {
         p.group.in_group = true;
         p.group.members = vec![Member { id: 0x100, name: "Dairine".into(), ..Default::default() }, Member { id: 0x200, name: "Bob\0".into(), ..Default::default() }];

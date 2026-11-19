@@ -23,7 +23,7 @@
 //! server's to keep: a server that keeps any slot (go-eqoa-server does)
 //! needs no change for them.
 //!
-//! Stacked Spell Bars (Extended > UI > HUD, Jibwiz's ticket 1913, "move your
+//! Stacked Spell Bars (Extended > UI > HUD, a player's ticket 1913, "move your
 //! spellbars vertically, and nest them x2 evenly above the chat box stacked on
 //! top of each other. Scale them down about 5% and remove the pop up horizontal
 //! box on the current bar that tells you what the spell is. This should be for

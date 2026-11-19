@@ -178,7 +178,7 @@ struct ActorAt {
 /// `VICSprite::NameColors`.
 const NAME_COLORS: [[f32; 4]; 3] = [[212.0 / 255.0, 192.0 / 255.0, 111.0 / 255.0, 1.0], [100.0 / 255.0, 175.0 / 255.0, 220.0 / 255.0, 1.0], [90.0 / 255.0, 1.0, 80.0 / 255.0, 1.0]];
 
-/// A mercenary's name (the GM Jibrish's petition 1488, 2026-11-11: "Change
+/// A mercenary's name (a GM's petition 1488, 2026-11-11: "Change
 /// mercenary name colors to match that of pets, with a slight reddish tint"):
 /// `NAME_COLORS[1]`, the pet's (100, 175, 220), with red brought up and the
 /// rest down a little. A server tells which creatures are mercs
@@ -197,7 +197,7 @@ pub struct Plate {
     pub mark: Option<u8>,
 }
 
-/// A quest mark's colour (the GM Jibrish's petition 1813: "yellow ! and ?").
+/// A quest mark's colour (a GM's petition 1813: "yellow ! and ?").
 const MARK_COLOR: [f32; 4] = [1.0, 0.86, 0.1, 1.0];
 
 /// A quest mark's size against its name's at `MARK_NEAR` from the camera.
@@ -244,7 +244,7 @@ pub struct Play {
     /// `m_p07578`: the 0x40's interval in the game's clock's ticks (983.04
     /// a second): 100 (101.7 ms), or what 0x07B2 sets. The PS2 keeps it for
     /// the program's run; here a login starts at 100 again (no server we
-    /// know sends 0x07B2: none in Sandstorm's captures, none in
+    /// know sends 0x07B2: none in the reference server's captures, none in
     /// go-eqoa-server).
     send_interval: u32,
     puppets: Vec<Option<Puppet>>,
@@ -255,7 +255,7 @@ pub struct Play {
     pub abilities: std::collections::BTreeMap<i64, net::dump::Ability>,
     ability_token: u32,
     /// S2's record of the pad, which 0x0032 carries on a server whose patch
-    /// has it (`s2::Presses`: Sandstorm's live S2)
+    /// has it (`s2::Presses`: the reference server's live S2)
     presses: crate::s2::Presses,
     /// The HUD's quick menus.
     pub hud_menus: crate::hudmenu::HudMenus,
@@ -264,7 +264,7 @@ pub struct Play {
     /// A 0x0033 for a slot past the game's ten (the Extended page's Ability
     /// Bars) waiting for its 0x00B4: (display index, slot, the session's
     /// clock when it was sent, in ms). A server that keeps only the game's slots
-    /// (Sandstorm, measured 2026-10-23: slots 10 and 13 dropped, slot 3
+    /// (the reference server, measured 2026-10-23: slots 10 and 13 dropped, slot 3
     /// answered) never answers it, and the player is told (`slot_unanswered`).
     slot_asked: Option<(i64, i64, i64)>,
     /// The live client's weapon sets, kept by a server that sends them
@@ -669,7 +669,7 @@ pub struct Play {
     /// next.
     projectiles: std::collections::BTreeMap<u32, (Option<esf::Model>, Vec<GpuModel>)>,
     casts: Vec<crate::spells::Cast>,
-    /// The pets in a zone's prop (`petart`: Zerkziee's catapult): their rams
+    /// The pets in a zone's prop (`petart`: a player's catapult): their rams
     /// and shots, and each prop's drawn bounds.
     petart: crate::petart::State,
     pet_tops: crate::petart::Tops,
@@ -749,13 +749,13 @@ const GUIDE_WAIT_MS: u32 = 3000;
 
 /// How long a monster's name and level stay in the target's info window from
 /// the server's answer to a press of □ or Q (`Play::mob_info_shown`): a tap is
-/// let go before the answer comes, and the GM Jibrish's petition 1459 asks for
+/// let go before the answer comes, and a GM's petition 1459 asks for
 /// a press; held longer, the window stays while held.
 pub const MOB_INFO_MS: u32 = 3000;
 
 /// The colour a 0x00DB's number is drawn in, from what follows its body
 /// (`rest`): a server's patch's three bytes when it colours them (`patch`:
-/// Sandstorm's S2, `s2::Rules::damage_rgb`, read as ever, and nothing else
+/// the reference server's S2, `s2::Rules::damage_rgb`, read as ever, and nothing else
 /// then), else its tag's row's (`numcolor::rgb`, with the rows `choices`) when
 /// the server offered tags (`tags`); none, the game's own colour.
 fn number_rgb(patch: bool, rest: &[u8], tags: bool, choices: &[crate::numcolor::Choice; crate::numcolor::ROWS]) -> Option<[u8; 3]> {
@@ -838,7 +838,7 @@ fn far_pose_every(far: u32) -> u32 {
 /// where the player now stands, as `Respawn` (0x00B2) and `Msg000D` end with
 /// `SetSky(m_camera, 1)`. A sky that only fades in after a port held every
 /// weather change behind its 30 s (`VIAtmosphere::SetWeather` waits on a
-/// change under way), and Sandstorm sends the weather just before each port.
+/// change under way), and the reference server sends the weather just before each port.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Atmos {
     Weather(u8, bool),
@@ -852,7 +852,7 @@ pub const WORLD_FILES: [&str; 6] = ["TUNARIA.ESF", "RATHE.ESF", "ODUS.ESF", "LAV
 /// patch's table, else CLIENT's six: `s2::Rules::world_file`), unless the
 /// dump says the world is not on the disc (`m_p0662C`), when its path is
 /// loaded; the path too for an id past the table. A file name in capitals.
-/// The login took the path alone, so a vampire standing in Sandstorm's
+/// The login took the path alone, so a vampire standing in the reference server's
 /// Sanctuary (world 7, SECRETS.ESF) logged in to Tunaria's hills (F3
 /// 20261025-055704); a teleport there already went by the id.
 pub fn login_world_file(player: &net::session::Player) -> String {
@@ -1001,7 +1001,7 @@ mod login_world {
     }
 
     /// A login goes to the world the dump's id names in the world table,
-    /// whatever its path says: Sandstorm's patch's seventh is Secrets
+    /// whatever its path says: the reference server's patch's seventh is Secrets
     /// again. The dump's flag, or an id past the table, loads the path. The
     /// control: the path alone, as the login had it, goes to Tunaria.
     #[test]
@@ -1810,7 +1810,7 @@ fn hush(cs: &mut CSprite<Ee>, s: &mut crate::sound::Sound) {
 }
 
 /// `ApplyLook`'s `SetVisible`: a creature whose `Flag1` is up (state byte
-/// 154's bit 1, an invisible one: Sandstorm sets it on the caster's own
+/// 154's bit 1, an invisible one: the reference server sets it on the caster's own
 /// channel) has its skins hidden (`VIClientPart06D00::Apply`'s
 /// `SetSkinsVisible`), the body and all it wears; what it holds, its helm and
 /// its name stay. No creature (none sent yet) is shown.
@@ -2070,7 +2070,7 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
 }
 
 /// How much smaller a merc's tag is drawn than its name: two of the font's
-/// pixels off its `height` (the GM Jibrish's petition 1587, 2026-11-11:
+/// pixels off its `height` (a GM's petition 1587, 2026-11-11:
 /// "Lower the font size of mercenary display tags by 2"), the name the
 /// font's own size.
 fn tag_size(height: u32) -> f32 {
@@ -2180,7 +2180,7 @@ mod entity_actors {
 
     const SIGNPOST: u32 = 0x6A82352C;
     const HUMAN: u32 = 0x70D898C6;
-    /// Sandstorm's blocker: a box of collision, nothing to draw.
+    /// the reference server's blocker: a box of collision, nothing to draw.
     const BLOCKER: u32 = 0x6F412342;
 
     /// TUNARIA's zones round Freeport's open ground and CHAR.ESF, and the
@@ -2460,7 +2460,7 @@ mod entity_actors {
         assert_eq!(send(&mut p, &mut w, HUMAN, 0), human, "the model changed");
     }
 
-    /// Sandstorm's blockers (F3 20261028-233048, an unnamed creature where
+    /// the reference server's blockers (F3 20261028-233048, an unnamed creature where
     /// the player stood; a quest's gate the players ran past): CHAR.ESF's
     /// 0x6F412342 is a SimpleSprite with an empty prim buffer and a
     /// collision buffer, a closed box 5 a side about its origin. With nothing
@@ -2577,8 +2577,8 @@ mod entity_actors {
 /// (200), or farther is never targeted.
 const CYCLE_REACH2: f32 = 40000.0;
 
-/// Whether `c` is a familiar, which no target cycle takes (the GM Jibwiz's
-/// petitions 1881 and 1903, Brother's 1902, 2026-11-13: "Only direct mouse
+/// Whether `c` is a familiar, which no target cycle takes (a GM's
+/// petitions 1881 and 1903, another's 1902, 2026-11-13: "Only direct mouse
 /// targeting, or pressing and holding the target button to go into first
 /// person with a cross hair ... should target heal bot. The cycle targeting
 /// should not"); a click, the crosshair, a name and the 6 key still do. A
@@ -3013,7 +3013,7 @@ mod far_poses {
     /// A few far characters are posed every frame, as near ones are; a
     /// crowd takes turns, about `FAR_POSE_BUDGET` a frame. The control: one
     /// frame in four however few (the client's before) poses a quarter of
-    /// Sandstorm's 24.
+    /// the reference server's 24.
     #[test]
     fn far_characters_are_posed_every_frame_unless_a_crowd() {
         for few in [1, 3, 24, FAR_POSE_BUDGET] {
@@ -3031,7 +3031,7 @@ mod held {
     use super::*;
 
     /// A player turned into a creature keeps its weapons on its channel
-    /// (Sandstorm's bard in Mouse Form, `pcaps/ps2_main_capture.pcap`: both
+    /// (the reference server's bard in Mouse Form, `pcaps/ps2_main_capture.pcap`: both
     /// hands 0xF4DD991A, type 5): the creature's sprite holds no items, so
     /// none is attached and both hands swing hand to hand. The same items on
     /// a sprite that holds them hang on its nodes, the override first. The
@@ -3138,7 +3138,7 @@ mod held {
         crate::raceopts::set_looks(Default::default());
     }
 
-    /// A Wisp casts no shadow (petition 1449, the GM Jibrish: "people can tell
+    /// A Wisp casts no shadow (petition 1449, a GM: "people can tell
     /// its just an invisible human"): every model of its puppet (its armour,
     /// the wisp in its helm, the sword in its hand, its helm, its cape) is
     /// cleared of casting into Sun Shadows' and Light Shadows' maps as the
@@ -4800,7 +4800,7 @@ impl Play {
     /// `VIClientPart06D00::LoadRes` puts on the actor whatever sprite the
     /// dictionary has (model 0 is the null sprite, which meets nothing). So
     /// an entity with no puppet, its model holding nothing to draw, still
-    /// has its actor: Sandstorm's blockers are CHAR.ESF's 0x6F412342, a
+    /// has its actor: the reference server's blockers are CHAR.ESF's 0x6F412342, a
     /// SimpleSprite with an empty prim buffer and a collision buffer, an
     /// invisible wall (F3 20261028-233048).
     fn place_actors(&mut self, walker: &mut Walker, lib: &Library) {
@@ -5525,8 +5525,8 @@ impl Play {
     /// `Respawn` there, then `SendOpSigned(73, token)`. The PS2 does both in
     /// one go, its frame stopped in `Respawn`'s `EnterWorld` until the world
     /// and the zones round the arrival are in, so the answer and its first
-    /// 0x40 from the arrival leave together (Sandstorm's captures,
-    /// `claude-notes/world-change-state-resync.md`); here the move is done
+    /// 0x40 from the arrival leave together (the reference server's captures,
+    /// the maintainer's notes); here the move is done
     /// when the loading screen comes down (`loading_step`), and the token
     /// waits for it (`arrival`). With no self (`m_selfId` -1) nothing
     /// moves, and a move into a world the table lacks cannot be made: both
@@ -5617,7 +5617,7 @@ impl Play {
     /// while a move of the server's is not done (`arrival`): the PS2's
     /// frame stops in `Respawn` until it stands at the arrival, where this
     /// client went on walking the world it was leaving, and sent the new
-    /// world's number with the old world's place (Sandstorm answered that
+    /// world's number with the old world's place (the reference server answered that
     /// with 0x07D2, "This character has been modified by a customer service
     /// representative").
     fn position_due(&mut self, walk: &vi::walk::WalkPhysics<Ee>, clock: i64) {
@@ -5680,7 +5680,7 @@ impl Play {
         self.stood_sent = false;
         let moving = if world as i64 != self.player.world {
             // the world table: the disc's six, or the server's patch's
-            // (`s2`: Sandstorm's eight)
+            // (`s2`: the reference server's eight)
             match crate::s2::get().world_file(world as i64) {
                 Some(f) => {
                     eprintln!("play: teleport to world {world} ({f}) at {pos:?}");
@@ -6346,7 +6346,7 @@ impl Play {
     /// current one back), `/t` goes as typed, `/r` to whoever last sent a
     /// tell. A command it does not know goes to the server as typed, where
     /// the game answers it with word 826 itself: the client's own, as
-    /// Sandstorm's S2 forwards them, so the server's commands (a GM's
+    /// the reference server's S2 forwards them, so the server's commands (a GM's
     /// `/goto`, go-eqoa-server's dev console) can be typed with a slash.
     /// Plain text goes to the current channel. Not here: the crafting
     /// commands.
@@ -6783,7 +6783,7 @@ impl Play {
     /// server that offered it (go-eqoa-server's `world.jump`, 0x7E28), a jump
     /// asked of the walk, which takes off at its next frame if the client and
     /// the walk allow (`controls::Client::may_jump`, `Walker::ask_jump`). On a
-    /// server that never offered it (Sandstorm's, eqoa.live's) nothing at all.
+    /// server that never offered it (the reference server's, eqoa.live's) nothing at all.
     pub fn jump_key(&mut self, walker: &mut Walker) {
         if self.session.jumps {
             walker.ask_jump();
@@ -6974,7 +6974,7 @@ impl Play {
             rooted: self.rooted,
             // IsTimedOut (8 s with nothing arriving) is not applied:
             // go-eqoa-server sends nothing while nothing changes, so it would
-            // stop a player standing still (the Sandstorm capture's longest
+            // stop a player standing still (the reference server capture's longest
             // silence is 2.6 s)
             timed_out: false,
             // the keyboard's held axes: the viewer's (`game_keys`)
@@ -8230,8 +8230,8 @@ impl Play {
 
     /// Whether a member of this player's group invites into it: on a server
     /// that offered it (`Session::member_invites`), unless it told that the
-    /// group's leader lets only the leader invite (`Session::group_reg`, the GM
-    /// Jibrish's petition 1476: "Allow anyone in my group to invite").
+    /// group's leader lets only the leader invite (`Session::group_reg`, a
+    /// GM's petition 1476: "Allow anyone in my group to invite").
     fn members_invite(&self) -> bool {
         self.session.member_invites && self.session.group_reg.is_none_or(|g| g.members_invite)
     }
@@ -8547,7 +8547,7 @@ impl Play {
                 self.who_open = true;
                 self.mode = 35;
             }
-            // a server's patch's Group menu (`s2`, Sandstorm's player
+            // a server's patch's Group menu (`s2`, the reference server's player
             // search): Search, in the patch's window (`searchwnd`) on the
             // player's levels, or in the who window when the patch's window
             // is not this shape; Register, Unregister
@@ -9121,7 +9121,7 @@ impl Play {
         }
     }
 
-    /// A key on an ability bar's slot (`binds::bar_slot`, Jibwiz's ticket
+    /// A key on an ability bar's slot (`binds::bar_slot`, a GM's ticket
     /// 1913; bars 3 and 4, the server owner's of 2026-11-18): in play (and the
     /// manual camera), the ability on it used as a click on it uses it, its
     /// bar's selection on it (bars 3 and 4 are menus 4 and 5,
@@ -9163,7 +9163,7 @@ impl Play {
     /// Stacked Spell Bars are drawn (`hudmenu`'s doc, ticket 1913): the
     /// Extended row on, on a computer, whatever was pressed last but a finger:
     /// a controller walks and uses the stacked bars with its d-pad as the
-    /// arrows do (Waldorf's petition 2448: they fell back to the carousel at
+    /// arrows do (a player's petition 2448: they fell back to the carousel at
     /// the pad's first press). A finger on the touch screen keeps the
     /// carousel, whose taps it plays with; never on a phone.
     pub fn stacked_bars(&self) -> bool {
@@ -10676,7 +10676,7 @@ impl Play {
     /// model too, whose actor holds the null sprite (`VIClientPart06D00::
     /// Create`), so `CycleTarget` and `TargetCentre` take it, the rings go
     /// round it and its numbers float over it, where no body is drawn (F3
-    /// 20261024-203920: Sandstorm's Ice Statue in Geyvax Cave, model 0,
+    /// 20261024-203920: the reference server's Ice Statue in Geyvax Cave, model 0,
     /// targetable only on a PS2).
     fn in_scene(&self, e: &net::entity::Entity) -> bool {
         e.world as i64 == self.player.world
@@ -10691,7 +10691,7 @@ impl Play {
     /// NPC/PC Display and Distance against the server's offer
     /// (`net::session::OP_ENTITY_VIEW`): the slots read are the player's
     /// number within the server's most, the game's 24 from a server that
-    /// offered none (Sandstorm, eqoa.live), and a server that offered is told
+    /// offered none (the reference server, eqoa.live), and a server that offered is told
     /// both whenever either changes (it fills that many from that far from
     /// its next pass; what was past a lowered number is dropped here at once,
     /// and its puppets with it). The view distance draws farther on any
@@ -10699,7 +10699,7 @@ impl Play {
     /// The effects on the pet the server sent (`Session::agree_pet_effects`, which
     /// each frame tells it what Extended's Pet Effects says), those not over now:
     /// their icons in their order, for the row under the pet's bar. None with the
-    /// row off, from a server that sends none (Sandstorm, eqoa.live), or with no
+    /// row off, from a server that sends none (the reference server, eqoa.live), or with no
     /// pet; the game shows a pet's effects nowhere, and nor does this client
     /// anywhere else.
     /// With the buff window up they are its third row instead (`buffwnd`).
@@ -11060,8 +11060,8 @@ impl Play {
     }
 
     /// The server's answer to a talk to a monster with nothing to say
-    /// (go-eqoa-server's `world.mob_info`, `net::session::OP_MOB_INFO`; the GM
-    /// Jibrish's petition 1459, 2026-11-10: "press the mob information button
+    /// (go-eqoa-server's `world.mob_info`, `net::session::OP_MOB_INFO`; a
+    /// GM's petition 1459, 2026-11-10: "press the mob information button
     /// on monster ... This should ONLY show the monsters name and level,
     /// nothing else"), for the target it still is: the info window shows them,
     /// as a pet's, for [`MOB_INFO_MS`] from now (`now`, the session's clock)
@@ -11646,7 +11646,7 @@ mod commands {
     }
 
     /// The quest guide speaks only where the server does not (the user's
-    /// "so sandstorm can benefit without server additions"; no mixing): its
+    /// "so [the reference server] can benefit without server additions"; no mixing): its
     /// marks once the wait into the world is over on a server that offered
     /// none; the server's alone, the guide off for good, once it offers its
     /// own, even after a world change takes the offer back; a scripted run's
@@ -11906,7 +11906,7 @@ mod commands {
         assert_eq!(also.cam.walk.phys.position.y.0, floor - 2.0, "a dump's SetLocation as it is");
     }
 
-    /// Sandstorm's boon (F3 pass 25): "A great wind stirs across Freeport.",
+    /// the reference server's boon (F3 pass 25): "A great wind stirs across Freeport.",
     /// then every player there is moved (0x00B2) 71 up into its sky, all to
     /// one point. From Freeport's coach, 358 away, a PS2 reads no zone for it
     /// (the four round the point are in its cache: `loading::needs_read`) and
@@ -11994,9 +11994,9 @@ mod commands {
     /// out until then: within a world (a far port) and across worlds
     /// (Tunaria's Freeport to Odus), the answer is handed on with the first
     /// 0x40 from the arrival and nothing between them, so the two leave in
-    /// one packet, as Sandstorm's captures show a PS2 sending them. Sent at
+    /// one packet, as the reference server's captures show a PS2 sending them. Sent at
     /// once on the 0x00B2, with the old world's place sent as the new
-    /// world's meanwhile, is what Sandstorm kicked with 0x07D2. Answered at
+    /// world's meanwhile, is what the reference server kicked with 0x07D2. Answered at
     /// once: a world the table lacks (no move), and no self. Controls: the
     /// 0x40 goes out every update before the move and after it, so the
     /// silence between is the move's; the 0x40 at the arrival is the walk's
@@ -12345,7 +12345,7 @@ mod commands {
         });
     }
 
-    /// A creature with no body (model 0: Sandstorm's Ice Statue in Geyvax
+    /// A creature with no body (model 0: the reference server's Ice Statue in Geyvax
     /// Cave, 0x101076) is targeted as on a PS2, where its actor holds the
     /// null sprite and `CycleTarget` asks only for an actor: R1 picks it, the
     /// mouse finds it (an upright two high where its body would stand), and
@@ -12456,11 +12456,11 @@ mod commands {
     }
 
     /// R1 and Tab in a window wider than 4:3 go in the console's order (F3
-    /// 20261026-154639, jib at 1707x932: "a *slightly* higher preference to
+    /// 20261026-154639, a tester at 1707x932: "a *slightly* higher preference to
     /// targeting mobs in front of you and close"). How far off the middle a
     /// creature is counts as the game's camera measures it
     /// (`walker.view(4/3)`); the window's projection draws its x at 4/3 over
-    /// the aspect of that (0.73 at jib's shape, x squared 0.53), and at the
+    /// the aspect of that (0.73 at the tester's shape, x squared 0.53), and at the
     /// game's in a window narrower than 4:3. From a camera at the origin
     /// looking along -z: A, 40 ahead (0.28), then B, 13 away and 5 to the
     /// side (0.405), then C, past the 4:3 picture's side, which only the
@@ -12827,7 +12827,7 @@ mod commands {
 
     /// The target box's level (Live petition 5130): the target creature's,
     /// once the server offered it, with Target Level on. The controls: no
-    /// offer (Sandstorm, any other server), Target Level off, no target, a
+    /// offer (the reference server, any other server), Target Level off, no target, a
     /// target that is not a creature: none, the game's box.
     #[test]
     fn the_target_box_has_its_level_only_where_the_server_offered_it() {
@@ -13035,7 +13035,7 @@ mod commands {
     }
 
     /// NPC/PC Display and Distance against the server: one that offered
-    /// nothing (the control: Sandstorm's, eqoa.live's) is told nothing and the
+    /// nothing (the control: the reference server's, eqoa.live's) is told nothing and the
     /// game's 24 are read; an offer is answered once with the player's numbers
     /// (the slots within it), again when either changes; a lowered number
     /// drops what was past it.
@@ -13405,7 +13405,7 @@ mod commands {
         assert_eq!(p.attack.due, now.wrapping_sub(crate::attackclock::PRESS_TO_FIRST_HIT).wrapping_add(4000), "the player's own");
     }
 
-    /// A server's patch's Group menu (`s2`, Sandstorm's player search):
+    /// A server's patch's Group menu (`s2`, the reference server's player search):
     /// Search opens the who window on the search's results (mode 35, the
     /// request out), and the who list proper takes the window back; without
     /// the patch (the control) its message does nothing, as no retail menu
@@ -13425,7 +13425,7 @@ mod commands {
         assert_eq!((p.mode, p.search_mode, p.who_open), (0, false, false));
     }
 
-    /// Sandstorm's live S2 (`searchwnd`): its Search opens the patch's own
+    /// the reference server's live S2 (`searchwnd`): its Search opens the patch's own
     /// window over play, on the player's own levels, with nothing asked
     /// yet (the who window stays shut); while it is up it has the keys, its
     /// Search asks with its filter, and △ closes it and lets the player
@@ -13480,7 +13480,7 @@ mod commands {
         });
     }
 
-    /// A server's patch that colours damage (`s2`: Sandstorm's S2) has the
+    /// A server's patch that colours damage (`s2`: the reference server's S2) has the
     /// three bytes after 0x00DB's body colour the number, the player's own
     /// hit and one taken alike; without it (the control) they are passed
     /// over and the number is the game's white.
@@ -13510,7 +13510,7 @@ mod commands {
     }
 
     /// What colours a number (`number_rgb`): a patch's three bytes when it
-    /// colours them, whatever else is chosen, and no tag read then (Sandstorm's
+    /// colours them, whatever else is chosen, and no tag read then (the reference server's
     /// path as it was); else a tag's row's colour from a server that offered
     /// tags, Default the game's (none); a byte from a server that made no
     /// offer, no byte, or three bytes are no tag.
@@ -13913,9 +13913,9 @@ mod commands {
     }
 
     /// The run speed is the server's, as `UpdateGame` hands `m_speed` to
-    /// the walk each frame: the dump's at world entry (Sandstorm's
+    /// the walk each frame: the dump's at world entry (the reference server's
     /// 8.833333), then 0x00F8's `SetSpeed` (Spirit of the Wolf's 11.483333
-    /// and a snare's 7.243333 in a Sandstorm capture, the walk speed 3 with
+    /// and a snare's 7.243333 in a reference server capture, the walk speed 3 with
     /// either; a stop, 0, stops the walk too), and a dump's again (Msg000D:
     /// no SetSpeed, the walk speed kept). The control is the walk's own
     /// speed, the client's until 2026-10-23, which no buff moved (the user:
@@ -14023,7 +14023,7 @@ mod commands {
 
     /// What `UpdateControls` is given: off; the member gone from the group
     /// or not in the scene, lost; and while following the run is 1.05 times
-    /// the speed the server gave (the dump's, Sandstorm's 8.833333).
+    /// the speed the server gave (the dump's, the reference server's 8.833333).
     #[test]
     fn the_follow_handed_to_the_controls() {
         let speed = f32::from_bits(0x410D5555);

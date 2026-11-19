@@ -1,4 +1,4 @@
-//! The quick-chat tree against the decomp: eqoa-port's oracle (op 810) runs
+//! The quick-chat tree against the decomp: the decomp-built oracle (op 810) runs
 //! CLIENT's own `VITextSet` (Reset, FreeAll, Get, Child, GetChild, Mark,
 //! Remove, MakeId and ChildId over their domains), `VIClient::LoadTextSets`
 //! and `VIWndMenu4::ParseEscape`/`Expand` out of build/libclient.so on a

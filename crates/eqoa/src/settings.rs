@@ -372,7 +372,7 @@ pub fn save_auto_cast_file(text: &str) -> bool {
 
 // ---- the account's options (petition 1621) --------------------------------------------
 
-/// The options are the ACCOUNT's (the GM Jibrish's petition 1621, "account
+/// The options are the ACCOUNT's (a GM's petition 1621, "account
 /// bound, not just character bound"): once a login names one
 /// (`set_account`: the server and the login name, the pregame's STATION),
 /// the Options window's settings (game.opt's), the Extended rows (client.opt's
@@ -806,7 +806,7 @@ impl Focus {
     }
 }
 
-/// The Profanity Filter's tier (Options > Interface; the GM Jibrish's
+/// The Profanity Filter's tier (Options > Interface; a GM's
 /// petition 1625): the server's filter of what the player hears.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Profanity {
@@ -929,7 +929,7 @@ pub struct ClientOptions {
     pub screen_shake: bool,
     /// Controller Focus, each window's by its place (`focus`)
     pub controller: [Focus; crate::multibox::PLACES],
-    /// Slow When Not Focused (the GM Jibrish's petition 1634), each window's
+    /// Slow When Not Focused (a GM's petition 1634), each window's
     /// by its place as Controller Focus is: on, a window the system reports
     /// covered or minimised takes its frames at the game's 30 a second
     /// (`viewer`'s `HIDDEN_GAP`); off, the default, at its Frame Rate as in
@@ -976,14 +976,14 @@ pub struct ClientOptions {
     /// under its bar, where the server sends them (`Session::agree_pet_effects`);
     /// off, none, as the game shows them nowhere. On by default.
     pub pet_effects: bool,
-    /// Buff Window (`buffwnd`; the GM Jibrish's petition 1761): on a server that
+    /// Buff Window (`buffwnd`; a GM's petition 1761): on a server that
     /// offers it (`Session::agree_buffs`), the player's effects in two rows and
     /// its pet's in a third, each with its name and time left and a beneficial
     /// one taken off by a click or the pad; off, or on any other server, the
     /// game's strip (`influence`). On by default.
     pub buff_window: bool,
-    /// Quest Markers over the heads (Extended > UI > Name Plates; the GM
-    /// Jibrish's petition 1813): on a server that sends them
+    /// Quest Markers over the heads (Extended > UI > Name Plates;
+    /// a GM's petition 1813): on a server that sends them
     /// (`Session::agree_head_marks`), a yellow "!" over an NPC with a quest
     /// the player may take now and a "?" over one where a quest can be moved
     /// on now, above its name; off, or on any other server, none. On by
@@ -1011,7 +1011,7 @@ pub struct ClientOptions {
     /// go-eqoa-server's roster sends them (0x7E1A's kind byte). Either way a
     /// merc is targeted in the world and by L1's group cycle.
     pub raid_mercs: bool,
-    /// Loading Tips (`tips`; the GM Jibrish's petition 1778): a tip
+    /// Loading Tips (`tips`; a GM's petition 1778): a tip
     /// line on every loading screen. On by default.
     pub loading_tips: bool,
     /// Number Colors (`numcolor`; the server owner's of 2026-11-09: "we can add
@@ -1032,7 +1032,7 @@ pub struct ClientOptions {
     /// DPS Meter Shows: the fight (under way, or the last) or Overall, every
     /// fight since the login; a click on the panel's title or `/dps` turns it.
     pub dps_view: crate::dpsmeter::View,
-    /// Item Links (`itemlink`; the GM Jibrish's petition 1463: "This should be
+    /// Item Links (`itemlink`; a GM's petition 1463: "This should be
     /// off by default for ps2 players and a toggle option. If toggled off for
     /// players, they should just see a plain text item name if linked"): links
     /// made from the inventory, drawn and opened in the chat box, on a server
@@ -1049,12 +1049,12 @@ pub struct ClientOptions {
     /// target or a dead one, the nearest creature fighting the player (else
     /// its pet or group) targeted. Off by default.
     pub auto_target: bool,
-    /// Weapon Swap Back (jibrish, 2026-11-16, work board 1581): a weapon set
+    /// Weapon Swap Back (a GM, 2026-11-16, work board 1581): a weapon set
     /// used from the HUD asks the server to put back what it took off when
     /// pressed again (0x0022's swap-back byte, `gear::use_message`). Off by
     /// default.
     pub weapon_swap_back: bool,
-    /// Chat Always Shown (Jibwiz's ticket 1914: "allows your chat box to stay
+    /// Chat Always Shown (a player's ticket 1914: "allows your chat box to stay
     /// fully visible without auto collapse"): the chat box open at its five
     /// rows with the last lines in it, never sliding away (`chat::WndChat::
     /// always`). Off by default, the game's box.
@@ -1066,14 +1066,14 @@ pub struct ClientOptions {
     /// Guild) instead of walking the item links (`Play::chat_channel_step`).
     /// Off by default, the game's R2.
     pub r2_channels: bool,
-    /// Stacked Spell Bars (Jibwiz's ticket 1913): on a computer, the ability
+    /// Stacked Spell Bars (a player's ticket 1913): on a computer, the ability
     /// bars shown (two, or Ability Bars' three or four) drawn as rows of five
     /// above the chat box at 95%, as Spell Bar Layout stands them, with no
     /// name bar, each slot a key of its own on the Controls page
     /// (`hudmenu::Stacked`, `binds`' bar rows). Off by default, the game's
     /// carousel; a controller or a touch screen keeps the carousel.
     pub stacked_bars: bool,
-    /// Spell Bar Opacity (Jibwiz's ticket 1953: "the horizontal spell bars need
+    /// Spell Bar Opacity (a player's ticket 1953: "the horizontal spell bars need
     /// opacity as a setting for the non spell icon portion of the bar"): the
     /// stacked bars' cell frames drawn at this percent (0 to 100 in tens), the
     /// icons always whole (`hudmenu::HudMenus::draw_stacked`). 100 by default,
@@ -1091,7 +1091,7 @@ pub struct ClientOptions {
     /// the spell bars are stacked, Upper Left (the default) or Below
     /// (`hudmenu::UtilityLayout`, `hudmenu::HudMenus::draw_utility`).
     pub utility_layout: crate::hudmenu::UtilityLayout,
-    /// Chat Tabs (Jibwiz's ticket 1951): which of the chat box's tabs each
+    /// Chat Tabs (a player's ticket 1951): which of the chat box's tabs each
     /// kind of line goes to (`chat::Kind`, by its index): 0 the box's own,
     /// Main; 1 to 3 a tab of its own, which exists while a kind goes to it and
     /// whose lines Main no longer shows. Every kind Main's by default: no tabs.
@@ -1112,19 +1112,19 @@ pub struct ClientOptions {
     /// world gives the account its menus once. Off by default, the game's:
     /// each character its own, as the server keeps them.
     pub shared_shortcuts: bool,
-    /// Auto Save Options (Waldorf's ticket 2002: "A toggle that autosaves
+    /// Auto Save Options (a player's ticket 2002: "A toggle that autosaves
     /// changes to your options instead of having to go back to the 'Save
     /// Changes'"): every step back in the Options window keeps what was
     /// changed as Save Changes keeps it, and Triangle on its menu saves
     /// instead of putting the settings back (`options::WndOptions::keep`).
     /// Off by default, the game's: only Save Changes keeps them.
     pub auto_save: bool,
-    /// Profanity Filter (the GM Jibrish's petition 1490: "Under options then
+    /// Profanity Filter (a GM's petition 1490: "Under options then
     /// interface add an option to turn the profanity filter on or off"): the
     /// server's filter of what this player hears, told to a server that asks
     /// for it (`Session::agree_profanity_filter`, go-eqoa-server's 0x7E60);
     /// High by default, as the game has it at every login. Options >
-    /// Interface. Three tiers since the GM Jibrish's petition 1625: Off,
+    /// Interface. Three tiers since a GM's petition 1625: Off,
     /// Medium (only racial slurs) and High (every word, the old On).
     pub profanity_filter: Profanity,
     /// Map (the user, 2026-11-09: "also add the map and quest helper we had
@@ -1177,7 +1177,7 @@ pub struct ClientOptions {
     /// take, a "?" where a step is to be done) and the quest tracker on the
     /// HUD, from a server that sends them (`net::session::OP_QUEST_MARKERS`,
     /// `OP_QUEST_PROGRESS`: go-eqoa-server), else the client's own guide's
-    /// (`questguide`: Sandstorm sends no such thing); off, none, the server
+    /// (`questguide`: the reference server sends no such thing); off, none, the server
     /// asked for none and the guide not run, as the game has none.
     pub quest_helper: bool,
     /// Quest Markers (under the Quest Helper, on by default): the map's and
@@ -1323,7 +1323,7 @@ pub struct ClientOptions {
     /// was, `TOUCH_SIZE_MIN` to `TOUCH_SIZE_MAX` in `TOUCH_SIZE_STEP`s, drawn
     /// larger than it was only as far as the window has room (a player,
     /// 2026-11-02: "Is there a way to make the on screen controller size
-    /// adjustable?"; Jibrish's petition 1386, 2026-11-09: "Mobile clients and
+    /// adjustable?"; a GM's petition 1386, 2026-11-09: "Mobile clients and
     /// mobile browser need the ability to adjust the on screen controler
     /// size"). They took over Touch Pad Size, the whole pad's 50 to 100,
     /// which an older client.opt's `touch_size` gives both.
@@ -1344,7 +1344,7 @@ pub struct ClientOptions {
     /// pad display"). Kept the moment a drag or a pinch ends.
     pub touch_moves: [[i16; 2]; 3],
     /// Button Layout: Bottom (Select and Start low between the sticks,
-    /// `touch::Opts::low_start`; the GM Jibcrotwo's petition 2084), or Classic.
+    /// `touch::Opts::low_start`; a GM's petition 2084), or Classic.
     pub touch_low_start: bool,
     /// Texture Packs, natively (the user, 2026-11-08: PCSX2's replacement
     /// packs read as they are, "an Extended page row turns packs on and

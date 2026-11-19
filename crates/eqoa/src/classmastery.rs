@@ -255,7 +255,7 @@ impl Part {
     /// (an ability, bought with the class owned). The disc's records carry no
     /// flag, so here a skill is a Master Class's first rank when neither the
     /// node's parent nor the list's names another Master Class skill:
-    /// Sandstorm's list names the class for each ability; go-eqoa-server's
+    /// the reference server's list names the class for each ability; go-eqoa-server's
     /// names none once the class is owned (each ability a line of its own in
     /// the window) and its node keeps the class. The first rank is refused
     /// when a Master Class skill owned is not one of its ranks.
@@ -710,7 +710,7 @@ impl ClassMastery {
     }
 
     /// The category's lists made again after a skill was bought or switched
-    /// (the GM Jibrish's petition 1622: the game's `SelectCategory` put the
+    /// (a GM's petition 1622: the game's `SelectCategory` put the
     /// cursor back on the first line): each list keeps its selected line
     /// and its scroll. A skill that left the list for the next rank of its
     /// chain (a rank bought: the rank after it is now the one offered, or
@@ -1194,7 +1194,7 @@ mod tests {
     }
 
     /// Sub-ops 5 and 6 turn a skill on and off and hand the run speed they
-    /// carry on to `SetSpeed` (`m_owner->SetSpeed(m_speed)`), Sandstorm's
+    /// carry on to `SetSpeed` (`m_owner->SetSpeed(m_speed)`), the reference server's
     /// 8.833333 and Spirit of the Wolf's 11.483333 here; the control is
     /// sub-op 4, which carries no speed and gives nothing.
     #[test]
@@ -1377,7 +1377,7 @@ mod tests {
         assert_eq!(buy_with(vec![rank(1, true, 0), rank(2, true, 0), rank(50, false, 0)], MASTER_CLASS, 1), (None, true, vec![15]), "a second ability listed alone");
         assert_eq!(buy(vec![rank(1, true, 0), rank(50, false, 0)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]), "the control: a first rank");
         assert_eq!(buy_with(vec![rank(1, true, 0), rank(50, false, 0)], MASTER_CLASS, 50), (Some(CmUp::Warn(1840)), false, vec![]), "a node naming itself names no rank below");
-        // another Master Class with its abilities under it, as Sandstorm
+        // another Master Class with its abilities under it, as the reference server
         // lists them, beside the class owned and one of its abilities
         assert_eq!(buy(vec![rank(1, true, 0), rank(2, true, 1), rank(50, false, 0), rank(51, false, 50)], MASTER_CLASS), (Some(CmUp::Warn(1840)), false, vec![]), "another class with its abilities");
     }

@@ -1,4 +1,4 @@
-//! The oracle harness, shared by the oracle tests: eqoa-port's `build/oracle`
+//! The oracle harness, shared by the oracle tests: the oracle (built from the decomp)
 //! over a pipe, byte views of the repr(C) structs, a seeded RNG, and the
 //! player's SUPPORT image.
 #![allow(dead_code)]
@@ -23,7 +23,7 @@ impl Oracle {
         Self::spawn(path)
     }
 
-    /// Another of eqoa-port's oracle programs (`build/<name>`).
+    /// Another of the oracle programs built from the decomp (`build/<name>`).
     pub fn open_at(name: &str) -> Option<Oracle> {
         Self::spawn(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../eqoa-port/build").join(name))
     }

@@ -3,7 +3,7 @@
 //! The game keeps ONE dictionary per stage (title, character select, in-game),
 //! and every container it loads registers into it; about 30% of in-game
 //! texture lookups resolve to a surface another, earlier file registered
-//! (`claude-notes/dictid-cross-file-resolution.md`, measured). A DictID that is
+//! (the maintainer's notes, measured). A DictID that is
 //! already present is not registered again: `VIESFParse::ParseSurfaceObj` finds
 //! the id first and skips the record, and `VIMap::Insert` hands back the
 //! existing node (decomp `viesfparse.cpp`, `vimap_t.h`). So the FIRST file
@@ -489,7 +489,7 @@ impl Library {
 
     /// Registers `r` under `id` too, unless something already has `id` (the
     /// dictionary's first registration wins): an object already loaded given
-    /// another DictID, as a server's patch does (Sandstorm's S2 registers
+    /// another DictID, as a server's patch does (the reference server's S2 registers
     /// five CHAR.ESF surfaces under DictIDs of its own for its armour set 9).
     /// The 2002 view takes it as it is: its record is Frontiers'.
     pub fn alias(&mut self, id: i32, r: Ref) -> bool {

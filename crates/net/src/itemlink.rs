@@ -1,4 +1,4 @@
-//! go-eqoa-server's item links in chat (the GM Jibrish's petition 1463,
+//! go-eqoa-server's item links in chat (a GM's petition 1463,
 //! 2026-11-10: "shift click an item and if your chat is open it puts a link to
 //! that item. If people click it, they can view the items stats, name, icon"),
 //! on the wire. CLIENT has none of it; the server's own opcodes carry it, and

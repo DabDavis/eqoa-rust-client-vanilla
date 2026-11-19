@@ -3,7 +3,7 @@
 //!
 //! Each frame [`Console::poll`] runs SUPPORT's `VIPad::Read` (`vi::pad`, held
 //! to the decomp) on a libpad whose port 0 is every source at once, OR'd as
-//! eqoa-port's `platform/pad.c` ORs them: the gamepads (natively gilrs, SDL's
+//! the decomp's native build's `platform/pad.c` ORs them: the gamepads (natively gilrs, SDL's
 //! layout; in a page the Gamepad API read straight, `padmap`, which knows
 //! each browser's layouts; both positional, A ✕, B ○, X □, Y △, Back Select),
 //! the touch screen's pad (`touch`) and a script (`EQOA_PAD`). A pad that is not ready is read as all zeros, as
@@ -67,7 +67,7 @@ pub mod bit {
     /// button, is none of the game's.
     pub const NUMBERED: [u16; 12] = [SQUARE, CROSS, CIRCLE, TRIANGLE, L1, R1, L2, R2, SELECT, START, L3, R3];
 
-    /// By name, as eqoa-port's pad scripts spell them.
+    /// By name, as the decomp's native build's pad scripts spell them.
     pub fn named(s: &str) -> Option<u16> {
         Some(match s {
             "select" => SELECT,
@@ -459,7 +459,7 @@ pub fn pad_keys(old: &mut ConsolePad<Ee>, new: &ConsolePad<Ee>) -> Vec<(i32, boo
 
 /// `EQOA_PAD`: a pad played by script, for headless runs and the window
 /// alike. `;`-separated steps, each at a time in ms (16 ms frames round it):
-/// `<button>@<ms>[+<hold>]` presses a button (eqoa-port's names: cross,
+/// `<button>@<ms>[+<hold>]` presses a button (the decomp's native build's names: cross,
 /// circle, square, triangle, up, down, left, right, l1, l2, r1, r2, start,
 /// select, l3, r3) and holds it 100 ms or `hold`; `stick <l|r> <x> <y>@<ms>+<hold>`
 /// holds a stick (-1..1, +y down).

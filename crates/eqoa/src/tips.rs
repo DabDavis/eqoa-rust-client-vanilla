@@ -1,4 +1,4 @@
-//! The loading screens' tips (the GM Jibrish's petition 1778, 2026-11-12: "Add
+//! The loading screens' tips (a GM's petition 1778, 2026-11-12: "Add
 //! text tips to the loading screens. Create one for each command, with a brief
 //! one sentence description of the command ... Create one hint that loads on a
 //! loading screen that is randomly displayed when they load either into the
@@ -14,7 +14,7 @@
 //! window, as the screen's 2D half is). Extended > Other > General's Loading
 //! Tips turns them off.
 //!
-//! Each tip is tagged (the GM Jibrish's petition 1811, 2026-11-12: "For
+//! Each tip is tagged (a GM's petition 1811, 2026-11-12: "For
 //! Heirloom: include all tips. Tag some other tips for Live that are NOT about
 //! in-game NPCs and ONLY about client features"): `all` (the client's own
 //! features and the game's own commands) shows everywhere, `heirloom` (the

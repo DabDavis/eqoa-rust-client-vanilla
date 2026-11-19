@@ -1,4 +1,4 @@
-//! DRDP against the decomp, byte for byte: eqoa-port's `build/oracle_drdp`
+//! DRDP against the decomp, byte for byte: the oracle `oracle_drdp` (built from the decomp)
 //! runs the decomp's network library with only the socket replaced, and
 //! every step here is run on it and on this crate, and the replies compared.
 //!
@@ -6,9 +6,9 @@
 //! reordering, duplicating network for thousands of steps (guaranteed
 //! messages big enough to fragment, state channels with small changes,
 //! best-effort, clock jumps that trip the keep-alive and the timeouts); and
-//! a real capture of a PS2 talking to Sandstorm replayed into one client.
+//! a real capture of a PS2 talking to the reference server replayed into one client.
 //!
-//! SKIPs without the oracle (`make oracle` in eqoa-port).
+//! SKIPs without the oracle (`make oracle` in the decomp's native build).
 
 use drdp::{Addr, Drdp, address_to_endpoint, PORT_LEADER};
 use std::io::{Read, Write};

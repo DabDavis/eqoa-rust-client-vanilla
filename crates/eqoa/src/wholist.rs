@@ -11,7 +11,7 @@
 //! user's choice), by name from the start, and ○ (C on the keyboard) or a
 //! click on a column's heading sorts it by that column instead.
 //!
-//! A server whose patch sorts the list itself (Sandstorm's S2, `PatchSort`)
+//! A server whose patch sorts the list itself (the reference server's S2, `PatchSort`)
 //! has it sorted as the patch sorts it: L1 and R1, or left and right, go
 //! round the columns, the selection keeping its place in the list (the row
 //! there now another player's), the heading sorted by marked before and
@@ -20,7 +20,7 @@
 //! or a patch of another shape, the client's own sort above. As on a PS2,
 //! the patch sorts a list only when its count is not the one it last sorted,
 //! so a list sent again with the same count keeps the server's own order
-//! (Sandstorm's: CM count first; `WhoList::patch_get_list`).
+//! (the reference server's: CM count first; `WhoList::patch_get_list`).
 
 #![allow(clippy::too_many_arguments)]
 
@@ -125,7 +125,7 @@ impl Sort {
     }
 }
 
-/// Where Sandstorm's S2 hooks the who list, and where in its code each
+/// Where the reference server's S2 hooks the who list, and where in its code each
 /// word, table and number it uses is named, as the live S2 (ss-patch-60,
 /// 2026-10-15) has them.
 mod at {
@@ -175,7 +175,7 @@ const T2: u32 = 10;
 const T3: u32 = 11;
 const T9: u32 = 25;
 
-/// A server's patch's own sort of the who list (Sandstorm's S2: its
+/// A server's patch's own sort of the who list (the reference server's S2: its
 /// `GetList` sorts the list in place, a stable insertion sort, whenever a
 /// new one is there or a key has moved the column; its `OnKeyDown` moves the
 /// column; its `OnDrawSelf` marks the heading and puts the keys in the
@@ -491,7 +491,7 @@ impl WhoList {
     /// count are those it last sorted (FC004, FC008); it remembers them. A
     /// list the server sends again lands in the same buffer the last one
     /// freed (`Close`'s `VIVector::Clear`, then the same growth), so a list
-    /// of the same count stays in the server's own order (Sandstorm's: CM
+    /// of the same count stays in the server's own order (the reference server's: CM
     /// count first) until the count changes or a key moves the column (its
     /// `OnKeyDown` zeroes FC004). The first list is sorted.
     fn patch_get_list(&mut self, who: &Who) {
@@ -1039,7 +1039,7 @@ mod tests {
         }
     }
 
-    /// Sandstorm's S2 sorts the who list itself: what its hooks use, read out
+    /// the reference server's S2 sorts the who list itself: what its hooks use, read out
     /// of the live S2 where its code names it. Its keys are L1 and left one
     /// column back, R1 and right one on; its ranks put the races and the
     /// classes in the order their short words spell; its marks are the ones
@@ -1051,7 +1051,7 @@ mod tests {
     /// last sorted (FC004/FC008: the buffer and the count; a list the server
     /// sends again lands in the buffer the last one freed). So the first list
     /// is sorted by the column, a second of the same count stays in the
-    /// server's own order (Sandstorm's: CM count first, F3 2026-10-29) until a
+    /// server's own order (the reference server's: CM count first, F3 2026-10-29) until a
     /// key moves the column, and one of another count is sorted. The control:
     /// the patch's sort run on every list, as before, puts the second in
     /// name order.

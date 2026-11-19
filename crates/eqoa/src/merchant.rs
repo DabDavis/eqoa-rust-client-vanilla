@@ -199,7 +199,7 @@ pub struct Merchant {
     desc: String,
     /// The selection's text or description, as last drawn, longer than its
     /// box: □ (the keyboard's Q), a click or a tap on the description opens
-    /// it whole in the item menu's `VIWndInspect` (the player Felthious's
+    /// it whole in the item menu's `VIWndInspect` (a player's
     /// petition 2107, for the spells' descriptions, a scroll's too)
     more: bool,
     /// The selection's whole text, for `inspect` (`Info::inspect_item`)

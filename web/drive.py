@@ -10,7 +10,7 @@ canvas (the licence, the title, Station's login screen...): drive it with
 
     web/drive.py --iso run/eqoa.iso --view 'CHAR.ESF 0x70D898C6' --shot 8=human.png
     web/drive.py --iso run/eqoa.iso --boot --params 'relay=ws://127.0.0.1:8790&server=203.0.113.10' \\
-        --keys 12=Enter:100 --type 20=dab --shot 30=station.png
+        --keys 12=Enter:100 --type 20=player --shot 30=station.png
 
 --shot SECONDS=FILE.png screenshots that long after the button (repeatable);
 --until TEXT exits 0 once a console line has it; --keys SECONDS=KEYS holds

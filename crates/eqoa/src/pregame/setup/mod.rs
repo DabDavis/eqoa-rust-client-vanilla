@@ -449,7 +449,7 @@ impl Setup {
                     self.sound.push(OptionsUp::Volume(1, self.options.music_volume));
                 }
                 // the client's own: a tip in the space under the menu (`tips`,
-                // the GM Jibrish's petition 1811), while nothing is over it
+                // a GM's petition 1811), while nothing is over it
                 if self.splash.ready && !self.options_visible && !self.message.visible && !self.net_visible {
                     crate::tips::draw_title(cx.vui, cx.r, 304, 392);
                 }

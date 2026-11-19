@@ -18,7 +18,7 @@
 //! for a player who never picks one. An untagged number (any other server's,
 //! a figure on the player that another made, a heal from another) is always the
 //! game's colour, and so is any number while a server's patch colours them
-//! (Sandstorm's S2: `s2::Rules::damage_rgb`, its three bytes, read as before).
+//! (the reference server's S2: `s2::Rules::damage_rgb`, its three bytes, read as before).
 //!
 //! Two rows more, Merc Damage and Merc Heals, on a page of their own (Extended
 //! > Merc Colors: Number Colors' page is full), for the figures the player's

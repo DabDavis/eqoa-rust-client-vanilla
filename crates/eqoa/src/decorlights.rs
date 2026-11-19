@@ -308,7 +308,7 @@ pub fn is_art(model: u32) -> bool {
 }
 
 /// The pet's look `model` is, if the server named it one (`net::decor::
-/// PetArt`: Zerkziee's catapult): a prop worn by a pet, which rams at its
+/// PetArt`: a player's catapult): a prop worn by a pet, which rams at its
 /// swings and fires its shot at its casts (`petart`).
 pub fn pet_art(model: u32) -> Option<net::decor::PetArt> {
     if model == 0 {

@@ -1,5 +1,5 @@
 //! go-eqoa-server's own, no retail message: a yellow "!" or "?" over a quest
-//! NPC's head (the GM Jibrish's petition 1813, 2026-11-12: "Add the ability for
+//! NPC's head (a GM's petition 1813, 2026-11-12: "Add the ability for
 //! us to add yellow ! and ? over NPCs in game, visible to the player, if they
 //! toggle it on or we turn it on by default. The exclamation point over their
 //! head should only happen if there's a quest they can log right then, and the

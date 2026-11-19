@@ -104,9 +104,9 @@ impl Header {
 /// the words it shows (`ShowText`) in `shown`.
 ///
 /// It speaks the disc's forms unless `live`: then SOE's final live client's
-/// (`c:/eqoa-live-1500`, read off Corsten's retail state where its gram
+/// (`c:/eqoa-live-1500`, read off a retail character's savestate where its gram
 /// client is `VIClient+0x30910`), which a server says it takes by offering
-/// it (go-eqoa-server's [`OP_LIVE_MAIL`]; Sandstorm and every server built
+/// it (go-eqoa-server's [`OP_LIVE_MAIL`]; the reference server and every server built
 /// for the disc never do, and keep the disc's). The live forms: a send
 /// names several recipients and carries no envelope, an open carries none
 /// either, a send's answer can name the recipients unknown (status 9) or

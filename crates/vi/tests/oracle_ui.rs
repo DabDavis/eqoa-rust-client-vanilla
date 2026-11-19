@@ -1,4 +1,4 @@
-//! `vi::ui` against the decomp's own UI layer: eqoa-port's `build/oracle_ui`
+//! `vi::ui` against the decomp's own UI layer: the oracle `oracle_ui` (built from the decomp)
 //! compiles viui.cpp, viuiwindow.cpp, viuitextscroll.cpp and vifont.cpp
 //! over a raster that RECORDS each call (and a dictionary that answers with
 //! the id asked for), and the same calls are made here through a `Raster`

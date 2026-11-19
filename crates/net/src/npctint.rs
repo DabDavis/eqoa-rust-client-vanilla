@@ -9,7 +9,7 @@
 //! they come into view. A PS2 never answers: it draws each body in its own
 //! colours, as this client does on every server that makes no offer.
 //!
-//! Layout 2 (the GM Jibrish's petition 1893: Mr. Moogie's body in a soft red
+//! Layout 2 (a GM's petition 1893: Mr. Moogie's body in a soft red
 //! glow) puts a glow after each colour; this client answers an offer of 2 or
 //! more with 2 ([`LAYOUT`]) and an older server's 1 with 1.
 //!

@@ -1,7 +1,7 @@
 //! The game's frame, as the console keeps it. CLIENT's loop holds each frame
 //! to at least 20 VITimer units (20.35 ms) and the raster then waits for a
 //! field of NTSC video, so a frame is two fields: 30 a second
-//! (`claude-notes/qol-patches-20260816.md`, "The 30 fps lock is a
+//! (the maintainer's notes, "The 30 fps lock is a
 //! BUSY-WAIT").
 //!
 //! What the game moves on its clock (`VIScene::GetTime`: the walk and the

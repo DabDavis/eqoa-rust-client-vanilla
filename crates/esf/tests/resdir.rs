@@ -30,7 +30,7 @@ impl<R: ReadAt> ReadAt for Counting<R> {
 
 /// The Frontiers disc (`$EQOA_ISO`, else `run/eqoa.iso`), and the 2002 disc
 /// when there is one (`$EQOA_2002_ISO`, else the USA disc under
-/// `../decomp-builds/discs/eqoa-usa/`).
+/// the other disc builds).
 fn discs() -> Vec<(&'static str, std::path::PathBuf)> {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut out = Vec::new();

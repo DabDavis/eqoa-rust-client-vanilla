@@ -1,4 +1,4 @@
-//! VISoundDevice against the decomp: eqoa-port's `build/oracle_snd` runs the
+//! VISoundDevice against the decomp: the oracle `oracle_snd` (built from the decomp) runs the
 //! decomp's own VISoundDevice, VIWave and VIXm (in the EE's layout) over its
 //! SNDDRV, and every call the game makes is made to it and to `snd::device`
 //! over `snd::Driver`. The results, every packet the device ships (to the
@@ -7,7 +7,7 @@
 //! The float model is `Ieee`, the oracle's: the device's maths are products
 //! and sums with no fused operations, then a truncating conversion.
 //!
-//! SKIPs without the oracle (`make oracle` in eqoa-port) or the disc.
+//! SKIPs without the oracle (`make oracle` in the decomp's native build) or the disc.
 
 mod common;
 use common::{Files, Oracle, disc, pcm};

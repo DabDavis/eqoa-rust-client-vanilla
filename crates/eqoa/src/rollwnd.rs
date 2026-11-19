@@ -1,4 +1,4 @@
-//! The loot rolls' pop-up (the GM Jibrish's petition 1448: under a raid's need
+//! The loot rolls' pop-up (a GM's petition 1448: under a raid's need
 //! before greed, "for pc a pop up window that does not stop the persons
 //! movement. It says "Need, green [greed], pass". People have 120 seconds to
 //! choose ... be mindful of controller controls, so if the player holds R2 they

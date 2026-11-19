@@ -130,7 +130,7 @@ pub fn set_style<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, style: i32, rc: Option<
             // 20261020-193543), so the follow orbit zooms out 11.0, about 40%
             // further; walls still pull it in (`min_collision_dist` and the
             // sweep in `move_camera` are the game's). The QOL ELF raised the
-            // same ceiling on the PS2 (claude-notes/qol-patches-20260816.md,
+            // same ceiling on the PS2 (the maintainer's notes,
             // the cave on `VIWalkCamera::Process` storing +0x264).
             cam.max_orbit_distance = f(crate::settings::camera_distance());
             cam.min_collision_dist = f(3.5);

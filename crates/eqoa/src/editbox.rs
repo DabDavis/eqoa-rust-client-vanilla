@@ -44,7 +44,7 @@ pub fn set_pad_only(compact: bool) {
 /// `gKeyboardAttached` as the PS2 has it: a keyboard is plugged in, whichever
 /// of it and the pad was pressed last. Here: a key of a keyboard has been
 /// pressed since the touch screen was last touched (`keyboard_pressed`,
-/// `screen_touched`). The GM Jibrish's petition 1633: with Keyboard set to
+/// `screen_touched`). A GM's petition 1633: with Keyboard set to
 /// Compact, Enter opened the compact face but the controller's R3 the soft
 /// keyboard, the pad's press read as no keyboard at all.
 static KEYBOARD_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

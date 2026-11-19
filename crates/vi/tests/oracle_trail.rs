@@ -1,12 +1,12 @@
 //! `vi::trail` against the decomp's VITrailFx, bit for bit (`Ieee`):
-//! eqoa-port's `build/oracle_trail` compiles vitrailfx.cpp over a recording
+//! the oracle `oracle_trail` (built from the decomp) compiles vitrailfx.cpp over a recording
 //! raster, and the same script runs on both sides: weapon swings beginning
 //! trails, a segment a frame along an arc, trails ended mid-swing and left
 //! to fade, the pool running out, more segments than a trail holds (the
 //! oldest recycled), and a frame-time hitch. Every strip (colour, vertex,
 //! count, order) must be equal; a planted difference must not be.
 //!
-//! SKIPs without the oracle (`make oracle` in eqoa-port).
+//! SKIPs without the oracle (`make oracle` in the decomp's native build).
 
 mod common;
 use common::Oracle;

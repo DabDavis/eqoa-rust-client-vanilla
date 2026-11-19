@@ -5,7 +5,7 @@
 //!
 //! - the Frontiers disc (`run/eqoa.iso`, or `$EQOA_ISO`), read through its
 //!   ISO 9660 directory, against `run/support.bin` and `run/client.bin`;
-//! - the other discs (`$EQOA_BUILDS`, else `../decomp-builds`):
+//! - the other discs (`$EQOA_BUILDS`, else the other discs' decrypted modules):
 //!   `extracted/<disc>/` holds `UTIL.REL` and the `.AUT`s as the disc has
 //!   them, `modules/<disc>/<MODULE>.snr1` the references.
 //!

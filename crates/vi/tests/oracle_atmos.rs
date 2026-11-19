@@ -1,4 +1,4 @@
-//! The atmosphere against the decomp, frame by frame: eqoa-port's
+//! The atmosphere against the decomp, frame by frame: the decomp's native build's
 //! `build/oracle_atmos` runs SUPPORT's VIAtmosphere (with VIMaterial and the
 //! particle system under it) over a recording raster, sound device and scene
 //! with newlib's rand(), and every request here is run on it and on
@@ -16,7 +16,7 @@
 //! there), clearing, both planes of sky, and a camera that walks over a
 //! liquid surface and jumps far enough to re-drop the whole field.
 //!
-//! SKIPs without the oracle (`make oracle` in eqoa-port).
+//! SKIPs without the oracle (`make oracle` in the decomp's native build).
 
 mod common;
 use common::Oracle;

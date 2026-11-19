@@ -1,4 +1,4 @@
-//! `vi::clipstack` against the decomp, bit for bit (`Ieee`): eqoa-port's
+//! `vi::clipstack` against the decomp, bit for bit (`Ieee`): the decomp's native build's
 //! oracle runs libsupport's own `VIFrustum::CalcPlanes` (op 1700) and a script
 //! of `VIClipStack` commands on one stack (op 1701): over cameras like the
 //! game's (an eye round Freeport's places, a view 55 degrees high at any
@@ -10,7 +10,7 @@
 //! The controls: a corner moved one float step changes a plane, and a script
 //! answered for another camera does not compare equal.
 //!
-//! SKIPs without the oracle (`make oracle` in eqoa-port).
+//! SKIPs without the oracle (`make oracle` in the decomp's native build).
 
 mod common;
 use common::{Oracle, Rng};

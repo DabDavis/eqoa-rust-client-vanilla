@@ -1,4 +1,4 @@
-//! go-eqoa-server's own, no retail message: a ready check (the GM Jibrish's
+//! go-eqoa-server's own, no retail message: a ready check (a GM's
 //! petition 1711, 2026-11-12: "/readycheck ... pops up a window on their screen
 //! with "Are you ready?" and Yes or No. It does not stop them from moving while
 //! the pop up is up. It expires after 30 seconds"). A raid's leader or helper,

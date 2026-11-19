@@ -6,7 +6,7 @@
 //! samples (`VIEESurfCache::Set`'s TEX1: trilinear, the level by depth; the
 //! renderer's `gs_lod_k`). Bytes come out as stored, so they stay comparable
 //! with the fixtures; how the GS reads texture alpha is the renderer's
-//! business (see `claude-notes/go-client-vs-decomp-audit-20261015.md`,
+//! business (see the maintainer's notes,
 //! texture alpha).
 
 use crate::i32le;

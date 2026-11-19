@@ -4,7 +4,7 @@
 //! in mode 42). A child of `play`, for `Play`'s fields.
 //!
 //! All of it is a live server's only: on one that sends no feature word
-//! (Sandstorm, a PS2's) the Group menu is the disc's, `/lfg` goes to the
+//! (the reference server, a PS2's) the Group menu is the disc's, `/lfg` goes to the
 //! server as typed, and the group chat's Show and Hide send the disc's
 //! 0x0B01.
 
@@ -26,7 +26,7 @@ const LIVE_GROUP: [(i32, u32); 3] = [(1673, 0x0209_0000), (1851, 0x020A_0000), (
 /// its sell form names a quantity (the feature word's bit 0x08: a Sell count
 /// of 1 is one item), else 0 (a count of 1 is the whole bank record, as from
 /// a disc client); again whenever a later 0x07F5 turns the bit on or off. An
-/// offer of 0 is answered by nothing; a server that offers nothing (Sandstorm)
+/// offer of 0 is answered by nothing; a server that offers nothing (the reference server)
 /// is sent nothing.
 pub const OP_AUCTION_FORM: u16 = 0x7E0B;
 
@@ -273,7 +273,7 @@ impl Play {
                 Out::Invite(id, name) => self.invite_to_group(id, &name),
                 Out::Chat(line) => self.chat_line(&line),
                 // Tell (petition 1476): the window closed, the chat line begun
-                // with the tell, as Sandstorm's player search's (`search_key`)
+                // with the tell, as the reference server's player search's (`search_key`)
                 Out::Tell(name) => {
                     self.live.part.found.clear();
                     self.mode = 0;
@@ -332,7 +332,7 @@ pub(super) mod tests {
     /// answered 1; a later 0x07F5 that turns the bit off is answered 0, one
     /// that leaves it as it was nothing; an offer of 0 nothing. The
     /// controls: an offer without the bit is answered 0, and no offer (a
-    /// server like Sandstorm) is sent nothing whatever the word says.
+    /// server like the reference server) is sent nothing whatever the word says.
     #[test]
     fn the_auction_forms_offer_is_answered_by_bit_0x08() {
         let offer = |v: u32| v.to_le_bytes();
@@ -432,7 +432,7 @@ pub(super) mod tests {
         assert_eq!(&live[8..], &LIVE_GROUP[..]);
     }
 
-    /// Petition 1460 (the GM Jibrish: "I see no raid button under community >
+    /// Petition 1460 (a GM: "I see no raid button under community >
     /// group"): on a server that sends the feature word, Start > Community >
     /// Group shows Raid on its seventh bar, after Leave (the disc's eight round
     /// it in their order, the live three after Follow), whether the raid's offer

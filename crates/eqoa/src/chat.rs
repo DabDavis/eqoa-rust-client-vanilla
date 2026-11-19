@@ -21,13 +21,13 @@
 //! right back down (`walk_older`, `walk_newer`), the one lit washed, and the
 //! history let go forgets the walk.
 //!
-//! Chat Always Shown (Extended > UI > Chat, Jibwiz's ticket 1914: "allows your
+//! Chat Always Shown (Extended > UI > Chat, a player's ticket 1914: "allows your
 //! chat box to stay fully visible without auto collapse") is the client's too
 //! (`always`): the box stays open at its five rows as the fixed mode keeps it,
 //! the last five lines in it whatever their age, with no backdrop strip (the
 //! fixed mode's, a window's). Off, the game's box exactly.
 //!
-//! Chat Tabs are the client's too (Jibwiz's ticket 1951: "optional chat tabs
+//! Chat Tabs are the client's too (a player's ticket 1951: "optional chat tabs
 //! ... Up to 3. Each tab loads a new chat and can be set to filter all of a
 //! certain type of chat to that tab. The tab should be nameable as well, up to
 //! 8 characters"): each kind of line (`Kind`, told by `kind_of` from its words
@@ -393,7 +393,7 @@ pub enum Let {
 /// The highlight, over the rows: a wash the words read through.
 const SELECTED: [f32; 4] = [0.30, 0.55, 1.0, 0.40];
 
-/// A shout's colour, (63, 255, 63): 0x0A7B's three bytes as Sandstorm sends
+/// A shout's colour, (63, 255, 63): 0x0A7B's three bytes as the reference server sends
 /// a shout (`pcaps/ps2_sandstorm.pcap`, `eqoa_live_capture.pcap`) and
 /// go-eqoa-server copies it.
 pub const SHOUT_COLOR: [u8; 3] = [63, 255, 63];
@@ -503,7 +503,7 @@ fn rgb(c: [f32; 4]) -> [u8; 3] {
 }
 
 /// What kind of line `text` in colour `color` is (`Kind`), as the server words
-/// and colours them (go-eqoa-server's and Sandstorm's: a tell in (255, 127,
+/// and colours them (go-eqoa-server's and the reference server's: a tell in (255, 127,
 /// 255), the group's in (.5, .5, 1), the guild's in (.25, 1, .8), a shout
 /// "<name> shouts: ", a roll "<name> rolls N (a to b)." in gold or orange; a
 /// say "<name>: "), the rest by their words.
@@ -526,7 +526,7 @@ pub fn kind_of(text: &str, color: [f32; 4]) -> Kind {
     if c == [255, 215, 64] || c == [255, 140, 0] {
         return Kind::Rolls;
     }
-    // a say before the words: what someone says ("Jibrish: incoming, mez
+    // a say before the words: what someone says ("Bob: incoming, mez
     // resisted", a quick chat's line) is theirs whatever words are in it
     // (petitions 2271 and 5262: says and the quick chat's lines with a
     // combat word in them went to the Combat tab)
@@ -1392,7 +1392,7 @@ mod tests {
     }
 
     /// A shout is someone else's "<name> shouts: <text>" in the shout's
-    /// colour, as Sandstorm's 0x0A7B carries it (the capture's own line); the
+    /// colour, as the reference server's 0x0A7B carries it (the capture's own line); the
     /// controls: the same words white, a say quoting " shouts: ", the
     /// player's own shout, and another colour are not.
     #[test]

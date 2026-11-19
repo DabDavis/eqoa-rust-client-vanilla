@@ -4,7 +4,7 @@
 //! On the IOP it is three threads: the RPC server that runs each packet of
 //! commands from the EE, the XM thread a 100 Hz timer wakes, and the BGM
 //! thread that runs once a vblank. Here they are state machines on one clock,
-//! the SPU2's sample count, scheduled exactly as eqoa-port's sound oracle
+//! the SPU2's sample count, scheduled exactly as the sound oracle (built from the decomp)
 //! schedules the decomp's own threads (`test/oracle/oracle_snd.cpp`):
 //! - the timer fires every 480 samples (10 ms), the first 480 after
 //!   `StartHardTimer`, and the XM thread runs its tick at once;

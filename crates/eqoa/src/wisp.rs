@@ -127,7 +127,7 @@ fn wisp_on(lib: &Library, body: u32, race_look: Option<&Look>) -> Option<u32> {
 }
 
 /// Whether a character drawn as `body` with `race_look` is a Wisp, which casts
-/// no shadow at all (petition 1449, the GM Jibrish: "The wisp player model should
+/// no shadow at all (petition 1449, a GM: "The wisp player model should
 /// not project a shadow, because people can tell its just an invisible human"):
 /// no blob shadow (`shadows::Caster::casts`), and nothing of it in Sun Shadows'
 /// or Light Shadows' maps (`render::GpuModel::casts`), neither its armour nor

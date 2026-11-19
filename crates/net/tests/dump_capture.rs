@@ -1,6 +1,6 @@
 //! `net::dump` against the console's own session: pcaps/ps2_sandstorm.pcap's
 //! server packets are replayed into the Rust DRDP (which joins the
-//! fragments), and every MemoryDump Sandstorm sent must read with no short
+//! fragments), and every MemoryDump the reference server sent must read with no short
 //! read (a PS2 entered the world on each, so `Msg000D` read it whole). Every
 //! retail dump ends in 39 zero bytes past the last field `Msg000D` reads
 //! (`ReadState`); the reader must stop exactly there, which, with the

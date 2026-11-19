@@ -1,4 +1,4 @@
-//! A server's player search, as Sandstorm's S2 adds it (`s2`): three more
+//! A server's player search, as the reference server's S2 adds it (`s2`): three more
 //! entries in the Group menu, Search (word 1673), Register (1815) and
 //! Unregister (1816), whose messages (0xFF000001-3) S2's own code takes.
 //! Register and Unregister are bare opcodes, 0x1503 and 0x1504 (list or
@@ -8,7 +8,7 @@
 //! S2 shows them in a window of its own (`searchwnd`: a title, the search's
 //! filter, sortable columns, a player's Location and Group lines, Tell and
 //! Invite). When that window's code is not the shape `searchwnd` reads (a
-//! build of S2 other than Sandstorm's live one), the game's who window shows
+//! build of S2 other than the reference server's live one), the game's who window shows
 //! them instead (`wholist`: name, race, class and level, Tell and Invite by
 //! the player's id), the search asked for any race and class over the
 //! player's own levels, as S2's window opens on them.
@@ -97,7 +97,7 @@ pub fn unregister() -> Vec<u8> {
 mod tests {
     use super::*;
 
-    /// 0x1500 as Sandstorm sent it live (23 bytes: every field, no note), a
+    /// 0x1500 as the reference server sent it live (23 bytes: every field, no note), a
     /// shorter one that stops before the id, and a note; less than 3 bytes
     /// is nothing (the control).
     #[test]

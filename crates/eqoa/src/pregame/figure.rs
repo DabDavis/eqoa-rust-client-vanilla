@@ -662,8 +662,8 @@ mod tests {
     /// disc's CHARSEL files standing in, the human of 2002 (another
     /// skeleton), made again as Frontiers' when the art goes back, its look
     /// and items kept. The control is the Frontiers view's own figure. Needs
-    /// both discs (`run/eqoa.iso`, `$EQOA_2002_ISO` or the USA disc under
-    /// `../decomp-builds`) and a graphics adapter.
+    /// both discs (`run/eqoa.iso`, `$EQOA_2002_ISO` or the USA disc among
+    /// the other disc builds) and a graphics adapter.
     #[test]
     fn a_figure_is_its_model_in_the_art_drawn() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

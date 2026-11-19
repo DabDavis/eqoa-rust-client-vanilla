@@ -20,7 +20,7 @@
 //!
 //! The challenge and the surrender go only to a server whose feature word
 //! (0x07F5, `VIClient+0x813C`) has bit 0x10: SOE's sent 0x1B, go-eqoa-server
-//! 0x10; the disc has no case for 0x07F5, and Sandstorm sends none.
+//! 0x10; the disc has no case for 0x07F5, and the reference server sends none.
 //!
 //! go-eqoa-server offers these messages with its own 0x7E09 (`net::session::
 //! OP_DUEL_WINDOW`, answered at once) and otherwise duels a client by boxes.
@@ -719,7 +719,7 @@ mod tests {
     }
 
     /// The feature word gates the challenge and the surrender (the control: a
-    /// server without bit 0x10, Sandstorm's none); the refusals are the live
+    /// server without bit 0x10, the reference server's none); the refusals are the live
     /// words in red, sent nowhere.
     #[test]
     fn a_challenge_needs_the_servers_duel_bit() {

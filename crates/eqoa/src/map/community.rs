@@ -1,7 +1,7 @@
 //! The community's markers on the map (the user, 2026-10-26: "Players can
 //! submit waypoints to be added to the in-game map. Submissions would require
 //! official approval, similar to our spellfx"; the user's choices: one list
-//! for every player of this client on any server, Sandstorm's too, kept on
+//! for every player of this client on any server, the reference server's too, kept on
 //! eqoaclassic, suggested from the map). The list is go-eqoa-server's on
 //! eqoaclassic.com (`BASE`; `EQOA_MAPMARKS=<base>` another): `GET mapmarks`
 //! the markers a GM accepted, asked when the map first opens in a run and

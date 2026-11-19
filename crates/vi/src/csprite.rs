@@ -99,7 +99,7 @@ pub struct CSprite<M: Model> {
     /// `m_flags & 1`, `Init`'s `npc` (the 0x2710 header's last field from
     /// version 4, 1 below): while it is clear `AttachItem` attaches nothing
     /// and leaves the hands' attack types at 11. Clear on the creatures a
-    /// form or an illusion makes of a player (Sandstorm's bard in Mouse Form
+    /// form or an illusion makes of a player (the reference server's bard in Mouse Form
     /// is 0x8150E6AF), which name item nodes all the same.
     pub holds_items: bool,
     /// `m_node` (0x2915): named nodes; 8 is the helm's.

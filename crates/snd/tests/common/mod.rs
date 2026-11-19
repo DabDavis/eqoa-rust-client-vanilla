@@ -1,4 +1,4 @@
-//! The harness both oracle tests share: eqoa-port's `build/oracle_snd`, the
+//! The harness both oracle tests share: the oracle `oracle_snd` (built from the decomp), the
 //! disc, and CDSTREAM's files as the oracle numbers them.
 
 use snd::Disc;

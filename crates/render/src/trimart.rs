@@ -8,7 +8,7 @@
 //! texels of a hue, saturation and value window, inside a texture's rectangles
 //! where the trim is a band or a piece of the same colours as the rest (a
 //! leather strap on leather). Read off the disc's art by eye, a texture at a
-//! time (claude-notes/armor-trim-all-sets-20261113.md); the art itself is the
+//! time (the maintainer's notes); the art itself is the
 //! disc's, read at run time: nothing here is game data but these numbers.
 //!
 //! What each set's trim is:

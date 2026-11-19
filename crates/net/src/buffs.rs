@@ -1,4 +1,4 @@
-//! go-eqoa-server's own, no retail message: the buff window (the GM Jibrish's
+//! go-eqoa-server's own, no retail message: the buff window (a GM's
 //! petition 1761, 2026-11-12: "Give the buff window 2 horizontal bars for buffs
 //! on the player, and a third for buffs on their pet. Allow someone to mouse
 //! click off their buffs, and add a way for console to navigate to the buff bar

@@ -18,7 +18,7 @@
 //! each kept ([`send_pending`], at most [`SENT_A_LOGIN`], newest first, each
 //! cut to what the offer says it takes), and each is let go at the server's
 //! answer (0x7E66), filed or not: a report is never sent twice. A server that
-//! makes no offer (Sandstorm's, eqoa.live's, an older go-eqoa-server) is sent
+//! makes no offer (the reference server's, eqoa.live's, an older go-eqoa-server) is sent
 //! nothing, and a crash stays kept for one that does. Nothing else leaves:
 //! the log stays the player's (`logfile`).
 

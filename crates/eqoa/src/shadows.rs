@@ -1,5 +1,5 @@
 //! The characters' blob shadows, as `VIScene` draws them: `vi::shadow`
-//! (`RenderShadow`, held to the decomp by eqoa-port's `oracle_shadow`) over
+//! (`RenderShadow`, held to the decomp by its oracle, `oracle_shadow`) over
 //! the walker's world (`World::query_intersection_actors`: the ground and the
 //! placed props under each, as the default `VIActorFilter` takes them), drawn
 //! by `render::shadow` under `SetSky`'s material.

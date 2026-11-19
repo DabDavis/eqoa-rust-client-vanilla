@@ -1,5 +1,5 @@
 //! The sockets a page cannot open, held by a relay (go-eqoa-server's
-//! `cmd/wsrelay`, or eqoa-port's `tools/wsrelay.py`: the same protocol), each
+//! `cmd/wsrelay`, or the decomp native build's `tools/wsrelay.py`: the same protocol), each
 //! one WebSocket:
 //!
 //! - `/udp`: the game's DRDP. The relay answers `ok <addr> <port>` (its own

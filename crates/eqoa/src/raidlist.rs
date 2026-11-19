@@ -5,7 +5,7 @@
 //! to a client that asked (`Session::agree_raid_roster`, the Extended page's Raid
 //! List, on by default), and is drawn here in place of the group's bars: a row a
 //! member, its name over a thin health bar and a thinner power bar in the HUD's blue
-//! (Dwarfrish's petition 1242, the user's word, 2026-11-08: "Add a thin mana bar to the
+//! (a player's petition 1242, the user's word, 2026-11-08: "Add a thin mana bar to the
 //! raid window frames that shows the players current mana in blue"; the roster has
 //! carried each member's power since it began), in as many columns as it takes, down from
 //! where the bars start and above the chat box, the pet's bar under it. Past what
@@ -13,7 +13,7 @@
 //! client can see (`hud::Pick::Raid`); one out of sight is greyed.
 //!
 //! On a server that sends the raid's state (go-eqoa-server's 0x7E44, `net::raid`;
-//! the GM Jibrish's petition 1448: "A small icon denoting who is raid leader") a
+//! a GM's petition 1448: "A small icon denoting who is raid leader") a
 //! row carries its member's marks at the right of its name: a gold crown the
 //! leader, a blue cross its helper, a red diamond its main assist (petition 1451).
 //!
@@ -27,7 +27,7 @@
 //! does it by the target (a pad, a keyboard, a finger). Every row carries its role
 //! at its health bar's left (the same petition): a shield for a Warrior, a Paladin
 //! or a Shadow Knight, a staff for a Cleric, a Druid or a Shaman, a sword for the
-//! rest; a mercenary's row a gold coin whatever its class (the GM Jibrish's petition
+//! rest; a mercenary's row a gold coin whatever its class (a GM's petition
 //! 1869, from go-eqoa-server's 0x7E1A kind byte). Drawn, not the atlas's: UI.CSF has
 //! one shield (texture 120, a 33 by 32 crest that is a smudge at 8) and no staff,
 //! sword or coin.
@@ -71,7 +71,7 @@ pub enum Role {
     Healer,
     /// everyone else: a sword
     Damage,
-    /// a mercenary, whatever its class: a gold coin (the GM Jibrish's petition
+    /// a mercenary, whatever its class: a gold coin (a GM's petition
     /// 1869: "Flag mercenaries as mercenaries with a special icon instead of
     /// their tank/heal/dps icon in the raid")
     Merc,

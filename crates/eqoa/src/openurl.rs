@@ -14,7 +14,7 @@ const OUR_ADDRESS: &str = "104.238.144.159";
 /// The password page for `server` (the host Station logs in at, as Network
 /// Setup or the page names it: a name or an address, a port or a scheme
 /// perhaps): eqoaclassic's on eqoaclassic, none on any other server
-/// (Sandstorm's, a private one), whose Forgot Password stays the game's.
+/// (the reference server's, a private one), whose Forgot Password stays the game's.
 pub fn password_url(server: &str) -> Option<&'static str> {
     let s = server.trim();
     let s = s.split_once("://").map_or(s, |(_, rest)| rest);
@@ -101,7 +101,7 @@ mod tests {
     use super::*;
 
     /// eqoaclassic's page for eqoaclassic, by name, address, port or
-    /// scheme; none for Sandstorm, a private server, the local one, none.
+    /// scheme; none for the reference server, a private server, the local one, none.
     #[test]
     fn the_password_page_by_host() {
         for s in ["eqoaclassic.com", "EQOAClassic.com", " eqoaclassic.com ", "eqoaclassic.com:9735", "www.eqoaclassic.com", "eqoaclassic.com.", "104.238.144.159", "104.238.144.159:10070", "https://eqoaclassic.com/eqoa/play/", "wss://eqoaclassic.com/eqoa/relay"] {

@@ -1,4 +1,4 @@
-//! A server's player search, in the window Sandstorm's S2 draws it in
+//! A server's player search, in the window the reference server's S2 draws it in
 //! (`s2`, `playersearch`). The Group menu's Search opens it over the game:
 //! a `VIUIWindow` 608 wide, titled by S2, that while it is open takes every
 //! key `VIWndGame` and the HUD's menus would have (S2 puts its handler in
@@ -827,7 +827,7 @@ impl Search {
 
 #[cfg(test)]
 pub mod testing {
-    /// The live S2 (Sandstorm's, not in the repository: `$EQOA_S2_BUILDS`,
+    /// The live S2 (the reference server's, not in the repository: `$EQOA_S2_BUILDS`,
     /// else beside it), parsed; a test without it skips.
     pub fn live() -> Option<crate::s2::Patch> {
         let root = std::env::var_os("EQOA_S2_BUILDS").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."));

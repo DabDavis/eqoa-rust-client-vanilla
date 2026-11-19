@@ -1,4 +1,4 @@
-//! The spell effects against the decomp, call for call: eqoa-port's
+//! The spell effects against the decomp, call for call: the decomp's native build's
 //! `build/oracle_spell` runs SUPPORT's spell-effect, particle and lightning
 //! TUs over a fake world (scene, character sprites, camera effect, recording
 //! raster) with newlib's rand(), and `vi::spell` runs here under `Ieee` over a
@@ -14,7 +14,7 @@
 //! on our side only, and one rule of the fake world changed on
 //! our side only.
 //!
-//! SKIPs without the oracle (`make oracle` in eqoa-port) or the disc.
+//! SKIPs without the oracle (`make oracle` in the decomp's native build) or the disc.
 
 mod common;
 use common::Oracle;

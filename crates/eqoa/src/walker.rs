@@ -269,7 +269,7 @@ impl Kept {
 /// The world as the walk meets it in flight (the module's doc): its collision
 /// the world's, and water everywhere with no surface, so `Process` takes the swim
 /// path whatever is really there, and past a real surface freely. In a GM's
-/// noclip (go-eqoa-server's `/noclip`, 0x7E7A, the GM Jibrish's petition 1904)
+/// noclip (go-eqoa-server's `/noclip`, 0x7E7A, a GM's petition 1904)
 /// it meets nothing at all: every wall, floor and ceiling is passed through.
 struct Aloft<'a> {
     world: &'a mut World<Ee>,
@@ -2212,8 +2212,8 @@ pub(crate) mod tests {
 
     /// A run steered by the mouse over Freeport's slopes (camera mode 3, the
     /// right button held, the mouse a pixel a frame either way, at 75 frames
-    /// a second, jib's rate) is drawn on the ground under it all the way, as
-    /// the console's own frames stand on it, and runs: up jib's slope
+    /// a second, a tester's rate) is drawn on the ground under it all the way, as
+    /// the console's own frames stand on it, and runs: up the tester's slope
     /// south-west of the docks from a stand (F3 20261028-150758: "it phases
     /// characters into slopes, forces them to walk"), and down the side of
     /// the mound by the harbour with the button taken while running (022842:
@@ -2316,7 +2316,7 @@ pub(crate) mod tests {
     /// button held on the move, which steers as the right does: the walk on
     /// the body's own axes and the camera put behind the body by the look
     /// every frame drawn, `mouse::look_held` after `rewind`, as
-    /// `Viewer::sticks` calls them), at 144 frames a second and jib's 91, the
+    /// `Viewer::sticks` calls them), at 144 frames a second and a tester's 91, the
     /// mouse still or a pixel a frame: the eye moves as evenly as with the
     /// keys alone (its largest change of pace from one frame drawn to the
     /// next no larger, the floats' own steps at x 22000 apart) and the camera

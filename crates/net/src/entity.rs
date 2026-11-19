@@ -42,7 +42,7 @@ pub fn channel_of_slot(slot: usize) -> Option<u8> {
 }
 
 /// The live game's look (go-eqoa-server's 0x7E0C, [`crate::session::OP_LIVE_LOOK`]):
-/// SOE's live CLIENT (eqoa-live-1500, in the Corsten and Lostologist save
+/// SOE's live CLIENT (eqoa-live-1500, in two retail characters' save
 /// states) reads a colour (`VIColor32`: r, g, b, a) for each held item, each
 /// armour slot and the robe where the disc's reads a tint, and per armour
 /// slot the variant its ArmorGroup is picked by (`GetArmorGroupResourceID`,
@@ -297,7 +297,7 @@ impl Entity {
     }
 
     /// `ReadUpdate`: the disc's CLIENT's, or with `live` the live game's
-    /// (`VICreatureEntity::ReadUpdate`, Corsten's 0x013D2870), which reads
+    /// (`VICreatureEntity::ReadUpdate`, a retail character's savestate, 0x013D2870), which reads
     /// [`LiveColors`] after the armour sets in place of the tints, and no
     /// robe tint.
     fn read_update(&mut self, r: &mut Reader, live: bool) {
@@ -420,7 +420,7 @@ pub struct Entities {
     /// The server told this client the live game's look is in force
     /// (`Session::live_look`): a channel of [`LIVE_STATE_SIZE`] bytes or more
     /// is then read as the live CLIENT reads it; any other as the disc's, as
-    /// every channel is on a server that never offered it (Sandstorm).
+    /// every channel is on a server that never offered it (the reference server).
     pub live_look: bool,
 }
 
@@ -609,7 +609,7 @@ mod tests {
     /// variants, and no tints. The controls: the same bytes before the look
     /// is in force are the disc's reading (the name lands elsewhere), and a
     /// channel of the disc's 162 bytes is the disc's whatever is in force (a
-    /// server that never offered the look, Sandstorm).
+    /// server that never offered the look, the reference server).
     #[test]
     fn the_live_channel() {
         let (live, disc) = (unhex(LIVE_DYED), unhex(DISC_DYED));

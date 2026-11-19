@@ -64,7 +64,7 @@ pub fn helm(set: u8) -> Option<u32> {
 }
 
 /// `GetHelm` by a patch's tables: `SetArmorSlot`'s clamp, then the patch's
-/// remap (Sandstorm's set 9 wears set 4's helm), then `$Helm`, whose slots
+/// remap (the reference server's set 9 wears set 4's helm), then `$Helm`, whose slots
 /// past 8 retail never fills.
 pub fn helm_with(set: u8, t: &Tables) -> Option<u32> {
     let set = if set >= t.armor_limit { 0 } else { set };
@@ -73,8 +73,8 @@ pub fn helm_with(set: u8, t: &Tables) -> Option<u32> {
 }
 
 /// Set 9, the ornate gold-and-steel plate CHAR.ESF holds under the plain
-/// plate's five DictIDs (claude-notes/charesf-shadowed-armor.md): the five
-/// DictIDs Sandstorm's S2 registers those surfaces under (its
+/// plate's five DictIDs (the maintainer's notes): the five
+/// DictIDs the reference server's S2 registers those surfaces under (its
 /// `GetArmorSetTexture` hook's table), chest, bracer, gloves, legs, boots.
 /// go-eqoa-server draws it without the patch (the eqoa crate's `s2`, the
 /// server's armour): the same ids, the same surfaces.
@@ -180,7 +180,7 @@ pub struct Tables {
     /// a robe past retail's four: its (chest, legs) DictIDs, robe 0's where
     /// one does not resolve
     pub robe_art: Vec<(u8, [u32; 2])>,
-    /// a set past `$Armor`'s nine: its five slots' DictIDs (Sandstorm's
+    /// a set past `$Armor`'s nine: its five slots' DictIDs (the reference server's
     /// set 9, `GetArmorSetTexture`'s hook)
     pub armor_extra: Vec<(u8, [u32; 5])>,
     /// a trimmed piece's texture with its trim in a dye's colour
@@ -197,7 +197,7 @@ impl Tables {
 
     /// These tables with go-eqoa-server's armour (the server says so: its live
     /// look's `LIVE_LOOK_ARMOR`): set 9, [`ORNATE`], below the set limit,
-    /// wearing set 4's helm, as Sandstorm's S2 has it; and the trims drawn by
+    /// wearing set 4's helm, as the reference server's S2 has it; and the trims drawn by
     /// `trim`. What a patch already has of it is kept.
     pub fn with_server_armor(mut self, trim: TrimNamer) -> Tables {
         self.armor_limit = self.armor_limit.max(ORNATE_SET + 1);
@@ -415,7 +415,7 @@ mod tests {
         cs
     }
 
-    /// Sandstorm's tables as its S2 leaves them: 30 tints (15 clear), sets
+    /// The reference server's tables as its S2 leaves them: 30 tints (15 clear), sets
     /// below 10, set 9 wearing set 4's helm, robes 4 and 5 out of its art.
     fn sandstorm() -> Tables {
         let mut tints = TINTS.to_vec();
@@ -481,7 +481,7 @@ mod tests {
     }
 
     /// go-eqoa-server's armour: set 9 below the limit, its five DictIDs, set
-    /// 4's helm, whatever a patch's tables (Sandstorm's keep their own); the
+    /// 4's helm, whatever a patch's tables (the reference server's keep their own); the
     /// trims named by the namer. Retail's without it: set 9 none.
     #[test]
     fn the_servers_armour_is_set_nine_and_the_trims() {

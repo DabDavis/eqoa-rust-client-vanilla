@@ -10,7 +10,7 @@
 //! every setting back as it was and applies.
 //!
 //! The client's own on the game's Interface page: Profanity Filter under its
-//! rows (the GM Jibrish's petition 1490), Off, Medium (only racial slurs) or
+//! rows (a GM's petition 1490), Off, Medium (only racial slurs) or
 //! High (petition 1625), High by default as the game is at every login; it is the server's filter of what the player hears, told to a
 //! server that asks for it (go-eqoa-server's 0x7E60,
 //! `Session::agree_profanity_filter`), taken by Save Changes and put back by
@@ -19,12 +19,12 @@
 //! The client's own, beside the game's: an Extended row between Sound and
 //! Save Changes (the menu a row longer), its words the client's (no
 //! WORDS.TXT entry). It opens a menu of its own over the options menu, drawn
-//! as that one is, of four groups (the GM Jibrish's petitions 1631 and 1634,
+//! as that one is, of four groups (a GM's petitions 1631 and 1634,
 //! 2026-11-11: `GROUPS`): Graphics (Video, World, Lighting, Characters,
 //! natively Textures, Weather), UI (HUD, HUD Layout, Name Plates, Map, Number Colors,
 //! Merc Colors, DPS Meter, Chat), Other (General, Combat, Camera, natively
 //! Sound), Touch Controls (Size & Look, Layout: every row of the touch
-//! screen's pad, the GM Jibcrotwo's petition 2084) and the Multi-boxing
+//! screen's pad, a GM's petition 2084) and the Multi-boxing
 //! settings. A group opens a menu of its
 //! categories in the place of the groups' (`CATEGORIES`), the Multi-boxing
 //! settings, a group of one, its page at once; each category opens a page laid
@@ -93,7 +93,7 @@
 //!   weather's own);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Stacked Spell Bars (2026-11-13,
-//!   Jibwiz's ticket 1913, Off by default: On, on a computer, every bar shown
+//!   a player's ticket 1913, Off by default: On, on a computer, every bar shown
 //!   as a row of five above the chat box at 95% with no name bar, in one
 //!   column or two (HUD Layout's Spell Bar Layout), each slot a key on the
 //!   Controls page; `hudmenu::Stacked`), Update Notices (one setting for
@@ -123,7 +123,7 @@
 //!   Auto, Window, Pad 1 to 4 or Off, `input::pick`, kept for each window of
 //!   the client open, `multibox`; what it reads now is said beside Back),
 //!   Capture Controller (one setting for every window), and the touch
-//!   screen's pad (`touch`; 2026-11-09, Jibrish's petition 1386): Touch
+//!   screen's pad (`touch`; 2026-11-09, a GM's petition 1386): Touch
 //!   Stick Size and Touch Button Size (sliders and their numbers: the sticks
 //!   and the buttons, each 50 to 200% of the pad as it was in fives, drawn
 //!   larger than it was only as far as the window has room, `touch::layout`;
@@ -222,13 +222,13 @@
 //!   the nearest creature fighting the player targeted); Weapon Swap Back (Off
 //!   by default; On: a weapon set used again puts back what it took off, the
 //!   server's, work board 1581: `gear::use_message`);
-//! - Chat (2026-11-10, the GM Jibrish's petition 1463: "This should be off by
+//! - Chat (2026-11-10, a GM's petition 1463: "This should be off by
 //!   default for ps2 players and a toggle option"): Item Links (On by default:
 //!   items linked from the inventory into the chat line, drawn purple in the
 //!   chat box and opened in a window, `itemlink`, the server asked for them:
 //!   `Session::agree_item_links`; Off: none, the server sends the plain names a
 //!   PS2 gets), the page saying when this server has no links; Chat Always
-//!   Shown (2026-11-13, Jibwiz's ticket 1914, Off by default: On, the chat box
+//!   Shown (2026-11-13, a player's ticket 1914, Off by default: On, the chat box
 //!   stays open at its five rows, the last lines in it, never sliding away);
 //!   R2 Channel Switch (2026-11-18, the server owner's, Off by default: On,
 //!   with R2 held the d-pad's left and right step the chat channel, Say,
@@ -244,7 +244,7 @@
 //! menu puts them back, and Save Changes keeps them with the game's
 //! (`client.opt`).
 //!
-//! Auto Save Options (Other > General; Waldorf's ticket 2002, 2026-11-13, Off
+//! Auto Save Options (Other > General; a player's ticket 2002, 2026-11-13, Off
 //! by default, the game's): On, every step back (a page to the menu, an
 //! Extended page or menu up a step, the Controls and Macros pages) keeps what
 //! was changed as Save Changes does, the game's, the client's and the keys
@@ -764,7 +764,7 @@ impl WndOptions {
     }
 
     /// A step back (a page to the menu, an Extended page or menu up a step)
-    /// with Auto Save Options on (Waldorf's ticket 2002): everything changed
+    /// with Auto Save Options on (a player's ticket 2002): everything changed
     /// kept as Save Changes keeps it (the four held settings taken,
     /// `settings::save`: game.opt, client.opt and keys.opt), with no box and
     /// no "Saving...", and what Triangle on the menu would put back made
@@ -1590,7 +1590,7 @@ impl WndOptions {
 
     /// `DrawInterfacePage`: Auto Attack, 3rd Person Camera, Camera Pitch
     /// Axis, Soft Keyboard and (feature 0x200) Vibration; then the client's
-    /// Profanity Filter (the GM Jibrish's petition 1490), its words the
+    /// Profanity Filter (a GM's petition 1490), its words the
     /// client's.
     fn draw_interface(&mut self, vui: &Vui, r: &mut dyn Raster, o: &GameOptions) {
         let mut items = vec![10, 0, 1, 6];
@@ -1935,17 +1935,17 @@ fn chat_tab_kind(item: i32) -> Option<usize> {
     usize::try_from(item - CHAT_TAB_FIRST).ok().filter(|&k| k < crate::chat::KINDS)
 }
 
-/// Spell Bar Opacity's item (Jibwiz's ticket 1953).
+/// Spell Bar Opacity's item (a player's ticket 1953).
 const SPELL_BAR_OPACITY: i32 = 102;
 /// Pets Pass Through's item (Thorinoak's ticket 1977).
 const PETS_PASS: i32 = 103;
 /// Same Shortcuts on Every Character's item (Piedpiper's ticket 1987).
 const SHARED_SHORTCUTS: i32 = 104;
-/// Auto Save Options' item (Waldorf's ticket 2002).
+/// Auto Save Options' item (a player's ticket 2002).
 const AUTO_SAVE: i32 = 105;
 /// Move Touch Pad's, Reset Touch Pad's and Button Layout's items (the server
 /// owner's of 2026-11-14, "the apk client cant resize or move touch pad
-/// display"; the GM Jibcrotwo's petition 2084).
+/// display"; a GM's petition 2084).
 const MOVE_TOUCH: i32 = 106;
 const RESET_TOUCH: i32 = 107;
 const TOUCH_LAYOUT: i32 = 108;
@@ -1955,7 +1955,7 @@ const TARGET_LEVEL: i32 = 120;
 /// Weather's item (2026-11-15, with Flora's and Environment's sliders). 130,
 /// not the next free, is this lane's, as Target Level's 120.
 const WEATHER: i32 = 130;
-/// Weapon Swap Back's item (jibrish, 2026-11-16, work board 1581). 140, not
+/// Weapon Swap Back's item (a GM, 2026-11-16, work board 1581). 140, not
 /// the next free, as Weather's 130.
 const WEAPON_SWAP_BACK: i32 = 140;
 /// R2 Channel Switch's item (the server owner, 2026-11-18). 150, not the next
@@ -1982,7 +1982,7 @@ pub(crate) const SPELL_BAR_LAYOUT: i32 = 200;
 /// decides"). 210, as Spell Bar Layout's 200; off with the stacked bars.
 pub(crate) const UTILITY_LAYOUT: i32 = 210;
 
-/// Slow When Not Focused's item (the GM Jibrish's petition 1634; natively:
+/// Slow When Not Focused's item (a GM's petition 1634; natively:
 /// a page's pace in the back is the browser's).
 const SLOW_UNFOCUSED: i32 = 82;
 
@@ -2036,7 +2036,7 @@ struct Category {
     group: Group,
 }
 
-/// Extended's first menu (the GM Jibrish's petitions 1631, "when they open
+/// Extended's first menu (a GM's petitions 1631, "when they open
 /// extended they see 3 options, graphics, UI and other", and 1634, a
 /// "Multi-boxing settings" folder off it): each opens a menu of its
 /// categories, a group of one category its page at once.
@@ -2091,7 +2091,7 @@ const ALL_CATEGORIES: [Category; 25] = [
     Category { name: "Size & Look", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Touch },
     Category { name: "Sound", items: &[32], note: Note::Output, group: Group::Other },
     Category { name: "Multi-boxing settings", items: MULTIBOX, note: Note::Reads, group: Group::Multibox },
-    // the chat tabs (2026-11-13, Jibwiz's ticket 1951): each kind of line to
+    // the chat tabs (2026-11-13, a player's ticket 1951): each kind of line to
     // Main or a tab of its own, the talk on one page and the game's on another
     Category { name: "Chat Tabs: Talk", items: &[92, 93, 94, 95, 96], note: Note::ChatTabs, group: Group::Ui },
     Category { name: "Chat Tabs: Game", items: &[97, 98, 99, 100, 101], note: Note::ChatTabs, group: Group::Ui },
@@ -3563,7 +3563,7 @@ mod tests {
     }
 
     /// Extended opens on its groups: Graphics, UI, Other and the
-    /// Multi-boxing settings (the GM Jibrish's petitions 1631 and 1634), a
+    /// Multi-boxing settings (a GM's petitions 1631 and 1634), a
     /// window as the options menu's with its bottom where that one's is. Each
     /// group opens its categories' menu (the Multi-boxing settings, a group
     /// of one, its page at once), each category its page on its first row,
@@ -4362,7 +4362,7 @@ mod tests {
         assert_eq!(once.len(), listed.len(), "an item on two pages");
     }
 
-    /// Auto Save Options (Waldorf's ticket 2002). Off (the control, the
+    /// Auto Save Options (a player's ticket 2002). Off (the control, the
     /// game's): Faction Messages (held) and Damage Numbers changed on Game's
     /// page, Triangle to the menu keeps nothing, Triangle there puts them
     /// back and nothing is written. Turned on on Other > General's page, the

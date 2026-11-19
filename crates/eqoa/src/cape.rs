@@ -1694,7 +1694,7 @@ mod tests {
         0xBE10_226F, 0x70EF_CE05, 0x6AF9_8A81, 0x4A4D_88FB, 0x141B_FE0C,
     ];
 
-    /// A body on four legs wears no cape (petition 1411: Bunsen's cape hung
+    /// A body on four legs wears no cape (petition 1411: a player's cape hung
     /// from Leopard Form's tail): every form a player is turned into on four
     /// legs, for every style; its spine lies along the ground, so it has no
     /// frame. The control: the forms on two legs (a were's, a golem's, Spirit

@@ -1,5 +1,5 @@
 //! `VIQuat` and the `VIMatrix44` operations the animation code uses
-//! (decomp `viquat.cpp`, `vimatrix44.cpp`; VU0 routines as eqoa-port spells
+//! (decomp `viquat.cpp`, `vimatrix44.cpp`; VU0 routines as the decomp's native build spells
 //! them under `VI_PORT`).
 
 use crate::fpu::{F, Model, f};

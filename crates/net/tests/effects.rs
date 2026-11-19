@@ -2,7 +2,7 @@
 //! the decomp's rules: 132-byte records after the count, at most eight, a
 //! wide name of at most 31 characters, and `VIMemStream`'s reads (nothing
 //! written past the end, nothing read after an error). The captures do hold
-//! whole values (re-tools/drdp_pcap_parser.py reads Sandstorm's first, 136
+//! whole values (re-tools/drdp_pcap_parser.py reads the reference server's first, 136
 //! bytes with one effect, and others up to 796, always 4 + 132 bytes an
 //! effect), but the DRDP replay the other capture tests use does not deliver
 //! them, so these are built by hand; each has a control a looser reader would

@@ -1,7 +1,7 @@
 //! A pet in a zone's prop (go-eqoa-server's own: a mastery rank's `PetArt`,
 //! its `decorart` rows of kind pet, `net::decor::PetArt`; the server owner,
-//! 2026-11-17, of Zerkziee's construct: "where dust is is a catapult prop. we
-//! have templates for props as mobs now. lets give it to zerkziee. it can ram
+//! 2026-11-17, of a player's construct: "where dust is is a catapult prop. we
+//! have templates for props as mobs now. lets give it to [the player]. it can ram
 //! for attack and we can make the catapult fire").
 //!
 //! The server sends the pet's channel with the prop as its model (Tunaria's

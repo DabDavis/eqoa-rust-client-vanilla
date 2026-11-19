@@ -1,4 +1,4 @@
-//! The buff window in play (`buffwnd`; the GM Jibrish's petition 1761): the
+//! The buff window in play (`buffwnd`; a GM's petition 1761): the
 //! set the server sends, drawn in the effects strip's place, its clicks (left
 //! selects, right removes: petition 1809), its d-pad (R2 held and L2; the
 //! keyboard's C and Z) and its removals sent. A child of

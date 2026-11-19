@@ -1,4 +1,4 @@
-//! The effect volumes against the decomp, frame by frame: eqoa-port's
+//! The effect volumes against the decomp, frame by frame: the decomp's native build's
 //! `build/oracle_effect` runs SUPPORT's VIEffectVolume, VIBoid and
 //! VIEffectVolumeSprite over a recording raster and scene with newlib's
 //! rand() and a clock of the test's, and every request here is run on it and
@@ -13,7 +13,7 @@
 //! out of their fade distance over a day; the clock stutters and hitches,
 //! and one box is moved far enough to re-seed its volume.
 //!
-//! SKIPs without the oracle (`make oracle` in eqoa-port).
+//! SKIPs without the oracle (`make oracle` in the decomp's native build).
 
 mod common;
 use common::Oracle;

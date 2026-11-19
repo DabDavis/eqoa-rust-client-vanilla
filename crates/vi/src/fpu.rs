@@ -4,7 +4,7 @@
 //!
 //! - [`Ee`] is the console: the `ee` crate's chop/flush/saturate arithmetic and
 //!   conditioned compares. It is what the client runs.
-//! - [`Ieee`] is eqoa-port: host single precision (SSE, no contraction) and the
+//! - [`Ieee`] is the decomp's native build: host single precision (SSE, no contraction) and the
 //!   host's libm. It exists so a test can compare this port against the decomp
 //!   compiled for the host BIT FOR BIT (`tests/oracle.rs`), which proves the
 //!   control flow, the constants and the operation order; the `ee` crate's own
@@ -59,7 +59,7 @@ pub trait Model: Copy + Default + fmt::Debug + PartialEq + 'static {
     }
 }
 
-/// eqoa-port's arithmetic: IEEE single, round to nearest, the host's libm.
+/// The decomp's native build's arithmetic: IEEE single, round to nearest, the host's libm.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Ieee;
 

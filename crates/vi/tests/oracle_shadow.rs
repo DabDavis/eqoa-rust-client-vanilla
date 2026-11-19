@@ -1,5 +1,5 @@
 //! `vi::shadow` against the decomp's `VIScene::RenderShadow`, bit for bit
-//! (`Ieee`): eqoa-port's `build/oracle_shadow` compiles viscene.cpp over a
+//! (`Ieee`): the oracle `oracle_shadow` (built from the decomp) compiles viscene.cpp over a
 //! scene in raw memory and a recording raster, so the decomp's own
 //! RenderShadow runs end to end: the actor's transform and its inverse, the
 //! CSprite's six slots through libsupport's `CalcSlotWorldTransform` (node
@@ -19,7 +19,7 @@
 //! rows); then seeded random characters over random ground. The control: our
 //! side with one node moved a hundredth must not compare equal.
 //!
-//! SKIPs without the oracle (`make oracle` in eqoa-port).
+//! SKIPs without the oracle (`make oracle` in the decomp's native build).
 
 mod common;
 use common::{Oracle, bytes};

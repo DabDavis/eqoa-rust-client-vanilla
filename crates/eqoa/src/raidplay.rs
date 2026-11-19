@@ -1,5 +1,5 @@
-//! A raid's windows in play (`net::raid`, go-eqoa-server's 0x7E42-0x7E48; the
-//! GM Jibrish's petitions 1448 and 1451): the raid's state as the server sends
+//! A raid's windows in play (`net::raid`, go-eqoa-server's 0x7E42-0x7E48; a
+//! GM's petitions 1448 and 1451): the raid's state as the server sends
 //! it (the marks in the raid list and on the group's bars, Community > Group >
 //! Raid in the start menu, the disband refused in combat), the loot rolls'
 //! pop-up (`rollwnd`) and the master looter's list for the corpse window
@@ -7,7 +7,7 @@
 //! `Play`'s fields.
 //!
 //! Every rule is the server's; the client shows and asks. On a server that
-//! offers none of it (a PS2's, Sandstorm's) nothing here is drawn or sent, and
+//! offers none of it (a PS2's, the reference server's) nothing here is drawn or sent, and
 //! the start menu is the game's.
 
 use super::Play;
@@ -32,7 +32,7 @@ pub const MSG_KICK: u32 = MSG_RAID | 0x0B00;
 /// Move to Group's entries (petition 1687): the target to group `msg & 0xFF`;
 /// with no group, the sub-menu itself (`startmenu::RAID_GROUPS_SUB`).
 pub const MSG_GROUP: u32 = MSG_RAID | 0x0C00;
-/// Add to Instance and Remove from Instance (the GM Jibrish's petition 1879):
+/// Add to Instance and Remove from Instance (a GM's petition 1879):
 /// the target added to the party's instance, or taken out of it (ops 14, 15).
 pub const MSG_INST_ADD: u32 = MSG_RAID | 0x0E00;
 pub const MSG_INST_REMOVE: u32 = MSG_RAID | 0x0F00;
@@ -137,7 +137,7 @@ pub fn group_counts(raid: &[net::session::RaidMember]) -> Vec<(u8, usize)> {
 /// full one dimmed (petition 1687).
 ///
 /// Out of a raid, a plain group's leader (`party`) has Loot Rules too, first:
-/// Free for All and Need Before Greed (the GM Jibrish's petition 1878; master
+/// Free for All and Need Before Greed (a GM's petition 1878; master
 /// looter stays a raid's), the group's rule as the server says it marked
 /// (`State::group_rule`), dimmed in its fight. Everyone has Add to Instance and
 /// Remove from Instance (petition 1879: the target; the server says who may),

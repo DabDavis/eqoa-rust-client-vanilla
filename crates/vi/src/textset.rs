@@ -5,7 +5,7 @@
 //! path: its low two bits are its depth (0 the root .. 3), and each level
 //! above it adds a 2-bit child index at bits 2, 4 and 6 (`MakeId`,
 //! `ChildId`), so the root is 0 and a set at depth 3 has no children. Held to
-//! the decomp by `tests/oracle_textset.rs` (eqoa-port's op 810, CLIENT's own
+//! the decomp by `tests/oracle_textset.rs` (the decomp's native build's op 810, CLIENT's own
 //! functions out of its libclient.so).
 
 /// `VITextPair`: a choice's label and its line, each optional.

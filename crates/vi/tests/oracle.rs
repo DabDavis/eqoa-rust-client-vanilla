@@ -1,9 +1,9 @@
-//! This port against the decomp compiled for the host (eqoa-port's
-//! `build/oracle`), bit for bit, under the [`Ieee`] model: the same object
+//! This port against the decomp compiled for the host (the oracle,
+//! built from the decomp), bit for bit, under the [`Ieee`] model: the same object
 //! bytes and arguments go to both, and every byte that comes back must agree.
 //!
-//! The oracle is found at `$EQOA_ORACLE`, else `../eqoa-port/build/oracle`
-//! beside this repository (`make oracle` in eqoa-port). Without it the tests
+//! The oracle is found at `$EQOA_ORACLE`, else the oracle binary
+//! beside this repository (`make oracle` in the decomp's native build). Without it the tests
 //! say so and pass.
 
 #![allow(clippy::approx_constant, clippy::field_reassign_with_default)]

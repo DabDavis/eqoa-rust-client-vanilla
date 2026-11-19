@@ -17,7 +17,7 @@ use crate::stream::Reader;
 /// The layout of [`crate::session::OP_DECOR_LIGHTS`] this client reads: 4,
 /// pets sent in their looks in every world, the look's zone among the
 /// [`Asset`]s (read off the disc whatever the world: the owner, 2026-11-18,
-/// "zerkziee construct is turning back into a spider and not a catapult",
+/// "[a player's] construct is turning back into a spider and not a catapult",
 /// after the Teleporter to Odus); 3 the pets' looks after the walk-ons
 /// ([`PetArt`]), and pets sent in them where the world's zones hold them; 2
 /// the walk-ons after the papers ([`WalkOn`]), and the server's rides
@@ -164,7 +164,7 @@ pub struct Decor {
 
 /// Art the server may dress a player's pet in (its `decorart` rows of kind
 /// pet; the owner, 2026-11-17: "where dust is is a catapult prop ... lets
-/// give it to zerkziee. it can ram for attack and we can make the catapult
+/// give it to [a player]. it can ram for attack and we can make the catapult
 /// fire"): a zone's prop, one of [`Decor::art`] (whose zone the walk reads),
 /// that walks as a creature, rams at its swings and fires `shot` (a sprite of
 /// the same zone, 0 none) at its casts, drawn `shot_scale` its size; the art

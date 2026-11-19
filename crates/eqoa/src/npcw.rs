@@ -601,7 +601,7 @@ mod tests {
     /// `Msg001A` does every record, and takes it off the corpse, so the
     /// window shows what is left and the next request names a record the
     /// server still has (vanilla dropped 0x0019: the looted record stayed on
-    /// the window and asking for it again had Sandstorm answer "item not
+    /// the window and asking for it again had the reference server answer "item not
     /// found"). The controls: a slot the corpse does not hold changes
     /// nothing, and a message cut short is read as nothing.
     #[test]

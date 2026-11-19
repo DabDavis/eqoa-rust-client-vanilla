@@ -175,7 +175,7 @@ pub enum Source {
     Walk { file: usize, index: usize, character: Ref, spawn: Option<Spawn> },
 }
 
-/// The human (`claude-notes`: model ids by race; the wire value is the DictID).
+/// The human (model ids by race; the wire value is the DictID).
 pub const HUMAN: i32 = 0x70D898C6;
 
 impl Source {
@@ -280,7 +280,7 @@ pub enum Camera {
 /// An edit box's Enter in the game's codes, as `VIKeyboard` makes it: 13
 /// (done, or a new line in a box of lines: a mail's body, a petition's), and
 /// with Shift 4, done in every box (`editbox`), which the box's legend says
-/// ("Shift+Enter = End"; the GM Jibrish's petition 1626). Tab is done too.
+/// ("Shift+Enter = End"; a GM's petition 1626). Tab is done too.
 fn enter_key(shift: bool) -> i32 {
     if shift { 4 } else { 13 }
 }
@@ -2116,8 +2116,8 @@ fn follow_catch_up(w: &mut Walker, p: &mut crate::play::Play, sticks: [f32; 4], 
 const CATCH_UP_FRAMES: usize = 60;
 
 /// When a window that gave nothing to draw on takes its next frame: at
-/// `HIDDEN_GAP` with this window's Slow When Not Focused on (the GM
-/// Jibrish's petition 1634: a box in the back slowed so far its follow
+/// `HIDDEN_GAP` with this window's Slow When Not Focused on (a
+/// GM's petition 1634: a box in the back slowed so far its follow
 /// went wrong), else at its Frame Rate as in front (`settings::awake_gap`);
 /// a hidden page's come from its ticker at `HIDDEN_GAP` (`web::hidden_tick`),
 /// none held back.

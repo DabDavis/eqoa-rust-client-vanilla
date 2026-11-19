@@ -161,7 +161,7 @@ fn without_a_stand_in_both_views_are_one() {
 }
 
 /// The two discs: `$EQOA_ISO` (default `run/eqoa.iso`) and `$EQOA_2002_ISO`
-/// (default the USA disc under `../decomp-builds/discs/eqoa-usa/`).
+/// (default the USA disc among the other disc builds).
 fn discs() -> Option<(iso::Iso, iso::Iso)> {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let frontiers = std::env::var_os("EQOA_ISO").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("run/eqoa.iso"));
@@ -179,7 +179,7 @@ fn discs() -> Option<(iso::Iso, iso::Iso)> {
 /// On the discs: the 2002 CHAR.ESF stands in for Frontiers'. The human
 /// (0x70D898C6) is other art in 2002 and the ogre (0x6A82352C) the same
 /// bytes; what the 2002 disc lacks (Frontiers' new creatures) stays
-/// Frontiers' in both views. Counts as `claude-notes/era-2002-art-20261024.md`
+/// Frontiers' in both views. Counts as the maintainer's notes
 /// measured them: 770 of the 2002 file's 3,661 ids are other art (or only
 /// on its disc), 2,891 are Frontiers' bytes.
 #[test]

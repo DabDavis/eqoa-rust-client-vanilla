@@ -1,4 +1,4 @@
-//! Item links in play (`itemlink`; the GM Jibrish's petition 1463): making
+//! Item links in play (`itemlink`; a GM's petition 1463): making
 //! one from the inventory into the chat line, the line kept with its links, the
 //! walk through the chat box's links with its history held, the windows, and
 //! the server told the Extended row Item Links. The chat line's own sending is

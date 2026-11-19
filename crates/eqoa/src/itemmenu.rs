@@ -10,7 +10,7 @@
 //! (potions on 0-1, gems on 2-3) and Prepare on a weapon makes a weapon set:
 //! its weapon-set mode, the sets' column and their name editor
 //! (`VIWndEdit`), read off that build
-//! (`../claude-notes/live-toolbars-gear-sets-20261024.md`).
+//! (the maintainer's notes).
 //!
 //! What it asks of the client comes back as `ItemOut`, which `play` sends.
 //! A pointer (`pointer`) takes the tabs, the rows and their popups, the

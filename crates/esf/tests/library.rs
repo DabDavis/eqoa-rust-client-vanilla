@@ -1,8 +1,8 @@
 //! The dictionary across files.
 //!
 //! CHAR.ESF and CHARCUST.CSF register 16 of the same DictIDs, 8 of them with
-//! different bytes (the shadowed armor of `claude-notes/charesf-shadowed-
-//! armor.md`), so which file wins changes what is drawn. The game's rule is
+//! different bytes (the shadowed armor in
+//! CHAR.ESF and CHARCUST.CSF), so which file wins changes what is drawn. The game's rule is
 //! that the first registration wins (`ParseSurfaceObj` finds before it adds;
 //! `VIMap::Insert` keeps an existing key); this holds the library to it in both
 //! load orders.

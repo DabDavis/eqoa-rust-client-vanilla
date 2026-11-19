@@ -1,6 +1,6 @@
 //! CLIENT's data, read out of its image (`modules`: the player's decrypted
 //! one, or the disc's own unpacked by crate `dnas`): the menu definitions
-//! the decomp leaves `extern` (eqoa-port's gendata reads the same roots,
+//! the decomp leaves `extern` (the decomp's native build's gendata reads the same roots,
 //! `data/client.txt`) and `gWorldInfo`. Addresses are the decomp's (CLIENT
 //! at 0x00BB4980); a pointer word is resolved through the image's SNR1
 //! relocation table (`R_WORD`, no import), as gendata does. Nothing read
@@ -200,7 +200,7 @@ pub fn world_name_word(img: &ClientImage, world: i32) -> Option<u16> {
 mod tests {
     use super::*;
 
-    /// Sandstorm's S2 gives the Group menu (`VIMenuDef` 0x00CCED20) three
+    /// The reference server's S2 gives the Group menu (`VIMenuDef` 0x00CCED20) three
     /// more entries out of its arena: Search, Register and Unregister, whose
     /// messages its own code takes (0xFF000001-3); the disc's image (the
     /// control) has the eight retail ones. Skipped without CLIENT's image

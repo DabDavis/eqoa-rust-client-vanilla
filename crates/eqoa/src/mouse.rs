@@ -41,7 +41,7 @@
 //!   eaves had taken it all the way in to the character).
 //! - while the player moves (the keys, a stick, autorun: `moving`), the
 //!   left button in the follow orbit looks round as it does standing, and
-//!   the run goes on the way it went (the GM Jibrish's ask of 2026-11-17, as
+//!   the run goes on the way it went (a GM's ask of 2026-11-17, as
 //!   World of Warcraft's left button: "character retains the direction that
 //!   was moving when started"). The follow orbit's walk goes the way the
 //!   camera looks, so the view it goes by is kept as the look began
@@ -56,7 +56,7 @@
 //!   button on the move steered as the right does (F3 20261025-044637).
 //! - both buttons run forward (the left stick all the way up), steered as
 //!   the right button steers, and nothing else walks meanwhile: the keys'
-//!   and the sticks' walk are left out (`both_run`; the GM Jibrish's ask of
+//!   and the sticks' walk are left out (`both_run`; a GM's ask of
 //!   2026-11-17, "It should override other movement keys"; A and D had
 //!   added a sidestep, a diagonal, which the right button with W and A still
 //!   runs).
@@ -1633,8 +1633,8 @@ mod tests {
     }
 
     /// The left button held while the player moves looks round the follow
-    /// orbit as it does standing, and the run goes on as it went (the GM
-    /// Jibrish's ask of 2026-11-17): the view the walk goes by kept as the
+    /// orbit as it does standing, and the run goes on as it went (a
+    /// GM's ask of 2026-11-17): the view the walk goes by kept as the
     /// look began (`walk_view`), the camera held where the look put it; let
     /// go, the camera eases back behind the run in about a quarter second,
     /// the same at 30 and 165 frames a second, the run going on its way all

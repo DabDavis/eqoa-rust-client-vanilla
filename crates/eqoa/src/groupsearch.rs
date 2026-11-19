@@ -1,5 +1,5 @@
 //! SOE's live client's group search, looking for a group or for players
-//! (read out of its CLIENT, `c:/eqoa-live-1500`, in the Corsten save state,
+//! (read out of its CLIENT, `c:/eqoa-live-1500`, in a retail character's savestate,
 //! CLIENT at 0x012AC400; `live`): its window, `VIWndGroupSearch` (live
 //! 0x013623C8..0x01366E18, the game window's mode 42), and its half of
 //! `VIClientPart2EFC8` (live VIClient+0x308F8, 0x012EBD68..0x012ECD38), whose
@@ -20,11 +20,11 @@
 //! after `SEARCH_GIVE_UP_MS` (the live client stays "Searching" and refuses
 //! every search after it until it connects again); and on a server that tells
 //! the standing (go-eqoa-server's 0x7E5D/0x7E5E, `net::session::GroupReg`; the
-//! GM Jibrish's petition 1476, 2026-11-11) two more rows at the foot of the
+//! GM's petition 1476, 2026-11-11) two more rows at the foot of the
 //! form, Registered (✕ registers or unregisters, the Group menu's Register and
 //! Unregister) and, at the bottom right, "Allow anyone in my group to invite"
 //! (✕ turns it, 0x7E5F), and Options' Tell puts "/tell <name> " in the chat
-//! line ("It just pretypes the /tell"), as Sandstorm's player search does.
+//! line ("It just pretypes the /tell"), as the reference server's player search does.
 
 use crate::editbox::{EditBox, EditUp};
 use crate::listbox::ListBox;

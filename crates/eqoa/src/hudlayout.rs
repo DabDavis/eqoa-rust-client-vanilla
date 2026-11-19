@@ -57,7 +57,7 @@ pub enum Piece {
     /// the quick menus (`hudmenu`)
     QuickMenus,
     /// the Stacked Spell Bars (`hudmenu::draw_stacked`): over the chat box
-    /// unmoved, but a piece of their own (Jibrish's petition 5229: they moved
+    /// unmoved, but a piece of their own (a GM's petition 5229: they moved
     /// with the chat box)
     SpellBars,
     /// the Utility Bars (`hudmenu::HudMenus::draw_utility`: the item quick

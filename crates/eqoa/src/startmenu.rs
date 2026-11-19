@@ -979,7 +979,7 @@ const MSG_RECIPE_BOOK: u32 = 0xA701_0000;
 const TAILORING: (i32, i32) = (1479, 2);
 
 /// Character > Tradeskills > Recipe Book with Tailoring (skill 2) fourth, after
-/// the disc's Jewelry, Armor and Weapons (3, 1, 0), as Sandstorm's S2 and ours
+/// the disc's Jewelry, Armor and Weapons (3, 1, 0), as the reference server's S2 and ours
 /// put it (a 4-entry table of their own, the disc's three and then word 1479 with
 /// id 2): a server that serves no S2 (eqoaclassic.com since 2026-10-19), or a
 /// page whose patch is not fetched, left the book with no Tailoring though the
@@ -1066,7 +1066,7 @@ impl StartData {
         }
     }
 
-    /// Community > Group > Raid (the client's own; the GM Jibrish's petitions 1448
+    /// Community > Group > Raid (the client's own; a GM's petitions 1448
     /// and 1451, `raidplay`): an entry put after Leave in every Group menu (title
     /// word 107: Community's, reached from every start table) while the server
     /// offers the raid's windows, opening a menu of `rows`' entries (a row of
@@ -1128,7 +1128,7 @@ impl StartData {
         }
     }
 
-    /// Community > Group > Dismiss Mercenary (the client's own; the GM Jibrish's
+    /// Community > Group > Dismiss Mercenary (the client's own; a GM's
     /// petition 1475, 2026-11-11: "Put the option under the group options in main
     /// menu"), put after Leave (and the Raid entry, when it is there) in every
     /// Group menu while the server says the player's merc is out (`mercplay`), or
@@ -1744,7 +1744,7 @@ mod recipe_book_tests {
     /// The start menu read off CLIENT's image: Character > Tradeskills > Recipe
     /// Book shows Jewelry, Armor, Weapons and Tailoring on the disc's image (a
     /// server that serves no S2, eqoaclassic.com's; the web page's), and the same
-    /// four, once each, under Sandstorm's S2 and ours; picking Tailoring asks for
+    /// four, once each, under the reference server's S2 and ours; picking Tailoring asks for
     /// skill 2's book and opens it. Skipped without CLIENT's image
     /// (`run/client.bin`); each S2 skipped when it is not beside the repository.
     #[test]

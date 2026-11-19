@@ -1,5 +1,5 @@
-// Shading after the VU1 strip programs (claude-notes/vu1-microcode-
-// disassembly-20261017.md, verified there against PCSX2), one pass per
+// Shading after the VU1 strip programs (the VU1
+// microcode's disassembly, verified against PCSX2), one pass per
 // material layer, the light per vertex as VU1 computes it (the GS then
 // interpolates the colour):
 //

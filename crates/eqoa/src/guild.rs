@@ -190,7 +190,7 @@ fn cmd(sub: u8) -> Writer {
 
 impl Cmds {
     /// `CanInvite`: 3 not in one, 11 full (128, or the server's patch's
-    /// cap: Sandstorm's S2 makes it 255, `s2::Rules::guild_cap`), 5 a plain
+    /// cap: the reference server's S2 makes it 255, `s2::Rules::guild_cap`), 5 a plain
     /// member.
     pub fn can_invite(g: &Guild, me: i32) -> i32 {
         if !g.in_guild {
@@ -1009,7 +1009,7 @@ mod tests {
         assert_eq!(Cmds::can_kick(&g, 2, 3), 5);
         assert_eq!(Cmds::can_invite(&g, 2), 5);
         assert_eq!(Cmds::can_invite(&g, 3), 0);
-        // full at 128, or at the server's patch's cap (Sandstorm's S2: 255)
+        // full at 128, or at the server's patch's cap (the reference server's S2: 255)
         let mut big = g.clone();
         for id in 100..(100 + 124) {
             big.members.insert(id, Member { id, name: String::new(), class: 0, race: 0, level: 1, rank: 0, online: false });

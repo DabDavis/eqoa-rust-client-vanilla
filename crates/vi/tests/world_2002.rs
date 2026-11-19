@@ -81,7 +81,7 @@ fn a_version_1_proxy_table_names_each_zone() {
 }
 
 /// The two discs: `run/eqoa.iso` (or `$EQOA_ISO`) and `$EQOA_2002_ISO` (or the
-/// USA disc under `../decomp-builds/discs/eqoa-usa/`).
+/// USA disc among the other disc builds).
 fn discs() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let frontiers = std::env::var_os("EQOA_ISO").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("run/eqoa.iso"));

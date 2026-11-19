@@ -40,7 +40,7 @@
 //! offer in the pregame). A body none of its races wears (a form, an
 //! illusion's creature, any creature) keeps its header's word, so a form still
 //! holds nothing; an NPC keeps what the PS2 gave it; and a server that lists
-//! no races (Sandstorm, eqoa.live, one whose creation takes nothing past the
+//! no races (the reference server, eqoa.live, one whose creation takes nothing past the
 //! game's) is the game as it was.
 
 use net::creation::Creation;

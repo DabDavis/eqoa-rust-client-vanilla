@@ -1,7 +1,7 @@
 //! `VIVect4`, `VIMatrix44`, `VIPlane`, `VIBBox`, `VISphere`: the parts the
 //! collision walk uses. The matrices are ROW-major with ROW vectors
 //! (`p' = p * M`), as the engine's are. Where the guest uses VU0, this follows
-//! eqoa-port's C spelling of it (`vimatrix44.cpp` under `VI_PORT`,
+//! the decomp's native build's C spelling of it (`vimatrix44.cpp` under `VI_PORT`,
 //! `platform/vu0.c`), operation for operation, so the `Ieee` model can be held
 //! to the oracle; under `Ee` the same order runs on the console's FPU rules.
 

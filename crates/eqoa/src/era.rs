@@ -12,7 +12,7 @@
 //! Tunaria itself comes off the 2002 disc (the walk's world swapped in place,
 //! `viewer`), its ground the same and its lighting, props and textures 2002's,
 //! with no radial flora or effect volumes (Frontiers added both). Measured,
-//! file by file: `claude-notes/era-2002-art-20261024.md`.
+//! file by file: the maintainer's notes.
 //!
 //! Only the art changes: the game is Frontiers' (its code, words, menus and
 //! rules), the server's patch is read as it is, and the 2002 disc is read for

@@ -1,11 +1,11 @@
-# The loading screens' tips (the GM Jibrish's petition 1778, 2026-11-12: "Add text
+# The loading screens' tips (a GM's petition 1778, 2026-11-12: "Add text
 # tips to the loading screens. Create one for each command, with a brief one
 # sentence description of the command ... Create one hint that loads on a loading
 # screen that is randomly displayed"). One tip a line, one sentence each; a line
 # starting with # is a note, and a blank line is nothing. Edit freely: `tips.rs`
 # reads this file into the client as it is built. GM-only commands stay out.
 #
-# Each tip starts with its tag (the GM Jibrish's petition 1811): `all:` for the
+# Each tip starts with its tag (a GM's petition 1811): `all:` for the
 # client's own features and the game's own commands, shown on every server and
 # on the title screen; `heirloom:` for the server's commands, NPCs and features,
 # shown only on the Heirloom shard (and on the title screen when Heirloom was

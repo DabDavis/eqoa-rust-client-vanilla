@@ -1,4 +1,4 @@
-//! A server's patch, S2, as the client a server patches plays: Sandstorm's
+//! A server's patch, S2, as the client a server patches plays: the reference server's
 //! players run the retail disc with S2 applied over the patch server, and S2
 //! changes things retail fixes. On a PS2 the patcher only puts S2 on the
 //! card; a loader in the launcher reads SS off the card, SS installs a stub
@@ -21,7 +21,7 @@
 //! refuse, the client is retail's, as before.
 //!
 //! What the live S2 tells the server is taken too (the user, 2026-10-25, for
-//! a vampire's Sanctuary, which Sandstorm refuses "memcard patch 0
+//! a vampire's Sanctuary, which the reference server refuses "memcard patch 0
 //! outdated" without it): the shard connection's hello (`Hello`: DiscVersion
 //! 21, the boot patch's word, the patch's build, the device block) and
 //! UseSkill's record of the pad (`Presses`), each made as S2 makes it but
@@ -467,9 +467,9 @@ mod at {
 }
 
 /// The boot patch's SS block word (`at::BOOT_SS_BLOCK`), which S2's hello
-/// sends: 3 in the `SLUS_207.44` Sandstorm's disc patch makes (its xdelta as
+/// sends: 3 in the `SLUS_207.44` that the reference server's disc patch makes (its xdelta as
 /// of 2026-10-23; August's, which `EQOA-local.iso` and eqoa-boot carry, made
-/// 2). This client boots no patched disc; it says what Sandstorm's own
+/// 2). This client boots no patched disc; it says what the reference server's own
 /// patch says now.
 pub const BOOT_SS_WORD: u32 = 3;
 
@@ -651,7 +651,7 @@ pub enum StackTest {
     /// no stack at all)
     Below(i32),
     /// `addi v0, v0, K`: the test is `m_maxStack + K`, true unless it is 0
-    /// (Sandstorm's 1: any item but one whose `m_maxStack` is -1)
+    /// (the reference server's 1: any item but one whose `m_maxStack` is -1)
     Plus(i32),
 }
 
@@ -1056,10 +1056,10 @@ pub struct Rules {
     pub commands_to_server: bool,
     /// the Auctions window opens on this Max. Level (retail 50)
     pub auction_max_level: i32,
-    /// `CanSell`'s stack test: retail auctions no stack, Sandstorm's S2
+    /// `CanSell`'s stack test: retail auctions no stack, the reference server's S2
     /// any item (`auction::can_sell`)
     pub sell_stack: StackTest,
-    /// `CanInvite`: a guild of this many is full (retail 128, Sandstorm's
+    /// `CanInvite`: a guild of this many is full (retail 128, the reference server's
     /// S2 255; `guild::Cmds::can_invite`)
     pub guild_cap: i32,
     /// the world table; `None` is CLIENT's own six
@@ -1101,7 +1101,7 @@ impl Rules {
             player_search: false,
             damage_rgb: false,
             commands_to_server: false,
-            // the disc's 50; every server vanilla plays goes to 60 (Sandstorm's S2 hooks 60; eqoaclassic's
+            // the disc's 50; every server vanilla plays goes to 60 (the reference server's S2 hooks 60; eqoaclassic's
             // petition 1845, 2026-11-12: "Auction max level defaults to 50 instead of 60")
             auction_max_level: 60,
             sell_stack: StackTest::Below(2),
@@ -1172,7 +1172,7 @@ impl Rules {
         }
         r.armor_art = f.armor_art.clone();
         // The hello in the live S2's shape alone (its numbers and the device
-        // block; Sandstorm's server reads its patch out of it). The July S2's
+        // block; the reference server reads its patch out of it). The July S2's
         // (19, then its build) is not taken: our own server, whose S2 is July's,
         // reads 19 as that S2 with our hard-disk loader after it, and offers
         // the loader's 30 worlds (go-eqoa-server's `LoadableWorlds`), which this
@@ -1186,7 +1186,7 @@ impl Rules {
     /// What `ConnectShard`'s hello sends after its opcode under this patch
     /// (`net::session::Session::connect_shard`): the DiscVersion, then each
     /// of the cave's writes as a PS2 running it sends it, the boot patch's
-    /// word as Sandstorm's makes it (`BOOT_SS_WORD`) and the device block as
+    /// word as the reference server's makes it (`BOOT_SS_WORD`) and the device block as
     /// this client makes it (`make_device_block`, in the server's folder).
     /// `None` is retail's hello: none in the patch, or a part this client
     /// does not know how to make.
@@ -1337,7 +1337,7 @@ impl Rules {
     }
 
     /// The game's words as the patcher left them in the server's folder
-    /// (WORDS.TXT: Sandstorm's adds 1815 Register and 1816 Unregister), the
+    /// (WORDS.TXT: the reference server's adds 1815 Register and 1816 Unregister), the
     /// card's copy read before the disc's as the game reads it; `None` with
     /// no copy there.
     pub fn words(&self) -> Option<vi::strtab::StringTable> {
@@ -1364,7 +1364,7 @@ impl Rules {
 static CURRENT: RwLock<Option<Arc<Rules>>> = RwLock::new(None);
 
 /// The CHAR.ESF records set 9's five surfaces are ([`vi::cust::ORNATE`]'s
-/// order: chest, bracer, gloves, legs, boots), by file offset: what Sandstorm's
+/// order: chest, bracer, gloves, legs, boots), by file offset: what the reference server's
 /// S2 registers (`SetResources`' hook) and go-eqoa-server's armour draws.
 pub const ORNATE_RECORDS: [u32; 5] = [0x073BEC, 0x072257, 0x0C7D31, 0x06C8BE, 0x06AF29];
 
@@ -1378,7 +1378,7 @@ pub const ART_BODIES: [(u32, u32, u32); 2] = [(0xDC3B_344D, 0x06AEB9, 321_452), 
 /// The CHAR.ESF bodies a library with no CHAR.ESF whole (character select)
 /// is to cut out of it for set 9's art (`ART_BODIES`,
 /// `Rules::register_art_cut`): with go-eqoa-server's armour in force on this
-/// connection (`server_armor`), else none (retail and Sandstorm draw
+/// connection (`server_armor`), else none (retail and the reference server draw
 /// character select as the console does, with no CHAR.ESF).
 pub fn art_bodies() -> Vec<u32> {
     if server_armor() { ART_BODIES.iter().map(|b| b.0).collect() } else { Vec::new() }
@@ -1489,13 +1489,13 @@ pub fn begin_session() {
 mod tests {
     use super::*;
 
-    /// The S2 builds read here, none of them in the repository (Sandstorm's
+    /// The S2 builds read here, none of them in the repository (the reference server's
     /// code, and our own server's): `$EQOA_S2_BUILDS`, else the folders the
     /// patch was fetched into beside this repository.
     fn build(which: &str) -> Option<Vec<u8>> {
         let root = std::env::var_os("EQOA_S2_BUILDS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."));
         let rel = match which {
-            // Sandstorm's live ss-patch-60, fetched 2026-10-15
+            // the reference server's live ss-patch-60, fetched 2026-10-15
             "live" => "extracted-assets/sandstorm-patch-20261015/S2",
             // its July build
             "july" => "go-eqoa-server/patches/S2-stock",
@@ -1518,7 +1518,7 @@ mod tests {
         Some(Rules::from_patch(&Patch::parse(&data).expect("the stub takes it")))
     }
 
-    /// Every feature, read off Sandstorm's live build, is what the July and
+    /// Every feature, read off the reference server's live build, is what the July and
     /// live notes found it to be.
     #[test]
     fn the_live_s2s_features() {
@@ -1685,9 +1685,9 @@ mod tests {
     }
 
     /// A world the disc does not carry comes whole out of the server's
-    /// folder (Sandstorm's world 6), its name in any case; without the
+    /// folder (the reference server's world 6), its name in any case; without the
     /// folder (the control) it is not there. Needs the disc (`run/eqoa.iso`)
-    /// and a container to stand in for the world (Sandstorm's ss-art.csf).
+    /// and a container to stand in for the world (the reference server's ss-art.csf).
     #[test]
     fn a_world_out_of_the_servers_folder() {
         let iso = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
@@ -1945,7 +1945,7 @@ mod tests {
 
     /// The tables with go-eqoa-server's armour (`cust_with(true)`): retail's
     /// with set 9 (its five DictIDs, set 4's helm) and a trim namer; without,
-    /// retail's exactly. Sandstorm's S2's tables keep theirs and gain the trims.
+    /// retail's exactly. The reference server's S2's tables keep theirs and gain the trims.
     #[test]
     fn the_servers_armour_in_the_tables() {
         let r = Rules::retail();
@@ -1959,7 +1959,7 @@ mod tests {
     }
 
     /// The words come out of the server's folder when the patcher put a
-    /// WORDS.TXT there (Sandstorm's: Register and Unregister at 1815, 1816);
+    /// WORDS.TXT there (the reference server's: Register and Unregister at 1815, 1816);
     /// without a folder (the control) there are none of its own.
     #[test]
     fn the_words_out_of_the_servers_folder() {

@@ -1,7 +1,7 @@
 //! SOE's final live client's weapon sets, and the layout they come with: what
 //! `c:/eqoa-live-1500`'s CLIENT does where the Frontiers disc's does otherwise,
 //! read off that build where two retail save states hold it resident (CLIENT at
-//! 0x012AC400 in one; `claude-notes/live-toolbars-gear-sets-20261024.md`). That
+//! 0x012AC400 in one; the maintainer's notes). That
 //! build has no decomp, so each function here names the live address it is
 //! read from and the tests hold it to what the code there does.
 //!
@@ -10,7 +10,7 @@
 //! hands (`hudmenu`), the item quick slots take a potion (type 2) on 0-1 and a
 //! gem (type 7) on 2-3 where the disc's take a gem on 2 and a weapon on 3
 //! (`inventory::quick_slot`), and the item menu's Prepare on a weapon makes a
-//! set (`itemmenu`). A server that does not (Sandstorm, every server built for
+//! set (`itemmenu`). A server that does not (the reference server, every server built for
 //! the disc) leaves the disc's layout.
 
 use net::dump::{ItemList, NetItem};

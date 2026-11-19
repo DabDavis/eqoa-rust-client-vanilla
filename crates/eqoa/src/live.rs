@@ -1,11 +1,11 @@
 //! SOE's live client (`c:/eqoa-live-1500`, the CLIENT the servers ran last,
-//! read out of the Corsten and Lostologist save states,
-//! `../claude-notes/live-1500-build-in-retail-savestates-20261015.md`): its
+//! read out of two retail characters' savestates,
+//! the maintainer's notes): its
 //! server feature word (0x07F5), which more than one of this client's
 //! windows reads. The words its windows show past the disc's WORDS.TXT are
 //! `livewords`'.
 //!
-//! The disc has no case for 0x07F5: a server that sends none (Sandstorm,
+//! The disc has no case for 0x07F5: a server that sends none (the reference server,
 //! eqoa.live, any PS2's) is played as the disc plays it, and one that sends
 //! it gets what the live client does with each of its bits.
 
@@ -154,7 +154,7 @@ mod tests {
     }
 
     /// `livewords`' rows against the live client's own table, read out of
-    /// the Corsten save state (`$EQOA_LIVE_STATE`, default
+    /// a retail character's savestate (`$EQOA_LIVE_STATE`, default
     /// `1.6-savestates/EEEE1FCC.001.p2s` beside this repository: PCSX2's old
     /// gzip state, EE RAM at offset 228): the `VIStringTable` at 0x01FAD924,
     /// each row's cell a pointer to its UTF-16. Every row 1840..1889 is

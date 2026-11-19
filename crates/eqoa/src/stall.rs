@@ -12,7 +12,7 @@
 //! the stall. A line comes at most once in `SAY_EVERY`, the stalls between
 //! counted into the next.
 //!
-//! F3 20261029-025532 (Windows, two windows on Sandstorm, two DualSenses on
+//! F3 20261029-025532 (Windows, two windows on the reference server, two DualSenses on
 //! Bluetooth): "Game keeps freezing on both windows at the same time.
 //! Sometimes briefly for like 5 second then sometimes for like a whole
 //! minute". The report's own frames were on time; what showed the freezes was

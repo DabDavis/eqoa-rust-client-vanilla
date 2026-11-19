@@ -125,7 +125,7 @@ fn vs_light_cast_solid(v: VsIn) -> @builtin(position) vec4<f32> {
 // casters above, but never cut by the face's near plane: a vertex nearer the
 // light than NEAR is held on the plane (its depth the nearest), so a helm
 // floating up within NEAR of the lantern over its wearer still casts its
-// whole shadow (the GM Jibmonk's petition 1591: the Jal'Raeth's shadow lost a
+// whole shadow (a GM's petition 1591: the Jal'Raeth's shadow lost a
 // square from its middle near the top of their float, where the near plane
 // cut the part of it nearest the light). The near plane stays for what does
 // not move: a torch's own stick, a lamp's housing.

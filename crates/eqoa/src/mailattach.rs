@@ -6,7 +6,7 @@
 //! inbox marks a gram that carries something with "+" before its subject.
 //! Every rule is the server's: what may be mailed (no No Trade, No Rent or
 //! worn item; a Lore item only to one who has none), the postage, a pack
-//! with no room. A server that never offers it (Sandstorm, an older
+//! with no room. A server that never offers it (the reference server, an older
 //! go-eqoa-server) is mailed as before, and nothing here shows.
 //!
 //! The windows are `gram`'s (`Compose`, `Read`, `Inbox`); this is the

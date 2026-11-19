@@ -5,7 +5,7 @@
 //! its key before; a row of the Controls page, `binds`) asks the walk for one (`Play::jump_key`,
 //! `Walker::ask_jump`), which `walker.rs` gives on its console frames: a start
 //! speed up and then CLIENT's own fall and landing, 0.9 high, 0.6 s on flat ground.
-//! Never on a server that does not offer it: Sandstorm's and eqoa.live's checks
+//! Never on a server that does not offer it: the reference server's and eqoa.live's checks
 //! of a player's moves would read the rise as a body held up by nothing, as
 //! go-eqoa-server's does for a client it never offered the jump. A jump waits for
 //! a report standing to have gone out since the body last landed or was moved

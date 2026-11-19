@@ -686,7 +686,7 @@ fn off_draws_as_before() {
 /// shadow on the ground grows as it rises, and once its top came within
 /// `NEAR` (0.5) of the light the faces' near plane cut that part away, and the
 /// part of a helm nearest the light is its crown, which shadows the middle
-/// (the GM Jibmonk's petition 1591: "a large square goes missing in the
+/// (a GM's petition 1591: "a large square goes missing in the
 /// middle"). A mover is held on the near plane, not cut: the ground round the
 /// helm's foot, where the square was, is in its shadow at every height of the
 /// float, as it is below the near plane. The control: the same helm placed as

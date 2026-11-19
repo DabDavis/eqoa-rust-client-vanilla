@@ -3,7 +3,7 @@
 //! the stack of clip volumes `VIScene::Render`'s walk pushes as it goes
 //! through the portals, each a run of planes (normals outward) and a run of
 //! points, the top alone tested (`CullByTop`, `ClipByTop`). Held to the decomp
-//! by eqoa-port's oracle (ops 1700-1703).
+//! by the decomp-built oracle (ops 1700-1703).
 
 use crate::fpu::{F, Model};
 use crate::geom::{BBox, Plane, Sphere};

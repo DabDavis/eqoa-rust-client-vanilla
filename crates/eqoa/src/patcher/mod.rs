@@ -1,5 +1,5 @@
 //! SETUP's Verant patcher (`decomp/modules/setup/src`, 454 of 462 functions
-//! byte-exact; `claude-notes/decomp-setup-patcher-20261016.md`): after the
+//! byte-exact; the maintainer's notes): after the
 //! title's Play and before STATION, the server's manifest is fetched from
 //! its patch port (7000, the path `data\psvrpath.dat` names), every file it
 //! names is judged against the card's copy (by SIZE, unless the distribution

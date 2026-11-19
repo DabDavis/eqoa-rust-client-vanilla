@@ -3,7 +3,7 @@
 //! which keeps it as `m_flags & 1`, and `AttachItem` attaches nothing while
 //! it is clear (decomp `viesfparse.cpp` `ParseCSpriteObj`, `vicsprite.cpp`
 //! `Init` and `AttachItem`). Every playable race's model holds items; the
-//! creatures Sandstorm turned a bard into hold none, though Sandstorm's
+//! creatures the reference server turned a bard into hold none, though the reference server's
 //! channel still named both of the bard's weapons and both creatures name
 //! item nodes (`pcaps/ps2_main_capture.pcap`: Mouse Form, 0x8150E6AF;
 //! `pcaps/ps2_sandstorm.pcap`: 0x82A69570).

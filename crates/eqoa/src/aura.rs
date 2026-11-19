@@ -730,7 +730,7 @@ fn tip_of(lib: &esf::Library, item: u32) -> Option<[f32; 3]> {
 /// Where along the held item a hand's aura puts its borrowed particles, when
 /// the server names it: the aura's `nodes` byte, which a hand's aura has no
 /// other use for (go-eqoa-server's `/aura ... along=N`, the named looks'
-/// own: the owner, 2026-11-14, "lets move the druid epic aura down zerkziee
+/// own: the owner, 2026-11-14, "lets move the druid epic aura down [a player's]
 /// scimitar down the blade more"), 1-100 the share in percent of the item's
 /// [`reach`] from the hand; 0 (and anything past 100) none, the place the
 /// source's own share gives.
@@ -800,7 +800,7 @@ pub fn lend_hand(lib: &esf::Library, m: &mut esf::Model, a: &net::entity::PieceA
 /// sparkles, 1.25 up a 1.61 staff, at 0.78 of a scimitar's blade, not past
 /// its tip; the place kept when the source has no trail), at the hand for an
 /// item with no trail (a bow, whose grip is its middle: the owner,
-/// 2026-11-14, "zerkziee's bow has the aura too far out and lets put it
+/// 2026-11-14, "[a player]'s bow has the aura too far out and lets put it
 /// where the hand is"; a shield), or, when the aura says
 /// where ([`along`]), that share of the item's reach out from the hand along
 /// the emitter's own line, in the aura's hue
@@ -1466,7 +1466,7 @@ mod tests {
     }
 
     /// The druid staff glow (the Oak Staff of Eilerawdl, 0xCBF4135A) on
-    /// Zerkziee's weapons: its sparkles 1.25 up the 1.61 staff go at that
+    /// A player's weapons: its sparkles 1.25 up the 1.61 staff go at that
     /// share of each held item's reach, inside the Triad Scimitar's (0.999)
     /// and the ranger's axe's (0.625) tips, not past them; its amber
     /// emissive (120, 80, 30) and gold sheen (255, 204, 0) lent. The
@@ -1540,7 +1540,7 @@ mod tests {
 
     /// A bow has no trail and is held at its middle: a hand aura's borrowed
     /// particles sit at the hand (the item's origin, its grip), whatever its
-    /// along (Zerkziee's 45); the control, the scimitar in the same hand,
+    /// along (a player's 45); the control, the scimitar in the same hand,
     /// still at 45% of its reach.
     #[test]
     fn a_bows_aura_at_the_grip() {

@@ -1,4 +1,4 @@
-//! The swing tables against the decomp, over their whole domains: eqoa-port's
+//! The swing tables against the decomp, over their whole domains: the decomp's native build's
 //! oracle loads CLIENT (build/libclient.so) and tabulates `GetSwing` for
 //! class -2..16, level -1..70 and all 128 combinations of the seven worn
 //! flags, then `SwingDelay`, `SwingEffect` and `AttackAnim` for -2..16; every

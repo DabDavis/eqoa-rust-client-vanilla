@@ -1,4 +1,4 @@
-//! `VIPad` against the decomp (eqoa-port's `build/oracle`, ops 50-52), bit
+//! `VIPad` against the decomp (the oracle (built from the decomp), ops 50-52), bit
 //! for bit under `Ieee`: `ScaleStick` over every byte, and every call of the
 //! class over a scripted libpad (the oracle interposes the `scePad*` calls
 //! libsupport imports), comparing the return, the pad's bytes, the

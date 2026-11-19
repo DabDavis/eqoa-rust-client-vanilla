@@ -121,14 +121,14 @@ pub struct SpellBook {
     text: Vec<u16>,
     desc: Vec<u16>,
     /// The description's first line shown, and the ability it is of: R1 and R2
-    /// scroll a description longer than its four rows (the GM Jibrish's petition
+    /// scroll a description longer than its four rows (a GM's petition
     /// 1250: "R1 moved the text up and r2 moved the text down on live"), back to
     /// its top when another ability is selected
     desc_top: i32,
     desc_of: i64,
     /// The description, as last drawn, longer than its four rows: □ (the
-    /// keyboard's Q), a click or a tap on it opens it whole (`inspect`; the
-    /// player Felthious's petition 2107, "open the discription for spells in
+    /// keyboard's Q), a click or a tap on it opens it whole (`inspect`; a
+    /// player's petition 2107, "open the discription for spells in
     /// a new window if its bigger than what we can read")
     more: bool,
     /// The ability's name and its whole description, for `inspect`

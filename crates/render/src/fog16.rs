@@ -8,7 +8,7 @@
 //! four levels or less never shows, a darkening of four or less shows
 //! twice over, and fans stop a good way short of the fog's colour: on the
 //! console the fog is a low, dim band where a blend of eight bits a channel
-//! draws a bright cloud (eqoa-port, `VI_GS=cpu`).
+//! draws a bright cloud (the decomp's native build, `VI_GS=cpu`).
 //!
 //! A blend cannot read the frame each fan finds, so the fans add up what
 //! falls on each pixel instead (`fans.wgsl` `fs_sums`, into two float

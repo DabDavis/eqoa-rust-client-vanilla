@@ -2,7 +2,7 @@
 """The quest guide: writes crates/eqoa/src/questguide/data.rs.
 
 What the client's own quest marks and tracker estimate from (`questguide`),
-on a server that sends none of its own (Sandstorm): EQOA-Data's 1-20 city
+on a server that sends none of its own (the reference server): EQOA-Data's 1-20 city
 class quests (github.com/Jadiction/EQOA-Data, MIT: Quests/1-20/<city>/<class>
 .json), as go-eqoa-server's tools/quests/data/<city>.json hold them (746
 quests in 13 cities, each a chain of a class), with only what the marks and

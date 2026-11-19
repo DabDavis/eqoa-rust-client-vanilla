@@ -337,7 +337,7 @@ impl Layout for UiRaster<'_> {
 /// `c`'s do: it culls by the winding on the screen with one parity, the 2D
 /// layer's fans included, so a blit or a fill turned over on one axis (a
 /// negative width or height, not both) is drawn on no PS2, while vanilla's
-/// 2D layer drew it (`../claude-notes/vanilla-decomp-ports-20261028.md`).
+/// 2D layer drew it (the maintainer's notes).
 /// The case seen: the fishing window's message box, which `VIUIWindow::Init`
 /// sizes (-1, -1), its fill one blit (-25, 23) under the message's bar, a
 /// small dark square in vanilla alone (the user, 2026-11-02: "the fishing

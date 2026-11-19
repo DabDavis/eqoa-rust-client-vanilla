@@ -7,7 +7,7 @@
 //! the session's first list, and this client answers 1 and is sent, after every
 //! list ([`crate::session::OP_SELECT_INFO_DATA`]), each character's own race, its
 //! race's name where the game has no word for it, its mastery points and the race
-//! option rows its Customize re-chooses. A server that never offers it (Sandstorm's,
+//! option rows its Customize re-chooses. A server that never offers it (the reference server's,
 //! eqoa.live's) gets no answer, and select shows the game's two lines.
 
 use crate::stream::Reader;

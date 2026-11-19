@@ -330,7 +330,7 @@ pub struct ModelRef {
 /// translation -- every member in ITEM.ESF and TUNARIA.ESF has an all-zero
 /// first triple -- and the scale is applied as it is, never skipped.
 /// `go-eqoa-esf-tools-v2` reads it as translation, scale, yaw, which puts every
-/// member at its group's origin (`claude-notes/groupsprite-member-order-20261019.md`).
+/// member at its group's origin (the maintainer's notes).
 #[derive(Clone, Copy)]
 struct Placement {
     angles: [f32; 3],

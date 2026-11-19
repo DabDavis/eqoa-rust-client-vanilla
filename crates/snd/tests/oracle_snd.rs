@@ -1,12 +1,12 @@
-//! SNDDRV and the SPU2 against the decomp, sample for sample: eqoa-port's
-//! `build/oracle_snd` runs the decomp's SNDDRV over eqoa-port's SPU2 on a
+//! SNDDRV and the SPU2 against the decomp, sample for sample: the decomp's native build's
+//! `build/oracle_snd` runs the decomp's SNDDRV over the decomp's native build's SPU2 on a
 //! deterministic IOP, and every call here is made to it and to this crate,
 //! and the status blocks and the PCM compared.
 //!
 //! The game's own data drives it: UI.CSF's waves, AMBTRACK.ESF's XM modules
 //! and two BGM streams, through every command the EE sends.
 //!
-//! SKIPs without the oracle (`make oracle` in eqoa-port) or the disc.
+//! SKIPs without the oracle (`make oracle` in the decomp's native build) or the disc.
 
 mod common;
 use common::{Files, Oracle, disc, pcm};

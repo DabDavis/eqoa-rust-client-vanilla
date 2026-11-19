@@ -860,7 +860,7 @@ window.eqoaAsk2002 = () => {
   }
 };
 
-// ---- remembering the disc images (jib's F3 20261025-214009: "Remember
+// ---- remembering the disc images (a tester's F3 20261025-214009: "Remember
 // location"): with the box ticked, a disc is picked through the File System
 // Access picker (Chromium-based browsers; `showOpenFilePicker`, its `id`
 // opening it where the last image was), and its handle is kept in this

@@ -1,5 +1,5 @@
 //! `vi::flora` against the decomp's radial flora, bit for bit (`Ieee`):
-//! eqoa-port's `build/oracle_flora` compiles viradialflorasystem.cpp over a
+//! the oracle `oracle_flora` (built from the decomp) compiles viradialflorasystem.cpp over a
 //! scene in raw memory (VIScene's grid helpers, VIQueryTriList, VIClipper and
 //! VIFrustum are libsupport's own; the query hands the list a triangle soup in
 //! order; the leaf lookup is a zone per grid cell; the clock is the caller's)
@@ -14,7 +14,7 @@
 //! 700; a scale jitter past 1 clamps plants to 0. A planted difference (one
 //! few triangles' flora sets) must not compare equal.
 //!
-//! SKIPs without the oracle (`make oracle` in eqoa-port).
+//! SKIPs without the oracle (`make oracle` in the decomp's native build).
 
 mod common;
 use common::{Oracle, bytes};

@@ -3393,8 +3393,8 @@ mod tests {
 
     /// The 2002 disc's copies of the character files standing in for
     /// Frontiers' (`disc`), as the world's library has them in that art
-    /// (`era::install`): `$EQOA_2002_ISO`, else the USA disc under
-    /// `../decomp-builds/discs/eqoa-usa/`. None (skipped, loudly) without
+    /// (`era::install`): `$EQOA_2002_ISO`, else the USA disc among
+    /// the other disc builds. None (skipped, loudly) without
     /// either disc.
     fn disc_2002() -> Option<Library> {
         let mut lib = disc()?;

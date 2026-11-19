@@ -1,5 +1,5 @@
 //! `VIUIListBox`, a SUPPORT class only the live client has (live SUPPORT
-//! 0x00478580..0x00478E78 in the Corsten state, named in its export table): a
+//! 0x00478580..0x00478E78 in a retail character's savestate, named in its export table): a
 //! framed list of rows of up to four columns over a `VIUIWindow`, scrolled to
 //! keep its selection in view. The live group search lists its players in
 //! one (`groupsearch`); its Class Mastery windows were rebuilt on it too.

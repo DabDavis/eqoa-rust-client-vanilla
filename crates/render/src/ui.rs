@@ -44,7 +44,7 @@ pub fn viewport_of(v: [i32; 4]) -> Option<[i32; 4]> {
 
 /// Where the frame sits in a `size` target: its offset and its scale. The
 /// frame keeps its 4:3 shape (a PS2 shows it on a 4:3 picture): the full
-/// height, in the middle of a wider target (eqoa-port's widescreen does the
+/// height, in the middle of a wider target (the decomp's native build's widescreen does the
 /// same with the HUD).
 fn frame(size: (u32, u32)) -> (f32, f32, f32, f32) {
     let (tw, th) = (size.0 as f32, size.1 as f32);

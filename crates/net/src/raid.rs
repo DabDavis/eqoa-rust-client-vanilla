@@ -1,4 +1,4 @@
-//! go-eqoa-server's own, no retail message: a raid's windows (the GM Jibrish's
+//! go-eqoa-server's own, no retail message: a raid's windows (a GM's
 //! petitions 1448 and 1451, 2026-11-10: "A small icon denoting who is raid
 //! leader", the loot rules, "a pop up window that does not stop the persons
 //! movement", the master looter's Assign and Abandon). A raid is a group whose
@@ -51,7 +51,7 @@ pub struct State {
 }
 
 /// [`State::flags`]' bit for a plain group's own rule (go-eqoa-server's
-/// `groupRuleFlag`, the GM Jibrish's petition 1878, 2026-11-13: a group's
+/// `groupRuleFlag`, a GM's petition 1878, 2026-11-13: a group's
 /// leader may set need before greed as a raid's does): the leader 0 (no raid),
 /// [`State::rule`] the group's rule, bit 0 its fight and bit 1 this client its
 /// leader as a raid's. A group whose rule is free for all is sent all zero.
@@ -201,7 +201,7 @@ pub enum Command {
     /// 13: two members' groups traded
     Swap(u32, u32),
     /// 14, 15: the target added to the party's instance, or taken out of it
-    /// (the GM Jibrish's petition 1879: go-eqoa-server's `/addinstance`,
+    /// (a GM's petition 1879: go-eqoa-server's `/addinstance`,
     /// `/removeinstance`; its party's leader's, its raid's helper's or the
     /// instance's owner's)
     InstanceAdd(u32),

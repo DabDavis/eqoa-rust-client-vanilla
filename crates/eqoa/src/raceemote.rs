@@ -36,7 +36,7 @@
 //! Only a player's character (name colour 2, the player's own) in a body
 //! `TABLE` lists, on a server that has races of its own (it offered
 //! creation's races, or sent race labels), changes; an NPC in the same body,
-//! a body not listed, and every body on a server with none (Sandstorm,
+//! a body not listed, and every body on a server with none (the reference server,
 //! eqoa.live) is the game as it was.
 //!
 //! The fall and the landing, the same way (the user, 2026-11-09, asked if
@@ -1184,7 +1184,7 @@ pub fn put_moves(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>) ->
 /// `sc`) when it is a player's character (`player`) on a server with races of
 /// its own (`races`, `server_has_races`) in a body that takes them
 /// (`moves_body`); anything else (an NPC, a form or an illusion into another
-/// body, any body on Sandstorm or eqoa.live) is left as the game made it.
+/// body, any body on the reference server or eqoa.live) is left as the game made it.
 /// Whether it is such a character.
 pub fn grant_moves(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, model: u32, player: bool, races: Option<&net::creation::Creation>) -> bool {
     if !(player && moves_body(model) && server_has_races(races)) {
@@ -1195,7 +1195,7 @@ pub fn grant_moves(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, 
 }
 
 /// Whether the server has races of its own: it listed creation's races
-/// (`net::creation`), or sent race labels (`racelabel`). Sandstorm and
+/// (`net::creation`), or sent race labels (`racelabel`). the reference server and
 /// eqoa.live do neither.
 pub fn server_has_races(races: Option<&net::creation::Creation>) -> bool {
     races.is_some_and(|c| !c.races.is_empty()) || crate::racelabel::any()
@@ -1553,8 +1553,8 @@ mod tests {
     /// and take the 2002 human's, carried onto them; the Frontiers disc's
     /// keep their own (`the_listed_bodies_on_the_disc`). The control: the
     /// 2002 human's own play list has the four. Needs the 2002 disc
-    /// (`$EQOA_2002_ISO`, default the USA disc under
-    /// `../decomp-builds/discs/eqoa-usa/`).
+    /// (`$EQOA_2002_ISO`, default the USA disc among
+    /// the other disc builds).
     #[test]
     fn the_2002_brownie_and_skeleton() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

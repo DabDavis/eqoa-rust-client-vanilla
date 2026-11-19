@@ -1,5 +1,5 @@
 //! A pet's dyes as this client draws them (the server owner, 2026-11-16:
-//! Zerkziee's drachnid pet should "have 2 different color areas that can be
+//! a player's drachnid pet should "have 2 different color areas that can be
 //! changed like armor dye (will be a template for pet color dye)"; `net::petdye`
 //! has the message, go-eqoa-server's `entity/petdyes.go` the tables and its
 //! Pet Groomers the dyeing).

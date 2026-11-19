@@ -11,7 +11,7 @@
 //! the packets are the console's to the byte.
 //!
 //! The float arithmetic is generic over `vi::Model`: `Ee` in the client, `Ieee`
-//! against eqoa-port's oracle. A float to int conversion truncates on both.
+//! against the oracle (built from the decomp). A float to int conversion truncates on both.
 //!
 //! Two departures, both where the console misbehaves (F3 20261025-190120,
 //! sounds garbled until a restart; `tests/device_upload.rs`): a sound let go

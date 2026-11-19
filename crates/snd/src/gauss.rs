@@ -1,5 +1,5 @@
 //! The SPU2's 4-tap Gaussian interpolation table, 256 x 4: the hardware's own,
-//! as documented by nocash; this copy by way of eqoa-port's platform/spu2_gauss.inc,
+//! as documented by nocash; this copy by way of the decomp's native build's platform/spu2_gauss.inc,
 //! from OpenGOAL's game/sound/common/interp_table.inc (ISC licence,
 //! (c) 2021-2024 Ziemas; see `spu2.rs`).
 

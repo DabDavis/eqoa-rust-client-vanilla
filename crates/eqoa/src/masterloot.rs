@@ -1,4 +1,4 @@
-//! The master looter's choices on a corpse (the GM Jibrish's petition 1451:
+//! The master looter's choices on a corpse (a GM's petition 1451:
 //! "master looter. This allows the raid leader to open the loot corpse on kill,
 //! and only that, and then add an option to the item they can select below
 //! "Inspect" that says assign or abandon. Assign should list next to them in a

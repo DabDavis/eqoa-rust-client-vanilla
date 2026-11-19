@@ -174,7 +174,7 @@ impl CharRecord {
         }
     }
 
-    /// The live game's record (its `CharacterList`, Corsten's 0x012CC018):
+    /// The live game's record (its `CharacterList`, a retail character's savestate's 0x012CC018):
     /// the zigzags, then `m_robe`, the three held items, their attack types,
     /// the armour sets, six ArmorGroup variants, the held items' colours, the
     /// armour slots' and the robe's (r, g, b, a each); no robe tint.

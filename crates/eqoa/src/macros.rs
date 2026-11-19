@@ -4,7 +4,7 @@
 //! not the same yet"): `Pad::SetMacroButtonState`, `ApplyMacroButton` and
 //! `UpdateMacroButtons` (`pcsx2/SIO/Pad/Pad.cpp`) over the pad the game reads.
 //! What a macro is, `binds::Macro`; the page that sets them, `macropage`;
-//! `claude-notes/vanilla-macros-pcsx2-20261110.md`.
+//! the maintainer's notes.
 //!
 //! A macro runs while one of its triggers is held, each of the trigger's
 //! inputs further than the macro's Deadzone (PCSX2's `value > deadzone`: a

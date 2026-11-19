@@ -1,5 +1,5 @@
-//! The player's own key and button bindings (F3 20261021: jib asked to rebind
-//! every control, the keyboard's and the controller's, and dab for a legend
+//! The player's own key and button bindings (F3 20261021: a player asked to rebind
+//! every control, the keyboard's and the controller's, and another for a legend
 //! of the keyboard). The client's addition, not the game's: the PS2 has no
 //! such thing, and the game's own paths (`VIWndGame::OnKeyDown`, the windows'
 //! keys, `PadKeys`, `UpdateControls`) and the client's keyboard dispatch
@@ -36,14 +36,14 @@
 //! dispatch alike, and V, the jump's key before, stays the jump's beside Space
 //! (nothing else claims it). Space, while the jump's row has it, is still the
 //! attack's wherever it makes no jump (`KeyEdge::space_attacks`): on a server
-//! that never offered one (Sandstorm's, eqoa.live's, eqoaclassic's Live
+//! that never offered one (the reference server's, eqoa.live's, eqoaclassic's Live
 //! shard) and with a window up (the corpse's ✕, a trade's chat line, the
 //! fishing cast), so a player there finds Space as it was. A layout kept
 //! before (`keys.opt`) keeps every row it moved, each line read onto today's
 //! defaults (a row it put on G takes G, the attack the key that row left), and
 //! a macro it put on G keeps G (`Binds::from_text`).
 //!
-//! The ability bars' slots (Jibwiz's ticket 1913, "allow you to keybind each
+//! The ability bars' slots (a player's ticket 1913, "allow you to keybind each
 //! key", for PC players: `hudmenu::Stacked`) are rows of no key and no button
 //! (`Pad::KeysOnly`): a key the player puts on one uses that slot's ability
 //! (`Alias::Slot`, `Play::bar_slot_key`), every bar's: the first two bars'
@@ -63,7 +63,7 @@
 //! keys/buttons. lets make a similar native solution"; 2026-11-10: "we are
 //! using pcsx2 macro system, but it is not the same yet": PCSX2's Macro
 //! Buttons, `pcsx2/SIO/Pad/Pad.cpp`;
-//! `claude-notes/vanilla-macros-pcsx2-20261110.md`): `MACROS` of them, each
+//! the maintainer's notes): `MACROS` of them, each
 //! as PCSX2 keeps one (`Macro`):
 //! its triggers (any one of them runs it, each a chord of keys, controller
 //! buttons and sticks' ways, every one of them held), the game's buttons
@@ -1503,7 +1503,7 @@ pub fn key_of(name: &str) -> Key {
 }
 
 /// A key's name with the modifiers held written before it, in the order
-/// ctrl, alt, shift ("ctrl+alt+shift+1"; Jibwiz's ticket 1950: Shift+1 binds
+/// ctrl, alt, shift ("ctrl+alt+shift+1"; a player's ticket 1950: Shift+1 binds
 /// as Shift+1, not as the "!" it types): `base` the key's own, as it is
 /// without them (`base_name`).
 pub fn combo_name(ctrl: bool, alt: bool, shift: bool, base: &str) -> String {
@@ -1782,7 +1782,7 @@ mod tests {
     fn a_row_moves_or_swaps() {
         let mut b = Binds::default();
         let (talk, attack, cycle, use_) = (row_named("talk").unwrap(), row_named("attack").unwrap(), row_named("cycle_target").unwrap(), row_named("use").unwrap());
-        // jib's: Confirm (E, ✕ in a window) on Q, Talk takes E
+        // a player's: Confirm (E, ✕ in a window) on Q, Talk takes E
         assert_eq!(b.bind_key(use_, "q"), Moved::Swapped(talk));
         assert_eq!((b.key(use_), b.key(talk)), (Some("q"), Some("e")));
         assert_eq!((b.alias("q"), b.alias("e")), (Alias::To("e"), Alias::To("q")));

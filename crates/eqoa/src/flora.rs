@@ -1,5 +1,5 @@
 //! The radial flora (`VIRadialFloraSystem`, `vi::flora`, held to the decomp
-//! by eqoa-port's `oracle_flora`): the plants the game grows round the camera
+//! by the decomp's oracle, `oracle_flora`): the plants the game grows round the camera
 //! out of each zone's flora tables, a 3 x 3 grid of 40-unit swatches that
 //! follows it, the plants within 40 units drawn farthest first and faded out
 //! from 10. `VIScene::Render` updates it at the camera before the world draws

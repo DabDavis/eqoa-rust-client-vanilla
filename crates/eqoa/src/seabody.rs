@@ -1,5 +1,5 @@
 //! A player's own character in a sea creature's body treads water standing and
-//! swims moving, on land too (the GM Jibrish's petition 1620: the Mermaid race,
+//! swims moving, on land too (a GM's petition 1620: the Mermaid race,
 //! go-eqoa-server's 32, in the merfolk's bodies).
 //!
 //! The sea creatures' bodies (the merfolk, sirens, sharks, eels: 29 of

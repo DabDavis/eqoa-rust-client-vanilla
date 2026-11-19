@@ -1,4 +1,4 @@
-//! The map: the client's own (the game has none; F3 20261021, jib). M opens
+//! The map: the client's own (the game has none; F3 20261021). M opens
 //! it full screen over the game, on the player's area; it is drawn from the
 //! game's own terrain off the player's disc, zone by zone while the game
 //! plays (`build`: each zone's terrain from straight above, the light
@@ -12,7 +12,7 @@
 //! whole world and back in; a drag, the left stick, the arrows, WASD and the
 //! d-pad pan; ✕, Space or Home goes back to the player and follows it. A
 //! finger drags it and two pinch it. There is no pad combination to open it
-//! yet (jib's "TBD"): a pad reaches it by M on a keyboard, or by a click or
+//! yet (a tester's "TBD"): a pad reaches it by M on a keyboard, or by a click or
 //! a tap on the HUD's compass, which opens it too (the touch screen's way).
 //!
 //! The places (`places`, petition 1479): the Places button, P or Start opens

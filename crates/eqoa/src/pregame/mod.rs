@@ -1,5 +1,5 @@
 //! The pregame: what the PS2 shows from the disc's boot to the world, in the
-//! order SLUS runs its scenes (`_root`, `claude-notes/loadexec-scene-probe-20260811.md`):
+//! order SLUS runs its scenes (`_root`, the maintainer's notes):
 //!
 //! 1. **the launcher's loading screens** (`boot`): `VIDisplayLoadingScreen`'s
 //!    pictures while the modules load (here: while SUPPORT's image and the UI

@@ -240,7 +240,7 @@ fn byte<M: Model>(v: F<M>) -> u8 {
 /// Whether `at` projects inside the screen through `view_proj` (the
 /// renderer's, whose depth runs 0..1 where the PS2's runs -1..1): what
 /// `TrackTarget` asks of the camera's `m_viewProj` before drawing, the x
-/// range the window's own (as eqoa-port widens it on a wide screen).
+/// range the window's own (as the decomp's native build widens it on a wide screen).
 pub fn on_screen(view_proj: glam::Mat4, at: [f32; 3]) -> bool {
     let h = view_proj * glam::Vec4::new(at[0], at[1], at[2], 1.0);
     if h.w == 0.0 {

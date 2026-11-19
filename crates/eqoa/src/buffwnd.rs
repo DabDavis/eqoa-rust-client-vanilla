@@ -1,4 +1,4 @@
-//! The buff window (the GM Jibrish's petition 1761, 2026-11-12: "Give the buff
+//! The buff window (a GM's petition 1761, 2026-11-12: "Give the buff
 //! window 2 horizontal bars for buffs on the player, and a third for buffs on
 //! their pet. Allow someone to mouse click off their buffs, and add a way for
 //! console to navigate to the buff bar and then use arrow keys to click off
@@ -13,7 +13,7 @@
 //!   sixteen (the game's strip holds eight); the pet's under them in a row of
 //!   their own at half the size (the art of the row under the pet's bar, which
 //!   it replaces), with Extended's Pet Effects on.
-//! - The mouse and a finger (the GM Jibrish's petition 1809, 2026-11-12: "Make
+//! - The mouse and a finger (a GM's petition 1809, 2026-11-12: "Make
 //!   it right click to remove, and left click to unselect"): a left click (a
 //!   tap) on a buff selects it, its name and its time left shown under the rows
 //!   for `INFO_MS`; a left click on the selected one, or anywhere off the bar,

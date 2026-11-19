@@ -33,7 +33,7 @@ struct Number {
     defender: u32,
     /// 0 when added; gone past 1 (1.1 a second).
     time: f32,
-    /// the colour a server's patch sends with it (Sandstorm's S2: three
+    /// the colour a server's patch sends with it (the reference server's S2: three
     /// bytes after 0x00DB's body), in place of the game's white, yellow or
     /// green
     rgb: Option<[u8; 3]>,
@@ -105,7 +105,7 @@ impl Damage {
         self.add_colored(defender, amount, z, None);
     }
 
-    /// `AddDamage` with the colour a server's patch sent (`s2`: Sandstorm's
+    /// `AddDamage` with the colour a server's patch sent (`s2`: the reference server's
     /// damage colours), the game's own without one.
     pub fn add_colored(&mut self, defender: u32, amount: i32, z: i16, rgb: Option<[u8; 3]>) {
         if self.free.is_empty() {
@@ -360,7 +360,7 @@ mod tests {
         assert_eq!(s[1].at.y, 2.0 + bounce1);
     }
 
-    /// A number a server's patch coloured (Sandstorm's S2) is drawn in that
+    /// A number a server's patch coloured (the reference server's S2) is drawn in that
     /// colour, hit or heal, made or taken; one with none in the game's (the
     /// control).
     #[test]

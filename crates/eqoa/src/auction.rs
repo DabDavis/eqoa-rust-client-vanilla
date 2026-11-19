@@ -382,7 +382,7 @@ impl Auction {
 
 /// `VIWndAuction::CanSell`: tradeable, not lore, rentable, and its stack
 /// test as the server's patch leaves it (`s2::StackTest`): retail's, not a
-/// stack; Sandstorm's S2 lets a stack go too (its record 3 rewrites the
+/// stack; the reference server's S2 lets a stack go too (its record 3 rewrites the
 /// test, so on its PS2s crafting materials and gems sell). The live client
 /// with its feature word's bit 0x08 (`live`, live 0x0130EDB8) asks only
 /// that it trades and rents: stacks and lore items go. Here a lore item
@@ -503,9 +503,9 @@ enum SellChild {
 /// item's whole description with its stat bonuses and its text (what a loot
 /// roll's Inspect shows, `Info::inspect_item`) in the item menu's
 /// `VIWndInspect`; △ closes it. A click or a tap on the item's text beside
-/// the list, or on the form's item row, does the same (Zerkziee's petition
+/// the list, or on the form's item row, does the same (a player's petition
 /// 2134: the stats before the item is put up). The text beside the list
-/// has the stat bonuses too (`Info::sell_item`, Zerkziee's petition 2424:
+/// has the stat bonuses too (`Info::sell_item`, a player's petition 2424:
 /// no Inspect needed). The client's own: the disc's window shows only
 /// `DescribeBankItem`'s lines.
 pub struct SellWnd {
@@ -1133,7 +1133,7 @@ mod tests {
     }
 
     /// A stack (a gem, a crafting material: max stack 20) is refused under
-    /// retail's CanSell and sold under Sandstorm's S2, which rewrites the
+    /// retail's CanSell and sold under the reference server's S2, which rewrites the
     /// test; the form opens for it, or says 1727 and plays sound 9. The
     /// other tests stand under both: lore, no trade and no rent stay
     /// refused.

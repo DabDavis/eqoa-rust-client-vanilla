@@ -184,7 +184,7 @@ impl Default for SearchWnd {
             race: -1,
             min_level: 1,
             // the Auctions window's Max. Level (`li a1, 50`; a server's
-            // patch may change it: Sandstorm's S2 opens on 60)
+            // patch may change it: the reference server's S2 opens on 60)
             max_level: crate::s2::get().auction_max_level,
             min_price: 0,
             max_price: 0x7FFF_FFFF,
@@ -1847,7 +1847,7 @@ mod tests {
     /// On a server that sends the live client's feature word without bit
     /// 0x02 (`live`) the race picker has no Ogre (9) and the class picker no
     /// Alchemist (14), and Enter takes the row's own value; the controls, no
-    /// word (the disc's lists, as on Sandstorm) and the retail word 0x1B,
+    /// word (the disc's lists, as on the reference server) and the retail word 0x1B,
     /// have them. The wear slots and attack types never change.
     #[test]
     fn the_pickers_leave_ogre_and_alchemist_to_the_feature_word() {

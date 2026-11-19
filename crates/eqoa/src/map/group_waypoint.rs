@@ -1,4 +1,4 @@
-//! The group's waypoint (F3 20261026-212034, a Sandstorm player on a
+//! The group's waypoint (F3 20261026-212034, a player on the reference server, on a
 //! controller: "should allow a Long-press square on map to set a group
 //! waypoint"; the user's choice: over the group's chat). The client's own: the
 //! game has no such thing, and no server is asked for anything new.
@@ -13,7 +13,7 @@
 //! world's and the area's names the game's own, out of WORDS.TXT). Every
 //! server relays it as "<Name> tells the group: <line>" on 0x069E
 //! (`net::session::Event::GroupChat`): go-eqoa-server's `groupChat`, and
-//! Sandstorm's (its players' chat logs in the F3 reports carry the same words;
+//! The reference server's (its players' chat logs in the F3 reports carry the same words;
 //! the C# server it descends from sends them on 0x069E).
 //!
 //! Every vanilla client in the group that hears such a line puts the group's

@@ -246,8 +246,8 @@ mod tests {
     /// tiles the bar's edge into the stone (the lines seen at 77).
     ///
     /// The 2002 disc's pictures (its own painting and stone, `era`) are cut on
-    /// the same rows (`$EQOA_2002_ISO`, else the USA disc under
-    /// `../decomp-builds/discs/eqoa-usa/`; skipped without it).
+    /// the same rows (`$EQOA_2002_ISO`, else the USA disc among
+    /// the other disc builds; skipped without it).
     #[test]
     fn the_cuts_are_the_pictures() {
         let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");

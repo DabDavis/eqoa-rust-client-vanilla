@@ -67,7 +67,7 @@ pub fn far(from: [f32; 3], to: [f32; 3]) -> bool {
 /// within the inner radius of where it stood are in its cache already
 /// (`VIWorld::StreamLeaf` loads inside it and lets go only past the outer).
 /// A far move with nothing to read shows the game's loading screen for a
-/// moment only (eqoa-port: some five frames of it for Sandstorm's boon, the
+/// moment only (the decomp's native build: some five frames of it for the reference server's boon, the
 /// move 71 up into Freeport's sky), so it is not held (`Screen::hold_far`):
 /// held, the walk stood in the air at the arrival a second with no 0x40
 /// sent, and every player the boon threw there at once stood on the ones held

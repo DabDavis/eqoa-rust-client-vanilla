@@ -1,8 +1,8 @@
 //! The quest guide (the user: "for quest tracker and map/minimap icons,
-//! etc. let it be built into client also, so sandstorm can benefit without
+//! etc. let it be built into client also, so [the reference server] can benefit without
 //! server additions, though may not be as accurate"): on a server that offers
 //! no quest marks or tracker of its own (go-eqoa-server's 0x7E03 and 0x7E05,
-//! `net::session::OP_QUEST_MARKERS`; Sandstorm offers neither), the client
+//! `net::session::OP_QUEST_MARKERS`; the reference server offers neither), the client
 //! makes the same ones (`map::quests` on the map and the minimap, `tracker`
 //! under it) out of what it knows: the journal's lines (CLIENT's eight,
 //! `questlog::Quests`), the player's class, race, level, place and items, and
@@ -13,14 +13,14 @@
 //! its own is believed alone, and the guide stays off (`Play::guide_on`).
 //!
 //! - A journal line is a step of a quest when it names that step's people or
-//!   things (`match_line`). Sandstorm words its journal its own way ("Pick up
+//!   things (`match_line`). The reference server words its journal its own way ("Pick up
 //!   Militia bracers from Merchant Galosh.", "Return to Nothard.", "Bring
 //!   Norgram 2 slashed orc pawn belts ."), so the line's words are held to
 //!   the step's NPC or creature (by its own name, not a title: Nothard for
 //!   Commander Nothard; a long word one letter off still counts), its items
 //!   (plurals as their singulars) and what it hands over, among the quests of
 //!   the player's class, race and level; the player's home city, the quest
-//!   of a line that just left (Sandstorm puts a quest's next step's line in
+//!   of a line that just left (the reference server puts a quest's next step's line in
 //!   as the last goes) and a chain's next quest weigh in on a tie. Within
 //!   the quest, a loot step whose drops are all held, or a step whose
 //!   handed-over item is, is behind the player: the step after it is the one
@@ -32,7 +32,7 @@
 //!   the quest's, every quest it requires finished, neither in the journal
 //!   nor finished itself, and of the player's home city unless a chain begun
 //!   elsewhere (every city's first quests would be a "!" in every town, and a
-//!   Sandstorm character's history is not known). At most 40, the steps'
+//!   character's history on the reference server is not known). At most 40, the steps'
 //!   first, then the player's world, nearest first.
 //! - The tracker (`Estimate::tracker`): each line's quest and its step's
 //!   objectives: a show, give or loot step's items held of those needed (the
@@ -58,7 +58,7 @@ pub use data::{CITIES, HOMES, NPCS, QUESTS};
 
 /// What the guide's own cards and quests say after their names.
 pub const GUIDE: &str = crate::tracker::GUIDE;
-/// What the game says as a quest's last step is done (0x0046, Sandstorm's
+/// What the game says as a quest's last step is done (0x0046, the reference server's
 /// and go-eqoa-server's alike).
 pub const FINISHED: &str = "You have finished a quest!";
 
@@ -214,7 +214,7 @@ fn stem(w: &str) -> String {
 }
 
 /// Two words alike: the same, or both of six letters or more, the same
-/// first letter and one letter apart (Sandstorm's "Norgram" for Norgam).
+/// first letter and one letter apart (the reference server's "Norgram" for Norgam).
 fn same(a: &str, b: &str) -> bool {
     a == b || (a.len() >= 6 && b.len() >= 6 && a.as_bytes()[0] == b.as_bytes()[0] && one_apart(a, b))
 }
@@ -575,7 +575,7 @@ pub fn homes(kept: Option<u8>, race: i64, class: i64, world: i32, at: [f32; 2]) 
 
 /// How many of item `name` the player holds (worn ones too, as the server
 /// counts them): by its name in any case, else every word of the guide's in
-/// the item's (Sandstorm's names may say more: "orc" in a belt's).
+/// the item's (the reference server's names may say more: "orc" in a belt's).
 pub fn held(items: &[NetItem], name: &str) -> u32 {
     let n = |it: &NetItem| it.quantity.max(1) as u32;
     let exact: u32 = items.iter().filter(|it| it.item.name.trim().eq_ignore_ascii_case(name)).map(n).sum();

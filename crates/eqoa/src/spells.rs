@@ -1211,7 +1211,7 @@ mod tests {
 
     /// A quad attack's four hit sounds as its target lists make them: a
     /// sound actor of SPELLFX's hit sprite at each strike (0, 0.5, 1.2 and
-    /// 1.9 s, a bard's Attack4 on Sandstorm), each made for 759 ms (the
+    /// 1.9 s, a bard's Attack4 on the reference server), each made for 759 ms (the
     /// effect's CreateSound), so each overlaps the one before.
     const STRIKES: [f64; 4] = [0.0, 500.0, 1200.0, 1900.0];
     const LIFE: f64 = 759.0;

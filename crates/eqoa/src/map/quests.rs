@@ -2,7 +2,7 @@
 //! map too", "only if eligible for the class/level", "on the quest icon on the
 //! map have hover tooltip with quest info"): what a server sends for the
 //! player (`net::session::OP_QUEST_MARKERS_DATA`, go-eqoa-server's), or on a
-//! server that sends none (Sandstorm) the client's own guide's (`questguide`,
+//! server that sends none (the reference server) the client's own guide's (`questguide`,
 //! each card's first line "<NPC> (guide)"), a gold "!" at each giver of a
 //! quest the player may take and a
 //! "?" where a step of its quests is to be done (pale at an NPC to see, warmer
@@ -14,7 +14,7 @@
 //! on it; a click puts it there at once) and under the pad's middle cross once
 //! the map is panned. Quest Markers (Extended's Quests page, and the map's own
 //! J or R3) hides them, and then the server is asked for none. An ability
-//! quest's mark (petition 2285, Zerkziee's "highlights the ability quest
+//! quest's mark (petition 2285, a player's "highlights the ability quest
 //! differently compared to other quest", the owner's yes of 2026-11-17: a
 //! quest the server flags as giving the player's class an ability,
 //! `net::session::QUEST_FLAG_ABILITY`, or the guide's own `ability`) is ringed

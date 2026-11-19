@@ -723,8 +723,8 @@ mod tests {
     /// A cut that is its
     /// file's bytes (the hill giant is the same on both discs) or has none of
     /// the bodies (no kerran on the 2002 disc) stands in for nothing. Needs
-    /// both discs (`run/eqoa.iso`, and `$EQOA_2002_ISO` or the USA disc under
-    /// `../decomp-builds/discs/eqoa-usa/`; without them it passes having
+    /// both discs (`run/eqoa.iso`, and `$EQOA_2002_ISO` or the USA disc among
+    /// the other disc builds; without them it passes having
     /// checked nothing, and says so only under `--nocapture`).
     #[test]
     fn the_2002_art_draws_a_races_body_as_the_world_does() {

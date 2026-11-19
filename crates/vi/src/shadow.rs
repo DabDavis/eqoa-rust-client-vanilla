@@ -1,6 +1,6 @@
 //! The characters' blob shadows, as `VIScene` queues and draws them (decomp
 //! `viscene.cpp`: `RasterActor`'s queue, `RenderShadows`, `RenderShadow`; the
-//! material `SetSky` makes), held to the decomp by eqoa-port's
+//! material `SetSky` makes), held to the decomp by the decomp's native build's
 //! `oracle_shadow` (`tests/oracle_shadow.rs`).
 //!
 //! `RasterActor` queues an actor it rasters whose sprite is a `VICSprite`

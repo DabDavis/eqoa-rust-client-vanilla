@@ -34,7 +34,7 @@
 //! How it is drawn is the Extended page's Controller rows (`Opts`, from
 //! `settings`' `touch_stick`, `touch_buttons`, `touch_opacity` and
 //! `touch_edge`; a player's ask of 2026-11-02, "Is there a way to make the on
-//! screen controller size adjustable?", and Jibrish's petition 1386 of
+//! screen controller size adjustable?", and a GM's petition 1386 of
 //! 2026-11-09, "Mobile clients and mobile browser need the ability to adjust
 //! the on screen controler size"): the sticks and the buttons each 50% to
 //! 200% of the pad as it was, larger only as far as the window has room
@@ -49,7 +49,7 @@
 //! the pad's three parts (`Part`); a finger drags one (`Opts::moves`, kept on
 //! the screen by `moved`), two pinch both sizes, and the bar's Reset and Done
 //! (`draw_edit_bar`) put it back or end it; the viewer keeps each edit as the
-//! fingers lift (`take_edited`). Button Layout's Bottom (the GM Jibcrotwo's
+//! fingers lift (`take_edited`). Button Layout's Bottom (a GM's
 //! petition 2084) puts Select and Start low between the sticks (`lowered`).
 //!
 //! The client's own dialog over the game (the update's question) takes a
@@ -203,7 +203,7 @@ pub struct Opts {
     /// window's shorter side (`MOVE_MOST` at most either way), and drawn kept
     /// on the screen (`moved`)
     pub moves: [[f32; 2]; 3],
-    /// Button Layout's Bottom (the GM Jibcrotwo's petition 2084: "a secondary
+    /// Button Layout's Bottom (a GM's petition 2084: "a secondary
     /// one that moves the start and select buttons from the top of the screen
     /// to near the bottom in between the two joysticks"): Select and Start low
     /// between the sticks (`lowered`); off, Classic, where `layout` puts them

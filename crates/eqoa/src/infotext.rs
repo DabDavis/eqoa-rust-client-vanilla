@@ -544,7 +544,7 @@ impl Info<'_> {
         d
     }
 
-    /// The client's own, for the auction's sell window (Zerkziee's petition
+    /// The client's own, for the auction's sell window (a player's petition
     /// 2424: the stats beside the list, no Inspect needed): `DescribeBankItem`'s
     /// lines, then the stat bonuses as many to a row as fit (`stat_rows`); the
     /// item's text stays behind □'s Inspect.
@@ -1074,7 +1074,7 @@ mod tests {
     /// feature word without bit 0x02 (`live`): race 9 and class 14 leave
     /// both the ALL/NONE tests and the list, so the races but the Ogre are
     /// ALL and an Ogre alone is NONE. The controls: no word (the disc's, as
-    /// on Sandstorm) and the retail word 0x1B count them.
+    /// on the reference server) and the retail word 0x1B count them.
     #[test]
     fn ogre_and_alchemist_by_the_feature_word() {
         let words = numbered();

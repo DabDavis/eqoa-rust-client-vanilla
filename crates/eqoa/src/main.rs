@@ -634,7 +634,7 @@ fn run(args: &[String]) -> Result<()> {
             for f in dressview::FILES {
                 lib.add(*f, esf::Container::open(iso.read(f)?)?);
             }
-            // set 9's art (go-eqoa-server's armour, Sandstorm's S2)
+            // set 9's art (go-eqoa-server's armour, the reference server's S2)
             s2::get().register_art(&mut lib);
             // the 2002 disc's copies standing in, as the world has them with F9
             if words.y2002 {
@@ -836,7 +836,7 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
     let (mut lib, src) = source(&file, &[])?;
     let main_file = 0;
     lib.add("CHAR.ESF", esf::Container::open(disc(None)?.read("CHAR.ESF")?)?);
-    // a server's patch's own names for CHAR.ESF's art (`s2`: Sandstorm's set 9)
+    // a server's patch's own names for CHAR.ESF's art (`s2`: the reference server's set 9)
     s2::get().register_art(&mut lib);
     // What creatures hold: weapons and shields.
     lib.add("ITEM.ESF", esf::Container::open(disc(None)?.read("ITEM.ESF")?)?);
@@ -854,7 +854,7 @@ pub fn world_library(player: &net::session::Player) -> Result<(esf::Library, vie
     // the compass's patch art.
     lib.add("ADDART.CSF", esf::Container::open(disc(None)?.read("ADDART.CSF")?)?);
     // A server's patch's own art (`s2`: where CLIENT reads the card's added
-    // art, Sandstorm's S2 reads its ss-art.csf, robes 4 and 5), out of the
+    // art, the reference server's S2 reads its ss-art.csf, robes 4 and 5), out of the
     // server's folder.
     if let Some(path) = s2::get().art_path() {
         match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| esf::Container::open(b).map_err(|e| format!("{e:?}"))) {

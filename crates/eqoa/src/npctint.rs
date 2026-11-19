@@ -14,7 +14,7 @@
 //! colours. A creature with no tint, and every creature on a server that sends
 //! none, is drawn exactly as before.
 //!
-//! A glow (layout 2, the GM Jibrish's petition 1893: Mr. Moogie's body in a
+//! A glow (layout 2, a GM's petition 1893: Mr. Moogie's body in a
 //! soft red glow) sets every layer's emissive, the colour the light adds to
 //! the ambient (`render`'s layer `emissive`), to the glow's colour times its
 //! alpha ([`apply`]), so the body is lit in it by day and night as an epic

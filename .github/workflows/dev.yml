@@ -71,7 +71,7 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
-      # The tests that need the disc image, eqoa-port's oracles or a GPU
+      # The tests that need the disc image, the decomp-built oracles or a GPU
       # skip without them; the rest gate the build.
       - name: Test
         if: matrix.os == 'linux'

@@ -1,10 +1,10 @@
 //! The SPU2: 2 MB of sound RAM, two cores of 24 voices, a 48 kHz stereo mix.
 //!
-//! Ported line by line from eqoa-port's `platform/spu2.c`, which the oracle
+//! Ported line by line from the decomp's native build's `platform/spu2.c`, which the oracle
 //! runs: a voice is the hardware's (PS-ADPCM decoded four samples a word, a
 //! 4-tap Gaussian interpolator stepped by the 14-bit pitch, 0x1000 = 48 kHz,
 //! the ADSR envelope, a volume that may sweep), in the per-sample order
-//! eqoa-port measured against PCSX2: the envelope steps before it applies, the
+//! the decomp's native build measured against PCSX2: the envelope steps before it applies, the
 //! four taps sum in 32 bits, the decoder runs at most 12 samples ahead and
 //! re-reads the block header every sample, a key-on starts at SSA | 1, and the
 //! prediction is one rounded sum.

@@ -2,7 +2,7 @@
 //! below minimap above chat bar, transparent background. like if quest says
 //! obtain 3 bat eyes, have 0/3"): the quests under way a server sends
 //! (`net::session::OP_QUEST_PROGRESS_DATA`, go-eqoa-server's: none from
-//! Sandstorm), in the HUD's frame under the minimap (`map::mini::FRAME`) and
+//! the reference server), in the HUD's frame under the minimap (`map::mini::FRAME`) and
 //! above the chat box at its tallest, out at a wide window's right and up a
 //! tall one's top with the quick menus as the minimap is. No backing: the
 //! words outlined so they read over the world, each quest's name in gold (an

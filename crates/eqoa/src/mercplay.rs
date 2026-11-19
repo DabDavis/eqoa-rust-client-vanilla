@@ -1,10 +1,10 @@
-//! A server's mercenaries in play (go-eqoa-server's `world.mercs`; the GM
-//! Jibrish's petitions 1475 and 1488, 2026-11-11): Community > Group >
+//! A server's mercenaries in play (go-eqoa-server's `world.mercs`; a
+//! GM's petitions 1475 and 1488, 2026-11-11): Community > Group >
 //! Dismiss Mercenary, the client's own entry, there while the server says the
 //! player's own merc is out (`net::session::Mercs`, 0x7E5B), sending 0x7E5C
 //! (the server's `/merc dismiss`); a merc's name drawn in the pet's colour
 //! tinted red (`Play::name_color`), and under it its hirer's tag (`merc_tag`:
-//! "<Lonewulf's Mercenary>", `play::labels`' second line). On a server that tells nothing (Sandstorm,
+//! "<Lonewulf's Mercenary>", `play::labels`' second line). On a server that tells nothing (the reference server,
 //! a PS2's) neither: the menu is the game's and a merc's name the pet's. A
 //! child of `play`, for `Play`'s fields.
 //!
@@ -103,7 +103,7 @@ impl Play {
     /// Whether `TargetCentre` (the crosshair: the manual camera all the way
     /// in, first person's controller targeting) passes the creature over as
     /// one of a player's side (`m_p256` 3, a pet's): every pet, as the game
-    /// does, but a merc (the GM Jibwiz's petition 2270, 2026-11-17: "players
+    /// does, but a merc (a GM's petition 2270, 2026-11-17: "players
     /// need to be able to mouse target or first person view controller target
     /// mercenaries", to heal and buff them as a group's member is): one whose
     /// name is drawn as a merc's (`Play::name_color`, the server's 0x7E5B).

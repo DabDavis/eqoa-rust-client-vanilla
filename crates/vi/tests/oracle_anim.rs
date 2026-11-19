@@ -1,6 +1,6 @@
 //! The animation system against the decomp compiled for the host, bit for bit
 //! (`Ieee`): a character is parsed from CHAR.ESF here, the same data is handed
-//! to eqoa-port's oracle, which builds a real VICSprite in a bare VIScene
+//! to the oracle (built from the decomp), which builds a real VICSprite in a bare VIScene
 //! through the guest's API, and a script of (time, locomotion, LOD) steps runs
 //! on both: SetLocomotion -> SetAnimation (priorities, 250 ms blends, freezes,
 //! the two-layer sync, the fidget) and VIHSprite::Process (play timing, the
@@ -241,7 +241,7 @@ fn character_animation_matches() {
 }
 
 /// A character whose only clip is played once: Delwin Stitchfinger's body
-/// (0xD7741560, CHAR.ESF 141, the halfling Sandstorm sends for him in
+/// (0xD7741560, CHAR.ESF 141, the halfling the reference server sends for him in
 /// Bobble-by-Water). Its play list has one entry, idle, played once (sync 1);
 /// its clip lies on the ground, gets up and falls back down, and every other
 /// entry is SetDefaultEntries' copy of it. So idle holds the clip's last frame,
