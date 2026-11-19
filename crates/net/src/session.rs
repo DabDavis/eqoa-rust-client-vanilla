@@ -251,11 +251,13 @@ pub const OP_SELECT_INFO: u16 = 0x7E67;
 /// rows its Customize re-chooses (`selectinfo::read`), by server id, the whole
 /// list each time ([`Session::select_info`]).
 pub const OP_SELECT_INFO_DATA: u16 = 0x7E68;
-/// go-eqoa-server's own, no retail message either: Hardcore characters
-/// (`hardcore`), a u32 after the opcode, both ways. The server offers it (1) after
-/// the session's first character list where it has Hardcore; this client answers 1
-/// at once ([`Session::hardcore`]), writes the choice in every creation after it
-/// and is sent [`OP_HARDCORE_CHARS`] after every list. A PS2 ignores the offer.
+/// go-eqoa-server's own, no retail message either: Hardcore and [OG] characters
+/// (`hardcore`), a u32 after the opcode, both ways. The server offers it after
+/// the session's first character list where it has either, its bits
+/// (`hardcore::OFFER_HARDCORE` 1, `hardcore::OFFER_OG` 2; a server of before
+/// sends 1); this client answers the bits it takes at once ([`Session::hardcore`],
+/// [`Session::og`]), writes the choices in every creation after it and is sent
+/// [`OP_HARDCORE_CHARS`] after every list. A PS2 ignores the offer.
 pub const OP_HARDCORE: u16 = 0x7EB0;
 /// Each listed character's plain name and Hardcore standing, fallen with its
 /// death (`hardcore::read_chars`), the whole list each time
@@ -1135,6 +1137,10 @@ pub struct NewChar {
     /// the race options, when Some, which [`Session::create_character`] makes it
     /// only for a server that offered it (None, or unchecked, is Some(false)).
     pub hardcore: Option<bool>,
+    /// [OG] chosen (`hardcore::og_block`): written after the Hardcore block,
+    /// before the race options, when Some, which [`Session::create_character`]
+    /// makes it only for a server that offered [OG].
+    pub og: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -1487,6 +1493,9 @@ pub struct Session {
     /// The server offered Hardcore and this client took it ([`OP_HARDCORE`]): a
     /// creation carries the choice (`hardcore::block`).
     pub hardcore: bool,
+    /// The server offered [OG] characters and this client took it (the offer's
+    /// `hardcore::OFFER_OG`): a creation carries the choice (`hardcore::og_block`).
+    pub og: bool,
     /// Each listed character's Hardcore standing, by server id
     /// ([`OP_HARDCORE_CHARS`]); empty from a server that sends none.
     pub hardcore_chars: std::collections::HashMap<i64, crate::hardcore::Char>,
@@ -1743,6 +1752,7 @@ impl Session {
             cape_list: Default::default(),
             select_info: Default::default(),
             hardcore: false,
+            og: false,
             hardcore_chars: Default::default(),
             hardcore_fall: None,
             capes_in_view: Default::default(),
@@ -2372,7 +2382,7 @@ impl Session {
     /// `VIWndCharCreateBlank::Reset` leaves it; the stats go raw.
     pub fn create_character(&mut self, c: &NewChar) {
         // the choice goes only to a server that offered it (`hardcore`)
-        let c = NewChar { hardcore: self.hardcore.then(|| c.hardcore.unwrap_or(false)), ..c.clone() };
+        let c = NewChar { hardcore: self.hardcore.then(|| c.hardcore.unwrap_or(false)), og: self.og.then(|| c.og.unwrap_or(false)), ..c.clone() };
         self.send(&new_char_message(&c));
     }
 
@@ -2893,9 +2903,15 @@ impl Session {
             // Hardcore offered: taken (the create pages offer the choice, select
             // shows the fallen: `hardcore`)
             OP_HARDCORE => {
-                if r.u32() != 0 && !r.error {
-                    self.hardcore = true;
-                    self.send_op_int(OP_HARDCORE, 1);
+                let v = r.u32();
+                if v != 0 && !r.error {
+                    // its bits: Hardcore, [OG] (a server of before sends 1)
+                    let took = v & (crate::hardcore::OFFER_HARDCORE | crate::hardcore::OFFER_OG);
+                    self.hardcore = took & crate::hardcore::OFFER_HARDCORE != 0;
+                    self.og = took & crate::hardcore::OFFER_OG != 0;
+                    if took != 0 {
+                        self.send_op_int(OP_HARDCORE, took);
+                    }
                 }
             }
             OP_HARDCORE_CHARS => match crate::hardcore::read_chars(&m.data[2.min(m.data.len())..]) {
@@ -3662,6 +3678,9 @@ pub fn new_char_message(c: &NewChar) -> Vec<u8> {
     }
     if let Some(h) = c.hardcore {
         w.bytes(&crate::hardcore::block(h));
+    }
+    if let Some(o) = c.og {
+        w.bytes(&crate::hardcore::og_block(o));
     }
     if let Some(b) = crate::raceopts::choices_block(&c.options) {
         w.bytes(&b);
@@ -6169,6 +6188,50 @@ mod tests {
         f.extend([1, b'X', 1, b'Y', 12, 0]);
         deliver(&mut s, drdp::TYPE_GUARANTEED, f);
         assert_eq!(s.hardcore_fall.as_ref().map(|f| (f.killer.as_str(), f.place.as_str(), f.secs)), Some(("X", "Y", 12)));
+    }
+
+    // [OG] (the offer's bit 2, 2026-11-19): the bits taken are answered; a
+    // creation carries 'O', 1, choice after the 'H' block, before 'R', only once
+    // [OG] was offered. The controls: a server of before (1) gets no 'O', and
+    // an [OG]-only offer (2) no 'H'.
+    #[test]
+    fn og_is_answered_and_chosen_at_creation() {
+        let form = NewChar { name: "Brakk".into(), race: 4, class: 0, options: vec![("skin".into(), 2)], hardcore: Some(false), og: Some(true), ..Default::default() };
+        let opts = crate::raceopts::choices_block(&form.options).unwrap();
+        // each case on a session of its own (no acks here: few messages in flight)
+        let case = |offer: u8, form: &NewChar| -> (bool, bool, Vec<Vec<u8>>, Vec<u8>) {
+            let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+            let out = |s: &mut Session, hi: u8| -> Vec<Vec<u8>> {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                s.flush();
+                let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&hi)).map(|(_, d)| d).collect();
+                sent.borrow_mut().clear();
+                m
+            };
+            out(&mut s, 0x7E);
+            deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xB0, 0x7E, offer, 0, 0, 0]);
+            let answer = out(&mut s, 0x7E);
+            s.create_character(form);
+            (s.hardcore, s.og, answer, out(&mut s, 0x00).pop().unwrap())
+        };
+        // a server of before: Hardcore alone, no 'O'
+        let (hc, og, answer, with) = case(1, &form);
+        assert!(hc && !og);
+        assert_eq!(answer, [vec![0xB0, 0x7E, 1, 0, 0, 0]]);
+        assert!(with.ends_with(&[vec![b'H', 1, 0], opts.clone()].concat()), "no 'O' to a server of before: {with:?}");
+        // both
+        let (hc, og, answer, with) = case(3, &form);
+        assert!(hc && og);
+        assert_eq!(answer, [vec![0xB0, 0x7E, 3, 0, 0, 0]]);
+        assert!(with.ends_with(&[vec![b'H', 1, 0, b'O', 1, 1], opts.clone()].concat()), "'H', 'O', then 'R': {with:?}");
+        // [OG] alone (a shard without Hardcore), unknown bits not answered;
+        // left unchosen it is 0, still written
+        let (hc, og, answer, with) = case(2 | 8, &NewChar { og: None, ..form.clone() });
+        assert!(!hc && og);
+        assert_eq!(answer, [vec![0xB0, 0x7E, 2, 0, 0, 0]]);
+        assert!(with.ends_with(&[vec![b'O', 1, 0], opts].concat()), "unchosen: 0: {with:?}");
+        assert_eq!(with, new_char_message(&NewChar { hardcore: None, og: Some(false), ..form.clone() }), "no 'H'");
     }
 
     #[test]

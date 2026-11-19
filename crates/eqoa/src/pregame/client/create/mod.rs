@@ -200,10 +200,26 @@ pub fn hardcore_offered() -> bool {
     HARDCORE_OFFERED.with(|c| c.get())
 }
 
+thread_local! {
+    /// The server offered [OG] characters (0x7EB0's bit 2, `net::hardcore`) and
+    /// the session took it: the review page shows its row.
+    static OG_OFFERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the review page offers [OG] (the session's `og`, each frame).
+pub fn set_og_offered(on: bool) {
+    OG_OFFERED.with(|c| c.set(on));
+}
+
+/// The review page's [OG] row is up.
+pub fn og_offered() -> bool {
+    OG_OFFERED.with(|c| c.get())
+}
+
 /// `VIWndCharCreateBlank::Reset`'s form: no name, city 0, and every choice
 /// -1 (the pages then take the race's defaults), no points spent.
 pub fn blank_form() -> NewChar {
-    NewChar { name: String::new(), race: -1, class: -1, sex: -1, hair_color: -1, hair_length: -1, hair_style: -1, face: -1, city: 0, stats: [0; 7], options: Vec::new(), hardcore: None }
+    NewChar { name: String::new(), race: -1, class: -1, sex: -1, hair_color: -1, hair_length: -1, hair_style: -1, face: -1, city: 0, stats: [0; 7], options: Vec::new(), hardcore: None, og: None }
 }
 
 impl Create {
@@ -398,6 +414,8 @@ impl Create {
                 // Hardcore as the review page's row has it (`net::hardcore`: the
                 // session writes it only to a server that offered it)
                 self.form.hardcore = Some(self.review.hardcore && hardcore_offered());
+                // and [OG] (`net::hardcore`: written only to a server that offered it)
+                self.form.og = Some(self.review.og && og_offered());
                 session.create_character(&self.form);
                 self.sent = self.form.clone();
                 return Out::Done;

@@ -15,7 +15,7 @@ fn read(b: &[u8]) -> (u16, Vec<u8>, Vec<i64>, Vec<u32>, usize) {
 
 #[test]
 fn the_creation_form() {
-    let c = NewChar { name: "Arwen".into(), race: 1, class: 13, sex: 1, hair_color: 7, hair_length: 2, hair_style: 3, face: 0, city: 0, stats: [5, 0, 3, 2, 4, 6, 0], options: vec![], hardcore: None };
+    let c = NewChar { name: "Arwen".into(), race: 1, class: 13, sex: 1, hair_color: 7, hair_length: 2, hair_style: 3, face: 0, city: 0, stats: [5, 0, 3, 2, 4, 6, 0], options: vec![], hardcore: None, og: None };
     let b = new_char_message(&c);
     let (op, name, f, s, end) = read(&b);
     assert_eq!(op, 0x002B);

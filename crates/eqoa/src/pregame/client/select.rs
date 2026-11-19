@@ -57,11 +57,17 @@ pub fn info_lines(c: &CharRecord, word: &dyn Fn(i32) -> Vec<u16>, race_name: &dy
         Some(h) if h.hardcore => out.push(wide(HARDCORE_LINE)),
         _ => {}
     }
+    // an [OG] character's mark (`net::hardcore`, its flag 8)
+    if c.hc.as_ref().is_some_and(|h| h.og) {
+        out.push(wide(OG_LINE));
+    }
     out
 }
 
 /// A Hardcore character's line at select.
 pub const HARDCORE_LINE: &str = "Hardcore";
+/// An [OG] character's line at select.
+pub const OG_LINE: &str = "[OG]";
 /// What Enter on a fallen character says (ours).
 pub const FALLEN_REFUSAL: &str = "This Hardcore character has fallen and cannot enter the world.";
 
@@ -1058,18 +1064,25 @@ mod tests {
         c.hc = Some(net::hardcore::Char { name: "Squeak".into(), hardcore: true, ..Default::default() });
         assert_eq!(text(&c), ["w503 60", "1500 CMs", "Wisp", &alchemist, "Hardcore"]);
         let fall = net::hardcore::Fall { at: 1_794_991_500, level: 52, cms: 140, killer: "a Zek sentry".into(), place: "Tallon's fortress".into() };
-        c.hc = Some(net::hardcore::Char { name: "Squeak".into(), hardcore: true, open: false, fall: Some(fall.clone()) });
+        c.hc = Some(net::hardcore::Char { name: "Squeak".into(), hardcore: true, open: false, fall: Some(fall.clone()), ..Default::default() });
         assert_eq!(text(&c), ["w503 60", "1500 CMs", "Wisp", &alchemist, "Fallen 2026-11-18 08:45 UTC", "Slain by a Zek sentry", "In Tallon's fortress"]);
         c.info = None;
-        c.hc = Some(net::hardcore::Char { name: "Squeak".into(), hardcore: true, open: false, fall: Some(net::hardcore::Fall { place: String::new(), ..fall }) });
+        c.hc = Some(net::hardcore::Char { name: "Squeak".into(), hardcore: true, open: false, fall: Some(net::hardcore::Fall { place: String::new(), ..fall }), ..Default::default() });
         assert_eq!(text(&c), ["w503 60", &alchemist, "Fallen 2026-11-18 08:45 UTC", "At level 52, 140 CMs", "Slain by a Zek sentry"], "no select info: the counts; no place: no line");
+        // [OG] (its flag 8): its mark under them, after Hardcore's; the control: none
+        c.hc = Some(net::hardcore::Char { name: "Squeak".into(), hardcore: true, og: true, ..Default::default() });
+        assert_eq!(text(&c), ["w503 60", &alchemist, "Hardcore", "[OG]"]);
+        c.hc = Some(net::hardcore::Char { name: "Squeak".into(), og: true, ..Default::default() });
+        assert_eq!(text(&c), ["w503 60", &alchemist, "[OG]"]);
+        c.hc = Some(net::hardcore::Char { name: "Squeak".into(), og_open: true, ..Default::default() });
+        assert_eq!(text(&c), ["w503 60", &alchemist], "the control: still to choose, no mark");
     }
 
     /// Enter on a fallen Hardcore character: refused with our line, nothing sent,
     /// a buzz; Delete still takes it. The control: a living Hardcore one plays.
     #[test]
     fn a_fallen_character_is_never_played() {
-        let fallen = net::hardcore::Char { name: "B".into(), hardcore: true, open: false, fall: Some(Default::default()) };
+        let fallen = net::hardcore::Char { name: "B".into(), hardcore: true, open: false, fall: Some(Default::default()), ..Default::default() };
         let alive = net::hardcore::Char { name: "A".into(), hardcore: true, ..Default::default() };
         let chars = vec![CharRecord { hc: Some(alive), ..rec("A", 1) }, CharRecord { hc: Some(fallen), ..rec("B", 2) }];
         let (mut cues, mut reqs) = (Vec::new(), Vec::new());

@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-19 · [OG] is chosen for each character
+- On a server with [OG] characters, the last page of character creation now has an "[OG]" row under the
+  stats (and under "Hardcore" where that is offered too): turn it on for a character that plays the game as
+  it was, with the basic upgrades only: no map, minimap or item links, and no mouse or touch in the world.
+  Creating with it on asks you to confirm first, since it can never be undone. With both rows shown, up and
+  down choose the row, left and right turn it; a click on a row turns it too.
+- [OG] used to be chosen for a whole account when the account was made. Now each character chooses for
+  itself, and character select shows "[OG]" under an [OG] character, as it shows "Hardcore".
+
 ## 2026-11-19 · Item stats while you sell at the auction
 - When you put an item up for auction, the text beside your bank's list now shows the item's stat bonuses
   (Strength, Stamina, AC and the rest) under its usual lines, so you can see what you are selling without

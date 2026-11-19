@@ -11,6 +11,13 @@
 //! chosen: left or right (the d-pad, the arrow keys, a click on the row) turns it
 //! on or off. Created on, a question first: Hardcore is for good, and the
 //! character's first death its last; cross creates, triangle goes back to the page.
+//!
+//! On a server that offers [OG] characters (the same offer's bit 2; the server
+//! owner's of 2026-11-19: "lets make [OG] status a char tag like [HC]") an "[OG]"
+//! row the same way, saying what [OG] gives up (the basic upgrades only: no map,
+//! minimap or item links, no mouse or touch). With both rows up and down choose
+//! the row left and right turn (the chosen one's value between arrows); created
+//! with either on, the question says what each means.
 
 use super::tables;
 use super::{Env, Msg, create_model_dressed, frame_camera, legend, word};
@@ -24,6 +31,10 @@ use vi::ui::{FrameParam, Window};
 const TRIANGLE: i32 = 1;
 const CROSS: i32 = 2;
 const HARDCORE_ROW: i32 = 3;
+const OG_ROW: i32 = 4;
+/// A click on a row, as `point` hands it to `key` (no key of the game's).
+const HARDCORE_KEY: i32 = -1003;
+const OG_KEY: i32 = -1004;
 
 /// The Hardcore row's words and the question's (ours).
 pub const HARDCORE_LABEL: &str = "Hardcore";
@@ -31,10 +42,33 @@ pub const HARDCORE_EXPLAIN: [&str; 2] = ["Death is final: no respawn, no", "resu
 pub const HARDCORE_ASK: &str = "Create %s as a Hardcore character? Death is final: no respawn, no resurrection. It can never be undone.";
 pub const HARDCORE_YES: &str = "Yes, create a Hardcore character";
 pub const HARDCORE_NO: &str = "No, go back";
+/// Hardcore's one line when the [OG] row stands under it.
+pub const HARDCORE_SHORT: &str = "Final death. Cannot be undone.";
+/// The [OG] row's words and the question's (ours).
+pub const OG_LABEL: &str = "[OG]";
+pub const OG_EXPLAIN: [&str; 2] = ["No map, minimap or item links,", "no mouse or touch: basics only."];
+pub const OG_ASK: &str = "Create %s as an [OG] character? The basic upgrades only: no map, minimap or item links, and no mouse or touch in the world. It can never be undone.";
+pub const OG_YES: &str = "Yes, create an [OG] character";
+pub const BOTH_TITLE: &str = "Hardcore [OG]";
+pub const BOTH_ASK: &str = "Create %s as a Hardcore [OG] character? Death is final, and the basic upgrades only: no map, minimap or item links, no mouse or touch. It can never be undone.";
+pub const BOTH_YES: &str = "Yes, Hardcore and [OG]";
+
+/// The question for what is on: its title, words and yes, and its text's rows.
+pub fn question(hardcore: bool, og: bool) -> (&'static str, &'static str, &'static str, i32) {
+    match (hardcore, og) {
+        (true, true) => (BOTH_TITLE, BOTH_ASK, BOTH_YES, 4),
+        (false, true) => (OG_LABEL, OG_ASK, OG_YES, 4),
+        _ => (HARDCORE_LABEL, HARDCORE_ASK, HARDCORE_YES, 3),
+    }
+}
 
 pub struct ReviewPage {
     /// the Hardcore row on (a server that offered it)
     pub hardcore: bool,
+    /// the [OG] row on (a server that offered it)
+    pub og: bool,
+    /// with both rows up, the [OG] row is the one left and right turn
+    pub og_row: bool,
     /// the question up over the page (Create with Hardcore on)
     pub asking: bool,
     window: Window,
@@ -47,7 +81,7 @@ pub struct ReviewPage {
 
 impl Default for ReviewPage {
     fn default() -> Self {
-        ReviewPage { hardcore: false, asking: false, window: Window::default(), idle: -1, time: -1, hits: Hits::default() }
+        ReviewPage { hardcore: false, og: false, og_row: false, asking: false, window: Window::default(), idle: -1, time: -1, hits: Hits::default() }
     }
 }
 
@@ -74,6 +108,8 @@ impl ReviewPage {
     /// `Reset`.
     pub fn reset(&mut self, env: &mut Env) {
         self.hardcore = false;
+        self.og = false;
+        self.og_row = false;
         self.asking = false;
         self.idle = 0;
         self.time = 0;
@@ -81,12 +117,19 @@ impl ReviewPage {
     }
 
     /// `OnKeyDown`: Enter creates (267), back is 260; on a server that offers
-    /// Hardcore left and right turn its row, and Create with it on asks first.
+    /// Hardcore or [OG] left and right turn the row (up and down choose it, with
+    /// both), and Create with either on asks first.
     pub fn key(&mut self, k: i32, env: &mut Env, sounds: &mut Vec<i32>) -> Option<Msg> {
-        let offered = super::hardcore_offered();
-        if !offered {
+        let (hc_offered, og_offered) = (super::hardcore_offered(), super::og_offered());
+        if !hc_offered {
             self.hardcore = false;
         }
+        if !og_offered {
+            self.og = false;
+        }
+        // the row left and right turn: [OG]'s alone, Hardcore's alone, or the chosen one
+        self.og_row = og_offered && (!hc_offered || self.og_row);
+        let offered = hc_offered || og_offered;
         if self.asking {
             match k {
                 13 | key::CROSS => {
@@ -105,11 +148,33 @@ impl ReviewPage {
         }
         match k {
             17 | 18 | key::LEFT | key::RIGHT if offered => {
+                if self.og_row {
+                    self.og = !self.og;
+                } else {
+                    self.hardcore = !self.hardcore;
+                }
+                sounds.push(11);
+                None
+            }
+            19 | 20 | key::UP | key::DOWN if hc_offered && og_offered => {
+                self.og_row = !self.og_row;
+                sounds.push(11);
+                None
+            }
+            // a click on a row: that row, turned
+            OG_KEY if og_offered => {
+                self.og_row = true;
+                self.og = !self.og;
+                sounds.push(11);
+                None
+            }
+            HARDCORE_KEY if hc_offered => {
+                self.og_row = false;
                 self.hardcore = !self.hardcore;
                 sounds.push(11);
                 None
             }
-            13 | key::CROSS if self.hardcore => {
+            13 | key::CROSS if self.hardcore || self.og => {
                 self.asking = true;
                 sounds.push(13);
                 None
@@ -175,17 +240,35 @@ impl ReviewPage {
                 r.draw_string([tp[0] + 140, tp[1]], black, &vi::ui::wide(&v.to_string()));
                 tp[1] += 19;
             }
-            // the Hardcore row, on a server that offers it: "< On >", and why
-            if super::hardcore_offered() {
-                let red = [0.6, 0.0, 0.0, 1.0];
-                let at = [tp[0], tp[1] + 6];
-                r.draw_string(at, black, &vi::ui::wide(HARDCORE_LABEL));
-                let v = vi::ui::wide(if self.hardcore { "< On >" } else { "< Off >" });
-                r.draw_string([at[0] + 140, at[1]], if self.hardcore { red } else { black }, &v);
-                self.hits.push([at[0] - 4, at[1] - 2, at[0] + 220, at[1] + 18], HARDCORE_ROW);
-                for (i, l) in HARDCORE_EXPLAIN.iter().enumerate() {
-                    r.draw_string([at[0], at[1] + 19 * (i as i32 + 1)], black, &vi::ui::wide(l));
+            // the Hardcore row and the [OG] row, on a server that offers them:
+            // "< On >" (the arrows on the row left and right turn), and why
+            let (hc_offered, og_offered) = (super::hardcore_offered(), super::og_offered());
+            let both = hc_offered && og_offered;
+            let red = [0.6, 0.0, 0.0, 1.0];
+            let step = if both { 17 } else { 19 };
+            let mut at = [tp[0], tp[1] + if both { 4 } else { 6 }];
+            let mut rows: Vec<(&str, bool, bool, &[&str], i32)> = Vec::new();
+            if hc_offered {
+                let lines: &[&str] = if both { &[HARDCORE_SHORT] } else { &HARDCORE_EXPLAIN };
+                rows.push((HARDCORE_LABEL, self.hardcore, !self.og_row || !both, lines, HARDCORE_ROW));
+            }
+            if og_offered {
+                rows.push((OG_LABEL, self.og, self.og_row || !both, &OG_EXPLAIN, OG_ROW));
+            }
+            for (label, on, chosen, lines, id) in rows {
+                r.draw_string(at, black, &vi::ui::wide(label));
+                let v = match (on, chosen) {
+                    (true, true) => "< On >",
+                    (false, true) => "< Off >",
+                    (true, false) => "  On",
+                    (false, false) => "  Off",
+                };
+                r.draw_string([at[0] + 140, at[1]], if on { red } else { black }, &vi::ui::wide(v));
+                self.hits.push([at[0] - 4, at[1] - 2, at[0] + 220, at[1] + 18], id);
+                for (i, l) in lines.iter().enumerate() {
+                    r.draw_string([at[0], at[1] + step * (i as i32 + 1)], black, &vi::ui::wide(l));
                 }
+                at[1] += step * (lines.len() as i32 + 1) + 4;
             }
         }
         // the model, its flourish, the camera, the scene
@@ -237,24 +320,25 @@ impl ReviewPage {
             let y = r.point_size() + 345;
             vui.draw_centered_string_ex(r, &h, 490, y, white, 0, true);
         }
-        // the question, over everything (Create with Hardcore on)
+        // the question, over everything (Create with Hardcore or [OG] on)
         if self.asking {
-            self.window.init(vui, r, [320, 224], 420, 7, 0);
-            self.window.set_title(Some(&vi::ui::wide(HARDCORE_LABEL)));
+            let (title, ask, yes_word, rows) = question(self.hardcore, self.og);
+            self.window.init(vui, r, [320, 224], 420, rows + 4, 0);
+            self.window.set_title(Some(&vi::ui::wide(title)));
             self.window.open(false);
             self.window.draw(vui, r);
             let w = self.window.size[0];
-            let ask = HARDCORE_ASK.replacen("%s", &form.name, 1);
-            self.window.text_box(vui, r, &vi::ui::wide(&ask), 30, 1, w - 60, 3, vi::ui::UI_COLORS[0], 0);
+            let ask = ask.replacen("%s", &form.name, 1);
+            self.window.text_box(vui, r, &vi::ui::wide(&ask), 30, 1, w - 60, rows, vi::ui::UI_COLORS[0], 0);
             let mut yes = vi::ui::wide("|x");
-            yes.extend(vi::ui::wide(HARDCORE_YES));
+            yes.extend(vi::ui::wide(yes_word));
             let mut no = vi::ui::wide("|t");
             no.extend(vi::ui::wide(HARDCORE_NO));
-            self.window.text_box(vui, r, &yes, 30, 5, w - 60, 1, vi::ui::UI_COLORS[0], 0);
-            self.window.text_box(vui, r, &no, 30, 6, w - 60, 1, vi::ui::UI_COLORS[0], 0);
+            self.window.text_box(vui, r, &yes, 30, rows + 2, w - 60, 1, vi::ui::UI_COLORS[0], 0);
+            self.window.text_box(vui, r, &no, 30, rows + 3, w - 60, 1, vi::ui::UI_COLORS[0], 0);
             self.hits.clear();
-            self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 30, 5, w - 60, 1), CROSS);
-            self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 30, 6, w - 60, 1), TRIANGLE);
+            self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 30, rows + 2, w - 60, 1), CROSS);
+            self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 30, rows + 3, w - 60, 1), TRIANGLE);
         } else {
             self.window.close(true);
         }
@@ -262,10 +346,16 @@ impl ReviewPage {
 
     /// A pointer: the legend's glyphs.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
-        match self.hits.at(p) {
-            Some(TRIANGLE) => vec![key::TRIANGLE],
-            Some(CROSS) => vec![key::CROSS],
-            Some(HARDCORE_ROW) => vec![key::RIGHT],
+        self.hits.at(p).map_or(Vec::new(), |id| self.point_key(id))
+    }
+
+    /// The keys a hit's id presses.
+    fn point_key(&self, id: i32) -> Vec<i32> {
+        match id {
+            TRIANGLE => vec![key::TRIANGLE],
+            CROSS => vec![key::CROSS],
+            HARDCORE_ROW => vec![HARDCORE_KEY],
+            OG_ROW => vec![OG_KEY],
             _ => Vec::new(),
         }
     }
@@ -349,6 +439,91 @@ mod tests {
         p.reset(&mut env);
         assert!(!p.hardcore && !p.asking, "a reset: off");
         super::super::set_hardcore_offered(false);
+    }
+
+    /// [OG] on a server that offers it (the offer's bit 2): alone, left/right turn
+    /// its row and Create asks first, its question saying what [OG] gives up; with
+    /// Hardcore too, up/down choose the row left/right turn, a click turns the row
+    /// clicked, and the question names both. The controls: not offered, no row and
+    /// it is turned off; a reset turns it off.
+    #[test]
+    fn og_is_turned_and_asked() {
+        let mut p = ReviewPage::default();
+        let mut env = Env::default();
+        let mut s = Vec::new();
+        super::super::set_hardcore_offered(false);
+        super::super::set_og_offered(false);
+        p.og = true;
+        assert_eq!(p.key(key::RIGHT, &mut env, &mut s), None);
+        assert!(!p.og, "the control: not offered, off");
+        super::super::set_og_offered(true);
+        assert_eq!(p.key(key::RIGHT, &mut env, &mut s), None);
+        assert!(p.og && !p.hardcore, "[OG] alone: right turns it");
+        assert_eq!(p.key(key::CROSS, &mut env, &mut s), None, "asked first");
+        assert!(p.asking);
+        assert_eq!(question(p.hardcore, p.og).0, OG_LABEL);
+        assert_eq!(p.key(key::CROSS, &mut env, &mut s), Some(Msg::Create), "yes: created");
+        // both offered: right turns Hardcore's row, down chooses [OG]'s
+        p.reset(&mut env);
+        super::super::set_hardcore_offered(true);
+        assert_eq!(p.key(key::RIGHT, &mut env, &mut s), None);
+        assert!(p.hardcore && !p.og, "Hardcore's row first");
+        assert_eq!(p.key(key::DOWN, &mut env, &mut s), None);
+        assert_eq!(p.key(18, &mut env, &mut s), None);
+        assert!(p.hardcore && p.og && p.og_row, "down, then right: [OG] on");
+        assert_eq!(p.key(19, &mut env, &mut s), None);
+        assert_eq!(p.key(key::LEFT, &mut env, &mut s), None);
+        assert!(!p.hardcore && p.og, "up, then left: Hardcore off");
+        // a click on a row turns that row
+        assert_eq!(p.point_key(OG_ROW), vec![OG_KEY]);
+        assert_eq!(p.key(OG_KEY, &mut env, &mut s), None);
+        assert!(!p.og && p.og_row);
+        assert_eq!(p.key(HARDCORE_KEY, &mut env, &mut s), None);
+        assert_eq!(p.key(OG_KEY, &mut env, &mut s), None);
+        assert!(p.hardcore && p.og);
+        assert_eq!(p.key(13, &mut env, &mut s), None);
+        assert!(p.asking);
+        assert_eq!(question(p.hardcore, p.og).0, BOTH_TITLE);
+        assert_eq!(p.key(27, &mut env, &mut s), None, "no: back to the page");
+        assert!(!p.asking && p.hardcore && p.og);
+        p.reset(&mut env);
+        assert!(!p.og && !p.og_row && !p.hardcore, "a reset: off");
+        // the words say what [OG] gives up; Hardcore's alone are as before
+        for (_, ask, _, _) in [question(false, true), question(true, true)] {
+            assert!(ask.contains("no map, minimap or item links") && ask.contains("no mouse or touch"), "{ask}");
+        }
+        assert_eq!(question(true, false), (HARDCORE_LABEL, HARDCORE_ASK, HARDCORE_YES, 3), "the control: Hardcore's question");
+        assert!(OG_EXPLAIN.join(" ").contains("No map, minimap or item links") && OG_EXPLAIN.join(" ").contains("no mouse or touch"));
+        super::super::set_hardcore_offered(false);
+        super::super::set_og_offered(false);
+    }
+
+    /// Both rows drawn under the stats, above the legend's bar: a click on each
+    /// turns its own row, and the legend's glyphs are still found under them.
+    #[test]
+    fn both_rows_are_drawn_above_the_legend() {
+        let mut p = ReviewPage::default();
+        let v = super::super::tests_vui();
+        let mut r = crate::pointer::testing::NullRaster;
+        let res = crate::pregame::res::Res::new();
+        let mut shared = crate::pregame::Shared::default();
+        let (mut cues, mut music) = (Vec::new(), Vec::new());
+        let mut cx = Ctx { now: 0, game_frame: true, vui: &v, r: &mut r, res: &res, shared: &mut shared, cues: &mut cues, music: &mut music, gpu: None };
+        let mut env = Env::default();
+        let form = NewChar { race: 1, class: 13, ..super::super::blank_form() };
+        super::super::set_hardcore_offered(true);
+        super::super::set_og_offered(true);
+        p.draw(&mut cx, &mut env, None, &form);
+        let rows: Vec<(i32, Vec<i32>)> = (300..420).step_by(2).map(|y| (y, p.point([100.0, y as f32]))).filter(|(_, k)| !k.is_empty() && k[0] < 0).collect();
+        let hc = rows.iter().find(|(_, k)| k == &vec![HARDCORE_KEY]).map(|r| r.0);
+        let og = rows.iter().find(|(_, k)| k == &vec![OG_KEY]).map(|r| r.0);
+        assert!(matches!((hc, og), (Some(a), Some(b)) if a < b && b < 400), "rows at {hc:?} and {og:?}");
+        let found: Vec<i32> = (40..400).step_by(2).flat_map(|x| p.point([x as f32, 420.0])).collect();
+        assert!(found.contains(&key::TRIANGLE) && found.contains(&key::CROSS), "the legend under them");
+        super::super::set_hardcore_offered(false);
+        super::super::set_og_offered(false);
+        p.draw(&mut cx, &mut env, None, &form);
+        assert!((300..420).step_by(2).all(|y| p.point([100.0, y as f32]).iter().all(|k| *k >= 0)), "the control: no rows");
     }
 
     #[test]

@@ -17,6 +17,13 @@
 //! - [`crate::session::OP_HARDCORE_FALL`] ([`read_fall`]): the player's own
 //!   Hardcore character has just fallen, and in how many seconds the server ends
 //!   the connection (0x0777, `Msg0777`: back to the server list).
+//!
+//! [OG] characters ride the same offer (the server owner, 2026-11-19: "lets make
+//! [OG] status a char tag like [HC]"): the offer's u32 is bits, [`OFFER_HARDCORE`]
+//! and [`OFFER_OG`] (a server of before sends 1); this client answers the bits it
+//! takes, writes [`og_block`] after [`block`] when [OG] was offered, and reads
+//! [`OG`] and [`OG_OPEN`] in the list. An [OG] character has the basic upgrades
+//! only on that server: no map, minimap or item links, no mouse or touch.
 
 use crate::stream::Reader;
 
@@ -24,6 +31,12 @@ use crate::stream::Reader;
 pub const VERSION: u8 = 1;
 /// A creation's block's first byte, before the race options' 'R'.
 pub const MARK: u8 = b'H';
+/// The [OG] block's first byte, after the Hardcore block, before 'R'.
+pub const OG_MARK: u8 = b'O';
+
+/// The offer's bits: what the server's creation takes.
+pub const OFFER_HARDCORE: u32 = 1;
+pub const OFFER_OG: u32 = 2;
 
 /// The flags of a character's entry.
 pub const HARDCORE: u8 = 1;
@@ -31,6 +44,9 @@ pub const FALLEN: u8 = 2;
 /// A character made by a client that did not choose (a PS2's): it is asked in
 /// the world.
 pub const OPEN: u8 = 4;
+/// An [OG] character, and one whose [OG] choice is still to be asked in the world.
+pub const OG: u8 = 8;
+pub const OG_OPEN: u8 = 16;
 
 /// A fallen character's death, as the server took it down at the moment.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -52,6 +68,9 @@ pub struct Char {
     /// its choice still to make (in the world)
     pub open: bool,
     pub fall: Option<Fall>,
+    /// an [OG] character, and its [OG] choice still to make (in the world)
+    pub og: bool,
+    pub og_open: bool,
 }
 
 fn text(r: &mut Reader) -> String {
@@ -83,7 +102,7 @@ pub fn read_chars(data: &[u8]) -> Option<Vec<(u32, Char)>> {
         if r.error {
             return None;
         }
-        out.push((id, Char { name, hardcore: flags & HARDCORE != 0, open: flags & OPEN != 0, fall }));
+        out.push((id, Char { name, hardcore: flags & HARDCORE != 0, open: flags & OPEN != 0, fall, og: flags & OG != 0, og_open: flags & OG_OPEN != 0 }));
     }
     (!r.error && r.pos == data.len()).then_some(out)
 }
@@ -114,6 +133,13 @@ pub fn read_fall(data: &[u8]) -> Option<FallNotice> {
 /// 0 not.
 pub fn block(hardcore: bool) -> [u8; 3] {
     [MARK, VERSION, hardcore as u8]
+}
+
+/// The creation's [OG] choice, after [`block`] (or 0x002B's own fields) and
+/// before the race options' block, by a client the server offered [OG]: 'O',
+/// version 1, 1 [OG] or 0 not.
+pub fn og_block(og: bool) -> [u8; 3] {
+    [OG_MARK, VERSION, og as u8]
 }
 
 /// Unix seconds as "2026-11-18 08:45 UTC".
@@ -164,7 +190,7 @@ pub(crate) mod tests {
     fn the_chars_are_read() {
         let l = read_chars(&sample()).unwrap();
         assert_eq!(l.len(), 2);
-        assert_eq!(l[0], (7, Char { name: "Meshuggah".into(), hardcore: true, open: false, fall: None }));
+        assert_eq!(l[0], (7, Char { name: "Meshuggah".into(), hardcore: true, open: false, fall: None, og: false, og_open: false }));
         let f = l[1].1.fall.clone().unwrap();
         assert_eq!((l[1].0, l[1].1.name.as_str(), f.level, f.cms, f.killer.as_str(), f.place.as_str()), (9, "Brakk", 52, 140, "a Zek sentry", "Tallon's fortress"));
         assert_eq!(stamp(f.at), "2026-11-23 08:45 UTC");
@@ -197,5 +223,25 @@ pub(crate) mod tests {
         assert_eq!(stamp(1_794_991_500), "2026-11-18 08:45 UTC");
         assert_eq!(block(true), [b'H', 1, 1]);
         assert_eq!(block(false), [b'H', 1, 0]);
+        assert_eq!(og_block(true), [b'O', 1, 1]);
+        assert_eq!(og_block(false), [b'O', 1, 0]);
+    }
+
+    /// [OG]'s flags (8, and 16 its choice open) beside Hardcore's; the control:
+    /// a server of before sends neither.
+    #[test]
+    fn og_flags_are_read() {
+        let mut b = vec![VERSION, 2, 0];
+        b.extend_from_slice(&7u32.to_le_bytes());
+        str8(&mut b, "Meshuggah");
+        b.push(HARDCORE | OG);
+        b.extend_from_slice(&8u32.to_le_bytes());
+        str8(&mut b, "Newbie");
+        b.push(OPEN | OG_OPEN);
+        let l = read_chars(&b).unwrap();
+        assert!(l[0].1.og && l[0].1.hardcore && !l[0].1.og_open);
+        assert!(l[1].1.og_open && l[1].1.open && !l[1].1.og);
+        let old = read_chars(&sample()).unwrap();
+        assert!(old.iter().all(|(_, c)| !c.og && !c.og_open), "the control");
     }
 }
