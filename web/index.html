@@ -63,6 +63,10 @@
   #install .row { margin-top: 10px; }
   #install .note { color: var(--text); }
   #install-go { flex: 0 1 auto; }
+  /* players in the world now (/online.json, when the host has one); hidden with the panel once the game runs */
+  .online { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: var(--dim); font-size: 13px; }
+  .online .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 6px var(--good); flex: none; }
+  .online b { color: var(--text); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -73,6 +77,7 @@
   <form id="gate" class="card" autocomplete="on">
     <h1>EverQuest Online Adventures</h1>
     <p class="lede">A client in your browser, from your own <i>Frontiers</i> disc image. The image stays on your computer: it is read here, never uploaded. You sign in on the game's own Station screen.</p>
+    <div class="online" id="online" hidden aria-live="polite"><span class="dot"></span><span id="online-text"></span></div>
     <div class="gfx" id="gfx">
       <div class="state" id="gfx-state">Checking graphics…</div>
       <p>Recommended browser: a Chromium-based one (Chrome, Edge, Brave, Opera, Chromium) with WebGPU.</p>
@@ -132,6 +137,26 @@
   fetch('/ps2/', { method: 'HEAD', cache: 'no-store' }).then((r) => {
     if (r.ok) document.getElementById('ps2-row').hidden = false;
   }).catch(() => {});
+  // how many are in the world now, where the host writes /online.json (eqoaclassic.com, every minute:
+  // {updated, total, shards: [{name, players}]}, players null for a shard down); anywhere else, or a file
+  // more than five minutes old, shows nothing. Never waited on: the page and the game go on without it.
+  (() => {
+    const box = document.getElementById('online'), text = document.getElementById('online-text');
+    const show = (d) => {
+      const fresh = d && Array.isArray(d.shards) && Date.now() - Date.parse(d.updated) < 300000;
+      if (!fresh || !d.shards.some((s) => s.players !== null)) { box.hidden = true; return; }
+      const parts = d.shards.map((s) => String(s.name).replace(/ Server$/, '') + ' ' + (s.players === null ? 'offline' : s.players));
+      text.innerHTML = '';
+      const b = document.createElement('b');
+      b.textContent = d.total + (d.total === 1 ? ' player' : ' players') + ' online';
+      text.append(b, ' \u00b7 ' + parts.join(' \u00b7 '));
+      box.hidden = false;
+    };
+    const load = () => fetch('/online.json', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null)).then(show).catch(() => { box.hidden = true; });
+    load();
+    setInterval(load, 60000);
+  })();
 </script>
 <script type="module" src="./notices.js"></script>
 <script type="module" src="./main.js"></script>

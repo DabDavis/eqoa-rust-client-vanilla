@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-20 · The play page shows how many are online
+- The page you start the game from in your browser now says how many players are in the world, on each
+  server, before you press Start (it updates every minute).
+
 ## 2026-11-20 · The camera holds still on a diagonal run with the right mouse button
 - Holding the right mouse button while running with W and A or D (the diagonal) no longer makes the camera
   shake left and right: it stays right behind your character, as it does running straight ahead.
