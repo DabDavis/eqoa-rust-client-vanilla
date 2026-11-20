@@ -759,6 +759,8 @@ pub fn shot_with(
                 let frame_s = frame_ms as f32 / 1000.0;
                 // the keys' and the pad's sticks are in `sticks` already
                 mouse.moving = crate::mouse::moving(&sticks, &[0.0; 4], play.as_ref().is_some_and(|p| p.autorun));
+                // A and D turn both buttons' run (`Mouse::side`)
+                mouse.side = sticks[2];
                 // the look turns the walk as the last console frame left it
                 // (`Walker::rewind`)
                 walker.rewind();
@@ -789,6 +791,7 @@ pub fn shot_with(
             }
             let mut client = play.as_ref().filter(|p| !p.is_dead()).map(|p| p.control_client()).unwrap_or_default();
             client.steer = look_free && mouse.steer(walker.cam.camera_mode);
+            client.lean = mouse.lean();
             // the view the walk keeps while the left button looks round on
             // the move (`Mouse::walk_view`)
             client.walk_view = mouse.walk_view().filter(|_| look_free);
@@ -3302,6 +3305,9 @@ impl App {
         let pad = if offer { [0.0; 4] } else { self.console.sticks() };
         // the left button steers while the player moves (`Mouse::moving`)
         self.mouse.moving = crate::mouse::moving(&a, &pad, self.play.as_ref().is_some_and(|p| p.autorun));
+        // A and D (or a stick to the side) turn both buttons' run
+        // (`Mouse::side`)
+        self.mouse.side = if pad[2].abs() > a[2].abs() { pad[2] } else { a[2] };
         let ((look, zoom), feel) = match self.walker.as_mut() {
             Some(w) if free => {
                 // the looks turn the walk as the last console frame left it
@@ -6406,6 +6412,7 @@ impl App {
                 // the view the walk keeps while the left button looks round
                 // on the move (`Mouse::walk_view`)
                 let walk_view = self.mouse.walk_view().filter(|_| look_free);
+                let lean = self.mouse.lean();
                 let game_keys = self.game_keys();
                 let now = self.clock.elapsed().as_millis() as i64;
                 let Some(g) = &mut self.gfx else { return };
@@ -6453,6 +6460,7 @@ impl App {
                     client.keys = game_keys;
                     client.steer = steer;
                     client.walk_view = walk_view;
+                    client.lean = lean;
                     // a frame come late while following (`follow_catch_up`)
                     if let Some(p) = play.as_mut() {
                         client = follow_catch_up(w, p, sticks, now, client);

@@ -37,7 +37,17 @@
 //! slot uses it, a right click turns its auto (`stacked_at`), and each slot
 //! of both can be given a key on the Controls page (`binds::bar_slot`,
 //! `slot_entry`). The arrows and E still walk and use the bar up, its
-//! selection outlined.
+//! selection outlined: stacked, the bars lie across, so left and right walk
+//! along the bar up and up and down go to the bar above and below, round the
+//! carousel's order (`HudMenus::key`; a player's petition 2457: "since the
+//! bars are now horizontal, it would make much more sense that left/right on
+//! the dpad would cycle through the same bar's 5 icons and up/down would go
+//! to the next"), the d-pad's and the arrows' alike. Played with a controller
+//! (`HudMenus::named`: the last input no key, mouse or finger), the name of
+//! what the selection holds shows over the bars while the bar is lit, as the
+//! carousel's title bar shows it (`draw_name`; the same petition: "can we
+//! still see the name of the spell/item the cursor is over when using the
+//! dpad?"); on the keyboard and the mouse, none, as ticket 1913 asked.
 //!
 //! With Ability Bars at 3 or 4 (the server owner, 2026-11-18: "When players
 //! turn on 4 they need to be able to stack 4 spell bars, or 2 columns of 2,
@@ -515,6 +525,10 @@ pub struct HudMenus {
     /// The cells the Utility Bars last drew, as `stacked_hits` (in their
     /// own place, `draw_utility`).
     utility_hits: Vec<(usize, i32, [i32; 4])>,
+    /// The stacked bars are played with a controller (the last input no key,
+    /// mouse or finger: play's): the selection's name is drawn over them
+    /// (`draw_name`).
+    pub named: bool,
 }
 
 impl Default for HudMenus {
@@ -532,6 +546,7 @@ impl Default for HudMenus {
             stacked: false,
             stacked_hits: Vec::new(),
             utility_hits: Vec::new(),
+            named: false,
         }
     }
 }
@@ -694,6 +709,37 @@ impl HudMenus {
                 self.stacked_hits.push((menu, n, [x, y, x + cw, y + ch]));
             }
         }
+    }
+
+    /// The name of what the selection of the menu up holds (`name`: an
+    /// ability's, an item's, a set's), over the stacked bars (`utility`: the
+    /// Utility Bars) where the menu up is one of theirs, as they were last
+    /// drawn: centred over the selected cell, a line above the block's top,
+    /// with a shadow; only while the bars are played with a controller
+    /// (`named`) and the menu is lit by a key (20 s, as the carousel's title
+    /// bar shows it bright). Draw it in the bars' own place (their piece).
+    pub fn draw_name(&self, vui: &Vui, r: &mut dyn Raster, now: i64, utility: bool, name: &dyn Fn(u32, i64) -> Vec<u16>) {
+        let up = self.up();
+        let m = &self.menus[up];
+        if !self.named || m.lit <= 0 || m.time < now {
+            return;
+        }
+        let hits = if utility { &self.utility_hits } else { &self.stacked_hits };
+        let Some(&(_, _, c)) = hits.iter().find(|&&(menu, n, _)| menu == up && n == m.sel) else { return };
+        let e = self.defs[up].entries.get(m.sel.max(0) as usize).copied().unwrap_or_default();
+        if e.msg == 0 || e.id < 0 {
+            return;
+        }
+        let s = name(e.msg, e.id);
+        if s.is_empty() {
+            return;
+        }
+        let top = hits.iter().map(|h| h.2[1]).min().unwrap_or(c[1]);
+        let left = hits.iter().map(|h| h.2[0]).min().unwrap_or(c[0]);
+        let half = r.string_width(&s) / 2;
+        let x = ((c[0] + c[2]) / 2).max(left + half);
+        let y = top - r.point_size() / 2 - 4;
+        vui.draw_centered_string_ex(r, &s, x, y, [1.0, 1.0, 1.0, 1.0], 0, true);
     }
 
     /// The stacked bars' cell at frame point `p` (in the chat box's place, as
@@ -877,8 +923,12 @@ impl HudMenus {
     /// sets). Returns what was used:
     /// (message, id). `switch`: left and right go round the menus
     /// (`VIWndGame::Interact` and `Attack`, play's alone); without it they
-    /// only light the menu up.
+    /// only light the menu up. Stacked (`stacked`, the module's doc) the bars
+    /// lie across: left and right walk the bar up as up and down walk the
+    /// carousel's, and up and down go round the menus (up the one before, the
+    /// bar above), or only light it, as left and right do the carousel's.
     pub fn key(&mut self, key: Key, now: i64, bars: Bars, switch: bool, cues: &mut Vec<crate::sound::Cue>) -> Option<(u32, i64)> {
+        let key = if self.stacked { across(key) } else { key };
         let k = self.up();
         let def = self.defs[k].clone();
         let m = &mut self.menus[k];
@@ -932,6 +982,20 @@ impl HudMenus {
         m.lit = 1;
         m.alpha = 0.3;
         m.time = now + 20000;
+    }
+}
+
+/// A key on the stacked bars, which lie across (`HudMenus::key`; petition
+/// 2457), as the carousel's column takes it: left and right walk the bar
+/// (the column's up and down), up and down go round the bars (its left and
+/// right).
+fn across(key: Key) -> Key {
+    match key {
+        Key::Left => Key::Up,
+        Key::Right => Key::Down,
+        Key::Up => Key::Left,
+        Key::Down => Key::Right,
+        Key::Use => Key::Use,
     }
 }
 
@@ -1070,6 +1134,82 @@ mod tests {
         assert_eq!(h.stacked_hits.len(), 5, "one bar, one row");
         h.draw_stacked(&vui, &mut r, 320, 216, DISC, Layout::Columns);
         assert_eq!(h.stacked_hits, hits, "two bars: 2 Columns is one column of two, as Stacked");
+    }
+
+    /// Petition 2457: on the stacked bars, which lie across, left and right
+    /// walk the bar up (round its five) and up and down go to the bar above
+    /// and below, without the switch only lighting it; and played with a
+    /// controller (`named`) the selection's name is drawn over the bars, at
+    /// the selected cell, while the bar is lit, none past its 20 s or with a
+    /// key or the mouse last. The controls: the carousel (not stacked) walks
+    /// up and down and switches with left and right, as the game's.
+    #[test]
+    fn stacked_bars_walk_across_and_name_the_selection_for_a_controller() {
+        struct Rec(Vec<([i32; 2], Vec<u16>)>);
+        impl Raster for Rec {
+            fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+            fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+            fn draw_string(&mut self, at: [i32; 2], _: [f32; 4], s: &[u16]) {
+                self.0.push((at, s.to_vec()));
+            }
+            fn draw_centered_string(&mut self, at: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+                self.0.push((at, s.to_vec()));
+            }
+            fn string_width(&self, s: &[u16]) -> i32 {
+                s.len() as i32 * 8
+            }
+            fn point_size(&self) -> i32 {
+                16
+            }
+            fn viewport(&self) -> [i32; 4] {
+                [0, 0, 640, 448]
+            }
+            fn set_viewport(&mut self, _: [i32; 4]) {}
+        }
+        let walk = |stacked: bool, keys: &[Key], switch: bool| {
+            let mut h = HudMenus { stacked, ..Default::default() };
+            for &k in keys {
+                h.key(k, 0, DISC, switch, &mut Vec::new());
+            }
+            (h.sel, h.menus[0].sel, h.menus[1].sel)
+        };
+        // stacked: along the bar, then down to bar 2 (its own selection kept)
+        assert_eq!(walk(true, &[Key::Right, Key::Right], true), (0, 2, 0), "right walks the bar");
+        assert_eq!(walk(true, &[Key::Left], true), (0, 4, 0), "left from the first goes round to the fifth");
+        assert_eq!(walk(true, &[Key::Down], true), (1, 0, 0), "down: the bar below");
+        assert_eq!(walk(true, &[Key::Down, Key::Up], true), (0, 0, 0), "up: the bar above");
+        assert_eq!(walk(true, &[Key::Down, Key::Right], true), (1, 0, 1), "along bar 2");
+        assert_eq!(walk(true, &[Key::Down, Key::Up], false), (0, 0, 0), "without the switch up and down only light");
+        assert_eq!(walk(true, &[Key::Right], false), (0, 1, 0), "and left and right still walk");
+        // the controls: the carousel, the game's keys
+        assert_eq!(walk(false, &[Key::Down, Key::Down], true), (0, 2, 0), "the carousel: down walks");
+        assert_eq!(walk(false, &[Key::Right], true), (1, 0, 0), "the carousel: right switches");
+        // the name, over the bars, at the selected cell
+        let vui = crate::pointer::testing::vui();
+        let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id };
+        let named = |pad: bool, at: i64| {
+            let mut h = HudMenus { stacked: true, named: pad, ..Default::default() };
+            h.defs[0] = MenuDef { count: 5, entries: vec![ab(11), ab(12), ab(13), Entry::default(), Entry::default()] };
+            h.defs[1] = MenuDef { count: 5, entries: vec![ab(21), Entry::default(), Entry::default(), Entry::default(), Entry::default()] };
+            h.key(Key::Right, 100, DISC, true, &mut Vec::new());
+            let mut r = Rec(Vec::new());
+            h.draw_stacked(&vui, &mut r, 320, 216, DISC, Layout::Stacked);
+            assert!(r.0.is_empty(), "the bars draw no name themselves");
+            let name = |msg: u32, id: i64| crate::ui::wide(&format!("{msg:x} {id}"));
+            h.draw_name(&vui, &mut r, at, false, &name);
+            let cell = h.stacked_hits.iter().find(|c| c.0 == 0 && c.1 == 1).unwrap().2;
+            let top = h.stacked_hits.iter().map(|c| c.2[1]).min().unwrap();
+            (r.0, cell, top)
+        };
+        let (drawn, cell, top) = named(true, 5000);
+        assert_eq!(drawn.len(), 2, "the name and its shadow: {drawn:?}");
+        let (at, s) = &drawn[1];
+        assert_eq!(String::from_utf16_lossy(s), "8060000 12", "the second slot's ability");
+        assert!(at[1] < top && at[0] >= cell[0] && at[0] <= cell[2], "over the bars at the cell: {at:?} {cell:?} top {top}");
+        assert!(named(true, 100 + 20001).0.is_empty(), "past the bar's 20 s lit: none");
+        assert!(named(false, 5000).0.is_empty(), "a key or the mouse last: none (ticket 1913)");
     }
 
     /// The server owner's "stack 4 spell bars, or 2 columns of 2, side by

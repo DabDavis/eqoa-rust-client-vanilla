@@ -653,6 +653,9 @@ impl Walker {
         self.scene.time = now_ms;
         self.draw_between(&ahead, now_ms);
         self.camera_as_drawn();
+        if c.steer {
+            self.camera_behind_as_drawn(c.lean);
+        }
         let next = self.cam.effect.sample;
         if !game_frame {
             self.cam.effect.sample = self.shake;
@@ -1009,6 +1012,34 @@ impl Walker {
         let moved = Vect3::new(on(p.x, back[0]), on(p.y, back[1]), on(p.z, back[2]));
         cam.cur.camera_pos = moved;
         cam.last.camera_pos = moved;
+    }
+
+    /// Steered in the follow orbit (`controls::Client::steer`: the mouse's
+    /// right button, or both), the camera put behind the body as this frame
+    /// draws it, at its distance and tilt (`set_orbit_angle`), so the
+    /// camera's `Process`, which takes the orbit's angle from where the
+    /// camera is from the body, finds it right behind. The look put it behind
+    /// the body round the console frame kept (`mouse::look_held`), and
+    /// `camera_as_drawn` moves that onto the body as the last frame drew it:
+    /// with a run that goes sideways too (W and A or D, the diagonal at the
+    /// run's pace) the body had gone on across the camera's line by a frame
+    /// drawn's way, as long as the frame drawn is and as far as the console
+    /// frame's place in it puts it, so the angle went up to 0.4 degrees off
+    /// the back and back again, frame to frame, and the view swung left and
+    /// right (petition 2479, a GM: "When holding right click, pressing W and
+    /// pressing A or D to go diagonally, the camera jitters left and right").
+    /// A frame's sidestep alone (A, at the strafe's pace) moved it less. The
+    /// body is where it is drawn either way; only the camera's angle round it
+    /// changes, to the one the look gave it. With both buttons' run turned
+    /// off the view by A or D (`lean`, `mouse::Mouse::lean`) the camera is
+    /// behind the view, not the body.
+    fn camera_behind_as_drawn(&mut self, lean: f32) {
+        let cam = &mut self.cam;
+        if cam.camera_mode != 3 {
+            return;
+        }
+        let behind = cam.walk.phys.angles.x - F::new(lean) + F::new(std::f32::consts::PI);
+        cam.set_orbit_angle(behind);
     }
 
     /// After the camera's `Process`, what is kept of the frame drawn. The
@@ -2407,6 +2438,79 @@ pub(crate) mod tests {
                 assert!(same_frames(&now, &then), "{look:?} at {hz} Hz: the walk keeps the same console frames");
             } else {
                 assert!(then.jump > 50.0, "the control, {look:?}: {} mm", then.jump);
+            }
+        }
+    }
+
+    /// Petition 2479 (a GM: "When holding right click, pressing W and
+    /// pressing A or D to go diagonally, the camera jitters left and right"):
+    /// the right button alone held (the mouse's own path: `Mouse::look`
+    /// after `rewind`, its steer handed to `frame_with`, as `Viewer::sticks`
+    /// and the frame do), the mouse still, a run forward, a sidestep and both
+    /// diagonals at 60 and 144 frames a second: the view's way does not move
+    /// from one frame drawn to the next (its change of turn under 0.001
+    /// degrees). The control: the steps of `frame_with` without
+    /// `camera_behind_as_drawn`, as until 2026-11-20, where the camera's
+    /// `Process` found the body a frame drawn on across the camera's line:
+    /// on the diagonals the view swung by more than 0.2 degrees a frame.
+    #[test]
+    fn a_diagonal_steered_by_the_right_button_holds_the_view_still() {
+        use std::f64::consts::PI;
+        let Some(base) = open_ground() else { return };
+        let t0 = base.scene.time;
+        let control = |w: &mut Walker, keys: [f32; 4], now: i64, c: &crate::controls::Client| {
+            crate::controls::update_controls(w, keys, c);
+            let dt_s = (now - w.scene.time).clamp(0, 100) as f32 / 1000.0;
+            w.step_kept(now);
+            let ahead = w.ahead();
+            w.scene.time = now;
+            w.draw_between(&ahead, now);
+            w.camera_as_drawn();
+            w.reach.steered = true;
+            w.eye = w.reach.process(&mut w.cam, &mut crate::camreach::PastThin { scene: &mut w.scene }, dt_s);
+            w.keep_left();
+        };
+        // the largest change of the view's turn from one frame drawn to the
+        // next over the run's last two seconds (degrees)
+        let run = |c: Controls, hz: f64, fixed: bool| -> f64 {
+            let sticks = c.axes();
+            let mut w = open_ground().unwrap();
+            crate::camstyle::set_style(&mut w.cam, 3, None, &mut w.scene);
+            let mut m = crate::mouse::Mouse::default();
+            m.button(true, true, web_time::Instant::now());
+            let mut ways = Vec::new();
+            for k in 1..=(hz * 3.0) as u64 {
+                let now = drawn_at(t0, hz, 0.0, k);
+                m.moving = crate::mouse::moving(&sticks, &[0.0; 4], false);
+                // a drag past the slop to begin with, then the mouse still
+                m.motion(if k < 3 { 10.0 } else { 0.0 }, 0.0);
+                w.rewind();
+                let _ = m.look(&mut w, false, 1.0 / hz as f32);
+                let client = crate::controls::Client { steer: m.steer(w.cam.camera_mode), walk_view: m.walk_view(), ..Default::default() };
+                assert!(client.steer, "the right button steers");
+                if fixed {
+                    w.frame_with(sticks, now, &client, true);
+                } else {
+                    w.rewind();
+                    control(&mut w, sticks, now, &client);
+                }
+                if now - t0 >= 1000 {
+                    let d = w.eye.direction;
+                    ways.push((d.x.0 as f64).atan2(d.z.0 as f64));
+                }
+            }
+            let turn = |a: f64, b: f64| ((b - a + PI).rem_euclid(2.0 * PI) - PI).to_degrees();
+            ways.windows(3).map(|p| (turn(p[1], p[2]) - turn(p[0], p[1])).abs()).fold(0.0, f64::max)
+        };
+        let go = |fwd: f32, strafe: f32| Controls { fwd, strafe, ..Default::default() };
+        for (case, c, diagonal) in [("W", go(1.0, 0.0), false), ("A", go(0.0, -1.0), false), ("W and A", go(1.0, -1.0), true), ("W and D", go(1.0, 1.0), true)] {
+            for hz in [60.0, 144.0] {
+                let (now, then) = (run(c, hz, true), run(c, hz, false));
+                eprintln!("{case} at {hz} Hz: the view's turn changes by {now:.4} degrees a frame at most; the control {then:.4}");
+                assert!(now < 0.001, "{case} at {hz} Hz: the view swings {now} degrees a frame");
+                if diagonal {
+                    assert!(then > 0.2, "the control, {case} at {hz} Hz: {then} degrees");
+                }
             }
         }
     }

@@ -6983,6 +6983,9 @@ impl Play {
             steer: false,
             // the view the walk keeps: the viewer's (`Mouse::walk_view`)
             walk_view: None,
+            // the two buttons' run turned off the view: the viewer's
+            // (`Mouse::lean`)
+            lean: 0.0,
             // `IsModal`: the manual camera
             modal: self.mode == 38,
             // the server's word (`Session::flying`, `walker`)
@@ -10531,6 +10534,9 @@ impl Play {
                 // Layout, 2026-11-18), no name bar; a piece of their own to
                 // move (petition 5229), not the chat box's
                 self.hud_menus.stacked = self.stacked_bars();
+                // played with a controller (no key, mouse or finger last):
+                // the selection's name over the bars (petition 2457)
+                self.hud_menus.named = !self.keyboard && !self.touched;
                 if self.hud_menus.stacked {
                     let (anchor, vertical) = (r.ui.anchor, r.ui.vertical);
                     r.ui.anchor = Anchor::Right;
@@ -10544,6 +10550,7 @@ impl Play {
                     let lift = crate::hudmenu::HudMenus::utility_height(bars, utility);
                     let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::SpellBars);
                     self.hud_menus.draw_stacked(vui, &mut r, top - lift, left, bars, crate::settings::spell_bar_layout());
+                    self.hud_menus.draw_name(vui, &mut r, now as i64, false, &name);
                     crate::hudlayout::end(r.ui, m);
                     if utility == crate::hudmenu::UtilityLayout::UpperLeft {
                         r.ui.anchor = Anchor::Left;
@@ -10555,6 +10562,7 @@ impl Play {
                         crate::hudmenu::UtilityLayout::Below => [left, top],
                     };
                     self.hud_menus.draw_utility(vui, &mut r, bars, utility, at);
+                    self.hud_menus.draw_name(vui, &mut r, now as i64, true, &name);
                     crate::hudlayout::end(r.ui, m);
                     (r.ui.anchor, r.ui.vertical) = (anchor, vertical);
                 } else {

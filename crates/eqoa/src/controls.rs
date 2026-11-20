@@ -119,6 +119,11 @@ pub struct Client {
     /// the client's own (the module's doc): the view the follow orbit's walk
     /// keeps while the mouse's left button looks round on the move
     pub walk_view: Option<WalkView>,
+    /// the client's own: how far the mouse's two buttons' run is turned off
+    /// the view (radians, left positive: `mouse::Mouse::lean`), so the
+    /// camera steered behind the view is put behind it, not the body
+    /// (`Walker::camera_behind_as_drawn`)
+    pub lean: f32,
     /// `m_p00078`: following the group member `m_p0007C`
     pub follow: Follow,
     /// `UpdateGame`'s `m_walkCam.m_runSpeed`, which `Walker::frame_with`
@@ -147,7 +152,7 @@ pub struct Client {
 
 impl Default for Client {
     fn default() -> Self {
-        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, walk_view: None, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0, modal: false, flying: false, noclip: false, jumps: false, stood_sent: false, step: true }
+        Client { has_chat: false, inverted: false, auto_attack: false, swung: false, target: None, autorun: false, casting: false, move_ok: true, look_ok: true, rooted: false, timed_out: false, keys: [0.0; 8], steer: false, walk_view: None, lean: 0.0, follow: Follow::Off, run_speed: vi::walk::RUN_SPEED, walk_speed: 3.0, modal: false, flying: false, noclip: false, jumps: false, stood_sent: false, step: true }
     }
 }
 

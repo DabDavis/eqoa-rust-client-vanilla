@@ -5,6 +5,21 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-20 · The camera holds still on a diagonal run with the right mouse button
+- Holding the right mouse button while running with W and A or D (the diagonal) no longer makes the camera
+  shake left and right: it stays right behind your character, as it does running straight ahead.
+
+## 2026-11-20 · Both mouse buttons with A or D angle the run
+- Running with both mouse buttons held, A or D now angles your run a little to the left or right: your
+  character turns and runs that way with the ordinary running animation, not the sidestep, while the camera
+  keeps looking where you are looking. Let go of A or D and you run straight ahead again.
+
+## 2026-11-20 · Stacked Spell Bars with a controller: left and right along the bar, names shown
+- With Stacked Spell Bars on, the d-pad (and the arrow keys) now follow how the bars are laid out: left and right
+  move along the bar you are on, and up and down go to the bar above or below.
+- Playing with a controller, the name of the spell or item the selection is on shows just above the bars for a
+  while after you move it, as the old carousel showed it. With the keyboard and mouse the bars stay without it.
+
 ## 2026-11-19 · Stacked Spell Bars stay stacked with a controller
 - With Stacked Spell Bars on, pressing anything on a controller no longer turns the bars back into the old
   five-slot carousel: they stay stacked, and the d-pad walks and uses them as the arrow keys do. Only a finger
