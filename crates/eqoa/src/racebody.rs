@@ -119,7 +119,23 @@ const HAND_SEATS: &[HandSeats] = &[
         nodes: 24,
         seats: [(17, [0.0, 0.0, 0.0, 1.0], [-0.045, -0.02, 0.0]), (12, [0.0, 0.0, 1.0, 0.0], [0.045, -0.02, 0.0]), (11, [0.0, 0.0, 0.0, 1.0], [0.15, 0.08, 0.0])],
     },
+    HandSeats {
+        bodies: GARGOYLES,
+        nodes: 49,
+        seats: [(10, [0.0, 0.0, 0.0, 1.0], [-0.09, 0.0, 0.0]), (20, [0.0, 0.0, 1.0, 0.0], [0.09, 0.0, 0.0]), (20, [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0])],
+    },
 ];
+
+/// The gargoyles' six bodies (go-eqoa-server's Gargoyle race and its Stone
+/// options: granite, moss, ice, obsidian, shadow, fire; one 49-node skeleton).
+/// Their item nodes are their fingers' first bones, 11 and 21, each with the
+/// model's axes in the bind pose, so a weapon in the left hand was drawn as in
+/// the right, blade down (Heirloom petition 2493: "gargoyle left handed weapons
+/// are upside down"), where the human's off hand's node (27) is turned half
+/// round its z. Their seats are those two nodes' places under the hands (10,
+/// 20), the off hand's turned as the human's is; the shield on the left hand
+/// itself, where it was hung before.
+pub const GARGOYLES: &[u32] = &[0xB4D2_D132, 0x4E2A_945C, 0xAEC5_D9F6, 0x0013_55C8, 0x6D95_9FD9, 0x9304_BAB5];
 
 /// The merfolk's bodies: go-eqoa-server's race 32's merman (its male's),
 /// mermaid (its female's), the two sirens and the sea king (Quintashi's body,
@@ -416,8 +432,16 @@ mod tests {
         assert_eq!(&garg.item_nodes[..3], &[11, 21, -1], "both hands, no shield");
         assert_eq!(garg.item_node(0), None, "as a PS2 attaches nothing");
         assert!(grant(&mut garg, GARGOYLE, true, Some(&listed)));
-        assert_eq!([garg.item_node(0), garg.item_node(1), garg.item_node(2)], [Some(11), Some(21), Some(20)], "the shield on its left hand");
-        assert_eq!(garg.h.nodes[21].parent, 20);
+        // its own seats (petition 2493): the fingers' places under the hands, the
+        // left one's turned half round its z as the human's off hand is
+        let [m, o, sh] = [0, 1, 2].map(|k| garg.item_node(k).unwrap());
+        assert_eq!((garg.h.nodes.len(), [m, o, sh].map(|i| garg.h.nodes[i as usize].parent)), (52, [10, 20, 20]));
+        let (bm, bo) = (garg.h.nodes[m as usize].bind, garg.h.nodes[o as usize].bind);
+        assert!((bm.trans.x - garg.h.nodes[11].bind.trans.x).abs() < F::new(1e-4) && (bo.trans.x - garg.h.nodes[21].bind.trans.x).abs() < F::new(1e-4), "where its fingers' nodes are");
+        assert_eq!((bm.rot.z, bm.rot.w), (F::new(0.0), F::new(1.0)), "the right hand's as its finger's");
+        assert!(bo.rot.z.abs() > F::new(0.999), "the left hand's turned half round z, as the human's 27: {:?}", bo.rot);
+        assert!(grant(&mut garg, GARGOYLE, true, Some(&listed)));
+        assert_eq!(garg.h.nodes.len(), 52, "seated once");
         let mut mouse = load(MOUSE_FORM);
         assert!(!grant(&mut mouse, MOUSE_FORM, true, Some(&listed)), "a form holds nothing");
         let mut human = load(0x70D8_98C6);
@@ -767,3 +791,4 @@ mod tests {
         assert_eq!(changed(&every, true).len(), 294, "the control: every body that holds nothing and names an item node, listed");
     }
 }
+
