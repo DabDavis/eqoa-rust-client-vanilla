@@ -3375,8 +3375,8 @@ mod held {
         let mut player = None;
         apply(&lib, &mut g, &mut player, &entity(2), None, 0, 0, Some(&races), false);
         let p = player.as_ref().unwrap();
-        assert_eq!(p.held, [Some((sword, 11)), Some((bow, 21)), Some((shield, 20))]);
-        assert_eq!(nodes(&player), [11, 20, 21], "each item's model on its node");
+        assert_eq!(p.held, [Some((sword, 49)), Some((bow, 50)), Some((shield, 51))], "the hands' seats (racebody: petition 2493)");
+        assert_eq!(nodes(&player), [49, 50, 51], "each item's model on its seat");
         assert_eq!(p.projectile, [Some(0), Some(0x845F_ECDD)], "the second hand's bow shoots its arrow");
         assert_eq!(crate::spells::hand_attack_types(entity(2).creature.as_ref().unwrap(), holds(&player)), [1, 7]);
 
@@ -3394,7 +3394,7 @@ mod held {
         assert!(nodes(&late).is_empty());
         let made_anew = apply(&lib, &mut g, &mut late, &entity(2), None, 0, 33, Some(&races), false);
         assert!(made_anew.is_none(), "the puppet kept");
-        assert_eq!(nodes(&late), [11, 20, 21]);
+        assert_eq!(nodes(&late), [49, 50, 51]);
     }
 
     /// The player's own sprite, the walker's, holds items as its puppet's
@@ -3425,7 +3425,7 @@ mod held {
             races: vec![net::creation::Race { id: 29, like: 9, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [GARGOYLE, GARGOYLE], name: "Gargoyle".into(), short: "GAR".into(), desc: String::new() }],
         });
         p.grant_walker(&mut walker, &lib);
-        assert_eq!(holds(&walker), Some((true, Some(11), Some(20))));
+        assert_eq!(holds(&walker), Some((true, Some(49), Some(51))));
     }
 
     /// The player's own emotes, the walker's (`PlayEmote`'s `SetAction`), are
