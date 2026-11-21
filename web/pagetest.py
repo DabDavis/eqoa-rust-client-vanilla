@@ -349,7 +349,26 @@ async def gpuguard(page, check, url):
         } catch (e) { out.rangeThrew = `${e.name}: ${e.message}`; }
         await new Promise((r) => setTimeout(r, 50));
         out.rangeTold = told.slice(told3);
-        try { dev.destroy(); dev2.destroy(); dev3.destroy(); } catch (e) { out.threw = out.threw || `${e.name}: ${e.message} (destroy)`; }
+        // a pass begun on a live device that dies while it is recorded (Safari,
+        // Heirloom petition 2358): a stand-in buffer handed to the real pass
+        // does nothing, no TypeError; the control: the browser's pass refuses
+        // an object that is no buffer, a TypeError
+        const dev4 = await (await navigator.gpu.requestAdapter()).requestDevice();
+        const tex4 = dev4.createTexture({ size: [4, 4], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+        const enc4 = dev4.createCommandEncoder();
+        const rp4 = enc4.beginRenderPass({ colorAttachments: [{ view: tex4.createView(), loadOp: 'clear', storeOp: 'store' }] });
+        try { rp4.setVertexBuffer(0, {}); out.passControl = 'none'; } catch (e) { out.passControl = e.name; }
+        g.simulate();
+        try {
+          const late = dev4.createBuffer({ size: 64, usage: GPUBufferUsage.VERTEX });
+          out.lateStub = g.isStub(late);
+          rp4.setVertexBuffer(0, late);
+          rp4.draw(3);
+          rp4.end();
+          out.passThrew = null;
+        } catch (e) { out.passThrew = `${e.name}: ${e.message}`; }
+        await new Promise((r) => setTimeout(r, 50));
+        try { dev.destroy(); dev2.destroy(); dev3.destroy(); dev4.destroy(); } catch (e) { out.threw = out.threw || `${e.name}: ${e.message} (destroy)`; }
         return out;
       } finally { window.eqoaGpuThrew = before; }
     })()""") or {}
@@ -364,6 +383,8 @@ async def gpuguard(page, check, url):
     told = r.get("told") or []
     check("gpuguard: the client told once, with the call", len(told) == 1 and told[0].startswith("GPUDevice.createBuffer: ") and r.get("lossesTold") == 1, str(told))
     check("gpuguard: a new device after it is the browser's", r.get("newReal") is True, str(r))
+    check("gpuguard: a real pass refuses an object that is no buffer (control)", r.get("passControl") == "TypeError", str(r))
+    check("gpuguard: a stand-in handed to a pass begun before the death does nothing (petition 2358)", r.get("lateStub") is True and "passThrew" in r and r["passThrew"] is None, str(r))
     if r.get("rangeStub") is False and not r.get("rangeTold"):
         check("gpuguard: skipped the RangeError (this browser made the huge buffer an error object, no throw)", True)
     else:

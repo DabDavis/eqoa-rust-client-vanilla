@@ -5,6 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-21 · The web page recovers instead of stopping when Safari's graphics restart
+- In Safari (Mac, iPhone, iPad), the page no longer stops with "The client stopped: TypeError ... setVertexBuffer" when the browser's graphics restart in the middle of a frame. The game makes its graphics again and carries on, as it already did for the browser's other graphics errors.
+
 ## 2026-11-21 · No crash when Windows takes the game's window away
 - The game no longer crashes on Windows when its window is minimised, moved to another monitor, or the display goes to sleep and wakes. It waits until the window is back, then carries on drawing.
 - After the graphics card's driver resets, the game no longer crashes setting its window up again.

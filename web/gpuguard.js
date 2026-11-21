@@ -25,7 +25,14 @@
 // other error is thrown as before, and a device nothing has thrown on is
 // called as before. Render and compute pass encoders' own methods (the draws,
 // thousands a frame) are not wrapped: none of them throws on a lost device;
-// a pass begun on a dead device is a stand-in anyway.
+// a pass begun on a dead device is a stand-in anyway. But a pass begun on a
+// live device that died while it was being recorded is the browser's own, and
+// a stand-in handed to it (a buffer, a bind group or a pipeline made after the
+// death) is a TypeError: "Argument 2 ('buffer') to
+// GPURenderPassEncoder.setVertexBuffer must be an instance of GPUBuffer"
+// (Safari, Heirloom petition 2358, 2026-11-18). So the passes' calls that take
+// an object (`PASS_TAKES`) do nothing once their device is dead or when given
+// a stand-in: a check, not the try/catch of the rest.
 //
 // For a test, window.eqoaGpuGuard.simulate() makes the newest device's calls
 // throw as Safari's do (pagetest.py's gpuguard; drive.py --js).
@@ -113,6 +120,31 @@ function told(dev, where, e) {
   });
 }
 
+// the passes' calls that take another GPU object (`passGuard`)
+const PASS_TAKES = new Set(['setVertexBuffer', 'setIndexBuffer', 'setBindGroup', 'setPipeline', 'drawIndirect', 'drawIndexedIndirect', 'executeBundles', 'dispatchWorkgroupsIndirect']);
+
+function hasStub(args) {
+  for (const a of args) {
+    if (a && typeof a === 'object' && a[STUB]) return true;
+    if (Array.isArray(a) && a.some((b) => b && b[STUB])) return true;
+  }
+  return false;
+}
+
+// a pass's call that takes an object: nothing done on a dead device's pass, or
+// with a stand-in (a real pass refuses one with a TypeError)
+function passGuard(proto, name) {
+  const desc = Object.getOwnPropertyDescriptor(proto, name);
+  if (!desc || typeof desc.value !== 'function') return;
+  const orig = desc.value;
+  const guarded = function (...args) {
+    const dev = owner.get(this);
+    if ((dev && dead.has(dev)) || hasStub(args)) return undefined;
+    return orig.apply(this, args);
+  };
+  Object.defineProperty(proto, name, { ...desc, value: guarded });
+}
+
 function deviceOf(o) {
   return typeof GPUDevice !== 'undefined' && o instanceof GPUDevice ? o : owner.get(o);
 }
@@ -159,8 +191,12 @@ function install() {
     const C = globalThis[cls];
     if (!C || !C.prototype) continue;
     for (const name of Object.getOwnPropertyNames(C.prototype)) {
-      // the passes' draws and sets: only `end` (a stand-in pass is a stub)
-      if ((cls === 'GPURenderPassEncoder' || cls === 'GPUComputePassEncoder') && name !== 'end') continue;
+      // the passes' draws and sets: only `end` (a stand-in pass is a stub),
+      // and those taking an object checked (`passGuard`)
+      if ((cls === 'GPURenderPassEncoder' || cls === 'GPUComputePassEncoder') && name !== 'end') {
+        if (PASS_TAKES.has(name)) passGuard(C.prototype, name);
+        continue;
+      }
       wrap(cls, C.prototype, name);
     }
   }
