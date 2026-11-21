@@ -979,8 +979,25 @@ pub fn take_pointer(window: &winit::window::Window) -> Option<Grab> {
     } else {
         return None;
     };
-    window.set_cursor_visible(false);
+    set_cursor_visible(window, false);
     Some(grab)
+}
+
+/// The cursor shown or hidden over the window. In a page not through winit:
+/// its web `Window::set_cursor_visible` takes the canvas's RefCell mutably
+/// (winit 0.30.13's window.rs:244), and winit calls the client with that
+/// RefCell borrowed: its visibilitychange handler holds it across the
+/// `Occluded(true)` it sends (an `if let` on `canvas.borrow()`), which the
+/// client answers by giving the pointer back (`let_go_pointer`), and its
+/// ResizeObserver across a `Resized`: "RefCell already borrowed", the client
+/// stopped (Firefox, 2026-11-21, and four before). The canvas's style is set
+/// instead (`web::set_cursor_visible`), as winit sets it; the client sets no
+/// cursor through winit in a page, so winit never writes that style itself.
+fn set_cursor_visible(window: &winit::window::Window, visible: bool) {
+    #[cfg(target_arch = "wasm32")]
+    crate::web::set_cursor_visible(window, visible);
+    #[cfg(not(target_arch = "wasm32"))]
+    window.set_cursor_visible(visible);
 }
 
 /// Puts the cursor at `at` (window pixels), a confined one's way back to
@@ -996,7 +1013,7 @@ pub fn put_pointer(window: &winit::window::Window, at: (f64, f64)) {
 /// other window).
 pub fn give_pointer(window: &winit::window::Window, home: Option<(f64, f64)>) {
     let _ = window.set_cursor_grab(winit::window::CursorGrabMode::None);
-    window.set_cursor_visible(true);
+    set_cursor_visible(window, true);
     #[cfg(windows)]
     unclip(window);
     #[cfg(not(target_arch = "wasm32"))]

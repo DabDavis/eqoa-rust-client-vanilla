@@ -114,6 +114,7 @@ web-sys = { version = "0.3.106", features = [
     "BinaryType",
     "CloseEvent",
     "console",
+    "CssStyleDeclaration",
     "Document",
     "Element",
     "Event",
