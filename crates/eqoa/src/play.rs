@@ -6843,8 +6843,10 @@ impl Play {
     }
 
     /// `ToggleFollow` (`/follow`, the quick command): on, the target when it
-    /// is another of the group's members, else word 1195 ("You must target a
-    /// group member to follow.") and off; on, off. `UpdateControls` steers it.
+    /// is another of the group's members (or another player in the scene,
+    /// where the server allows it: `player_in_scene`), else word 1195 ("You
+    /// must target a group member to follow.") and off; on, off.
+    /// `UpdateControls` steers it.
     fn toggle_follow(&mut self) {
         self.following = !self.following;
         if self.following {
@@ -6867,9 +6869,14 @@ impl Play {
     /// whose plate says player (`p256` 2, as `InviteEntity` asks), not an
     /// NPC, a pet or a merc. Any such may be followed, in a group or not (the
     /// owner, 2026-11-11: "any player can follow any player"; CLIENT's
-    /// `ToggleFollow` takes group members only, word 1195 else).
+    /// `ToggleFollow` takes group members only, word 1195 else), except on a
+    /// server that says group members only (`qol::FOLLOW_GROUP_ONLY`, the Live
+    /// shard's; Live petition 5400, Innoruuk: "Auto follow currently allowing
+    /// to auto follow people not in group"; the owner 2026-11-21: group only on
+    /// Live), where this is never true.
     fn player_in_scene(&self, id: u32) -> bool {
-        self.entities.slots.iter().flatten().any(|e| e.id == id && e.creature.as_ref().is_some_and(|c| c.p256 == 2))
+        !crate::settings::qol::off(crate::settings::qol::FOLLOW_GROUP_ONLY)
+            && self.entities.slots.iter().flatten().any(|e| e.id == id && e.creature.as_ref().is_some_and(|c| c.p256 == 2))
     }
 
     /// What `UpdateControls` changed (`Walker::frame_with`): autorun off
@@ -14033,6 +14040,44 @@ mod commands {
         assert_ne!(p.control_client().follow, Follow::Lost, "steered to while in the scene");
         p.entities.slots[0] = None;
         assert_eq!(p.control_client().follow, Follow::Lost, "gone from the scene: lost");
+    }
+
+    /// On a server that says group members only (`qol::FOLLOW_GROUP_ONLY`,
+    /// Live's; Live petition 5400, the owner 2026-11-21: group only on Live): a
+    /// player in the scene outside the group is word 1195, as CLIENT's
+    /// `ToggleFollow` has it, and a group member is still followed. The
+    /// controls: told nothing, or told other bits only, that player is
+    /// followed (an older server keeps today's rule).
+    #[test]
+    fn follow_takes_group_members_only_where_the_server_says() {
+        let mut p = play();
+        p.self_at = Some(([0.0; 3], None));
+        let put = |p: &mut Play, k: usize, id: u32| {
+            p.entities.slots[k] = Some(net::entity::Entity { id, creature: Some(net::entity::Creature { p256: 2, ..Default::default() }), ..Default::default() });
+        };
+        put(&mut p, 0, 0x400);
+        put(&mut p, 1, 0x200);
+        grouped(&mut p, &[0x100, 0x200]);
+        let follow = |p: &mut Play, t: u32| {
+            p.following = false;
+            p.target = t;
+            p.chat.clear();
+            p.do_action(0x0B0E_0007, 0);
+        };
+        for (bits, any) in [(0, true), (crate::settings::qol::SPELL_BARS | 0xFFF, true), (crate::settings::qol::FOLLOW_GROUP_ONLY, false), (0x7FFF | crate::settings::qol::FOLLOW_GROUP_ONLY, false)] {
+            p.session.qol_off = bits;
+            crate::settings::qol::set_off(bits);
+            follow(&mut p, 0x400);
+            if any {
+                assert!(p.following && p.follow_id == 0x400 && p.chat.is_empty(), "bits {bits:#x}: a player outside the group");
+            } else {
+                assert!(!p.following && last_line(&p) == "(word 1195)", "bits {bits:#x}: a player outside the group refused");
+            }
+            follow(&mut p, 0x200);
+            assert!(p.following && p.follow_id == 0x200 && p.chat.is_empty(), "bits {bits:#x}: a group member");
+            assert_ne!(p.control_client().follow, Follow::Lost, "bits {bits:#x}: the member steered to");
+        }
+        crate::settings::qol::set_off(0);
     }
 
     /// What `UpdateControls` is given: off; the member gone from the group

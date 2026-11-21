@@ -2349,6 +2349,13 @@ pub mod qol {
     /// No touch in the world (an [OG] account's): the touch pad is not drawn
     /// and a finger does nothing there (`viewer`).
     pub const NO_TOUCH: u32 = 1 << 14;
+    /// Follow takes group members only, as CLIENT's `ToggleFollow` does
+    /// (word 1195 else): go-eqoa-server's `world.follow_any_player` false,
+    /// `QoLFollowGroupOnly`, sent to every session there (Live petition 5400,
+    /// Innoruuk: "Auto follow currently allowing to auto follow people not in
+    /// group"; the owner 2026-11-21: group only on Live). A server that never
+    /// sends it keeps any player followable (the owner, 2026-11-11).
+    pub const FOLLOW_GROUP_ONLY: u32 = 1 << 15;
 
     thread_local! {
         static OFF: Cell<u32> = const { Cell::new(0) };

@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-21 · Follow takes group members only on the Live server
+- On the Live server, Follow (/follow and the quick command) follows members of your group only, as the original game did. Targeting anyone else says "You must target a group member to follow."
+- On the Heirloom Test Server, any player can still follow any player.
+
 ## 2026-11-21 · Health as a number over the bars
 - A new option shows health as a percentage (for example "87%") over the health bars: each group member's, your pet's, your target's and your own, and at the right of each name in the raid list.
 - Turn it on in Options > Extended > UI > Group & Raid > Health Numbers. It is off until you turn it on.
