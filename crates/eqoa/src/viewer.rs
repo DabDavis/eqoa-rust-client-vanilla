@@ -4979,6 +4979,14 @@ impl App {
                     crate::map::mini::toggle();
                     return;
                 }
+                // U: Extended's Quest Helper turned, kept (the client's own,
+                // `settings::toggle_quest_helper`; free in the game's keyboard
+                // table), in play and the manual camera: the quests' marks and
+                // the quest tracker shown or hidden at once
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.eq_ignore_ascii_case("u") && !event.repeat => {
+                    crate::settings::toggle_quest_helper();
+                    return;
+                }
                 // F: the game's Assist Target asked, whom the target targets
                 // (the client's key for it, `Play::assist_target`; free in
                 // the game's keyboard table)

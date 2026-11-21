@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-21 · Hide the Quest Helper with a key
+
+- Press U to hide or show the Quest Helper: the quest marks on the map and the minimap, and the quest tracker under the minimap. It stays as you leave it, the same as Options > Extended > Map > Quest Helper.
+- U can be moved to another key or a controller button in Options > Controls (the Quest Helper row).
+
 ## 2026-11-20 · A gargoyle's left-hand weapon the right way up
 - A Gargoyle's weapon in the left hand was drawn upside down, its blade pointing at the ground. It is held
   as the right hand's is now, mirrored, as every other race holds a weapon in its off hand.

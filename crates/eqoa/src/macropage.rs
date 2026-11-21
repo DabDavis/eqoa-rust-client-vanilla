@@ -1023,11 +1023,11 @@ mod tests {
         page.capture_axes(&vui, [0.0, 0.0, 0.0, -0.7], &mut cues);
         page.capture_key(&vui, "f11", &mut cues);
         page.capture_button(bit_of(bit::CROSS), &mut cues);
-        page.capture_key(&vui, "u", &mut cues);
+        page.capture_key(&vui, "b", &mut cues);
         page.capture_button(bit_of(bit::L2), &mut cues);
         page.capture_button(bit_of(bit::R1), &mut cues);
         let parts = page.capture.as_ref().unwrap().parts.clone();
-        assert_eq!(parts, vec![Input::Stick(0), Input::Button(bit_of(bit::CROSS)), Input::Key("u".into()), Input::Button(bit_of(bit::L2))], "four, F11 and the fifth left out");
+        assert_eq!(parts, vec![Input::Stick(0), Input::Button(bit_of(bit::CROSS)), Input::Key("b".into()), Input::Button(bit_of(bit::L2))], "four, F11 and the fifth left out");
         page.capture_axes(&vui, [0.0, 0.0, 0.0, -0.3], &mut cues);
         assert_eq!((page.capture.is_none(), settings::binds().macros[0].triggers.clone()), (true, vec![parts]), "kept as L up came back");
         // Escape: given up, the trigger as it was

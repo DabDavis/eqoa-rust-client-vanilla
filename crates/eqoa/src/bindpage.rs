@@ -593,7 +593,7 @@ mod tests {
         let l3 = binds::bit_index(crate::input::bit::L3).unwrap();
         b.set_trigger(0, None, vec![Input::Key("y".into())]).unwrap();
         b.set_trigger(2, None, vec![Input::Key("y".into()), Input::Button(l3)]).unwrap();
-        b.set_trigger(3, None, vec![Input::Key("u".into())]).unwrap();
+        b.set_trigger(3, None, vec![Input::Key("b".into())]).unwrap();
         b.set_trigger(4, None, vec![Input::Button(binds::bit_index(crate::input::bit::R3).unwrap())]).unwrap();
         settings::set_binds(b);
         let mut page = ControlsPage::default();
@@ -618,7 +618,7 @@ mod tests {
         page.row = defaults();
         page.key(key::CROSS, true, 0, &mut cues);
         let b = settings::binds();
-        assert_eq!(b.macros[3].triggers, vec![vec![Input::Key("u".into())]]);
+        assert_eq!(b.macros[3].triggers, vec![vec![Input::Key("b".into())]]);
         assert_eq!(b.controls_defaults(), b, "every key and button back");
         testing::reset(false);
     }

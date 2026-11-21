@@ -2878,6 +2878,25 @@ pub fn set_minimap(on: bool) -> Result<(), String> {
     save_client()
 }
 
+/// Quest Helper turned (its key, U: `binds`' "quest_helper", the owner's of
+/// 2026-11-21: "can players hide the quest helper with a button"), and kept at
+/// once, as the minimap's key keeps its own.
+pub fn set_quest_helper(on: bool) -> Result<(), String> {
+    let mut c = client();
+    c.quest_helper = on;
+    set_client(c);
+    save_client()
+}
+
+/// U: the Quest Helper shown or hidden, kept (Extended's Quest Helper).
+pub fn toggle_quest_helper() {
+    let on = !client().quest_helper;
+    if let Err(e) = set_quest_helper(on) {
+        crate::say(&format!("quest helper {}, not kept: {e}", if on { "shown" } else { "hidden" }));
+    }
+    crate::say(&format!("quest helper {}", if on { "shown" } else { "hidden" }));
+}
+
 /// Whether the game asks to restart into a newer build (Update Notices).
 pub fn update_notices() -> bool {
     client().update_notices
