@@ -10550,7 +10550,11 @@ impl Play {
                     let lift = crate::hudmenu::HudMenus::utility_height(bars, utility);
                     let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::SpellBars);
                     self.hud_menus.draw_stacked(vui, &mut r, top - lift, left, bars, crate::settings::spell_bar_layout());
-                    self.hud_menus.draw_name(vui, &mut r, now as i64, false, &name);
+                    // the name not counted in the piece: against the screen's
+                    // edge it moves, the bars do not (petition 2547)
+                    let screen = crate::hudlayout::screen_x(r.ui, &m);
+                    let m = crate::hudlayout::seal(r.ui, m);
+                    self.hud_menus.draw_name(vui, &mut r, now as i64, false, Some(screen), &name);
                     crate::hudlayout::end(r.ui, m);
                     if utility == crate::hudmenu::UtilityLayout::UpperLeft {
                         r.ui.anchor = Anchor::Left;
@@ -10562,7 +10566,9 @@ impl Play {
                         crate::hudmenu::UtilityLayout::Below => [left, top],
                     };
                     self.hud_menus.draw_utility(vui, &mut r, bars, utility, at);
-                    self.hud_menus.draw_name(vui, &mut r, now as i64, true, &name);
+                    let screen = crate::hudlayout::screen_x(r.ui, &m);
+                    let m = crate::hudlayout::seal(r.ui, m);
+                    self.hud_menus.draw_name(vui, &mut r, now as i64, true, Some(screen), &name);
                     crate::hudlayout::end(r.ui, m);
                     (r.ui.anchor, r.ui.vertical) = (anchor, vertical);
                 } else {

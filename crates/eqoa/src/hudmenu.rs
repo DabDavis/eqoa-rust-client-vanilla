@@ -717,8 +717,12 @@ impl HudMenus {
     /// drawn: centred over the selected cell, a line above the block's top,
     /// with a shadow; only while the bars are played with a controller
     /// (`named`) and the menu is lit by a key (20 s, as the carousel's title
-    /// bar shows it bright). Draw it in the bars' own place (their piece).
-    pub fn draw_name(&self, vui: &Vui, r: &mut dyn Raster, now: i64, utility: bool, name: &dyn Fn(u32, i64) -> Vec<u16>) {
+    /// bar shows it bright). Draw it in the bars' own place (their piece),
+    /// not counted in it (`hudlayout::seal`), and kept within `screen` (its
+    /// left and right in the piece's frame pixels, `hudlayout::screen_x`):
+    /// against the screen's edge the name moves, the bars do not (petition
+    /// 2547).
+    pub fn draw_name(&self, vui: &Vui, r: &mut dyn Raster, now: i64, utility: bool, screen: Option<[i32; 2]>, name: &dyn Fn(u32, i64) -> Vec<u16>) {
         let up = self.up();
         let m = &self.menus[up];
         if !self.named || m.lit <= 0 || m.time < now {
@@ -737,7 +741,10 @@ impl HudMenus {
         let top = hits.iter().map(|h| h.2[1]).min().unwrap_or(c[1]);
         let left = hits.iter().map(|h| h.2[0]).min().unwrap_or(c[0]);
         let half = r.string_width(&s) / 2;
-        let x = ((c[0] + c[2]) / 2).max(left + half);
+        let mut x = ((c[0] + c[2]) / 2).max(left + half);
+        if let Some([lo, hi]) = screen {
+            x = x.min(hi - half).max(lo + half);
+        }
         let y = top - r.point_size() / 2 - 4;
         vui.draw_centered_string_ex(r, &s, x, y, [1.0, 1.0, 1.0, 1.0], 0, true);
     }
@@ -1189,7 +1196,7 @@ mod tests {
         // the name, over the bars, at the selected cell
         let vui = crate::pointer::testing::vui();
         let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id };
-        let named = |pad: bool, at: i64| {
+        let named_in = |pad: bool, at: i64, screen: Option<[i32; 2]>| {
             let mut h = HudMenus { stacked: true, named: pad, ..Default::default() };
             h.defs[0] = MenuDef { count: 5, entries: vec![ab(11), ab(12), ab(13), Entry::default(), Entry::default()] };
             h.defs[1] = MenuDef { count: 5, entries: vec![ab(21), Entry::default(), Entry::default(), Entry::default(), Entry::default()] };
@@ -1198,11 +1205,12 @@ mod tests {
             h.draw_stacked(&vui, &mut r, 320, 216, DISC, Layout::Stacked);
             assert!(r.0.is_empty(), "the bars draw no name themselves");
             let name = |msg: u32, id: i64| crate::ui::wide(&format!("{msg:x} {id}"));
-            h.draw_name(&vui, &mut r, at, false, &name);
+            h.draw_name(&vui, &mut r, at, false, screen, &name);
             let cell = h.stacked_hits.iter().find(|c| c.0 == 0 && c.1 == 1).unwrap().2;
             let top = h.stacked_hits.iter().map(|c| c.2[1]).min().unwrap();
             (r.0, cell, top)
         };
+        let named = |pad: bool, at: i64| named_in(pad, at, None);
         let (drawn, cell, top) = named(true, 5000);
         assert_eq!(drawn.len(), 2, "the name and its shadow: {drawn:?}");
         let (at, s) = &drawn[1];
@@ -1210,6 +1218,15 @@ mod tests {
         assert!(at[1] < top && at[0] >= cell[0] && at[0] <= cell[2], "over the bars at the cell: {at:?} {cell:?} top {top}");
         assert!(named(true, 100 + 20001).0.is_empty(), "past the bar's 20 s lit: none");
         assert!(named(false, 5000).0.is_empty(), "a key or the mouse last: none (ticket 1913)");
+        // petition 2547: the bars against the screen's right edge, the name
+        // (the piece does not count it, so the bars stay) kept on the screen
+        let half = "8060000 12".len() as i32 * 8 / 2;
+        let mid = (cell[0] + cell[2]) / 2;
+        let edge = mid + 10;
+        let (drawn, _, _) = named_in(true, 5000, Some([0, edge]));
+        assert_eq!(drawn[1].0[0], edge - half, "pulled in to end at the screen's edge: {drawn:?}");
+        let (drawn, _, _) = named_in(true, 5000, Some([0, 4000]));
+        assert_eq!(drawn[1].0[0], mid, "the control: room on the screen, over the cell");
     }
 
     /// The server owner's "stack 4 spell bars, or 2 columns of 2, side by

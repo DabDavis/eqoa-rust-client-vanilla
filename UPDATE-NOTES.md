@@ -5,6 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-21 · Stacked spell bars stay put against the screen's edge
+- Stacked Spell Bars (and the Utility Bars) moved against the screen's edge are no longer pushed in when the name of a spell or item you select would run off the screen: the bars stay where you put them, and the name slides over to stay on the screen.
+
 ## 2026-11-21 · Hide the Quest Helper with a key
 
 - Press U to hide or show the Quest Helper: the quest marks on the map and the minimap, and the quest tracker under the minimap. It stays as you leave it, the same as Options > Extended > Map > Quest Helper.

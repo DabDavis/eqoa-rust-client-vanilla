@@ -435,6 +435,27 @@ pub fn end(ui: &mut Ui, m: Mark) {
     }
 }
 
+/// The piece `m` drawn so far noted as `end` notes it, and the mark for what
+/// follows: drawn at the piece's shift but not counted in it, as the name over
+/// the stacked bars, which may run past the screen's side. Counted, `clamp`
+/// moved the whole block in from the edge it was placed against while such a
+/// name showed (petition 2547, "UI Stacked shifting when placed against the
+/// edge - Shifts when you select a spell that would show its name off the
+/// screen"). End the mark it gives with `end`.
+pub fn seal(ui: &mut Ui, m: Mark) -> Mark {
+    if let Some(r) = covered(&ui.quads[m.from.min(ui.quads.len())..]) {
+        note(m.piece, r, m.shift);
+    }
+    Mark { from: usize::MAX, ..m }
+}
+
+/// The screen's left and right as the piece of `m` draws (its frame pixels
+/// before its shift), whole pixels within it.
+pub fn screen_x(ui: &Ui, m: &Mark) -> [i32; 2] {
+    let s = Beyond { side: ui.side(), top: ui.top() }.screen();
+    [(s[0] - m.shift[0]).ceil() as i32, (s[2] - m.shift[0]).floor() as i32]
+}
+
 /// The frame rectangle `quads` show: each one's bounds within its cut, a quad
 /// cut to nothing left out. A name scrolled in its box (`TextScroll`: the quick
 /// bar's selected ability, 158 pixels wide) is drawn whole and cut to the box;
