@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-21 · Health as a number over the bars
+- A new option shows health as a percentage (for example "87%") over the health bars: each group member's, your pet's, your target's and your own, and at the right of each name in the raid list.
+- Turn it on in Options > Extended > UI > Group & Raid > Health Numbers. It is off until you turn it on.
+- A group member whose health the game does not know yet shows no number. Others' health is only known as a share, so it is shown as a percentage, not as hit points.
+
 ## 2026-11-21 · Stacked spell bars stay put against the screen's edge
 - Stacked Spell Bars (and the Utility Bars) moved against the screen's edge are no longer pushed in when the name of a spell or item you select would run off the screen: the bars stay where you put them, and the name slides over to stay on the screen.
 

@@ -142,6 +142,109 @@ fn power_at(at: [i32; 2]) -> [i32; 2] {
     [at[0] + POWER_UNDER[0], at[1] + POWER_UNDER[1]]
 }
 
+/// Where a bar's health gauge sits in it (`DrawGroup`'s, `DrawPet`'s and
+/// `DrawTarget`'s 10 in, 25 down), and the gauge's frame (136): 60 by 10.
+const GAUGE_IN: [i32; 2] = [10, 25];
+const GAUGE: [i32; 2] = [60, 10];
+
+/// Health Numbers (Extended > UI > Group & Raid; Live petition 5393, Spoony:
+/// "add the option to overlay health as a number, or percentage, over party
+/// bars. Including pets."): a bar's health of 255 as a whole percentage, the
+/// nearest, but a living bar never 0 and a hurt one never 100. The client
+/// knows another's health only as a share of 255 (the entity's +0x19, the
+/// group's and the raid's rosters), so a percentage and no invented points.
+pub fn health_percent(hp: u8) -> u8 {
+    match hp {
+        0 => 0,
+        255 => 100,
+        hp => ((hp as u32 * 100 + 127) / 255).clamp(1, 99) as u8,
+    }
+}
+
+/// `health_percent` as it is drawn: "87%".
+pub fn health_text(hp: u8) -> String {
+    format!("{}%", health_percent(hp))
+}
+
+/// A health number (Health Numbers, Live petition 5393): its text and the
+/// middle of the gauge it is drawn over.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HealthNumber {
+    pub at: [i32; 2],
+    pub text: String,
+}
+
+/// The height a health number is drawn at (the font scaled to it): the
+/// gauge's frame's, so it stays over the gauge, clear of the name over it
+/// and the power under it.
+const NUMBER_H: f32 = 10.0;
+
+/// The health number over the gauge at `gauge` (its frame's top left) for
+/// `hp` of 255 (clamped there), none with Extended's Health Numbers off.
+fn health_number(gauge: [i32; 2], hp: i32) -> Option<HealthNumber> {
+    if !crate::settings::health_numbers() {
+        return None;
+    }
+    let at = [gauge[0] + GAUGE[0] / 2, gauge[1] + GAUGE[1] / 2];
+    Some(HealthNumber { at, text: health_text(hp.clamp(0, 255) as u8) })
+}
+
+/// The group's bars' health numbers, for the bars from `at` (`DrawGroup`'s,
+/// 48 apart): a member's only while its health is known
+/// (`GetGroupMemberHPKnown`), none for one whose is not.
+pub fn group_numbers(at: [i32; 2], group: &[MemberState]) -> Vec<HealthNumber> {
+    group
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            let (hp, _, _) = m.hp?;
+            health_number([at[0] + GAUGE_IN[0], at[1] + i as i32 * 48 + GAUGE_IN[1]], hp as i32)
+        })
+        .collect()
+}
+
+/// The pet's bar's health number, for its bar at `at`: a creature pet's (the
+/// one with a gauge), none for another.
+pub fn pet_number(at: [i32; 2], pet: &PetState) -> Option<HealthNumber> {
+    let (hp, _, _) = pet.creature?;
+    health_number([at[0] + GAUGE_IN[0], at[1] + GAUGE_IN[1]], hp)
+}
+
+/// The target box's health number, for the box at `at` ("Target" there, the
+/// bar 25 under it): while a creature is targeted, none without one.
+pub fn target_number(at: [i32; 2], s: &HudState) -> Option<HealthNumber> {
+    s.target_name.as_ref()?;
+    health_number([at[0] + GAUGE_IN[0], at[1] + 25 + GAUGE_IN[1]], s.target_hp)
+}
+
+/// The player's own health gauge's number (the gauge at `PLAYER_GAUGE`),
+/// while the player's entity is there.
+pub fn self_number(s: &HudState) -> Option<HealthNumber> {
+    if !s.has_self {
+        return None;
+    }
+    health_number(PLAYER_GAUGE, s.self_hp)
+}
+
+/// The player's own health gauge: the frame's art at (10, 15), the gauge
+/// 59 in and 21 down.
+const PLAYER_GAUGE: [i32; 2] = [69, 36];
+
+/// A health number drawn: small (`NUMBER_H`), white with a black shadow a
+/// pixel down and right (as the raid list's names), centred on its gauge and
+/// inside it, so it never widens the HUD piece it is drawn in
+/// (`hudlayout::covered`).
+fn draw_health_number(ui: &mut UiRaster, n: &HealthNumber) {
+    let Some(f) = ui.assets.font else { return };
+    let s = wide(&n.text);
+    let font = &ui.ui.fonts[f];
+    let scale = NUMBER_H / font.height.max(1) as f32;
+    let w = font.string_width(&s) as f32 * scale;
+    let (x, y) = (n.at[0] as f32 - w / 2.0, n.at[1] as f32 - NUMBER_H / 2.0);
+    ui.ui.text_scaled(f, x + 1.0, y + 1.0, scale, [0.0, 0.0, 0.0, 0.85], &s);
+    ui.ui.text_scaled(f, x, y, scale, [1.0; 4], &s);
+}
+
 /// The pet's effects' row (the user, 2026-11-09: "put the buff icons under the
 /// pet name plate"; CLIENT shows a pet's effects nowhere, and from petition 1041
 /// the server had put them on the player's own effects window, channel 0x43):
@@ -414,6 +517,9 @@ impl Hud {
         }
         p = [p[0] + 59, p[1] + 21];
         draw_gauge(vui, ui, 7, 136, p, true, s.self_hp as f32 / 255.0);
+        if let Some(n) = self_number(s) {
+            draw_health_number(ui, &n);
+        }
         p[1] += 10;
         let v = if s.max_power == 0 { 0.0 } else { s.power as f32 / s.max_power as f32 };
         draw_gauge(vui, ui, 9, 136, p, true, v);
@@ -538,7 +644,7 @@ impl Hud {
                 draw_gauge(vui, ui, 9, 136, power_at(start), m.is_target, v as f32 / 255.0);
             }
             if let Some((hp, f4, f8)) = m.hp {
-                p = [p[0] + 10, p[1] + 25];
+                p = [p[0] + GAUGE_IN[0], p[1] + GAUGE_IN[1]];
                 draw_gauge(vui, ui, 7, 136, p, m.is_target, hp as f32 / 255.0);
                 p = [p[0] + 65, p[1] + 2];
                 if f4 {
@@ -550,6 +656,9 @@ impl Hud {
                 }
             }
             p = [start[0], start[1] + 48];
+        }
+        for n in group_numbers(at, &s.group) {
+            draw_health_number(ui, &n);
         }
         self.glow1_on = if glowing { 1 } else { -1 };
     }
@@ -580,8 +689,12 @@ impl Hud {
             draw_gauge(vui, ui, 9, 136, power_at(p), pet.is_target, v as f32 / 255.0);
         }
         let Some((hp, f4, f8)) = pet.creature else { return };
-        p = [p[0] + 10, p[1] + 25];
+        let number = pet_number(p, pet);
+        p = [p[0] + GAUGE_IN[0], p[1] + GAUGE_IN[1]];
         draw_gauge(vui, ui, 7, 136, p, pet.is_target, hp as f32 / 255.0);
+        if let Some(n) = number {
+            draw_health_number(ui, &n);
+        }
         p = [p[0] + 65, p[1] + 2];
         if f4 {
             vui.blit_ex(ui, 118, [p[0], p[1] - 2], 3, g, 0);
@@ -615,8 +728,11 @@ impl Hud {
             self.scroll.reset();
         }
         self.scroll.text_scroll(vui, ui, &name, [0.0, 0.0, 0.0, self.glow0], 8);
-        p = [p[0] + 10, p[1] + 25];
+        p = [p[0] + GAUGE_IN[0], p[1] + GAUGE_IN[1]];
         draw_gauge(vui, ui, 7, 136, p, has, s.target_hp as f32 / 255.0);
+        if let Some(n) = target_number(at, s) {
+            draw_health_number(ui, &n);
+        }
         p = [p[0] + 65, p[1] + 2];
         if let (Some(d), true) = (s.target_info, has) {
             let icon = match d {
@@ -812,6 +928,59 @@ mod tests {
         assert!(p[1] + 10 <= at[1] + 46, "inside the bar");
         assert!(p[1] + 10 <= at[1] + super::PET_FX_AT[1], "clear of the pet's effects");
         assert!(p[1] + 10 <= at[1] + 48, "clear of the next member's bar");
+    }
+
+    /// A bar's health as a percentage (Live petition 5393): the nearest whole
+    /// one, but a living bar never 0% and a hurt one never 100%.
+    #[test]
+    fn health_is_a_percentage_of_255() {
+        use super::{health_percent, health_text};
+        let got: Vec<u8> = [0u8, 1, 2, 3, 127, 128, 200, 230, 253, 254, 255].iter().map(|&hp| health_percent(hp)).collect();
+        assert_eq!(got, [0, 1, 1, 1, 50, 50, 78, 90, 99, 99, 100]);
+        assert_eq!((health_text(128), health_text(255), health_text(0)), ("50%".to_string(), "100%".to_string(), "0%".to_string()));
+        for hp in 1..255u8 {
+            assert!((1..=99).contains(&health_percent(hp)), "{hp}: living and hurt");
+        }
+    }
+
+    /// Health Numbers (Live petition 5393, Spoony: "add the option to overlay
+    /// health as a number, or percentage, over party bars. Including pets."):
+    /// with it on, each group member whose health is known, a creature pet, the
+    /// target and the player get their percentage centred on their health
+    /// gauge (60 by 10, 10 in and 25 down their bar), inside the gauge's frame
+    /// and so clear of the name over it and the power under it; a member whose
+    /// health is not known, a pet with no gauge and no target get none. The
+    /// control: with it off (the default) there are none at all.
+    #[test]
+    fn health_numbers_sit_on_the_gauges_only_when_on() {
+        use super::{GROUP_AT, HealthNumber, NUMBER_H, PLAYER_GAUGE, TARGET_AT, group_numbers, pet_number, self_number, target_number};
+        use crate::settings::{ClientOptions, set_client};
+        let member = |id: u32, hp: Option<u8>| MemberState { id, name: format!("m{id}"), hp: hp.map(|h| (h, false, false)), ..Default::default() };
+        let group = vec![member(1, Some(128)), member(2, None), member(3, Some(255))];
+        let pet = PetState { name: "Swarming Death".into(), creature: Some((1, false, false)), ..Default::default() };
+        let s = HudState { has_self: true, self_hp: 200, target_name: Some("a rat".into()), target_hp: 230, ..Default::default() };
+        let pet_at = [20, 141];
+        let all = |s: &HudState| (group_numbers(GROUP_AT, &group), pet_number(pet_at, &pet), target_number(TARGET_AT, s), self_number(s));
+        set_client(ClientOptions::default());
+        assert!(!ClientOptions::default().health_numbers);
+        assert_eq!(all(&s), (Vec::new(), None, None, None), "the control: off, none drawn");
+        set_client(ClientOptions { health_numbers: true, ..Default::default() });
+        let n = |at: [i32; 2], text: &str| HealthNumber { at, text: text.into() };
+        let (group_got, pet_got, target_got, self_got) = all(&s);
+        assert_eq!(group_got, vec![n([60, 123], "50%"), n([60, 219], "100%")], "the first and third members; the second's health is not known");
+        assert_eq!(pet_got, Some(n([60, 171], "1%")), "the pet's");
+        assert_eq!(target_got, Some(n([60, 403], "90%")), "the target's");
+        assert_eq!(self_got, Some(n([99, 41], "78%")), "the player's own");
+        assert_eq!(PLAYER_GAUGE, [10 + 59, 15 + 21], "where `draw` puts the player's gauge");
+        // each over its gauge, inside the frame: (bar top + 25) .. (+ 35)
+        for (num, bar_top) in [(&group_got[0], 93), (&group_got[1], 93 + 96), (pet_got.as_ref().unwrap(), 141), (target_got.as_ref().unwrap(), 348 + 25)] {
+            let (top, bottom) = (num.at[1] as f32 - NUMBER_H / 2.0, num.at[1] as f32 + NUMBER_H / 2.0);
+            assert!(top >= (bar_top + 25) as f32 && bottom <= (bar_top + 35) as f32, "{num:?} off its gauge");
+        }
+        assert_eq!(pet_number(pet_at, &PetState { creature: None, ..pet.clone() }), None, "a pet with no gauge");
+        assert_eq!(target_number(TARGET_AT, &HudState { target_name: None, ..s.clone() }), None, "no target");
+        assert_eq!(self_number(&HudState { has_self: false, ..s.clone() }), None, "no player's entity");
+        set_client(ClientOptions::default());
     }
 
     /// A Vui whose atlas has the player's effects strip's art at the disc's

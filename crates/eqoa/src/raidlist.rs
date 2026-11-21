@@ -456,19 +456,43 @@ fn head(fit: &Fit, first: usize) -> String {
     }
 }
 
+/// A row's health number (Extended's Health Numbers; Live petition 5393,
+/// Spoony: "add the option to overlay health as a number, or percentage, over
+/// party bars. Including pets."): its health as a percentage
+/// (`hud::health_text`), none with the option off. The bar is 3 high, too
+/// thin to write on: the number goes at the right of the name's line.
+pub fn row_number(row: &Row) -> Option<String> {
+    crate::settings::health_numbers().then(|| crate::hud::health_text(row.hp))
+}
+
+/// The room between a row's health number and the name.
+const NUMBER_GAP: i32 = 3;
+
 /// One member's row in rectangle `r`: its name (cut to the column, less its
-/// marks) and marks over its role's icon and its health and power bars.
+/// marks and its health number) and marks over its role's icon and its health
+/// and power bars; the number, with Health Numbers on, left of the marks.
 fn draw_row(vui: &Vui, ui: &mut UiRaster, r: [i32; 4], row: &Row) {
     let font = ui.assets.font;
     let scale = font.map_or(1.0, |f| NAME_H / ui.ui.fonts[f].height.max(1) as f32);
     let (x, y) = (r[0] + 2, r[1]);
     let marks = marks_width(row.marks);
+    let number = row_number(row).map(|t| wide(&t));
+    let number_w = match (&number, font) {
+        (Some(t), Some(f)) => (ui.ui.fonts[f].string_width(t) as f32 * scale).ceil() as i32,
+        _ => 0,
+    };
+    let room = COL_W - 4 - marks - if number_w > 0 { number_w + NUMBER_GAP } else { 0 };
     let mut name = wide(&row.name);
     while let Some(f) = font
         && !name.is_empty()
-        && ui.ui.fonts[f].string_width(&name) as f32 * scale > (COL_W - 4 - marks) as f32
+        && ui.ui.fonts[f].string_width(&name) as f32 * scale > room as f32
     {
         name.pop();
+    }
+    if let (Some(t), Some(f)) = (&number, font) {
+        let nx = (r[2] - 2 - marks - number_w) as f32;
+        ui.ui.text_scaled(f, nx + 1.0, y as f32 + 1.0, scale, SHADOW, t);
+        ui.ui.text_scaled(f, nx, y as f32, scale, NAME, t);
     }
     if let Some(f) = font {
         let c = if row.dragged { NAME_TARGET } else { name_colour(row) };
@@ -527,6 +551,22 @@ pub fn draw(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], fit: &Fit, rows: &[Row],
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A raid row's health number (Health Numbers, Live petition 5393): its
+    /// health as a percentage with the option on, a dead member's 0%; the
+    /// control: none with it off, the default.
+    #[test]
+    fn a_rows_health_number_only_with_health_numbers_on() {
+        use crate::settings::{ClientOptions, set_client};
+        let r = Row { hp: 128, seen: true, ..Default::default() };
+        set_client(ClientOptions::default());
+        assert_eq!(row_number(&r), None, "the control: off");
+        set_client(ClientOptions { health_numbers: true, ..Default::default() });
+        assert_eq!(row_number(&r).as_deref(), Some("50%"));
+        assert_eq!(row_number(&Row { hp: 0, ..r.clone() }).as_deref(), Some("0%"), "dead");
+        assert_eq!(row_number(&Row { hp: 255, ..r.clone() }).as_deref(), Some("100%"));
+        set_client(ClientOptions::default());
+    }
 
     /// The frame's left side the HUD leaves it: from the group's bars' place down to
     /// above the chat box, and short of the frame's far side.

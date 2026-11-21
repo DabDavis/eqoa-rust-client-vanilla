@@ -955,6 +955,9 @@ impl WndOptions {
                     // (`Session::agree_power_bars`), the bars drawn or not
                     // under the group's, the pet's and the raid list's health
                     86 => c.power_bars = !c.power_bars,
+                    // Health Numbers: the percentages drawn or not over the
+                    // bars from the next frame (`hud`, `raidlist`)
+                    HEALTH_NUMBERS => c.health_numbers = !c.health_numbers,
                     // Buff Window: the server told from the next frame
                     // (`Session::agree_buffs`), ours or the game's strip
                     // drawn (`buffwnd`)
@@ -1814,7 +1817,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 102] = [
+const EXTENDED_ITEMS: [(i32, &str); 103] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1917,6 +1920,7 @@ const EXTENDED_ITEMS: [(i32, &str); 102] = [
     (PACK_REBUILD, "Rebuild Pack Cache"),
     (SPELL_BAR_LAYOUT, "Spell Bar Layout"),
     (UTILITY_LAYOUT, "Utility Bar Layout"),
+    (HEALTH_NUMBERS, "Health Numbers"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -1981,6 +1985,11 @@ pub(crate) const SPELL_BAR_LAYOUT: i32 = 200;
 /// the upper left, side by side vertical, or down below and the player
 /// decides"). 210, as Spell Bar Layout's 200; off with the stacked bars.
 pub(crate) const UTILITY_LAYOUT: i32 = 210;
+/// Health Numbers' item (Live petition 5393, Spoony: "add the option to
+/// overlay health as a number, or percentage, over party bars. Including
+/// pets."). 220, as Utility Bar Layout's 210; the server's `qol::POWER_BARS`
+/// turns it off with Power Bars.
+pub(crate) const HEALTH_NUMBERS: i32 = 220;
 
 /// Slow When Not Focused's item (a GM's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -2075,7 +2084,9 @@ const ALL_CATEGORIES: [Category; 25] = [
     Category { name: "HUD", items: &[22, 90, 30, 40, 58, 83], note: Note::None, group: Group::Ui },
     // the group's and the raid's windows (2026-11-12, Power Bars: HUD's page
     // was full, so Raid List came with it)
-    Category { name: "Group & Raid", items: &[49, 86, 88], note: Note::None, group: Group::Ui },
+    // Health Numbers (2026-11-21, Live petition 5393) after Power Bars, the
+    // other thing drawn on the same bars
+    Category { name: "Group & Raid", items: &[49, 86, HEALTH_NUMBERS, 88], note: Note::None, group: Group::Ui },
     // Minimap Scroll Frame (2026-11-13) here: Map's page was full
     // Spell Bar Opacity (2026-11-13, ticket 1953) here: HUD's page is full
     Category { name: "HUD Layout", items: &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT], note: Note::Hud, group: Group::Ui },
@@ -2265,6 +2276,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         49 => on_off(c.raid_list),
         58 => on_off(c.pet_effects),
         86 => on_off(c.power_bars),
+        HEALTH_NUMBERS => on_off(c.health_numbers),
         88 => wide(if c.raid_mercs { "Shown" } else { "Hidden" }),
         83 => on_off(c.buff_window),
         85 => on_off(c.head_marks),
@@ -2974,6 +2986,16 @@ mod tests {
         assert_eq!(value_text(&vui, 86), Some(wide(vui.words.get(552, vui.language))));
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::power_bars(), "and back: two values");
+        goto!(HEALTH_NUMBERS);
+        assert_eq!(w.item, HEALTH_NUMBERS, "Health Numbers");
+        assert!(!settings::health_numbers(), "off by default: the game's bars");
+        assert_eq!(value_text(&vui, HEALTH_NUMBERS), Some(wide(vui.words.get(552, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::health_numbers(), cues.last()), (true, Some(&11)), "on: the percentages over the bars");
+        assert_eq!(value_text(&vui, HEALTH_NUMBERS), Some(wide(vui.words.get(551, vui.language))));
+        assert!(settings::power_bars() && settings::raid_list(), "moving no other row");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::health_numbers(), "and back: two values");
         goto!(88);
         assert_eq!(w.item, 88, "Raid Mercenaries");
         assert_eq!((settings::raid_mercs(), value_text(&vui, 88)), (false, Some(wide("Hidden"))), "Hidden by default");
@@ -3669,7 +3691,7 @@ mod tests {
             of(1),
             vec![
                 ("HUD", vec!["Ability Bars", "Stacked Spell Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
-                ("Group & Raid", vec!["Raid List", "Power Bars", "Raid Mercenaries"]),
+                ("Group & Raid", vec!["Raid List", "Power Bars", "Health Numbers", "Raid Mercenaries"]),
                 ("HUD Layout", vec!["Move HUD", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity", "Spell Bar Layout", "Utility Bar Layout"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers", "Target Level"]),
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
@@ -4161,13 +4183,13 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, 83, 58, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, 58, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
         }
         let off_text = Some(wide(vui.words.get(552, vui.language)));
-        for item in [44, TARGET_LEVEL, 70, 86, 83, 58, 78, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
+        for item in [44, TARGET_LEVEL, 70, 86, HEALTH_NUMBERS, 83, 58, 78, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
             for k in path_to(&w, item) {
                 w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
                 w.draw(&vui, &mut NullRaster, &o, &mut ups);

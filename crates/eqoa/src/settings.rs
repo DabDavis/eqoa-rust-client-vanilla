@@ -1004,6 +1004,15 @@ pub struct ClientOptions {
     /// power, which the roster has always carried). Off, or on a server that
     /// sends none, the game's bars. On by default.
     pub power_bars: bool,
+    /// Health Numbers (Extended > UI > Group & Raid; Live petition 5393,
+    /// Spoony: "add the option to overlay health as a number, or percentage,
+    /// over party bars. Including pets."): each group member's, the pet's and
+    /// the target's health as a percentage over its gauge, and in the raid
+    /// list's rows at the right of the name (`hud::health_percent`). A share
+    /// of 255 is all the client knows of another's health, so a percentage, no
+    /// invented points; a member whose health is not known shows none. Off by
+    /// default; a server that turns Power Bars off turns this off with it.
+    pub health_numbers: bool,
     /// Raid Mercenaries (Extended > UI > Group & Raid; the owner, 2026-11-13:
     /// "lets hide mercs from raid group display"): false, Hidden (the
     /// default), the raid list draws its players' rows alone; true, Shown, the
@@ -1519,6 +1528,7 @@ impl Default for ClientOptions {
             head_marks: true,
             target_level: true,
             power_bars: true,
+            health_numbers: false,
             raid_mercs: false,
             loading_tips: true,
             number_colors: crate::numcolor::DEFAULTS,
@@ -1665,6 +1675,10 @@ impl ClientOptions {
         }
         if !self.power_bars {
             s.push_str("power_bars=off\n");
+        }
+        // Health Numbers only when on
+        if self.health_numbers {
+            s.push_str("health_numbers=on\n");
         }
         // Raid Mercenaries only when Shown
         if self.raid_mercs {
@@ -1952,6 +1966,8 @@ impl ClientOptions {
                 ("target_level", "off") => c.target_level = false,
                 ("power_bars", "on") => c.power_bars = true,
                 ("power_bars", "off") => c.power_bars = false,
+                ("health_numbers", "on") => c.health_numbers = true,
+                ("health_numbers", "off") => c.health_numbers = false,
                 ("raid_mercs", "shown") => c.raid_mercs = true,
                 ("raid_mercs", "hidden") => c.raid_mercs = false,
                 ("loading_tips", "on") => c.loading_tips = true,
@@ -2304,7 +2320,8 @@ pub mod qol {
     /// Character > Summary's stat caps ("346/435"): the value alone and the
     /// game's column widths (`trainer`).
     pub const STAT_CAPS: u32 = 1 << 5;
-    /// Others' power under their health (Power Bars).
+    /// Others' power under their health (Power Bars), and the health numbers
+    /// over the bars (Health Numbers).
     pub const POWER_BARS: u32 = 1 << 6;
     /// The buff window: the game's effects strip.
     pub const BUFF_WINDOW: u32 = 1 << 7;
@@ -2355,7 +2372,7 @@ pub mod qol {
             44 | 45 | 85 => QUEST_HELPER,
             70..=72 => DPS_METER,
             64..=69 | 80 | 81 => NUMBER_COLORS,
-            86 => POWER_BARS,
+            86 | crate::options::HEALTH_NUMBERS => POWER_BARS,
             83 => BUFF_WINDOW,
             58 => PET_EFFECTS,
             78 | 79 => AUTO_CAST,
@@ -2400,7 +2417,7 @@ pub mod qol {
             c.number_colors = [0; crate::numcolor::ROWS];
         }
         if off(POWER_BARS) {
-            c.power_bars = false;
+            (c.power_bars, c.health_numbers) = (false, false);
         }
         if off(BUFF_WINDOW) {
             c.buff_window = false;
@@ -2442,7 +2459,7 @@ pub mod qol {
             v.number_colors = kept.number_colors;
         }
         if off(POWER_BARS) {
-            v.power_bars = kept.power_bars;
+            (v.power_bars, v.health_numbers) = (kept.power_bars, kept.health_numbers);
         }
         if off(BUFF_WINDOW) {
             v.buff_window = kept.buff_window;
@@ -2617,6 +2634,12 @@ pub fn target_level() -> bool {
 /// pet's bar and the raid list (`hud`, `raidlist`).
 pub fn power_bars() -> bool {
     client().power_bars
+}
+
+/// Health Numbers: the health as a percentage over the group's, the pet's
+/// and the target's bars and in the raid list's rows (`hud`, `raidlist`).
+pub fn health_numbers() -> bool {
+    client().health_numbers
 }
 
 /// Raid Mercenaries: the raid list draws the raid's mercs' rows (Shown) or
@@ -3910,7 +3933,7 @@ mod tests {
     #[test]
     fn the_server_turns_additions_off_and_the_choices_stay() {
         testing::reset(false);
-        let chosen = ClientOptions { dps_meter: true, auto_target: true, number_colors: [3; crate::numcolor::ROWS], ability_bars: 4, stacked_bars: true, spell_bar_layout: crate::hudmenu::Layout::Columns, utility_layout: crate::hudmenu::UtilityLayout::Below, ..Default::default() };
+        let chosen = ClientOptions { dps_meter: true, auto_target: true, health_numbers: true, number_colors: [3; crate::numcolor::ROWS], ability_bars: 4, stacked_bars: true, spell_bar_layout: crate::hudmenu::Layout::Columns, utility_layout: crate::hudmenu::UtilityLayout::Below, ..Default::default() };
         set_client(chosen);
         assert_eq!(client(), chosen, "nothing off: as kept");
         let all = qol::MAP | qol::QUEST_HELPER | qol::TARGET_LEVEL | qol::DPS_METER | qol::NUMBER_COLORS | qol::STAT_CAPS | qol::POWER_BARS | qol::BUFF_WINDOW | qol::PET_EFFECTS | qol::AUTO_CAST | qol::ITEM_LINKS | qol::SPELL_BARS;
@@ -3920,7 +3943,7 @@ mod tests {
         assert!(!(c.map || c.minimap || map() || minimap()), "the map, off by default");
         assert!(c.map_markers, "its markers the player's, with it");
         assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
-        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.buff_window || c.pet_effects || c.auto_cast || c.auto_target), "the rest");
+        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.pet_effects || c.auto_cast || c.auto_target), "the rest");
         assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
         assert!(!c.item_links && (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) == (ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft), "item links off by default, the game's two bars");
         let d = ClientOptions::default();
@@ -4101,6 +4124,18 @@ mod tests {
         let back = ClientOptions::from_text(&off);
         assert!(!back.buff_window && !back.loading_tips);
         assert!(ClientOptions::from_text("buff_window=maybe").buff_window, "the default");
+    }
+
+    #[test]
+    fn health_numbers_are_kept_only_when_on() {
+        assert!(!ClientOptions::default().health_numbers, "off by default");
+        assert!(!ClientOptions::default().to_text().contains("health_numbers"), "the default writes nothing");
+        let t = ClientOptions { health_numbers: true, ..Default::default() }.to_text();
+        assert!(t.contains("health_numbers=on\n"), "{t}");
+        assert!(ClientOptions::from_text(&t).health_numbers, "read back");
+        assert!(!ClientOptions::from_text("health_numbers=off").health_numbers);
+        assert!(!ClientOptions::from_text("health_numbers=maybe").health_numbers, "the default");
+        assert!(!ClientOptions::from_text("power_bars=on").health_numbers, "the control: Power Bars' key is not this");
     }
 
     #[test]
