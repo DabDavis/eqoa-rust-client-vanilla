@@ -78,6 +78,17 @@ pub fn watch(device: &wgpu::Device, recovered: bool) {
             mark(&format!("out of graphics memory ({n} times this run; a texture pack's budget now {} MB)", render::pack_limits().budget >> 20));
             return;
         }
+        // the window's surface refusing a call (Windows took it away or
+        // changed it: a minimised window, a display gone to sleep): the
+        // window's, not the device's, made again from the window by the
+        // next frame (`surface`), never a panic (the crash reports of
+        // 2026-11-19/21, "In Surface::configure  Invalid surface")
+        if let wgpu::Error::Validation { description, .. } = &e
+            && is_surface_error(description)
+        {
+            surface_failed(description);
+            return;
+        }
         if recovered {
             let text = e.to_string();
             let line = text.lines().take(3).collect::<Vec<_>>().join(" ");
@@ -92,6 +103,32 @@ pub fn watch(device: &wgpu::Device, recovered: bool) {
         // anything else as wgpu's default handler takes it
         panic!("wgpu error: {e}\n");
     }));
+}
+
+/// A surface call's validation error that reached the device's handler (one
+/// made outside the error scopes `viewer`'s `Gfx` puts round its own).
+static SURFACE_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// Whether a validation error's words are a surface call's: wgpu names the
+/// call it came from ("In Surface::configure", "In
+/// Surface::get_current_texture_view", "In Surface::present").
+pub fn is_surface_error(description: &str) -> bool {
+    description.contains("In Surface::") || description.contains("Error in Surface::")
+}
+
+/// The window's surface refused a call (`is_surface_error`): taken by the
+/// next frame (`take_surface_failed`), said in the log once until then.
+pub fn surface_failed(why: &str) {
+    if !SURFACE_FAILED.swap(true, Ordering::SeqCst) {
+        let line = why.split_whitespace().collect::<Vec<_>>().join(" ");
+        crate::say(&format!("graphics: the window's surface refused a call ({line}): it is made again"));
+    }
+}
+
+/// Whether the window's surface refused a call since the last frame asked
+/// (`surface_failed`).
+pub fn take_surface_failed() -> bool {
+    SURFACE_FAILED.swap(false, Ordering::SeqCst)
 }
 
 /// The device taken as lost, said in the log once a loss.
@@ -469,6 +506,17 @@ mod tests {
         assert!(threw_out_of_memory("GPUDevice.createBuffer: RangeError: Failed to execute 'createBuffer' on 'GPUDevice': createBuffer failed, size (1099511627776) is too large for the implementation when mappedAtCreation == true"), "Chrome's words in the page test");
         assert!(!threw_out_of_memory("GPUDevice.createBuffer: Unable to create buffer."), "the control: Safari's lost device");
         assert!(!threw_out_of_memory("GPUQueue.writeTexture: RangeError: offset"), "the control: not createBuffer's");
+    }
+
+    /// The NVIDIA crash report's words (2026-11-21, "In Surface::configure
+    /// Invalid surface") are the window's surface's, as an acquire's are;
+    /// the controls: a buffer's or a pipeline's validation error is not.
+    #[test]
+    fn surface_errors_are_the_windows() {
+        assert!(is_surface_error("Validation Error\n\nCaused by:\n  In Surface::configure\n    Invalid surface\n"));
+        assert!(is_surface_error("Validation Error\n\nCaused by:\n  In Surface::get_current_texture_view\n    Surface is not configured for presentation\n"));
+        assert!(!is_surface_error("Validation Error\n\nCaused by:\n  In Device::create_buffer, label = 'vertices'\n    Buffer size 0 is invalid\n"), "the control");
+        assert!(!is_surface_error("In a render pass\n  Surface texture used after present"), "the control: a pass's words, not a surface call's");
     }
 
     #[test]

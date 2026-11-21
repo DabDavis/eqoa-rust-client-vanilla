@@ -212,6 +212,7 @@ mod spells;
 mod stall;
 mod stream;
 mod gpulost;
+mod surface;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpustart;
 #[cfg(not(target_arch = "wasm32"))]

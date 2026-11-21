@@ -1910,6 +1910,16 @@ struct Gfx {
     /// than the window (Android: above the device's keyboard,
     /// `fit_keyboard`); None while the frame is the window's size.
     whole: Option<(u32, u32)>,
+    /// Where the window's surface stands (`surface`): acquired from only once
+    /// configured without an error.
+    surface_state: crate::surface::State,
+    /// When a surface that failed to be made again may be tried again
+    /// (`surface::RETRY`).
+    surface_retry: Option<Instant>,
+    /// The instance the surface was made on, natively, to make it again from
+    /// the window (`remake_surface`).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    instance: Option<wgpu::Instance>,
 }
 
 /// Android: the activity's side of the window (`App::android`).
@@ -2019,8 +2029,8 @@ impl Gfx {
         if !std::mem::take(&mut self.resized) {
             return;
         }
-        if let Some(surface) = &self.surface {
-            surface.configure(&self.device, &self.surface_config());
+        if self.surface.is_some() {
+            self.configure_surface();
         }
         self.depth = render::depth_view(&self.device, self.config.width, self.config.height);
     }
@@ -2029,15 +2039,14 @@ impl Gfx {
     /// picked again and the surface configured when the row moved (a surface
     /// a page or `EQOA_OFFSCREEN` made is left as it is).
     fn apply_vsync(&mut self) {
-        let Some(surface) = &self.surface else { return };
-        if self.present_modes.is_empty() {
+        if self.surface.is_none() || self.present_modes.is_empty() {
             return;
         }
         let vsync = crate::settings::vsync();
         let want = present_mode(&self.present_modes, vsync);
         if self.config.present_mode != want {
             self.config.present_mode = want;
-            surface.configure(&self.device, &self.surface_config());
+            self.configure_surface();
             crate::settings::set_display_refresh(self.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()));
             eprintln!("present mode {want:?} (vsync {})", if vsync { "on" } else { "off" });
         }
@@ -2058,28 +2067,150 @@ impl Gfx {
     /// drawn offscreen), or `Err` when it gives none: covered (`Err(true)`:
     /// on macOS wgpu answers `Occluded` at once while no part of the window
     /// can be seen, a full-screen window behind another; `covered`, a test's
-    /// script's), or (`Err(false)`) timed out, or its surface outdated or
-    /// lost, which is configured again: wgpu waits a second for one before it
-    /// says timed out, and a frame that waited so is a stall's (`stall`).
-    /// The frame's uploads are submitted all the same: wgpu keeps every
-    /// queued write until a submission takes it, and a window left behind
-    /// another grew by each frame's until the machine ran out of memory (F3
-    /// 20261024-093648: two windows on a Mac).
-    fn acquire(&self, covered: bool) -> Result<Option<wgpu::SurfaceTexture>, bool> {
-        let stale = match (&self.surface, covered) {
-            (_, true) => None,
-            (None, false) => return Ok(None),
-            (Some(surface), false) => match surface.get_current_texture() {
-                wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => return Ok(Some(f)),
-                wgpu::CurrentSurfaceTexture::Occluded => None,
-                _ => Some(surface),
-            },
-        };
-        self.queue.submit(std::iter::empty());
-        if let Some(surface) = stale {
-            surface.configure(&self.device, &self.surface_config());
+    /// script's; minimised, its size nothing, as Windows has it; or a
+    /// surface that failed, waiting to be made again), or (`Err(false)`)
+    /// timed out, or its surface outdated (configured again), lost or
+    /// refusing (made again from the window, `surface`): wgpu waits a second
+    /// for one before it says timed out, and a frame that waited so is a
+    /// stall's (`stall`). The frame's uploads are submitted all the same:
+    /// wgpu keeps every queued write until a submission takes it, and a
+    /// window left behind another grew by each frame's until the machine ran
+    /// out of memory (F3 20261024-093648: two windows on a Mac).
+    fn acquire(&mut self, covered: bool) -> Result<Option<wgpu::SurfaceTexture>, bool> {
+        use crate::surface::{Refused, State, Step};
+        if self.surface.is_none() && !covered {
+            return Ok(None);
         }
-        Err(stale.is_none())
+        if crate::gpulost::take_surface_failed() {
+            self.surface_state = State::Remake;
+        }
+        let step = if covered { Step::Skip } else { crate::surface::step(self.surface_state, self.window_size(), self.surface_retry.is_none_or(|t| Instant::now() >= t)) };
+        match step {
+            Step::Skip => {
+                self.queue.submit(std::iter::empty());
+                return Err(true);
+            }
+            Step::Remake => self.remake_surface(),
+            Step::Configure => {
+                self.configure_surface();
+            }
+            Step::Acquire => {}
+        }
+        if self.surface_state != State::Ready {
+            self.queue.submit(std::iter::empty());
+            return Err(true);
+        }
+        let Some(surface) = &self.surface else { return Ok(None) };
+        #[cfg(not(target_arch = "wasm32"))]
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let got = surface.get_current_texture();
+        #[cfg(not(target_arch = "wasm32"))]
+        let refused = pollster::block_on(scope.pop());
+        #[cfg(target_arch = "wasm32")]
+        let refused: Option<wgpu::Error> = None;
+        let r = match got {
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) if refused.is_none() => return Ok(Some(f)),
+            wgpu::CurrentSurfaceTexture::Success(_) | wgpu::CurrentSurfaceTexture::Suboptimal(_) => Refused::Validation,
+            wgpu::CurrentSurfaceTexture::Timeout => Refused::Timeout,
+            wgpu::CurrentSurfaceTexture::Occluded => Refused::Occluded,
+            wgpu::CurrentSurfaceTexture::Outdated => Refused::Outdated,
+            wgpu::CurrentSurfaceTexture::Lost => Refused::Lost,
+            wgpu::CurrentSurfaceTexture::Validation => Refused::Validation,
+        };
+        if let Some(e) = &refused {
+            self.surface_refused(&format!("acquire: {e}"));
+        } else if matches!(r, Refused::Lost | Refused::Validation) {
+            self.surface_refused(&format!("acquire: {r:?}"));
+        }
+        self.queue.submit(std::iter::empty());
+        self.surface_state = crate::surface::after_refused(r);
+        // outdated: configured again at once, as before
+        if self.surface_state == State::Configure && crate::surface::step(State::Configure, self.window_size(), true) == Step::Configure {
+            self.configure_surface();
+        }
+        Err(r == Refused::Occluded)
+    }
+
+    /// The window's size, natively (a minimised window's is nothing on
+    /// Windows); a page's canvas is taken as it is configured.
+    fn window_size(&self) -> (u32, u32) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let s = self.window.inner_size();
+            (s.width, s.height)
+        }
+        #[cfg(target_arch = "wasm32")]
+        (self.config.width.max(1), self.config.height.max(1))
+    }
+
+    /// The surface configured at the frame's size (`surface_config`), the
+    /// error it raises caught (natively, an error scope) and taken as the
+    /// surface's to be made again, never a panic (`surface`). A minimised
+    /// window's is left to be configured when it has a size. Whether it was.
+    fn configure_surface(&mut self) -> bool {
+        use crate::surface::State;
+        let Some(surface) = &self.surface else { return false };
+        let c = self.surface_config();
+        let size = self.window_size();
+        if c.width == 0 || c.height == 0 || size.0 == 0 || size.1 == 0 {
+            if self.surface_state == State::Ready {
+                self.surface_state = State::Configure;
+            }
+            return false;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        surface.configure(&self.device, &c);
+        #[cfg(not(target_arch = "wasm32"))]
+        let error = pollster::block_on(scope.pop());
+        #[cfg(target_arch = "wasm32")]
+        let error: Option<wgpu::Error> = None;
+        if let Some(e) = &error {
+            self.surface_refused(&format!("configure: {e}"));
+        } else if self.surface_state == State::Remake {
+            crate::say(&format!("graphics: the window's surface made again ({}x{})", c.width, c.height));
+        }
+        self.surface_state = crate::surface::after_configure(error.is_some());
+        if error.is_some() {
+            self.surface_retry = Some(Instant::now() + crate::surface::RETRY);
+        } else {
+            self.surface_retry = None;
+        }
+        error.is_none()
+    }
+
+    /// The surface refused a call (`why`): said in the log the first time
+    /// of a run of failures, not each second it fails again.
+    fn surface_refused(&self, why: &str) {
+        if self.surface_state != crate::surface::State::Remake {
+            let line = why.split_whitespace().collect::<Vec<_>>().join(" ");
+            crate::say(&format!("graphics: the window's surface refused a call ({line}): it is made again"));
+        }
+    }
+
+    /// A surface made again from the window in place of one lost or refusing
+    /// (natively; a page's canvas is configured again), then configured. The
+    /// new one is made before the old is let go (a surface failing to be made
+    /// keeps the old to try again from), and the old let go before the new
+    /// is configured (a window keeps one swap chain).
+    fn remake_surface(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(instance) = &self.instance {
+            match instance.create_surface(self.window.clone()) {
+                Ok(s) => {
+                    self.surface = None;
+                    self.surface = Some(s);
+                }
+                Err(e) => {
+                    if self.surface_retry.is_none() {
+                        crate::say(&format!("graphics: the window's surface could not be made again ({e}): tried again each second"));
+                    }
+                    self.surface_retry = Some(Instant::now() + crate::surface::RETRY);
+                    return;
+                }
+            }
+        }
+        self.configure_surface();
     }
 }
 
@@ -3705,7 +3836,7 @@ impl App {
         }
         let depth = render::depth_view(&device, config.width, config.height);
         let offscreen = surface.is_none().then(|| offscreen_target(&device, &config));
-        self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title: "EQOA".into(), present_modes: Vec::new(), resized: false, whole: None });
+        self.gfx = Some(Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title: "EQOA".into(), present_modes: Vec::new(), resized: false, whole: None, surface_state: crate::surface::State::Ready, surface_retry: None, instance: self.instance.clone() });
         // before the world there is nothing to load: the pregame draws
         if self.host.is_some() {
             if let Some(g) = &self.gfx {
@@ -3834,7 +3965,15 @@ impl App {
     /// (`web::remake`'s fallback to WebGL2).
     #[allow(clippy::too_many_arguments)]
     fn reattach(&mut self, new_window: Option<Arc<Window>>, surface: Option<wgpu::Surface<'static>>, config: wgpu::SurfaceConfiguration, device: wgpu::Device, queue: wgpu::Queue, ps2_sums: bool, present_modes: Vec<wgpu::PresentMode>) {
-        let Some(old) = self.gfx.take() else { return };
+        let Some(mut old) = self.gfx.take() else { return };
+        // the old surface let go before the new one is configured: a window
+        // keeps one swap chain, and the new surface's configuring failed
+        // while the old one's was still there (Vulkan's "native window in
+        // use", wgpu's "Invalid surface"), then acquired from (the crash
+        // report of 2026-11-19, "Surface is not configured for
+        // presentation"). The rest of the old goes at the end of this
+        // function, as before.
+        old.surface = None;
         let Gfx { window, title, whole, config: old_config, .. } = old;
         let window = new_window.unwrap_or(window);
         crate::gpulost::watch(&device, true);
@@ -3857,7 +3996,7 @@ impl App {
         }
         let depth = render::depth_view(&device, config.width, config.height);
         let offscreen = surface.is_none().then(|| offscreen_target(&device, &config));
-        let mut g = Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title, present_modes, resized: true, whole };
+        let mut g = Gfx { window, surface, offscreen, in_flight: None, device, queue, config, depth, renderer, models: Vec::new(), title, present_modes, resized: true, whole, surface_state: crate::surface::State::Configure, surface_retry: None, instance: self.instance.clone() };
         // the character and the sky in their places (`load`'s order)
         if self.walker.is_some() {
             self.body_at = usize::MAX;
@@ -3871,8 +4010,11 @@ impl App {
                 self.sky_at = crate::sky::upload(&mut g.renderer, &g.device, &g.queue, &self.lib, &mut g.models);
             }
         }
-        if let Some(s) = g.surface.as_ref() {
-            s.configure(&g.device, &g.surface_config());
+        // configured here, or (a minimised window) as the first frame with a
+        // size begins (`acquire`); an error not the new device's refusal
+        // (`gpulost::refused`) but the surface's, made again (`surface`)
+        if g.surface.is_some() {
+            g.configure_surface();
         }
         g.window.request_redraw();
         self.gfx = Some(g);
@@ -5534,8 +5676,8 @@ impl App {
                 g.config.height = size.height.max(1);
                 g.whole = None;
                 g.renderer.scale.set_into_top(false);
-                surface.configure(&g.device, &g.surface_config());
                 g.surface = Some(surface);
+                g.configure_surface();
                 // the depth buffer at the size too (`apply_size`)
                 g.resized = true;
                 crate::android::set_surface(true);
