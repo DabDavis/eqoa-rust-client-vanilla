@@ -5,6 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-21 · Trolls, ogres, dwarves, gnomes and halflings land a jump standing
+- A troll, ogre, dwarf, gnome or halfling no longer doubles over into what looked like an attack as it lands a jump: it comes down from the jump and stands up, as the other races do.
+
 ## 2026-11-21 · Two web page crashes fixed: switching tabs while looking with the mouse, and a graphics card that hangs
 - The web page no longer stops with "RefCell already borrowed" when you switch tabs, minimise the browser or resize its window while holding a mouse button to look around.
 - When the graphics card hangs in the web page, the game now waits longer for the browser to give its graphics back and carries on where you were instead of stopping after a minute. If the browser still refuses, the page says to reload it, and no longer switches you to WebGL2 for nothing.

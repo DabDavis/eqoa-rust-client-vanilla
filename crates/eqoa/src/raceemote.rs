@@ -1088,16 +1088,56 @@ pub fn grant_swim(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, m
     true
 }
 
+/// The player races' bodies whose own landing (7) doubles them over (Live
+/// petition 5423, "when press SPACE-jump on a troll character it starts
+/// attacking instead of jump animation"): the gnome's, dwarf's, troll's,
+/// halfling's and ogre's, both sexes, one play list for the five (the fall
+/// a251AA8B, the landing B10B9EF5). That landing, 9 frames over 0.66 s, throws
+/// the arms out and bends the body forward until the head is down at the
+/// knees: a heavy fall's, which a jump of 0.9 played on every landing, and on
+/// a troll or an ogre it reads as a lunge. The human's, elf's, dark elf's,
+/// barbarian's and erudite's (87BF30D3, 033A83B3) are a short knee bend,
+/// left as they are. Their fall (arms spread) is kept.
+pub const LAND_DOUBLED: &[u32] = &[
+    0xA99C_6B15, 0x4C40_84FC, // gnome
+    0xAA5B_0447, 0x350B_FDBE, // dwarf
+    0x4C6F_A532, 0x4DE3_2701, // troll
+    0xA3DB_3FE2, 0x8A27_A731, // halfling
+    0x8480_7490, 0xACC0_0B4F, // ogre
+];
+
+/// Puts the idle's clips and speed over `cs`'s landing (7), as
+/// `SetDefaultEntries` fills a body with none: the fall blends back to
+/// standing as it comes down. The landing keeps its own priority, channel,
+/// sync and sound (the thump). Whether it changed (not when it is the idle's
+/// already).
+pub fn put_land_idle(cs: &mut CSprite<Ee>) -> bool {
+    let idle = cs.entries[0];
+    let land = &mut cs.entries[AIR[1] as usize];
+    if land.animation == idle.animation {
+        return false;
+    }
+    land.animation = idle.animation;
+    land.weight = idle.weight;
+    true
+}
+
 /// The fall and the landing (`air_poses`) on `cs` (made of `model`, its clips
 /// in `sc`) when it is a player's character (`player`) on a server with jumps
 /// (`jumps`) in a body `TABLE` lists or another its race's options offer
 /// (`race_of`); anything else is left as the game made it, and a body with a
 /// fall and a landing of its own keeps them (`put_air`). A froglok's body
-/// takes its own leap instead (`leap_slot`, `put_leap`). Whether its fall and
-/// landing are the table's.
+/// takes its own leap instead (`leap_slot`, `put_leap`); a body whose own
+/// landing doubles it over (`LAND_DOUBLED`) lands as the idle
+/// (`put_land_idle`). Whether its fall and landing are the table's.
 pub fn grant_air(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, model: u32, player: bool, jumps: bool) -> bool {
     if !(player && jumps) {
         return false;
+    }
+    // the short and the big races: their own fall, the idle for a landing
+    if LAND_DOUBLED.contains(&model) {
+        put_land_idle(cs);
+        return true;
     }
     // a race that leaps (the froglok): its own leap, else the table's
     if let Some(slot) = leap_slot(model)
@@ -1399,6 +1439,61 @@ mod tests {
         let mut sc = AnimScene::default();
         let cs = load_csprite(lib, lib.lookup(id as i32).expect("on the disc"), &mut sc, &mut AnimCache::new(), &mut Rand(1)).expect("a CSprite");
         (cs, sc)
+    }
+
+    /// The short and the big races' landing (`LAND_DOUBLED`, petition 5423):
+    /// on the disc it bows the head to the knees (the highest node of its
+    /// lowest frame under 0.65 of the idle's) for the gnome, dwarf, troll,
+    /// halfling and ogre, both sexes, and for no other player race (the
+    /// control); a player's in one of those bodies on a server with jumps lands
+    /// as the idle (standing), its landing's priority, sync and sound kept, its
+    /// own fall kept, and again changes nothing; an NPC's and one on a server
+    /// without jumps keep the disc's; the other races keep their own fall and
+    /// landing. Needs `run/eqoa.iso`.
+    #[test]
+    fn the_short_and_big_races_land_standing() {
+        let Some(lib) = disc() else { return };
+        // the highest any node stands in any frame of `clips`, over the bind's
+        let top = |cs: &CSprite<Ee>, sc: &AnimScene<Ee>, e: usize| -> f32 {
+            let rig = Rig::of(cs, &sc.ref_maps[cs.h.ref_map]);
+            let clips: Vec<&Anim<Ee>> = cs.entries[e].animation.iter().filter_map(|&i| usize::try_from(i).ok()).map(|i| &sc.anims[i]).collect();
+            (0..clips[0].num_frames).map(|f| places(&rig, &frames_at(&rig, &clips, f)).iter().map(|p| p.y).fold(f32::MIN, f32::max)).fold(f32::MAX, f32::min)
+        };
+        for &id in PLAYER_BODIES {
+            let doubled = LAND_DOUBLED.contains(&id);
+            let (cs, sc) = load(&lib, id);
+            // the control: the disc's landing; the doubled one bows the head to
+            // the knees (its lowest top 0.56 of the idle's), the others' knee
+            // bend not (0.74)
+            let ratio = top(&cs, &sc, AIR[1] as usize) / top(&cs, &sc, 0);
+            eprintln!("{id:#010x}: the landing's lowest top {ratio:.2} of the idle's");
+            assert_eq!(ratio < 0.65, doubled, "{id:#010x}: {ratio}");
+            let (mut cs, mut sc) = load(&lib, id);
+            let had = entries(&cs);
+            let own = cs.entries[AIR[1] as usize];
+            assert_eq!(grant_air(&lib, &mut cs, &mut sc, id, true, true), doubled, "{id:#010x}");
+            if !doubled {
+                assert_eq!(entries(&cs), had, "{id:#010x}: its own fall and landing");
+                continue;
+            }
+            let (fall, land, idle) = (cs.entries[AIR[0] as usize], cs.entries[AIR[1] as usize], cs.entries[0]);
+            assert_eq!((land.animation, land.weight), (idle.animation, idle.weight), "{id:#010x}: the idle's");
+            assert_eq!((land.sync, land.sound, land.priority), (own.sync, own.sound, own.priority), "{id:#010x}: the landing's own");
+            assert_eq!(fall.animation, had_fall(&lib, id), "{id:#010x}: its own fall");
+            assert!(top(&cs, &sc, AIR[1] as usize) / top(&cs, &sc, 0) > 0.95, "{id:#010x}: standing");
+            let done = entries(&cs);
+            assert!(grant_air(&lib, &mut cs, &mut sc, id, true, true));
+            assert_eq!(entries(&cs), done, "{id:#010x}: put again, nothing changes");
+            for (player, jumps) in [(false, true), (true, false)] {
+                let (mut cs, mut sc) = load(&lib, id);
+                let had = entries(&cs);
+                assert!(!grant_air(&lib, &mut cs, &mut sc, id, player, jumps));
+                assert_eq!(entries(&cs), had, "{id:#010x}: as the game made it");
+            }
+        }
+        fn had_fall(lib: &Library, id: u32) -> [i32; 2] {
+            load(lib, id).0.entries[AIR[0] as usize].animation
+        }
     }
 
     /// The froglok's jump (`AIR_LEAP`): its leap (42) leaves the ground after
