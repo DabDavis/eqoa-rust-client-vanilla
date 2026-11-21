@@ -7,7 +7,7 @@ is put on the page by `.github/workflows/notes.yml`.
 
 ## 2026-11-21 · Two web page crashes fixed: switching tabs while looking with the mouse, and a graphics card that hangs
 - The web page no longer stops with "RefCell already borrowed" when you switch tabs, minimise the browser or resize its window while holding a mouse button to look around.
-- When the graphics card hangs in the web page, the game now waits longer for the browser to give its graphics back, trying both of its ways of drawing, and carries on where you were instead of stopping after a minute. If the browser still refuses, the page says to reload it, and no longer switches you to WebGL2 for nothing.
+- When the graphics card hangs in the web page, the game now waits longer for the browser to give its graphics back and carries on where you were instead of stopping after a minute. If the browser still refuses, the page says to reload it, and no longer switches you to WebGL2 for nothing.
 
 ## 2026-11-21 · The web page recovers instead of stopping when Safari's graphics restart
 - In Safari (Mac, iPhone, iPad), the page no longer stops with "The client stopped: TypeError ... setVertexBuffer" when the browser's graphics restart in the middle of a frame. The game makes its graphics again and carries on, as it already did for the browser's other graphics errors.

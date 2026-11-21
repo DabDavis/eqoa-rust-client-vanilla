@@ -971,7 +971,7 @@ pub fn remake() -> Option<Result<viewer::PendingGfx, String>> {
                     match &fresh {
                         Some(c) => {
                             status(&format!(
-                                "graphics: the browser refuses both WebGPU and WebGL2 for now ({last}): trying both for {} s more",
+                                "graphics: the browser refuses both WebGPU and WebGL2 for now ({last}): trying WebGL2 for {} s more",
                                 crate::gpulost::page::total_ms(leg.pauses_ms) / 1000
                             ));
                             c.clone()

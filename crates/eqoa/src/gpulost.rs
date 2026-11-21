@@ -395,7 +395,7 @@ pub fn test(device: &wgpu::Device, now: i64) {
 /// every try), each try a fresh adapter; then WebGL2, on a fresh canvas (one
 /// that has had a "webgpu" context never gives a "webgl2" one), which a
 /// Chrome whose GPU process keeps failing still draws on (in software if it
-/// must); both refused, either on that canvas for 2 minutes more. On WebGL2
+/// must); refused, WebGL2 on that canvas for 2 minutes more. On WebGL2
 /// (chosen, or fallen back to: never back to WebGPU in that
 /// page) WebGL2 again on its canvas once the browser gives the context back.
 pub mod page {
@@ -411,9 +411,11 @@ pub mod page {
     /// Both refused (2026-11-21's crash report: Chrome after a
     /// `DXGI_ERROR_DEVICE_HUNG`, no WebGPU adapter for 50 s, then
     /// `getContext("webgl2")` null on the fresh canvas too: a browser blocks
-    /// a page from the graphics card for a while after it hung): WebGPU, then
-    /// WebGL2, on the fresh canvas, every 10 s for 2 minutes more, the game
-    /// going on meanwhile, before the page stops.
+    /// a page from the graphics card for a while after it hung): WebGL2 again
+    /// on the fresh canvas, every 10 s for 2 minutes more, the game going on
+    /// meanwhile, before the page stops. WebGL2 alone: `gfx_on` makes its
+    /// surface before it asks for an adapter, so a WebGPU try would take the
+    /// fresh canvas's "webgpu" context, and no "webgl2" one comes after it.
     pub const BLOCKED_PAUSES_MS: [i32; 12] = [10_000; 12];
 
     /// One leg of the way: the backends tried, in order, at each try, the
@@ -435,7 +437,7 @@ pub mod page {
         vec![
             Leg { backends: &[Backend::BrowserWebGpu], pauses_ms: &WEBGPU_PAUSES_MS, fresh_canvas: false },
             Leg { backends: &[Backend::Gl], pauses_ms: &FALLBACK_PAUSES_MS, fresh_canvas: true },
-            Leg { backends: &[Backend::BrowserWebGpu, Backend::Gl], pauses_ms: &BLOCKED_PAUSES_MS, fresh_canvas: true },
+            Leg { backends: &[Backend::Gl], pauses_ms: &BLOCKED_PAUSES_MS, fresh_canvas: true },
         ]
     }
 
@@ -451,8 +453,9 @@ mod tests {
     use render::wgpu::Backend;
 
     /// WebGPU is tried again for 45-60 s, no pause over 5 s and none
-    /// shorter than the one before; then WebGL2 on a fresh canvas; then, both
-    /// refused, either on that canvas for 2 minutes more. Only the first leg
+    /// shorter than the one before; then WebGL2 on a fresh canvas; then,
+    /// refused, WebGL2 on that canvas for 2 minutes more (never WebGPU there:
+    /// its surface would take the canvas from WebGL2). Only the first leg
     /// is on the lost device's canvas, and it asks for WebGPU alone (that
     /// canvas gives no "webgl2" context). On WebGL2 only WebGL2, on its own
     /// canvas: a page fallen back never goes back to WebGPU (the backend it
@@ -463,7 +466,7 @@ mod tests {
         let p = page::plan(Backend::BrowserWebGpu);
         assert_eq!(
             p.iter().map(|l| (l.backends, l.fresh_canvas)).collect::<Vec<_>>(),
-            [(&[Backend::BrowserWebGpu][..], false), (&[Backend::Gl][..], true), (&[Backend::BrowserWebGpu, Backend::Gl][..], true)]
+            [(&[Backend::BrowserWebGpu][..], false), (&[Backend::Gl][..], true), (&[Backend::Gl][..], true)]
         );
         assert!(p.iter().all(|l| l.fresh_canvas || !l.backends.contains(&Backend::Gl)), "no WebGL2 asked of WebGPU's canvas");
         assert!((100_000..=180_000).contains(&page::total_ms(p[2].pauses_ms)), "both refused: 2 minutes more");
