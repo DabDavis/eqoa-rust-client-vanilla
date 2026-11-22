@@ -4274,6 +4274,10 @@ impl Play {
                         walker.place(player.pos, player.hpr[0]);
                     }
                     self.filters_sent = None;
+                    // Msg000D's `m_wndGame->SetMode(1)`: every window closed,
+                    // the quick-chat menus too (`windows_closed_by_dump`)
+                    self.set_mode_0(walker);
+                    self.windows_closed_by_dump();
                     self.player = player;
                     // Msg000D reads `m_speed` out of the dump (no SetSpeed)
                     self.speed = dump.speed;
@@ -7531,6 +7535,21 @@ impl Play {
         }
     }
 
+    /// `Msg000D` in play (a respawn, a server's restart resumed where the
+    /// player stands): `m_wndGame->SetMode(1)` closes every window, the
+    /// quick-chat menus (`m_menu4`) among them, and play has the keys. This
+    /// client closed the others with the mode (`set_mode_0`) but kept the
+    /// quick-chat menus open where they stood, their branch and its pressed
+    /// direction: a press after the dump went on where the menus were left,
+    /// and a pet's Passive was sent where the player meant the root's choice
+    /// (petition 2618, at a server's keep restart). The menus closed here,
+    /// the keys they held dropped, as a pointer's hold on one of them.
+    fn windows_closed_by_dump(&mut self) {
+        self.set_mode_zero();
+        self.quick.close();
+        self.quick_held = None;
+    }
+
     /// What the start menu asked of the camera since it was last looked at,
     /// done in the order asked (`race_frame_due`), as the game does each at
     /// once: `ApplyRaceCamera` (the camera saved, then the character framed
@@ -8885,8 +8904,13 @@ impl Play {
     /// quick-chat menus over the root's set, with the keys (mode 30; the
     /// effects' bar goes while they are up). In mode 30 the key reaches the
     /// menus, which pass it up to close them.
+    ///
+    /// Not while the loading screen is up: the game's frame stops there (no
+    /// key reaches a window), and here the menus are neither run nor drawn
+    /// under it, so a menu opened then took every key unseen and ran them
+    /// all at once as the screen came down (petition 2618).
     pub fn open_quick_chat(&mut self) {
-        if self.mode == 0 && self.quick.open() {
+        if self.mode == 0 && !self.loading.up() && self.quick.open() {
             self.mode = 30;
         }
     }
@@ -11525,6 +11549,79 @@ mod commands {
         assert_eq!(p.sound_ops, vec![OptionsUp::PreviewEnd], "ended with the window");
         p.end_options_preview();
         assert_eq!(p.sound_ops.len(), 1, "once");
+    }
+
+    /// Petition 2618: a player's quick chat as the server keeps it (the
+    /// root's Up "Sendpet" is |30, the pet's attack on the target; Left is
+    /// Options, its Left Pet Command, whose Up is Passive, |24), the menus
+    /// left open on Pet Command as a server's keep restart resumes with a
+    /// MemoryDump where the player stands. The dump closes them, as
+    /// `Msg000D`'s `SetMode(1)` does, so the next press of the d-pad's up
+    /// sends nothing and L2 then up sends the root's Sendpet. The control:
+    /// without the dump's close, the same up sends the pet's Passive (0x0041
+    /// command 1), the stray command the server logged.
+    #[test]
+    fn a_dump_closes_the_quick_chat_menus() {
+        use crate::pointer::key;
+        use crate::pointer::testing::{NullRaster, vui};
+        crate::settings::testing::reset(false);
+        let vui = vui();
+        let mut r = NullRaster;
+        let set = |id: i64, e: [(&str, &str); 4]| net::dump::TextSet { id, entries: e.iter().enumerate().map(|(k, &(label, text))| net::dump::TextEntry { id: k as i64, text: text.into(), label: label.into() }).collect() };
+        let sets = vec![
+            set(0, [("Sendpet", "|30"), ("Options", " "), ("Group", " "), ("Communicate", " ")]),
+            set(5, [("Chat Mode", " "), ("Pet Command", " "), ("Grouping", " "), ("Chat Filter", " ")]),
+            set(22, [("Passive", "|24"), ("More Pet Commands", " "), ("Defensive", "|25"), ("Aggressive", "|26")]),
+        ];
+        let mut p = play_with(Box::new(net::dump::MemoryDump { text_sets: sets, ..Default::default() }));
+        p.take_abilities();
+        // the world entry's loading screen down
+        assert!(p.loading.end(true, i64::MAX).is_some());
+        p.pet_id = 0x200;
+        p.target = 0x300;
+        p.session.record = Some(Vec::new());
+        let tap = |p: &mut Play, r: &mut NullRaster, k: i32| {
+            p.quick_key(k, true);
+            p.quick_key(k, false);
+            let outs = p.run_quick(&vui, r);
+            p.quick_outs(outs);
+        };
+        // the pet's commands sent (0x0041's command byte)
+        let pet = |p: &mut Play| -> Vec<u8> { std::mem::take(p.session.record.as_mut().unwrap()).into_iter().map(|(_, m)| m).filter(|m| m.len() >= 3 && m[0] == 0x41 && m[1] == 0).map(|m| m[2]).collect() };
+        let on_pet_command = |p: &mut Play, r: &mut NullRaster| {
+            p.open_quick_chat();
+            tap(p, r, key::LEFT);
+            tap(p, r, key::LEFT);
+            assert_eq!(p.mode, 30, "the menus up on Pet Command");
+        };
+        on_pet_command(&mut p, &mut r);
+        tap(&mut p, &mut r, key::UP);
+        assert_eq!((pet(&mut p), p.mode), (vec![1], 0), "the control: up there sends Passive");
+        on_pet_command(&mut p, &mut r);
+        p.windows_closed_by_dump();
+        assert!(p.mode == 0 && !p.quick.visible(), "the dump closed them");
+        tap(&mut p, &mut r, key::UP);
+        assert_eq!(pet(&mut p), Vec::<u8>::new(), "up after the dump sends nothing");
+        p.open_quick_chat();
+        tap(&mut p, &mut r, key::UP);
+        assert_eq!((pet(&mut p), p.mode), (vec![8], 0), "L2 then up: Sendpet, the root's");
+    }
+
+    /// Petition 2618: L2 under the loading screen opens no quick-chat menu,
+    /// which would take every key unseen (the menus are not run under it)
+    /// and run them all as it came down. The control: once it is down, L2
+    /// opens them.
+    #[test]
+    fn the_quick_chat_does_not_open_under_the_loading_screen() {
+        crate::settings::testing::reset(false);
+        let mut p = play();
+        // the world entry's own loading screen up, as it comes
+        assert!(p.loading.up());
+        p.open_quick_chat();
+        assert_eq!((p.mode, p.quick.visible()), (0, false), "under the loading screen");
+        assert!(p.loading.end(true, i64::MAX).is_some());
+        p.open_quick_chat();
+        assert_eq!((p.mode, p.quick.visible()), (30, true), "the control: once it is down");
     }
 
     /// A character wears the cape the server's set names for its id

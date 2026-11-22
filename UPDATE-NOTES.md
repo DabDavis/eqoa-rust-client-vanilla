@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-22 · Quick chat after a server restart
+- When the server restarts and puts you back where you stood (or you respawn), an open quick-chat (L2) menu now closes, as on the PS2. It no longer stays open on the submenu you left it in, so your next press can't send a command from there by mistake, such as setting your pet to Passive.
+- L2 no longer opens the quick chat behind a loading screen, where it took your presses without showing them and used them all at once when the screen went away.
+
 ## 2026-11-21 · Trolls, ogres, dwarves, gnomes and halflings land a jump standing
 - A troll, ogre, dwarf, gnome or halfling no longer doubles over into what looked like an attack as it lands a jump: it comes down from the jump and stands up, as the other races do.
 
