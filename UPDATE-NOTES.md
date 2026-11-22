@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-22 · Every loot roll can be answered
+- With more than three loot rolls open, the roll strips now scroll, so no roll times out unseen. The d-pad or the arrow keys walk past the third strip, the mouse wheel over the strips (or a finger's drag on them) scrolls them, and "+N above" / "+N more" beside them can be clicked to page through.
+- A count turns red when a roll it hides has 15 seconds or less left.
+
 ## 2026-11-22 · Quick chat after a server restart
 - When the server restarts and puts you back where you stood (or you respawn), an open quick-chat (L2) menu now closes, as on the PS2. It no longer stays open on the submenu you left it in, so your next press can't send a command from there by mistake, such as setting your pet to Passive.
 - L2 no longer opens the quick chat behind a loading screen, where it took your presses without showing them and used them all at once when the screen went away.

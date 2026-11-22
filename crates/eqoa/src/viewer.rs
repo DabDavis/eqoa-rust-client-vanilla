@@ -713,6 +713,10 @@ pub fn shot_with(
                             eprintln!("mouse {step}: the chat box's history");
                             continue;
                         }
+                        (Some("wheel"), Some(n), _) if p.roll_wheel(mouse.cursor, (w, h), n as f32) => {
+                            eprintln!("mouse {step}: the loot rolls' strips");
+                            continue;
+                        }
                         _ => {}
                     }
                 }
@@ -2604,6 +2608,9 @@ enum Finger {
     OfferList,
     /// Move HUD's (`hudlayout`): a piece it picked up, dragged, or the bar's button
     Hud,
+    /// the loot rolls' strips' (`rollwnd`, entry 1757): a drag scrolls them, a
+    /// tap is a click there; the window pixels' y it was last at
+    Rolls(i32),
 }
 
 pub fn run(lib: Library, source: Source) -> Result<(), Error> {
@@ -3600,7 +3607,15 @@ impl App {
                 crate::editbox::screen_touched();
                 // Move HUD: a finger on a piece takes it (`hudlayout`)
                 let hud = self.play.as_mut().is_some_and(|pl| pl.hud_press(at, size));
-                let w = if hud { Some(Finger::Hud) } else { self.finger_on(p) };
+                // on the loot rolls' strips: theirs (a drag scrolls them)
+                let rolls = !hud && self.walker.is_some() && self.play.as_ref().is_some_and(|pl| pl.rolls_cover(at, size));
+                let w = if hud {
+                    Some(Finger::Hud)
+                } else if rolls {
+                    Some(Finger::Rolls(at[1].round() as i32))
+                } else {
+                    self.finger_on(p)
+                };
                 self.fingers.retain(|f| f.0 != id);
                 if let Some(w) = w {
                     self.fingers.push((id, w));
@@ -3644,6 +3659,21 @@ impl App {
             Finger::Pointer => {
                 if let Some(down) = self.taps.touch(id, phase, at, size) {
                     self.tap(down, size);
+                }
+            }
+            Finger::Rolls(was) => {
+                if let Some(down) = self.taps.touch(id, phase, at, size) {
+                    // a tap: a click where it came down (a choice, a count)
+                    self.click(crate::mouse::Click::Target(down[0] as f64, down[1] as f64), true);
+                } else if phase == Phase::Moved {
+                    let lines = crate::touch::drag_lines(at[1].round() - was as f32, size);
+                    let cur = (at[0] as f64, at[1] as f64);
+                    if let Some(pl) = self.play.as_mut() {
+                        pl.roll_wheel(cur, size, lines);
+                    }
+                    if let Some(f) = self.fingers.iter_mut().find(|f| f.0 == id) {
+                        f.1 = Finger::Rolls(at[1].round() as i32);
+                    }
                 }
             }
             Finger::OfferList => {
@@ -6294,7 +6324,7 @@ impl App {
                     let took = match (self.play.as_mut(), self.gfx.as_ref()) {
                         (Some(p), Some(g)) => {
                             let size = (g.config.width, g.config.height);
-                            p.chat_wheel(self.cursor, size, d) || p.raid_wheel(self.cursor, size, d) || p.meter_wheel(self.cursor, size, d) || p.book_wheel(self.cursor, size, d)
+                            p.chat_wheel(self.cursor, size, d) || p.roll_wheel(self.cursor, size, d) || p.raid_wheel(self.cursor, size, d) || p.meter_wheel(self.cursor, size, d) || p.book_wheel(self.cursor, size, d)
                         }
                         _ => false,
                     };

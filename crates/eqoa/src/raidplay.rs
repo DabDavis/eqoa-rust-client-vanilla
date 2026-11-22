@@ -534,6 +534,22 @@ impl Play {
         true
     }
 
+    /// The wheel's `lines` (up positive; a finger's drag down) at window
+    /// pixels `at` on a `size` window: over the rolls' strips (or their
+    /// counts) a roll a notch, taken before the camera's zoom (entry 1757).
+    /// False off them.
+    pub fn roll_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
+        let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        self.rolls_shown() && !self.search.open && !crate::hideui::hidden() && self.raid.rolls.wheel(f, lines)
+    }
+
+    /// Whether window pixels `at` on a `size` window are on the rolls'
+    /// strips or their counts (a finger put down there drags them).
+    pub fn rolls_cover(&self, at: [f32; 2], size: (u32, u32)) -> bool {
+        let f = render::ui::frame_from_window(size, at);
+        self.rolls_shown() && !self.search.open && !crate::hideui::hidden() && self.raid.rolls.covers(f)
+    }
+
     /// The strips are drawn: in play, the chat box's history and the manual
     /// camera (the windows over them keep the rolls until they close).
     fn rolls_shown(&self) -> bool {
@@ -742,6 +758,34 @@ mod tests {
         // the server's end closes the strip
         p.raid_roll(Roll { id: 7, ..Default::default() });
         assert!(!p.raid.rolls.is_open());
+    }
+
+    /// The wheel over the strips scrolls them and is theirs (so it does not
+    /// zoom the camera); the same wheel off them is not (the control: the
+    /// viewer zooms with it). Entry 1757.
+    #[test]
+    fn a_wheel_over_the_rolls_scrolls_them() {
+        let mut p = play();
+        p.mode = 0;
+        for id in 1..=5 {
+            p.raid_roll(roll(id));
+        }
+        let (vui, mut nr) = (crate::pointer::testing::vui(), crate::pointer::testing::NullRaster);
+        p.run_rolls(&vui, &mut nr);
+        let size = (640, 448);
+        let on = render::ui::window_from_frame(size, [450.0, 180.0]);
+        let on = (on[0] as f64, on[1] as f64);
+        assert!(p.rolls_cover([on.0 as f32, on.1 as f32], size));
+        assert!(p.roll_wheel(on, size, -1.0), "over the strips: theirs");
+        p.run_rolls(&vui, &mut nr);
+        assert!(p.roll_wheel(on, size, -1.0));
+        assert!(!p.roll_wheel((5.0, 5.0), size, -1.0), "off them: the camera's");
+        // scrolled two down: the third roll is the top strip's, its Greed a click
+        p.run_rolls(&vui, &mut nr);
+        let greed = render::ui::window_from_frame(size, [436.0 + 98.0, 164.0 + 33.0]);
+        let c = crate::mouse::Click::Target(greed[0] as f64, greed[1] as f64);
+        assert!(p.point(c, size, false));
+        assert_eq!(sent(&mut p), [net::raid::roll_choice(3, Choice::Greed)]);
     }
 
     /// The ready check's strip (petition 1711): with a roll up too, R2 and right

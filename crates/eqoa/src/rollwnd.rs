@@ -10,6 +10,11 @@
 //! along the top), the oldest at the top, [`SHOWN`] at once: the item's icon
 //! and name, Need, Greed and Pass under them (Need dimmed where the server says
 //! the player can neither wear nor use it), and the time left on a bar.
+//! More than that open, the strips scroll (jibrish's entry 1757: every roll
+//! can be answered, as each one's clock runs from its offer): the d-pad walks
+//! past the last strip shown, the wheel (or a finger's drag) over them steps a
+//! roll a notch, and "+N above" / "+N more" beside the first and the last
+//! strips page by a click, red while a roll they hide has 15 s or less left.
 //!
 //! It never takes the keys of play. A click on a choice makes it (`point`);
 //! with R2 held (the chat box's history, mode 33, where the walk and the camera
@@ -25,8 +30,8 @@ use net::dump::NetItem;
 use net::raid::{Choice, Roll};
 use vi::ui::{FrameParam, Raster, Vui, icon_id, wide};
 
-/// The most strips drawn at once; the rest wait their turn (a line beside the
-/// last says how many).
+/// The most strips drawn at once; the rest are scrolled to (a line beside the
+/// first and the last says how many are above and below).
 pub const SHOWN: usize = 3;
 
 /// The first strip's top left (the 4:3 frame's, drawn in the middle anchor:
@@ -83,7 +88,18 @@ pub struct Rolls {
     /// strips' places left free at the top (the ready check's, `readywnd`):
     /// the rolls start that many lower and that many fewer are shown
     pub skip: usize,
+    /// the index in `open` of the top strip shown (`first()` keeps it valid)
+    first: usize,
+    /// where the counts were drawn last (frame x0 y0 x1 y1), and which way they
+    /// page (-1 up, 1 down)
+    count_hits: Vec<([i32; 4], i32)>,
+    /// the wheel's or a finger's lines not yet a whole notch
+    wheel_left: f32,
 }
+
+/// A roll's seconds left at or under which its bar (and a count that hides
+/// it) is red.
+const RED_SECONDS: i64 = 15;
 
 impl Rolls {
     /// A roll from the server at `now`: a new one goes last, one of the same id
@@ -103,11 +119,65 @@ impl Rolls {
 
     /// Roll `id` closed (answered, or the server's end of it).
     pub fn close(&mut self, id: u32) {
-        self.open.retain(|o| o.id != id);
+        let Some(i) = self.open.iter().position(|o| o.id == id) else { return };
+        self.open.remove(i);
+        // the lit roll and the window keep to what they showed: one closed
+        // above them moves them up with the rest
+        if i < self.sel {
+            self.sel -= 1;
+        }
+        if i < self.first {
+            self.first -= 1;
+        }
         self.sel = self.sel.min(self.open.len().saturating_sub(1));
+        self.settle();
         if self.open.is_empty() {
             self.focused = false;
         }
+    }
+
+    /// The top strip's index in `open`: kept so the window is full while
+    /// enough are open (the last ones closed pull it up).
+    fn first(&self) -> usize {
+        self.first.min(self.open.len().saturating_sub(self.shown()))
+    }
+
+    /// `first` made valid (after a close, a roll, a `skip` changed), and the
+    /// lit roll, while focused, kept in the window.
+    fn settle(&mut self) {
+        self.first = self.first();
+        if self.focused && self.is_open() {
+            let last = self.first + self.shown() - 1;
+            let to = self.sel.clamp(self.first, last);
+            if to != self.sel {
+                self.sel = to;
+                self.choice = self.first_choice(to);
+            }
+        }
+    }
+
+    /// The window moved by `by` rolls (up negative), kept in `open`.
+    fn scroll(&mut self, by: i64) {
+        let room = self.open.len().saturating_sub(self.shown()) as i64;
+        self.first = (self.first() as i64 + by).clamp(0, room) as usize;
+        self.settle();
+    }
+
+    /// The wheel's `lines` (up positive; a finger's drag down) at frame point
+    /// `p`: a roll a whole notch when it is over the strips. False when it is
+    /// not (the camera's zoom, then).
+    pub fn wheel(&mut self, p: [f32; 2], lines: f32) -> bool {
+        if !self.covers(p) {
+            self.wheel_left = 0.0;
+            return false;
+        }
+        self.wheel_left += lines;
+        let notches = self.wheel_left.trunc();
+        self.wheel_left -= notches;
+        if notches != 0.0 {
+            self.scroll(-(notches as i64));
+        }
+        true
     }
 
     /// Those past their time by more than a few seconds go (the server ends
@@ -134,7 +204,9 @@ impl Rolls {
             return false;
         }
         self.focused = true;
-        self.sel = self.sel.min(self.shown() - 1);
+        let first = self.first();
+        self.first = first;
+        self.sel = self.sel.clamp(first, first + self.shown() - 1);
         self.choice = self.first_choice(self.sel);
         true
     }
@@ -201,15 +273,19 @@ impl Rolls {
                 if self.sel > 0 {
                     self.sel -= 1;
                     self.choice = self.first_choice(self.sel);
+                    // above the first shown: the window follows
+                    self.first = self.first().min(self.sel);
                 }
                 None
             }
             139 | 20 => {
-                let more = self.sel + 1 < self.shown();
+                // past the last shown the walk goes on into those below
+                let more = self.sel + 1 < self.open.len();
                 step(cues, more);
                 if more {
                     self.sel += 1;
                     self.choice = self.first_choice(self.sel);
+                    self.first = self.first().max((self.sel + 1).saturating_sub(self.shown()));
                 }
                 None
             }
@@ -230,6 +306,11 @@ impl Rolls {
     /// or not); anything else nothing.
     pub fn point(&mut self, p: [f32; 2]) -> Option<(u32, Choice)> {
         let (x, y) = (p[0] as i32, p[1] as i32);
+        // a count: a page that way
+        if let Some(&(_, dir)) = self.count_hits.iter().find(|(r, _)| (r[0]..r[2]).contains(&x) && (r[1]..r[3]).contains(&y)) {
+            self.scroll(dir as i64 * self.shown() as i64);
+            return None;
+        }
         let &(_, k, c) = self.hits.iter().find(|(r, _, _)| (r[0]..r[2]).contains(&x) && (r[1]..r[3]).contains(&y))?;
         self.make(k, c)
     }
@@ -238,20 +319,23 @@ impl Rolls {
     /// the world's).
     pub fn covers(&self, p: [f32; 2]) -> bool {
         let n = self.shown() as i32;
-        n > 0 && p[0] >= AT[0] as f32 && p[0] < (AT[0] + W) as f32 && p[1] >= self.top() as f32 && p[1] < (self.top() + n * (H + GAP)) as f32
+        let on_count = self.count_hits.iter().any(|(r, _)| p[0] >= r[0] as f32 && p[0] < r[2] as f32 && p[1] >= r[1] as f32 && p[1] < r[3] as f32);
+        on_count || n > 0 && p[0] >= AT[0] as f32 && p[0] < (AT[0] + W) as f32 && p[1] >= self.top() as f32 && p[1] < (self.top() + n * (H + GAP)) as f32
     }
 
     /// The strips at `now` (the session's clock), each choice's place noted.
     /// `icon` is an item's surface (`inventory::item_icon`).
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64, icon: &dyn Fn(&NetItem) -> i32) {
         self.hits.clear();
+        self.count_hits.clear();
+        self.settle();
         let (white, yellow, dim) = ([1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 0.0, 1.0], [0.55, 0.55, 0.55, 0.7]);
         let fh = vui.font_height(r);
         let fp = FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 1), br: (106, 0), bottom: (102, 2), bl: (105, 0), left: (104, 0) };
-        let (shown, top) = (self.shown(), self.top());
-        for (k, o) in self.open.iter().take(shown).enumerate() {
+        let (shown, top, first) = (self.shown(), self.top(), self.first());
+        for (k, o) in self.open.iter().enumerate().skip(first).take(shown) {
             let lit_roll = self.focused && k == self.sel;
-            let at = [AT[0], top + k as i32 * (H + GAP)];
+            let at = [AT[0], top + (k - first) as i32 * (H + GAP)];
             r.blit(icon_id("black"), 0, at, [0, 0], [W, H], 3, if lit_roll { 0.85 } else { 0.7 });
             vui.blit_frame(r, at, [W, H], &fp, 3, 1.0, true);
             // the item: its icon at half size, its name cut to its room
@@ -287,16 +371,26 @@ impl Rolls {
             let (x0, y0) = (at[0] + 8, at[1] + H - 6);
             r.fill_fan([0.15, 0.15, 0.15, 1.0], [[x0, y0], [x0 + full, y0], [x0 + full, y0 + 2], [x0, y0 + 2]]);
             if w > 0 {
-                let c = if o.seconds(now) <= 15 { [0.95, 0.25, 0.2, 1.0] } else { [1.0, 0.55, 0.0, 1.0] };
+                let c = if o.seconds(now) <= RED_SECONDS { [0.95, 0.25, 0.2, 1.0] } else { [1.0, 0.55, 0.0, 1.0] };
                 r.fill_fan(c, [[x0, y0], [x0 + w, y0], [x0 + w, y0 + 2], [x0, y0 + 2]]);
             }
         }
-        // more waiting: their count left of the last strip (under it is the chat box)
-        if self.open.len() > shown {
-            let s = wide(&format!("+{} more", self.open.len() - shown));
-            let y = top + (shown as i32 - 1) * (H + GAP) + H / 2 - fh / 2;
+        // those scrolled past: their counts left of the first strip (above)
+        // and of the last (below; under it is the chat box), each a click to
+        // page that way, red while one it hides is about to lapse
+        let red = [0.95, 0.25, 0.2, 1.0];
+        let below = first + shown;
+        for (dir, hidden, slot, word) in [(-1, 0..first, 0, "above"), (1, below.min(self.open.len())..self.open.len(), shown.max(1) - 1, "more")] {
+            if hidden.is_empty() {
+                continue;
+            }
+            let lapsing = self.open[hidden.clone()].iter().any(|o| o.seconds(now) <= RED_SECONDS);
+            let s = wide(&format!("+{} {word}", hidden.len()));
+            let y = top + slot as i32 * (H + GAP) + H / 2 - fh / 2;
             let w = vui.string_width(r, &s);
-            vui.draw_string_ex(r, &s, AT[0] - 6 - w, y, white, true);
+            let x = AT[0] - 6 - w;
+            vui.draw_string_ex(r, &s, x, y, if lapsing { red } else { white }, true);
+            self.count_hits.push(([x - 4, y - 4, AT[0], y + fh + 4], dir));
         }
     }
 }
@@ -408,20 +502,200 @@ mod tests {
         assert_eq!(r.point(greed(0)), Some((2, Choice::Greed)));
     }
 
-    /// Past `SHOWN` the rest wait: the d-pad steps only over those drawn.
+    /// A raster that keeps each string drawn with its colour.
+    #[derive(Default)]
+    struct Colours(Vec<(String, [f32; 4])>);
+
+    impl crate::ui::Layout for Colours {}
+
+    impl Raster for Colours {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, _: [i32; 2], c: [f32; 4], s: &[u16]) {
+            self.0.push((String::from_utf16_lossy(s), c));
+        }
+        fn draw_centered_string(&mut self, _: [i32; 2], c: [f32; 4], s: &[u16], _: u32) {
+            self.0.push((String::from_utf16_lossy(s), c));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    impl Colours {
+        /// The colour a string starting `with` was drawn in, if it was (its
+        /// last drawing: the shadow is drawn first, in black).
+        fn of(&self, with: &str) -> Option<[f32; 4]> {
+            self.0.iter().rev().find(|(s, _)| s.starts_with(with)).map(|(_, c)| *c)
+        }
+        fn has(&self, s: &str) -> bool {
+            self.0.iter().any(|(t, _)| t == s)
+        }
+    }
+
+    fn ids(r: &Rolls) -> Vec<u32> {
+        r.open.iter().map(|o| o.id).collect()
+    }
+
+    /// Past `SHOWN` the d-pad walks on into those below and the window
+    /// follows; up walks back to the first. The cue is 9 only at either end.
+    /// (Before entry 1757 the walk stopped at the third strip.)
     #[test]
-    fn only_the_first_rolls_are_shown_and_lit() {
+    fn every_roll_is_reached_by_the_dpad() {
         let mut r = Rolls::default();
         let mut cues = Vec::new();
         for id in 1..=6 {
             r.roll(roll(id, 120, true), 0);
         }
         r.take_focus();
-        for _ in 0..10 {
+        for _ in 0..5 {
             r.key(139, &mut cues);
         }
-        assert_eq!(r.sel, SHOWN - 1);
-        assert_eq!(r.key(134, &mut cues), Some((SHOWN as u32, Choice::Need)));
-        assert_eq!(r.open.len(), 5);
+        assert_eq!((r.sel, r.first()), (5, 3), "roll 6 lit, the window at 4..6");
+        assert!(cues.iter().all(|&c| c == 11), "every step moved: {cues:?}");
+        r.key(139, &mut cues);
+        assert_eq!(cues.last(), Some(&9), "the real end");
+        assert_eq!(r.key(134, &mut cues), Some((6, Choice::Need)));
+        assert_eq!((r.open.len(), r.first(), r.sel), (5, 2, 4), "the window stays full after the close");
+        cues.clear();
+        for _ in 0..4 {
+            r.key(138, &mut cues);
+        }
+        assert_eq!((r.sel, r.first()), (0, 0), "back up to roll 1");
+        assert!(cues.iter().all(|&c| c == 11));
+        r.key(138, &mut cues);
+        assert_eq!(cues.last(), Some(&9));
+    }
+
+    /// The counts: "+N above" left of the first strip and "+N more" left of
+    /// the last, a click on one a page that way and never a choice.
+    #[test]
+    fn a_click_on_a_count_pages() {
+        let vui = vui();
+        let mut r = Rolls::default();
+        for id in 1..=7 {
+            r.roll(roll(id, 120, true), 0);
+        }
+        let mut c = Colours::default();
+        r.draw(&vui, &mut c, 1000, &|_| 0);
+        assert!(c.has("+4 more") && !c.0.iter().any(|(s, _)| s.ends_with("above")));
+        let (more, _) = r.count_hits[0];
+        let at = [(more[0] + 2) as f32, (more[1] + 6) as f32];
+        assert!(r.covers(at), "the count is the strips', not the world's");
+        assert_eq!(r.point(at), None, "a count makes no choice");
+        assert_eq!((r.first(), r.open.len()), (3, 7), "a page down");
+        let mut c = Colours::default();
+        r.draw(&vui, &mut c, 1000, &|_| 0);
+        assert!(c.has("+3 above") && c.has("+1 more"), "{:?}", c.0);
+        // "+N above" is the first count drawn now
+        let (above, dir) = r.count_hits[0];
+        assert_eq!(dir, -1);
+        assert_eq!(r.point([(above[0] + 2) as f32, (above[1] + 6) as f32]), None);
+        assert_eq!(r.first(), 0, "a page up");
+        // the control: a click left of the strips, off the counts, is not theirs
+        r.draw(&vui, &mut NullRaster, 1000, &|_| 0);
+        assert!(!r.covers([(AT[0] - 150) as f32, (AT[1] + 2) as f32]));
+    }
+
+    /// A count is red while a roll it hides has 15 s or less left; white
+    /// while every one it hides has more (the control).
+    #[test]
+    fn a_count_turns_red_for_a_lapsing_roll() {
+        let vui = vui();
+        let red = [0.95, 0.25, 0.2, 1.0];
+        let mut r = Rolls::default();
+        for id in 1..=3 {
+            r.roll(roll(id, 120, true), 0);
+        }
+        r.roll(roll(4, 30, true), 0); // hidden below, ends at 30 s
+        r.roll(roll(5, 120, true), 0);
+        let mut c = Colours::default();
+        r.draw(&vui, &mut c, 14_000, &|_| 0);
+        assert_ne!(c.of("+2 more"), Some(red), "16 s left: white");
+        let mut c = Colours::default();
+        r.draw(&vui, &mut c, 16_000, &|_| 0);
+        assert_eq!(c.of("+2 more"), Some(red), "14 s left: red");
+        // scrolled past it, the count above it turns red instead
+        r.scroll(2);
+        let mut c = Colours::default();
+        r.draw(&vui, &mut c, 16_000, &|_| 0);
+        assert_ne!(c.of("+2 above"), Some(red), "rolls 1 and 2 have time");
+        assert!(c.of("+").is_some());
+        r.scroll(-2);
+        r.roll(roll(1, 10, true), 16_000);
+        r.scroll(1);
+        let mut c = Colours::default();
+        r.draw(&vui, &mut c, 16_000, &|_| 0);
+        assert_eq!(c.of("+1 above"), Some(red), "roll 1 at 10 s, above");
+    }
+
+    /// A ready check up (`skip` 1): two shown of five, and the d-pad still
+    /// reaches roll 5.
+    #[test]
+    fn under_a_ready_check_every_roll_is_reached() {
+        let mut r = Rolls::default();
+        let mut cues = Vec::new();
+        for id in 1..=5 {
+            r.roll(roll(id, 120, true), 0);
+        }
+        r.skip = 1;
+        r.take_focus();
+        for _ in 0..4 {
+            r.key(139, &mut cues);
+        }
+        assert_eq!((r.shown(), r.sel, r.first()), (2, 4, 3));
+        assert_eq!(r.key(134, &mut cues), Some((5, Choice::Need)));
+    }
+
+    /// The last rolls closed while scrolled to the bottom pull the window
+    /// up: no empty strip is drawn. The control: closed above, the window
+    /// keeps the same rolls.
+    #[test]
+    fn closing_the_last_rolls_pulls_the_window_up() {
+        let vui = vui();
+        let mut r = Rolls::default();
+        for id in 1..=6 {
+            r.roll(roll(id, 120, true), 0);
+        }
+        r.scroll(10);
+        assert_eq!(r.first(), 3);
+        r.close(6);
+        r.close(5);
+        assert_eq!(r.first(), 1);
+        let mut c = Colours::default();
+        r.draw(&vui, &mut c, 0, &|_| 0);
+        assert!(c.has("item 2") && c.has("item 4") && !c.has("item 1") && c.has("+1 above"), "{:?}", c.0);
+        r.close(1);
+        assert_eq!((r.first(), ids(&r)), (0, vec![2, 3, 4]), "closed above: the same three shown");
+    }
+
+    /// The wheel over the strips steps a roll a notch (up positive) and is
+    /// taken; off them it is not (the camera's).
+    #[test]
+    fn the_wheel_over_the_strips_scrolls() {
+        let vui = vui();
+        let mut r = Rolls::default();
+        for id in 1..=5 {
+            r.roll(roll(id, 120, true), 0);
+        }
+        r.draw(&vui, &mut NullRaster, 0, &|_| 0);
+        let on = [(AT[0] + 10) as f32, (AT[1] + 10) as f32];
+        assert!(r.wheel(on, -1.0));
+        assert_eq!(r.first(), 1);
+        assert!(r.wheel(on, -0.5) && r.first() == 1, "half a notch waits");
+        assert!(r.wheel(on, -0.5) && r.first() == 2);
+        assert!(r.wheel(on, -3.0) && r.first() == 2, "kept at the bottom");
+        assert!(r.wheel(on, 5.0) && r.first() == 0);
+        assert!(!r.wheel([10.0, 10.0], -1.0), "off the strips: not theirs");
+        assert_eq!(r.first(), 0);
     }
 }
