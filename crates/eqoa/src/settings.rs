@@ -976,6 +976,14 @@ pub struct ClientOptions {
     /// under its bar, where the server sends them (`Session::agree_pet_effects`);
     /// off, none, as the game shows them nowhere. On by default.
     pub pet_effects: bool,
+    /// Group Effects (Extended > UI > Group & Raid; jibrish, 2026-11-22: "add
+    /// very small / tiny icon versions for the buffs group members have"): the
+    /// effects on each group member as tiny icons beside its bar's gauges
+    /// (`hud::member_effects_pieces`), where the server sends them
+    /// (`Session::agree_group_effects`, go-eqoa-server's 0x7EC0/0x7EC1); off,
+    /// none, as the game shows another's effects nowhere. On by default; a
+    /// server that turns Pet Effects off turns this off with it.
+    pub group_effects: bool,
     /// Buff Window (`buffwnd`; a GM's petition 1761): on a server that
     /// offers it (`Session::agree_buffs`), the player's effects in two rows and
     /// its pet's in a third, each with its name and time left and a beneficial
@@ -1524,6 +1532,7 @@ impl Default for ClientOptions {
             overlapping_names: false,
             raid_list: true,
             pet_effects: true,
+            group_effects: true,
             buff_window: true,
             head_marks: true,
             target_level: true,
@@ -1663,6 +1672,9 @@ impl ClientOptions {
         }
         if !self.pet_effects {
             s.push_str("pet_effects=off\n");
+        }
+        if !self.group_effects {
+            s.push_str("group_effects=off\n");
         }
         if !self.buff_window {
             s.push_str("buff_window=off\n");
@@ -1958,6 +1970,8 @@ impl ClientOptions {
                 ("raid_list", "off") => c.raid_list = false,
                 ("pet_effects", "on") => c.pet_effects = true,
                 ("pet_effects", "off") => c.pet_effects = false,
+                ("group_effects", "on") => c.group_effects = true,
+                ("group_effects", "off") => c.group_effects = false,
                 ("buff_window", "on") => c.buff_window = true,
                 ("buff_window", "off") => c.buff_window = false,
                 ("head_marks", "on") => c.head_marks = true,
@@ -2381,7 +2395,7 @@ pub mod qol {
             64..=69 | 80 | 81 => NUMBER_COLORS,
             86 | crate::options::HEALTH_NUMBERS => POWER_BARS,
             83 => BUFF_WINDOW,
-            58 => PET_EFFECTS,
+            58 | crate::options::GROUP_EFFECTS => PET_EFFECTS,
             78 | 79 => AUTO_CAST,
             22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT => SPELL_BARS,
             _ => return None,
@@ -2430,7 +2444,7 @@ pub mod qol {
             c.buff_window = false;
         }
         if off(PET_EFFECTS) {
-            c.pet_effects = false;
+            (c.pet_effects, c.group_effects) = (false, false);
         }
         if off(AUTO_CAST) {
             (c.auto_cast, c.auto_target) = (false, false);
@@ -2472,7 +2486,7 @@ pub mod qol {
             v.buff_window = kept.buff_window;
         }
         if off(PET_EFFECTS) {
-            v.pet_effects = kept.pet_effects;
+            (v.pet_effects, v.group_effects) = (kept.pet_effects, kept.group_effects);
         }
         if off(AUTO_CAST) {
             (v.auto_cast, v.auto_target) = (kept.auto_cast, kept.auto_target);
@@ -2618,6 +2632,12 @@ pub fn raid_list() -> bool {
 /// Pet Effects: the pet's effects under its bar (`hud`).
 pub fn pet_effects() -> bool {
     client().pet_effects
+}
+
+/// Group Effects: the group members' effects as tiny icons beside their bars
+/// (`hud`).
+pub fn group_effects() -> bool {
+    client().group_effects
 }
 
 /// Buff Window: the client's own effects window (`buffwnd`).
@@ -3950,7 +3970,7 @@ mod tests {
         assert!(!(c.map || c.minimap || map() || minimap()), "the map, off by default");
         assert!(c.map_markers, "its markers the player's, with it");
         assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
-        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.pet_effects || c.auto_cast || c.auto_target), "the rest");
+        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.pet_effects || c.group_effects || c.auto_cast || c.auto_target), "the rest");
         assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
         assert!(!c.item_links && (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) == (ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft), "item links off by default, the game's two bars");
         let d = ClientOptions::default();
@@ -4186,6 +4206,18 @@ mod tests {
         assert!(ClientOptions::from_text("head_marks=on").head_marks);
         assert!(ClientOptions::from_text("head_marks=maybe").head_marks, "the default");
         assert!(ClientOptions::from_text("quest_markers=off").head_marks, "the control: the map's row is not this");
+    }
+
+    #[test]
+    fn group_effects_are_kept_only_when_off() {
+        assert!(ClientOptions::default().group_effects, "on by default");
+        assert!(!ClientOptions::default().to_text().contains("group_effects"));
+        let t = ClientOptions { group_effects: false, ..Default::default() }.to_text();
+        assert!(t.contains("group_effects=off\n"), "{t}");
+        assert!(!ClientOptions::from_text(&t).group_effects, "read back");
+        assert!(ClientOptions::from_text("group_effects=on").group_effects);
+        assert!(ClientOptions::from_text("group_effects=maybe").group_effects, "the default");
+        assert!(ClientOptions::from_text("pet_effects=off").group_effects, "the control: Pet Effects' key is not this");
     }
 
     #[test]

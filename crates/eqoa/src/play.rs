@@ -4320,6 +4320,8 @@ impl Play {
         // Pet Effects: the server told what the Extended row says (off, what it
         // sent forgotten)
         self.session.agree_pet_effects(crate::settings::pet_effects());
+        // Group Effects: the same for the members' tiny icons (off, none drawn)
+        self.session.agree_group_effects(crate::settings::group_effects());
         // Power Bars: the server told what its row says (off, what it sent
         // forgotten and the raid list's power not drawn)
         self.session.agree_power_bars(crate::settings::power_bars());
@@ -10316,7 +10318,7 @@ impl Play {
                 .filter(|m| Some(m.id) != me && m.active)
                 .map(|m| {
                     let flags = find(Some(m.id)).and_then(|e| e.creature.as_ref()).map_or(0, |c| c.flags262);
-                    crate::hud::MemberState { id: m.id, name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)), marks: self.raid_marks(m.id), power: self.session.power_of(m.id) }
+                    crate::hud::MemberState { id: m.id, name: m.name.clone(), is_target: m.id == self.target, hp: (m.hp_known != 0).then_some((m.hp, flags & 4 != 0, flags & 8 != 0)), marks: self.raid_marks(m.id), power: self.session.power_of(m.id), effects: self.member_effects(m.id) }
                 })
                 .collect(),
             raid: self.raid_rows(me, power_bars),
@@ -10775,6 +10777,18 @@ impl Play {
             return Vec::new();
         }
         self.session.pet_effects_left(self.session.now()).into_iter().map(|(icon, _)| icon).collect()
+    }
+
+    /// The effects on group member `id` the server sent (`Session::agree_group_effects`,
+    /// which each frame tells it what Extended's Group Effects says): their icons in
+    /// their order, drawn tiny beside the member's gauges (`hud::member_effects_pieces`).
+    /// None with the row off or from a server that sends none; the game shows
+    /// another's effects nowhere.
+    fn member_effects(&self, id: u32) -> Vec<u32> {
+        if !crate::settings::group_effects() {
+            return Vec::new();
+        }
+        self.session.effects_of(id).to_vec()
     }
 
     /// Number Colors: the server told to tag the numbers while a row is not
