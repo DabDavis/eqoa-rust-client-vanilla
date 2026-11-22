@@ -433,7 +433,9 @@ pub struct Play {
     /// while held; and `mob_shown_at`, when the answer came (the session's
     /// clock), the window up for [`MOB_INFO_MS`] from then however short the
     /// press was.
-    mob_info: Option<(u32, u8, String)>,
+    /// (layout 2, entry 680: the lines under its level, the player's own
+    /// merc's `/merc` commands)
+    mob_info: Option<(u32, u8, String, Vec<String>)>,
     talk_held: bool,
     mob_shown_at: Option<u32>,
     /// `m_petId` and `m_petName` (filled from the entity once it is seen).
@@ -3720,7 +3722,7 @@ impl Play {
                 Event::RaidState(st) => self.raid_state(st),
                 // a server's word on a monster with nothing to say
                 // (`world.mob_info`): its name and level, for the info window
-                Event::MobInfo { id, level, name } => self.mob_info_shown(id, level, name, now),
+                Event::MobInfo { id, level, name, extra } => self.mob_info_shown(id, level, name, extra, now),
                 Event::RaidRoll(r) => self.raid_roll(r),
                 Event::ReadyCheck(c) => self.ready_check(c),
                 Event::MasterLoot(m) => self.master_loot(m),
@@ -11131,7 +11133,7 @@ impl Play {
     /// however short the press (a tap is let go before the answer comes), and
     /// as long as the press is held (`m_p678`, as on a player). An answer for
     /// another than the target is nothing.
-    pub fn mob_info_shown(&mut self, id: u32, level: u8, name: String, now: u32) {
+    pub fn mob_info_shown(&mut self, id: u32, level: u8, name: String, extra: Vec<String>, now: u32) {
         if self.target != id {
             return;
         }
@@ -11139,7 +11141,7 @@ impl Play {
             self.info_up = true;
         }
         self.mob_shown_at = Some(now);
-        self.mob_info = Some((id, level, name));
+        self.mob_info = Some((id, level, name, extra));
     }
 
     /// The target box's level (Live petition 5130): the target's, a creature's
@@ -11168,7 +11170,10 @@ impl Play {
         let race = crate::racelabel::long(&c.name).unwrap_or_else(|| word(race));
         let class = word(if c.class < 15 { 165 + c.class as i32 } else { 165 });
         let level = format!("{} {}", word(503), c.level);
-        match c.p256 {
+        // the server's lines under the level (`OP_MOB_INFO`'s layout 2, entry
+        // 680: the player's own merc's `/merc` commands), for this one alone
+        let under: String = self.mob_info.as_ref().filter(|m| m.0 == e.id).map_or_else(String::new, |m| m.3.iter().map(|l| format!("\n{l}")).collect());
+        let text = match c.p256 {
             2 => {
                 let (guild, title) = if self.target_info.is_some() { (self.target_guild.as_str(), self.target_title.as_str()) } else { ("", "") };
                 let rank = if title.is_empty() { class.as_str() } else { title };
@@ -11190,8 +11195,9 @@ impl Play {
             }),
             // a monster the server said has nothing to say (`mob_info`): its
             // name and level as the server holds them, as a pet's are drawn
-            _ => self.mob_info.as_ref().filter(|m| m.0 == e.id).map(|(_, lv, name)| format!("{name}\n{} {lv}", word(503))),
-        }
+            _ => self.mob_info.as_ref().filter(|m| m.0 == e.id).map(|(_, lv, name, _)| format!("{name}\n{} {lv}", word(503))),
+        };
+        text.map(|t| if c.p256 == 2 { t } else { t + &under })
     }
 
     /// The target's name, for the screen.
@@ -14293,6 +14299,34 @@ mod commands {
         crate::racelabel::clear();
     }
 
+    /// The server's lines under the level (`OP_MOB_INFO` layout 2, entry 680):
+    /// the player's own merc's `/merc` commands drawn one per line under its
+    /// class and level, and under a monster's level too; the controls: an
+    /// answer with no lines (layout 1) draws the level last, and lines for
+    /// another id are not drawn.
+    #[test]
+    fn the_info_window_draws_the_servers_lines_under_the_level() {
+        let mut p = play();
+        p.words = Some(crate::groupsearch::tests::numbered());
+        let creature = |id: u32, name: &str, p256: u8| net::entity::Entity {
+            id,
+            p19: 255,
+            creature: Some(net::entity::Creature { name: name.into(), level: 20, p256, ..Default::default() }),
+            ..Default::default()
+        };
+        p.entities.slots[0] = Some(creature(0x40, "Karn", 3));
+        p.entities.slots[1] = Some(creature(0x41, "moss snake", 0));
+        p.target = 0x40;
+        assert_eq!(p.target_info_text().as_deref(), Some("Karn\nw503 20"), "the control: no lines");
+        p.mob_info_shown(0x40, 20, "Karn".into(), vec!["/merc".into(), "/merc dismiss".into()], 1000);
+        assert!(p.info_wanted());
+        assert_eq!(p.target_info_text().as_deref(), Some("Karn\nw503 20\n/merc\n/merc dismiss"));
+        p.target = 0x41;
+        assert!(p.target_info_text().is_none(), "the lines were the merc's: another is not shown them");
+        p.mob_info_shown(0x41, 3, "moss snake".into(), Vec::new(), 2000);
+        assert_eq!(p.target_info_text().as_deref(), Some("moss snake\nw503 3"), "layout 1: the level last");
+    }
+
     /// A monster the server says has nothing to say (go-eqoa-server's
     /// `world.mob_info`, petition 1459): its name and the server's level alone in
     /// the info window, as a pet's are drawn; with the press still held at the
@@ -14318,7 +14352,7 @@ mod commands {
         p.interact_with_target(); // Q down: a talk sent
         p.drop_stale_mob_info(1000);
         assert!(!p.info_wanted() && p.target_info_text().is_none(), "the control: no answer yet, nothing");
-        p.mob_info_shown(0x20, 3, "moss snake".into(), 1000);
+        p.mob_info_shown(0x20, 3, "moss snake".into(), Vec::new(), 1000);
         p.drop_stale_mob_info(1000);
         assert!(p.info_up && p.info_wanted(), "the answer with the press held: the window up");
         assert_eq!(p.target_info_text().as_deref(), Some("moss snake\nw503 3"), "the name and the server's level, nothing else");
@@ -14328,12 +14362,12 @@ mod commands {
         assert!(!p.info_wanted(), "let go: closed");
 
         p.interact_with_target();
-        p.mob_info_shown(0x21, 2, "fruit bat".into(), 9000);
+        p.mob_info_shown(0x21, 2, "fruit bat".into(), Vec::new(), 9000);
         p.drop_stale_mob_info(9000);
         assert!(!p.info_wanted(), "an answer for another than the target shows nothing");
         assert_ne!(p.target_info_text().as_deref(), Some("fruit bat\nw503 2"), "and is not kept");
 
-        p.mob_info_shown(0x20, 3, "moss snake".into(), 9100);
+        p.mob_info_shown(0x20, 3, "moss snake".into(), Vec::new(), 9100);
         assert!(p.info_wanted());
         p.target = 0x21; // Tab with Q still held
         p.drop_stale_mob_info(9200);
@@ -14341,7 +14375,7 @@ mod commands {
         p.target = 0x20;
         assert_eq!(p.target_info_text(), None, "and back: the answer was gone with its target");
 
-        p.mob_info_shown(0x20, 3, "moss snake".into(), 9300);
+        p.mob_info_shown(0x20, 3, "moss snake".into(), Vec::new(), 9300);
         p.entities.slots[0].as_mut().unwrap().p19 = 0; // it died
         p.drop_stale_mob_info(9400);
         assert_eq!(p.target_info_text(), None, "a dead monster: nothing");
@@ -14375,7 +14409,7 @@ mod commands {
         p.entities.slots[0] = Some(creature(0x30, "moss snake"));
         p.entities.slots[1] = Some(creature(0x31, "fruit bat"));
         let shown = |p: &Play| p.info_wanted() && p.target_info_text().is_some();
-        let snake = |p: &mut Play, at: u32| p.mob_info_shown(0x30, 3, "moss snake".into(), at);
+        let snake = |p: &mut Play, at: u32| p.mob_info_shown(0x30, 3, "moss snake".into(), Vec::new(), at);
         p.target = 0x30;
         p.interact_with_target(); // Q down
         p.info_let_go(); // and up, before the answer

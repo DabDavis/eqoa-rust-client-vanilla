@@ -853,18 +853,27 @@ pub const OP_PET_DYES: u16 = 0x7E92;
 /// 2026-11-10: "press the mob information button on monster ... This should
 /// ONLY show the monsters name and level, nothing else"; the server's
 /// `world.mob_info`). The offer, server to client once the player is in the
-/// world: a u8, 1, the layout of [`OP_MOB_INFO`]. CLIENT has no such case, so a
-/// PS2 ignores it and is shown the two lines in a dialogue box (0x0046).
+/// world: a u8, the newest layout of [`OP_MOB_INFO`] it sends (1, or 2 with
+/// the extra lines). CLIENT has no such case, so a PS2 ignores it and is shown
+/// the lines in a dialogue box (0x0046).
 pub const OP_MOB_INFO_OFFER: u16 = 0x7E4C;
-/// The answer to [`OP_MOB_INFO_OFFER`], client to server, at once: a u8, 1 to be
-/// sent [`OP_MOB_INFO`] in place of the dialogue box.
+/// The answer to [`OP_MOB_INFO_OFFER`], client to server, at once: a u8, the
+/// layout of [`OP_MOB_INFO`] to be sent in place of the dialogue box (the
+/// offer's, up to [`MOB_INFO_LAYOUT`]).
 pub const OP_MOB_INFO_ANSWER: u16 = 0x7E4D;
+/// The newest layout of [`OP_MOB_INFO`] this client reads.
+pub const MOB_INFO_LAYOUT: u8 = 2;
+/// The most extra lines (layout 2) taken, each at most this many bytes.
+pub const MOB_INFO_LINES: usize = 16;
+pub const MOB_INFO_LINE_BYTES: usize = 63;
 /// A monster's name and level, from a server the client answered, in answer to
 /// its 0x0004 on a living monster with nothing to say (or out of the talk's
 /// reach): a u8 layout (1), the u32 id the 0x0004 named, a u8 its level and its
 /// name (a u8 byte count and the bytes). Shown in the target's details box as
 /// CLIENT's `DrawTargetInfo` shows a pet's (`Play::target_info_text`), while □
-/// is held.
+/// is held. Layout 2 (jibrish's entry 680: the player's own mercenary's
+/// `/merc` commands under its level) adds a u8 count of lines under the level,
+/// each a u8 byte count (at most 63) and its ASCII.
 pub const OP_MOB_INFO: u16 = 0x7E4E;
 
 /// go-eqoa-server's own: a target's level in the target box (Live petition
@@ -1194,7 +1203,7 @@ pub enum Event {
     RaidState(crate::raid::State),
     /// [`OP_MOB_INFO`]: the monster the client knows by `id` has nothing to say;
     /// its name and level, for the target's details box.
-    MobInfo { id: u32, level: u8, name: String },
+    MobInfo { id: u32, level: u8, name: String, extra: Vec<String> },
     /// [`OP_ITEM_LINK_LINE`]: the links of the chat line the next event carries
     /// (the line's own message, read as ever, comes right after it).
     ChatLinks(Vec<crate::itemlink::ChatLink>),
@@ -3032,9 +3041,9 @@ impl Session {
             // box (`Play::mob_info`); another layout is left to the box
             OP_MOB_INFO_OFFER => {
                 let layout = r.u8();
-                if !r.error && layout == 1 {
+                if !r.error && layout >= 1 {
                     let mut w = Writer::op(OP_MOB_INFO_ANSWER);
-                    w.u8(1);
+                    w.u8(layout.min(MOB_INFO_LAYOUT));
                     self.send(&w.data);
                 }
             }
@@ -3108,8 +3117,21 @@ impl Session {
             OP_MOB_INFO => {
                 let (layout, id, level, len) = (r.u8(), r.u32(), r.u8(), r.u8() as usize);
                 let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
-                if !r.error && layout == 1 {
-                    ev.push(Event::MobInfo { id, level, name });
+                // layout 2: the lines under the level (the player's own merc's
+                // commands), each ASCII of at most 63 bytes
+                let mut extra = Vec::new();
+                if layout == 2 {
+                    let n = r.u8() as usize;
+                    for _ in 0..n {
+                        let len = r.u8() as usize;
+                        let b = r.bytes(len);
+                        if len <= MOB_INFO_LINE_BYTES && extra.len() < MOB_INFO_LINES {
+                            extra.push(b.iter().map(|&c| if (0x20..0x7F).contains(&c) { c as char } else { '?' }).collect());
+                        }
+                    }
+                }
+                if !r.error && matches!(layout, 1 | 2) {
+                    ev.push(Event::MobInfo { id, level, name, extra });
                 } else {
                     debug_line(&format!("[net] a monster's name and level: {} bytes not read", m.data.len()));
                 }
@@ -5456,14 +5478,14 @@ mod tests {
         };
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4C, 0x7E]);
         assert_eq!(answers(&mut s), [], "a short offer is no offer");
-        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4C, 0x7E, 2]);
-        assert_eq!(answers(&mut s), [], "another layout is left to the box");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4C, 0x7E, 0]);
+        assert_eq!(answers(&mut s), [], "no layout: left to the box");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4C, 0x7E, 1]);
         assert!(ev.is_empty(), "the offer is the session's: {ev:?}");
         assert_eq!(answers(&mut s), [(251, vec![0x4D, 0x7E, 1])], "answered at once, a u8 1");
         let wire = vec![0x4E, 0x7E, 1, 0xA1, 0x86, 0x01, 0x00, 3, 10, b'm', b'o', b's', b's', b' ', b's', b'n', b'a', b'k', b'e'];
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, wire.clone());
-        assert!(matches!(&ev[..], [Event::MobInfo { id: 0x186A1, level: 3, name }] if name == "moss snake"), "{ev:?}");
+        assert!(matches!(&ev[..], [Event::MobInfo { id: 0x186A1, level: 3, name, extra }] if name == "moss snake" && extra.is_empty()), "{ev:?}");
         assert_eq!(answers(&mut s), [], "the message answered nothing");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, wire[..wire.len() - 1].to_vec());
         assert!(ev.is_empty(), "the control: one cut short is nothing: {ev:?}");
@@ -5473,6 +5495,35 @@ mod tests {
         assert!(ev.is_empty(), "the control: another layout is nothing: {ev:?}");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4C, 0x7E, 1]);
         assert_eq!(answers(&mut s), [(251, vec![0x4D, 0x7E, 1])], "a new offer is answered again");
+    }
+
+    // Layout 2 (entry 680): an offer of 2 answered 2 (and one of a later
+    // layout 2, the newest read); the lines under the level read after the
+    // name; cut short, nothing. The control: an offer of 1 is still answered 1
+    // (above), and layout 1 carries no lines.
+    #[test]
+    fn mob_info_layout_2_lines() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0x4D, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4C, 0x7E, 2]);
+        assert_eq!(answers(&mut s), [(251, vec![0x4D, 0x7E, 2])], "2 offered: 2 taken");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x4C, 0x7E, 5]);
+        assert_eq!(answers(&mut s), [(251, vec![0x4D, 0x7E, 2])], "a later layout: the newest this client reads");
+        let mut wire = vec![0x4E, 0x7E, 2, 0x10, 0, 0, 0, 20, 4, b'K', b'a', b'r', b'n', 2];
+        for l in ["/merc", "/merc dismiss"] {
+            wire.push(l.len() as u8);
+            wire.extend_from_slice(l.as_bytes());
+        }
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, wire.clone());
+        assert!(matches!(&ev[..], [Event::MobInfo { id: 0x10, level: 20, name, extra }] if name == "Karn" && extra == &["/merc", "/merc dismiss"]), "{ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, wire[..wire.len() - 2].to_vec());
+        assert!(ev.is_empty(), "cut short: nothing: {ev:?}");
     }
 
     // The damage meter (go-eqoa-server's 0x7E3A-0x7E3D): nothing asked with no

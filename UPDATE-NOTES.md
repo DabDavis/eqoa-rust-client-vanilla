@@ -5,6 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-22 · Your mercenary's commands in its details box
+- On a server that sends them, holding □ (Q) on your own mercenary lists its /merc commands under its name and level. Another player's mercenary and monsters still show only their name and level.
+
 ## 2026-11-22 · Web page: a lost world no longer leaves you on the loading screen
 - In the web page, moving into one of the server's own worlds (the heroic dungeons, the Homelands) whose copy the browser had let go of now opens it again from the browser's storage and carries on.
 - If it still cannot be opened, you are logged out where the server has you and the page says why, instead of staying on "Loading, please wait" until the server drops you.
