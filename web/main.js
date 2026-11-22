@@ -534,6 +534,16 @@ window.eqoaUnpack = async (name, util, aut, fresh) => {
 // private storage, worlds/<name>, or found kept there from a visit before by
 // its size and CRC; the game then reads its zones out of that file.
 
+// The worlds this page holds for its game, each a shared Web Lock held while
+// the page lives (eqoa-world-use-<name>): web/worlds.js removes and builds
+// over none a page holds (entry 1323).
+const worldHolds = new Set();
+function holdWorld(name) {
+  if (!navigator.locks || worldHolds.has(name)) return;
+  worldHolds.add(name);
+  navigator.locks.request(`eqoa-world-use-${name}`, { mode: 'shared' }, () => new Promise(() => {})).catch(() => worldHolds.delete(name));
+}
+
 window.eqoaWorlds = {
   // whether this page can keep one: its private storage answers (none on plain
   // http to another host, none in some private windows) and workers run
@@ -564,7 +574,9 @@ window.eqoaWorlds = {
       }
       try {
         const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('worlds');
-        resolve({ file: await (await dir.getFileHandle(name)).getFile(), how: data.done, heap: data.heap });
+        const file = await (await dir.getFileHandle(name)).getFile();
+        holdWorld(name);
+        resolve({ file, how: data.done, heap: data.heap });
       } catch (e) {
         reject(e);
       }
@@ -573,8 +585,19 @@ window.eqoaWorlds = {
       w.terminate();
       reject(new Error(e.message || "the world's worker failed"));
     };
-    wasmModule.then((module) => w.postMessage({ module, disc, list, name, size }), reject);
+    wasmModule.then((module) => w.postMessage({ module, disc, list, name, size, mine: worldHolds.has(name) }), reject);
   }),
+  // the file of a world this page holds, taken anew (its last snapshot
+  // failed to read): null when it is gone
+  reopen: async (name) => {
+    try {
+      const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('worlds');
+      return await (await dir.getFileHandle(name)).getFile();
+    } catch (e) {
+      console.log(`server worlds: ${name} could not be opened again (${e && e.message ? e.message : e})`);
+      return null;
+    }
+  },
 };
 
 // ---- the map's pictures (the client's map, M: map/store.rs): each zone's
@@ -951,12 +974,10 @@ function offerKeep(name) {
 }
 
 // The picker that can be remembered, in a click's (or a tick's) activation:
-// it opens where the kept image is, else where this picker last opened (its
-// `id`); a start it cannot open in is tried once more without.
+// it opens where this picker last opened (its `id`).
 function pickRemembered(name) {
   const d = discInputs[name];
   const opts = anyFile ? { id: d.id } : { id: d.id, types: [{ description: 'Disc image', accept: { 'application/octet-stream': ['.iso', '.bin', '.img'] } }] };
-  const start = remembered[d.key] ? remembered[d.key].handle : null;
   const open = (o) => window.showOpenFilePicker(o).then(async ([handle]) => {
     const file = await handle.getFile();
     remembered[d.key] = { handle, name: file.name };
@@ -972,12 +993,11 @@ function pickRemembered(name) {
     saySoft(name, `The picker did not open (${e && e.message ? e.message : e}): click to choose it again, or untick Remember to use the browser's own.`);
     if ($(name).files.length && !remembered[d.key]) offerKeep(name);
   };
-  open(start ? { ...opts, startIn: start } : opts).catch((e) => {
-    if (start && !(e && e.name === 'AbortError') && navigator.userActivation && navigator.userActivation.isActive) {
-      return open(opts).catch(failed);
-    }
-    failed(e);
-  });
+  // one call, in the click's own activation: a start in the kept image's
+  // folder failed when that image had moved, and the second try had no
+  // activation left (entry 1323: "User activation required"); the picker's
+  // `id` opens where it last did, which is that folder unless it moved
+  open(opts).catch(failed);
 }
 
 if (canRemember) {

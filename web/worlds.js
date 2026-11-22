@@ -5,10 +5,15 @@
 // a zone at a time: the disc read and the file written synchronously, which
 // only a worker can do, and never the whole world in memory. One page at a time
 // builds a world (a Web Lock on its name): another waits, then finds it kept.
+// A page that holds a world for its game holds a shared lock on it too
+// (eqoa-world-use-<name>, main.js's holdWorld) for as long as it lives: a world
+// a page has in use is never removed or written over here (entry 1323: a
+// world's file removed under a game that was reading it failed its world
+// change with a NotFoundError), only one no page holds.
 import init, { world_kept, world_build, heap_bytes } from './eqoa.js';
 
 self.onmessage = async ({ data }) => {
-  const { module, disc, list, name, size } = data;
+  const { module, disc, list, name, size, mine } = data;
   const progress = (phase, done, total) => self.postMessage({ progress: [phase, done, total] });
   try {
     // a browser that cannot write a file synchronously here builds nothing
@@ -18,6 +23,13 @@ self.onmessage = async ({ data }) => {
       return;
     }
     await init({ module_or_path: module });
+    // how many pages hold `file` for their game now (this one's counted when
+    // `own`): none known where the browser has no Web Locks
+    const holders = async (file) => {
+      if (!navigator.locks || !navigator.locks.query) return 0;
+      const { held = [] } = await navigator.locks.query().catch(() => ({}));
+      return held.filter((l) => l.name === `eqoa-world-use-${file}`).length;
+    };
     const job = async () => {
       const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('worlds', { create: true });
       let kept = null;
@@ -25,6 +37,11 @@ self.onmessage = async ({ data }) => {
         kept = await (await dir.getFileHandle(name)).getFile();
       } catch { /* none kept */ }
       if (kept && world_kept(kept, list, progress)) return 'found kept';
+      // a copy that failed its check while another page's game reads it is
+      // left to that page (built over, its game would lose its world)
+      if (kept && (await holders(name)) > (mine ? 1 : 0)) {
+        throw new Error('the copy kept in this browser failed its check while another window of the game has it in use: close the other windows and log in again');
+      }
       // room for it in what the browser gives this page, a copy that failed
       // its check counted as free (it is replaced)
       if (navigator.storage.estimate) {
@@ -41,10 +58,16 @@ self.onmessage = async ({ data }) => {
         throw e;
       }
       h.close();
-      // the same world's builds of another CRC let go
+      // the same world's builds of another CRC let go, but those a page
+      // still has in use (another window on another server, or on this one
+      // before its restart): the next build after they are let go removes them
       const stem = name.slice(0, name.lastIndexOf('-') + 1);
+      const others = [];
       for await (const other of dir.keys()) {
-        if (other !== name && other.startsWith(stem)) await dir.removeEntry(other).catch(() => {});
+        if (other !== name && other.startsWith(stem)) others.push(other);
+      }
+      for (const other of others) {
+        if ((await holders(other)) === 0) await dir.removeEntry(other).catch(() => {});
       }
       return 'built';
     };

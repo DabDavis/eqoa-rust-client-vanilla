@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-22 · Web page: a lost world no longer leaves you on the loading screen
+- In the web page, moving into one of the server's own worlds (the heroic dungeons, the Homelands) whose copy the browser had let go of now opens it again from the browser's storage and carries on.
+- If it still cannot be opened, you are logged out where the server has you and the page says why, instead of staying on "Loading, please wait" until the server drops you.
+- A second window of the page (another server, or a log in again) no longer deletes or rebuilds a world another window is playing in.
+- With "Remember my disc images" ticked, the disc picker opens with one click again; it no longer says "User activation required".
+- When one of the server's worlds cannot be built from your disc, the notice now says the real reason (a zone of your disc, or the built world, not matching the server's) instead of always blaming your disc.
+
 ## 2026-11-22 · Every loot roll can be answered
 - With more than three loot rolls open, the roll strips now scroll, so no roll times out unseen. The d-pad or the arrow keys walk past the third strip, the mouse wheel over the strips (or a finger's drag on them) scrolls them, and "+N above" / "+N more" beside them can be clicked to page through.
 - A count turns red when a roll it hides has 15 seconds or less left.

@@ -86,6 +86,25 @@ pub fn disc_of(name: &str) -> Option<WebDisc> {
     Some(WebDisc::of_file(file, name))
 }
 
+/// World file `name` (any case) of the server's held here taken anew off the
+/// origin's storage (`eqoaWorlds.reopen`), when the snapshot the page held
+/// failed a read (entry 1323: a NotFoundError entering it): its new snapshot
+/// kept, and a disc of it. None when it is not one of the server's held here,
+/// or its file is gone or not the size it was.
+pub async fn reopen(name: &str) -> Option<WebDisc> {
+    let path = serverworlds::path_of(name)?.to_string_lossy().into_owned();
+    let old = FILES.with(|f| f.borrow().get(&path).cloned())?;
+    let kept = path.rsplit('/').next()?.to_string();
+    let page = page_worlds()?;
+    let f = js_sys::Reflect::get(&page, &"reopen".into()).ok()?.dyn_into::<js_sys::Function>().ok()?;
+    let p = f.call1(&page, &JsValue::from(kept.as_str())).ok()?;
+    let v = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&p)).await.ok()?;
+    let file = v.dyn_into::<web_sys::File>().ok().filter(|f| f.size() == old.size())?;
+    super::log(&format!("server worlds: {name} opened again off this browser's storage (worlds/{kept})"));
+    FILES.with(|f| f.borrow_mut().insert(path, file.clone()));
+    Some(WebDisc::of_file(file, name))
+}
+
 /// The notice at the page's top that says how far the build has come
 /// (`eqoaNotices.notice`, notices.js); none clears it.
 fn notice(text: Option<&str>) {
@@ -133,8 +152,8 @@ fn build_all(worlds: &[World]) -> std::sync::mpsc::Receiver<Vec<u8>> {
                 }
                 Err((e, quiet)) => {
                     super::log(&format!("server worlds: world {} {:?} not held: {e}", w.id, w.name));
-                    // another disc's lands are not the server's: said plainly
-                    let why = if e.contains("not the server's") { "your disc's lands are not the ones it is made of".to_string() } else { e };
+                    // the reason as the build found it, in plain words
+                    let why = serverworlds::why_not_held(&e);
                     if !quiet {
                         super::problem(
                             "server-worlds",

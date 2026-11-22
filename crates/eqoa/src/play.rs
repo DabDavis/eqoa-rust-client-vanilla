@@ -6764,6 +6764,24 @@ impl Play {
         self.quit = true;
     }
 
+    /// A move into another world that could not be opened (its file
+    /// unreadable: entry 1323's WORLD14.ESF in a page): never left on the
+    /// loading screen. The server is told the player logs out (0x09B0, so it
+    /// ends the session cleanly, the character where the server has it), and
+    /// the client goes back to the game's screens saying why: in a page its
+    /// login screen again, which builds the world anew.
+    pub fn world_change_failed(&mut self, file: &str, why: &str) {
+        self.session.send(&net::stream::Writer::op(0x09B0).data);
+        self.session.flush();
+        let text = format!("The move into {file} failed ({why}). You were logged out where the server has you: log in again.");
+        eprintln!("play: {text}");
+        #[cfg(target_arch = "wasm32")]
+        if !self.booted {
+            crate::web::disconnected(&text);
+        }
+        self.quit = true;
+    }
+
     /// Quit answered yes (`m_p2EC28`, `Process`'s LOGOUT): 0x09B0 to the
     /// server, sent now, then `Disconnect(9, 1)`: in a page its login screen
     /// again, saying word 820 ("Logged out."), as the console goes back to
@@ -11515,6 +11533,20 @@ mod commands {
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
         Play::new(s, Player::default(), dump)
+    }
+
+    /// A world change that failed (entry 1323) logs out (0x09B0 sent) and
+    /// leaves the world; the control: a play that had none stays, nothing sent.
+    #[test]
+    fn a_failed_world_change_logs_out() {
+        let mut p = play();
+        p.session.record = Some(Vec::new());
+        assert!(!p.quit);
+        assert!(p.session.record.as_ref().unwrap().is_empty(), "the control: nothing sent before");
+        p.world_change_failed("WORLD14.ESF", "NotFoundError");
+        assert!(p.quit, "back to the game's screens, never the loading screen");
+        let sent: Vec<Vec<u8>> = p.session.record.take().unwrap().into_iter().map(|(_, m)| m).collect();
+        assert_eq!(sent.iter().filter(|m| m[..2] == [0xB0, 0x09]).count(), 1, "0x09B0 once: {sent:?}");
     }
 
     /// A preview of the Sound page's Battle Music playing when the Options

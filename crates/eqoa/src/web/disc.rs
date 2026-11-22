@@ -239,52 +239,16 @@ impl WebDisc {
             let (o, name) = (out.clone(), name.to_string());
             wasm_bindgen_futures::spawn_local(async move {
                 let t = web_time::Instant::now();
-                let r = async {
-                    // the 2002 disc's world where it places the arrival
-                    // (`super::places`), else Frontiers'
-                    let mut off_2002 = None;
-                    if let Some(mut d2) = d2 {
-                        let c = d2.container(&name).await?;
-                        match super::places(&c, x, z) {
-                            true => off_2002 = Some((d2, c)),
-                            false => super::log(&format!("art: the 2002 disc's {name} places no zone at the arrival: Frontiers' world instead")),
-                        }
-                    }
-                    let era = if off_2002.is_some() { esf::Era::Y2002 } else { esf::Era::Frontiers };
-                    let mut frontiers = frontiers;
-                    let (d, c) = match off_2002 {
-                        Some(both) => both,
-                        None => {
-                            let c = frontiers.container(&name).await?;
-                            (frontiers.copy(), c)
-                        }
-                    };
-                    let mut lib = esf::Library::new();
-                    let f = lib.add(&name, c);
-                    let base = d.find(&name).ok_or("the world left the disc")?.lba as u64 * iso::SECTOR;
-                    let mut zones = Vec::new();
-                    for (zi, off, n) in crate::stream::fill_set(&lib, f, x, z) {
-                        zones.push((zi, d.read_at(base + off, n).await?));
-                    }
-                    // the 2002 disc's world with Frontiers' as its twin, for
-                    // its effect volumes and streamed audio (`stream::wants_twin`),
-                    // its zones read with the arrival's
-                    let (mut twin, mut twin_zones) = (None, Vec::new());
-                    if crate::stream::wants_twin(era) {
-                        let c = frontiers.container(&name).await?;
-                        let tbase = frontiers.find(&name).ok_or("the world left the disc")?.lba as u64 * iso::SECTOR;
-                        let t = lib.add("twin", c);
-                        for &(zi, _) in &zones {
-                            if let Some((off, n)) = lib.zone_range(t, zi) {
-                                twin_zones.push((zi, frontiers.read_at(tbase + off, n).await?));
-                            }
-                        }
-                        twin = Some(std::mem::replace(&mut lib.files[t].1, esf::Container::empty()));
-                    }
-                    super::log(&format!("{name} opened ({era:?}), {} zones read round the arrival ({} ms)", zones.len(), t.elapsed().as_millis()));
-                    Ok::<_, String>(crate::stream::Opened { container: std::mem::replace(&mut lib.files[f].1, esf::Container::empty()), zones, era, twin, twin_zones })
+                let mut r = open_world(&name, x, z, d2, frontiers, t).await;
+                // a server's world whose file's snapshot failed a read (its
+                // file taken away under the page: entry 1323's NotFoundError):
+                // taken anew off the origin's storage, and tried once more
+                if let Err(e) = &r
+                    && let Some(fresh) = super::worlds::reopen(&name).await
+                {
+                    super::log(&format!("{name}: {e}: trying again with the file opened anew"));
+                    r = open_world(&name, x, z, None, fresh, t).await;
                 }
-                .await;
                 *o.borrow_mut() = Some(r);
             });
             out
@@ -423,4 +387,55 @@ impl WebDisc {
             }
         }
     }
+}
+
+/// A world's opening for `WebDisc::world_opener`: its container and the zones
+/// round the arrival at (`x`, `z`), off the 2002 disc `d2` when that one
+/// places a zone there, else off `frontiers` (with Frontiers' twin for the
+/// 2002 art). `t` is when the move began.
+async fn open_world(name: &str, x: f32, z: f32, d2: Option<WebDisc>, frontiers: WebDisc, t: web_time::Instant) -> Result<crate::stream::Opened, String> {
+    let name = name.to_string();
+    // the 2002 disc's world where it places the arrival
+    // (`super::places`), else Frontiers'
+    let mut off_2002 = None;
+    if let Some(mut d2) = d2 {
+        let c = d2.container(&name).await?;
+        match super::places(&c, x, z) {
+            true => off_2002 = Some((d2, c)),
+            false => super::log(&format!("art: the 2002 disc's {name} places no zone at the arrival: Frontiers' world instead")),
+        }
+    }
+    let era = if off_2002.is_some() { esf::Era::Y2002 } else { esf::Era::Frontiers };
+    let mut frontiers = frontiers;
+    let (d, c) = match off_2002 {
+        Some(both) => both,
+        None => {
+            let c = frontiers.container(&name).await?;
+            (frontiers.copy(), c)
+        }
+    };
+    let mut lib = esf::Library::new();
+    let f = lib.add(&name, c);
+    let base = d.find(&name).ok_or("the world left the disc")?.lba as u64 * iso::SECTOR;
+    let mut zones = Vec::new();
+    for (zi, off, n) in crate::stream::fill_set(&lib, f, x, z) {
+        zones.push((zi, d.read_at(base + off, n).await?));
+    }
+    // the 2002 disc's world with Frontiers' as its twin, for
+    // its effect volumes and streamed audio (`stream::wants_twin`),
+    // its zones read with the arrival's
+    let (mut twin, mut twin_zones) = (None, Vec::new());
+    if crate::stream::wants_twin(era) {
+        let c = frontiers.container(&name).await?;
+        let tbase = frontiers.find(&name).ok_or("the world left the disc")?.lba as u64 * iso::SECTOR;
+        let t = lib.add("twin", c);
+        for &(zi, _) in &zones {
+            if let Some((off, n)) = lib.zone_range(t, zi) {
+                twin_zones.push((zi, frontiers.read_at(tbase + off, n).await?));
+            }
+        }
+        twin = Some(std::mem::replace(&mut lib.files[t].1, esf::Container::empty()));
+    }
+    super::log(&format!("{name} opened ({era:?}), {} zones read round the arrival ({} ms)", zones.len(), t.elapsed().as_millis()));
+    Ok::<_, String>(crate::stream::Opened { container: std::mem::replace(&mut lib.files[f].1, esf::Container::empty()), zones, era, twin, twin_zones })
 }

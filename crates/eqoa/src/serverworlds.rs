@@ -703,6 +703,21 @@ pub fn compose_into(disc: &dyn Disc, w: &World, out: &mut dyn Sink) -> Result<()
     Ok(())
 }
 
+/// What a page says of a world it could not hold (`web::worlds`' notice): the build's own reason in plain words, never only "your disc"
+/// (entry 1323: the same disc had built it before).
+pub fn why_not_held(e: &str) -> String {
+    if e.contains("is not on this disc") || e.contains("not an EQOA disc image") {
+        return format!("your disc is not the one it is made of: {e}");
+    }
+    if e.contains(" zone ") && e.contains("not the server's") {
+        return format!("a zone of your disc is not the server's: {e}");
+    }
+    if e.starts_with("built ") && e.contains("not the server's") {
+        return format!("the world built here did not come out as the server's (the server's world may have changed since it was listed, or the browser's storage failed a write; logging in again builds it once more): {e}");
+    }
+    e.to_string()
+}
+
 /// The records an extra's art is taken from, read through `disc`: zone
 /// `zone` of the disc's world file `name`, or the whole of any other file
 /// (`extras::Art`).
@@ -1032,6 +1047,20 @@ mod tests {
         assert_eq!(f.file.b, b);
         let mut g = FileSink::new(VecFile::default(), 1 << 20, Box::new(|_, _| {}));
         assert!(compose_into(&src, &wrong, &mut g).unwrap_err().contains("not the server's"), "the control: into a file too");
+    }
+
+    /// The page's notice gives the build's own reason (entry 1323): a zone's
+    /// CRC, the built file's, or no such file on the disc, each said as what
+    /// it is; never only "your disc's lands" for a built file's CRC.
+    #[test]
+    fn a_world_not_held_says_why() {
+        let zone = why_not_held("TUNARIA.ESF zone 12 is not the server's (this disc's: 10 bytes, CRC 0000abcd)");
+        assert!(zone.starts_with("a zone of your disc") && zone.contains("zone 12"), "{zone}");
+        let built = why_not_held("built 5 bytes, CRC 00000001: not the server's 6 bytes, CRC 00000002");
+        assert!(built.contains("did not come out as the server's") && built.contains("CRC 00000002") && !built.contains("your disc is not"), "{built}");
+        assert!(why_not_held("GUK.ESF is not on this disc").starts_with("your disc is not the one"));
+        // the control: any other reason is said as it is
+        assert_eq!(why_not_held("the storage is full"), "the storage is full");
     }
 
     /// A zone given extras built here is the server's build of the same

@@ -6535,6 +6535,11 @@ impl App {
                             crate::say(&format!("world change to {file}: {e}"));
                             #[cfg(target_arch = "wasm32")]
                             crate::web::problem("world", &format!("The world change to {file} failed: {e}"));
+                            // never left on the loading screen (entry 1323): logged
+                            // out cleanly, back to the game's screens
+                            if let Some(p) = self.play.as_mut() {
+                                p.world_change_failed(&file, &e.to_string());
+                            }
                         }
                     }
                     if let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut()) {
