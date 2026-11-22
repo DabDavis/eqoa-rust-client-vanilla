@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-22 · Auto-cast fires damage spells that read like buffs
+- Marking a damage spell or debuff auto now makes it an attack, cast at your target in a fight, for spells whose description reads partly like a buff: Lightning Blast, Supernova, Lightning Nova, Lightning Storm, Lightning Maelstrom, Mana Blast, Dissipate, the bards' Blades, the alchemists' fire and mix potions, and others. Before, they were taken for buffs, cast at yourself, refused by the server, and switched off after three tries.
+- A slot still marked from before is switched off the old way once; mark it auto again (or type /autocast Lightning Blast attack) and it stays an attack.
+
 ## 2026-11-22 · Web page: ✕ and □ on third-party PS4 controllers
 - In the web page, a PS4-style controller the browser has no layout for (a "DS4 Wired Controller" or another DualShock 4 copy, in Chrome or Edge on Windows and macOS, or Firefox on Windows) now has ✕, ○ and □ where they are printed. Before, its □ worked as ✕, its ✕ as ○ and its ○ as □, at logging in, in chat boxes and in the world. Controllers the browser knows, a real DualShock 4 included, are read as before.
 

@@ -183,8 +183,13 @@ pub fn guess(a: &Ability) -> Option<Kind> {
     }
     let harmful = has(&d, &["decrease", "damage", "injur", "strike", "attack", "drain", "steal", "siphon", "resisted by", "debuff", "taunt", "hate", "root", "snare", "stun", "lance", "bolt", "blast", "burn", "shot", "blow", "slash", "pierce", "crush", "melee", "smite", "nuke", "lightning", "fire", "frost", "poison", "disease", "storm", "shock", "sleet", "spray", "jet", "slam", "malady", "affliction", "fever", "blight", "corrosive", "venom", "gale", "wilting", "sickening", "decaying wind"]);
     // a buff's own words go first: "increases the target's armor", "Defensive
-    // Proc" (a proc names damage it does when the player is struck)
-    let lasting = has(&d, &["buff", "proc", "increase", "aura", "skin", "shield", "armor", "min", "regenerat", "over time", "per tic", "surround"]);
+    // Proc" (a proc names damage it does when the player is struck); never in
+    // a harm's own words: a "debuff" is no buff, "Increase 30% based on DEX"
+    // is its damage's modifier, "mind" no minutes (petition 2664: Lightning
+    // Blast, "Target, ecrease Hitpoints by 708 ; Increase 30% based on DEX",
+    // was guessed a buff, cast at its caster, refused and switched off)
+    let w = not_lasting_words(&d);
+    let lasting = has(&w, &["buff", "proc", "increase", "aura", "skin", "shield", "armor", "min", "regenerat", "over time", "per tic", "surround"]);
     if a.scope == 1 && harmful && !(lasting && !has(&d, &["decrease", "drain", "steal", "siphon", "resisted by", "target, decrease", "strike", "injur"])) {
         return Some(Kind::Attack);
     }
@@ -202,6 +207,21 @@ pub fn guess(a: &Ability) -> Option<Kind> {
         return Some(Kind::Buff);
     }
     None
+}
+
+/// Description `d` (lowercase) without the words of a harm that read as a
+/// buff's: "debuff", "mind", and a damage modifier ("increase 30% based on",
+/// "modified 15% based on").
+fn not_lasting_words(d: &str) -> String {
+    let mut w = d.replace("debuff", " ").replace("mind", " ");
+    while let Some(at) = w.find("% based on") {
+        // back over the number to its word ("increase 30", "modified 15")
+        let head = w[..at].trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+        let head = head.trim_end();
+        let start = ["increase", "increased", "modified", "mod"].iter().find(|m| head.ends_with(*m)).map_or(head.len(), |m| head.len() - m.len());
+        w.replace_range(start..at + "% based on".len(), " ");
+    }
+    w
 }
 
 /// Whether ability `a` summons a pet, by its name and words: a summoning
@@ -840,6 +860,35 @@ mod tests {
         assert_eq!(g("Impart", "Pet Heal", 3), None);
         // an aura on the weapon is a buff, not a pet
         assert_eq!(g("Chilling Aura", "Summons an aura that surrounds your weapon, inflicting unholy damage.", 0), Some(Kind::Buff));
+
+    }
+
+    /// Petition 2664: a harm whose words read as a buff's ("debuff", a damage
+    /// modifier "Increase 30% based on DEX", "mind") was guessed a buff, cast
+    /// at its caster, refused, and switched off after three misses. The
+    /// control: buffs and heals with the same modifier stay as they were.
+    #[test]
+    fn a_harms_modifier_or_debuff_is_no_buff() {
+        let g = |name: &str, desc: &str, scope: i64| guess(&ab(1, 0, name, desc, scope));
+        assert_eq!(g("Lightning Blast", "Target, ecrease Hitpoints by 708 ; Increase 30% based on DEX", 1), Some(Kind::Attack));
+        assert_eq!(g("Supernova", "Target Debuff Hp by 2736 ; Increase 30% based on DEX", 1), Some(Kind::Attack));
+        assert_eq!(g("Dissipate", "Target, Debuff Hp by 32 Modified 15% based on DEX", 1), Some(Kind::Attack));
+        assert_eq!(g("Lightning Storm", "Target Debuff Hp by 690, aoe 390, Mod 15% based on DEX", 1), Some(Kind::Attack));
+        assert_eq!(g("Rhythmic Blades", "Debuff AGI", 1), Some(Kind::Attack));
+        assert_eq!(g("Sanity Warp", "Warps the target's mind with a surge of arcane energy, dealing arcane damage. Modified by DEX.", 1), Some(Kind::Attack));
+        // controls: a buff or a heal with the same modifier
+        assert_eq!(g("Endure Ailment", "Target, Increase PR/DR by 15 ; Increase 15% based on WIS, 30min", 1), Some(Kind::Buff));
+        assert_eq!(g("Hymn of Vigor", "Group, Increase HP per tic by 6 ; Increase 43% based on CHA, 2min", 2), Some(Kind::Buff));
+        assert_eq!(g("Field Dress", "Target, Increase Hitpoints by 125 ; Increase 25% based on CHA", 1), Some(Kind::Heal));
+        assert_eq!(g("Lightning Ward", "Target, buff DR, PR, FR, CR, LR by 100, 30min", 1), Some(Kind::Buff));
+        assert_eq!(g("Mark of Woe", "Target, Add Offensive Proc, Damage Target when they hit , 42sec", 1), Some(Kind::Buff));
+        // and the Attack it now is fires at the target in a fight
+        let list = book(&[ab(7, 0, "Lightning Blast", "Target, ecrease Hitpoints by 708 ; Increase 30% based on DEX", 1)]);
+        let mut c = auto(&[(7, guess(&list[&7]).unwrap())]);
+        let mut now = calm(10_000);
+        now.attacking = true;
+        now.foe = Some(Foe { distance: 10.0 });
+        assert_eq!(c.choose(&list, &now).map(|c| (c.id, c.at_self)), Some((7, false)));
     }
 
     #[test]
