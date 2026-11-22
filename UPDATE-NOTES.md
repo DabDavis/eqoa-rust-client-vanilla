@@ -5,6 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-22 · Web page: ✕ and □ on third-party PS4 controllers
+- In the web page, a PS4-style controller the browser has no layout for (a "DS4 Wired Controller" or another DualShock 4 copy, in Chrome or Edge on Windows and macOS, or Firefox on Windows) now has ✕, ○ and □ where they are printed. Before, its □ worked as ✕, its ✕ as ○ and its ○ as □, at logging in, in chat boxes and in the world. Controllers the browser knows, a real DualShock 4 included, are read as before.
+
 ## 2026-11-22 · Frogloks jump higher
 - On a server with jumps, a froglok's jump goes twice as high as everyone else's (about its own height) and stays in the air a little longer. Every other race jumps as before. The server must allow the higher jump too: on one that does not yet, a froglok's higher jump is put back down.
 

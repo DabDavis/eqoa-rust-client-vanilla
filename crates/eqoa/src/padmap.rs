@@ -175,12 +175,37 @@ const EIGHTBITDO_DINPUT_PRODUCTS: &[u16] = &[
     0x6102, 0x6103, 0x9000, 0x9001, 0x9015, 0xab11, 0xab20,
 ];
 
+/// A DualShock 4's HID report, as Sony's pads and their clones send it in
+/// DirectInput (SDL's database: a:b1 b:b2 x:b0 y:b3, the shoulders b4 and
+/// b5, the triggers b6 and b7, back b8, start b9, the sticks' clicks b10 and
+/// b11): □ first, ✕ second, ○ third, △ fourth. Read positionally a clone's
+/// □ was ✕, its ✕ ○ and its ○ □ (Heirloom petition 2657, 2026-11-22: "DS4
+/// Wired Controller (Vendor: 7545 Product: 0104)", Chrome 142 on Windows,
+/// "my x and square button are switched in logging in and chat boxes").
+const DS4_DINPUT: [u8; 12] = [1, 2, 0, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+/// Whether the pad is a DualShock 4 or a clone of one, by its id: Sony's
+/// vendor, or a name a DS4 gives ("DS4 ...", "PS4 ...", Sony's own
+/// "Wireless Controller", which clones copy). A real one Chromium and
+/// Firefox map "standard" by its ids; this reads the rest.
+fn is_ds4(pad: &WebPad) -> bool {
+    let (vendor, _, name) = id_parts(&pad.id);
+    let lower = name.to_ascii_lowercase();
+    vendor == Some(0x054c) || lower.contains("ds4") || lower.contains("ps4") || name.trim() == "Wireless Controller"
+}
+
 /// A pad's own button order, where SDL's database gives it: the Gamepad
 /// API's index of each of `ORDER_BITS`. Read only when the browser has no
-/// mapping for the pad.
-pub fn own_order(pad: &WebPad) -> Option<[u8; 12]> {
+/// mapping for the pad: 8BitDo's D-input pads in either no-mapping layout,
+/// a DS4 by its HID usages (`Layout::Usage`) only (through joydev its axes
+/// are not those `own_axes` gives).
+pub fn own_order(pad: &WebPad, layout: Layout) -> Option<[u8; 12]> {
     let (vendor, product, _) = id_parts(&pad.id);
-    (vendor == Some(0x2dc8) && product.is_some_and(|p| EIGHTBITDO_DINPUT_PRODUCTS.contains(&p))).then_some(EIGHTBITDO_DINPUT)
+    match layout {
+        Layout::Raw | Layout::Usage if vendor == Some(0x2dc8) && product.is_some_and(|p| EIGHTBITDO_DINPUT_PRODUCTS.contains(&p)) => Some(EIGHTBITDO_DINPUT),
+        Layout::Usage if is_ds4(pad) => Some(DS4_DINPUT),
+        _ => None,
+    }
 }
 
 /// The d-pad from a hat switch's axis as Chromium gives it, in
@@ -327,7 +352,7 @@ impl PadMap {
     fn trigger_pair(pad: &WebPad, layout: Layout, b: Browser) -> Option<(usize, usize)> {
         match layout {
             Layout::Evdev if pad.axes.len() >= 6 => Some((4, 5)),
-            Layout::Raw if b.linux && pad.axes.len() >= 6 && own_order(pad).is_none() => Some((2, 5)),
+            Layout::Raw if b.linux && pad.axes.len() >= 6 && own_order(pad, layout).is_none() => Some((2, 5)),
             _ => None,
         }
     }
@@ -506,7 +531,7 @@ impl PadMap {
     /// triggers by their buttons' travel; the right stick on Z and Rz. None
     /// for every other pad.
     fn read_own(pad: &WebPad, layout: Layout, b: Browser) -> Option<Report> {
-        let order = matches!(layout, Layout::Raw | Layout::Usage).then(|| own_order(pad)).flatten();
+        let order = own_order(pad, layout);
         if layout != Layout::Usage && order.is_none() {
             return None;
         }
@@ -546,12 +571,14 @@ impl PadMap {
     /// 12 to 15 by the layout's own rule, X and Y swapped, its triggers.
     pub fn how(&self, pad: &WebPad, b: Browser) -> String {
         let layout = layout(pad, b);
-        let own = matches!(layout, Layout::Raw | Layout::Usage) && own_order(pad).is_some();
+        let order = own_order(pad, layout);
+        let own = order.is_some();
+        let whose = if order == Some(DS4_DINPUT) { "a DS4's" } else { "8BitDo's" };
         let mut how = match layout {
             Layout::Standard => "the standard layout".to_string(),
             Layout::Evdev => "Firefox's evdev layout".to_string(),
-            Layout::Raw if own => "8BitDo's D-input order, through joydev".to_string(),
-            Layout::Usage if own => "8BitDo's D-input order, by its HID usages".to_string(),
+            Layout::Raw if own => format!("{whose} D-input order, through joydev"),
+            Layout::Usage if own => format!("{whose} D-input order, by its HID usages"),
             Layout::Usage => "its own order, positionally, by its HID usages".to_string(),
             Layout::Raw if self.triggers => "xpad's own order".to_string(),
             Layout::Raw => "its own order, positionally".to_string(),
@@ -834,6 +861,64 @@ mod tests {
         assert!(PadMap::default().how(&four, chrome).contains("the d-pad on buttons 12 to 15, the right stick at axes 2 and 3"));
     }
 
+    /// Heirloom petition 2657 (2026-11-22): a third-party DS4, "DS4 Wired
+    /// Controller (Vendor: 7545 Product: 0104)", Chrome 142 on Windows, no
+    /// mapping, by its HID usages: □ ✕ ○ △ first. Its ✕ (button 1) confirms
+    /// and its □ (button 0) does not; ○ and △ where they are; the d-pad on
+    /// the hat at 9 and the right stick on Z and Rz as before. The controls:
+    /// the same pad with an id no DS4's stays positional (✕ at 0); a real DS4
+    /// Chrome maps "standard" keeps the standard layout; Sony's own name or
+    /// vendor unmapped reads as the clone; and through joydev (Chrome on
+    /// Linux) the DS4 order is not taken.
+    #[test]
+    fn a_third_party_ds4_by_its_usages_has_cross_second() {
+        let chrome = Browser::new("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36", None);
+        let id = "DS4 Wired Controller (Vendor: 7545 Product: 0104)";
+        let rest = [0.0, 0.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, HAT_REST];
+        let p = pad(id, "", 14, &rest);
+        assert_eq!(layout(&p, chrome), Layout::Usage);
+        assert_eq!(own_order(&p, Layout::Usage), Some(DS4_DINPUT));
+        let mut m = PadMap::default();
+        assert_eq!(m.read(&p, chrome), Report::default(), "at rest");
+        let want = [(0, bit::SQUARE), (1, bit::CROSS), (2, bit::CIRCLE), (3, bit::TRIANGLE), (4, bit::L1), (5, bit::R1), (8, bit::SELECT), (9, bit::START), (10, bit::L3), (11, bit::R3), (12, 0), (13, 0)];
+        for (i, k) in want {
+            let mut q = p.clone();
+            press(&mut q, i, 1.0);
+            assert_eq!(m.read(&q, chrome).buttons, k, "button {i}");
+        }
+        let mut q = p.clone();
+        press(&mut q, 6, 1.0);
+        press(&mut q, 7, 0.5);
+        let r = m.read(&q, chrome);
+        assert_eq!((r.buttons, r.triggers), (bit::L2 | bit::R2, [1.0, 0.5]));
+        let mut q = p.clone();
+        q.axes[9] = HAT[2];
+        q.axes[2] = 0.5;
+        q.axes[5] = -0.25;
+        let r = m.read(&q, chrome);
+        assert_eq!((r.buttons, r.sticks), (bit::RIGHT, [0.5, -0.25, 0.0, 0.0]));
+        assert!(m.how(&p, chrome).starts_with("a DS4's D-input order, by its HID usages, the d-pad on the hat at axis 9, the right stick at axes 2 and 5"), "{}", m.how(&p, chrome));
+        // the controls
+        let mut other = pad("USB Gamepad (Vendor: 0079 Product: 0006)", "", 14, &rest);
+        press(&mut other, 0, 1.0);
+        assert_eq!(PadMap::default().read(&other, chrome).buttons, bit::CROSS, "an unknown pad stays positional");
+        let mut ps3 = pad("PS3 GamePad (Vendor: 2563 Product: 0575)", "", 13, &rest);
+        press(&mut ps3, 0, 1.0);
+        ps3.axes[9] = HAT[0];
+        assert_eq!(PadMap::default().read(&ps3, chrome).buttons, bit::CROSS | bit::UP, "the PS3 hat pad as before");
+        assert!(PadMap::default().how(&ps3, chrome).starts_with("its own order, positionally, by its HID usages"));
+        let mut real = pad("Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 09cc)", "standard", 18, &[0.0; 4]);
+        press(&mut real, 0, 1.0);
+        assert_eq!(PadMap::default().read(&real, chrome).buttons, bit::CROSS, "a standard-mapped DS4 is the standard layout");
+        for sony in ["Wireless Controller (Vendor: 054c Product: 05c4)", "Some pad (Vendor: 054c Product: 0ba0)", "PS4 Controller (Vendor: 1234 Product: 0001)"] {
+            let mut q = pad(sony, "", 14, &rest);
+            press(&mut q, 1, 1.0);
+            assert_eq!(PadMap::default().read(&q, chrome).buttons, bit::CROSS, "{sony}");
+        }
+        let linux = Browser::new(CHROME_LINUX, None);
+        assert_eq!(own_order(&pad(id, "", 13, &[0.0; 8]), layout(&pad(id, "", 13, &[0.0; 8]), linux)), None, "not through joydev");
+    }
+
     const FIREFOX_WINDOWS: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0";
     const FIREFOX_MAC: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.5; rv:140.0) Gecko/20100101 Firefox/140.0";
 
@@ -1046,9 +1131,9 @@ mod tests {
         assert_eq!(id_parts("DualSense Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 0ce6)"), (Some(0x054c), Some(0x0ce6), "DualSense Wireless Controller"));
         // Chrome's id for a pad it has no mapping for: no space before Vendor
         assert_eq!(id_parts("8BitDo Pro 2 (Vendor: 2dc8 Product: 6006)"), (Some(0x2dc8), Some(0x6006), "8BitDo Pro 2"));
-        assert_eq!(own_order(&pro2_windows()), Some(EIGHTBITDO_DINPUT));
-        assert_eq!(own_order(&pad("8BitDo Ultimate 2C (Vendor: 2dc8 Product: 310a)", "", 16, &[])), None, "an 8BitDo in Xbox's order");
-        assert_eq!(own_order(&pad("Xbox 360 Controller (XInput STANDARD GAMEPAD)", "standard", 17, &[])), None);
+        assert_eq!(own_order(&pro2_windows(), Layout::Usage), Some(EIGHTBITDO_DINPUT));
+        assert_eq!(own_order(&pad("8BitDo Ultimate 2C (Vendor: 2dc8 Product: 310a)", "", 16, &[]), Layout::Usage), None, "an 8BitDo in Xbox's order");
+        assert_eq!(own_order(&pad("Xbox 360 Controller (XInput STANDARD GAMEPAD)", "standard", 17, &[]), Layout::Standard), None);
         // a name with dashes is still a name
         assert_eq!(id_parts("drive.py pad"), (None, None, "drive.py pad"));
         assert_eq!(id_parts("8BitDo-Pro-2"), (None, None, "8BitDo-Pro-2"));
