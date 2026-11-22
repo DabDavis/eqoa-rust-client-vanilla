@@ -234,14 +234,21 @@ fn play(lib: &Library, model: i32, row: &Row, cols: usize) -> Result<(i64, Posed
 
 /// The walk's arc over a jump on flat ground (`walker::JUMP_SPEED`'s doc):
 /// the feet's height `ms` after leaving it, 0.9 at the top 0.29 s in, down
-/// again 0.62 s after (`raceemote::JUMP_AIR_MS`).
-pub fn arc(ms: i64) -> f32 {
-    let (t, top, all) = (ms as f32, 290.0, raceemote::JUMP_AIR_MS);
+/// again 0.62 s after (`raceemote::JUMP_AIR_MS`); a `froglok`'s twice as
+/// high, 1.8 at the top 0.40 s in, down 0.87 s after
+/// (`walker::FROGLOK_JUMP_SPEED`'s doc).
+pub fn arc(ms: i64, froglok: bool) -> f32 {
+    let (high, top, all) = if froglok {
+        (crate::walker::FROGLOK_JUMP_TOP, raceemote::FROGLOK_TOP_MS, raceemote::FROGLOK_AIR_MS)
+    } else {
+        (crate::walker::JUMP_TOP, 290.0, raceemote::JUMP_AIR_MS)
+    };
+    let t = ms as f32;
     if t <= 0.0 || t >= all {
         return 0.0;
     }
     let k = if t <= top { (top - t) / top } else { (t - top) / (all - top) };
-    crate::walker::JUMP_TOP * (1.0 - k * k)
+    high * (1.0 - k * k)
 }
 
 /// A jump (`Row::Jump`) as the walk drives the sprite: a moment of the
@@ -252,7 +259,9 @@ pub fn arc(ms: i64) -> f32 {
 /// moments `cols` across it.
 fn play_jump(lib: &Library, model: i32, row: &Row, run: bool, cols: usize) -> Result<(i64, Posed, Vec<(i64, Posed)>), String> {
     let step = 16;
-    let (lead, air) = (480i64, raceemote::JUMP_AIR_MS as i64);
+    // a froglok's own leap goes twice as high (`walker::JumpArc::FROGLOK`)
+    let froglok = matches!(row, Row::Jump { human: false, .. }) && raceemote::leap_slot(model as u32).is_some();
+    let (lead, air) = (480i64, if froglok { raceemote::FROGLOK_AIR_MS } else { raceemote::JUMP_AIR_MS } as i64);
     let ground = if run { 2 } else { 0 };
     let gait = |t: i64| if t < lead { ground } else if t < lead + air { 6 } else if t < lead + air + step { 7 } else { ground };
     // its length: until the landing is done
@@ -300,7 +309,7 @@ fn play_jump(lib: &Library, model: i32, row: &Row, run: bool, cols: usize) -> Re
             standing = Some(pose(&mut cs, &sc, 0.0));
         }
         if times.iter().any(|&m| m / step * step == t) {
-            out.push((t - lead, pose(&mut cs, &sc, arc(t - lead))));
+            out.push((t - lead, pose(&mut cs, &sc, arc(t - lead, froglok))));
         }
         t += step;
     }
@@ -405,8 +414,10 @@ mod tests {
         let j = parse(&words("jump runjump humanjump humanrunjump")).unwrap();
         assert_eq!(j.rows.iter().map(Row::label).collect::<Vec<_>>(), ["jump", "runjump", "humanjump", "humanrunjump"]);
         assert_eq!(j.rows[1], Row::Jump { run: true, human: false });
-        assert_eq!((arc(0), arc(raceemote::JUMP_AIR_MS as i64)), (0.0, 0.0));
-        assert!((arc(290) - crate::walker::JUMP_TOP).abs() < 1e-6, "the top 0.29 s in");
+        assert_eq!((arc(0, false), arc(raceemote::JUMP_AIR_MS as i64, false)), (0.0, 0.0));
+        assert!((arc(290, false) - crate::walker::JUMP_TOP).abs() < 1e-6, "the top 0.29 s in");
+        assert_eq!((arc(0, true), arc(raceemote::FROGLOK_AIR_MS as i64, true)), (0.0, 0.0));
+        assert!((arc(400, true) - crate::walker::FROGLOK_JUMP_TOP).abs() < 1e-6, "a froglok's top 0.40 s in, 1.8");
         let none = parse(&[]).unwrap();
         assert_eq!((none.rows, none.cols, none.tight), ((0..4).map(Row::Emote).collect::<Vec<_>>(), 3, false));
         assert!(parse(&words("wav")).is_err());

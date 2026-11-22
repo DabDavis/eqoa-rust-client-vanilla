@@ -820,6 +820,13 @@ pub const LEAP_CLEAR: f32 = 0.08;
 /// 0.62 s): what the leap's air part is played over.
 pub const JUMP_AIR_MS: f32 = 620.0;
 
+/// How long a froglok's jump is in the air on flat ground
+/// (`walker::FROGLOK_JUMP_SPEED`'s doc, about 0.87 s: twice as high), and
+/// when it is at its top (0.40 s): the leap's air part is played over this,
+/// as only a froglok leaps (`AIR_LEAP`).
+pub const FROGLOK_AIR_MS: f32 = 870.0;
+pub const FROGLOK_TOP_MS: f32 = 400.0;
+
 /// A leap cut at its take-off and its landing (`leap_cut`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Leap {
@@ -921,7 +928,8 @@ fn rest_world(rig: &Rig, b: i32) -> glam::Mat4 {
 
 /// The fall and the landing cut from the body's own leap in `slot` (`AIR_LEAP`,
 /// `leap_cut`) over `cs`'s entries 6 and 7 (its clips added to `sc`): the fall
-/// its push off to its touch down, played once over `JUMP_AIR_MS` and held at
+/// its push off to its touch down, played once over `FROGLOK_AIR_MS` (a
+/// froglok's jump is twice as high as everyone's) and held at
 /// its last (the legs reaching down) for a longer fall; the landing the crouch
 /// from the touch down on, once, at the leap's own speed. The leap's own rise
 /// is taken off (each frame lowered by its lift, so the lowest foot stays
@@ -944,7 +952,7 @@ pub fn put_leap(cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, slot: i32) -> bool
     // the air's frames over the jump's time in the air; the landing at the
     // leap's own rate and play speed
     let air = (leap.land - leap.take_off) as f32;
-    let fall_rate = F::new(air * 1000.0 / JUMP_AIR_MS);
+    let fall_rate = F::new(air * 1000.0 / FROGLOK_AIR_MS);
     let land_rate = F::new(clips[0].play_rate.0 * clips[0].play_speed.0 * src.weight.0);
     let last = clips[0].num_frames - 1;
     let driven: std::collections::HashSet<usize> = clips.iter().flat_map(|a| a.nodes.iter().filter_map(|(r, _)| rig.by_ref.get(r).copied())).collect();
@@ -1536,7 +1544,7 @@ mod tests {
                 }
                 if e == AIR[0] {
                     let ms = (frames - 1) as f32 * 1000.0 / clips[0].play_rate.0;
-                    assert!((ms - JUMP_AIR_MS).abs() < 1.0, "{id:#010x}: the fall over {ms} ms");
+                    assert!((ms - FROGLOK_AIR_MS).abs() < 1.0, "{id:#010x}: the fall over {ms} ms, a froglok's jump");
                 }
             }
             for (player, jumps) in [(false, true), (true, false)] {

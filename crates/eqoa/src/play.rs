@@ -6808,9 +6808,11 @@ impl Play {
     /// asked of the walk, which takes off at its next frame if the client and
     /// the walk allow (`controls::Client::may_jump`, `Walker::ask_jump`). On a
     /// server that never offered it (the reference server's, eqoa.live's) nothing at all.
+    /// A froglok (its race in the MemoryDump, 10) jumps twice as high
+    /// (`walker::JumpArc::of`).
     pub fn jump_key(&mut self, walker: &mut Walker) {
         if self.session.jumps {
-            walker.ask_jump();
+            walker.ask_jump_as(crate::walker::JumpArc::of(self.dump.player.race));
         }
     }
 

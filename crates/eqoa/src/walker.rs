@@ -148,8 +148,10 @@ pub struct Walker {
     fly_tilt: Option<(i32, F<Ee>)>,
     /// This frame's length (s), as the camera's `Process` is told it.
     frame_s: f32,
-    /// A jump asked (`ask_jump`): when, on the walk's clock.
+    /// A jump asked (`ask_jump`): when, on the walk's clock, and its arc (the
+    /// jumper's race's: `JumpArc::of`).
     jump_asked: Option<i64>,
+    jump_arc: JumpArc,
     /// In a jump, from its take-off until the body is on a floor again: its
     /// fall wholly in by its top (`jump::fall_by_top`), which a jump that
     /// reaches its top has already.
@@ -166,6 +168,43 @@ pub const JUMP_SPEED: f32 = 7.1;
 /// body (`m_parm30`, 1.8). go-eqoa-server's movement check takes a jump to this
 /// (its `JumpTop`), and no further.
 pub const JUMP_TOP: f32 = 0.9;
+
+/// The froglok's race (the S2's race 10, which go-eqoa-server sends as itself:
+/// the MemoryDump's `VIPlayer` race).
+pub const RACE_FROGLOK: i64 = 10;
+
+/// A froglok's jump (the owner, 2026-11-22, on a player's petition "frogluks
+/// should be able to jump higher then other characters"): twice everyone
+/// else's, `JUMP_TOP` doubled to the walk's whole body (`m_parm30`, 1.8), so a
+/// froglok clears its own height. Its start speed reaches that top with the
+/// walk's own integrator (1.79 over the floor, the top 0.40 s in, back on flat
+/// ground 0.87 to 0.90 s after leaving it). go-eqoa-server's movement check takes a
+/// froglok's jump to this (its `FroglokJumpTop`), and no further.
+pub const FROGLOK_JUMP_SPEED: f32 = 10.0;
+/// The highest a froglok's jump takes the feet over the floor it left.
+pub const FROGLOK_JUMP_TOP: f32 = 1.8;
+
+/// A jump's start speed up and the top it reaches (`take_off`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct JumpArc {
+    pub speed: f32,
+    pub top: f32,
+}
+
+impl JumpArc {
+    /// Everyone's jump.
+    pub const HUMAN: JumpArc = JumpArc { speed: JUMP_SPEED, top: JUMP_TOP };
+    /// A froglok's: twice as high.
+    pub const FROGLOK: JumpArc = JumpArc { speed: FROGLOK_JUMP_SPEED, top: FROGLOK_JUMP_TOP };
+
+    /// The jump of a character of `race` (the server's race, as the MemoryDump
+    /// gives the own character's): the froglok's, else everyone's. By the
+    /// race, as the server judges it, never by the body drawn (an illusion
+    /// into a froglok's form is no froglok to the movement check).
+    pub fn of(race: i64) -> JumpArc {
+        if race == RACE_FROGLOK { JumpArc::FROGLOK } else { JumpArc::HUMAN }
+    }
+}
 
 /// How long a jump asked waits for the walk and the client to allow one (ms on
 /// the walk's clock): a press as the body comes down, or before the report of
@@ -469,7 +508,7 @@ impl Walker {
         cam.set_orbit_distance(dist);
         cam.set_orbit_angle_behind();
         let eye = cam.process(&mut scene);
-        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None, scale: F::ONE, flying: false, noclip: false, fly_tilt: None, frame_s: 0.0, jump_asked: None, in_jump: false }
+        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None, scale: F::ONE, flying: false, noclip: false, fly_tilt: None, frame_s: 0.0, jump_asked: None, jump_arc: JumpArc::HUMAN, in_jump: false }
     }
 
     /// `Respawn`'s placing: the character stood at `pos` (on the ground
@@ -828,7 +867,14 @@ impl Walker {
     /// The jump key (`Play::jump_key`): a jump asked of the walk, taken at its
     /// next frame that allows one (`jump_if_asked`), within `JUMP_WAIT_MS`.
     pub fn ask_jump(&mut self) {
+        self.ask_jump_as(JumpArc::HUMAN);
+    }
+
+    /// The jump key for a character whose jump is `arc` (`JumpArc::of` its
+    /// race): as `ask_jump`, the jump that arc's.
+    pub fn ask_jump_as(&mut self, arc: JumpArc) {
         self.jump_asked = Some(self.scene.time);
+        self.jump_arc = arc;
     }
 
     /// The jump asked, taken now if the client allows one
@@ -851,16 +897,17 @@ impl Walker {
         self.take_off();
     }
 
-    /// The jump (the module's doc): `JUMP_SPEED` up, and the floor the walk
+    /// The jump (the module's doc): its arc's start speed up (`JUMP_SPEED`, a
+    /// froglok's `FROGLOK_JUMP_SPEED`), and the floor the walk
     /// remembers lifted over the jump's top by the step-down tolerance and a
     /// little, so no floor under the feet on the way up or down holds the body
     /// before its feet come down to one.
     fn take_off(&mut self) {
         let w = &mut self.cam.walk;
-        let lift = w.phys.position.y + F::new(JUMP_TOP) + w.parm28 + F::new(0.1);
+        let lift = w.phys.position.y + F::new(self.jump_arc.top) + w.parm28 + F::new(0.1);
         w.phys.floor = lift;
         w.committed.floor = lift;
-        w.phys.velocity.y = F::new(JUMP_SPEED);
+        w.phys.velocity.y = F::new(self.jump_arc.speed);
         self.in_jump = true;
         eprintln!("walker: jump from {:?}", w.phys.position.to_array());
     }
@@ -3187,6 +3234,62 @@ pub(crate) mod tests {
             _ => 0,
         };
         (top, air)
+    }
+
+    /// A jump in place asked as `arc` at `hz` on the open ground: the
+    /// highest the feet went over the floor, the time in the air (`arc`),
+    /// when it was at its top (ms after leaving the floor), and whether it
+    /// came down at the very height it left.
+    fn jump_as(ja: JumpArc, hz: f64) -> Option<(f32, i64, i64, bool)> {
+        let mut w = open_ground()?;
+        hold(&mut w, Controls::default(), &jumper(), hz, 0.5);
+        let (floor, bits) = (w.cam.walk.phys.position.y.0, w.cam.walk.phys.position.y.bits());
+        let t0 = w.scene.time;
+        let mut drawn = Vec::new();
+        for k in 1..=(hz * 2.0) as u64 {
+            if k == 1 {
+                w.ask_jump_as(ja);
+            }
+            w.frame_with(Controls::default().axes(), drawn_at(t0, hz, 0.0, k), &jumper(), true);
+            drawn.push(w.cam.walk.phys);
+        }
+        let (top, air) = arc(&drawn, floor);
+        let off = drawn.iter().position(|p| p.flags & ON_FLOOR == 0)?;
+        let high = drawn.iter().max_by(|a, b| a.position.y.0.total_cmp(&b.position.y.0))?;
+        let last = drawn.last()?;
+        Some((top, air, high.time - drawn[off].time, last.flags & ON_FLOOR != 0 && last.position.y.bits() == bits))
+    }
+
+    /// A froglok's jump (the owner, 2026-11-22) rises twice as high as
+    /// everyone's, to 1.79 (`FROGLOK_JUMP_TOP` 1.8, never over it), at the
+    /// console's rate and drawn at 60 and 165: its top 0.37 to 0.40 s in,
+    /// 0.8 to 0.94 s in the air (`raceemote::FROGLOK_AIR_MS` 870), down at
+    /// the height it left. Only race 10 jumps so (`JumpArc::of`). The
+    /// controls: every other race (the game's ten, the custom races past the
+    /// froglok, a race unknown) gets everyone's jump, and that jump, asked
+    /// the same way, still tops out at 0.896, half the froglok's.
+    #[test]
+    fn a_froglok_jumps_twice_as_high() {
+        assert_eq!(JumpArc::of(RACE_FROGLOK), JumpArc::FROGLOK);
+        for race in (0..10).chain([11, 30, 31, 33, -1]) {
+            assert_eq!(JumpArc::of(race), JumpArc::HUMAN, "the control: race {race}");
+        }
+        for hz in [1000.0 / CONSOLE_FRAME_MS, 60.0, 165.0] {
+            let Some((top, air, at, home)) = jump_as(JumpArc::of(RACE_FROGLOK), hz) else { return };
+            eprintln!("{hz:.2} Hz: a froglok's top {top:.4} {at} ms in, {air} ms in the air");
+            assert!((top - 1.785).abs() < 0.02 && top <= FROGLOK_JUMP_TOP + 0.005, "{hz} Hz: the froglok's top {top}");
+            assert!((360..=410).contains(&at), "{hz} Hz: its top {at} ms in");
+            assert!((800..=940).contains(&air) && (air as f32 - raceemote_air()).abs() < 75.0, "{hz} Hz: {air} ms in the air");
+            assert!(home, "{hz} Hz: down at the height it left");
+            let (htop, hair, _, hhome) = jump_as(JumpArc::of(0), hz).unwrap();
+            assert!((htop - 0.896).abs() < 0.01 && htop <= JUMP_TOP + 0.005 && hhome, "{hz} Hz: the control, a human's top {htop}");
+            assert!((560..=680).contains(&hair), "{hz} Hz: the control, a human {hair} ms in the air");
+            assert!(top > 1.95 * htop && top < 2.05 * htop, "{hz} Hz: twice as high: {top} against {htop}");
+        }
+    }
+
+    fn raceemote_air() -> f32 {
+        crate::raceemote::FROGLOK_AIR_MS
     }
 
     /// A jump in place rises to `JUMP_TOP` (0.896 with the walk's integrator) and

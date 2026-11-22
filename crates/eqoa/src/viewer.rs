@@ -803,7 +803,7 @@ pub fn shot_with(
                 (client.jumps, client.stood_sent) = (true, true);
             }
             if jump_at.iter().any(|&ms| t - frame_ms < ms && ms <= t) {
-                walker.ask_jump();
+                walker.ask_jump_as(crate::walker::JumpArc::of(play.as_ref().map_or(0, |p| p.dump.player.race)));
             }
             // a stick that ran runs until it comes back well under the
             // threshold (`input::RunHold`), as the window's
