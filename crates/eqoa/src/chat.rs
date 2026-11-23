@@ -863,9 +863,18 @@ impl WndChat {
         let h = vui.font_height(ui);
         let tl = self.window.top_left();
         let (mut x, y) = (tl[0] + 25, tl[1] - h + 2);
-        for t in shown {
-            let name = crate::ui::wide(&self.tabs.name(t));
-            let w = vui.string_width(ui, &name);
+        let count = shown.len();
+        for (i, t) in shown.into_iter().enumerate() {
+            let mut name = crate::ui::wide(&self.tabs.name(t));
+            let mut w = vui.string_width(ui, &name);
+            if self.size.width < ChatSize::BASE_WIDTH {
+                let remaining = (count - i) as i32;
+                let room = (self.window.bottom_right()[0] - 20 - x - 14 * (remaining - 1)) / remaining;
+                if w > room {
+                    name = crate::startmenu::fit_label(vui, ui, &name, &[], room);
+                    w = vui.string_width(ui, &name);
+                }
+            }
             let color = if t == self.tabs.active {
                 [1.0, 1.0, 0.6, 1.0]
             } else if self.tabs.unread[t] {
@@ -888,8 +897,7 @@ impl WndChat {
         }
     }
 
-    /// `CountLines`: the fresh lines (every line while scrolling; five in a
-    /// fixed mode), at most five.
+    /// The number of fresh rows visible, or all configured rows while fixed.
     fn count_lines(&self) -> i32 {
         if self.fixed() {
             return self.size.rows;
@@ -1683,6 +1691,24 @@ mod tests {
         let input = c.input_rect(&vui(), &Rows);
         assert!(c.shown.iter().all(|r| r.bottom <= input[1]));
         assert!(input[3] <= 448 && input[0] >= 0);
+    }
+
+    #[test]
+    fn a_narrow_box_keeps_all_tab_buttons_in_reach() {
+        let mut c = WndChat::new();
+        let mut routes = [0; KINDS];
+        routes[..3].copy_from_slice(&[1, 2, 3]);
+        c.set_tabs(routes, ["Whispers", "Guildies", "Treasure"].map(tab_name));
+        c.resize(ChatSize { width: 231, rows: 3 }, width);
+        c.always = true;
+        frame(&mut c, 0.1);
+        let hits = c.tabs.hits.clone();
+        assert_eq!(hits.len(), 4);
+        for (rect, tab) in hits {
+            assert!(rect[0] >= c.window.top_left()[0] && rect[2] <= c.window.bottom_right()[0]);
+            assert!(c.click_tab([(rect[0] + 1) as f32, (rect[1] + 1) as f32]));
+            assert_eq!(c.tab(), tab);
+        }
     }
 
     /// A frame `dt` seconds on.

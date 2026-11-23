@@ -1096,7 +1096,7 @@ impl Ui {
 
 #[cfg(test)]
 mod tests {
-    use super::{Anchor, Quad, Vertical, WHOLE, note, pack, place, rise, rose, settle, settle_along, shift, side, top, viewport_of};
+    use super::{Anchor, HudScale, Quad, Vertical, WHOLE, note, pack, place, rise, rose, settle, settle_along, shift, side, top, viewport_of};
 
     /// A glyph `w` wide and 3 tall: every texel ink of colour `c` but its
     /// middle row's first, clear.
