@@ -112,6 +112,11 @@ pub struct MemberState {
     /// server last sent it (`Session::power_of`), none when there is none to
     /// show.
     pub power: Option<u8>,
+    /// The client's own (Extended's Group Effects): the icons (DictIDs) of the
+    /// effects on it in their order, as the server last sent them
+    /// (`Session::effects_of`), drawn tiny beside its gauges
+    /// (`member_effects_pieces`); none with Group Effects off.
+    pub effects: Vec<u32>,
 }
 
 /// What `DrawPet` reads: `GetPetName`, whether the pet is the target, and
@@ -311,6 +316,54 @@ pub fn pet_effects_pieces(vui: &Vui, at: [i32; 2], icons: &[u32]) -> Vec<FxPiece
 /// strip's size falls between the frame's pixels), as `Blit` draws them.
 fn draw_pet_effects(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], icons: &[u32]) {
     draw_fx_pieces(vui, ui, &pet_effects_pieces(vui, at, icons), 1.0);
+}
+
+/// Group Effects (jibrish, 2026-11-22: "add very small / tiny icon versions
+/// for the buffs group members have"): a member's effects as tiny icons in its
+/// bar's room right of its gauges, where `DrawGroup` draws only the two status
+/// icons (118 and 119, 25 apart from the gauge's frame's end + 5): each icon
+/// whole, `MEMBER_FX` square on a translucent dark tile of its own size
+/// (`MEMBER_FX_SHADE`, so it reads over bright ground), `MEMBER_FX_STEP` apart
+/// (a pixel between tiles), from `MEMBER_FX_AT` (the health
+/// gauge's top, 6 past its frame) and past the status icons the member shows,
+/// in `MEMBER_FX_ROWS` rows level with the health and the power gauges, as
+/// many to a row as end by the bar's right (`MEMBER_FX_RIGHT`, its 174); what
+/// does not fit is left out (nine and nine: the server sends 16 at most). All
+/// inside the bar's 174 by 46, so the group's piece is no larger
+/// (`hudlayout`).
+const MEMBER_FX_AT: [i32; 2] = [76, 25];
+const MEMBER_FX: i32 = 10;
+const MEMBER_FX_STEP: i32 = 11;
+const MEMBER_FX_ROWS: usize = 2;
+const MEMBER_FX_RIGHT: i32 = 174;
+/// The tiles' alpha: UI.CSF's "black" blended (mode 3), as the buff window's
+/// name box draws it (at 0.8 there).
+const MEMBER_FX_SHADE: f32 = 0.5;
+
+/// The tiny icons for the member's bar at `at` showing `status` of its status
+/// icons (0 to 2), in the order they went on, left to right and the first row
+/// first: each icon's rectangle, which is its tile's too.
+pub fn member_effects_pieces(at: [i32; 2], status: usize, icons: &[u32]) -> Vec<FxPiece> {
+    let x0 = at[0] + MEMBER_FX_AT[0] + 25 * status.min(2) as i32;
+    let per_row = ((MEMBER_FX_RIGHT + MEMBER_FX_STEP - MEMBER_FX - MEMBER_FX_AT[0] - 25 * status.min(2) as i32) / MEMBER_FX_STEP).max(0) as usize;
+    let most = per_row * MEMBER_FX_ROWS;
+    let mut out = Vec::new();
+    for (i, &icon) in icons.iter().take(most).enumerate() {
+        let (col, row) = ((i % per_row) as i32, (i / per_row) as i32);
+        let (x, y) = (x0 + col * MEMBER_FX_STEP, at[1] + MEMBER_FX_AT[1] + row * MEMBER_FX_STEP);
+        out.push(FxPiece { art: FxArt::Icon(icon), r: [x as f32, y as f32, MEMBER_FX as f32, MEMBER_FX as f32] });
+    }
+    out
+}
+
+/// A member's tiny icons drawn: each one's translucent tile, then the icons
+/// whole.
+fn draw_member_effects(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], status: usize, icons: &[u32]) {
+    let pieces = member_effects_pieces(at, status, icons);
+    for p in &pieces {
+        ui.blit(icon_id("black"), 0, [p.r[0] as i32, p.r[1] as i32], [0, 0], [MEMBER_FX, MEMBER_FX], 3, MEMBER_FX_SHADE);
+    }
+    draw_fx_pieces(vui, ui, &pieces, 1.0);
 }
 
 /// Pieces of an effects' row drawn (the pet's, `buffwnd`'s), each at `alpha`.
@@ -643,6 +696,10 @@ impl Hud {
             if let Some(v) = m.power {
                 draw_gauge(vui, ui, 9, 136, power_at(start), m.is_target, v as f32 / 255.0);
             }
+            if !m.effects.is_empty() {
+                let status = m.hp.map_or(0, |(_, f4, f8)| f4 as usize + f8 as usize);
+                draw_member_effects(vui, ui, start, status, &m.effects);
+            }
             if let Some((hp, f4, f8)) = m.hp {
                 p = [p[0] + GAUGE_IN[0], p[1] + GAUGE_IN[1]];
                 draw_gauge(vui, ui, 7, 136, p, m.is_target, hp as f32 / 255.0);
@@ -914,7 +971,7 @@ mod tests {
         assert!(v.is_finite() && v > 0.0 && (0.0..=1.0).contains(&part), "a GM's level 100: {v} {part}");
     }
 
-    use super::{FxArt, FxPiece, Hud, HudState, MemberState, PetState, Pick, bearing_point, patch_point, pet_effects_height, pet_effects_pieces, power_at, waypoint_point};
+    use super::{FxArt, FxPiece, GROUP_AT, Hud, HudState, MemberState, PetState, Pick, bearing_point, member_effects_pieces, patch_point, pet_effects_height, pet_effects_pieces, power_at, waypoint_point};
 
     /// Power Bars: a member's (or the pet's) power under its health gauge (25
     /// down, its frame 10 high), inside its 46-high bar and above the pet's
@@ -941,6 +998,34 @@ mod tests {
         for hp in 1..255u8 {
             assert!((1..=99).contains(&health_percent(hp)), "{hp}: living and hurt");
         }
+    }
+
+    /// Group Effects (jibrish, 2026-11-22: "add very small / tiny icon versions
+    /// for the buffs group members have"): a member's icons tiny in its bar's
+    /// room right of its gauges, in their order, nine to a row in two rows
+    /// level with the health and power gauges, a pixel apart, all inside the
+    /// bar's 174 by 46; its status icons push them right, fewer to a row; what
+    /// does not fit is left out. The control: none, nothing.
+    #[test]
+    fn a_members_effects_sit_tiny_beside_its_gauges() {
+        let at = GROUP_AT;
+        let icons: Vec<u32> = (1..=16).collect();
+        let p = member_effects_pieces(at, 0, &icons);
+        assert_eq!(p.len(), 16, "the server's most, nine and seven");
+        assert_eq!((p[0].art, p[0].r), (FxArt::Icon(1), [(at[0] + 76) as f32, (at[1] + 25) as f32, 10.0, 10.0]), "right of the gauges' frames (10 + 60), level with the health");
+        assert_eq!((p[15].art, p[8].r[1]), (FxArt::Icon(16), p[0].r[1]), "in their order, nine to the first row");
+        assert_eq!((p[9].r[0], p[9].r[1]), (p[0].r[0], p[0].r[1] + 11.0), "the tenth under the first, level with the power");
+        assert_eq!(p[1].r[0] - (p[0].r[0] + p[0].r[2]), 1.0, "a pixel between two");
+        for q in &p {
+            let inside = q.r[0] >= (at[0] + 75) as f32 && q.r[0] + q.r[2] <= (at[0] + 174) as f32 && q.r[1] >= (at[1] + 25) as f32 && q.r[1] + q.r[3] <= (at[1] + 46) as f32;
+            assert!(inside, "inside the bar, right of the gauges: {:?}", q.r);
+        }
+        let one = member_effects_pieces(at, 1, &icons);
+        assert_eq!((one[0].r[0], one.len()), ((at[0] + 101) as f32, 12), "past one status icon: six to a row");
+        let two = member_effects_pieces(at, 2, &icons);
+        assert_eq!((two[0].r[0], two.len()), ((at[0] + 126) as f32, 8), "past both: four to a row, the rest left out");
+        assert_eq!(member_effects_pieces(at, 0, &(1..=30).collect::<Vec<u32>>()).len(), 18, "two rows of nine at most");
+        assert!(member_effects_pieces(at, 0, &[]).is_empty(), "the control: none, nothing");
     }
 
     /// Health Numbers (Live petition 5393, Spoony: "add the option to overlay

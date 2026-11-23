@@ -366,8 +366,10 @@ or a browser (each described where it lives below):
   `buffplay.rs`): on a server that offers it (go-eqoa-server's 0x7E57, a u8 both ways; the answer is
   Extended > UI > HUD's Buff Window, on by default) the set comes as 0x7E58 (each line whose, removable,
   the effect's spell id, icon, ms left, name; the player's, then the pet's) and is drawn in the effects
-  strip's place: the player's buffs eight to a row in the strip's art, a second row for nine to sixteen
-  (the game's strip holds eight), the pet's under them at half size (in place of the row under the pet's
+  strip's place: the player's buffs in the strip's art, up to eight in a row at its size (the game's strip
+  holds eight), more at three quarters of it, ten to a row, a second row for eleven to twenty (jibrish,
+  2026-11-22: "when too many buffs are on the players themselves, scale down the icons a bit";
+  `buffwnd::player_size`), the pet's under them at half size (in place of the row under the pet's
   bar, with Pet Effects on). A left click or a tap selects a buff and shows its name and time left; a
   left click on it again, or anywhere off the bar, lets it go (a GM's petition 1809); a right
   click or a long press on a buff asks it off at once (0x7E59: u8 whose, u32 id, u32 icon), and the
@@ -431,6 +433,15 @@ or a browser (each described where it lives below):
   it targets the pet. The player's own effects window (channel 0x43) stays the
   player's own, on every client. Extended > UI's Pet Effects, on by default; off, or
   on a server that sends none, nothing is drawn, as on a PS2.
+- **The group members' effects** (jibrish, 2026-11-22: "add very small / tiny icon versions for
+  the buffs group members have"; `hud::member_effects_pieces`): CLIENT shows no one's effects but
+  the player's own, so on a server that sends them (go-eqoa-server's 0x7EC0 offers, a u32 both
+  ways; 0x7EC1: each other member's id as the roster names it and its effects' icons, whenever they
+  change) each member's effects go as tiny icons (10 pixels of the 640x448 frame, on a translucent dark tile
+  each, a pixel apart) into its bar's room right of its health and power gauges, nine to a row in two rows, past
+  the poison and disease icons when it shows them; what does not fit is left out. Extended > UI >
+  Group & Raid's Group Effects, on by default; off, or on a server that sends none, nothing is
+  drawn, as on a PS2. A server that turns Pet Effects off (`qol::PET_EFFECTS`) turns this off too.
 - **Number colours by what made them** (the server owner's of 2026-11-09, of a player's
   ask "to see/change colors of damage/procs/healing for player/pets similar to the way SS
   does": "we can add the number colors to extended menu"; `numcolor.rs`): CLIENT colours

@@ -9,10 +9,13 @@
 //! game's strip, as it was.
 //!
 //! - The rows: the player's effects in the strip's own art (its caps, a cell of
-//!   34 a buff), eight to a row, a second row under the first for nine to
-//!   sixteen (the game's strip holds eight); the pet's under them in a row of
-//!   their own at half the size (the art of the row under the pet's bar, which
-//!   it replaces), with Extended's Pet Effects on.
+//!   34 a buff), eight in a row at the strip's size (the game's strip holds
+//!   eight); more at three quarters of it, ten to a row, a second row under the
+//!   first for eleven to twenty (jibrish, 2026-11-22: "when too many buffs are
+//!   on the players themselves, scale down the icons a bit": `player_size`);
+//!   the pet's under them in a row of their own at half the size (the art of
+//!   the row under the pet's bar, which it replaces), with Extended's Pet
+//!   Effects on.
 //! - The mouse and a finger (a GM's petition 1809, 2026-11-12: "Make
 //!   it right click to remove, and left click to unselect"): a left click (a
 //!   tap) on a buff selects it, its name and its time left shown under the rows
@@ -37,11 +40,28 @@ use vi::ui::{FrameParam, Raster, Vui, Window, icon_id, wide};
 
 /// The strip's place (`VIWndGame::Init`'s for `VIWndInfluence`).
 pub const AT: [i32; 2] = [143, 15];
-/// Buffs to a row, and the player's rows at most.
+/// Buffs to a row at the strip's size, and the player's rows at most (the
+/// pet's row's index).
 pub const PER_ROW: usize = 8;
 pub const PLAYER_ROWS: usize = 2;
-/// A player's row's stride: a cell's 34 and the 4 its icons hang below it.
+/// A player's row's stride at the strip's size: a cell's 34 and the 4 its
+/// icons hang below it.
 pub const ROW_H: i32 = 38;
+/// The player's rows by how many buffs it has (jibrish, 2026-11-22: "when too
+/// many buffs are on the players themselves, scale down the icons a bit"): each
+/// a scale, buffs to a row and rows at most, the first that holds them all
+/// taken (`player_size`). Eight or fewer: the strip's own size in one row, the
+/// game's; more: three quarters of it, ten to a row (no wider than the eight),
+/// in two rows. Past the last's twenty the rest are left out (go-eqoa-server
+/// sends 16 at most).
+pub const PLAYER_SIZES: [(f32, usize, usize); 2] = [(1.0, PER_ROW, 1), (0.75, 10, PLAYER_ROWS)];
+
+/// The scale, buffs to a row and rows at most for `n` of the player's buffs
+/// (`PLAYER_SIZES`).
+pub fn player_size(n: usize) -> (f32, usize, usize) {
+    let last = PLAYER_SIZES[PLAYER_SIZES.len() - 1];
+    PLAYER_SIZES.into_iter().find(|&(_, per, rows)| n <= per * rows).unwrap_or(last)
+}
 /// The pet's row's scale, and its height (`hud::PET_FX_ROW_H`'s).
 pub const PET_SCALE: f32 = 0.5;
 pub const PET_ROW_H: i32 = 20;
@@ -61,10 +81,13 @@ pub struct Cell {
 
 /// The cells for `lines` (the player's first, then the pet's), `cell_w` the
 /// strip's cell's width and `cap_w` its left cap's: each row starts after a
-/// cap, its cells side by side, the last 3 narrower as the strip's last is.
-/// The pet's row only when `pets` (Pet Effects on).
+/// cap, its cells side by side, the last 3 narrower as the strip's last is,
+/// the player's at the scale its count takes (`player_size`). The pet's row
+/// only when `pets` (Pet Effects on). A cell's scale is its height over 34.
 pub fn layout(lines: &[Line], cell_w: i32, cap_w: i32, pets: bool) -> Vec<Cell> {
-    let mine: Vec<usize> = (0..lines.len()).filter(|&i| lines[i].whose == ON_PLAYER).take(PER_ROW * PLAYER_ROWS).collect();
+    let n = lines.iter().filter(|l| l.whose == ON_PLAYER).count();
+    let (k, per_row, most_rows) = player_size(n);
+    let mine: Vec<usize> = (0..lines.len()).filter(|&i| lines[i].whose == ON_PLAYER).take(per_row * most_rows).collect();
     let theirs: Vec<usize> = if pets { (0..lines.len()).filter(|&i| lines[i].whose == ON_PET).take(PER_ROW).collect() } else { Vec::new() };
     let mut out = Vec::new();
     let row_of = |idx: &[usize], row: usize, y: f32, k: f32, out: &mut Vec<Cell>| {
@@ -75,19 +98,25 @@ pub fn layout(lines: &[Line], cell_w: i32, cap_w: i32, pets: bool) -> Vec<Cell> 
             x += w as f32 * k;
         }
     };
-    let rows = mine.len().div_ceil(PER_ROW);
-    for (row, chunk) in mine.chunks(PER_ROW).enumerate() {
-        row_of(chunk, row, (AT[1] + row as i32 * ROW_H) as f32, 1.0, &mut out);
+    let rows = mine.len().div_ceil(per_row);
+    for (row, chunk) in mine.chunks(per_row).enumerate() {
+        row_of(chunk, row, AT[1] as f32 + row as f32 * ROW_H as f32 * k, k, &mut out);
     }
     if !theirs.is_empty() {
-        row_of(&theirs, PLAYER_ROWS, (AT[1] + rows as i32 * ROW_H) as f32, PET_SCALE, &mut out);
+        row_of(&theirs, PLAYER_ROWS, AT[1] as f32 + rows as f32 * ROW_H as f32 * k, PET_SCALE, &mut out);
     }
     out
 }
 
+/// A cell's scale: its height over the strip's 34.
+fn scale_of(c: &Cell) -> f32 {
+    c.r[3] / 34.0
+}
+
 /// The window's foot in the frame: under its last row.
 pub fn bottom(cells: &[Cell]) -> i32 {
-    cells.iter().map(|c| if c.row == PLAYER_ROWS { c.r[1] as i32 + PET_ROW_H } else { c.r[1] as i32 + ROW_H }).max().unwrap_or(AT[1])
+    let foot = |c: &Cell| if c.row == PLAYER_ROWS { c.r[1] + PET_ROW_H as f32 } else { c.r[1] + ROW_H as f32 * scale_of(c) };
+    cells.iter().map(|c| foot(c).ceil() as i32).max().unwrap_or(AT[1])
 }
 
 /// A time left as it is shown: "1h 05m", "12:34", "45s"; none for no end.
@@ -259,7 +288,7 @@ impl BuffWnd {
     pub fn point(&mut self, p: [f32; 2], now: i64, right: bool, finger: bool, cues: &mut Vec<i32>) -> Option<Option<Line>> {
         let at = self.cells.iter().find(|c| {
             let (x, y) = (p[0] - self.off[0], p[1] - self.off[1]);
-            x >= c.r[0] && x < c.r[0] + c.r[2] && y >= c.r[1] && y < c.r[1] + c.r[3] + if c.row == PLAYER_ROWS { 2.0 } else { 4.0 }
+            x >= c.r[0] && x < c.r[0] + c.r[2] && y >= c.r[1] && y < c.r[1] + c.r[3] + 4.0 * scale_of(c)
         });
         let Some(l) = at.and_then(|c| self.lines.get(c.line)).cloned() else {
             if !right && !self.focused {
@@ -315,7 +344,7 @@ impl BuffWnd {
         rows.dedup();
         for row in rows {
             let rc: Vec<&Cell> = cells.iter().filter(|c| c.row == row).collect();
-            let k = if row == PLAYER_ROWS { PET_SCALE } else { 1.0 };
+            let k = scale_of(rc[0]);
             let (x0, y) = (rc[0].r[0] - cap_l.uv1[0] as f32 * k, rc[0].r[1]);
             pieces.push(FxPiece { art: FxArt::Entry(159, cap_l.uv1), r: [x0, y, cap_l.uv1[0] as f32 * k, cap_l.uv1[1] as f32 * k] });
             for c in &rc {
@@ -339,7 +368,7 @@ impl BuffWnd {
         // focused with none selected: the highlight framed and the keys only
         let info = !self.focused || self.chosen;
         let Some(c) = cells.iter().find(|c| c.line == i).copied() else { return };
-        let k = if c.row == PLAYER_ROWS { PET_SCALE } else { 1.0 };
+        let k = scale_of(&c);
         let (x0, y0) = ((c.r[0] + 2.0 * k) as i32, (c.r[1] + 5.0 * k) as i32);
         let (x1, y1) = (x0 + (34.0 * k) as i32, y0 + (34.0 * k) as i32);
         let gold = [1.0, 0.85, 0.2, 1.0];
@@ -396,23 +425,38 @@ mod tests {
         (1..=mine).map(|i| line(ON_PLAYER, i, i % 5 != 0)).chain((1..=pets).map(|i| line(ON_PET, 100 + i, true))).collect()
     }
 
-    /// Eight to a row, a second row for nine to sixteen, the pet's under them at
-    /// half the size; the pet's row only with Pet Effects on (the control).
+    /// Eight or fewer at the strip's size in one row; more at three quarters,
+    /// ten to a row, a second row for eleven to twenty, no wider than the
+    /// eight (jibrish, 2026-11-22: "scale down the icons a bit"); the pet's
+    /// under them at half the size; the pet's row only with Pet Effects on
+    /// (the control). Each cell's scale is its height's (`scale_of`).
     #[test]
-    fn the_rows_hold_two_of_the_players_and_one_of_the_pets() {
+    fn the_rows_shrink_past_eight_and_hold_the_pets_under_them() {
+        let full = layout(&set(8, 0), 37, 13, true);
+        assert_eq!(full.len(), 8);
+        assert_eq!((full[0].row, full[0].r), (0, [156.0, 15.0, 37.0, 34.0]), "eight: the strip's size");
+        assert_eq!((full[7].row, full[7].r), (0, [415.0, 15.0, 34.0, 34.0]), "one row, its last 3 narrower");
         let l = set(11, 3);
         let c = layout(&l, 37, 13, true);
         assert_eq!(c.len(), 14);
-        assert_eq!((c[0].row, c[0].r), (0, [156.0, 15.0, 37.0, 34.0]));
-        assert_eq!((c[7].row, c[7].r[2]), (0, 34.0), "the row's last is 3 narrower");
-        assert_eq!((c[8].row, c[8].col, c[8].r[1]), (1, 0, 53.0));
-        assert_eq!((c[11].row, c[11].r), (2, [149.5, 91.0, 18.5, 17.0]), "the pet's at half, under both");
-        assert_eq!(bottom(&c), 111);
+        assert_eq!((c[0].row, c[0].r), (0, [152.75, 15.0, 27.75, 25.5]), "eleven: three quarters");
+        assert_eq!((c[9].row, c[9].r[2]), (0, 25.5), "ten to the row, its last 3 narrower");
+        assert_eq!((c[10].row, c[10].col, c[10].r[1]), (1, 0, 43.5), "the eleventh on a second row");
+        assert_eq!((c[11].row, c[11].r), (2, [149.5, 72.0, 18.5, 17.0]), "the pet's at half, under both");
+        assert_eq!(bottom(&c), 92);
+        let right = |c: &[Cell]| c.iter().filter(|c| c.row < PLAYER_ROWS).map(|c| c.r[0] + c.r[2]).fold(0.0, f32::max);
+        assert!(right(&c) <= right(&full), "no wider than the eight: {} > {}", right(&c), right(&full));
+        let nine = layout(&set(9, 0), 37, 13, true);
+        assert!(nine.len() == 9 && nine.iter().all(|c| c.row == 0 && c.r[3] == 25.5), "nine: one row, smaller");
         let one = layout(&set(3, 2), 37, 13, true);
         assert_eq!(one[3].r[1], 53.0, "one row of the player's: the pet's right under it");
         assert_eq!(layout(&l, 37, 13, false).len(), 11, "Pet Effects off: no pet row");
-        assert_eq!(layout(&set(20, 0), 37, 13, true).len(), 16, "two rows at most");
+        assert_eq!(layout(&set(20, 0), 37, 13, true).len(), 20, "two rows of ten");
+        assert_eq!(layout(&set(25, 0), 37, 13, true).len(), 20, "past twenty the rest left out");
         assert!(layout(&[], 37, 13, true).is_empty());
+        assert_eq!(player_size(8), (1.0, 8, 1));
+        assert_eq!(player_size(9), (0.75, 10, 2));
+        assert_eq!(player_size(16), (0.75, 10, 2), "the server's most");
     }
 
     #[test]
@@ -430,7 +474,7 @@ mod tests {
     /// go. The control: unfocused, no key is the bar's.
     #[test]
     fn the_dpad_walks_the_buffs_and_takes_one_off() {
-        let l = set(10, 2);
+        let l = set(12, 2);
         let mut b = BuffWnd::default();
         let mut cues = Vec::new();
         assert_eq!(b.key(137, &l, true, &mut cues), (false, None), "unfocused: not the bar's");
@@ -447,11 +491,11 @@ mod tests {
         b.key(137, &l, true, &mut cues);
         assert_eq!(lit(&b), Some(3));
         b.key(139, &l, true, &mut cues);
-        assert_eq!(lit(&b), Some(10), "down: the second row's nearest (it has two)");
+        assert_eq!(lit(&b), Some(12), "down: the second row's nearest (it has two)");
         b.key(139, &l, true, &mut cues);
         assert_eq!(lit(&b), Some(102), "down: the pet's row's nearest");
         assert_eq!(b.key(134, &l, true, &mut cues), (true, None), "✕ never removes");
-        assert_eq!(b.key(133, &l, true, &mut cues), (true, Some(l[11].clone())), "□: the pet's buff off");
+        assert_eq!(b.key(133, &l, true, &mut cues), (true, Some(l[13].clone())), "□: the pet's buff off");
         b.key(138, &l, true, &mut cues);
         b.key(138, &l, true, &mut cues);
         b.key(136, &l, true, &mut cues);

@@ -634,6 +634,23 @@ pub const OP_PET_EFFECTS: u16 = 0x7E32;
 /// its name (a u8 byte count and UTF-8), in the order they went on. Each is the
 /// whole set; none, no pet.
 pub const OP_PET_EFFECTS_DATA: u16 = 0x7E33;
+/// go-eqoa-server's own: the effects on each of the player's group members, for
+/// the tiny icons beside their bars (jibrish, 2026-11-22: "add very small / tiny
+/// icon versions for the buffs group members have"; `Play::member_effects`,
+/// `hud::member_effects_pieces`). A u32 after the opcode, both ways, as
+/// [`OP_PET_EFFECTS`]: offered once the player is in the world, answered 1 to
+/// have them and 0 to stop, at once and whenever that changes
+/// (`agree_group_effects`, the Extended page's Group Effects). CLIENT shows no
+/// one's effects but the player's own (channel 0x43), so a PS2 ignores the
+/// offer and is sent none; nothing is asked of a server that made no offer.
+pub const OP_GROUP_EFFECTS: u16 = 0x7EC0;
+/// The members' effects, from a server the client asked ([`OP_GROUP_EFFECTS`]),
+/// whenever they change: a u8 count of members, then each its u32 id (as the
+/// group's roster names it, [`Session::power_of`]'s ids) and a u8 count of
+/// icons, each a u32 (a DictID, as channel 0x43's), in the order they went on
+/// (what the member's own buff window shows, at most 16). Each is the whole
+/// set: a member it leaves out has none.
+pub const OP_GROUP_EFFECTS_DATA: u16 = 0x7EC1;
 /// go-eqoa-server's own: what made each figure, for the Extended page's Number
 /// Colors (`Play::damage_indication`; the user, 2026-11-09: "we can add the
 /// number colors to extended menu"). The offer, server to client once the
@@ -793,6 +810,19 @@ fn read_pet_effects(r: &mut Reader) -> Option<Vec<PetEffect>> {
         let len = r.u8() as usize;
         let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
         out.push(PetEffect { icon, left_ms, name });
+    }
+    (!r.error).then_some(out)
+}
+
+/// [`OP_GROUP_EFFECTS_DATA`]'s body, each member's id and icons, or None when
+/// it is short.
+fn read_group_effects(r: &mut Reader) -> Option<Vec<(u32, Vec<u32>)>> {
+    let n = r.u8() as usize;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let id = r.u32();
+        let k = r.u8() as usize;
+        out.push((id, (0..k).map(|_| r.u32()).collect()));
     }
     (!r.error).then_some(out)
 }
@@ -1540,6 +1570,12 @@ pub struct Session {
     pet_effects_asked: Option<bool>,
     pub pet_effects: Vec<PetEffect>,
     pub pet_effects_at: u32,
+    /// The same for the group members' effects ([`OP_GROUP_EFFECTS`],
+    /// [`OP_GROUP_EFFECTS_DATA`]): each member's id and its icons
+    /// (`effects_of`).
+    pub group_effects_offer: bool,
+    group_effects_asked: Option<bool>,
+    pub group_effects: Vec<(u32, Vec<u32>)>,
     /// Whether the server offered the number tags ([`OP_NUMBER_TAGS_OFFER`])
     /// on this connection, and what it was last told (none since the offer).
     pub number_tags_offer: bool,
@@ -1778,6 +1814,9 @@ impl Session {
             pet_effects_asked: None,
             pet_effects: Vec::new(),
             pet_effects_at: 0,
+            group_effects_offer: false,
+            group_effects_asked: None,
+            group_effects: Vec::new(),
             number_tags_offer: false,
             number_tags_layout: 0,
             number_tags_asked: None,
@@ -2089,6 +2128,27 @@ impl Session {
         }
         self.pet_effects_asked = Some(want);
         self.send_op_int(OP_PET_EFFECTS, want as u32);
+    }
+
+    /// Group Effects: a server that offered the members' effects
+    /// ([`OP_GROUP_EFFECTS`]) is told whether to send them (`want`), as
+    /// [`Session::agree_pet_effects`] tells it of the pet's. Off, the set it
+    /// sent is forgotten.
+    pub fn agree_group_effects(&mut self, want: bool) {
+        if !want {
+            self.group_effects.clear();
+        }
+        if !self.group_effects_offer || self.group_effects_asked == Some(want) {
+            return;
+        }
+        self.group_effects_asked = Some(want);
+        self.send_op_int(OP_GROUP_EFFECTS, want as u32);
+    }
+
+    /// The icons of the effects on group member `id` (as the roster names it)
+    /// the server last sent, in their order; none for a member it sent none of.
+    pub fn effects_of(&self, id: u32) -> &[u32] {
+        self.group_effects.iter().find(|(i, _)| *i == id).map_or(&[], |(_, icons)| icons.as_slice())
     }
 
     /// Number Colors: a server that offered the number tags
@@ -2640,6 +2700,9 @@ impl Session {
                 self.pet_effects_offer = false;
                 self.pet_effects_asked = None;
                 self.pet_effects.clear();
+                self.group_effects_offer = false;
+                self.group_effects_asked = None;
+                self.group_effects.clear();
                 self.buffs_offer = false;
                 self.buffs_asked = None;
                 self.buffs.clear();
@@ -3295,6 +3358,20 @@ impl Session {
                 if let Some(set) = read_pet_effects(&mut r) {
                     self.pet_effects = set;
                     self.pet_effects_at = self.now();
+                }
+            }
+            // the members' effects offered (again at every world entry), as
+            // the pet's: told afresh what the client wants (`agree_group_effects`)
+            OP_GROUP_EFFECTS => {
+                r.u32();
+                if !r.error {
+                    self.group_effects_offer = true;
+                    self.group_effects_asked = None;
+                }
+            }
+            OP_GROUP_EFFECTS_DATA => {
+                if let Some(set) = read_group_effects(&mut r) {
+                    self.group_effects = set;
                 }
             }
             // the number tags offered (again at every world entry): told
@@ -5214,6 +5291,61 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x32, 0x7E, 1, 0, 0, 0]);
         s.agree_pet_effects(true);
         assert_eq!(answers(&mut s), [(251, vec![0x32, 0x7E, 1, 0, 0, 0])], "its offer answered");
+    }
+
+    // The group members' effects (go-eqoa-server's 0x7EC0/0x7EC1): nothing
+    // asked with no offer (the control); an offer answered at once with what is
+    // wanted and again only when that changes; a set read whole, each member's
+    // icons by its id (none for a member it leaves out), a short set not taken;
+    // off, stopped and forgotten; a new connection asks nothing until it is
+    // offered again.
+    #[test]
+    fn group_effects_offer_answer_and_set() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.starts_with(&[0xC0, 0x7E])).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        s.agree_group_effects(true);
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xC0, 0x7E, 1, 0, 0, 0]);
+        s.agree_group_effects(true);
+        s.agree_group_effects(true);
+        assert_eq!(answers(&mut s), [(251, vec![0xC0, 0x7E, 1, 0, 0, 0])], "asked once");
+
+        let member = |m: &mut Vec<u8>, id: u32, icons: &[u32]| {
+            m.extend_from_slice(&id.to_le_bytes());
+            m.push(icons.len() as u8);
+            for i in icons {
+                m.extend_from_slice(&i.to_le_bytes());
+            }
+        };
+        let mut m = vec![0xC1, 0x7E, 2];
+        member(&mut m, 100_001, &[0xA1B2_C3D4, 0x0BAD_F00D]);
+        member(&mut m, 0x8000_1234, &[]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
+        assert_eq!(s.effects_of(100_001), [0xA1B2_C3D4, 0x0BAD_F00D], "in their order");
+        assert_eq!(s.effects_of(0x8000_1234), [] as [u32; 0], "a bare member");
+        assert_eq!(s.effects_of(7), [] as [u32; 0], "the control: one it left out has none");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 3].to_vec());
+        assert_eq!(s.group_effects.len(), 2, "a short set is not taken");
+        assert_eq!(s.effects_of(100_001).len(), 2, "and the last kept");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xC1, 0x7E, 0]);
+        assert!(s.group_effects.is_empty(), "out of the group: an empty set");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, m);
+        s.agree_group_effects(false);
+        assert_eq!(answers(&mut s), [(251, vec![0xC0, 0x7E, 0, 0, 0, 0])], "and stopped");
+        assert!(s.group_effects.is_empty(), "off: the set forgotten");
+
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        s.agree_group_effects(true);
+        assert_eq!(answers(&mut s), [], "a new connection: nothing asked before its offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xC0, 0x7E, 1, 0, 0, 0]);
+        s.agree_group_effects(true);
+        assert_eq!(answers(&mut s), [(251, vec![0xC0, 0x7E, 1, 0, 0, 0])], "its offer answered");
     }
 
     // The number tags (go-eqoa-server's 0x7E38/0x7E39): nothing asked with no

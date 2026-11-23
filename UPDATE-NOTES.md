@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-22 · Your group's buffs on their bars, and a smaller buff bar when you have many
+- On a server that sends them, each group member's buffs now show as tiny icons on their bar in the group window, to the right of their health and power. Extended > UI > Group & Raid > Group Effects turns them off.
+- With more than eight buffs on you, the buff window's icons shrink a little so ten fit in a row (two rows hold twenty), instead of a second full-size row taking up more of the screen.
+
 ## 2026-11-22 · Auto-cast fires damage spells that read like buffs
 - Marking a damage spell or debuff auto now makes it an attack, cast at your target in a fight, for spells whose description reads partly like a buff: Lightning Blast, Supernova, Lightning Nova, Lightning Storm, Lightning Maelstrom, Mana Blast, Dissipate, the bards' Blades, the alchemists' fire and mix potions, and others. Before, they were taken for buffs, cast at yourself, refused by the server, and switched off after three tries.
 - A slot still marked from before is switched off the old way once; mark it auto again (or type /autocast Lightning Blast attack) and it stays an attack.
