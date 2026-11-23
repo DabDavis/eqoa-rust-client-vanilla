@@ -468,6 +468,10 @@ fn shift_in(s: &State, piece: Piece, b: Beyond) -> [f32; 2] {
             Some(offset) => offset,
             None => return [0.0; 2],
         },
+        // At the original Controller positions the minimap's roller ends
+        // exactly where the carousel's vertical frame starts (x = 589).
+        None if piece == Piece::Minimap && crate::settings::minimap_scroll()
+            && s.layout.get(Piece::QuickMenus).is_none() && s.drawn[Piece::QuickMenus.index()].is_some() => [-4.0, 0.0],
         None => return [0.0; 2],
     };
     match s.natural[piece.index()] {
@@ -1031,6 +1035,23 @@ mod tests {
         assert!(release());
         assert_eq!(crate::settings::chat_pane_size(2), (60, 5));
         assert_eq!(crate::settings::chat_pane_size(0), (75, 7));
+    }
+
+    #[test]
+    fn controller_minimap_leaves_a_gutter_beside_the_stock_carousel() {
+        crate::settings::testing::reset(false);
+        testing_reset();
+        assert_eq!(shift(Piece::Minimap, WIDE), [0.0; 2]);
+        with(|s| s.drawn[Piece::QuickMenus.index()] = Some([536.0, 13.0, 741.0, 186.0]));
+        assert_eq!(shift(Piece::Minimap, WIDE), [-4.0, 0.0]);
+        let moved = Place { h: Edge::End, v: Edge::Start, dx: -62.0, dy: 12.0 };
+        with(|s| s.layout.set(Piece::Minimap, Some(moved)));
+        assert_eq!(shift(Piece::Minimap, WIDE), [-62.0, 12.0]);
+        with(|s| {
+            s.layout = Layout::default();
+            s.layout.set(Piece::QuickMenus, Some(moved));
+        });
+        assert_eq!(shift(Piece::Minimap, WIDE), [0.0; 2]);
     }
 
     #[test]

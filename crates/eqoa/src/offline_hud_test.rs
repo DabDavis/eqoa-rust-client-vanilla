@@ -90,8 +90,7 @@ fn offline_pc_and_controller_hud_png() {
         let path = output.join(name);
         let size = if narrow { (640, 480) } else { (960, 540) };
         crate::viewer::shot_with(&mut lib, &src, None, Some(script), size, path.to_str().unwrap(), Some(fixture_play(&icon_ids))).expect("offline HUD capture");
-        if narrow {
-            eprintln!("offline HUD screen {:?}, pieces {:?}", crate::hudlayout::Beyond::of(size).screen(), crate::hudlayout::drawn_all());
-        }
+        eprintln!("{} HUD screen {:?}, pieces {:?}", if pc { "PC" } else { "Controller" },
+            crate::hudlayout::Beyond::of(size).screen(), crate::hudlayout::drawn_all());
     }
 }
