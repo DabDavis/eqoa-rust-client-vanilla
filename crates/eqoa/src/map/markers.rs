@@ -752,7 +752,9 @@ mod tests {
         let odus = CAMPS.iter().find(|c| c.world == 2).unwrap().at;
         assert!(!grid([odus[0] - 20000.0, odus[1] + 40000.0]), "the control: off the grid");
         assert_eq!(of_world(0).filter(|m| matches!(m, Marker::Coach(_))).count(), 30);
-        assert_eq!(of_world(1).collect::<Vec<_>>().len(), 2, "Dilga and the Cyclops' Fortress hobgoblins");
+        // the Rathe: Dilga, the Cyclops' Fortress hobgoblins and the server's census camps there (its gen_camp_teles.py CENSUS_CAMPS)
+        assert_eq!(of_world(1).filter(|m| matches!(m, Marker::Coach(_))).count(), 1, "Dilga, the Rathe's one coach");
+        assert!(of_world(1).filter(|m| matches!(m, Marker::Camp(_))).count() > 10, "the Rathe's camps");
         assert!(of_world(1).any(|m| matches!(m, Marker::Camp(i) if CAMPS[i].name == "Hobgoblins (Cyclops' Fortress)" && CAMPS[i].levels == (46, 50))));
         // the FAQ's camps (go-eqoa-server's faq_camps_20261114.py), and its re-levelled camps at its levels
         for (name, levels) in [("Frosteye Orcs (the excavation)", (54, 57)), ("Tae Ew Aggressors", (33, 37)), ("Desert Bandits", (60, 62)),

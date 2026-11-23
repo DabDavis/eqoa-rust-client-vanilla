@@ -292,6 +292,11 @@ def main():
     for man in sorted(spawns):
         world, x, z = spawns[man]
         town = served.get(man) or EXTRA_TOWNS.get(man, "")
+        if not town:
+            # a coachman the server names no town for (a GM's own, e.g. the Rathe's Coach Rubgar, Saca, the Homelands' coachmen):
+            # no route to draw, and the map's coaches there are the game's own
+            print(f"coach {man:22} left out: no town, world {world}", file=sys.stderr)
+            continue
         to = runs(town) if town else []
         coaches.append(dict(man=man, town=town, world=int(world), at=(float(x), float(z)), to=to))
         print(f"coach {man:22} {town or '-':20} w{world} ({x:.0f}, {z:.0f}) -> {to}", file=sys.stderr)
