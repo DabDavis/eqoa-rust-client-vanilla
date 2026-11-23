@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-23 · Sandstorms no longer flash clear
+- **A heavy sandstorm (or whiteout or snowstorm) no longer goes clear for a moment** when you turn the camera. The storm now thins and thickens smoothly: a storm that really ends fades out over a couple of seconds instead of vanishing in one frame.
+- **Walking under an arch, a palm or an awning in a storm** now eases the storm back over about a second instead of jumping between thick and thin.
+
 ## 2026-11-23 · No more falling through blue space after dying in one world and waking in another
 - When you die and your bind point is in another world (or the server moves you to another world), you now wait on the loading screen until that world is in, standing still, then wake at your bind point. Before, especially in the web page, your character could be put back where you died but in the new world, with no ground under it, and fall through empty blue space until you logged out.
 - If the new world's files still have not come after half a minute, the game tries reading them once more. If that fails too, you are logged out where the server has you and told why, instead of being left on the loading screen or in the void.

@@ -232,6 +232,53 @@ impl Zones {
     }
 }
 
+/// How fast a storm drawn may thin: its weights fall at most this much a
+/// second (heavy to clear in 2 s; the server's quickest fade is 1 s). The
+/// game never changes its weather within a frame either: its own fades run
+/// over 30 s (`ProcessTransitions`, `p608` a 30th a second).
+pub const FALL_PER_S: f32 = 0.5;
+
+/// The weather drawn this frame from the one drawn `dt_s` seconds before
+/// (`drawn`) and the sample now (`now`): each weight rises to the sample's at
+/// once and falls toward it no faster than `FALL_PER_S`, so a sample that
+/// reads clear for a frame (the owner, 2026-11-23: "sometimes in a heavy sand
+/// storm when you rotate the camera you can see clear for a frame") thins
+/// the storm by a hundredth, not to nothing. The wind, seed and time are the
+/// sample's while it has weather, else the last drawn's.
+pub fn hold(drawn: &Sample, now: &Sample, dt_s: f32) -> Sample {
+    let fall = FALL_PER_S * dt_s.max(0.0);
+    let held = |d: f32, n: f32| n.max(d - fall).max(0.0);
+    let mut s = if now.intensity() > 0.0 { *now } else { Sample { wind: drawn.wind, seed: drawn.seed, time_s: drawn.time_s, ..Default::default() } };
+    s.rain = held(drawn.rain, now.rain);
+    s.snow = held(drawn.snow, now.snow);
+    s.sand = held(drawn.sand, now.sand);
+    s.whiteout = held(drawn.whiteout, now.whiteout);
+    s
+}
+
+/// Whether env flags off the camera's leaf (`GetEnvFlags`) put it in a
+/// liquid, where a storm's fog gives way to the game's own: water, slime,
+/// lava or mud (1, 2, 4, 8). A place in no leaf (`!0`, the game's answer
+/// there) is no liquid to a storm: the camera passing such a place for a
+/// frame does not lift it.
+pub fn in_liquid(flags: u32) -> bool {
+    flags != !0 && flags & 0xF != 0
+}
+
+/// How fast the roof's hold on a storm comes and goes (`roofed`): all of it
+/// in a second.
+pub const ROOF_PER_S: f32 = 1.0;
+
+/// A storm's fog (near, far) under `roof` (0 to 1: how much a roof over the
+/// character holds it off, eased by `ROOF_PER_S`): at all of it the near
+/// kept off to 6 and the far four times, between in proportion. A roof the
+/// probe (every 100 ms) finds for one probe moves it a tenth, not to four
+/// times at once.
+pub fn roofed(near: f32, far: f32, roof: f32) -> (f32, f32) {
+    let k = roof.clamp(0.0, 1.0);
+    (near + (near.max(6.0) - near) * k, far * (1.0 + 3.0 * k))
+}
+
 /// The storms' fog: its distances, its colour, how much weather there is,
 /// and how far the sky moves toward the colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -476,6 +523,66 @@ mod tests {
         assert!(z.preview.is_some());
         assert!(z.set_world(2), "another world ends it");
         assert_eq!(z.sample(2, 0.0, 0.0, 0), Sample::default());
+    }
+
+    /// A heavy sandstorm whose sample reads clear for one frame at 165 Hz (or
+    /// at 30) is drawn as thick as before but a hair, then as heavy again:
+    /// its fog's far moves by under 1%, never to none. Held, it thins at
+    /// `FALL_PER_S` (clear in 2 s) when the storm really ends; it thickens at
+    /// once. The control: the sample alone, which had no fog that frame.
+    #[test]
+    fn a_storm_never_drops_for_a_frame() {
+        let heavy = Sample { sand: 1.0, wind: [4.0, 1.0], seed: 7, time_s: 3.0, ..Default::default() };
+        let clear = Sample::default();
+        assert_eq!(fog(&clear, 12.0), None, "the control: the sample alone has no fog that frame");
+        for hz in [30.0f32, 165.0] {
+            let dt = 1.0 / hz;
+            let drawn = hold(&heavy, &heavy, dt);
+            assert_eq!(drawn, heavy, "steady: the sample");
+            let blink = hold(&drawn, &clear, dt);
+            let f = fog(&blink, 12.0).expect("a storm still drawn");
+            let far = fog(&heavy, 12.0).unwrap().far;
+            assert!(f.far >= far && f.far < far * 1.04, "{hz} Hz: far {} against {far}", f.far);
+            assert_eq!((blink.wind, blink.seed), (heavy.wind, heavy.seed), "its wind kept");
+            assert_eq!(hold(&blink, &heavy, dt), heavy, "{hz} Hz: back at once");
+        }
+        // a storm that ends thins over 2 s, whatever the frame rate
+        for hz in [30.0f32, 165.0] {
+            let mut d = heavy;
+            let mut t = 0.0;
+            while d.intensity() > 0.0 {
+                d = hold(&d, &clear, 1.0 / hz);
+                t += 1.0 / hz;
+            }
+            assert!((t - 1.0 / FALL_PER_S).abs() < 0.05, "{hz} Hz: clear after {t} s");
+        }
+        // a lighter sample is followed down at the rate, a heavier up at once
+        let half = Sample { sand: 0.5, ..heavy };
+        assert!((hold(&heavy, &half, 0.1).sand - 0.95).abs() < 1e-6);
+        assert_eq!(hold(&half, &heavy, 0.1).sand, 1.0);
+    }
+
+    /// A liquid at the camera gives the storm's fog way to the game's; a
+    /// place in no leaf (`!0`) is none. The control: every liquid bit.
+    #[test]
+    fn a_leaf_missed_is_no_liquid() {
+        assert!(!in_liquid(!0), "no leaf: the storm stays");
+        assert!(!in_liquid(0));
+        for b in [1, 2, 4, 8] {
+            assert!(in_liquid(b), "the control: liquid {b}");
+        }
+    }
+
+    /// A roof found for one probe (100 ms) holds a heavy sand's fog (3.2 to
+    /// 40) off by a tenth: the far 52, not 160. The control: a roof held a
+    /// second, the old figures (near 6, far four times).
+    #[test]
+    fn a_roof_for_one_probe_barely_moves_the_fog() {
+        assert_eq!(roofed(3.2, 40.0, 0.0), (3.2, 40.0));
+        let (n, f) = roofed(3.2, 40.0, 0.1 * ROOF_PER_S);
+        assert!((f - 52.0).abs() < 1e-4 && n < 3.5, "{n} {f}");
+        assert_eq!(roofed(3.2, 40.0, 1.0), (6.0, 160.0), "the control: a roof held");
+        assert_eq!(roofed(10.0, 100.0, 1.0), (10.0, 400.0), "a near past 6 kept");
     }
 
     /// A plate fades across the fog and is gone past it.
