@@ -181,7 +181,11 @@ def main():
     # the camps go-eqoa-server's FAQ camps tool re-levelled (its gen_camp_teles.py FAQ_LEVELED): their levels
     # here, the FAQ's, not the guide's (the owner, 2026-11-14)
     relevelled = set(getattr(teles, "FAQ_LEVELED", ()))
+    extras = []  # the server's camps placed by hand (gen_camp_teles.py EXTRA_CAMPS: no guide point on the map)
     for key, (gx, gz, world, label, here) in placed.items():
+        if key not in specs:
+            extras.append((key, gx, gz, world, label, here))
+            continue
         spec = specs[key]
         pts = [q for q in zones["pois"] if q["category"] == "camp" and q["name"] == spec[2] and q.get("note")]
         if spec[3] is not None:
@@ -215,6 +219,15 @@ def main():
         (fa, fb, fc, fd), kept, n, med = teles.fit(pairs)
         fits[w] = (fa, fb, fc, fd)
         print(f"world {w}: game x = {fa:.5f} map x + {fb:.1f}, z = {fc:.5f} map y + {fd:.1f} ({kept} of {n} camps, median {med:.0f} off)", file=sys.stderr)
+
+    # the hand-placed camps, drawn as the map's other camps at their place (the map point the camp fit's inverse)
+    for key, gx, gz, world, label, here in extras:
+        if world not in fits:
+            continue
+        fa, fb, fc, fd = fits[world]
+        lo, hi = level_range(here) if here else (0, 0)
+        others.append(dict(key=key, name=label[0].upper() + label[1:], label=label, world=world, at=(gx, gz),
+                           map=((gx - fb) / fa, (gz - fd) / fc), lo=lo, hi=hi, note="", guide=False))
 
     # the map's other camps under the guide's (drawn first, so a guide camp's
     # badge is over theirs)
