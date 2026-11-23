@@ -40,8 +40,64 @@ use vi::geom::Matrix44;
 use vi::hsprite::{AnimScene, HSprite};
 
 /// Past this the screen comes down whatever is still out (a read that never
-/// answers): the client's, where the game would wait for good.
+/// answers): the client's, where the game would wait for good. Not while
+/// another world's file is still being read: the walk let go then would walk
+/// the old world under the new one's number (petition 5512); those reads are
+/// given up by the viewer instead ([`Reads`]), which logs out.
 pub const CAP_MS: i64 = 60_000;
+
+/// How long a world change's reads may take before they are begun again
+/// ([`Reads`]): a page's took 4 s for the Rathe on a live server.
+pub const READS_TRY_MS: i64 = 30_000;
+/// How many times a world change's reads are begun before it is given up
+/// (`Play::world_change_failed`: logged out where the server has the player).
+pub const READS_TRIES: u32 = 2;
+
+/// What a world change's reads that have not come call for ([`Reads::due`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ReadsDue {
+    /// still within their time
+    Wait,
+    /// begun again (the first never answered)
+    Again,
+    /// given up: the world change failed
+    GiveUp,
+}
+
+/// The clock on a world change's reads (`stream::open_world`): a page's
+/// that never answer are begun once more, then given up, never waited on
+/// for good.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reads {
+    since: i64,
+    tries: u32,
+}
+
+impl Reads {
+    /// Reads begun at `now` (ms).
+    pub fn begun(now: i64) -> Self {
+        Reads { since: now, tries: 1 }
+    }
+
+    /// At `now`, with the reads still out: wait, begin them again (the clock
+    /// starting over), or give up.
+    pub fn due(&mut self, now: i64) -> ReadsDue {
+        if now - self.since < READS_TRY_MS {
+            return ReadsDue::Wait;
+        }
+        if self.tries < READS_TRIES {
+            self.tries += 1;
+            self.since = now;
+            return ReadsDue::Again;
+        }
+        ReadsDue::GiveUp
+    }
+
+    /// How long they have been out in all, at `now`.
+    pub fn waited(&self, now: i64) -> i64 {
+        now - self.since + READS_TRY_MS * (self.tries as i64 - 1)
+    }
+}
 
 /// A move at least this far, or into another world, keeps the screen up at
 /// least `FAR_HOLD_MS`: a PS2 shows it while `EnterWorld` reads the zones
@@ -295,10 +351,11 @@ impl Screen {
     }
 
     /// Where to hold the walk, given where it stands now: the first place it
-    /// stood since the wait began (or the world was entered); none while
-    /// another world is read (the old world's walk is let go).
+    /// stood since the wait began (or the world was entered). While another
+    /// world is read the old world's walk is held too, where it stood: let go,
+    /// it fell and walked there under the new world's number (petition 5512).
     pub fn hold_at(&mut self, now_at: [f32; 3], now_heading: f32) -> Option<([f32; 3], f32)> {
-        let w = self.wait.as_mut().filter(|w| !w.entering)?;
+        let w = self.wait.as_mut()?;
         Some(*w.held.get_or_insert((now_at, now_heading)))
     }
 
@@ -313,7 +370,7 @@ impl Screen {
     pub fn end(&mut self, settled: bool, now: i64) -> Option<Wait> {
         let w = self.wait?;
         let up = now - w.since;
-        if (settled && !w.entering && up >= self.hold) || up >= CAP_MS {
+        if (settled && !w.entering && up >= self.hold) || (up >= CAP_MS && !w.entering) {
             self.wait = None;
             return Some(w);
         }
@@ -537,9 +594,31 @@ mod tests {
         assert_eq!(s.waits_at(), Some([6.0, 0.0, 6.0]));
         assert_eq!(s.end(true, 2300).map(|w| w.respawn), Some(false), "the second move's own: a dump's, as given");
         // the cap
-        s.begin([0.0; 3], 0.0, true, false, 10_000);
+        s.begin([0.0; 3], 0.0, false, false, 10_000);
         assert_eq!(s.end(false, 10_000 + CAP_MS - 1), None);
         assert!(s.end(false, 10_000 + CAP_MS).is_some());
+        // not while another world is read (petition 5512): down, the walk
+        // went on in the old world under the new one's number; the viewer
+        // gives those reads up (`Reads`)
+        s.begin([0.0; 3], 0.0, true, false, 10_000);
+        assert_eq!(s.end(true, 10_000 + CAP_MS * 10), None, "a world change's reads out: still up");
+        s.entered();
+        assert!(s.end(false, 10_000 + CAP_MS * 10).is_some(), "control: entered, the cap ends it");
+    }
+
+    /// A world change's reads that never answer (petition 5512's guard):
+    /// waited `READS_TRY_MS`, begun once more, then given up. The control:
+    /// a moment short of each, still waited on.
+    #[test]
+    fn a_world_changes_reads_are_given_up() {
+        let mut r = Reads::begun(1000);
+        assert_eq!(r.due(1000 + READS_TRY_MS - 1), ReadsDue::Wait, "control: a moment short");
+        assert_eq!(r.due(1000 + READS_TRY_MS), ReadsDue::Again, "begun again");
+        let again = 1000 + READS_TRY_MS;
+        assert_eq!(r.due(again + READS_TRY_MS - 1), ReadsDue::Wait, "control: the second's own time");
+        assert_eq!(r.waited(again + READS_TRY_MS - 1), 2 * READS_TRY_MS - 1);
+        assert_eq!(r.due(again + READS_TRY_MS), ReadsDue::GiveUp, "then given up");
+        assert_eq!(r.due(again + READS_TRY_MS * 5), ReadsDue::GiveUp, "and stays so");
     }
 
     /// A far move's hold (F3 20261025-171303): the screen stays up
@@ -565,8 +644,8 @@ mod tests {
     }
 
     /// The walk is held where it first stood once the wait began (where the
-    /// move put it), not where it drifts to; not at all while another world
-    /// is read; and a new world's walk is held where it starts.
+    /// move put it), not where it drifts to; the old world's where it stood
+    /// while another world is read; and a new world's walk where it starts.
     #[test]
     fn the_walk_is_held_where_the_move_put_it() {
         let mut s = Screen::default();
@@ -577,9 +656,12 @@ mod tests {
         // another move: its own place
         s.begin([9.0, 54.0, 9.0], 2.0, false, true, 10);
         assert_eq!(s.hold_at([9.0, 60.0, 9.0], 2.0), Some(([9.0, 60.0, 9.0], 2.0)));
-        // a world change: the old world's walk is not held; the new one is
+        // a world change: the old world's walk held where it stood (petition
+        // 5512: let go, it fell there under the new world's number), then the
+        // new one where it starts
         s.begin([1.0, 2.0, 3.0], 0.0, true, true, 20);
-        assert_eq!(s.hold_at([9.0, 60.0, 9.0], 2.0), None);
+        assert_eq!(s.hold_at([9.0, 60.0, 9.0], 2.0), Some(([9.0, 60.0, 9.0], 2.0)));
+        assert_eq!(s.hold_at([9.0, 40.0, 9.0], 2.0), Some(([9.0, 60.0, 9.0], 2.0)), "fallen: back");
         s.entered();
         assert_eq!(s.hold_at([1.0, 9.0, 3.0], 0.0), Some(([1.0, 9.0, 3.0], 0.0)));
         // control: a hold that followed the walk would not take it back

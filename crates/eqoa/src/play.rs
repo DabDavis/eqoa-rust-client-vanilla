@@ -4262,7 +4262,9 @@ impl Play {
                     self.stood_sent = false;
                     let (arrival, heading, here) = (player.pos, player.hpr[0], player.world == self.player.world);
                     let far = !here || crate::loading::far(walker_at(walker), arrival);
-                    if player.world != self.player.world {
+                    // a world still being entered: a dump into it is a move
+                    // into it, never a place in the old world's walk
+                    if player.world != self.player.world || self.world_pending() {
                         match crate::s2::get().world_file(player.world) {
                             Some(f) => {
                                 eprintln!("play: the dump's world {} ({f}) at {:?}", player.world, player.pos);
@@ -5628,8 +5630,17 @@ impl Play {
     /// world's number with the old world's place (the reference server answered that
     /// with 0x07D2, "This character has been modified by a customer service
     /// representative").
+    ///
+    /// None either while another world is still to be entered
+    /// (`world_pending`), whatever moved the player there: a respawn's dump
+    /// into another world has no token to wait on, and its 0x40s went out
+    /// with the new world's number at the old world's place for as long as a
+    /// page read the world (petition 5512: the server took the place, moved
+    /// the player back to it with an 0x00B2 once the world was in, and that
+    /// place, off the new world's ground, fell for five minutes). The PS2's
+    /// frame stops in `EnterWorld`, which sends nothing.
     fn position_due(&mut self, walk: &vi::walk::WalkPhysics<Ee>, clock: i64) {
-        if self.session.self_id.is_some() && self.arrival.is_empty() && (self.last_send == -1 || clock - self.last_send >= i64::from(self.send_interval)) {
+        if self.session.self_id.is_some() && self.arrival.is_empty() && !self.world_pending() && (self.last_send == -1 || clock - self.last_send >= i64::from(self.send_interval)) {
             self.send_position(walk, clock);
         }
     }
@@ -5686,7 +5697,12 @@ impl Play {
         self.following = false;
         // no jump before a report from the arrival stands (`stood_sent`)
         self.stood_sent = false;
-        let moving = if world as i64 != self.player.world {
+        // A world still being entered (its file read, or the world change
+        // not taken yet) is entered at this place instead: a move into it
+        // while it loads is never a place in the old world's walk (petition
+        // 5512: the server's move back to where the old world's walk had
+        // been reported put the new world's walk there, off its ground).
+        let moving = if world as i64 != self.player.world || self.world_pending() {
             // the world table: the disc's six, or the server's patch's
             // (`s2`: the reference server's eight)
             match crate::s2::get().world_file(world as i64) {
@@ -5704,8 +5720,11 @@ impl Play {
                     self.fade.set(1.0, 0.0);
                     self.player.world = world as i64;
                     self.player.pos = pos;
-                    // the walker is built again there (`world_entered`)
-                    self.cam_carry = Some((walker.cam.camera_mode, Some(crate::camstyle::save(&walker.cam))));
+                    // the walker is built again there (`world_entered`); a
+                    // move while one is under way keeps the camera it carries
+                    if self.cam_carry.is_none() {
+                        self.cam_carry = Some((walker.cam.camera_mode, Some(crate::camstyle::save(&walker.cam))));
+                    }
                     true
                 }
                 None => {
@@ -12283,6 +12302,86 @@ mod commands {
             assert!(!p.loading());
             assert_eq!(there.cam.walk.committed.position, before);
             assert_eq!(sent(&mut p), [answer(4)]);
+        });
+    }
+
+    /// Petition 5512 ("upon death I stayed floating in blue space"): a
+    /// respawn's move into another world carries no token, and while a page
+    /// read the world its 0x40s went out with the new world's number at the
+    /// old world's place; the server took that place and, once the world was
+    /// in, moved the player back to it with an 0x00B2, which the client took
+    /// as a move within the new world, off its ground, falling for minutes.
+    /// Now nothing is sent until the world is entered, and a move into the
+    /// world being entered goes to it (a world change again, at its place),
+    /// never to the old world's walk; then the answer and the 0x40 from the
+    /// arrival, in the new world. Controls: a 0x40 every update before, and
+    /// again after.
+    #[test]
+    fn nothing_is_sent_from_the_old_world_while_another_is_entered() {
+        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        if !iso.exists() {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        }
+        crate::s2::with_rules(crate::s2::Rules::retail(), || {
+            let mut p = play();
+            p.session.record = Some(Vec::new());
+            let sent = |p: &mut Play| std::mem::take(p.session.record.as_mut().unwrap());
+            let positions = |d: &[(u8, Vec<u8>)]| d.iter().filter(|m| m.0 == 0x40).count();
+            let answer = |token: i64| {
+                let mut w = net::stream::Writer::op(0x0049);
+                w.signed(token);
+                (drdp::TYPE_GUARANTEED, w.data)
+            };
+            let (a, b) = ((25275.115f32, 15766.627f32), (23533.45f32, 18890.77f32));
+            let mut lib = Library::new();
+            let w = lib.add("TUNARIA.ESF", crate::stream::open_file(&iso, "TUNARIA.ESF").unwrap());
+            let mut src = crate::stream::FileZones::open(&iso, "TUNARIA.ESF").unwrap();
+            crate::stream::fill(&mut lib, w, a.0, a.1, &mut src);
+            let tunaria = || vi::world::World::load(&lib, w).unwrap();
+            let mut walker = Walker::arrive(tunaria(), Spawn::ground(a.0, a.1, 0.0));
+            p.loading_step(&mut walker, true);
+            let mut now = 0i64;
+            let mut tick = |p: &mut Play, walker: &Walker, n: u32| {
+                for _ in 0..n {
+                    now = now.max(p.session.timer()) + i64::from(p.send_interval);
+                    p.position_due(&walker.cam.walk.committed, now);
+                }
+            };
+            let ago = |p: &Play| p.session.now() as i64 - crate::loading::FAR_HOLD_MS;
+            tick(&mut p, &walker, 2);
+            assert_eq!(positions(&sent(&mut p)), 2, "the control: a position every update in play");
+
+            // the respawn's move into world 1 (no token, as a dump's)
+            let bind = [8792.4f32, 62.1, 7355.0];
+            assert!(p.teleport(&mut walker, 1, bind, [0.0; 3], ago(&p)));
+            assert!(p.world_pending());
+            let (file, _) = p.take_world_change().expect("a world change");
+            tick(&mut p, &walker, 5);
+            assert_eq!(sent(&mut p), [], "nothing while the new world is read: it would carry world 1 at the old world's place");
+
+            // the server's move to a place of world 1 while it is read: the
+            // world change goes there, the old world's walk untouched
+            let old = walker.cam.walk.committed.position;
+            let back = [b.0, 60.0, b.1];
+            p.msg_00b2(&mut walker, 1, back, [0.5, 0.0, 0.0], 7, ago(&p));
+            assert_eq!(walker.cam.walk.committed.position, old, "the old world's walk not moved");
+            let (again, spawn) = p.take_world_change().expect("the move goes to the world being entered");
+            assert_eq!((again, spawn.pos), (file, back));
+            tick(&mut p, &walker, 3);
+            assert_eq!(sent(&mut p), [], "still nothing");
+
+            // entered there (Tunaria's geometry standing in): the answer and
+            // the 0x40 from the arrival, world 1
+            let mut there = Walker::arrive(tunaria(), spawn);
+            p.world_entered(&mut there);
+            p.loading_step(&mut there, true);
+            let at = vi::selfstate::encode(1, &there.cam.walk.committed, 0, p.target);
+            assert_eq!(sent(&mut p), [answer(7), (0x40, at)], "answered from the arrival, in world 1");
+            let c = there.cam.walk.committed.position;
+            assert!((c.x.0 - back[0]).abs() < 0.01 && (c.z.0 - back[2]).abs() < 0.01, "{c:?}");
+            tick(&mut p, &there, 2);
+            assert_eq!(positions(&sent(&mut p)), 2, "the control: positions again after");
         });
     }
 

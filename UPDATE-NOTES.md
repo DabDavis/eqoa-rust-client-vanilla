@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-23 · No more falling through blue space after dying in one world and waking in another
+- When you die and your bind point is in another world (or the server moves you to another world), you now wait on the loading screen until that world is in, standing still, then wake at your bind point. Before, especially in the web page, your character could be put back where you died but in the new world, with no ground under it, and fall through empty blue space until you logged out.
+- If the new world's files still have not come after half a minute, the game tries reading them once more. If that fails too, you are logged out where the server has you and told why, instead of being left on the loading screen or in the void.
+
 ## 2026-11-22 · Your group's buffs on their bars, and a smaller buff bar when you have many
 - On a server that sends them, each group member's buffs now show as tiny icons on their bar in the group window, to the right of their health and power. Extended > UI > Group & Raid > Group Effects turns them off.
 - With more than eight buffs on you, the buff window's icons shrink a little so ten fit in a row (two rows hold twenty), instead of a second full-size row taking up more of the screen.

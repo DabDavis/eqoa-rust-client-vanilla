@@ -2446,8 +2446,9 @@ struct App {
     /// Where the sky's models start in `Gfx::models`.
     sky_at: Option<usize>,
     /// A world change under way: the world's file, the arrival, and its
-    /// reads (`stream::open_world`), entered once they are in.
-    entering: Option<(String, Spawn, crate::stream::Arrival)>,
+    /// reads (`stream::open_world`), entered once they are in, and their
+    /// clock (`loading::Reads`: begun again, then given up).
+    entering: Option<(String, Spawn, crate::stream::Arrival, crate::loading::Reads)>,
     /// The world off the other art's disc (F9, `swap_world_art`): its file
     /// and its reads, put in place of the world drawn once they are in.
     swapping: Option<(String, crate::stream::Arrival)>,
@@ -6509,7 +6510,8 @@ impl App {
                 // screen), and the walk begun again there once they are in.
                 if let Some((file, at)) = self.play.as_mut().and_then(|p| p.take_world_change()) {
                     let reads = stream::open_world(&file, at.pos[0], at.pos[2]);
-                    self.entering = Some((file, at, reads));
+                    let now = self.clock.elapsed().as_millis() as i64;
+                    self.entering = Some((file, at, reads, crate::loading::Reads::begun(now)));
                     // the world being left is not swapped any more
                     self.swapping = None;
                 }
@@ -6522,8 +6524,26 @@ impl App {
                         crate::web::problem("world", &format!("The world could not be swapped for the other art's: {e}"));
                     }
                 }
-                if let Some(r) = self.entering.as_ref().and_then(|e| e.2.borrow_mut().take()) {
-                    let (file, at, _) = self.entering.take().unwrap();
+                // Reads that never answer (a page's): begun once more, then
+                // given up as a failed world change (logged out where the
+                // server has the player), never waited on under the loading
+                // screen for good
+                let mut gave_up = None;
+                if let Some(e) = self.entering.as_mut().filter(|e| e.2.borrow().is_none()) {
+                    let now = self.clock.elapsed().as_millis() as i64;
+                    match e.3.due(now) {
+                        crate::loading::ReadsDue::Wait => {}
+                        crate::loading::ReadsDue::Again => {
+                            crate::say(&format!("world change to {}: no reads after {} ms: begun again", e.0, crate::loading::READS_TRY_MS));
+                            e.2 = stream::open_world(&e.0, e.1.pos[0], e.1.pos[2]);
+                        }
+                        crate::loading::ReadsDue::GiveUp => {
+                            gave_up = Some(Err(format!("its files were not read in {} seconds", e.3.waited(now) / 1000)));
+                        }
+                    }
+                }
+                if let Some(r) = gave_up.or_else(|| self.entering.as_ref().and_then(|e| e.2.borrow_mut().take())) {
+                    let (file, at, _, _) = self.entering.take().unwrap();
                     match r.map_err(Error::from).and_then(|o| self.enter_world(&file, o, at)) {
                         Ok(()) => {
                             crate::say(&format!("entered {file} at {:?}", at.pos));
