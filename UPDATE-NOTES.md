@@ -5,6 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-23 · Lizardmen's helms fit their heads
+- A lizardman's helm is now bigger and sits further over the head, so the back and sides of the head and the jaw no longer poke through it. Before, every helm sat on top like a small cap, and on the strapped, bare and hierophant scales the head showed through the back and sides of it. The spines along the top and the snout still come out through the helm, as they are meant to.
+
 ## 2026-11-23 · Sandstorms no longer flash clear
 - **A heavy sandstorm (or whiteout or snowstorm) no longer goes clear for a moment** when you turn the camera. The storm now thins and thickens smoothly: a storm that really ends fades out over a couple of seconds instead of vanishing in one frame.
 - **Walking under an arch, a palm or an awning in a storm** now eases the storm back over about a second instead of jumping between thick and thin.
