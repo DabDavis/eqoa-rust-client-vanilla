@@ -223,8 +223,19 @@ pub const HEAD_SEATS: &[HeadSeat] = &[
     // stretched a tenth, 3 cm up and 2 cm forward (`a_dryads_helm_covers_her_crown`)
     HeadSeat { bodies: &[0x70EF_CE05], anchor: Anchor::Named, scale: [1.05; 3], offset: [0.0, 0.01, 0.02] },
     HeadSeat { bodies: &[0x21F3_11BB, 0xACE7_1E26, 0xB90A_DDD2], anchor: Anchor::Named, scale: [1.1; 3], offset: [0.0, 0.03, 0.02] },
-    // the lizardmen, gnolls and minotaurs, one skeleton
-    HeadSeat { bodies: &[0x9112_20E2, 0xD45B_9F1F, 0x2C1D_8724, 0x7468_EAE7, 0x16BB_9E24, 0xEEBF_6DA5], anchor: Anchor::Head, scale: [1.4; 3], offset: [0.0, 0.36, 0.10] },
+    // the lizardmen, gnolls and minotaurs, one skeleton. The lizardmen (the owner,
+    // 2026-11-23: "lizardmen need work on the helm fit; it needs to be bigger because
+    // there is clipping"): at x1.4, 36 cm up and 10 cm forward every helm sat on the
+    // strapped, bare and hierophant bodies' heads as a cap, their skulls (27 cm wide,
+    // 43 cm from the back of the head to the snout) out of the back and the sides and
+    // the jaw out past the cheek guards, by up to 5 cm; the pauldrons', robed and grey
+    // bodies' narrower heads (20 cm) came out of helms 2, 3, 5, 6 and the straw hat by
+    // up to 2 cm. Now the wide heads' helms are stretched 1.9 across, 1.6 up and 1.8
+    // deep, 7 cm forward, and the narrow heads' 1.6, 1.5 and 1.7, 8 cm forward: the
+    // head inside every helm but the spines and fins along the middle (out of the top
+    // and back, a crest) and the snout (out of the face) (`a_lizardmans_helm_holds_its_head`)
+    HeadSeat { bodies: &[0x9112_20E2, 0x2C1D_8724, 0x16BB_9E24], anchor: Anchor::Head, scale: [1.9, 1.6, 1.8], offset: [0.0, 0.36, 0.07] },
+    HeadSeat { bodies: &[0xD45B_9F1F, 0x7468_EAE7, 0xEEBF_6DA5], anchor: Anchor::Head, scale: [1.6, 1.5, 1.7], offset: [0.0, 0.36, 0.08] },
     HeadSeat {
         bodies: &[
             0xCF41_5561, 0x223F_D6BC, 0xF5F3_A450, 0x097B_FC70, 0xB7B2_1DFC, 0x4A9B_AB9E, 0x17DA_0FEB, 0x7492_678E, 0x585E_5ED9, 0x16BA_0BD3, 0x3C6D_3677, 0xC2D7_DD2F, 0x71F1_63CA, 0xC3B9_4FA5, 0x147A_C3EE, 0x09E0_AE7D, 0xB156_28DA, 0xCE06_735E, 0x2EDA_50DC,
@@ -4487,6 +4498,40 @@ mod tests {
                     .collect();
                 eprintln!("{id:08X} {label}: {} + {} on top: {per:?}", crown.len(), cover.len());
             }
+        }
+    }
+
+    /// A lizardman's helm holds its head (the owner, 2026-11-23: "lizardmen need work
+    /// on the helm fit; it needs to be bigger because there is clipping"): on all six
+    /// lizardman bodies, standing and in each of `POSES`, every vertex of the head above
+    /// its lips (`cranium`) lies inside each of helms 1-6 and 8 seated as `HEAD_SEATS`
+    /// has it (`holds`), and the top half of it under each; but for the spines and fins
+    /// along the middle (within 4 cm of it, a crest out of the top and the back as a
+    /// Haliai's is) and the snout (16 cm or more ahead of the head node, out of the
+    /// face). Helm 7's mail hangs close round the jaw and the snout's root, where no seat
+    /// keeps the head in (judged by eye: `eqoa dress <body> ... helm=7 race=1
+    /// frame=head`). The control: seated as before (x1.4, 36 cm up, 10 cm forward), the
+    /// head came out of four of those seven helms or more on every body.
+    #[test]
+    fn a_lizardmans_helm_holds_its_head() {
+        let Some(lib) = disc() else { return };
+        let before = HelmFit { scale: Vec3::splat(1.4), offset: Vec3::new(0.0, 0.36, 0.10) };
+        let judged = |p: &Vec3| p.x.abs() > 0.04 && p.z < 0.16;
+        for id in [0x9112_20E2u32, 0xD45B_9F1F, 0x2C1D_8724, 0x7468_EAE7, 0x16BB_9E24, 0xEEBF_6DA5] {
+            let cs = sprite_of(&lib, id);
+            let seat = head_fit(id, &cs, true).unwrap_or_else(|| panic!("{id:08X}: a seat"));
+            let (crown, cover, mid) = cranium(&lib, id, None).unwrap_or_else(|| panic!("{id:08X}: a jaw"));
+            let (crown, cover): (Vec<Vec3>, Vec<Vec3>) = (crown.into_iter().filter(judged).collect(), cover.into_iter().filter(judged).collect());
+            let helms: Vec<(u8, Vec<[Vec3; 3]>)> = helms_on(&lib, id, &cs, false).into_iter().filter(|h| h.0 != 7).collect();
+            assert_eq!(helms.len(), 7, "{id:08X}");
+            for h in &helms {
+                let r = holds(std::slice::from_ref(h), &crown, &cover, mid, &seat);
+                eprintln!("{id:08X} helm {}: {r:?}", h.0);
+                assert!(r.is_ok(), "{id:08X} helm {}: the head out of it, {r:?}", h.0);
+            }
+            let old = helms.iter().filter(|h| holds(std::slice::from_ref(*h), &crown, &cover, mid, &before).is_err()).count();
+            eprintln!("{id:08X}: out of {old} helms as seated before");
+            assert!(old >= 4, "{id:08X}: the control, out of {old} helms as seated before");
         }
     }
 

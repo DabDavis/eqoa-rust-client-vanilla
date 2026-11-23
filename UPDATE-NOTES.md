@@ -5,6 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-23 · Lizardmen's helms fit their heads
+- A lizardman's helm is now bigger and sits further over the head, so the back and sides of the head and the jaw no longer poke through it. Before, every helm sat on top like a small cap, and on the strapped, bare and hierophant scales the head showed through the back and sides of it. The spines along the top and the snout still come out through the helm, as they are meant to.
+
 ## 2026-11-22 · Your group's buffs on their bars, and a smaller buff bar when you have many
 - On a server that sends them, each group member's buffs now show as tiny icons on their bar in the group window, to the right of their health and power. Extended > UI > Group & Raid > Group Effects turns them off.
 - With more than eight buffs on you, the buff window's icons shrink a little so ten fit in a row (two rows hold twenty), instead of a second full-size row taking up more of the screen.
