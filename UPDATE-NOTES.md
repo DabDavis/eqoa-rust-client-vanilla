@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-23 · HUD size and keyboard chat
+
+- In Extended > UI > Interface Size, adjust the HUD and overhead names independently or choose the chat box's width and number of rows. You can also type `/hud` and drag **Resize** on the chat box. Drag the rest of the box to move it.
+- In Extended > UI > Chat, adjust the background opacity or turn on **Inline Keyboard Chat**. Press Enter to type in the chat box, Enter again to send, or Escape to cancel. A controller's chat button opens the usual keyboard.
+- Use `/sa` for Say, `/s` for Shout, `/g` for Group and `/gu` for Guild. Submit a shortcut by itself to select that channel for subsequent messages, or include a message to use it once. Use `/t Name message` for a tell and `/r message` to reply.
+
 ## 2026-11-23 · 180 more hunting camps on the map
 - The map (M) shows about 180 more hunting camps: every sizeable group of creatures the server has that the map was missing, in Tunaria, the Rathe and Odus, each with its creatures' levels (for example the shriek camp in Wktaan's 4th Talon, the Isle of Dread's breath stealers, the Tomb of Kings' Holciel and the Tae Ew of Cazic-Thule), and Zentar's Keep's own hexbones and Bogman Village's rancidbone trolls.
 

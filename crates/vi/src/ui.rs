@@ -705,6 +705,11 @@ impl Window {
     /// draws the panel in the window's set, faded by `1 - (1-open)^2`, and
     /// the title. True when fully open or fully closed.
     pub fn draw(&mut self, vui: &Vui, ui: &mut dyn Raster) -> bool {
+        self.draw_with_panel_opacity(vui, ui, 0.75)
+    }
+
+    /// Draw the window with a caller-selected opacity for the translucent panel.
+    pub fn draw_with_panel_opacity(&mut self, vui: &Vui, ui: &mut dyn Raster, opacity: f32) -> bool {
         let fp = frame_sets();
         if self.dir > 0.0 {
             self.open = (self.open + 0.15).min(1.0);
@@ -722,7 +727,7 @@ impl Window {
                 vui.blit_fill_frame(ui, ipos, [isize[0] + 1, isize[1]], &fp[1], 35, 3, k, true);
                 vui.blit_frame(ui, tl, size, &fp[0], 3, k, true);
             }
-            1 => vui.blit_fill_frame(ui, ipos, isize, &fp[3], 61, 3, k * 0.75, true),
+            1 => vui.blit_fill_frame(ui, ipos, isize, &fp[3], 61, 3, k * opacity, true),
             2 => {
                 vui.blit_rect(ui, 51, ipos, [isize[0] + 1, isize[1]], 3, k);
                 vui.blit_frame(ui, tl, size, &fp[0], 3, k, true);

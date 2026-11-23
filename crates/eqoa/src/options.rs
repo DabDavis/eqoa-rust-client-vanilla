@@ -1095,6 +1095,12 @@ impl WndOptions {
                     // Chat Always Shown (ticket 1914): the box from the next
                     // frame (`chat::WndChat::always`)
                     89 => c.chat_always = !c.chat_always,
+                    HUD_SCALE => slide(&mut c.hud_scale, 50, 150, 5),
+                    NAMEPLATE_SCALE => slide(&mut c.nameplate_scale, 50, 200, 5),
+                    CHAT_WIDTH => slide(&mut c.chat_width, 50, 125, 5),
+                    CHAT_ROWS => slide(&mut c.chat_rows, 3, 12, 1),
+                    CHAT_OPACITY => slide(&mut c.chat_opacity, 0, 100, 5),
+                    INLINE_CHAT => c.inline_chat = !c.inline_chat,
                     // Stacked Spell Bars (ticket 1913): from the next frame
                     // (`hudmenu::Stacked`)
                     90 => c.stacked_bars = !c.stacked_bars,
@@ -1821,7 +1827,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 104] = [
+const EXTENDED_ITEMS: [(i32, &str); 110] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1926,6 +1932,12 @@ const EXTENDED_ITEMS: [(i32, &str); 104] = [
     (UTILITY_LAYOUT, "Utility Bar Layout"),
     (HEALTH_NUMBERS, "Health Numbers"),
     (GROUP_EFFECTS, "Group Effects"),
+    (HUD_SCALE, "HUD Scale %"),
+    (NAMEPLATE_SCALE, "Name Plate Scale %"),
+    (CHAT_WIDTH, "Chat Width %"),
+    (CHAT_ROWS, "Chat Rows"),
+    (CHAT_OPACITY, "Chat Opacity %"),
+    (INLINE_CHAT, "Inline Keyboard Chat"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -1999,6 +2011,13 @@ pub(crate) const HEALTH_NUMBERS: i32 = 220;
 /// versions for the buffs group members have"). 230, as Health Numbers' 220;
 /// the server's `qol::PET_EFFECTS` turns it off with Pet Effects.
 pub(crate) const GROUP_EFFECTS: i32 = 230;
+
+const HUD_SCALE: i32 = 240;
+const NAMEPLATE_SCALE: i32 = 241;
+const CHAT_WIDTH: i32 = 242;
+const CHAT_ROWS: i32 = 243;
+const CHAT_OPACITY: i32 = 244;
+const INLINE_CHAT: i32 = 245;
 
 /// Slow When Not Focused's item (a GM's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -2084,7 +2103,7 @@ const GROUPS: [(Group, &str); 5] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// Capture Controller and Sound in Background the Multi-boxing settings',
 /// Controller's touch rows Other's Touch; petition 2084, 2026-11-14: Touch a
 /// group of its own, Touch Controls, its rows Size & Look and Layout).
-const ALL_CATEGORIES: [Category; 25] = [
+const ALL_CATEGORIES: [Category; 26] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
@@ -2104,7 +2123,7 @@ const ALL_CATEGORIES: [Category; 25] = [
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
-    Category { name: "Chat", items: &[73, 89, R2_CHANNELS], note: Note::Links, group: Group::Ui },
+    Category { name: "Chat", items: &[73, 89, R2_CHANNELS, INLINE_CHAT, CHAT_OPACITY], note: Note::Links, group: Group::Ui },
     Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE], note: Note::Shortcuts, group: Group::Other },
     Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None, group: Group::Other },
@@ -2125,6 +2144,7 @@ const ALL_CATEGORIES: [Category; 25] = [
     // how they do texture packs like precaching"): Textures' page is full;
     // natively, as Textures (a page's list ends before it)
     Category { name: "Texture Cache", items: &[PACK_PRECACHE, PACK_COMPRESS, PACK_REBUILD], note: Note::Textures, group: Group::Graphics },
+    Category { name: "Interface Size", items: &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS], note: Note::None, group: Group::Ui },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -2133,7 +2153,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[23]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[23], a[25]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -2317,6 +2337,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         77 => wide("Reset"),
         73 => on_off(c.item_links),
         89 => on_off(c.chat_always),
+        INLINE_CHAT => on_off(c.inline_chat),
         PETS_PASS => on_off(c.pets_pass),
         SHARED_SHORTCUTS => on_off(c.shared_shortcuts),
         AUTO_SAVE => on_off(c.auto_save),
@@ -2406,6 +2427,11 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         62 => (c.touch_edge as f32 / TOUCH_EDGE_MAX as f32, Some(c.touch_edge as u16)),
         57 => (at(c.shadow_distance as f32, SHADOW_DISTANCE_GAME as f32, SHADOW_DISTANCE_MAX as f32), Some(c.shadow_distance)),
         SPELL_BAR_OPACITY => (c.spell_bar_opacity as f32 / 100.0, Some(c.spell_bar_opacity as u16)),
+        HUD_SCALE => (at(c.hud_scale as f32, 50.0, 150.0), Some(c.hud_scale as u16)),
+        NAMEPLATE_SCALE => (at(c.nameplate_scale as f32, 50.0, 200.0), Some(c.nameplate_scale as u16)),
+        CHAT_WIDTH => (at(c.chat_width as f32, 50.0, 125.0), Some(c.chat_width as u16)),
+        CHAT_ROWS => (at(c.chat_rows as f32, 3.0, 12.0), Some(c.chat_rows as u16)),
+        CHAT_OPACITY => (c.chat_opacity as f32 / 100.0, Some(c.chat_opacity as u16)),
         36 => share_slider(c.flora),
         37 => share_slider(c.environment),
         WEATHER => share_slider(c.weather),
@@ -3718,9 +3744,10 @@ mod tests {
                 ("Number Colors", n[..6].to_vec()),
                 ("Merc Colors", n[6..8].to_vec()),
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "Reset DPS Meter"]),
-                ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
+                ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch", "Inline Keyboard Chat", "Chat Opacity %"]),
                 ("Chat Tabs: Talk", vec!["Say", "Tells", "Group", "Guild", "Shouts"]),
                 ("Chat Tabs: Game", vec!["Combat", "Loot", "Rolls", "Experience", "System"]),
+                ("Interface Size", vec!["HUD Scale %", "Name Plate Scale %", "Chat Width %", "Chat Rows"]),
             ],
             "UI: what is drawn over the world"
         );

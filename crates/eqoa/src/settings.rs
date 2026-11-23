@@ -1076,6 +1076,14 @@ pub struct ClientOptions {
     /// rows with the last lines in it, never sliding away (`chat::WndChat::
     /// always`). Off by default, the game's box.
     pub chat_always: bool,
+    /// Interface sizes and chat background opacity, in percent of the original
+    /// sizes and of full opacity. Chat height is a count of visible rows.
+    pub hud_scale: u8,
+    pub nameplate_scale: u8,
+    pub chat_width: u8,
+    pub chat_rows: u8,
+    pub chat_opacity: u8,
+    pub inline_chat: bool,
     /// R2 Channel Switch (the server owner, 2026-11-18: "for switching chat
     /// channels hold r2 then dpad left/right can switch channels if players
     /// have that on"): with R2 held (the chat box's history, mode 33) left
@@ -1548,6 +1556,12 @@ impl Default for ClientOptions {
             auto_target: false,
             weapon_swap_back: false,
             chat_always: false,
+            hud_scale: 100,
+            nameplate_scale: 100,
+            chat_width: 100,
+            chat_rows: 5,
+            chat_opacity: 75,
+            inline_chat: false,
             r2_channels: false,
             stacked_bars: false,
             spell_bar_opacity: 100,
@@ -1733,6 +1747,17 @@ impl ClientOptions {
         // Chat Always Shown and Stacked Spell Bars only when on
         if self.chat_always {
             s.push_str("chat_always=on\n");
+        }
+        for (key, value, default) in [
+            ("hud_scale", self.hud_scale, 100), ("nameplate_scale", self.nameplate_scale, 100),
+            ("chat_width", self.chat_width, 100), ("chat_rows", self.chat_rows, 5), ("chat_opacity", self.chat_opacity, 75),
+        ] {
+            if value != default {
+                s.push_str(&format!("{key}={value}\n"));
+            }
+        }
+        if self.inline_chat {
+            s.push_str("inline_chat=on\n");
         }
         if self.stacked_bars {
             s.push_str("stacked_bars=on\n");
@@ -1999,6 +2024,20 @@ impl ClientOptions {
                 ("weapon_swap_back", "on") => c.weapon_swap_back = true,
                 ("weapon_swap_back", "off") => c.weapon_swap_back = false,
                 ("chat_always", "on") => c.chat_always = true,
+                ("inline_chat", "on") => c.inline_chat = true,
+                ("inline_chat", "off") => c.inline_chat = false,
+                (key @ ("hud_scale" | "nameplate_scale" | "chat_width" | "chat_rows" | "chat_opacity"), v) => {
+                    let (field, range) = match key {
+                        "hud_scale" => (&mut c.hud_scale, 50..=150),
+                        "nameplate_scale" => (&mut c.nameplate_scale, 50..=200),
+                        "chat_width" => (&mut c.chat_width, 50..=125),
+                        "chat_rows" => (&mut c.chat_rows, 3..=12),
+                        _ => (&mut c.chat_opacity, 0..=100),
+                    };
+                    if let Some(n) = v.parse::<u8>().ok().filter(|n| range.contains(n)) {
+                        *field = n;
+                    }
+                }
                 ("r2_channels", "on") => c.r2_channels = true,
                 ("r2_channels", "off") => c.r2_channels = false,
                 ("chat_always", "off") => c.chat_always = false,
@@ -2234,8 +2273,19 @@ fn read_client() -> ClientOptions {
 /// own as the file has them now (another window may have saved its own since
 /// this one read them).
 fn save_client() -> Result<(), String> {
+    write_client(kept_client())
+}
+
+/// A drag in Move HUD saves only the two sizes the player changed there.
+pub fn keep_chat_size(width: u8, rows: u8) {
+    set_client(ClientOptions { chat_width: width, chat_rows: rows, ..client() });
+    if let Err(e) = write_client(ClientOptions { chat_width: width, chat_rows: rows, ..read_client() }) {
+        crate::say(&format!("The chat size could not be saved: {e}"));
+    }
+}
+
+fn write_client(mine: ClientOptions) -> Result<(), String> {
     let me = place();
-    let mine = kept_client();
     let mut shared = read_shared();
     shared.controller[me] = mine.controller[me];
     shared.slow_unfocused[me] = mine.slow_unfocused[me];
@@ -3424,6 +3474,18 @@ mod tests {
         assert_eq!(game_options(), none);
         assert_eq!(client(), ClientOptions::default());
         testing::reset(false);
+    }
+
+    #[test]
+    fn hud_chat_settings_round_trip_and_reject_out_of_range_values() {
+        let defaults = ClientOptions::default();
+        let options = ClientOptions { hud_scale: 65, nameplate_scale: 170, chat_width: 85, chat_rows: 9, chat_opacity: 0, inline_chat: true, ..defaults };
+        assert_eq!(ClientOptions::from_text(&options.to_text()), options);
+        assert_eq!(ClientOptions::from_text("hud_scale=0\nnameplate_scale=255\nchat_width=0\nchat_rows=255\nchat_opacity=101\ninline_chat=bad"), defaults);
+        assert_eq!(ClientOptions::from_text(""), defaults);
+        for key in ["hud_scale=", "nameplate_scale=", "chat_width=", "chat_rows=", "chat_opacity=", "inline_chat="] {
+            assert!(!defaults.to_text().contains(key));
+        }
     }
 
     /// The keys and buttons: kept by Save Changes in keys.opt and read back

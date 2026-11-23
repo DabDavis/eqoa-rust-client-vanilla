@@ -28,7 +28,7 @@
 //!   and read at the next start. Reset HUD (Extended, the bar's Reset, `/hud
 //!   reset`) puts every piece back at once and keeps that.
 
-use render::ui::{SCREEN_H, SCREEN_W, Ui};
+use render::ui::{HudScale, SCREEN_H, SCREEN_W, Ui};
 use std::cell::RefCell;
 
 /// The HUD's pieces that move, in the order they are drawn.
@@ -301,6 +301,27 @@ struct Drag {
     piece: Piece,
     from: [f32; 2],
     shift: [f32; 2],
+    resize: Option<ChatResize>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ChatResize {
+    initial: [u8; 2],
+    next: [u8; 2],
+    /// Screen distance per percentage point of width and per row of height.
+    unit: [f32; 2],
+}
+
+impl ChatResize {
+    fn delta(self) -> [f32; 2] {
+        std::array::from_fn(|i| (self.next[i] as f32 - self.initial[i] as f32) * self.unit[i])
+    }
+
+    fn update(&mut self, dx: f32, dy: f32) {
+        let width = self.initial[0] as f32 + dx / self.unit[0];
+        self.next = [(width / 5.0).round().clamp(10.0, 25.0) as u8 * 5,
+            (self.initial[1] as f32 + dy / self.unit[1]).round().clamp(3.0, 12.0) as u8];
+    }
 }
 
 /// What the bar at the top while the HUD moves has: its buttons.
@@ -328,6 +349,8 @@ struct State {
     pressed: bool,
     /// the bar's buttons where they were drawn
     buttons: Vec<([f32; 4], Button)>,
+    /// The Resize handle as drawn, and the screen height of one chat row.
+    chat_grip: Option<([f32; 4], f32)>,
 }
 
 thread_local! {
@@ -361,11 +384,9 @@ pub fn unlocked() -> bool {
 pub fn set_unlocked(on: bool) {
     let ended = with(|s| {
         s.unlocked = on;
-        !on && s.drag.take().is_some()
+        if on { None } else { s.drag.take() }
     });
-    if ended {
-        keep();
-    }
+    finish_drag(ended);
 }
 
 /// Every piece where the game puts it, kept so.
@@ -410,12 +431,42 @@ fn shift_in(s: &State, piece: Piece, b: Beyond) -> [f32; 2] {
     }
 }
 
-/// A piece begun on `ui` (`end`): what it draws is moved by its shift.
+/// The piece's frame corner and how far widescreen or portrait moves that corner.
+fn anchor(piece: Piece, b: Beyond) -> ([f32; 2], [f32; 2]) {
+    let (h, v) = piece.own();
+    let edge = |e, span| match e { Edge::Start => 0.0, Edge::Middle => span * 0.5, Edge::End => span };
+    ([edge(h, SCREEN_W), edge(v, SCREEN_H)], [h.reference(b.side), v.reference(b.top)])
+}
+
+pub fn scale(piece: Piece, b: Beyond) -> HudScale {
+    let (corner, offset) = anchor(piece, b);
+    HudScale { origin: [corner[0] + offset[0], corner[1] + offset[1]], factor: crate::settings::client().hud_scale as f32 / 100.0 }
+}
+
+/// A pointer in frame pixels, expressed in the piece's original drawing coordinates.
+pub fn local_point(piece: Piece, p: [f32; 2], b: Beyond) -> [f32; 2] {
+    let moved = shift(piece, b);
+    let (_, offset) = anchor(piece, b);
+    let q = scale(piece, b).inverse([p[0] - moved[0], p[1] - moved[1]]);
+    [q[0] - offset[0], q[1] - offset[1]]
+}
+
+/// Where a piece's drawing coordinates land, including its saved move. Used by
+/// layers drawn outside the main HUD pass.
+pub fn frame_point(piece: Piece, p: [f32; 2], b: Beyond) -> [f32; 2] {
+    let moved = shift(piece, b);
+    let (_, offset) = anchor(piece, b);
+    let q = scale(piece, b).point([p[0] + offset[0], p[1] + offset[1]]);
+    [q[0] + moved[0], q[1] + moved[1]]
+}
+
+/// A piece begun on `ui` (`end`): what it draws is scaled and moved together.
 pub struct Mark {
     piece: Piece,
     from: usize,
     shift: [f32; 2],
     before: [f32; 2],
+    before_scale: HudScale,
 }
 
 /// `piece` is drawn next on `ui`, moved where the player put it.
@@ -423,13 +474,15 @@ pub fn begin(ui: &mut Ui, piece: Piece) -> Mark {
     let b = Beyond { side: ui.side(), top: ui.top() };
     let shift = shift(piece, b);
     let before = std::mem::replace(&mut ui.shift, shift);
-    Mark { piece, from: ui.quads.len(), shift, before }
+    let before_scale = std::mem::replace(&mut ui.hud_scale, scale(piece, b));
+    Mark { piece, from: ui.quads.len(), shift, before, before_scale }
 }
 
 /// The piece `m` drawn: the rectangle its quads cover noted (beside what the
 /// frame noted of it already) and `ui`'s shift as it was.
 pub fn end(ui: &mut Ui, m: Mark) {
     ui.shift = m.before;
+    ui.hud_scale = m.before_scale;
     if let Some(r) = covered(&ui.quads[m.from.min(ui.quads.len())..]) {
         note(m.piece, r, m.shift);
     }
@@ -452,8 +505,9 @@ pub fn seal(ui: &mut Ui, m: Mark) -> Mark {
 /// The screen's left and right as the piece of `m` draws (its frame pixels
 /// before its shift), whole pixels within it.
 pub fn screen_x(ui: &Ui, m: &Mark) -> [i32; 2] {
-    let s = Beyond { side: ui.side(), top: ui.top() }.screen();
-    [(s[0] - m.shift[0]).ceil() as i32, (s[2] - m.shift[0]).floor() as i32]
+    let b = Beyond { side: ui.side(), top: ui.top() };
+    let s = b.screen();
+    [local_point(m.piece, [s[0], 0.0], b)[0].ceil() as i32, local_point(m.piece, [s[2], 0.0], b)[0].floor() as i32]
 }
 
 /// The frame rectangle `quads` show: each one's bounds within its cut, a quad
@@ -561,9 +615,19 @@ pub fn press(p: [f32; 2], b: Beyond) -> Press {
         if let Some(&(_, k)) = s.buttons.iter().find(|(r, _)| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3]) {
             return Press::Button(k);
         }
+        if let Some((r, row)) = s.chat_grip
+            && p[0] >= r[0] && p[0] < r[2] && p[1] >= r[1] && p[1] < r[3]
+        {
+            let c = crate::settings::client();
+            let initial = [c.chat_width, c.chat_rows];
+            let width = crate::chat::ChatSize::BASE_WIDTH as f32 * c.hud_scale as f32 / 10_000.0;
+            let resize = ChatResize { initial, next: initial, unit: [width, row] };
+            s.drag = Some(Drag { piece: Piece::Chat, from: p, shift: [0.0; 2], resize: Some(resize) });
+            return Press::Piece(Piece::Chat);
+        }
         let Some(piece) = piece_at_in(s, p) else { return Press::None };
         let shift = shift_in(s, piece, b);
-        s.drag = Some(Drag { piece, from: p, shift });
+        s.drag = Some(Drag { piece, from: p, shift, resize: None });
         Press::Piece(piece)
     });
     if hit != Press::None {
@@ -586,6 +650,10 @@ pub fn dragging() -> bool {
 /// with it, kept on the screen.
 pub fn drag_to(p: [f32; 2], b: Beyond) {
     with(|s| {
+        if let Some(d) = &mut s.drag && let Some(resize) = &mut d.resize {
+            resize.update(d.from[0] - p[0], d.from[1] - p[1]);
+            return;
+        }
         let Some(d) = s.drag else { return };
         let i = d.piece.index();
         let want = [d.shift[0] + p[0] - d.from[0], d.shift[1] + p[1] - d.from[1]];
@@ -600,11 +668,20 @@ pub fn drag_to(p: [f32; 2], b: Beyond) {
 /// The press let go: a piece dragged stays where it is, kept. False when
 /// Move HUD took no press (the release is the world's).
 pub fn release() -> bool {
-    let (pressed, dragged) = with(|s| (std::mem::take(&mut s.pressed), s.drag.take().is_some()));
-    if dragged {
+    let (pressed, drag) = with(|s| (std::mem::take(&mut s.pressed), s.drag.take()));
+    finish_drag(drag);
+    pressed || drag.is_some()
+}
+
+fn finish_drag(drag: Option<Drag>) {
+    let Some(d) = drag else { return };
+    if let Some(size) = d.resize {
+        if size.initial != size.next {
+            crate::settings::keep_chat_size(size.next[0], size.next[1]);
+        }
+    } else {
         keep();
     }
-    pressed || dragged
 }
 
 /// The bar's buttons drawn over `r` (frame pixels) this frame, for `press`.
@@ -688,13 +765,31 @@ pub fn draw_moving(r: &mut crate::ui::UiRaster) {
             q.clip = Some(render::ui::WHOLE);
         }
     };
-    for (piece, at) in drawn_all() {
+    let resize = with(|s| s.drag.and_then(|d| d.resize));
+    let mut chat_grip = None;
+    for (piece, mut at) in drawn_all() {
+        if piece == Piece::Chat && let Some(size) = resize {
+            let [dx, dy] = size.delta();
+            at[0] -= dx;
+            at[1] -= dy;
+        }
         fill(ui, at, if held == Some(piece) { FILL_HELD } else { FILL });
         for e in [[at[0], at[1], at[2], at[1] + 1.0], [at[0], at[3] - 1.0, at[2], at[3]], [at[0], at[1], at[0] + 1.0, at[3]], [at[2] - 1.0, at[1], at[2], at[3]]] {
             fill(ui, e, EDGE);
         }
-        words(ui, at[0] + 3.0, at[1] + 2.0, piece.label(), WORDS);
+        let mut x = at[0] + 3.0;
+        if piece == Piece::Chat {
+            let right = x + width(ui, "Resize") + 6.0;
+            let grip = [at[0], at[1], right, at[1] + TEXT_H + 5.0];
+            fill(ui, grip, BUTTON);
+            words(ui, x, at[1] + 2.0, "Resize", [1.0; 4]);
+            let row = (ui.fonts[font].height as f32 - 4.0).max(1.0) * crate::settings::client().hud_scale as f32 / 100.0;
+            chat_grip = Some((grip, row));
+            x = right + 3.0;
+        }
+        words(ui, x, at[1] + 2.0, piece.label(), WORDS);
     }
+    with(|s| s.chat_grip = chat_grip);
     // the bar: its words, Reset and Lock, in the middle of the screen's top
     let pad = 4.0;
     let (lock_w, reset_w) = (width(ui, "Lock") + pad * 4.0, width(ui, "Reset") + pad * 4.0);
@@ -731,6 +826,43 @@ mod tests {
     const WIDE: Beyond = Beyond { side: 106.0, top: 0.0 };
     const TALL: Beyond = Beyond { side: 0.0, top: 85.0 };
     const FOUR: Beyond = Beyond { side: 0.0, top: 0.0 };
+
+    #[test]
+    fn scaled_hud_pointers_follow_each_piece_and_its_saved_move() {
+        testing_reset();
+        crate::settings::testing::reset(false);
+        crate::settings::set_client(crate::settings::ClientOptions { hud_scale: 75, ..Default::default() });
+        let local = [400.0, 360.0];
+        for b in [FOUR, WIDE, TALL] {
+            for piece in PIECES {
+                with(|s| s.layout.set(piece, Some(Place { h: Edge::Middle, v: Edge::Middle, dx: 12.0, dy: -20.0 })));
+                let shown = frame_point(piece, local, b);
+                assert_eq!(local_point(piece, shown, b), local, "{piece:?}, {b:?}");
+            }
+        }
+        with(|s| s.layout = Layout::default());
+        assert_eq!(frame_point(Piece::Chat, local, WIDE), [566.0, 382.0]);
+        assert_eq!(frame_point(Piece::Player, [40.0, 20.0], TALL), [30.0, -70.0]);
+    }
+
+    #[test]
+    fn chat_grip_resizes_on_release_and_keeps_only_its_settings() {
+        testing_reset();
+        crate::settings::testing::reset(false);
+        crate::settings::set_client(crate::settings::ClientOptions { nameplate_scale: 150, ..Default::default() });
+        set_unlocked(true);
+        with(|s| s.chat_grip = Some(([200.0, 330.0, 245.0, 347.0], 17.0)));
+        assert_eq!(press([210.0, 338.0], FOUR), Press::Piece(Piece::Chat));
+        drag_to([325.5, 304.0], FOUR);
+        assert_eq!(crate::settings::client().chat_width, 100, "reflow on release");
+        assert!(release());
+        let c = crate::settings::client();
+        assert_eq!((c.chat_width, c.chat_rows, c.nameplate_scale), (75, 7, 150));
+        let saved = String::from_utf8(crate::settings::testing::kept("client.opt").unwrap()).unwrap();
+        assert!(saved.contains("chat_width=75") && saved.contains("chat_rows=7"));
+        assert!(!saved.contains("nameplate_scale"), "other unsaved changes stay pending");
+        assert_eq!(layout(), Layout::default());
+    }
 
     /// A place keeps the distance from the side it was measured from: the
     /// chat box (the right's) put at the left of a wide screen is measured

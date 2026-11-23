@@ -212,6 +212,8 @@ pub struct EditBox {
     pub title: Vec<u16>,
     /// `m_x24`: what Done is for
     pub purpose: u32,
+    /// The physical keyboard opened this chat line in the HUD.
+    pub inline_chat: bool,
     /// `m_x18C`: every character drawn as a star (STATION's password
     /// fields; CLIENT never sets it)
     pub password: bool,
@@ -248,6 +250,7 @@ impl Default for EditBox {
             allow_spaces: true,
             title: Vec::new(),
             purpose: 0,
+            inline_chat: false,
             password: false,
             pos: [16, 40],
             alpha: 0.0,
@@ -383,6 +386,7 @@ impl EditBox {
 
     /// `OnMessage` 295: the focus starts a fresh session.
     pub fn focus(&mut self, now: i64) {
+        self.inline_chat = false;
         self.time = now;
         self.alpha = 0.0;
         self.pulse = 0.0;
@@ -441,7 +445,7 @@ impl EditBox {
 
     /// What was asked of this box on the screen (`Field`): one cue for it all,
     /// where typing has one a character.
-    fn take_asks(&mut self, now: i64, cues: &mut Vec<i32>) {
+    pub(crate) fn take_asks(&mut self, now: i64, cues: &mut Vec<i32>) {
         for ask in FIELD.with_borrow_mut(|f| {
             // what was asked of a box gone is dropped, not left for the next
             if !f.up() {
@@ -943,6 +947,45 @@ impl EditBox {
             out.push((at, to, false));
         }
         out
+    }
+
+    /// The chat window's last row, using the ordinary edit buffer, caret and links.
+    pub fn draw_inline(&self, vui: &Vui, r: &mut dyn Raster, rect: [i32; 4], channel: &str, now: i64) {
+        let [left, top, right, bottom] = rect;
+        let label = wide(&format!("{channel}> "));
+        let y = top + 1;
+        vui.fill_rectangle(r, [[left, top], [right, top + 1]], [0.75, 0.68, 0.48, 0.85]);
+        vui.draw_string_ex(r, &label, left + 3, y, [1.0, 0.85, 0.5, 1.0], true);
+        let x = left + 3 + vui.string_width(r, &label);
+        let available = (right - x - 4).max(0);
+        // Scroll the single line horizontally as the caret moves or text is pasted.
+        let cursor = self.cursor.min(self.text.len());
+        let measure = |s: &[u16]| vui.string_width(r, s);
+        let mut start = cursor;
+        let mut room = available;
+        while start > 0 {
+            let advance = measure(&self.text[start - 1..start]);
+            if advance > room { break; }
+            room -= advance;
+            start -= 1;
+        }
+        let mut end = cursor;
+        while end < self.text.len() {
+            let advance = measure(&self.text[end..=end]);
+            if advance > room { break; }
+            room -= advance;
+            end += 1;
+        }
+        let mut at = x;
+        for (a, b, link) in self.runs(start, end) {
+            let run = &self.text[a..b];
+            vui.draw_string_ex(r, run, at, y, if link { crate::itemlink::COLOR } else { [1.0; 4] }, true);
+            at += vui.string_width(r, run);
+        }
+        if ((now - self.last_input) / 500) & 1 == 0 {
+            let caret = x + vui.string_width(r, &self.text[start..cursor]);
+            vui.fill_rectangle(r, [[caret, y + 2], [caret + 1, bottom]], [1.0; 4]);
+        }
     }
 
     /// `OnDrawSelf`.
@@ -1630,11 +1673,14 @@ mod tests {
     /// purple; the control: a line with none is the one run it always was.
     #[test]
     fn a_link_is_drawn_in_its_colour() {
-        struct Runs(Vec<(String, [f32; 4])>);
+        #[derive(Default)]
+        struct Runs(Vec<(String, [f32; 4])>, Vec<[[i32; 2]; 4]>);
         impl Raster for Runs {
             fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
             fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
-            fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+            fn fill_fan(&mut self, color: [f32; 4], corners: [[i32; 2]; 4]) {
+                if color == [1.0; 4] { self.1.push(corners); }
+            }
             fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
             fn draw_string(&mut self, _: [i32; 2], c: [f32; 4], s: &[u16]) {
                 if c[0] + c[1] + c[2] > 0.0 {
@@ -1660,14 +1706,26 @@ mod tests {
         e.set_text(&wide("see"));
         e.insert_link(&wide("Rusty Sword"), 0, 7, 0);
         e.insert(b'!' as u16, 0);
-        let mut r = Runs(Vec::new());
+        let mut r = Runs::default();
         e.draw(&vui, &mut r, 1000, &mut cues);
         let lines: Vec<(String, bool)> = r.0.iter().filter(|(t, _)| ["see ", "Rusty Sword", "!"].contains(&t.as_str())).map(|(t, c)| (t.clone(), c[0] == crate::itemlink::COLOR[0] && c[1] == crate::itemlink::COLOR[1])).collect();
         assert_eq!(lines, vec![("see ".into(), false), ("Rusty Sword".into(), true), ("!".into(), false)]);
+        let mut r = Runs::default();
+        e.draw_inline(&vui, &mut r, [12, 24, 123, 41], "Say", 0);
+        let words: Vec<_> = r.0.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(words, ["Say> ", "y Sword", "!"]);
+        assert_eq!(r.0[1].1, crate::itemlink::COLOR);
+        assert_eq!(r.1.last().unwrap()[0], [119, 27], "caret at the visible draft's end");
+        e.cursor = 0;
+        let mut r = Runs::default();
+        e.draw_inline(&vui, &mut r, [12, 24, 123, 41], "Say", 0);
+        let words: Vec<_> = r.0.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(words, ["Say> ", "see ", "Rust"]);
+        assert_eq!(r.1.last().unwrap()[0], [55, 27], "caret before the first character");
         let mut e = EditBox::default();
         e.set_max_length(128);
         e.set_text(&wide("see Rusty Sword!"));
-        let mut r = Runs(Vec::new());
+        let mut r = Runs::default();
         e.draw(&vui, &mut r, 1000, &mut cues);
         assert!(r.0.iter().any(|(t, _)| t == "see Rusty Sword!"), "the control: one run");
     }

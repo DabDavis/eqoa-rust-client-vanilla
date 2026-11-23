@@ -454,6 +454,43 @@ fn shift(q: &mut Quad, by: [f32; 2]) {
     });
 }
 
+/// Uniform scale about a HUD piece's anchored corner, before its drag offset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HudScale {
+    pub origin: [f32; 2],
+    pub factor: f32,
+}
+
+impl HudScale {
+    pub const IDENTITY: Self = Self { origin: [0.0; 2], factor: 1.0 };
+
+    pub fn point(self, p: [f32; 2]) -> [f32; 2] {
+        if self.factor == 1.0 {
+            return p;
+        }
+        let [x, y] = self.origin;
+        [x + (p[0] - x) * self.factor, y + (p[1] - y) * self.factor]
+    }
+
+    pub fn inverse(self, p: [f32; 2]) -> [f32; 2] {
+        Self { factor: self.factor.recip(), ..self }.point(p)
+    }
+
+    pub fn quad(self, q: &mut Quad) {
+        if self.factor == 1.0 {
+            return;
+        }
+        for p in &mut q.pos {
+            *p = self.point(*p);
+        }
+        if let Some([l, t, r, b]) = q.clip.filter(|c| *c != WHOLE) {
+            let a = self.point([l as f32, t as f32]);
+            let b = self.point([r as f32, b as f32]);
+            q.clip = Some([a[0], a[1], b[0], b[1]].map(|v| v.round() as i32));
+        }
+    }
+}
+
 /// A quad with the frame that is the frame's whole width (a window's
 /// backdrop or band: on a TV it runs off both sides) run across the target's
 /// whole width, its texture carried on at its own scale (a blit's texels
@@ -627,6 +664,7 @@ pub struct Ui {
     /// them, in frame pixels: a HUD piece the player moved (`eqoa`'s
     /// `hudlayout`). Nothing by default; `begin` puts it back.
     pub shift: [f32; 2],
+    pub hud_scale: HudScale,
     /// The target's frame pixels beyond each side of the frame, and above
     /// and below it (`begin`).
     side: f32,
@@ -740,7 +778,7 @@ impl Ui {
         let sharp = set("ui sharp text", "fs_sharp_tested", "fs_sharp");
         let smooth = set("ui smooth text", "fs_smooth_tested", "fs_smooth");
         let art_sharp = set("ui sharp", "fs_art_sharp_tested", "fs_art_sharp");
-        Ui { layout, sampler, filtering, pipelines, sharp, smooth, art_sharp, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, shift: [0.0; 2], side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed), retire: Default::default() }
+        Ui { layout, sampler, filtering, pipelines, sharp, smooth, art_sharp, textures: Vec::new(), fonts: Vec::new(), quads: Vec::new(), viewport: None, anchor: Anchor::Middle, vertical: Vertical::Middle, shift: [0.0; 2], hud_scale: HudScale::IDENTITY, side: 0.0, top: 0.0, sided: Vec::new(), risen: Vec::new(), opaque: Vec::new(), kept: Vec::new(), split: None, serial: LAYERS.fetch_add(1, Ordering::Relaxed), retire: Default::default() }
     }
 
     /// A new frame's quads, for a `size` target: none yet, and those made
@@ -756,6 +794,7 @@ impl Ui {
         self.anchor = Anchor::Middle;
         self.vertical = Vertical::Middle;
         self.shift = [0.0; 2];
+        self.hud_scale = HudScale::IDENTITY;
         self.viewport = None;
         self.split = None;
     }
@@ -963,7 +1002,8 @@ impl Ui {
         if self.top > 0.0 && self.anchor.hud() {
             y = self.vertical.place(y, self.top);
         }
-        [x + self.shift[0], y + self.shift[1]]
+        let p = self.hud_scale.point([x, y]);
+        [p[0] + self.shift[0], p[1] + self.shift[1]]
     }
 
     /// A quad, placed in and cut to the current viewport, then moved across
@@ -971,6 +1011,7 @@ impl Ui {
     pub fn push(&mut self, mut q: Quad) {
         place(&mut q, self.viewport, self.anchor, self.side);
         rise(&mut q, self.anchor, self.vertical, self.top);
+        self.hud_scale.quad(&mut q);
         shift(&mut q, self.shift);
         note(self.quads.len(), &q, self.anchor, self.side, &mut self.sided, &mut self.opaque);
         if let Some(dy) = rose(self.anchor, self.vertical, self.top) {
@@ -1117,6 +1158,22 @@ mod tests {
 
     fn quad(x0: f32, x1: f32) -> Quad {
         Quad { tex: 0, blend: 0, pos: [[x0, 10.0], [x1, 10.0], [x1, 20.0], [x0, 20.0]], uv: [[0.0; 2]; 4], color: [1.0; 4], clip: None }
+    }
+
+    #[test]
+    fn hud_scale_moves_quads_and_scissors_about_the_same_corner() {
+        let mut q = quad(100.0, 200.0);
+        q.clip = Some([120, 10, 190, 20]);
+        let scale = HudScale { origin: [640.0, 0.0], factor: 0.5 };
+        scale.quad(&mut q);
+        assert_eq!(q.pos[0], [370.0, 5.0]);
+        assert_eq!(q.clip, Some([380, 5, 415, 10]));
+        let original = q.pos;
+        HudScale::IDENTITY.quad(&mut q);
+        assert_eq!(q.pos, original);
+        q.clip = Some(WHOLE);
+        scale.quad(&mut q);
+        assert_eq!(q.clip, Some(WHOLE));
     }
 
     #[test]

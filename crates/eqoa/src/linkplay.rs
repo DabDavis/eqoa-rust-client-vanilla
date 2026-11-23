@@ -97,7 +97,8 @@ impl Play {
     /// headless run's `linkclick`.
     pub fn link_on_screen(&self, size: (u32, u32), k: usize) -> Option<(f64, f64)> {
         let p = self.wnd_chat.as_ref()?.newest_link_at(k)?;
-        let w = render::ui::window_from_frame(size, [p[0] + render::ui::side(size), p[1] + render::ui::top(size)]);
+        let f = crate::hudlayout::frame_point(crate::hudlayout::Piece::Chat, p, crate::hudlayout::Beyond::of(size));
+        let w = render::ui::window_from_frame(size, f);
         Some((w[0] as f64, w[1] as f64))
     }
 
@@ -304,6 +305,64 @@ mod tests {
         assert_eq!(wire(&first(&mut p)), (0, "/t Annabel Rusty Sword".into(), vec![(11, 11, 0, 3)]));
         p.chat_line_linked("/bug Rusty Sword", &sword(5));
         assert!(taken(&mut p).iter().all(|m| m[1] != 0x7E || m[0] == 0x0F), "a command: the plain line");
+    }
+
+    #[test]
+    fn inline_keyboard_channel_switch_send_reply_and_cancel() {
+        use crate::pointer::testing::{NullRaster, vui};
+        crate::settings::testing::reset(false);
+        let mut p = play(true);
+        p.wnd_chat = Some(crate::chat::WndChat::new());
+        p.keyboard_chat_key("");
+        assert!(!p.inline_editing(), "default keyboard window");
+        crate::settings::set_client(crate::settings::ClientOptions { inline_chat: true, ..crate::settings::client() });
+        let key = |p: &mut Play, k| {
+            p.edit_key(k, true);
+            p.run_edit(&vui(), &NullRaster);
+        };
+        key(&mut p, 27);
+        p.keyboard = false;
+        p.keyboard_chat_key("");
+        assert!(!p.inline_editing(), "controller-bound chat key");
+        key(&mut p, 27);
+        p.keyboard = true;
+        p.open_chat_line();
+        assert!(!p.inline_editing(), "R3 and the pointer keep their popup");
+        key(&mut p, 27);
+        p.keyboard_chat_key("");
+        assert!(p.inline_editing());
+        p.edit.paste("/g", 0);
+        taken(&mut p);
+        key(&mut p, 13);
+        assert!(p.inline_editing() && taken(&mut p).is_empty() && p.channel == 0, "no group, keep the draft");
+        p.group.in_group = true;
+        p.group.members.resize(2, Default::default());
+        p.guild.in_guild = true;
+        for (command, mode, label) in [("/S", 3, "Shout"), ("/g", 2, "Group"), ("/Gu", 4, "Guild"), ("/sa", 0, "Say")] {
+            p.edit.set_text(&crate::ui::wide(command));
+            assert_eq!(p.inline_label(), label);
+            key(&mut p, 13);
+            assert!(p.inline_editing() && p.edit.text.is_empty());
+            assert_eq!((p.channel, p.inline_label()), (mode, label));
+            assert_eq!(taken(&mut p), [vec![0x0E, 0x00, mode]], "no empty message");
+        }
+        p.edit.paste("/t Ann hello", 0);
+        key(&mut p, 13);
+        assert_eq!(p.mode, 0);
+        assert_eq!(taken(&mut p).len(), 1);
+        p.keyboard_chat_key("/r ");
+        key(&mut p, 13);
+        assert!(p.inline_editing() && taken(&mut p).is_empty(), "no previous tell");
+        p.reply_name = "Ann".into();
+        key(&mut p, 13);
+        assert_eq!(String::from_utf16_lossy(&p.edit.text), "/t Ann ");
+        assert!(p.link_item(0, 0));
+        key(&mut p, 13);
+        assert_eq!(wire(&taken(&mut p)[0]), (0, "/t Ann Rusty Sword".into(), vec![(7, 11, 0, 3)]));
+        p.keyboard_chat_key("");
+        p.edit.paste("discard me", 0);
+        key(&mut p, 27);
+        assert!(p.mode == 0 && taken(&mut p).is_empty(), "Escape cancels without sending");
     }
 
     /// The line given up with a link in it is kept and comes back at the next

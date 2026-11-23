@@ -1474,7 +1474,7 @@ pub fn shot_with(
                 let mut pv = crate::play::PlateView::of(&walker.cam, &walker.eye.position, (w, h));
                 pv.fog = p.weather_fog;
                 if shot_override {
-                    (pv.eye, pv.scale) = (shot_eye, 1.0);
+                    (pv.eye, pv.scale) = (shot_eye, crate::settings::client().nameplate_scale as f32 / 100.0);
                 }
                 t.plates = crate::play::labels(&plates, &pv, view.view_proj, t);
                 t.plate_scale = pv.scale;
@@ -4438,6 +4438,9 @@ impl App {
         {
             let down = event.state == ElementState::Pressed;
             let soft = !p.edit_pad_only();
+            if p.inline_editing() && event.repeat && event.logical_key == Key::Named(NamedKey::Enter) {
+                return;
+            }
             let named = match &event.logical_key {
                 Key::Named(NamedKey::Backspace) => Some(8),
                 Key::Named(NamedKey::Escape) => Some(27),
@@ -5061,7 +5064,7 @@ impl App {
             let open = |p: &mut crate::play::Play, held: &mut HashSet<String>, s: &str| {
                 held.clear();
                 if p.hud_ready() {
-                    p.chat_key(s, s.is_empty() || s == "/");
+                    p.keyboard_chat_key(s);
                 } else {
                     p.typing = Some(s.to_string());
                 }
@@ -5097,8 +5100,10 @@ impl App {
                 }
             }
             match (&mut p.typing, &event.logical_key) {
-                (None, Key::Named(NamedKey::Enter)) => {
-                    open(p, &mut self.held, "");
+                (None, Key::Named(NamedKey::Enter)) if p.mode == 0 => {
+                    if !event.repeat {
+                        open(p, &mut self.held, "");
+                    }
                     return;
                 }
                 // Q: InteractWithTarget.
@@ -5945,13 +5950,13 @@ impl App {
         // Escape with chat lines selected: they are let go, and nothing more
         if event.state == ElementState::Pressed
             && event.logical_key == Key::Named(NamedKey::Escape)
-            && self.play.as_mut().is_some_and(|p| p.chat_escape())
+            && self.play.as_mut().is_some_and(|p| !p.inline_editing() && p.chat_escape())
         {
             return;
         }
         // Escape while the mouse look holds the pointer: it is let go
         // (as a browser ends its lock on Escape), and nothing more
-        if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) && self.mouse.escape() {
+        if event.state == ElementState::Pressed && event.logical_key == Key::Named(NamedKey::Escape) && !self.play.as_ref().is_some_and(|p| p.inline_editing()) && self.mouse.escape() {
             self.grab_pointer(false);
             return;
         }
