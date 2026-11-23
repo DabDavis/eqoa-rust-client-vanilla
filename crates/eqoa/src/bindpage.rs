@@ -180,10 +180,10 @@ impl ControlsPage {
     fn select(&mut self, cues: &mut Vec<i32>) {
         if entry(self.row) == Entry::Defaults {
             let b = crate::settings::binds();
-            let d = b.controls_defaults();
+            let d = b.controls_defaults_profile(crate::binds::pc_shortcuts());
             let lost = (0..binds::MACROS).filter(|&m| d.macros[m].triggers.len() != b.macros[m].triggers.len()).count();
             crate::settings::set_binds(d);
-            self.note = Some(if lost == 0 { "Every key and button is back where it began.".into() } else { "Every key and button is back where it began, and out of the macros' triggers.".into() });
+            self.note = Some(if crate::binds::pc_shortcuts() { "PC keyboard overrides are reset; shared bindings and macros are kept.".into() } else if lost == 0 { "Every key and button is back where it began.".into() } else { "Every key and button is back where it began, and out of the macros' triggers.".into() });
             cues.push(13);
             return;
         }
@@ -219,20 +219,24 @@ impl ControlsPage {
         let row = self.row as usize;
         let mut b = crate::settings::binds();
         let had = b.macros_with(&Input::Key(name.to_string()));
-        let moved = b.bind_key(row, name);
+        let moved = b.bind_key_profile(row, name, crate::binds::pc_shortcuts());
         crate::settings::set_binds(b.clone());
         self.capture = None;
         let me = format!("{}: {}.", label(vui, row), binds::display(name));
         let mut note = match moved {
-            Moved::Swapped(o) if b.key(o).is_none_or(str::is_empty) => format!("{me} {} has no key now.", label(vui, o)),
-            Moved::Swapped(o) => format!("{me} {}: {}.", label(vui, o), binds::display(b.key(o).unwrap_or(""))),
+            Moved::Swapped(o) if b.profile_key(o, crate::binds::pc_shortcuts()).is_none_or(str::is_empty) => format!("{me} {} has no key now.", label(vui, o)),
+            Moved::Swapped(o) => format!("{me} {}: {}.", label(vui, o), binds::display(b.profile_key(o, crate::binds::pc_shortcuts()).unwrap_or(""))),
             Moved::Freed(Some(old)) if !old.is_empty() => format!("{me} {} does nothing now.", binds::display(&old)),
             _ => me,
         };
         // the macros' triggers the key was in went with it (`bind_key`):
         // said, as a row is
         if !had.is_empty() {
-            note.push_str(&format!(" {} is no longer in a trigger of {}.", binds::display(name), macro_names(&had)));
+            if crate::binds::pc_shortcuts() {
+                note.push_str(&format!(" {} overrides {} in PC mode.", binds::display(name), macro_names(&had)));
+            } else {
+                note.push_str(&format!(" {} is no longer in a trigger of {}.", binds::display(name), macro_names(&had)));
+            }
         }
         self.note = Some(note);
         cues.push(13);
@@ -353,7 +357,7 @@ impl ControlsPage {
             let kt = if waiting(Column::Keyboard) {
                 "Press a key".to_string()
             } else {
-                b.key(entry as usize).map_or_else(|| "-".to_string(), binds::display)
+                b.profile_key(entry as usize, crate::binds::pc_shortcuts()).filter(|s| !s.is_empty()).map_or_else(|| "-".to_string(), binds::display)
             };
             let pt = if waiting(Column::Pad) {
                 "Press".to_string()

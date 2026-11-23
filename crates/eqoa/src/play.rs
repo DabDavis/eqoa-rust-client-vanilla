@@ -1965,7 +1965,7 @@ impl PlateView {
         PlateView {
             eye: glam::Vec3::from(crate::lod::eye(cam, eye).to_array()),
             distance: crate::settings::name_distance(),
-            scale: crate::lod::plate_scale(cam, eye, k) * (crate::settings::client().nameplate_scale as f32 / 100.0),
+            scale: crate::lod::plate_scale(cam, eye, k) * (crate::settings::client().display_ui().nameplate_scale as f32 / 100.0),
             most: crate::settings::entity_slots().max(NAME_PLATES_GAME),
             overlap: crate::settings::overlapping_names(),
             fog: None,
@@ -2809,7 +2809,7 @@ mod name_plates {
         assert_eq!((v.distance, v.most), (22.0, NAME_PLATES_GAME));
         assert!((v.scale - crate::lod::PLATE_FLOOR).abs() < 1e-3);
         assert_eq!(PlateView::of(&cam, &back(8.0), (1920, 1080)), PlateView::game(Vec3::new(1000.0, 51.68, 1992.0)), "the game's camera: the game's");
-        crate::settings::set_client(crate::settings::ClientOptions { hud_scale: 50, nameplate_scale: 150, ..crate::settings::client() });
+        crate::settings::set_client(crate::settings::ClientOptions { pc_mode: true, hud_scale: 50, nameplate_scale: 150, ..crate::settings::client() });
         let scaled = PlateView::of(&cam, &back(50.0), (1920, 1080));
         assert_eq!(scaled, PlateView { scale: v.scale * 1.5, ..v }, "name size composes with zoom independently of HUD size");
         crate::settings::set_client(crate::settings::ClientOptions { name_distance: 90, entity_slots: 64, ..Default::default() });
@@ -3973,7 +3973,7 @@ impl Play {
                 }
                 Event::AbilitySlot { token, index, slot } => {
                     self.ability_token = token;
-                    if self.slot_asked.is_some_and(|(i, _, _)| i == index as i64) {
+                    if self.slot_asked.is_some_and(|(i, s, _)| i == index as i64 && s == slot as i64) {
                         self.slot_asked = None;
                     }
                     self.ability_slot(index as i64, slot as i64);
@@ -5977,6 +5977,16 @@ impl Play {
             // compass and the quick menus up at its top, the chat box down at
             // its bottom (each answers in its own place)
             let bars_at = local(if self.hud_menus.stacked { Piece::SpellBars } else { Piece::QuickMenus });
+            if crate::binds::pc_shortcuts() && let Some((menu, n)) = self.hud_menus.stacked_at(bars_at) {
+                let native = crate::hudmenu::BAR_MENUS.iter().position(|&m| m == menu);
+                let bar = if menu >= crate::hudmenu::MENUS { Some(crate::hudmenu::PC_ACTION_BAR + menu - crate::hudmenu::MENUS) }
+                    else { native.filter(|_| n < 5) };
+                if let Some(bar) = bar {
+                    if matches!(c, Click::Right(..)) { self.auto_point(bars_at); }
+                    else { self.bar_slot_key(bar, n as usize); }
+                    return true;
+                }
+            }
             // a right click on a bar's ability: its auto turned (`autocast`);
             // anywhere else, the world's as ever
             if matches!(c, Click::Right(..)) {
@@ -5999,6 +6009,12 @@ impl Play {
             }
             // the Utility Bars (2026-11-18) where they were put, a piece of
             // their own, at the side Utility Bar Layout draws them at
+            if crate::binds::pc_shortcuts() && let Some(k) = self.hud_menus.point_equipment(local(Piece::EquipmentBar)) {
+                self.note_hud_key(k, true);
+                self.hud_key(k);
+                self.note_hud_key(k, false);
+                return true;
+            }
             if let Some(k) = self.hud_menus.point_utility(local(Piece::UtilityBars)) {
                 self.note_hud_key(k, true);
                 self.hud_key(k);
@@ -6006,7 +6022,8 @@ impl Play {
                 return true;
             }
             // the chat box: the chat line, as R3 opens it
-            if self.wnd_chat.as_ref().is_some_and(|w| w.contains(local(Piece::Chat))) {
+            if self.wnd_chat.as_ref().is_some_and(|w| w.contains(local(Piece::Chat))
+                || (crate::settings::pc_mode() && (1..=crate::chat::TABS).any(|t| w.pane(t).is_some_and(|p| p.contains(local(Self::chat_piece(t))))))) {
                 self.open_chat_line();
                 return true;
             }
@@ -6022,6 +6039,10 @@ impl Play {
                 // a raid list's group line: nothing to target
                 Some(crate::hud::Pick::RaidGroup(_)) => return true,
                 Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),
+                Some(crate::hud::Pick::Settings) => {
+                    self.open_options();
+                    return true;
+                }
                 // the minimap: the map opened, as the compass opens it
                 Some(crate::hud::Pick::Minimap) => {
                     self.map.show();
@@ -6076,9 +6097,18 @@ impl Play {
     /// The chat box's point for a pointer at window pixels `at` (as `point`
     /// takes it, before a wide window's move and a tall one's).
     fn chat_point(at: (f64, f64), size: (u32, u32)) -> [f32; 2] {
+        Self::chat_pane_point(at, size, 0)
+    }
+
+    fn chat_piece(t: usize) -> crate::hudlayout::Piece {
+        use crate::hudlayout::Piece;
+        match t { 1 => Piece::Chat1, 2 => Piece::Chat2, 3 => Piece::Chat3, _ => Piece::Chat }
+    }
+
+    fn chat_pane_point(at: (f64, f64), size: (u32, u32), t: usize) -> [f32; 2] {
         let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
         // where the player put the box (`hudlayout`)
-        crate::hudlayout::local_point(crate::hudlayout::Piece::Chat, f, crate::hudlayout::Beyond::of(size))
+        crate::hudlayout::local_point(Self::chat_piece(t), f, crate::hudlayout::Beyond::of(size))
     }
 
     /// A mouse button down in the world at window pixels `at` (`left`: the left
@@ -6088,9 +6118,33 @@ impl Play {
     pub fn chat_press(&mut self, at: (f64, f64), size: (u32, u32), left: bool) -> bool {
         let lines = ((self.mode == 0 && !self.search.open) || self.mode == 33) && !crate::hideui::hidden();
         let scrolling = self.mode == 33;
+        let frame = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        if self.links.covers(frame) { return false; }
         let Some(c) = self.wnd_chat.as_mut() else { return false };
-        if c.dragging() {
+        if c.dragging() || (1..=crate::chat::TABS).any(|t| c.pane(t).is_some_and(|p| p.dragging())) {
             return true;
+        }
+        if left && lines && crate::settings::pc_mode() {
+            for t in (1..=crate::chat::TABS).rev() {
+                let p = Self::chat_pane_point(at, size, t);
+                if c.pane(t).is_some_and(|pane| pane.control_at(p)) {
+                    c.set_detached(t, false);
+                    if let Err(e) = crate::settings::set_chat_detached(t, false) { crate::say(&format!("chat: could not save pane: {e}")); }
+                    return true;
+                }
+                if c.pane_mut(t).is_some_and(|pane| pane.press(p, at)) { return true; }
+                if c.pane(t).is_some_and(|pane| pane.contains(p)) {
+                    self.open_chat_line();
+                    return true;
+                }
+            }
+            if c.control_at(Self::chat_point(at, size)) {
+                let t = c.tab();
+                if c.set_detached(t, true) {
+                    if let Err(e) = crate::settings::set_chat_detached(t, true) { crate::say(&format!("chat: could not save pane: {e}")); }
+                }
+                return true;
+            }
         }
         // a tab's name over the box (ticket 1951): that tab shown
         if left && lines && c.click_tab(Self::chat_point(at, size)) {
@@ -6106,14 +6160,31 @@ impl Play {
     /// The pointer moved in the world: a drag of the chat box's goes with it.
     pub fn chat_moved(&mut self, at: (f64, f64), size: (u32, u32)) {
         if let Some(c) = self.wnd_chat.as_mut() {
+            for t in 1..=crate::chat::TABS {
+                if let Some(p) = c.pane_mut(t) { p.moved(Self::chat_pane_point(at, size, t), at); }
+            }
             c.moved(Self::chat_point(at, size), at);
         }
+    }
+
+    pub fn spell_hover(&mut self, at: Option<[f32; 2]>, size: (u32, u32)) {
+        let p = at.filter(|_| crate::binds::pc_shortcuts() && self.mode == 0 && !self.map.open && !self.search.open && !crate::hideui::hidden())
+            .map(|at| crate::hudlayout::local_point(crate::hudlayout::Piece::SpellBars, render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size)));
+        self.hud_menus.hover_stacked(p);
+        let p = at.filter(|_| crate::binds::pc_shortcuts() && self.mode == 0 && !self.map.open && !self.search.open && !crate::hideui::hidden())
+            .map(|at| crate::hudlayout::local_point(crate::hudlayout::Piece::EquipmentBar, render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size)));
+        self.hud_menus.hover_equipment(p);
     }
 
     /// The left button let go (`chat::Let`).
     pub fn chat_release(&mut self) -> crate::chat::Let {
         let scrolling = self.mode == 33;
-        let got = self.wnd_chat.as_mut().map_or(crate::chat::Let::NotHeld, |c| c.release(scrolling));
+        let got = self.wnd_chat.as_mut().map_or(crate::chat::Let::NotHeld, |c| {
+            for t in 1..=crate::chat::TABS {
+                if let Some(p) = c.pane_mut(t).filter(|p| p.dragging()) { return p.release(false); }
+            }
+            c.release(scrolling)
+        });
         // a click on an item link opens it (`itemlink`)
         if let crate::chat::Let::Link(id, name) = &got {
             self.open_link(*id, name);
@@ -6125,13 +6196,14 @@ impl Play {
     /// A press of the chat box's that is down (the other button's are nothing
     /// while it is).
     pub fn chat_dragging(&self) -> bool {
-        self.wnd_chat.as_ref().is_some_and(|c| c.dragging())
+        self.wnd_chat.as_ref().is_some_and(|c| c.dragging() || (1..=crate::chat::TABS).any(|t| c.pane(t).is_some_and(|p| p.dragging())))
     }
 
     /// The pointer gone from the window or the keys to another: a drag's release
     /// may never come, so it ends here, what it selected kept.
     pub fn chat_let_go(&mut self) {
         if let Some(c) = self.wnd_chat.as_mut() {
+            for t in 1..=crate::chat::TABS { if let Some(p) = c.pane_mut(t) { p.let_go(); } }
             c.let_go();
         }
     }
@@ -6139,7 +6211,11 @@ impl Play {
     /// Esc: a selection cleared takes it, and it is nothing more.
     pub fn chat_escape(&mut self) -> bool {
         let scrolling = self.mode == 33;
-        let Some(c) = self.wnd_chat.as_mut().filter(|c| c.selecting()) else { return false };
+        let Some(c) = self.wnd_chat.as_mut() else { return false };
+        for t in 1..=crate::chat::TABS {
+            if let Some(p) = c.pane_mut(t).filter(|p| p.selecting()) { p.clear_selection(false); return true; }
+        }
+        if !c.selecting() { return false; }
         c.clear_selection(scrolling);
         true
     }
@@ -6147,7 +6223,19 @@ impl Play {
     /// The wheel's `lines` over the chat box's history (`WndChat::wheel`).
     pub fn chat_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
         let held = self.mode == 33;
-        self.wnd_chat.as_mut().is_some_and(|c| c.wheel(Self::chat_point(at, size), lines, held))
+        self.wnd_chat.as_mut().is_some_and(|c| {
+            if crate::settings::pc_mode() {
+                for t in (1..=crate::chat::TABS).rev() {
+                    let point = Self::chat_pane_point(at, size, t);
+                    if let Some(p) = c.pane_mut(t).filter(|p| p.contains(point)) {
+                        return p.pc_wheel(point, lines);
+                    }
+                }
+                let point = Self::chat_point(at, size);
+                if c.contains(point) { return c.pc_wheel(point, lines); }
+            }
+            c.wheel(Self::chat_point(at, size), lines, held)
+        })
     }
 
     /// The wheel's `lines` (up positive; a finger's drag down) on the window
@@ -7214,6 +7302,7 @@ impl Play {
             return;
         }
         match key {
+            144 if crate::settings::pc_mode() => self.open_options(),
             144 => self.open_start_menu(true),
             145 => self.camera_style_key(walker),
             134 => self.attack_press(),
@@ -8330,7 +8419,7 @@ impl Play {
     /// Keyboard Enter, slash, Tell or Reply in the world. Controller and touch
     /// chat continue through the game's edit window.
     pub fn keyboard_chat_key(&mut self, text: &str) {
-        let inline = self.mode == 0 && self.keyboard && self.wnd_chat.is_some() && crate::settings::client().inline_chat;
+        let inline = self.mode == 0 && self.keyboard && self.wnd_chat.is_some() && crate::settings::pc_mode() && crate::settings::client().inline_chat;
         self.chat_key(text, text.is_empty() || text == "/");
         self.edit.inline_chat = inline;
     }
@@ -9173,7 +9262,18 @@ impl Play {
     /// expansion mask's bit 1 the game's two, or as many as the Extended
     /// page's Ability Bars asks (their slots the server's to keep).
     pub fn ability_bars(&self) -> i32 {
+        if let Some(slots) = self.pc_slot_capacity() {
+            return (slots / 5).min(crate::hudmenu::MAX_BARS);
+        }
         if (self.session.expansion >> 1) & 1 != 0 { (crate::settings::ability_bars() as i32).clamp(2, crate::hudmenu::MAX_BARS) } else { 1 }
+    }
+
+    /// Expanded PC spell books and bars share one capacity. The server confirms
+    /// each equipped spell through its normal memorize reply.
+    fn pc_slot_capacity(&self) -> Option<i32> {
+        crate::binds::pc_shortcuts().then(|| {
+            if self.session.expansion & 2 == 0 { 5 } else { i32::from(crate::settings::pc_action_rows()) * 10 }
+        })
     }
 
     /// What the HUD's carousel holds: the ability bars (`ability_bars`) and
@@ -9236,6 +9336,10 @@ impl Play {
         if (self.mode != 0 && self.mode != 38) || self.typing.is_some() || self.map.open {
             return;
         }
+        if (crate::hudmenu::PC_ACTION_BAR..crate::hudmenu::PC_ACTION_BAR + 2).contains(&bar) {
+            if slot < 10 { self.cast_pc_slot(20 + (bar - crate::hudmenu::PC_ACTION_BAR) * 10 + slot); }
+            return;
+        }
         let shown = match bar {
             crate::hudmenu::ITEMS_BAR => true,
             crate::hudmenu::SETS_BAR => self.gear.on,
@@ -9245,9 +9349,20 @@ impl Play {
             return;
         }
         let Some(menu) = crate::hudmenu::key_menu(bar) else { return };
+        if crate::binds::pc_shortcuts() && bar < crate::hudmenu::MAX_BARS as usize && slot < 5 {
+            self.hud_menus.sel = menu as i32;
+            self.hud_menus.menus[menu].sel = slot as i32;
+            self.cast_pc_slot(bar * 5 + slot);
+            return;
+        }
         let Some((msg, id)) = self.hud_menus.slot_entry(bar, slot) else { return };
+        if crate::binds::pc_shortcuts() { self.hud_menus.sel = menu as i32; }
         self.hud_menus.menus[menu].sel = slot as i32;
         eprintln!("play: bar {} slot {} key: {msg:#x} {id}", bar + 1, slot + 1);
+        self.press_bar_entry(msg, id);
+    }
+
+    fn press_bar_entry(&mut self, msg: u32, id: i64) {
         // circle (135) as the click's, without its hold (`auto_use_held`
         // reads the menu up, not this bar)
         let noted = !self.is_dead();
@@ -9260,6 +9375,15 @@ impl Play {
         }
     }
 
+    /// A keyboard press and a click read the same confirmed gem, even if a
+    /// memorize reply arrived after the last HUD frame.
+    fn cast_pc_slot(&mut self, slot: usize) {
+        if let Some(capacity) = self.pc_slot_capacity() && slot < capacity as usize
+            && let Some(spell) = self.abilities.values().find(|a| a.valid != 0 && a.slot == slot as i64) {
+            self.press_bar_entry(0x8060000, spell.id);
+        }
+    }
+
     /// Stacked Spell Bars are drawn (`hudmenu`'s doc, ticket 1913): the
     /// Extended row on, on a computer, whatever was pressed last but a finger:
     /// a controller walks and uses the stacked bars with its d-pad as the
@@ -9267,7 +9391,7 @@ impl Play {
     /// the pad's first press). A finger on the touch screen keeps the
     /// carousel, whose taps it plays with; never on a phone.
     pub fn stacked_bars(&self) -> bool {
-        stacked_for(crate::settings::stacked_bars(), self.touched)
+        crate::binds::pc_shortcuts() || stacked_for(crate::settings::stacked_bars(), self.touched)
     }
 
     /// A memorize past the game's ten slots that the server left unanswered
@@ -9279,8 +9403,8 @@ impl Play {
             return;
         }
         self.slot_asked = None;
-        eprintln!("play: no 0x00B4 for slot {slot}: the server keeps the game's ten slots only");
-        self.add_chat(format!("This server did not keep the ability on bar {}: it keeps abilities on the game's two bars only.", slot / 5 + 1), [1.0, 0.25, 0.25, 1.0]);
+        eprintln!("play: no 0x00B4 for slot {slot}");
+        self.add_chat(format!("The server has not confirmed spell gem {}.", slot + 1), [1.0, 0.25, 0.25, 1.0]);
     }
 
     /// A line the client writes itself: word `id`, in red as the game's
@@ -10483,12 +10607,16 @@ impl Play {
                 // Chat Always Shown (ticket 1914): never sliding away
                 c.always = crate::settings::chat_always() || crate::hudlayout::unlocked();
                 // the chat tabs (ticket 1951), each line into its kind's
-                let opts = crate::settings::client();
+                let opts = crate::settings::client().display_ui();
                 let screen_width = render::ui::SCREEN_W + 2.0 * r.ui.side();
-                c.resize(crate::chat::ChatSize::from_options(&opts, screen_width), |s| vi::ui::Raster::string_width(&r, s));
+                c.resize(crate::chat::ChatSize::from_dimensions(&opts, screen_width, crate::settings::chat_pane_size(0)), |s| vi::ui::Raster::string_width(&r, s));
                 c.opacity = opts.chat_opacity;
                 c.typing = self.mode == 2 && self.edit.inline_chat;
                 c.set_tabs(opts.chat_tabs, opts.chat_tab_names);
+                let pc = crate::settings::pc_mode();
+                for t in 1..=crate::chat::TABS {
+                    c.set_detached(t, pc && opts.chat_detached[t - 1]);
+                }
                 for (text, color, at, links) in self.chat_pending.drain(..) {
                     let rr = &r;
                     c.add_line(&text, color, at, |s| vi::ui::Raster::string_width(rr, s), &links);
@@ -10496,8 +10624,23 @@ impl Play {
                 let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Chat);
                 c.draw(vui, &mut r, now, dt);
                 c.draw_selection(&mut r);
+                c.draw_pane_control(vui, &mut r, pc);
                 crate::hudlayout::end(r.ui, m);
                 self.cues.extend(c.cues.drain(..).map(crate::sound::Cue::Ui));
+                for t in 1..=crate::chat::TABS {
+                    if let Some(pane) = c.pane_mut(t) {
+                        if !in_play { pane.clear_selection(false); }
+                        pane.show_links = crate::settings::item_links();
+                        pane.opacity = opts.chat_opacity;
+                        pane.resize(crate::chat::ChatSize::from_dimensions(&opts, screen_width, crate::settings::chat_pane_size(t)), |s| vi::ui::Raster::string_width(&r, s));
+                        let m = crate::hudlayout::begin(r.ui, Self::chat_piece(t));
+                        pane.draw(vui, &mut r, now, dt);
+                        pane.draw_selection(&mut r);
+                        pane.draw_pane_control(vui, &mut r, true);
+                        crate::hudlayout::end(r.ui, m);
+                        self.cues.extend(pane.cues.drain(..).map(crate::sound::Cue::Ui));
+                    }
+                }
             }
             r.ui.anchor = Anchor::Middle;
             r.ui.vertical = Vertical::Middle;
@@ -10558,6 +10701,7 @@ impl Play {
             let now_ms = now as i64;
             let expansion = self.session.expansion;
             let bars = self.ability_bars();
+            self.book.set_pc_slot_capacity(self.pc_slot_capacity());
             if std::mem::take(&mut self.book_open) {
                 self.book.open(vui, &r, expansion, now_ms);
             }
@@ -10631,6 +10775,7 @@ impl Play {
             if (self.mode == 0 || self.mode == 30 || self.mode == 38 || self.mode == 43) && !self.search.open {
                 let bars = self.hud_bars();
                 self.hud_menus.build(&self.abilities, &self.dump.inventory, &self.gear, bars);
+                if crate::binds::pc_shortcuts() { self.hud_menus.sync_pc_slots(&self.abilities); }
                 let abilities = &self.abilities;
                 let inventory = &self.dump.inventory.items;
                 let gear = &self.gear;
@@ -10661,14 +10806,20 @@ impl Play {
                     // at the upper left or on the chat box under the spell
                     // bars (Utility Bar Layout)
                     let utility = crate::settings::utility_layout();
+                    let pc = crate::binds::pc_shortcuts();
                     let lift = crate::hudmenu::HudMenus::utility_height(bars, utility);
                     let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::SpellBars);
-                    self.hud_menus.draw_stacked(vui, &mut r, top - lift, left, bars, crate::settings::spell_bar_layout());
+                    if pc {
+                        self.hud_menus.draw_pc_bars(vui, &mut r, 440, 150, bars, crate::settings::pc_action_rows() as usize);
+                    } else {
+                        self.hud_menus.draw_stacked(vui, &mut r, top - lift, left, bars, crate::settings::spell_bar_layout());
+                    }
                     // the name not counted in the piece: against the screen's
                     // edge it moves, the bars do not (petition 2547)
                     let screen = crate::hudlayout::screen_x(r.ui, &m);
                     let m = crate::hudlayout::seal(r.ui, m);
                     self.hud_menus.draw_name(vui, &mut r, now as i64, false, Some(screen), &name);
+                    if pc { self.hud_menus.draw_hover_name(vui, &mut r, Some(screen), &name); }
                     crate::hudlayout::end(r.ui, m);
                     if utility == crate::hudmenu::UtilityLayout::UpperLeft {
                         r.ui.anchor = Anchor::Left;
@@ -10677,13 +10828,27 @@ impl Play {
                     let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::UtilityBars);
                     let at = match utility {
                         crate::hudmenu::UtilityLayout::UpperLeft => crate::hudmenu::UPPER_LEFT_AT,
+                        crate::hudmenu::UtilityLayout::Below if pc => [469, 270],
                         crate::hudmenu::UtilityLayout::Below => [left, top],
                     };
-                    self.hud_menus.draw_utility(vui, &mut r, bars, utility, at);
+                    let utility_bars = if pc { crate::hudmenu::Bars { gear: false, ..bars } } else { bars };
+                    self.hud_menus.draw_utility(vui, &mut r, utility_bars, utility, at);
                     let screen = crate::hudlayout::screen_x(r.ui, &m);
                     let m = crate::hudlayout::seal(r.ui, m);
                     self.hud_menus.draw_name(vui, &mut r, now as i64, true, Some(screen), &name);
                     crate::hudlayout::end(r.ui, m);
+                    if pc && bars.gear {
+                        r.ui.anchor = Anchor::Right;
+                        r.ui.vertical = Vertical::Bottom;
+                        let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::EquipmentBar);
+                        self.hud_menus.draw_equipment(vui, &mut r, bars, [469, 306]);
+                        let screen = crate::hudlayout::screen_x(r.ui, &m);
+                        let m = crate::hudlayout::seal(r.ui, m);
+                        self.hud_menus.draw_equipment_name(vui, &mut r, now as i64, Some(screen), &name);
+                        crate::hudlayout::end(r.ui, m);
+                    } else {
+                        self.hud_menus.hide_equipment();
+                    }
                     (r.ui.anchor, r.ui.vertical) = (anchor, vertical);
                 } else {
                     self.hud_menus.hide_utility();
@@ -10982,7 +11147,7 @@ impl Play {
     /// "main" Main) or name shown; none, the next tab there.
     fn tab_command(&mut self, arg: &str) {
         let Some(c) = self.wnd_chat.as_mut() else { return };
-        let tabs = c.tab_names();
+        let tabs: Vec<_> = c.tab_names().into_iter().filter(|(t, _, _)| *t == 0 || c.pane(*t).is_none()).collect();
         if tabs.len() < 2 {
             self.add_chat("There are no chat tabs: Extended > UI > Chat Tabs sends a kind of line to one.".to_string(), [1.0; 4]);
             return;
@@ -11647,7 +11812,7 @@ mod commands {
         p.mode = 34;
         p.options_wnd.open(&vui, &r, &p.options);
         let (mut cues, mut ups) = (Vec::new(), Vec::new());
-        for k in [key::DOWN, key::DOWN, key::CROSS] {
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             p.options_wnd.key(&vui, &mut r, &mut p.options, k, 0, &mut cues, &mut ups);
         }
         ups.clear();
@@ -13532,6 +13697,23 @@ mod commands {
         let mut p = fresh();
         p.hud_menus.menus[2].sel = 3;
         assert_eq!(key(&mut p, 0, 0, retail()), used(0), "the control: bar 1's first slot");
+        let bindings = crate::binds::Binds::default();
+        for (digit, expected) in [("1", 0), ("8", 7)] {
+            let crate::binds::Alias::Slot(bar, slot) = bindings.profile_alias(digit, true) else { panic!("PC number must map to a spell slot") };
+            assert_eq!(key(&mut fresh(), bar, slot, retail()), used(expected), "PC number {digit} reaches the existing cast packet");
+        }
+        let vui = crate::pointer::testing::vui();
+        let mut raster = crate::pointer::testing::NullRaster;
+        let mut clicked = fresh();
+        clicked.hud_menus.stacked = true;
+        let shown = clicked.hud_bars();
+        clicked.hud_menus.draw_pc_bars(&vui, &mut raster, 440, 150, shown, 2);
+        let click = clicked.hud_menus.point([150.0 + 7.0 * 34.0 + 1.0, 420.0]).expect("slot 8 hit");
+        clicked.session.flush();
+        sent.borrow_mut().clear();
+        clicked.hud_key(click);
+        clicked.session.flush();
+        assert_eq!(guaranteed(&sent.borrow()).into_iter().find(|m| m.starts_with(&[0x32, 0x00])), used(7), "PC mouse slot reaches the same cast packet");
         assert_eq!(key(&mut p, 2, 0, retail()), used(10), "bar 3's first slot: slot 10");
         assert_eq!((p.hud_menus.menus[4].sel, p.hud_menus.menus[2].sel), (0, 3), "bar 3's menu selected, the items' left");
         assert_eq!(key(&mut p, 3, 4, retail()), used(19), "bar 4's fifth slot: slot 19");
@@ -13579,6 +13761,39 @@ mod commands {
         let bars = p.hud_bars();
         p.hud_menus.build(&p.abilities, &p.dump.inventory, &p.gear, bars);
         assert_eq!(op(sends(&mut p, sets, 4), 0x22), Some(vec![0x22, 0x00, 4]), "bare hands taken up");
+        crate::settings::set_client(crate::settings::ClientOptions { pc_mode: true, pc_action_rows: 4, ability_bars: 4, ..crate::settings::client() });
+        for slot in 20..40 {
+            let mut pc = fresh();
+            let (bar, cell) = (crate::hudmenu::PC_ACTION_BAR + (slot - 20) / 10, slot % 10);
+            pc.abilities.insert(120, net::dump::Ability { id: 120, display_index: 22, slot: -1, valid: 0, ..Default::default() });
+            pc.book_actions(vec![crate::spellbook::Out::Send0033(22, slot as i64)]);
+            pc.session.flush();
+            assert_eq!(op(guaranteed(&sent.borrow()), 0x33), Some(vec![0x33, 0, 0x55, 0, 0, 0, 22, slot as u8]));
+            assert_eq!(key(&mut pc, bar, cell, retail()), None, "slot {} is pending", slot + 1);
+            pc.ability_slot(22, slot as i64);
+            assert_eq!(key(&mut pc, bar, cell, retail()), used(slot as u8), "acknowledged slot {}", slot + 1);
+        }
+        let mut limited = fresh();
+        limited.abilities.insert(120, net::dump::Ability { id: 120, slot: 39, valid: 1, ..Default::default() });
+        limited.session.expansion = 0;
+        assert_eq!(limited.pc_slot_capacity(), Some(5));
+        assert_eq!(key(&mut limited, crate::hudmenu::PC_ACTION_BAR + 1, 9, retail()), None);
+        limited.session.expansion = 2;
+        crate::settings::set_client(crate::settings::ClientOptions { pc_action_rows: 2, ..crate::settings::client() });
+        assert_eq!(key(&mut limited, crate::hudmenu::PC_ACTION_BAR + 1, 9, retail()), None, "row four is hidden");
+        crate::settings::set_client(crate::settings::ClientOptions { pc_action_rows: 4, ..crate::settings::client() });
+        assert_eq!(key(&mut limited, crate::hudmenu::PC_ACTION_BAR + 1, 9, retail()), used(39), "revealing the row restores access");
+        let mut gear_click = fresh();
+        gear_click.gear.on = true;
+        let bars = gear_click.hud_bars();
+        gear_click.hud_menus.build(&gear_click.abilities, &gear_click.dump.inventory, &gear_click.gear, bars);
+        gear_click.hud_menus.draw_equipment(&vui, &mut raster, bars, [469, 306]);
+        let click = gear_click.hud_menus.point_equipment([469.0 + 4.0 * 34.0 + 1.0, 286.0]).unwrap();
+        gear_click.session.flush();
+        sent.borrow_mut().clear();
+        gear_click.hud_key(click);
+        gear_click.session.flush();
+        assert_eq!(op(guaranteed(&sent.borrow()), 0x22), Some(vec![0x22, 0, 4]), "independent equipment row uses the real bare-hands switch");
         crate::settings::testing::reset(false);
     }
 
@@ -14709,3 +14924,7 @@ mod stacked_pad_tests {
         assert!(!super::stacked_for(false, false), "the control: the row off");
     }
 }
+
+#[cfg(test)]
+#[path = "offline_hud_test.rs"]
+mod offline_hud_test;

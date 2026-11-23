@@ -679,9 +679,9 @@ impl ChatSize {
     pub const BASE_WIDTH: i32 = 462;
     pub const ORIGINAL: Self = Self { width: Self::BASE_WIDTH, rows: 5 };
 
-    pub fn from_options(opts: &crate::settings::ClientOptions, screen_width: f32) -> Self {
+    pub fn from_dimensions(opts: &crate::settings::ClientOptions, screen_width: f32, (width, rows): (u8, u8)) -> Self {
         let available = (screen_width * 100.0 / opts.hud_scale as f32).floor() as i32;
-        Self { width: (Self::BASE_WIDTH * opts.chat_width as i32 / 100).min(available), rows: opts.chat_rows as i32 }
+        Self { width: (Self::BASE_WIDTH * width as i32 / 100).min(available), rows: rows as i32 }
     }
 
     fn wrap_width(self) -> i32 {
@@ -749,6 +749,10 @@ pub struct WndChat {
     row_height: i32,
     /// The chat tabs (the module's doc).
     tabs: Tabs,
+    /// Detached tabs own their original history and their own interaction state.
+    panes: [Option<Box<WndChat>>; TABS],
+    pane_title: Option<String>,
+    control_hit: Option<[i32; 4]>,
 }
 
 impl WndChat {
@@ -762,18 +766,23 @@ impl WndChat {
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
         let size = ChatSize::ORIGINAL;
-        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default() }
+        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None }
     }
 
     pub fn resize(&mut self, size: ChatSize, measure: impl Fn(&[u16]) -> i32) {
-        if self.size == size {
-            return;
-        }
-        if self.size.width != size.width {
-            for ring in std::iter::once(&mut self.text).chain(self.tabs.parked.iter_mut().flatten()) {
+        self.resize_with(size, &measure);
+    }
+
+    fn resize_with(&mut self, size: ChatSize, measure: &dyn Fn(&[u16]) -> i32) {
+        // A reattached ring may have been wrapped to a different pane width
+        // even when this window's own size has not changed.
+        let changed = self.size != size || self.text.width != size.wrap_width() - 30;
+        for ring in std::iter::once(&mut self.text).chain(self.tabs.parked.iter_mut().flatten()) {
+            if ring.width != size.wrap_width() - 30 {
                 ring.rewrap(size.wrap_width(), &measure);
             }
         }
+        if !changed { return; }
         self.size = size;
         self.sel = None;
         self.drag = None;
@@ -786,6 +795,15 @@ impl WndChat {
     pub fn set_tabs(&mut self, routes: [u8; KINDS], names: [[char; TAB_NAME_MOST]; TABS]) {
         self.tabs.routes = routes.map(|r| if (r as usize) <= TABS { r } else { 0 });
         self.tabs.names = names;
+        for t in 1..=TABS {
+            // Keep an orphaned tab's history parked if its last route is removed.
+            // Its saved detach preference can take effect again when rerouted.
+            if !self.tabs.exists(t) { self.set_detached(t, false); }
+            let name = self.tabs.name(t);
+            if let Some(pane) = self.panes[t - 1].as_mut() {
+                pane.pane_title = Some(name);
+            }
+        }
         if !self.tabs.exists(self.tabs.active) {
             self.show_tab(0);
         }
@@ -796,7 +814,11 @@ impl WndChat {
     pub fn add_line(&mut self, text: &str, c: [f32; 4], now: u32, width: impl Fn(&[u16]) -> i32, links: &[net::itemlink::ChatLink]) {
         let t = self.tabs.routes[kind_of(text, c).index()] as usize;
         let wide: Vec<u16> = text.encode_utf16().collect();
-        if t == self.tabs.active {
+        if t > 0 && let Some(pane) = self.panes[t - 1].as_mut() {
+            let at_end = pane.scroll == 1 && pane.bottom == pane.text.end();
+            pane.text.add_text_linked(&wide, c, now, width, links);
+            if at_end && !pane.selecting() { pane.set_scroll(1); }
+        } else if t == self.tabs.active {
             self.text.add_text_linked(&wide, c, now, width, links);
         } else {
             let ring = self.tabs.parked[t].get_or_insert_with(|| ChatText::new(self.size.wrap_width()));
@@ -818,7 +840,7 @@ impl WndChat {
     /// Shows tab `t` (one not there: nothing, false): its lines in the box, the
     /// selection and the walk let go, the history's view on its newest lines.
     pub fn show_tab(&mut self, t: usize) -> bool {
-        if t > TABS || !self.tabs.exists(t) {
+        if t > TABS || !self.tabs.exists(t) || (t > 0 && self.panes[t - 1].is_some()) {
             return false;
         }
         self.tabs.unread[t] = false;
@@ -841,6 +863,38 @@ impl WndChat {
         true
     }
 
+    /// Move, never copy, the tab's history between the main window and its pane.
+    pub fn set_detached(&mut self, t: usize, detached: bool) -> bool {
+        if !(1..=TABS).contains(&t) { return false; }
+        if detached {
+            if !self.tabs.exists(t) || self.panes[t - 1].is_some() { return false; }
+            if self.tabs.active == t { self.show_tab(0); }
+            let mut pane = WndChat::new();
+            pane.size = self.size;
+            pane.text = self.tabs.parked[t].take().unwrap_or_else(|| ChatText::new(self.size.wrap_width()));
+            pane.pane_title = Some(self.tabs.name(t));
+            pane.always = true;
+            self.tabs.unread[t] = false;
+            self.panes[t - 1] = Some(Box::new(pane));
+        } else {
+            let Some(pane) = self.panes[t - 1].take() else { return false };
+            self.tabs.parked[t] = Some(pane.text);
+        }
+        true
+    }
+
+    pub fn pane(&self, t: usize) -> Option<&WndChat> {
+        self.panes.get(t.checked_sub(1)?)?.as_deref()
+    }
+
+    pub fn pane_mut(&mut self, t: usize) -> Option<&mut WndChat> {
+        self.panes.get_mut(t.checked_sub(1)?)?.as_deref_mut()
+    }
+
+    pub fn control_at(&self, p: [f32; 2]) -> bool {
+        self.control_hit.is_some_and(|r| p[0] >= r[0] as f32 && p[0] < r[2] as f32 && p[1] >= r[1] as f32 && p[1] < r[3] as f32)
+    }
+
     /// A click at point `p` (as `contains` takes one): on a tab's name, that
     /// tab shown (sound 11).
     pub fn click_tab(&mut self, p: [f32; 2]) -> bool {
@@ -856,7 +910,7 @@ impl WndChat {
     /// the rest grey, each noted for a click (`click_tab`).
     fn draw_tabs(&mut self, vui: &Vui, ui: &mut dyn crate::ui::Layout) {
         self.tabs.hits.clear();
-        let shown = self.tabs.shown();
+        let shown: Vec<_> = self.tabs.shown().into_iter().filter(|&t| t == 0 || self.panes[t - 1].is_none()).collect();
         if shown.len() < 2 || !(self.fixed() || self.scroll == 1) || !(self.window.is_open() || self.window.is_opening()) {
             return;
         }
@@ -895,6 +949,28 @@ impl WndChat {
             self.tabs.hits.push(([x - 4, y - 1, x + w + 4, y + h - 3], t));
             x += w + 14;
         }
+    }
+
+    /// PC pane control, in its own header above the window.
+    pub fn draw_pane_control(&mut self, vui: &Vui, ui: &mut dyn crate::ui::Layout, pc: bool) {
+        self.control_hit = None;
+        if !pc || !(self.window.is_open() || self.window.is_opening()) { return; }
+        let label = if let Some(title) = &self.pane_title {
+            format!("{title}  [Dock]")
+        } else if self.tabs.active > 0 {
+            "[Detach tab]".to_string()
+        } else { return };
+        let text = crate::ui::wide(&label);
+        let w = vui.string_width(ui, &text);
+        let h = vui.font_height(ui);
+        let tl = self.window.top_left();
+        // A detached pane has no tab strip; the main window's action sits
+        // above its tabs so both remain separately clickable.
+        let x = tl[0] + 25;
+        let y = tl[1] - h * if self.pane_title.is_some() { 1 } else { 2 } + 2;
+        ui.fill_fan([0.0, 0.0, 0.0, self.opacity as f32 / 100.0], [[x-4,y-1],[x+w+4,y-1],[x+w+4,y+h-3],[x-4,y+h-3]]);
+        vui.draw_string_ex(ui, &text, x, y, [1.0, 1.0, 0.6, 1.0], true);
+        self.control_hit = Some([x-4,y-1,x+w+4,y+h-3]);
     }
 
     /// The number of fresh rows visible, or all configured rows while fixed.
@@ -1237,6 +1313,13 @@ impl WndChat {
         true
     }
 
+    /// Mouse history does not require holding the controller's scroll mode.
+    pub fn pc_wheel(&mut self, p: [f32; 2], lines: f32) -> bool {
+        if !self.contains(p) { return false; }
+        if self.scroll != 1 { self.set_scroll(1); }
+        self.wheel(p, lines, false)
+    }
+
     /// What the Copy key would take: the lines selected, in order, or the newest.
     fn copy_now(&self) -> Option<String> {
         match self.sel {
@@ -1530,6 +1613,82 @@ mod tests {
         c.set_tabs([0; KINDS], names);
         assert_eq!(c.tab(), 0);
         assert_eq!(c.tab_names().len(), 1);
+    }
+
+    #[test]
+    fn detached_tabs_keep_routing_history_and_independent_scroll() {
+        let mut c = WndChat::new();
+        let mut routes = [0; KINDS];
+        routes[Kind::Tells.index()] = 1;
+        routes[Kind::Combat.index()] = 2;
+        c.set_tabs(routes, [['\0'; TAB_NAME_MOST]; TABS]);
+        assert!(c.show_tab(1));
+        c.text.add_text(&crate::ui::wide("old tell"), [1.0; 4], 0, width);
+        assert!(c.set_detached(1, true));
+        assert!(c.set_detached(2, true));
+        assert_eq!(c.tab(), 0);
+        for i in 0..10 {
+            c.pane_mut(1).unwrap().text.add_text(&crate::ui::wide(&format!("line {i}")), [1.0; 4], 0, width);
+        }
+        c.pane_mut(1).unwrap().set_scroll(1);
+        c.pane_mut(1).unwrap().scroll_up();
+        let before = c.pane(1).unwrap().bottom;
+        assert_eq!(c.pane(2).unwrap().scroll, 0);
+        // A new routed tell leaves the earlier history view in place.
+        c.add_line("Someone tells you, 'hello'", [1.0, 0.5, 1.0, 1.0], 0, width, &[]);
+        assert_eq!(c.pane(1).unwrap().bottom, before);
+        assert_eq!(c.pane(1).unwrap().text.count(), 12);
+        assert_eq!(c.pane(2).unwrap().text.count(), 0);
+        c.pane_mut(1).unwrap().resize(ChatSize { width: 300, rows: 6 }, width);
+        assert_eq!(c.pane(1).unwrap().size.width, 300);
+        assert!(c.set_detached(1, false));
+        assert!(c.show_tab(1));
+        c.resize(ChatSize::ORIGINAL, width);
+        assert_eq!(c.text.width, ChatSize::ORIGINAL.wrap_width() - 30, "reattached history fits Main");
+        assert!(c.text.count() >= 11, "the original history was moved back");
+        assert!(c.pane(2).is_some(), "the other pane stays open");
+    }
+
+    #[test]
+    fn detached_tab_draws_control_and_link_then_rejoins_after_rerouting() {
+        let (v, mut r) = (vui(), Rows);
+        let mut c = WndChat::new();
+        c.always = true;
+        let mut routes = [0; KINDS];
+        routes[Kind::Tells.index()] = 1;
+        let names = [['\0'; TAB_NAME_MOST]; TABS];
+        c.set_tabs(routes, names);
+        let line = "Ann tells you, 'Rusty Sword'";
+        let at = line.find("Rusty").unwrap();
+        c.add_line(line, [1.0; 4], 0, width, &[link(at, 11, 42)]);
+        assert!(c.show_tab(1));
+        c.draw(&v, &mut r, 0, 0.1);
+        c.draw_pane_control(&v, &mut r, true);
+        let control = c.control_hit.unwrap();
+        assert!(c.control_at([(control[0] + 1) as f32, (control[1] + 1) as f32]));
+        assert!(c.set_detached(1, true));
+        let pane = c.pane_mut(1).unwrap();
+        pane.draw(&v, &mut r, 0, 0.1);
+        pane.draw_pane_control(&v, &mut r, true);
+        let dock = pane.control_hit.unwrap();
+        assert!(pane.control_at([(dock[0] + 1) as f32, (dock[1] + 1) as f32]));
+        let link_point = pane.newest_link_at(0).expect("link drawn in detached pane");
+        assert_eq!(pane.link_at(link_point).unwrap().0, 42);
+        assert!(pane.pc_wheel(link_point, 1.0));
+        assert_eq!(pane.scroll, 1, "the pane takes the wheel without controller scroll mode");
+        // Removing the last route parks the same history. Restoring it can
+        // detach the same tab again, as the persisted preference requests.
+        c.set_tabs([0; KINDS], names);
+        assert!(c.pane(1).is_none());
+        c.set_tabs(routes, names);
+        assert!(c.set_detached(1, true));
+        let pane = c.pane_mut(1).unwrap();
+        pane.draw(&v, &mut r, 0, 0.1);
+        assert_eq!(pane.link_at(pane.newest_link_at(0).unwrap()).unwrap().0, 42);
+        assert!(c.set_detached(1, false));
+        assert!(c.show_tab(1));
+        c.draw(&v, &mut r, 0, 0.1);
+        assert_eq!(c.link_at(c.newest_link_at(0).unwrap()).unwrap().0, 42);
     }
 
     /// A shout is someone else's "<name> shouts: <text>" in the shout's

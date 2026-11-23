@@ -178,6 +178,26 @@ pub const ROWS: &[Row] = &[
     row("sets_slot3", "Weapon set 3", &[], Pad::KeysOnly, SET_HELP),
     row("sets_slot4", "Weapon set 4", &[], Pad::KeysOnly, SET_HELP),
     row("sets_slot5", "Weapon set: bare hands", &[], Pad::KeysOnly, SET_HELP),
+    row("pcbar3_slot1", "PC spell row 3: slot 1", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar3_slot2", "PC spell row 3: slot 2", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar3_slot3", "PC spell row 3: slot 3", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar3_slot4", "PC spell row 3: slot 4", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar3_slot5", "PC spell row 3: slot 5", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar3_slot6", "PC spell row 3: slot 6", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar3_slot7", "PC spell row 3: slot 7", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar3_slot8", "PC spell row 3: slot 8", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar3_slot9", "PC spell row 3: slot 9", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar3_slot10", "PC spell row 3: slot 10", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar4_slot1", "PC spell row 4: slot 1", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar4_slot2", "PC spell row 4: slot 2", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar4_slot3", "PC spell row 4: slot 3", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar4_slot4", "PC spell row 4: slot 4", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar4_slot5", "PC spell row 4: slot 5", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar4_slot6", "PC spell row 4: slot 6", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar4_slot7", "PC spell row 4: slot 7", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar4_slot8", "PC spell row 4: slot 8", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar4_slot9", "PC spell row 4: slot 9", &[], Pad::KeysOnly, PC_ACTION_HELP),
+    row("pcbar4_slot10", "PC spell row 4: slot 10", &[], Pad::KeysOnly, PC_ACTION_HELP),
     row("cycle_target", "Target: {1405}, group, {418}", &["`", "~"], b(bit::L1), "Each press the next of the player, the group and the pet; held, aim as with Tab. On the map |7 zooms out."),
     row("quick_chat", "Quick chat", &["z"], b(bit::L2), "Again, it closes the quick chat."),
     row("next_target", "Target: the next (hold: aim)", &["tab"], b(bit::R1), "Held: the view at the eyes, the target the one nearest the crosshair. In a window Tab is |8; on the map |8 zooms in."),
@@ -211,6 +231,7 @@ pub const ROWS: &[Row] = &[
     row("group_disband", "Group: {529}", &["f7"], Pad::None, ""),
     row("group_leave", "{994}", &["f8"], Pad::None, ""),
     row("art", "Art: Frontiers' or 2002's", &["f9"], Pad::None, "Everything drawn swaps between Frontiers' art and the 2002 disc's (EverQuest Online Adventures, USA, SLUS-20470), at once; the first time, it asks for that disc."),
+    row("settings", "Settings", &["f10"], Pad::None, "Opens Settings from play."),
     row("hide_ui", "Hide UI", &["h"], Pad::None, "Hides everything over the world: the HUD, the chat, the names over heads, the damage numbers and the target's rings. Again, or any window coming up, shows them."),
     row("minimap", "Minimap", &["n"], Pad::None, "Shows or hides the minimap, as Extended's Map page does, and keeps it. On the map: a community marker suggested."),
     row("quest_helper", "Quest Helper", &["u"], Pad::None, "Shows or hides the Quest Helper (the quests' marks on the map and the minimap, and the quest tracker), as Extended's Map page does, and keeps it."),
@@ -218,7 +239,8 @@ pub const ROWS: &[Row] = &[
 ];
 
 /// What a key on an ability bar's slot row does (`bar_slot`).
-const BAR_HELP: &str = "Uses the ability on this slot, as clicking it does. No key until you give it one. Bars 3 and 4 are there with Extended > UI > HUD > Ability Bars at 3 or 4. Stacked Spell Bars (the same page) shows the bars above the chat box, Spell Bar Layout (HUD Layout) stacks them or stands them in two columns, and Move HUD moves them.";
+const BAR_HELP: &str = "Uses the equipped spell in this slot, as clicking it does. PC mode defaults keys 1 through 0 to the first ten slots; change any key here. Other slots have no default key. Spell Bar Rows controls the PC rows, and Move HUD moves them.";
+const PC_ACTION_HELP: &str = "Uses the equipped spell in this slot. Memorize spells through the spell book; the server must confirm the slot. No key is assigned until you choose one here.";
 
 /// What a key on an item quick slot's row does (`bar_slot`).
 const ITEM_HELP: &str = "Uses the item on this quick slot, as clicking it on the Utility Bars does (Extended > UI > HUD > Stacked Spell Bars shows them). No key until you give it one.";
@@ -236,6 +258,8 @@ pub fn bar_slot(row: usize) -> Option<(usize, usize)> {
     let (bar, slot) = id.split_once("_slot")?;
     let slot = slot.parse::<usize>().ok()?;
     let (bar, most) = match bar {
+        "pcbar3" => (crate::hudmenu::PC_ACTION_BAR, 10),
+        "pcbar4" => (crate::hudmenu::PC_ACTION_BAR + 1, 10),
         "items" => (crate::hudmenu::ITEMS_BAR, 4),
         "sets" => (crate::hudmenu::SETS_BAR, crate::gear::ENTRIES),
         _ => {
@@ -249,6 +273,11 @@ pub fn bar_slot(row: usize) -> Option<(usize, usize)> {
 /// A row's index by its name.
 pub fn row_named(id: &str) -> Option<usize> {
     ROWS.iter().position(|r| r.id == id)
+}
+
+/// The server may disable the extended spell-bar presentation.
+pub fn pc_shortcuts() -> bool {
+    crate::settings::pc_mode() && !crate::settings::qol::off(crate::settings::qol::SPELL_BARS)
 }
 
 /// The attack's key as the dispatch takes it (its row's default, G):
@@ -556,6 +585,9 @@ pub struct Binds {
     /// each row's key where the player moved it (by `ROWS`' index; None: its
     /// default)
     keys: Vec<Option<String>>,
+    /// PC profile edits are restored literally, without replaying a swap
+    /// against the other profile's different default keys.
+    pc_keys: Vec<Option<String>>,
     /// the physical button (a bit index) on each of the game's fields, or
     /// `NO_BUTTON`
     pad: [u8; 16],
@@ -570,6 +602,7 @@ impl Default for Binds {
     fn default() -> Self {
         Binds {
             keys: vec![None; ROWS.len()],
+            pc_keys: vec![None; ROWS.len()],
             pad: std::array::from_fn(|i| i as u8),
             rows: vec![None; ROWS.len()],
             macros: Default::default(),
@@ -603,6 +636,58 @@ pub enum Moved {
 }
 
 impl Binds {
+    /// Effective PC defaults join the first two five-slot menus on 1..0.
+    /// Overrides stay in the ordinary bindings store, independent of profile.
+    fn profile_default(row: usize, pc: bool) -> Option<&'static str> {
+        if pc {
+            if let Some((bar, slot)) = bar_slot(row) {
+                if bar < 2 { return Some(["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"][bar * 5 + slot]); }
+            }
+            if ROWS[row].id.starts_with("target_") && ROWS[row].keys.first().is_some_and(|k| matches!(*k, "1" | "2" | "3" | "4" | "5" | "6")) { return None; }
+        }
+        ROWS[row].keys.first().copied()
+    }
+
+    pub fn profile_key(&self, row: usize, pc: bool) -> Option<&str> {
+        if !pc { return self.key(row); }
+        if let Some(k) = self.pc_keys[row].as_deref() { return Some(k); }
+        let k = self.keys[row].as_deref().or_else(|| Self::profile_default(row, true))?;
+        if self.profile_row_on(k, true) != Some(row) || self.key_in_macros(k) { None } else { Some(k) }
+    }
+
+    fn profile_row_on(&self, name: &str, pc: bool) -> Option<usize> {
+        if !pc { return self.row_on(name); }
+        self.pc_keys.iter().position(|k| k.as_deref() == Some(name)).or_else(||
+            self.keys.iter().enumerate().find(|(r, k)| self.pc_keys[*r].is_none() && k.as_deref() == Some(name)).map(|(r, _)| r)).or_else(||
+            (0..ROWS.len()).find(|&r| self.pc_keys[r].is_none() && !self.moved(r) && Self::profile_default(r, true) == Some(name)))
+    }
+
+    pub fn profile_alias(&self, name: &str, pc: bool) -> Alias {
+        if !pc { return self.alias(name); }
+        if self.pc_keys.iter().all(|k| k.as_deref() != Some(name)) && self.key_in_macros(name) { return Alias::Macro; }
+        if let Some(r) = self.profile_row_on(name, true) {
+            if let Some((bar, slot)) = bar_slot(r) { return Alias::Slot(bar, slot); }
+            return match (ROWS[r].keys.first(), ROWS[r].pad) {
+                (Some(k), _) if *k == name => Alias::Same,
+                (Some(k), _) => Alias::To(k),
+                (None, Pad::Button(b)) => Alias::Button(b),
+                _ => Alias::Nothing,
+            };
+        }
+        if matches!(name, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "0") || self.row_on(name).is_some_and(|r| self.pc_keys[r].is_some()) { Alias::Nothing } else { self.alias(name) }
+    }
+
+    pub fn bind_key_profile(&mut self, row: usize, name: &str, pc: bool) -> Moved {
+        if !pc { return self.bind_key(row, name); }
+        let old = self.profile_key(row, true).map(str::to_string);
+        if old.as_deref() == Some(name) { return Moved::Already; }
+        let other = self.profile_row_on(name, true).filter(|&o| o != row);
+        self.pc_keys[row] = Some(name.to_string());
+        match other {
+            Some(o) => { self.pc_keys[o] = Some(old.unwrap_or_default()); Moved::Swapped(o) }
+            None => Moved::Freed(old),
+        }
+    }
     pub fn is_default(&self) -> bool {
         *self == Binds::default()
     }
@@ -1022,6 +1107,19 @@ impl Binds {
         d
     }
 
+    /// Reset only the PC profile's overrides, preserving controller bindings
+    /// and macros. The legacy Defaults behavior remains in controller mode.
+    pub fn controls_defaults_profile(&self, pc: bool) -> Binds {
+        if !pc {
+            let mut out = self.controls_defaults();
+            out.pc_keys = self.pc_keys.clone();
+            return out;
+        }
+        let mut out = self.clone();
+        out.pc_keys.fill(None);
+        out
+    }
+
     /// The controllers' buttons (`input::bit`, physical) as the game's
     /// fields; a button on a row of the client's keys is none of them.
     pub fn remap(&self, buttons: u16) -> u16 {
@@ -1047,6 +1145,9 @@ impl Binds {
             if let Some(k) = k {
                 s.push_str(&format!("key.{}={k}\n", ROWS[r].id));
             }
+        }
+        for (r, k) in self.pc_keys.iter().enumerate() {
+            if let Some(k) = k { s.push_str(&format!("pc_key.{}={k}\n", ROWS[r].id)); }
         }
         for (r, b) in self.rows.iter().enumerate() {
             if let Some(b) = b {
@@ -1087,10 +1188,13 @@ impl Binds {
     /// a line not understood is left out.
     pub fn from_text(s: &str) -> Binds {
         let mut b = Binds::default();
+        let mut pc_keys = Vec::new();
         let button = |n: &str| BUTTONS.iter().position(|x| x.0 == n).map(|i| i as u8);
         for line in s.lines() {
             let Some((k, v)) = line.split_once('=') else { continue };
-            if let Some(id) = k.strip_prefix("key.") {
+            if let Some(id) = k.strip_prefix("pc_key.") {
+                if let Some(r) = row_named(id) && (v.is_empty() || valid_name(v)) { pc_keys.push((r, v.to_string())); }
+            } else if let Some(id) = k.strip_prefix("key.") {
                 let Some(r) = row_named(id) else { continue };
                 if v.is_empty() {
                     b.clear_key(r);
@@ -1175,6 +1279,7 @@ impl Binds {
                 }
             }
         }
+        for (r, v) in pc_keys { b.pc_keys[r] = Some(v); }
         b
     }
 
@@ -1354,6 +1459,8 @@ pub struct KeyEdge {
     /// that offered jumps), as the viewer sets it before each key. A key
     /// let go is still what it was pressed as.
     pub space_attacks: bool,
+    /// Apply the computer profile's number-row defaults.
+    pub pc_mode: bool,
 }
 
 impl KeyEdge {
@@ -1362,7 +1469,8 @@ impl KeyEdge {
     /// keyboard and no key is remapped.
     pub fn key(&mut self, name: &str, down: bool, repeat: bool, typing: bool, b: &Binds) -> Option<Sent> {
         let same = |name: &str| Some(Sent::Key(name.to_string()));
-        let now = |name: &str| match b.alias(name) {
+        let pc = self.pc_mode;
+        let now = |name: &str| match b.profile_alias(name, pc) {
             Alias::Same => same(name),
             Alias::To(k) => same(k),
             Alias::Button(k) => Some(Sent::Button(k)),
@@ -1639,6 +1747,79 @@ fn display_key(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn settings_shortcut_is_rebindable_and_preserves_old_f10_macros() {
+        use super::*;
+        let row = row_named("settings").unwrap();
+        let mut b = Binds::default();
+        assert_eq!(b.key(row), Some("f10"));
+        b.bind_key(row, "b");
+        assert_eq!(b.alias("b"), Alias::To("f10"));
+        assert_eq!(b.alias("f10"), Alias::Nothing);
+        let old = Binds::from_text("macro.1.key=f10\n");
+        assert_eq!(old.alias("f10"), Alias::Macro);
+        assert_eq!(old.key(row), Some(""));
+        assert_eq!(Binds::from_text(&old.to_text()), old);
+    }
+    #[test]
+    fn pc_number_defaults_preserve_overrides_and_typing() {
+        use super::*;
+        let mut b = Binds::default();
+        for (i, key) in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"].iter().enumerate() {
+            assert_eq!(b.profile_alias(key, true), Alias::Slot(i / 5, i % 5));
+        }
+        assert_eq!(b.profile_alias("1", false), Alias::Same);
+        let mut edge = KeyEdge::default();
+        edge.pc_mode = true;
+        assert_eq!(edge.key("1", true, false, true, &b), Some(Sent::Key("1".into())));
+        assert_eq!(edge.key("1", false, false, true, &b), Some(Sent::Key("1".into())), "chat release remains text too");
+        assert_eq!(edge.key("1", true, false, false, &b), Some(Sent::Slot(0, 0)));
+        edge.pc_mode = false;
+        assert_eq!(edge.key("1", false, false, false, &b), Some(Sent::Slot(0, 0)), "release follows the press across profile changes");
+        edge.clear();
+        let row = row_named("bar1_slot1").unwrap();
+        b.bind_key_profile(row, "b", true);
+        assert_eq!(b.profile_alias("b", true), Alias::Slot(0, 0));
+        assert_eq!(b.profile_alias("1", true), Alias::Nothing);
+        let loaded = Binds::from_text(&b.to_text());
+        assert_eq!(loaded.profile_alias("b", true), Alias::Slot(0, 0));
+        assert_eq!(loaded.profile_alias("b", false), Alias::Same, "PC edit does not alter controller mode");
+        assert_eq!(loaded, b, "PC changes round trip without replaying controller swaps");
+
+        let mut swapped = Binds::default();
+        let target = row_named("target_self").unwrap();
+        swapped.bind_key_profile(target, "1", true);
+        assert_eq!(swapped.profile_key(row, true), Some(""));
+        let restored = Binds::from_text(&swapped.to_text());
+        assert_eq!(restored, swapped, "an explicitly emptied PC slot survives restart");
+        assert_eq!(restored.profile_alias("1", true), Alias::Same);
+
+        let mut legacy = Binds::default();
+        legacy.bind_key(row_named("attack").unwrap(), "1");
+        let legacy = Binds::from_text(&legacy.to_text());
+        assert_eq!(legacy.profile_alias("1", true), Alias::To("g"), "an old digit override wins");
+        assert_eq!(legacy.profile_key(row, true), None, "the displaced PC default is not shown");
+
+        let mut profiles = Binds::default();
+        profiles.bind_key_profile(row, "2", true);
+        assert_eq!(profiles.profile_alias("2", true), Alias::Slot(0, 0));
+        assert_eq!(profiles.profile_alias("1", true), Alias::Slot(0, 1));
+        assert_eq!(profiles.alias("1"), Alias::Same, "controller self target remains");
+        assert_eq!(profiles.alias("2"), Alias::Same, "controller group target remains");
+        assert_eq!(Binds::from_text(&profiles.to_text()), profiles);
+        let reset = profiles.controls_defaults_profile(true);
+        assert_eq!(reset.profile_alias("1", true), Alias::Slot(0, 0));
+        assert_eq!(reset.profile_alias("2", true), Alias::Slot(0, 1));
+        assert_eq!(reset.alias("1"), Alias::Same);
+        assert_eq!(profiles.controls_defaults_profile(false).profile_alias("2", true), Alias::Slot(0, 0), "controller reset preserves PC overlay");
+        let mut with_macro = Binds::from_text("macro.1.key=1\n");
+        with_macro.bind_key_profile(row, "1", true);
+        assert_eq!(with_macro.profile_alias("1", true), Alias::Slot(0, 0));
+        assert_eq!(with_macro.alias("1"), Alias::Macro, "controller macro survives a PC-only override");
+        let with_macro = Binds::from_text(&with_macro.to_text());
+        assert_eq!(with_macro.profile_alias("1", true), Alias::Slot(0, 0));
+        assert_eq!(with_macro.alias("1"), Alias::Macro);
+    }
     use super::*;
 
     /// The default table is today's layout: every key the client's keyboard
@@ -1721,6 +1902,7 @@ mod tests {
             "F7" => NamedKey::F7,
             "F8" => NamedKey::F8,
             "F9" => NamedKey::F9,
+            "F10" => NamedKey::F10,
             "F11" => NamedKey::F11,
             other => panic!("the dispatch matches NamedKey::{other}: give it a name here and a row"),
         }
@@ -1839,7 +2021,7 @@ mod tests {
     #[test]
     fn a_bars_slot_takes_a_key() {
         let slots: Vec<usize> = (0..ROWS.len()).filter(|&k| bar_slot(k).is_some()).collect();
-        assert_eq!(slots.len(), 29, "four bars of five, four item slots, four sets and bare hands");
+        assert_eq!(slots.len(), 49, "forty spell slots, four items, four sets and bare hands");
         assert_eq!(bar_slot(row_named("items_slot1").unwrap()), Some((crate::hudmenu::ITEMS_BAR, 0)));
         assert_eq!(bar_slot(row_named("items_slot4").unwrap()), Some((crate::hudmenu::ITEMS_BAR, 3)));
         assert_eq!(bar_slot(row_named("sets_slot5").unwrap()), Some((crate::hudmenu::SETS_BAR, 4)));
@@ -1847,6 +2029,8 @@ mod tests {
         assert_eq!(bar_slot(row_named("bar2_slot5").unwrap()), Some((1, 4)));
         assert_eq!(bar_slot(row_named("bar3_slot1").unwrap()), Some((2, 0)));
         assert_eq!(bar_slot(row_named("bar4_slot5").unwrap()), Some((3, 4)));
+        assert_eq!(bar_slot(row_named("pcbar3_slot1").unwrap()), Some((crate::hudmenu::PC_ACTION_BAR, 0)), "server slot 20");
+        assert_eq!(bar_slot(row_named("pcbar4_slot10").unwrap()), Some((crate::hudmenu::PC_ACTION_BAR + 1, 9)), "server slot 39");
         assert_eq!(bar_slot(row_named("attack").unwrap()), None);
         assert_eq!(ROWS[row_named("bar4_slot2").unwrap()].label, "Bar 4: slot 2");
         let mut b4 = Binds::default();

@@ -1474,7 +1474,7 @@ pub fn shot_with(
                 let mut pv = crate::play::PlateView::of(&walker.cam, &walker.eye.position, (w, h));
                 pv.fog = p.weather_fog;
                 if shot_override {
-                    (pv.eye, pv.scale) = (shot_eye, crate::settings::client().nameplate_scale as f32 / 100.0);
+                    (pv.eye, pv.scale) = (shot_eye, crate::settings::client().display_ui().nameplate_scale as f32 / 100.0);
                 }
                 t.plates = crate::play::labels(&plates, &pv, view.view_proj, t);
                 t.plate_scale = pv.scale;
@@ -1723,16 +1723,21 @@ fn device_keyboard() -> bool {
     false
 }
 
-/// Whether a key pressed before the world is the art's (`era`): F9, or the
-/// key its row was moved onto on the Controls page (`binds`); F9 moved off
-/// is not.
-fn is_art_key(k: &Key) -> bool {
-    let Some(name) = crate::binds::name_of(k) else { return false };
-    match crate::settings::with_binds(|b| b.alias(&name)) {
-        crate::binds::Alias::Same => name == "f9",
-        crate::binds::Alias::To(to) => to == "f9",
-        _ => false,
-    }
+/// Resolve the pre-login art and Settings shortcuts, including a remapped chord.
+fn title_shortcut(event: &KeyIn, mods: (bool, bool, bool)) -> Option<String> {
+    use crate::binds::Alias;
+    let plain = crate::binds::name_of(&event.logical_key)?;
+    let (ctrl, alt, shift) = mods;
+    crate::settings::with_binds(|bindings| {
+        let pc = crate::binds::pc_shortcuts();
+        let chord = crate::binds::combo_name(ctrl, alt, shift, event.base.unwrap_or(&plain));
+        let name = if (ctrl || alt || shift) && bindings.profile_alias(&chord, pc) != Alias::Same { chord } else { plain };
+        match bindings.profile_alias(&name, pc) {
+            Alias::Same => Some(name),
+            Alias::To(key) => Some(key.to_string()),
+            _ => None,
+        }
+    })
 }
 
 /// A test script's times (`EQOA_COVERED`, `EQOA_UNFOCUS`):
@@ -5129,6 +5134,10 @@ impl App {
                     p.open_quick_chat();
                     return;
                 }
+                (None, Key::Named(NamedKey::F10)) if p.mode == 0 && !event.repeat => {
+                    p.open_options();
+                    return;
+                }
                 // F1: the Options window's Controls page (the client's
                 // own; F1 makes no code in the game's keyboard table).
                 (None, Key::Named(NamedKey::F1)) if p.mode == 0 && !event.repeat => {
@@ -5834,7 +5843,7 @@ impl App {
         let (c, a, sh) = self.mods;
         let name = if (c || a || sh) && !typing {
             let combo = crate::binds::combo_name(c, a, sh, &own);
-            if capture || crate::settings::with_binds(|b| b.combo_bound(&combo)) { combo } else { plain }
+            if capture || crate::settings::with_binds(|b| b.profile_alias(&combo, crate::binds::pc_shortcuts()) != crate::binds::Alias::Same) { combo } else { plain }
         } else {
             plain
         };
@@ -5911,10 +5920,13 @@ impl App {
             if !device_keyboard() {
                 self.touch.hide();
             }
-            // F9 (`era`), as the Controls page has it: the art swapped
-            if event.state == ElementState::Pressed && !event.repeat && is_art_key(&event.logical_key) && self.host.as_ref().is_some_and(|h| h.pre.setup.capturing().is_none()) {
-                self.toggle_era();
-                return;
+            // Title-screen shortcuts follow the same rows in Controls as play.
+            if pressed && !event.repeat && self.host.as_ref().is_some_and(|h| h.pre.setup.capturing().is_none()) {
+                match title_shortcut(&event, self.mods).as_deref() {
+                    Some("f9") => { self.toggle_era(); return; }
+                    Some("f10") if self.host.as_mut().unwrap().pre.ask_options() => return,
+                    _ => {}
+                }
             }
             // the title's Options' Controls page waiting for a key: it is
             // the page's, as play's is
@@ -6017,6 +6029,8 @@ impl App {
                 // jumps (a window up, any other server); with the map up it is
                 // the map's (its Center), whatever the server
                 self.keys_edge.space_attacks = self.play.as_ref().is_some_and(|p| !(p.mode == 0 && p.session.jumps) && !p.map.open);
+                self.keys_edge.pc_mode = crate::binds::pc_shortcuts()
+                    && self.play.as_ref().is_some_and(|p| matches!(p.mode, 0 | 38) && !p.map.open);
                 match crate::settings::with_binds(|b| self.keys_edge.key(&name, down, event.repeat, typing, b)) {
                     Some(Sent::Key(to)) if to == name => event,
                     Some(Sent::Key(to)) => KeyIn { logical_key: crate::binds::key_of(&to), text: None, ..event },
@@ -6201,6 +6215,7 @@ impl App {
                     p.hud_release();
                     p.map.let_go();
                     p.map.mini_hover(None);
+                    p.spell_hover(None, (1, 1));
                 }
             }
             WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
@@ -6286,6 +6301,7 @@ impl App {
                     && let Some(p) = self.play.as_mut()
                 {
                     p.chat_moved(self.cursor, (g.config.width, g.config.height));
+                    p.spell_hover(Some([position.x as f32, position.y as f32]), (g.config.width, g.config.height));
                 }
                 // a drag begun: the pointer taken, within the press's
                 // gesture; a confined cursor put back to the middle

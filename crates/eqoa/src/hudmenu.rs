@@ -180,6 +180,26 @@ pub const STACKED_SCALE: f32 = 0.95;
 /// from its frame's left, its rows 31 apart), which the stacked bars scale.
 const CELL: [i32; 2] = [36, 31];
 
+/// Fit a shortcut, including its two-pixel shadow, inside a cell. Long
+/// names are abbreviated here; the hover label retains the complete name.
+fn shortcut_label(r: &dyn Raster, cell: [i32; 4], label: &str) -> Option<([i32; 2], Vec<u16>)> {
+    let width = cell[2] - cell[0] - 5;
+    if width <= 0 || r.point_size() <= 0 || r.point_size() + 3 > cell[3] - cell[1] { return None; }
+    let mut chars: Vec<char> = label.chars().collect();
+    let mut wide = crate::ui::wide(label);
+    if r.string_width(&wide) > width {
+        loop {
+            if chars.pop().is_none() { return None; }
+            let abbreviated = format!("{}..", chars.iter().collect::<String>());
+            wide = crate::ui::wide(&abbreviated);
+            if r.string_width(&wide) <= width { break; }
+        }
+    }
+    let w = r.string_width(&wide);
+    if w < 0 || w > width { return None; }
+    Some(([cell[2] - 3 - w, cell[1] + 1], wide))
+}
+
 /// How far the stacked bars stand above the chat box's window top, frame pixels:
 /// its panel is drawn 10 inside it, so they stand 2 above the panel.
 const STACKED_GAP: i32 = -8;
@@ -192,6 +212,8 @@ const COLUMN_GAP: i32 = 6;
 /// slots' (`items_slot1`..4) and the weapon sets' (`sets_slot1`..5).
 pub const ITEMS_BAR: usize = 4;
 pub const SETS_BAR: usize = 5;
+/// The two PC-only rows for server-confirmed equipped slots 20–39.
+pub const PC_ACTION_BAR: usize = 6;
 
 /// The menu a key's bar reads (`binds::bar_slot`): the ability bars'
 /// (`BAR_MENUS`), then the items' and the weapon sets'.
@@ -514,6 +536,8 @@ pub struct HudMenus {
     pub sel: i32,
     pub menus: [HudMenu; MENUS],
     pub defs: [MenuDef; MENUS],
+    /// Server-confirmed equipped abilities for PC rows three and four.
+    pub pc_defs: [MenuDef; 2],
     live: bool,
     pub auto: Vec<i64>,
     /// Stacked Spell Bars are drawn (the module's doc): the pointer reads
@@ -525,10 +549,14 @@ pub struct HudMenus {
     /// The cells the Utility Bars last drew, as `stacked_hits` (in their
     /// own place, `draw_utility`).
     utility_hits: Vec<(usize, i32, [i32; 4])>,
+    equipment_hits: Vec<(usize, i32, [i32; 4])>,
+    equipment_hover: Option<i32>,
     /// The stacked bars are played with a controller (the last input no key,
     /// mouse or finger: play's): the selection's name is drawn over them
     /// (`draw_name`).
     pub named: bool,
+    /// Last mouse position resolved against the spell cells.
+    hover: Option<(usize, i32)>,
 }
 
 impl Default for HudMenus {
@@ -541,17 +569,33 @@ impl Default for HudMenus {
                 ITEMS => MenuDef { count: 4, entries: vec![Entry::default(); 4] },
                 _ => MenuDef { count: 5, entries: vec![Entry::default(); 5] },
             }),
+            pc_defs: std::array::from_fn(|_| MenuDef { count: 10, entries: vec![Entry::default(); 10] }),
             live: false,
             auto: Vec::new(),
             stacked: false,
             stacked_hits: Vec::new(),
             utility_hits: Vec::new(),
+            equipment_hits: Vec::new(),
+            equipment_hover: None,
             named: false,
+            hover: None,
         }
     }
 }
 
 impl HudMenus {
+    /// Reflect only confirmed, currently equipped server slots 20–39.
+    pub fn sync_pc_slots(&mut self, abilities: &BTreeMap<i64, Ability>) {
+        for def in &mut self.pc_defs { def.entries.fill(Entry::default()); }
+        for a in abilities.values().filter(|a| a.valid != 0 && (20..40).contains(&a.slot)) {
+            let i = (a.slot - 20) as usize;
+            self.pc_defs[i / 10].entries[i % 10] = Entry {
+                icon2: a.icon_front as i32,
+                x08: if a.lockout > 0 { 61 } else { -1 },
+                msg: 0x8060000, id: a.id,
+            };
+        }
+    }
     /// `UpdateQuickBars`' HUD menus, and the client's bars as menu 1 is
     /// built, from the ability list (in its map's order: by id), the
     /// inventory and the weapon sets; a menu no longer in the carousel (the
@@ -663,11 +707,26 @@ impl HudMenus {
     /// its widest bar and `COLUMN_GAP`; the menu up's selection outlined; no
     /// title bar. The cells are noted for the pointer (`stacked_at`).
     pub fn draw_stacked(&mut self, vui: &Vui, r: &mut dyn Raster, chat_top: i32, left: i32, bars: Bars, layout: Layout) {
+        self.draw_stacked_inner(vui, r, chat_top, left, bars, layout, None);
+    }
+
+    /// Computer profile: pair the real five-slot menus into ten-wide rows.
+    pub fn draw_pc_bars(&mut self, vui: &Vui, r: &mut dyn Raster, bottom: i32, left: i32, bars: Bars, rows: usize) {
+        self.draw_stacked_inner(vui, r, bottom, left, bars, Layout::Stacked, Some(rows.clamp(1, 4)));
+    }
+
+    fn draw_stacked_inner(&mut self, vui: &Vui, r: &mut dyn Raster, chat_top: i32, left: i32, bars: Bars, layout: Layout, pc_rows: Option<usize>) {
+        let pc = pc_rows.is_some();
         self.stacked_hits.clear();
         let frame = vui.entry(29);
         let s = |v: i32| (v as f32 * STACKED_SCALE).round() as i32;
         let (cw, ch) = (s(CELL[0]), s(CELL[1]));
-        let (grid, per) = stacked_grid(bars, layout);
+        let (grid, per) = if let Some(rows) = pc_rows {
+            let n = (rows * 2).min(BAR_MENUS.len());
+            let mut grid: Vec<_> = BAR_MENUS[..n].iter().enumerate().map(|(i, &m)| (m, i % 2, i / 2)).collect();
+            for row in 2..rows { grid.push((MENUS + row - 2, 0, row)); }
+            (grid, rows)
+        } else { stacked_grid(bars, layout) };
         // each column from the one before it: as wide as its widest bar (the
         // first bar's packed 252-255 make it up to nine), then the gap
         let width = |menu: usize| (self.defs[menu].count.max(0) as f32 * CELL[0] as f32 * STACKED_SCALE).round() as i32;
@@ -675,7 +734,7 @@ impl HudMenus {
         let column_x: Vec<i32> = (0..columns)
             .scan(left, |x, c| {
                 let at = *x;
-                *x += grid.iter().filter(|g| g.1 == c).map(|g| width(g.0)).max().unwrap_or(0) + s(COLUMN_GAP);
+                *x += if pc { cw * 5 } else { grid.iter().filter(|g| g.1 == c).map(|g| width(g.0)).max().unwrap_or(0) + s(COLUMN_GAP) };
                 Some(at)
             })
             .collect();
@@ -684,13 +743,23 @@ impl HudMenus {
         // drawn at 0 too, unseen, so the piece moved is the whole block
         let opacity = frame_alpha(crate::settings::client().spell_bar_opacity);
         for &(menu, column, row) in &grid {
-            let y = chat_top - STACKED_GAP - ch * (per - row) as i32;
-            let def = &self.defs[menu];
+            let y = chat_top - STACKED_GAP - ch * if pc { (row + 1) as i32 } else { (per - row) as i32 };
+            let def = if menu < MENUS { &self.defs[menu] } else { &self.pc_defs[menu - MENUS] };
+            // In PC mode the selected row count controls slots beyond 9;
+            // the legacy five-slot Ability Bars setting is independent. A
+            // non-expansion server still supports only the first five.
+            let unavailable = pc && bars.abilities < 2 && menu != 0;
             for n in 0..def.count.max(0) {
-                let x = column_x[column] + (n as f32 * CELL[0] as f32 * STACKED_SCALE).round() as i32;
+                // Packed special slots 252–255 remain reachable in their own
+                // short row above the normal ten-wide block.
+                let (x, y) = if pc && menu == 0 && n >= 5 {
+                    (left + (n - 5) * cw, chat_top - STACKED_GAP - ch * (per as i32 + 1))
+                } else {
+                    (column_x[column] + if pc { n * cw } else { (n as f32 * CELL[0] as f32 * STACKED_SCALE).round() as i32 }, y)
+                };
                 let at = [x, y];
-                r.stretch_blit(vui.entry_id(&frame), 0, at, [cw, ch], frame.uv0, frame.uv1, 3, opacity);
-                let e = def.entries.get(n as usize).copied().unwrap_or_default();
+                r.stretch_blit(vui.entry_id(&frame), 0, at, [cw, ch], frame.uv0, frame.uv1, 3, if unavailable { opacity * 0.35 } else { opacity });
+                let e = if unavailable { Entry::default() } else { def.entries.get(n as usize).copied().unwrap_or_default() };
                 // the icon where the list puts it in its frame, scaled
                 let icon = [x + s(7), y + s(2)];
                 if e.icon2 != -1 {
@@ -703,8 +772,21 @@ impl HudMenus {
                 if e.msg == 0x8060000 && e.icon2 != -1 && self.auto.contains(&e.id) {
                     draw_auto_mark(r, icon, 1.0);
                 }
-                if menu == up && n == self.menus[menu].sel {
+                if menu < MENUS && menu == up && n == self.menus[menu].sel {
                     outline(r, [icon[0] - 2, icon[1] - 2, icon[0] + s(22) + 1, icon[1] + s(22) + 1], [1.0, 0.85, 0.3, 1.0]);
+                }
+                if pc && self.hover == Some((menu, n)) {
+                    outline(r, [x, y, x + cw - 1, y + ch - 1], [1.0, 1.0, 1.0, 1.0]);
+                }
+                if pc && (n < 5 || menu >= MENUS) {
+                    let row = if menu >= MENUS { Some(format!("pcbar{}_slot{}", menu - MENUS + 3, n + 1)) }
+                        else { BAR_MENUS.iter().position(|&m| m == menu).map(|bar| format!("bar{}_slot{}", bar + 1, n + 1)) };
+                    if let Some(row) = row {
+                        let label = crate::binds::row_named(&row).and_then(|i| crate::settings::with_binds(|b| b.profile_key(i, true).filter(|k| !k.is_empty()).map(crate::binds::display)));
+                        if let Some((at, label)) = label.and_then(|label| shortcut_label(r, [x, y, x + cw, y + ch], &label)) {
+                            vui.draw_string_ex(r, &label, at[0], at[1], [1.0, 1.0, 1.0, 1.0], true);
+                        }
+                    }
                 }
                 self.stacked_hits.push((menu, n, [x, y, x + cw, y + ch]));
             }
@@ -756,6 +838,40 @@ impl HudMenus {
         self.stacked_hits.iter().find(|(_, _, c)| (c[0]..c[2]).contains(&x) && (c[1]..c[3]).contains(&y)).map(|&(m, n, _)| (m, n))
     }
 
+    pub fn pc_entry(&self, menu: usize, n: i32) -> Option<Entry> {
+        let def = if menu < MENUS { self.defs.get(menu)? } else { self.pc_defs.get(menu - MENUS)? };
+        def.entries.get(usize::try_from(n).ok()?).copied()
+    }
+
+    pub fn hover_stacked(&mut self, p: Option<[f32; 2]>) {
+        self.hover = p.and_then(|p| self.stacked_at(p));
+    }
+
+    /// Show the hovered ability's actual name, using the same lookup as the
+    /// controller's selected-slot label.
+    pub fn draw_hover_name(&self, vui: &Vui, r: &mut dyn Raster, screen: Option<[i32; 2]>, name: &dyn Fn(u32, i64) -> Vec<u16>) {
+        let Some((menu, n)) = self.hover else { return };
+        let Some(&(_, _, c)) = self.stacked_hits.iter().find(|&&(m, i, _)| m == menu && i == n) else { return };
+        let def = if menu < MENUS { &self.defs[menu] } else { &self.pc_defs[menu - MENUS] };
+        let Some(e) = def.entries.get(n as usize) else { return };
+        let mut text = if e.msg == 0 || e.id < 0 { Vec::new() } else { name(e.msg, e.id) };
+        let row = if menu >= MENUS { Some(format!("pcbar{}_slot{}", menu - MENUS + 3, n + 1)) }
+            else { BAR_MENUS.iter().position(|&m| m == menu).filter(|_| n < 5).map(|bar| format!("bar{}_slot{}", bar + 1, n + 1)) };
+        if let Some(row) = row {
+            let key = crate::binds::row_named(&row).and_then(|i| crate::settings::with_binds(|b| b.profile_key(i, true).filter(|k| !k.is_empty()).map(crate::binds::display)));
+            if let Some(key) = key {
+                text = if text.is_empty() { crate::ui::wide(&key) } else { crate::ui::wide(&format!("{} ({key})", String::from_utf16_lossy(&text))) };
+            }
+        }
+        if menu >= MENUS && text.is_empty() { text = crate::ui::wide("Empty spell slot"); }
+        if text.is_empty() { return; }
+        let half = r.string_width(&text) / 2;
+        let mut x = (c[0] + c[2]) / 2;
+        if let Some([lo, hi]) = screen { x = x.min(hi - half).max(lo + half); }
+        let y = c[1] - r.point_size() / 2 - 4;
+        vui.draw_centered_string_ex(r, &text, x, y, [1.0, 1.0, 1.0, 1.0], 0, true);
+    }
+
     /// The Utility Bars' cells (the module's doc, `UtilityLayout`): the item
     /// quick slots' bar, and the weapon sets' with them (`bars.gear`), each
     /// cell a stacked bar's size. Upper Left: a column a bar from `at` (their
@@ -798,7 +914,15 @@ impl HudMenus {
     /// `DrawGear` has them; the menu up's selection outlined; no name. The
     /// cells are noted for the pointer (`utility_at`).
     pub fn draw_utility(&mut self, vui: &Vui, r: &mut dyn Raster, bars: Bars, layout: UtilityLayout, at: [i32; 2]) {
-        let cells = self.utility_cells(bars, layout, at);
+        self.draw_utility_subset(vui, r, bars, layout, at, false);
+    }
+
+    pub fn draw_equipment(&mut self, vui: &Vui, r: &mut dyn Raster, bars: Bars, at: [i32; 2]) {
+        self.draw_utility_subset(vui, r, bars, UtilityLayout::Below, at, true);
+    }
+
+    fn draw_utility_subset(&mut self, vui: &Vui, r: &mut dyn Raster, bars: Bars, layout: UtilityLayout, at: [i32; 2], equipment: bool) {
+        let cells: Vec<_> = self.utility_cells(bars, layout, at).into_iter().filter(|c| !equipment || c.0 == GEAR).collect();
         let frame = vui.entry(29);
         let s = |v: i32| (v as f32 * STACKED_SCALE).round() as i32;
         let opacity = frame_alpha(crate::settings::client().spell_bar_opacity);
@@ -825,7 +949,45 @@ impl HudMenus {
                 outline(r, [icon[0] - 2, icon[1] - 2, icon[0] + s(22) + 1, icon[1] + s(22) + 1], [1.0, 0.85, 0.3, 1.0]);
             }
         }
-        self.utility_hits = cells;
+        if equipment { self.equipment_hits = cells; } else { self.utility_hits = cells; }
+    }
+
+    pub fn point_equipment(&mut self, p: [f32; 2]) -> Option<Key> {
+        let (x, y) = (p[0] as i32, p[1] as i32);
+        let &(menu, n, _) = self.equipment_hits.iter().find(|(_, _, c)| (c[0]..c[2]).contains(&x) && (c[1]..c[3]).contains(&y))?;
+        self.sel = menu as i32;
+        self.menus[menu].sel = n;
+        Some(Key::Use)
+    }
+
+    pub fn hover_equipment(&mut self, p: Option<[f32; 2]>) {
+        self.equipment_hover = p.and_then(|p| {
+            let (x, y) = (p[0] as i32, p[1] as i32);
+            self.equipment_hits.iter().find(|(_, _, c)| (c[0]..c[2]).contains(&x) && (c[1]..c[3]).contains(&y)).map(|(_, n, _)| *n)
+        });
+    }
+
+    pub fn hide_equipment(&mut self) {
+        self.equipment_hits.clear();
+        self.equipment_hover = None;
+    }
+
+    /// Names the independent equipment cell under the pointer or pad focus.
+    pub fn draw_equipment_name(&self, vui: &Vui, r: &mut dyn Raster, now: i64, screen: Option<[i32; 2]>, name: &dyn Fn(u32, i64) -> Vec<u16>) {
+        let n = self.equipment_hover.or_else(|| {
+            let m = &self.menus[GEAR];
+            (self.named && self.up() == GEAR && m.lit > 0 && m.time >= now).then_some(m.sel)
+        });
+        let Some(n) = n else { return };
+        let Some(&(_, _, c)) = self.equipment_hits.iter().find(|(_, i, _)| *i == n) else { return };
+        let Some(e) = self.defs[GEAR].entries.get(n as usize) else { return };
+        let text = name(e.msg, e.id);
+        if text.is_empty() { return; }
+        let half = r.string_width(&text) / 2;
+        let mut x = (c[0] + c[2]) / 2;
+        if let Some([lo, hi]) = screen { x = x.min(hi - half).max(lo + half); }
+        let y = c[1] - r.point_size() / 2 - 4;
+        vui.draw_centered_string_ex(r, &text, x, y, [1.0; 4], 0, true);
     }
 
     /// The Utility Bars' cell at frame point `p` (in their own place, as
@@ -852,6 +1014,8 @@ impl HudMenus {
     /// cells forgotten, so no pointer finds them.
     pub fn hide_utility(&mut self) {
         self.utility_hits.clear();
+        self.equipment_hits.clear();
+        self.equipment_hover = None;
     }
 
     /// The entry a key's bar's slot shows (`binds::bar_slot`, `key_menu`: the
@@ -875,6 +1039,7 @@ impl HudMenus {
     pub fn point(&mut self, p: [f32; 2]) -> Option<Key> {
         if self.stacked {
             let (menu, n) = self.stacked_at(p)?;
+            if menu >= MENUS { return None; }
             self.sel = menu as i32;
             self.menus[menu].sel = n;
             return Some(Key::Use);
@@ -913,7 +1078,8 @@ impl HudMenus {
     /// what a right click or a long press makes auto (`autocast`).
     pub fn ability_at(&self, p: [f32; 2]) -> Option<i64> {
         let (menu, n) = if self.stacked { self.stacked_at(p)? } else { (self.up(), self.row_at(p)?) };
-        let e = self.defs[menu].entries.get(n as usize).copied()?;
+        let def = if menu < MENUS { &self.defs[menu] } else { &self.pc_defs[menu - MENUS] };
+        let e = def.entries.get(n as usize).copied()?;
         (e.msg == 0x8060000 && e.icon2 != -1).then_some(e.id)
     }
 
@@ -1014,6 +1180,98 @@ pub fn frame_alpha(percent: u8) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pc_shortcut_text_and_shadow_stay_inside_the_cell() {
+        use vi::ui::Raster;
+        let r = crate::pointer::testing::NullRaster;
+        for cell in [[150, 390, 184, 419], [456, 419, 490, 448]] {
+            for key in ["1", "0", "shift+f12", "ctrl+shift+9"] {
+                let (at, text) = super::shortcut_label(&r, cell, key).expect("a compact label fits");
+                assert!(at[0] >= cell[0] && at[1] >= cell[1]);
+                assert!(at[0] + r.string_width(&text) + 2 <= cell[2]);
+                assert!(at[1] + r.point_size() + 2 <= cell[3]);
+                if key.len() > 3 { assert!(String::from_utf16_lossy(&text).ends_with("..")); }
+            }
+        }
+        assert!(super::shortcut_label(&r, [0, 0, 10, 10], "1").is_none(), "do not spill out when even the font cannot fit");
+    }
+    #[test]
+    fn pc_pairs_real_menus_and_keeps_packed_slots_accessible() {
+        let vui = crate::pointer::testing::vui();
+        let mut r = crate::pointer::testing::NullRaster;
+        let mut h = super::HudMenus::default();
+        h.defs[0].count = 7;
+        h.stacked = true;
+        h.draw_pc_bars(&vui, &mut r, 440, 150, super::Bars { abilities: 4, gear: false }, 2);
+        assert_eq!(h.stacked_hits.len(), 22);
+        let cell = |m, n| h.stacked_hits.iter().find(|&&(menu, slot, _)| menu == m && slot == n).unwrap().2;
+        let (a, b, c, d, packed) = (cell(0, 0), cell(1, 0), cell(4, 0), cell(5, 0), cell(0, 5));
+        assert_eq!(a[1], b[1]);
+        assert_eq!(c[1], d[1]);
+        assert_eq!(b[0] - a[0], 5 * (a[2] - a[0]));
+        assert!(packed[1] < c[1] && c[1] < a[1]);
+        assert_eq!(h.stacked_at([(b[0] + 1) as f32, (b[1] + 1) as f32]), Some((1, 0)));
+        h.defs[0].count = 5;
+        h.draw_pc_bars(&vui, &mut r, 440, 150, super::Bars { abilities: 1, gear: false }, 4);
+        assert_eq!(h.stacked_hits.len(), 40, "even a five-gem server has four aligned ten-cell rows");
+        let primary_four = h.stacked_hits.iter().find(|c| c.0 == 0 && c.1 == 0).unwrap().2;
+        h.draw_pc_bars(&vui, &mut r, 440, 150, super::Bars { abilities: 1, gear: false }, 1);
+        let primary_one = h.stacked_hits.iter().find(|c| c.0 == 0 && c.1 == 0).unwrap().2;
+        assert_eq!(primary_one, primary_four, "primary gem stays in place as rows are added");
+        h.draw_pc_bars(&vui, &mut r, 440, 150, super::Bars { abilities: 1, gear: false }, 4);
+        for menu in [0, 1, 4, 5, super::MENUS, super::MENUS + 1] {
+            let expected = if menu >= super::MENUS { 10 } else { 5 };
+            assert_eq!(h.stacked_hits.iter().filter(|c| c.0 == menu).count(), expected);
+        }
+    }
+
+    #[test]
+    fn pc_slots_show_only_confirmed_equipped_spells() {
+        let mut h = super::HudMenus::default();
+        let mut abilities = std::collections::BTreeMap::new();
+        for slot in [19, 20, 29, 30, 39, 40] {
+            abilities.insert(slot, net::dump::Ability { id: slot, slot, valid: 1, icon_front: 5, ..Default::default() });
+        }
+        abilities.get_mut(&29).unwrap().lockout = 1;
+        abilities.get_mut(&30).unwrap().valid = 0;
+        h.sync_pc_slots(&abilities);
+        assert_eq!(h.pc_defs[0].entries[0].id, 20);
+        assert_eq!(h.pc_defs[0].entries[9].id, 29);
+        assert_eq!(h.pc_defs[0].entries[9].x08, 61, "the server lockout badge is retained");
+        assert_eq!(h.pc_defs[1].entries[0].msg, 0, "unconfirmed slot is empty");
+        assert_eq!(h.pc_defs[1].entries[9].id, 39);
+        abilities.get_mut(&20).unwrap().valid = 0;
+        abilities.get_mut(&30).unwrap().valid = 1;
+        h.sync_pc_slots(&abilities);
+        assert_eq!(h.pc_defs[0].entries[0].msg, 0, "unmemorization clears the old cell");
+        assert_eq!(h.pc_defs[1].entries[0].id, 30, "the acknowledgement fills the new cell");
+    }
+
+    #[test]
+    fn equipment_hover_and_pad_focus_name_the_separate_set() {
+        let vui = crate::pointer::testing::vui();
+        let mut r = crate::pointer::testing::Said::default();
+        let mut h = super::HudMenus::default();
+        h.stacked = true;
+        h.defs[super::GEAR].entries[1] = super::Entry { msg: crate::gear::MSG, id: 1, icon2: 42, x08: -1 };
+        h.draw_equipment(&vui, &mut r, super::Bars { abilities: 4, gear: true }, [469, 306]);
+        let cell = h.equipment_hits.iter().find(|(_, n, _)| *n == 1).unwrap().2;
+        let point = [(cell[0] + 1) as f32, (cell[1] + 1) as f32];
+        let name = |msg, id| if msg == crate::gear::MSG && id == 1 { crate::ui::wide("Shield Set") } else { Vec::new() };
+        h.hover_equipment(Some(point));
+        h.draw_equipment_name(&vui, &mut r, 10, None, &name);
+        assert!(r.0.iter().any(|s| s == "Shield Set"));
+        h.hover_equipment(None);
+        h.named = true;
+        h.sel = super::GEAR as i32;
+        h.menus[super::GEAR].sel = 1;
+        h.menus[super::GEAR].lit = 1;
+        h.menus[super::GEAR].time = 100;
+        r.0.clear();
+        h.draw_equipment_name(&vui, &mut r, 10, None, &name);
+        assert!(r.0.iter().any(|s| s == "Shield Set"), "pad focus names the same actual set");
+        assert_eq!(h.point_equipment(point), Some(super::Key::Use));
+    }
     use super::*;
     use crate::gear::{BARE_HANDS, MSG};
     use net::dump::{Item, NetItem};

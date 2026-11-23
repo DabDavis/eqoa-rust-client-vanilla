@@ -315,7 +315,7 @@ mod tests {
         p.wnd_chat = Some(crate::chat::WndChat::new());
         p.keyboard_chat_key("");
         assert!(!p.inline_editing(), "default keyboard window");
-        crate::settings::set_client(crate::settings::ClientOptions { inline_chat: true, ..crate::settings::client() });
+        crate::settings::set_client(crate::settings::ClientOptions { pc_mode: true, inline_chat: true, ..crate::settings::client() });
         let key = |p: &mut Play, k| {
             p.edit_key(k, true);
             p.run_edit(&vui(), &NullRaster);

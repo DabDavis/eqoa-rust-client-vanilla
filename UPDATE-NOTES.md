@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-23 · PC and Controller interfaces
+
+- Choose **PC** or **Controller** at the top of Options. Press **F10** from the title or in the world. In PC mode you can also click **Settings** or press Start on a controller. In Controller mode, use **Start → Options**. Switching saves the choice immediately and restores that interface's layout.
+- PC starts with four ten-slot spell bars at bottom center. Keys **1–9** and **0** activate equipped gems 1–10 on the bottom row. Choose one to four rows in **Extended → UI → HUD → Spell Bar Rows**. The Spell Book can equip up to 40 different gems on supporting servers. Hiding a bar preserves its spells, and a new assignment becomes active when the server confirms it.
+- Where the server supports weapon sets, the independent **Equipment Switch** bar offers your four prepared sets and bare hands. The item quick slots have their own bar.
+- In PC chat, select a tab and click **Detach tab** to open it separately. **Dock** brings the same history back. Type `/hud` to drag and resize individual windows or pin a HUD piece in place.
+
 ## 2026-11-23 · HUD size and keyboard chat
 
 - In Extended > UI > Interface Size, adjust the HUD and overhead names independently or choose the chat box's width and number of rows. You can also type `/hud` and drag **Resize** on the chat box. Drag the rest of the box to move it.

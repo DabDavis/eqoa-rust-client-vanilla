@@ -6,7 +6,9 @@
 //! vanilla's, the selected ability alone off its slot) and the hot-bar slots it is
 //! put on (five, ten with the expansion's bit 1, and five more a bar of the
 //! client's with the Extended page's Ability Bars: slots 10-19, the list's
-//! ten rows showing them ten at a time, `draw_slots10`).
+//! ten rows showing them ten at a time, `draw_slots10`). PC mode numbers the
+//! equipped gems and offers up to four ten-slot pages, within the character's
+//! and server's limits. Each choice uses the same memorization request.
 //!
 //! What it asks of the server: `Send0033` (an ability's display index onto
 //! a slot; the answer is 0x00B4), `Send003A` (Arrange: one display index
@@ -60,6 +62,7 @@ const UNMEMORIZE_ONE: u32 = 0x080A_0000;
 /// + slot).
 const TAB: i32 = 1000;
 const SLOT: i32 = 2000;
+const PC_PAGE: i32 = 3000;
 /// The description's box, for the wheel (`wheel`): no row, tab or slot.
 const DESC: i32 = -2;
 
@@ -107,6 +110,8 @@ pub struct SpellBook {
     held_at: i32,
     /// `m_x34`: the slot chosen in mode 2
     pub slot: i32,
+    /// Available real memorization slots in PC mode. Controller uses its own bar count.
+    pc_slots: Option<i32>,
     /// `m_x3C`: the selection drawn
     x3c: bool,
     /// `m_x44`: it has the focus (the pointer blinks)
@@ -157,6 +162,7 @@ impl Default for SpellBook {
             tab_count: 0,
             held_at: -1,
             slot: 0,
+            pc_slots: None,
             x3c: true,
             x44: false,
             fade: 1.0,
@@ -183,6 +189,20 @@ impl Default for SpellBook {
 }
 
 impl SpellBook {
+    pub fn set_pc_slot_capacity(&mut self, capacity: Option<i32>) {
+        let slots = capacity.map(|n| n.clamp(5, 40));
+        if self.pc_slots != slots {
+            self.pc_slots = slots;
+            self.hits.clear();
+            // A newly restricted server or profile must not repurpose the
+            // pending selection for a different slot when the player confirms.
+            if self.mode == 2 { self.show_list(self.drawn); }
+        }
+    }
+
+    fn slot_count(&self, bars: i32) -> i32 {
+        self.pc_slots.unwrap_or(5 * bars.max(1))
+    }
 
     /// A pointer at frame point `p` (`pointer`), as the keys reach the
     /// book: the popup's row used at once, a click off the popup closing it
@@ -206,6 +226,10 @@ impl SpellBook {
             // a description that is cut off: opened whole (□); else the wheel's
             Some(DESC) if self.more && self.mode == 0 => vec![key::SQUARE],
             Some(DESC) => Vec::new(),
+            Some(h) if h >= PC_PAGE => {
+                if self.mode != 2 { return Vec::new(); }
+                crate::pointer::steps(self.slot / 10, h - PC_PAGE, key::LEFT, key::RIGHT)
+            }
             Some(h) if h >= SLOT => {
                 let j = h - SLOT;
                 if self.mode != 2 {
@@ -406,6 +430,17 @@ impl SpellBook {
             143 if self.mode == 0 => self.desc_top += 1,
             17 | 136 if self.mode == 0 => self.tab_by(-1, now, &mut out),
             18 | 137 if self.mode == 0 => self.tab_by(1, now, &mut out),
+            17 | 136 | 18 | 137 if self.mode == 2 && self.pc_slots.is_some() => {
+                let count = self.slot_count(bars);
+                let direction = if matches!(key, 17 | 136) { -1 } else { 1 };
+                let page = self.slot / 10 + direction;
+                if (0..=(count - 1) / 10).contains(&page) {
+                    let next = (page * 10 + self.slot % 10).min(count - 1);
+                    self.slot_by(next - self.slot, bars, now, &mut out);
+                } else {
+                    out.push(Out::Sound(9));
+                }
+            }
             19 | 138 => match self.mode {
                 0 | 1 => self.flash.press(138),
                 2 => self.slot_by(-1, bars, now, &mut out),
@@ -425,7 +460,8 @@ impl SpellBook {
                     out.push(Out::Sound(13));
                     self.place(now, &mut out);
                 }
-                2 => self.assign(now, &mut out),
+                2 if (0..self.slot_count(bars)).contains(&self.slot) => self.assign(now, &mut out),
+                2 => { self.show_list(now); out.push(Out::Sound(9)); }
                 _ => {}
             },
             _ => {}
@@ -608,7 +644,7 @@ impl SpellBook {
     /// `Slot`: the slot chosen, five or ten (the expansion's bit 1), or five
     /// a bar of the client's more.
     fn slot_by(&mut self, d: i32, bars: i32, now: i64, out: &mut Vec<Out>) {
-        let count = 5 * bars.max(1);
+        let count = self.slot_count(bars);
         if self.slot + d >= count {
             out.push(Out::Sound(9));
             self.slot = count - 1;
@@ -682,8 +718,8 @@ impl SpellBook {
         let n = self.rows.len() as i32;
         let t = if n >= 7 { self.top as f32 / (n - 6) as f32 } else { 0.0 };
         self.window.draw_vscroll(vui, r, [137, 47], 270, t);
-        if bars >= 2 {
-            self.draw_slots10(vui, r, abilities, bars);
+        if self.pc_slots.is_some() || bars >= 2 {
+            self.draw_slots10(vui, r, abilities, self.slot_count(bars));
         } else {
             self.draw_slots(vui, r, abilities);
         }
@@ -899,22 +935,43 @@ impl SpellBook {
     /// the Extended page's Ability Bars) there are more slots than its rows:
     /// ten show at a time, bars 1 and 2 then bars 3 and 4 (`slot_page`), a
     /// row only for a slot there is, and a scroll bar beside them says which.
-    fn draw_slots10(&mut self, vui: &Vui, r: &mut dyn Raster, abilities: &BTreeMap<i64, Ability>, bars: i32) {
+    fn draw_slots10(&mut self, vui: &Vui, r: &mut dyn Raster, abilities: &BTreeMap<i64, Ability>, count: i32) {
         self.window.init(vui, r, [545, 155], 190, 10, 1);
         self.window.open(true);
         let w = self.window.size[0] - 40;
-        let count = 5 * bars;
         let first = self.slot_page(abilities, count) * 10;
+        let pc = self.pc_slots.is_some();
+        if pc {
+            let pages = (count + 9) / 10;
+            if self.mode == 2 && pages > 1 {
+                self.window.text(vui, r, &wide("Bar"), 16, -1, [1.0; 4], 1);
+                for page in 0..pages {
+                    let x = 52 + 31 * page;
+                    let c = if page == first / 10 { [1.0, 1.0, 0.0, 1.0] } else { [1.0; 4] };
+                    self.window.text_box(vui, r, &wide(&(page + 1).to_string()), x, -1, 28, 1, c, 13);
+                    let mut hit = crate::pointer::rows_rect(&self.window, vui, r, x, -1, 28, 1);
+                    hit[0] = self.window.top_left()[0] + x;
+                    self.hits.push(hit, PC_PAGE + page);
+                }
+            } else {
+                self.window.text_box(vui, r, &wide(&format!("Bar {}", first / 10 + 1)), 20, -1, w, 1, [1.0; 4], 9);
+            }
+        }
         for i in 0..(count - first).min(10) {
             self.window.text_box(vui, r, &[], 20, i, w, 1, [0.0, 0.0, 0.0, 1.0], 4);
             self.hits.push(crate::pointer::rows_rect(&self.window, vui, r, 20, i, w, 1), SLOT + first + i);
+            if pc {
+                let c = if self.mode == 2 && self.slot == first + i { [1.0, 1.0, 0.0, 1.0] } else { [1.0; 4] };
+                self.window.text_box(vui, r, &wide(&(first + i + 1).to_string()), 34, i, 27, 1, c, 1);
+            }
         }
         for &(id, slot, _) in &self.slots.clone() {
             let name = abilities.get(&id).map_or_else(Vec::new, |a| wide(&a.name));
             if (first as i64..(first + 10).min(count) as i64).contains(&slot) {
                 let lit = self.mode == 2 && slot == self.slot as i64;
                 let c = if lit { [1.0, 1.0, 0.0, 1.0] } else { [1.0; 4] };
-                self.window.text_box(vui, r, &name, 20, slot as i32 - first, w, 1, c, 11);
+                let (x, width, flags) = if pc { (64, w - 44, 3) } else { (20, w, 11) };
+                self.window.text_box(vui, r, &name, x, slot as i32 - first, width, 1, c, flags);
             }
         }
         if self.mode == 2 {
@@ -1316,5 +1373,77 @@ mod tests {
         b.sel = 0;
         b.draw(&vui, &mut r, &map, 0, 4, 400);
         assert_eq!(b.hits.at(row(2)), Some(SLOT + 2), "ability 1 is on none");
+    }
+
+    #[test]
+    fn pc_memorizes_the_selected_gem_on_each_ten_slot_bar() {
+        use crate::pointer::testing::{Said, mid, vui};
+        let (vui, mut r) = (vui(), Said::default());
+        let mut known = ability(2, 9, 2, true, 39);
+        known.name = "Last Spell".into();
+        let (mut b, map) = book(&[ability(1, 7, 1, false, -1), known]);
+        b.set_pc_slot_capacity(Some(40));
+        b.open(&vui, &r, 2, 0);
+        for (page, slot) in [(0, 0), (1, 19), (2, 25), (3, 39)] {
+            b.build(&map); // next frame uses the last server update
+            b.key(&map, 2, 13, true, 0); // selected spell
+            b.key(&map, 2, 13, true, 0); // Memorize
+            assert_eq!(b.mode, 2);
+            let mut grid = Window::default();
+            grid.init(&vui, &r, [545, 155], 190, 10, 1);
+            let button = [grid.top_left()[0] as f32 + (52 + 31 * page + 14) as f32, grid.row_center(&vui, &r, -1)[1] as f32];
+            b.draw(&vui, &mut r, &map, 0, 2, 10);
+            let keys = b.point(button);
+            assert_eq!(keys, vec![key::RIGHT; page as usize]);
+            for k in keys { b.key(&map, 2, k, true, 20); }
+            assert_eq!(b.slot, page * 10);
+            r.0.clear();
+            b.draw(&vui, &mut r, &map, 0, 2, 30);
+            for number in (page * 10 + 1)..=(page * 10 + 10) {
+                assert!(r.0.contains(&number.to_string()), "gem number {number} is on the page");
+            }
+            if page == 3 { assert!(r.0.contains(&"Last Spell".into())); }
+            let at = mid(crate::pointer::rows_rect(&grid, &vui, &r, 20, slot % 10, 150, 1));
+            if slot != b.slot { assert_eq!(b.point(at), [MOVED]); }
+            assert_eq!(b.point(at), [key::CROSS]);
+            assert_eq!(b.key(&map, 2, key::CROSS, true, 40), [Out::Send0033(7, i64::from(slot))]);
+            assert_eq!(map[&1].slot, -1, "only the server reply changes a memorized slot");
+        }
+        b.sel = 1;
+        r.0.clear();
+        b.draw(&vui, &mut r, &map, 0, 2, 50);
+        assert!(r.0.contains(&"Bar 4".into()) && r.0.contains(&"Last Spell".into()), "the learned spell shows its equipped bar");
+    }
+
+    #[test]
+    fn pc_slot_pages_obey_server_and_profile_capacity() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let (mut b, map) = book(&[ability(1, 7, 1, false, -1)]);
+        let vui = vui();
+        b.open(&vui, &NullRaster, 2, 0);
+        for capacity in [5, 10, 20, 30, 40] {
+            b.set_pc_slot_capacity(Some(capacity));
+            b.build(&map);
+            b.key(&map, 2, 13, true, 0);
+            b.key(&map, 2, 13, true, 0);
+            for _ in 0..3 { b.key(&map, 2, 18, true, 0); }
+            for _ in 0..9 { b.key(&map, 2, key::DOWN, true, 0); }
+            assert_eq!(b.slot, capacity - 1);
+            assert_eq!(b.key(&map, 2, key::RIGHT, true, 0), [Out::Sound(9)]);
+            assert_eq!(b.key(&map, 2, key::DOWN, true, 0), [Out::Sound(9)]);
+            assert_eq!(b.key(&map, 2, 13, true, 0), [Out::Send0033(7, i64::from(capacity - 1))]);
+        }
+        b.build(&map);
+        b.key(&map, 2, 13, true, 0);
+        b.key(&map, 2, 13, true, 0);
+        b.key(&map, 2, key::RIGHT, true, 0);
+        assert_eq!(b.slot, 10);
+        b.set_pc_slot_capacity(Some(5));
+        assert_eq!((b.mode, b.slot), (0, 0), "a lower limit cancels an outstanding slot selection");
+        b.set_pc_slot_capacity(None);
+        b.key(&map, 2, 13, true, 0);
+        b.key(&map, 2, 13, true, 0);
+        assert!(b.key(&map, 2, key::RIGHT, true, 0).is_empty());
+        assert_eq!(b.slot, 0, "the Controller book retains its original input");
     }
 }

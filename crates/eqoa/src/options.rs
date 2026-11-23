@@ -539,6 +539,10 @@ impl WndOptions {
             return self.macros.point(p);
         }
         let Some(h) = self.hits.at(p) else { return Vec::new() };
+        if self.page == -1 && matches!(h, MODE_PC_HIT | MODE_PAD_HIT) {
+            self.sel = MODE_ROW;
+            return vec![if h == MODE_PC_HIT { key::LEFT } else { key::RIGHT }];
+        }
         let k = h % HIT_ROWS;
         if h < LABEL {
             // a menu: `Prev`/`Next` start the tick's pulse over
@@ -579,7 +583,7 @@ impl WndOptions {
         self.saved_client = crate::settings::client();
         self.saved_binds = crate::settings::binds();
         self.edit = [(o.no_faction == 0) as u8, (o.no_loot == 0) as u8, o.auto_attack, o.vibration];
-        self.sel = 0;
+        self.sel = MODE_ROW;
         self.page = -1;
         self.grp = None;
         self.grp_sel = 0;
@@ -797,8 +801,9 @@ impl WndOptions {
 
     /// `Prev`.
     fn prev(&mut self, now: i64, cues: &mut Vec<i32>) {
+        let first = if self.page == -1 { MODE_ROW } else { 0 };
         let at = self.at();
-        if *at > 0 {
+        if *at > first {
             *at -= 1;
             self.window.reset_tick_pulse(now);
             cues.push(11);
@@ -815,7 +820,7 @@ impl WndOptions {
             (-1, _, _) => MENU.len() as i32 - 1,
             (3, None, _) => GROUPS.len() as i32 - 1,
             (3, Some(g), None) => group_categories(g).len() as i32 - 1,
-            (3, _, Some(c)) => CATEGORIES[c].items.len() as i32 - 1,
+            (3, _, Some(c)) => category(c).items.len() as i32 - 1,
             (page, _, _) => {
                 let mut last = [2, 3, 3];
                 if FEATURES & 0x100 != 0 {
@@ -866,6 +871,10 @@ impl WndOptions {
     /// `numcolor::PALETTE`. A slider (`slider_at`) makes its own
     /// sound, as a volume does; every other row sound 11.
     fn change(&mut self, o: &mut GameOptions, d: i32, cues: &mut Vec<i32>, ups: &mut Vec<OptionsUp>) {
+        if self.page == -1 && self.sel == MODE_ROW {
+            self.choose_ui(d < 0, cues);
+            return;
+        }
         let tracks = if FEATURES & 0x100 != 0 { 10 } else { 3 };
         let step = F::<Ee>::new(0.1);
         let volume = |v: &mut F<Ee>, cues: &mut Vec<i32>| {
@@ -1180,6 +1189,7 @@ impl WndOptions {
                     // Display: the window's own, carried out on the next
                     // frame (`display`, `viewer`)
                     33 => crate::display::ask(!crate::display::full()),
+                    22 if c.pc_mode => c.pc_action_rows = 1 + (c.pc_action_rows.clamp(1, 4) - 1 + if d < 0 { 3 } else { 1 }) % 4,
                     22 => {
                         let (lo, n) = (crate::settings::ABILITY_BARS_GAME, crate::hudmenu::MAX_BARS as u8 - crate::settings::ABILITY_BARS_GAME + 1);
                         c.ability_bars = lo + (c.ability_bars.saturating_sub(lo).min(n - 1) + if d < 0 { n - 1 } else { 1 }) % n;
@@ -1282,6 +1292,10 @@ impl WndOptions {
     /// Extended, over it) and X there a category's page (`page_window`), or
     /// on Save Changes asks (true).
     fn select(&mut self, vui: &Vui, r: &dyn Raster, cues: &mut Vec<i32>) -> bool {
+        if self.page == -1 && self.sel == MODE_ROW {
+            self.choose_ui(!crate::settings::pc_mode(), cues);
+            return false;
+        }
         if self.page == 3 && self.grp.is_none() {
             cues.push(8);
             let g = self.grp_sel.clamp(0, GROUPS.len() as i32 - 1) as usize;
@@ -1410,7 +1424,7 @@ impl WndOptions {
     fn open_category(&mut self, vui: &Vui, r: &dyn Raster, c: usize) {
         self.cat = Some(c);
         self.row = 0;
-        self.page_window(vui, r, CATEGORIES[c].items.len() as i32 + 3);
+        self.page_window(vui, r, category(c).items.len() as i32 + 3);
     }
 
     /// A page's window, 440 wide and `rows` high, an empty title bar, over
@@ -1522,7 +1536,22 @@ impl WndOptions {
         }
     }
 
-    /// `DrawMenu`: Game, Interface, Sound, the client's Extended, Controls
+    fn choose_ui(&mut self, pc: bool, cues: &mut Vec<i32>) {
+        match crate::settings::set_ui_mode(pc) {
+            Ok(()) => {
+                // A mode switch is immediate; backing out still discards
+                // other options according to the usual Save Changes rules.
+                self.saved_client = self.saved_client.with_interface(crate::settings::client());
+                cues.push(11);
+            }
+            Err(e) => {
+                crate::say(&format!("Could not save the interface selection: {e}"));
+                cues.push(9);
+            }
+        }
+    }
+
+    /// `DrawMenu`: UI Mode, Game, Interface, Sound, Extended, Controls
     /// and Macros, Save Changes, the selected one lit, and the legend two
     /// rows under the last.
     fn draw_menu(&mut self, vui: &Vui, r: &mut dyn Raster) {
@@ -1535,6 +1564,19 @@ impl WndOptions {
             id => vui.words.get(id, vui.language).to_string(),
         };
         let width = self.window.size[0];
+        let mode_focus = self.page == -1 && self.sel == MODE_ROW;
+        let pc = crate::settings::pc_mode();
+        self.window.text_box(vui, r, &wide("UI Mode"), 30, 0, 76, 1, UI_COLORS[mode_focus as usize], 0);
+        if mode_focus { self.window.tick_r(vui, r, 25, 0, true); }
+        for (name, selected, x, w, hit) in [("PC", pc, 106, 54, MODE_PC_HIT), ("Controller", !pc, 162, 124, MODE_PAD_HIT)] {
+            self.window.draw_frame(vui, r, x, 0, w, 1, if selected { 96 } else { 64 });
+            self.window.text_box(vui, r, &wide(name), x + 2, 0, w - 4, 1, UI_COLORS[selected as usize], 8);
+            if self.page == -1 {
+                let mut bounds = rows_rect(&self.window, vui, r, x, 0, w, 1);
+                bounds[0] = self.window.top_left()[0] + x;
+                self.hits.push(bounds, hit);
+            }
+        }
         for (k, id) in MENU.into_iter().enumerate() {
             let on = self.sel == k as i32;
             let s = if on { format!("|q{}|w", w(id)) } else { w(id) };
@@ -1691,13 +1733,15 @@ impl WndOptions {
     /// under them the Back legend and, beside it, the category's note
     /// (`Note`).
     fn draw_category(&mut self, vui: &Vui, r: &mut dyn Raster, c: usize) {
-        let cat = &CATEGORIES[c];
+        let cat = category(c);
         self.item = cat.items.get(self.row as usize).copied().unwrap_or(self.item);
         // Output Device's round: the system's devices listed while it shows
         if cat.items.contains(&32) {
             crate::audio::want_listing();
         }
-        let labels: Vec<Vec<u16>> = cat.items.iter().map(|&i| wide(label_of(i))).collect();
+        let labels: Vec<Vec<u16>> = cat.items.iter().map(|&i| {
+            wide(if i == 22 && crate::settings::pc_mode() { "Spell Bar Rows" } else { label_of(i) })
+        }).collect();
         let values: Vec<Option<Vec<u16>>> = cat.items.iter().map(|&i| value_text(vui, i)).collect();
         let paints: Vec<Option<[f32; 4]>> = cat.items.iter().map(|&i| value_paint(i)).collect();
         self.draw_rows_painted(vui, r, &labels, &values, &paints);
@@ -1760,7 +1804,9 @@ impl WndOptions {
                 TOUCH_LAYOUT => Some("Bottom: Start and Select between the sticks".to_string()),
                 _ => None,
             },
-            Note::Hud => (self.item == 76 && crate::hudlayout::unlocked()).then(|| "Leave the menu and drag the pieces".to_string()),
+            Note::Hud => (self.item == 76 && crate::hudlayout::unlocked()).then(|| {
+                if crate::settings::pc_mode() { "Drag, pin or unpin each piece" } else { "Leave the menu and drag the pieces" }.to_string()
+            }),
             Note::ChatTabs => Some("Name a tab in chat: /tabname 1 Loot".to_string()),
             Note::Shortcuts => match self.item {
                 SHARED_SHORTCUTS => Some("L2's menus on every character of the account".to_string()),
@@ -1816,6 +1862,10 @@ const MACROS_PAGE: &str = "Macros";
 /// 778, 800), the client's Extended, Controls and Macros, Save Changes
 /// (482).
 const MENU: [i32; 7] = [773, 778, 800, -1, -2, -3, 482];
+// Row zero of the frame was the top margin. Keep the game's menu and page IDs.
+const MODE_ROW: i32 = -1;
+const MODE_PC_HIT: i32 = 400;
+const MODE_PAD_HIT: i32 = 401;
 
 /// The menu's window: a row down, its rows, a row clear, the legend.
 const MENU_ROWS: i32 = MENU.len() as i32 + 3;
@@ -2157,9 +2207,22 @@ const CATEGORIES: &[Category] = &{
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
+fn category(i: usize) -> Category {
+    let mut cat = CATEGORIES[i];
+    cat.items = match (crate::settings::pc_mode(), cat.name) {
+        (false, "Interface Size") => &[],
+        (false, "Chat") => &[73, 89, R2_CHANNELS],
+        (true, "Chat") => &[73, 89, INLINE_CHAT, CHAT_OPACITY],
+        (true, "HUD") => &[22, 30, 40, 58, 83],
+        (true, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, UTILITY_LAYOUT],
+        _ => cat.items,
+    };
+    cat
+}
+
 fn group_categories(g: usize) -> Vec<usize> {
     let group = GROUPS[g].0;
-    CATEGORIES.iter().enumerate().filter(|(_, c)| c.group == group).map(|(k, _)| k).collect()
+    (0..CATEGORIES.len()).filter(|&i| CATEGORIES[i].group == group && !category(i).items.is_empty()).collect()
 }
 
 /// The group `g`'s one category when it has only one, its page opened from
@@ -2287,6 +2350,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         19 => on_off(c.capture),
         21 => on_off(c.background_sound),
         SLOW_UNFOCUSED => on_off(c.slow_unfocused[crate::multibox::place()]),
+        22 if c.pc_mode => wide(&c.pc_action_rows.to_string()),
         22 => wide(&c.ability_bars.to_string()),
         25 => wide(match c.art {
             esf::Era::Frontiers => "Frontiers",
@@ -2484,6 +2548,39 @@ fn words(vui: &Vui, ids: &[i32]) -> Vec<Vec<u16>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_row_switches_profiles_by_pad_keyboard_and_pointer() {
+        use crate::pointer::{key, testing::{NullRaster, vui}};
+        use crate::settings;
+        settings::testing::reset(false);
+        let mut w = WndOptions::default();
+        let (vui, mut r, mut o) = (vui(), NullRaster, GameOptions::default());
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        w.open(&vui, &r, &o);
+        assert_eq!((w.sel, w.page, settings::pc_mode()), (MODE_ROW, -1, false));
+        w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
+        assert!(settings::pc_mode());
+        w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
+        assert!(settings::pc_mode(), "leaving the menu keeps the explicit choice");
+        w.open(&vui, &r, &o);
+        w.draw(&vui, &mut r, &o, &mut ups);
+        let button = rows_rect(&w.window, &vui, &r, 162, 0, 124, 1);
+        let y = (button[1] + 4) as f32;
+        let left = w.window.top_left()[0];
+        assert_eq!(w.point([(left + 159) as f32, y]), [key::LEFT], "right edge of PC");
+        assert!(w.point([(left + 161) as f32, y]).is_empty(), "gap between buttons");
+        let click = w.point([(left + 163) as f32, y]);
+        assert_eq!(click, [key::RIGHT]);
+        w.key(&vui, &mut r, &mut o, click[0], 0, &mut cues, &mut ups);
+        assert!(!settings::pc_mode());
+        let size = CATEGORIES.iter().position(|c| c.name == "Interface Size").unwrap();
+        assert!(category(size).items.is_empty());
+        w.key(&vui, &mut r, &mut o, 17, 0, &mut cues, &mut ups);
+        assert_eq!(category(size).items, &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS]);
+        w.key(&vui, &mut r, &mut o, 13, 0, &mut cues, &mut ups);
+        assert!(!settings::pc_mode());
+    }
 
     /// The four held settings change only when saved; the live ones at
     /// Auto Attack is on from the start (the user's choice); everything else
@@ -2723,7 +2820,7 @@ mod tests {
             keys.extend(std::iter::repeat_n(key::DOWN, at));
             keys.push(key::CROSS);
         }
-        let row = CATEGORIES[c].items.iter().position(|&i| i == item).unwrap();
+        let row = category(c).items.iter().position(|&i| i == item).unwrap();
         keys.extend(std::iter::repeat_n(key::DOWN, row));
         keys
     }
@@ -2764,7 +2861,7 @@ mod tests {
         }
         w.open(&vui, &NullRaster, &o);
         w.draw(&vui, &mut NullRaster, &o, &mut Vec::new());
-        for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             press(&mut w, &mut o, k, &mut cues);
         }
         assert_eq!((w.sel, w.page, w.grp, w.grp_sel, w.cat, w.item), (3, 3, None, 0, None, -1), "Extended's groups, Graphics lit");
@@ -3533,6 +3630,7 @@ mod tests {
         w.open(&vui, &NullRaster, &o);
         for k in [
             key::DOWN,
+            key::DOWN,
             key::CROSS,
             key::RIGHT,
             key::TRIANGLE,
@@ -3676,7 +3774,7 @@ mod tests {
                 assert!(w.window5.top_left()[1] > 24, "{gname}: its title tab on the picture");
             }
             for (k, &c) in cats.iter().enumerate() {
-                let cat = &CATEGORIES[c];
+                let cat = category(c);
                 if !lone {
                     keys(&mut w, key::CROSS, &mut cues);
                 }
@@ -3704,7 +3802,7 @@ mod tests {
             }
             keys(&mut w, key::DOWN, &mut cues);
         }
-        assert_eq!(pages, CATEGORIES.len(), "every category's page reached");
+        assert_eq!(pages, (0..CATEGORIES.len()).filter(|&i| !category(i).items.is_empty()).count(), "every visible category reached");
         assert_eq!(cues.last(), Some(&9), "no group past the last");
         assert!(!w.back(&mut cues), "the groups go back to the menu");
         assert_eq!((w.page, w.sel), (-1, 3));
@@ -3717,7 +3815,8 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn each_group_holds_its_kind() {
-        let of = |g: usize| group_categories(g).into_iter().map(|c| (CATEGORIES[c].name, CATEGORIES[c].items.iter().map(|&i| label_of(i)).collect::<Vec<_>>())).collect::<Vec<_>>();
+        crate::settings::testing::reset(false);
+        let of = |g: usize| group_categories(g).into_iter().map(category).map(|c| (c.name, c.items.iter().map(|&i| label_of(i)).collect::<Vec<_>>())).collect::<Vec<_>>();
         let textures: Vec<&str> = if cfg!(target_os = "android") { vec!["Texture Packs", "Texture Pack Memory", "Dump Textures"] } else { vec!["Texture Packs", "Texture Pack Memory", "Dump Textures", "Texture Folder"] };
         assert_eq!(
             of(0),
@@ -3744,10 +3843,9 @@ mod tests {
                 ("Number Colors", n[..6].to_vec()),
                 ("Merc Colors", n[6..8].to_vec()),
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "Reset DPS Meter"]),
-                ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch", "Inline Keyboard Chat", "Chat Opacity %"]),
+                ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs: Talk", vec!["Say", "Tells", "Group", "Guild", "Shouts"]),
                 ("Chat Tabs: Game", vec!["Combat", "Loot", "Rolls", "Experience", "System"]),
-                ("Interface Size", vec!["HUD Scale %", "Name Plate Scale %", "Chat Width %", "Chat Rows"]),
             ],
             "UI: what is drawn over the world"
         );
@@ -3879,7 +3977,7 @@ mod tests {
             w.draw(&vui, &mut NullRaster, o, &mut ups);
         };
         w.open(&vui, &NullRaster, &o);
-        for k in [key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             press(&mut w, &mut o, k);
         }
         assert_eq!((w.sel, w.page), (4, 4), "Controls");
@@ -3942,7 +4040,7 @@ mod tests {
         nine.init(&vui, &NullRaster, CENTER, 300, 9, 0);
         nine.set_title(Some(&[1]));
         assert_eq!((w.window.rows, w.window.bottom_right()[1]), (10, nine.bottom_right()[1]), "a row more, grown upward");
-        for _ in 0..5 {
+        for _ in 0..6 {
             press(&mut w, &mut o, key::DOWN);
         }
         assert_eq!(w.sel, 5);
@@ -4227,7 +4325,7 @@ mod tests {
         let (mut cues, mut ups) = (Vec::new(), Vec::new());
         w.open(&vui, &NullRaster, &o);
         w.draw(&vui, &mut NullRaster, &o, &mut Vec::new());
-        for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
         let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT];
@@ -4458,6 +4556,7 @@ mod tests {
         // off: the game's
         assert!(!settings::auto_save(), "off by default");
         w.open(&vui, &NullRaster, &o);
+        press(&mut w, &mut o, key::DOWN, &mut ups);
         for k in game_page {
             press(&mut w, &mut o, k, &mut ups);
         }
@@ -4471,6 +4570,7 @@ mod tests {
         assert_eq!(testing::kept("game.opt"), None, "nothing written");
         // turned on, by its row: kept by the step back off its page
         w.open(&vui, &NullRaster, &o);
+        press(&mut w, &mut o, key::DOWN, &mut ups);
         press(&mut w, &mut o, key::DOWN, &mut ups);
         press(&mut w, &mut o, key::DOWN, &mut ups);
         press(&mut w, &mut o, key::DOWN, &mut ups);
@@ -4546,7 +4646,7 @@ mod tests {
         };
         assert!(!settings::auto_save());
         w.open(&vui, &NullRaster, &o);
-        for k in [key::DOWN, key::DOWN, key::CROSS, key::DOWN] {
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS, key::DOWN] {
             press(&mut w, &mut o, k, &mut ups);
         }
         assert_eq!(w.item, 3, "Fx Volume");
