@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-23 · Sandstorms no longer flash clear
+- **A heavy sandstorm (or whiteout or snowstorm) no longer goes clear for a moment** when you turn the camera. The storm now thins and thickens smoothly: a storm that really ends fades out over a couple of seconds instead of vanishing in one frame.
+- **Walking under an arch, a palm or an awning in a storm** now eases the storm back over about a second instead of jumping between thick and thin.
+
 ## 2026-11-22 · Your group's buffs on their bars, and a smaller buff bar when you have many
 - On a server that sends them, each group member's buffs now show as tiny icons on their bar in the group window, to the right of their health and power. Extended > UI > Group & Raid > Group Effects turns them off.
 - With more than eight buffs on you, the buff window's icons shrink a little so ten fit in a row (two rows hold twenty), instead of a second full-size row taking up more of the screen.

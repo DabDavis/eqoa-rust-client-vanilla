@@ -109,14 +109,12 @@ pub fn lit(
         // a server's regional weather (`weather_zones`, board entry #1550):
         // the storms' fog, never farther than the fog it replaces, its colour
         // moved to by the weather's intensity, the sun dimmed; under a roof
-        // nearer fog is kept off and the far is four times; none in a liquid
-        let storm = weather.as_deref().filter(|_| flags & 0xF == 0).and_then(|w| crate::weather_zones::fog(&w.regional, hour_now).map(|f| (f, w.roof)));
+        // nearer fog is kept off and the far is four times, eased in and out
+        // (`weather_zones::roofed`); none in a liquid (a leaf missed is none:
+        // `weather_zones::in_liquid`)
+        let storm = weather.as_deref().filter(|_| !crate::weather_zones::in_liquid(flags)).and_then(|w| crate::weather_zones::fog(&w.regional, hour_now).map(|f| (f, w.roof_share)));
         if let Some((f, roof)) = storm {
-            let (mut near, mut far) = (f.near, f.far);
-            if roof {
-                near = near.max(6.0);
-                far *= 4.0;
-            }
+            let (near, far) = crate::weather_zones::roofed(f.near, f.far, roof);
             let wc = Vec3::from(f.color);
             v.fog = Some(match v.fog {
                 Some((n, fa, c)) => (n.min(near), fa.min(far), c.lerp(wc, f.intensity)),

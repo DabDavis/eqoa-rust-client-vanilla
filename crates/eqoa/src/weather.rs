@@ -121,6 +121,15 @@ pub struct Weather {
     /// probed every 100 ms while there is regional weather
     pub roof: bool,
     pub upwind_wall: bool,
+    /// how much the roof holds the storm's fog off (0 to 1), eased toward
+    /// `roof` (`weather_zones::roofed`), and the scene time it was last eased
+    pub roof_share: f32,
+    roof_eased: Option<i64>,
+    /// the regional weather drawn, before Options' Weather: held from frame to
+    /// frame (`weather_zones::hold`), and the caller's time it was (None: the
+    /// next sample is taken as it is, after a server's move)
+    drawn: crate::weather_zones::Sample,
+    drawn_at: Option<i64>,
     /// the sandstorm's blowing dust (`sanddust`)
     pub dust: crate::sanddust::Dust,
     probed: Option<i64>,
@@ -198,6 +207,10 @@ impl Weather {
             preview,
             roof: false,
             upwind_wall: false,
+            roof_share: 0.0,
+            roof_eased: None,
+            drawn: Default::default(),
+            drawn_at: None,
             dust: Default::default(),
             probed: None,
         };
@@ -213,12 +226,18 @@ impl Weather {
         w
     }
 
-    /// This frame's regional weather: the server's sample at the camera
-    /// (`Play::weather_sample`), else `EQOA_WEATHER_PREVIEW`'s, else none;
-    /// through Options' Weather.
+    /// This frame's regional weather: the server's sample where the character
+    /// stands (`Play::weather_sample`), else `EQOA_WEATHER_PREVIEW`'s, else
+    /// none; held from the frame before (`weather_zones::hold`: a storm thins
+    /// over seconds, never in a frame), then through Options' Weather.
     pub fn set_regional(&mut self, server: Option<crate::weather_zones::Sample>, now_ms: i64) {
         let s = server.or_else(|| self.preview.map(|p| p.sample(now_ms))).unwrap_or_default();
-        self.regional = s.scaled(crate::settings::client().weather);
+        self.drawn = match self.drawn_at {
+            Some(t) => crate::weather_zones::hold(&self.drawn, &s, ((now_ms - t).max(0) as f32 / 1000.0).min(1.0)),
+            None => s,
+        };
+        self.drawn_at = Some(now_ms);
+        self.regional = self.drawn.scaled(crate::settings::client().weather);
     }
 
     /// A weather byte off the wire (`VIClient::SetWeather`).
@@ -229,6 +248,10 @@ impl Weather {
     /// `VIScene::SetSky(cam, 1)`: the sky of the profiles where `eye` stands,
     /// at once, as `Respawn` and `Msg000D` set it.
     pub fn sky_now(&mut self, world: &World<Ee>, eye: &vi::camera::Eye<Ee>) {
+        // the regional weather of the new place at once, not the old one's
+        // held, nor its roof
+        self.drawn_at = None;
+        self.roof_eased = None;
         if let Some(g) = &world.grid {
             self.atm.set_sky(&g.profile_blend(&eye.position), true);
             self.first = false;
@@ -341,6 +364,16 @@ impl Weather {
                 atmosphere::Scene::collide_ray(&mut Rays(world), &mut side)
             };
         }
+        // the roof's hold eased toward the probe's word (`weather_zones::roofed`)
+        let target = if self.roof { 1.0 } else { 0.0 };
+        self.roof_share = match self.roof_eased {
+            Some(t) if time >= t => {
+                let step = crate::weather_zones::ROOF_PER_S * ((time - t) as f32 / 1000.0);
+                self.roof_share + (target - self.roof_share).clamp(-step, step)
+            }
+            _ => target,
+        };
+        self.roof_eased = Some(time);
         if let Some(s) = sound.as_deref_mut() {
             s.weather = self.atm.intensity;
             s.outdoors = o;
