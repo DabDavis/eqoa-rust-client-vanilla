@@ -134,6 +134,9 @@ struct Puppet {
     /// A pet in a zone's prop (`petart`): its moving parts, the wheels and
     /// the arm, its model made skinned by them; none for every other.
     prop: Option<crate::petart::Rig>,
+    /// Dressed as a player's character (`dressed_as_player`: a player's, or a
+    /// server's mercenary's): a merc told after it was made is made anew.
+    player: bool,
 }
 
 impl Puppet {
@@ -1277,6 +1280,27 @@ fn a_player(e: &net::entity::Entity) -> bool {
     e.creature.as_ref().is_some_and(|c| c.p256 == 2)
 }
 
+/// A server's mercenary: a creature of a pet's name colour (3, which
+/// go-eqoa-server gives every NPC with an owner) whose name the server lists
+/// among its mercs (`net::session::Mercs`, 0x7E5B).
+fn a_merc(e: &net::entity::Entity, mercs: Option<&net::session::Mercs>) -> bool {
+    e.creature.as_ref().is_some_and(|c| c.p256 == 3 && mercs.is_some_and(|m| m.is(&c.name)))
+}
+
+/// Whether a creature is dressed as a player's character: a player's, or a
+/// server's mercenary (`a_merc`), which the server dresses as a player of its
+/// race (its body, its armour, its hands' items: go-eqoa-server's
+/// `dressMercLocked`). In a body one of the server's races wears, it holds its
+/// items (`racebody`), takes the race's moves (`raceemote`), and wears its
+/// armour laid on a body with no text slots and its helm on a head with no
+/// helm node (`slotless`), as a player in that body does (Heirloom petition
+/// 2772: "gear doesnt show on merc Jal'raeth", a merc in the Jal'Raeth's body,
+/// which names no text slot, drawn bare). Any other NPC keeps the look the
+/// PS2 gives it.
+fn dressed_as_player(e: &net::entity::Entity, mercs: Option<&net::session::Mercs>) -> bool {
+    a_player(e) || a_merc(e, mercs)
+}
+
 /// The look a server's race's player chose for its parts (`raceopts`), by the
 /// name its channel carries; none for an NPC or any other player.
 fn race_look_of(e: &net::entity::Entity) -> Option<std::rc::Rc<net::raceopts::Look>> {
@@ -1312,13 +1336,13 @@ fn petdye_of(e: &net::entity::Entity) -> Option<crate::petdye::PetDye> {
 /// (`raceemote::grant_swim`), and one in a body with no monk's moves of its
 /// own kicks and strikes as the human (`raceemote::grant_moves`).
 #[allow(clippy::too_many_arguments)]
-fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Puppet> {
+fn build_puppet(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, player: bool, jumps: bool) -> Option<Puppet> {
     let era = lib.view_for(e.drawn_model as i32);
-    lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era, races, jumps))
+    lib.with_view(era, || build_puppet_in(lib, g, e, look, slot, game_ms, era, races, player, jumps))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Puppet> {
+fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, era: esf::Era, races: Option<&net::creation::Creation>, player: bool, jumps: bool) -> Option<Puppet> {
     let textures = render::library_textures(lib);
     // a pet's look no zone of this world holds: off the decorations' assets
     // (`decorlights::pet_asset_model`: the catapult in Odus)
@@ -1341,7 +1365,6 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     // a pet in a zone's prop: its wheels and arm parts of a
                     // skinned model of their own (`petart::rig`)
                     let prop = if sprite.is_none() && crate::decorlights::pet_art(e.drawn_model).is_some() { crate::petart::rig(&mut model) } else { None };
-                    let player = a_player(e);
                     if let Some(cs) = sprite.as_mut() {
                         crate::racebody::grant(cs, e.drawn_model, player, races);
                         crate::raceemote::grant(lib, cs, &mut anims, e.drawn_model, player, races);
@@ -1428,7 +1451,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if !trims.is_empty() {
                         g.renderer.set_trims(g.device, g.queue, &mut gpu, &model, &trims, &textures);
                     }
-                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, lights: None, race_look, tint, petdye, aura, pieces, wisp, prop };
+                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, lights: None, race_look, tint, petdye, aura, pieces, wisp, prop, player };
                     p.set_casts();
                     Some(p)
                 })
@@ -1698,17 +1721,18 @@ fn redo(was: (u32, u32, Option<vi::cust::Look>, Held), now: (u32, u32, Option<vi
 /// for a list that came after it was made). The puppet it replaced, when it
 /// was made anew.
 #[allow(clippy::too_many_arguments)]
-fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, jumps: bool) -> Option<Option<Puppet>> {
-    if let Some(p) = p.as_mut().filter(|p| (p.id, p.model) == (e.id, e.drawn_model))
+fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::Entity, look: Option<vi::cust::Look>, slot: usize, game_ms: i64, races: Option<&net::creation::Creation>, mercs: Option<&net::session::Mercs>, jumps: bool) -> Option<Option<Puppet>> {
+    let player = dressed_as_player(e, mercs);
+    if let Some(p) = p.as_mut().filter(|p| (p.id, p.model, p.player) == (e.id, e.drawn_model, player))
         && let Some(cs) = p.sprite.as_mut()
     {
-        crate::racebody::grant(cs, p.model, a_player(e), races);
+        crate::racebody::grant(cs, p.model, player, races);
         let anims = &mut p.anims;
         lib.with_view(p.era, || {
-            crate::raceemote::grant(lib, cs, anims, p.model, a_player(e), races);
-            crate::raceemote::grant_moves(lib, cs, anims, p.model, a_player(e), races);
-            crate::raceemote::grant_swim(lib, cs, anims, p.model, a_player(e), races);
-            crate::raceemote::grant_air(lib, cs, anims, p.model, a_player(e), jumps)
+            crate::raceemote::grant(lib, cs, anims, p.model, player, races);
+            crate::raceemote::grant_moves(lib, cs, anims, p.model, player, races);
+            crate::raceemote::grant_swim(lib, cs, anims, p.model, player, races);
+            crate::raceemote::grant_air(lib, cs, anims, p.model, player, jumps)
         });
     }
     let r = p.as_ref().map_or(Redo::Build, |p| redo((p.id, p.model, p.look, p.held), (e.id, e.drawn_model, look, held_by(p.sprite.as_ref(), e.creature.as_ref()))));
@@ -1718,9 +1742,10 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
         _ => r,
     };
     // a tint on its body come, changed or gone (`npctint`), or a worn
-    // piece's aura (`aura::pieces`): made anew
+    // piece's aura (`aura::pieces`), or a merc told or no longer
+    // (`dressed_as_player`): made anew
     let r = match p.as_ref() {
-        Some(p) if r != Redo::Build && (p.tint != tint_of(e) || p.petdye != petdye_of(e) || p.pieces != pieces_of(e)) => Redo::Build,
+        Some(p) if r != Redo::Build && (p.tint != tint_of(e) || p.petdye != petdye_of(e) || p.pieces != pieces_of(e) || p.player != player) => Redo::Build,
         _ => r,
     };
     // the art swapped (F9), or a texture pack turned on or off (`texpack`),
@@ -1728,7 +1753,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
     let r = if p.as_ref().is_some_and(|p| p.era != lib.view_for(e.drawn_model as i32) || p.textures != crate::texpack::generation()) { Redo::Build } else { r };
     match r {
         Redo::Keep => None,
-        Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms, races, jumps))),
+        Redo::Build => Some(std::mem::replace(p, build_puppet(lib, g, e, look, slot, game_ms, races, player, jumps))),
         Redo::Items => {
             if let Some(p) = p.as_mut()
                 && let (Some(cs), Some(c)) = (&p.sprite, &e.creature)
@@ -1736,7 +1761,7 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
                 p.held = held_items(cs, c);
                 p.projectile = crate::spells::hand_projectiles(c, cs.holds_items);
                 let helm_aura;
-                (p.attached, p.weapons, _, helm_aura) = lib.with_view(p.era, || attach(lib, g, cs, c, p.held, p.model, a_player(e)));
+                (p.attached, p.weapons, _, helm_aura) = lib.with_view(p.era, || attach(lib, g, cs, c, p.held, p.model, player));
                 // the helm's aura's particles made again with it
                 p.aura.retain(|w| w.first != 64 * (crate::aura::HELM + 1));
                 p.aura.extend(helm_aura);
@@ -3187,9 +3212,9 @@ mod held {
         p.session.self_id = Some(100_001);
         p.self_model = Some(HUMAN);
         let (me, wil, dab) = (entity(100_001, "Glim", sword), entity(100_002, "Wil", sword), entity(100_003, "Dab", sword));
-        apply(&lib, &mut g, &mut p.self_puppet, &me, look(&me), 0, 0, None, false);
+        apply(&lib, &mut g, &mut p.self_puppet, &me, look(&me), 0, 0, None, None, false);
         for (slot, e) in [(1, &wil), (2, &dab)] {
-            apply(&lib, &mut g, &mut p.puppets[slot], e, look(e), slot, 0, None, false);
+            apply(&lib, &mut g, &mut p.puppets[slot], e, look(e), slot, 0, None, None, false);
         }
         p.entities.slots[..3].clone_from_slice(&[Some(me.clone()), Some(wil.clone()), Some(dab.clone())]);
         for pp in p.puppets.iter_mut().flatten().chain(p.self_puppet.as_mut()) {
@@ -3220,7 +3245,7 @@ mod held {
         assert_eq!(casters(&p, &mut walker), [false, false, true], "the player's Wisp, Wil's, and the control Dab's");
         // the items attached again (a sword swapped for a bow: `Redo::Items`)
         for (slot, e) in [(1, entity(100_002, "Wil", bow)), (2, entity(100_003, "Dab", bow))] {
-            assert!(apply(&lib, &mut g, &mut p.puppets[slot], &e, look(&e), slot, 33, None, false).is_none(), "slot {slot}: the puppet kept");
+            assert!(apply(&lib, &mut g, &mut p.puppets[slot], &e, look(&e), slot, 33, None, None, false).is_none(), "slot {slot}: the puppet kept");
             assert!(puppet(&p, slot).held[0].is_some_and(|h| h.0 == bow), "slot {slot}: the bow in hand");
         }
         assert_eq!(wisp_models(&p, 1), [false; 5], "a Wisp's bow casts nothing either");
@@ -3291,21 +3316,21 @@ mod held {
         let tint = |p: &Option<Puppet>| p.as_ref().expect("a puppet").tint;
         let (mut him, mut beside, mut them) = (None, None, None);
         for (p, e) in [(&mut him, &yhafiran), (&mut beside, &twin), (&mut them, &player)] {
-            apply(&lib, &mut g, p, e, None, 0, 0, None, false);
+            apply(&lib, &mut g, p, e, None, 0, 0, None, None, false);
         }
         assert_eq!((tint(&him), tint(&beside), tint(&them)), (Some(Tint::color(0x2A73_33FF)), None, None));
         let aura = |p: &Option<Puppet>| p.as_ref().expect("a puppet").aura.iter().map(|w| w.nodes.len()).sum::<usize>();
         let shell = |p: &Option<Puppet>| p.as_ref().expect("a puppet").gpu.shell.as_ref().map(|s| s.colors()[0]);
         assert_eq!((aura(&him), aura(&beside), aura(&them)), (0, 0, 0), "a colour alone: no aura");
         assert_eq!((shell(&him), shell(&beside), shell(&them)), (None, None, None), "a colour alone: no shell");
-        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 33, None, false).is_none(), "the same tint: kept");
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 33, None, None, false).is_none(), "the same tint: kept");
         crate::npctint::set(vec![("yhafiran".into(), Tint::color(0x4D80_4DFF))]);
-        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 66, None, false).is_some(), "a new tint: made anew");
-        assert!(apply(&lib, &mut g, &mut beside, &twin, None, 0, 66, None, false).is_none(), "the twin kept");
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 66, None, None, false).is_some(), "a new tint: made anew");
+        assert!(apply(&lib, &mut g, &mut beside, &twin, None, 0, 66, None, None, false).is_none(), "the twin kept");
         assert_eq!(tint(&him), Some(Tint::color(0x4D80_4DFF)));
         // a glow come on the same colour (petition 1893): made anew in it
         crate::npctint::set(vec![("yhafiran".into(), Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080, ..Default::default() })]);
-        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 77, None, false).is_some(), "a glow come: made anew");
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 77, None, None, false).is_some(), "a glow come: made anew");
         assert_eq!(tint(&him), Some(Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080, ..Default::default() }));
         assert_eq!((aura(&him), aura(&beside)), (0, 0), "a glow (the default aura): no particles");
         assert_eq!((shell(&him), shell(&beside)), (Some([128, 32, 32]), None), "a glow: its shell in the glow; the twin none");
@@ -3313,13 +3338,13 @@ mod held {
         use net::npctint::Aura;
         let both = Tint { color: 0x4D80_4DFF, glow: 0xFF40_4080, aura: Aura { kind: Aura::BOTH, source: 0, nodes: 5 } };
         crate::npctint::set(vec![("yhafiran".into(), both)]);
-        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 88, None, false).is_some(), "an aura named: made anew");
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 88, None, None, false).is_some(), "an aura named: made anew");
         assert_eq!((aura(&him), shell(&him)), (5, Some([128, 32, 32])));
         crate::npctint::set(vec![("yhafiran".into(), Tint { aura: Aura { kind: Aura::PARTICLES, source: 0, nodes: 0 }, ..both })]);
-        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 89, None, false).is_some());
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 89, None, None, false).is_some());
         assert_eq!((aura(&him), shell(&him)), (crate::aura::AURA_NODES, None), "particles alone");
         crate::npctint::set(Vec::new());
-        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 99, None, false).is_some(), "the tint gone: made anew");
+        assert!(apply(&lib, &mut g, &mut him, &yhafiran, None, 0, 99, None, None, false).is_some(), "the tint gone: made anew");
         assert_eq!((tint(&him), aura(&him), shell(&him)), (None, 0, None));
     }
 
@@ -3375,7 +3400,7 @@ mod held {
         let holds = |p: &Option<Puppet>| p.as_ref().and_then(|p| p.sprite.as_ref()).expect("a sprite").holds_items;
 
         let mut player = None;
-        apply(&lib, &mut g, &mut player, &entity(2), None, 0, 0, Some(&races), false);
+        apply(&lib, &mut g, &mut player, &entity(2), None, 0, 0, Some(&races), None, false);
         let p = player.as_ref().unwrap();
         assert_eq!(p.held, [Some((sword, 49)), Some((bow, 50)), Some((shield, 51))], "the hands' seats (racebody: petition 2493)");
         assert_eq!(nodes(&player), [49, 50, 51], "each item's model on its seat");
@@ -3384,7 +3409,7 @@ mod held {
 
         for (who, list) in [("an NPC", Some(&races)), ("a server with no races of its own", None)] {
             let mut bare = None;
-            apply(&lib, &mut g, &mut bare, &entity(if who == "an NPC" { 0 } else { 2 }), None, 0, 0, list, false);
+            apply(&lib, &mut g, &mut bare, &entity(if who == "an NPC" { 0 } else { 2 }), None, 0, 0, list, None, false);
             assert!(nodes(&bare).is_empty(), "{who}: nothing hung");
             assert_eq!((bare.as_ref().unwrap().held, bare.as_ref().unwrap().projectile), ([None; 3], [None; 2]), "{who}");
             assert!(!holds(&bare), "{who}");
@@ -3392,11 +3417,87 @@ mod held {
 
         // the list after the puppet: its items at the next apply, not made anew
         let mut late = None;
-        apply(&lib, &mut g, &mut late, &entity(2), None, 0, 0, None, false);
+        apply(&lib, &mut g, &mut late, &entity(2), None, 0, 0, None, None, false);
         assert!(nodes(&late).is_empty());
-        let made_anew = apply(&lib, &mut g, &mut late, &entity(2), None, 0, 33, Some(&races), false);
+        let made_anew = apply(&lib, &mut g, &mut late, &entity(2), None, 0, 33, Some(&races), None, false);
         assert!(made_anew.is_none(), "the puppet kept");
         assert_eq!(nodes(&late), [49, 50, 51]);
+    }
+
+    /// A server's merc in a body one of its races wears is dressed as a
+    /// player in it is (Heirloom petition 2772: "gear doesnt show on merc
+    /// Jal'raeth"): the Jal'Raeth's robed body, which names no text slot, in
+    /// plate and a helm, a sword in hand, as a merc (name colour 3, its name
+    /// in the server's 0x7E5B) has the player's armour laid on (the same
+    /// batches), its sword on the player's hand seat and its helm on its
+    /// head, as the player's character of the same channel has. The controls:
+    /// the same creature with no mercs told, and a pet the list does not name,
+    /// are drawn as the PS2 draws an NPC, bare and without the helm. A merc
+    /// told after its puppet was made is made anew, dressed. Needs
+    /// `run/eqoa.iso` and a graphics adapter.
+    #[test]
+    fn a_merc_in_a_races_body_is_dressed_as_a_player() {
+        const JALRAETH: u32 = 0xF51B_AB09;
+        let sword = 0x17F9_870Bu32;
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let Ok(mut iso) = iso::Iso::open(&path) else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let instance = render::wgpu::Instance::new(render::wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&render::wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
+        let mut g = Gpu { renderer: &mut renderer, device: &device, queue: &queue };
+        let mut lib = Library::new();
+        for f in ["CHAR.ESF", "CHARCUST.CSF", "ITEM.ESF"] {
+            lib.add(f, esf::Container::open(iso.read(f).unwrap()).unwrap());
+        }
+        let races = net::creation::Creation {
+            all_classes: true,
+            races: vec![net::creation::Race { id: 30, like: 0, city: 0, bonus: [0; 7], class_mask: 0x7FFF, body: [JALRAETH, JALRAETH], name: "Jal'Raeth".into(), short: "JAL".into(), desc: String::new() }],
+        };
+        let mercs = net::session::Mercs { own: true, names: vec!["Ralthas".into()], ..Default::default() };
+        let entity = |name: &str, p256: u8| net::entity::Entity {
+            id: 100_601,
+            model: JALRAETH,
+            drawn_model: JALRAETH,
+            creature: Some(net::entity::Creature { name: name.into(), p256, items: [sword, 0, 0], item_types: [1, 11], armor: [4; 6], ..Default::default() }),
+            ..Default::default()
+        };
+        let look = |e: &net::entity::Entity| e.creature.as_ref().map(look_of);
+        let made = |e: &net::entity::Entity, list: Option<&net::session::Mercs>, g: &mut Gpu| {
+            let mut p = None;
+            apply(&lib, g, &mut p, e, look(e), 0, 0, Some(&races), list, false);
+            p.expect("a puppet")
+        };
+        let drawn = |p: &Puppet| {
+            let mut nodes: Vec<i32> = p.attached.iter().map(|a| a.0).collect();
+            nodes.sort_unstable();
+            (p.gpu.batch_count(), nodes, p.held)
+        };
+        let player = drawn(&made(&entity("Ralthas", 2), Some(&mercs), &mut g));
+        let merc = drawn(&made(&entity("Ralthas", 3), Some(&mercs), &mut g));
+        assert_eq!(merc, player, "the merc dressed as the player");
+        let npc = drawn(&made(&entity("Ralthas", 3), None, &mut g));
+        let pet = drawn(&made(&entity("Fido", 3), Some(&mercs), &mut g));
+        assert_eq!(npc, pet, "the controls alike");
+        assert!(player.0 > npc.0, "the player's armour laid on ({} batches), not the NPC's ({})", player.0, npc.0);
+        assert!(player.1.len() > npc.1.len(), "the player's helm hung ({:?}), not the NPC's ({:?})", player.1, npc.1);
+        assert_ne!(player.2[0], npc.2[0], "the sword on the player's hand seat, the NPC's on the body's own node");
+
+        // the mercs told after the puppet: made anew, dressed
+        let late = entity("Ralthas", 3);
+        let mut p = None;
+        apply(&lib, &mut g, &mut p, &late, look(&late), 0, 0, Some(&races), None, false);
+        assert_eq!(drawn(p.as_ref().unwrap()), npc);
+        assert!(apply(&lib, &mut g, &mut p, &late, look(&late), 0, 33, Some(&races), Some(&mercs), false).is_some(), "made anew");
+        assert_eq!(drawn(p.as_ref().unwrap()), player);
+        assert!(apply(&lib, &mut g, &mut p, &late, look(&late), 0, 66, Some(&races), Some(&mercs), false).is_none(), "then kept");
     }
 
     /// The player's own sprite, the walker's, holds items as its puppet's
@@ -4498,7 +4599,7 @@ impl Play {
                 let previewed = dyeplay::preview(&self.dyepick, e);
                 let e = previewed.as_ref().unwrap_or(e);
                 let look = e.creature.as_ref().map(look_of);
-                apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms, self.session.creation.as_ref(), self.session.jumps);
+                apply(lib, &mut g, &mut self.self_puppet, e, look, slot, game_ms, self.session.creation.as_ref(), self.session.mercs.as_ref(), self.session.jumps);
                 let want = cape_of(&self.session, e);
                 if let Some(p) = self.self_puppet.as_mut() {
                     wear_cape(lib, &mut g, p, want);
@@ -4514,7 +4615,7 @@ impl Play {
                 continue;
             };
             let look = e.creature.as_ref().map(look_of);
-            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms, self.session.creation.as_ref(), self.session.jumps)
+            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms, self.session.creation.as_ref(), self.session.mercs.as_ref(), self.session.jumps)
                 && let Some(s) = sound.as_deref_mut()
             {
                 s.share_sounds(lib, &sounds_of(&self.puppets[slot]));

@@ -5,6 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-23 · Mercenaries of the newer races show their gear
+- A mercenary of one of the server's own races whose body has no armour of its own (the Jal'Raeth, the gargoyle, the dryad, the merfolk and the others) now shows its armour, its helm and its weapons as a player of that race does. Before, it was drawn bare, holding its weapons in the wrong place or not at all.
+
 ## 2026-11-23 · 180 more hunting camps on the map
 - The map (M) shows about 180 more hunting camps: every sizeable group of creatures the server has that the map was missing, in Tunaria, the Rathe and Odus, each with its creatures' levels (for example the shriek camp in Wktaan's 4th Talon, the Isle of Dread's breath stealers, the Tomb of Kings' Holciel and the Tae Ew of Cazic-Thule), and Zentar's Keep's own hexbones and Bogman Village's rancidbone trolls.
 
