@@ -184,6 +184,42 @@ pub enum Key {
 /// Stacked Spell Bars' scale (ticket 1913: "scale them down about 5%").
 pub const STACKED_SCALE: f32 = 0.95;
 
+fn stacked_px(v: i32) -> i32 {
+    (v as f32 * STACKED_SCALE).round() as i32
+}
+
+fn draw_stacked_icon(vui: &Vui, r: &mut dyn Raster, e: Entry, [x, y]: [i32; 2], pc: bool) -> [i32; 2] {
+    let s = stacked_px;
+    let mut icon = [x + s(7), y + s(2)];
+    let mut icon_size = [s(22), s(22)];
+    // Fit the spell book's gem background and pictogram into a PC cell.
+    if pc && e.msg == 0x8060000 && e.icon2 != -1 && e.icon_back != -1 && e.icon_back != 0 && r.has(e.icon_back as u32) {
+        let at = [x + 1, y + 2];
+        let size = [s(CELL[0]) - 2, s(CELL[1]) - 4];
+        r.stretch_blit(e.icon_back as u32, 0, at, size, [0, 0], [46, 34], 3, 1.0);
+        icon = [at[0] + 13 * size[0] / 46, at[1] + 6 * size[1] / 34];
+        icon_size = [22 * size[0] / 46, 22 * size[1] / 34];
+    }
+    if e.icon2 != -1 {
+        r.stretch_blit(e.icon2 as u32, 0, icon, icon_size, [0, 0], [22, 22], 3, 1.0);
+    }
+    if e.x08 == 61 {
+        let badge = vui.entry(61);
+        r.stretch_blit(vui.entry_id(&badge), 0, [x + s(5), y], [s(26), s(26)], badge.uv0, [26, 26], 3, 0.5);
+    }
+    icon
+}
+
+pub(crate) fn draw_cursor_gem(vui: &Vui, r: &mut dyn Raster, a: &Ability, p: [f32; 2], screen: [f32; 4]) {
+    let origin = |axis| {
+        let length = stacked_px(CELL[axis]) as f32;
+        let p = p[axis];
+        let after = p + 8.0;
+        (if after + length <= screen[axis + 2] { after } else { p - 8.0 - length }) as i32
+    };
+    draw_stacked_icon(vui, r, Entry::spell(a), [origin(0), origin(1)], true);
+}
+
 /// A slot's cell in the carousel's list, frame pixels (`row_at`'s: 36 across
 /// from its frame's left, its rows 31 apart), which the stacked bars scale.
 const CELL: [i32; 2] = [36, 31];
@@ -592,10 +628,17 @@ impl Default for HudMenus {
 }
 
 impl HudMenus {
-    /// Reflect only confirmed, currently equipped server slots 20–39.
-    pub fn sync_pc_slots(&mut self, abilities: &BTreeMap<i64, Ability>) {
+    /// Reflect confirmed server slots 20–39 and hide the gem on the pointer.
+    pub fn sync_pc_slots(&mut self, abilities: &BTreeMap<i64, Ability>, carried: Option<i64>) {
+        if let Some(id) = carried {
+            for entry in self.defs.iter_mut().flat_map(|def| &mut def.entries) {
+                if entry.msg == 0x8060000 && entry.id == id {
+                    *entry = Entry::default();
+                }
+            }
+        }
         for def in &mut self.pc_defs { def.entries.fill(Entry::default()); }
-        for a in abilities.values().filter(|a| a.valid != 0 && (20..40).contains(&a.slot)) {
+        for a in abilities.values().filter(|a| Some(a.id) != carried && a.valid != 0 && (20..40).contains(&a.slot)) {
             let i = (a.slot - 20) as usize;
             self.pc_defs[i / 10].entries[i % 10] = Entry::spell(a);
         }
@@ -723,7 +766,7 @@ impl HudMenus {
         let pc = pc_rows.is_some();
         self.stacked_hits.clear();
         let frame = vui.entry(29);
-        let s = |v: i32| (v as f32 * STACKED_SCALE).round() as i32;
+        let s = stacked_px;
         let (cw, ch) = (s(CELL[0]), s(CELL[1]));
         let (grid, per) = if let Some(rows) = pc_rows {
             let n = (rows * 2).min(BAR_MENUS.len());
@@ -764,28 +807,7 @@ impl HudMenus {
                 let at = [x, y];
                 r.stretch_blit(vui.entry_id(&frame), 0, at, [cw, ch], frame.uv0, frame.uv1, 3, if unavailable { opacity * 0.35 } else { opacity });
                 let e = if unavailable { Entry::default() } else { def.entries.get(n as usize).copied().unwrap_or_default() };
-                // the icon where the list puts it in its frame, scaled
-                let mut icon = [x + s(7), y + s(2)];
-                let mut icon_size = [s(22), s(22)];
-                // The server sends a 64×64 gem surface and a 32×32
-                // pictogram. The Book uses the gem's 46×34 artwork and the
-                // pictogram's 22×22 crop at (13,6). Fit those same layers
-                // together within a PC slot; the controller path is unchanged.
-                if pc && e.msg == 0x8060000 && e.icon2 != -1 && e.icon_back != -1 && e.icon_back != 0 && r.has(e.icon_back as u32) {
-                    let back = e.icon_back as u32;
-                    let at = [x + 1, y + 2];
-                    let size = [cw - 2, ch - 4];
-                    r.stretch_blit(back, 0, at, size, [0, 0], [46, 34], 3, 1.0);
-                    icon = [at[0] + 13 * size[0] / 46, at[1] + 6 * size[1] / 34];
-                    icon_size = [22 * size[0] / 46, 22 * size[1] / 34];
-                }
-                if e.icon2 != -1 {
-                    r.stretch_blit(e.icon2 as u32, 0, icon, icon_size, [0, 0], [22, 22], 3, 1.0);
-                }
-                if e.x08 == 61 {
-                    let badge = vui.entry(61);
-                    r.stretch_blit(vui.entry_id(&badge), 0, [x + s(5), y], [s(26), s(26)], badge.uv0, [26, 26], 3, 0.5);
-                }
+                let icon = draw_stacked_icon(vui, r, e, at, pc);
                 if e.msg == 0x8060000 && e.icon2 != -1 && self.auto.contains(&e.id) {
                     draw_auto_mark(r, icon, 1.0);
                 }
@@ -854,6 +876,16 @@ impl HudMenus {
     pub fn stacked_at(&self, p: [f32; 2]) -> Option<(usize, i32)> {
         let (x, y) = (p[0] as i32, p[1] as i32);
         self.stacked_hits.iter().find(|(_, _, c)| (c[0]..c[2]).contains(&x) && (c[1]..c[3]).contains(&y)).map(|&(m, n, _)| (m, n))
+    }
+
+    /// The regular PC cells map to assignable server slots.
+    pub fn pc_slot_at(&self, p: [f32; 2]) -> Option<i64> {
+        let (menu, n) = self.stacked_at(p)?;
+        if menu >= MENUS {
+            return (n < 10).then_some(20 + (menu - MENUS) as i64 * 10 + i64::from(n));
+        }
+        let bar = BAR_MENUS.iter().position(|&m| m == menu)?;
+        (n < 5).then_some(bar as i64 * 5 + i64::from(n))
     }
 
     pub fn pc_entry(&self, menu: usize, n: i32) -> Option<Entry> {
@@ -1224,7 +1256,7 @@ mod tests {
         }
         let bars = super::Bars { abilities: 4, gear: false };
         h.build(&abilities, &Default::default(), &Default::default(), bars);
-        h.sync_pc_slots(&abilities);
+        h.sync_pc_slots(&abilities, None);
         let mut r = Rec::default();
         h.draw_pc_bars(&vui, &mut r, 440, 150, bars, 4);
         for (menu, slot, back, front) in [(0, 0, 0x12345678, 0x22345678), (super::MENUS, 0, 0x12345679, 0x22345679)] {
@@ -1249,6 +1281,14 @@ mod tests {
         r.0.clear();
         h.draw_stacked(&vui, &mut r, 320, 200, bars, super::Layout::Stacked);
         assert!(!r.0.iter().any(|v| v.0 == 0x12345678 || v.0 == 0x12345679), "controller bar drawing stays unchanged");
+        r.0.clear();
+        h.sync_pc_slots(&abilities, Some(1));
+        h.draw_pc_bars(&vui, &mut r, 440, 150, bars, 4);
+        assert!(!r.0.iter().any(|v| v.0 == 0x12345678 || v.0 == 0x22345678), "pickup clears the source art");
+        r.0.clear();
+        super::draw_cursor_gem(&vui, &mut r, &abilities[&1], [638.0, 446.0], [0.0, 0.0, 640.0, 448.0]);
+        assert_eq!(r.0.iter().map(|v| v.0).collect::<Vec<_>>(), [0x12345678, 0x22345678]);
+        assert!(r.0.iter().all(|(_, at, size, _)| at[0] + size[0] < 638 && at[1] + size[1] < 446), "the gem stays visible at the pointer near the edge");
     }
     #[test]
     fn pc_shortcut_text_and_shadow_stay_inside_the_cell() {
@@ -1304,7 +1344,7 @@ mod tests {
         }
         abilities.get_mut(&29).unwrap().lockout = 1;
         abilities.get_mut(&30).unwrap().valid = 0;
-        h.sync_pc_slots(&abilities);
+        h.sync_pc_slots(&abilities, None);
         assert_eq!(h.pc_defs[0].entries[0].id, 20);
         assert_eq!(h.pc_defs[0].entries[9].id, 29);
         assert_eq!(h.pc_defs[0].entries[9].x08, 61, "the server lockout badge is retained");
@@ -1312,7 +1352,7 @@ mod tests {
         assert_eq!(h.pc_defs[1].entries[9].id, 39);
         abilities.get_mut(&20).unwrap().valid = 0;
         abilities.get_mut(&30).unwrap().valid = 1;
-        h.sync_pc_slots(&abilities);
+        h.sync_pc_slots(&abilities, None);
         assert_eq!(h.pc_defs[0].entries[0].msg, 0, "unmemorization clears the old cell");
         assert_eq!(h.pc_defs[1].entries[0].id, 30, "the acknowledgement fills the new cell");
     }

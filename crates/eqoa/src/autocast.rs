@@ -341,6 +341,8 @@ pub struct Now {
     pub effects: Vec<String>,
     /// the ability bars shown (`Play::ability_bars`)
     pub bars: i32,
+    /// the spell gem attached to the PC cursor
+    pub carried: Option<i64>,
 }
 
 /// An auto cast to send: the ability (its id), and whether at the player
@@ -645,7 +647,7 @@ impl AutoCast {
             .on
             .iter()
             .filter_map(|(id, &k)| abilities.get(id).map(|a| (a, k)))
-            .filter(|(a, _)| a.valid != 0 && shown(a.slot) && a.lockout <= 0 && (a.power_cost <= 0 || now.power >= a.power_cost as i32))
+            .filter(|(a, _)| Some(a.id) != now.carried && a.valid != 0 && shown(a.slot) && a.lockout <= 0 && (a.power_cost <= 0 || now.power >= a.power_cost as i32))
             .filter(|(a, _)| self.tries.get(&a.id).is_none_or(|t| now.ms >= t.next && t.watch.is_none()))
             .collect();
         // the bars' order: the first bar's slots, then the rest
