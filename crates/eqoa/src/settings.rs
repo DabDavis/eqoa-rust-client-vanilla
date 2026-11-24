@@ -1049,6 +1049,14 @@ pub struct ClientOptions {
     /// HUD Extras, kept. Off by default. A server that turns Character >
     /// Summary's stat caps off (`qol::STAT_CAPS`) turns it off with them.
     pub stat_window: bool,
+    /// Item Slot Icons (petitions 2926, 2928: "can we have the icon change to
+    /// whatever item is mounted"): Item (true), each item quick slot holding
+    /// an item shows that item's own icon (`hudmenu::Entry::art`), on the
+    /// Utility Bars and in the carousel's stack; Slot, the game's gem and
+    /// potion icons for the slot whatever is on it. Item by default. A server
+    /// that turns the spell bars' additions off (`qol::SPELL_BARS`: the game's
+    /// carousel) turns this to Slot.
+    pub item_icons: bool,
     /// Quest Markers over the heads (Extended > UI > Name Plates;
     /// a GM's petition 1813): on a server that sends them
     /// (`Session::agree_head_marks`), a yellow "!" over an NPC with a quest
@@ -1627,6 +1635,7 @@ impl Default for ClientOptions {
             buff_window: true,
             buff_timers: true,
             stat_window: false,
+            item_icons: true,
             head_marks: true,
             target_level: true,
             power_bars: true,
@@ -1800,6 +1809,9 @@ impl ClientOptions {
         }
         if self.stat_window {
             s.push_str("stat_window=on\n");
+        }
+        if !self.item_icons {
+            s.push_str("item_icons=slot\n");
         }
         if !self.head_marks {
             s.push_str("head_marks=off\n");
@@ -2135,6 +2147,8 @@ impl ClientOptions {
                 ("buff_timers", "off") => c.buff_timers = false,
                 ("stat_window", "on") => c.stat_window = true,
                 ("stat_window", "off") => c.stat_window = false,
+                ("item_icons", "item") => c.item_icons = true,
+                ("item_icons", "slot") => c.item_icons = false,
                 ("head_marks", "on") => c.head_marks = true,
                 ("head_marks", "off") => c.head_marks = false,
                 ("target_level", "on") => c.target_level = true,
@@ -2653,7 +2667,7 @@ pub mod qol {
     /// `item_links_here`, the player's to turn there (plain names until then).
     pub const ITEM_LINKS: u32 = 1 << 10;
     /// Ability Bars 3 and 4 and Stacked Spell Bars: the game's two bars, its
-    /// carousel.
+    /// carousel (and its slots' own icons: Item Slot Icons at Slot).
     pub const SPELL_BARS: u32 = 1 << 11;
     /// An [OG] account's (go-eqoa-server's `world.og_accounts`; the owner,
     /// 2026-11-18: "[OG] tag shows players you opt-out of the QoL changes to
@@ -2704,7 +2718,7 @@ pub mod qol {
             crate::options::STAT_WINDOW => STAT_CAPS,
             58 | crate::options::GROUP_EFFECTS => PET_EFFECTS,
             78 | 79 => AUTO_CAST,
-            22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT | crate::options::SPELL_BAR_SIZE => SPELL_BARS,
+            22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT | crate::options::SPELL_BAR_SIZE | crate::options::ITEM_ICONS => SPELL_BARS,
             _ => return None,
         })
     }
@@ -2764,6 +2778,7 @@ pub mod qol {
         }
         if off(SPELL_BARS) {
             (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) = (super::ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft);
+            c.item_icons = false;
         }
         c
     }
@@ -2810,6 +2825,7 @@ pub mod qol {
         }
         if off(SPELL_BARS) {
             (v.ability_bars, v.stacked_bars, v.spell_bar_layout, v.utility_layout) = (kept.ability_bars, kept.stacked_bars, kept.spell_bar_layout, kept.utility_layout);
+            v.item_icons = kept.item_icons;
         }
         v
     }
@@ -2971,6 +2987,12 @@ pub fn buff_timers() -> bool {
 /// Stat Window: the client's panel of the stat channel (`statwnd`).
 pub fn stat_window() -> bool {
     client().stat_window
+}
+
+/// Item Slot Icons at Item: an item quick slot shows its item's own icon
+/// (`hudmenu`).
+pub fn item_icons() -> bool {
+    client().item_icons
 }
 
 /// The Stat Window shown or hidden (F4, `/stats`), kept as Save Changes keeps
@@ -4459,7 +4481,7 @@ mod tests {
         assert!(!(c.map || c.minimap || map() || minimap()), "the map, off by default");
         assert!(c.map_markers, "its markers the player's, with it");
         assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
-        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.buff_timers || buff_timers() || c.stat_window || stat_window() || c.pet_effects || c.group_effects || c.auto_cast || c.auto_target), "the rest");
+        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.buff_timers || buff_timers() || c.stat_window || stat_window() || c.item_icons || item_icons() || c.pet_effects || c.group_effects || c.auto_cast || c.auto_target), "the rest");
         assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
         assert!(!c.item_links && (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) == (ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft), "item links off by default, the game's two bars");
         let d = ClientOptions::default();
@@ -4640,6 +4662,20 @@ mod tests {
         let back = ClientOptions::from_text(&off);
         assert!(!back.buff_window && !back.loading_tips);
         assert!(ClientOptions::from_text("buff_window=maybe").buff_window, "the default");
+    }
+
+    /// Item Slot Icons (petitions 2926, 2928): Item by default and not
+    /// written; Slot written and read back; an unknown value the default.
+    #[test]
+    fn item_slot_icons_are_kept_only_at_slot() {
+        let d = ClientOptions::default();
+        assert!(d.item_icons, "Item by default");
+        assert!(!d.to_text().contains("item_icons"));
+        let c = ClientOptions { item_icons: false, ..d };
+        assert!(c.to_text().contains("item_icons=slot\n"));
+        assert_eq!(ClientOptions::from_text(&c.to_text()), c, "round trip");
+        assert!(ClientOptions::from_text("item_icons=item").item_icons);
+        assert!(ClientOptions::from_text("item_icons=banner").item_icons, "the default");
     }
 
     /// Stat Window (petition 2925): off by default and not written; on

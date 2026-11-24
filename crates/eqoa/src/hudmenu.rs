@@ -90,18 +90,42 @@ pub struct Entry {
     pub x08: i32,
     pub msg: u32,
     pub id: i64,
+    /// An item quick slot's item's own icon (`VIClient::ItemIcon`, an
+    /// ITEMICON.ESF banner's DictID; `set_item_art`), drawn in the slot's
+    /// place with Extended's Item Slot Icons at Item (petitions 2926, 2928);
+    /// -1 for none.
+    pub art: i32,
 }
 
 impl Default for Entry {
     fn default() -> Self {
-        Entry { icon2: -1, icon_back: -1, x08: -1, msg: 0, id: 0 }
+        Entry { icon2: -1, icon_back: -1, x08: -1, msg: 0, id: 0, art: -1 }
     }
 }
 
 impl Entry {
     fn spell(a: &Ability) -> Self {
-        Self { icon2: a.icon_front as i32, icon_back: a.icon_back, x08: if a.lockout > 0 { 61 } else { -1 }, msg: 0x8060000, id: a.id }
+        Self { icon2: a.icon_front as i32, icon_back: a.icon_back, x08: if a.lockout > 0 { 61 } else { -1 }, msg: 0x8060000, id: a.id, art: -1 }
     }
+}
+
+/// An item's banner (ITEMICON.ESF's, `wndlist::draw_icon`'s 114 by 44: the
+/// item drawn in its middle on a grey plate) as a quick slot shows it: the
+/// middle, where the item is (texels x, y, w, h; a wide gem or stone whole
+/// in it, 3 to 2), drawn `ART_SIZE` big (frame pixels, before a bar's scale).
+pub const ART_CROP: [i32; 4] = [27, 2, 60, 40];
+pub const ART_SIZE: [i32; 2] = [30, 20];
+
+/// Draws item art `id` (`ART_CROP`) `size` big with its middle at `mid`, at
+/// `alpha`. False when the raster has no such surface (the slot's own icon
+/// is drawn instead).
+fn draw_art(r: &mut dyn Raster, id: i32, mid: [i32; 2], size: [i32; 2], alpha: f32) -> bool {
+    if id == -1 || !r.has(id as u32) {
+        return false;
+    }
+    let [x, y, w, h] = ART_CROP;
+    r.stretch_blit(id as u32, 0, [mid[0] - size[0] / 2, mid[1] - size[1] / 2], size, [x, y], [w, h], 3, alpha);
+    true
 }
 
 /// `VIMenuDef`
@@ -505,13 +529,22 @@ impl HudMenu {
         }
         vui.blit_ex_size(r, 158, icon, [top.uv1[0], 3], 3, a, 2);
         let icons = if live { SLOT_ICONS_LIVE } else { SLOT_ICONS };
+        let art = crate::settings::item_icons();
         let mut list = [pos[0] + 17 + 6, pos[1] - 5 + 8];
         let mut n = self.sel;
         for _ in 0..menu.count {
             if n >= menu.count {
                 n = 0;
             }
-            vui.blit_ex(r, icons[(n.max(0) as usize).min(3)], list, 3, a, 0);
+            // Item Slot Icons at Item (petitions 2926, 2928): the item's own,
+            // the size of the slot's
+            let e = menu.entries.get(n.max(0) as usize).copied().unwrap_or_default();
+            let id = icons[(n.max(0) as usize).min(3)];
+            let size = vui.entry(id).uv1;
+            let mid = [list[0] + size[0] / 2, list[1] + size[1] / 2];
+            if !(art && e.msg != 0 && draw_art(r, e.art, mid, ART_SIZE, a)) {
+                vui.blit_ex(r, id, list, 3, a, 0);
+            }
             list[1] += 32;
             n += 1;
         }
@@ -595,6 +628,9 @@ pub struct HudMenus {
     utility_hits: Vec<(usize, i32, [i32; 4])>,
     equipment_hits: Vec<(usize, i32, [i32; 4])>,
     equipment_hover: Option<i32>,
+    /// The Utility Bars' cell the mouse is over (petitions 2926, 2928:
+    /// `hover_utility`), named over the bars (`draw_utility_hover_name`).
+    utility_hover: Option<(usize, i32)>,
     /// The stacked bars are played with a controller (the last input no key,
     /// mouse or finger: play's): the selection's name is drawn over them
     /// (`draw_name`).
@@ -621,6 +657,7 @@ impl Default for HudMenus {
             utility_hits: Vec::new(),
             equipment_hits: Vec::new(),
             equipment_hover: None,
+            utility_hover: None,
             named: false,
             hover: None,
         }
@@ -958,11 +995,13 @@ impl HudMenus {
 
     /// The Utility Bars (`utility_cells`): each cell a slot's frame at Spell
     /// Bar Opacity, an item slot's icon the game's for that slot (the
-    /// carousel's stack draws the same, `SLOT_ICONS`; an item's own picture
-    /// is the inventory's banner, not a square), whole while it holds an item
-    /// and faint while empty; a set's badge and icon as the live client's
-    /// `DrawGear` has them; the menu up's selection outlined; no name. The
-    /// cells are noted for the pointer (`utility_at`).
+    /// carousel's stack draws the same, `SLOT_ICONS`), whole while it holds
+    /// an item and faint while empty; with Item Slot Icons at Item (petitions
+    /// 2926, 2928), a slot holding an item shows the item's own (`draw_art`:
+    /// the middle of its inventory banner); a set's badge and icon as the live
+    /// client's `DrawGear` has them; the menu up's selection outlined; no name
+    /// but the mouse's (`draw_utility_hover_name`). The cells are noted for
+    /// the pointer (`utility_at`).
     pub fn draw_utility(&mut self, vui: &Vui, r: &mut dyn Raster, bars: Bars, layout: UtilityLayout, at: [i32; 2]) {
         self.draw_utility_subset(vui, r, bars, layout, at, false);
     }
@@ -983,11 +1022,16 @@ impl HudMenus {
             let e = self.defs[menu].entries.get(n as usize).copied().unwrap_or_default();
             let icon = [c[0] + s(7), c[1] + s(2)];
             if menu == ITEMS {
-                let id = icons[(n.max(0) as usize).min(3)];
-                let size = vui.entry(id).uv1;
-                let size = [s(size[0]), s(size[1])];
-                let centre = [c[0] + (c[2] - c[0] - size[0]) / 2, c[1] + (c[3] - c[1] - size[1]) / 2];
-                vui.blit_ex_size(r, id, centre, size, 3, if e.msg != 0 { 1.0 } else { 0.35 }, 0);
+                // Item Slot Icons at Item (petitions 2926, 2928): the item's
+                // own icon, square in the cell as a spell's; else the slot's
+                let mid = [(c[0] + c[2]) / 2, (c[1] + c[3]) / 2];
+                if !(crate::settings::item_icons() && e.msg != 0 && draw_art(r, e.art, mid, [s(ART_SIZE[0]), s(ART_SIZE[1])], 1.0)) {
+                    let id = icons[(n.max(0) as usize).min(3)];
+                    let size = vui.entry(id).uv1;
+                    let size = [s(size[0]), s(size[1])];
+                    let centre = [c[0] + (c[2] - c[0] - size[0]) / 2, c[1] + (c[3] - c[1] - size[1]) / 2];
+                    vui.blit_ex_size(r, id, centre, size, 3, if e.msg != 0 { 1.0 } else { 0.35 }, 0);
+                }
             } else {
                 for id in [e.x08, e.icon2] {
                     if id != -1 {
@@ -1040,6 +1084,46 @@ impl HudMenus {
         vui.draw_centered_string_ex(r, &text, x, y, [1.0; 4], 0, true);
     }
 
+    /// The mouse at frame point `p` in the Utility Bars' place (none: off the
+    /// window, or the bars not up): the cell under it, named over the bars
+    /// (`draw_utility_hover_name`; petitions 2926, 2928: "it doesnt tell you
+    /// which one it is when you mouse over them").
+    pub fn hover_utility(&mut self, p: Option<[f32; 2]>) {
+        self.utility_hover = p.and_then(|p| self.utility_at(p));
+    }
+
+    /// The Utility Bars' cell under the mouse (`hover_utility`) named over it
+    /// as the equipment bar's is: an item slot's item, a weapon set's name, an
+    /// empty item slot "Empty item slot"; kept on `screen` (its left and right).
+    pub fn draw_utility_hover_name(&self, vui: &Vui, r: &mut dyn Raster, screen: Option<[i32; 2]>, name: &dyn Fn(u32, i64) -> Vec<u16>) {
+        let Some((menu, n)) = self.utility_hover else { return };
+        let Some(&(_, _, c)) = self.utility_hits.iter().find(|&&(m, i, _)| m == menu && i == n) else { return };
+        let e = self.defs[menu].entries.get(n.max(0) as usize).copied().unwrap_or_default();
+        let mut text = if e.msg == 0 || e.id < 0 { Vec::new() } else { name(e.msg, e.id) };
+        if text.is_empty() && menu == ITEMS {
+            text = crate::ui::wide("Empty item slot");
+        }
+        if text.is_empty() {
+            return;
+        }
+        let half = r.string_width(&text) / 2;
+        let mut x = (c[0] + c[2]) / 2;
+        if let Some([lo, hi]) = screen {
+            x = x.min(hi - half).max(lo + half);
+        }
+        let y = c[1] - r.point_size() / 2 - 4;
+        vui.draw_centered_string_ex(r, &text, x, y, [1.0; 4], 0, true);
+    }
+
+    /// Each item quick slot's item's own icon (`Entry::art`) out of the
+    /// inventory, as `build` put the items on the slots: `VIClient::ItemIcon`
+    /// with the expansion's `flags` (`inventory::item_icon`).
+    pub fn set_item_art(&mut self, inventory: &ItemList, flags: u32) {
+        for e in &mut self.defs[ITEMS].entries {
+            e.art = if e.msg == 0x2030000 { inventory.items.get(e.id.max(0) as usize).map_or(-1, |it| crate::inventory::item_icon(it, flags) as i32) } else { -1 };
+        }
+    }
+
     /// The Utility Bars' cell at frame point `p` (in their own place, as
     /// `draw_utility` drew them): its menu and entry.
     pub fn utility_at(&self, p: [f32; 2]) -> Option<(usize, i32)> {
@@ -1064,6 +1148,7 @@ impl HudMenus {
     /// cells forgotten, so no pointer finds them.
     pub fn hide_utility(&mut self) {
         self.utility_hits.clear();
+        self.utility_hover = None;
         self.equipment_hits.clear();
         self.equipment_hover = None;
     }
@@ -1773,6 +1858,99 @@ mod tests {
         assert_eq!(HudMenus::utility_height(DISC, UtilityLayout::Below), ch + s(COLUMN_GAP));
         h.hide_utility();
         assert_eq!(h.point_utility(mid([216, bottom - ch, 216 + cw, bottom])), None, "hidden: nothing found");
+    }
+
+    /// Item Slot Icons (petitions 2926, 2928): each quick slot's item's own
+    /// icon (the expansion's where there is one, `inventory::item_icon`),
+    /// drawn as the middle of its banner on the Utility Bars and in the
+    /// carousel's stack; the mouse over a cell names what is on it, "Empty
+    /// item slot" for none. The controls: at Slot, and for a surface the
+    /// raster lacks, the slot's own icon; off a cell, or hidden, no name.
+    #[test]
+    fn item_slots_show_their_items_and_name_them_under_the_mouse() {
+        struct Rec(Vec<(u32, [i32; 2], [i32; 2], [i32; 2], [i32; 2])>, Vec<String>);
+        impl Raster for Rec {
+            fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn stretch_blit(&mut self, id: u32, _: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], _: i32, _: f32) {
+                self.0.push((id, at, size, a, b));
+            }
+            fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+            fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+            fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16]) {
+                self.1.push(String::from_utf16_lossy(s));
+            }
+            fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+                self.1.push(String::from_utf16_lossy(s));
+            }
+            fn string_width(&self, s: &[u16]) -> i32 {
+                s.len() as i32 * 8
+            }
+            fn point_size(&self) -> i32 {
+                16
+            }
+            fn viewport(&self) -> [i32; 4] {
+                [0, 0, 640, 448]
+            }
+            fn set_viewport(&mut self, _: [i32; 4]) {}
+            fn has(&self, id: u32) -> bool {
+                id != 0x4444
+            }
+        }
+        crate::settings::testing::reset(false);
+        let vui = crate::pointer::testing::vui();
+        let stone = |q: i64, icon: i64, icon2: i64, name: &str| NetItem { quick_slot: q, equip_slot: -1, item: Item { icon, icon2, p4c: 7, name: name.into(), ..Default::default() }, ..Default::default() };
+        let inv = ItemList { items: vec![stone(0, 0x1111, 0x2222, "Spirit of Wolf Stone"), stone(2, 0x3333, 0, "Freeport Travel Stone"), stone(3, 0x4444, 0, "Lost Stone")], ..Default::default() };
+        let mut h = HudMenus::default();
+        h.build(&BTreeMap::new(), &inv, &Gear::default(), DISC);
+        h.set_item_art(&inv, 0);
+        let art = |h: &HudMenus| h.defs[ITEMS].entries.iter().map(|e| e.art).collect::<Vec<_>>();
+        assert_eq!(art(&h), vec![0x1111, -1, 0x3333, 0x4444], "each slot's item's icon, none on the empty one");
+        h.set_item_art(&inv, 2);
+        assert_eq!(art(&h)[0], 0x2222, "the expansion's icon");
+        let name = |msg: u32, id: i64| if msg == 0x2030000 { inv.items.get(id as usize).map(|it| crate::ui::wide(&it.item.name)).unwrap_or_default() } else { Vec::new() };
+        let s = |v: i32| (v as f32 * STACKED_SCALE).round() as i32;
+        let arts = |r: &Rec| r.0.iter().filter(|b| b.3 == [ART_CROP[0], ART_CROP[1]] && b.4 == [ART_CROP[2], ART_CROP[3]]).map(|b| (b.0, b.1, b.2)).collect::<Vec<_>>();
+        let mut r = Rec(Vec::new(), Vec::new());
+        h.draw_utility(&vui, &mut r, DISC, UtilityLayout::UpperLeft, UPPER_LEFT_AT);
+        let cell = |h: &HudMenus, n: i32| h.utility_hits.iter().find(|c| c.0 == ITEMS && c.1 == n).unwrap().2;
+        let c0 = cell(&h, 0);
+        let size = [s(ART_SIZE[0]), s(ART_SIZE[1])];
+        let at = [(c0[0] + c0[2]) / 2 - size[0] / 2, (c0[1] + c0[3]) / 2 - size[1] / 2];
+        assert_eq!(arts(&r), vec![(0x2222, at, size), (0x3333, [at[0], at[1] + (c0[3] - c0[1]) * 2], size)], "two items drawn as themselves, mid-cell; the lost surface not");
+        crate::settings::set_client(crate::settings::ClientOptions { item_icons: false, ..crate::settings::client() });
+        let mut r = Rec(Vec::new(), Vec::new());
+        h.draw_utility(&vui, &mut r, DISC, UtilityLayout::UpperLeft, UPPER_LEFT_AT);
+        assert!(arts(&r).is_empty(), "the control: Slot, the slots' own icons");
+        let mut r = Rec(Vec::new(), Vec::new());
+        h.menus[ITEMS].draw_stack(&vui, &mut r, &h.defs[ITEMS].clone(), &name, false);
+        assert!(arts(&r).is_empty(), "nor in the carousel");
+        crate::settings::set_client(crate::settings::ClientOptions { item_icons: true, ..crate::settings::client() });
+        let mut r = Rec(Vec::new(), Vec::new());
+        h.menus[ITEMS].draw_stack(&vui, &mut r, &h.defs[ITEMS].clone(), &name, false);
+        assert_eq!(arts(&r).iter().map(|a| (a.0, a.2)).collect::<Vec<_>>(), vec![(0x2222, ART_SIZE), (0x3333, ART_SIZE)], "the carousel's stack too");
+        // the mouse
+        let mid = |c: [i32; 4]| [(c[0] + c[2]) as f32 / 2.0, (c[1] + c[3]) as f32 / 2.0];
+        let said = |h: &HudMenus| {
+            let mut r = Rec(Vec::new(), Vec::new());
+            h.draw_utility_hover_name(&vui, &mut r, None, &name);
+            // its shadow, then the words
+            let mut said = r.1;
+            said.dedup();
+            said
+        };
+        assert!(said(&h).is_empty(), "no mouse: no name");
+        h.hover_utility(Some(mid(cell(&h, 2))));
+        assert_eq!(said(&h), vec!["Freeport Travel Stone".to_string()], "the third slot's");
+        h.hover_utility(Some(mid(cell(&h, 0))));
+        assert_eq!(said(&h), vec!["Spirit of Wolf Stone".to_string()], "the first's");
+        h.hover_utility(Some(mid(cell(&h, 1))));
+        assert_eq!(said(&h), vec!["Empty item slot".to_string()]);
+        h.hover_utility(Some([0.0, 0.0]));
+        assert!(said(&h).is_empty(), "off the bars");
+        h.hover_utility(Some(mid(cell(&h, 2))));
+        h.hide_utility();
+        assert!(said(&h).is_empty(), "hidden");
+        crate::settings::testing::reset(false);
     }
 
     /// A pointer on the quick menu up: the title bar is the next menu, a

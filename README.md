@@ -437,6 +437,12 @@ or a browser (each described where it lives below):
   and the six resists as Character > Summary's Details shows them (CLIENT's `CurStat`). OFF and DEF MOD
   are not in the channel, so it does not show them. A server that turns the stat caps off
   (`settings::qol::STAT_CAPS`) turns it off too.
+- **Item Slot Icons** (petitions 2926, 2928; `hudmenu`): each item quick slot holding an item shows the
+  item's own icon (`VIClient::ItemIcon`, the middle of its ITEMICON.ESF banner, `hudmenu::ART_CROP`) where
+  the game shows the slot's gem or potion, on the Utility Bars and in the carousel's stack; the mouse over
+  a Utility Bars cell names what is on it ("Empty item slot" for none), as the equipment bar's cells are
+  named. Extended > UI > HUD Extras' Item Slot Icons: Item (the default) or Slot (the game's). A server
+  that turns the spell bars' additions off (`settings::qol::SPELL_BARS`) keeps the game's slot icons.
 - **Loading tips** (a GM's petition 1778, 2026-11-12; `tips.rs`, `tips.txt`): one "Did you
   know" sentence, picked at random as each loading screen comes up (world entry, a logout's way back,
   a zone or world change, a coach, a gate, a rez), under its bar in the 4:3 frame's middle, never the

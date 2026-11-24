@@ -1002,6 +1002,9 @@ impl WndOptions {
                     // Stat Window (petition 2925): the panel drawn or not
                     // from the next frame (`statwnd`)
                     STAT_WINDOW => c.stat_window = !c.stat_window,
+                    // Item Slot Icons (petitions 2926, 2928): Item or Slot,
+                    // the quick slots drawn so from the next frame (`hudmenu`)
+                    ITEM_ICONS => c.item_icons = !c.item_icons,
                     // Quest Markers: the server told from the next frame
                     // (`Session::agree_head_marks`), the marks drawn or not
                     // over the NPCs' names (`Play::plates`)
@@ -1940,7 +1943,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 116] = [
+const EXTENDED_ITEMS: [(i32, &str); 117] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -2057,6 +2060,7 @@ const EXTENDED_ITEMS: [(i32, &str); 116] = [
     (AD_KEYS, "A/D Keys"),
     (BUFF_TIMERS, "Buff Timers"),
     (STAT_WINDOW, "Stat Window"),
+    (ITEM_ICONS, "Item Slot Icons"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2143,9 +2147,11 @@ const CHAT_WAKE_ON_MESSAGE: i32 = 248;
 /// A/D Keys' item (petition 2909). 250, as Interface Size's 240s.
 const AD_KEYS: i32 = 250;
 /// HUD Extras' rows (petitions 2924-2928): Buff Timers (the Buff Window's
-/// time left on each icon), Stat Window (`statwnd`).
+/// time left on each icon), Stat Window (`statwnd`), Item Slot Icons (the
+/// item quick slots' items' own icons, `hudmenu`).
 pub(crate) const BUFF_TIMERS: i32 = 251;
 pub(crate) const STAT_WINDOW: i32 = 252;
+pub(crate) const ITEM_ICONS: i32 = 253;
 
 /// Slow When Not Focused's item (a GM's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -2273,7 +2279,7 @@ const ALL_CATEGORIES: [Category; 26] = [
     Category { name: "Interface Size", items: &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS], note: Note::None, group: Group::Ui },
     // what the HUD tells of its own pieces (petitions 2924-2928): HUD's page
     // is full
-    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW], note: Note::None, group: Group::Ui },
+    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS], note: Note::None, group: Group::Ui },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -2457,6 +2463,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         83 => on_off(c.buff_window),
         BUFF_TIMERS => on_off(c.buff_timers),
         STAT_WINDOW => on_off(c.stat_window),
+        ITEM_ICONS => wide(if c.item_icons { "Item" } else { "Slot" }),
         85 => on_off(c.head_marks),
         TARGET_LEVEL => on_off(c.target_level),
         84 => on_off(c.loading_tips),
@@ -3766,6 +3773,15 @@ mod tests {
         assert_eq!((settings::stat_window(), value_text(&vui, STAT_WINDOW), cues.last()), (true, Some(wide(vui.words.get(551, vui.language))), Some(&11)), "on");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::stat_window(), "and back");
+        // Item Slot Icons Item by default (petitions 2926, 2928), two values
+        goto!(ITEM_ICONS);
+        assert_eq!(w.item, ITEM_ICONS, "Item Slot Icons");
+        assert!(settings::item_icons(), "Item by default");
+        assert_eq!(value_text(&vui, ITEM_ICONS), Some(wide("Item")));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::item_icons(), value_text(&vui, ITEM_ICONS), cues.last()), (false, Some(wide("Slot")), Some(&11)), "Slot");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::item_icons(), "and back");
         // A/D Keys Strafe by default (petition 2909), two values
         goto!(AD_KEYS);
         assert_eq!(w.item, AD_KEYS, "A/D Keys");
@@ -4087,7 +4103,7 @@ mod tests {
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
-                ("HUD Extras", vec!["Buff Timers", "Stat Window"]),
+                ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons"]),
             ],
             "UI: what is drawn over the world"
         );
@@ -4589,7 +4605,7 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
@@ -4612,6 +4628,7 @@ mod tests {
         }
         assert_eq!(value_text(&vui, 64), Some(wide("Default")), "a number's colour the game's");
         assert_eq!(value_text(&vui, 22), Some(wide("2")), "the game's two bars");
+        assert_eq!(value_text(&vui, ITEM_ICONS), Some(wide("Slot")), "the game's slot icons");
         // the Map, the Minimap and Item Links: off by default here, said, and
         // turned
         for item in [41, 42, 73] {

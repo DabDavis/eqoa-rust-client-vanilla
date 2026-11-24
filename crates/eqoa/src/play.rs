@@ -6447,6 +6447,11 @@ impl Play {
         let p = at.filter(|_| crate::binds::pc_shortcuts() && self.mode == 0 && !self.map.open && !self.search.open && !crate::hideui::hidden())
             .map(|at| crate::hudlayout::local_point(crate::hudlayout::Piece::EquipmentBar, render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size)));
         self.hud_menus.hover_equipment(p);
+        // the Utility Bars' cell under the mouse (petitions 2926, 2928: "it
+        // doesnt tell you which one it is when you mouse over them")
+        let p = at.filter(|_| self.hud_menus.stacked && self.mode == 0 && !self.map.open && !self.search.open && !crate::hideui::hidden())
+            .map(|at| crate::hudlayout::local_point(crate::hudlayout::Piece::UtilityBars, render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size)));
+        self.hud_menus.hover_utility(p);
     }
 
     /// The left button let go (`chat::Let`).
@@ -11143,6 +11148,9 @@ impl Play {
             if (self.mode == 0 || self.mode == 30 || self.mode == 38 || self.mode == 43) && !self.search.open {
                 let bars = self.hud_bars();
                 self.hud_menus.build(&self.abilities, &self.dump.inventory, &self.gear, bars);
+                // the item quick slots' items' own icons (Item Slot Icons,
+                // petitions 2926, 2928)
+                self.hud_menus.set_item_art(&self.dump.inventory, self.session.expansion & net::session::EXPANSION_FLAGS);
                 if crate::binds::pc_shortcuts() {
                     let held = self.carried_gem();
                     self.hud_menus.sync_pc_slots(&self.abilities, held);
@@ -11207,6 +11215,8 @@ impl Play {
                     let screen = crate::hudlayout::screen_x(r.ui, &m);
                     let m = crate::hudlayout::seal(r.ui, m);
                     self.hud_menus.draw_name(vui, &mut r, now as i64, true, Some(screen), &name);
+                    // the cell under the mouse named (petitions 2926, 2928)
+                    self.hud_menus.draw_utility_hover_name(vui, &mut r, Some(screen), &name);
                     crate::hudlayout::end(r.ui, m);
                     if pc && bars.gear {
                         r.ui.anchor = Anchor::Right;
