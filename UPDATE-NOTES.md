@@ -5,9 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
-## 2026-11-24 · Right click loots the corpse under your merc
+## 2026-11-24 · Right click loots past your merc and pet
 
-- A **right click** (or a double click) on a corpse opens it even when your merc, a pet or a groupmate stands over it, and small creatures such as goblins and their corpses are easier to click. A left click still targets whatever is nearest, and the controller's targeting is unchanged.
+- A **right click** (or a double click) on a corpse opens it even when your pet, your merc, a groupmate or a groupmate's merc stands in front of it: your own side no longer gets in the way. Anything else (a creature, a merchant, another player) still takes the click when it is nearer, as before. Small creatures such as goblins and their corpses are easier to click. A left click still targets whatever is nearest, and the controller's targeting is unchanged.
 
 ## 2026-11-24 · Instanced duels in Neriak
 

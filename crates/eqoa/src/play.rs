@@ -6002,12 +6002,12 @@ impl Play {
 
     /// `creature_at` for a click that targets (`interact` false: the
     /// nearest the camera, as before) or one that uses what it is on (a
-    /// right or double click: talk or loot, `interact`), which among those
-    /// under the cursor takes a corpse first, then any other, and the
-    /// player's own side last (pets and mercs, anyone's, and the group's
-    /// members), the nearest the camera within each (`pick_rank`; Heirloom
-    /// 2897: a dead pickclaw shaman under the player's merc could not be
-    /// looted). The controller's targeting (R1, ✕) is not this: vanilla's
+    /// right or double click: talk or loot, `interact`), which passes the
+    /// player's own side over (`own_side`: its pet, its group's mercs, its
+    /// group's members) for anything else under the cursor, a corpse, an NPC,
+    /// a merchant, an enemy or another player, those the nearest the camera
+    /// as before (Heirloom 2897: a dead pickclaw shaman under the player's
+    /// merc could not be looted). The controller's targeting (R1, ✕) is not this: vanilla's
     /// mouse alone.
     pub fn creature_at_for(&self, at: (f64, f64), size: (u32, u32), view_proj: glam::Mat4, interact: bool) -> Option<u32> {
         let (w, h) = (size.0 as f32, size.1 as f32);
@@ -6032,7 +6032,7 @@ impl Play {
             if crate::mouse::to_segment(cursor, a, b) > reach {
                 continue;
             }
-            let rank = if interact { self.pick_rank(e) } else { 0 };
+            let rank = (interact && self.own_side(e)) as u8;
             if best.is_none_or(|(_, r, d)| rank < r || (rank == r && depth < d)) {
                 best = Some((e.id, rank, depth));
             }
@@ -6040,19 +6040,19 @@ impl Play {
         best.map(|b| b.0)
     }
 
-    /// How a right click ranks a creature under the cursor (`creature_at_for`,
-    /// lower first): 0 a corpse that is not a player's, 2 the player's own
-    /// side (its pet, a pet's or a merc's name colour, a group member), 1
-    /// anyone else.
-    fn pick_rank(&self, e: &net::entity::Entity) -> u8 {
-        let player = a_player(e);
-        if e.p18 & 2 != 0 && !player {
-            0
-        } else if e.id == self.pet_id || e.creature.as_ref().is_some_and(|c| c.p256 == 3) || (player && self.group_member(e.id)) {
-            2
-        } else {
-            1
+    /// Whether a right click passes `e` over for anything else under the
+    /// cursor (`creature_at_for`): the player's pet, a merc hired by the
+    /// player or a group member (`net::session::Mercs::owner`, where the
+    /// server names hirers), or a group member. A group member's own pet
+    /// cannot be told from anyone's here (no owner is sent for a pet), so it
+    /// competes as anyone does.
+    fn own_side(&self, e: &net::entity::Entity) -> bool {
+        if e.id == self.pet_id || self.group_member(e.id) {
+            return true;
         }
+        let Some(c) = e.creature.as_ref().filter(|c| c.p256 == 3) else { return false };
+        let Some(owner) = self.session.mercs.as_ref().and_then(|m| m.owner(&c.name)) else { return false };
+        owner == self.player.name || self.group.members[..self.group.count()].iter().any(|m| m.name == owner)
     }
 
     /// A click or a tap `c` on a `size` window, on the game's windows
@@ -13169,34 +13169,32 @@ mod commands {
     }
 
     /// Heirloom 2897: a dead pickclaw shaman with the player's merc standing
-    /// over it could not be right-clicked to loot. A right click (interact)
-    /// under which lie a corpse and, nearer the camera, the player's merc, a
-    /// pet, a group member and a live goblin takes the corpse; with the
-    /// corpse gone the live goblin before the player's own side; with only
-    /// the side, the nearest of it. A left click (target) is as before: the
-    /// nearest the camera, the merc. A corpse of a player's is not taken
-    /// first.
+    /// over it could not be right-clicked to loot. A right click passes the
+    /// player's own side over (its merc, its pet, a group member, a group
+    /// member's merc) for the corpse behind them; anything else competes as
+    /// before, the nearest the camera: a live goblin or a merchant in front
+    /// of the corpse wins it, and a stranger's merc is not passed over. A
+    /// left click is unchanged: the nearest, the merc.
     #[test]
     fn a_right_click_loots_the_corpse_under_a_merc() {
         let mut p = play();
         let me: u32 = 0x1DCD_6501;
         p.session.self_id = Some(u64::from(me));
-        let creature = |id: u32, z: f32, name: &str, p18: u8, p256: u8| net::entity::Entity {
+        p.player.name = "Rollotomasi".into();
+        let creature = |id: u32, z: f32, name: &str, p18: u8, p256: u8, npc_flags: u16| net::entity::Entity {
             id,
             kind: 130,
             p18,
             p19: 1,
             pos: [0.0, 0.0, z],
             actor_pos: [0.0, 0.0, z],
-            creature: Some(net::entity::Creature { name: name.into(), p256, ..Default::default() }),
+            creature: Some(net::entity::Creature { name: name.into(), p256, npc_flags, ..Default::default() }),
             ..Default::default()
         };
-        let (corpse, merc, pet, mate, goblin) = (0x0010_0001, 0x0010_0002, 0x0010_0003, 0x1DCD_6502, 0x0010_0005);
-        p.entities.slots[0] = Some(creature(corpse, -12.0, "pickclaw shaman", 3, 0));
-        p.entities.slots[1] = Some(creature(merc, -9.0, "Ralthas", 1, 3));
-        p.entities.slots[2] = Some(creature(pet, -9.5, "Gobaner", 1, 3));
-        p.entities.slots[3] = Some(creature(mate, -10.0, "Groupmate", 1, 2));
-        p.entities.slots[4] = Some(creature(goblin, -11.0, "pickclaw warrior", 1, 0));
+        let (corpse, merc, pet, mate, mate_merc, goblin) = (0x0010_0001, 0x0010_0002, 0x0010_0003, 0x1DCD_6502, 0x0010_0004, 0x0010_0005);
+        p.session.mercs = Some(net::session::Mercs { own: true, names: vec!["Ralthas".into(), "Brann".into(), "Stranger".into()], owners: vec!["Rollotomasi".into(), "Groupmate".into(), "Someone".into()], ..Default::default() });
+        p.entities.slots[0] = Some(creature(corpse, -12.0, "pickclaw shaman", 3, 0, 0));
+        p.entities.slots[1] = Some(creature(merc, -9.0, "Ralthas", 1, 3, 0));
         p.pet_id = pet;
         p.group.in_group = true;
         p.group.members = vec![crate::group::Member { id: mate, name: "Groupmate".into(), ..Default::default() }];
@@ -13204,21 +13202,38 @@ mod commands {
         let m = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
         let c = m * glam::Vec4::new(0.0, 0.5, -12.0, 1.0);
         let at = (((c.x / c.w + 1.0) * 0.5 * 640.0) as f64, ((1.0 - c.y / c.w) * 0.5 * 480.0) as f64);
-        assert_eq!(p.creature_at_for(at, (640, 480), m, true), Some(corpse), "a right click: the corpse under them");
+        let right = |p: &Play| p.creature_at_for(at, (640, 480), m, true);
+        assert_eq!(right(&p), Some(corpse), "the corpse behind the player's merc");
         assert_eq!(p.creature_at_for(at, (640, 480), m, false), Some(merc), "a left click: the nearest, as before");
         assert_eq!(p.creature_at(at, (640, 480), m), Some(merc));
-        p.entities.slots[0] = None;
-        assert_eq!(p.creature_at_for(at, (640, 480), m, true), Some(goblin), "no corpse: the live goblin before the player's side");
+        // the whole side in front: the pet, a group member and its merc too
+        p.entities.slots[2] = Some(creature(pet, -9.5, "Gobaner", 1, 3, 0));
+        p.entities.slots[3] = Some(creature(mate, -10.0, "Groupmate", 1, 2, 0));
+        p.entities.slots[4] = Some(creature(mate_merc, -10.5, "Brann", 1, 3, 0));
+        assert_eq!(right(&p), Some(corpse), "the corpse behind the pet, a group member and its merc");
+        p.entities.slots[1] = None;
+        p.entities.slots[3] = None;
         p.entities.slots[4] = None;
-        assert_eq!(p.creature_at_for(at, (640, 480), m, true), Some(merc), "only the side: its nearest");
-        // a player's corpse is not looted first
-        p.entities.slots[0] = Some(creature(corpse, -12.0, "Someone", 3, 2));
-        p.entities.slots[4] = Some(creature(goblin, -11.0, "pickclaw warrior", 1, 0));
-        assert_eq!(p.creature_at_for(at, (640, 480), m, true), Some(goblin), "a player's corpse ranks as anyone");
-        // the click itself: a right click on the corpse under the merc asks for its loot (0x0015)
-        p.entities.slots[0] = Some(creature(corpse, -12.0, "pickclaw shaman", 3, 0));
-        p.click(p.creature_at_for(at, (640, 480), m, true), true);
+        assert_eq!(right(&p), Some(corpse), "the corpse behind the pet alone");
+        // the click itself: the corpse targeted (its loot asked, 0x0015)
+        p.click(right(&p), true);
         assert_eq!(p.target, corpse, "the corpse targeted, the loot asked");
+        // a live goblin in front of the corpse wins, the nearest as before
+        p.entities.slots[5] = Some(creature(goblin, -11.0, "pickclaw warrior", 1, 0, 0));
+        assert_eq!(right(&p), Some(goblin), "a live goblin in front of the corpse");
+        // a merchant in front of the corpse is talked to
+        p.entities.slots[5] = Some(creature(goblin, -11.0, "Merchant Merb", 1, 0, 0x80));
+        assert_eq!(right(&p), Some(goblin), "a merchant in front of the corpse");
+        p.click(right(&p), true);
+        assert_eq!(p.target, goblin, "the merchant targeted and talked to");
+        // a stranger's merc in front of the corpse is not the player's side
+        p.entities.slots[5] = Some(creature(goblin, -11.0, "Stranger", 1, 3, 0));
+        assert_eq!(right(&p), Some(goblin), "a stranger's merc competes as anyone");
+        // with only the player's side under the cursor, its nearest
+        p.entities.slots[0] = None;
+        p.entities.slots[5] = None;
+        p.entities.slots[1] = Some(creature(merc, -9.0, "Ralthas", 1, 3, 0));
+        assert_eq!(right(&p), Some(merc), "only the side: its nearest");
     }
 
     /// A small body's upright is picked `MIN_PICK_HEIGHT` tall at least (a
