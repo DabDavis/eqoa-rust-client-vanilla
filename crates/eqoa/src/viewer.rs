@@ -636,7 +636,7 @@ pub fn shot_with(
                         eprintln!("touch tap: {c:?} on a window (mode {mode})");
                         continue;
                     }
-                    let id = p.creature_at(c.at(), (w, h), vp);
+                    let id = p.creature_at_for(c.at(), (w, h), vp, !matches!(c, crate::mouse::Click::Target(..)));
                     eprintln!("touch tap: {c:?} on {id:?}");
                     p.click(id, !matches!(c, crate::mouse::Click::Target(..)));
                 }
@@ -729,7 +729,7 @@ pub fn shot_with(
                         eprintln!("mouse {step}: {c:?} on a window (mode {mode})");
                         continue;
                     }
-                    let id = p.creature_at(c.at(), (w, h), vp);
+                    let id = p.creature_at_for(c.at(), (w, h), vp, !matches!(c, crate::mouse::Click::Target(..)));
                     eprintln!("mouse {step}: {:?} on {id:?}", c);
                     p.click(id, !matches!(c, crate::mouse::Click::Target(..)));
                 }
@@ -3796,7 +3796,8 @@ impl App {
         if p.point(c, size, finger) {
             return;
         }
-        p.click(p.creature_at(c.at(), size, vp), !matches!(c, crate::mouse::Click::Target(..)));
+        let interact = !matches!(c, crate::mouse::Click::Target(..));
+        p.click(p.creature_at_for(c.at(), size, vp, interact), interact);
     }
 
     /// A mouse button on the chat box's lines (`Play::chat_press`), true when it

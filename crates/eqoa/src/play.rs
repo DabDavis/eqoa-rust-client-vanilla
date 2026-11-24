@@ -1284,6 +1284,23 @@ fn a_player(e: &net::entity::Entity) -> bool {
     e.creature.as_ref().is_some_and(|c| c.p256 == 2)
 }
 
+/// The least height a creature's upright is picked by the mouse
+/// (`Play::creature_at_for`): a human's is about two, a small goblin's
+/// name plate sat too low to be clicked (Heirloom 2897).
+const MIN_PICK_HEIGHT: f32 = 1.6;
+
+/// The top of a creature's upright as the mouse picks it
+/// (`Play::creature_at_for`): its name plate's anchor (two up with none),
+/// `MIN_PICK_HEIGHT` above the feet at least, so a small body (a 0.9 goblin)
+/// or one lying dead is clicked as easily as a short man.
+fn pick_head(foot: glam::Vec3, name_at: Option<[f32; 3]>) -> glam::Vec3 {
+    let mut head = name_at.map_or(foot + glam::Vec3::Y * 2.0, glam::Vec3::from);
+    if head.y - foot.y < MIN_PICK_HEIGHT {
+        head.y = foot.y + MIN_PICK_HEIGHT;
+    }
+    head
+}
+
 /// A server's mercenary: a creature of a pet's name colour (3, which
 /// go-eqoa-server gives every NPC with an owner) whose name the server lists
 /// among its mercs (`net::session::Mercs`, 0x7E5B).
@@ -5975,9 +5992,24 @@ impl Play {
 
     /// The creature drawn under window point `at` of a `size` window seen
     /// through `view_proj` (the player left out): of those whose upright,
-    /// from the feet to the name plate's anchor, passes within a quarter of
-    /// its height on screen (12 pixels at least), the nearest the camera.
+    /// from the feet to the name plate's anchor (`MIN_PICK_HEIGHT` at
+    /// least), passes within a quarter of its height on screen (12 pixels at
+    /// least), the nearest the camera. A click's (`creature_at_for`, not
+    /// interacting).
     pub fn creature_at(&self, at: (f64, f64), size: (u32, u32), view_proj: glam::Mat4) -> Option<u32> {
+        self.creature_at_for(at, size, view_proj, false)
+    }
+
+    /// `creature_at` for a click that targets (`interact` false: the
+    /// nearest the camera, as before) or one that uses what it is on (a
+    /// right or double click: talk or loot, `interact`), which among those
+    /// under the cursor takes a corpse first, then any other, and the
+    /// player's own side last (pets and mercs, anyone's, and the group's
+    /// members), the nearest the camera within each (`pick_rank`; Heirloom
+    /// 2897: a dead pickclaw shaman under the player's merc could not be
+    /// looted). The controller's targeting (R1, ✕) is not this: vanilla's
+    /// mouse alone.
+    pub fn creature_at_for(&self, at: (f64, f64), size: (u32, u32), view_proj: glam::Mat4, interact: bool) -> Option<u32> {
         let (w, h) = (size.0 as f32, size.1 as f32);
         let px = |p: glam::Vec3| {
             let c = view_proj * p.extend(1.0);
@@ -5985,7 +6017,7 @@ impl Play {
         };
         let cursor = glam::Vec2::new(at.0 as f32, at.1 as f32);
         let me = self.self_id32();
-        let mut best: Option<(u32, f32)> = None;
+        let mut best: Option<(u32, u8, f32)> = None;
         for (slot, e) in self.entities.slots.iter().enumerate() {
             // any with an actor, a body or none (its upright two high)
             let Some(e) = e.as_ref().filter(|e| self.in_scene(e)) else { continue };
@@ -5994,14 +6026,33 @@ impl Play {
             }
             let foot = glam::Vec3::from(e.actor_pos);
             let name_at = self.puppets.get(slot).and_then(|p| p.as_ref()).and_then(|p| p.name_at);
-            let head = name_at.map_or(foot + glam::Vec3::Y * 2.0, glam::Vec3::from);
+            let head = pick_head(foot, name_at);
             let (Some((a, depth)), Some((b, _))) = (px(foot), px(head)) else { continue };
             let reach = ((b - a).length() * 0.25).max(12.0);
-            if crate::mouse::to_segment(cursor, a, b) <= reach && best.is_none_or(|(_, d)| depth < d) {
-                best = Some((e.id, depth));
+            if crate::mouse::to_segment(cursor, a, b) > reach {
+                continue;
+            }
+            let rank = if interact { self.pick_rank(e) } else { 0 };
+            if best.is_none_or(|(_, r, d)| rank < r || (rank == r && depth < d)) {
+                best = Some((e.id, rank, depth));
             }
         }
         best.map(|b| b.0)
+    }
+
+    /// How a right click ranks a creature under the cursor (`creature_at_for`,
+    /// lower first): 0 a corpse that is not a player's, 2 the player's own
+    /// side (its pet, a pet's or a merc's name colour, a group member), 1
+    /// anyone else.
+    fn pick_rank(&self, e: &net::entity::Entity) -> u8 {
+        let player = a_player(e);
+        if e.p18 & 2 != 0 && !player {
+            0
+        } else if e.id == self.pet_id || e.creature.as_ref().is_some_and(|c| c.p256 == 3) || (player && self.group_member(e.id)) {
+            2
+        } else {
+            1
+        }
     }
 
     /// A click or a tap `c` on a `size` window, on the game's windows
@@ -13115,6 +13166,88 @@ mod commands {
         assert_eq!(p.actor_pos(0x0010_1076), Some([0.0, 0.0, -10.0]));
         assert_eq!(p.slot4_of(1), None, "no body, no slot 4");
         assert_eq!(p.actor_pos(0x0020_0001), None, "the control: another world's has no actor here");
+    }
+
+    /// Heirloom 2897: a dead pickclaw shaman with the player's merc standing
+    /// over it could not be right-clicked to loot. A right click (interact)
+    /// under which lie a corpse and, nearer the camera, the player's merc, a
+    /// pet, a group member and a live goblin takes the corpse; with the
+    /// corpse gone the live goblin before the player's own side; with only
+    /// the side, the nearest of it. A left click (target) is as before: the
+    /// nearest the camera, the merc. A corpse of a player's is not taken
+    /// first.
+    #[test]
+    fn a_right_click_loots_the_corpse_under_a_merc() {
+        let mut p = play();
+        let me: u32 = 0x1DCD_6501;
+        p.session.self_id = Some(u64::from(me));
+        let creature = |id: u32, z: f32, name: &str, p18: u8, p256: u8| net::entity::Entity {
+            id,
+            kind: 130,
+            p18,
+            p19: 1,
+            pos: [0.0, 0.0, z],
+            actor_pos: [0.0, 0.0, z],
+            creature: Some(net::entity::Creature { name: name.into(), p256, ..Default::default() }),
+            ..Default::default()
+        };
+        let (corpse, merc, pet, mate, goblin) = (0x0010_0001, 0x0010_0002, 0x0010_0003, 0x1DCD_6502, 0x0010_0005);
+        p.entities.slots[0] = Some(creature(corpse, -12.0, "pickclaw shaman", 3, 0));
+        p.entities.slots[1] = Some(creature(merc, -9.0, "Ralthas", 1, 3));
+        p.entities.slots[2] = Some(creature(pet, -9.5, "Gobaner", 1, 3));
+        p.entities.slots[3] = Some(creature(mate, -10.0, "Groupmate", 1, 2));
+        p.entities.slots[4] = Some(creature(goblin, -11.0, "pickclaw warrior", 1, 0));
+        p.pet_id = pet;
+        p.group.in_group = true;
+        p.group.members = vec![crate::group::Member { id: mate, name: "Groupmate".into(), ..Default::default() }];
+        let view = glam::camera::rh::view::look_to_mat4(glam::Vec3::new(0.0, 1.0, 0.0), glam::Vec3::NEG_Z, glam::Vec3::Y);
+        let m = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
+        let c = m * glam::Vec4::new(0.0, 0.5, -12.0, 1.0);
+        let at = (((c.x / c.w + 1.0) * 0.5 * 640.0) as f64, ((1.0 - c.y / c.w) * 0.5 * 480.0) as f64);
+        assert_eq!(p.creature_at_for(at, (640, 480), m, true), Some(corpse), "a right click: the corpse under them");
+        assert_eq!(p.creature_at_for(at, (640, 480), m, false), Some(merc), "a left click: the nearest, as before");
+        assert_eq!(p.creature_at(at, (640, 480), m), Some(merc));
+        p.entities.slots[0] = None;
+        assert_eq!(p.creature_at_for(at, (640, 480), m, true), Some(goblin), "no corpse: the live goblin before the player's side");
+        p.entities.slots[4] = None;
+        assert_eq!(p.creature_at_for(at, (640, 480), m, true), Some(merc), "only the side: its nearest");
+        // a player's corpse is not looted first
+        p.entities.slots[0] = Some(creature(corpse, -12.0, "Someone", 3, 2));
+        p.entities.slots[4] = Some(creature(goblin, -11.0, "pickclaw warrior", 1, 0));
+        assert_eq!(p.creature_at_for(at, (640, 480), m, true), Some(goblin), "a player's corpse ranks as anyone");
+        // the click itself: a right click on the corpse under the merc asks for its loot (0x0015)
+        p.entities.slots[0] = Some(creature(corpse, -12.0, "pickclaw shaman", 3, 0));
+        p.click(p.creature_at_for(at, (640, 480), m, true), true);
+        assert_eq!(p.target, corpse, "the corpse targeted, the loot asked");
+    }
+
+    /// A small body's upright is picked `MIN_PICK_HEIGHT` tall at least (a
+    /// 0.9 pickclaw's name plate sat low, Heirloom 2897); a tall one's plate
+    /// is kept, and one with no plate stands two high.
+    #[test]
+    fn a_small_body_is_picked_at_least_min_height() {
+        let foot = glam::Vec3::new(3.0, 5.0, -7.0);
+        let low = pick_head(foot, Some([3.1, 5.9, -7.0]));
+        assert_eq!(low, glam::Vec3::new(3.1, 5.0 + MIN_PICK_HEIGHT, -7.0), "raised to the least height");
+        assert_eq!(pick_head(foot, Some([3.0, 8.0, -7.0])), glam::Vec3::new(3.0, 8.0, -7.0), "a tall one's plate kept");
+        assert_eq!(pick_head(foot, None), foot + glam::Vec3::Y * 2.0, "no plate: two high");
+        // a click a little above a lying corpse's plate still finds it
+        let mut p = play();
+        p.entities.slots[0] = Some(net::entity::Entity {
+            id: 0x0010_0009,
+            kind: 130,
+            p18: 3,
+            p19: 1,
+            pos: [0.0, 0.0, -30.0],
+            actor_pos: [0.0, 0.0, -30.0],
+            creature: Some(net::entity::Creature { name: "pickclaw shaman".into(), ..Default::default() }),
+            ..Default::default()
+        });
+        let view = glam::camera::rh::view::look_to_mat4(glam::Vec3::new(0.0, 1.0, 0.0), glam::Vec3::NEG_Z, glam::Vec3::Y);
+        let m = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
+        let c = m * glam::Vec4::new(0.0, 1.5, -30.0, 1.0);
+        let at = (((c.x / c.w + 1.0) * 0.5 * 640.0) as f64, ((1.0 - c.y / c.w) * 0.5 * 480.0) as f64);
+        assert_eq!(p.creature_at_for(at, (640, 480), m, true), Some(0x0010_0009));
     }
 
     /// No target cycle takes a familiar (petitions 1881, 1902, 1903): Tab and

@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Right click loots the corpse under your merc
+
+- A **right click** (or a double click) on a corpse opens it even when your merc, a pet or a groupmate stands over it, and small creatures such as goblins and their corpses are easier to click. A left click still targets whatever is nearest, and the controller's targeting is unchanged.
+
 ## 2026-11-24 · Instanced duels in Neriak
 
 - **Community → Duel → Instanced duel** challenges the player you have selected to a private match in a sealed Neriak arena (Heirloom). Both fighters lose their buffs on arrival, a 60-second countdown runs once both have loaded, and everyone is restored to full health and mana at 1. Mind the four lava pockets. When the fight ends, each fighter goes back to where they started. Mr. Moogie's **Recent duels** lists the last ten results.
