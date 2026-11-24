@@ -10695,7 +10695,7 @@ impl Play {
                 let window = self.pc_window().map(|(key, title)| (crate::pcwindows::begin(&mut r), key, title));
                 self.search.draw(vui, &mut r);
                 if let Some((layer, key, title)) = window {
-                    self.pc_windows.show(&mut r, layer, key, title);
+                    self.pc_windows.show(&mut r, layer, Some((key, title)));
                 }
             }
             r.ui.anchor = Anchor::Left;
@@ -10854,8 +10854,8 @@ impl Play {
                 }
                 self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
             }
-            if let Some(layer) = window_layer && let Some((id, title)) = self.pc_window() {
-                self.pc_windows.show(&mut r, layer, id, title);
+            if let Some(layer) = window_layer {
+                self.pc_windows.show(&mut r, layer, self.pc_window());
             }
             r.ui.anchor = Anchor::Right;
             r.ui.vertical = Vertical::Top;

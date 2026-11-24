@@ -1006,6 +1006,12 @@ impl WndChat {
         self.mode != 0 || self.always || self.typing
     }
 
+    /// The controller's scroll view keeps its original indicator. In PC mode
+    /// there is nothing to scroll until wrapped history exceeds the rows.
+    fn scroll_indicator(&self, pc: bool) -> bool {
+        self.scroll == 1 && (!pc || self.text.count() > self.size.rows as usize)
+    }
+
     /// `SetScroll`: 1 opens the view on the last five lines, 0 ends it. (A
     /// selection, the client's, keeps the view it was made in until it is cleared.)
     pub fn set_scroll(&mut self, on: i32) {
@@ -1155,7 +1161,7 @@ impl WndChat {
         self.draw_tabs(vui, ui);
         self.drag_on(dt);
         self.tell_copy();
-        if self.scroll == 1 {
+        if self.scroll_indicator(crate::settings::pc_mode()) {
             let n = self.text.count();
             let rows = self.size.rows as usize;
             let t = if n > rows { self.text.index(self.top) as f32 / (n - rows) as f32 } else { 0.0 };
@@ -2125,6 +2131,18 @@ mod tests {
         assert!(c.wheel(p, -1.0, false));
         frame(&mut c, 0.016);
         assert_eq!(c.shown.first().unwrap().seq, 18);
+    }
+
+    #[test]
+    fn pc_history_indicator_requires_more_wrapped_lines_than_visible_rows() {
+        let mut c = with_lines(5);
+        c.set_scroll(1);
+        assert!(!c.scroll_indicator(true), "five rows fit the five-row PC pane");
+        assert!(c.scroll_indicator(false), "controller scroll view keeps its indicator");
+        c.text.add_text(&crate::ui::wide("one more line"), [1.0; 4], 0, width);
+        assert!(c.scroll_indicator(true), "extra wrapped history shows the PC indicator");
+        c.set_scroll(0);
+        assert!(!c.scroll_indicator(true), "the indicator is only in scroll view");
     }
 
     /// What a row's runs were drawn as: the words and the colour, in order.

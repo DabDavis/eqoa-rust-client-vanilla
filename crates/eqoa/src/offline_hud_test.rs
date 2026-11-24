@@ -4,6 +4,21 @@
 
 use super::*;
 
+// Read-only 2026-11-17 server-spell snapshot: real names and their paired
+// UI.CSF back/front DictIDs. These mixed-class examples repeat across the
+// synthetic 40-slot fixture; they are not a real player's spell loadout.
+// Fields: name, back, front, level, cast, recast, power, scope.
+const FIXTURE_SPELLS: [(&str, i64, i64, i64, i64, i64, i64, i64); 8] = [
+    ("Unstable Mixture", -1809115846, -466420384, 1, 1, 2, 5, 0),
+    ("Nimble Strike", 486870879, -1265863830, 1, 0, 30, 8, 1),
+    ("Chant of Battle", 593297002, -2143509564, 3, 1, 1, 36, 2),
+    ("Clashing Verses", 486870879, 1589074753, 4, 2, 1, 25, 1),
+    ("Minor Healing", 486870879, -2105187409, 1, 2, 1, 15, 1),
+    ("Root", 486870879, -610493769, 8, 3, 6, 20, 1),
+    ("Excite", 439871130, -630227479, 1, 2, 1, 15, 3),
+    ("Fire Bolt", 486870879, 829958967, 4, 1, 1, 17, 1),
+];
+
 #[path = "pc_window_test.rs"]
 mod pc_window_test;
 
@@ -13,7 +28,7 @@ impl net::session::Datagrams for Nowhere {
     fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> { None }
 }
 
-pub(super) fn fixture_play(icon_ids: &[i64]) -> Play {
+pub(super) fn fixture_play() -> Play {
     let mut session = net::session::Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "offline-fixture", [0; 32]).unwrap();
     session.self_id = Some(0x100);
     session.expansion = 2;
@@ -35,11 +50,12 @@ pub(super) fn fixture_play(icon_ids: &[i64]) -> Play {
     p.entities.slots[0] = Some(me);
     p.entities.slots[1] = Some(actor(0x200, "Training Dummy", 85));
     p.target = 0x200;
-    // Fixture abilities occupy all real 0..39 slots. The front IDs are actual
-    // UI.CSF texture DictIDs; names are deliberately synthetic.
+    // Exercise every real slot with repeated, mixed-class named examples.
     for slot in 0..40i64 {
         let id = slot + 1;
-        p.abilities.insert(id, net::dump::Ability { id, valid: 1, slot, name: format!("Fixture {id}"), icon_front: icon_ids[slot as usize % icon_ids.len()], ..Default::default() });
+        let i = slot as usize % FIXTURE_SPELLS.len();
+        let (name, icon_back, icon_front, level, cast_time, cooldown, power_cost, scope) = FIXTURE_SPELLS[i];
+        p.abilities.insert(id, net::dump::Ability { id, display_index: slot, valid: 1, slot, p14: 1, name: name.into(), icon_back, icon_front, level, cast_time, cooldown, power_cost, scope, ..Default::default() });
     }
     for (index, name, wear, attack) in [(0, "Sword", 12, 1), (1, "Bow", 14, 7), (2, "Wand", 18, 1), (3, "Pole", 20, 1)] {
         let id = 100 + index;
@@ -50,11 +66,12 @@ pub(super) fn fixture_play(icon_ids: &[i64]) -> Play {
     p.add_chat("A friend tells you, 'Welcome to the offline fixture.'".into(), [1.0, 0.5, 1.0, 1.0]);
     p.add_chat("You hit a training dummy for 24 damage.".into(), [1.0; 4]);
     p.add_chat("Welcome to EverQuest Online Adventures.".into(), [1.0; 4]);
+    p.add_chat("Offline fixture: mixed-class spell examples, not a player loadout.".into(), [1.0; 4]);
     p.add_chat("Friend: Ready for adventure?".into(), [1.0; 4]);
     p
 }
 
-pub(super) fn offline_assets() -> (esf::Library, crate::viewer::Source, Vec<i64>, std::path::PathBuf) {
+pub(super) fn offline_assets() -> (esf::Library, crate::viewer::Source, std::path::PathBuf) {
     let iso = std::env::var("EQOA_ISO").expect("absolute EQOA_ISO is required");
     let output = std::path::PathBuf::from(std::env::var_os("EQOA_OFFLINE_HUD_OUT").expect("EQOA_OFFLINE_HUD_OUT is required"));
     assert!(std::path::Path::new(&iso).is_absolute() && output.is_absolute());
@@ -69,21 +86,33 @@ pub(super) fn offline_assets() -> (esf::Library, crate::viewer::Source, Vec<i64>
     let (mut lib, src) = crate::source("TUNARIA.ESF", &["walk".into(), zone.to_string()]).expect("Qeynos world");
     let mut disc = crate::disc(None).unwrap();
     let ui = esf::Container::open(disc.read("UI.CSF").unwrap()).unwrap();
-    // The first six 32px surfaces are flat tiles; the following fourteen are
-    // legible pictograms in the disc's UI image.
-    let icon_ids: Vec<i64> = ui.surfaces.iter().filter(|s| s.width == 32 && s.height == 32).skip(6).take(14).map(|s| s.dict_id as u32 as i64).collect();
-    assert!(!icon_ids.is_empty(), "disc has 32px UI icons");
+    for &(name, back, front, ..) in &FIXTURE_SPELLS {
+        for (id, dimension, crop) in [(back, 64, [46usize, 34usize]), (front, 32, [22, 22])] {
+            let surface = ui.surfaces.iter().find(|s| s.dict_id as u32 == id as u32 && s.width == dimension && s.height == dimension)
+                .unwrap_or_else(|| panic!("{name} surface {id} is absent or has the wrong dimensions"));
+            let image = surface.decode(&ui.data).unwrap_or_else(|| panic!("{name} surface {id} does not decode"));
+            let mut transparent = 0;
+            let mut visible = 0;
+            for y in 0..crop[1] {
+                for x in 0..crop[0] {
+                    if image.rgba[(y * image.width as usize + x) * 4 + 3] == 0 { transparent += 1; } else { visible += 1; }
+                }
+            }
+            assert!(visible > 0, "{name} crop {id} must contain visible pixels");
+            eprintln!("fixture {name}: surface={:#010x}, source={}x{}, crop={}x{}, transparent={}, visible={}", id as u32, dimension, dimension, crop[0], crop[1], transparent, visible);
+        }
+    }
     lib.add("UI.CSF", ui);
     for file in ["ITEM.ESF", "ARIAL.CSF", "ARIALUI.CSF", "ITEMICON.ESF", "SPELLFX.CSF", "FX.CSF", "ADDART.CSF"] {
         lib.add(file, esf::Container::open(disc.read(file).unwrap()).unwrap());
     }
-    (lib, src, icon_ids, output)
+    (lib, src, output)
 }
 
 #[test]
 #[ignore = "manual offline GPU fixture: requires local disc and output directory"]
 fn offline_pc_and_controller_hud_png() {
-    let (mut lib, src, icon_ids, output) = offline_assets();
+    let (mut lib, src, output) = offline_assets();
     let script = crate::viewer::Script { ms: 1000, controls: Default::default() };
     crate::settings::testing::reset(false);
     let narrow = std::env::var_os("EQOA_HUD_NARROW").is_some();
@@ -97,7 +126,7 @@ fn offline_pc_and_controller_hud_png() {
         let name = if pc { "offline-pc-hud.png" } else { "offline-controller-hud.png" };
         let path = output.join(name);
         let size = if narrow { (640, 480) } else { (960, 540) };
-        crate::viewer::shot_with(&mut lib, &src, None, Some(script), size, path.to_str().unwrap(), Some(fixture_play(&icon_ids))).expect("offline HUD capture");
+        crate::viewer::shot_with(&mut lib, &src, None, Some(script), size, path.to_str().unwrap(), Some(fixture_play())).expect("offline HUD capture");
         eprintln!("{} HUD screen {:?}, pieces {:?}", if pc { "PC" } else { "Controller" },
             crate::hudlayout::Beyond::of(size).screen(), crate::hudlayout::drawn_all());
     }
@@ -109,7 +138,7 @@ fn offline_pc_and_controller_hud_png() {
 #[ignore = "manual offline GPU interaction test: requires local disc"]
 fn offline_chat_move_resize_pin_reopen_and_hit_test() {
     use crate::hudlayout::{self, Beyond, Piece};
-    let (mut lib, src, icons, output) = offline_assets();
+    let (mut lib, src, output) = offline_assets();
     let size = (960, 540);
     let beyond = Beyond::of(size);
     let path = output.join("offline-chat-interaction.png");
@@ -119,10 +148,10 @@ fn offline_chat_move_resize_pin_reopen_and_hit_test() {
     crate::settings::set_ui_mode(true).unwrap();
     crate::settings::set_chat_detached(1, true).unwrap();
     hudlayout::set_unlocked(true);
-    let mut pointer = fixture_play(&icons);
+    let mut pointer = fixture_play();
     pointer.loading.wait = None;
     let render = |lib: &mut esf::Library| {
-        crate::viewer::shot_with(lib, &src, None, Some(script), size, path.to_str().unwrap(), Some(fixture_play(&icons))).unwrap();
+        crate::viewer::shot_with(lib, &src, None, Some(script), size, path.to_str().unwrap(), Some(fixture_play())).unwrap();
     };
     let rect = |piece| hudlayout::drawn_all().into_iter().find(|(p, _)| *p == piece).expect("piece drawn").1;
     let px = |p| render::ui::window_from_frame(size, p);

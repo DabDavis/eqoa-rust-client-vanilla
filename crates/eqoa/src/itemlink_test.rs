@@ -6,7 +6,7 @@ use render::wgpu;
 #[test]
 #[ignore = "manual offline GPU interaction test: requires local disc"]
 fn two_inspections_move_zoom_pin_and_close_independently() {
-    let (mut lib, source, icons, output) = offline_assets();
+    let (mut lib, source, output) = offline_assets();
     crate::settings::testing::reset(false);
     crate::settings::set_ui_mode(true).unwrap();
     let size = (960, 540);
@@ -14,7 +14,7 @@ fn two_inspections_move_zoom_pin_and_close_independently() {
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&render::packed::device_descriptor(&adapter))).unwrap();
     let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
-    let mut p = fixture_play(&icons);
+    let mut p = fixture_play();
     p.loading.wait = None;
     p.take_modules(None);
     p.attach_ui(&mut renderer, &device, &queue, render::TARGET_FORMAT, &lib);
@@ -67,11 +67,16 @@ fn two_inspections_move_zoom_pin_and_close_independently() {
     let zoomed = p.links.frame_geometry(1).unwrap();
     assert!(zoomed.3 > b.3, "second comparison zooms independently");
     assert_eq!(p.links.frame_geometry(0).unwrap().3, a.3);
-    // Pan the zoomed item horizontally; its fixed X must remain available.
-    press(&mut p, [zoomed.1[2] - 20.0, zoomed.1[3] - 5.0]);
+    // Zoom alone expands the frame. Narrow it until it needs a horizontal
+    // scrollbar, then pan that viewport; its fixed X must stay available.
+    let corner = [zoomed.1[2] - 5., zoomed.1[3] - 5.];
+    drag(&mut p, corner, [corner[0] - 48., corner[1]]);
+    frame(&mut p, &mut renderer, &mut now);
+    let narrow = p.links.frame_geometry(1).unwrap().1;
+    press(&mut p, [narrow[2] - 20.0, narrow[3] - 5.0]);
     frame(&mut p, &mut renderer, &mut now);
     assert!(p.links.slot_covers(1, p.links.close_position(1).unwrap()));
-    press(&mut p, [zoomed.1[2] - 45.0, zoomed.1[1] + 9.0]);
+    press(&mut p, [narrow[2] - 45.0, narrow[1] + 9.0]);
     frame(&mut p, &mut renderer, &mut now);
     let pinned = p.links.frame_geometry(1).unwrap().1;
     let h = [pinned[0] + 15.0, pinned[1] + 8.0];
@@ -108,7 +113,7 @@ fn two_inspections_move_zoom_pin_and_close_independently() {
     assert_eq!(p.links.frame_geometry(0).unwrap().1, moved.1, "survivor retains its own placement");
     assert_eq!(p.links.frame_geometry(1).unwrap().3, zoomed.3, "replacement reuses the second comparison slot");
     eprintln!("comparison slots moved, zoomed, pinned, overlapped and closed independently; saved {}", crate::settings::pc_window_layout());
-    let mut capture = fixture_play(&icons);
+    let mut capture = fixture_play();
     for (id, name) in [(1, "First sword"), (2, "Second shield")] {
         capture.open_link(id, name);
         let mut item = net::dump::NetItem::default();
