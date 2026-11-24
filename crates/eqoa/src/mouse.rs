@@ -900,8 +900,10 @@ pub fn aim(cam: &mut WalkCamera<Ee>, dx: f32, dy: f32, inverted: bool) {
 /// the follow orbit in from where the camera is (a wall's pull included)
 /// and out from the distance chosen (`camreach::Reach`), the choice kept and
 /// the camera there at once, unless that is out past a pull, which the
-/// camera eases back from when there is room (`Reach`); the other orbit at
-/// once.
+/// camera eases back from when there is room (`Reach`), nearer than the
+/// game's closest collision distance too once the wheel has asked it out
+/// (`Reach::asked`: with the choice already at its ceiling a notch out had
+/// done nothing at all, Heirloom 2900); the other orbit at once.
 pub fn zoom(cam: &mut WalkCamera<Ee>, reach: &mut crate::camreach::Reach, lines: f32) {
     let k = 0.9f32.powf(lines);
     match cam.camera_mode {
@@ -912,6 +914,8 @@ pub fn zoom(cam: &mut WalkCamera<Ee>, reach: &mut crate::camreach::Reach, lines:
             reach.chosen = Some(to);
             if to < cam.cur.dist || chosen <= cam.cur.dist {
                 cam.set_orbit_distance(to);
+            } else if lines < 0.0 {
+                reach.asked = true;
             }
         }
         1 => {

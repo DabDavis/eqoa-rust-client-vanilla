@@ -136,6 +136,14 @@ pub struct Reach {
     /// (`controls::Client::walk_view`), the camera kept where the left
     /// button's look or its ease back put it
     pub steered: bool,
+    /// the wheel asked the camera out while it was held in short of the
+    /// choice (`mouse::zoom`): the way back out goes on nearer than the
+    /// game's closest collision distance too, short of what is in the way,
+    /// as the PS2's stick zooms out from where the camera is (`OrbitIn`)
+    /// until its sweep meets something (Heirloom 2900: pulled in at the foot
+    /// of a hill, a wheel at the choice already did nothing). The game's own
+    /// pull (flags 2, 4) ends it.
+    pub asked: bool,
 }
 
 impl Reach {
@@ -166,6 +174,7 @@ impl Reach {
             self.ease(cam, scene, dt_s);
         } else {
             self.speed = 0.0;
+            self.asked = false;
         }
         let (d0, f0, spring) = (cam.cur.dist, cam.cur.flags, zooming(cam));
         // the shake's sample as `Process` found it, for the eye made again
@@ -179,6 +188,9 @@ impl Reach {
             eye = cam.set_camera();
         }
         let pull = (f0 | cam.cur.flags) & 6 != 0;
+        if pull || came_in {
+            self.asked = false;
+        }
         // the stick's zoom (the spring) is a choice; a pull (flags 2, 4) is
         // not, nor is coming in for what is in the way
         if mode == 3 && cam.camera_mode == 3 && spring && !pull && !came_in && cam.cur.dist != d0 {
@@ -200,14 +212,18 @@ impl Reach {
 
     /// A step back out toward the distance chosen, as far as the game's
     /// sweep is clear (`SHORT` short of what is in the way), when the
-    /// camera is at rest and that is past its closest collision distance.
+    /// camera is at rest and that is past its closest collision distance,
+    /// or nearer when the wheel asked it out (`asked`).
     fn ease<S: Scene<Ee>>(&mut self, cam: &mut WalkCamera<Ee>, scene: &mut S, dt_s: f32) {
         let want = self.chosen(cam);
+        if want <= cam.cur.dist {
+            self.asked = false;
+        }
         let resting = cam.cur.flags & (1 | 2 | 4 | 8) == 0 && !zooming(cam);
         let to = if resting && cam.cur.dist < want {
             match reach(cam, scene, want) {
                 None => Some(want),
-                Some(r) => Some(r - F::new(SHORT)).filter(|&to| cam.min_collision_dist < to),
+                Some(r) => Some(r - F::new(SHORT)).filter(|&to| self.asked || cam.min_collision_dist < to),
             }
         } else {
             None
@@ -780,6 +796,48 @@ mod tests {
                     assert_eq!(ours.cur.dist.0, 1.5, "in to its closest, as the game");
                 }
             }
+        }
+    }
+
+    /// Heirloom 2900 (pulled in at the foot of a hill, "you cannot scroll
+    /// the camera out"): a wall all round 3 out has brought the camera in to
+    /// the game's closest (1.5), the choice still 11. A notch out on the wheel
+    /// takes it out from where it is to just short of the wall, as the PS2's
+    /// stick zooms out from there (the control: `OrbitIn` alone moves the
+    /// game's out too), never past it, and it stays; the wall gone, on out to
+    /// the choice. Before, the choice already at its ceiling, the notch did
+    /// nothing at all. At 30 and 165 frames a second.
+    #[test]
+    fn held_in_close_the_wheel_takes_the_camera_out_to_what_is_in_the_way() {
+        for ms in [33i64, 6] {
+            let mut room = Room { t: 0, wall: 100.0 };
+            let (mut cam, mut reach) = orbit(&mut room, 11.0);
+            room.wall = 3.0;
+            frames(&mut cam, Some(&mut reach), &mut room, (4000 / ms) as usize, ms);
+            assert_eq!((cam.cur.dist.0, reach.chosen(&cam).0), (1.5, 11.0), "in to its closest, as the game, {ms} ms");
+            let (mut game, mut beside) = (cam, Room { t: room.t, wall: 3.0 });
+            let still = frames(&mut cam, Some(&mut reach), &mut room, (1000 / ms) as usize, ms);
+            assert!(still.iter().all(|&d| d == 1.5), "nothing asked, the game's, {ms} ms");
+            // the control: the game's stick out a third of a second
+            let mut out = 0.0f32;
+            for _ in 0..(330 / ms) {
+                beside.t += ms;
+                game.orbit_in(F::new(-1.0));
+                game.process(&mut beside);
+                out = out.max(game.cur.dist.0);
+            }
+            assert!(out > 2.0, "the game's stick zooms out from its closest, {ms} ms: {out}");
+            crate::mouse::zoom(&mut cam, &mut reach, -1.0);
+            assert_eq!(reach.chosen(&cam).0, 11.0, "{ms} ms");
+            let d = frames(&mut cam, Some(&mut reach), &mut room, (2000 / ms) as usize, ms);
+            for w in d.windows(2) {
+                assert!(w[1] >= w[0] && w[1] <= held(3.0) + 1e-3, "{ms} ms: {w:?}");
+            }
+            assert!((d.last().unwrap() - held(3.0)).abs() < 1e-3, "out to just short of the wall, {ms} ms: {}", d.last().unwrap());
+            assert_eq!(cam.cur.flags, 0, "no pull, {ms} ms");
+            room.wall = 100.0;
+            let d = frames(&mut cam, Some(&mut reach), &mut room, (3000 / ms) as usize, ms);
+            assert_eq!(*d.last().unwrap(), 11.0, "{ms} ms");
         }
     }
 

@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Zoom out again after a hill pulls the camera in
+
+- When a hill or wall behind you pulls the third-person camera in close to your character, scrolling the **mouse wheel** out now moves it back out right away, as far as there is room, even when your zoom was already at its widest. Before, the wheel did nothing until you stepped away or went into first person and back.
+
 ## 2026-11-24 · Right click loots past your merc and pet
 
 - A **right click** (or a double click) on a corpse opens it even when your pet, your merc, a groupmate or a groupmate's merc stands in front of it: your own side no longer gets in the way. Anything else (a creature, a merchant, another player) still takes the click when it is nearer, as before. Small creatures such as goblins and their corpses are easier to click. A left click still targets whatever is nearest, and the controller's targeting is unchanged.
