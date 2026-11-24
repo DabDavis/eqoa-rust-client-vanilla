@@ -7464,13 +7464,7 @@ impl Play {
             146 => self.toggle_autorun(),
             // R2 held: the chat box's history (mode 33), movement and the
             // camera allowed (`SetP06DC0(1, 1)`)
-            143 => {
-                self.mode = 33;
-                self.locks = (true, true);
-                if let Some(c) = self.wnd_chat.as_mut() {
-                    c.begin_history(crate::settings::pc_mode());
-                }
-            }
+            143 => self.chat_history_key(key, down),
             // L2: the quick-chat menus (mode 30, `VIWndMenu4`)
             141 => self.open_quick_chat(),
             _ => {}
@@ -9189,17 +9183,16 @@ impl Play {
         }
     }
 
-    /// The keyboard's C (99) held in play: the chat box's history, as R2
-    /// (mode 33, movement and the camera allowed, `SetP06DC0(1, 1)`); in it,
-    /// the keys to the chat box (its up and down 19 and 20), C let go back
-    /// to play (`chat_scroll_key`).
+    /// Chat Expand held in play (99 for the keyboard, 143 for the pad):
+    /// mode 33, with movement and the camera allowed. The chat box gets the
+    /// scroll keys and releasing Chat Expand returns to play.
     pub fn chat_history_key(&mut self, key: i32, down: bool) {
         match self.mode {
-            0 if down && key == 99 => {
+            0 if down && matches!(key, 99 | 143) => {
                 self.mode = 33;
                 self.locks = (true, true);
                 if let Some(c) = self.wnd_chat.as_mut() {
-                    c.begin_history(crate::settings::pc_mode());
+                    c.begin_history(key == 99 || crate::settings::pc_mode());
                 }
             }
             33 => self.chat_scroll_key(key, down),
@@ -14753,11 +14746,13 @@ mod commands {
             let mut routes = [0; KINDS];
             routes[Kind::Tells.index()] = 2;
             chat.set_tabs(routes, [['\0'; TAB_NAME_MOST]; TABS]);
+            assert!(chat.show_tab(2));
             p.wnd_chat = Some(chat);
             assert!(!p.chat_history_shortcut(HistoryKey::NextTab, size), "Tab is still a gameplay key");
             p.chat_history_key(99, true);
+            assert_eq!(p.wnd_chat.as_ref().unwrap().tab(), 0, "the keyboard opens Main before Tab in either interface");
             assert!(p.chat_history_shortcut(HistoryKey::NextTab, size));
-            assert_eq!(p.wnd_chat.as_ref().unwrap().tab(), 2, "unconfigured tabs are skipped");
+            assert_eq!(p.wnd_chat.as_ref().unwrap().tab(), 2, "the first Tab advances past Main and skips unconfigured tabs");
             assert_eq!(p.chat_history_shortcut(HistoryKey::PageUp, size), pc);
             assert_eq!(p.chat_history_shortcut(HistoryKey::PageDown, size), pc);
             assert_eq!(p.channel, 0, "paging doesn't change the channel");
@@ -14776,7 +14771,12 @@ mod commands {
             assert!(!p.rolls_focused());
             assert!(!p.chat_history_shortcut(HistoryKey::NextTab, size));
             p.chat_history_key(99, true);
-            assert_eq!(p.wnd_chat.as_ref().unwrap().tab(), if pc { 0 } else { 2 }, "PC starts on Main; Controller keeps the tab shown");
+            assert_eq!(p.wnd_chat.as_ref().unwrap().tab(), 0, "each keyboard hold returns to Main");
+            p.chat_history_key(99, false);
+            assert!(p.wnd_chat.as_mut().unwrap().show_tab(2));
+            p.chat_history_key(143, true);
+            assert_eq!(p.wnd_chat.as_ref().unwrap().tab(), if pc { 0 } else { 2 }, "a pad in Controller mode can scroll the tab shown");
+            p.chat_history_key(143, false);
         }
         crate::settings::testing::reset(false);
     }

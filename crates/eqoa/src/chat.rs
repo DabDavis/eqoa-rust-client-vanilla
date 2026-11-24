@@ -975,9 +975,8 @@ impl WndChat {
         }
     }
 
-    /// The hold begins. `main` (the PC interface) starts it on Main; the
-    /// Controller interface scrolls the tab shown, as before, since a pad
-    /// has no Tab to cycle back with.
+    /// Keyboard activation and the PC interface start on Main. A gamepad in
+    /// the Controller interface holds the displayed tab so R2 can scroll it.
     pub fn begin_history(&mut self, main: bool) {
         self.end_history();
         if main { self.show_tab(0); }
