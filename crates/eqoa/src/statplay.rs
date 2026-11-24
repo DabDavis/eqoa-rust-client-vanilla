@@ -77,7 +77,7 @@ mod tests {
         p.chat_line("/stats on");
         assert!(settings::stat_window());
         assert!(!p.stat_point([10.0, 160.0]), "not drawn yet: nothing found");
-        let panel = crate::statwnd::panel([3, 7, 10]);
+        let panel = crate::statwnd::panel([3, 7, 10, 10]);
         p.stat_panel = Some(panel);
         assert!(p.stat_point([(panel.rect[0] + 20) as f32, (panel.rect[1] + 30) as f32]), "on it: its own");
         assert!(settings::stat_window(), "and still up");

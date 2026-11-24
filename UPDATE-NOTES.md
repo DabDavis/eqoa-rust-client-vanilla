@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Melee and damage taken in the Stat Window
+
+- The **Stat Window** (F4 or `/stats`) now shows your real **offence and defence** on a server that sends them: **Melee**, how much one hit of your main hand does to a creature of your own level (or **Ranged**, one arrow, while a ranged weapon is equipped), and **Taken**, how much a creature of your own level hits you for after your AC and agility. They are the numbers the server's combat rolls use, and they update as your gear, buffs, stats and level change. They appear under your resists once the server has sent them; a server that does not send them shows the window as before.
+
 ## 2026-11-24 · Buff names and timers, a Stat Window, item icons on the quick slots
 
 - Hover the mouse over a buff or debuff in the **Buff Window** to see its name and how long it has left, without clicking. Each of your buffs now also shows its **time left** on its icon ("45s", "12m", "2h"), in yellow in its last minute. Turn the numbers off with **Buff Timers** under **Options → Extended → UI → HUD Extras**.
