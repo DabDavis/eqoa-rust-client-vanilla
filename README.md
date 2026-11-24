@@ -82,9 +82,10 @@ or a browser (each described where it lives below):
   a piece in place, **Unpin** to move it again, and **Lock** to return to play.
 - **PC windows**. Drag the title bar to move an open gameplay window, or drag
   its bottom-right corner to change its width and height. Use **−** and **+**
-  to zoom the contents between 50% and 200%. Scrollbars reach any controls
-  outside the viewport. **Pin** holds its layout, **Unpin** unlocks it and
-  **Reset** restores its original size and placement. Inventory, the Spell
+  to zoom the contents. An untouched window fits the display. Narrowing or
+  shortening a window brings up a scrollbar on the axis that needs it.
+  Enlarge the window to hide it again. **Pin** holds its layout, **Unpin** unlocks
+  it and **Reset** restores its original size and placement. Inventory, the Spell
   Book, and each of two open item comparisons keep their own settings.
 - **PC chat**. Choose a tab and click **Detach tab** to give it a window. Click
   **Dock** to bring it back with its history. Each window has a **Resize** handle

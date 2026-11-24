@@ -104,6 +104,9 @@ pub trait Raster {
     fn point_size(&self) -> i32;
     fn viewport(&self) -> [i32; 4];
     fn set_viewport(&mut self, v: [i32; 4]);
+    /// Whether to draw the original lists' vertical position indicators.
+    /// A PC window supplies its own interactive scrollbars when undersized.
+    fn native_list_scrollbars(&self) -> bool { true }
     /// Whether surface `id` is there to draw (CLIENT's icon cache asks; a
     /// recorder has everything).
     fn has(&self, _id: u32) -> bool {
@@ -760,6 +763,7 @@ impl Window {
     /// `DrawVScroll(at, h, t, flags)`: the bar down `h` and the thumb at
     /// `t` (0 top, 1 bottom; none outside that).
     pub fn draw_vscroll(&self, vui: &Vui, ui: &mut dyn Raster, at: [i32; 2], h: i32, t: f32) {
+        if !ui.native_list_scrollbars() { return; }
         let e = vui.entry(84);
         vui.blit_vert_bar(ui, at, 81, 83, 82, h, 3, self.open);
         if (0.0..=1.0).contains(&t) {

@@ -624,6 +624,12 @@ impl WndOptions {
         }
     }
 
+    pub fn scroll_controls(&mut self, lines: f32) {
+        if self.page == 4 && !self.message.visible {
+            self.controls.scroll(lines);
+        }
+    }
+
     /// What the Controls or Macros page waits for, if anything: a key, a
     /// button, or (Macros') a trigger.
     pub fn capturing(&self) -> Option<crate::bindpage::Column> {

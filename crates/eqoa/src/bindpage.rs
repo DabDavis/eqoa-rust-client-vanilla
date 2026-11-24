@@ -75,6 +75,8 @@ pub struct ControlsPage {
     pub col: i32,
     /// the first entry shown
     top: i32,
+    /// Fractional wheel motion from a high-resolution mouse or trackpad.
+    wheel: f32,
     /// the entries shown at once, as last drawn
     shown: i32,
     /// waiting for a key or a button
@@ -96,6 +98,17 @@ impl ControlsPage {
     /// The entries: the rows, then Defaults.
     fn entries() -> i32 {
         defaults() + 1
+    }
+
+    pub fn scroll(&mut self, lines: f32) {
+        if self.capture.is_some() { return; }
+        self.wheel += lines;
+        let rows = self.wheel.trunc() as i32;
+        self.wheel = self.wheel.fract();
+        if rows != 0 {
+            self.row = self.row.saturating_sub(rows).clamp(0, Self::entries() - 1);
+            self.note = None;
+        }
     }
 
     /// Whether entry `row`'s column `col` can be moved: a key (△'s row,
@@ -390,8 +403,8 @@ impl ControlsPage {
         if on_screen(self.row, self.top, self.shown) {
             w.tick_r(vui, r, 36, self.row - self.top + 2, true);
         }
-        // a scroll bar down the list's right when it is longer than the view
-        if n > self.shown {
+        // Controller shows the original position indicator for its binding list.
+        if n > self.shown && !crate::settings::pc_mode() {
             let h = vui.font_height(r) - 4;
             let top = w.row_center(vui, r, 2)[1] - 4;
             let t = self.top as f32 / (n - self.shown) as f32;
@@ -765,6 +778,23 @@ mod tests {
         assert_eq!(page.top, ControlsPage::entries() - page.shown);
         assert_eq!(cues.last(), Some(&9), "the end");
         testing::reset(false);
+    }
+
+    #[test]
+    fn wheel_scrolls_by_whole_rows_and_keeps_the_captured_binding_in_place() {
+        let mut page = ControlsPage::default();
+        page.scroll(-0.5);
+        assert_eq!(page.row, 0);
+        page.scroll(-2.5);
+        assert_eq!(page.row, 3);
+        page.capture = Some(Column::Keyboard);
+        page.scroll(10.);
+        assert_eq!(page.row, 3);
+        page.capture = None;
+        page.scroll(10.);
+        assert_eq!(page.row, 0);
+        page.scroll(-10_000.);
+        assert_eq!(page.row, defaults());
     }
 
     /// A pointer: a row's words select it, a cell its column, the selection

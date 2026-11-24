@@ -32,7 +32,7 @@ fn open(p: &mut Play, r: &mut render::Renderer, w: &mut crate::walker::Walker, s
 #[test]
 #[ignore = "manual offline GPU interaction test: requires local disc"]
 fn inventory_and_book_move_resize_zoom_and_restore() {
-    let (mut lib, source, icons, output) = offline_assets();
+    let (mut lib, source, output) = offline_assets();
     crate::settings::testing::reset(false);
     crate::settings::set_ui_mode(true).unwrap();
     let size = (960, 540);
@@ -40,8 +40,7 @@ fn inventory_and_book_move_resize_zoom_and_restore() {
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&render::packed::device_descriptor(&adapter))).unwrap();
     let mut renderer = render::Renderer::new(&device, &queue, render::TARGET_FORMAT);
-    let mut play = fixture_play(&icons);
-    for a in play.abilities.values_mut() { a.p14 = 1; a.level = 1; a.display_index = a.id - 1; }
+    let mut play = fixture_play();
     for (i, item) in play.dump.inventory.items.iter_mut().enumerate() {
         item.item.name = format!("Fixture item {}", i + 1);
         item.inv_index = i as u32 + 1;
@@ -69,6 +68,7 @@ fn inventory_and_book_move_resize_zoom_and_restore() {
     assert!(play.items.visible, "ordinary Start menu opened Inventory");
     let (key, before, _, zoom) = play.pc_windows.geometry().expect("Inventory frame");
     assert_eq!(key, 1013);
+    assert_eq!(play.pc_windows.scrollbars(), [false; 2]);
     let header = [before[0] + 25.0, before[1] + 9.0];
     drag(&mut play, header, [header[0] + 35.0, header[1] + 20.0]);
     frame(&mut play, &mut renderer, &walker, size, &mut now);
@@ -103,6 +103,48 @@ fn inventory_and_book_move_resize_zoom_and_restore() {
     assert_eq!(play.mode, 5, "ordinary Start menu opened Spell Book");
     let (key, book_before, source_rect, book_zoom) = play.pc_windows.geometry().expect("Spell Book frame");
     assert_eq!(key, 5);
+    let capture_book = |lib: &mut esf::Library, name: &str| {
+        let mut snapshot = fixture_play();
+        snapshot.loading.wait = None;
+        snapshot.take_modules(None);
+        snapshot.mode = 5;
+        snapshot.book_open = true;
+        let path = output.join(name);
+        let script = crate::viewer::Script { ms: 1000, controls: Default::default() };
+        crate::viewer::shot_with(lib, &source, None, Some(script), size, path.to_str().unwrap(), Some(snapshot)).expect("Book PNG");
+    };
+    assert_eq!(play.pc_windows.scrollbars(), [false; 2], "ordinary Book open has no scrollbars");
+    capture_book(&mut lib, "offline-pc-window-book.png");
+    frame(&mut play, &mut renderer, &walker, (640, 480), &mut now);
+    assert_eq!(play.pc_windows.scrollbars(), [false; 2], "an untouched Book fits the smaller display");
+    frame(&mut play, &mut renderer, &walker, size, &mut now);
+    for _ in 0..7 {
+        assert!(play.window_wheel(-1.0));
+        frame(&mut play, &mut renderer, &walker, size, &mut now);
+    }
+    assert!(play.book.sel >= 6, "wheel reaches beyond the first six spells without a permanent track");
+    for _ in 0..7 {
+        assert!(play.window_wheel(1.0));
+        frame(&mut play, &mut renderer, &walker, size, &mut now);
+    }
+    for (delta, bars, file) in [
+        ([-76., 0.], [true, false], "offline-pc-window-book-narrow.png"),
+        ([0., -60.], [false, true], "offline-pc-window-book-short.png"),
+    ] {
+        let corner = [book_before[2] - 5., book_before[3] - 5.];
+        drag(&mut play, corner, [corner[0] + delta[0], corner[1] + delta[1]]);
+        frame(&mut play, &mut renderer, &walker, size, &mut now);
+        assert_eq!(play.pc_windows.scrollbars(), bars);
+        capture_book(&mut lib, file);
+        let bounds = play.pc_windows.geometry().unwrap().1;
+        let corner = [bounds[2] - 5., bounds[3] - 5.];
+        drag(&mut play, corner, [corner[0] - delta[0], corner[1] - delta[1]]);
+        frame(&mut play, &mut renderer, &walker, size, &mut now);
+        assert_eq!(play.pc_windows.scrollbars(), [false; 2], "enlarging the viewport clears its track");
+        let bounds = play.pc_windows.geometry().unwrap().1;
+        press(&mut play, [bounds[2] - 15., bounds[1] + 9.]);
+        frame(&mut play, &mut renderer, &walker, size, &mut now);
+    }
     let h = [book_before[0] + 25.0, book_before[1] + 9.0];
     drag(&mut play, h, [h[0] - 24.0, h[1] + 12.0]);
     frame(&mut play, &mut renderer, &walker, size, &mut now);
@@ -117,6 +159,7 @@ fn inventory_and_book_move_resize_zoom_and_restore() {
     frame(&mut play, &mut renderer, &walker, size, &mut now);
     let (_, book_saved, _, zoom) = play.pc_windows.geometry().unwrap();
     assert!(zoom > book_zoom, "Spell Book zoom increased");
+    assert_eq!(play.pc_windows.scrollbars(), [true; 2]);
     eprintln!("Spell Book frame: before={book_before:?}, saved={book_saved:?}, zoom={zoom}%");
     // Find a real book row via its existing hit test, then send its projected
     // location through Play's normal transformed mouse path.
@@ -158,17 +201,13 @@ fn inventory_and_book_move_resize_zoom_and_restore() {
     let (key, restored, _, restored_zoom) = play.pc_windows.geometry().unwrap();
     assert_eq!(key, 5);
     assert_eq!((restored, restored_zoom), (book_saved, zoom), "Spell Book placement and zoom survive reopening");
-    // Capture the saved Book layout using a fresh Play and the existing
-    // offscreen renderer. The interaction assertions above entered it through
-    // the real menu; this second instance is solely a visual receipt.
-    let mut snapshot = fixture_play(&icons);
-    for a in snapshot.abilities.values_mut() { a.p14 = 1; a.level = 1; a.display_index = a.id - 1; }
-    snapshot.loading.wait = None;
-    snapshot.take_modules(None);
-    snapshot.mode = 5;
-    snapshot.book_open = true;
-    let path = output.join("offline-pc-window-book.png");
-    let script = crate::viewer::Script { ms: 1000, controls: Default::default() };
-    crate::viewer::shot_with(&mut lib, &source, None, Some(script), size, path.to_str().unwrap(), Some(snapshot)).expect("Book PNG");
-    eprintln!("Spell Book screenshot: {}", path.display());
+    assert_eq!(play.pc_windows.scrollbars(), [true; 2], "a deliberately smaller saved Book retains its viewport");
+    capture_book(&mut lib, "offline-pc-window-book-small.png");
+    press(&mut play, [restored[2] - 15., restored[1] + 9.]);
+    frame(&mut play, &mut renderer, &walker, size, &mut now);
+    assert_eq!(play.pc_windows.scrollbars(), [false; 2], "Reset returns to auto fit");
+    capture_book(&mut lib, "offline-pc-window-book-restored.png");
+    crate::settings::set_ui_mode(false).unwrap();
+    capture_book(&mut lib, "offline-controller-window-book.png");
+    crate::settings::set_ui_mode(true).unwrap();
 }

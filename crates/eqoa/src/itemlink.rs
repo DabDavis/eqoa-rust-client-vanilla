@@ -236,7 +236,7 @@ impl Links {
             let at = at_of[w.slot];
             let layer = crate::pcwindows::begin(r);
             Self::draw_one(w, vui, r, ww, at, describe, icon, false);
-            self.frames[w.slot].show(r, layer, Self::key(w.slot), "Item Inspection");
+            self.frames[w.slot].show(r, layer, Some((Self::key(w.slot), "Item Inspection")));
             if let Some([_, top, right, _]) = self.frames[w.slot].frame_body() {
                 w.pc_x = [right - 21.0, top, right, top + 20.0];
                 vui.draw_string_ex(r, &wide("x"), (right - 14.0) as i32, (top + 2.0) as i32, [1.0; 4], true);

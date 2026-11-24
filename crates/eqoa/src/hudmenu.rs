@@ -84,6 +84,8 @@ use vi::ui::{Raster, TextScroll};
 #[derive(Clone, Copy, Debug)]
 pub struct Entry {
     pub icon2: i32,
+    /// Server-supplied UI.CSF gem back; -1 or 0 means none.
+    pub icon_back: i64,
     /// 61: the ability is locked out (the badge)
     pub x08: i32,
     pub msg: u32,
@@ -92,7 +94,13 @@ pub struct Entry {
 
 impl Default for Entry {
     fn default() -> Self {
-        Entry { icon2: -1, x08: -1, msg: 0, id: 0 }
+        Entry { icon2: -1, icon_back: -1, x08: -1, msg: 0, id: 0 }
+    }
+}
+
+impl Entry {
+    fn spell(a: &Ability) -> Self {
+        Self { icon2: a.icon_front as i32, icon_back: a.icon_back, x08: if a.lockout > 0 { 61 } else { -1 }, msg: 0x8060000, id: a.id }
     }
 }
 
@@ -589,11 +597,7 @@ impl HudMenus {
         for def in &mut self.pc_defs { def.entries.fill(Entry::default()); }
         for a in abilities.values().filter(|a| a.valid != 0 && (20..40).contains(&a.slot)) {
             let i = (a.slot - 20) as usize;
-            self.pc_defs[i / 10].entries[i % 10] = Entry {
-                icon2: a.icon_front as i32,
-                x08: if a.lockout > 0 { 61 } else { -1 },
-                msg: 0x8060000, id: a.id,
-            };
+            self.pc_defs[i / 10].entries[i % 10] = Entry::spell(a);
         }
     }
     /// `UpdateQuickBars`' HUD menus, and the client's bars as menu 1 is
@@ -609,7 +613,7 @@ impl HudMenus {
             *e = Entry::default();
         }
         let (mut n1, mut n2) = (0, 0);
-        let item = |a: &Ability| Entry { icon2: a.icon_front as i32, x08: if a.lockout > 0 { 61 } else { -1 }, msg: 0x8060000, id: a.id };
+        let item = Entry::spell;
         for a in abilities.values() {
             if a.valid == 0 {
                 continue;
@@ -664,7 +668,7 @@ impl HudMenus {
             let q = it.quick_slot;
             if (0..4).contains(&q) && (!bars.gear || matches!(it.item.p4c, 2 | 7)) {
                 // (the count, `m_number`, is not drawn by the stack)
-                m2.entries[q as usize] = Entry { icon2: -1, x08: -1, msg: 0x2030000, id: k as i64 };
+                m2.entries[q as usize] = Entry { icon2: -1, x08: -1, msg: 0x2030000, id: k as i64, ..Entry::default() };
             }
         }
         // the live client's BuildGearMenu (0x01359FD0) and SetGearMenuItem
@@ -676,7 +680,7 @@ impl HudMenus {
         }
         for k in 0..crate::gear::ENTRIES as i64 {
             if k == crate::gear::BARE_HANDS || !gear.empty(k) {
-                m3.entries[k as usize] = Entry { icon2: gear.icon(k, inventory), x08: gear.badge(k, inventory), msg: crate::gear::MSG, id: k };
+                m3.entries[k as usize] = Entry { icon2: gear.icon(k, inventory), x08: gear.badge(k, inventory), msg: crate::gear::MSG, id: k, ..Entry::default() };
             }
         }
         if !shown(self.up(), bars) {
@@ -761,19 +765,33 @@ impl HudMenus {
                 r.stretch_blit(vui.entry_id(&frame), 0, at, [cw, ch], frame.uv0, frame.uv1, 3, if unavailable { opacity * 0.35 } else { opacity });
                 let e = if unavailable { Entry::default() } else { def.entries.get(n as usize).copied().unwrap_or_default() };
                 // the icon where the list puts it in its frame, scaled
-                let icon = [x + s(7), y + s(2)];
+                let mut icon = [x + s(7), y + s(2)];
+                let mut icon_size = [s(22), s(22)];
+                // The server sends a 64×64 gem surface and a 32×32
+                // pictogram. The Book uses the gem's 46×34 artwork and the
+                // pictogram's 22×22 crop at (13,6). Fit those same layers
+                // together within a PC slot; the controller path is unchanged.
+                if pc && e.msg == 0x8060000 && e.icon2 != -1 && e.icon_back != -1 && e.icon_back != 0 && r.has(e.icon_back as u32) {
+                    let back = e.icon_back as u32;
+                    let at = [x + 1, y + 2];
+                    let size = [cw - 2, ch - 4];
+                    r.stretch_blit(back, 0, at, size, [0, 0], [46, 34], 3, 1.0);
+                    icon = [at[0] + 13 * size[0] / 46, at[1] + 6 * size[1] / 34];
+                    icon_size = [22 * size[0] / 46, 22 * size[1] / 34];
+                }
                 if e.icon2 != -1 {
-                    r.stretch_blit(e.icon2 as u32, 0, icon, [s(22), s(22)], [0, 0], [22, 22], 3, 1.0);
+                    r.stretch_blit(e.icon2 as u32, 0, icon, icon_size, [0, 0], [22, 22], 3, 1.0);
                 }
                 if e.x08 == 61 {
                     let badge = vui.entry(61);
-                    r.stretch_blit(vui.entry_id(&badge), 0, [icon[0] - s(2), icon[1] - s(2)], [s(26), s(26)], badge.uv0, [26, 26], 3, 0.5);
+                    r.stretch_blit(vui.entry_id(&badge), 0, [x + s(5), y], [s(26), s(26)], badge.uv0, [26, 26], 3, 0.5);
                 }
                 if e.msg == 0x8060000 && e.icon2 != -1 && self.auto.contains(&e.id) {
                     draw_auto_mark(r, icon, 1.0);
                 }
                 if menu < MENUS && menu == up && n == self.menus[menu].sel {
-                    outline(r, [icon[0] - 2, icon[1] - 2, icon[0] + s(22) + 1, icon[1] + s(22) + 1], [1.0, 0.85, 0.3, 1.0]);
+                    let rect = if pc { [x + 1, y + 1, x + cw - 2, y + ch - 2] } else { [icon[0] - 2, icon[1] - 2, icon[0] + s(22) + 1, icon[1] + s(22) + 1] };
+                    outline(r, rect, [1.0, 0.85, 0.3, 1.0]);
                 }
                 if pc && self.hover == Some((menu, n)) {
                     outline(r, [x, y, x + cw - 1, y + ch - 1], [1.0, 1.0, 1.0, 1.0]);
@@ -1181,6 +1199,58 @@ pub fn frame_alpha(percent: u8) -> f32 {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn pc_gems_draw_the_server_back_then_front_within_each_cell() {
+        use vi::ui::Raster;
+        #[derive(Default)]
+        struct Rec(Vec<(u32, [i32; 2], [i32; 2], [i32; 2])>, Option<u32>);
+        impl Raster for Rec {
+            fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+            fn stretch_blit(&mut self, id: u32, _: u32, at: [i32; 2], size: [i32; 2], _: [i32; 2], uv: [i32; 2], _: i32, _: f32) { self.0.push((id, at, size, uv)); }
+            fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+            fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+            fn draw_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16]) {}
+            fn draw_centered_string(&mut self, _: [i32; 2], _: [f32; 4], _: &[u16], _: u32) {}
+            fn string_width(&self, s: &[u16]) -> i32 { s.len() as i32 * 8 }
+            fn point_size(&self) -> i32 { 16 }
+            fn viewport(&self) -> [i32; 4] { [0, 0, 640, 448] }
+            fn set_viewport(&mut self, _: [i32; 4]) {}
+            fn has(&self, id: u32) -> bool { self.1 != Some(id) }
+        }
+        let vui = crate::pointer::testing::vui();
+        let mut h = super::HudMenus::default();
+        let mut abilities = std::collections::BTreeMap::new();
+        for (id, slot, back, front) in [(1, 0, 0x12345678, 0x22345678), (2, 20, 0x12345679, 0x22345679), (3, 1, -1, 0x2234567a), (4, 2, 0, 0x2234567b)] {
+            abilities.insert(id, net::dump::Ability { id, slot, valid: 1, icon_back: back, icon_front: front, ..Default::default() });
+        }
+        let bars = super::Bars { abilities: 4, gear: false };
+        h.build(&abilities, &Default::default(), &Default::default(), bars);
+        h.sync_pc_slots(&abilities);
+        let mut r = Rec::default();
+        h.draw_pc_bars(&vui, &mut r, 440, 150, bars, 4);
+        for (menu, slot, back, front) in [(0, 0, 0x12345678, 0x22345678), (super::MENUS, 0, 0x12345679, 0x22345679)] {
+            let b = r.0.iter().position(|v| v.0 == back).expect("server gem back");
+            let f = r.0.iter().position(|v| v.0 == front).expect("server front icon");
+            assert!(b < f, "back must be drawn before front");
+            assert_eq!(r.0[b].3, [46, 34]);
+            assert_eq!(r.0[f].3, [22, 22]);
+            let cell = h.stacked_hits.iter().find(|&&(m, n, _)| m == menu && n == slot).unwrap().2;
+            for (_, at, size, _) in [r.0[b], r.0[f]] {
+                assert!(at[0] >= cell[0] && at[1] >= cell[1] && at[0] + size[0] <= cell[2] && at[1] + size[1] <= cell[3]);
+            }
+        }
+        assert!(r.0.iter().any(|v| v.0 == 0x2234567a && v.2 == [21, 21]), "a missing back keeps the original full front size");
+        assert!(r.0.iter().any(|v| v.0 == 0x2234567b && v.2 == [21, 21]), "a zero back keeps the original full front size");
+        r.0.clear();
+        r.1 = Some(0x12345678);
+        h.draw_pc_bars(&vui, &mut r, 440, 150, bars, 4);
+        assert!(!r.0.iter().any(|v| v.0 == 0x12345678), "an unloaded back is not drawn");
+        assert!(r.0.iter().any(|v| v.0 == 0x22345678 && v.2 == [21, 21]), "an unloaded back restores the full-size front");
+        r.1 = None;
+        r.0.clear();
+        h.draw_stacked(&vui, &mut r, 320, 200, bars, super::Layout::Stacked);
+        assert!(!r.0.iter().any(|v| v.0 == 0x12345678 || v.0 == 0x12345679), "controller bar drawing stays unchanged");
+    }
+    #[test]
     fn pc_shortcut_text_and_shadow_stay_inside_the_cell() {
         use vi::ui::Raster;
         let r = crate::pointer::testing::NullRaster;
@@ -1253,7 +1323,7 @@ mod tests {
         let mut r = crate::pointer::testing::Said::default();
         let mut h = super::HudMenus::default();
         h.stacked = true;
-        h.defs[super::GEAR].entries[1] = super::Entry { msg: crate::gear::MSG, id: 1, icon2: 42, x08: -1 };
+        h.defs[super::GEAR].entries[1] = super::Entry { msg: crate::gear::MSG, id: 1, icon2: 42, x08: -1, ..super::Entry::default() };
         h.draw_equipment(&vui, &mut r, super::Bars { abilities: 4, gear: true }, [469, 306]);
         let cell = h.equipment_hits.iter().find(|(_, n, _)| *n == 1).unwrap().2;
         let point = [(cell[0] + 1) as f32, (cell[1] + 1) as f32];
@@ -1309,7 +1379,7 @@ mod tests {
         }
         let vui = crate::pointer::testing::vui();
         let mut h = HudMenus::default();
-        let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id };
+        let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id, ..Entry::default() };
         h.defs[0] = MenuDef { count: 5, entries: vec![ab(11), ab(12), ab(13), Entry::default(), Entry::default()] };
         let name = |_: u32, _: i64| Vec::new();
         let marks = |h: &mut HudMenus| {
@@ -1366,7 +1436,7 @@ mod tests {
         }
         let vui = crate::pointer::testing::vui();
         let mut h = HudMenus::default();
-        let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id };
+        let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id, ..Entry::default() };
         h.defs[0] = MenuDef { count: 5, entries: vec![ab(11), ab(12), ab(13), Entry::default(), Entry::default()] };
         h.defs[1] = MenuDef { count: 5, entries: vec![Entry::default(), ab(22), Entry::default(), Entry::default(), ab(25)] };
         let name = |_: u32, _: i64| crate::ui::wide("Fire Bolt");
@@ -1453,7 +1523,7 @@ mod tests {
         assert_eq!(walk(false, &[Key::Right], true), (1, 0, 0), "the carousel: right switches");
         // the name, over the bars, at the selected cell
         let vui = crate::pointer::testing::vui();
-        let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id };
+        let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id, ..Entry::default() };
         let named_in = |pad: bool, at: i64, screen: Option<[i32; 2]>| {
             let mut h = HudMenus { stacked: true, named: pad, ..Default::default() };
             h.defs[0] = MenuDef { count: 5, entries: vec![ab(11), ab(12), ab(13), Entry::default(), Entry::default()] };
@@ -1522,7 +1592,7 @@ mod tests {
         crate::settings::testing::reset(false);
         let vui = crate::pointer::testing::vui();
         let mut h = HudMenus::default();
-        let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id };
+        let ab = |id: i64| Entry { icon2: 5, x08: -1, msg: 0x8060000, id, ..Entry::default() };
         let bar = |first: i64| MenuDef { count: 5, entries: (0..5).map(|n| if n == 2 { Entry::default() } else { ab(first + n) }).collect() };
         for (k, &menu) in BAR_MENUS.iter().enumerate() {
             h.defs[menu] = bar(10 * (k as i64 + 1));
@@ -1618,9 +1688,9 @@ mod tests {
         crate::settings::testing::reset(false);
         let vui = crate::pointer::testing::vui();
         let mut h = HudMenus::default();
-        let item = |k: i64| Entry { icon2: -1, x08: -1, msg: 0x2030000, id: k };
+        let item = |k: i64| Entry { icon2: -1, x08: -1, msg: 0x2030000, id: k, ..Entry::default() };
         h.defs[ITEMS] = MenuDef { count: 4, entries: vec![item(3), Entry::default(), item(5), Entry::default()] };
-        let set = |k: i64| Entry { icon2: 7, x08: -1, msg: crate::gear::MSG, id: k };
+        let set = |k: i64| Entry { icon2: 7, x08: -1, msg: crate::gear::MSG, id: k, ..Entry::default() };
         h.defs[GEAR] = MenuDef { count: 5, entries: vec![set(0), Entry::default(), Entry::default(), Entry::default(), set(BARE_HANDS)] };
         let s = |v: i32| (v as f32 * STACKED_SCALE).round() as i32;
         let (cw, ch) = (s(CELL[0]), s(CELL[1]));

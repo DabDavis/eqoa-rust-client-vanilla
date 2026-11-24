@@ -205,6 +205,12 @@ impl Setup {
         self.keys.push((key, down));
     }
 
+    pub fn scroll(&mut self, lines: f32) {
+        if self.focus == Some(Focus::Options) && crate::settings::pc_mode() {
+            self.options_wnd.scroll_controls(lines);
+        }
+    }
+
     /// A pointer at frame point `p`: the keys the window with the focus asks for.
     pub fn point(&mut self, p: [f32; 2]) -> Vec<i32> {
         match self.focus {

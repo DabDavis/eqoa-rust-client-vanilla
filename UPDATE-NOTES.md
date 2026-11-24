@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-23 · Spell gem artwork and PC window scrollbars
+
+- Equipped spells on the PC bars show their colored gem and spell symbol together, using the artwork assigned to each ability.
+- PC windows open with their contents visible. Narrowing a window can show a horizontal scrollbar, and shortening it can show a vertical one. The bars disappear when the contents fit again. The Spell Book list still responds to the mouse wheel.
+- Main and detached PC chat panes show the history scrollbar only while scrolling through more lines than the pane can display.
+- On the PC title screen, scroll through the Controls list with the wheel or arrow keys. The fixed window opens without a scrollbar.
+
 ## 2026-11-23 · PC and Controller interfaces
 
 - Choose **PC** or **Controller** at the top of Options. Press **F10** from the title or in the world. In PC mode you can also click **Settings** or press Start on a controller. In Controller mode, use **Start → Options**. Switching saves the choice immediately and restores that interface's layout.
