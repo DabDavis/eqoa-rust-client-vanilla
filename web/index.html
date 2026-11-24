@@ -77,6 +77,10 @@
   <form id="gate" class="card" autocomplete="on">
     <h1>EverQuest Online Adventures</h1>
     <p class="lede">A client in your browser, from your own <i>Frontiers</i> disc image. The image stays on your computer: it is read here, never uploaded. You sign in on the game's own Station screen.</p>
+    <div id="classic-account" hidden>
+      <p class="lede"><a class="link" href="https://eqoaclassic.com/terms?mode=create" target="_blank" rel="noopener">Create an account</a> or <a class="link" href="https://eqoaclassic.com/terms" target="_blank" rel="noopener">accept the Player Terms for your existing account</a> before game sign-in. <a class="link" href="https://eqoaclassic.com/privacy" target="_blank" rel="noopener">Privacy Notice</a></p>
+      <p class="lede"><strong>Vanilla Test - Wipes</strong> (Live) characters and their progress will be wiped for testing. <strong>Sandbox Test - No Wipes</strong> (Heirloom) has no planned character wipes. Bugs or rollbacks can still erase progress on either server.</p>
+    </div>
     <div class="online" id="online" hidden aria-live="polite"><span class="dot"></span><span id="online-text"></span></div>
     <div class="gfx" id="gfx">
       <div class="state" id="gfx-state">Checking graphics…</div>
@@ -128,10 +132,11 @@
       document.getElementById('status').textContent = 'The client\u2019s files did not load (' + t.src + '). Reload the page; if it happens again, the site may be in the middle of an update: wait a minute.';
     }
   }, true);
-  // eqoaclassic's password page (a forgotten password asked for, a known one
-  // changed), linked where the page is eqoaclassic's, whose accounts it keeps;
-  // the game's Station login opens it from Forgot Password too
-  if (/(^|\.)eqoaclassic\.com$/i.test(location.hostname)) document.getElementById('pw-link').hidden = false;
+  // These account pages and shard names belong to EQOA Classic.
+  if (/(^|\.)eqoaclassic\.com$/i.test(location.hostname)) {
+    document.getElementById('classic-account').hidden = false;
+    document.getElementById('pw-link').hidden = false;
+  }
   // a site that offers the PS2/PCSX2 loader at /ps2/ (eqoaclassic.com's EQOABOOT.ELF) is
   // linked from here; any other host shows nothing
   fetch('/ps2/', { method: 'HEAD', cache: 'no-store' }).then((r) => {
