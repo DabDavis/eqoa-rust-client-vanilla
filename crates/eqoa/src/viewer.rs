@@ -6026,6 +6026,29 @@ impl App {
                 p.capture_key_up(&name);
             }
         }
+        // These physical keyboard shortcuts take precedence over gameplay
+        // bindings only while chat has focus. Keep their repeats and releases
+        // out of those bindings too, even if chat expand is released first.
+        let unmodified = self.mods == (false, false, false);
+        #[cfg(target_os = "macos")]
+        let unmodified = unmodified && !self.super_held;
+        if pressed && !event.repeat && !typing && capturing.is_none() && unmodified
+            && let Some(name) = kname.as_deref()
+            && let Some(p) = self.play.as_mut()
+        {
+            use crate::chat::HistoryKey;
+            let shortcut = match event.logical_key {
+                Key::Named(NamedKey::Tab) => Some(HistoryKey::NextTab),
+                Key::Named(NamedKey::ArrowLeft) => Some(HistoryKey::PageUp),
+                Key::Named(NamedKey::ArrowRight) => Some(HistoryKey::PageDown),
+                _ => None,
+            };
+            let size = self.gfx.as_ref().map_or((640, 480), |g| (g.config.width, g.config.height));
+            if shortcut.is_some_and(|key| p.chat_history_shortcut(key, size)) {
+                self.keys_edge.hold_back(name);
+                return;
+            }
+        }
         // The player's own keys (`binds`, the client's, at the edge):
         // a key a row was moved onto is that row's default key to all
         // below, the row's old key nothing; a key given to △'s row

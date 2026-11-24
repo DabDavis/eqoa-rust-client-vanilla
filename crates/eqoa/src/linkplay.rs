@@ -56,15 +56,15 @@ impl Play {
         closed
     }
 
-    /// A key while the chat box's history is held (mode 33): left (the
-    /// keyboard's too) walks up through its links, right back down while one is
+    /// A key while the chat box's history is held (mode 33): left walks up
+    /// through the focused pane's links, right back down while one is
     /// lit, ✕ (Enter) opens the lit one, △ (Escape) closes the newest window.
     /// True when it was the walk's.
     pub(super) fn link_key(&mut self, key: i32) -> bool {
         if !crate::settings::item_links() {
             return false;
         }
-        let Some(c) = self.wnd_chat.as_mut() else { return false };
+        let Some(c) = self.wnd_chat.as_mut().map(|c| c.history_mut()) else { return false };
         match key {
             136 | 17 => {
                 c.walk_older();
@@ -93,7 +93,7 @@ impl Play {
 
     /// A link is lit by the walk (the keyboard's right and Enter are its).
     pub fn link_walking(&self) -> bool {
-        self.mode == 33 && self.wnd_chat.as_ref().is_some_and(|c| c.walking())
+        self.mode == 33 && self.wnd_chat.as_ref().is_some_and(|c| c.history().walking())
     }
 
     /// Where in a `size` window the `k`th newest item link the chat box drew is
