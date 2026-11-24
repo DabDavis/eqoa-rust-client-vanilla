@@ -6051,7 +6051,7 @@ impl Play {
         }
         // a loot roll's strips (`raidplay`): in play and while R2 holds the
         // chat box's history, a click on one is theirs
-        if matches!(c, Click::Target(..) | Click::Interact(..)) && matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.roll_point(f) {
+        if matches!(c, Click::Target(..) | Click::Interact(..)) && matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.roll_point(local(Piece::RaidPrompts)) {
             return true;
         }
         // the buff window (`buffwnd`, petition 1809): a left click on a buff
@@ -6223,6 +6223,7 @@ impl Play {
         let scrolling = self.mode == 33;
         let frame = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
         if self.links.covers(frame) { return false; }
+        let now = self.session.now();
         let Some(c) = self.wnd_chat.as_mut() else { return false };
         if c.dragging() || (1..=crate::chat::TABS).any(|t| c.pane(t).is_some_and(|p| p.dragging())) {
             return true;
@@ -6230,18 +6231,25 @@ impl Play {
         if left && lines && crate::settings::pc_mode() {
             for t in (1..=crate::chat::TABS).rev() {
                 let p = Self::chat_pane_point(at, size, t);
-                if c.pane(t).is_some_and(|pane| pane.control_at(p)) {
+                let Some(pane) = c.pane_mut(t) else { continue };
+                if pane.control_at(p) {
                     c.set_detached(t, false);
+                    c.activity(now);
                     if let Err(e) = crate::settings::set_chat_detached(t, false) { crate::say(&format!("chat: could not save pane: {e}")); }
                     return true;
                 }
-                if c.pane_mut(t).is_some_and(|pane| pane.press(p, at)) { return true; }
-                if c.pane(t).is_some_and(|pane| pane.contains(p)) {
+                if pane.press(p, at) {
+                    pane.activity(now);
+                    return true;
+                }
+                if pane.contains(p) {
+                    pane.activity(now);
                     self.open_chat_line();
                     return true;
                 }
             }
             if c.control_at(Self::chat_point(at, size)) {
+                c.activity(now);
                 let t = c.tab();
                 if c.set_detached(t, true) {
                     if let Err(e) = crate::settings::set_chat_detached(t, true) { crate::say(&format!("chat: could not save pane: {e}")); }
@@ -6251,9 +6259,11 @@ impl Play {
         }
         // a tab's name over the box (ticket 1951): that tab shown
         if left && lines && c.click_tab(Self::chat_point(at, size)) {
+            c.activity(now);
             return true;
         }
         if left && lines && c.press(Self::chat_point(at, size), at) {
+            c.activity(now);
             return true;
         }
         c.clear_selection(scrolling);
@@ -6262,11 +6272,19 @@ impl Play {
 
     /// The pointer moved in the world: a drag of the chat box's goes with it.
     pub fn chat_moved(&mut self, at: (f64, f64), size: (u32, u32)) {
+        let now = self.session.now();
         if let Some(c) = self.wnd_chat.as_mut() {
-            for t in 1..=crate::chat::TABS {
-                if let Some(p) = c.pane_mut(t) { p.moved(Self::chat_pane_point(at, size, t), at); }
+            let mut covered = false;
+            for t in (1..=crate::chat::TABS).rev() {
+                if let Some(p) = c.pane_mut(t) {
+                    let point = Self::chat_pane_point(at, size, t);
+                    p.moved(point, at);
+                    covered |= p.hover((!covered).then_some(point), now);
+                }
             }
-            c.moved(Self::chat_point(at, size), at);
+            let point = Self::chat_point(at, size);
+            c.moved(point, at);
+            c.hover((!covered).then_some(point), now);
         }
     }
 
@@ -6305,9 +6323,11 @@ impl Play {
     /// The pointer gone from the window or the keys to another: a drag's release
     /// may never come, so it ends here, what it selected kept.
     pub fn chat_let_go(&mut self) {
+        let now = self.session.now();
         if let Some(c) = self.wnd_chat.as_mut() {
-            for t in 1..=crate::chat::TABS { if let Some(p) = c.pane_mut(t) { p.let_go(); } }
+            for t in 1..=crate::chat::TABS { if let Some(p) = c.pane_mut(t) { p.let_go(); p.hover(None, now); } }
             c.let_go();
+            c.hover(None, now);
         }
     }
 
@@ -6328,16 +6348,23 @@ impl Play {
         let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
         if matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.links.covers(f) { return true; }
         let held = self.mode == 33;
+        let now = self.session.now();
         self.wnd_chat.as_mut().is_some_and(|c| {
             if crate::settings::pc_mode() {
                 for t in (1..=crate::chat::TABS).rev() {
                     let point = Self::chat_pane_point(at, size, t);
                     if let Some(p) = c.pane_mut(t).filter(|p| p.contains(point)) {
-                        return p.pc_wheel(point, lines);
+                        let took = p.pc_wheel(point, lines);
+                        if took { p.activity(now); }
+                        return took;
                     }
                 }
                 let point = Self::chat_point(at, size);
-                if c.contains(point) { return c.pc_wheel(point, lines); }
+                if c.contains(point) {
+                    let took = c.pc_wheel(point, lines);
+                    if took { c.activity(now); }
+                    return took;
+                }
             }
             c.wheel(Self::chat_point(at, size), lines, held)
         })
@@ -10557,7 +10584,9 @@ impl Play {
         crate::editbox::set_pad_only(crate::editbox::compact_face(self.keyboard, self.options.compact != 0));
         let under_liquid = walker.cam.walk.is_under_liquid();
         let (start_stats, start_loc) = self.start_view(walker);
-        let info_text = if self.info_wanted() || self.info_window.open > 0.0 { self.target_info_text() } else { None };
+        let pc = crate::settings::pc_mode();
+        let show_info = self.info_wanted() || (pc && self.hud_moving());
+        let info_text = if show_info || self.info_window.open > 0.0 { self.target_info_text() } else { None };
         let me = self.self_id32();
         let find = |id: Option<u32>| self.entities.slots.iter().flatten().find(|e| Some(e.id) == id);
         let me_e = find(me);
@@ -10723,16 +10752,22 @@ impl Play {
                 }
                 // item links drawn as links, or the line's plain words (`itemlink`)
                 c.show_links = crate::settings::item_links();
-                // Chat Always Shown (ticket 1914): never sliding away
-                c.always = crate::settings::chat_always() || crate::hudlayout::unlocked();
                 // the chat tabs (ticket 1951), each line into its kind's
                 let opts = crate::settings::client().display_ui();
+                // The configured PC fade owns visibility while enabled: keep
+                // the frame and its hit areas available through the delay.
+                let arranging = crate::hudlayout::unlocked();
+                c.always = crate::chat::WndChat::hold_open(crate::settings::chat_always(), arranging, pc, opts.chat_fade_seconds);
                 let screen_width = render::ui::SCREEN_W + 2.0 * r.ui.side();
-                c.resize(crate::chat::ChatSize::from_dimensions(&opts, screen_width, crate::settings::chat_pane_size(0)), |s| vi::ui::Raster::string_width(&r, s));
+                let pane_size = |tab| {
+                    let percent = crate::hudlayout::piece_scale_percent(Self::chat_piece(tab));
+                    crate::chat::ChatSize::from_dimensions(&opts, screen_width * 100.0 / f32::from(percent), crate::settings::chat_pane_size(tab))
+                };
+                c.resize(pane_size(0), |s| vi::ui::Raster::string_width(&r, s));
                 c.opacity = opts.chat_opacity;
                 c.typing = self.mode == 2 && self.edit.inline_chat;
                 c.set_tabs(opts.chat_tabs, opts.chat_tab_names);
-                let pc = crate::settings::pc_mode();
+                c.set_wake_on_message(pc && opts.chat_wake_on_message);
                 for t in 1..=crate::chat::TABS {
                     c.set_detached(t, pc && opts.chat_detached[t - 1]);
                 }
@@ -10740,10 +10775,14 @@ impl Play {
                     let rr = &r;
                     c.add_line(&text, color, at, |s| vi::ui::Raster::string_width(rr, s), &links);
                 }
+                let composing = self.mode == 2 && self.edit.purpose == 0x0B0F_0000;
                 let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Chat);
+                let first = r.ui.quads.len();
                 c.draw(vui, &mut r, now, dt);
                 c.draw_selection(&mut r);
                 c.draw_pane_control(vui, &mut r, pc);
+                let alpha = c.fade_alpha(now, opts.chat_fade_seconds, pc, arranging || composing);
+                crate::chat::fade_quads(&mut r.ui.quads[first..], alpha);
                 crate::hudlayout::end(r.ui, m);
                 self.cues.extend(c.cues.drain(..).map(crate::sound::Cue::Ui));
                 for t in 1..=crate::chat::TABS {
@@ -10751,11 +10790,14 @@ impl Play {
                         if !in_play { pane.clear_selection(false); }
                         pane.show_links = crate::settings::item_links();
                         pane.opacity = opts.chat_opacity;
-                        pane.resize(crate::chat::ChatSize::from_dimensions(&opts, screen_width, crate::settings::chat_pane_size(t)), |s| vi::ui::Raster::string_width(&r, s));
+                        pane.resize(pane_size(t), |s| vi::ui::Raster::string_width(&r, s));
                         let m = crate::hudlayout::begin(r.ui, Self::chat_piece(t));
+                        let first = r.ui.quads.len();
                         pane.draw(vui, &mut r, now, dt);
                         pane.draw_selection(&mut r);
                         pane.draw_pane_control(vui, &mut r, true);
+                        let alpha = pane.fade_alpha(now, opts.chat_fade_seconds, pc, arranging);
+                        crate::chat::fade_quads(&mut r.ui.quads[first..], alpha);
                         crate::hudlayout::end(r.ui, m);
                         self.cues.extend(pane.cues.drain(..).map(crate::sound::Cue::Ui));
                     }
@@ -10764,7 +10806,9 @@ impl Play {
             r.ui.anchor = Anchor::Middle;
             r.ui.vertical = Vertical::Middle;
             // a raid's loot rolls (`raidplay`), under every window
+            let mark = pc.then(|| crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::RaidPrompts));
             self.run_rolls(vui, &mut r);
+            if let Some(m) = mark { crate::hudlayout::end(r.ui, m); }
             // the item links' windows (`itemlink`), at the top middle
             let side = crate::ui::Layout::side(&r);
             self.run_links(vui, &mut r, side);
@@ -10869,7 +10913,7 @@ impl Play {
             }
             // the target's info window, in the middle of a tall window's right
             r.ui.vertical = Vertical::Middle;
-            if self.info_wanted() {
+            if show_info && info_text.is_some() {
                 self.info_window.open(false);
             } else {
                 self.info_window.close(false);
@@ -10879,6 +10923,7 @@ impl Play {
                 match info_text {
                     None => w.close(true),
                     Some(text) => {
+                        let mark = pc.then(|| crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::TargetInfo));
                         let text = crate::ui::wide(&text);
                         let lines = w.count_lines(vui, &mut r, &text, 155);
                         w.init(vui, &r, [500, 235], 195, lines, 1);
@@ -10888,6 +10933,7 @@ impl Play {
                         w.draw(vui, &mut r);
                         let c = [1.0, 1.0, 1.0, w.open];
                         w.text_box(vui, &mut r, &text, 20, 0, w.size[0] - 40, lines, c, 3);
+                        if let Some(m) = mark { crate::hudlayout::end(r.ui, m); }
                     }
                 }
             }

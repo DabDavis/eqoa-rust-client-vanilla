@@ -675,6 +675,17 @@ pub struct ChatSize {
     rows: i32,
 }
 
+/// Fade the complete pane, including opaque solid fills and their labels.
+/// Blend-zero fills normally ignore their alpha, so use alpha blending while
+/// fading and preserve their originally opaque appearance at the fade start.
+pub fn fade_quads(quads: &mut [render::ui::Quad], alpha: f32) {
+    if alpha >= 1.0 { return; }
+    for q in quads {
+        if q.blend == 0 { q.blend = 3; q.color[3] = alpha; }
+        else { q.color[3] *= alpha; }
+    }
+}
+
 impl ChatSize {
     pub const BASE_WIDTH: i32 = 462;
     pub const ORIGINAL: Self = Self { width: Self::BASE_WIDTH, rows: 5 };
@@ -753,9 +764,18 @@ pub struct WndChat {
     panes: [Option<Box<WndChat>>; TABS],
     pane_title: Option<String>,
     control_hit: Option<[i32; 4]>,
+    last_activity: Option<u32>,
+    hovered: bool,
+    wake_on_message: bool,
 }
 
 impl WndChat {
+    /// An enabled PC fade replaces the legacy slide-away, even when the
+    /// separate Always Shown option is off.
+    pub fn hold_open(always: bool, moving: bool, pc: bool, seconds: u8) -> bool {
+        always || moving || (pc && seconds > 0)
+    }
+
     /// Whether frame point `p` is on the box while it shows (before the right
     /// side's move), for a pointer.
     pub fn contains(&self, p: [f32; 2]) -> bool {
@@ -766,7 +786,38 @@ impl WndChat {
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
         let size = ChatSize::ORIGINAL;
-        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None }
+        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None, last_activity: None, hovered: false, wake_on_message: false }
+    }
+
+    /// A pointer action or active interaction restores this pane without
+    /// affecting the other detached panes.
+    pub fn activity(&mut self, now: u32) { self.last_activity = Some(now); }
+
+    /// Set once per frame before routing incoming messages, rather than
+    /// consulting settings separately for every line in a busy channel.
+    pub fn set_wake_on_message(&mut self, on: bool) { self.wake_on_message = on; }
+
+    /// Hover includes the pane's tab and detach/dock controls, even when its
+    /// quads are fully transparent; hit testing is never removed by fading.
+    pub fn hover(&mut self, p: Option<[f32; 2]>, now: u32) -> bool {
+        let hovered = p.is_some_and(|p| self.contains(p) || self.control_at(p)
+            || self.tabs.hits.iter().any(|(r, _)| p[0] >= r[0] as f32 && p[0] < r[2] as f32 && p[1] >= r[1] as f32 && p[1] < r[3] as f32));
+        if hovered || self.hovered { self.activity(now); }
+        self.hovered = hovered;
+        hovered
+    }
+
+    /// PC inactivity: full opacity for the chosen delay, then a one-second
+    /// linear fade. Wrapping arithmetic keeps the session clock's rollover safe.
+    pub fn fade_alpha(&mut self, now: u32, seconds: u8, pc: bool, editing: bool) -> f32 {
+        if !pc || seconds == 0 || editing || self.hovered || self.typing || self.drag.is_some() || self.held != 0 {
+            self.activity(now);
+            return 1.0;
+        }
+        let start = *self.last_activity.get_or_insert(now);
+        let elapsed = now.wrapping_sub(start);
+        let delay = u32::from(seconds) * 1000;
+        1.0 - (elapsed.saturating_sub(delay) as f32 / 1000.0).min(1.0)
     }
 
     pub fn resize(&mut self, size: ChatSize, measure: impl Fn(&[u16]) -> i32) {
@@ -815,12 +866,15 @@ impl WndChat {
         let t = self.tabs.routes[kind_of(text, c).index()] as usize;
         let wide: Vec<u16> = text.encode_utf16().collect();
         if t > 0 && let Some(pane) = self.panes[t - 1].as_mut() {
+            if self.wake_on_message { pane.activity(now); }
             let at_end = pane.scroll == 1 && pane.bottom == pane.text.end();
             pane.text.add_text_linked(&wide, c, now, width, links);
             if at_end && !pane.selecting() { pane.set_scroll(1); }
         } else if t == self.tabs.active {
+            if self.wake_on_message { self.activity(now); }
             self.text.add_text_linked(&wide, c, now, width, links);
         } else {
+            if self.wake_on_message { self.activity(now); }
             let ring = self.tabs.parked[t].get_or_insert_with(|| ChatText::new(self.size.wrap_width()));
             ring.add_text_linked(&wide, c, now, width, links);
             self.tabs.unread[t] = true;
@@ -916,7 +970,8 @@ impl WndChat {
         }
         let h = vui.font_height(ui);
         let tl = self.window.top_left();
-        let (mut x, y) = (tl[0] + 25, tl[1] - h + 2);
+        // The chat uses frame set 3, painted from logical top-left + 10.
+        let (mut x, y) = (tl[0] + 14, tl[1] + 13 - h);
         let count = shown.len();
         for (i, t) in shown.into_iter().enumerate() {
             let mut name = crate::ui::wide(&self.tabs.name(t));
@@ -966,8 +1021,9 @@ impl WndChat {
         let tl = self.window.top_left();
         // A detached pane has no tab strip; the main window's action sits
         // above its tabs so both remain separately clickable.
-        let x = tl[0] + 25;
-        let y = tl[1] - h * if self.pane_title.is_some() { 1 } else { 2 } + 2;
+        let x = tl[0] + 14;
+        let tab_y = tl[1] + 13 - h;
+        let y = if self.pane_title.is_some() { tab_y } else { tab_y - h + 2 };
         ui.fill_fan([0.0, 0.0, 0.0, self.opacity as f32 / 100.0], [[x-4,y-1],[x+w+4,y-1],[x+w+4,y+h-3],[x-4,y+h-3]]);
         vui.draw_string_ex(ui, &text, x, y, [1.0, 1.0, 0.6, 1.0], true);
         self.control_hit = Some([x-4,y-1,x+w+4,y+h-3]);
@@ -1874,6 +1930,97 @@ mod tests {
             assert!(c.click_tab([(rect[0] + 1) as f32, (rect[1] + 1) as f32]));
             assert_eq!(c.tab(), tab);
         }
+    }
+
+    #[test]
+    fn tabs_and_pane_header_touch_the_painted_frame() {
+        let (v, mut r) = (vui(), Rows);
+        for box_width in [231, ChatSize::BASE_WIDTH, 577] {
+            let mut c = WndChat::new();
+            let mut routes = [0; KINDS];
+            routes[Kind::Tells.index()] = 1;
+            c.set_tabs(routes, [['\0'; TAB_NAME_MOST]; TABS]);
+            c.resize(ChatSize { width: box_width, rows: 5 }, width);
+            c.always = true;
+            assert!(c.show_tab(1));
+            c.draw(&v, &mut r, 0, 0.1);
+            c.draw_pane_control(&v, &mut r, true);
+            let tab = c.tabs.hits[0].0;
+            assert_eq!(tab[0], c.window.top_left()[0] + 10);
+            assert_eq!(tab[3], c.window.top_left()[1] + 10, "tab meets painted frame");
+            assert_eq!(c.control_hit.unwrap()[3], tab[1], "detach control meets tab strip");
+            assert!(c.set_detached(1, true));
+            let pane = c.pane_mut(1).unwrap();
+            pane.draw(&v, &mut r, 0, 0.1);
+            pane.draw_pane_control(&v, &mut r, true);
+            let header = pane.control_hit.unwrap();
+            assert_eq!(header[0], pane.window.top_left()[0] + 10);
+            assert_eq!(header[3], pane.window.top_left()[1] + 10, "detached header meets painted frame");
+            assert!(pane.control_at([(header[0] + 1) as f32, (header[3] - 1) as f32]));
+        }
+    }
+
+    #[test]
+    fn inactivity_fades_each_pane_and_activity_restores_it() {
+        let mut c = WndChat::new();
+        let mut routes = [0; KINDS];
+        routes[Kind::Tells.index()] = 1;
+        routes[Kind::Combat.index()] = 2;
+        c.set_tabs(routes, [['\0'; TAB_NAME_MOST]; TABS]);
+        assert!(c.set_detached(1, true));
+        c.activity(1000);
+        c.pane_mut(1).unwrap().activity(1000);
+        assert_eq!(c.fade_alpha(6000, 5, true, false), 1.0);
+        assert_eq!(c.fade_alpha(6500, 5, true, false), 0.5);
+        assert_eq!(c.fade_alpha(7000, 5, true, false), 0.0);
+        for _ in 0..20 {
+            c.add_line("Ann tells you, 'hello'", [1.0; 4], 7000, width, &[]);
+            c.add_line("You hit a target for 10 damage.", [1.0; 4], 7000, width, &[]);
+        }
+        assert_eq!(c.fade_alpha(7000, 5, true, false), 0.0, "busy parked channel does not wake Main by default");
+        assert_eq!(c.pane_mut(1).unwrap().fade_alpha(7000, 5, true, false), 0.0, "busy detached channel stays faded by default");
+        c.set_wake_on_message(true);
+        c.add_line("Ann tells you, 'hello'", [1.0; 4], 7000, width, &[]);
+        assert_eq!(c.fade_alpha(7000, 5, true, false), 0.0, "other pane remains faded");
+        assert_eq!(c.pane_mut(1).unwrap().fade_alpha(7000, 5, true, false), 1.0, "routed message restores its pane");
+        c.add_line("You hit a target for 10 damage.", [1.0; 4], 7000, width, &[]);
+        assert_eq!(c.fade_alpha(7000, 5, true, false), 1.0, "opt-in parked-tab activity restores Main");
+        let pane = c.pane_mut(1).unwrap();
+        pane.draw(&vui(), &mut Rows, 7000, 0.1);
+        pane.draw_pane_control(&vui(), &mut Rows, true);
+        let h = pane.control_hit.unwrap();
+        assert!(pane.hover(Some([(h[0] + 1) as f32, (h[1] + 1) as f32]), 8000));
+        assert_eq!(pane.fade_alpha(20_000, 5, true, false), 1.0, "stationary header hover holds the pane visible");
+        pane.hover(None, 20_000);
+        assert_eq!(pane.fade_alpha(25_500, 5, true, false), 0.5, "fade restarts after pointer leaves");
+        assert_eq!(c.fade_alpha(7000, 5, true, true), 1.0, "HUD edit and composition restore panes");
+        assert_eq!(c.fade_alpha(8000, 0, true, false), 1.0, "zero disables fade");
+        assert_eq!(c.fade_alpha(9000, 5, false, false), 1.0, "controller behavior stays");
+        c.activity(u32::MAX - 499);
+        assert_eq!(c.fade_alpha(5500, 5, true, false), 0.0, "clock rollover remains safe");
+    }
+
+    #[test]
+    fn pc_fade_keeps_the_frame_and_pointer_region_open_without_always_shown() {
+        let mut c = with_lines(1);
+        c.always = WndChat::hold_open(false, false, true, 30);
+        for _ in 0..30 { c.draw(&vui(), &mut Rows, 30_000, 0.1); }
+        assert!(c.window.is_open(), "fade delay keeps an otherwise aged pane open");
+        let tl = c.window.top_left();
+        assert!(c.contains([(tl[0] + 20) as f32, (tl[1] + 20) as f32]), "hover can still restore the faded pane");
+        assert!(!WndChat::hold_open(false, false, true, 0), "disabled fade retains legacy slide-away");
+        assert!(!WndChat::hold_open(false, false, false, 30), "controller retains legacy slide-away");
+    }
+
+    #[test]
+    fn fade_covers_opaque_and_blended_pane_quads() {
+        let make = |blend, alpha| render::ui::Quad { tex: 0, blend, pos: [[0.0; 2]; 4], uv: [[0.0; 2]; 4], color: [1.0, 1.0, 1.0, alpha], clip: None };
+        let mut quads = [make(0, 0.5), make(3, 0.6)];
+        fade_quads(&mut quads, 1.0);
+        assert_eq!((quads[0].blend, quads[0].color[3]), (0, 0.5), "disabled fade is unchanged");
+        fade_quads(&mut quads, 0.5);
+        assert_eq!((quads[0].blend, quads[0].color[3]), (3, 0.5), "opaque fills really blend");
+        assert!((quads[1].color[3] - 0.3).abs() < 0.0001, "translucent text or panel fades too");
     }
 
     /// A frame `dt` seconds on.

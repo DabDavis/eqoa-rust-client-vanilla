@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Resizable PC HUD and chat fading
+
+- Type `/hud` and drag a gold corner arrow to size a HUD piece from 50% to 200%. The minimap, character and target frames, equipment switch bar, chat panes and other pieces each remember their size. Drag the body to move a piece. Click **Lock** at the top to finish.
+- To size all equipped spell rows together, use **F10 → Extended → UI → HUD Layout → Spell Bar Size %**. It adjusts the same setting as the spell bars' corner arrows.
+- Chat tabs sit against the top edge of their pane. **Resize** in the HUD editor changes the pane's width and line count. The corner arrows also scale its text.
+- Under **Extended → UI → Chat**, choose a **Chat Fade Delay** from 1 to 120 seconds, or leave it **Off**. After the delay each idle pane fades over one second. Hover, scroll or type to bring chat back. Enable **Wake on New Chat** if incoming messages should also reveal their pane.
+
 ## 2026-11-23 · Spell gem artwork and PC window scrollbars
 
 - Equipped spells on the PC bars show their colored gem and spell symbol together, using the artwork assigned to each ability.

@@ -70,10 +70,19 @@ pub enum Piece {
     UtilityBars,
     /// The PC weapon-set bar, with its own placement and pin.
     EquipmentBar,
+    /// The details window opened by inspecting a target.
+    TargetInfo,
+    /// Loot rolls and ready checks share a stack of non-modal raid prompts.
+    RaidPrompts,
 }
 
 /// Each piece, in `Piece`'s order.
-pub const PIECES: [Piece; 18] = [Piece::Player, Piece::Group, Piece::Pet, Piece::Target, Piece::Minimap, Piece::Quests, Piece::Meter, Piece::Effects, Piece::Chat, Piece::Chat1, Piece::Chat2, Piece::Chat3, Piece::Settings, Piece::Breath, Piece::QuickMenus, Piece::SpellBars, Piece::UtilityBars, Piece::EquipmentBar];
+pub const PIECES: [Piece; 20] = [
+    Piece::Player, Piece::Group, Piece::Pet, Piece::Target, Piece::Minimap, Piece::Quests,
+    Piece::Meter, Piece::Effects, Piece::Chat, Piece::Chat1, Piece::Chat2, Piece::Chat3,
+    Piece::Settings, Piece::Breath, Piece::QuickMenus, Piece::SpellBars, Piece::UtilityBars,
+    Piece::EquipmentBar, Piece::TargetInfo, Piece::RaidPrompts,
+];
 const N: usize = PIECES.len();
 
 /// Where on an axis a piece is measured from: the screen's left (top), its
@@ -153,6 +162,8 @@ impl Piece {
             Piece::SpellBars => "spellbars",
             Piece::UtilityBars => "utilitybars",
             Piece::EquipmentBar => "equipment",
+            Piece::TargetInfo => "targetinfo",
+            Piece::RaidPrompts => "raidprompts",
         }
     }
 
@@ -177,6 +188,8 @@ impl Piece {
             Piece::SpellBars => "Spell Bars",
             Piece::UtilityBars => "Utility Bars",
             Piece::EquipmentBar => "Equipment Switch",
+            Piece::TargetInfo => "Target Details",
+            Piece::RaidPrompts => "Raid Prompts",
         }
     }
 
@@ -186,6 +199,8 @@ impl Piece {
         match self {
             Piece::Player | Piece::Group | Piece::Pet | Piece::Effects => (Edge::Start, Edge::Start),
             Piece::Target => (Edge::Start, Edge::End),
+            Piece::TargetInfo => (Edge::End, Edge::Middle),
+            Piece::RaidPrompts => (Edge::Middle, Edge::Middle),
             Piece::Chat | Piece::Chat1 | Piece::Chat2 | Piece::Chat3 | Piece::Settings | Piece::SpellBars | Piece::EquipmentBar => (Edge::End, Edge::End),
             Piece::Minimap | Piece::Quests | Piece::Meter | Piece::Breath | Piece::QuickMenus => (Edge::End, Edge::Start),
             // the side Utility Bar Layout draws them at (`Play::draw_hud`)
@@ -270,10 +285,21 @@ pub fn clamp(shift: [f32; 2], natural: [f32; 4], b: Beyond) -> [f32; 2] {
 }
 
 /// Every moved piece's place (none for one where the game puts it).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layout {
     pub places: [Option<Place>; N],
     pinned: [bool; N],
+    percent: [u16; N],
+}
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self { places: [None; N], pinned: [false; N], percent: [100; N] }
+    }
+}
+
+fn size_step(percent: u16) -> u16 {
+    (percent.clamp(50, 200) + 2) / 5 * 5
 }
 
 impl Layout {
@@ -290,6 +316,9 @@ impl Layout {
         let mut s = String::new();
         for p in PIECES {
             if self.pinned[p.index()] { s.push_str(&format!("pin {}\n", p.key())); }
+            if self.percent[p.index()] != 100 {
+                s.push_str(&format!("size {} {}\n", p.key(), self.percent[p.index()]));
+            }
             if let Some(at) = self.get(p) {
                 s.push_str(&format!("{} {} {} {} {}\n", p.key(), at.h.key(true), at.dx, at.v.key(false), at.dy));
             }
@@ -303,6 +332,16 @@ impl Layout {
         let mut l = Layout::default();
         for line in s.lines() {
             let mut it = line.split_whitespace();
+            if it.clone().next() == Some("size") {
+                it.next();
+                if let (Some(name), Some(value), None) = (it.next(), it.next(), it.next())
+                    && let Some(piece) = PIECES.into_iter().find(|p| p.key() == name)
+                    && let Ok(percent @ 50..=200) = value.parse::<u16>()
+                {
+                    l.percent[piece.index()] = size_step(percent);
+                }
+                continue;
+            }
             if it.clone().next() == Some("pin") {
                 it.next();
                 if let Some(name) = it.next() && it.next().is_none()
@@ -337,7 +376,21 @@ struct Drag {
     piece: Piece,
     from: [f32; 2],
     shift: [f32; 2],
-    resize: Option<ChatResize>,
+    kind: DragKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DragKind {
+    Move,
+    Chat(ChatResize),
+    Scale { rect: [f32; 4], direction: [f32; 2], percent: u16, place: Option<Place> },
+}
+
+#[derive(Clone, Copy)]
+struct ScaleGrip {
+    piece: Piece,
+    rect: [f32; 4],
+    direction: [f32; 2],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -391,6 +444,7 @@ struct State {
     buttons: Vec<([f32; 4], Button)>,
     /// Visible chat resize handles and the screen height of one row.
     chat_grips: Vec<(Piece, [f32; 4], f32)>,
+    scale_grips: Vec<ScaleGrip>,
 }
 
 thread_local! {
@@ -417,6 +471,29 @@ pub fn layout() -> Layout {
 /// Whether Move HUD is on.
 pub fn unlocked() -> bool {
     with(|s| s.unlocked)
+}
+
+/// An individual PC piece's size relative to the player's global HUD scale.
+pub fn piece_scale_percent(piece: Piece) -> u16 {
+    with(|s| if s.read_for.is_some_and(|(_, pc)| pc) { s.layout.percent[piece.index()] } else { 100 })
+}
+
+/// Used by the Spell Bar Size option. Its center stays put across edits even
+/// for a manually placed bar, which is drawn from the retail bottom-right corner.
+pub fn set_piece_scale_percent(piece: Piece, percent: u16) {
+    let changed = with(|s| {
+        let i = piece.index();
+        let next = size_step(percent);
+        if !s.read_for.is_some_and(|(_, pc)| pc) || s.layout.percent[i] == next { return false; }
+        if piece == Piece::SpellBars && let Some(pos) = s.layout.places[i].as_mut() {
+            let global = crate::settings::client().display_ui().hud_scale as f32 / 100.0;
+            pos.dx += (SCREEN_W / 2.0) * global * (f32::from(next) - f32::from(s.layout.percent[i])) / 100.0;
+        }
+        s.layout.percent[i] = next;
+        s.natural[i] = None;
+        true
+    });
+    if changed { keep(); }
 }
 
 /// Move HUD on or off; off ends a drag (keeping where it got to).
@@ -464,8 +541,9 @@ pub fn shift(piece: Piece, b: Beyond) -> [f32; 2] {
 fn shift_in(s: &State, piece: Piece, b: Beyond) -> [f32; 2] {
     let raw = match s.layout.get(piece) {
         Some(at) => at.shift(piece, b),
-        None if s.read_for.is_some_and(|(_, pc)| pc) => match pc_offset(piece, b) {
+        None if s.read_for.is_some_and(|(_, pc)| pc) => match pc_offset(piece, b, &s.layout) {
             Some(offset) => offset,
+            None if s.layout.percent[piece.index()] != 100 => [0.0; 2],
             None => return [0.0; 2],
         },
         // At the original Controller positions the minimap's roller ends
@@ -525,39 +603,41 @@ fn place_detached(s: &State, piece: Piece, b: Beyond, n: [f32; 4], preferred: [f
 
 /// The PC action bars are centered, the target above them and chat in two
 /// columns at the sides. Lift main chat clear of the bars on narrower displays.
-fn pc_offset(piece: Piece, b: Beyond) -> Option<[f32; 2]> {
+fn pc_offset(piece: Piece, b: Beyond, layout: &Layout) -> Option<[f32; 2]> {
     let c = crate::settings::client();
     let k = c.hud_scale as f32 * 0.01;
+    let factor = |p: Piece| k * f32::from(layout.percent[p.index()]) / 100.0;
+    let spell = factor(Piece::SpellBars);
+    let chat = factor(Piece::Chat);
     let width = SCREEN_W + 2.0 * b.side;
-    let chat_width = (crate::chat::ChatSize::BASE_WIDTH as f32 * c.chat_width as f32 / 100.0 * k).min(width);
-    let side_room = (width - 340.0 * k) * 0.5;
+    let chat_width = (crate::chat::ChatSize::BASE_WIDTH as f32 * c.chat_width as f32 / 100.0 * chat).min(width);
+    let side_room = (width - 340.0 * spell) * 0.5;
     // Reserve one extra row for a character's packed special abilities.
-    let spell_height = 29.0 * (c.pc_action_rows.clamp(1, 4) as f32 + 1.0) + 8.0;
-    let main_y = if chat_width + 10.0 > side_room { -spell_height * k } else { -4.0 };
-    let left = -width + chat_width - 25.0 * k + 8.0;
-    let pane_height = (c.chat_rows as f32 * 17.0 + 76.0) * k;
-    let gear_lift = if 171.0 * k + 8.0 > side_room { (spell_height - 40.0).max(0.0) } else { 0.0 };
-    let utilities_y = (94.0 - gear_lift) * k;
-    let right_y = -(122.0 + gear_lift) * k;
+    let spell_height = (29.0 * (c.pc_action_rows.clamp(1, 4) as f32 + 1.0) + 8.0) * spell;
+    let main_y = if chat_width + 10.0 > side_room { -spell_height } else { -4.0 };
+    let left = -width + chat_width - 25.0 * chat + 8.0;
+    let pane_height = (c.chat_rows as f32 * 17.0 + 76.0) * chat;
+    let gear_lift = if 171.0 * factor(Piece::EquipmentBar) + 8.0 > side_room { (spell_height - 40.0 * k).max(0.0) } else { 0.0 };
+    let right_y = -122.0 * k - gear_lift;
     Some(match piece {
-        Piece::SpellBars => [-b.side - 320.0 * (1.0 - k), -3.0],
-        Piece::Target => [320.0 + b.side - 107.0 * k, 18.0 - SCREEN_H - 2.0 * b.top + 100.0 * k],
+        Piece::SpellBars => [-b.side - 320.0 * (1.0 - spell), -3.0],
+        Piece::Target => [320.0 + b.side - 107.0 * factor(piece), 18.0 - SCREEN_H - 2.0 * b.top + 100.0 * factor(piece)],
         Piece::Chat => [left, main_y],
         Piece::Chat1 => {
             let [pane_width, rows] = c.chat_pane_sizes[0].unwrap_or([c.chat_width, c.chat_rows]);
-            let height = (rows as f32 * 17.0 + 76.0) * k;
+            let height = (rows as f32 * 17.0 + 76.0) * factor(piece);
             // Main chat rises above four spell bars at 4:3. When that leaves
             // too little space below the player frame, use the other column.
             if SCREEN_H + 2.0 * b.top + main_y - pane_height - height < 90.0 * k {
                 return Some([-8.0, right_y]);
             }
-            let dx = (crate::chat::ChatSize::BASE_WIDTH as f32 * pane_width as f32 / 100.0 * k).min(width) - chat_width;
+            let dx = (crate::chat::ChatSize::BASE_WIDTH as f32 * pane_width as f32 / 100.0 * factor(piece)).min(width) - chat_width;
             [left + dx, main_y - pane_height]
         }
         Piece::Chat2 => [-8.0, right_y],
-        Piece::Chat3 => [-8.0, right_y - (c.chat_pane_sizes[1].map_or(c.chat_rows, |s| s[1]) as f32 * 17.0 + 76.0) * k],
-        Piece::EquipmentBar => [-8.0, utilities_y],
-        Piece::UtilityBars if c.utility_layout == crate::hudmenu::UtilityLayout::Below => [-8.0, utilities_y],
+        Piece::Chat3 => [-8.0, right_y - (c.chat_pane_sizes[1].map_or(c.chat_rows, |s| s[1]) as f32 * 17.0 + 76.0) * factor(Piece::Chat2)],
+        Piece::EquipmentBar => [-8.0, 94.0 * factor(piece) - gear_lift],
+        Piece::UtilityBars if c.utility_layout == crate::hudmenu::UtilityLayout::Below => [-8.0, 94.0 * factor(piece) - gear_lift],
         _ => return None,
     })
 }
@@ -571,7 +651,8 @@ fn anchor(piece: Piece, b: Beyond) -> ([f32; 2], [f32; 2]) {
 
 pub fn scale(piece: Piece, b: Beyond) -> HudScale {
     let (corner, offset) = anchor(piece, b);
-    HudScale { origin: [corner[0] + offset[0], corner[1] + offset[1]], factor: crate::settings::client().display_ui().hud_scale as f32 / 100.0 }
+    let global = crate::settings::client().display_ui().hud_scale as f32 / 100.0;
+    HudScale { origin: [corner[0] + offset[0], corner[1] + offset[1]], factor: global * (f32::from(piece_scale_percent(piece)) / 100.0) }
 }
 
 /// A pointer in frame pixels, expressed in the piece's original drawing coordinates.
@@ -725,6 +806,16 @@ fn piece_at_in(s: &State, p: [f32; 2]) -> Option<Piece> {
         .map(|(k, _)| k)
 }
 
+/// A detached pane can acquire a new automatic position as neighboring pieces
+/// change. Start an edit at the position the player actually saw and clicked.
+fn drawn_shift(s: &State, piece: Piece, b: Beyond) -> [f32; 2] {
+    let i = piece.index();
+    match (s.drawn[i], s.natural[i]) {
+        (Some(rect), Some(natural)) => [rect[0] - natural[0], rect[1] - natural[1]],
+        _ => shift_in(s, piece, b),
+    }
+}
+
 /// What a press at frame point `p` on screen `b` took while the HUD moves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Press {
@@ -753,16 +844,26 @@ pub fn press(p: [f32; 2], b: Beyond) -> Press {
             let c = crate::settings::client();
             let (w, h) = crate::settings::chat_pane_size(tab);
             let initial = [w, h];
-            let width = crate::chat::ChatSize::BASE_WIDTH as f32 * c.hud_scale as f32 / 10_000.0;
-            let place = s.drawn[piece.index()].map(|rect| Place::of(piece, shift_in(s, piece, b), rect, b));
+            let width = crate::chat::ChatSize::BASE_WIDTH as f32 * c.hud_scale as f32 / 10_000.0
+                * (f32::from(s.layout.percent[piece.index()]) / 100.0);
+            let place = s.drawn[piece.index()].map(|rect| Place::of(piece, drawn_shift(s, piece, b), rect, b));
             let resize = ChatResize { initial, next: initial, unit: [width, row], place };
-            s.drag = Some(Drag { piece, from: p, shift: [0.0; 2], resize: Some(resize) });
+            s.drag = Some(Drag { piece, from: p, shift: [0.0; 2], kind: DragKind::Chat(resize) });
+            return Press::Piece(piece);
+        }
+        if let Some(&grip) = s.scale_grips.iter().rev().find(|g| {
+            let [l, t, r, b] = g.rect;
+            !s.layout.pinned[g.piece.index()] && l <= p[0] && p[0] < r && t <= p[1] && p[1] < b
+        }) && let Some(rect) = s.drawn[grip.piece.index()] {
+            let piece = grip.piece;
+            let kind = DragKind::Scale { rect, direction: grip.direction, percent: s.layout.percent[piece.index()], place: s.layout.get(piece) };
+            s.drag = Some(Drag { piece, from: p, shift: drawn_shift(s, piece, b), kind });
             return Press::Piece(piece);
         }
         let Some(piece) = piece_at_in(s, p) else { return Press::None };
         if s.layout.pinned[piece.index()] { return Press::Piece(piece); }
-        let shift = shift_in(s, piece, b);
-        s.drag = Some(Drag { piece, from: p, shift, resize: None });
+        let shift = drawn_shift(s, piece, b);
+        s.drag = Some(Drag { piece, from: p, shift, kind: DragKind::Move });
         Press::Piece(piece)
     });
     if hit != Press::None {
@@ -775,7 +876,7 @@ pub fn press(p: [f32; 2], b: Beyond) -> Press {
             with(|s| {
                 let pin = !s.layout.pinned[p.index()];
                 if pin && s.layout.get(p).is_none() && let Some(rect) = s.drawn[p.index()] {
-                    let at = Place::of(p, shift_in(s, p, b), rect, b);
+                    let at = Place::of(p, drawn_shift(s, p, b), rect, b);
                     s.layout.set(p, Some(at));
                 }
                 s.layout.pinned[p.index()] = pin;
@@ -796,12 +897,44 @@ pub fn dragging() -> bool {
 /// with it, kept on the screen.
 pub fn drag_to(p: [f32; 2], b: Beyond) {
     with(|s| {
-        if let Some(d) = &mut s.drag && let Some(resize) = &mut d.resize {
-            resize.update(d.from[0] - p[0], d.from[1] - p[1]);
-            return;
-        }
         let Some(d) = s.drag else { return };
         let i = d.piece.index();
+        match d.kind {
+            DragKind::Chat(mut resize) => {
+                resize.update(d.from[0] - p[0], d.from[1] - p[1]);
+                s.drag = Some(Drag { kind: DragKind::Chat(resize), ..d });
+                return;
+            }
+            DragKind::Scale { rect, direction, percent, place } => {
+                let deltas: [f32; 2] = std::array::from_fn(|a| {
+                    direction[a] * (p[a] - d.from[a]) / (rect[a+2] - rect[a]).max(32.0)
+                });
+                let delta = if deltas[0].abs() >= deltas[1].abs() { deltas[0] } else { deltas[1] };
+                let next = size_step((f32::from(percent) * (1.0 + delta)).round() as u16);
+                if s.layout.percent[i] == next { return; }
+                s.layout.percent[i] = next;
+                // Reproject the original bounds, not the last mouse event, so
+                // rounding never accumulates. Keep the opposite corner stationary.
+                let (corner, offset) = anchor(d.piece, b);
+                let ratio = f32::from(next) / f32::from(percent);
+                let natural: [f32; 4] = std::array::from_fn(|j| {
+                    let a = j % 2;
+                    let origin = corner[a] + offset[a];
+                    origin + (rect[j] - d.shift[a] - origin) * ratio
+                });
+                s.natural[i] = Some(natural);
+                if next == percent { s.layout.set(d.piece, place); return; }
+                let want = std::array::from_fn(|a| {
+                    let fixed = if direction[a] > 0.0 { a } else { a + 2 };
+                    rect[fixed] - natural[fixed]
+                });
+                let to = clamp(want, natural, b);
+                let drawn = std::array::from_fn(|j| natural[j] + to[j % 2]);
+                s.layout.set(d.piece, Some(Place::of(d.piece, to, drawn, b)));
+                return;
+            }
+            DragKind::Move => {}
+        }
         let want = [d.shift[0] + p[0] - d.from[0], d.shift[1] + p[1] - d.from[1]];
         let Some(n) = s.natural[i] else { return };
         let to = clamp(want, n, b);
@@ -821,7 +954,7 @@ pub fn release() -> bool {
 
 fn finish_drag(drag: Option<Drag>) {
     let Some(d) = drag else { return };
-    if let Some(size) = d.resize {
+    if let DragKind::Chat(size) = d.kind {
         if size.initial != size.next {
             if let Some(place) = size.place {
                 with(|s| s.layout.set(d.piece, Some(place)));
@@ -886,6 +1019,29 @@ const BUTTON: [f32; 4] = [0.35, 0.3, 0.12, 0.95];
 
 /// The bar's words.
 const BAR_TEXT: &str = "Move HUD: drag a piece to move it";
+const PC_BAR_TEXT: &str = "Move HUD: drag a piece or resize from a corner";
+
+/// Diagonal grips face the screen's center and its opposite corner, so even a
+/// piece flush against two edges has room to grow. Keep clear of title controls.
+fn grips(piece: Piece, r: [f32; 4], b: Beyond) -> [ScaleGrip; 2] {
+    const W: f32 = 11.0;
+    let screen = b.screen();
+    let inward: [f32; 2] = std::array::from_fn(|a| {
+        if r[a] + r[a+2] <= screen[a] + screen[a+2] { 1.0 } else { -1.0 }
+    });
+    [inward, [-inward[0], -inward[1]]].map(|direction| {
+        let x = if direction[0] < 0.0 { r[0] } else { r[2] - W };
+        let y = if direction[1] < 0.0 { r[1] - W } else { r[3] - 2.0 };
+        let x = x.clamp(screen[0], screen[2] - W);
+        let y = y.clamp(screen[1], screen[3] - W);
+        ScaleGrip { piece, rect: [x, y, x + W, y + W], direction }
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn scale_grips(piece: Piece) -> Vec<([f32; 4], [f32; 2])> {
+    with(|s| s.scale_grips.iter().filter(|g| g.piece == piece).map(|g| (g.rect, g.direction)).collect())
+}
 
 /// Move HUD's look, over the HUD drawn this frame (`frame_end` first): each
 /// piece's outline, a light fill (the one held fuller) and its name, and at
@@ -917,13 +1073,14 @@ pub fn draw_moving(r: &mut crate::ui::UiRaster) {
             q.clip = Some(render::ui::WHOLE);
         }
     };
-    let resize = with(|s| s.drag.and_then(|d| d.resize));
+    let drag = with(|s| s.drag);
     let mut chat_grips = Vec::new();
+    let mut scale_grips = Vec::new();
     let mut buttons = Vec::new();
     let pc = crate::settings::pc_mode();
     let pins = with(|s| s.layout.pinned);
     for (piece, mut at) in drawn_all() {
-        if held == Some(piece) && let Some(size) = resize {
+        if held == Some(piece) && let Some(Drag { kind: DragKind::Chat(size), .. }) = drag {
             let [dx, dy] = size.delta();
             at[0] -= dx;
             at[1] -= dy;
@@ -943,7 +1100,7 @@ pub fn draw_moving(r: &mut crate::ui::UiRaster) {
             let grip = [at[0], at[1], right, at[1] + TEXT_H + 5.0];
             fill(ui, grip, BUTTON);
             words(ui, x, at[1] + 2.0, "Resize", [1.0; 4]);
-            let row = (ui.fonts[font].height as f32 - 4.0).max(1.0) * crate::settings::client().hud_scale as f32 / 100.0;
+            let row = (ui.fonts[font].height as f32 - 4.0).max(1.0) * crate::hudlayout::scale(piece, b).factor;
             chat_grips.push((piece, grip, row));
             x = right + 3.0;
         }
@@ -957,18 +1114,43 @@ pub fn draw_moving(r: &mut crate::ui::UiRaster) {
             fill(ui, rect, BUTTON);
             words(ui, left + 4.0, top + 2.0, label, [1.0; 4]);
             buttons.push((rect, Button::Pin(piece)));
+            if !pins[piece.index()] {
+                for grip in grips(piece, at, b) {
+                    let [l, t, r, bottom] = grip.rect;
+                    let [dx, dy] = grip.direction;
+                    let (cx, cy) = ((l + r) * 0.5, (t + bottom) * 0.5);
+                    // On a short piece at the display edge, keep Pin and the
+                    // chat reflow grip exposed; the opposite corner still works.
+                    if buttons.iter().any(|(btn, _)| btn[0] <= cx && cx < btn[2] && btn[1] <= cy && cy < btn[3])
+                        || chat_grips.iter().any(|(_, btn, _)| btn[0] <= cx && cx < btn[2] && btn[1] <= cy && cy < btn[3]) { continue; }
+                    fill(ui, grip.rect, BUTTON);
+                    for step in [-2.5, -0.5, 1.5] {
+                        let (x, y) = (cx + dx * step, cy + dy * step);
+                        fill(ui, [x - 1., y - 1., x + 1., y + 1.], WORDS);
+                    }
+                    let (x, y) = (cx + dx * 3., cy + dy * 3.);
+                    fill(ui, [x.min(cx) - 0.8, y - 0.8, x.max(cx) + 0.8, y + 0.8], WORDS);
+                    fill(ui, [x - 0.8, y.min(cy) - 0.8, x + 0.8, y.max(cy) + 0.8], WORDS);
+                    scale_grips.push(grip);
+                }
+            }
         }
     }
-    with(|s| s.chat_grips = chat_grips);
+    with(|s| { s.chat_grips = chat_grips; s.scale_grips = scale_grips; });
     // the bar: its words, Reset and Lock, in the middle of the screen's top
     let pad = 4.0;
     let (lock_w, reset_w) = (width(ui, "Lock") + pad * 4.0, width(ui, "Reset") + pad * 4.0);
-    let text_w = width(ui, BAR_TEXT);
+    let size_label;
+    let title = if let Some(Drag { piece, kind: DragKind::Scale { .. }, .. }) = drag {
+        size_label = format!("{}  {}%", piece.label(), piece_scale_percent(piece));
+        size_label.as_str()
+    } else if pc { PC_BAR_TEXT } else { BAR_TEXT };
+    let text_w = width(ui, title);
     let w = pad * 3.0 + text_w + pad * 2.0 + reset_w + pad + lock_w;
     let h = TEXT_H + pad * 2.0;
     let (x0, y0) = (320.0 - w / 2.0, -b.top + 4.0);
     fill(ui, [x0, y0, x0 + w, y0 + h], BAR);
-    words(ui, x0 + pad * 3.0, y0 + pad, BAR_TEXT, WORDS);
+    words(ui, x0 + pad * 3.0, y0 + pad, title, WORDS);
     let mut x = x0 + pad * 3.0 + text_w + pad * 2.0;
     for (label, bw, k) in [("Reset", reset_w, Button::Reset), ("Lock", lock_w, Button::Lock)] {
         let rr = [x, y0 + 2.0, x + bw, y0 + h - 2.0];
@@ -995,6 +1177,52 @@ mod tests {
     const WIDE: Beyond = Beyond { side: 106.0, top: 0.0 };
     const TALL: Beyond = Beyond { side: 0.0, top: 85.0 };
     const FOUR: Beyond = Beyond { side: 0.0, top: 0.0 };
+
+    #[test]
+    fn corner_drags_size_each_piece_keep_the_far_corner_and_restore_the_saved_profile() {
+        testing_reset();
+        crate::settings::testing::reset(false);
+        crate::settings::set_ui_mode(true).unwrap();
+        set_unlocked(true);
+        for piece in PIECES {
+            let rect = [230.0, 150.0, 330.0, 214.0];
+            // Put the piece in clear space so the screen edge does not limit its growth.
+            with(|s| s.layout.set(piece, Some(Place::of(piece, [0.0; 2], rect, WIDE))));
+            frame_begin();
+            note(piece, rect, [0.0; 2]);
+            frame_end();
+            let grip = grips(piece, rect, WIDE)[0];
+            with(|s| s.scale_grips = vec![grip]);
+            let start = [(grip.rect[0] + grip.rect[2]) * 0.5, (grip.rect[1] + grip.rect[3]) * 0.5];
+            let far = std::array::from_fn(|a| rect[if grip.direction[a] > 0.0 { a } else { a + 2 }]);
+            let fixed = local_point(piece, far, WIDE);
+            assert_eq!(press(start, WIDE), Press::Piece(piece));
+            drag_to([start[0] + 25.0 * grip.direction[0], start[1] + 16.0 * grip.direction[1]], WIDE);
+            assert!(release());
+            assert_eq!(piece_scale_percent(piece), 125, "{piece:?}");
+            let after = frame_point(piece, fixed, WIDE);
+            assert!((far[0] - after[0]).abs() <= 0.51 && (far[1] - after[1]).abs() <= 0.51, "{piece:?}: {far:?} -> {after:?}");
+        }
+        crate::settings::set_ui_mode(false).unwrap();
+        assert!(PIECES.into_iter().all(|p| piece_scale_percent(p) == 100));
+        crate::settings::set_ui_mode(true).unwrap();
+        assert!(PIECES.into_iter().all(|p| piece_scale_percent(p) == 125));
+        reset();
+        testing_reset();
+        assert_eq!(layout(), Layout::default());
+    }
+
+    #[test]
+    fn size_records_can_be_added_to_old_placements_without_losing_valid_records() {
+        let old = "pin target\ntarget l 5 b -8\n";
+        let before = Layout::from_text(old);
+        assert_eq!(before.percent, [100; N]);
+        let mut expected = before;
+        expected.percent[Piece::Target.index()] = 135;
+        let config = format!("{old}size target 136\nsize target 500\nsize typo 150\nsize chat -5\nsize minimap 55 extra\n");
+        assert_eq!(Layout::from_text(&config), expected);
+        assert_eq!(Layout::from_text(&expected.to_text()), expected);
+    }
 
     #[test]
     fn scaled_hud_pointers_follow_each_piece_and_its_saved_move() {
@@ -1096,7 +1324,7 @@ mod tests {
         assert!(layout().get(Piece::Chat1).is_some(), "pin captures the automatically chosen location");
         with(|s| s.drawn[Piece::Minimap.index()] = Some(pane));
         assert_eq!(bounds(shift(Piece::Chat1, FOUR)), pane, "new obstacles do not move a pinned pane");
-        assert!(pc_offset(Piece::Chat1, WIDE).unwrap()[0] < -100.0, "a wide display keeps Tells above Main on the left");
+        assert!(pc_offset(Piece::Chat1, WIDE, &layout()).unwrap()[0] < -100.0, "a wide display keeps Tells above Main on the left");
         crate::settings::testing::reset(false);
         testing_reset();
     }

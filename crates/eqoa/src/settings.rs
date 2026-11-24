@@ -1110,6 +1110,10 @@ pub struct ClientOptions {
     pub chat_width: u8,
     pub chat_rows: u8,
     pub chat_opacity: u8,
+    /// PC chat idle fade delay in seconds; zero leaves chat visible.
+    pub chat_fade_seconds: u8,
+    /// Let newly received chat wake its PC pane; otherwise only interaction does.
+    pub chat_wake_on_message: bool,
     pub inline_chat: bool,
     /// R2 Channel Switch (the server owner, 2026-11-18: "for switching chat
     /// channels hold r2 then dpad left/right can switch channels if players
@@ -1592,6 +1596,8 @@ impl Default for ClientOptions {
             chat_width: 100,
             chat_rows: 5,
             chat_opacity: 75,
+            chat_fade_seconds: 0,
+            chat_wake_on_message: false,
             inline_chat: false,
             r2_channels: false,
             stacked_bars: false,
@@ -1788,6 +1794,10 @@ impl ClientOptions {
         if self.chat_always {
             s.push_str("chat_always=on\n");
         }
+        if self.chat_fade_seconds != 0 {
+            s.push_str(&format!("chat_fade_seconds={}\n", self.chat_fade_seconds));
+        }
+        if self.chat_wake_on_message { s.push_str("chat_wake_on_message=on\n"); }
         for (key, value, default) in [
             ("hud_scale", self.hud_scale, 100), ("nameplate_scale", self.nameplate_scale, 100),
             ("chat_width", self.chat_width, 100), ("chat_rows", self.chat_rows, 5), ("chat_opacity", self.chat_opacity, 75),
@@ -2082,6 +2092,11 @@ impl ClientOptions {
                 ("weapon_swap_back", "on") => c.weapon_swap_back = true,
                 ("weapon_swap_back", "off") => c.weapon_swap_back = false,
                 ("chat_always", "on") => c.chat_always = true,
+                ("chat_fade_seconds", v) => {
+                    if let Ok(n) = v.parse::<u8>() && n <= 120 { c.chat_fade_seconds = n; }
+                }
+                ("chat_wake_on_message", "on") => c.chat_wake_on_message = true,
+                ("chat_wake_on_message", "off") => c.chat_wake_on_message = false,
                 ("inline_chat", "on") => c.inline_chat = true,
                 ("inline_chat", "off") => c.inline_chat = false,
                 (key @ ("hud_scale" | "nameplate_scale" | "chat_width" | "chat_rows" | "chat_opacity"), v) => {
@@ -2347,7 +2362,7 @@ impl ClientOptions {
     pub(crate) fn display_ui(self) -> Self {
         if self.pc_mode { return self; }
         Self { hud_scale: 100, nameplate_scale: 100, chat_width: 100, chat_rows: 5,
-            chat_opacity: 75, inline_chat: false, chat_detached: [false; crate::chat::TABS], ..self }
+            chat_opacity: 75, chat_fade_seconds: 0, chat_wake_on_message: false, inline_chat: false, chat_detached: [false; crate::chat::TABS], ..self }
     }
 
     pub(crate) fn with_interface(self, ui: Self) -> Self {
@@ -2355,7 +2370,7 @@ impl ClientOptions {
             pc_mode: ui.pc_mode, pc_action_rows: ui.pc_action_rows, ability_bars: ui.ability_bars, stacked_bars: ui.stacked_bars,
             spell_bar_opacity: ui.spell_bar_opacity, spell_bar_layout: ui.spell_bar_layout, utility_layout: ui.utility_layout,
             hud_scale: ui.hud_scale, nameplate_scale: ui.nameplate_scale,
-            chat_always: ui.chat_always, chat_width: ui.chat_width, chat_rows: ui.chat_rows, chat_opacity: ui.chat_opacity,
+            chat_always: ui.chat_always, chat_width: ui.chat_width, chat_rows: ui.chat_rows, chat_opacity: ui.chat_opacity, chat_fade_seconds: ui.chat_fade_seconds, chat_wake_on_message: ui.chat_wake_on_message,
             inline_chat: ui.inline_chat, chat_tabs: ui.chat_tabs, chat_tab_names: ui.chat_tab_names, chat_detached: ui.chat_detached,
             chat_pane_sizes: ui.chat_pane_sizes,
             health_numbers: ui.health_numbers, ..self
@@ -2618,7 +2633,7 @@ pub mod qol {
             83 => BUFF_WINDOW,
             58 | crate::options::GROUP_EFFECTS => PET_EFFECTS,
             78 | 79 => AUTO_CAST,
-            22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT => SPELL_BARS,
+            22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT | crate::options::SPELL_BAR_SIZE => SPELL_BARS,
             _ => return None,
         })
     }
@@ -3517,6 +3532,31 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pc_chat_fade_delay_is_bounded_and_profile_specific() {
+        use super::ClientOptions;
+        let default = ClientOptions::default();
+        assert_eq!(default.chat_fade_seconds, 0);
+        assert!(!default.chat_wake_on_message);
+        assert!(!default.to_text().contains("chat_fade_seconds="));
+        assert!(!default.to_text().contains("chat_wake_on_message="));
+        for seconds in [0, 1, 5, 10, 37, 120] {
+            let c = ClientOptions { pc_mode: true, chat_fade_seconds: seconds, ..default };
+            assert_eq!(ClientOptions::from_text(&c.to_text()).chat_fade_seconds, seconds);
+            let controller = ClientOptions { pc_mode: false, chat_fade_seconds: seconds, ..default };
+            assert_eq!(controller.display_ui().chat_fade_seconds, 0);
+            assert_eq!(default.with_interface(c).chat_fade_seconds, seconds);
+        }
+        for bad in ["121", "255", "-1", "invalid"] {
+            assert_eq!(ClientOptions::from_text(&format!("chat_fade_seconds={bad}\n")).chat_fade_seconds, 0);
+        }
+        assert_eq!(ClientOptions::from_text("chat_always=on\n").chat_fade_seconds, 0, "legacy settings do not enable a new fade");
+        let wake = ClientOptions { pc_mode: true, chat_wake_on_message: true, ..default };
+        assert!(ClientOptions::from_text(&wake.to_text()).chat_wake_on_message);
+        assert!(default.with_interface(wake).chat_wake_on_message);
+        assert!(!ClientOptions { pc_mode: false, ..wake }.display_ui().chat_wake_on_message);
+        assert!(!ClientOptions::from_text("chat_wake_on_message=invalid\n").chat_wake_on_message);
+    }
     use super::*;
 
     fn changed() -> GameOptions {

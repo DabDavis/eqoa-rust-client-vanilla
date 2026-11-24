@@ -540,6 +540,7 @@ impl Play {
     /// False off them.
     pub fn roll_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
         let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        let f = crate::hudlayout::local_point(crate::hudlayout::Piece::RaidPrompts, f, crate::hudlayout::Beyond::of(size));
         self.rolls_shown() && !self.search.open && !crate::hideui::hidden() && self.raid.rolls.wheel(f, lines)
     }
 
@@ -547,6 +548,7 @@ impl Play {
     /// strips or their counts (a finger put down there drags them).
     pub fn rolls_cover(&self, at: [f32; 2], size: (u32, u32)) -> bool {
         let f = render::ui::frame_from_window(size, at);
+        let f = crate::hudlayout::local_point(crate::hudlayout::Piece::RaidPrompts, f, crate::hudlayout::Beyond::of(size));
         self.rolls_shown() && !self.search.open && !crate::hideui::hidden() && self.raid.rolls.covers(f)
     }
 
@@ -786,6 +788,22 @@ mod tests {
         let c = crate::mouse::Click::Target(greed[0] as f64, greed[1] as f64);
         assert!(p.point(c, size, false));
         assert_eq!(sent(&mut p), [net::raid::roll_choice(3, Choice::Greed)]);
+
+        // The same controls follow the resized PC prompt stack.
+        crate::settings::testing::reset(false);
+        crate::settings::set_ui_mode(true).unwrap();
+        crate::hudlayout::testing_reset();
+        let piece = crate::hudlayout::Piece::RaidPrompts;
+        crate::hudlayout::set_piece_scale_percent(piece, 135);
+        let screen = |q| render::ui::window_from_frame(size, crate::hudlayout::frame_point(piece, q, crate::hudlayout::Beyond::of(size)));
+        p.run_rolls(&vui, &mut nr);
+        let on = screen([450.0, 180.0]);
+        assert!(p.rolls_cover(on, size));
+        assert!(p.roll_wheel((on[0] as f64, on[1] as f64), size, 5.0));
+        p.run_rolls(&vui, &mut nr);
+        let greed = screen([534.0, 197.0]);
+        assert!(p.point(crate::mouse::Click::Target(greed[0] as f64, greed[1] as f64), size, false));
+        assert_eq!(sent(&mut p), [net::raid::roll_choice(1, Choice::Greed)]);
     }
 
     /// The ready check's strip (petition 1711): with a roll up too, R2 and right
