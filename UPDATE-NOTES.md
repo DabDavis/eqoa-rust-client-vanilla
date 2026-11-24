@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Jump landings
+
+- Gnomes, dwarves, halflings, trolls and ogres no longer stand frozen and slide along the ground after a running jump: their standing landing now lasts as long as a human's, then the run or walk carries straight on.
+
 ## 2026-11-23 · Spell gem artwork and PC window scrollbars
 
 - Equipped spells on the PC bars show their colored gem and spell symbol together, using the artwork assigned to each ability.

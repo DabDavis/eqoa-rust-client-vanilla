@@ -1114,19 +1114,47 @@ pub const LAND_DOUBLED: &[u32] = &[
     0x8480_7490, 0xACC0_0B4F, // ogre
 ];
 
-/// Puts the idle's clips and speed over `cs`'s landing (7), as
-/// `SetDefaultEntries` fills a body with none: the fall blends back to
-/// standing as it comes down. The landing keeps its own priority, channel,
-/// sync and sound (the thump). Whether it changed (not when it is the idle's
-/// already).
-pub fn put_land_idle(cs: &mut CSprite<Ee>) -> bool {
+/// How many of the idle's frames a `LAND_DOUBLED` body's landing stands
+/// (`put_land_idle`), at the idle clip's own rate (10 a second): 0.4 s, as
+/// long as the human's and the barbarian's knee bend (4 frames at 10, at
+/// 0.82 to 0.92), which the walk and the run wait out as they wait out any
+/// landing (`SetAnimation`: a once play of a higher priority holds them).
+pub const LAND_STAND_FRAMES: i32 = 4;
+
+/// Puts a standing landing over `cs`'s landing (7): the first
+/// `LAND_STAND_FRAMES` of its idle's clips (added to `sc`), once, at the
+/// idle clip's own rate: the fall blends back to standing as it comes down,
+/// and a character still moving runs or walks on as soon as a human would.
+/// Not the whole idle (2d4c844, Heirloom petition 2889): played once at the
+/// idle's speed (0.5) that held the walk and the run off for 1.4 s, the body
+/// standing still while it slid along the ground. The landing keeps its own
+/// priority, channel, sync and sound (the thump). Whether it changed (not
+/// when it is put already).
+pub fn put_land_idle(cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>) -> bool {
     let idle = cs.entries[0];
-    let land = &mut cs.entries[AIR[1] as usize];
-    if land.animation == idle.animation {
+    let ids: Vec<usize> = idle.animation.iter().filter_map(|&i| usize::try_from(i).ok().filter(|&i| i < sc.anims.len())).collect();
+    let Some(&first) = ids.first() else { return false };
+    let land = cs.entries[AIR[1] as usize];
+    let stood = |i: i32| usize::try_from(i).ok().and_then(|i| sc.anims.get(i)).is_some_and(|a| a.num_frames == LAND_STAND_FRAMES.min(sc.anims[first].num_frames) && a.nodes.len() == sc.anims[first].nodes.len() && a.playback_type == ONCE);
+    if land.animation != idle.animation && stood(land.animation[0]) {
         return false;
     }
-    land.animation = idle.animation;
-    land.weight = idle.weight;
+    let rig = Rig::of(cs, &sc.ref_maps[cs.h.ref_map]);
+    let mut out = [-1, -1];
+    for (k, &i) in ids.iter().enumerate().take(2) {
+        let a = sc.anims[i].clone();
+        let to = LAND_STAND_FRAMES.min(a.num_frames) - 1;
+        let lower = vec![0.0; a.num_frames as usize];
+        let rate = F::new(a.play_rate.0 * a.play_speed.0);
+        sc.anims.push(cut(&a, &rig, &std::collections::HashSet::new(), 0, to, &lower, rate));
+        out[k] = sc.anims.len() as i32 - 1;
+    }
+    if cs.skel_type != 1 {
+        out[1] = -1;
+    }
+    let land = &mut cs.entries[AIR[1] as usize];
+    land.animation = out;
+    land.weight = F::ONE;
     true
 }
 
@@ -1136,15 +1164,15 @@ pub fn put_land_idle(cs: &mut CSprite<Ee>) -> bool {
 /// (`race_of`); anything else is left as the game made it, and a body with a
 /// fall and a landing of its own keeps them (`put_air`). A froglok's body
 /// takes its own leap instead (`leap_slot`, `put_leap`); a body whose own
-/// landing doubles it over (`LAND_DOUBLED`) lands as the idle
-/// (`put_land_idle`). Whether its fall and landing are the table's.
+/// landing doubles it over (`LAND_DOUBLED`) lands standing, as briefly as
+/// a human (`put_land_idle`). Whether its fall and landing are the table's.
 pub fn grant_air(lib: &Library, cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>, model: u32, player: bool, jumps: bool) -> bool {
     if !(player && jumps) {
         return false;
     }
     // the short and the big races: their own fall, the idle for a landing
     if LAND_DOUBLED.contains(&model) {
-        put_land_idle(cs);
+        put_land_idle(cs, sc);
         return true;
     }
     // a race that leaps (the froglok): its own leap, else the table's
@@ -1485,13 +1513,24 @@ mod tests {
                 continue;
             }
             let (fall, land, idle) = (cs.entries[AIR[0] as usize], cs.entries[AIR[1] as usize], cs.entries[0]);
-            assert_eq!((land.animation, land.weight), (idle.animation, idle.weight), "{id:#010x}: the idle's");
+            // the idle's first frames, once, at the idle clip's own rate
+            for k in 0..2 {
+                let (got, src) = (&sc.anims[land.animation[k] as usize], &sc.anims[idle.animation[k] as usize]);
+                assert_eq!((got.num_frames, got.playback_type, got.play_rate.0, land.weight.0), (LAND_STAND_FRAMES, ONCE, src.play_rate.0 * src.play_speed.0, 1.0), "{id:#010x}: {k}");
+                for (&(r, f), &(rs, fs)) in got.nodes.iter().zip(&src.nodes) {
+                    assert_eq!(r, rs);
+                    for i in 0..LAND_STAND_FRAMES {
+                        let (a, b) = (frame_of(got, f, i), frame_of(src, fs, i));
+                        assert_eq!((gv(&a.trans), gq(&a.rot)), (gv(&b.trans), gq(&b.rot)), "{id:#010x}: node {r} frame {i}");
+                    }
+                }
+            }
             assert_eq!((land.sync, land.sound, land.priority), (own.sync, own.sound, own.priority), "{id:#010x}: the landing's own");
             assert_eq!(fall.animation, had_fall(&lib, id), "{id:#010x}: its own fall");
             assert!(top(&cs, &sc, AIR[1] as usize) / top(&cs, &sc, 0) > 0.95, "{id:#010x}: standing");
-            let done = entries(&cs);
+            let (done, clips) = (entries(&cs), sc.anims.len());
             assert!(grant_air(&lib, &mut cs, &mut sc, id, true, true));
-            assert_eq!(entries(&cs), done, "{id:#010x}: put again, nothing changes");
+            assert_eq!((entries(&cs), sc.anims.len()), (done, clips), "{id:#010x}: put again, nothing changes");
             for (player, jumps) in [(false, true), (true, false)] {
                 let (mut cs, mut sc) = load(&lib, id);
                 let had = entries(&cs);
@@ -1501,6 +1540,58 @@ mod tests {
         }
         fn had_fall(lib: &Library, id: u32) -> [i32; 2] {
             load(lib, id).0.entries[AIR[0] as usize].animation
+        }
+    }
+
+    /// Heirloom petition 2889 ("the animation gets locked in a non moving
+    /// 'ragdoll' briefly upon landing, resulting in the character power
+    /// sliding", a gnome): a player landing a jump while running (the walk's
+    /// 7, then its run, 3, every console frame) runs again within 0.5 s in
+    /// every player body, as the human's and the barbarian's own knee bend
+    /// lets it, the doubled bodies' landing standing (its pose the idle's).
+    /// The control: the whole idle as the landing (2d4c844) held the run off
+    /// for 1.4 s on each `LAND_DOUBLED` body (0.33 s now for every
+    /// body, as for the human). Needs `run/eqoa.iso`.
+    #[test]
+    fn a_landing_runs_on_as_soon_as_a_humans() {
+        let Some(lib) = disc() else { return };
+        // ms from the landing to the run playing on layer 0
+        let run_after = |cs: &mut CSprite<Ee>, sc: &mut AnimScene<Ee>| -> i64 {
+            let mut rand = Rand(1);
+            sc.time = 10_000;
+            cs.set_locomotion(3, sc, &mut rand);
+            for _ in 0..30 {
+                sc.time += 33;
+                cs.h.process(0, sc);
+            }
+            cs.set_locomotion(7, sc, &mut rand);
+            let t0 = sc.time;
+            while sc.time - t0 < 5_000 {
+                sc.time += 33;
+                cs.h.process(0, sc);
+                cs.set_locomotion(3, sc, &mut rand);
+                if cs.cur[0].anim == 3 {
+                    return sc.time - t0;
+                }
+            }
+            i64::MAX
+        };
+        for &id in PLAYER_BODIES {
+            let (mut cs, mut sc) = load(&lib, id);
+            grant_air(&lib, &mut cs, &mut sc, id, true, true);
+            let ms = run_after(&mut cs, &mut sc);
+            eprintln!("{id:#010x}: runs {ms} ms after the landing");
+            assert!(ms <= 500, "{id:#010x}: {ms} ms");
+            if !LAND_DOUBLED.contains(&id) {
+                continue;
+            }
+            // the control: the idle's clips whole, at its speed
+            let (mut cs, mut sc) = load(&lib, id);
+            let idle = cs.entries[0];
+            let land = &mut cs.entries[AIR[1] as usize];
+            (land.animation, land.weight) = (idle.animation, idle.weight);
+            let ms = run_after(&mut cs, &mut sc);
+            assert!(ms >= 1_400, "{id:#010x}: the control, {ms} ms");
         }
     }
 
