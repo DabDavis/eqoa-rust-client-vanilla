@@ -147,6 +147,13 @@ impl Play {
         self.pc_gems.cursor = None;
     }
 
+    /// The right button pressed while a gem press holds the left: the two
+    /// are the mouse's run, not a cast or a pickup. The left's press is given
+    /// back to the mouse (true) and its release is no longer the gem's.
+    pub fn spell_gem_handoff(&mut self) -> bool {
+        self.pc_gems.left.take().is_some()
+    }
+
     pub fn spell_gem_right(&mut self, at: (f64, f64), size: (u32, u32), view: glam::Mat4) -> bool {
         if self.pc_gems.carried.is_none() || !self.spell_gems_active() {
             return false;
@@ -409,6 +416,20 @@ mod tests {
         assert_eq!(play.carried_gem(), None);
         assert_eq!(play.gem_in_slot(0).unwrap().id, 10);
         assert!(packets(&mut play).is_empty(), "putting a gem back needs no server change");
+    }
+
+    #[test]
+    fn the_right_button_during_a_gem_press_is_the_run_not_a_cast() {
+        let mut play = fixture();
+        let start = play.session.now();
+        let source = pointer(167.0, 433.0);
+        assert!(!play.spell_gem_handoff(), "no gem press, nothing to hand back");
+        assert!(play.spell_gem_press(source, SIZE, start));
+        assert!(play.spell_gem_handoff());
+        play.spell_gem_frame(start + PICKUP_MS);
+        assert_eq!(play.carried_gem(), None, "no pickup while running");
+        assert!(!play.spell_gem_release(source, SIZE, start + PICKUP_MS, None), "the release is the mouse's");
+        assert!(packets(&mut play).is_empty(), "nothing cast");
     }
 
     #[test]

@@ -6265,6 +6265,14 @@ impl App {
                     {
                         return;
                     }
+                    // both buttons are the run: a left press a gem took is
+                    // the mouse's again, and casts nothing when let go
+                    if down && button == MouseButton::Right
+                        && let Some(p) = self.play.as_mut()
+                        && p.spell_gem_handoff()
+                    {
+                        let _ = self.mouse.button(false, true, Instant::now());
+                    }
                     // the left button on a quick-chat choice holds its
                     // direction while it is down (`Play::point_press`), and
                     // what it would click is not a click
