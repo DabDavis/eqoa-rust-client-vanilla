@@ -6430,6 +6430,8 @@ impl Play {
 
     pub fn spell_hover(&mut self, at: Option<[f32; 2]>, size: (u32, u32)) {
         self.gem_pointer(at, size);
+        // the buff window's names under the mouse (`buffwnd`, petition 2924)
+        self.buff_hover(at.map(|at| crate::hudlayout::local_point(crate::hudlayout::Piece::Effects, render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size))));
         let p = at.filter(|_| crate::binds::pc_shortcuts() && self.mode == 0 && !self.map.open && !self.search.open && !crate::hideui::hidden())
             .map(|at| crate::hudlayout::local_point(crate::hudlayout::Piece::SpellBars, render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size)));
         self.hud_menus.hover_stacked(p);

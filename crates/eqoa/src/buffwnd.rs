@@ -34,6 +34,16 @@
 //! - A removal goes to the server (0x7E59), which takes off only what is
 //!   beneficial and says so in the chat either way; the set it sends again
 //!   takes the buff out of the rows.
+//! - The mouse over a buff (petition 2924: "Mousing over buff/debuffs tells
+//!   you their name"): its name, time left and what a click does in the box
+//!   under the rows, as a click's, while the pointer is on it (`hover`), not
+//!   framed; a click's or the d-pad's selection shows before it.
+//! - Buff Timers (Extended > UI > HUD Extras, on by default; the same
+//!   petition: "On the icons themselves, a number showing how long it has
+//!   remaining"): each of the player's buffs with an end carries its time
+//!   left at its icon's foot ("45s", "12m", "2h": `short_time`, `timers`);
+//!   the pet's half-size row carries none (its icons are 16 pixels: its
+//!   time is in the box).
 
 use net::buffs::{Line, NO_END, ON_PET, ON_PLAYER};
 use vi::ui::{FrameParam, Raster, Vui, Window, icon_id, wide};
@@ -132,6 +142,22 @@ pub fn time_text(ms: u32) -> String {
     }
 }
 
+/// A time left as a buff's icon carries it (Buff Timers): whole seconds
+/// under a minute ("45s"), whole minutes under an hour ("12m"), then whole
+/// hours ("2h"), each rounded up as `time_text` rounds its seconds, so "1m"
+/// is never shown for less than a minute; none for no end.
+pub fn short_time(ms: u32) -> String {
+    if ms == NO_END {
+        return String::new();
+    }
+    let s = ms.div_ceil(1000);
+    match s {
+        0..60 => format!("{s}s"),
+        60..3600 => format!("{}m", s / 60),
+        _ => format!("{}h", s / 3600),
+    }
+}
+
 /// What makes a line the same line across sets: whose, its id and icon.
 fn key_of(l: &Line) -> (u8, u32, u32, String) {
     (l.whose, l.id, l.icon, l.name.clone())
@@ -147,6 +173,8 @@ pub struct BuffWnd {
     chosen: bool,
     /// the last pointer was a finger (the hint says long-press, not right-click)
     finger: bool,
+    /// the buff the mouse is over (petition 2924; `hover`)
+    hovered: Option<(u8, u32, u32, String)>,
     /// the lines and cells drawn last, and the frame's offset from the frame to
     /// where they were placed (`Ui::placed`), for a pointer
     lines: Vec<Line>,
@@ -160,7 +188,7 @@ pub struct BuffWnd {
 
 impl Default for BuffWnd {
     fn default() -> Self {
-        BuffWnd { focused: false, lit: None, lit_until: 0, chosen: false, finger: false, lines: Vec::new(), cells: Vec::new(), off: [0.0; 2], cw: 32, capw: 5 }
+        BuffWnd { focused: false, lit: None, lit_until: 0, chosen: false, finger: false, hovered: None, lines: Vec::new(), cells: Vec::new(), off: [0.0; 2], cw: 32, capw: 5 }
     }
 }
 
@@ -286,11 +314,7 @@ impl BuffWnd {
     /// when it was the one selected; a right click takes it off at once (the
     /// line to send) when it may come off, else selects it to say so.
     pub fn point(&mut self, p: [f32; 2], now: i64, right: bool, finger: bool, cues: &mut Vec<i32>) -> Option<Option<Line>> {
-        let at = self.cells.iter().find(|c| {
-            let (x, y) = (p[0] - self.off[0], p[1] - self.off[1]);
-            x >= c.r[0] && x < c.r[0] + c.r[2] && y >= c.r[1] && y < c.r[1] + c.r[3] + 4.0 * scale_of(c)
-        });
-        let Some(l) = at.and_then(|c| self.lines.get(c.line)).cloned() else {
+        let Some(l) = self.line_at(p).cloned() else {
             if !right && !self.focused {
                 self.lit = None;
                 self.lit_until = 0;
@@ -327,6 +351,37 @@ impl BuffWnd {
         Some(None)
     }
 
+    /// The line drawn at frame point `p` (as placed on the screen), its cell's
+    /// icon hanging 4 below it as a click finds it.
+    fn line_at(&self, p: [f32; 2]) -> Option<&Line> {
+        let (x, y) = (p[0] - self.off[0], p[1] - self.off[1]);
+        let at = self.cells.iter().find(|c| x >= c.r[0] && x < c.r[0] + c.r[2] && y >= c.r[1] && y < c.r[1] + c.r[3] + 4.0 * scale_of(c));
+        at.and_then(|c| self.lines.get(c.line))
+    }
+
+    /// The mouse at frame point `p` (as placed on the screen; none, off the
+    /// window or the bar not drawn): the buff under it named in the box under
+    /// the rows while it stays (`draw_info`). Whether it is on one.
+    pub fn hover(&mut self, p: Option<[f32; 2]>) -> bool {
+        self.hovered = p.and_then(|p| self.line_at(p)).map(key_of);
+        self.hovered.is_some()
+    }
+
+    /// Buff Timers: each of the player's buffs with an end, its icon's
+    /// rectangle (x, y, w, h, as `pieces` placed it) and its time left
+    /// (`short_time`), as last drawn; the pet's row has none.
+    pub fn timers(&self) -> Vec<([f32; 4], String)> {
+        self.cells
+            .iter()
+            .filter(|c| c.row < PLAYER_ROWS)
+            .filter_map(|c| {
+                let k = scale_of(c);
+                let t = short_time(self.lines.get(c.line)?.left_ms);
+                (!t.is_empty()).then(|| ([c.r[0] + 3.0 * k, c.r[1] + 6.0 * k, 32.0 * k, 32.0 * k], t))
+            })
+            .collect()
+    }
+
     /// The rows' art for `lines` (the set now, each with its time left), each
     /// cell noted for a pointer at `off` from the frame (`Ui::placed` of the
     /// frame's corner). `pets`: Pet Effects on. Drawn by `hud::draw_fx_pieces`,
@@ -359,27 +414,33 @@ impl BuffWnd {
     }
 
     /// Over the rows (`pieces`): the lit buff framed, and under the rows its
-    /// name, its time left at `now` and what may be done with it.
+    /// name, its time left at `now` and what may be done with it; with none
+    /// lit, the one the mouse is over (`hover`), unframed.
     pub fn draw_info(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64) {
         let (lines, cells) = (&self.lines, &self.cells);
         // the lit buff: a frame round its icon, and its name and time under the rows
         let shown = self.focused || now < self.lit_until;
-        let Some(i) = self.lit_index(lines).filter(|_| shown) else { return };
+        let lit = self.lit_index(lines).filter(|_| shown);
+        let hovered = self.hovered.as_ref().and_then(|k| lines.iter().position(|l| &key_of(l) == k));
+        let Some((i, framed)) = lit.map(|i| (i, true)).or(hovered.map(|i| (i, false))) else { return };
         // focused with none selected: the highlight framed and the keys only
-        let info = !self.focused || self.chosen;
+        let focused = self.focused && framed;
+        let info = !focused || self.chosen;
         let Some(c) = cells.iter().find(|c| c.line == i).copied() else { return };
-        let k = scale_of(&c);
-        let (x0, y0) = ((c.r[0] + 2.0 * k) as i32, (c.r[1] + 5.0 * k) as i32);
-        let (x1, y1) = (x0 + (34.0 * k) as i32, y0 + (34.0 * k) as i32);
-        let gold = [1.0, 0.85, 0.2, 1.0];
-        for (a, b) in [([x0, y0], [x1, y0 + 2]), ([x0, y1 - 2], [x1, y1]), ([x0, y0], [x0 + 2, y1]), ([x1 - 2, y0], [x1, y1])] {
-            r.fill_fan(gold, [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]]);
+        if framed {
+            let k = scale_of(&c);
+            let (x0, y0) = ((c.r[0] + 2.0 * k) as i32, (c.r[1] + 5.0 * k) as i32);
+            let (x1, y1) = (x0 + (34.0 * k) as i32, y0 + (34.0 * k) as i32);
+            let gold = [1.0, 0.85, 0.2, 1.0];
+            for (a, b) in [([x0, y0], [x1, y0 + 2]), ([x0, y1 - 2], [x1, y1]), ([x0, y0], [x0 + 2, y1]), ([x1 - 2, y0], [x1, y1])] {
+                r.fill_fan(gold, [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]]);
+            }
         }
         let l = &lines[i];
         let fh = vui.font_height(r);
         let name = wide(&if l.whose == ON_PET { format!("{} (pet)", l.name) } else { l.name.clone() });
         let left = wide(&time_text(l.left_ms));
-        let hint = wide(hint(self.focused, info, l.removable, self.finger));
+        let hint = wide(hint(focused, info, l.removable, self.finger && framed));
         let mut win = Window::default();
         let w = if info { vui.string_width(r, &name) + vui.string_width(r, &left) + 36 } else { 0 }.max(win.text_width(vui, r, &hint) + 20).max(180);
         let h = if info { fh * 2 + 12 } else { fh + 12 };
@@ -457,6 +518,79 @@ mod tests {
         assert_eq!(player_size(8), (1.0, 8, 1));
         assert_eq!(player_size(9), (0.75, 10, 2));
         assert_eq!(player_size(16), (0.75, 10, 2), "the server's most");
+    }
+
+    /// Buff Timers (petition 2924): seconds under a minute, minutes under an
+    /// hour, then hours, each rounded up as the box's clock rounds; none for
+    /// no end.
+    #[test]
+    fn short_times_fit_on_an_icon() {
+        assert_eq!(short_time(45_000), "45s");
+        assert_eq!(short_time(44_001), "45s", "rounded up, as `time_text`");
+        assert_eq!(short_time(1), "1s");
+        assert_eq!(short_time(59_000), "59s");
+        assert_eq!(short_time(60_000), "1m");
+        assert_eq!(short_time(754_000), "12m");
+        assert_eq!(short_time(3_599_000), "59m");
+        assert_eq!(short_time(3_600_000), "1h");
+        assert_eq!(short_time(7_300_000), "2h");
+        assert_eq!(short_time(NO_END), "");
+    }
+
+    /// Through the drawing: a timer on each of the player's icons that has an
+    /// end, at its icon's place and scale, none on the pet's row, none for a
+    /// buff with no end. The control: before `pieces`, none.
+    #[test]
+    fn timers_sit_on_the_players_icons() {
+        let mut atlas = vec![vi::ui::UiTexEntry::default(); 161];
+        atlas[157].uv1 = [32, 32];
+        atlas[159].uv1 = [5, 34];
+        atlas[160].uv1 = [3, 34];
+        let vui = Vui::new(Default::default(), Default::default(), atlas);
+        let mut l = set(3, 2);
+        l[1].left_ms = NO_END;
+        l[2].left_ms = 754_000;
+        let mut b = BuffWnd::default();
+        assert!(b.timers().is_empty(), "nothing drawn yet");
+        b.pieces(&vui, &l, true, [0.0; 2]);
+        let t = b.timers();
+        assert_eq!(t.len(), 2, "the player's two with an end, not the pet's");
+        assert_eq!(t[0], ([AT[0] as f32 + 5.0 + 3.0, AT[1] as f32 + 6.0, 32.0, 32.0], "1m".to_string()));
+        assert_eq!(t[1].1, "12m");
+        let many = set(12, 0);
+        b.pieces(&vui, &many, true, [0.0; 2]);
+        let t = b.timers();
+        assert_eq!((t.len(), t[0].0[2]), (12, 24.0), "at three quarters past eight");
+    }
+
+    /// The mouse over a buff (petition 2924): `hover` finds it where it was
+    /// drawn and the box names it, unframed and unselected; off the bar, or the
+    /// pointer gone, nothing. A click's selection is shown before it. The
+    /// controls: before a draw, nothing; a hover selects nothing and plays no
+    /// sound.
+    #[test]
+    fn the_mouse_over_a_buff_names_it() {
+        use crate::pointer::testing::NullRaster;
+        let l = set(4, 0);
+        let mut b = BuffWnd::default();
+        assert!(!b.hover(Some([170.0, 20.0])), "nothing drawn yet");
+        b.lines = l.clone();
+        b.cells = layout(&l, 37, 13, true);
+        b.off = [10.0, 0.0];
+        assert!(b.hover(Some([170.0, 20.0])));
+        assert_eq!(b.hovered.as_ref().map(|k| k.1), Some(1));
+        assert!(b.lit.is_none() && !b.chosen, "a hover selects nothing");
+        b.draw_info(&Vui::new(Default::default(), Default::default(), vec![vi::ui::UiTexEntry::default(); 161]), &mut NullRaster, 0);
+        assert!(b.hover(Some([210.0, 20.0])));
+        assert_eq!(b.hovered.as_ref().map(|k| k.1), Some(2), "the next one");
+        assert!(!b.hover(Some([600.0, 20.0])), "off the bar");
+        assert!(!b.hover(None), "the pointer gone");
+        assert!(b.hovered.is_none());
+        let mut cues = Vec::new();
+        b.hover(Some([210.0, 20.0]));
+        b.point([170.0, 20.0], 0, false, false, &mut cues);
+        assert_eq!(cues.len(), 1, "only the click sounds");
+        assert_eq!(b.lit.as_ref().map(|k| k.1), Some(1), "the click's shown before the hover's");
     }
 
     #[test]

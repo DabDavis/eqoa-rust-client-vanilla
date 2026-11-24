@@ -423,7 +423,12 @@ or a browser (each described where it lives below):
   server takes off only what is beneficial and says so in the chat. A controller: R2 held and L2 give
   the bar the d-pad until △ or L2 (left and right, up and down between the rows, ✕ selects or lets go
   of the highlighted one, □ asks it off); a keyboard: C held and Z, the arrows, Enter selects,
-  Backspace asks it off, Escape lets go. Off, or on any other server, the game's strip (`influence`); a PS2 ignores the offer.
+  Backspace asks it off, Escape lets go. The mouse over a buff names it the same way, with its time
+  left, while it stays there, unframed (petition 2924, `BuffWnd::hover`). Buff Timers (Extended > UI >
+  HUD Extras, on by default; the same petition) puts each of the player's buffs' time left on its icon's
+  foot ("45s", "12m", "2h": `buffwnd::short_time`), yellow in its last minute; the pet's half-size row
+  carries none. A server that turns the Buff Window off (`settings::qol::BUFF_WINDOW`) turns both off.
+  Off, or on any other server, the game's strip (`influence`); a PS2 ignores the offer.
 - **Loading tips** (a GM's petition 1778, 2026-11-12; `tips.rs`, `tips.txt`): one "Did you
   know" sentence, picked at random as each loading screen comes up (world entry, a logout's way back,
   a zone or world change, a coach, a gate, a rez), under its bar in the 4:3 frame's middle, never the

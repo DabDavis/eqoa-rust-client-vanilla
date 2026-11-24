@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Buff names and timers, a Stat Window, item icons on the quick slots
+
+- Hover the mouse over a buff or debuff in the **Buff Window** to see its name and how long it has left, without clicking. Each of your buffs now also shows its **time left** on its icon ("45s", "12m", "2h"), in yellow in its last minute. Turn the numbers off with **Buff Timers** under **Options → Extended → UI → HUD Extras**.
+
 ## 2026-11-24 · Smaller HUD and name plates, Follow camera zoom, A/D turning
 
 - **HUD Scale %** under **Options → Extended → UI → Interface Size** now works in the Controller interface too: shrink the whole HUD down to 50% (or grow it to 150%) for more of the world on screen, without hiding it. Each piece shrinks toward its own corner of the screen, and clicking it still works. It starts at 100%, so nothing changes until you move it, and the Controller and PC interfaces each keep their own size.

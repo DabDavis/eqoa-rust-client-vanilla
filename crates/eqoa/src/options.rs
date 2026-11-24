@@ -995,6 +995,10 @@ impl WndOptions {
                     // (`Session::agree_buffs`), ours or the game's strip
                     // drawn (`buffwnd`)
                     83 => c.buff_window = !c.buff_window,
+                    // Buff Timers (petition 2924): the time left drawn or not
+                    // on the Buff Window's icons from the next frame
+                    // (`buffwnd::timers`)
+                    BUFF_TIMERS => c.buff_timers = !c.buff_timers,
                     // Quest Markers: the server told from the next frame
                     // (`Session::agree_head_marks`), the marks drawn or not
                     // over the NPCs' names (`Play::plates`)
@@ -1933,7 +1937,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 114] = [
+const EXTENDED_ITEMS: [(i32, &str); 115] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -2048,6 +2052,7 @@ const EXTENDED_ITEMS: [(i32, &str); 114] = [
     (SPELL_BAR_SIZE, "Spell Bar Size %"),
     (CHAT_WAKE_ON_MESSAGE, "Wake on New Chat"),
     (AD_KEYS, "A/D Keys"),
+    (BUFF_TIMERS, "Buff Timers"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2133,6 +2138,9 @@ pub(crate) const SPELL_BAR_SIZE: i32 = 247;
 const CHAT_WAKE_ON_MESSAGE: i32 = 248;
 /// A/D Keys' item (petition 2909). 250, as Interface Size's 240s.
 const AD_KEYS: i32 = 250;
+/// HUD Extras' rows (petitions 2924-2928): Buff Timers (the Buff Window's
+/// time left on each icon).
+pub(crate) const BUFF_TIMERS: i32 = 251;
 
 /// Slow When Not Focused's item (a GM's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -2218,7 +2226,7 @@ const GROUPS: [(Group, &str); 5] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// Capture Controller and Sound in Background the Multi-boxing settings',
 /// Controller's touch rows Other's Touch; petition 2084, 2026-11-14: Touch a
 /// group of its own, Touch Controls, its rows Size & Look and Layout).
-const ALL_CATEGORIES: [Category; 25] = [
+const ALL_CATEGORIES: [Category; 26] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
@@ -2258,6 +2266,9 @@ const ALL_CATEGORIES: [Category; 25] = [
     // natively, as Textures (a page's list ends before it)
     Category { name: "Texture Cache", items: &[PACK_PRECACHE, PACK_COMPRESS, PACK_REBUILD], note: Note::Textures, group: Group::Graphics },
     Category { name: "Interface Size", items: &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS], note: Note::None, group: Group::Ui },
+    // what the HUD tells of its own pieces (petitions 2924-2928): HUD's page
+    // is full
+    Category { name: "HUD Extras", items: &[BUFF_TIMERS], note: Note::None, group: Group::Ui },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -2266,7 +2277,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24], a[25]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -2439,6 +2450,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         GROUP_EFFECTS => on_off(c.group_effects),
         88 => wide(if c.raid_mercs { "Shown" } else { "Hidden" }),
         83 => on_off(c.buff_window),
+        BUFF_TIMERS => on_off(c.buff_timers),
         85 => on_off(c.head_marks),
         TARGET_LEVEL => on_off(c.target_level),
         84 => on_off(c.loading_tips),
@@ -3730,6 +3742,15 @@ mod tests {
         assert_eq!((settings::weapon_swap_back(), cues.last()), (true, Some(&11)), "on");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::weapon_swap_back(), "and back");
+        // Buff Timers On by default (petition 2924), two values
+        goto!(BUFF_TIMERS);
+        assert_eq!(w.item, BUFF_TIMERS, "Buff Timers");
+        assert!(settings::buff_timers(), "on by default");
+        assert_eq!(value_text(&vui, BUFF_TIMERS), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::buff_timers(), value_text(&vui, BUFF_TIMERS), cues.last()), (false, Some(wide(vui.words.get(552, vui.language))), Some(&11)), "off");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::buff_timers(), "and back");
         // A/D Keys Strafe by default (petition 2909), two values
         goto!(AD_KEYS);
         assert_eq!(w.item, AD_KEYS, "A/D Keys");
@@ -4051,6 +4072,7 @@ mod tests {
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
+                ("HUD Extras", vec!["Buff Timers"]),
             ],
             "UI: what is drawn over the world"
         );
@@ -4552,13 +4574,13 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
         }
         let off_text = Some(wide(vui.words.get(552, vui.language)));
-        for item in [44, TARGET_LEVEL, 70, 86, HEALTH_NUMBERS, 83, 58, GROUP_EFFECTS, 78, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
+        for item in [44, TARGET_LEVEL, 70, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, 58, GROUP_EFFECTS, 78, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
             for k in path_to(&w, item) {
                 w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
                 w.draw(&vui, &mut NullRaster, &o, &mut ups);

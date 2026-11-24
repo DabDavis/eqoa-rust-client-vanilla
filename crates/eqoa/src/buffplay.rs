@@ -107,6 +107,39 @@ impl Play {
         let now = self.session.now() as i64;
         let pieces = self.buffs.pieces(vui, &lines, crate::settings::pet_effects(), [0.0; 2]);
         crate::hud::draw_fx_pieces(vui, r, &pieces, 1.0);
+        if crate::settings::buff_timers() {
+            draw_timers(r, &self.buffs.timers());
+        }
         self.buffs.draw_info(vui, r, now);
+    }
+
+    /// The mouse moved to frame point `f` (none: it left the window): the
+    /// buff under it named (`BuffWnd::hover`, petition 2924), where the bar
+    /// is up in play and the HUD shown.
+    pub(super) fn buff_hover(&mut self, f: Option<[f32; 2]>) {
+        let up = matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.buff_window_on() && crate::influence::shown(self.mode);
+        self.buffs.hover(f.filter(|_| up));
+    }
+}
+
+/// Buff Timers (`BuffWnd::timers`): each time left at its icon's foot, right
+/// aligned, a third of the icon high (8 pixels at least), outlined in black;
+/// white, yellow in its last minute. The foot is the cell's frame's inside
+/// (an icon hangs 4 of its 32 below the frame, `buffwnd::ROW_H`), so the
+/// words stand on the icon, not on the world under the bar.
+fn draw_timers(r: &mut crate::ui::UiRaster, timers: &[([f32; 4], String)]) {
+    let Some(font) = r.assets.font else { return };
+    let fh = r.ui.fonts[font].height.max(1) as f32;
+    for (icon, t) in timers {
+        let h = (icon[3] * 0.36).max(8.0);
+        let scale = h / fh;
+        let w = crate::ui::wide(t);
+        let tw = r.ui.fonts[font].string_width(&w) as f32 * scale;
+        let (x, y) = (icon[0] + icon[2] - tw - 1.0, icon[1] + icon[3] * 26.0 / 32.0 - h);
+        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+            r.ui.text_scaled(font, x + dx, y + dy, scale, [0.0, 0.0, 0.0, 0.9], &w);
+        }
+        let color = if t.ends_with('s') { [1.0, 0.9, 0.3, 1.0] } else { [1.0; 4] };
+        r.ui.text_scaled(font, x, y, scale, color, &w);
     }
 }

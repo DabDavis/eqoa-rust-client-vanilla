@@ -1036,6 +1036,13 @@ pub struct ClientOptions {
     /// one taken off by a click or the pad; off, or on any other server, the
     /// game's strip (`influence`). On by default.
     pub buff_window: bool,
+    /// Buff Timers (petition 2924: "On the icons themselves, a number showing
+    /// how long it has remaining"): each of the player's buffs in the Buff
+    /// Window carries its time left on its icon ("45s", "12m", "2h";
+    /// `buffwnd::short_time`); off, the icons alone, as before. On by
+    /// default: the Buff Window is the client's own. A server that turns the
+    /// Buff Window off turns this off with it.
+    pub buff_timers: bool,
     /// Quest Markers over the heads (Extended > UI > Name Plates;
     /// a GM's petition 1813): on a server that sends them
     /// (`Session::agree_head_marks`), a yellow "!" over an NPC with a quest
@@ -1612,6 +1619,7 @@ impl Default for ClientOptions {
             pet_effects: true,
             group_effects: true,
             buff_window: true,
+            buff_timers: true,
             head_marks: true,
             target_level: true,
             power_bars: true,
@@ -1779,6 +1787,9 @@ impl ClientOptions {
         }
         if !self.buff_window {
             s.push_str("buff_window=off\n");
+        }
+        if !self.buff_timers {
+            s.push_str("buff_timers=off\n");
         }
         if !self.head_marks {
             s.push_str("head_marks=off\n");
@@ -2110,6 +2121,8 @@ impl ClientOptions {
                 ("group_effects", "off") => c.group_effects = false,
                 ("buff_window", "on") => c.buff_window = true,
                 ("buff_window", "off") => c.buff_window = false,
+                ("buff_timers", "on") => c.buff_timers = true,
+                ("buff_timers", "off") => c.buff_timers = false,
                 ("head_marks", "on") => c.head_marks = true,
                 ("head_marks", "off") => c.head_marks = false,
                 ("target_level", "on") => c.target_level = true,
@@ -2618,7 +2631,7 @@ pub mod qol {
     /// Others' power under their health (Power Bars), and the health numbers
     /// over the bars (Health Numbers).
     pub const POWER_BARS: u32 = 1 << 6;
-    /// The buff window: the game's effects strip.
+    /// The buff window: the game's effects strip (and its Buff Timers).
     pub const BUFF_WINDOW: u32 = 1 << 7;
     /// The pet's effects under its bar (Pet Effects).
     pub const PET_EFFECTS: u32 = 1 << 8;
@@ -2675,7 +2688,7 @@ pub mod qol {
             70..=72 => DPS_METER,
             64..=69 | 80 | 81 => NUMBER_COLORS,
             86 | crate::options::HEALTH_NUMBERS => POWER_BARS,
-            83 => BUFF_WINDOW,
+            83 | crate::options::BUFF_TIMERS => BUFF_WINDOW,
             58 | crate::options::GROUP_EFFECTS => PET_EFFECTS,
             78 | 79 => AUTO_CAST,
             22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT | crate::options::SPELL_BAR_SIZE => SPELL_BARS,
@@ -2722,7 +2735,7 @@ pub mod qol {
             (c.power_bars, c.health_numbers) = (false, false);
         }
         if off(BUFF_WINDOW) {
-            c.buff_window = false;
+            (c.buff_window, c.buff_timers) = (false, false);
         }
         if off(PET_EFFECTS) {
             (c.pet_effects, c.group_effects) = (false, false);
@@ -2764,7 +2777,7 @@ pub mod qol {
             (v.power_bars, v.health_numbers) = (kept.power_bars, kept.health_numbers);
         }
         if off(BUFF_WINDOW) {
-            v.buff_window = kept.buff_window;
+            (v.buff_window, v.buff_timers) = (kept.buff_window, kept.buff_timers);
         }
         if off(PET_EFFECTS) {
             (v.pet_effects, v.group_effects) = (kept.pet_effects, kept.group_effects);
@@ -2929,6 +2942,11 @@ pub fn group_effects() -> bool {
 /// Buff Window: the client's own effects window (`buffwnd`).
 pub fn buff_window() -> bool {
     client().buff_window
+}
+
+/// Buff Timers: the Buff Window's icons carry their time left (`buffwnd`).
+pub fn buff_timers() -> bool {
+    client().buff_timers
 }
 
 /// Quest Markers over the heads: the "!" and "?" over quest NPCs' names
@@ -4410,7 +4428,7 @@ mod tests {
         assert!(!(c.map || c.minimap || map() || minimap()), "the map, off by default");
         assert!(c.map_markers, "its markers the player's, with it");
         assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
-        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.pet_effects || c.group_effects || c.auto_cast || c.auto_target), "the rest");
+        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.buff_timers || buff_timers() || c.pet_effects || c.group_effects || c.auto_cast || c.auto_target), "the rest");
         assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
         assert!(!c.item_links && (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) == (ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft), "item links off by default, the game's two bars");
         let d = ClientOptions::default();
@@ -4591,6 +4609,20 @@ mod tests {
         let back = ClientOptions::from_text(&off);
         assert!(!back.buff_window && !back.loading_tips);
         assert!(ClientOptions::from_text("buff_window=maybe").buff_window, "the default");
+    }
+
+    /// Buff Timers (petition 2924): on by default and not written; off
+    /// written and read back; an unknown value the default.
+    #[test]
+    fn buff_timers_are_kept_only_when_off() {
+        let d = ClientOptions::default();
+        assert!(d.buff_timers, "on by default");
+        assert!(!d.to_text().contains("buff_timers"));
+        let c = ClientOptions { buff_timers: false, ..d };
+        assert!(c.to_text().contains("buff_timers=off\n"));
+        assert_eq!(ClientOptions::from_text(&c.to_text()), c, "round trip");
+        assert!(ClientOptions::from_text("buff_timers=on").buff_timers);
+        assert!(ClientOptions::from_text("buff_timers=sometimes").buff_timers, "the default");
     }
 
     #[test]
