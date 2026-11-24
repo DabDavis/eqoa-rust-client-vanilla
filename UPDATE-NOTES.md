@@ -9,6 +9,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 - **Community → Duel → Instanced duel** challenges the player you have selected to a private match in a sealed Neriak arena (Heirloom). Both fighters lose their buffs on arrival, a 60-second countdown runs once both have loaded, and everyone is restored to full health and mana at 1. Mind the four lava pockets. When the fight ends, each fighter goes back to where they started. Mr. Moogie's **Recent duels** lists the last ten results.
 
+## 2026-11-24 · Instanced duels in Neriak
+
+- **Community → Duel → Instanced duel** challenges the player you have selected to a private match in a sealed Neriak arena (Heirloom). Both fighters lose their buffs on arrival, a 60-second countdown runs once both have loaded, and everyone is restored to full health and mana at 1. Mind the four lava pockets. When the fight ends, each fighter goes back to where they started. Mr. Moogie's **Recent duels** lists the last ten results.
+
 ## 2026-11-24 · Keyboard chat starts on Main
 
 - Press **Chat Expand** (**C** by default) on the keyboard to select **Main** immediately in either interface. While holding it, the first **Tab** moves to the next chat view.
