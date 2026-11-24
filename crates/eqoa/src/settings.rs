@@ -1135,6 +1135,12 @@ pub struct ClientOptions {
     /// the two interfaces and which stays the PC's. 100 by default: the
     /// game's HUD, every quad where it was.
     pub controller_hud_scale: u8,
+    /// The Controller interface's Nameplate Size (petition 2908, the owner's
+    /// of 2026-11-24: in both interfaces), in percent, `NAMEPLATE_MIN` to
+    /// 200: what `display_ui` gives as `nameplate_scale` there. Its own key,
+    /// as `controller_hud_scale`: an older file's `nameplate_scale` stays the
+    /// PC's. 100 by default, the game's plates.
+    pub controller_nameplate_scale: u8,
     pub chat_width: u8,
     pub chat_rows: u8,
     pub chat_opacity: u8,
@@ -1623,6 +1629,7 @@ impl Default for ClientOptions {
             hud_scale: 100,
             nameplate_scale: 100,
             controller_hud_scale: 100,
+            controller_nameplate_scale: 100,
             chat_width: 100,
             chat_rows: 5,
             chat_opacity: 75,
@@ -1833,7 +1840,7 @@ impl ClientOptions {
         }
         if self.chat_wake_on_message { s.push_str("chat_wake_on_message=on\n"); }
         for (key, value, default) in [
-            ("hud_scale", self.hud_scale, 100), ("nameplate_scale", self.nameplate_scale, 100), ("controller_hud_scale", self.controller_hud_scale, 100),
+            ("hud_scale", self.hud_scale, 100), ("nameplate_scale", self.nameplate_scale, 100), ("controller_hud_scale", self.controller_hud_scale, 100), ("controller_nameplate_scale", self.controller_nameplate_scale, 100),
             ("chat_width", self.chat_width, 100), ("chat_rows", self.chat_rows, 5), ("chat_opacity", self.chat_opacity, 75),
         ] {
             if value != default {
@@ -2135,10 +2142,11 @@ impl ClientOptions {
                 ("chat_wake_on_message", "off") => c.chat_wake_on_message = false,
                 ("inline_chat", "on") => c.inline_chat = true,
                 ("inline_chat", "off") => c.inline_chat = false,
-                (key @ ("hud_scale" | "nameplate_scale" | "controller_hud_scale" | "chat_width" | "chat_rows" | "chat_opacity"), v) => {
+                (key @ ("hud_scale" | "nameplate_scale" | "controller_hud_scale" | "controller_nameplate_scale" | "chat_width" | "chat_rows" | "chat_opacity"), v) => {
                     let (field, range) = match key {
                         "hud_scale" => (&mut c.hud_scale, HUD_SCALE_MIN..=HUD_SCALE_MAX),
                         "controller_hud_scale" => (&mut c.controller_hud_scale, HUD_SCALE_MIN..=HUD_SCALE_MAX),
+                        "controller_nameplate_scale" => (&mut c.controller_nameplate_scale, NAMEPLATE_MIN..=200),
                         "nameplate_scale" => (&mut c.nameplate_scale, NAMEPLATE_MIN..=200),
                         "chat_width" => (&mut c.chat_width, 50..=125),
                         "chat_rows" => (&mut c.chat_rows, 3..=12),
@@ -2398,7 +2406,7 @@ impl ClientOptions {
     /// those choices available when the player first selects the PC interface.
     pub(crate) fn display_ui(self) -> Self {
         if self.pc_mode { return self; }
-        Self { hud_scale: self.controller_hud_scale, nameplate_scale: 100, chat_width: 100, chat_rows: 5,
+        Self { hud_scale: self.controller_hud_scale, nameplate_scale: self.controller_nameplate_scale, chat_width: 100, chat_rows: 5,
             chat_opacity: 75, chat_fade_seconds: 0, chat_wake_on_message: false, inline_chat: false, chat_detached: [false; crate::chat::TABS], ..self }
     }
 
@@ -3767,6 +3775,35 @@ mod tests {
         assert_eq!(client().display_ui().hud_scale, 85, "the PC's first default");
         set_ui_mode(false).unwrap();
         assert_eq!((client().display_ui().hud_scale, read_client().controller_hud_scale), (70, 70), "kept over the switch");
+        testing::reset(false);
+    }
+
+    /// The Controller interface's Nameplate Size (petition 2908, the owner's
+    /// of 2026-11-24): its own key, 30 to 200, written only when moved, what
+    /// `display_ui` gives there; an older file's `nameplate_scale` stays the
+    /// PC's, and a switch there and back keeps it.
+    #[test]
+    fn controller_nameplate_scale_is_its_own() {
+        let d = ClientOptions::default();
+        assert_eq!(d.controller_nameplate_scale, 100);
+        assert!(!d.to_text().contains("controller_nameplate_scale"));
+        let c = ClientOptions { controller_nameplate_scale: 30, ..d };
+        assert!(c.to_text().contains("controller_nameplate_scale=30\n"));
+        assert_eq!(ClientOptions::from_text(&c.to_text()), c, "round trip");
+        for bad in ["controller_nameplate_scale=29", "controller_nameplate_scale=201", "controller_nameplate_scale=x"] {
+            assert_eq!(ClientOptions::from_text(bad).controller_nameplate_scale, 100, "{bad}");
+        }
+        let both = ClientOptions { nameplate_scale: 150, controller_nameplate_scale: 40, ..d };
+        assert_eq!(both.display_ui().nameplate_scale, 40, "Controller: its own");
+        assert_eq!(ClientOptions { pc_mode: true, ..both }.display_ui().nameplate_scale, 150, "PC: the PC's");
+        assert_eq!(ClientOptions { nameplate_scale: 150, ..d }.display_ui().nameplate_scale, 100, "an older file's nameplate_scale is not the Controller's");
+        testing::reset(false);
+        set_client(ClientOptions { controller_nameplate_scale: 45, ..client() });
+        write_client(client()).unwrap();
+        set_ui_mode(true).unwrap();
+        assert_eq!(client().display_ui().nameplate_scale, 100, "the PC's own");
+        set_ui_mode(false).unwrap();
+        assert_eq!((client().display_ui().nameplate_scale, read_client().controller_nameplate_scale), (45, 45), "kept over the switch");
         testing::reset(false);
     }
 

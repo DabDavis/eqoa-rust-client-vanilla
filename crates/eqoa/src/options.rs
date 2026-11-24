@@ -1129,7 +1129,10 @@ impl WndOptions {
                     // next frame (`hudlayout::scale`)
                     HUD_SCALE if c.pc_mode => slide(&mut c.hud_scale, HUD_SCALE_MIN, HUD_SCALE_MAX, 5),
                     HUD_SCALE => slide(&mut c.controller_hud_scale, HUD_SCALE_MIN, HUD_SCALE_MAX, 5),
-                    NAMEPLATE_SCALE => slide(&mut c.nameplate_scale, NAMEPLATE_MIN, 200, 5),
+                    // Nameplate Size: the interface's own (the Controller's,
+                    // petition 2908 and the owner's of 2026-11-24)
+                    NAMEPLATE_SCALE if c.pc_mode => slide(&mut c.nameplate_scale, NAMEPLATE_MIN, 200, 5),
+                    NAMEPLATE_SCALE => slide(&mut c.controller_nameplate_scale, NAMEPLATE_MIN, 200, 5),
                     CHAT_WIDTH => slide(&mut c.chat_width, 50, 125, 5),
                     CHAT_ROWS => slide(&mut c.chat_rows, 3, 12, 1),
                     CHAT_OPACITY => slide(&mut c.chat_opacity, 0, 100, 5),
@@ -2270,8 +2273,9 @@ const CATEGORIES: &[Category] = &{
 fn category(i: usize) -> Category {
     let mut cat = CATEGORIES[i];
     cat.items = match (crate::settings::pc_mode(), cat.name) {
-        // the Controller's: HUD Scale alone (petition 2912), the rest the PC's
-        (false, "Interface Size") => &[HUD_SCALE],
+        // the Controller's: HUD Scale and Nameplate Size (petitions 2912,
+        // 2908), the chat's sizes the PC's
+        (false, "Interface Size") => &[HUD_SCALE, NAMEPLATE_SCALE],
         (false, "Chat") => &[73, 89, R2_CHANNELS],
         (false, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT],
         (true, "Chat") => &[73, 89, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY, CHAT_WAKE_ON_MESSAGE],
@@ -2563,7 +2567,10 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
             let v = c.display_ui().hud_scale;
             (at(v as f32, HUD_SCALE_MIN as f32, HUD_SCALE_MAX as f32), Some(v as u16))
         }
-        NAMEPLATE_SCALE => (at(c.nameplate_scale as f32, NAMEPLATE_MIN as f32, 200.0), Some(c.nameplate_scale as u16)),
+        NAMEPLATE_SCALE => {
+            let v = c.display_ui().nameplate_scale;
+            (at(v as f32, NAMEPLATE_MIN as f32, 200.0), Some(v as u16))
+        }
         CHAT_WIDTH => (at(c.chat_width as f32, 50.0, 125.0), Some(c.chat_width as u16)),
         CHAT_ROWS => (at(c.chat_rows as f32, 3.0, 12.0), Some(c.chat_rows as u16)),
         CHAT_OPACITY => (c.chat_opacity as f32 / 100.0, Some(c.chat_opacity as u16)),
@@ -2739,7 +2746,7 @@ mod tests {
         w.key(&vui, &mut r, &mut o, click[0], 0, &mut cues, &mut ups);
         assert!(!settings::pc_mode());
         let size = CATEGORIES.iter().position(|c| c.name == "Interface Size").unwrap();
-        assert_eq!(category(size).items, &[HUD_SCALE], "the Controller's: HUD Scale alone (petition 2912)");
+        assert_eq!(category(size).items, &[HUD_SCALE, NAMEPLATE_SCALE], "the Controller's: HUD Scale and Nameplate Size (petitions 2912, 2908)");
         w.key(&vui, &mut r, &mut o, 17, 0, &mut cues, &mut ups);
         assert_eq!(category(size).items, &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS]);
         w.key(&vui, &mut r, &mut o, 13, 0, &mut cues, &mut ups);
@@ -3742,6 +3749,22 @@ mod tests {
         assert_eq!((c.controller_hud_scale, c.hud_scale, c.display_ui().hud_scale, cues.last()), (95, 100, 95, Some(&11)), "smaller");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!(settings::client().controller_hud_scale, 100, "and back");
+        // Nameplate Size in the Controller interface too (petition 2908, the
+        // owner's of 2026-11-24): its own, down to 30, the PC's left as it was
+        goto!(NAMEPLATE_SCALE);
+        assert_eq!((w.item, settings::pc_mode()), (NAMEPLATE_SCALE, false), "Nameplate Size, Controller");
+        assert_eq!(slider_at(NAMEPLATE_SCALE).and_then(|s| s.1), Some(100));
+        for _ in 0..20 {
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+        }
+        let c = settings::client();
+        assert_eq!((c.controller_nameplate_scale, c.nameplate_scale, c.display_ui().nameplate_scale, cues.last()), (30, 100, 30, Some(&9)), "30 at the least, the end's sound");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!(settings::client().controller_nameplate_scale, 35);
+        for _ in 0..13 {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+        }
+        assert_eq!(settings::client().controller_nameplate_scale, 100, "and back");
         // R2 Channel Switch Off by default (the server owner, 2026-11-18), two values
         goto!(R2_CHANNELS);
         assert_eq!(w.item, R2_CHANNELS, "R2 Channel Switch");
@@ -4027,7 +4050,7 @@ mod tests {
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "Reset DPS Meter"]),
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
-                ("Interface Size", vec!["HUD Scale %"]),
+                ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
             ],
             "UI: what is drawn over the world"
         );

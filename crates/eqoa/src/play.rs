@@ -2867,6 +2867,12 @@ mod name_plates {
         crate::settings::set_client(crate::settings::ClientOptions { pc_mode: true, hud_scale: 50, nameplate_scale: 150, ..crate::settings::client() });
         let scaled = PlateView::of(&cam, &back(50.0), (1920, 1080));
         assert_eq!(scaled, PlateView { scale: v.scale * 1.5, ..v }, "name size composes with zoom independently of HUD size");
+        // the Controller interface's own Nameplate Size (petition 2908), the
+        // PC's 150 not reaching it
+        crate::settings::set_client(crate::settings::ClientOptions { pc_mode: false, controller_nameplate_scale: 30, ..crate::settings::client() });
+        assert_eq!(PlateView::of(&cam, &back(50.0), (1920, 1080)), PlateView { scale: v.scale * 0.3, ..v }, "Controller: 30%");
+        crate::settings::set_client(crate::settings::ClientOptions { controller_nameplate_scale: 100, ..crate::settings::client() });
+        assert_eq!(PlateView::of(&cam, &back(50.0), (1920, 1080)), v, "Controller at its default: the game's, the PC's 150 aside");
         crate::settings::set_client(crate::settings::ClientOptions { name_distance: 90, entity_slots: 64, ..Default::default() });
         let v = PlateView::of(&cam, &back(50.0), (1920, 1080));
         assert_eq!((v.distance, v.most, v.overlap), (90.0, 64, false));

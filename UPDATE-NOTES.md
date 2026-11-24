@@ -8,7 +8,7 @@ is put on the page by `.github/workflows/notes.yml`.
 ## 2026-11-24 · Smaller HUD and name plates, Follow camera zoom, A/D turning
 
 - **HUD Scale %** under **Options → Extended → UI → Interface Size** now works in the Controller interface too: shrink the whole HUD down to 50% (or grow it to 150%) for more of the world on screen, without hiding it. Each piece shrinks toward its own corner of the screen, and clicking it still works. It starts at 100%, so nothing changes until you move it, and the Controller and PC interfaces each keep their own size.
-- **Nameplate Size %** (PC interface) now goes down to **30%**, where it stopped at 50%.
+- **Nameplate Size %** in the same place now goes down to **30%**, where it stopped at 50%, and now works in the Controller interface too. It starts at 100%, and each interface keeps its own size.
 - The **Follow** camera (Options → Interface → 3rd Person Camera: Follow) now zooms with the **mouse wheel** (or a pinch), out as far as **Camera Distance** under **Extended → Other → Camera** allows. Zoom in past its closest to go into first person. It starts at the same distance as before.
 - New **A/D Keys** row under **Extended → Other → Camera**: **Strafe** (the default, as before) or **Turn**. On Turn, A and D turn your character left and right in first person and the Follow camera, and swing the camera round in the other cameras. While you steer with the mouse they still sidestep. A controller is unchanged.
 
