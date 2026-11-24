@@ -1043,6 +1043,12 @@ pub struct ClientOptions {
     /// default: the Buff Window is the client's own. A server that turns the
     /// Buff Window off turns this off with it.
     pub buff_timers: bool,
+    /// Stat Window (petition 2925: "a stat box ... health, power, resists,
+    /// AC ... HoT and PoT"): the client's own panel of what the stat channel
+    /// tells (`statwnd`), shown or hidden by F4, `/stats` and Extended > UI >
+    /// HUD Extras, kept. Off by default. A server that turns Character >
+    /// Summary's stat caps off (`qol::STAT_CAPS`) turns it off with them.
+    pub stat_window: bool,
     /// Quest Markers over the heads (Extended > UI > Name Plates;
     /// a GM's petition 1813): on a server that sends them
     /// (`Session::agree_head_marks`), a yellow "!" over an NPC with a quest
@@ -1620,6 +1626,7 @@ impl Default for ClientOptions {
             group_effects: true,
             buff_window: true,
             buff_timers: true,
+            stat_window: false,
             head_marks: true,
             target_level: true,
             power_bars: true,
@@ -1790,6 +1797,9 @@ impl ClientOptions {
         }
         if !self.buff_timers {
             s.push_str("buff_timers=off\n");
+        }
+        if self.stat_window {
+            s.push_str("stat_window=on\n");
         }
         if !self.head_marks {
             s.push_str("head_marks=off\n");
@@ -2123,6 +2133,8 @@ impl ClientOptions {
                 ("buff_window", "off") => c.buff_window = false,
                 ("buff_timers", "on") => c.buff_timers = true,
                 ("buff_timers", "off") => c.buff_timers = false,
+                ("stat_window", "on") => c.stat_window = true,
+                ("stat_window", "off") => c.stat_window = false,
                 ("head_marks", "on") => c.head_marks = true,
                 ("head_marks", "off") => c.head_marks = false,
                 ("target_level", "on") => c.target_level = true,
@@ -2626,7 +2638,7 @@ pub mod qol {
     /// Number Colors and Merc Colors: every number the game's colour.
     pub const NUMBER_COLORS: u32 = 1 << 4;
     /// Character > Summary's stat caps ("346/435"): the value alone and the
-    /// game's column widths (`trainer`).
+    /// game's column widths (`trainer`); and the Stat Window (`statwnd`).
     pub const STAT_CAPS: u32 = 1 << 5;
     /// Others' power under their health (Power Bars), and the health numbers
     /// over the bars (Health Numbers).
@@ -2689,6 +2701,7 @@ pub mod qol {
             64..=69 | 80 | 81 => NUMBER_COLORS,
             86 | crate::options::HEALTH_NUMBERS => POWER_BARS,
             83 | crate::options::BUFF_TIMERS => BUFF_WINDOW,
+            crate::options::STAT_WINDOW => STAT_CAPS,
             58 | crate::options::GROUP_EFFECTS => PET_EFFECTS,
             78 | 79 => AUTO_CAST,
             22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT | crate::options::SPELL_BAR_SIZE => SPELL_BARS,
@@ -2724,6 +2737,9 @@ pub mod qol {
         }
         if off(TARGET_LEVEL) {
             c.target_level = false;
+        }
+        if off(STAT_CAPS) {
+            c.stat_window = false;
         }
         if off(DPS_METER) {
             c.dps_meter = false;
@@ -2766,6 +2782,9 @@ pub mod qol {
         }
         if off(TARGET_LEVEL) {
             v.target_level = kept.target_level;
+        }
+        if off(STAT_CAPS) {
+            v.stat_window = kept.stat_window;
         }
         if off(DPS_METER) {
             v.dps_meter = kept.dps_meter;
@@ -2947,6 +2966,18 @@ pub fn buff_window() -> bool {
 /// Buff Timers: the Buff Window's icons carry their time left (`buffwnd`).
 pub fn buff_timers() -> bool {
     client().buff_timers
+}
+
+/// Stat Window: the client's panel of the stat channel (`statwnd`).
+pub fn stat_window() -> bool {
+    client().stat_window
+}
+
+/// The Stat Window shown or hidden (F4, `/stats`), kept as Save Changes keeps
+/// it.
+pub fn set_stat_window(on: bool) -> Result<(), String> {
+    set_client(ClientOptions { stat_window: on, ..client() });
+    save_client()
 }
 
 /// Quest Markers over the heads: the "!" and "?" over quest NPCs' names
@@ -4418,7 +4449,7 @@ mod tests {
     #[test]
     fn the_server_turns_additions_off_and_the_choices_stay() {
         testing::reset(false);
-        let chosen = ClientOptions { dps_meter: true, auto_target: true, health_numbers: true, number_colors: [3; crate::numcolor::ROWS], ability_bars: 4, stacked_bars: true, spell_bar_layout: crate::hudmenu::Layout::Columns, utility_layout: crate::hudmenu::UtilityLayout::Below, ..Default::default() };
+        let chosen = ClientOptions { dps_meter: true, auto_target: true, stat_window: true, health_numbers: true, number_colors: [3; crate::numcolor::ROWS], ability_bars: 4, stacked_bars: true, spell_bar_layout: crate::hudmenu::Layout::Columns, utility_layout: crate::hudmenu::UtilityLayout::Below, ..Default::default() };
         set_client(chosen);
         assert_eq!(client(), chosen, "nothing off: as kept");
         let all = qol::MAP | qol::QUEST_HELPER | qol::TARGET_LEVEL | qol::DPS_METER | qol::NUMBER_COLORS | qol::STAT_CAPS | qol::POWER_BARS | qol::BUFF_WINDOW | qol::PET_EFFECTS | qol::AUTO_CAST | qol::ITEM_LINKS | qol::SPELL_BARS;
@@ -4428,7 +4459,7 @@ mod tests {
         assert!(!(c.map || c.minimap || map() || minimap()), "the map, off by default");
         assert!(c.map_markers, "its markers the player's, with it");
         assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
-        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.buff_timers || buff_timers() || c.pet_effects || c.group_effects || c.auto_cast || c.auto_target), "the rest");
+        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.buff_timers || buff_timers() || c.stat_window || stat_window() || c.pet_effects || c.group_effects || c.auto_cast || c.auto_target), "the rest");
         assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
         assert!(!c.item_links && (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) == (ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft), "item links off by default, the game's two bars");
         let d = ClientOptions::default();
@@ -4609,6 +4640,20 @@ mod tests {
         let back = ClientOptions::from_text(&off);
         assert!(!back.buff_window && !back.loading_tips);
         assert!(ClientOptions::from_text("buff_window=maybe").buff_window, "the default");
+    }
+
+    /// Stat Window (petition 2925): off by default and not written; on
+    /// written and read back; an unknown value the default.
+    #[test]
+    fn the_stat_window_is_kept_only_when_on() {
+        let d = ClientOptions::default();
+        assert!(!d.stat_window, "off by default");
+        assert!(!d.to_text().contains("stat_window"));
+        let c = ClientOptions { stat_window: true, ..d };
+        assert!(c.to_text().contains("stat_window=on\n"));
+        assert_eq!(ClientOptions::from_text(&c.to_text()), c, "round trip");
+        assert!(!ClientOptions::from_text("stat_window=off").stat_window);
+        assert!(!ClientOptions::from_text("stat_window=maybe").stat_window, "the default");
     }
 
     /// Buff Timers (petition 2924): on by default and not written; off

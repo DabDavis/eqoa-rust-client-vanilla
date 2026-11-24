@@ -999,6 +999,9 @@ impl WndOptions {
                     // on the Buff Window's icons from the next frame
                     // (`buffwnd::timers`)
                     BUFF_TIMERS => c.buff_timers = !c.buff_timers,
+                    // Stat Window (petition 2925): the panel drawn or not
+                    // from the next frame (`statwnd`)
+                    STAT_WINDOW => c.stat_window = !c.stat_window,
                     // Quest Markers: the server told from the next frame
                     // (`Session::agree_head_marks`), the marks drawn or not
                     // over the NPCs' names (`Play::plates`)
@@ -1937,7 +1940,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 115] = [
+const EXTENDED_ITEMS: [(i32, &str); 116] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -2053,6 +2056,7 @@ const EXTENDED_ITEMS: [(i32, &str); 115] = [
     (CHAT_WAKE_ON_MESSAGE, "Wake on New Chat"),
     (AD_KEYS, "A/D Keys"),
     (BUFF_TIMERS, "Buff Timers"),
+    (STAT_WINDOW, "Stat Window"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2139,8 +2143,9 @@ const CHAT_WAKE_ON_MESSAGE: i32 = 248;
 /// A/D Keys' item (petition 2909). 250, as Interface Size's 240s.
 const AD_KEYS: i32 = 250;
 /// HUD Extras' rows (petitions 2924-2928): Buff Timers (the Buff Window's
-/// time left on each icon).
+/// time left on each icon), Stat Window (`statwnd`).
 pub(crate) const BUFF_TIMERS: i32 = 251;
+pub(crate) const STAT_WINDOW: i32 = 252;
 
 /// Slow When Not Focused's item (a GM's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -2268,7 +2273,7 @@ const ALL_CATEGORIES: [Category; 26] = [
     Category { name: "Interface Size", items: &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS], note: Note::None, group: Group::Ui },
     // what the HUD tells of its own pieces (petitions 2924-2928): HUD's page
     // is full
-    Category { name: "HUD Extras", items: &[BUFF_TIMERS], note: Note::None, group: Group::Ui },
+    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW], note: Note::None, group: Group::Ui },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -2451,6 +2456,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         88 => wide(if c.raid_mercs { "Shown" } else { "Hidden" }),
         83 => on_off(c.buff_window),
         BUFF_TIMERS => on_off(c.buff_timers),
+        STAT_WINDOW => on_off(c.stat_window),
         85 => on_off(c.head_marks),
         TARGET_LEVEL => on_off(c.target_level),
         84 => on_off(c.loading_tips),
@@ -3751,6 +3757,15 @@ mod tests {
         assert_eq!((settings::buff_timers(), value_text(&vui, BUFF_TIMERS), cues.last()), (false, Some(wide(vui.words.get(552, vui.language))), Some(&11)), "off");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::buff_timers(), "and back");
+        // Stat Window Off by default (petition 2925), two values
+        goto!(STAT_WINDOW);
+        assert_eq!(w.item, STAT_WINDOW, "Stat Window");
+        assert!(!settings::stat_window(), "off by default");
+        assert_eq!(value_text(&vui, STAT_WINDOW), Some(wide(vui.words.get(552, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::stat_window(), value_text(&vui, STAT_WINDOW), cues.last()), (true, Some(wide(vui.words.get(551, vui.language))), Some(&11)), "on");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::stat_window(), "and back");
         // A/D Keys Strafe by default (petition 2909), two values
         goto!(AD_KEYS);
         assert_eq!(w.item, AD_KEYS, "A/D Keys");
@@ -4072,7 +4087,7 @@ mod tests {
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
-                ("HUD Extras", vec!["Buff Timers"]),
+                ("HUD Extras", vec!["Buff Timers", "Stat Window"]),
             ],
             "UI: what is drawn over the world"
         );
@@ -4574,13 +4589,13 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
         }
         let off_text = Some(wide(vui.words.get(552, vui.language)));
-        for item in [44, TARGET_LEVEL, 70, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, 58, GROUP_EFFECTS, 78, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
+        for item in [44, TARGET_LEVEL, 70, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, 78, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
             for k in path_to(&w, item) {
                 w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
                 w.draw(&vui, &mut NullRaster, &o, &mut ups);

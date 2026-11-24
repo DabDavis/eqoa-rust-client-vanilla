@@ -429,6 +429,14 @@ or a browser (each described where it lives below):
   foot ("45s", "12m", "2h": `buffwnd::short_time`), yellow in its last minute; the pet's half-size row
   carries none. A server that turns the Buff Window off (`settings::qol::BUFF_WINDOW`) turns both off.
   Off, or on any other server, the game's strip (`influence`); a PS2 ignores the offer.
+- **The Stat Window** (petition 2925; `statwnd.rs`, `statplay.rs`): a HUD panel, off by default, shown
+  or hidden by F4 (a Controls row), `/stats` or Extended > UI > HUD Extras' Stat Window, kept, its X
+  closing it, moved and sized as a piece of the HUD (`hudlayout::Piece::Stats`, at the left). It shows
+  what the stat channel (0x42) tells the client: health and power now and most, HoT and PoT (stats 12
+  and 13, CLIENT's words 240 and 241), AC, the seven stats with what items and spells add over the base,
+  and the six resists as Character > Summary's Details shows them (CLIENT's `CurStat`). OFF and DEF MOD
+  are not in the channel, so it does not show them. A server that turns the stat caps off
+  (`settings::qol::STAT_CAPS`) turns it off too.
 - **Loading tips** (a GM's petition 1778, 2026-11-12; `tips.rs`, `tips.txt`): one "Did you
   know" sentence, picked at random as each loading screen comes up (world entry, a logout's way back,
   a zone or world change, a coach, a gate, a rez), under its bar in the 4:3 frame's middle, never the

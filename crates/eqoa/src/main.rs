@@ -178,6 +178,7 @@ mod startmenu;
 mod textlist;
 mod trade;
 mod trainer;
+mod statwnd;
 mod trails;
 mod options;
 // a web page opened from the game (Station's Forgot Password on our server):

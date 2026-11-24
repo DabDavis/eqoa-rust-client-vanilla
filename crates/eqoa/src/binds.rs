@@ -235,6 +235,7 @@ pub const ROWS: &[Row] = &[
     row("hide_ui", "Hide UI", &["h"], Pad::None, "Hides everything over the world: the HUD, the chat, the names over heads, the damage numbers and the target's rings. Again, or any window coming up, shows them."),
     row("minimap", "Minimap", &["n"], Pad::None, "Shows or hides the minimap, as Extended's Map page does, and keeps it. On the map: a community marker suggested."),
     row("quest_helper", "Quest Helper", &["u"], Pad::None, "Shows or hides the Quest Helper (the quests' marks on the map and the minimap, and the quest tracker), as Extended's Map page does, and keeps it."),
+    row("stat_window", "Stat Window", &["f4"], Pad::None, "Shows or hides the Stat Window (health, power, HoT, PoT, AC, the stats and the resists), as Extended's HUD Extras page and /stats do, and keeps it."),
     row("controls", "Controls", &["f1"], Pad::None, "This page, from play."),
 ];
 
@@ -1897,6 +1898,7 @@ mod tests {
             "Shift" => NamedKey::Shift,
             "F1" => NamedKey::F1,
             "F3" => NamedKey::F3,
+            "F4" => NamedKey::F4,
             "F5" => NamedKey::F5,
             "F6" => NamedKey::F6,
             "F7" => NamedKey::F7,

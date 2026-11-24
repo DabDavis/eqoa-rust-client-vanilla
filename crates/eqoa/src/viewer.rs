@@ -5204,6 +5204,13 @@ impl App {
                     crate::settings::toggle_quest_helper();
                     return;
                 }
+                // F4: the Stat Window shown or hidden, kept (the client's
+                // own, `statwnd`, petition 2925; F4 makes no code in the
+                // game's keyboard table), in play and the manual camera
+                (None, Key::Named(NamedKey::F4)) if (p.mode == 0 || p.mode == 38) && !event.repeat => {
+                    p.toggle_stat_window();
+                    return;
+                }
                 // F: the game's Assist Target asked, whom the target targets
                 // (the client's key for it, `Play::assist_target`; free in
                 // the game's keyboard table)

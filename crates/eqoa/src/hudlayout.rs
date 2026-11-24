@@ -74,14 +74,16 @@ pub enum Piece {
     TargetInfo,
     /// Loot rolls and ready checks share a stack of non-modal raid prompts.
     RaidPrompts,
+    /// The Stat Window (`statwnd`), at the left.
+    Stats,
 }
 
 /// Each piece, in `Piece`'s order.
-pub const PIECES: [Piece; 20] = [
+pub const PIECES: [Piece; 21] = [
     Piece::Player, Piece::Group, Piece::Pet, Piece::Target, Piece::Minimap, Piece::Quests,
     Piece::Meter, Piece::Effects, Piece::Chat, Piece::Chat1, Piece::Chat2, Piece::Chat3,
     Piece::Settings, Piece::Breath, Piece::QuickMenus, Piece::SpellBars, Piece::UtilityBars,
-    Piece::EquipmentBar, Piece::TargetInfo, Piece::RaidPrompts,
+    Piece::EquipmentBar, Piece::TargetInfo, Piece::RaidPrompts, Piece::Stats,
 ];
 const N: usize = PIECES.len();
 
@@ -164,6 +166,7 @@ impl Piece {
             Piece::EquipmentBar => "equipment",
             Piece::TargetInfo => "targetinfo",
             Piece::RaidPrompts => "raidprompts",
+            Piece::Stats => "stats",
         }
     }
 
@@ -190,6 +193,7 @@ impl Piece {
             Piece::EquipmentBar => "Equipment Switch",
             Piece::TargetInfo => "Target Details",
             Piece::RaidPrompts => "Raid Prompts",
+            Piece::Stats => "Stat Window",
         }
     }
 
@@ -199,6 +203,7 @@ impl Piece {
         match self {
             Piece::Player | Piece::Group | Piece::Pet | Piece::Effects => (Edge::Start, Edge::Start),
             Piece::Target => (Edge::Start, Edge::End),
+            Piece::Stats => (Edge::Start, Edge::Middle),
             Piece::TargetInfo => (Edge::End, Edge::Middle),
             Piece::RaidPrompts => (Edge::Middle, Edge::Middle),
             Piece::Chat | Piece::Chat1 | Piece::Chat2 | Piece::Chat3 | Piece::Settings | Piece::SpellBars | Piece::EquipmentBar => (Edge::End, Edge::End),

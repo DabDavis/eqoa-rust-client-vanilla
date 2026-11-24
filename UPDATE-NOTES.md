@@ -8,6 +8,7 @@ is put on the page by `.github/workflows/notes.yml`.
 ## 2026-11-24 · Buff names and timers, a Stat Window, item icons on the quick slots
 
 - Hover the mouse over a buff or debuff in the **Buff Window** to see its name and how long it has left, without clicking. Each of your buffs now also shows its **time left** on its icon ("45s", "12m", "2h"), in yellow in its last minute. Turn the numbers off with **Buff Timers** under **Options → Extended → UI → HUD Extras**.
+- New **Stat Window**: press **F4** (or type `/stats`) to show a small panel with your health and power, **HoT** and **PoT**, **AC**, your seven stats (with what your gear and buffs add, in green) and your six resists. It stays up as you play and updates as they change. Press F4 again or click its **X** to close it; type `/hud` to move or resize it. It is also under **Options → Extended → UI → HUD Extras**, and F4 can be changed on the Controls page.
 
 ## 2026-11-24 · Smaller HUD and name plates, Follow camera zoom, A/D turning
 
