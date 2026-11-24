@@ -1723,6 +1723,18 @@ fn device_keyboard() -> bool {
     false
 }
 
+/// Name a physical chord as Controls captures it and play dispatches it.
+/// While typing, preserve the logical character produced by the keyboard.
+pub(crate) fn binding_input_name(logical: &Key, base: Option<&str>, mods: (bool, bool, bool), capture: bool, typing: bool, binds: &crate::binds::Binds, pc: bool) -> Option<String> {
+    let plain = crate::binds::name_of(logical)?;
+    let (ctrl, alt, shift) = mods;
+    if (ctrl || alt || shift) && !typing {
+        let combo = crate::binds::combo_name(ctrl, alt, shift, base.unwrap_or(&plain));
+        if capture || binds.profile_alias(&combo, pc) != crate::binds::Alias::Same { return Some(combo); }
+    }
+    Some(plain)
+}
+
 /// Resolve the pre-login art and Settings shortcuts, including a remapped chord.
 fn title_shortcut(event: &KeyIn, mods: (bool, bool, bool)) -> Option<String> {
     use crate::binds::Alias;
@@ -5840,13 +5852,7 @@ impl App {
         {
             return Some(n.clone());
         }
-        let (c, a, sh) = self.mods;
-        let name = if (c || a || sh) && !typing {
-            let combo = crate::binds::combo_name(c, a, sh, &own);
-            if capture || crate::settings::with_binds(|b| b.profile_alias(&combo, crate::binds::pc_shortcuts()) != crate::binds::Alias::Same) { combo } else { plain }
-        } else {
-            plain
-        };
+        let name = crate::settings::with_binds(|b| binding_input_name(&ev.logical_key, Some(&own), self.mods, capture, typing, b, crate::binds::pc_shortcuts()))?;
         self.key_names.insert(own, name.clone());
         Some(name)
     }
@@ -6060,10 +6066,7 @@ impl App {
                     // its ability used on the press
                     Some(Sent::Slot(bar, slot)) => {
                         if let Some(p) = self.play.as_mut() {
-                            p.keyboard = true;
-                            if down && !event.repeat {
-                                p.bar_slot_key(bar, slot);
-                            }
+                            p.keyboard_slot_edge(bar, slot, down, event.repeat);
                         }
                         return;
                     }

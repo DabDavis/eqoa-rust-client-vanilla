@@ -1566,7 +1566,7 @@ impl WndOptions {
         let width = self.window.size[0];
         let mode_focus = self.page == -1 && self.sel == MODE_ROW;
         let pc = crate::settings::pc_mode();
-        self.window.text_box(vui, r, &wide("UI Mode"), 30, 0, 76, 1, UI_COLORS[mode_focus as usize], 0);
+        self.window.text_box(vui, r, &wide("Mode"), 30, 0, 76, 1, UI_COLORS[mode_focus as usize], 0);
         if mode_focus { self.window.tick_r(vui, r, 25, 0, true); }
         for (name, selected, x, w, hit) in [("PC", pc, 106, 54, MODE_PC_HIT), ("Controller", !pc, 162, 124, MODE_PAD_HIT)] {
             self.window.draw_frame(vui, r, x, 0, w, 1, if selected { 96 } else { 64 });
@@ -1983,7 +1983,7 @@ const EXTENDED_ITEMS: [(i32, &str); 110] = [
     (HEALTH_NUMBERS, "Health Numbers"),
     (GROUP_EFFECTS, "Group Effects"),
     (HUD_SCALE, "HUD Scale %"),
-    (NAMEPLATE_SCALE, "Name Plate Scale %"),
+    (NAMEPLATE_SCALE, "Nameplate Size %"),
     (CHAT_WIDTH, "Chat Width %"),
     (CHAT_ROWS, "Chat Rows"),
     (CHAT_OPACITY, "Chat Opacity %"),

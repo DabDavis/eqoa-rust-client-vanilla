@@ -8,6 +8,10 @@ use super::Play;
 use crate::editbox::TextLink;
 use net::itemlink::{LINKS_MOST, Linked};
 
+#[cfg(test)]
+#[path = "itemlink_test.rs"]
+mod itemlink_test;
+
 impl Play {
     /// Links can be made here: the server offered them and Item Links is on.
     pub(crate) fn links_made(&self) -> bool {
@@ -169,7 +173,7 @@ impl Play {
     /// `link_item`) and icon.
     /// `side` is the frame pixels the window shows beyond each side (the
     /// windows' band widens by it).
-    pub(super) fn run_links(&mut self, vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, side: i32) {
+    pub(super) fn run_links(&mut self, vui: &vi::ui::Vui, r: &mut crate::ui::UiRaster, side: i32) {
         if !self.links.is_open() || !matches!(self.mode, 0 | 33 | 38) || crate::hideui::hidden() {
             return;
         }
@@ -185,7 +189,13 @@ impl Play {
             attack_words: &attack_words,
         };
         let flags = net::session::EXPANSION_FLAGS;
-        self.links.draw(vui, r, side, &|it, fits| info.link_item(it, fits), &|it| crate::inventory::item_icon(it, flags) as i32);
+        let describe = |it: &net::dump::NetItem, fits: &dyn Fn(&str) -> bool| info.link_item(it, fits);
+        let icon = |it: &net::dump::NetItem| crate::inventory::item_icon(it, flags) as i32;
+        if crate::settings::pc_mode() {
+            self.links.draw_pc(vui, r, side, &describe, &icon);
+        } else {
+            self.links.draw(vui, r, side, &describe, &icon);
+        }
     }
 }
 

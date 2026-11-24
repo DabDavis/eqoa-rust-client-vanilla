@@ -69,7 +69,10 @@ or a browser (each described where it lives below):
   and remembers the mode and each layout.
 - **PC spell gems and equipment**. Keys **1–9** and **0** activate equipped gems
   1–10. Set **Extended → UI → HUD → Spell Bar Rows** to show one to four
-  ten-slot rows. In the Spell Book, memorize an ability into any visible bar and
+  ten-slot rows. In **Options → Controls**, choose a bar and gem, press its key
+  combination (for example **Shift+1** or **Ctrl+2**), then **Save Changes**.
+  In a supporting browser, use the game's fullscreen mode for combinations
+  that normally switch browser tabs. In the Spell Book, memorize an ability into any visible bar and
   slot. Servers supporting expanded bars can keep **40 distinct equipped gems**
   per character. Hiding a row preserves its equipped spells. On servers with weapon sets,
   the **Equipment Switch** bar lets you click a prepared set or bare hands.
@@ -77,6 +80,12 @@ or a browser (each described where it lives below):
   overhead names independently. Type `/hud` to move the player frame, spell
   bars, equipment bar, chat windows and other HUD pieces. Click **Pin** to hold
   a piece in place, **Unpin** to move it again, and **Lock** to return to play.
+- **PC windows**. Drag the title bar to move an open gameplay window, or drag
+  its bottom-right corner to change its width and height. Use **−** and **+**
+  to zoom the contents between 50% and 200%. Scrollbars reach any controls
+  outside the viewport. **Pin** holds its layout, **Unpin** unlocks it and
+  **Reset** restores its original size and placement. Inventory, the Spell
+  Book, and each of two open item comparisons keep their own settings.
 - **PC chat**. Choose a tab and click **Detach tab** to give it a window. Click
   **Dock** to bring it back with its history. Each window has a **Resize** handle
   in Move HUD. **Extended → UI → Chat** controls background opacity and inline

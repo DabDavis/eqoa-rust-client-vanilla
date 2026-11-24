@@ -239,8 +239,8 @@ pub const ROWS: &[Row] = &[
 ];
 
 /// What a key on an ability bar's slot row does (`bar_slot`).
-const BAR_HELP: &str = "Uses the equipped spell in this slot, as clicking it does. PC mode defaults keys 1 through 0 to the first ten slots; change any key here. Other slots have no default key. Spell Bar Rows controls the PC rows, and Move HUD moves them.";
-const PC_ACTION_HELP: &str = "Uses the equipped spell in this slot. Memorize spells through the spell book; the server must confirm the slot. No key is assigned until you choose one here.";
+const BAR_HELP: &str = "Uses the equipped spell in this slot. PC mode defaults 1 through 0 to Bar 1. Bind other gems to keys or combinations such as Shift+1 or Ctrl+2. Spell Bar Rows controls the PC rows.";
+const PC_ACTION_HELP: &str = "Uses the equipped spell in this slot. Memorize it in the spell book and wait for server confirmation. Bind a key or combination such as Shift+1 or Ctrl+2 here.";
 
 /// What a key on an item quick slot's row does (`bar_slot`).
 const ITEM_HELP: &str = "Uses the item on this quick slot, as clicking it on the Utility Bars does (Extended > UI > HUD > Stacked Spell Bars shows them). No key until you give it one.";

@@ -932,6 +932,11 @@ pub fn draw_moving(r: &mut crate::ui::UiRaster) {
         for e in [[at[0], at[1], at[2], at[1] + 1.0], [at[0], at[3] - 1.0, at[2], at[3]], [at[0], at[1], at[0] + 1.0, at[3]], [at[2] - 1.0, at[1], at[2], at[3]]] {
             fill(ui, e, EDGE);
         }
+        if pc {
+            // Keep the edit handles readable over a pane's tabs and the
+            // action bar's own icons while the player is arranging the HUD.
+            fill(ui, [at[0] + 1.0, at[1] + 1.0, at[2] - 1.0, (at[1] + TEXT_H + 5.0).min(at[3])], [0.075, 0.065, 0.04, 0.97]);
+        }
         let mut x = at[0] + 3.0;
         if pc && piece.chat_tab().is_some() && !pins[piece.index()] {
             let right = x + width(ui, "Resize") + 6.0;

@@ -306,6 +306,17 @@ pub fn save_hud_layout(text: &str) -> bool {
     }
 }
 
+pub(crate) fn pc_window_layout() -> String {
+    read_interface_file("windows-pc").map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+}
+
+pub(crate) fn save_pc_window_layout(text: &str) {
+    let bytes = text.as_bytes();
+    if let Err(e) = store::write(&own_file("windows-pc", place()), bytes).and_then(|_| account_write("windows-pc", bytes)) {
+        crate::say(&format!("Could not save PC window positions: {e}"));
+    }
+}
+
 // ---- the quest guide's record (`questguide`) --------------------------------------------
 
 /// The quest guide's file: what it keeps of each character (the quests it
@@ -442,6 +453,8 @@ pub fn set_account(server: &str, user: &str) {
         migrate(&key);
     }
     bump_generation();
+    #[cfg(target_arch = "wasm32")]
+    crate::web::keyboard_profile(pc_mode());
 }
 
 /// The account's files made from the window's set kept most recently (the
@@ -458,7 +471,7 @@ fn migrate(key: &str) {
     if let Some(b) = store::read(&own_file("client", from)) {
         let _ = store::write(&account_file(key, "client"), ClientOptions::from_text(&String::from_utf8_lossy(&b)).rows_text().as_bytes());
     }
-    for name in ["hud", "hud-pc", "interface-controller", "interface-pc"] {
+    for name in ["hud", "hud-pc", "windows-pc", "interface-controller", "interface-pc"] {
         if let Some(b) = store::read(&own_file(name, from)) {
             let _ = store::write(&account_file(key, name), &b);
         }
@@ -2279,6 +2292,11 @@ impl ClientOptions {
         }
         c.touch_stick = stick.or(old_size).unwrap_or(c.touch_stick);
         c.touch_buttons = buttons.or(old_size).unwrap_or(c.touch_buttons);
+        // Older profiles omitted dimensions for a detached pane. Snapshot
+        // the inherited dimensions before a later resize of Main.
+        for (detached, size) in c.chat_detached.iter().zip(&mut c.chat_pane_sizes) {
+            if *detached { size.get_or_insert([c.chat_width, c.chat_rows]); }
+        }
         c
     }
 }
@@ -2391,16 +2409,22 @@ pub fn set_ui_mode(pc: bool) -> Result<(), String> {
     let profile = ClientOptions { pc_mode: pc, ..profile };
     write_client(read_client().with_interface(profile))?;
     CLIENT.with(|c| c.set(Some((cache_key(), current.with_interface(profile)))));
+    #[cfg(target_arch = "wasm32")]
+    crate::web::keyboard_profile(pc);
     Ok(())
 }
 
 pub fn set_chat_detached(tab: usize, detached: bool) -> Result<(), String> {
     let Some(i) = tab.checked_sub(1).filter(|&i| i < crate::chat::TABS) else { return Err("Unknown chat tab".into()) };
     if !pc_mode() { return Err("Detach chat in PC mode".into()); }
+    let mut live = kept_client();
     let mut saved = read_client();
+    if detached {
+        let size = *live.chat_pane_sizes[i].get_or_insert([live.chat_width, live.chat_rows]);
+        saved.chat_pane_sizes[i] = Some(size);
+    }
     saved.chat_detached[i] = detached;
     write_client(saved)?;
-    let mut live = kept_client();
     live.chat_detached[i] = detached;
     CLIENT.with(|c| c.set(Some((cache_key(), live))));
     Ok(())

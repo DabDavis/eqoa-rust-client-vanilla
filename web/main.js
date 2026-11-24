@@ -1136,14 +1136,30 @@ function fullScreen() {
   Promise.resolve(asked).catch((e) => console.log(`full screen refused (${e && e.message ? e.message : e})`));
 }
 
-document.addEventListener('fullscreenchange', () => {
+let pcKeyboard = false;
+let lockRequest = 0;
+const spellKeys = Array.from({ length: 10 }, (_, digit) => 'Digit' + digit);
+function syncKeyboardLock() {
   if (!keepsEscape) return;
+  const request = ++lockRequest;
   if (!document.fullscreenElement) {
     navigator.keyboard.unlock();
     return;
   }
-  navigator.keyboard.lock(['Escape']).catch((e) => console.log(`full screen: Escape not kept (${e && e.message ? e.message : e})`));
-});
+  // Ctrl+number normally changes browser tabs. The PC spell bars can use
+  // that combination while the player is in the game's fullscreen canvas.
+  navigator.keyboard.lock(pcKeyboard ? ['Escape', ...spellKeys] : ['Escape']).catch((e) => {
+    if (request !== lockRequest || !document.fullscreenElement) return;
+    if (pcKeyboard) return navigator.keyboard.lock(['Escape']);
+    throw e;
+  }).catch((e) => console.log(`full screen: keyboard lock refused (${e && e.message ? e.message : e})`));
+}
+window.eqoaKeyboardProfile = (pc) => {
+  if (pcKeyboard === pc) return;
+  pcKeyboard = pc;
+  if (document.fullscreenElement) syncKeyboardLock();
+};
+document.addEventListener('fullscreenchange', syncKeyboardLock);
 
 for (const ev of ['keydown', 'keyup']) {
   addEventListener(ev, (e) => { if (e.key === 'F11') e.stopImmediatePropagation(); }, true);

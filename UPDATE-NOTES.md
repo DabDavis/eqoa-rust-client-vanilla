@@ -10,6 +10,8 @@ is put on the page by `.github/workflows/notes.yml`.
 - Choose **PC** or **Controller** at the top of Options. Press **F10** from the title or in the world. In PC mode you can also click **Settings** or press Start on a controller. In Controller mode, use **Start → Options**. Switching saves the choice immediately and restores that interface's layout.
 - PC starts with four ten-slot spell bars at bottom center. Keys **1–9** and **0** activate equipped gems 1–10 on the bottom row. Choose one to four rows in **Extended → UI → HUD → Spell Bar Rows**. The Spell Book can equip up to 40 different gems on supporting servers. Hiding a bar preserves its spells, and a new assignment becomes active when the server confirms it.
 - Where the server supports weapon sets, the independent **Equipment Switch** bar offers your four prepared sets and bare hands. The item quick slots have their own bar.
+- Open **Options → Controls** to bind any visible bar and gem to its own key or combination. For example, assign **Shift+1** to Bar 2, Gem 1 and **Ctrl+2** to Bar 3, Gem 2. Choose **Save Changes**. For browser tab-switch combinations, use the game's fullscreen mode in a browser with keyboard lock.
+- In PC mode, drag the title bar to move Inventory, the Spell Book and other gameplay windows. Drag the bottom-right corner to resize width and height, or use **−** and **+** to scale the contents. Each window remembers its layout. **Pin** locks it and **Reset** restores its default layout after unpinning.
 - In PC chat, select a tab and click **Detach tab** to open it separately. **Dock** brings the same history back. Type `/hud` to drag and resize individual windows or pin a HUD piece in place.
 
 ## 2026-11-23 · HUD size and keyboard chat

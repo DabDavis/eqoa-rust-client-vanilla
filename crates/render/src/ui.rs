@@ -979,6 +979,15 @@ impl Ui {
         }
     }
 
+    /// Quads from `first` already have final screen positions and scissors
+    /// inside a player-positioned window. Exclude their previous positions
+    /// from the retail HUD's end-of-frame edge and overlap adjustments.
+    pub fn finish_floating_layer(&mut self, first: usize) {
+        self.sided.truncate(self.sided.partition_point(|(i, _)| *i < first));
+        self.risen.truncate(self.risen.partition_point(|(i, _)| *i < first));
+        self.opaque.truncate(self.opaque.partition_point(|(i, _)| *i < first));
+    }
+
     /// A quad cut only to the target, not to the frame or a viewport: for
     /// what floats over the world, which reaches past the frame's sides in a
     /// wider window. Its place is its own (no `anchor`).

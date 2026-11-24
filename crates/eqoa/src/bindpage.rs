@@ -442,6 +442,18 @@ pub fn macro_names(ms: &[usize]) -> String {
 
 /// A row's label, its WORDS.TXT words in.
 pub fn label(vui: &Vui, row: usize) -> String {
+    profile_label(vui, row, crate::settings::pc_mode())
+}
+
+fn profile_label(vui: &Vui, row: usize, pc: bool) -> String {
+    if pc && let Some((bar, slot)) = binds::bar_slot(row) {
+        let pc_slot = match bar {
+            0..=3 => Some((bar / 2 + 1, (bar % 2) * 5 + slot + 1)),
+            b if (crate::hudmenu::PC_ACTION_BAR..crate::hudmenu::PC_ACTION_BAR + 2).contains(&b) => Some((b - crate::hudmenu::PC_ACTION_BAR + 3, slot + 1)),
+            _ => None,
+        };
+        if let Some((bar, slot)) = pc_slot { return format!("Bar {bar}: Gem {slot}"); }
+    }
     ROWS.get(row).map_or_else(String::new, |r| expand(vui, r.label))
 }
 
@@ -496,6 +508,21 @@ mod tests {
     use super::*;
     use crate::pointer::testing::{NullRaster, mid, vui};
     use crate::settings::{self, testing};
+
+    #[test]
+    fn pc_labels_match_all_visible_gems_without_changing_controller_labels() {
+        let vui = vui();
+        for bar in 1..=4 {
+            for gem in 1..=10 {
+                let id = if bar <= 2 {
+                    format!("bar{}_slot{}", (bar - 1) * 2 + (gem - 1) / 5 + 1, (gem - 1) % 5 + 1)
+                } else { format!("pcbar{bar}_slot{gem}") };
+                let row = binds::row_named(&id).unwrap();
+                assert_eq!(profile_label(&vui, row, true), format!("Bar {bar}: Gem {gem}"), "{id}");
+                assert_eq!(profile_label(&vui, row, false), expand(&vui, ROWS[row].label), "controller {id}");
+            }
+        }
+    }
 
     fn drawn(page: &mut ControlsPage, w: &mut Window) {
         let vui = vui();

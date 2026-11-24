@@ -123,6 +123,7 @@ mod petart;
 mod petdye;
 mod display;
 mod hudlayout;
+mod pcwindows;
 mod hudmenu;
 mod influence;
 mod input;
