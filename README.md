@@ -83,6 +83,13 @@ or a browser (each described where it lives below):
   frame and equipment switch bar. **Extended → UI → HUD Layout → Spell Bar Size %**
   also scales the full stack of spell bars. Click **Pin** to lock a piece against dragging,
   **Unpin** to edit it again, and **Lock** at the top to return to play.
+- **HUD Scale in either interface**. **Extended → UI → Interface Size → HUD Scale %**
+  sizes the whole HUD from **50% to 150%** (100%, the game's, by default), each
+  piece about its own corner, and clicks follow it. The Controller interface
+  keeps its own scale (`controller_hud_scale`, petition 2912), so a PC choice never
+  shrinks it; there the raid prompts and the target info, drawn as windows, keep
+  their size. **Nameplate Size %** (the PC interface's) goes from **30%** to 200%
+  (petition 2908).
 - **PC windows**. Type `/hud` before opening a window to show its layout
   controls. Drag the title bar to move the window, or drag its bottom-right
   corner to change its width and height. Use **−** and **+**

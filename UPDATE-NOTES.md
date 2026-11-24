@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Smaller HUD and name plates, Follow camera zoom, A/D turning
+
+- **HUD Scale %** under **Options → Extended → UI → Interface Size** now works in the Controller interface too: shrink the whole HUD down to 50% (or grow it to 150%) for more of the world on screen, without hiding it. Each piece shrinks toward its own corner of the screen, and clicking it still works. It starts at 100%, so nothing changes until you move it, and the Controller and PC interfaces each keep their own size.
+- **Nameplate Size %** (PC interface) now goes down to **30%**, where it stopped at 50%.
+- The **Follow** camera (Options → Interface → 3rd Person Camera: Follow) now zooms with the **mouse wheel** (or a pinch), out as far as **Camera Distance** under **Extended → Other → Camera** allows. Zoom in past its closest to go into first person. It starts at the same distance as before.
+- New **A/D Keys** row under **Extended → Other → Camera**: **Strafe** (the default, as before) or **Turn**. On Turn, A and D turn your character left and right in first person and the Follow camera, and swing the camera round in the other cameras. While you steer with the mouse they still sidestep. A controller is unchanged.
+
 ## 2026-11-24 · Zoom out again after a hill pulls the camera in
 
 - When a hill or wall behind you pulls the third-person camera in close to your character, scrolling the **mouse wheel** out now moves it back out right away, as far as there is room, even when your zoom was already at its widest. Before, the wheel did nothing until you stepped away or went into first person and back.

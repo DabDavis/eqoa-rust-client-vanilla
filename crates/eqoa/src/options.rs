@@ -273,7 +273,7 @@
 use crate::bindpage::ControlsPage;
 use crate::macropage::MacrosPage;
 use crate::pointer::{Hits, key, rows_rect};
-use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, NAMEPLATE_MIN, SHADOW_DISTANCE_GAME, SHADOW_DISTANCE_MAX, SHADOW_DISTANCE_STEP, TOUCH_EDGE_MAX, TOUCH_EDGE_STEP, TOUCH_OPACITY_MAX, TOUCH_OPACITY_MIN, TOUCH_OPACITY_STEP, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
+use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, HUD_SCALE_MAX, HUD_SCALE_MIN, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, NAMEPLATE_MIN, SHADOW_DISTANCE_GAME, SHADOW_DISTANCE_MAX, SHADOW_DISTANCE_STEP, TOUCH_EDGE_MAX, TOUCH_EDGE_STEP, TOUCH_OPACITY_MAX, TOUCH_OPACITY_MIN, TOUCH_OPACITY_STEP, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
 use vi::fpu::{Ee, F};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -1124,7 +1124,11 @@ impl WndOptions {
                     // Chat Always Shown (ticket 1914): the box from the next
                     // frame (`chat::WndChat::always`)
                     89 => c.chat_always = !c.chat_always,
-                    HUD_SCALE => slide(&mut c.hud_scale, 50, 150, 5),
+                    // HUD Scale: the interface's own (the Controller's,
+                    // petition 2912), the HUD drawn and pointed at so from the
+                    // next frame (`hudlayout::scale`)
+                    HUD_SCALE if c.pc_mode => slide(&mut c.hud_scale, HUD_SCALE_MIN, HUD_SCALE_MAX, 5),
+                    HUD_SCALE => slide(&mut c.controller_hud_scale, HUD_SCALE_MIN, HUD_SCALE_MAX, 5),
                     NAMEPLATE_SCALE => slide(&mut c.nameplate_scale, NAMEPLATE_MIN, 200, 5),
                     CHAT_WIDTH => slide(&mut c.chat_width, 50, 125, 5),
                     CHAT_ROWS => slide(&mut c.chat_rows, 3, 12, 1),
@@ -2266,7 +2270,8 @@ const CATEGORIES: &[Category] = &{
 fn category(i: usize) -> Category {
     let mut cat = CATEGORIES[i];
     cat.items = match (crate::settings::pc_mode(), cat.name) {
-        (false, "Interface Size") => &[],
+        // the Controller's: HUD Scale alone (petition 2912), the rest the PC's
+        (false, "Interface Size") => &[HUD_SCALE],
         (false, "Chat") => &[73, 89, R2_CHANNELS],
         (false, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT],
         (true, "Chat") => &[73, 89, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY, CHAT_WAKE_ON_MESSAGE],
@@ -2554,7 +2559,10 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
             let n = crate::hudlayout::piece_scale_percent(crate::hudlayout::Piece::SpellBars);
             (at(n as f32, 50.0, 200.0), Some(n))
         }
-        HUD_SCALE => (at(c.hud_scale as f32, 50.0, 150.0), Some(c.hud_scale as u16)),
+        HUD_SCALE => {
+            let v = c.display_ui().hud_scale;
+            (at(v as f32, HUD_SCALE_MIN as f32, HUD_SCALE_MAX as f32), Some(v as u16))
+        }
         NAMEPLATE_SCALE => (at(c.nameplate_scale as f32, NAMEPLATE_MIN as f32, 200.0), Some(c.nameplate_scale as u16)),
         CHAT_WIDTH => (at(c.chat_width as f32, 50.0, 125.0), Some(c.chat_width as u16)),
         CHAT_ROWS => (at(c.chat_rows as f32, 3.0, 12.0), Some(c.chat_rows as u16)),
@@ -2731,7 +2739,7 @@ mod tests {
         w.key(&vui, &mut r, &mut o, click[0], 0, &mut cues, &mut ups);
         assert!(!settings::pc_mode());
         let size = CATEGORIES.iter().position(|c| c.name == "Interface Size").unwrap();
-        assert!(category(size).items.is_empty());
+        assert_eq!(category(size).items, &[HUD_SCALE], "the Controller's: HUD Scale alone (petition 2912)");
         w.key(&vui, &mut r, &mut o, 17, 0, &mut cues, &mut ups);
         assert_eq!(category(size).items, &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS]);
         w.key(&vui, &mut r, &mut o, 13, 0, &mut cues, &mut ups);
@@ -3724,6 +3732,16 @@ mod tests {
         assert_eq!((settings::ad_turn(), value_text(&vui, AD_KEYS), cues.last()), (true, Some(wide("Turn")), Some(&11)), "Turn");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::ad_turn(), "and back");
+        // HUD Scale in the Controller interface (petition 2912): its own
+        // scale, 100 by default, in steps of 5, the PC's left as it was
+        goto!(HUD_SCALE);
+        assert_eq!((w.item, settings::pc_mode()), (HUD_SCALE, false), "HUD Scale, Controller");
+        assert_eq!(slider_at(HUD_SCALE).and_then(|s| s.1), Some(100));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        let c = settings::client();
+        assert_eq!((c.controller_hud_scale, c.hud_scale, c.display_ui().hud_scale, cues.last()), (95, 100, 95, Some(&11)), "smaller");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!(settings::client().controller_hud_scale, 100, "and back");
         // R2 Channel Switch Off by default (the server owner, 2026-11-18), two values
         goto!(R2_CHANNELS);
         assert_eq!(w.item, R2_CHANNELS, "R2 Channel Switch");
@@ -4009,6 +4027,7 @@ mod tests {
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "Reset DPS Meter"]),
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
+                ("Interface Size", vec!["HUD Scale %"]),
             ],
             "UI: what is drawn over the world"
         );

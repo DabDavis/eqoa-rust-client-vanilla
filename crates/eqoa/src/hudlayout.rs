@@ -651,9 +651,15 @@ fn anchor(piece: Piece, b: Beyond) -> ([f32; 2], [f32; 2]) {
     ([edge(h, SCREEN_W), edge(v, SCREEN_H)], [h.reference(b.side), v.reference(b.top)])
 }
 
+/// The HUD Scale (Interface Size, either interface; the Controller's since
+/// petition 2912) times the piece's own size (the PC's), about the piece's
+/// own corner. The Controller interface draws the raid prompts and the target
+/// info as windows, outside `begin` (`Play`'s frame), so they are not scaled
+/// there and their hit tests (`local_point`) must not be either.
 pub fn scale(piece: Piece, b: Beyond) -> HudScale {
     let (corner, offset) = anchor(piece, b);
-    let global = crate::settings::client().display_ui().hud_scale as f32 / 100.0;
+    let windowed = matches!(piece, Piece::RaidPrompts | Piece::TargetInfo) && !crate::settings::pc_mode();
+    let global = if windowed { 1.0 } else { crate::settings::client().display_ui().hud_scale as f32 / 100.0 };
     HudScale { origin: [corner[0] + offset[0], corner[1] + offset[1]], factor: global * (f32::from(piece_scale_percent(piece)) / 100.0) }
 }
 
@@ -843,7 +849,7 @@ pub fn press(p: [f32; 2], b: Beyond) -> Press {
             && p[0] >= r[0] && p[0] < r[2] && p[1] >= r[1] && p[1] < r[3])
             && let Some(tab) = piece.chat_tab()
         {
-            let c = crate::settings::client();
+            let c = crate::settings::client().display_ui();
             let (w, h) = crate::settings::chat_pane_size(tab);
             let initial = [w, h];
             let width = crate::chat::ChatSize::BASE_WIDTH as f32 * c.hud_scale as f32 / 10_000.0
@@ -1245,6 +1251,41 @@ mod tests {
         });
         assert_eq!(frame_point(Piece::Chat, local, WIDE), [566.0, 382.0]);
         assert_eq!(frame_point(Piece::Player, [40.0, 20.0], TALL), [30.0, -70.0]);
+    }
+
+    /// The Controller interface's HUD Scale (petition 2912): every HUD piece
+    /// scaled about its own corner and pointed at through the same scale,
+    /// but the raid prompts and the target info, which it draws as windows;
+    /// an older file's `hud_scale` (the PC's) does not reach it. The control:
+    /// at its default the game's HUD, every point where it was.
+    #[test]
+    fn controller_hud_scale_sizes_and_points_at_every_piece() {
+        testing_reset();
+        crate::settings::testing::reset(false);
+        let legacy = crate::settings::ClientOptions { pc_mode: false, hud_scale: 75, ..Default::default() };
+        crate::settings::set_client(legacy);
+        let local = [40.0, 20.0];
+        for b in [FOUR, WIDE, TALL] {
+            for piece in PIECES {
+                assert_eq!(scale(piece, b).factor, 1.0, "{piece:?}: the PC's 75 is not the Controller's");
+                assert_eq!(frame_point(piece, local, b), [local[0] + anchor(piece, b).1[0], local[1] + anchor(piece, b).1[1]], "{piece:?}: where it was");
+            }
+        }
+        crate::settings::set_client(crate::settings::ClientOptions { controller_hud_scale: 50, ..legacy });
+        for b in [FOUR, WIDE, TALL] {
+            for piece in PIECES {
+                let windowed = matches!(piece, Piece::RaidPrompts | Piece::TargetInfo);
+                assert_eq!(scale(piece, b).factor, if windowed { 1.0 } else { 0.5 }, "{piece:?}, {b:?}");
+                let shown = frame_point(piece, [400.0, 360.0], b);
+                assert_eq!(local_point(piece, shown, b), [400.0, 360.0], "{piece:?}, {b:?}: pointed at where drawn");
+            }
+        }
+        // the player's frame, at the top left, half its distance from there
+        assert_eq!(frame_point(Piece::Player, local, FOUR), [20.0, 10.0]);
+        // the PC interface keeps its own scale
+        crate::settings::set_client(crate::settings::ClientOptions { pc_mode: true, controller_hud_scale: 50, ..legacy });
+        assert_eq!(scale(Piece::Player, FOUR).factor, 0.75);
+        crate::settings::testing::reset(false);
     }
 
     #[test]
