@@ -2604,8 +2604,18 @@ mod entity_actors {
     }
 }
 
-/// Exclusive squared range for target cycling and the manual crosshair.
+/// `CycleTarget`'s reach: a creature this far (200), squared, or farther
+/// is never targeted; from the camera on the PS2, from the character in the
+/// PC interface (`cycle_target_from_character`).
 const CYCLE_REACH2: f32 = 40000.0;
+
+/// Where Tab and R1 measure from: the camera (`CycleTarget`, the PS2's) or
+/// the drawn character (the PC interface's).
+#[derive(Clone, Copy)]
+enum CycleFrom<'a> {
+    Camera { eye: glam::Vec3, dir: glam::Vec3 },
+    Character(&'a WalkPhysics<Ee>),
+}
 
 /// Whether `c` is a familiar, which no target cycle takes (a GM's
 /// petitions 1881 and 1903, another's 1902, 2026-11-13: "Only direct mouse
@@ -5260,12 +5270,41 @@ impl Play {
         }
     }
 
-    /// Tab and R1 cycle ahead of the player along the camera's centre ray.
-    /// The game's 4:3 projection weights aim and distance consistently across
-    /// window sizes. The drawn view determines which creatures are on screen.
-    /// L1 cycles through self, group members and the pet.
-    pub fn cycle_target(&mut self, group: bool, body: &WalkPhysics<Ee>, game: glam::Mat4, view_proj: glam::Mat4) {
-        let origin = glam::Vec3::from(body.smooth_location().to_array());
+    /// `CycleTarget(group)`, the PS2's (the Controller interface's). Not
+    /// `group` (R1, Tab): the next creature in view, by `CompareY` over the
+    /// game's score (mostly how far off the screen's centre line, plus
+    /// distance; a corpse 2 further), from the camera at `eye` looking along
+    /// `dir`, the group, the pet, the player and a familiar (`is_familiar`:
+    /// Healbot) left out. `group` (L1): the player, the group's other
+    /// members, the pet (but a familiar), in turn. Changing between the two
+    /// starts each from its first; then 0x0010 with the token and the choice.
+    ///
+    /// How far off the centre line a creature is (its x after the divide)
+    /// is measured through `game`, the game's own camera (`m_viewProj`: 55
+    /// degrees and 10/7 across a 4:3 picture, `walker.view(4/3)`), as
+    /// `TargetCentre` measures; what is in view (`m_frustum.Cull`) is the
+    /// view as drawn, `view_proj` (a wider window's sides, a narrower one's
+    /// top and bottom: a creature the player sees can be cycled to). A wider
+    /// window draws a creature's x at 4/3 over its aspect of the game's
+    /// (Hor+, `walker::projection_to`), so measured as drawn the side's
+    /// penalty, x squared, was 0.53 of the console's at 1707x932 and a
+    /// creature off to the side came before one ahead (F3 20261026-154639);
+    /// a narrower one draws it at the game's (Vert+).
+    pub fn cycle_target(&mut self, group: bool, eye: glam::Vec3, dir: glam::Vec3, game: glam::Mat4, view_proj: glam::Mat4) {
+        self.cycle_target_with(group, CycleFrom::Camera { eye, dir }, game, view_proj);
+    }
+
+    /// The PC interface's Tab and R1 (PR #23): ahead of the character along
+    /// the camera's centre ray, so the camera's zoom does not change the
+    /// pick. Measured from the drawn character, not the camera: a creature
+    /// between the camera and the character, or behind the character, is
+    /// passed over; off the centre line counts its height too (x and y
+    /// squared). L1 is `cycle_target`'s.
+    pub fn cycle_target_from_character(&mut self, group: bool, body: &WalkPhysics<Ee>, game: glam::Mat4, view_proj: glam::Mat4) {
+        self.cycle_target_with(group, CycleFrom::Character(body), game, view_proj);
+    }
+
+    fn cycle_target_with(&mut self, group: bool, from: CycleFrom, game: glam::Mat4, view_proj: glam::Mat4) {
         let me = self.self_id32();
         let mut members: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
         // a raid group's others the client can see (the Raid List)
@@ -5303,6 +5342,41 @@ impl Play {
                 dead = c.state == 14;
             }
             let pos = glam::Vec3::from(e.actor_pos);
+            let body = match from {
+                CycleFrom::Character(body) => body,
+                CycleFrom::Camera { eye, dir } => {
+                    // the PS2's `CycleTarget` (viclient.cpp), from the camera
+                    let d2 = (pos - eye).length_squared();
+                    let mut near = false;
+                    if d2 < 15.0 {
+                        let a = glam::Vec3::new(pos.x - eye.x, 0.0, pos.z - eye.z).normalize_or_zero();
+                        let b = glam::Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
+                        near = a.dot(b) > 0.65;
+                    }
+                    let h = view_proj * pos.extend(1.0);
+                    let inside = h.w > 0.0 && (h.x / h.w).abs() <= 1.0 && (h.y / h.w).abs() <= 1.0 && h.z / h.w >= 0.0 && h.z / h.w <= 1.0;
+                    if !near && !inside {
+                        continue;
+                    }
+                    if e.p18 & 1 == 0 || d2 >= CYCLE_REACH2 {
+                        continue;
+                    }
+                    // the game's camera's x; read only past 5 away and not near,
+                    // which is in view, in front of both (their w is the depth)
+                    let g = game * pos.extend(1.0);
+                    let x = g.x / g.w;
+                    let score = if near {
+                        0.0
+                    } else if d2 < 25.0 {
+                        d2.sqrt() / 50.0 * 0.35
+                    } else {
+                        d2.sqrt() / 50.0 * 0.35 + x * x
+                    };
+                    cand.push((score + if dead { 2.0 } else { 0.0 }, e.id));
+                    continue;
+                }
+            };
+            let origin = glam::Vec3::from(body.smooth_location().to_array());
             let offset = pos - origin;
             let d2 = offset.length_squared();
             // w = 0 removes the camera translation. After projection, aim.w
@@ -5357,11 +5431,20 @@ impl Play {
         self.last_group = group;
     }
 
-    /// Cast from the character's current position in the direction of the view.
+    /// `cycle_target` from `walker`'s camera in a window `aspect` wide:
+    /// measured through the game's camera (`walker.view(4/3)`), in view as
+    /// drawn (`walker.view(aspect)`). The PC interface measures from the
+    /// character instead (`cycle_target_from_character`); the Controller
+    /// interface keeps the PS2's camera.
     pub fn cycle_target_from(&mut self, group: bool, walker: &Walker, aspect: f32) {
         let (drawn, view) = walker.view(aspect);
         let (game, _) = walker.view(4.0 / 3.0);
-        self.cycle_target(group, &walker.cam.walk.phys, game * view, drawn * view);
+        if crate::settings::pc_mode() {
+            self.cycle_target_from_character(group, &walker.cam.walk.phys, game * view, drawn * view);
+        } else {
+            let dir = glam::Vec3::from(walker.eye.direction.to_array());
+            self.cycle_target(group, walker.eye_position(), dir, game * view, drawn * view);
+        }
     }
 
     /// `VIWndGame::OnKeyDown`'s L1 and R1 in play (` and Tab on the
@@ -13084,9 +13167,9 @@ mod commands {
         p.entities.slots[1] = Some(creature(0x0010_1076, 0, [0.0, 0.0, -10.0], "Ice Statue"));
         let proj = glam::camera::rh::proj::directx::perspective(45f32.to_radians(), 4.0 / 3.0, 0.3, 6000.0);
         let vp = proj * glam::camera::rh::view::look_to_mat4(glam::Vec3::ZERO, glam::Vec3::NEG_Z, glam::Vec3::Y);
-        p.cycle_target(false, &Default::default(), vp, vp);
+        p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, vp, vp);
         assert_eq!(p.target, 0x0010_1076, "R1: the statue");
-        p.cycle_target(false, &Default::default(), vp, vp);
+        p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, vp, vp);
         assert_eq!(p.target, 0x0010_1076, "R1 again: still the only one with an actor");
         // a click a unit up its upright
         let c = vp * glam::Vec4::new(0.0, 1.0, -10.0, 1.0);
@@ -13129,7 +13212,7 @@ mod commands {
         let cycle = |p: &mut Play, group: bool| -> Vec<u32> {
             (0..6)
                 .map(|_| {
-                    p.cycle_target(group, &Default::default(), m, m);
+                    p.cycle_target(group, glam::Vec3::ZERO, glam::Vec3::NEG_Z, m, m);
                     p.target
                 })
                 .collect()
@@ -13215,7 +13298,7 @@ mod commands {
             p.target = u32::MAX;
             (0..4)
                 .map(|_| {
-                    p.cycle_target(false, &Default::default(), game, drawn);
+                    p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, game, drawn);
                     p.target
                 })
                 .collect()
@@ -13270,12 +13353,12 @@ mod commands {
             p.select_target(1);
             assert_eq!(p.target, 0x100, "start on self");
             for id in expected {
-                p.cycle_target(false, &cam.walk.phys, game, drawn);
+                p.cycle_target_from_character(false, &cam.walk.phys, game, drawn);
                 assert_eq!(p.target, id, "heading {heading}, camera orbit {orbit}, distance {zoom}");
             }
             if orbit == 0.0 {
                 p.entities.slots[1] = None;
-                p.cycle_target(false, &cam.walk.phys, game, drawn);
+                p.cycle_target_from_character(false, &cam.walk.phys, game, drawn);
                 assert_eq!(p.target, u32::MAX, "no eligible target ahead of the player");
             }
         }
@@ -13324,6 +13407,11 @@ mod commands {
 
         let wide_eye = walker.eye_position();
         let orbit = walker.cam.cur.orbit.to_array();
+        // the control: the Controller interface keeps the PS2's `CycleTarget`,
+        // from the camera, which has Rudolph in front of it first
+        crate::settings::set_client(crate::settings::ClientOptions { pc_mode: false, ..crate::settings::client() });
+        assert_eq!(first_picks(&mut p, &mut walker), [RUDOLPH; 2], "the PS2's, from the camera");
+        crate::settings::set_client(crate::settings::ClientOptions { pc_mode: true, ..crate::settings::client() });
         let wide = first_picks(&mut p, &mut walker);
         crate::mouse::zoom(&mut walker.cam, &mut walker.reach, 10.0);
         walker.eye = walker.cam.process(&mut walker.scene);
@@ -13332,7 +13420,8 @@ mod commands {
         assert_eq!(walker.cam.cur.orbit.to_array(), orbit);
         assert_eq!(walker.cam.walk.phys.position.to_array(), at);
         let close = first_picks(&mut p, &mut walker);
-        assert_eq!([wide, close], [[GRIMEFOD; 2]; 2], "first [Tab, R1] picks when zoomed out and in");
+        assert_eq!([wide, close], [[GRIMEFOD; 2]; 2], "first [Tab, R1] picks when zoomed out and in (PC interface)");
+        crate::settings::set_client(crate::settings::ClientOptions { pc_mode: false, ..crate::settings::client() });
     }
 
     #[test]
@@ -13355,11 +13444,11 @@ mod commands {
         p.entities.slots[1] = Some(cycle_creature(player_ray, (origin + forward * 20.0).to_array(), true));
         // Below and just behind the character on a slope, yet in front of the camera.
         p.entities.slots[2] = Some(cycle_creature(0x303, (origin + Vec3::new(0.0, -2.0, -0.3)).to_array(), true));
-        p.cycle_target(false, &body, vp, vp);
+        p.cycle_target_from_character(false, &body, vp, vp);
         assert_eq!(p.target, player_ray);
-        p.cycle_target(false, &body, vp, vp);
+        p.cycle_target_from_character(false, &body, vp, vp);
         assert_eq!(p.target, camera_ray, "the nearer off-axis target is still in the cycle");
-        p.cycle_target(false, &body, vp, vp);
+        p.cycle_target_from_character(false, &body, vp, vp);
         assert_eq!(p.target, player_ray, "the target downhill behind the player stays out of the cycle");
     }
 
@@ -13393,7 +13482,7 @@ mod commands {
             let m = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
             (0..7)
                 .map(|_| {
-                    p.cycle_target(group, &Default::default(), m, m);
+                    p.cycle_target(group, glam::Vec3::ZERO, glam::Vec3::NEG_Z, m, m);
                     p.target
                 })
                 .collect()
@@ -13445,7 +13534,7 @@ mod commands {
         let m = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
         let reached: Vec<u32> = (0..4)
             .map(|_| {
-                p.cycle_target(true, &Default::default(), m, m);
+                p.cycle_target(true, glam::Vec3::ZERO, glam::Vec3::NEG_Z, m, m);
                 p.target
             })
             .collect();
