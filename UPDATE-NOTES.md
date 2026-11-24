@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Busy chat panes scroll back down
+
+- The mouse wheel reaches the newest line again in a busy chat pane, such as a detached **Combat** pane in a fight: each notch down now passes the lines that came in since the last one, and at the bottom the pane follows live chat again.
+
 ## 2026-11-24 · Keyboard chat starts on Main
 
 - Press **Chat Expand** (**C** by default) on the keyboard to select **Main** immediately in either interface. While holding it, the first **Tab** moves to the next chat view.
