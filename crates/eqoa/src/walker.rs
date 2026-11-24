@@ -1428,7 +1428,8 @@ pub(crate) mod tests {
     /// The disc's TUNARIA.ESF with the zones round (x, z) read and the
     /// collision world made; None without `run/eqoa.iso`.
     pub(crate) fn tunaria_round(x: f32, z: f32) -> Option<World<Ee>> {
-        let iso = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let iso = std::env::var_os("EQOA_ISO").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso"));
         if !iso.exists() {
             eprintln!("SKIP: no run/eqoa.iso");
             return None;
