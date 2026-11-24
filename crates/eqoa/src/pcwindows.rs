@@ -98,6 +98,7 @@ fn layouts(text: &str) -> BTreeMap<i32, Layout> {
 #[derive(Clone, Copy, Debug)]
 struct View {
     key: i32,
+    editing: bool,
     screen: Rect,
     source: Rect,
     frame: Rect,
@@ -109,9 +110,12 @@ struct View {
 }
 
 impl View {
-    fn new(key: i32, screen: Rect, source: Rect, layout: Layout, pan: [f32; 2]) -> Self {
+    fn new(key: i32, screen: Rect, source: Rect, layout: Layout, pan: [f32; 2], editing: bool) -> Self {
         let manual = layout.resized_axes(source, screen);
-        let header = [0.0, TITLE];
+        // Saved positions and sizes include the title bar. Keep the body in
+        // place when hiding it, and give untouched windows the full screen.
+        let title = if editing || layout.position.is_some() || layout.size.is_some() { TITLE } else { 0.0 };
+        let header = [0.0, title];
         let limits: [f32; 2] = std::array::from_fn(|i| {
             let size = if manual[i] || layout.pinned { layout.size.map(|s| s[i]) } else { None };
             size.unwrap_or(screen.size(i)).clamp(MIN_SIZE[i], screen.size(i))
@@ -135,16 +139,17 @@ impl View {
             let span = if manual[i] || layout.pinned { limits[i] } else { natural.clamp(MIN_SIZE[i], limits[i]) };
             let travel = screen.size(i) - span;
             let origin = layout.position.map_or_else(
-                || (source.0[i] - if i == 1 { TITLE } else { 0.0 }).clamp(screen.0[i], screen.0[i] + travel),
+                || (source.0[i] - header[i]).clamp(screen.0[i], screen.0[i] + travel),
                 |p| screen.0[i] + p[i] * travel,
             );
             frame.0[i] = origin;
             frame.0[i + 2] = origin + span;
         }
         let [l, t, r, b] = frame.0;
-        let body = Rect([l, t + TITLE, r - if scroll[1] { GUTTER } else { 0.0 }, b - if scroll[0] { GUTTER } else { 0.0 }]);
+        let body = Rect([l, t + title, r - if scroll[1] { GUTTER } else { 0.0 }, b - if scroll[0] { GUTTER } else { 0.0 }]);
+        if !editing { frame.0[1] = body.0[1]; }
         let pan = std::array::from_fn(|i| if scroll[i] { pan[i] } else { 0.0 });
-        Self { key, screen, source, frame, body, zoom, max_zoom, scroll, pan }
+        Self { key, editing, screen, source, frame, body, zoom, max_zoom, scroll, pan }
     }
     fn overflow(self, i: usize) -> f32 { (self.source.size(i) * self.zoom - self.body.size(i)).max(0.0) }
     fn origin(self, i: usize) -> f32 { self.body.0[i] - self.pan[i] * self.overflow(i) }
@@ -265,7 +270,10 @@ impl Windows {
             return;
         };
         let previous = self.view.filter(|v| v.key == key);
-        if previous.is_none() { self.release(); }
+        let editing = crate::hudlayout::unlocked();
+        if previous.is_none() || (!editing && self.drag.is_some_and(|d| !matches!(d.action, Action::Scroll(_)))) {
+            self.release();
+        }
         // Animated glyphs and nested menus can change the drawn extent.
         // Keep the frame steady when previously visible content disappears.
         let layout = self.saved.get(&key).copied().unwrap_or_default();
@@ -273,8 +281,8 @@ impl Windows {
         if !layout.resized_axes(source, screen).contains(&true) && let Some(v) = previous {
             source = source.union(v.source);
         }
-        let view = View::new(key, screen, source, layout, previous.map_or([0.0; 2], |v| v.pan));
-        if let Some(index) = layer.backdrop {
+        let view = View::new(key, screen, source, layout, previous.map_or([0.0; 2], |v| v.pan), editing);
+        if editing && let Some(index) = layer.backdrop {
             let [l, t, right, b] = view.body.0;
             r.ui.quads[index].pos = [[l,t], [right,t], [right,b], [l,b]];
         }
@@ -294,10 +302,11 @@ impl Windows {
     pub fn frame_body(&self) -> Option<[f32; 4]> { self.view.map(|v| v.body.0) }
     pub fn press(&mut self, key: Option<i32>, at: [f32; 2]) -> bool {
         let Some(v) = self.view.filter(|v| Some(v.key) == key && v.frame.has(at)) else { return false };
+        let editing = v.editing && crate::hudlayout::unlocked();
         let layout = self.saved.get(&v.key).copied().unwrap_or_default();
-        let action = if at[1] < v.body.0[1] {
+        let action = if editing && at[1] < v.body.0[1] {
             v.buttons().into_iter().find(|(b, _)| b.has(at)).map_or(Action::Move, |(_, k)| k)
-        } else if !layout.pinned && v.grip().has(at) { Action::Resize }
+        } else if editing && !layout.pinned && v.grip().has(at) { Action::Resize }
         else if let Some(axis) = (0..2).find(|&i| v.scroll[i] && v.track(i).has(at)) { Action::Scroll(axis) }
         else { return false };
         let mut drag_view = v;
@@ -338,6 +347,10 @@ impl Windows {
         let Some(drag) = self.drag else { return false };
         let v = drag.view;
         if Some(v.key) != key { self.clear(); return false; }
+        if !matches!(drag.action, Action::Scroll(_)) && !crate::hudlayout::unlocked() {
+            self.release();
+            return false;
+        }
         let delta = [at[0] - drag.from[0], at[1] - drag.from[1]];
         if let Action::Scroll(i) = drag.action {
             let travel = v.track(i).size(i) - v.thumb(i).size(i);
@@ -377,6 +390,7 @@ impl Windows {
 }
 
 fn draw_frame(r: &mut UiRaster, view: View, title: &str, layout: Layout) {
+    if !view.editing && !view.scroll.contains(&true) { return; }
     let (Some(white), Some(font)) = (r.assets.white, r.assets.font) else { return };
     let ui = &mut *r.ui;
     let (anchor, vertical, viewport, shift, hud_scale) = (ui.anchor, ui.vertical, ui.viewport.take(), ui.shift, ui.hud_scale);
@@ -395,43 +409,46 @@ fn draw_frame(r: &mut UiRaster, view: View, title: &str, layout: Layout) {
         ui.text_scaled(font, x, y, size, color, &crate::ui::wide(text));
         for q in &mut ui.quads[first..] { q.clip = Some(clip.0.map(|n| n.round() as i32)); }
     };
-    let [l, t, right, b] = view.frame.0;
-    let header = Rect([l,t,right,t+TITLE]);
-    fill(ui, header, BODY);
-    fill(ui, Rect([l,t+TITLE-1.,right,t+TITLE]), METAL);
-    label(ui, title, l + 5., t + 2., scale, Rect([l, t, right - 138., t + TITLE]), ink);
-    for (btn, action) in view.buttons() {
-        let enabled = match action {
-            Action::Pin => true,
-            Action::Smaller => !layout.pinned && view.zoom > 0.501,
-            Action::Larger => !layout.pinned && view.zoom < view.max_zoom - 0.001,
-            _ => !layout.pinned,
-        };
-        fill(ui, btn, if enabled { [0.26, 0.23, 0.16, 1.0] } else { BODY });
-        let color = if enabled { ink } else { [0.55, 0.53, 0.46, 1.0] };
-        if matches!(action, Action::Smaller | Action::Larger) {
-            // The tiny disc-font hyphen can fall between samples at 640x480.
-            let (x, y) = ((btn.0[0] + btn.0[2]) / 2., (btn.0[1] + btn.0[3]) / 2.);
-            fill(ui, Rect([x - 4., y - 1., x + 4., y + 1.]), color);
-            if matches!(action, Action::Larger) { fill(ui, Rect([x - 1., y - 4., x + 1., y + 4.]), color); }
-            continue;
+    if view.editing {
+        let [l, t, right, _] = view.frame.0;
+        let header = Rect([l,t,right,t+TITLE]);
+        fill(ui, header, BODY);
+        fill(ui, Rect([l,t+TITLE-1.,right,t+TITLE]), METAL);
+        label(ui, title, l + 5., t + 2., scale, Rect([l, t, right - 138., t + TITLE]), ink);
+        for (btn, action) in view.buttons() {
+            let enabled = match action {
+                Action::Pin => true,
+                Action::Smaller => !layout.pinned && view.zoom > 0.501,
+                Action::Larger => !layout.pinned && view.zoom < view.max_zoom - 0.001,
+                _ => !layout.pinned,
+            };
+            fill(ui, btn, if enabled { [0.26, 0.23, 0.16, 1.0] } else { BODY });
+            let color = if enabled { ink } else { [0.55, 0.53, 0.46, 1.0] };
+            if matches!(action, Action::Smaller | Action::Larger) {
+                // The tiny disc-font hyphen can fall between samples at 640x480.
+                let (x, y) = ((btn.0[0] + btn.0[2]) / 2., (btn.0[1] + btn.0[3]) / 2.);
+                fill(ui, Rect([x - 4., y - 1., x + 4., y + 1.]), color);
+                if matches!(action, Action::Larger) { fill(ui, Rect([x - 1., y - 4., x + 1., y + 4.]), color); }
+                continue;
+            }
+            let text = match action {
+                Action::Pin if layout.pinned => "Unpin",
+                Action::Pin => "Pin",
+                _ => "Reset",
+            };
+            let width = ui.fonts[font].string_width(&crate::ui::wide(text)).max(1) as f32;
+            let fit = scale.min((btn.size(0) - 3.) / width);
+            label(ui, text, btn.0[0] + (btn.size(0) - width * fit) / 2., t + 2., fit, btn, color);
         }
-        let text = match action {
-            Action::Pin if layout.pinned => "Unpin",
-            Action::Pin => "Pin",
-            _ => "Reset",
-        };
-        let width = ui.fonts[font].string_width(&crate::ui::wide(text)).max(1) as f32;
-        let fit = scale.min((btn.size(0) - 3.) / width);
-        label(ui, text, btn.0[0] + (btn.size(0) - width * fit) / 2., t + 2., fit, btn, color);
+        label(ui, &format!("{:.0}%", view.zoom * 100.), right - 116., t + 2., scale, Rect([right - 117., t, right - 81., t + TITLE]), ink);
     }
-    label(ui, &format!("{:.0}%", view.zoom * 100.), right - 116., t + 2., scale, Rect([right - 117., t, right - 81., t + TITLE]), ink);
     for i in 0..2 {
         if !view.scroll[i] { continue; }
         fill(ui, view.track(i), BODY);
         fill(ui, view.thumb(i), METAL);
     }
-    if !layout.pinned {
+    if view.editing && !layout.pinned {
+        let [_, _, right, b] = view.frame.0;
         fill(ui, view.grip(), BODY);
         for inset in [5., 9.] {
             ui.push_whole(Quad {
@@ -453,13 +470,13 @@ mod tests {
         let source = Rect([0., 0., 640., 350.]);
         let make = |size, axes, zoom| View::new(5, screen, source, Layout {
             size, resized: Some(axes), zoom, ..Layout::default()
-        }, [1.; 2]);
+        }, [1.; 2], false);
         let full = make(None, [false; 2], 100);
         assert_eq!(full.scroll, [false; 2]);
-        assert_eq!([full.body.size(0), full.body.size(1)], [640., 350.]);
+        assert_eq!(full.body, source);
         assert_eq!(full.pan, [0.; 2]);
         let mut windows = Windows { view: Some(full), ..Default::default() };
-        for at in [[638., 200.], [280., 367.]] {
+        for at in [[638., 200.], [280., 348.]] {
             assert!(windows.input(Some(5), at).is_some());
             assert!(!windows.press(Some(5), at), "a hidden track must not intercept {at:?}");
         }
@@ -485,16 +502,16 @@ mod tests {
         let screen = Rect([-100., 0., 740., 448.]);
         let source = Rect([0., 0., 640., 350.]);
         for key in [5, 13] {
-            let v = View::new(key, screen, source, saved[&key], [1.; 2]);
+            let v = View::new(key, screen, source, saved[&key], [1.; 2], false);
             assert_eq!(v.scroll, [false; 2]);
         }
-        assert_eq!(View::new(1013, screen, source, saved[&1013], [0.; 2]).scroll, [true, false]);
+        assert_eq!(View::new(1013, screen, source, saved[&1013], [0.; 2], false).scroll, [true, false]);
     }
 
     #[test]
     fn a_resized_zoomed_window_can_reach_both_far_edges_without_stretching_its_contents() {
         let layout = Layout { size: Some([260., 150.]), resized: Some([true; 2]), zoom: 150, ..Layout::default() };
-        let view = View::new(5, Rect([0., 0., 640., 448.]), Rect([10., 20., 620., 380.]), layout, [0.; 2]);
+        let view = View::new(5, Rect([0., 0., 640., 448.]), Rect([10., 20., 620., 380.]), layout, [0.; 2], false);
         let [x, y] = view.place([40., 50.]);
         assert_eq!(view.place([50., 60.]), [x + 15., y + 15.]);
         let mut windows = Windows { view: Some(view), ..Default::default() };
@@ -509,18 +526,50 @@ mod tests {
         let view = windows.view.unwrap();
         let last = [view.source.0[2] - 1., view.source.0[3] - 1.];
         assert_eq!(windows.input(Some(5), view.place(last)), Some(last));
-        assert_eq!(windows.input(Some(5), [view.frame.0[0], view.frame.0[1]]), None);
+        assert_eq!(windows.input(Some(5), [view.frame.0[0] - 1., view.frame.0[1]]), None);
+    }
+
+    #[test]
+    fn locking_hud_ends_window_edits_before_the_next_frame() {
+        crate::settings::testing::reset(false);
+        crate::settings::set_ui_mode(true).unwrap();
+        crate::hudlayout::set_unlocked(true);
+        let screen = Rect([0., 0., 640., 448.]);
+        let source = Rect([20., 80., 320., 300.]);
+        let view = View::new(5, screen, source, Layout::default(), [0.; 2], true);
+        let mut windows = Windows { cache: Some(crate::settings::hud_cache_key()), view: Some(view), ..Default::default() };
+        let title = [view.frame.0[0] + 10., view.frame.0[1] + 9.];
+        let grip = [view.frame.0[2] - 5., view.frame.0[3] - 5.];
+        assert!(windows.press(Some(5), title));
+        assert!(windows.drag(Some(5), [title[0] + 24., title[1] + 12.]));
+
+        crate::hudlayout::set_unlocked(false);
+        assert!(!windows.drag(Some(5), [title[0] + 48., title[1] + 24.]));
+        assert!(!windows.press(Some(5), title));
+        assert!(!windows.press(Some(5), grip));
+        for (button, _) in view.buttons() {
+            assert!(!windows.press(Some(5), [button.0[0] + 1., button.0[1] + 1.]));
+        }
+        let saved = layouts(&crate::settings::pc_window_layout());
+        let editing = View::new(5, screen, source, saved[&5], [0.; 2], true);
+        let locked = View::new(5, screen, source, saved[&5], [0.; 2], false);
+        assert_eq!(locked.body, editing.body);
+        let [left, top, _, _] = locked.body.0;
+        assert!((left - (source.0[0] + 24.)).abs() < 0.001);
+        assert!((top - (source.0[1] + 12.)).abs() < 0.001);
+        assert_eq!(locked.frame.0[1], locked.body.0[1]);
     }
 
     #[test]
     fn pinned_window_keeps_its_size_when_a_submenu_grows_and_another_window_saves() {
         crate::settings::testing::reset(false);
         crate::settings::set_ui_mode(true).unwrap();
+        crate::hudlayout::set_unlocked(true);
         let screen = Rect([-100., 0., 740., 448.]);
         let source = Rect([20., 80., 320., 300.]);
         let mut windows = Vec::new();
         for key in [5, 1013] {
-            let view = View::new(key, screen, source, Layout::default(), [0.; 2]);
+            let view = View::new(key, screen, source, Layout::default(), [0.; 2], true);
             let mut frame = Windows { cache: Some(crate::settings::hud_cache_key()), view: Some(view), ..Default::default() };
             assert!(frame.press(Some(key), [view.frame.0[2] - 45., view.frame.0[1] + 9.]));
             windows.push(frame);
@@ -528,7 +577,7 @@ mod tests {
         for mut window in windows {
             assert!(window.release());
             let v = window.view.unwrap();
-            let grown = View::new(v.key, screen, Rect([0., 20., 615., 395.]), window.saved[&v.key], [0.; 2]);
+            let grown = View::new(v.key, screen, Rect([0., 20., 615., 395.]), window.saved[&v.key], [0.; 2], true);
             assert_eq!(grown.scroll, [false; 2], "pinning an untouched window does not create scrollbars");
             for (before, after) in v.frame.0.into_iter().zip(grown.frame.0) {
                 assert!((before - after).abs() < 0.001, "pin held the frame edge at {before}, got {after}");

@@ -83,8 +83,9 @@ or a browser (each described where it lives below):
   frame and equipment switch bar. **Extended → UI → HUD Layout → Spell Bar Size %**
   also scales the full stack of spell bars. Click **Pin** to lock a piece against dragging,
   **Unpin** to edit it again, and **Lock** at the top to return to play.
-- **PC windows**. Drag the title bar to move an open gameplay window, or drag
-  its bottom-right corner to change its width and height. Use **−** and **+**
+- **PC windows**. Type `/hud` before opening a window to show its layout
+  controls. Drag the title bar to move the window, or drag its bottom-right
+  corner to change its width and height. Use **−** and **+**
   to zoom the contents. An untouched window fits the display. Narrowing or
   shortening a window brings up a scrollbar on the axis that needs it.
   Enlarge the window to hide it again. **Pin** holds its layout, **Unpin** unlocks

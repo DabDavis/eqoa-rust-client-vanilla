@@ -63,6 +63,29 @@ fn inventory_and_book_move_resize_zoom_and_restore() {
         assert!(p.hud_drag(px(b), size), "window drag move {b:?}");
         assert!(p.hud_release());
     };
+    let check_controls = |p: &mut Play, r: &mut render::Renderer, now: &mut i64, mode| {
+        for (command, visible) in [("", false), ("/hud", true), ("/hud lock", false)] {
+            if !command.is_empty() { p.chat_line(command); }
+            frame(p, r, &walker, size, now);
+            assert_eq!(p.pc_windows.geometry().expect("PC modal").0, mode);
+            let button_drawn = r.ui.as_ref().unwrap().quads.iter().any(|q| q.color == [0.26, 0.23, 0.16, 1.0]);
+            assert_eq!(button_drawn, visible, "window {mode} edit buttons");
+        }
+    };
+    play.open_dialog(&crate::ui::wide("Welcome, adventurer."), false);
+    check_controls(&mut play, &mut renderer, &mut now, 9);
+    play.close_dialog();
+    play.open_start_menu(true);
+    check_controls(&mut play, &mut renderer, &mut now, 13);
+    play.start_key(144, true);
+    frame(&mut play, &mut renderer, &walker, size, &mut now);
+    play.open_options();
+    check_controls(&mut play, &mut renderer, &mut now, 34);
+    play.panel_key(27, true);
+    for _ in 0..8 { frame(&mut play, &mut renderer, &walker, size, &mut now); }
+    assert_eq!(play.mode, 0, "Options closes back to play");
+
+    play.chat_line("/hud");
     // Open via the normal Start button, then select the actual disc menu row.
     open(&mut play, &mut renderer, &mut walker, size, &mut now, 0x0200_0000);
     assert!(play.items.visible, "ordinary Start menu opened Inventory");
@@ -161,6 +184,10 @@ fn inventory_and_book_move_resize_zoom_and_restore() {
     assert!(zoom > book_zoom, "Spell Book zoom increased");
     assert_eq!(play.pc_windows.scrollbars(), [true; 2]);
     eprintln!("Spell Book frame: before={book_before:?}, saved={book_saved:?}, zoom={zoom}%");
+    play.chat_line("/hud lock");
+    frame(&mut play, &mut renderer, &walker, size, &mut now);
+    assert_eq!(play.pc_windows.scrollbars(), [true; 2], "locking keeps needed scrollbars");
+    assert_eq!(play.pc_windows.geometry().unwrap().3, zoom, "locking keeps the saved zoom");
     // Find a real book row via its existing hit test, then send its projected
     // location through Play's normal transformed mouse path.
     let original = play.book.sel;
@@ -188,6 +215,7 @@ fn inventory_and_book_move_resize_zoom_and_restore() {
     assert_eq!(play.mode, 0, "Start closes the menu");
     // A new window manager must reload both layouts from the saved store,
     // rather than merely retaining the first manager's in-memory state.
+    play.chat_line("/hud");
     play.pc_windows = Default::default();
     open(&mut play, &mut renderer, &mut walker, size, &mut now, 0x0200_0000);
     let (key, restored, _, restored_zoom) = play.pc_windows.geometry().unwrap();
