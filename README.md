@@ -77,9 +77,12 @@ or a browser (each described where it lives below):
   per character. Hiding a row preserves its equipped spells. On servers with weapon sets,
   the **Equipment Switch** bar lets you click a prepared set or bare hands.
 - **PC HUD layout**. In **Extended → UI → Interface Size**, adjust the HUD and
-  overhead names independently. Type `/hud` to move the player frame, spell
-  bars, equipment bar, chat windows and other HUD pieces. Click **Pin** to hold
-  a piece in place, **Unpin** to move it again, and **Lock** to return to play.
+  overhead names independently. Type `/hud` to arrange the HUD. Drag a piece
+  to move it or drag a gold corner arrow to scale it from **50% to 200%**.
+  Each piece remembers its own size, including the target, minimap, character
+  frame and equipment switch bar. **Extended → UI → HUD Layout → Spell Bar Size %**
+  also scales the full stack of spell bars. Click **Pin** to lock a piece against dragging,
+  **Unpin** to edit it again, and **Lock** at the top to return to play.
 - **PC windows**. Drag the title bar to move an open gameplay window, or drag
   its bottom-right corner to change its width and height. Use **−** and **+**
   to zoom the contents. An untouched window fits the display. Narrowing or
@@ -87,10 +90,14 @@ or a browser (each described where it lives below):
   Enlarge the window to hide it again. **Pin** holds its layout, **Unpin** unlocks
   it and **Reset** restores its original size and placement. Inventory, the Spell
   Book, and each of two open item comparisons keep their own settings.
-- **PC chat**. Choose a tab and click **Detach tab** to give it a window. Click
-  **Dock** to bring it back with its history. Each window has a **Resize** handle
-  in Move HUD. **Extended → UI → Chat** controls background opacity and inline
-  keyboard chat. Press Enter to type, Enter again to send, or Escape to cancel.
+- **PC chat**. Click a tab along the top edge of the chat window and click
+  **Detach tab** to open it separately. **Dock** brings it back with its history.
+  In `/hud`, drag **Resize** to change a pane's width and line count, or use a
+  corner arrow to scale the frame and text together. Under **Extended → UI → Chat**,
+  set **Chat Fade Delay** to **Off** or **1–120 seconds**. Each pane fades after
+  you leave it idle. Hover over it to bring it back. Turn on **Wake on New Chat**
+  to also show a pane when it receives a message. Press Enter to type, Enter again
+  to send, or Escape to cancel.
   A shortcut by itself selects Say (`/sa`), Shout (`/s`), Group (`/g`) or
   Guild (`/gu`). Include a message for a one-time send, use `/t Name message`
   for a tell, or `/r message` to reply.

@@ -488,6 +488,9 @@ pub struct WndOptions {
     saved: GameOptions,
     /// the client's own as it opened, put back with them
     saved_client: ClientOptions,
+    /// The separate HUD layout authority, captured for Options' Cancel.
+    saved_spell_bar_scale: u16,
+    spell_bar_scale_edited: bool,
     /// The Save Changes box carries the account's notice (`settings::ACCOUNT_NOTICE`).
     notice: bool,
     /// the keys and buttons as it opened, put back with them
@@ -581,6 +584,8 @@ impl WndOptions {
         self.message.visible = false;
         self.saved = *o;
         self.saved_client = crate::settings::client();
+        self.saved_spell_bar_scale = crate::hudlayout::piece_scale_percent(crate::hudlayout::Piece::SpellBars);
+        self.spell_bar_scale_edited = false;
         self.saved_binds = crate::settings::binds();
         self.edit = [(o.no_faction == 0) as u8, (o.no_loot == 0) as u8, o.auto_attack, o.vibration];
         self.sel = 0;
@@ -756,6 +761,10 @@ impl WndOptions {
                 o.no_damage = s.no_damage;
                 crate::settings::set_client(self.saved_client);
                 crate::settings::set_binds(self.saved_binds.clone());
+                if self.spell_bar_scale_edited {
+                    crate::hudlayout::set_piece_scale_percent(crate::hudlayout::Piece::SpellBars, self.saved_spell_bar_scale);
+                    self.spell_bar_scale_edited = false;
+                }
                 ups.push(OptionsUp::Volume(0, o.fx_volume));
                 ups.push(OptionsUp::Volume(1, o.music_volume));
                 ups.push(OptionsUp::Apply);
@@ -785,13 +794,15 @@ impl WndOptions {
         }
         self.take_held(o);
         // nothing changed since the window opened or last kept: nothing written
-        if *o == self.saved && crate::settings::client() == self.saved_client && crate::settings::binds() == self.saved_binds {
+        if *o == self.saved && crate::settings::client() == self.saved_client && crate::settings::binds() == self.saved_binds && !self.spell_bar_scale_edited {
             return;
         }
         crate::settings::save(o);
         self.saved = *o;
         self.saved_client = crate::settings::client();
         self.saved_binds = crate::settings::binds();
+        self.saved_spell_bar_scale = crate::hudlayout::piece_scale_percent(crate::hudlayout::Piece::SpellBars);
+        self.spell_bar_scale_edited = false;
     }
 
     /// The row up and down move: the options menu's, Extended's
@@ -1115,6 +1126,18 @@ impl WndOptions {
                     CHAT_WIDTH => slide(&mut c.chat_width, 50, 125, 5),
                     CHAT_ROWS => slide(&mut c.chat_rows, 3, 12, 1),
                     CHAT_OPACITY => slide(&mut c.chat_opacity, 0, 100, 5),
+                    CHAT_FADE_DELAY => slide(&mut c.chat_fade_seconds, 0, 120, 1),
+                    CHAT_WAKE_ON_MESSAGE => c.chat_wake_on_message = !c.chat_wake_on_message,
+                    SPELL_BAR_SIZE => {
+                        let piece = crate::hudlayout::Piece::SpellBars;
+                        let old = crate::hudlayout::piece_scale_percent(piece);
+                        let next = (old as i32 + d.signum() * 5).clamp(50, 200) as u16;
+                        if next != old {
+                            crate::hudlayout::set_piece_scale_percent(piece, next);
+                            self.spell_bar_scale_edited = true;
+                            cues.push(11);
+                        } else { cues.push(9); }
+                    }
                     INLINE_CHAT => c.inline_chat = !c.inline_chat,
                     // Stacked Spell Bars (ticket 1913): from the next frame
                     // (`hudmenu::Stacked`)
@@ -1254,7 +1277,7 @@ impl WndOptions {
             _ => {}
         }
         // (Texture Folder and Reset DPS Meter make their own sound)
-        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == 55 || self.item == 72 || self.item == 77 || self.item == RESET_TOUCH;
+        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == 55 || self.item == 72 || self.item == 77 || self.item == RESET_TOUCH || self.item == CHAT_FADE_DELAY;
         let slides = matches!(self.item, 3 | 4) || slider_at(self.item).is_some();
         if !slides && !inert && ((0..=11).contains(&self.item) || extended(self.item)) {
             cues.push(11);
@@ -1543,11 +1566,19 @@ impl WndOptions {
     }
 
     fn choose_ui(&mut self, pc: bool, cues: &mut Vec<i32>) {
+        let was_pc = crate::settings::pc_mode();
         match crate::settings::set_ui_mode(pc) {
             Ok(()) => {
                 // A mode switch is immediate; backing out still discards
                 // other options according to the usual Save Changes rules.
                 self.saved_client = self.saved_client.with_interface(crate::settings::client());
+                // Each UI profile owns its HUD layout. A successful switch
+                // accepts the outgoing profile's current scale and starts a
+                // new Cancel baseline on the incoming one.
+                if pc != was_pc {
+                    self.saved_spell_bar_scale = crate::hudlayout::piece_scale_percent(crate::hudlayout::Piece::SpellBars);
+                    self.spell_bar_scale_edited = false;
+                }
                 cues.push(11);
             }
             Err(e) => {
@@ -1804,15 +1835,22 @@ impl WndOptions {
                 _ => None,
             },
             Note::Meter => self.meter_note.clone().filter(|_| matches!(self.item, 70..=72)),
-            Note::Links => self.links_note.clone().filter(|_| self.item == 73),
+            Note::Links => match self.item {
+                73 => self.links_note.clone(),
+                CHAT_FADE_DELAY => Some("Off: no fade; otherwise fades after inactivity".to_string()),
+                CHAT_WAKE_ON_MESSAGE => Some("New messages also wake their chat pane".to_string()),
+                _ => None,
+            },
             Note::TouchLayout => match self.item {
                 MOVE_TOUCH if crate::touch::editing() => Some("Leave the menu, drag a part, pinch to size".to_string()),
                 TOUCH_LAYOUT => Some("Bottom: Start and Select between the sticks".to_string()),
                 _ => None,
             },
-            Note::Hud => (self.item == 76 && crate::hudlayout::unlocked()).then(|| {
-                if crate::settings::pc_mode() { "Drag, pin or unpin each piece" } else { "Leave the menu and drag the pieces" }.to_string()
-            }),
+            Note::Hud => match self.item {
+                76 if crate::hudlayout::unlocked() => Some(if crate::settings::pc_mode() { "Drag, pin or unpin each piece" } else { "Leave the menu and drag the pieces" }.to_string()),
+                SPELL_BAR_SIZE => Some("Also adjustable by dragging in Move HUD".to_string()),
+                _ => None,
+            },
             Note::ChatTabs => Some("Name a tab in chat: /tabname 1 Loot".to_string()),
             Note::Shortcuts => match self.item {
                 SHARED_SHORTCUTS => Some("L2's menus on every character of the account".to_string()),
@@ -1883,7 +1921,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 110] = [
+const EXTENDED_ITEMS: [(i32, &str); 113] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -1994,6 +2032,9 @@ const EXTENDED_ITEMS: [(i32, &str); 110] = [
     (CHAT_ROWS, "Chat Rows"),
     (CHAT_OPACITY, "Chat Opacity %"),
     (INLINE_CHAT, "Inline Keyboard Chat"),
+    (CHAT_FADE_DELAY, "Chat Fade Delay"),
+    (SPELL_BAR_SIZE, "Spell Bar Size %"),
+    (CHAT_WAKE_ON_MESSAGE, "Wake on New Chat"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2074,6 +2115,9 @@ const CHAT_WIDTH: i32 = 242;
 const CHAT_ROWS: i32 = 243;
 const CHAT_OPACITY: i32 = 244;
 const INLINE_CHAT: i32 = 245;
+const CHAT_FADE_DELAY: i32 = 246;
+pub(crate) const SPELL_BAR_SIZE: i32 = 247;
+const CHAT_WAKE_ON_MESSAGE: i32 = 248;
 
 /// Slow When Not Focused's item (a GM's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -2179,7 +2223,7 @@ const ALL_CATEGORIES: [Category; 26] = [
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
-    Category { name: "Chat", items: &[73, 89, R2_CHANNELS, INLINE_CHAT, CHAT_OPACITY], note: Note::Links, group: Group::Ui },
+    Category { name: "Chat", items: &[73, 89, R2_CHANNELS, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY], note: Note::Links, group: Group::Ui },
     Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE], note: Note::Shortcuts, group: Group::Other },
     Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18], note: Note::None, group: Group::Other },
@@ -2218,9 +2262,10 @@ fn category(i: usize) -> Category {
     cat.items = match (crate::settings::pc_mode(), cat.name) {
         (false, "Interface Size") => &[],
         (false, "Chat") => &[73, 89, R2_CHANNELS],
-        (true, "Chat") => &[73, 89, INLINE_CHAT, CHAT_OPACITY],
+        (false, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT],
+        (true, "Chat") => &[73, 89, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY, CHAT_WAKE_ON_MESSAGE],
         (true, "HUD") => &[22, 30, 40, 58, 83],
-        (true, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, UTILITY_LAYOUT],
+        (true, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, UTILITY_LAYOUT, SPELL_BAR_SIZE],
         _ => cat.items,
     };
     cat
@@ -2407,6 +2452,8 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         77 => wide("Reset"),
         73 => on_off(c.item_links),
         89 => on_off(c.chat_always),
+        CHAT_FADE_DELAY => if c.chat_fade_seconds == 0 { wide("Off") } else { wide(&format!("{} s", c.chat_fade_seconds)) },
+        CHAT_WAKE_ON_MESSAGE => on_off(c.chat_wake_on_message),
         INLINE_CHAT => on_off(c.inline_chat),
         PETS_PASS => on_off(c.pets_pass),
         SHARED_SHORTCUTS => on_off(c.shared_shortcuts),
@@ -2497,6 +2544,10 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         62 => (c.touch_edge as f32 / TOUCH_EDGE_MAX as f32, Some(c.touch_edge as u16)),
         57 => (at(c.shadow_distance as f32, SHADOW_DISTANCE_GAME as f32, SHADOW_DISTANCE_MAX as f32), Some(c.shadow_distance)),
         SPELL_BAR_OPACITY => (c.spell_bar_opacity as f32 / 100.0, Some(c.spell_bar_opacity as u16)),
+        SPELL_BAR_SIZE => {
+            let n = crate::hudlayout::piece_scale_percent(crate::hudlayout::Piece::SpellBars);
+            (at(n as f32, 50.0, 200.0), Some(n))
+        }
         HUD_SCALE => (at(c.hud_scale as f32, 50.0, 150.0), Some(c.hud_scale as u16)),
         NAMEPLATE_SCALE => (at(c.nameplate_scale as f32, 50.0, 200.0), Some(c.nameplate_scale as u16)),
         CHAT_WIDTH => (at(c.chat_width as f32, 50.0, 125.0), Some(c.chat_width as u16)),
@@ -2553,6 +2604,96 @@ fn words(vui: &Vui, ids: &[i32]) -> Vec<Vec<u16>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pc_fade_and_spell_size_are_discoverable_and_use_existing_settings_lifecycle() {
+        use crate::pointer::testing::{vui, NullRaster};
+        use crate::settings::{self, testing};
+        let piece = crate::hudlayout::Piece::SpellBars;
+        testing::reset(false);
+        crate::hudlayout::testing_reset();
+        let hud = (0..CATEGORIES.len()).find(|&i| CATEGORIES[i].name == "HUD Layout").unwrap();
+        let chat = (0..CATEGORIES.len()).find(|&i| CATEGORIES[i].name == "Chat").unwrap();
+        assert!(!category(hud).items.contains(&SPELL_BAR_SIZE));
+        assert!(!category(chat).items.contains(&CHAT_FADE_DELAY));
+        assert!(!category(chat).items.contains(&CHAT_WAKE_ON_MESSAGE));
+        settings::set_ui_mode(true).unwrap();
+        assert!(category(hud).items.contains(&SPELL_BAR_SIZE));
+        assert!(category(chat).items.contains(&CHAT_FADE_DELAY));
+        assert!(category(chat).items.contains(&CHAT_WAKE_ON_MESSAGE));
+        assert!(category(hud).items.len() <= PAGE_MOST && category(chat).items.len() <= PAGE_MOST);
+        let vui = vui();
+        let mut options = GameOptions::default();
+        let mut window = WndOptions::default();
+        let mut cues = Vec::new();
+        let mut ups = Vec::new();
+        let scale = || crate::hudlayout::piece_scale_percent(piece);
+        crate::hudlayout::set_piece_scale_percent(piece, 100);
+        window.open(&vui, &NullRaster, &options);
+        window.item = SPELL_BAR_SIZE;
+        window.change(&mut options, 1, &mut cues, &mut ups);
+        assert_eq!(scale(), 105);
+        assert_eq!(slider_at(SPELL_BAR_SIZE).unwrap().1, Some(105));
+        window.key(&vui, &mut NullRaster, &mut options, key::TRIANGLE, 0, &mut cues, &mut ups);
+        assert_eq!(scale(), 100, "Cancel restores an edited size");
+
+        window.open(&vui, &NullRaster, &options);
+        crate::hudlayout::set_piece_scale_percent(piece, 150);
+        window.key(&vui, &mut NullRaster, &mut options, key::TRIANGLE, 0, &mut cues, &mut ups);
+        assert_eq!(scale(), 150, "Cancel does not revert an unrelated layout change");
+
+        window.open(&vui, &NullRaster, &options);
+        window.item = SPELL_BAR_SIZE;
+        window.change(&mut options, 1, &mut cues, &mut ups);
+        assert_eq!(scale(), 155);
+        window.save_count = 1;
+        window.draw(&vui, &mut NullRaster, &mut options, &mut ups);
+        window.open(&vui, &NullRaster, &options);
+        window.item = SPELL_BAR_SIZE;
+        window.change(&mut options, 1, &mut cues, &mut ups);
+        window.key(&vui, &mut NullRaster, &mut options, key::TRIANGLE, 0, &mut cues, &mut ups);
+        assert_eq!(scale(), 155, "Save makes the edited layout the next Cancel baseline");
+
+        window.open(&vui, &NullRaster, &options);
+        window.item = CHAT_FADE_DELAY;
+        assert_eq!(String::from_utf16_lossy(&value_text(&vui, CHAT_FADE_DELAY).unwrap()), "Off");
+        for expected in 1..=120 {
+            window.change(&mut options, 1, &mut cues, &mut ups);
+            assert_eq!(settings::client().chat_fade_seconds, expected);
+        }
+        assert_eq!(String::from_utf16_lossy(&value_text(&vui, CHAT_FADE_DELAY).unwrap()), "120 s");
+        window.key(&vui, &mut NullRaster, &mut options, key::TRIANGLE, 0, &mut cues, &mut ups);
+        assert_eq!(settings::client().chat_fade_seconds, 0, "Cancel restores fade delay");
+
+        window.open(&vui, &NullRaster, &options);
+        window.item = CHAT_FADE_DELAY;
+        for _ in 0..10 { window.change(&mut options, 1, &mut cues, &mut ups); }
+        window.item = CHAT_WAKE_ON_MESSAGE;
+        window.change(&mut options, 1, &mut cues, &mut ups);
+        assert!(settings::client().chat_wake_on_message);
+        window.save_count = 1;
+        window.draw(&vui, &mut NullRaster, &mut options, &mut ups);
+        let saved = String::from_utf8(testing::kept("client.opt").expect("Save Changes wrote client options")).unwrap();
+        assert!(saved.contains("chat_fade_seconds=10\n"), "fade delay persisted: {saved}");
+        assert!(saved.contains("chat_wake_on_message=on\n"), "wake choice persisted: {saved}");
+
+        window.open(&vui, &NullRaster, &options);
+        window.item = SPELL_BAR_SIZE;
+        window.change(&mut options, 1, &mut cues, &mut ups);
+        assert_eq!(scale(), 160);
+        window.choose_ui(true, &mut cues);
+        assert!(window.spell_bar_scale_edited, "reselecting the same mode is not a profile switch");
+        window.choose_ui(false, &mut cues);
+        assert!(!window.spell_bar_scale_edited);
+        let controller_scale = scale();
+        window.key(&vui, &mut NullRaster, &mut options, key::TRIANGLE, 0, &mut cues, &mut ups);
+        assert_eq!(scale(), controller_scale, "Cancel cannot alter the controller layout");
+        settings::set_ui_mode(true).unwrap();
+        assert_eq!(scale(), 160, "switching profile accepts the outgoing PC layout");
+        assert_eq!(settings::client().chat_fade_seconds, 10, "the PC chat delay is restored with its profile");
+        assert!(settings::client().chat_wake_on_message, "the PC wake choice is restored with its profile");
+        testing::reset(false);
+        crate::hudlayout::testing_reset();
+    }
     use super::*;
 
     #[test]
@@ -3918,11 +4059,23 @@ mod tests {
             v.sort();
             v
         };
-        // (an Android app has no Texture Folder: `TEXTURES`)
-        let all: Vec<i32> = EXTENDED_ITEMS.iter().map(|&(i, _)| i).filter(|&i| !(cfg!(target_os = "android") && i == 55)).collect();
-        assert_eq!(listed(CATEGORIES), all);
-        assert!(fits(CATEGORIES));
-        assert!(menus_fit(CATEGORIES));
+        // Check the menus the player can actually open in each profile.
+        crate::settings::testing::reset(false);
+        let mut available = Vec::new();
+        for pc in [false, true] {
+            crate::settings::set_ui_mode(pc).unwrap();
+            let categories: Vec<_> = (0..CATEGORIES.len()).map(category).filter(|c| !c.items.is_empty()).collect();
+            let rows = listed(&categories);
+            assert!(rows.windows(2).all(|pair| pair[0] != pair[1]), "duplicate row, pc={pc}");
+            assert!(fits(&categories) && menus_fit(&categories));
+            available.extend(rows);
+        }
+        available.sort();
+        available.dedup();
+        // An Android app has no Texture Folder.
+        let all: Vec<i32> = EXTENDED_ITEMS.iter().map(|&(i, _)| i)
+            .filter(|&i| !(cfg!(target_os = "android") && i == 55)).collect();
+        assert_eq!(available, all);
         assert!(EXTENDED_ITEMS.iter().all(|&(i, l)| !l.is_empty() && label_of(i) == l));
         let short = [Category { name: "Video", items: &[13, 20], note: Note::None, group: Group::Graphics }];
         assert_ne!(listed(&short), all, "the control: rows left out");
@@ -4335,7 +4488,7 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
