@@ -6233,7 +6233,7 @@ impl App {
                 let at = [self.cursor.0 as f32, self.cursor.1 as f32];
                 if !down && button == MouseButton::Left
                     && let (Some(p), Some(g)) = (self.play.as_mut(), self.gfx.as_ref())
-                    && p.spell_gem_release(at, (g.config.width, g.config.height), p.session.now())
+                    && p.spell_gem_release(at, (g.config.width, g.config.height), p.session.now(), self.last_view)
                 {
                     return;
                 }
