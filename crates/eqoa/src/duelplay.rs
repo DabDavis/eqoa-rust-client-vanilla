@@ -23,7 +23,7 @@ pub struct Duel {
     /// the client's clock as `Process` last counted the queue down
     last: Option<i64>,
     /// the start menu's Duel entry as last set (`duel_menu`)
-    menu: Option<bool>,
+    menu: Option<(bool, bool)>,
 }
 
 /// The modes the duel window owns.
@@ -105,11 +105,12 @@ impl Play {
     /// there while the server lets the player duel.
     pub(super) fn duel_menu(&mut self) {
         let on = self.duel.part.on();
+        let arena = crate::serverworlds::neriak_arena_held();
         if let Some(s) = self.start.as_mut()
-            && self.duel.menu != Some(on)
+            && self.duel.menu != Some((on, arena))
         {
-            s.set_duels(on);
-            self.duel.menu = Some(on);
+            s.set_duels(on, arena);
+            self.duel.menu = Some((on, arena));
         }
     }
 
@@ -425,6 +426,8 @@ mod tests {
         p.do_action(crate::duel::MSG_INVITE, 0);
         p.do_action(crate::duel::MSG_SURRENDER, 0);
         assert_eq!(sent(&mut p), vec![vec![0x01, 0x15, 1, 0, 0, 0, 0, 0x55, 0, 0, 0], vec![0x01, 0x15, 4, 0, 0, 0, 0]]);
+        p.do_action(crate::duel::MSG_INSTANCED, 0);
+        assert_eq!(sent(&mut p), vec![vec![0x01, 0x15, 11, 0, 0, 0, 0, 0x55, 0, 0, 0]]);
         // at the player: the live refusal, in red, nothing sent
         p.target = 0x100;
         p.do_action(crate::duel::MSG_INVITE, 0);
@@ -546,12 +549,18 @@ mod tests {
     /// The feature word puts Community > Duel (Invite, Surrender) in the
     /// start menu sixth, after Chat Modes, as the live menu has it, and takes
     /// it out again; the disc's Community (the control) has none. Needs
-    /// `run/client.bin` (SKIPs without).
+    /// a client image from `EQOA_ISO` or `run/client.bin`.
     #[test]
     fn the_feature_word_puts_duel_in_community() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/client.bin");
-        let Some(img) = std::fs::read(&path).ok().and_then(crate::client_image::ClientImage::from_bytes) else {
-            eprintln!("SKIP: no run/client.bin");
+        let img = if let Some(disc) = std::env::var_os("EQOA_ISO") {
+            let image = crate::modules::load_now(crate::modules::Module::Client, std::path::Path::new(&disc))
+                .expect("load the client menu from the supplied disc");
+            crate::client_image::ClientImage::from_bytes(image.as_ref().clone()).expect("read the disc's client menu")
+        } else if let Some(img) = std::fs::read(path).ok().and_then(crate::client_image::ClientImage::from_bytes) {
+            img
+        } else {
+            eprintln!("SKIP: no client image");
             return;
         };
         let mut p = play();
@@ -570,6 +579,16 @@ mod tests {
         assert_eq!(disc[4].0, 530, "Chat Modes fifth");
         assert_eq!(live[5], (1864, Some(vec![(86, crate::duel::MSG_INVITE), (1865, crate::duel::MSG_SURRENDER)])), "Duel sixth");
         assert_eq!([&live[..5], &live[6..]].concat(), disc, "the rest as the disc's");
+        let s = p.start.as_mut().unwrap();
+        s.set_duels(true, true);
+        s.set_duels(true, true);
+        let msg = crate::duel::MSG_INSTANCED;
+        assert_eq!(String::from_utf16_lossy(&s.menus.labels[&(msg, 0)].text), "Instanced duel");
+        let arena = community(&p);
+        assert_eq!(arena[5].1.as_ref().unwrap().iter().map(|e| e.1).collect::<Vec<_>>(),
+            [crate::duel::MSG_INVITE, msg, crate::duel::MSG_SURRENDER]);
+        p.start.as_mut().unwrap().set_duels(true, false);
+        assert_eq!(community(&p), live);
         // a server without duels takes it out; the menus read again keep it
         p.duel_opcode(0x07F5, &0x1Bu32.to_le_bytes(), None);
         assert_eq!(community(&p).len(), 12, "0x1B has the duel bit");

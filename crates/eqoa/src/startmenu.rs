@@ -1024,12 +1024,17 @@ impl StartData {
     /// `DoAction` 0xAB000001) and Surrender (1865, 0xAB000002)), put in every
     /// Community menu (title word 420) or taken out. The disc has none; the
     /// client shows it while the server lets the player duel (`duelplay`).
-    pub fn set_duels(&mut self, on: bool) {
-        use crate::client_image::MenuEntry;
+    pub fn set_duels(&mut self, on: bool, arena: bool) {
+        use crate::client_image::{Label, MenuEntry};
         let duel = *self.duel_menu.get_or_insert_with(|| {
             let entry = |word: i32, msg: u32| MenuEntry { word, msg, id: 0, ..Default::default() };
             self.menus.push(Menu { x00: -1, x04: 1864, entries: vec![entry(86, crate::duel::MSG_INVITE), entry(1865, crate::duel::MSG_SURRENDER)] })
         });
+        let msg = crate::duel::MSG_INSTANCED;
+        self.menus.labels.insert((msg, 0), Label { text: vi::ui::wide("Instanced duel"), ..Default::default() });
+        let entries = &mut self.menus.list[duel].entries;
+        entries.retain(|entry| entry.msg != msg);
+        if arena { entries.insert(1, MenuEntry { msg, id: 0, ..Default::default() }); }
         for m in self.menus.list.iter_mut().filter(|m| m.x04 == 420) {
             let at = m.entries.iter().position(|e| e.sub == Some(duel));
             match (on, at) {

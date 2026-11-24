@@ -47,6 +47,7 @@ pub const FEATURE_DUELS: u32 = 0x10;
 /// The start menu's Community > Duel > Invite and Surrender (`DoAction`).
 pub const MSG_INVITE: u32 = 0xAB00_0001;
 pub const MSG_SURRENDER: u32 = 0xAB00_0002;
+pub const MSG_INSTANCED: u32 = 0xAB00_0003;
 /// An invitation's time, in the client's clock's ticks (VITimer's, 983.04 a
 /// second): the record's timer as sub 2 makes it.
 pub const INVITE_TIME: u32 = 20000;
@@ -426,6 +427,10 @@ impl Part {
     /// player duel; at the player's own id word 1862 and at no target 1863,
     /// in red; else sub 1 with the target.
     pub fn challenge(&self, target: u32, me: Option<u32>, words: Option<&StringTable>) -> Option<Do> {
+        self.challenge_mode(1, target, me, words)
+    }
+
+    fn challenge_mode(&self, sub: u8, target: u32, me: Option<u32>, words: Option<&StringTable>) -> Option<Do> {
         if !self.on() {
             return None;
         }
@@ -435,7 +440,7 @@ impl Part {
         if target == u32::MAX {
             return Some(Do::Line(word_of(words, 1863), RED));
         }
-        let mut w = up(1, self.duel_id);
+        let mut w = up(sub, self.duel_id);
         w.u32(target);
         Some(Do::Send(w.data))
     }
@@ -530,6 +535,7 @@ impl Part {
     pub fn use_msg(&self, msg: u32, target: u32, me: Option<u32>, words: Option<&StringTable>) -> Option<Do> {
         match msg {
             MSG_INVITE => self.challenge(target, me, words),
+            MSG_INSTANCED => self.challenge_mode(11, target, me, words),
             MSG_SURRENDER => self.surrender(),
             _ => None,
         }

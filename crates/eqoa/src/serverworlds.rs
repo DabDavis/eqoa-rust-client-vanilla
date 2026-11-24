@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 mod extras;
+mod neriak;
 
 /// A server's world held here, ready to load.
 #[derive(Clone, Debug)]
@@ -77,8 +78,12 @@ pub fn keep(h: Held) {
     }
 }
 
-/// The server's worlds held here, by id: (id, its name), the map's places
-/// (`map::places`).
+/// Whether the locally built private duel arena is available to the menu.
+pub fn neriak_arena_held() -> bool {
+    HELD.read().is_ok_and(|worlds| worlds.iter().any(|w| w.id == 16 && w.name == "Neriak Duel Arena"))
+}
+
+/// The held worlds, by ID and name, for the map's places list.
 pub fn held_worlds() -> Vec<(u8, String)> {
     let mut v: Vec<(u8, String)> = held().into_iter().map(|h| (h.id, h.name)).collect();
     v.sort();
@@ -645,6 +650,9 @@ pub fn compose_into(disc: &dyn Disc, w: &World, out: &mut dyn Sink) -> Result<()
         if crc32(&rec) != part.crc {
             return Err(not_the_servers(name, p.zone, &rec));
         }
+        if w.id == 16 && w.name == "Neriak Duel Arena" && w.parts.len() == 1 && name == "TUNARIA.ESF" && p.zone == 45 {
+            neriak::cut(&mut rec)?;
+        }
         let at = out.len();
         if part.extras.is_empty() {
             let delta = at as i64 - from as i64;
@@ -895,7 +903,7 @@ mod tests {
     use super::*;
 
     fn disc() -> Option<PathBuf> {
-        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+        let p = std::env::var_os("EQOA_ISO").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso"));
         p.exists().then_some(p)
     }
 
@@ -1109,6 +1117,10 @@ mod tests {
             let world = built_world(w, &j);
             let b = compose(&disc, &world).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!((b.len() as u32, crc32(&b)), (world.size, world.crc), "{name}");
+            if world.id == 16 && world.name == "Neriak Duel Arena" {
+                let server = std::fs::read(Path::new(&dir).join("world16.ESF")).expect("server's cropped arena");
+                assert!(b == server, "client and server Neriak geometry differ");
+            }
             seen += 1;
         }
         eprintln!("{seen} server worlds built as the server built them");

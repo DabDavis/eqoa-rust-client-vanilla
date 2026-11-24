@@ -7710,6 +7710,8 @@ impl Play {
     /// (`ShowMain`; `a` resets it), and the character framed
     /// (`ApplyRaceCamera`, `start_menu_camera`).
     pub fn open_start_menu(&mut self, reset: bool) {
+        // The arena can finish building after the server's duel feature word.
+        self.duel_menu();
         if self.start.is_some() {
             if self.mode == 13 {
                 self.close_start_menu(0);
