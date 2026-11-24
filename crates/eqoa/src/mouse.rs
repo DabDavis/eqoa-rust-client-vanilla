@@ -85,8 +85,10 @@
 //!   `camreach` keeps and eases the camera back out to after something
 //!   pulled it in; past the closest it goes into first person (`Zoom::In`,
 //!   as P's style 0), and out of first person back to the camera it came
-//!   from (`Zoom::Out`, `Play::wheel_style`). The follow camera, which does
-//!   not zoom, goes into first person on the wheel's first notch in.
+//!   from (`Zoom::Out`, `Play::wheel_style`). The Follow camera (the game
+//!   options' 3rd Person Camera: Follow) zooms as the other orbit does, out
+//!   to Camera Distance (petition 2909; the game's does not zoom), and into
+//!   first person past its closest.
 //! - a click (a press let go unmoved, within a few pixels) targets the
 //!   creature under it; a double click or a right click also talks to it,
 //!   or opens its corpse (`InteractWithTarget`, or `ToggleAutoAttack`'s loot
@@ -178,12 +180,12 @@ fn shortest(a: f32) -> f32 {
 }
 
 /// The wheel's `lines` (in positive) on `cam`: whether it changes the
-/// camera's style rather than zooming. An orbit already at its closest goes
-/// into first person; first person comes out.
+/// camera's style rather than zooming. An orbit (or the Follow camera,
+/// petition 2909) already at its closest goes into first person; first
+/// person comes out.
 pub fn zoom_step(cam: &WalkCamera<Ee>, lines: f32) -> Zoom {
     match cam.camera_mode {
-        1 | 3 if lines > 0.0 && cam.cur.dist <= cam.min_orbit_distance => Zoom::In,
-        2 if lines > 0.0 => Zoom::In,
+        1..=3 if lines > 0.0 && cam.cur.dist <= cam.min_orbit_distance => Zoom::In,
         0 if lines < 0.0 => Zoom::Out,
         _ => Zoom::None,
     }
@@ -918,7 +920,10 @@ pub fn zoom(cam: &mut WalkCamera<Ee>, reach: &mut crate::camreach::Reach, lines:
                 reach.asked = true;
             }
         }
-        1 => {
+        // the other orbit, and the Follow camera (petition 2909: "allow
+        // camera distance to work"), at once, within Camera Distance's
+        // ceiling (`Play`'s frame sets the Follow camera's)
+        1 | 2 => {
             let d = cam.cur.dist.0 * k;
             cam.set_orbit_distance(F::new(d));
         }
@@ -960,6 +965,11 @@ pub fn look_cam(cam: &mut WalkCamera<Ee>, dx: f32, dy: f32, wheel: f32, inverted
     } else {
         stick[0] = (dx * per_pixel).clamp(-1.0, 1.0);
         stick[1] = (dy * per_pixel).clamp(-1.0, 1.0);
+        // the Follow camera's distance by the pinch too (petition 2909)
+        if mode == 2 && wheel != 0.0 {
+            let d = cam.cur.dist.0 * 0.9f32.powf(wheel);
+            cam.set_orbit_distance(F::new(d));
+        }
     }
     stick
 }
@@ -1597,10 +1607,24 @@ mod tests {
         assert_eq!((cam.camera_mode, cam.cur.dist.0), (3, 1.5), "the orbit at its closest again");
         assert_eq!(cam.def_orbit_pitch, tilt, "the tilt kept");
         assert_eq!(cam.cur.orbit.y, tilt);
-        // the follow camera does not zoom: in is first person at once
+        // the Follow camera zooms too (petition 2909), within its ceiling,
+        // and is first person only past its closest
         crate::camstyle::set_style(&mut cam, 2, None, &mut Open);
-        assert_eq!(zoom_step(&cam, 0.5), Zoom::In);
+        cam.max_orbit_distance = F::new(crate::camstyle::FOLLOW_MAX_DISTANCE);
+        assert_eq!(cam.cur.dist.0, 3.38, "the game's distance to begin with");
+        assert_eq!(zoom_step(&cam, 0.5), Zoom::None, "a notch in zooms");
         assert_eq!(zoom_step(&cam, -0.5), Zoom::None);
+        look_cam(&mut cam, 0.0, 0.0, -40.0, false, 1.0 / 60.0);
+        assert_eq!(cam.cur.dist.0, 11.0, "out to Camera Distance");
+        let mut reach = crate::camreach::Reach::default();
+        zoom(&mut cam, &mut reach, 40.0);
+        assert_eq!(cam.cur.dist.0, 1.5, "in to the closest");
+        assert_eq!(zoom_step(&cam, 0.5), Zoom::In, "past it, first person");
+        let back = crate::camstyle::zoom_in(&mut cam, None, &mut Open);
+        assert_eq!(cam.camera_mode, 0);
+        let back = crate::camstyle::ZoomBack { preset: crate::camstyle::Preset { distance: F::new(6.0), ..back.preset }, ..back };
+        crate::camstyle::zoom_out(&mut cam, &back, None, &mut Open);
+        assert_eq!((cam.camera_mode, cam.cur.dist.0), (2, 6.0), "out of first person at the distance it left");
     }
 
     /// A wall `.1` behind the head at time `.0`: any sweep reaching further

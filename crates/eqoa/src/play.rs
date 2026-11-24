@@ -4845,6 +4845,17 @@ impl Play {
         if walker.cam.camera_mode == 3 {
             walker.cam.max_orbit_distance = F::new(crate::settings::camera_distance());
         }
+        // and the Follow camera's (petition 2909: "allow camera distance to
+        // work"), which the wheel zooms within (`mouse::zoom`): its game
+        // distance (3.38) is within every ceiling, so unzoomed it is the
+        // game's; a ceiling lowered under the distance brings it in
+        if walker.cam.camera_mode == 2 {
+            let ceiling = F::new(crate::settings::camera_distance());
+            walker.cam.max_orbit_distance = ceiling;
+            if ceiling < walker.cam.cur.dist {
+                walker.cam.set_orbit_distance(ceiling);
+            }
+        }
         // and its Camera Turn Speed: the view's turn by the stick and the keys
         crate::camstyle::turn_speed(&mut walker.cam, crate::settings::camera_turn());
         // and its Screen Shake: off, the spell effects' shake ended before

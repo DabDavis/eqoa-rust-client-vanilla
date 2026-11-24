@@ -955,6 +955,9 @@ impl WndOptions {
                 match self.item {
                     12 => c.lod = !c.lod,
                     18 => c.screen_shake = !c.screen_shake,
+                    // A/D Keys (petition 2909): Strafe or Turn, the keyboard's
+                    // walk from the next frame (`viewer::controls`)
+                    AD_KEYS => c.ad_turn = !c.ad_turn,
                     19 => c.capture = !c.capture,
                     21 => c.background_sound = !c.background_sound,
                     // Art (`era`): drawn as it moves, the window's (`viewer`
@@ -1923,7 +1926,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 113] = [
+const EXTENDED_ITEMS: [(i32, &str); 114] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -2037,6 +2040,7 @@ const EXTENDED_ITEMS: [(i32, &str); 113] = [
     (CHAT_FADE_DELAY, "Chat Fade Delay"),
     (SPELL_BAR_SIZE, "Spell Bar Size %"),
     (CHAT_WAKE_ON_MESSAGE, "Wake on New Chat"),
+    (AD_KEYS, "A/D Keys"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2120,6 +2124,8 @@ const INLINE_CHAT: i32 = 245;
 const CHAT_FADE_DELAY: i32 = 246;
 pub(crate) const SPELL_BAR_SIZE: i32 = 247;
 const CHAT_WAKE_ON_MESSAGE: i32 = 248;
+/// A/D Keys' item (petition 2909). 250, as Interface Size's 240s.
+const AD_KEYS: i32 = 250;
 
 /// Slow When Not Focused's item (a GM's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -2228,7 +2234,7 @@ const ALL_CATEGORIES: [Category; 25] = [
     Category { name: "Chat", items: &[73, 89, R2_CHANNELS, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY], note: Note::Links, group: Group::Ui },
     Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE], note: Note::Shortcuts, group: Group::Other },
     Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK], note: Note::None, group: Group::Other },
-    Category { name: "Camera", items: &[15, 17, 18], note: Note::None, group: Group::Other },
+    Category { name: "Camera", items: &[15, 17, 18, AD_KEYS], note: Note::None, group: Group::Other },
     Category { name: "Size & Look", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Touch },
     Category { name: "Sound", items: &[32], note: Note::Output, group: Group::Other },
     Category { name: "Multi-boxing settings", items: MULTIBOX, note: Note::Reads, group: Group::Multibox },
@@ -2397,6 +2403,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
             f => crate::input::focus_name(f),
         }),
         18 => on_off(c.screen_shake),
+        AD_KEYS => wide(if c.ad_turn { "Turn" } else { "Strafe" }),
         19 => on_off(c.capture),
         21 => on_off(c.background_sound),
         SLOW_UNFOCUSED => on_off(c.slow_unfocused[crate::multibox::place()]),
@@ -3708,6 +3715,15 @@ mod tests {
         assert_eq!((settings::weapon_swap_back(), cues.last()), (true, Some(&11)), "on");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::weapon_swap_back(), "and back");
+        // A/D Keys Strafe by default (petition 2909), two values
+        goto!(AD_KEYS);
+        assert_eq!(w.item, AD_KEYS, "A/D Keys");
+        assert!(!settings::ad_turn(), "Strafe by default");
+        assert_eq!(value_text(&vui, AD_KEYS), Some(wide("Strafe")));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::ad_turn(), value_text(&vui, AD_KEYS), cues.last()), (true, Some(wide("Turn")), Some(&11)), "Turn");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::ad_turn(), "and back");
         // R2 Channel Switch Off by default (the server owner, 2026-11-18), two values
         goto!(R2_CHANNELS);
         assert_eq!(w.item, R2_CHANNELS, "R2 Channel Switch");
@@ -4001,7 +4017,7 @@ mod tests {
             vec![
                 ("General", vec!["Update Notices", "Loading Screens", "Loading Tips", "Same Shortcuts", "Auto Save Options"]),
                 ("Combat", vec!["Auto-Cast", "Auto Target", "Pets Pass Through", "Weapon Swap Back"]),
-                ("Camera", vec!["Camera Distance", "Camera Turn Speed", "Screen Shake"]),
+                ("Camera", vec!["Camera Distance", "Camera Turn Speed", "Screen Shake", "A/D Keys"]),
                 ("Sound", vec!["Output Device"]),
             ],
             "Other: the rest"
@@ -4309,8 +4325,9 @@ mod tests {
         assert_eq!(w.point([slider + 2.0, y(&w, 1)]), down(1, key::LEFT));
         assert_eq!(w.point([frame + 110.0, y(&w, 2)]), down(2, key::RIGHT), "Screen Shake's value");
         assert_eq!(w.point([frame + 20.0, y(&w, 2)]), down(2, key::LEFT));
-        assert!(w.point([frame + 110.0, y(&w, 3)]).is_empty(), "the row under the last: nothing");
-        assert!(w.point([slider + 70.0, y(&w, 4)]).is_empty(), "the legend's row: nothing");
+        assert_eq!(w.point([frame + 110.0, y(&w, 3)]), down(3, key::RIGHT), "A/D Keys' value (petition 2909)");
+        assert!(w.point([frame + 110.0, y(&w, 4)]).is_empty(), "the row under the last: nothing");
+        assert!(w.point([slider + 70.0, y(&w, 5)]).is_empty(), "the legend's row: nothing");
         // Video: Display's value, Brightness at 5 of 10 (its knob mid-bar),
         // Frame Rate's value
         go(&mut w, &vui, &mut o, "Video");

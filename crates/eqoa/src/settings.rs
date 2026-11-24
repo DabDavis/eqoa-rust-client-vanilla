@@ -951,14 +951,23 @@ pub struct ClientOptions {
     /// Frame Rate as chosen; `None` until it is, the platform's
     /// (`set_platform_rate`: 30 on a page's WebGL2, else the display's)
     pub frame_rate: Option<FrameRate>,
-    /// Camera Distance: the follow orbit's ceiling, `CAMERA_MIN` to
-    /// `CAMERA_MAX`
+    /// Camera Distance: the follow orbit's ceiling, and the Follow camera's
+    /// (the game options' 3rd Person Camera: Follow, petition 2909),
+    /// `CAMERA_MIN` to `CAMERA_MAX`
     pub camera_distance: u8,
     /// Camera Turn Speed: percent of the game's, `TURN_MIN` to `TURN_MAX`
     pub camera_turn: u16,
     /// Screen Shake: the camera shaken as the game shakes it (the spell
     /// effects' shake events, `camstyle::screen_shake`), or never
     pub screen_shake: bool,
+    /// A/D Keys (petition 2909: "for A/D to be able to set to turn
+    /// left/right instead of strafing"): the keyboard's A and D as J and L,
+    /// the right stick's sideways push (`viewer::controls`): first person and
+    /// the Follow camera turn the body, the orbits swing round; while the
+    /// mouse steers they still sidestep. Off (Strafe) by default, the
+    /// client's A and D as they were. The keyboard's only: a controller's
+    /// left stick is the game's.
+    pub ad_turn: bool,
     /// Controller Focus, each window's by its place (`focus`)
     pub controller: [Focus; crate::multibox::PLACES],
     /// Slow When Not Focused (a GM's petition 1634), each window's
@@ -1569,6 +1578,7 @@ impl Default for ClientOptions {
             camera_distance: crate::camstyle::FOLLOW_MAX_DISTANCE as u8,
             camera_turn: TURN_GAME,
             screen_shake: true,
+            ad_turn: false,
             controller: [Focus::Auto; crate::multibox::PLACES],
             slow_unfocused: [false; crate::multibox::PLACES],
             capture: false,
@@ -1704,6 +1714,10 @@ impl ClientOptions {
         }
         if !self.screen_shake {
             s.push_str("screen_shake=off\n");
+        }
+        // A/D Keys only when Turn
+        if self.ad_turn {
+            s.push_str("ad_keys=turn\n");
         }
         for (k, f) in self.controller.iter().enumerate().filter(|(_, f)| **f != Focus::Auto) {
             s.push_str(&format!("controller.{}={}\n", k + 1, f.key()));
@@ -2052,6 +2066,8 @@ impl ClientOptions {
                 }
                 ("screen_shake", "on") => c.screen_shake = true,
                 ("screen_shake", "off") => c.screen_shake = false,
+                ("ad_keys", "turn") => c.ad_turn = true,
+                ("ad_keys", "strafe") => c.ad_turn = false,
                 ("capture_controller", "on") => c.capture = true,
                 ("capture_controller", "off") => c.capture = false,
                 ("art", "2002") => c.art = esf::Era::Y2002,
@@ -2810,6 +2826,11 @@ fn share_of(v: &str) -> Option<u8> {
 /// Whether the camera shakes as the game shakes it (Screen Shake).
 pub fn screen_shake() -> bool {
     client().screen_shake
+}
+
+/// A/D Keys now: true when A and D turn (`ClientOptions::ad_turn`).
+pub fn ad_turn() -> bool {
+    client().ad_turn
 }
 
 /// VSync now: the player's natively, always on in a page (the browser
@@ -4623,6 +4644,20 @@ mod tests {
     }
 
     /// Weapon Swap Back (work board 1581): off by default, written only when
+    /// A/D Keys (petition 2909): Strafe by default and not written; Turn
+    /// written and read back; an unknown value the default.
+    #[test]
+    fn ad_keys_kept_only_when_turn() {
+        let d = ClientOptions::default();
+        assert!(!d.ad_turn, "Strafe by default");
+        assert!(!d.to_text().contains("ad_keys"));
+        let c = ClientOptions { ad_turn: true, ..d };
+        assert!(c.to_text().contains("ad_keys=turn\n"));
+        assert_eq!(ClientOptions::from_text(&c.to_text()), c, "round trip");
+        assert!(!ClientOptions::from_text("ad_keys=strafe").ad_turn);
+        assert!(!ClientOptions::from_text("ad_keys=sideways").ad_turn, "the default");
+    }
+
     /// on, read back, an unknown value left at the default.
     #[test]
     fn weapon_swap_back_is_kept_only_when_on() {

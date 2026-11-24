@@ -1828,6 +1828,19 @@ pub fn shot_body() -> u32 {
     std::env::var("EQOA_BODY").ok().and_then(|v| u32::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok()).unwrap_or(HUMAN as u32)
 }
 
+/// The walker's controls from the keys `held` (by their default names, the
+/// Controls page's moves undone): W/S forward, A/D strafe, I/J/K/L a right
+/// stick. With `ad_turn` (A/D Keys at Turn, petition 2909, and the mouse not
+/// steering) A and D are J and L, the right stick's push to the side: first
+/// person and the Follow camera turn the body, the orbits swing round.
+pub(crate) fn key_controls(held: impl Fn(&str) -> bool, ad_turn: bool) -> Controls {
+    let k = |a: &str, b: &str| held(a) as i32 as f32 - held(b) as i32 as f32;
+    if ad_turn {
+        return Controls { fwd: k("w", "s"), strafe: 0.0, orbit: (k("l", "j") + k("d", "a")).clamp(-1.0, 1.0), pitch: k("k", "i") };
+    }
+    Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: k("l", "j"), pitch: k("k", "i") }
+}
+
 /// `EQOA_WALK=fwd,strafe,orbit,ms[;...]`: each set of controls held for its
 /// ms, one after another, then none (`shot`'s script, in the window too).
 fn walk_script() -> Option<Vec<(Controls, i64)>> {
@@ -3170,7 +3183,7 @@ impl App {
     }
 
     /// The walker's controls from the held keys (a pad's sticks): W/S
-    /// forward, A/D strafe, the client's own; I/J/K/L a right stick (orbit
+    /// forward, A/D strafe (or turn, A/D Keys), the client's own; I/J/K/L a right stick (orbit
     /// and zoom), which the game's keyboard leaves free (its own camera keys
     /// are Home, End, Page Up and Page Down, `game_keys`).
     fn controls(&self) -> Controls {
@@ -3182,8 +3195,8 @@ impl App {
             let t = self.clock.elapsed().as_millis() as i64;
             return segs.iter().find(|s| t <= s.1).map_or(Controls::default(), |s| s.0);
         }
-        let k = |a: &str, b: &str| self.held.contains(a) as i32 as f32 - self.held.contains(b) as i32 as f32;
-        Controls { fwd: k("w", "s"), strafe: k("d", "a"), orbit: k("l", "j"), pitch: k("k", "i") }
+        let steering = self.walker.as_ref().is_some_and(|w| self.mouse.steer(w.cam.camera_mode));
+        key_controls(|k| self.held.contains(k), crate::settings::ad_turn() && !steering)
     }
 
     /// The game's UI sounds asked for outside a window of its own (the
@@ -7312,6 +7325,25 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A/D Keys (petition 2909): Strafe, A and D are the left stick's
+    /// sideways push; Turn, they are J and L's right stick (the turn in first
+    /// person and the Follow camera, the swing round in the orbits), W and S
+    /// left as they are; A with L held cancels as J with L does. The control:
+    /// nothing held is still at rest either way.
+    #[test]
+    fn a_and_d_turn_when_chosen() {
+        let held = |keys: &'static [&'static str]| move |k: &str| keys.contains(&k);
+        let strafe = key_controls(held(&["w", "d"]), false);
+        assert_eq!(strafe.axes(), [0.0, 0.0, 1.0, -1.0], "D strafes right, W forward");
+        let turn = key_controls(held(&["w", "d"]), true);
+        assert_eq!(turn.axes(), [1.0, 0.0, 0.0, -1.0], "D is L: the right stick right");
+        assert_eq!(turn.axes(), key_controls(held(&["w", "l"]), false).axes());
+        assert_eq!(key_controls(held(&["a"]), true).axes(), key_controls(held(&["j"]), true).axes(), "A is J");
+        assert_eq!(key_controls(held(&["a", "l"]), true).axes(), [0.0; 4], "A against L");
+        assert_eq!(key_controls(held(&["d", "l"]), true).axes()[0], 1.0, "both right: full, not past it");
+        assert_eq!(key_controls(held(&[]), true).axes(), key_controls(held(&[]), false).axes());
+    }
 
     /// Enter in an edit box is 13 (a new line in a box of lines), with Shift
     /// 4, done (petition 1626).

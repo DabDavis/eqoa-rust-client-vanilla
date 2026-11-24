@@ -9,7 +9,8 @@
 //! The client's own, beside them: the follow orbit zooms out to 11.0 where
 //! the game stops at 8.0 (`FOLLOW_MAX_DISTANCE`), and the mouse wheel goes
 //! into first person past the closest zoom and back out (`zoom_in`,
-//! `zoom_out`).
+//! `zoom_out`). The Follow camera (style 2) zooms on the wheel too, out to
+//! the same Camera Distance (petition 2909), where the game holds it at 3.38.
 
 use crate::client_image::ClientImage;
 use vi::camera::WalkCamera;
@@ -257,6 +258,10 @@ pub fn zoom_out<S: Scene<Ee>>(cam: &mut WalkCamera<Ee>, back: &ZoomBack, rc: Opt
         }
         1 => {
             cam.set_orbit_pitch_angle(back.preset.pitch);
+            cam.set_orbit_distance(back.preset.distance);
+        }
+        // the Follow camera's distance (petition 2909), kept as the orbits'
+        2 => {
             cam.set_orbit_distance(back.preset.distance);
         }
         _ => {}
