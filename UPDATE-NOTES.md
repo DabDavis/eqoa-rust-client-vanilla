@@ -18,6 +18,9 @@ is put on the page by `.github/workflows/notes.yml`.
 - In Extended > UI > Chat, adjust the background opacity or turn on **Inline Keyboard Chat**. Press Enter to type in the chat box, Enter again to send, or Escape to cancel. A controller's chat button opens the usual keyboard.
 - Use `/sa` for Say, `/s` for Shout, `/g` for Group and `/gu` for Guild. Submit a shortcut by itself to select that channel for subsequent messages, or include a message to use it once. Use `/t Name message` for a tell and `/r message` to reply.
 
+## 2026-11-23 · Mercenaries of the newer races show their gear
+- A mercenary of one of the server's own races whose body has no armour of its own (the Jal'Raeth, the gargoyle, the dryad, the merfolk and the others) now shows its armour, its helm and its weapons as a player of that race does. Before, it was drawn bare, holding its weapons in the wrong place or not at all.
+
 ## 2026-11-23 · 180 more hunting camps on the map
 - The map (M) shows about 180 more hunting camps: every sizeable group of creatures the server has that the map was missing, in Tunaria, the Rathe and Odus, each with its creatures' levels (for example the shriek camp in Wktaan's 4th Talon, the Isle of Dread's breath stealers, the Tomb of Kings' Holciel and the Tae Ew of Cazic-Thule), and Zentar's Keep's own hexbones and Bogman Village's rancidbone trolls.
 
