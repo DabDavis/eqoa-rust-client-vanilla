@@ -137,7 +137,7 @@ impl Play {
             attacking: self.auto_attack,
             foe,
             effects: names,
-            bars: self.ability_bars(),
+            bars: self.pc_slot_capacity().map_or_else(|| self.ability_bars(), |slots| slots / 5),
         };
         if let Some(c) = self.autocast.choose(&self.abilities, &now) {
             let target = if c.at_self { me.unwrap_or(self.target) } else { self.target };
@@ -151,6 +151,10 @@ impl Play {
     pub(super) fn auto_point(&mut self, p: [f32; 2]) -> bool {
         let Some(id) = self.hud_menus.ability_at(p) else { return false };
         let Some(a) = self.abilities.get(&id).cloned() else { return false };
+        if let Some(capacity) = self.pc_slot_capacity()
+            && (a.valid == 0 || !((0..i64::from(capacity)).contains(&a.slot) || (252..256).contains(&a.slot))) {
+            return false;
+        }
         self.autocast.character(self.player.server_id, &self.dump.player.name);
         let mut line = self.autocast.toggle(&a);
         if !crate::settings::auto_cast() {
@@ -196,7 +200,7 @@ impl Play {
                     .autocast
                     .on
                     .iter()
-                    .filter_map(|(id, k)| self.abilities.get(id).map(|a| (a.slot, format!("  {}{} ({}{})", if a.valid != 0 && (0..20).contains(&a.slot) { format!("{}: ", a.slot + 1) } else { String::new() }, a.name, k.word(), if a.valid == 0 { ", not on a bar" } else { "" }))))
+                    .filter_map(|(id, k)| self.abilities.get(id).map(|a| (a.slot, format!("  {}{} ({}{})", if a.valid != 0 && (0..40).contains(&a.slot) { format!("{}: ", a.slot + 1) } else { String::new() }, a.name, k.word(), if a.valid == 0 { ", not on a bar" } else { "" }))))
                     .collect();
                 v.sort();
                 let mut out = vec![format!("Auto-cast is {}; {} auto slot{}.{}", if crate::settings::auto_cast() { "on" } else { "off" }, v.len(), if v.len() == 1 { "" } else { "s" }, if crate::settings::auto_target() { " Auto target is on." } else { "" })];

@@ -649,6 +649,7 @@ pub struct Play {
     ignore: crate::social::Ignore,
     ignore_wnd: crate::social::IgnoreList,
     panel_open: bool,
+    pc_windows: crate::pcwindows::Windows,
     panel_keys: Vec<(i32, bool)>,
     /// the Options window to open on its Controls page (F1 from play)
     controls_open: bool,
@@ -1990,7 +1991,7 @@ impl PlateView {
         PlateView {
             eye: glam::Vec3::from(crate::lod::eye(cam, eye).to_array()),
             distance: crate::settings::name_distance(),
-            scale: crate::lod::plate_scale(cam, eye, k),
+            scale: crate::lod::plate_scale(cam, eye, k) * (crate::settings::client().display_ui().nameplate_scale as f32 / 100.0),
             most: crate::settings::entity_slots().max(NAME_PLATES_GAME),
             overlap: crate::settings::overlapping_names(),
             fog: None,
@@ -2834,6 +2835,9 @@ mod name_plates {
         assert_eq!((v.distance, v.most), (22.0, NAME_PLATES_GAME));
         assert!((v.scale - crate::lod::PLATE_FLOOR).abs() < 1e-3);
         assert_eq!(PlateView::of(&cam, &back(8.0), (1920, 1080)), PlateView::game(Vec3::new(1000.0, 51.68, 1992.0)), "the game's camera: the game's");
+        crate::settings::set_client(crate::settings::ClientOptions { pc_mode: true, hud_scale: 50, nameplate_scale: 150, ..crate::settings::client() });
+        let scaled = PlateView::of(&cam, &back(50.0), (1920, 1080));
+        assert_eq!(scaled, PlateView { scale: v.scale * 1.5, ..v }, "name size composes with zoom independently of HUD size");
         crate::settings::set_client(crate::settings::ClientOptions { name_distance: 90, entity_slots: 64, ..Default::default() });
         let v = PlateView::of(&cam, &back(50.0), (1920, 1080));
         assert_eq!((v.distance, v.most, v.overlap), (90.0, 64, false));
@@ -3589,7 +3593,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default() };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default() };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -4071,7 +4075,7 @@ impl Play {
                 }
                 Event::AbilitySlot { token, index, slot } => {
                     self.ability_token = token;
-                    if self.slot_asked.is_some_and(|(i, _, _)| i == index as i64) {
+                    if self.slot_asked.is_some_and(|(i, s, _)| i == index as i64 && s == slot as i64) {
                         self.slot_asked = None;
                     }
                     self.ability_slot(index as i64, slot as i64);
@@ -6009,13 +6013,14 @@ impl Play {
             return false;
         }
         let f = render::ui::frame_from_window(size, at);
+        use crate::hudlayout::{Beyond, Piece, local_point};
+        let b = Beyond::of(size);
         // on a buff (`buffwnd`, petition 1809): taken off, as a right click
-        if self.buff_hold(f) {
+        if self.buff_hold(local_point(Piece::Effects, f, b)) {
             return true;
         }
-        let (side, up) = (render::ui::side(size), render::ui::top(size));
-        let menus = crate::hudlayout::shift(crate::hudlayout::Piece::QuickMenus, crate::hudlayout::Beyond::of(size));
-        self.auto_point([f[0] - side - menus[0], f[1] + up - menus[1]])
+        let piece = if self.hud_menus.stacked { Piece::SpellBars } else { Piece::QuickMenus };
+        self.auto_point(local_point(piece, f, b))
     }
 
     /// Long presses are wanted in play (`hud_hold`): auto-cast on, or the
@@ -6025,6 +6030,7 @@ impl Play {
     }
 
     pub fn point(&mut self, c: crate::mouse::Click, size: (u32, u32), finger: bool) -> bool {
+        use crate::hudlayout::{Beyond, Piece, local_point};
         use crate::mouse::Click;
         // a mouse means a keyboard beside it (the edit boxes' compact face,
         // with the options' Soft Keyboard on); a finger, none
@@ -6032,6 +6038,7 @@ impl Play {
         self.touched = finger;
         let (Click::Target(x, y) | Click::Interact(x, y) | Click::Right(x, y)) = c;
         let f = render::ui::frame_from_window(size, [x as f32, y as f32]);
+        let local = |piece| local_point(piece, f, Beyond::of(size));
         // the map, while it is up: its buttons and glyphs; a right click is △;
         // a click on the map itself puts the waypoint there or takes it away
         if self.map.open {
@@ -6050,7 +6057,7 @@ impl Play {
         // the buff window (`buffwnd`, petition 1809): a left click on a buff
         // selects it or lets it go, a right click takes it off (a left click
         // off it lets go and is still the world's)
-        if matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.buff_point(f, matches!(c, Click::Right(..)), finger) {
+        if matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.buff_point(local(Piece::Effects), matches!(c, Click::Right(..)), finger) {
             return true;
         }
         // the item links' windows (`itemlink`): a click on one is theirs, on
@@ -6071,28 +6078,30 @@ impl Play {
             // window's right, the compass at its left; in a tall window the
             // compass and the quick menus up at its top, the chat box down at
             // its bottom (each answers in its own place)
-            let (side, up) = (render::ui::side(size), render::ui::top(size));
-            // each where the player put it (`hudlayout`)
-            let moved = |p| crate::hudlayout::shift(p, crate::hudlayout::Beyond::of(size));
-            let (compass, menus) = (moved(crate::hudlayout::Piece::Player), moved(crate::hudlayout::Piece::QuickMenus));
+            let bars_at = local(if self.hud_menus.stacked { Piece::SpellBars } else { Piece::QuickMenus });
+            if crate::binds::pc_shortcuts() && let Some((menu, n)) = self.hud_menus.stacked_at(bars_at) {
+                let native = crate::hudmenu::BAR_MENUS.iter().position(|&m| m == menu);
+                let bar = if menu >= crate::hudmenu::MENUS { Some(crate::hudmenu::PC_ACTION_BAR + menu - crate::hudmenu::MENUS) }
+                    else { native.filter(|_| n < 5) };
+                if let Some(bar) = bar {
+                    if matches!(c, Click::Right(..)) { self.auto_point(bars_at); }
+                    else { self.bar_slot_key(bar, n as usize); }
+                    return true;
+                }
+            }
             // a right click on a bar's ability: its auto turned (`autocast`);
             // anywhere else, the world's as ever
             if matches!(c, Click::Right(..)) {
-                let stacked = moved(crate::hudlayout::Piece::SpellBars);
-                let bars_at = if self.hud_menus.stacked { [f[0] - side - stacked[0], f[1] - up - stacked[1]] } else { [f[0] - side - menus[0], f[1] + up - menus[1]] };
                 return self.auto_point(bars_at);
             }
             // the compass opens the map, with the Map on (the touch screen's
             // way to it)
-            if crate::settings::map() && crate::map::on_compass([f[0] + side - compass[0], f[1] + up - compass[1]]) && self.hud.is_some() {
+            if crate::settings::map() && crate::map::on_compass(local(Piece::Player)) && self.hud.is_some() {
                 self.map.show();
                 return true;
             }
             // the stacked bars (ticket 1913) where they were put, a piece of
             // their own (petition 5229)
-            let chat = moved(crate::hudlayout::Piece::Chat);
-            let stacked = moved(crate::hudlayout::Piece::SpellBars);
-            let bars_at = if self.hud_menus.stacked { [f[0] - side - stacked[0], f[1] - up - stacked[1]] } else { [f[0] - side - menus[0], f[1] + up - menus[1]] };
             if let Some(k) = self.hud_menus.point(bars_at) {
                 // the pad key it stands for in S2's record, let go at once
                 self.note_hud_key(k, true);
@@ -6102,19 +6111,21 @@ impl Play {
             }
             // the Utility Bars (2026-11-18) where they were put, a piece of
             // their own, at the side Utility Bar Layout draws them at
-            let utility = moved(crate::hudlayout::Piece::UtilityBars);
-            let utility_at = match crate::settings::utility_layout() {
-                crate::hudmenu::UtilityLayout::UpperLeft => [f[0] + side - utility[0], f[1] + up - utility[1]],
-                crate::hudmenu::UtilityLayout::Below => [f[0] - side - utility[0], f[1] - up - utility[1]],
-            };
-            if let Some(k) = self.hud_menus.point_utility(utility_at) {
+            if crate::binds::pc_shortcuts() && let Some(k) = self.hud_menus.point_equipment(local(Piece::EquipmentBar)) {
+                self.note_hud_key(k, true);
+                self.hud_key(k);
+                self.note_hud_key(k, false);
+                return true;
+            }
+            if let Some(k) = self.hud_menus.point_utility(local(Piece::UtilityBars)) {
                 self.note_hud_key(k, true);
                 self.hud_key(k);
                 self.note_hud_key(k, false);
                 return true;
             }
             // the chat box: the chat line, as R3 opens it
-            if self.wnd_chat.as_ref().is_some_and(|w| w.contains([f[0] - side - chat[0], f[1] - up - chat[1]])) {
+            if self.wnd_chat.as_ref().is_some_and(|w| w.contains(local(Piece::Chat))
+                || (crate::settings::pc_mode() && (1..=crate::chat::TABS).any(|t| w.pane(t).is_some_and(|p| p.contains(local(Self::chat_piece(t))))))) {
                 self.open_chat_line();
                 return true;
             }
@@ -6130,6 +6141,10 @@ impl Play {
                 // a raid list's group line: nothing to target
                 Some(crate::hud::Pick::RaidGroup(_)) => return true,
                 Some(crate::hud::Pick::Pet) => (self.pet_id != u32::MAX).then_some(self.pet_id),
+                Some(crate::hud::Pick::Settings) => {
+                    self.open_options();
+                    return true;
+                }
                 // the minimap: the map opened, as the compass opens it
                 Some(crate::hud::Pick::Minimap) => {
                     self.map.show();
@@ -6155,13 +6170,14 @@ impl Play {
             }
             return true;
         }
+        let window_at = self.pc_windows.input(self.pc_window().map(|(id, _)| id), f);
         let keys = if matches!(c, Click::Right(..)) {
             vec![crate::pointer::key::TRIANGLE]
         } else {
-            match self.glyphs.at(f, if finger { crate::pointer::FINGER } else { 0.0 }) {
+            match window_at.and_then(|at| self.glyphs.at(at, if finger { crate::pointer::FINGER } else { 0.0 })) {
                 Some(k) => vec![k],
                 None => {
-                    let keys = self.window_point(f);
+                    let keys = window_at.map_or_else(Vec::new, |at| self.window_point(at));
                     // the chat box, under a trade's (or a wager's) window and
                     // not on it: its chat line, as the chat box opens the chat
                     // line in play
@@ -6184,10 +6200,18 @@ impl Play {
     /// The chat box's point for a pointer at window pixels `at` (as `point`
     /// takes it, before a wide window's move and a tall one's).
     fn chat_point(at: (f64, f64), size: (u32, u32)) -> [f32; 2] {
+        Self::chat_pane_point(at, size, 0)
+    }
+
+    fn chat_piece(t: usize) -> crate::hudlayout::Piece {
+        use crate::hudlayout::Piece;
+        match t { 1 => Piece::Chat1, 2 => Piece::Chat2, 3 => Piece::Chat3, _ => Piece::Chat }
+    }
+
+    fn chat_pane_point(at: (f64, f64), size: (u32, u32), t: usize) -> [f32; 2] {
         let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
         // where the player put the box (`hudlayout`)
-        let m = crate::hudlayout::shift(crate::hudlayout::Piece::Chat, crate::hudlayout::Beyond::of(size));
-        [f[0] - render::ui::side(size) - m[0], f[1] - render::ui::top(size) - m[1]]
+        crate::hudlayout::local_point(Self::chat_piece(t), f, crate::hudlayout::Beyond::of(size))
     }
 
     /// A mouse button down in the world at window pixels `at` (`left`: the left
@@ -6197,9 +6221,33 @@ impl Play {
     pub fn chat_press(&mut self, at: (f64, f64), size: (u32, u32), left: bool) -> bool {
         let lines = ((self.mode == 0 && !self.search.open) || self.mode == 33) && !crate::hideui::hidden();
         let scrolling = self.mode == 33;
+        let frame = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        if self.links.covers(frame) { return false; }
         let Some(c) = self.wnd_chat.as_mut() else { return false };
-        if c.dragging() {
+        if c.dragging() || (1..=crate::chat::TABS).any(|t| c.pane(t).is_some_and(|p| p.dragging())) {
             return true;
+        }
+        if left && lines && crate::settings::pc_mode() {
+            for t in (1..=crate::chat::TABS).rev() {
+                let p = Self::chat_pane_point(at, size, t);
+                if c.pane(t).is_some_and(|pane| pane.control_at(p)) {
+                    c.set_detached(t, false);
+                    if let Err(e) = crate::settings::set_chat_detached(t, false) { crate::say(&format!("chat: could not save pane: {e}")); }
+                    return true;
+                }
+                if c.pane_mut(t).is_some_and(|pane| pane.press(p, at)) { return true; }
+                if c.pane(t).is_some_and(|pane| pane.contains(p)) {
+                    self.open_chat_line();
+                    return true;
+                }
+            }
+            if c.control_at(Self::chat_point(at, size)) {
+                let t = c.tab();
+                if c.set_detached(t, true) {
+                    if let Err(e) = crate::settings::set_chat_detached(t, true) { crate::say(&format!("chat: could not save pane: {e}")); }
+                }
+                return true;
+            }
         }
         // a tab's name over the box (ticket 1951): that tab shown
         if left && lines && c.click_tab(Self::chat_point(at, size)) {
@@ -6215,14 +6263,31 @@ impl Play {
     /// The pointer moved in the world: a drag of the chat box's goes with it.
     pub fn chat_moved(&mut self, at: (f64, f64), size: (u32, u32)) {
         if let Some(c) = self.wnd_chat.as_mut() {
+            for t in 1..=crate::chat::TABS {
+                if let Some(p) = c.pane_mut(t) { p.moved(Self::chat_pane_point(at, size, t), at); }
+            }
             c.moved(Self::chat_point(at, size), at);
         }
+    }
+
+    pub fn spell_hover(&mut self, at: Option<[f32; 2]>, size: (u32, u32)) {
+        let p = at.filter(|_| crate::binds::pc_shortcuts() && self.mode == 0 && !self.map.open && !self.search.open && !crate::hideui::hidden())
+            .map(|at| crate::hudlayout::local_point(crate::hudlayout::Piece::SpellBars, render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size)));
+        self.hud_menus.hover_stacked(p);
+        let p = at.filter(|_| crate::binds::pc_shortcuts() && self.mode == 0 && !self.map.open && !self.search.open && !crate::hideui::hidden())
+            .map(|at| crate::hudlayout::local_point(crate::hudlayout::Piece::EquipmentBar, render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size)));
+        self.hud_menus.hover_equipment(p);
     }
 
     /// The left button let go (`chat::Let`).
     pub fn chat_release(&mut self) -> crate::chat::Let {
         let scrolling = self.mode == 33;
-        let got = self.wnd_chat.as_mut().map_or(crate::chat::Let::NotHeld, |c| c.release(scrolling));
+        let got = self.wnd_chat.as_mut().map_or(crate::chat::Let::NotHeld, |c| {
+            for t in 1..=crate::chat::TABS {
+                if let Some(p) = c.pane_mut(t).filter(|p| p.dragging()) { return p.release(false); }
+            }
+            c.release(scrolling)
+        });
         // a click on an item link opens it (`itemlink`)
         if let crate::chat::Let::Link(id, name) = &got {
             self.open_link(*id, name);
@@ -6234,13 +6299,14 @@ impl Play {
     /// A press of the chat box's that is down (the other button's are nothing
     /// while it is).
     pub fn chat_dragging(&self) -> bool {
-        self.wnd_chat.as_ref().is_some_and(|c| c.dragging())
+        self.wnd_chat.as_ref().is_some_and(|c| c.dragging() || (1..=crate::chat::TABS).any(|t| c.pane(t).is_some_and(|p| p.dragging())))
     }
 
     /// The pointer gone from the window or the keys to another: a drag's release
     /// may never come, so it ends here, what it selected kept.
     pub fn chat_let_go(&mut self) {
         if let Some(c) = self.wnd_chat.as_mut() {
+            for t in 1..=crate::chat::TABS { if let Some(p) = c.pane_mut(t) { p.let_go(); } }
             c.let_go();
         }
     }
@@ -6248,15 +6314,33 @@ impl Play {
     /// Esc: a selection cleared takes it, and it is nothing more.
     pub fn chat_escape(&mut self) -> bool {
         let scrolling = self.mode == 33;
-        let Some(c) = self.wnd_chat.as_mut().filter(|c| c.selecting()) else { return false };
+        let Some(c) = self.wnd_chat.as_mut() else { return false };
+        for t in 1..=crate::chat::TABS {
+            if let Some(p) = c.pane_mut(t).filter(|p| p.selecting()) { p.clear_selection(false); return true; }
+        }
+        if !c.selecting() { return false; }
         c.clear_selection(scrolling);
         true
     }
 
     /// The wheel's `lines` over the chat box's history (`WndChat::wheel`).
     pub fn chat_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
+        let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        if matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.links.covers(f) { return true; }
         let held = self.mode == 33;
-        self.wnd_chat.as_mut().is_some_and(|c| c.wheel(Self::chat_point(at, size), lines, held))
+        self.wnd_chat.as_mut().is_some_and(|c| {
+            if crate::settings::pc_mode() {
+                for t in (1..=crate::chat::TABS).rev() {
+                    let point = Self::chat_pane_point(at, size, t);
+                    if let Some(p) = c.pane_mut(t).filter(|p| p.contains(point)) {
+                        return p.pc_wheel(point, lines);
+                    }
+                }
+                let point = Self::chat_point(at, size);
+                if c.contains(point) { return c.pc_wheel(point, lines); }
+            }
+            c.wheel(Self::chat_point(at, size), lines, held)
+        })
     }
 
     /// The wheel's `lines` (up positive; a finger's drag down) on the window
@@ -6292,7 +6376,7 @@ impl Play {
             return self.quick.point(f);
         }
         if self.mode == 2 {
-            return one(self.edit.point(f).flatten());
+            return if self.edit.inline_chat { Vec::new() } else { one(self.edit.point(f).flatten()) };
         }
         if self.bank_owns() {
             // Shift+click on an item of either list: linked in the chat line
@@ -6482,6 +6566,18 @@ impl Play {
         self.chat_line_linked(text, &[]);
     }
 
+    fn send_channel_line(&mut self, channel: u8, text: &str, links: &[net::itemlink::Linked]) {
+        use net::itemlink::Route;
+        let route = match channel { 3 => Route::Shout, 4 => Route::Guild, _ => Route::Say };
+        if !self.session.say_linked(route, text, self.target, links) {
+            match channel {
+                3 => self.session.send_op_sub_wide(0x0C01, 2, text),
+                4 => self.session.send_op_sub_wide(0x0578, 12, text),
+                _ => self.session.say(text, self.target),
+            }
+        }
+    }
+
     /// `chat_line` for a typed line with item links (`itemlink`, the chat
     /// line's `editbox::TextLink`s): where the server offered links and the
     /// Extended row is on, a line that goes with any of them goes as
@@ -6490,7 +6586,7 @@ impl Play {
     /// command's own word off; `/r`'s tell put before it); everywhere else, and
     /// for a command, the plain line, the items' names in it.
     pub fn chat_line_linked(&mut self, text: &str, links: &[crate::editbox::TextLink]) {
-        use net::itemlink::Route;
+        use crate::chat::Channel;
         let wide: Vec<u16> = text.encode_utf16().collect();
         if self.session.self_id.is_none() {
             self.chat_unsent += 1;
@@ -6509,14 +6605,7 @@ impl Play {
                 self.send_bug_note();
             }
             let l = Self::wire_links(&wide, links, 0, 0);
-            match self.channel {
-                4 if self.session.say_linked(Route::Guild, text, target, &l) => {}
-                4 => self.session.send_op_sub_wide(0x0578, 12, text),
-                3 if self.session.say_linked(Route::Shout, text, target, &l) => {}
-                3 => self.session.send_op_sub_wide(0x0C01, 2, text),
-                _ if self.session.say_linked(Route::Say, text, target, &l) => {}
-                _ => self.session.say(text, target),
-            }
+            self.send_channel_line(self.channel, text, &l);
             return;
         }
         // `/autotarget` (`autocast`), the client's own: longer than the
@@ -6544,45 +6633,21 @@ impl Play {
         if cmd == "/lfg" && crate::live::features().live() && self.lfg_command(&wide[n..]) {
             return;
         }
-        let back = self.channel;
-        // the links in what goes after the command's word, counted from there
-        let in_rest = Self::wire_links(&wide, links, rest_at, 0);
+        if let Some(channel) = Channel::command(&cmd) {
+            if let Some(mode) = channel.mode() {
+                self.session.send_op_byte(0x000E, mode);
+                self.send_channel_line(mode, &rest, &Self::wire_links(&wide, links, rest_at, 0));
+                self.session.send_op_byte(0x000E, self.channel);
+            } else if channel == Channel::Tell {
+                self.send_channel_line(0, text, &Self::wire_links(&wide, links, 0, 0));
+            } else if !self.reply_name.is_empty() {
+                let prefix = format!("/t {} ", self.reply_name);
+                let l = Self::wire_links(&wide, links, rest_at, prefix.encode_utf16().count());
+                self.send_channel_line(0, &(prefix + &rest), &l);
+            }
+            return;
+        }
         match cmd.as_str() {
-            "/sa" | "/say" => {
-                self.session.send_op_byte(0x000E, 0);
-                if !self.session.say_linked(Route::Say, &rest, target, &in_rest) {
-                    self.session.say(&rest, target);
-                }
-                self.session.send_op_byte(0x000E, back);
-            }
-            "/g" | "/group" => {
-                self.session.send_op_byte(0x000E, 2);
-                if !self.session.say_linked(Route::Say, &rest, target, &in_rest) {
-                    self.session.say(&rest, target);
-                }
-                self.session.send_op_byte(0x000E, back);
-            }
-            "/gu" | "/guild" => {
-                self.session.send_op_byte(0x000E, 4);
-                if !self.session.say_linked(Route::Guild, &rest, target, &in_rest) {
-                    self.session.send_op_sub_wide(0x0578, 12, &rest);
-                }
-                self.session.send_op_byte(0x000E, back);
-            }
-            "/s" | "/shout" => {
-                self.session.send_op_byte(0x000E, 3);
-                if !self.session.say_linked(Route::Shout, &rest, target, &in_rest) {
-                    self.session.send_op_sub_wide(0x0C01, 2, &rest);
-                }
-                self.session.send_op_byte(0x000E, back);
-            }
-            // a tell goes whole (the server parses it), its links where typed
-            "/t" | "/tell" => {
-                let l = Self::wire_links(&wide, links, 0, 0);
-                if !self.session.say_linked(Route::Say, text, target, &l) {
-                    self.session.say(text, target);
-                }
-            }
             "/alarm" => self.alarm_command(&rest),
             // the DPS meter's (`dpsmeter`), the client's own
             "/dps" => self.dps_command(&rest),
@@ -6611,17 +6676,6 @@ impl Play {
             "/rst_mastr" => self.admin_slash(0xA13A_0000, &rest),
             "/rst_both" => self.admin_slash(0xA13B_0000, &rest),
             "/rem_abil" => self.admin_slash(0xA13C_0000, &rest),
-            "/r" | "/reply" => {
-                if !self.reply_name.is_empty() {
-                    let line = format!("/t {} {}", self.reply_name, rest);
-                    // the links after the tell's words put before them
-                    let at = line.encode_utf16().count() - (wide.len() - rest_at.min(wide.len()));
-                    let l = Self::wire_links(&wide, links, rest_at, at);
-                    if !self.session.say_linked(Route::Say, &line, target, &l) {
-                        self.session.say(&line, target);
-                    }
-                }
-            }
             // go-eqoa-server's bug report: F3's form with the words typed after
             // it (`open_bug_report_typed`), where the server offered bug
             // reports; elsewhere the line as typed, its note first
@@ -7353,6 +7407,7 @@ impl Play {
             return;
         }
         match key {
+            144 if crate::settings::pc_mode() => self.open_options(),
             144 => self.open_start_menu(true),
             145 => self.camera_style_key(walker),
             134 => self.attack_press(),
@@ -8466,6 +8521,57 @@ impl Play {
         }
     }
 
+    /// Keyboard Enter, slash, Tell or Reply in the world. Controller and touch
+    /// chat continue through the game's edit window.
+    pub fn keyboard_chat_key(&mut self, text: &str) {
+        let inline = self.mode == 0 && self.keyboard && self.wnd_chat.is_some() && crate::settings::pc_mode() && crate::settings::client().inline_chat;
+        self.chat_key(text, text.is_empty() || text == "/");
+        self.edit.inline_chat = inline;
+    }
+
+    fn inline_label(&self) -> &'static str {
+        let draft = &self.edit.text;
+        if draft.first() == Some(&(b'/' as u16)) {
+            let end = draft.iter().position(|&c| c == b' ' as u16).unwrap_or(draft.len());
+            let word = String::from_utf16_lossy(&draft[..end]);
+            return crate::chat::Channel::command(&word).map_or("Command", |c| c.label());
+        }
+        match self.channel { 1 => "Tell", 2 => "Group", 3 => "Shout", 4 => "Guild", _ => "Say" }
+    }
+
+    /// A channel shortcut submitted on its own keeps the inline editor open
+    /// for its message. A shortcut with a body uses the ordinary chat sender.
+    fn inline_shortcut(&mut self, text: &str) -> bool {
+        use crate::chat::Channel;
+        let (word, body) = text.trim_end().split_once(' ').unwrap_or((text.trim_end(), ""));
+        let Some(channel) = Channel::command(word) else { return false };
+        // Keep an undeliverable draft in the editor so it can be corrected.
+        if channel == Channel::Group && self.group.count() < 2 {
+            self.show_word(629);
+            return true;
+        }
+        if channel == Channel::Guild && !self.guild.in_guild {
+            self.show_word(570);
+            return true;
+        }
+        if channel == Channel::Reply && self.reply_name.is_empty() {
+            self.add_chat("No one has sent you a tell to reply to.".into(), [1.0; 4]);
+            return true;
+        }
+        if !body.is_empty() {
+            return false;
+        }
+        if let Some(mode) = channel.mode() {
+            self.group_changed(mode);
+            self.edit.clear();
+        } else if channel == Channel::Tell {
+            self.edit.set_text(&crate::ui::wide("/t "));
+        } else {
+            self.edit.set_text(&crate::ui::wide(&format!("/t {} ", self.reply_name)));
+        }
+        true
+    }
+
     /// Whether a server's player search is up (`searchwnd`): it has the
     /// keys and the pointer.
     pub fn search_open(&self) -> bool {
@@ -8534,7 +8640,11 @@ impl Play {
 
     /// The edit box shows the compact legend (no soft keyboard).
     pub fn edit_pad_only(&self) -> bool {
-        crate::editbox::pad_only()
+        self.inline_editing() || crate::editbox::pad_only()
+    }
+
+    pub fn inline_editing(&self) -> bool {
+        self.mode == 2 && self.edit.inline_chat
     }
 
     /// A key for the edit box (the game's codes), handled with the next HUD
@@ -8548,6 +8658,9 @@ impl Play {
     fn run_edit(&mut self, vui: &vi::ui::Vui, r: &dyn vi::ui::Raster) {
         let now = self.session.now() as i64;
         let mut cues = Vec::new();
+        if self.inline_editing() {
+            self.edit.take_asks(now, &mut cues);
+        }
         for (key, down) in std::mem::take(&mut self.edit_keys) {
             if self.mode != 2 {
                 break;
@@ -8581,6 +8694,9 @@ impl Play {
             return;
         }
         let text = String::from_utf16_lossy(&self.edit.text);
+        if purpose == 0x0B0F_0000 && self.edit.inline_chat && self.inline_shortcut(&text) {
+            return;
+        }
         // the chat line sent (or emptied): no line kept with its links
         // (`itemlink`)
         let links = if purpose == 0x0B0F_0000 {
@@ -9179,6 +9295,7 @@ impl Play {
             return false;
         }
         let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        let Some(f) = self.pc_windows.input(self.pc_window().map(|(id, _)| id), f) else { return false };
         let Some(k) = self.quick.choice_key(f) else { return false };
         self.keyboard = true;
         self.quick.key(k, true);
@@ -9251,7 +9368,18 @@ impl Play {
     /// expansion mask's bit 1 the game's two, or as many as the Extended
     /// page's Ability Bars asks (their slots the server's to keep).
     pub fn ability_bars(&self) -> i32 {
+        if let Some(slots) = self.pc_slot_capacity() {
+            return (slots / 5).min(crate::hudmenu::MAX_BARS);
+        }
         if (self.session.expansion >> 1) & 1 != 0 { (crate::settings::ability_bars() as i32).clamp(2, crate::hudmenu::MAX_BARS) } else { 1 }
+    }
+
+    /// Expanded PC spell books and bars share one capacity. The server confirms
+    /// each equipped spell through its normal memorize reply.
+    fn pc_slot_capacity(&self) -> Option<i32> {
+        crate::binds::pc_shortcuts().then(|| {
+            if self.session.expansion & 2 == 0 { 5 } else { i32::from(crate::settings::pc_action_rows()) * 10 }
+        })
     }
 
     /// What the HUD's carousel holds: the ability bars (`ability_bars`) and
@@ -9310,22 +9438,45 @@ impl Play {
     /// "otherwise work the same way"): an item quick slot's item used as a
     /// click on it uses it (`hudmenu::ITEMS_BAR`), a weapon set taken up
     /// (`hudmenu::SETS_BAR`, on a server that keeps them).
+    pub(crate) fn keyboard_slot_edge(&mut self, bar: usize, slot: usize, down: bool, repeat: bool) {
+        self.keyboard = true;
+        if down && !repeat { self.bar_slot_key(bar, slot); }
+    }
+
     pub fn bar_slot_key(&mut self, bar: usize, slot: usize) {
         if (self.mode != 0 && self.mode != 38) || self.typing.is_some() || self.map.open {
+            return;
+        }
+        if (crate::hudmenu::PC_ACTION_BAR..crate::hudmenu::PC_ACTION_BAR + 2).contains(&bar) {
+            if slot < 10 { self.cast_pc_slot(20 + (bar - crate::hudmenu::PC_ACTION_BAR) * 10 + slot); }
             return;
         }
         let shown = match bar {
             crate::hudmenu::ITEMS_BAR => true,
             crate::hudmenu::SETS_BAR => self.gear.on,
+            b if crate::binds::pc_shortcuts() && b < crate::hudmenu::MAX_BARS as usize => {
+                slot < 5 && self.pc_slot_capacity().is_some_and(|n| b * 5 + slot < n as usize)
+            }
             b => b < self.ability_bars() as usize,
         };
         if !shown {
             return;
         }
         let Some(menu) = crate::hudmenu::key_menu(bar) else { return };
+        if crate::binds::pc_shortcuts() && bar < crate::hudmenu::MAX_BARS as usize && slot < 5 {
+            self.hud_menus.sel = menu as i32;
+            self.hud_menus.menus[menu].sel = slot as i32;
+            self.cast_pc_slot(bar * 5 + slot);
+            return;
+        }
         let Some((msg, id)) = self.hud_menus.slot_entry(bar, slot) else { return };
+        if crate::binds::pc_shortcuts() { self.hud_menus.sel = menu as i32; }
         self.hud_menus.menus[menu].sel = slot as i32;
         eprintln!("play: bar {} slot {} key: {msg:#x} {id}", bar + 1, slot + 1);
+        self.press_bar_entry(msg, id);
+    }
+
+    fn press_bar_entry(&mut self, msg: u32, id: i64) {
         // circle (135) as the click's, without its hold (`auto_use_held`
         // reads the menu up, not this bar)
         let noted = !self.is_dead();
@@ -9338,6 +9489,15 @@ impl Play {
         }
     }
 
+    /// A keyboard press and a click read the same confirmed gem, even if a
+    /// memorize reply arrived after the last HUD frame.
+    fn cast_pc_slot(&mut self, slot: usize) {
+        if let Some(capacity) = self.pc_slot_capacity() && slot < capacity as usize
+            && let Some(spell) = self.abilities.values().find(|a| a.valid != 0 && a.slot == slot as i64) {
+            self.press_bar_entry(0x8060000, spell.id);
+        }
+    }
+
     /// Stacked Spell Bars are drawn (`hudmenu`'s doc, ticket 1913): the
     /// Extended row on, on a computer, whatever was pressed last but a finger:
     /// a controller walks and uses the stacked bars with its d-pad as the
@@ -9345,7 +9505,7 @@ impl Play {
     /// the pad's first press). A finger on the touch screen keeps the
     /// carousel, whose taps it plays with; never on a phone.
     pub fn stacked_bars(&self) -> bool {
-        stacked_for(crate::settings::stacked_bars(), self.touched)
+        crate::binds::pc_shortcuts() || stacked_for(crate::settings::stacked_bars(), self.touched)
     }
 
     /// A memorize past the game's ten slots that the server left unanswered
@@ -9357,8 +9517,8 @@ impl Play {
             return;
         }
         self.slot_asked = None;
-        eprintln!("play: no 0x00B4 for slot {slot}: the server keeps the game's ten slots only");
-        self.add_chat(format!("This server did not keep the ability on bar {}: it keeps abilities on the game's two bars only.", slot / 5 + 1), [1.0, 0.25, 0.25, 1.0]);
+        eprintln!("play: no 0x00B4 for slot {slot}");
+        self.add_chat(format!("The server has not confirmed spell gem {}.", slot + 1), [1.0, 0.25, 0.25, 1.0]);
     }
 
     /// A line the client writes itself: word `id`, in red as the game's
@@ -10373,6 +10533,7 @@ impl Play {
     /// frames).
     fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32)) {
         ui.begin(size);
+        if self.pc_window().is_none() { self.pc_windows.clear(); }
         // the pieces this frame draws, where (`hudlayout`)
         crate::hudlayout::frame_begin();
         // LoadingProgress in place of the game's frame: no HUD, no windows
@@ -10531,7 +10692,11 @@ impl Play {
             if self.search.open {
                 self.locks = (false, false);
                 r.ui.anchor = Anchor::Middle;
+                let window = self.pc_window().map(|(key, title)| (crate::pcwindows::begin(&mut r), key, title));
                 self.search.draw(vui, &mut r);
+                if let Some((layer, key, title)) = window {
+                    self.pc_windows.show(&mut r, layer, key, title);
+                }
             }
             r.ui.anchor = Anchor::Left;
             r.ui.vertical = Vertical::Top;
@@ -10559,10 +10724,18 @@ impl Play {
                 // item links drawn as links, or the line's plain words (`itemlink`)
                 c.show_links = crate::settings::item_links();
                 // Chat Always Shown (ticket 1914): never sliding away
-                c.always = crate::settings::chat_always();
+                c.always = crate::settings::chat_always() || crate::hudlayout::unlocked();
                 // the chat tabs (ticket 1951), each line into its kind's
-                let opts = crate::settings::client();
+                let opts = crate::settings::client().display_ui();
+                let screen_width = render::ui::SCREEN_W + 2.0 * r.ui.side();
+                c.resize(crate::chat::ChatSize::from_dimensions(&opts, screen_width, crate::settings::chat_pane_size(0)), |s| vi::ui::Raster::string_width(&r, s));
+                c.opacity = opts.chat_opacity;
+                c.typing = self.mode == 2 && self.edit.inline_chat;
                 c.set_tabs(opts.chat_tabs, opts.chat_tab_names);
+                let pc = crate::settings::pc_mode();
+                for t in 1..=crate::chat::TABS {
+                    c.set_detached(t, pc && opts.chat_detached[t - 1]);
+                }
                 for (text, color, at, links) in self.chat_pending.drain(..) {
                     let rr = &r;
                     c.add_line(&text, color, at, |s| vi::ui::Raster::string_width(rr, s), &links);
@@ -10570,8 +10743,23 @@ impl Play {
                 let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Chat);
                 c.draw(vui, &mut r, now, dt);
                 c.draw_selection(&mut r);
+                c.draw_pane_control(vui, &mut r, pc);
                 crate::hudlayout::end(r.ui, m);
                 self.cues.extend(c.cues.drain(..).map(crate::sound::Cue::Ui));
+                for t in 1..=crate::chat::TABS {
+                    if let Some(pane) = c.pane_mut(t) {
+                        if !in_play { pane.clear_selection(false); }
+                        pane.show_links = crate::settings::item_links();
+                        pane.opacity = opts.chat_opacity;
+                        pane.resize(crate::chat::ChatSize::from_dimensions(&opts, screen_width, crate::settings::chat_pane_size(t)), |s| vi::ui::Raster::string_width(&r, s));
+                        let m = crate::hudlayout::begin(r.ui, Self::chat_piece(t));
+                        pane.draw(vui, &mut r, now, dt);
+                        pane.draw_selection(&mut r);
+                        pane.draw_pane_control(vui, &mut r, true);
+                        crate::hudlayout::end(r.ui, m);
+                        self.cues.extend(pane.cues.drain(..).map(crate::sound::Cue::Ui));
+                    }
+                }
             }
             r.ui.anchor = Anchor::Middle;
             r.ui.vertical = Vertical::Middle;
@@ -10580,6 +10768,7 @@ impl Play {
             // the item links' windows (`itemlink`), at the top middle
             let side = crate::ui::Layout::side(&r);
             self.run_links(vui, &mut r, side);
+            let window_layer = (!self.search.open && self.pc_window().is_some()).then(|| crate::pcwindows::begin(&mut r));
             if self.mode == 9 {
                 self.priv_chat.draw(vui, &mut r);
             }
@@ -10613,13 +10802,26 @@ impl Play {
             self.run_edit(vui, &r);
             if self.mode == 2 {
                 let mut cues = Vec::new();
-                self.edit.draw(vui, &mut r, now as i64, &mut cues);
+                if self.edit.inline_chat && let Some(chat) = &self.wnd_chat {
+                    let rect = chat.input_rect(vui, &r);
+                    let label = self.inline_label();
+                    r.ui.anchor = Anchor::Right;
+                    r.ui.vertical = Vertical::Bottom;
+                    let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Chat);
+                    self.edit.draw_inline(vui, &mut r, rect, label, now as i64);
+                    crate::hudlayout::end(r.ui, m);
+                    r.ui.anchor = Anchor::Middle;
+                    r.ui.vertical = Vertical::Middle;
+                } else {
+                    self.edit.draw(vui, &mut r, now as i64, &mut cues);
+                }
                 self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
             }
             // the spell book: opened, its keys, drawn; what it asks for
             let now_ms = now as i64;
             let expansion = self.session.expansion;
             let bars = self.ability_bars();
+            self.book.set_pc_slot_capacity(self.pc_slot_capacity());
             if std::mem::take(&mut self.book_open) {
                 self.book.open(vui, &r, expansion, now_ms);
             }
@@ -10651,6 +10853,9 @@ impl Play {
                     self.items.draw(vui, &mut r, &info, &mut cues);
                 }
                 self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
+            }
+            if let Some(layer) = window_layer && let Some((id, title)) = self.pc_window() {
+                self.pc_windows.show(&mut r, layer, id, title);
             }
             r.ui.anchor = Anchor::Right;
             r.ui.vertical = Vertical::Top;
@@ -10693,6 +10898,7 @@ impl Play {
             if (self.mode == 0 || self.mode == 30 || self.mode == 38 || self.mode == 43) && !self.search.open {
                 let bars = self.hud_bars();
                 self.hud_menus.build(&self.abilities, &self.dump.inventory, &self.gear, bars);
+                if crate::binds::pc_shortcuts() { self.hud_menus.sync_pc_slots(&self.abilities); }
                 let abilities = &self.abilities;
                 let inventory = &self.dump.inventory.items;
                 let gear = &self.gear;
@@ -10716,20 +10922,27 @@ impl Play {
                     let (anchor, vertical) = (r.ui.anchor, r.ui.vertical);
                     r.ui.anchor = Anchor::Right;
                     r.ui.vertical = Vertical::Bottom;
-                    let [left, top] = crate::chat::WndChat::full_top_left(vui, &r);
+                    let chat_size = self.wnd_chat.as_ref().map_or(crate::chat::ChatSize::ORIGINAL, |c| c.size);
+                    let [left, top] = chat_size.full_top_left(vui, &r);
                     // the Utility Bars (2026-11-18): the item quick slots and
                     // the weapon sets the carousel held, a piece of their own,
                     // at the upper left or on the chat box under the spell
                     // bars (Utility Bar Layout)
                     let utility = crate::settings::utility_layout();
+                    let pc = crate::binds::pc_shortcuts();
                     let lift = crate::hudmenu::HudMenus::utility_height(bars, utility);
                     let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::SpellBars);
-                    self.hud_menus.draw_stacked(vui, &mut r, top - lift, left, bars, crate::settings::spell_bar_layout());
+                    if pc {
+                        self.hud_menus.draw_pc_bars(vui, &mut r, 440, 150, bars, crate::settings::pc_action_rows() as usize);
+                    } else {
+                        self.hud_menus.draw_stacked(vui, &mut r, top - lift, left, bars, crate::settings::spell_bar_layout());
+                    }
                     // the name not counted in the piece: against the screen's
                     // edge it moves, the bars do not (petition 2547)
                     let screen = crate::hudlayout::screen_x(r.ui, &m);
                     let m = crate::hudlayout::seal(r.ui, m);
                     self.hud_menus.draw_name(vui, &mut r, now as i64, false, Some(screen), &name);
+                    if pc { self.hud_menus.draw_hover_name(vui, &mut r, Some(screen), &name); }
                     crate::hudlayout::end(r.ui, m);
                     if utility == crate::hudmenu::UtilityLayout::UpperLeft {
                         r.ui.anchor = Anchor::Left;
@@ -10738,13 +10951,27 @@ impl Play {
                     let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::UtilityBars);
                     let at = match utility {
                         crate::hudmenu::UtilityLayout::UpperLeft => crate::hudmenu::UPPER_LEFT_AT,
+                        crate::hudmenu::UtilityLayout::Below if pc => [469, 270],
                         crate::hudmenu::UtilityLayout::Below => [left, top],
                     };
-                    self.hud_menus.draw_utility(vui, &mut r, bars, utility, at);
+                    let utility_bars = if pc { crate::hudmenu::Bars { gear: false, ..bars } } else { bars };
+                    self.hud_menus.draw_utility(vui, &mut r, utility_bars, utility, at);
                     let screen = crate::hudlayout::screen_x(r.ui, &m);
                     let m = crate::hudlayout::seal(r.ui, m);
                     self.hud_menus.draw_name(vui, &mut r, now as i64, true, Some(screen), &name);
                     crate::hudlayout::end(r.ui, m);
+                    if pc && bars.gear {
+                        r.ui.anchor = Anchor::Right;
+                        r.ui.vertical = Vertical::Bottom;
+                        let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::EquipmentBar);
+                        self.hud_menus.draw_equipment(vui, &mut r, bars, [469, 306]);
+                        let screen = crate::hudlayout::screen_x(r.ui, &m);
+                        let m = crate::hudlayout::seal(r.ui, m);
+                        self.hud_menus.draw_equipment_name(vui, &mut r, now as i64, Some(screen), &name);
+                        crate::hudlayout::end(r.ui, m);
+                    } else {
+                        self.hud_menus.hide_equipment();
+                    }
                     (r.ui.anchor, r.ui.vertical) = (anchor, vertical);
                 } else {
                     self.hud_menus.hide_utility();
@@ -10941,15 +11168,52 @@ impl Play {
         crate::hudlayout::unlocked() && self.mode == 0 && !self.search.open && !self.map.open && !crate::hideui::hidden() && !self.loading.up()
     }
 
+    fn pc_window(&self) -> Option<(i32, &'static str)> {
+        if !crate::settings::pc_mode() || self.map.open || self.loading.up() { return None; }
+        if self.search.open { return Some((1000, "Player Search")); }
+        if self.mode == 13 && self.items.visible { return Some((1013, "Inventory")); }
+        let title = match self.mode {
+            0 | 33 | 36 | 38 => return None,
+            2 if self.edit.inline_chat => return None,
+            2 => "Text Entry",
+            5 => "Spell Book",
+            6 => "Recipes",
+            7 | 9 => "Conversation",
+            11 => "Bank",
+            12 => "Trainer",
+            13 => "Start Menu",
+            14 => "Message",
+            17 | 18 => "Friends",
+            20 | 21 => "Guild",
+            22 => "Quests",
+            26 => "Ignore List",
+            30 => "Quick Chat",
+            34 => "Options",
+            35 => "Who",
+            37 => "Experiment",
+            40 => "Class Mastery",
+            41 => "Factions",
+            recordplay::MODE => "Character Record",
+            mercplay::ITEMS_MODE => "Mercenary Equipment",
+            mercplay::SPELLS_MODE => "Mercenary Spells",
+            dyeplay::MODE => "Dye",
+            _ => "Game Window",
+        };
+        Some((self.mode, title))
+    }
+
     /// A press (the mouse's left button, a finger) at window pixels `at`
     /// while the HUD moves: true when it was Move HUD's (a piece picked up,
     /// the bar's Lock or Reset), and so nothing else's.
     pub fn hud_press(&mut self, at: [f32; 2], size: (u32, u32)) -> bool {
         use crate::hudlayout::{Beyond, Button, Press};
         let f = render::ui::frame_from_window(size, at);
+        if matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.links.press(f) { return true; }
+        let key = self.pc_window().map(|(id, _)| id);
+        if self.pc_windows.press(key, f) { return true; }
         // the dyers' colour picker up: every press is its (`dyeplay`)
         if self.dyepick_owns() {
-            return self.dyepick_press(f);
+            return self.pc_windows.input(key, f).is_none_or(|p| self.dyepick_press(p));
         }
         if !self.hud_moving() {
             // a raid list's row held to move it (`raidplay`, petition 1687)
@@ -10971,7 +11235,11 @@ impl Play {
     /// The pointer at window pixels `at` while a piece is dragged: it goes
     /// with it. False with none dragged.
     pub fn hud_drag(&mut self, at: [f32; 2], size: (u32, u32)) -> bool {
-        if self.dyepick_drag(render::ui::frame_from_window(size, at)) {
+        let f = render::ui::frame_from_window(size, at);
+        if self.links.drag(f) { return true; }
+        let key = self.pc_window().map(|(id, _)| id);
+        if self.pc_windows.drag(key, f) { return true; }
+        if self.dyepick_owns() && self.pc_windows.input(key, f).is_some_and(|p| self.dyepick_drag(p)) {
             return true;
         }
         if !crate::hudlayout::dragging() {
@@ -10983,7 +11251,7 @@ impl Play {
 
     /// The press let go: a dragged piece stays, kept. False with none.
     pub fn hud_release(&mut self) -> bool {
-        self.dyepick_release() || crate::hudlayout::release() || self.raid_drag_release()
+        self.links.release() || self.pc_windows.release() || self.dyepick_release() || crate::hudlayout::release() || self.raid_drag_release()
     }
 
     /// The meter cleared, and the server told to drop the fight under way.
@@ -11043,7 +11311,7 @@ impl Play {
     /// "main" Main) or name shown; none, the next tab there.
     fn tab_command(&mut self, arg: &str) {
         let Some(c) = self.wnd_chat.as_mut() else { return };
-        let tabs = c.tab_names();
+        let tabs: Vec<_> = c.tab_names().into_iter().filter(|(t, _, _)| *t == 0 || c.pane(*t).is_none()).collect();
         if tabs.len() < 2 {
             self.add_chat("There are no chat tabs: Extended > UI > Chat Tabs sends a kind of line to one.".to_string(), [1.0; 4]);
             return;
@@ -11178,7 +11446,7 @@ impl Play {
     /// true when it took it.
     pub fn book_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
         let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
-        self.mode == 5 && self.book.wheel(f, lines)
+        self.mode == 5 && self.pc_windows.input(self.pc_window().map(|(id, _)| id), f).is_some_and(|at| self.book.wheel(at, lines))
     }
 
     pub fn raid_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
@@ -11708,7 +11976,7 @@ mod commands {
         p.mode = 34;
         p.options_wnd.open(&vui, &r, &p.options);
         let (mut cues, mut ups) = (Vec::new(), Vec::new());
-        for k in [key::DOWN, key::DOWN, key::CROSS] {
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             p.options_wnd.key(&vui, &mut r, &mut p.options, k, 0, &mut cues, &mut ups);
         }
         ups.clear();
@@ -13593,6 +13861,23 @@ mod commands {
         let mut p = fresh();
         p.hud_menus.menus[2].sel = 3;
         assert_eq!(key(&mut p, 0, 0, retail()), used(0), "the control: bar 1's first slot");
+        let bindings = crate::binds::Binds::default();
+        for (digit, expected) in [("1", 0), ("8", 7)] {
+            let crate::binds::Alias::Slot(bar, slot) = bindings.profile_alias(digit, true) else { panic!("PC number must map to a spell slot") };
+            assert_eq!(key(&mut fresh(), bar, slot, retail()), used(expected), "PC number {digit} reaches the existing cast packet");
+        }
+        let vui = crate::pointer::testing::vui();
+        let mut raster = crate::pointer::testing::NullRaster;
+        let mut clicked = fresh();
+        clicked.hud_menus.stacked = true;
+        let shown = clicked.hud_bars();
+        clicked.hud_menus.draw_pc_bars(&vui, &mut raster, 440, 150, shown, 2);
+        let click = clicked.hud_menus.point([150.0 + 7.0 * 34.0 + 1.0, 420.0]).expect("slot 8 hit");
+        clicked.session.flush();
+        sent.borrow_mut().clear();
+        clicked.hud_key(click);
+        clicked.session.flush();
+        assert_eq!(guaranteed(&sent.borrow()).into_iter().find(|m| m.starts_with(&[0x32, 0x00])), used(7), "PC mouse slot reaches the same cast packet");
         assert_eq!(key(&mut p, 2, 0, retail()), used(10), "bar 3's first slot: slot 10");
         assert_eq!((p.hud_menus.menus[4].sel, p.hud_menus.menus[2].sel), (0, 3), "bar 3's menu selected, the items' left");
         assert_eq!(key(&mut p, 3, 4, retail()), used(19), "bar 4's fifth slot: slot 19");
@@ -13640,6 +13925,127 @@ mod commands {
         let bars = p.hud_bars();
         p.hud_menus.build(&p.abilities, &p.dump.inventory, &p.gear, bars);
         assert_eq!(op(sends(&mut p, sets, 4), 0x22), Some(vec![0x22, 0x00, 4]), "bare hands taken up");
+        crate::settings::set_client(crate::settings::ClientOptions { pc_mode: true, pc_action_rows: 4, ability_bars: 4, ..crate::settings::client() });
+        for slot in 20..40 {
+            let mut pc = fresh();
+            let (bar, cell) = (crate::hudmenu::PC_ACTION_BAR + (slot - 20) / 10, slot % 10);
+            pc.abilities.insert(120, net::dump::Ability { id: 120, display_index: 22, slot: -1, valid: 0, ..Default::default() });
+            pc.book_actions(vec![crate::spellbook::Out::Send0033(22, slot as i64)]);
+            pc.session.flush();
+            assert_eq!(op(guaranteed(&sent.borrow()), 0x33), Some(vec![0x33, 0, 0x55, 0, 0, 0, 22, slot as u8]));
+            assert_eq!(key(&mut pc, bar, cell, retail()), None, "slot {} is pending", slot + 1);
+            pc.ability_slot(22, slot as i64);
+            assert_eq!(key(&mut pc, bar, cell, retail()), used(slot as u8), "acknowledged slot {}", slot + 1);
+        }
+        let mut limited = fresh();
+        limited.abilities.insert(120, net::dump::Ability { id: 120, slot: 39, valid: 1, ..Default::default() });
+        limited.session.expansion = 0;
+        assert_eq!(limited.pc_slot_capacity(), Some(5));
+        assert_eq!(key(&mut limited, crate::hudmenu::PC_ACTION_BAR + 1, 9, retail()), None);
+        limited.session.expansion = 2;
+        crate::settings::set_client(crate::settings::ClientOptions { pc_action_rows: 2, ..crate::settings::client() });
+        assert_eq!(key(&mut limited, crate::hudmenu::PC_ACTION_BAR + 1, 9, retail()), None, "row four is hidden");
+        crate::settings::set_client(crate::settings::ClientOptions { pc_action_rows: 4, ..crate::settings::client() });
+        assert_eq!(key(&mut limited, crate::hudmenu::PC_ACTION_BAR + 1, 9, retail()), used(39), "revealing the row restores access");
+        let mut gear_click = fresh();
+        gear_click.gear.on = true;
+        let bars = gear_click.hud_bars();
+        gear_click.hud_menus.build(&gear_click.abilities, &gear_click.dump.inventory, &gear_click.gear, bars);
+        gear_click.hud_menus.draw_equipment(&vui, &mut raster, bars, [469, 306]);
+        let click = gear_click.hud_menus.point_equipment([469.0 + 4.0 * 34.0 + 1.0, 286.0]).unwrap();
+        gear_click.session.flush();
+        sent.borrow_mut().clear();
+        gear_click.hud_key(click);
+        gear_click.session.flush();
+        assert_eq!(op(guaranteed(&sent.borrow()), 0x22), Some(vec![0x22, 0, 4]), "independent equipment row uses the real bare-hands switch");
+        crate::settings::testing::reset(false);
+    }
+
+    #[test]
+    fn pc_modifier_bindings_capture_reload_and_cast_exactly_once() {
+        use crate::binds::{Alias, Binds, KeyEdge, Sent};
+        use winit::keyboard::{Key, KeyCode};
+        struct Rec(std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>);
+        impl net::session::Datagrams for Rec {
+            fn send_to(&mut self, d: &[u8], _: [u8; 4], _: u16) { self.0.borrow_mut().push(d.to_vec()); }
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> { None }
+        }
+        crate::settings::testing::reset(false);
+        crate::settings::set_client(crate::settings::ClientOptions { pc_mode: true, pc_action_rows: 4, ability_bars: 2, ..crate::settings::client() });
+        let vui = crate::pointer::testing::vui();
+        let cases = [
+            ("bar3_slot1", KeyCode::Digit1, "!", (false, false, true), "shift+1", 10u8),
+            ("pcbar3_slot1", KeyCode::Digit2, "2", (true, false, false), "ctrl+2", 20u8),
+            ("pcbar4_slot10", KeyCode::Digit0, ")", (true, true, true), "ctrl+alt+shift+0", 39u8),
+        ];
+        for (row_id, physical, logical, modifiers, expected, _) in &cases {
+            let mut page = crate::bindpage::ControlsPage::default();
+            page.row = crate::binds::row_named(row_id).unwrap() as i32;
+            let mut cues = Vec::new();
+            page.key(13, true, 0, &mut cues);
+            assert_eq!(page.capture, Some(crate::bindpage::Column::Keyboard));
+            let logical = Key::Character((*logical).into());
+            let base = crate::binds::base_name(*physical);
+            let name = crate::viewer::binding_input_name(&logical, base, *modifiers, true, false, &crate::settings::binds(), true).unwrap();
+            assert_eq!(&name, expected);
+            page.capture_key(&vui, &name, &mut cues);
+            assert!(page.capture.is_none());
+        }
+        let kept = crate::settings::binds();
+        let saved = kept.to_text();
+        let loaded = Binds::from_text(&saved);
+        assert_eq!(loaded, kept, "the captured chords survive a keys.opt round trip");
+        assert_eq!(loaded.profile_alias("1", true), Alias::Slot(0, 0));
+        assert_eq!(loaded.profile_alias("2", true), Alias::Slot(0, 1));
+        assert_eq!(loaded.alias("1"), Alias::Same, "controller self targeting remains");
+        assert_eq!(loaded.alias("2"), Alias::Same, "controller group targeting remains");
+        for (_, physical, logical, modifiers, expected, slot) in cases.into_iter().chain([
+            ("", KeyCode::Digit1, "1", (false, false, false), "1", 0u8),
+            ("", KeyCode::Digit2, "2", (false, false, false), "2", 1u8),
+        ]) {
+            let logical = Key::Character(logical.into());
+            let base = crate::binds::base_name(physical);
+            let input = crate::viewer::binding_input_name(&logical, base, modifiers, false, false, &loaded, true).unwrap();
+            assert_eq!(input, expected, "playing resolves the same physical chord");
+            let typed = crate::viewer::binding_input_name(&logical, base, modifiers, false, true, &loaded, true).unwrap();
+            assert_eq!(typed, logical.to_text().unwrap(), "typing keeps the logical character");
+            let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+            s.self_id = Some(0x100);
+            s.expansion = 2;
+            let mut p = Play::new(s, Player::default(), Box::default());
+            p.mode = 0;
+            p.ability_token = 0x55;
+            p.target = 0x4242;
+            p.abilities.insert(200, net::dump::Ability { id: 200, slot: slot as i64, valid: 1, icon_front: 101, ..Default::default() });
+            let bars = p.hud_bars();
+            p.hud_menus.build(&p.abilities, &p.dump.inventory, &p.gear, bars);
+            p.hud_menus.sync_pc_slots(&p.abilities);
+            p.session.flush();
+            sent.borrow_mut().clear();
+            let mut edge = KeyEdge::default();
+            edge.pc_mode = true;
+            p.keyboard_chat_key("");
+            assert!(p.keyboard_typing(), "the keyboard chat editor owns input");
+            assert_eq!(edge.key(&typed, true, false, p.keyboard_typing(), &loaded), Some(Sent::Key(typed.clone())));
+            for c in typed.chars() { p.edit_key(c as i32, true); }
+            p.run_edit(&vui, &crate::pointer::testing::NullRaster);
+            assert_eq!(String::from_utf16_lossy(&p.edit.text), typed, "the logical character reached the chat editor");
+            let _ = edge.key(&typed, false, false, p.keyboard_typing(), &loaded);
+            p.session.flush();
+            assert!(!guaranteed(&sent.borrow()).iter().any(|m| m.starts_with(&[0x32, 0])), "typing cannot cast");
+            p.edit_key(27, true);
+            p.run_edit(&vui, &crate::pointer::testing::NullRaster);
+            assert!(!p.keyboard_typing(), "closing chat restores the bindings");
+            let down = edge.key(&input, true, false, false, &loaded).unwrap();
+            let Sent::Slot(bar, gem) = down else { panic!("{input} is not a slot") };
+            p.keyboard_slot_edge(bar, gem, true, false);
+            if let Some(Sent::Slot(bar, gem)) = edge.key(&input, true, true, false, &loaded) { p.keyboard_slot_edge(bar, gem, true, true); }
+            if let Some(Sent::Slot(bar, gem)) = edge.key(&input, false, false, false, &loaded) { p.keyboard_slot_edge(bar, gem, false, false); }
+            p.session.flush();
+            let casts: Vec<_> = guaranteed(&sent.borrow()).into_iter().filter(|m| m.starts_with(&[0x32, 0])).collect();
+            assert_eq!(casts, vec![vec![0x32, 0, 0x55, 0, 0, 0, slot, 0x42, 0x42, 0, 0]], "{input} casts once without repeats");
+        }
         crate::settings::testing::reset(false);
     }
 
@@ -14770,3 +15176,7 @@ mod stacked_pad_tests {
         assert!(!super::stacked_for(false, false), "the control: the row off");
     }
 }
+
+#[cfg(test)]
+#[path = "offline_hud_test.rs"]
+mod offline_hud_test;

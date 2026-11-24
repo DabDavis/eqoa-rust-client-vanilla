@@ -512,10 +512,8 @@ impl Pregame {
     /// macOS's Settings… (⌘,): SETUP's title's Options (`setup::ask_options`);
     /// STATION, the server list and character select have none of the game's.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub fn ask_options(&mut self) {
-        if self.stage == Stage::Setup {
-            self.setup.ask_options();
-        }
+    pub fn ask_options(&mut self) -> bool {
+        self.stage == Stage::Setup && self.setup.ask_options()
     }
 
     /// One of the game's screens up and waiting on the player, nothing being

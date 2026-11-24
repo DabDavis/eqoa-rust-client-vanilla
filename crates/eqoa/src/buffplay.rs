@@ -105,8 +105,7 @@ impl Play {
     pub(super) fn draw_buffs(&mut self, vui: &vi::ui::Vui, r: &mut crate::ui::UiRaster) {
         let lines = self.buff_lines();
         let now = self.session.now() as i64;
-        let off = r.ui.placed([0.0, 0.0]);
-        let pieces = self.buffs.pieces(vui, &lines, crate::settings::pet_effects(), off);
+        let pieces = self.buffs.pieces(vui, &lines, crate::settings::pet_effects(), [0.0; 2]);
         crate::hud::draw_fx_pieces(vui, r, &pieces, 1.0);
         self.buffs.draw_info(vui, r, now);
     }

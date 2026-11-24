@@ -498,6 +498,11 @@ impl Map {
         let size = cx.size;
         // where the player put it (`hudlayout`), the HUD's last frame keeping it on the screen
         let moved = crate::hudlayout::shift(crate::hudlayout::Piece::Minimap, crate::hudlayout::Beyond::of(size));
+        // This layer is composed in already moved coordinates. Scale the tiles,
+        // symbols, frame and hover targets together about the moved HUD corner.
+        let mut scale = crate::hudlayout::scale(crate::hudlayout::Piece::Minimap, crate::hudlayout::Beyond::of(size));
+        scale.origin = [scale.origin[0] + moved[0], scale.origin[1] + moved[1]];
+        let pixels = render::ui::HudScale { origin: window_from_frame(size, scale.origin), ..scale };
         // all it draws, the scroll's rollers too: where a pointer finds it
         // and what its cards keep left of
         let outer = window_rect_moved(size, drawn(crate::settings::minimap_scroll()), moved);
@@ -679,8 +684,19 @@ impl Map {
         }
         // the card of the mark under the mouse's pointer, left of the frame,
         // drawn as the map's cards are
+        if scale.factor != 1.0 {
+            for quad in quads {
+                quad.pos = quad.pos.map(|p| pixels.point(p));
+            }
+            for quad in &mut r.ui.quads {
+                scale.quad(quad);
+            }
+        }
+        let a = pixels.point([outer[0], outer[1]]);
+        let b = pixels.point([outer[2], outer[3]]);
+        let outer = [a[0], a[1], b[0], b[1]];
         let reach = (MARK_REACH * px_line).max(half) + px_line;
-        if let (Some(vui), Some((q, m))) = (cx.vui, self.mini.cursor.and_then(|c| mark_under(&placed, c, reach))) {
+        if let (Some(vui), Some((q, m))) = (cx.vui, self.mini.cursor.and_then(|c| mark_under(&placed, pixels.inverse(c), reach))) {
             r.ui.anchor = Anchor::Middle;
             r.ui.vertical = Vertical::Middle;
             let lines: Vec<(Vec<u16>, [f32; 4])> = m
@@ -697,8 +713,9 @@ impl Map {
                 // left of the frame, level with the mark, below the name
                 // plate (the HUD's pass, after this one, would cover it), in
                 // the window
-                let (corner, at) = (f([0.0, 0.0]), f([outer[0], q[1]]));
-                let (plate, bottom) = (f([0.0, window_rect(size, PLATE)[3]])[1] + 1.0, f([0.0, size.1 as f32])[1]);
+                let (corner, at) = (f([0.0, 0.0]), f([outer[0], pixels.point(q)[1]]));
+                let plate = crate::hudlayout::frame_point(crate::hudlayout::Piece::QuickMenus, [0.0, PLATE[3] as f32], crate::hudlayout::Beyond::of(size))[1] + 1.0;
+                let bottom = f([0.0, size.1 as f32])[1];
                 let x = (at[0] - 6.0 - w).max(corner[0] + 1.0);
                 let y = (at[1] - hgt / 2.0).min(bottom - hgt - 1.0).max(plate);
                 let from = r.ui.quads.len();

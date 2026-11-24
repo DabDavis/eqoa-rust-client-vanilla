@@ -290,17 +290,30 @@ pub fn save_waypoints(w: &[(i32, [f32; 2])]) -> bool {
 /// was moved. The client's own, kept the moment a drag ends or Reset HUD is
 /// chosen, never sent anywhere.
 pub fn hud_layout() -> String {
-    account_read("hud").or_else(|| store::read(&own_file("hud", place()))).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+    let file = if pc_mode() { "hud-pc" } else { "hud" };
+    read_interface_file(file).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
 }
 
 /// Keeps this window's HUD layout (`hud_layout`): whether it was kept.
 pub fn save_hud_layout(text: &str) -> bool {
-    match store::write(&own_file("hud", place()), text.as_bytes()).and(account_write("hud", text.as_bytes())) {
+    let file = if pc_mode() { "hud-pc" } else { "hud" };
+    match store::write(&own_file(file, place()), text.as_bytes()).and_then(|_| account_write(file, text.as_bytes())) {
         Ok(()) => true,
         Err(e) => {
             crate::say(&format!("the HUD's layout was not kept: {e}"));
             false
         }
+    }
+}
+
+pub(crate) fn pc_window_layout() -> String {
+    read_interface_file("windows-pc").map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+}
+
+pub(crate) fn save_pc_window_layout(text: &str) {
+    let bytes = text.as_bytes();
+    if let Err(e) = store::write(&own_file("windows-pc", place()), bytes).and_then(|_| account_write("windows-pc", bytes)) {
+        crate::say(&format!("Could not save PC window positions: {e}"));
     }
 }
 
@@ -440,6 +453,8 @@ pub fn set_account(server: &str, user: &str) {
         migrate(&key);
     }
     bump_generation();
+    #[cfg(target_arch = "wasm32")]
+    crate::web::keyboard_profile(pc_mode());
 }
 
 /// The account's files made from the window's set kept most recently (the
@@ -456,8 +471,10 @@ fn migrate(key: &str) {
     if let Some(b) = store::read(&own_file("client", from)) {
         let _ = store::write(&account_file(key, "client"), ClientOptions::from_text(&String::from_utf8_lossy(&b)).rows_text().as_bytes());
     }
-    if let Some(b) = store::read(&own_file("hud", from)) {
-        let _ = store::write(&account_file(key, "hud"), &b);
+    for name in ["hud", "hud-pc", "windows-pc", "interface-controller", "interface-pc"] {
+        if let Some(b) = store::read(&own_file(name, from)) {
+            let _ = store::write(&account_file(key, name), &b);
+        }
     }
     crate::say(&format!("options: kept for the account from now on (from window {}'s)", from + 1));
 }
@@ -909,6 +926,14 @@ impl std::fmt::Debug for DeviceName {
 /// The client's own settings: the Options window's Extended page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClientOptions {
+    /// The selected interface, independent of the last device that sent input.
+    pub pc_mode: bool,
+    /// Visible ten-slot shortcut rows in the PC layout, independent of spell memorization capacity.
+    pub pc_action_rows: u8,
+    /// Routed chat tabs 1–3 displayed in independent PC windows.
+    pub chat_detached: [bool; crate::chat::TABS],
+    /// Detached panes inherit the main chat size until individually resized.
+    pub chat_pane_sizes: [Option<[u8; 2]>; crate::chat::TABS],
     /// Level of Detail: the game's levels (`VILODSprite::Raster`) while set;
     /// off, every LOD body draws its near level out to its off distance
     pub lod: bool,
@@ -1076,6 +1101,14 @@ pub struct ClientOptions {
     /// rows with the last lines in it, never sliding away (`chat::WndChat::
     /// always`). Off by default, the game's box.
     pub chat_always: bool,
+    /// Interface sizes and chat background opacity, in percent of the original
+    /// sizes and of full opacity. Chat height is a count of visible rows.
+    pub hud_scale: u8,
+    pub nameplate_scale: u8,
+    pub chat_width: u8,
+    pub chat_rows: u8,
+    pub chat_opacity: u8,
+    pub inline_chat: bool,
     /// R2 Channel Switch (the server owner, 2026-11-18: "for switching chat
     /// channels hold r2 then dpad left/right can switch channels if players
     /// have that on"): with R2 held (the chat box's history, mode 33) left
@@ -1514,6 +1547,10 @@ pub fn step_name_distance(v: u8, d: i32) -> Option<u8> {
 impl Default for ClientOptions {
     fn default() -> Self {
         ClientOptions {
+            pc_mode: false,
+            pc_action_rows: 4,
+            chat_detached: [false; crate::chat::TABS],
+            chat_pane_sizes: [None; crate::chat::TABS],
             lod: true,
             brightness: BRIGHTNESS_AS_DRAWN,
             fog: crate::fog::GAME,
@@ -1548,6 +1585,12 @@ impl Default for ClientOptions {
             auto_target: false,
             weapon_swap_back: false,
             chat_always: false,
+            hud_scale: 100,
+            nameplate_scale: 100,
+            chat_width: 100,
+            chat_rows: 5,
+            chat_opacity: 75,
+            inline_chat: false,
             r2_channels: false,
             stacked_bars: false,
             spell_bar_opacity: 100,
@@ -1628,6 +1671,15 @@ impl ClientOptions {
     /// when on (Ambient Occlusion and Dynamic Lighting the same).
     pub fn to_text(self) -> String {
         let mut s = format!("lod={}\nbrightness={}\ncamera_distance={}\n", if self.lod { "on" } else { "off" }, self.brightness, self.camera_distance);
+        if self.pc_mode { s.push_str("ui_mode=pc\n"); }
+        if self.pc_action_rows != 4 { s.push_str(&format!("pc_action_rows={}\n", self.pc_action_rows)); }
+        let detached = self.chat_detached.iter().enumerate().fold(0u8, |mask, (i, &on)| mask | (u8::from(on) << i));
+        if detached != 0 { s.push_str(&format!("chat_detached={detached}\n")); }
+        for (i, size) in self.chat_pane_sizes.iter().enumerate() {
+            if let Some([width, rows]) = size {
+                s.push_str(&format!("chat_pane_{}={width},{rows}\n", i + 1));
+            }
+        }
         if let Some(r) = self.frame_rate {
             s.push_str(&format!("frame_rate={}\n", r.key()));
         }
@@ -1733,6 +1785,17 @@ impl ClientOptions {
         // Chat Always Shown and Stacked Spell Bars only when on
         if self.chat_always {
             s.push_str("chat_always=on\n");
+        }
+        for (key, value, default) in [
+            ("hud_scale", self.hud_scale, 100), ("nameplate_scale", self.nameplate_scale, 100),
+            ("chat_width", self.chat_width, 100), ("chat_rows", self.chat_rows, 5), ("chat_opacity", self.chat_opacity, 75),
+        ] {
+            if value != default {
+                s.push_str(&format!("{key}={value}\n"));
+            }
+        }
+        if self.inline_chat {
+            s.push_str("inline_chat=on\n");
         }
         if self.stacked_bars {
             s.push_str("stacked_bars=on\n");
@@ -1929,6 +1992,24 @@ impl ClientOptions {
         for line in s.lines() {
             let Some((k, v)) = line.split_once('=') else { continue };
             match (k.trim(), v.trim()) {
+                ("ui_mode", "pc") => c.pc_mode = true,
+                ("ui_mode", "controller") => c.pc_mode = false,
+                ("pc_action_rows", v) => {
+                    if let Some(rows) = ranged(v, 1, 4) { c.pc_action_rows = rows; }
+                }
+                (k, v) if k.starts_with("chat_pane_") => {
+                    if let Some(index) = k["chat_pane_".len()..].parse::<usize>().ok().and_then(|t| t.checked_sub(1))
+                        && let Some(pane) = c.chat_pane_sizes.get_mut(index)
+                        && let Some((width, rows)) = v.split_once(',')
+                        && let (Some(w), Some(r)) = (ranged(width, 50, 125), ranged(rows, 3, 12)) {
+                        *pane = Some([w, r]);
+                    }
+                }
+                ("chat_detached", v) => {
+                    if let Some(mask) = ranged(v, 0, (1 << crate::chat::TABS) - 1) {
+                        c.chat_detached = std::array::from_fn(|i| mask & (1 << i) != 0);
+                    }
+                }
                 ("lod", "on") => c.lod = true,
                 ("lod", "off") => c.lod = false,
                 ("brightness", v) => {
@@ -1999,6 +2080,20 @@ impl ClientOptions {
                 ("weapon_swap_back", "on") => c.weapon_swap_back = true,
                 ("weapon_swap_back", "off") => c.weapon_swap_back = false,
                 ("chat_always", "on") => c.chat_always = true,
+                ("inline_chat", "on") => c.inline_chat = true,
+                ("inline_chat", "off") => c.inline_chat = false,
+                (key @ ("hud_scale" | "nameplate_scale" | "chat_width" | "chat_rows" | "chat_opacity"), v) => {
+                    let (field, range) = match key {
+                        "hud_scale" => (&mut c.hud_scale, 50..=150),
+                        "nameplate_scale" => (&mut c.nameplate_scale, 50..=200),
+                        "chat_width" => (&mut c.chat_width, 50..=125),
+                        "chat_rows" => (&mut c.chat_rows, 3..=12),
+                        _ => (&mut c.chat_opacity, 0..=100),
+                    };
+                    if let Some(n) = v.parse::<u8>().ok().filter(|n| range.contains(n)) {
+                        *field = n;
+                    }
+                }
                 ("r2_channels", "on") => c.r2_channels = true,
                 ("r2_channels", "off") => c.r2_channels = false,
                 ("chat_always", "off") => c.chat_always = false,
@@ -2197,6 +2292,11 @@ impl ClientOptions {
         }
         c.touch_stick = stick.or(old_size).unwrap_or(c.touch_stick);
         c.touch_buttons = buttons.or(old_size).unwrap_or(c.touch_buttons);
+        // Older profiles omitted dimensions for a detached pane. Snapshot
+        // the inherited dimensions before a later resize of Main.
+        for (detached, size) in c.chat_detached.iter().zip(&mut c.chat_pane_sizes) {
+            if *detached { size.get_or_insert([c.chat_width, c.chat_rows]); }
+        }
         c
     }
 }
@@ -2234,8 +2334,127 @@ fn read_client() -> ClientOptions {
 /// own as the file has them now (another window may have saved its own since
 /// this one read them).
 fn save_client() -> Result<(), String> {
+    write_client(kept_client())
+}
+
+/// Replace only the choices that travel with an interface. Audio, graphics,
+/// game options and the server's feature mask keep their usual lifetimes.
+impl ClientOptions {
+    /// PC display choices may be present in an older settings file. Keep
+    /// those choices available when the player first selects the PC interface.
+    pub(crate) fn display_ui(self) -> Self {
+        if self.pc_mode { return self; }
+        Self { hud_scale: 100, nameplate_scale: 100, chat_width: 100, chat_rows: 5,
+            chat_opacity: 75, inline_chat: false, chat_detached: [false; crate::chat::TABS], ..self }
+    }
+
+    pub(crate) fn with_interface(self, ui: Self) -> Self {
+        Self {
+            pc_mode: ui.pc_mode, pc_action_rows: ui.pc_action_rows, ability_bars: ui.ability_bars, stacked_bars: ui.stacked_bars,
+            spell_bar_opacity: ui.spell_bar_opacity, spell_bar_layout: ui.spell_bar_layout, utility_layout: ui.utility_layout,
+            hud_scale: ui.hud_scale, nameplate_scale: ui.nameplate_scale,
+            chat_always: ui.chat_always, chat_width: ui.chat_width, chat_rows: ui.chat_rows, chat_opacity: ui.chat_opacity,
+            inline_chat: ui.inline_chat, chat_tabs: ui.chat_tabs, chat_tab_names: ui.chat_tab_names, chat_detached: ui.chat_detached,
+            chat_pane_sizes: ui.chat_pane_sizes,
+            health_numbers: ui.health_numbers, ..self
+        }
+    }
+
+    fn first_pc(self) -> Self {
+        let mut routes = self.chat_tabs;
+        if routes == [0; crate::chat::KINDS] {
+            use crate::chat::Kind;
+            for (kind, tab) in [(Kind::Tells, 1), (Kind::Combat, 2), (Kind::System, 3)] {
+                routes[kind.index()] = tab;
+            }
+        }
+        Self {
+            pc_mode: true, ability_bars: 4, stacked_bars: true, health_numbers: true,
+            utility_layout: crate::hudmenu::UtilityLayout::Below,
+            hud_scale: if self.hud_scale == 100 { 85 } else { self.hud_scale },
+            chat_width: if self.chat_width == 100 { 65 } else { self.chat_width },
+            chat_rows: if self.chat_rows == 5 { 7 } else { self.chat_rows },
+            chat_opacity: if self.chat_opacity == 75 { 65 } else { self.chat_opacity },
+            chat_always: true, inline_chat: true, chat_tabs: routes, ..self
+        }
+    }
+}
+
+pub fn pc_mode() -> bool { kept_client().pc_mode }
+
+pub fn pc_action_rows() -> u8 { client().pc_action_rows.clamp(1, 4) }
+
+fn read_interface_file(name: &str) -> Option<Vec<u8>> {
+    match account_key() {
+        Some(account) => store::read(&account_file(&account, name)),
+        None => store::read(&own_file(name, place())),
+    }
+}
+
+/// A switch is kept immediately. Keep the outgoing interface before publishing
+/// the new selection, and preserve unrelated unsaved edits in the open window.
+pub fn set_ui_mode(pc: bool) -> Result<(), String> {
+    let current = kept_client();
+    if pc == current.pc_mode { return Ok(()); }
+    let file = |pc| if pc { "interface-pc" } else { "interface-controller" };
+    let outgoing = ClientOptions::default().with_interface(current).to_text();
+    store::write(&own_file(file(current.pc_mode), place()), outgoing.as_bytes())?;
+    account_write(file(current.pc_mode), outgoing.as_bytes())?;
+    let incoming = read_interface_file(file(pc));
+    let profile = match incoming {
+        Some(b) => ClientOptions::from_text(&String::from_utf8_lossy(&b)),
+        None if pc => current.first_pc(),
+        None => ClientOptions::default(),
+    };
+    let profile = ClientOptions { pc_mode: pc, ..profile };
+    write_client(read_client().with_interface(profile))?;
+    CLIENT.with(|c| c.set(Some((cache_key(), current.with_interface(profile)))));
+    #[cfg(target_arch = "wasm32")]
+    crate::web::keyboard_profile(pc);
+    Ok(())
+}
+
+pub fn set_chat_detached(tab: usize, detached: bool) -> Result<(), String> {
+    let Some(i) = tab.checked_sub(1).filter(|&i| i < crate::chat::TABS) else { return Err("Unknown chat tab".into()) };
+    if !pc_mode() { return Err("Detach chat in PC mode".into()); }
+    let mut live = kept_client();
+    let mut saved = read_client();
+    if detached {
+        let size = *live.chat_pane_sizes[i].get_or_insert([live.chat_width, live.chat_rows]);
+        saved.chat_pane_sizes[i] = Some(size);
+    }
+    saved.chat_detached[i] = detached;
+    write_client(saved)?;
+    live.chat_detached[i] = detached;
+    CLIENT.with(|c| c.set(Some((cache_key(), live))));
+    Ok(())
+}
+
+pub(crate) fn hud_cache_key() -> (usize, bool) { (cache_key(), pc_mode()) }
+
+pub fn chat_pane_size(tab: usize) -> (u8, u8) {
+    let c = client().display_ui();
+    let size = tab.checked_sub(1).and_then(|i| c.chat_pane_sizes.get(i).copied()).flatten();
+    let [w, r] = size.unwrap_or([c.chat_width, c.chat_rows]);
+    (w, r)
+}
+
+/// Resizing a chat window saves just the dimensions of that window.
+pub fn keep_chat_pane_size(tab: usize, width: u8, rows: u8) {
+    if tab > crate::chat::TABS { return; }
+    let resize = |mut c: ClientOptions| {
+        if tab == 0 { (c.chat_width, c.chat_rows) = (width, rows); }
+        else { c.chat_pane_sizes[tab - 1] = Some([width, rows]); }
+        c
+    };
+    set_client(resize(kept_client()));
+    if let Err(e) = write_client(resize(read_client())) {
+        crate::say(&format!("The chat size could not be saved: {e}"));
+    }
+}
+
+fn write_client(mine: ClientOptions) -> Result<(), String> {
     let me = place();
-    let mine = kept_client();
     let mut shared = read_shared();
     shared.controller[me] = mine.controller[me];
     shared.slow_unfocused[me] = mine.slow_unfocused[me];
@@ -3426,6 +3645,18 @@ mod tests {
         testing::reset(false);
     }
 
+    #[test]
+    fn hud_chat_settings_round_trip_and_reject_out_of_range_values() {
+        let defaults = ClientOptions::default();
+        let options = ClientOptions { hud_scale: 65, nameplate_scale: 170, chat_width: 85, chat_rows: 9, chat_opacity: 0, inline_chat: true, ..defaults };
+        assert_eq!(ClientOptions::from_text(&options.to_text()), options);
+        assert_eq!(ClientOptions::from_text("hud_scale=0\nnameplate_scale=255\nchat_width=0\nchat_rows=255\nchat_opacity=101\ninline_chat=bad"), defaults);
+        assert_eq!(ClientOptions::from_text(""), defaults);
+        for key in ["hud_scale=", "nameplate_scale=", "chat_width=", "chat_rows=", "chat_opacity=", "inline_chat="] {
+            assert!(!defaults.to_text().contains(key));
+        }
+    }
+
     /// The keys and buttons: kept by Save Changes in keys.opt and read back
     /// as the next run reads them; nothing kept, the default layout; with the
     /// store refusing, the defaults and a save that says it failed.
@@ -3924,6 +4155,52 @@ mod tests {
         for bad in ["render_scale=3", "render_scale=8", "render_scale=0", "render_scale=x2", "hud=smooth", "hud="] {
             assert_eq!(ClientOptions::from_text(bad), d, "{bad}: the defaults");
         }
+    }
+
+    #[test]
+    fn pc_profile_keeps_two_layouts_and_leaves_global_changes_pending() {
+        testing::reset(false);
+        let base = ClientOptions::default();
+        let legacy = ClientOptions { chat_rows: 9, nameplate_scale: 130, ..base };
+        testing::put(CLIENT_FILE, legacy.to_text().as_bytes());
+        assert!(!pc_mode());
+        assert_eq!(client().display_ui().nameplate_scale, 100);
+        set_client(ClientOptions { camera_distance: 14, ..client() });
+        set_ui_mode(true).unwrap();
+        assert!(client().inline_chat && client().chat_always);
+        assert_eq!((client().ability_bars, client().chat_rows, client().nameplate_scale), (4, 9, 130));
+        assert_eq!(read_client().camera_distance, base.camera_distance);
+        set_chat_detached(2, true).unwrap();
+        keep_chat_pane_size(0, 85, 8);
+        keep_chat_pane_size(2, 55, 4);
+        set_ui_mode(false).unwrap();
+        assert_eq!((client().chat_rows, client().chat_width), (9, 100));
+        assert_eq!(client().camera_distance, 14);
+        set_ui_mode(true).unwrap();
+        CLIENT.with(|c| c.set(None));
+        assert_eq!((client().chat_rows, client().chat_width, client().chat_detached), (8, 85, [false, true, false]));
+        assert_eq!((chat_pane_size(0), chat_pane_size(1), chat_pane_size(2)), ((85, 8), (85, 8), (55, 4)));
+        assert!(pc_mode());
+        testing::reset(true);
+        assert!(set_ui_mode(true).is_err());
+        assert!(!pc_mode(), "the selector still represents the kept mode on a write failure");
+    }
+
+    #[test]
+    fn pc_spell_row_count_is_saved_in_the_pc_profile() {
+        testing::reset(false);
+        assert_eq!(pc_action_rows(), 4);
+        set_account("a", "player");
+        set_ui_mode(true).unwrap();
+        set_client(ClientOptions { pc_action_rows: 2, ..client() });
+        set_ui_mode(false).unwrap();
+        set_ui_mode(true).unwrap();
+        assert_eq!(pc_action_rows(), 2);
+        assert_eq!(client().ability_bars, 4, "the legacy five-slot menu setting stays independent");
+        for invalid in ["0", "5", "-1", ""] {
+            assert_eq!(ClientOptions::from_text(&format!("pc_action_rows={invalid}")).pc_action_rows, 4);
+        }
+        testing::reset(false);
     }
 
     /// The options kept by the build with Textures' Crisp (gone the same day:

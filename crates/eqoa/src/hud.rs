@@ -469,6 +469,7 @@ pub enum Pick {
     Minimap,
     /// the quest tracker (`tracker`): the quest journal opened
     Quests,
+    Settings,
     /// the DPS meter (`dpsmeter`): its title's view or Reset, or its rows
     Meter(crate::dpsmeter::Hit),
 }
@@ -671,6 +672,15 @@ impl Hud {
             self.note(ui, p.rows, Pick::Meter(crate::dpsmeter::Hit::Rows));
             let (a, b) = (ui.ui.placed([p.rect[0] as f32, p.rect[1] as f32]), ui.ui.placed([p.rect[2] as f32, p.rect[3] as f32]));
             self.meter_panel = Some(([a[0], a[1], b[0], b[1]], p.shown.len(), p.room));
+            crate::hudlayout::end(ui.ui, mark);
+        }
+        if crate::settings::pc_mode() {
+            ui.ui.anchor = Anchor::Right;
+            ui.ui.vertical = Vertical::Bottom;
+            let mark = crate::hudlayout::begin(ui.ui, Piece::Settings);
+            let at = [536, 414];
+            vui.blit_bar(ui, &wide("Settings"), [1.0; 4], at, 25, 26, 94, 3, 1.0, 0, true);
+            self.note(ui, [at[0], at[1], at[0] + 94, at[1] + 25], Pick::Settings);
             crate::hudlayout::end(ui.ui, mark);
         }
     }

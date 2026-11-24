@@ -768,13 +768,13 @@ pub enum Command {
     System(bool),
     /// `clear`: every slot off
     Clear,
-    /// a slot by its number on the bars (1-20) or an ability by name, and a
+    /// a slot by its number on the bars or an ability by name, and a
     /// kind (none: turned as a right click turns it; `off`: off)
     Slot { which: String, kind: Option<Option<Kind>> },
     Help,
 }
 
-pub const HELP: &str = "/autocast: your auto slots; /autocast <slot 1-20 or name> [attack|buff|pet|heal|off]; /autocast on|off|clear. Right-click a quick-bar slot (long-press on touch, hold ○ or E a second) to turn it.";
+pub const HELP: &str = "/autocast: your auto slots; /autocast <slot number or spell name> [attack|buff|pet|heal|off]; /autocast on|off|clear. Right-click a quick-bar slot (long-press on touch, hold ○ or E a second) to turn it.";
 
 pub fn command(arg: &str) -> Command {
     let arg = arg.trim();
@@ -797,7 +797,7 @@ pub fn command(arg: &str) -> Command {
     }
 }
 
-/// The ability `which` names: a number is a bar slot (1-20, the first bar's
+/// The ability `which` names: a number is a bar slot (the first bar's
 /// first slot 1), else a name, whole, then its start (case aside).
 pub fn find<'a>(abilities: &'a BTreeMap<i64, Ability>, which: &str) -> Option<&'a Ability> {
     let on_bar = || abilities.values().filter(|a| a.valid != 0);

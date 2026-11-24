@@ -56,6 +56,10 @@ fn call_page(name: &str, arg: &JsValue) {
     }
 }
 
+pub fn keyboard_profile(pc: bool) {
+    call_page("eqoaKeyboardProfile", &JsValue::from_bool(pc));
+}
+
 /// The page's sound output (`window.eqoaAudio.clock`, main.js): 48 kHz
 /// frames it has played, or `None` while it is not running.
 pub fn audio_clock() -> Option<f64> {
@@ -1281,6 +1285,7 @@ fn opt(opts: &JsValue, k: &str) -> Option<String> {
 /// own host, as the relay resolves it).
 #[wasm_bindgen]
 pub async fn boot(file: web_sys::File, opts: JsValue) -> Result<(), JsValue> {
+    keyboard_profile(crate::settings::pc_mode());
     let r: Result<(), String> = async {
         let relay = opt(&opts, "relay").ok_or("no relay address")?;
         status("reading the disc");

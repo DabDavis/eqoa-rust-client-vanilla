@@ -62,6 +62,37 @@ or a browser (each described where it lives below):
   none picked and no edit box up, the newest line. Esc or a click elsewhere clears them. The game's
   chat is drawn as it was, the highlight over it; a click on a line is still the chat line, and a drag
   anywhere else still the camera.
+- **PC or Controller** is the first choice in Options. Press F10 on the keyboard
+  or open Options from the title screen. In the world, PC also has a **Settings**
+  button, and Start on a controller opens Settings directly while PC is selected.
+  In Controller mode, use Start → Options. The client starts in Controller mode
+  and remembers the mode and each layout.
+- **PC spell gems and equipment**. Keys **1–9** and **0** activate equipped gems
+  1–10. Set **Extended → UI → HUD → Spell Bar Rows** to show one to four
+  ten-slot rows. In **Options → Controls**, choose a bar and gem, press its key
+  combination (for example **Shift+1** or **Ctrl+2**), then **Save Changes**.
+  In a supporting browser, use the game's fullscreen mode for combinations
+  that normally switch browser tabs. In the Spell Book, memorize an ability into any visible bar and
+  slot. Servers supporting expanded bars can keep **40 distinct equipped gems**
+  per character. Hiding a row preserves its equipped spells. On servers with weapon sets,
+  the **Equipment Switch** bar lets you click a prepared set or bare hands.
+- **PC HUD layout**. In **Extended → UI → Interface Size**, adjust the HUD and
+  overhead names independently. Type `/hud` to move the player frame, spell
+  bars, equipment bar, chat windows and other HUD pieces. Click **Pin** to hold
+  a piece in place, **Unpin** to move it again, and **Lock** to return to play.
+- **PC windows**. Drag the title bar to move an open gameplay window, or drag
+  its bottom-right corner to change its width and height. Use **−** and **+**
+  to zoom the contents between 50% and 200%. Scrollbars reach any controls
+  outside the viewport. **Pin** holds its layout, **Unpin** unlocks it and
+  **Reset** restores its original size and placement. Inventory, the Spell
+  Book, and each of two open item comparisons keep their own settings.
+- **PC chat**. Choose a tab and click **Detach tab** to give it a window. Click
+  **Dock** to bring it back with its history. Each window has a **Resize** handle
+  in Move HUD. **Extended → UI → Chat** controls background opacity and inline
+  keyboard chat. Press Enter to type, Enter again to send, or Escape to cancel.
+  A shortcut by itself selects Say (`/sa`), Shout (`/s`), Group (`/g`) or
+  Guild (`/gu`). Include a message for a one-time send, use `/t Name message`
+  for a tell, or `/r message` to reply.
 - **A GM's flight** (the user's of 2026-11-07, `walker`, `Session::flying`): on a server that turns it on
   (go-eqoa-server's `#fly`, opcode 0x7E1B), the game's swim path with no gravity, no surface and a land
   body's gaits and flags, going where the camera looks at the walk's own speed: an orbit's default tilt (the follow

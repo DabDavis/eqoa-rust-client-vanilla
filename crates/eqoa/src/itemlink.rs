@@ -65,6 +65,9 @@ const KNOWN_MOST: usize = 32;
 #[derive(Clone, Debug)]
 pub struct Wnd {
     pub id: u32,
+    /// Stable comparison slot: the surviving window does not change its saved
+    /// layout when the other comparison is closed or replaced.
+    slot: usize,
     /// the name the chat line showed (until the record comes)
     name: String,
     item: Option<NetItem>,
@@ -73,6 +76,8 @@ pub struct Wnd {
     /// where it was drawn last, and its X (frame x0 y0 x1 y1)
     rect: [i32; 4],
     x_hit: [i32; 4],
+    /// Fixed PC close control, outside the scrollable item content.
+    pc_x: [f32; 4],
 }
 
 /// The open link windows (oldest first) and the records the server sent.
@@ -80,6 +85,7 @@ pub struct Wnd {
 pub struct Links {
     pub windows: Vec<Wnd>,
     known: std::collections::VecDeque<(u32, Option<NetItem>)>,
+    frames: [crate::pcwindows::Windows; WINDOWS],
 }
 
 impl Links {
@@ -99,7 +105,9 @@ impl Links {
             Some(None) => (None, true),
             None => (None, false),
         };
-        self.windows.push(Wnd { id, name: name.to_string(), item, gone, rect: [0; 4], x_hit: [0; 4] });
+        let slot = (0..WINDOWS).find(|slot| self.windows.iter().all(|w| w.slot != *slot)).unwrap();
+        self.frames[slot].clear();
+        self.windows.push(Wnd { id, slot, name: name.to_string(), item, gone, rect: [0; 4], x_hit: [0; 4], pc_x: [0.0; 4] });
         known.is_none().then_some(id)
     }
 
@@ -123,29 +131,76 @@ impl Links {
 
     /// Escape or △: the newest closed; false with none open.
     pub fn close_newest(&mut self) -> bool {
-        self.windows.pop().is_some()
+        if let Some(w) = self.windows.pop() { self.frames[w.slot].clear(); true } else { false }
     }
 
     /// Every window closed (the Extended row turned off).
     pub fn close_all(&mut self) {
         self.windows.clear();
+        for frame in &mut self.frames { frame.clear(); }
     }
 
     /// Whether frame point `p` is on a window (a click there is theirs).
     pub fn covers(&self, p: [f32; 2]) -> bool {
-        self.windows.iter().any(|w| inside(w.rect, p))
+        self.windows.iter().any(|w| if crate::settings::pc_mode() { self.frames[w.slot].covers(Self::key(w.slot), p) } else { inside(w.rect, p) })
     }
 
     /// A click at frame point `p`: on a window's X it closes (true); anywhere
     /// else on a window nothing.
     pub fn point(&mut self, p: [f32; 2]) -> bool {
-        match self.windows.iter().position(|w| inside(w.x_hit, p)) {
-            Some(k) => {
-                self.windows.remove(k);
+        let pc = crate::settings::pc_mode();
+        let hit = self.windows.iter().enumerate().rev().find_map(|(i, w)| {
+            if pc {
+                let frame = &self.frames[w.slot];
+                if !frame.covers(Self::key(w.slot), p) { return None; }
+                let [x0, y0, x1, y1] = w.pc_x;
+                Some((i, p[0] >= x0 && p[0] < x1 && p[1] >= y0 && p[1] < y1))
+            } else if inside(w.rect, p) { Some((i, inside(w.x_hit, p))) } else { None }
+        });
+        match hit {
+            Some((k, true)) => {
+                let w = self.windows.remove(k);
+                self.frames[w.slot].clear();
                 true
             }
-            None => false,
+            _ => false,
         }
+    }
+
+    fn key(slot: usize) -> i32 { 1001 + slot as i32 }
+
+    /// Topmost visible comparison owns its frame and prevents click-through.
+    pub fn press(&mut self, p: [f32; 2]) -> bool {
+        if !crate::settings::pc_mode() { return false; }
+        for w in self.windows.iter().rev() {
+            let frame = &mut self.frames[w.slot];
+            if frame.covers(Self::key(w.slot), p) { return frame.press(Some(Self::key(w.slot)), p); }
+        }
+        false
+    }
+
+    pub fn drag(&mut self, p: [f32; 2]) -> bool {
+        self.windows.iter().rev().any(|w| self.frames[w.slot].drag(Some(Self::key(w.slot)), p))
+    }
+
+    pub fn release(&mut self) -> bool {
+        self.frames.iter_mut().any(|frame| frame.release())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn frame_geometry(&self, slot: usize) -> Option<(i32, [f32; 4], [f32; 4], u16)> {
+        self.frames.get(slot)?.geometry()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn close_position(&self, slot: usize) -> Option<[f32; 2]> {
+        let w = self.windows.iter().find(|w| w.slot == slot)?;
+        Some([(w.pc_x[0] + w.pc_x[2]) / 2.0, (w.pc_x[1] + w.pc_x[3]) / 2.0])
+    }
+
+    #[cfg(test)]
+    pub(crate) fn slot_covers(&self, slot: usize, p: [f32; 2]) -> bool {
+        self.frames[slot].covers(Self::key(slot), p)
     }
 
     /// The windows' width and where each goes when `n` are open, the band
@@ -166,12 +221,35 @@ impl Links {
     /// for a pointer.
     pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, side: i32, describe: &dyn Fn(&NetItem, &dyn Fn(&str) -> bool) -> String, icon: &dyn Fn(&NetItem) -> i32) {
         let (ww, at_of) = Self::places(self.windows.len(), side);
+        for (w, at) in self.windows.iter_mut().zip(at_of) {
+            Self::draw_one(w, vui, r, ww, at, describe, icon, true);
+        }
+    }
+
+    pub fn draw_pc(&mut self, vui: &Vui, r: &mut crate::ui::UiRaster, describe: &dyn Fn(&NetItem, &dyn Fn(&str) -> bool) -> String, icon: &dyn Fn(&NetItem) -> i32) {
+        // Stable source coordinates prevent an open comparison accumulating
+        // a wider content extent when another opens or the screen is resized.
+        // The fixed band extension gives both sources their full width.
+        let padding = (2 * W + GAP - (BAND[1] - BAND[0]) + 1) / 2;
+        let (ww, at_of) = Self::places(WINDOWS, padding);
+        for w in &mut self.windows {
+            let at = at_of[w.slot];
+            let layer = crate::pcwindows::begin(r);
+            Self::draw_one(w, vui, r, ww, at, describe, icon, false);
+            self.frames[w.slot].show(r, layer, Self::key(w.slot), "Item Inspection");
+            if let Some([_, top, right, _]) = self.frames[w.slot].frame_body() {
+                w.pc_x = [right - 21.0, top, right, top + 20.0];
+                vui.draw_string_ex(r, &wide("x"), (right - 14.0) as i32, (top + 2.0) as i32, [1.0; 4], true);
+            }
+        }
+    }
+
+    fn draw_one(w: &mut Wnd, vui: &Vui, r: &mut dyn Raster, ww: i32, at: [i32; 2], describe: &dyn Fn(&NetItem, &dyn Fn(&str) -> bool) -> String, icon: &dyn Fn(&NetItem) -> i32, native_x: bool) {
         let (white, yellow) = ([1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 0.0, 1.0]);
         let step = vui.font_height(r) - 4;
         let fp = FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 1), br: (106, 0), bottom: (102, 2), bl: (105, 0), left: (104, 0) };
         // a row's room (`TextBox` wraps a row reaching its width less 8)
         let room = ww - 20 - 8;
-        for (w, at) in self.windows.iter_mut().zip(at_of) {
             let text = match (&w.item, w.gone) {
                 (Some(it), _) => {
                     let rr: &dyn Raster = r;
@@ -206,11 +284,10 @@ impl Links {
             }
             rows_at(vui, r, at, ww, at[1] + name_top + step / 2, name_rows).text_box(vui, r, &name, name_x, 0, name_w, name_rows, yellow, 3);
             let xx = at[0] + ww - 16;
-            vui.draw_string_ex(r, &wide("x"), xx, at[1] + 5, white, true);
+            if native_x { vui.draw_string_ex(r, &wide("x"), xx, at[1] + 5, white, true); }
             w.x_hit = [xx - 6, at[1], at[0] + ww, at[1] + 24];
             // the lines under the head
             rows_at(vui, r, at, ww, at[1] + head + step / 2, rows).text_box(vui, r, &text, 10, 0, ww - 20, rows, white, 3);
-        }
     }
 }
 
@@ -259,6 +336,19 @@ mod tests {
         l.record(3, None);
         assert!(l.windows[0].gone, "the server holds no such link");
         assert!(l.close_newest() && l.close_newest() && !l.close_newest());
+    }
+
+    #[test]
+    fn comparison_slots_stay_with_their_windows_when_one_closes() {
+        let mut l = Links::default();
+        l.open(1, "first");
+        l.open(2, "second");
+        assert_eq!(l.windows.iter().map(|w| w.slot).collect::<Vec<_>>(), [0, 1]);
+        l.close_newest();
+        l.open(3, "third");
+        assert_eq!(l.windows.iter().map(|w| (w.id, w.slot)).collect::<Vec<_>>(), [(1, 0), (3, 1)]);
+        l.open(4, "fourth");
+        assert_eq!(l.windows.iter().map(|w| (w.id, w.slot)).collect::<Vec<_>>(), [(3, 1), (4, 0)]);
     }
 
     /// Drawn side by side in the top band; a click on a window's X closes that
