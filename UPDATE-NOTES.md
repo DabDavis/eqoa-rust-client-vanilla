@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Independent pet panel on PC
+
+- The pet's health and mana panel stays where you put it when a group member or mercenary joins or leaves. Type `/hud` to move the pet and group panels independently.
+
 ## 2026-11-24 · Chat history controls
 
 - Hold **Chat Expand** (default **C**) to start on **Main**. Tap **Tab** to cycle through chat tabs and panes from left to right, and use **Up** or **Down** to scroll the selected view one line at a time.

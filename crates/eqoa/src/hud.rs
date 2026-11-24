@@ -477,6 +477,8 @@ pub enum Pick {
 /// Where `DrawGroup` starts the group's bars and `DrawTarget` the target's.
 const GROUP_AT: [i32; 2] = [20, 93];
 const TARGET_AT: [i32; 2] = [20, 348];
+/// The PC pet's fixed origin, matching the old solo position for saved offsets.
+const PC_PET_AT: [i32; 2] = [20, 93];
 
 impl Hud {
     pub fn new() -> Self {
@@ -582,16 +584,19 @@ impl Hud {
         draw_gauge(vui, ui, 152, 151, [p[0], p[1] + 10], true, part);
         draw_gauge(vui, ui, 8, 136, p, true, v);
         crate::hudlayout::end(ui.ui, m);
+        let pc = crate::settings::pc_mode();
         let m = crate::hudlayout::begin(ui.ui, Piece::Group);
-        let y = if s.raid.is_empty() {
+        let stacked_pet_y = if s.raid.is_empty() {
             self.raid_panel = None;
             self.raid_first = 0;
             self.draw_group(vui, ui, GROUP_AT, s);
             GROUP_AT[1] + ((s.group_count - 1) * 48).max(0)
         } else {
             self.glow1_on = -1;
-            // the pet's bar under it, and its effects' row
-            let below = s.pet.as_ref().map_or(0, |p| crate::raidlist::PET_H + pet_effects_height(p.effects.len()));
+            // Only the Controller layout reserves room under the raid for the pet.
+            let below = if pc { 0 } else {
+                s.pet.as_ref().map_or(0, |p| crate::raidlist::PET_H + pet_effects_height(p.effects.len()))
+            };
             let sections = crate::raidlist::sections(&s.raid, s.raid_new_group);
             let b = if sections.is_empty() {
                 let fit = crate::raidlist::Fit::under(s.raid.len(), below);
@@ -621,7 +626,8 @@ impl Hud {
         };
         crate::hudlayout::end(ui.ui, m);
         let m = crate::hudlayout::begin(ui.ui, Piece::Pet);
-        self.draw_pet(vui, ui, [20, y], s);
+        let pet_at = if pc { PC_PET_AT } else { [GROUP_AT[0], stacked_pet_y] };
+        self.draw_pet(vui, ui, pet_at, s);
         crate::hudlayout::end(ui.ui, m);
         ui.ui.vertical = Vertical::Bottom;
         let p = [-3, 331];
@@ -674,7 +680,7 @@ impl Hud {
             self.meter_panel = Some(([a[0], a[1], b[0], b[1]], p.shown.len(), p.room));
             crate::hudlayout::end(ui.ui, mark);
         }
-        if crate::settings::pc_mode() {
+        if pc {
             ui.ui.anchor = Anchor::Right;
             ui.ui.vertical = Vertical::Bottom;
             let mark = crate::hudlayout::begin(ui.ui, Piece::Settings);
@@ -1157,6 +1163,56 @@ mod tests {
             hud.draw(&vui, &mut assets.raster(&mut ui), &s);
             assert_eq!(hud.pick(row), want, "{} effects", effects.len());
             assert_eq!(hud.pick([60.0, 100.0]), Some(Pick::Pet), "the bar itself");
+        }
+    }
+
+    #[test]
+    fn the_pc_pet_panel_stays_put_as_the_group_changes() {
+        use crate::hudlayout::{self, Beyond, Piece};
+
+        let _gpu = crate::GPU_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut ui) = crate::ui::tests::layer() else {
+            eprintln!("SKIP: no graphics adapter");
+            return;
+        };
+        crate::settings::testing::reset(false);
+        crate::settings::set_ui_mode(true).unwrap();
+        let vui = strip_vui();
+        let assets = crate::ui::UiAssets::default();
+        let size = (640, 480);
+        let beyond = Beyond::of(size);
+        let mut hud = Hud::new();
+        let mut draw = |hud: &mut Hud, s: &HudState| {
+            ui.begin(size);
+            hudlayout::frame_begin();
+            hud.draw(&vui, &mut assets.raster(&mut ui), s);
+            hudlayout::frame_end();
+        };
+        let saved = "group l 12 t 25\npet l 245 t 125\n";
+        let resized = "size group 125\nsize pet 75\ngroup l 12 t 25\npet l 245 t 125\n";
+        for layout in ["", saved, resized] {
+            assert!(crate::settings::save_hud_layout(layout));
+            hudlayout::testing_reset();
+            let group = hudlayout::frame_point(Piece::Group, [40.0, 105.0], beyond);
+            let pet = hudlayout::frame_point(Piece::Pet, [40.0, 105.0], beyond);
+            let mut s = HudState {
+                pet: Some(PetState { name: "Grand Animation".into(), creature: Some((255, false, false)), power: Some(255), ..Default::default() }),
+                ..Default::default()
+            };
+            for n in [0, 1, 3, 1, 0] {
+                s.group_count = if n == 0 { 0 } else { n + 1 };
+                s.group = (0..n).map(|i| MemberState { id: 100 + i as u32, name: "Mercenary".into(), ..Default::default() }).collect();
+                draw(&mut hud, &s);
+                assert_eq!(hud.pick(pet), Some(Pick::Pet), "{n} other members, layout {layout:?}");
+                assert_eq!(hud.pick(group), (n > 0).then_some(Pick::Member(100)));
+            }
+            s.raid = (1..=20).map(|id| crate::raidlist::Row { id, name: format!("Member {id}"), ..Default::default() }).collect();
+            draw(&mut hud, &s);
+            assert_eq!(hud.pick(pet), Some(Pick::Pet), "the raid keeps the same pet position");
+            let raid_panel = hud.raid_panel.expect("raid list");
+            s.pet = None;
+            draw(&mut hud, &s);
+            assert_eq!(hud.raid_panel, Some(raid_panel), "the raid does not reserve room for the PC pet");
         }
     }
 
