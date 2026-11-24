@@ -11,7 +11,7 @@ is put on the page by `.github/workflows/notes.yml`.
 
 ## 2026-11-24 · Chat history controls
 
-- Hold **Chat Expand** (default **C**) to start on **Main**. Tap **Tab** to cycle through chat tabs and panes from left to right, and use **Up** or **Down** to scroll the selected view one line at a time.
+- While holding **Chat Expand** (default **C**), tap **Tab** to cycle through chat tabs and panes from left to right, and use **Up** or **Down** to scroll the selected view one line at a time. In the PC interface each hold starts on **Main**; in the Controller interface it starts on the tab shown, as before.
 - In the PC interface, **Left** and **Right** scroll by the selected pane's configured number of lines. Hold **Shift** with either arrow for its usual item-link or channel action while chat is expanded. Buff navigation and raid prompts still get their arrow shortcuts first.
 - Mouse-wheel scrolling resumes live chat and releases the scrollbar when you reach the newest line.
 

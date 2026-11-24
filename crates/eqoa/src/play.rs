@@ -7468,7 +7468,7 @@ impl Play {
                 self.mode = 33;
                 self.locks = (true, true);
                 if let Some(c) = self.wnd_chat.as_mut() {
-                    c.begin_history();
+                    c.begin_history(crate::settings::pc_mode());
                 }
             }
             // L2: the quick-chat menus (mode 30, `VIWndMenu4`)
@@ -9199,7 +9199,7 @@ impl Play {
                 self.mode = 33;
                 self.locks = (true, true);
                 if let Some(c) = self.wnd_chat.as_mut() {
-                    c.begin_history();
+                    c.begin_history(crate::settings::pc_mode());
                 }
             }
             33 => self.chat_scroll_key(key, down),
@@ -14776,7 +14776,7 @@ mod commands {
             assert!(!p.rolls_focused());
             assert!(!p.chat_history_shortcut(HistoryKey::NextTab, size));
             p.chat_history_key(99, true);
-            assert_eq!(p.wnd_chat.as_ref().unwrap().tab(), 0);
+            assert_eq!(p.wnd_chat.as_ref().unwrap().tab(), if pc { 0 } else { 2 }, "PC starts on Main; Controller keeps the tab shown");
         }
         crate::settings::testing::reset(false);
     }

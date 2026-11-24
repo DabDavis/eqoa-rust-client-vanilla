@@ -975,9 +975,12 @@ impl WndChat {
         }
     }
 
-    pub fn begin_history(&mut self) {
+    /// The hold begins. `main` (the PC interface) starts it on Main; the
+    /// Controller interface scrolls the tab shown, as before, since a pad
+    /// has no Tab to cycle back with.
+    pub fn begin_history(&mut self, main: bool) {
         self.end_history();
-        self.show_tab(0);
+        if main { self.show_tab(0); }
         self.hold_history();
     }
 
@@ -2422,7 +2425,7 @@ mod tests {
             }
         }
         assert!(c.show_tab(2));
-        c.begin_history();
+        c.begin_history(true);
         assert_eq!(c.tab(), 0, "each hold starts at Main");
         c.key_down(19);
         c.cycle_history(x);
@@ -2456,6 +2459,21 @@ mod tests {
     }
 
     #[test]
+    fn controller_hold_scrolls_the_tab_shown() {
+        let mut c = with_lines(20);
+        let mut routes = [0; KINDS];
+        routes[Kind::Tells.index()] = 2;
+        c.set_tabs(routes, [['\0'; TAB_NAME_MOST]; TABS]);
+        assert!(c.show_tab(2));
+        c.begin_history(false);
+        assert_eq!((c.tab(), c.scroll), (2, 1), "R2 on a pad scrolls the tab shown, as before #18");
+        c.end_history();
+        assert_eq!((c.tab(), c.scroll), (2, 0));
+        c.begin_history(true);
+        assert_eq!(c.tab(), 0, "the PC interface starts on Main");
+    }
+
+    #[test]
     fn chat_history_wheel_resumes_live_at_the_bottom() {
         let mut c = with_lines(20);
         let p = on(&c, 19);
@@ -2473,7 +2491,7 @@ mod tests {
         frame(&mut c, 0.016);
         assert_eq!(c.shown.first().unwrap().seq, 20, "new chat is visible immediately");
 
-        c.begin_history();
+        c.begin_history(true);
         let outside = [-300.0, -300.0];
         assert!(c.wheel(outside, 3.0, true));
         assert!(c.wheel(outside, -4.0, true));
