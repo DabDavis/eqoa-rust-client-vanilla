@@ -532,14 +532,14 @@ mod tests {
         let vp = proj * glam::camera::rh::view::look_to_mat4(glam::Vec3::ZERO, glam::Vec3::NEG_Z, glam::Vec3::Y);
         let mut seen = std::collections::BTreeSet::new();
         for _ in 0..3 {
-            p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, vp, vp);
+            p.cycle_target(false, &Default::default(), vp, vp);
             seen.insert(p.target);
         }
         assert_eq!(seen.into_iter().collect::<Vec<_>>(), vec![0x70], "the control: the pet passed over");
         let mut w = Writer::default();
         w.u8(1).u8(1).u32(0x55).u32(0x56);
         p.duel_opcode(0x1502, &down(7, 9, &w.data), None);
-        p.cycle_target(false, glam::Vec3::ZERO, glam::Vec3::NEG_Z, vp, vp);
+        p.cycle_target(false, &Default::default(), vp, vp);
         assert_eq!(p.target, 0x56, "the duel's pet, nearer, first");
     }
 
