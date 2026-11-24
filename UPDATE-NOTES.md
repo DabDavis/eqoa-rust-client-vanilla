@@ -12,6 +12,10 @@ is put on the page by `.github/workflows/notes.yml`.
 - Chat tabs sit against the top edge of their pane. **Resize** in the HUD editor changes the pane's width and line count. The corner arrows also scale its text.
 - Under **Extended → UI → Chat**, choose a **Chat Fade Delay** from 1 to 120 seconds, or leave it **Off**. After the delay each idle pane fades over one second. Hover, scroll or type to bring chat back. Enable **Wake on New Chat** if incoming messages should also reveal their pane.
 
+## 2026-11-24 · Jump landings
+
+- Gnomes, dwarves, halflings, trolls and ogres no longer stand frozen and slide along the ground after a running jump: their standing landing now lasts as long as a human's, then the run or walk carries straight on.
+
 ## 2026-11-23 · Spell gem artwork and PC window scrollbars
 
 - Equipped spells on the PC bars show their colored gem and spell symbol together, using the artwork assigned to each ability.
