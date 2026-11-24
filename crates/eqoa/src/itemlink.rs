@@ -226,10 +226,12 @@ impl Links {
         }
     }
 
-    pub fn draw_pc(&mut self, vui: &Vui, r: &mut crate::ui::UiRaster, side: i32, describe: &dyn Fn(&NetItem, &dyn Fn(&str) -> bool) -> String, icon: &dyn Fn(&NetItem) -> i32) {
-        // Stable source coordinates prevent an open comparison moving or
-        // accumulating a wider content extent as another is opened/closed.
-        let (ww, at_of) = Self::places(WINDOWS, side);
+    pub fn draw_pc(&mut self, vui: &Vui, r: &mut crate::ui::UiRaster, describe: &dyn Fn(&NetItem, &dyn Fn(&str) -> bool) -> String, icon: &dyn Fn(&NetItem) -> i32) {
+        // Stable source coordinates prevent an open comparison accumulating
+        // a wider content extent when another opens or the screen is resized.
+        // The fixed band extension gives both sources their full width.
+        let padding = (2 * W + GAP - (BAND[1] - BAND[0]) + 1) / 2;
+        let (ww, at_of) = Self::places(WINDOWS, padding);
         for w in &mut self.windows {
             let at = at_of[w.slot];
             let layer = crate::pcwindows::begin(r);

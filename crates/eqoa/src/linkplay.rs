@@ -192,7 +192,7 @@ impl Play {
         let describe = |it: &net::dump::NetItem, fits: &dyn Fn(&str) -> bool| info.link_item(it, fits);
         let icon = |it: &net::dump::NetItem| crate::inventory::item_icon(it, flags) as i32;
         if crate::settings::pc_mode() {
-            self.links.draw_pc(vui, r, side, &describe, &icon);
+            self.links.draw_pc(vui, r, &describe, &icon);
         } else {
             self.links.draw(vui, r, side, &describe, &icon);
         }

@@ -51,6 +51,11 @@ fn two_inspections_move_zoom_pin_and_close_independently() {
     p.open_link(2, "Second shield");
     frame(&mut p, &mut renderer, &mut now);
     assert_eq!(p.links.frame_geometry(0).unwrap().2, a.2, "survivor source does not jump when other slot reopens");
+    now += 100;
+    p.hud(renderer.ui.as_mut().unwrap(), &walker, now, glam::Mat4::IDENTITY, (640, 480), true);
+    assert_eq!(p.links.frame_geometry(0).unwrap().2, a.2, "source stays stable when the outer window changes aspect");
+    frame(&mut p, &mut renderer, &mut now);
+    assert_eq!(p.links.frame_geometry(1).unwrap().2, b.2, "the other source stays stable too");
     let head = [a.1[0] + 15.0, a.1[1] + 8.0];
     drag(&mut p, head, [head[0] - 35.0, head[1] + 25.0]);
     frame(&mut p, &mut renderer, &mut now);
