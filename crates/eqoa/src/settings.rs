@@ -734,6 +734,11 @@ pub fn set_binds(b: crate::binds::Binds) {
 pub const BRIGHTNESS_STEPS: u8 = 10;
 pub const BRIGHTNESS_AS_DRAWN: u8 = 5;
 
+/// Nameplate Size's least (Interface Size, petition 2908: "Would you
+/// consider allowing Nameplate scaling down to 30%?"), in percent of the
+/// game's plates; 100 stays the default, 200 the most.
+pub const NAMEPLATE_MIN: u8 = 30;
+
 /// The Extended page's Camera Distance: the follow orbit's zoom-out ceiling
 /// (`camstyle`), from the game's 8 to 50 in steps of 3 (15 places on the
 /// slider, the client's 11 among them, and its default).
@@ -2102,7 +2107,7 @@ impl ClientOptions {
                 (key @ ("hud_scale" | "nameplate_scale" | "chat_width" | "chat_rows" | "chat_opacity"), v) => {
                     let (field, range) = match key {
                         "hud_scale" => (&mut c.hud_scale, 50..=150),
-                        "nameplate_scale" => (&mut c.nameplate_scale, 50..=200),
+                        "nameplate_scale" => (&mut c.nameplate_scale, NAMEPLATE_MIN..=200),
                         "chat_width" => (&mut c.chat_width, 50..=125),
                         "chat_rows" => (&mut c.chat_rows, 3..=12),
                         _ => (&mut c.chat_opacity, 0..=100),
@@ -3697,6 +3702,19 @@ mod tests {
         for key in ["hud_scale=", "nameplate_scale=", "chat_width=", "chat_rows=", "chat_opacity=", "inline_chat="] {
             assert!(!defaults.to_text().contains(key));
         }
+    }
+
+    /// Nameplate Size goes down to 30% (petition 2908), not below; the
+    /// default stays 100 and is not written.
+    #[test]
+    fn nameplate_size_goes_down_to_thirty() {
+        let d = ClientOptions::default();
+        assert_eq!(d.nameplate_scale, 100);
+        assert_eq!(ClientOptions::from_text("nameplate_scale=30").nameplate_scale, 30);
+        assert_eq!(ClientOptions::from_text("nameplate_scale=45").nameplate_scale, 45);
+        assert_eq!(ClientOptions::from_text("nameplate_scale=29").nameplate_scale, 100, "below the least: the default");
+        let c = ClientOptions { nameplate_scale: 30, ..d };
+        assert_eq!(ClientOptions::from_text(&c.to_text()), c, "round trip");
     }
 
     /// The keys and buttons: kept by Save Changes in keys.opt and read back

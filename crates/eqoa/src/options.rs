@@ -273,7 +273,7 @@
 use crate::bindpage::ControlsPage;
 use crate::macropage::MacrosPage;
 use crate::pointer::{Hits, key, rows_rect};
-use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, SHADOW_DISTANCE_GAME, SHADOW_DISTANCE_MAX, SHADOW_DISTANCE_STEP, TOUCH_EDGE_MAX, TOUCH_EDGE_STEP, TOUCH_OPACITY_MAX, TOUCH_OPACITY_MIN, TOUCH_OPACITY_STEP, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
+use crate::settings::{BRIGHTNESS_STEPS, CAMERA_MAX, CAMERA_MIN, CAMERA_STEP, ClientOptions, ENTITY_SLOTS_GAME, ENTITY_SLOTS_MAX, ENTITY_SLOTS_STEP, ENTITY_VIEW_GAME, ENTITY_VIEW_MAX, ENTITY_VIEW_STEP, Focus, FrameRate, NAME_DISTANCE_GAME, NAME_DISTANCE_MAX, NAMEPLATE_MIN, SHADOW_DISTANCE_GAME, SHADOW_DISTANCE_MAX, SHADOW_DISTANCE_STEP, TOUCH_EDGE_MAX, TOUCH_EDGE_STEP, TOUCH_OPACITY_MAX, TOUCH_OPACITY_MIN, TOUCH_OPACITY_STEP, TOUCH_SIZE_MAX, TOUCH_SIZE_MIN, TOUCH_SIZE_STEP, TURN_MAX, TURN_MIN, TURN_STEP};
 use vi::fpu::{Ee, F};
 use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 
@@ -1122,7 +1122,7 @@ impl WndOptions {
                     // frame (`chat::WndChat::always`)
                     89 => c.chat_always = !c.chat_always,
                     HUD_SCALE => slide(&mut c.hud_scale, 50, 150, 5),
-                    NAMEPLATE_SCALE => slide(&mut c.nameplate_scale, 50, 200, 5),
+                    NAMEPLATE_SCALE => slide(&mut c.nameplate_scale, NAMEPLATE_MIN, 200, 5),
                     CHAT_WIDTH => slide(&mut c.chat_width, 50, 125, 5),
                     CHAT_ROWS => slide(&mut c.chat_rows, 3, 12, 1),
                     CHAT_OPACITY => slide(&mut c.chat_opacity, 0, 100, 5),
@@ -2548,7 +2548,7 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
             (at(n as f32, 50.0, 200.0), Some(n))
         }
         HUD_SCALE => (at(c.hud_scale as f32, 50.0, 150.0), Some(c.hud_scale as u16)),
-        NAMEPLATE_SCALE => (at(c.nameplate_scale as f32, 50.0, 200.0), Some(c.nameplate_scale as u16)),
+        NAMEPLATE_SCALE => (at(c.nameplate_scale as f32, NAMEPLATE_MIN as f32, 200.0), Some(c.nameplate_scale as u16)),
         CHAT_WIDTH => (at(c.chat_width as f32, 50.0, 125.0), Some(c.chat_width as u16)),
         CHAT_ROWS => (at(c.chat_rows as f32, 3.0, 12.0), Some(c.chat_rows as u16)),
         CHAT_OPACITY => (c.chat_opacity as f32 / 100.0, Some(c.chat_opacity as u16)),
