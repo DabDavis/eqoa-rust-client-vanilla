@@ -767,6 +767,9 @@ pub struct WndChat {
     last_activity: Option<u32>,
     hovered: bool,
     wake_on_message: bool,
+    /// PC mode: the tab strip sits against the painted frame. Controller mode
+    /// keeps its tabs where they were (`draw_tabs`).
+    pub pc_tabs: bool,
 }
 
 impl WndChat {
@@ -786,7 +789,7 @@ impl WndChat {
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
         let size = ChatSize::ORIGINAL;
-        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None, last_activity: None, hovered: false, wake_on_message: false }
+        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None, last_activity: None, hovered: false, wake_on_message: false, pc_tabs: false }
     }
 
     /// A pointer action or active interaction restores this pane without
@@ -970,8 +973,9 @@ impl WndChat {
         }
         let h = vui.font_height(ui);
         let tl = self.window.top_left();
-        // The chat uses frame set 3, painted from logical top-left + 10.
-        let (mut x, y) = (tl[0] + 14, tl[1] + 13 - h);
+        // The chat uses frame set 3, painted from logical top-left + 10: the
+        // PC strip meets it; Controller keeps its tabs as they were.
+        let (mut x, y) = if self.pc_tabs { (tl[0] + 14, tl[1] + 13 - h) } else { (tl[0] + 25, tl[1] - h + 2) };
         let count = shown.len();
         for (i, t) in shown.into_iter().enumerate() {
             let mut name = crate::ui::wide(&self.tabs.name(t));
@@ -1943,6 +1947,10 @@ mod tests {
             c.resize(ChatSize { width: box_width, rows: 5 }, width);
             c.always = true;
             assert!(c.show_tab(1));
+            c.draw(&v, &mut r, 0, 0.1);
+            let tab = c.tabs.hits[0].0;
+            assert_eq!([tab[0], tab[3]], [c.window.top_left()[0] + 21, c.window.top_left()[1] - 1], "Controller tabs stay where they were");
+            c.pc_tabs = true;
             c.draw(&v, &mut r, 0, 0.1);
             c.draw_pane_control(&v, &mut r, true);
             let tab = c.tabs.hits[0].0;
