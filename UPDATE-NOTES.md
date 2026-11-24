@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Chat history controls
+
+- Hold **Chat Expand** (default **C**) to start on **Main**. Tap **Tab** to cycle through chat tabs and panes from left to right, and use **Up** or **Down** to scroll the selected view one line at a time.
+- In the PC interface, **Left** and **Right** scroll by the selected pane's configured number of lines. Hold **Shift** with either arrow for its usual item-link or channel action while chat is expanded. Buff navigation and raid prompts still get their arrow shortcuts first.
+- Mouse-wheel scrolling resumes live chat and releases the scrollbar when you reach the newest line.
+
 ## 2026-11-24 · Rearrange spell gems on PC
 
 - On the desktop spell bars, hold the left mouse button for two seconds to pick up a gem. Left-click a slot to place it. An occupied slot hands its gem to your cursor. An empty slot completes the move.

@@ -5233,7 +5233,10 @@ impl Play {
         if self.roll_key(key, down) {
             return;
         }
-        let took = self.wnd_chat.as_mut().is_some_and(|c| if down { c.key_down(key) } else { c.key_up(key) });
+        let took = self.wnd_chat.as_mut().is_some_and(|c| {
+            let pane = c.history_mut();
+            if down { pane.key_down(key) } else { pane.key_up(key) }
+        });
         if took {
             return;
         }
@@ -5247,7 +5250,7 @@ impl Play {
             // R2, or the keyboard's C (`OnKeyUp` 67, 99, 143)
             143 | 67 | 99 => {
                 if let Some(c) = self.wnd_chat.as_mut() {
-                    c.set_scroll(0);
+                    c.end_history();
                 }
                 self.roll_let_go();
                 self.mode = 0;
@@ -6371,7 +6374,7 @@ impl Play {
                     return took;
                 }
             }
-            c.wheel(Self::chat_point(at, size), lines, held)
+            c.history_mut().wheel(Self::chat_point(at, size), lines, held)
         })
     }
 
@@ -7465,7 +7468,7 @@ impl Play {
                 self.mode = 33;
                 self.locks = (true, true);
                 if let Some(c) = self.wnd_chat.as_mut() {
-                    c.set_scroll(1);
+                    c.begin_history();
                 }
             }
             // L2: the quick-chat menus (mode 30, `VIWndMenu4`)
@@ -9196,12 +9199,38 @@ impl Play {
                 self.mode = 33;
                 self.locks = (true, true);
                 if let Some(c) = self.wnd_chat.as_mut() {
-                    c.set_scroll(1);
+                    c.begin_history();
                 }
             }
             33 => self.chat_scroll_key(key, down),
             _ => {}
         }
+    }
+
+    /// Keyboard shortcuts specific to an expanded chat. D-pad actions and
+    /// UI elements that already own the arrows still use chat_scroll_key.
+    pub fn chat_history_shortcut(&mut self, key: crate::chat::HistoryKey, size: (u32, u32)) -> bool {
+        use crate::chat::HistoryKey::*;
+        if self.mode != 33 || self.typing.is_some() || self.search.open || self.map.open || self.loading.up()
+            || crate::hideui::hidden() || self.buffs.focused() || self.rolls_focused() || self.chat_dragging()
+        {
+            return false;
+        }
+        if !matches!(key, NextTab) && (!crate::settings::pc_mode() || self.link_walking()
+            || matches!(key, PageDown) && self.rolls_up())
+        {
+            return false;
+        }
+        let Some(c) = self.wnd_chat.as_mut() else { return false };
+        match key {
+            NextTab => {
+                let beyond = crate::hudlayout::Beyond::of(size);
+                c.cycle_history(|pane, local| crate::hudlayout::frame_point(Self::chat_piece(pane), local, beyond)[0]);
+            }
+            PageUp => c.history_mut().page_history(true),
+            PageDown => c.history_mut().page_history(false),
+        }
+        true
     }
 
     /// `VIWndGame::OnKeyDown`'s L2 (the keyboard's Z) in play: the
@@ -10763,6 +10792,7 @@ impl Play {
             r.ui.vertical = Vertical::Bottom;
             let in_play = matches!(self.mode, 0 | 33);
             if let Some(c) = self.wnd_chat.as_mut() {
+                if self.mode != 33 { c.end_history(); }
                 // a selection is play's: a window up ends it
                 if !in_play {
                     c.clear_selection(false);
@@ -14707,6 +14737,48 @@ mod commands {
         assert_eq!((p.channel, last_line(&p)), (4, "(word 599)"));
         p.do_action(0x0B01_0000, 0);
         assert_eq!((p.channel, last_line(&p)), (0, "(word 595)"), "Say takes it back");
+    }
+
+    #[test]
+    fn chat_history_keyboard_shortcuts_are_scoped_to_the_ui_and_hold() {
+        use crate::chat::{HistoryKey, Kind, KINDS, TAB_NAME_MOST, TABS, WndChat};
+        let size = (960, 540);
+        for pc in [false, true] {
+            crate::settings::testing::reset(false);
+            crate::settings::set_ui_mode(pc).unwrap();
+            crate::settings::set_client(crate::settings::ClientOptions { r2_channels: true, ..crate::settings::client() });
+            let mut p = play();
+            p.loading.wait = None;
+            let mut chat = WndChat::new();
+            let mut routes = [0; KINDS];
+            routes[Kind::Tells.index()] = 2;
+            chat.set_tabs(routes, [['\0'; TAB_NAME_MOST]; TABS]);
+            p.wnd_chat = Some(chat);
+            assert!(!p.chat_history_shortcut(HistoryKey::NextTab, size), "Tab is still a gameplay key");
+            p.chat_history_key(99, true);
+            assert!(p.chat_history_shortcut(HistoryKey::NextTab, size));
+            assert_eq!(p.wnd_chat.as_ref().unwrap().tab(), 2, "unconfigured tabs are skipped");
+            assert_eq!(p.chat_history_shortcut(HistoryKey::PageUp, size), pc);
+            assert_eq!(p.chat_history_shortcut(HistoryKey::PageDown, size), pc);
+            assert_eq!(p.channel, 0, "paging doesn't change the channel");
+            assert!(p.window_key(137, true), "the D-pad still gets R2 Channel Switch");
+            assert_eq!(p.channel, 3);
+            p.map.open = true;
+            assert!(!p.chat_history_shortcut(HistoryKey::NextTab, size), "the map owns its keys");
+            p.map.open = false;
+            p.session.ready_offer = true;
+            p.ready_check(net::readycheck::Check { id: 4, seconds: 30, asker: "Ann".into() });
+            assert!(!p.chat_history_shortcut(HistoryKey::PageDown, size), "Right can still focus a ready check");
+            p.chat_history_key(18, true);
+            assert!(p.rolls_focused());
+            assert!(!p.chat_history_shortcut(HistoryKey::NextTab, size), "a focused prompt owns its keys");
+            p.chat_history_key(99, false);
+            assert!(!p.rolls_focused());
+            assert!(!p.chat_history_shortcut(HistoryKey::NextTab, size));
+            p.chat_history_key(99, true);
+            assert_eq!(p.wnd_chat.as_ref().unwrap().tab(), 0);
+        }
+        crate::settings::testing::reset(false);
     }
 
     /// R2 Channel Switch (the server owner, 2026-11-18): off, as by default,

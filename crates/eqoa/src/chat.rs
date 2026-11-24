@@ -675,6 +675,12 @@ pub struct ChatSize {
     rows: i32,
 }
 
+pub enum HistoryKey {
+    NextTab,
+    PageUp,
+    PageDown,
+}
+
 /// Fade the complete pane, including opaque solid fills and their labels.
 /// Blend-zero fills normally ignore their alpha, so use alpha blending while
 /// fading and preserve their originally opaque appearance at the fade start.
@@ -729,6 +735,8 @@ pub struct WndChat {
     /// the first line shown while scrolling, and the line after the last
     top: usize,
     bottom: usize,
+    /// This pane has the keys while chat is expanded, even when following live chat.
+    history_held: bool,
     /// the scroll key held (19, 20, 138, 139), and when it repeats
     held: i32,
     repeat: f32,
@@ -789,7 +797,7 @@ impl WndChat {
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
         let size = ChatSize::ORIGINAL;
-        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None, last_activity: None, hovered: false, wake_on_message: false, pc_tabs: false }
+        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, history_held: false, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None, last_activity: None, hovered: false, wake_on_message: false, pc_tabs: false }
     }
 
     /// A pointer action or active interaction restores this pane without
@@ -813,7 +821,7 @@ impl WndChat {
     /// PC inactivity: full opacity for the chosen delay, then a one-second
     /// linear fade. Wrapping arithmetic keeps the session clock's rollover safe.
     pub fn fade_alpha(&mut self, now: u32, seconds: u8, pc: bool, editing: bool) -> f32 {
-        if !pc || seconds == 0 || editing || self.hovered || self.typing || self.drag.is_some() || self.held != 0 {
+        if !pc || seconds == 0 || editing || self.hovered || self.typing || self.drag.is_some() || self.history_held || self.held != 0 {
             self.activity(now);
             return 1.0;
         }
@@ -936,6 +944,10 @@ impl WndChat {
         } else {
             let Some(pane) = self.panes[t - 1].take() else { return false };
             self.tabs.parked[t] = Some(pane.text);
+            if pane.history_held {
+                if !self.show_tab(t) { self.show_tab(0); }
+                self.hold_history();
+            }
         }
         true
     }
@@ -946,6 +958,63 @@ impl WndChat {
 
     pub fn pane_mut(&mut self, t: usize) -> Option<&mut WndChat> {
         self.panes.get_mut(t.checked_sub(1)?)?.as_deref_mut()
+    }
+
+    fn history_pane(&self) -> Option<usize> {
+        (1..=TABS).find(|&t| self.pane(t).is_some_and(|p| p.history_held))
+    }
+
+    pub fn history(&self) -> &Self {
+        self.history_pane().and_then(|t| self.pane(t)).unwrap_or(self)
+    }
+
+    pub fn history_mut(&mut self) -> &mut Self {
+        match self.history_pane() {
+            Some(t) => self.panes[t - 1].as_deref_mut().unwrap(),
+            None => self,
+        }
+    }
+
+    pub fn begin_history(&mut self) {
+        self.end_history();
+        self.show_tab(0);
+        self.hold_history();
+    }
+
+    pub fn end_history(&mut self) {
+        let pane = self.history_mut();
+        if pane.history_held {
+            pane.history_held = false;
+            pane.held = 0;
+            pane.set_scroll(0);
+        }
+    }
+
+    fn hold_history(&mut self) {
+        self.history_held = true;
+        if self.scroll != 1 { self.set_scroll(1); }
+    }
+
+    /// Main comes first. Docked tabs share a window and keep their tab order.
+    pub fn cycle_history(&mut self, x: impl Fn(usize, [f32; 2]) -> f32) {
+        let current = self.history_pane().unwrap_or(self.tabs.active);
+        let mut tabs = self.tabs.shown();
+        let left = |t| {
+            let (piece, pane) = self.pane(t).map_or((0, &*self), |p| (t, p));
+            x(piece, pane.window.top_left().map(|v| v as f32))
+        };
+        tabs[1..].sort_by(|&a, &b| left(a).total_cmp(&left(b)));
+        let next = tabs.iter().position(|&t| t == current).and_then(|i| tabs.get(i + 1)).copied().unwrap_or(0);
+        if next == current { return; }
+        self.end_history();
+        if let Some(pane) = self.pane_mut(next) {
+            pane.hold_history();
+            pane.cues.push(11);
+        } else {
+            self.show_tab(next);
+            self.hold_history();
+            self.cues.push(11);
+        }
     }
 
     pub fn control_at(&self, p: [f32; 2]) -> bool {
@@ -1029,7 +1098,11 @@ impl WndChat {
         let tab_y = tl[1] + 13 - h;
         let y = if self.pane_title.is_some() { tab_y } else { tab_y - h + 2 };
         ui.fill_fan([0.0, 0.0, 0.0, self.opacity as f32 / 100.0], [[x-4,y-1],[x+w+4,y-1],[x+w+4,y+h-3],[x-4,y+h-3]]);
-        vui.draw_string_ex(ui, &text, x, y, [1.0, 1.0, 0.6, 1.0], true);
+        let color = [1.0, 1.0, 0.6, 1.0];
+        vui.draw_string_ex(ui, &text, x, y, color, true);
+        if self.pane_title.is_some() && self.history_held {
+            ui.fill_fan(color, [[x, y+h-5], [x+w, y+h-5], [x+w, y+h-4], [x, y+h-4]]);
+        }
         self.control_hit = Some([x-4,y-1,x+w+4,y+h-3]);
     }
 
@@ -1060,10 +1133,9 @@ impl WndChat {
         85 + (self.size.rows + i32::from(self.typing) - 5) * self.row_height
     }
 
-    /// Whether the box is held open at five rows with every line in it: the
-    /// fixed mode's, or Chat Always Shown's (`always`).
+    /// Whether the box shows every configured row outside the scroll view.
     fn fixed(&self) -> bool {
-        self.mode != 0 || self.always || self.typing
+        self.mode != 0 || self.always || self.typing || (self.history_held && self.scroll == 0)
     }
 
     /// The controller's scroll view keeps its original indicator. In PC mode
@@ -1094,12 +1166,14 @@ impl WndChat {
             }
         } else {
             self.bottom = 0;
+            self.held = 0;
+            self.wheel = 0.0;
         }
     }
 
     /// `ScrollDown`: a line later, unless at the end.
     fn scroll_down(&mut self) {
-        if self.bottom != self.text.end() {
+        if self.scroll == 1 && self.bottom != self.text.end() {
             self.cues.push(11);
             self.bottom = ChatText::next(self.bottom);
             self.top = ChatText::next(self.top);
@@ -1121,19 +1195,35 @@ impl WndChat {
         }
     }
 
+    pub fn page_history(&mut self, older: bool) {
+        self.held = 0;
+        if older && self.scroll != 1 { self.set_scroll(1); }
+        let before = self.bottom;
+        let cues = self.cues.len();
+        for _ in 0..self.size.rows {
+            if older { self.scroll_up(); }
+            else { self.scroll_down(); }
+        }
+        self.cues.truncate(cues);
+        self.cues.push(if self.bottom == before { 9 } else { 11 });
+    }
+
     /// `OnKeyDown`: up and down scroll, and repeat while held. False for a
     /// key it passes up to the game window (only L3, 146).
     pub fn key_down(&mut self, key: i32) -> bool {
         self.held = 0;
         match key {
             19 | 138 => {
+                if self.scroll != 1 { self.set_scroll(1); }
                 self.held = key;
                 self.repeat = 0.45;
                 self.scroll_up();
             }
             20 | 139 => {
-                self.held = key;
-                self.repeat = 0.45;
+                if self.scroll == 1 {
+                    self.held = key;
+                    self.repeat = 0.45;
+                }
                 self.scroll_down();
             }
             146 => return false,
@@ -1362,28 +1452,46 @@ impl WndChat {
     /// on the chat log when holding the chat expand button"): a line a notch
     /// through the history. False when it is not the box's.
     pub fn wheel(&mut self, p: [f32; 2], lines: f32, held: bool) -> bool {
-        if self.scroll != 1 || !(held || self.contains(p) || self.drag.is_some()) {
+        if !held && (self.scroll != 1 || !(self.contains(p) || self.drag.is_some())) {
             return false;
         }
-        self.wheel += lines;
-        let cues = self.cues.len();
-        while self.wheel.abs() >= 1.0 {
-            if self.wheel > 0.0 {
-                self.scroll_up();
-            } else {
-                self.scroll_down();
-            }
-            self.wheel -= self.wheel.signum();
-        }
-        self.cues.truncate(cues);
+        self.scroll_wheel(lines);
         true
     }
 
     /// Mouse history does not require holding the controller's scroll mode.
     pub fn pc_wheel(&mut self, p: [f32; 2], lines: f32) -> bool {
         if !self.contains(p) { return false; }
-        if self.scroll != 1 { self.set_scroll(1); }
-        self.wheel(p, lines, false)
+        self.scroll_wheel(lines);
+        true
+    }
+
+    fn scroll_wheel(&mut self, lines: f32) {
+        if !lines.is_finite() { return; }
+        self.wheel += lines;
+        if self.scroll != 1 {
+            if self.text.count() <= self.size.rows as usize {
+                self.wheel = 0.0;
+                return;
+            }
+            self.wheel = self.wheel.max(0.0);
+            if self.wheel < 1.0 { return; }
+            self.set_scroll(1);
+        }
+        let cues = self.cues.len();
+        let steps = (self.wheel.abs() as usize).min(self.text.count());
+        for _ in 0..steps {
+            if self.wheel > 0.0 {
+                self.scroll_up();
+            } else {
+                self.scroll_down();
+            }
+        }
+        self.wheel = self.wheel.fract();
+        self.cues.truncate(cues);
+        if lines < 0.0 && self.bottom == self.text.end() && !self.selecting() {
+            self.set_scroll(0);
+        }
     }
 
     /// What the Copy key would take: the lines selected, in order, or the newest.
@@ -1521,6 +1629,7 @@ impl WndChat {
     /// the history lit (from none, the newest), the view moved to hold it. False
     /// (sound 9) at the oldest, or with none.
     pub fn walk_older(&mut self) -> bool {
+        if self.history_held && self.scroll != 1 { self.set_scroll(1); }
         let list = self.walk_list();
         if self.scroll != 1 || !self.show_links || list.is_empty() {
             self.cues.push(9);
@@ -1724,6 +1833,9 @@ mod tests {
         routes[Kind::Tells.index()] = 1;
         let names = [['\0'; TAB_NAME_MOST]; TABS];
         c.set_tabs(routes, names);
+        for i in 0..ChatSize::ORIGINAL.rows {
+            c.add_line(&format!("Ann tells you, 'line {i}'"), [1.0; 4], 0, width, &[]);
+        }
         let line = "Ann tells you, 'Rusty Sword'";
         let at = line.find("Rusty").unwrap();
         c.add_line(line, [1.0; 4], 0, width, &[link(at, 11, 42)]);
@@ -1742,6 +1854,9 @@ mod tests {
         assert_eq!(pane.link_at(link_point).unwrap().0, 42);
         assert!(pane.pc_wheel(link_point, 1.0));
         assert_eq!(pane.scroll, 1, "the pane takes the wheel without controller scroll mode");
+        assert_eq!(pane.text.index(pane.bottom), ChatSize::ORIGINAL.rows as usize);
+        assert!(pane.pc_wheel(link_point, -1.0));
+        assert_eq!(pane.scroll, 0, "the detached pane goes live at the bottom");
         // Removing the last route parks the same history. Restoring it can
         // detach the same tab again, as the persisted preference requests.
         c.set_tabs([0; KINDS], names);
@@ -2286,6 +2401,86 @@ mod tests {
         assert!(c.wheel(p, -1.0, false));
         frame(&mut c, 0.016);
         assert_eq!(c.shown.first().unwrap().seq, 18);
+    }
+
+    #[test]
+    fn chat_history_cycles_main_and_panes_in_screen_order() {
+        let mut c = with_lines(20);
+        let mut routes = [0; KINDS];
+        routes[Kind::Tells.index()] = 1;
+        routes[Kind::Loot.index()] = 2;
+        routes[Kind::Combat.index()] = 3;
+        c.set_tabs(routes, [['\0'; TAB_NAME_MOST]; TABS]);
+        assert!(c.set_detached(1, true));
+        assert!(c.set_detached(3, true));
+        let x = |pane, _| [40.0, 130.0, 0.0, 10.0][pane];
+        c.pane_mut(3).unwrap().size.rows = 7;
+        for t in [1, 3] {
+            let pane = c.pane_mut(t).unwrap();
+            for i in 0..20 {
+                pane.text.add_text(&crate::ui::wide(&format!("pane {t} line {i}")), [1.0; 4], 0, width);
+            }
+        }
+        assert!(c.show_tab(2));
+        c.begin_history();
+        assert_eq!(c.tab(), 0, "each hold starts at Main");
+        c.key_down(19);
+        c.cycle_history(x);
+        assert_eq!(c.held, 0, "switching stops the old pane's repeat");
+        assert_eq!(c.history_pane(), Some(3), "the leftmost pane is next");
+        c.history_mut().page_history(true);
+        let pane = c.pane(3).unwrap();
+        assert_eq!(pane.text.index(pane.bottom), 13, "page uses that pane's seven lines");
+        c.history_mut().key_down(19);
+        let pane = c.pane(3).unwrap();
+        assert_eq!(pane.text.index(pane.bottom), 12, "up scrolls just one line in the same pane");
+        assert_eq!(c.pane(1).unwrap().scroll, 0, "other detached panes are independent");
+        c.history_mut().page_history(true);
+        c.history_mut().page_history(true);
+        let pane = c.pane(3).unwrap();
+        assert_eq!(pane.top, pane.text.first(), "page up clamps at the oldest row");
+        c.history_mut().page_history(false);
+        let pane = c.pane(3).unwrap();
+        assert_eq!(pane.text.index(pane.bottom), 14);
+        c.history_mut().page_history(false);
+        assert_eq!(c.pane(3).unwrap().bottom, c.pane(3).unwrap().text.end(), "page down clamps at the newest row");
+        c.cycle_history(x);
+        assert_eq!((c.tab(), c.history_pane()), (2, None), "the docked tab is next");
+        c.cycle_history(x);
+        assert_eq!(c.history_pane(), Some(1), "the rightmost pane is last");
+        c.cycle_history(x);
+        assert_eq!((c.tab(), c.history_pane()), (0, None), "wraps to Main");
+        c.cycle_history(x);
+        c.end_history();
+        assert_eq!(c.pane(3).unwrap().scroll, 0, "releasing chat leaves the detached pane live");
+    }
+
+    #[test]
+    fn chat_history_wheel_resumes_live_at_the_bottom() {
+        let mut c = with_lines(20);
+        let p = on(&c, 19);
+        assert!(c.pc_wheel(p, -1.0));
+        assert_eq!(c.scroll, 0, "scrolling down at the live edge stays live");
+        assert!(c.pc_wheel(p, 0.5));
+        assert_eq!(c.scroll, 0, "a partial step leaves the scrollbar hidden");
+        assert!(c.pc_wheel(p, 1.5));
+        assert_eq!(c.text.index(c.bottom), 18);
+        assert!(c.pc_wheel(p, -1.0));
+        assert!(c.scroll_indicator(true), "scrollback stays pinned off the bottom");
+        assert!(c.pc_wheel(p, -1.0));
+        assert!(!c.scroll_indicator(true), "the wheel releases the indicator at the bottom");
+        c.text.add_text(&crate::ui::wide("new live line"), [1.0; 4], 0, width);
+        frame(&mut c, 0.016);
+        assert_eq!(c.shown.first().unwrap().seq, 20, "new chat is visible immediately");
+
+        c.begin_history();
+        let outside = [-300.0, -300.0];
+        assert!(c.wheel(outside, 3.0, true));
+        assert!(c.wheel(outside, -4.0, true));
+        assert_eq!(c.scroll, 0);
+        assert!(c.fixed(), "reaching the bottom keeps the explicitly held pane expanded");
+        assert!(c.key_down(19), "up can scroll again without releasing the expand key");
+        assert_eq!(c.text.index(c.bottom), 20);
     }
 
     #[test]
