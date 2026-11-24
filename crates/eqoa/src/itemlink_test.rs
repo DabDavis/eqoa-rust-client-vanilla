@@ -41,6 +41,7 @@ fn two_inspections_move_zoom_pin_and_close_independently() {
         assert!(p.hud_press(px(at), size));
         assert!(p.hud_release());
     };
+    p.chat_line("/hud");
     frame(&mut p, &mut renderer, &mut now);
     let a = p.links.frame_geometry(0).unwrap();
     let b = p.links.frame_geometry(1).unwrap();
@@ -96,10 +97,13 @@ fn two_inspections_move_zoom_pin_and_close_independently() {
     let at = px(under_x);
     assert!(p.point(crate::mouse::Click::Target(at[0] as f64, at[1] as f64), size, false));
     assert_eq!(p.links.windows.len(), 2, "covered X did not close the lower comparison");
+    p.chat_line("/hud lock");
+    frame(&mut p, &mut renderer, &mut now);
     let top_x = px(p.links.close_position(1).unwrap());
     assert!(p.point(crate::mouse::Click::Target(top_x[0] as f64, top_x[1] as f64), size, false));
     assert_eq!(p.links.windows.len(), 1);
     assert_eq!(p.links.windows[0].id, 1);
+    p.chat_line("/hud");
     frame(&mut p, &mut renderer, &mut now);
     assert_eq!(p.links.frame_geometry(0).unwrap().1, moved.1, "survivor retains placement after neighbor closes");
     let survivor_x = px(p.links.close_position(0).unwrap());

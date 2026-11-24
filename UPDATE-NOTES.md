@@ -16,6 +16,7 @@ is put on the page by `.github/workflows/notes.yml`.
 - To size all equipped spell rows together, use **F10 → Extended → UI → HUD Layout → Spell Bar Size %**. It adjusts the same setting as the spell bars' corner arrows.
 - Chat tabs sit against the top edge of their pane. **Resize** in the HUD editor changes the pane's width and line count. The corner arrows also scale its text.
 - Under **Extended → UI → Chat**, choose a **Chat Fade Delay** from 1 to 120 seconds, or leave it **Off**. After the delay each idle pane fades over one second. Hover, scroll or type to bring chat back. Enable **Wake on New Chat** if incoming messages should also reveal their pane.
+- PC windows such as the Start menu, Options, Inventory and NPC dialogue no longer show their title bar, zoom, **Pin**, **Reset** and resize corner during play. They keep the size, place and zoom you gave them, and still scroll when they need to. Type `/hud`, then open a window to change its layout again.
 
 ## 2026-11-24 · Jump landings
 
