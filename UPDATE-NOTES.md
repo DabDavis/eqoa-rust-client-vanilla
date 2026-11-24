@@ -5,6 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Busy chat panes scroll back down
+
+- The mouse wheel reaches the newest line again in a busy chat pane, such as a detached **Combat** pane in a fight: each notch down now passes the lines that came in since the last one, and at the bottom the pane follows live chat again.
 ## 2026-11-24 · Tab and R1 targeting in the PC interface
 
 - In the PC interface, **Tab** and **R1** pick the next target ahead of your character in the direction the camera looks, so zooming the camera in or out no longer changes which creature comes first. The Controller interface targets from the camera, as the PS2 did.
