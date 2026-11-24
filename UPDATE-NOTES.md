@@ -9,9 +9,13 @@ is put on the page by `.github/workflows/notes.yml`.
 
 - A **right click** (or a double click) on a corpse opens it even when your pet, your merc, a groupmate or a groupmate's merc stands in front of it: your own side no longer gets in the way. Anything else (a creature, a merchant, another player) still takes the click when it is nearer, as before. Small creatures such as goblins and their corpses are easier to click. A left click still targets whatever is nearest, and the controller's targeting is unchanged.
 
-## 2026-11-24 · Instanced duels in Neriak
+## 2026-11-24 · Busy chat panes scroll back down
 
-- **Community → Duel → Instanced duel** challenges the player you have selected to a private match in a sealed Neriak arena (Heirloom). Both fighters lose their buffs on arrival, a 60-second countdown runs once both have loaded, and everyone is restored to full health and mana at 1. Mind the four lava pockets. When the fight ends, each fighter goes back to where they started. Mr. Moogie's **Recent duels** lists the last ten results.
+- The mouse wheel reaches the newest line again in a busy chat pane, such as a detached **Combat** pane in a fight: each notch down now passes the lines that came in since the last one, and at the bottom the pane follows live chat again.
+
+## 2026-11-24 · Tab and R1 targeting in the PC interface
+
+- In the PC interface, **Tab** and **R1** pick the next target ahead of your character in the direction the camera looks, so zooming the camera in or out no longer changes which creature comes first. The Controller interface targets from the camera, as the PS2 did.
 
 ## 2026-11-24 · Instanced duels in Neriak
 

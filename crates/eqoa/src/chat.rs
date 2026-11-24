@@ -754,6 +754,13 @@ pub struct WndChat {
     /// The history's view is on the newest lines, nothing having taken it back
     /// (`follow`).
     following: bool,
+    /// Rows that came in under a scrolled-back view, and the seconds since the
+    /// wheel last went down: a spin down counts the rows that arrive between its
+    /// notches as passed (petition 5591: a busy detached Combat pane took a
+    /// line or more a notch, as fast as the wheel gave them back, and the
+    /// newest line was never reached).
+    arrived: usize,
+    down_gap: f32,
     /// The item links the last frame drew (`itemlink`), whether they are drawn as
     /// links (the Extended row Item Links: off, the line's plain words), and the
     /// one the history's walk has lit (its number).
@@ -797,7 +804,7 @@ impl WndChat {
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
         let size = ChatSize::ORIGINAL;
-        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, history_held: false, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None, last_activity: None, hovered: false, wake_on_message: false, pc_tabs: false }
+        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, history_held: false, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, arrived: 0, down_gap: f32::INFINITY, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None, last_activity: None, hovered: false, wake_on_message: false, pc_tabs: false }
     }
 
     /// A pointer action or active interaction restores this pane without
@@ -879,11 +886,15 @@ impl WndChat {
         if t > 0 && let Some(pane) = self.panes[t - 1].as_mut() {
             if self.wake_on_message { pane.activity(now); }
             let at_end = pane.scroll == 1 && pane.bottom == pane.text.end();
+            let seq = pane.text.seq;
             pane.text.add_text_linked(&wide, c, now, width, links);
             if at_end && !pane.selecting() { pane.set_scroll(1); }
+            else if pane.scroll == 1 { pane.arrived += (pane.text.seq - seq) as usize; }
         } else if t == self.tabs.active {
             if self.wake_on_message { self.activity(now); }
+            let seq = self.text.seq;
             self.text.add_text_linked(&wide, c, now, width, links);
+            if self.scroll == 1 { self.arrived += (self.text.seq - seq) as usize; }
         } else {
             if self.wake_on_message { self.activity(now); }
             let ring = self.tabs.parked[t].get_or_insert_with(|| ChatText::new(self.size.wrap_width()));
@@ -1171,6 +1182,7 @@ impl WndChat {
             self.held = 0;
             self.wheel = 0.0;
         }
+        self.arrived = 0;
     }
 
     /// `ScrollDown`: a line later, unless at the end.
@@ -1251,6 +1263,7 @@ impl WndChat {
     /// pixels a second (`dt` seconds since the last frame).
     pub fn draw(&mut self, vui: &Vui, ui: &mut dyn crate::ui::Layout, now: u32, dt: f32) {
         self.text.age(now);
+        self.down_gap += dt;
         // a held scroll key repeats every 1/20 s after the first 0.45 s
         if matches!(self.held, 19 | 20 | 138 | 139) {
             self.repeat -= dt;
@@ -1481,7 +1494,17 @@ impl WndChat {
             self.set_scroll(1);
         }
         let cues = self.cues.len();
-        let steps = (self.wheel.abs() as usize).min(self.text.count());
+        let mut steps = self.wheel.abs() as usize;
+        if self.wheel < 0.0 && steps > 0 {
+            // a notch of a spin down (another within half a second) passes the
+            // rows that came in since the last, so each notch is a row nearer
+            // the newest however busy the channel; the first notch after a
+            // read is one row, as ever
+            if self.down_gap <= 0.5 { steps += self.arrived; }
+            self.down_gap = 0.0;
+        }
+        if steps > 0 || self.wheel > 0.0 { self.arrived = 0; }
+        let steps = steps.min(self.text.count());
         for _ in 0..steps {
             if self.wheel > 0.0 {
                 self.scroll_up();
@@ -2470,6 +2493,87 @@ mod tests {
         assert_eq!((c.tab(), c.scroll), (2, 0));
         c.begin_history(true);
         assert_eq!(c.tab(), 0, "the PC interface starts on Main");
+    }
+
+    /// Petition 5591: a detached Combat pane, its ring gone round, a line of
+    /// combat coming in for every notch of the wheel: the spin down reaches the
+    /// newest line and the pane goes live again (it had stayed three rows off it
+    /// for as long as the fight went on). A read scrolled back holds still while
+    /// lines come in, and its first notch down is one row. Main and the other
+    /// detached pane route and scroll as before.
+    #[test]
+    fn a_busy_detached_pane_spins_down_to_the_newest_line() {
+        let mut c = WndChat::new();
+        let mut routes = [0; KINDS];
+        routes[Kind::Tells.index()] = 1;
+        routes[Kind::Combat.index()] = 3;
+        c.set_tabs(routes, [['\0'; TAB_NAME_MOST]; TABS]);
+        assert!(c.set_detached(1, true));
+        assert!(c.set_detached(3, true));
+        let (v, mut r) = (vui(), Rows);
+        let mut n = 0;
+        let hit = |c: &mut WndChat, n: &mut i32| {
+            c.add_line(&format!("You hit a gnoll for {n} points of damage."), [1.0; 4], 0, width, &[]);
+            *n += 1;
+        };
+        for _ in 0..1500 { hit(&mut c, &mut n); }
+        c.add_line("Someone: hello", [1.0; 4], 0, width, &[]);
+        c.add_line("Ann tells you, 'inc'", [1.0; 4], 0, width, &[]);
+        for _ in 0..30 {
+            c.draw(&v, &mut r, 0, 0.1);
+            for t in [1, 3] { c.pane_mut(t).unwrap().draw(&v, &mut r, 0, 0.1); }
+        }
+        let pane = c.pane(3).unwrap();
+        assert_eq!(pane.text.count(), LINES - 1, "the ring has gone round");
+        let p = on(pane, pane.shown[2].seq);
+        assert!(c.pane_mut(3).unwrap().pc_wheel(p, 3.0));
+        assert_eq!(c.pane(3).unwrap().scroll, 1);
+        // a read: the view holds while the fight goes on
+        let held: Vec<u64> = { let pane = c.pane_mut(3).unwrap(); pane.draw(&v, &mut r, 0, 0.1); pane.shown.iter().map(|s| s.seq).collect() };
+        for _ in 0..10 {
+            hit(&mut c, &mut n);
+            c.pane_mut(3).unwrap().draw(&v, &mut r, 0, 1.0);
+        }
+        let pane = c.pane(3).unwrap();
+        assert_eq!(pane.shown.iter().map(|s| s.seq).collect::<Vec<_>>(), held, "the history holds still under new lines");
+        // the spin down: a line in for every notch
+        let mut notches = 0;
+        while c.pane(3).unwrap().scroll == 1 {
+            hit(&mut c, &mut n);
+            let pane = c.pane_mut(3).unwrap();
+            pane.draw(&v, &mut r, 0, 0.016);
+            let before = pane.text.index(pane.bottom);
+            assert!(pane.pc_wheel(p, -1.0));
+            if notches == 0 && pane.scroll == 1 {
+                assert_eq!(pane.text.index(pane.bottom), before + 1, "the first notch after a read is one row");
+            }
+            notches += 1;
+            assert!(notches <= 20, "the wheel never reached the newest line");
+        }
+        let pane = c.pane_mut(3).unwrap();
+        pane.draw(&v, &mut r, 0, 0.016);
+        let newest = pane.text.lines[ChatText::prev(pane.text.end())].seq;
+        assert_eq!(pane.shown.first().unwrap().seq, newest, "live again on the newest line");
+        hit(&mut c, &mut n);
+        let pane = c.pane_mut(3).unwrap();
+        pane.draw(&v, &mut r, 0, 0.016);
+        assert_eq!(pane.shown.first().unwrap().seq, newest + 1, "and following the fight");
+        // the others: routed and live
+        assert_eq!(c.pane(1).unwrap().scroll, 0);
+        assert_eq!(c.pane(1).unwrap().text.count(), 1, "the tell went to its own pane");
+        assert_eq!(c.text.count(), 1, "Main kept its say and no combat");
+        // Main's own spin down in a busy channel (nothing routed away)
+        let mut c = with_lines(1200);
+        let p = on(&c, 1199);
+        assert!(c.pc_wheel(p, 4.0));
+        let mut notches = 0;
+        while c.scroll == 1 {
+            c.add_line("You hit a gnoll for 3 points of damage.", [1.0; 4], 0, width, &[]);
+            frame(&mut c, 0.016);
+            assert!(c.pc_wheel(p, -1.0));
+            notches += 1;
+            assert!(notches <= 20, "Main never reached the newest line");
+        }
     }
 
     #[test]
