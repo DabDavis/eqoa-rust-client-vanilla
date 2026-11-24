@@ -583,7 +583,7 @@ impl WndOptions {
         self.saved_client = crate::settings::client();
         self.saved_binds = crate::settings::binds();
         self.edit = [(o.no_faction == 0) as u8, (o.no_loot == 0) as u8, o.auto_attack, o.vibration];
-        self.sel = MODE_ROW;
+        self.sel = 0;
         self.page = -1;
         self.grp = None;
         self.grp_sel = 0;
@@ -2558,7 +2558,9 @@ mod tests {
         let (vui, mut r, mut o) = (vui(), NullRaster, GameOptions::default());
         let (mut cues, mut ups) = (Vec::new(), Vec::new());
         w.open(&vui, &r, &o);
-        assert_eq!((w.sel, w.page, settings::pc_mode()), (MODE_ROW, -1, false));
+        assert_eq!((w.sel, w.page, settings::pc_mode()), (0, -1, false), "opens on Game, as the game's menu: X there never switches the mode");
+        w.key(&vui, &mut r, &mut o, key::UP, 0, &mut cues, &mut ups);
+        assert_eq!(w.sel, MODE_ROW, "the mode row is above Game");
         w.key(&vui, &mut r, &mut o, key::CROSS, 0, &mut cues, &mut ups);
         assert!(settings::pc_mode());
         w.key(&vui, &mut r, &mut o, key::TRIANGLE, 0, &mut cues, &mut ups);
@@ -2861,7 +2863,7 @@ mod tests {
         }
         w.open(&vui, &NullRaster, &o);
         w.draw(&vui, &mut NullRaster, &o, &mut Vec::new());
-        for k in [key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             press(&mut w, &mut o, k, &mut cues);
         }
         assert_eq!((w.sel, w.page, w.grp, w.grp_sel, w.cat, w.item), (3, 3, None, 0, None, -1), "Extended's groups, Graphics lit");
@@ -3630,7 +3632,6 @@ mod tests {
         w.open(&vui, &NullRaster, &o);
         for k in [
             key::DOWN,
-            key::DOWN,
             key::CROSS,
             key::RIGHT,
             key::TRIANGLE,
@@ -3977,7 +3978,7 @@ mod tests {
             w.draw(&vui, &mut NullRaster, o, &mut ups);
         };
         w.open(&vui, &NullRaster, &o);
-        for k in [key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             press(&mut w, &mut o, k);
         }
         assert_eq!((w.sel, w.page), (4, 4), "Controls");
@@ -4040,7 +4041,7 @@ mod tests {
         nine.init(&vui, &NullRaster, CENTER, 300, 9, 0);
         nine.set_title(Some(&[1]));
         assert_eq!((w.window.rows, w.window.bottom_right()[1]), (10, nine.bottom_right()[1]), "a row more, grown upward");
-        for _ in 0..6 {
+        for _ in 0..5 {
             press(&mut w, &mut o, key::DOWN);
         }
         assert_eq!(w.sel, 5);
@@ -4325,7 +4326,7 @@ mod tests {
         let (mut cues, mut ups) = (Vec::new(), Vec::new());
         w.open(&vui, &NullRaster, &o);
         w.draw(&vui, &mut NullRaster, &o, &mut Vec::new());
-        for k in [key::DOWN, key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
+        for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
         let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT];
@@ -4556,7 +4557,6 @@ mod tests {
         // off: the game's
         assert!(!settings::auto_save(), "off by default");
         w.open(&vui, &NullRaster, &o);
-        press(&mut w, &mut o, key::DOWN, &mut ups);
         for k in game_page {
             press(&mut w, &mut o, k, &mut ups);
         }
@@ -4570,7 +4570,6 @@ mod tests {
         assert_eq!(testing::kept("game.opt"), None, "nothing written");
         // turned on, by its row: kept by the step back off its page
         w.open(&vui, &NullRaster, &o);
-        press(&mut w, &mut o, key::DOWN, &mut ups);
         press(&mut w, &mut o, key::DOWN, &mut ups);
         press(&mut w, &mut o, key::DOWN, &mut ups);
         press(&mut w, &mut o, key::DOWN, &mut ups);
@@ -4646,7 +4645,7 @@ mod tests {
         };
         assert!(!settings::auto_save());
         w.open(&vui, &NullRaster, &o);
-        for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS, key::DOWN] {
+        for k in [key::DOWN, key::DOWN, key::CROSS, key::DOWN] {
             press(&mut w, &mut o, k, &mut ups);
         }
         assert_eq!(w.item, 3, "Fx Volume");

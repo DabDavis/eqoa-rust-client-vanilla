@@ -291,7 +291,9 @@ pub fn save_waypoints(w: &[(i32, [f32; 2])]) -> bool {
 /// chosen, never sent anywhere.
 pub fn hud_layout() -> String {
     let file = if pc_mode() { "hud-pc" } else { "hud" };
-    read_interface_file(file).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+    // the account's, else this window's own, as before the PC layout came (a
+    // layout kept before the account had one of its own is not lost)
+    account_read(file).or_else(|| store::read(&own_file(file, place()))).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
 }
 
 /// Keeps this window's HUD layout (`hud_layout`): whether it was kept.

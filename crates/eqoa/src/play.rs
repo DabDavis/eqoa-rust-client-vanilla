@@ -11976,7 +11976,7 @@ mod commands {
         p.mode = 34;
         p.options_wnd.open(&vui, &r, &p.options);
         let (mut cues, mut ups) = (Vec::new(), Vec::new());
-        for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
+        for k in [key::DOWN, key::DOWN, key::CROSS] {
             p.options_wnd.key(&vui, &mut r, &mut p.options, k, 0, &mut cues, &mut ups);
         }
         ups.clear();
