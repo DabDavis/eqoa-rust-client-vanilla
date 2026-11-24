@@ -138,6 +138,7 @@ impl Play {
             foe,
             effects: names,
             bars: self.pc_slot_capacity().map_or_else(|| self.ability_bars(), |slots| slots / 5),
+            carried: self.carried_gem(),
         };
         if let Some(c) = self.autocast.choose(&self.abilities, &now) {
             let target = if c.at_self { me.unwrap_or(self.target) } else { self.target };

@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-24 · Rearrange spell gems on PC
+
+- On the desktop spell bars, hold the left mouse button for two seconds to pick up a gem. Left-click a slot to place it. An occupied slot hands its gem to your cursor. An empty slot completes the move.
+- Left-click empty space to return the gems to their original slots and cancel any unfinished swaps. Right-click empty space to unmemorize the gem you're carrying.
+
 ## 2026-11-24 · Resizable PC HUD and chat fading
 
 - Type `/hud` and drag a gold corner arrow to size a HUD piece from 50% to 200%. The minimap, character and target frames, equipment switch bar, chat panes and other pieces each remember their size. Drag the body to move a piece. Click **Lock** at the top to finish.

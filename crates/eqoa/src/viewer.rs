@@ -3547,6 +3547,9 @@ impl App {
     /// mouse thought it free: on Windows a clip left by a grab the window
     /// no longer knows of would hold the cursor in it (`mouse::unclip`).
     fn let_go_pointer(&mut self) {
+        if let Some(p) = self.play.as_mut() {
+            p.spell_gem_leave();
+        }
         let held = self.mouse.lose_focus();
         if let Some(g) = &self.gfx {
             if held || cfg!(windows) {
@@ -3787,6 +3790,9 @@ impl App {
     fn click(&mut self, c: crate::mouse::Click, finger: bool) {
         let (Some(p), Some(g), Some(vp)) = (self.play.as_mut(), self.gfx.as_ref(), self.last_view) else { return };
         let size = (g.config.width, g.config.height);
+        if !finger && matches!(c, crate::mouse::Click::Right(..)) && p.spell_gem_right(c.at(), size, vp) {
+            return;
+        }
         if p.point(c, size, finger) {
             return;
         }
@@ -6218,13 +6224,20 @@ impl App {
                     p.hud_release();
                     p.map.let_go();
                     p.map.mini_hover(None);
+                    p.spell_gem_leave();
                     p.spell_hover(None, (1, 1));
                 }
             }
             WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
                 let down = state == ElementState::Pressed;
-                // the map up: a drag pans it, a click is its (`map.rs`)
                 let at = [self.cursor.0 as f32, self.cursor.1 as f32];
+                if !down && button == MouseButton::Left
+                    && let (Some(p), Some(g)) = (self.play.as_mut(), self.gfx.as_ref())
+                    && p.spell_gem_release(at, (g.config.width, g.config.height), p.session.now(), self.last_view)
+                {
+                    return;
+                }
+                // the map up: a drag pans it, a click is its (`map.rs`)
                 if let Some(c) = self.play.as_mut().filter(|p| p.map.open).map(|p| p.map.mouse_button(button == MouseButton::Right, down, at)) {
                     if let Some(c) = c {
                         self.click(c, false);
@@ -6244,6 +6257,12 @@ impl App {
                     // a press on the chat box's lines selects them, and the
                     // mouse's gesture (the look, a click's target) is none of it
                     if self.chat_button(button == MouseButton::Left, down) {
+                        return;
+                    }
+                    if down && button == MouseButton::Left && self.mouse.idle()
+                        && let (Some(p), Some(g)) = (self.play.as_mut(), self.gfx.as_ref())
+                        && p.spell_gem_press(at, (g.config.width, g.config.height), p.session.now())
+                    {
                         return;
                     }
                     // the left button on a quick-chat choice holds its
