@@ -22,14 +22,14 @@
 //! as that one is, of four groups (a GM's petitions 1631 and 1634,
 //! 2026-11-11: `GROUPS`): Graphics (Video, World, Lighting, Characters,
 //! natively Textures, Weather), UI (HUD, HUD Layout, Name Plates, Map, Number Colors,
-//! Merc Colors, DPS Meter, Chat), Other (General, Combat, Camera, natively
+//! Merc Colors, DPS Meter, Chat, Chat Tabs), Other (General, Combat, Camera, natively
 //! Sound), Touch Controls (Size & Look, Layout: every row of the touch
 //! screen's pad, a GM's petition 2084) and the Multi-boxing
 //! settings. A group opens a menu of its
 //! categories in the place of the groups' (`CATEGORIES`), the Multi-boxing
-//! settings, a group of one, its page at once; each category opens a page laid
-//! out and driven as the game's pages are, short enough that none scrolls
-//! (`PAGE_MOST`). The rows by the categories they were on before the groups
+//! settings, a group of one, its page at once. Longer category pages take
+//! the menu's place so all their rows fit (`MENU_MOST`). The rows by the
+//! categories they were on before the groups
 //! (where a row went since is said in `ALL_CATEGORIES`):
 //! - Video: Display (natively: Window or Full Screen, the window's own as
 //!   F11 and Alt+Enter toggle it, `display`: it changes at once and stays,
@@ -1335,7 +1335,7 @@ impl WndOptions {
                 Some(c) => self.open_category(vui, r, c),
                 None => {
                     let n = group_categories(g).len();
-                    self.menu_window(vui, r, 5, n, GROUPS[g].1);
+                    Self::extended_window(vui, r, &self.window, &mut self.window5, 300, n, GROUPS[g].1);
                 }
             }
             return false;
@@ -1411,7 +1411,7 @@ impl WndOptions {
                 self.grp_sel = 0;
                 self.cat = None;
                 self.cat_sel = 0;
-                self.menu_window(vui, r, 4, GROUPS.len(), EXTENDED);
+                Self::extended_window(vui, r, &self.window, &mut self.window4, 300, GROUPS.len(), EXTENDED);
                 return false;
             }
             4 | 5 => {
@@ -1434,34 +1434,33 @@ impl WndOptions {
         false
     }
 
-    /// One of Extended's menus' windows (4 the groups', 5 a group's
-    /// categories'): as the options menu's (`open`), as tall as its `entries`
-    /// and their legend (`menu_rows`), its bottom where the menu's is: the
-    /// rows past the menu's nine go up, clear of the title's own menu under it.
-    fn menu_window(&mut self, vui: &Vui, r: &dyn Raster, which: u8, entries: usize, title: &str) {
+    /// An Extended menu or long page, as tall as its entries and legend.
+    /// Extra rows grow upward from the Options menu's bottom edge so the
+    /// title screen's menu stays clear.
+    fn extended_window(vui: &Vui, r: &dyn Raster, menu: &Window, w: &mut Window, width: i32, entries: usize, title: &str) {
         let bottom = |w: &Window| w.top_left()[1] + w.size[1];
-        let menu = bottom(&self.window);
-        let w = if which == 4 { &mut self.window4 } else { &mut self.window5 };
         w.close(true);
-        w.init(vui, r, CENTER, 300, menu_rows(entries), 0);
+        w.init(vui, r, CENTER, width, menu_rows(entries), 0);
         w.open(false);
         w.set_title(Some(&wide(title)));
-        w.center[1] -= bottom(w) - menu;
+        w.center[1] += bottom(menu) - bottom(w);
     }
 
-    /// Category `c`'s page open on its first row (`page_window`).
+    /// Category `c`'s page open on its first row.
     fn open_category(&mut self, vui: &Vui, r: &dyn Raster, c: usize) {
         self.cat = Some(c);
         self.row = 0;
-        self.page_window(vui, r, category(c).items.len() as i32 + 3);
+        let cat = category(c);
+        if cat.items.len() > STANDARD_PAGE_ITEMS {
+            Self::extended_window(vui, r, &self.window, &mut self.window2, 440, cat.items.len(), cat.name);
+        } else {
+            self.page_window(vui, r, menu_rows(cat.items.len()));
+        }
     }
 
-    /// A page's window, 440 wide and `rows` high, an empty title bar, over
-    /// the menu's middle. One of more rows than the game's pages (eight: a
-    /// category of `PAGE_MOST`) goes without their empty title bar (six
-    /// pixels each way) and its top where theirs is, so the options window's
-    /// title tab above it still shows and its bottom stays clear of the
-    /// title's menu under it.
+    /// A standard page's window, 440 wide and `rows` high, over the menu's
+    /// middle. Pages above eight rows share the top of an eight-row page
+    /// and give up the empty title bar so the menus around it stay clear.
     fn page_window(&mut self, vui: &Vui, r: &dyn Raster, rows: i32) {
         self.window2.close(true);
         self.window2.init(vui, r, CENTER, 440, rows, 0);
@@ -1533,9 +1532,12 @@ impl WndOptions {
             1 => self.draw_interface(vui, r, o),
             2 => self.draw_sound(vui, r, o),
             3 => {
-                match self.grp {
-                    Some(g) if lone_category(g).is_none() => self.draw_categories(vui, r, g),
-                    _ => self.draw_groups(vui, r),
+                // A long page has its own title and takes the menu's place.
+                if self.cat.is_none_or(|c| category(c).items.len() <= STANDARD_PAGE_ITEMS) {
+                    match self.grp {
+                        Some(g) if lone_category(g).is_none() => self.draw_categories(vui, r, g),
+                        _ => self.draw_groups(vui, r),
+                    }
                 }
                 if let Some(c) = self.cat {
                     self.draw_category(vui, r, c);
@@ -2154,7 +2156,7 @@ enum Note {
     Links,
     /// how the HUD's pieces move while Move HUD is on and chosen (`hudlayout`)
     Hud,
-    /// how a chat tab is named (`/tabname`), on the Chat Tabs pages
+    /// how a chat tab is named (`/tabname`), on the Chat Tabs page
     ChatTabs,
     /// how the touch pad is moved while Move Touch Pad is on and chosen, and
     /// where Button Layout's Bottom puts Select and Start while it is chosen
@@ -2195,7 +2197,7 @@ enum Group {
 /// The groups in their menu's order, and their names.
 const GROUPS: [(Group, &str); 5] = [(Group::Graphics, "Graphics"), (Group::Ui, "UI"), (Group::Other, "Other"), (Group::Touch, "Touch Controls"), (Group::Multibox, "Multi-boxing settings")];
 
-/// Extended's categories, each a page of `PAGE_MOST` rows at most, listed
+/// Extended's categories, each a page of `MENU_MOST` items at most, listed
 /// in its group's menu in this order (2026-11-11, petition 1631: the fifteen
 /// categories of one menu put in three; Characters' name plate rows became
 /// UI's Name Plates, Combat's meter UI's DPS Meter, UI's Update Notices and
@@ -2203,7 +2205,7 @@ const GROUPS: [(Group, &str); 5] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// Capture Controller and Sound in Background the Multi-boxing settings',
 /// Controller's touch rows Other's Touch; petition 2084, 2026-11-14: Touch a
 /// group of its own, Touch Controls, its rows Size & Look and Layout).
-const ALL_CATEGORIES: [Category; 26] = [
+const ALL_CATEGORIES: [Category; 25] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
@@ -2230,10 +2232,8 @@ const ALL_CATEGORIES: [Category; 26] = [
     Category { name: "Size & Look", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Touch },
     Category { name: "Sound", items: &[32], note: Note::Output, group: Group::Other },
     Category { name: "Multi-boxing settings", items: MULTIBOX, note: Note::Reads, group: Group::Multibox },
-    // the chat tabs (2026-11-13, a player's ticket 1951): each kind of line to
-    // Main or a tab of its own, the talk on one page and the game's on another
-    Category { name: "Chat Tabs: Talk", items: &[92, 93, 94, 95, 96], note: Note::ChatTabs, group: Group::Ui },
-    Category { name: "Chat Tabs: Game", items: &[97, 98, 99, 100, 101], note: Note::ChatTabs, group: Group::Ui },
+    // the chat tabs (ticket 1951): each kind of line to Main or a tab of its own
+    Category { name: "Chat Tabs", items: &[92, 93, 94, 95, 96, 97, 98, 99, 100, 101], note: Note::ChatTabs, group: Group::Ui },
     // the touch pad's place and buttons (2026-11-14: Move Touch Pad, Button
     // Layout, petition 2084), its sizes' page full
     Category { name: "Layout", items: &[MOVE_TOUCH, TOUCH_LAYOUT, RESET_TOUCH], note: Note::TouchLayout, group: Group::Touch },
@@ -2253,7 +2253,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[23], a[25]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -2319,8 +2319,8 @@ fn pack_memory_text(mb: u16) -> String {
     }
 }
 
-/// The most a menu of Extended's lists (a group's categories): its rows and
-/// legend as tall as the fifteen categories' one menu was, which fit.
+/// The most an Extended menu or long page can hold: its rows and legend
+/// are as tall as the original fifteen-category menu, which fit.
 const MENU_MOST: usize = 15;
 
 /// Whether every group's menu holds its categories (`MENU_MOST`).
@@ -2352,16 +2352,15 @@ const fn menu_rows(entries: usize) -> i32 {
     entries as i32 + 3
 }
 
-/// The most rows a category's page holds: six and the legend are as tall as
-/// nine rows, the most the options window has room for (`page_window`), so
-/// no page scrolls.
-const PAGE_MOST: usize = 6;
+/// A standard page fits six items and its legend over the category menu.
+/// Longer pages take the menu's place and can be as tall as it can be.
+const STANDARD_PAGE_ITEMS: usize = 6;
 
-/// Whether every category's page holds its rows (`PAGE_MOST`).
-const fn fits(cats: &[Category]) -> bool {
+/// Whether every category's page holds its rows (`MENU_MOST`).
+const fn pages_fit(cats: &[Category]) -> bool {
     let mut i = 0;
     while i < cats.len() {
-        if cats[i].items.len() > PAGE_MOST {
+        if cats[i].items.len() > MENU_MOST {
             return false;
         }
         i += 1;
@@ -2369,7 +2368,7 @@ const fn fits(cats: &[Category]) -> bool {
     true
 }
 
-const _: () = assert!(fits(CATEGORIES), "a category's page would scroll: give its rows another category");
+const _: () = assert!(pages_fit(CATEGORIES), "a category's page would be too tall");
 
 /// Whether `item` is one of Extended's rows.
 fn extended(item: i32) -> bool {
@@ -2620,7 +2619,8 @@ mod tests {
         assert!(category(hud).items.contains(&SPELL_BAR_SIZE));
         assert!(category(chat).items.contains(&CHAT_FADE_DELAY));
         assert!(category(chat).items.contains(&CHAT_WAKE_ON_MESSAGE));
-        assert!(category(hud).items.len() <= PAGE_MOST && category(chat).items.len() <= PAGE_MOST);
+        assert!(category(hud).items.len() <= STANDARD_PAGE_ITEMS);
+        assert!(category(chat).items.len() <= STANDARD_PAGE_ITEMS);
         let vui = vui();
         let mut options = GameOptions::default();
         let mut window = WndOptions::default();
@@ -3992,8 +3992,7 @@ mod tests {
                 ("Merc Colors", n[6..8].to_vec()),
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "Reset DPS Meter"]),
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
-                ("Chat Tabs: Talk", vec!["Say", "Tells", "Group", "Guild", "Shouts"]),
-                ("Chat Tabs: Game", vec!["Combat", "Loot", "Rolls", "Experience", "System"]),
+                ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
             ],
             "UI: what is drawn over the world"
         );
@@ -4050,8 +4049,7 @@ mod tests {
 
     /// Extended's rows are its categories' between them, every one on one
     /// page and none twice, each with its label, no page more than
-    /// `PAGE_MOST`; the controls: a table missing a row, and a page of
-    /// seven, fail.
+    /// `MENU_MOST`.
     #[test]
     fn every_row_on_one_page_and_no_page_scrolls() {
         let listed = |cats: &[Category]| {
@@ -4067,7 +4065,7 @@ mod tests {
             let categories: Vec<_> = (0..CATEGORIES.len()).map(category).filter(|c| !c.items.is_empty()).collect();
             let rows = listed(&categories);
             assert!(rows.windows(2).all(|pair| pair[0] != pair[1]), "duplicate row, pc={pc}");
-            assert!(fits(&categories) && menus_fit(&categories));
+            assert!(pages_fit(&categories) && menus_fit(&categories));
             available.extend(rows);
         }
         available.sort();
@@ -4079,12 +4077,12 @@ mod tests {
         assert!(EXTENDED_ITEMS.iter().all(|&(i, l)| !l.is_empty() && label_of(i) == l));
         let short = [Category { name: "Video", items: &[13, 20], note: Note::None, group: Group::Graphics }];
         assert_ne!(listed(&short), all, "the control: rows left out");
-        let seven = [Category { name: "Video", items: &[13, 20, 14, 26, 25, 12, 15], note: Note::None, group: Group::Graphics }];
-        assert!(!fits(&seven), "the control: a page that would scroll");
-        assert!(!menus_fit(&seven), "the control: groups with no category");
+        let long = [Category { name: "Video", items: &[13; MENU_MOST + 1], note: Note::None, group: Group::Graphics }];
+        assert!(!pages_fit(&long), "the control: a page too tall for the window");
+        assert!(!menus_fit(&long), "the control: groups with no category");
     }
 
-    /// A category's page of `PAGE_MOST` rows, a row more than the game's
+    /// A page of `STANDARD_PAGE_ITEMS` items, one row more than the game's
     /// eight-row pages, keeps its top where theirs is (the Interface page's:
     /// under the options window's title tab) and, without their empty title
     /// bar, ends less than a row lower; the control: centred as the game's
@@ -4104,7 +4102,7 @@ mod tests {
         assert_eq!(w.window2.rows, 9, "Interface: nine rows (Vibration, the client's Profanity Filter)");
         w.page_window(&vui, &r, 8);
         let (top8, h8) = (w.window2.top_left()[1], w.window2.size[1]);
-        w.page_window(&vui, &r, PAGE_MOST as i32 + 3);
+        w.page_window(&vui, &r, menu_rows(STANDARD_PAGE_ITEMS));
         let (top9, h9) = (w.window2.top_left()[1], w.window2.size[1]);
         assert_eq!((w.window2.rows, w.window2.title_h), (9, 18), "a row more, no title bar");
         assert_eq!(top9, top8, "the top where an eight-row page's is");
@@ -4354,6 +4352,12 @@ mod tests {
         crate::settings::set_client(ClientOptions { name_distance: 200, ..crate::settings::client() });
         w.draw(&vui, &mut r, &o, &mut ups);
         assert_eq!(w.point([slider + 110.0, y(&w, 0)]), vec![key::LEFT], "left of the knob at 200");
+        go(&mut w, &vui, &mut o, "Chat Tabs");
+        assert_eq!(w.window2.title.chars(), wide("Chat Tabs"));
+        let bottom = |window: &Window| window.top_left()[1] + window.size[1];
+        assert!(w.window2.top_left()[1] > 24, "the page and its title fit on screen");
+        assert_eq!(bottom(&w.window2), bottom(&w.window), "keeps the title screen's menu clear");
+        assert_eq!(w.point([frame + 110.0, y(&w, 9)]), down(9, key::RIGHT), "System's value on the last row");
         // Multi-boxing settings (its page straight from the groups):
         // Controller Focus's halves, Capture Controller's
         go(&mut w, &vui, &mut o, "Multi-boxing settings");
@@ -4391,8 +4395,9 @@ mod tests {
         assert_eq!(CATEGORIES[by_name("Lighting")].note, Note::Lighting);
         assert_eq!(CATEGORIES[by_name("DPS Meter")].note, Note::Meter);
         assert_eq!(CATEGORIES[by_name("Chat")].note, Note::Links);
+        assert_eq!(CATEGORIES[by_name("Chat Tabs")].note, Note::ChatTabs);
         assert_eq!(CATEGORIES[by_name("HUD Layout")].note, Note::Hud);
-        assert!(CATEGORIES.iter().filter(|c| c.note != Note::None).count() == if cfg!(target_arch = "wasm32") { 12 } else { 15 }, "the notes only");
+        assert_eq!(CATEGORIES.iter().filter(|c| c.note != Note::None).count(), if cfg!(target_arch = "wasm32") { 11 } else { 14 }, "the notes only");
         assert_eq!(CATEGORIES.iter().find(|c| c.name == "Texture Cache").map(|c| c.note), if cfg!(target_arch = "wasm32") { None } else { Some(Note::Textures) });
         #[cfg(not(target_arch = "wasm32"))]
         {
