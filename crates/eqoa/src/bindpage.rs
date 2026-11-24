@@ -340,6 +340,8 @@ impl ControlsPage {
         w.text_box(vui, r, &wide("Keyboard"), kx, 1, KEY_W, 1, dim, 8);
         w.text_box(vui, r, &wide("Controller"), px, 1, PAD_W, 1, dim, 8);
         let b = crate::settings::binds();
+        let pc = crate::binds::pc_shortcuts();
+        let mut selected_chord = None;
         for (k, entry) in (self.top..(self.top + self.shown).min(n)).enumerate() {
             let at = k as i32 + 2;
             let on = entry == self.row;
@@ -354,11 +356,18 @@ impl ControlsPage {
             self.hits.push(rows_rect(w, vui, r, 40, at, width - KEY_X - 48, 1), entry * 4);
             // the cells: the selected one framed with its arrows
             let waiting = |col: Column| on && self.capture == Some(col);
-            let kt = if waiting(Column::Keyboard) {
+            let mut kt = if waiting(Column::Keyboard) {
                 "Press a key".to_string()
             } else {
-                b.profile_key(entry as usize, crate::binds::pc_shortcuts()).filter(|s| !s.is_empty()).map_or_else(|| "-".to_string(), binds::display)
+                b.profile_key(entry as usize, pc).filter(|s| !s.is_empty()).map_or_else(|| "-".to_string(), binds::display)
             };
+            // A long chord can wrap past this single-line cell. Keep its
+            // base key visible and spell out the selected binding below.
+            if pc && kt.contains('+') && w.text_width(vui, r, &wide(&kt)) >= KEY_W - 8 {
+                let short = kt.replace("Ctrl+", "C+").replace("Alt+", "A+").replace("Shift+", "S+");
+                if on && self.col == 0 { selected_chord = Some(kt); }
+                kt = short;
+            }
             let pt = if waiting(Column::Pad) {
                 "Press".to_string()
             } else {
@@ -403,6 +412,8 @@ impl ControlsPage {
             // there does
             if self.col == 1 && row.pad == Pad::None {
                 "A controller's button put here does what this key does, and no longer what it did in the game.".to_string()
+            } else if let Some(chord) = selected_chord {
+                format!("{chord}. {}", expand(vui, row.help))
             } else {
                 expand(vui, row.help)
             }
