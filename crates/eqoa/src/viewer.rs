@@ -6340,7 +6340,7 @@ impl App {
                     // over the minimap: its zoom, not the camera's
                     p.map.mini_wheel(steps);
                 } else if let Some(h) = self.host.as_mut().filter(|_| self.walker.is_none()) {
-                    // before the world: the screen's list (character select's)
+                    // Before entering the world, scroll the active list.
                     h.scroll(d, 0.0);
                 } else if self.walker.is_some() {
                     // over the chat box's history in view, its lines
