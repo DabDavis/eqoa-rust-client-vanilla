@@ -620,6 +620,8 @@ fn pc_offset(piece: Piece, b: Beyond, layout: &Layout) -> Option<[f32; 2]> {
     let gear_lift = if 171.0 * factor(Piece::EquipmentBar) + 8.0 > side_room { (spell_height - 40.0 * k).max(0.0) } else { 0.0 };
     let right_y = -122.0 * k - gear_lift;
     Some(match piece {
+        // Beside the group, with room for two raid columns at the default size.
+        Piece::Pet => [212.0 * k, 0.0],
         Piece::SpellBars => [-b.side - 320.0 * (1.0 - spell), -3.0],
         Piece::Target => [320.0 + b.side - 107.0 * factor(piece), 18.0 - SCREEN_H - 2.0 * b.top + 100.0 * factor(piece)],
         Piece::Chat => [left, main_y],
