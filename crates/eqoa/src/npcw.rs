@@ -160,8 +160,8 @@ impl Play {
                     // Auto Loot (petition 3008): its takes from the next frames
                     self.npcw.auto_loot = AutoLoot::default();
                     if crate::settings::auto_loot() {
-                        if let Some(c) = self.npcw.corpse.as_ref() {
-                            self.npcw.auto_loot.arm(c);
+                        if self.npcw.corpse.is_some() {
+                            self.npcw.auto_loot.arm();
                         }
                     }
                 } else {

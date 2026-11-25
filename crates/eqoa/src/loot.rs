@@ -249,11 +249,6 @@ const AUTO_WAIT_MS: i64 = 2000;
 #[derive(Default, Debug)]
 pub struct AutoLoot {
     armed: bool,
-    /// the corpse's keys were their places when it came (go-eqoa-server's: the
-    /// server reads a take's key as the record's place in its own list, which
-    /// a 0x0019 keeps the client's list matching): the takes after the first
-    /// send the place. Else (a server whose keys are ids) each item's own key.
-    by_place: bool,
     opened: Option<i64>,
     /// the take sent: its item's id, and until when its answer is waited for
     waiting: Option<(i64, i64)>,
@@ -263,9 +258,8 @@ pub struct AutoLoot {
 
 impl AutoLoot {
     /// A corpse window opened with Auto Loot on.
-    pub fn arm(&mut self, corpse: &ItemList) {
-        let by_place = corpse.items.iter().enumerate().all(|(i, it)| it.inv_index as usize == i);
-        *self = AutoLoot { armed: true, by_place, ..Default::default() };
+    pub fn arm(&mut self) {
+        *self = AutoLoot { armed: true, ..Default::default() };
     }
 
     /// The server's answer to a take (0x0019): the next may go.
@@ -307,7 +301,9 @@ impl AutoLoot {
             Some((i, n)) => {
                 let it = &corpse.items[i];
                 self.waiting = Some((it.item.id, now + AUTO_WAIT_MS));
-                let key = if self.by_place { i as i32 } else { it.inv_index as i32 };
+                // the item's own key, as `LootOne` sends it (`m_corpse.GetSlotId(i)`,
+                // its `m_invIndex`, never renumbered), not its place in the list
+                let key = it.inv_index as i32;
                 Some(LootOut::One(key, n as i32))
             }
             None => {
@@ -356,21 +352,21 @@ mod tests {
         let mut c = ItemList { p04: 0, items: vec![item(7, 1, 0, 0, 0), item(8, 1, 1, 1, 0), item(9, 2, 2, 0, 0)] };
         let mut a = AutoLoot::default();
         assert_eq!(a.step(0, true, false, &c, &inv, 40), None, "not armed");
-        a.arm(&c);
+        a.arm();
         assert_eq!(a.step(1000, true, false, &c, &inv, 40), None, "the beat");
         assert_eq!(a.step(1299, true, false, &c, &inv, 40), None);
         assert_eq!(a.step(1300, true, false, &c, &inv, 40), Some(LootOut::One(0, 1)));
         assert_eq!(a.step(1400, true, false, &c, &inv, 40), None, "waiting for the answer");
         c.items.remove(0);
         a.answered();
-        assert_eq!(a.step(1500, true, false, &c, &inv, 40), Some(LootOut::One(1, 2)), "the NO TRADE passed, the key its place");
+        assert_eq!(a.step(1500, true, false, &c, &inv, 40), Some(LootOut::One(2, 2)), "the NO TRADE passed, the item's own key");
         c.items.remove(1);
         a.answered();
         assert_eq!(a.step(1600, true, false, &c, &inv, 40), None, "the NO TRADE left: the window stays");
         assert!(!a.armed());
         // emptied: closed; an unanswered take left
         let mut c = ItemList { p04: 0, items: vec![item(7, 1, 0, 0, 0), item(9, 1, 1, 0, 0)] };
-        a.arm(&c);
+        a.arm();
         assert_eq!(a.step(0, true, false, &c, &inv, 40), None);
         assert_eq!(a.step(300, true, false, &c, &inv, 40), Some(LootOut::One(0, 1)));
         assert_eq!(a.step(2299, true, false, &c, &inv, 40), None);
@@ -379,27 +375,52 @@ mod tests {
         a.answered();
         assert_eq!(a.step(2400, true, false, &c, &inv, 40), None, "one left, refused: open");
         c.items.clear();
-        a.arm(&ItemList { p04: 0, items: vec![item(9, 1, 0, 0, 0)] });
+        a.arm();
         let one = ItemList { p04: 0, items: vec![item(9, 1, 0, 0, 0)] };
         assert_eq!(a.step(0, true, false, &one, &inv, 40), None);
         assert_eq!(a.step(300, true, false, &one, &inv, 40), Some(LootOut::One(0, 1)));
         a.answered();
         assert_eq!(a.step(400, true, false, &c, &inv, 40), Some(LootOut::Close), "emptied: closed");
         // a corpse opened empty is left open; off, or the master looter's: stops
-        a.arm(&c);
+        a.arm();
         assert_eq!((a.step(0, true, false, &c, &inv, 40), a.step(300, true, false, &c, &inv, 40)), (None, None));
         let c = ItemList { p04: 0, items: vec![item(9, 1, 0, 0, 0)] };
-        a.arm(&c);
+        a.arm();
         assert_eq!(a.step(500, false, false, &c, &inv, 40), None);
         assert!(!a.armed(), "turned off");
-        a.arm(&c);
+        a.arm();
         assert_eq!(a.step(500, true, true, &c, &inv, 40), None);
         assert!(!a.armed(), "the master looter's");
         // keys that are not places (a server's ids): each item's own
         let c = ItemList { p04: 0, items: vec![item(9, 1, 40, 0, 0)] };
-        a.arm(&c);
+        a.arm();
         a.step(0, true, false, &c, &inv, 40);
         assert_eq!(a.step(300, true, false, &c, &inv, 40), Some(LootOut::One(40, 1)));
+    }
+
+    /// A three-item corpse whose keys are 0, 1, 2: each take sends the item's
+    /// own key, never its place in the list, which an earlier take moves
+    /// (`LootOne` sends `GetSlotId(i)`, the item's `m_invIndex`).
+    #[test]
+    fn auto_loot_sends_each_items_own_key() {
+        let inv = ItemList::default();
+        let mut c = ItemList { p04: 0, items: vec![item(7, 1, 0, 0, 0), item(8, 1, 1, 0, 0), item(9, 1, 2, 0, 0)] };
+        let mut a = AutoLoot::default();
+        a.arm();
+        assert_eq!(a.step(0, true, false, &c, &inv, 40), None);
+        let mut keys = Vec::new();
+        for t in [300, 400, 500] {
+            match a.step(t, true, false, &c, &inv, 40) {
+                Some(LootOut::One(k, 1)) => keys.push(k),
+                o => panic!("{o:?}"),
+            }
+            // the server's 0x0019: that item off the corpse, the rest in place
+            let at = c.items.iter().position(|it| it.inv_index as i32 == *keys.last().unwrap()).unwrap();
+            c.items.remove(at);
+            a.answered();
+        }
+        assert_eq!(keys, vec![0, 1, 2], "the items' own keys, not 0, 0, 0");
+        assert_eq!(a.step(600, true, false, &c, &inv, 40), Some(LootOut::Close));
     }
 
     fn corpse(n: usize) -> ItemList {
