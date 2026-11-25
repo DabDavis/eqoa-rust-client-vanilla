@@ -397,6 +397,34 @@ pub fn device_memory(device: &wgpu::Device) -> Option<u64> {
     }
 }
 
+/// The adapter a page's device was made on, as `set_adapter_info` was told
+/// it (the page's `adapter.get_info()`, taken before the device is asked
+/// for).
+static ADAPTER_INFO: std::sync::Mutex<Option<wgpu::AdapterInfo>> = std::sync::Mutex::new(None);
+
+/// Keeps `info` (the adapter's own `get_info()`) as the one `device_info`
+/// answers with. The page sets it at every adapter it takes, a lost
+/// device's new one included.
+pub fn set_adapter_info(info: wgpu::AdapterInfo) {
+    *ADAPTER_INFO.lock().unwrap_or_else(|e| e.into_inner()) = Some(info);
+}
+
+/// What adapter `device` is on, in place of `device.adapter_info()`, which
+/// on WebGPU reads `GPUDevice.adapterInfo`: Chrome and Edge have it only
+/// from 132, and on 131 it is undefined and its `description` a TypeError
+/// that stopped the client as the renderer was made (Heirloom crash report
+/// 3125, Edge 131). The adapter's own `info`, which 131 has, is kept by
+/// `set_adapter_info` and answered from; with none kept (natively, the
+/// tests) the device is asked.
+pub fn device_info(device: &wgpu::Device) -> wgpu::AdapterInfo {
+    kept_or(ADAPTER_INFO.lock().unwrap_or_else(|e| e.into_inner()).clone(), || device.adapter_info())
+}
+
+/// `kept`, else what `ask` says (`ask` not called when one is kept).
+fn kept_or(kept: Option<wgpu::AdapterInfo>, ask: impl FnOnce() -> wgpu::AdapterInfo) -> wgpu::AdapterInfo {
+    kept.unwrap_or_else(ask)
+}
+
 static PACK_LIMITS: std::sync::Mutex<PackLimits> = std::sync::Mutex::new(PackLimits { budget: 256 << 20, max_side: 1024 });
 /// How many times the device has run out of memory this run.
 static OUT_OF_MEMORY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -1225,7 +1253,7 @@ pub(crate) fn model_pipeline(
 
 impl Renderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        set_pack_limits(PackLimits::for_adapter(device.adapter_info().device_type, device_memory(device)));
+        set_pack_limits(PackLimits::for_adapter(device_info(device).device_type, device_memory(device)));
         let bc = packed::bc_supported(device);
         packed::set_compressed_textures(bc);
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
@@ -2919,7 +2947,7 @@ const TRIM: &str = "Trim auras";
 /// kept in `refused` and what it said in `said`. Elsewhere (natively, and a
 /// page on WebGPU, whose scopes answer only later) `make` alone.
 fn guarded<T>(device: &wgpu::Device, refused: &mut Vec<&'static str>, said: &mut Vec<String>, what: &'static str, make: impl FnOnce() -> Option<T>) -> Option<T> {
-    if !(cfg!(target_arch = "wasm32") && device.adapter_info().backend == wgpu::Backend::Gl) {
+    if !(cfg!(target_arch = "wasm32") && device_info(device).backend == wgpu::Backend::Gl) {
         return make();
     }
     caught(device, refused, said, what, make)
@@ -3561,6 +3589,32 @@ mod tests {
         } else {
             assert_eq!(m, None);
         }
+    }
+
+    /// The adapter kept for a page answers in place of the device, which is
+    /// never asked then (on Edge 131 asking threw: crash report 3125); with
+    /// none kept the device is.
+    #[test]
+    fn device_info_kept_or_asked() {
+        let info = |name: &str, backend| wgpu::AdapterInfo {
+            name: name.into(),
+            vendor: 0,
+            device: 0,
+            device_type: wgpu::DeviceType::Other,
+            device_pci_bus_id: String::new(),
+            driver: String::new(),
+            driver_info: String::new(),
+            backend,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: None,
+            limit_bucket: None,
+        };
+        let kept = info("kept", wgpu::Backend::BrowserWebGpu);
+        let got = super::kept_or(Some(kept), || panic!("the device was asked with an adapter kept"));
+        assert_eq!((got.name.as_str(), got.backend), ("kept", wgpu::Backend::BrowserWebGpu));
+        let asked = super::kept_or(None, || info("asked", wgpu::Backend::Gl));
+        assert_eq!((asked.name.as_str(), asked.backend), ("asked", wgpu::Backend::Gl));
     }
 
     /// Auto's budget: a discrete card's a third of its memory where the

@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · The web page starts again on older Edge and Chrome
+
+- On Edge or Chrome version 131 (and other browsers whose WebGPU is that age), the page stopped with "Cannot read properties of undefined (reading 'description')" as the game loaded. It now starts and plays; updating the browser is no longer needed for it.
+
 ## 2026-11-25 · Wing beats stop with their creature
 
 - A flying creature's wing beat (bats, the winged fiends, the forest qex and others) no longer keeps flapping in your ears after the creature is gone: it stops when the creature leaves, when you port, coach or zone away, and when it flies out of earshot.

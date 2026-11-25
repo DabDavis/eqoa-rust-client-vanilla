@@ -6957,8 +6957,8 @@ impl App {
                             if dynamic { "on" } else { "off" },
                             made(sun_shadows, g.renderer.sun_shadow_drawn().is_some()),
                             made(light_shadows, g.renderer.light_shadow_drawn().is_some()),
-                            g.device.adapter_info().backend,
-                            g.device.adapter_info().name,
+                            render::device_info(&g.device).backend,
+                            render::device_info(&g.device).name,
                         ));
                     }
                     // the particles' blend as the options have it (Particles:

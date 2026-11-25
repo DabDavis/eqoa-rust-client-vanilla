@@ -832,6 +832,9 @@ async fn gfx_on(canvas: web_sys::HtmlCanvasElement, again: Option<wgpu::Backend>
     let info = adapter.get_info();
     status(&format!("graphics: {} ({:?}){}", info.name, info.backend, if again.is_some() { ", a new device in place of the lost one" } else { "" }));
     BACKEND.with(|b| b.set(Some(info.backend)));
+    // what the renderer asks the device (`render::device_info`): Edge and
+    // Chrome 131's GPUDevice has no adapterInfo (Heirloom crash report 3125)
+    render::set_adapter_info(info.clone());
     crate::bugnote::set_graphics(&info.name, &format!("{:?}", info.backend));
     if let Some(ua) = web_sys::window().and_then(|w| w.navigator().user_agent().ok()) {
         crate::bugnote::set_browser(&ua);
