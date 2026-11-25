@@ -639,7 +639,7 @@ impl Sun {
                                 }
                             }
                         }
-                        Some(e.finish(&wgpu::RenderBundleDescriptor { label: Some("sun shadow casters") }))
+                        crate::finish_bundle(device, e, "sun shadow casters")
                     })
                     .collect();
                 clusters.push(Cluster { bounds, bundles, draws, wide: same[0].0 == i64::MAX });

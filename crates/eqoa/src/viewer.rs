@@ -4253,7 +4253,7 @@ impl App {
         match frame {
             Some(f) => g.queue.present(f),
             None => {
-                let _ = g.device.poll(wgpu::PollType::wait_indefinitely());
+                crate::gpulost::poll(&g.device, wgpu::PollType::wait_indefinitely());
             }
         }
         match done {
@@ -7337,7 +7337,7 @@ impl App {
                     Some(f) => g.queue.present(f),
                     None => {
                         if let Some(prev) = g.in_flight.replace(sent) {
-                            let _ = g.device.poll(wgpu::PollType::Wait { submission_index: Some(prev), timeout: None });
+                            crate::gpulost::poll(&g.device, wgpu::PollType::Wait { submission_index: Some(prev), timeout: None });
                         }
                     }
                 }

@@ -10,6 +10,7 @@ is put on the page by `.github/workflows/notes.yml`.
 - New **Focus Target**: target a creature and press **[** (or type **/focus**) to make it your focus. A small window above your target box then shows it all the time: its name in its con colour, its health and how far away it is, while you target other things. Press **]** (or type **/focus target**) to target your focus again in one press. Handy for healers watching the tank, tanks watching a loose add, or anyone keeping an eye on a named monster.
 - Press **[** again on the same target, or with nothing targeted, to let the focus go (or type **/focus clear**). The focus also goes by itself when the creature dies or leaves your view.
 - Both keys can be changed on the **Controls** page (**Set Focus** and **Target Focus**), and a controller button can be given to either; none is set by default. You can move the focus window like the rest of your HUD.
+- Fixed a crash when the graphics driver resets (Windows sometimes resets it, and a reset under several game windows could stop them all): the game now waits a moment for the graphics to come back and carries on where you were, as it already did after a sleep and wake.
 
 ## 2026-11-25 · Auto Loot, Attack With Abilities, choose your tracked quests, debuffs in the target window, spell cooldowns after a fast click
 

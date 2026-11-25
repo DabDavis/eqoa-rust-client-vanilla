@@ -40,6 +40,43 @@ use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 
 
+/// The device taken as lost (eqoa's `gpulost`, as wgpu says so: its lost
+/// callback runs inside the call that found the loss), by `device_key`; 0
+/// none. A recovery's new device is another key, so what it makes is made.
+static LOST_DEVICE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A device's key for `set_lost_device` (never 0).
+pub fn device_key(device: &wgpu::Device) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    device.hash(&mut h);
+    h.finish() | 1
+}
+
+/// The device of `key` (`device_key`) taken as lost, or none (0).
+pub fn set_lost_device(key: u64) {
+    LOST_DEVICE.store(key, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Whether `device` is taken as lost (`set_lost_device`).
+pub fn device_lost(device: &wgpu::Device) -> bool {
+    let lost = LOST_DEVICE.load(std::sync::atomic::Ordering::SeqCst);
+    lost != 0 && lost == device_key(device)
+}
+
+/// A render bundle finished, or `None` on a lost device (`device_lost`):
+/// wgpu's `RenderBundleEncoder::finish` panics there, not through the
+/// device's error handler ("Error in RenderBundleEncoder::finish ...
+/// Parent device is lost": Yevkassim's crash report 3042 of 2026-11-25, an
+/// RX 6900 XT's driver resetting under two windows at once). Nothing is
+/// drawn on a lost device, and the recovery makes every bundle again.
+pub fn finish_bundle(device: &wgpu::Device, e: wgpu::RenderBundleEncoder<'_>, label: &'static str) -> Option<wgpu::RenderBundle> {
+    if device_lost(device) {
+        return None;
+    }
+    Some(e.finish(&wgpu::RenderBundleDescriptor { label: Some(label) }))
+}
+
 /// `create_buffer_init` that does not panic on a lost device: wgpu's maps the
 /// buffer at its creation and panics when it cannot, which on a device the
 /// driver or the browser has just lost it cannot (the native F3 crash
@@ -2550,7 +2587,7 @@ impl Renderer {
             });
             let n = self.encode_run(&mut e, g, &g.members[span.clone()], deferred, shade);
             if n > 0 {
-                bundles[deferred as usize] = Some(e.finish(&wgpu::RenderBundleDescriptor { label: Some("group") }));
+                bundles[deferred as usize] = finish_bundle(device, e, "group");
             }
             drawn[deferred as usize] = n;
         }

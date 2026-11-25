@@ -39,6 +39,9 @@ static WHY: Mutex<String> = Mutex::new(String::new());
 /// device let go before (its `Destroyed` as it is dropped, or a late one) is
 /// not this one's.
 static DEVICE: AtomicU64 = AtomicU64::new(0);
+/// The device the client draws on now, as `render::device_key` keys it: the
+/// one `mark` takes as lost (`render::device_lost`).
+static DEVICE_KEY: AtomicU64 = AtomicU64::new(0);
 /// When the last recovery made its device, for `again_soon`.
 static RECOVERED: Mutex<Option<Instant>> = Mutex::new(None);
 /// How many recoveries this run.
@@ -59,6 +62,7 @@ pub const REPEAT: Duration = Duration::from_secs(60);
 /// recovery failed (`refused`) instead of the panic wgpu raises by default.
 pub fn watch(device: &wgpu::Device, recovered: bool) {
     let me = DEVICE.fetch_add(1, Ordering::SeqCst) + 1;
+    DEVICE_KEY.store(render::device_key(device), Ordering::SeqCst);
     device.set_device_lost_callback(move |reason, message| {
         if !matches!(reason, wgpu::DeviceLostReason::Destroyed) && DEVICE.load(Ordering::SeqCst) == me {
             mark(&format!("{reason:?}: {message}"));
@@ -66,6 +70,14 @@ pub fn watch(device: &wgpu::Device, recovered: bool) {
     });
     device.on_uncaptured_error(std::sync::Arc::new(move |e: wgpu::Error| {
         if DEVICE.load(Ordering::SeqCst) != me || lost() {
+            return;
+        }
+        // a call refused because the device is lost ("Parent device is
+        // lost", nested in a validation error: Yevkassim's crash report
+        // 3042, a driver reset on Vulkan): the loss itself, recovered from,
+        // never a panic (and on a recovery's device the loss, not a refusal)
+        if is_device_lost_error(&e.to_string()) {
+            mark("the device refused a call: it is lost");
             return;
         }
         // out of graphics memory (Hoofbite's Iris Xe in Freeport, three
@@ -112,6 +124,32 @@ pub fn watch(device: &wgpu::Device, recovered: bool) {
     }));
 }
 
+/// Whether an error's words say the device is lost: wgpu-core's
+/// `DeviceError::Lost` ("Parent device is lost"), anywhere in the error's
+/// chain, which a call made on a lost device raises (wrapped as the call's
+/// own validation error when it is nested: "In a bundle parameter").
+pub fn is_device_lost_error(text: &str) -> bool {
+    text.contains("Parent device is lost")
+}
+
+/// `device.poll`, which wgpu panics in (not through the device's error
+/// handler) when the wait finds the device lost: skipped while it is taken
+/// as lost, and natively a panic there for the loss (`is_device_lost_error`)
+/// stepped over and taken as the loss; any other panic goes on as it was.
+pub fn poll(device: &wgpu::Device, how: wgpu::PollType) {
+    if lost() || render::device_lost(device) {
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    match crate::logfile::caught(|| device.poll(how)) {
+        Ok(_) => {}
+        Err(e) if is_device_lost_error(&e) => mark("a wait on the device found it lost"),
+        Err(e) => panic!("{e}"),
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = device.poll(how);
+}
+
 /// A surface call's validation error that reached the device's handler (one
 /// made outside the error scopes `viewer`'s `Gfx` puts round its own).
 static SURFACE_FAILED: AtomicBool = AtomicBool::new(false);
@@ -153,6 +191,9 @@ pub fn mark(why: &str) {
     {
         *w = why.to_string();
     }
+    // nothing more made on it (`render::finish_bundle`), from now: wgpu's
+    // lost callback runs inside the call that found the loss
+    render::set_lost_device(DEVICE_KEY.load(Ordering::SeqCst));
     if !LOST.swap(true, Ordering::SeqCst) {
         crate::say(&format!("graphics: the device was lost ({why}): a new one is made, the game going on"));
     }
@@ -238,6 +279,7 @@ pub fn recovered() {
     if let Ok(mut w) = WHY.lock() {
         w.clear();
     }
+    render::set_lost_device(0);
     LOST.store(false, Ordering::SeqCst);
 }
 
@@ -466,6 +508,20 @@ pub mod page {
 mod tests {
     use super::*;
     use render::wgpu::Backend;
+
+    /// A lost device's refusal (crash report 3042's words, and the nested
+    /// form a create call's validation error takes) is the loss; the
+    /// controls: a surface's refusal, a destroyed window texture and an
+    /// ordinary validation error are not.
+    #[test]
+    fn a_lost_devices_error_is_the_loss() {
+        let crash = "Error in RenderBundleEncoder::finish: Validation Error\n\nCaused by:\n  In a bundle parameter\n    Parent device is lost\n";
+        assert!(is_device_lost_error(crash));
+        assert!(is_device_lost_error("Validation Error\n\nCaused by:\n  In Device::create_bind_group, label = 'layer'\n    Parent device is lost\n"));
+        assert!(!is_device_lost_error("Validation Error\n\nCaused by:\n  In Surface::configure\n    Invalid surface\n"));
+        assert!(!is_device_lost_error("In Queue::submit In a pass parameter Texture with '' label has been destroyed"));
+        assert!(!is_device_lost_error("Validation Error\n\nCaused by:\n  In Device::create_texture\n    Dimension X is zero\n"));
+    }
 
     /// WebGPU is tried again for 45-60 s, no pause over 5 s and none
     /// shorter than the one before; then WebGL2 on a fresh canvas; then,
