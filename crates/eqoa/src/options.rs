@@ -991,10 +991,11 @@ impl WndOptions {
                     // (`Session::agree_group_effects`), the members' tiny
                     // icons drawn or not (`hud`)
                     GROUP_EFFECTS => c.group_effects = !c.group_effects,
-                    // Debuff Icons (petition 2997): the server told from the
-                    // next frame (`Session::agree_npc_debuffs`), the icons
-                    // under the creatures' plates drawn or not (`play`)
-                    NPC_DEBUFFS => c.npc_debuffs = !c.npc_debuffs,
+                    // Debuff Icons (petitions 2997, 3020): Target Window, Name
+                    // Plate, Off; the server told from the next frame
+                    // (`Session::agree_npc_debuffs`), the icons drawn in the
+                    // target box (`hud`) or under the plates (`play`)
+                    NPC_DEBUFFS => c.npc_debuffs = c.npc_debuffs.step(d),
                     // Buff Window: the server told from the next frame
                     // (`Session::agree_buffs`), ours or the game's strip
                     // drawn (`buffwnd`)
@@ -2526,7 +2527,9 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         86 => on_off(c.power_bars),
         HEALTH_NUMBERS => on_off(c.health_numbers),
         GROUP_EFFECTS => on_off(c.group_effects),
-        NPC_DEBUFFS => on_off(c.npc_debuffs),
+        // Off in the game's word, as an on/off row's
+        NPC_DEBUFFS if c.npc_debuffs == crate::settings::DebuffIcons::Off => on_off(false),
+        NPC_DEBUFFS => wide(c.npc_debuffs.name()),
         88 => wide(if c.raid_mercs { "Shown" } else { "Hidden" }),
         83 => on_off(c.buff_window),
         BUFF_TIMERS => on_off(c.buff_timers),
@@ -3411,14 +3414,23 @@ mod tests {
         assert!(settings::group_effects(), "and back: two values");
         goto!(NPC_DEBUFFS);
         assert_eq!(w.item, NPC_DEBUFFS, "Debuff Icons");
-        assert!(settings::npc_debuffs(), "on: the icons under the creatures' plates");
-        assert_eq!(value_text(&vui, NPC_DEBUFFS), Some(wide(vui.words.get(551, vui.language))));
+        assert_eq!(settings::debuff_icons(), settings::DebuffIcons::Target, "the target box by default (petition 3020)");
+        assert_eq!(value_text(&vui, NPC_DEBUFFS), Some(wide("Target Window")));
         press(&mut w, &mut o, key::RIGHT, &mut cues);
-        assert_eq!((settings::npc_debuffs(), cues.last()), (false, Some(&11)), "off: the game's plates");
+        assert_eq!((settings::debuff_icons(), cues.last()), (settings::DebuffIcons::Plate, Some(&11)), "then under the creatures' plates");
+        assert_eq!(value_text(&vui, NPC_DEBUFFS), Some(wide("Name Plate")));
+        assert!(settings::npc_debuffs(), "still asked of the server");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::npc_debuffs(), cues.last()), (false, Some(&11)), "off: the game's plates and box");
         assert_eq!(value_text(&vui, NPC_DEBUFFS), Some(wide(vui.words.get(552, vui.language))));
         assert!(settings::group_effects() && settings::pet_effects(), "moving no other row");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!(settings::debuff_icons(), settings::DebuffIcons::Target, "round to the target box: three values");
         press(&mut w, &mut o, key::LEFT, &mut cues);
-        assert!(settings::npc_debuffs(), "and back: two values");
+        assert_eq!(settings::debuff_icons(), settings::DebuffIcons::Off, "and back");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!(settings::debuff_icons(), settings::DebuffIcons::Target);
         goto!(88);
         assert_eq!(w.item, 88, "Raid Mercenaries");
         assert_eq!((settings::raid_mercs(), value_text(&vui, 88)), (false, Some(wide("Hidden"))), "Hidden by default");

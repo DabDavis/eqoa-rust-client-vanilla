@@ -553,8 +553,13 @@ or a browser (each described where it lives below):
   size, on a translucent dark tile each, six to a row, centred), the plates `labels` keeps only, each
   with its time left at its foot while Buff Timers is on (`buffwnd::short_time`, yellow in its last
   minute), counted down between sets (`Session::npc_debuffs_left`). Drawn under the HUD after it, as
-  the damage numbers. Extended > UI > Name Plates' Debuff Icons, on by default; off, or on a server
-  that sends none, nothing is drawn, as on a PS2. A server that turns Pet Effects off
+  the damage numbers. Extended > UI > Name Plates' Debuff Icons picks where (Heirloom petition 3020,
+  Cucumber: "It should be moved to their target/con area to align with the group buffs"): Target
+  Window, the default, draws the target's alone in the target box beside its con, as Group Effects'
+  tiny icons sit on a member's bar (`hud::target_effects_pieces`: the same size, rows and room, the
+  name and time left under the mouse, the times with Buff Timers); Name Plate under every creature's
+  plate as above; Off, or on a server that sends none, nothing is drawn, as on a PS2 (a client.opt
+  from before reads on as Target Window, off as Off). A server that turns Pet Effects off
   (`qol::PET_EFFECTS`) turns this off too.
 - **Number colours by what made them** (the server owner's of 2026-11-09, of a player's
   ask "to see/change colors of damage/procs/healing for player/pets similar to the way SS

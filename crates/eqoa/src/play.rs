@@ -5457,8 +5457,9 @@ impl Play {
             // Extended's Quest Markers is on (`net::headmarks`)
             let mark = crate::settings::head_marks().then(|| self.session.head_mark(e.id)).flatten();
             // the player's effects on it, from a server that sends them,
-            // while Extended's Debuff Icons is on (petition 2997)
-            let debuffs = if crate::settings::npc_debuffs() { self.session.npc_debuffs_left(e.id, self.session.now()) } else { Vec::new() };
+            // while Extended's Debuff Icons says Name Plate (petitions 2997,
+            // 3020; Target Window's go in the target box, `target_effects`)
+            let debuffs = if crate::settings::debuff_icons() == crate::settings::DebuffIcons::Plate { self.session.npc_debuffs_left(e.id, self.session.now()) } else { Vec::new() };
             out.push(Plate { at, color: self.name_color(c), name: c.name.clone(), tag: self.merc_tag(c), mark, debuffs });
         }
         out
@@ -11140,6 +11141,7 @@ impl Play {
             target_name: target.and_then(|e| e.creature.as_ref()).map(|c| c.name.clone()),
             target_level: self.target_level(crate::settings::target_level()),
             target_hp: target.map_or(0, |e| e.p19 as i32),
+            target_effects: self.target_effects(target.filter(|e| e.creature.is_some()).map(|e| e.id)),
             target_info: self.target_info,
             self_targeted_flag: Some(self.target) == me && self.dump.player.p2c > 0,
             pet,
@@ -11739,6 +11741,16 @@ impl Play {
         }
         let now = self.session.now();
         self.session.effects_of(id, now).into_iter().map(|e| crate::hud::MemberFx { icon: e.icon, name: e.name, left_ms: e.left_ms }).collect()
+    }
+
+    /// Debuff Icons in the target box (Heirloom petition 3020): the player's
+    /// effects on targeted creature `id` the server sent, with their names and
+    /// times left, while Extended's Debuff Icons says Target Window (the
+    /// default); none otherwise, or for no creature targeted.
+    fn target_effects(&self, id: Option<u32>) -> Vec<crate::hud::MemberFx> {
+        let Some(id) = id.filter(|_| crate::settings::debuff_icons() == crate::settings::DebuffIcons::Target) else { return Vec::new() };
+        let now = self.session.now();
+        self.session.npc_debuffs_of(id, now).into_iter().map(|e| crate::hud::MemberFx { icon: e.icon, name: e.name, left_ms: e.left_ms }).collect()
     }
 
     /// Number Colors: the server told to tag the numbers while a row is not
