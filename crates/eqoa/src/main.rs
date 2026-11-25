@@ -143,6 +143,8 @@ mod inventory;
 mod hidelook;
 mod itemlink;
 mod itemmenu;
+mod bags;
+mod compare;
 mod mercwnd;
 mod classmastery;
 mod cs;

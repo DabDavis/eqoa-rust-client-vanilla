@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Bags inventory and Compare Gear
+
+- New **Inventory Style** under **Options → Extended → UI → Inventory**: **Retail List** (the game's tabbed list, as before) or **Bags**, which shows your whole pack as a grid of item icons, like the bags in EQ and most MMOs. Stacks show their count on the icon, worn items have a gold frame and a **W**, and gear your class cannot wear is tinted red. The grid shows how full your pack is (for example **16/40**).
+- In the bags, move with the d-pad or click an item, then press **X** (or click it again) for the same choices the list gives: equip or use, inspect, quick slot, move, destroy (and Link Item, Give to Merc and Hide Look where they apply). **Move** picks the item up: put it down on another slot with **X**. The mouse wheel scrolls a pack bigger than the grid.
+- **Bag Sort** lays the bags out by **Pack Order**, **Slot**, **Type** or **Name**: press **□** (Square) or click the Sort button over the grid to change it.
+- New **Compare Gear**: select or hover over a piece of gear you are not wearing and a box shows its stats next to what you are wearing in that slot, with the difference in **green** (better) or **red** (worse). It compares with exactly what wearing it would take off: a two-handed weapon against your weapon and shield, a ring against a free finger (nothing) or the ring it would replace. **Bags Only** (the default) shows it in the bags; **Always** in the Retail List too; or **Off**.
+
 ## 2026-11-25 · Resize the minimap on the Controller interface
 
 - The **Controller interface's minimap** can now be made bigger or smaller, the way the PC interface's HUD pieces are: turn on **Move HUD** (**Options → Extended → UI → HUD Layout**, or type `/hud`), then drag the small grip at a corner of the minimap. Its size is kept for the Controller interface (the PC interface keeps its own), and **Reset HUD** puts it back.

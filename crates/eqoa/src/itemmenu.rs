@@ -319,6 +319,20 @@ pub struct ItemMenu {
     pub tabs: Option<Vec<String>>,
     /// Lines over the description (a merc's window's: its name and figures)
     pub header: String,
+    /// Inventory Style at Bags (`bags`): the grid's selection, top row,
+    /// carried item and hovered cell
+    bag: crate::bags::Bag,
+    /// the grid's cells and the Sort button where they were drawn (-2 the
+    /// button)
+    bag_hits: Hits,
+    /// the grid's order and cells as the frame drew them (the pointer's)
+    bag_order: Vec<usize>,
+    bag_cells: i32,
+    /// the pointer over the window (frame points), for the hovered item's
+    /// description and comparison (`hover`)
+    pointer: Option<[f32; 2]>,
+    /// the player's class, race and level (`set_player`), for Compare Gear
+    player: (i64, i64, i64),
 }
 
 impl Default for ItemMenu {
@@ -354,6 +368,12 @@ impl Default for ItemMenu {
             },
             tabs: None,
             header: String::new(),
+            bag: crate::bags::Bag::default(),
+            bag_hits: Hits::default(),
+            bag_order: Vec::new(),
+            bag_cells: 0,
+            pointer: None,
+            player: (0, 0, 0),
         }
     }
 }
@@ -377,6 +397,7 @@ impl ItemMenu {
                 None => Vec::new(),
             },
             Focus::Edit => self.edit.point(p).flatten().into_iter().collect(),
+            Focus::Menu if self.bags_on() => self.bag_point(p),
             Focus::Menu if self.menu >= 0 => {
                 let m = &mut self.menus[self.menu as usize];
                 match self.tab_hits.at(p) {
@@ -401,12 +422,193 @@ impl ItemMenu {
         if !self.visible || self.focus != Focus::Menu || self.menu < 0 {
             return None;
         }
+        if self.bags_on() {
+            if self.menus[self.menu as usize].sub.as_ref().is_some_and(|s| s.visible) {
+                return None;
+            }
+            let c = self.bag_hits.at(p).filter(|&c| c >= 0)?;
+            return self.bag_order.get(c as usize).map(|&k| k as i32);
+        }
         let m = &self.menus[self.menu as usize];
         if m.sub.as_ref().is_some_and(|s| s.visible) {
             return None;
         }
         let id = m.id(&self.built.0, m.list.row_at(p)?);
         (id >= 0).then_some(id)
+    }
+
+    /// Inventory Style at Bags (`bags`): the player's own items as a grid; a
+    /// merc's window (`tabs`) keeps its lists.
+    pub fn bags_on(&self) -> bool {
+        self.tabs.is_none() && crate::settings::inventory_bags()
+    }
+
+    /// The pointer over the window (frame points), or gone: the item under
+    /// it described and compared in place of the selection's.
+    pub fn hover(&mut self, p: Option<[f32; 2]>) {
+        self.pointer = p;
+    }
+
+    /// The player's class, race and level this frame (Compare Gear's).
+    pub fn set_player(&mut self, class: i64, race: i64, level: i64) {
+        self.player = (class, race, level);
+    }
+
+    /// The wheel over the grid: its rows scrolled (`lines` up positive).
+    pub fn wheel(&mut self, p: [f32; 2], lines: i32) -> bool {
+        if !self.visible || !self.bags_on() || self.focus != Focus::Menu {
+            return false;
+        }
+        let g = crate::bags::grid_rect();
+        if p[0] < (g[0] - 8) as f32 || p[0] >= (g[2] + 8) as f32 || p[1] < (g[1] - 8) as f32 || p[1] >= (g[3] + 8) as f32 {
+            return false;
+        }
+        self.bag.scroll(-lines, self.bag_cells);
+        true
+    }
+
+    /// A pointer in the grid (`point`): with the popup up, its row used or,
+    /// off it, the popup closed (the cell under the pointer selected); else
+    /// the Sort button is □, a cell selected, the selected one used (✕); an
+    /// item carried by Move is let go on the cell clicked.
+    fn bag_point(&mut self, p: [f32; 2]) -> Vec<i32> {
+        let tab = self.menu.max(0) as usize;
+        if let Some(s) = self.menus[tab].sub.as_mut().filter(|s| s.visible) {
+            if let Some(k) = s.point(p) {
+                return k.into_iter().collect();
+            }
+            let mut keys = Vec::new();
+            if let Some(c) = self.bag_hits.at(p).filter(|&c| c >= 0 && c != self.bag.sel) {
+                self.bag.sel = c;
+                keys.push(crate::pointer::MOVED);
+            }
+            keys.push(key::TRIANGLE);
+            return keys;
+        }
+        match self.bag_hits.at(p) {
+            Some(-2) => vec![key::SQUARE],
+            Some(c) if c >= 0 && self.bag.carry.is_some() => {
+                self.bag.sel = c;
+                vec![key::CROSS]
+            }
+            Some(c) if c == self.bag.sel => vec![key::CROSS],
+            Some(c) if c >= 0 => {
+                self.bag.sel = c;
+                vec![crate::pointer::MOVED]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// A key to the grid (Focus::Menu at Bags): the popup's while it is up,
+    /// its action the list's (`action`); else the d-pad over the cells, ✕
+    /// the cell's item's popup (its tab's own) or a carried item let go
+    /// there (`SwapItems`), △ back (or Move undone), □ the next Bag Sort.
+    fn bag_key(&mut self, vui: &Vui, r: &mut dyn Raster, key: i32, down: bool, inv: &ItemList, info: &Info, waiting: bool, cues: &mut Vec<i32>, out: &mut Vec<ItemOut>) {
+        let now = vui.time;
+        let tab = self.menu.max(0) as usize;
+        if self.menus[tab].sub.as_ref().is_some_and(|s| s.visible) {
+            let up = {
+                let (menus, _) = &self.built;
+                self.menus[tab].key(menus, key, down, now, cues)
+            };
+            if let ListUp::Action(msg, id) = up {
+                self.action(tab, msg, id, inv, info, vui, r, waiting, cues, out);
+            }
+            return;
+        }
+        if !down {
+            return;
+        }
+        let order = crate::bags::order(inv, crate::settings::bag_sort());
+        let cells = crate::bags::cells(inv.items.len());
+        match key {
+            17 | 136 => cues.push(self.bag.step(-1, 0, cells)),
+            18 | 137 => cues.push(self.bag.step(1, 0, cells)),
+            19 | 138 => cues.push(self.bag.step(0, -1, cells)),
+            20 | 139 => cues.push(self.bag.step(0, 1, cells)),
+            133 => {
+                cues.push(11);
+                if let Err(e) = crate::settings::set_bag_sort(crate::settings::bag_sort().step(1)) {
+                    crate::say(&format!("options: could not save Bag Sort: {e}"));
+                }
+            }
+            27 | 132 => {
+                cues.push(8);
+                if self.bag.carry.take().is_none() {
+                    out.push(ItemOut::Back);
+                }
+            }
+            13 | 134 => {
+                if let Some(from) = self.bag.carry.take() {
+                    cues.push(13);
+                    if let Some(to) = crate::bags::drop_target(&order, self.bag.sel, from) {
+                        out.push(ItemOut::Swap(from as i32, to as i32));
+                    }
+                    return;
+                }
+                match order.get(self.bag.sel.max(0) as usize) {
+                    Some(&k) => self.bag_popup(k, inv, now, cues),
+                    None => cues.push(10),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Item `k`'s popup, the one its tab's row opens (`WndMenu`'s ✕ on that
+    /// row), beside its cell.
+    fn bag_popup(&mut self, k: usize, inv: &ItemList, now: i64, cues: &mut Vec<i32>) {
+        let Some(tab) = inv.items.get(k).and_then(crate::bags::tab_of) else {
+            cues.push(10);
+            return;
+        };
+        let menus = &self.built.0;
+        let Some(row) = menus.list.get(self.menus[tab].menu).and_then(|m| m.entries.iter().position(|e| e.id == k as i32 && e.sub.is_some())) else {
+            cues.push(10);
+            return;
+        };
+        self.menu = tab as i32;
+        self.tab = tab as i32;
+        let m = &mut self.menus[tab];
+        m.list.x60 = false;
+        m.list.sel = row as i32;
+        m.list.top = row as i32;
+        let _ = m.key(menus, key::CROSS, true, now, cues);
+        if let (Some(s), Some(rc)) = (m.sub.as_mut(), crate::bags::cell_rect(self.bag.sel, self.bag.top)) {
+            s.list.pos = [rc[2] + 2, rc[1] - 10];
+        }
+    }
+
+    /// The item the comparison is of (and the grid's description): the one
+    /// under the pointer, else the selection's (the grid's or the tab's).
+    fn shown_item(&self) -> i32 {
+        if self.bags_on() {
+            let cell = self.bag.hover.filter(|_| self.bag.carry.is_none()).unwrap_or(self.bag.sel);
+            return self.bag_order.get(cell.max(0) as usize).map_or(-1, |&k| k as i32);
+        }
+        if self.menu < 0 {
+            return -1;
+        }
+        // the list's: the row under the pointer only for the comparison
+        // (its description stays the selection's, as the game's)
+        let m = &self.menus[self.menu as usize];
+        let popup = m.sub.as_ref().is_some_and(|s| s.visible);
+        let row = self.pointer.filter(|_| !popup && crate::settings::compare_gear(false)).and_then(|p| m.list.row_at(p)).unwrap_or(m.list.sel);
+        m.id(&self.built.0, row)
+    }
+
+    /// Where the item shown is drawn: its grid cell, or its row of the tab
+    /// (`None` off the rows shown).
+    fn shown_rect(&self) -> Option<[i32; 4]> {
+        if self.bags_on() {
+            let cell = self.bag.hover.filter(|_| self.bag.carry.is_none()).unwrap_or(self.bag.sel);
+            return crate::bags::cell_rect(cell, self.bag.top);
+        }
+        let l = &self.menus[self.menu.max(0) as usize].list;
+        let row = self.pointer.filter(|_| crate::settings::compare_gear(false)).and_then(|p| l.row_at(p)).unwrap_or(l.sel);
+        let k = row - l.top;
+        (0..6).contains(&k).then(|| [l.pos[0], l.pos[1] + 44 * k, l.pos[0] + 114, l.pos[1] + 44 * k + 44])
     }
 
     /// The live client's weapon sets this frame (`gear::Gear::view`): with
@@ -450,6 +652,9 @@ impl ItemMenu {
         self.window.init(vui, r, [535, 180], 200, 15, 1);
         self.window.open(true);
         self.time = now;
+        self.bag.carry = None;
+        self.bag.hover = None;
+        self.bag.show(crate::bags::cells(self.bag_order.len()));
     }
 
     /// `ShowMenu(reset)`: the tab's menu shown and given the focus.
@@ -787,6 +992,7 @@ impl ItemMenu {
                     EditUp::None => {}
                 }
             }
+            Focus::Menu if self.bags_on() => self.bag_key(vui, r, key, down, inv, info, waiting, cues, out),
             Focus::Menu => {
                 let Some(tab) = (self.menu >= 0).then_some(self.menu as usize) else { return };
                 // left and right fall through the menu to here (OnKeyDown)
@@ -867,6 +1073,22 @@ impl ItemMenu {
                         sound = 10;
                     }
                 }
+                // Move in the grid: the item carried, in the pack's order
+                // (what Move changes), to the cell ✕ lets it go on
+                0x0205_0000 if self.bags_on() => {
+                    if !valid || inv.items.len() < 2 {
+                        sound = 10;
+                    } else {
+                        if crate::settings::bag_sort() != crate::bags::Sort::Pack
+                            && let Err(e) = crate::settings::set_bag_sort(crate::bags::Sort::Pack)
+                        {
+                            crate::say(&format!("options: could not save Bag Sort: {e}"));
+                        }
+                        self.bag.carry = Some(id as usize);
+                        self.bag.sel = id;
+                        self.bag.show(crate::bags::cells(inv.items.len()));
+                    }
+                }
                 0x0205_0000 => {
                     let l = &mut self.menus[tab].list;
                     if l.count() >= 2 {
@@ -894,9 +1116,26 @@ impl ItemMenu {
         let now = vui.time;
         let dt = (now - self.time) as f32 * 0.001;
         self.time = now;
+        let bags = self.bags_on();
+        if bags {
+            self.bag_order = crate::bags::order(info.inv, crate::settings::bag_sort());
+            self.bag_cells = crate::bags::cells(info.inv.items.len());
+            self.bag.show(self.bag_cells);
+            let popup = self.menus[self.menu.max(0) as usize].sub.as_ref().is_some_and(|s| s.visible);
+            self.bag.hover = self.pointer.filter(|_| !popup && self.focus == Focus::Menu).and_then(|p| self.bag.cell_at(p, self.bag_cells));
+        }
+        let shown = self.shown_item();
         // UpdateDesc: the selected entry's short description
         let menus = &self.built.0;
         self.desc = match self.menu {
+            // the grid's: the item shown, by its tab's describer
+            0..=3 if bags => match info.inv.items.get(shown.max(0) as usize).filter(|_| shown >= 0).and_then(crate::bags::tab_of) {
+                Some(3) => info.inv_food(shown),
+                Some(0) => info.inv_consumable(shown),
+                Some(1) => info.inv_equipment_short(shown),
+                Some(_) => info.inv_charged_short(shown),
+                None => String::new(),
+            },
             // a merc's window: its header, then the item by its kind
             0..=3 if self.tabs.is_some() => {
                 let m = &self.menus[self.menu as usize];
@@ -929,6 +1168,8 @@ impl ItemMenu {
         vui.blit_bar(r, &[], black, [70, 8], 33, 34, 500, 0, 1.0, 0, true);
         self.tab_hits.clear();
         let labels: Vec<(String, i32)> = match &self.tabs {
+            // the grid has no tabs: its header is its own (`bags::draw`)
+            _ if bags => Vec::new(),
             Some(t) => t.iter().map(|s| (s.clone(), 140)).collect(),
             None => [(437, 100), (438, 140), (1473, 140), (439, 0)].iter().map(|&(w, step)| (vui.words.get(w, vui.language).to_string(), step)).collect(),
         };
@@ -941,7 +1182,9 @@ impl ItemMenu {
             }
             pos[0] += step;
         }
-        vui.blit_rect(r, 51, [-1, 48], [175, 265], 0, 1.0);
+        if !bags {
+            vui.blit_rect(r, 51, [-1, 48], [175, 265], 0, 1.0);
+        }
         r.anchor(Anchor::Frame);
         // ended at the start menu's bottom rail's bar, as its frame is
         let below = crate::startmenu::BOTTOM_RAIL + crate::startmenu::RAIL_BAR;
@@ -949,7 +1192,9 @@ impl ItemMenu {
         r.anchor(Anchor::Middle);
         let e = vui.entry(89);
         lift[1] = pos[1] - e.uv1[1] / 2;
-        vui.blit_ex(r, e.x00, lift, 0, 1.0, 0);
+        if !bags {
+            vui.blit_ex(r, e.x00, lift, 0, 1.0, 0);
+        }
         let width = self.window.size[0];
         match self.menu {
             -1 => self.draw_slots(vui, r),
@@ -974,8 +1219,25 @@ impl ItemMenu {
         } else {
             self.alpha = 1.0;
         }
-        for m in &mut self.menus {
-            m.draw(vui, r, &self.built.0, now, cues);
+        if bags {
+            self.draw_bag(vui, r, info, now, cues);
+        } else {
+            for m in &mut self.menus {
+                m.draw(vui, r, &self.built.0, now, cues);
+            }
+        }
+        // Compare Gear (`compare`): the item shown beside what it replaces,
+        // a tooltip at its cell or row, while the menu has the focus (the
+        // player's own items: not a merc's window's)
+        let popup = self.menu >= 0 && self.menus[self.menu as usize].sub.as_ref().is_some_and(|s| s.visible);
+        if self.focus == Focus::Menu && self.menu >= 0 && !popup && self.tabs.is_none() && crate::settings::compare_gear(bags) {
+            let (class, race, level) = self.player;
+            if let Some(c) = crate::compare::compare(info.inv, shown.max(0) as usize, class, race, level).filter(|_| shown >= 0)
+                && let Some(anchor) = self.shown_rect()
+            {
+                let at = compare_at(crate::compare::height(&c), anchor, bags);
+                crate::compare::draw(vui, r, &c, info.inv, at, 1.0);
+            }
         }
         if self.inspect.visible {
             self.inspect.draw(vui, r, cues);
@@ -989,6 +1251,41 @@ impl ItemMenu {
         if self.focus == Focus::Edit {
             self.edit.draw(vui, r, now, cues);
         }
+    }
+
+    /// The grid in place of the tabs' lists (`bags::draw`), then the popup
+    /// of the tab whose item's it is.
+    fn draw_bag(&mut self, vui: &Vui, r: &mut dyn Layout, info: &Info, now: i64, cues: &mut Vec<i32>) {
+        let (class, race, level) = self.player;
+        let carried = self.bag.carry;
+        let cells: Vec<Option<crate::bags::Cell>> = (0..self.bag_cells)
+            .map(|c| {
+                let k = *self.bag_order.get(c as usize)?;
+                let it = &info.inv.items[k];
+                Some(crate::bags::Cell {
+                    icon: self.icon_of(k),
+                    quantity: it.quantity,
+                    worn: it.equip_slot != -1,
+                    unusable: infotext::is_wearable(it) && !inventory::can_use(it, class, race, level),
+                    carried: carried == Some(k),
+                })
+            })
+            .collect();
+        let pulse = 0.55 + 0.45 * ((now % 1000) as f32 / 1000.0 * std::f32::consts::TAU).cos();
+        let room = crate::inventory::pack_cap();
+        crate::bags::draw(vui, r, &self.bag, &cells, info.inv.items.len(), room, crate::settings::bag_sort(), pulse, &mut self.bag_hits);
+        for m in &mut self.menus {
+            m.list.hits.clear();
+        }
+        if let Some(s) = self.menus[self.menu.max(0) as usize].sub.as_mut().filter(|s| s.visible) {
+            s.draw(vui, r, &self.built.0, now, cues);
+        }
+    }
+
+    /// Item `k`'s icon as the frame's menus have it (`build_linked`'s).
+    fn icon_of(&self, k: usize) -> i32 {
+        let menus = &self.built.0;
+        self.menus.iter().find_map(|m| menus.list.get(m.menu)?.entries.iter().find(|e| e.id == k as i32 && e.sub.is_some()).map(|e| e.icon)).unwrap_or(-1)
     }
 
     /// `DrawSlots`: the slot column, the cursor pulsing on the slot, the
@@ -1055,6 +1352,24 @@ impl ItemMenu {
         let width = self.window.size[0];
         let name = wide(&self.slot_name);
         self.window.text_box(vui, r, &name, 20, 11, width - 40, 2, [1.0; 4], 11);
+    }
+}
+
+/// Where Compare Gear's panel (`h` high) goes, as a tooltip of the item
+/// shown at `anchor` (its cell or its row): in the grid under the cell (over
+/// it when there is no room), across the grid; beside the list, in the
+/// middle of the picture, level with the row. Kept above the start menu's
+/// bottom rail.
+fn compare_at(h: i32, anchor: [i32; 4], bags: bool) -> [i32; 2] {
+    const BOTTOM: i32 = 334;
+    let w = crate::compare::WIDTH;
+    if bags {
+        let g = crate::bags::grid_rect();
+        let x = ((anchor[0] + anchor[2]) / 2 - w / 2).clamp(g[0] - 8, g[2] + 8 - w);
+        let y = if anchor[3] + 4 + h <= BOTTOM { anchor[3] + 4 } else { (anchor[1] - 4 - h).max(4) };
+        [x, y]
+    } else {
+        [anchor[2] + 34, anchor[1].clamp(48, (BOTTOM - h).max(48))]
     }
 }
 
@@ -1557,5 +1872,101 @@ mod tests {
             }
         }
         assert_eq!(found, Some(0), "the sword's row, on the Equipment tab");
+    }
+
+    /// Inventory Style at Bags (petition 3118): the grid's d-pad, and each
+    /// cell's item opening its own tab's popup, so the list's actions go
+    /// out as the list sends them: Equip (UseItem), Move (carried, let go on
+    /// another cell: SwapItems), Destroy of a stack (the quantity first).
+    /// The pointer: a cell selected, used on a second click; the Sort
+    /// button turns Bag Sort. The control: at Retail List the same right is
+    /// the next tab, the grid untouched.
+    #[test]
+    fn the_bags_grid_routes_the_lists_actions() {
+        crate::settings::testing::reset(false);
+        let vui = crate::pointer::testing::vui();
+        let mut helm = it(1, 0, 0, 1);
+        helm.item.class_mask = -1;
+        helm.item.race_mask = -1;
+        let inv = ItemList { p04: 0, items: vec![it(-1, 2, 0, 1), helm, it(-1, 0, 0, 5)] };
+        let words = vui.words.clone();
+        let base = [0; 29];
+        let info = Info { words: &words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let fresh = || {
+            let mut m = ItemMenu::default();
+            m.set_built(build(&inv, [40, 40, 40, 40], &|_| -1, &|_| true));
+            m.open(&vui, &crate::pointer::testing::NullRaster);
+            m.draw(&vui, &mut crate::pointer::testing::NullRaster, &info, &mut Vec::new());
+            m
+        };
+        let press = |m: &mut ItemMenu, k: i32, out: &mut Vec<ItemOut>| {
+            for down in [true, false] {
+                m.key(&vui, &mut crate::pointer::testing::NullRaster, k, down, &inv, &info, false, &mut Vec::new(), out);
+                m.draw(&vui, &mut crate::pointer::testing::NullRaster, &info, &mut Vec::new());
+            }
+        };
+        // the control: the game's list, right is the Equipment tab
+        let mut m = fresh();
+        let mut out = Vec::new();
+        press(&mut m, 18, &mut out);
+        assert_eq!((m.menu, m.bag.sel), (1, 0), "Retail List: the next tab");
+        let mut o = crate::settings::client();
+        o.inventory_bags = true;
+        crate::settings::set_client(o);
+        // Equip: right to the helm, ✕ its popup (the Equipment tab's), ✕ Equip
+        let mut m = fresh();
+        press(&mut m, 18, &mut out);
+        assert_eq!((m.bag.sel, m.menu), (1, 0), "the grid's next cell");
+        press(&mut m, 13, &mut out);
+        assert!(m.menus[1].sub.as_ref().is_some_and(|s| s.visible), "the helm's popup is its tab's");
+        press(&mut m, 13, &mut out);
+        assert_eq!(out, vec![ItemOut::UseItem(1, 0)], "Equip, as the list sends it");
+        // Move: the bread's popup (Usable: use, inspect, quick slot, move,
+        // destroy), Move carries it; two cells on, ✕ lets it go there
+        out.clear();
+        press(&mut m, 17, &mut out);
+        press(&mut m, 13, &mut out);
+        assert!(m.menus[0].sub.as_ref().is_some_and(|s| s.visible));
+        for _ in 0..3 {
+            press(&mut m, 20, &mut out);
+        }
+        press(&mut m, 13, &mut out);
+        assert_eq!(m.bag.carry, Some(0), "carried");
+        press(&mut m, 18, &mut out);
+        press(&mut m, 18, &mut out);
+        press(&mut m, 13, &mut out);
+        assert_eq!((out.clone(), m.bag.carry), (vec![ItemOut::Swap(0, 2)], None), "SwapItems to the ore's place");
+        // Destroy on the stack of five (Misc: inspect, move, destroy): the
+        // quantity asked first
+        out.clear();
+        press(&mut m, 13, &mut out);
+        assert!(m.menus[3].sub.as_ref().is_some_and(|s| s.visible), "the ore's popup is Misc's");
+        press(&mut m, 20, &mut out);
+        press(&mut m, 20, &mut out);
+        press(&mut m, 13, &mut out);
+        assert!(m.focus == Focus::Quantity && out.is_empty(), "how many first");
+        // △ on the grid is back to the start menu
+        let mut m = fresh();
+        press(&mut m, 27, &mut out);
+        assert_eq!(out.last(), Some(&ItemOut::Back));
+        // the pointer: the helm's cell selected, then used; the Sort button
+        let mut m = fresh();
+        let r = crate::bags::cell_rect(1, 0).unwrap();
+        let mid = [(r[0] + r[2]) as f32 / 2.0, (r[1] + r[3]) as f32 / 2.0];
+        assert_eq!(m.point(mid), vec![crate::pointer::MOVED]);
+        assert_eq!(m.bag.sel, 1);
+        assert_eq!(m.point(mid), vec![key::CROSS], "the selection: used");
+        assert_eq!(m.item_at(mid), Some(1), "Shift+click links the cell's item");
+        let b = crate::bags::SORT_BUTTON;
+        let keys = m.point([(b[0] + b[2]) as f32 / 2.0, (b[1] + b[3]) as f32 / 2.0]);
+        assert_eq!(keys, vec![key::SQUARE]);
+        out.clear();
+        press(&mut m, key::SQUARE, &mut out);
+        assert_eq!(crate::settings::bag_sort(), crate::bags::Sort::Slot, "Bag Sort turned and kept");
+        // an [OG] account's: the game's list whatever is kept
+        crate::settings::qol::set_off(crate::settings::qol::LOCKED);
+        assert!(!m.bags_on());
+        crate::settings::qol::set_off(0);
+        crate::settings::testing::reset(false);
     }
 }

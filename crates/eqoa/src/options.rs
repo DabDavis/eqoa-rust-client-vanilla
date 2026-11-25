@@ -1015,6 +1015,12 @@ impl WndOptions {
                     // Item Slot Icons (petitions 2926, 2928): Item or Slot,
                     // the quick slots drawn so from the next frame (`hudmenu`)
                     ITEM_ICONS => c.item_icons = !c.item_icons,
+                    // Inventory (petition 3118): the item menu's grid or the
+                    // game's list, its order and the comparison, from the
+                    // next frame (`itemmenu`)
+                    INVENTORY_STYLE => c.inventory_bags = !c.inventory_bags,
+                    BAG_SORT => c.bag_sort = c.bag_sort.step(d),
+                    COMPARE_GEAR => c.compare_gear = c.compare_gear.step(d),
                     // HUD Layouts (petition 2947): the next name; ✕ loads it (`select`)
                     HUD_PROFILE => crate::hudlayout::step_picked(d),
                     // Mouseover Casting (petition 2960): the next cast on
@@ -2140,6 +2146,9 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (ATTACK_ABILITIES, "Attack With Abilities"),
     (DPS_COLUMNS, "DPS Meter Columns"),
     (DPS_SORT, "DPS Meter Sort"),
+    (INVENTORY_STYLE, "Inventory Style"),
+    (BAG_SORT, "Bag Sort"),
+    (COMPARE_GEAR, "Compare Gear"),
     (crate::numcolor::TAKEN_ITEM, crate::numcolor::LABELS[crate::numcolor::TAKEN]),
     (OWN_PLATE, "Own Name Plate"),
     (COACH_TALK, "Coach Talk on Arrival"),
@@ -2255,6 +2264,12 @@ const OWN_PLATE: i32 = 291;
 /// `qol::AUTO_CAST` turns them off with the automation.
 pub(crate) const COACH_TALK: i32 = 292;
 pub(crate) const STRAFE_SPEED: i32 = 293;
+/// Inventory's rows (Heirloom petition 3118): Inventory Style (Retail List
+/// or Bags, `bags`), Bag Sort, Compare Gear (`compare`). An [OG] account's
+/// (`qol::LOCKED`) read as the game's and do not turn.
+pub(crate) const INVENTORY_STYLE: i32 = 275;
+pub(crate) const BAG_SORT: i32 = 276;
+pub(crate) const COMPARE_GEAR: i32 = 277;
 
 const HUD_SCALE: i32 = 240;
 const NAMEPLATE_SCALE: i32 = 241;
@@ -2367,7 +2382,7 @@ const GROUPS: [(Group, &str); 5] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// Capture Controller and Sound in Background the Multi-boxing settings',
 /// Controller's touch rows Other's Touch; petition 2084, 2026-11-14: Touch a
 /// group of its own, Touch Controls, its rows Size & Look and Layout).
-const ALL_CATEGORIES: [Category; 28] = [
+const ALL_CATEGORIES: [Category; 29] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
@@ -2417,6 +2432,8 @@ const ALL_CATEGORIES: [Category; 28] = [
     Category { name: "Minimap Colors", items: &[300, 301, 302, 303, 304, 305, 306, crate::minimapcolor::SPELLS_SHOWN_ITEM], note: Note::None, group: Group::Ui },
     // the walk's own (petitions 5633, 3091): General's and Combat's pages are full
     Category { name: "Movement", items: &[STRAFE_SPEED, COACH_TALK], note: Note::None, group: Group::Other },
+    // the item menu's (petition 3118): its grid, its order, the comparison
+    Category { name: "Inventory", items: &[INVENTORY_STYLE, BAG_SORT, COMPARE_GEAR], note: Note::None, group: Group::Ui },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -2425,7 +2442,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24], a[25], a[26], a[27]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24], a[25], a[26], a[27], a[28]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -2608,6 +2625,10 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         BUFF_TIMERS => on_off(c.buff_timers),
         STAT_WINDOW => on_off(c.stat_window),
         ITEM_ICONS => wide(if c.item_icons { "Item" } else { "Slot" }),
+        INVENTORY_STYLE => wide(if crate::settings::inventory_bags() { "Bags" } else { "Retail List" }),
+        BAG_SORT => wide(c.bag_sort.name()),
+        COMPARE_GEAR if crate::settings::qol::off(crate::settings::qol::LOCKED) => on_off(false),
+        COMPARE_GEAR => wide(c.compare_gear.name()),
         SPELL_COOLDOWNS => on_off(c.spell_cooldowns),
         MOUSEOVER_CAST => wide(c.mouseover_cast.name()),
         HUD_PROFILE => wide(&crate::hudlayout::picked().unwrap_or_else(|| "None saved".to_string())),
@@ -4335,6 +4356,7 @@ mod tests {
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
                 ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "HUD Layouts"]),
                 ("Minimap Colors", crate::minimapcolor::LABELS.iter().copied().chain(["Spell Merchants Shown"]).collect()),
+                ("Inventory", vec!["Inventory Style", "Bag Sort", "Compare Gear"]),
             ],
             "UI: what is drawn over the world"
         );

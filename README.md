@@ -446,6 +446,19 @@ or a browser (each described where it lives below):
   with none), its health (+0x19, as the target box's gauge) and its distance. It goes when the creature
   dies, leaves the entities (out of view, despawned, a world changed) or its id is another's. No
   controller button by default. Not automation, so no server's QoL bit turns it off.
+- **Bags and Compare Gear** (Heirloom petition 3118; `bags.rs`, `compare.rs`, `itemmenu`): Extended > UI
+  > Inventory's Inventory Style: Retail List (the game's four tabs, the default) or Bags, the item menu's pack
+  as a grid of the items' own ITEMICON.ESF banners at two thirds (five across, eight rows shown, the pack's
+  room in cells, a stack's count on its icon, worn items framed in gold with a W, what the class cannot wear
+  washed red), laid out by Bag Sort (Pack Order, Slot, Type, Name: □ or its button). A cell's ✕ opens the
+  popup its tab's row opens in the list, the same built menu (`bags::tab_of`), so every action goes out as
+  the list sends it; Move carries the item to the cell ✕ lets it go on (`SwapItems`, Pack Order). The PC
+  interface frames it as the list (`pcwindows`, Inventory); the mouse selects, uses, scrolls (the wheel)
+  and hovers. Compare Gear (Bags Only, the default; Always, the list too; Off): an equippable item's stats
+  beside the worn items wearing it would take off (`compare::replaced`: `EquipSlotFor` and `Msg003F`'s own
+  rule on a copy of the list), with the difference in green or red, as a tooltip at its cell or row. An
+  [OG] account's (`settings::qol::LOCKED`) is the game's list with no comparison. Nothing new goes to a
+  server.
 - **Item Slot Icons** (petitions 2926, 2928; `hudmenu`): each item quick slot holding an item shows the
   item's own icon (`VIClient::ItemIcon`, the middle of its ITEMICON.ESF banner, `hudmenu::ART_CROP`) where
   the game shows the slot's gem or potion, on the Utility Bars and in the carousel's stack; the mouse over
