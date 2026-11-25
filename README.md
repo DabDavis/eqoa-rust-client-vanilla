@@ -526,6 +526,19 @@ or a browser (each described where it lives below):
   the poison and disease icons when it shows them; what does not fit is left out. Extended > UI >
   Group & Raid's Group Effects, on by default; off, or on a server that sends none, nothing is
   drawn, as on a PS2. A server that turns Pet Effects off (`qol::PET_EFFECTS`) turns this off too.
+- **Your debuffs under the creatures' plates** (Heirloom petition 2997: "Debuffs cast on evil NPCs
+  (combat) give an icon under their ID plate with remaining time on the debuff (so you know when to
+  refresh)"; `play::debuff_marks`, `play::debuff_quads`): CLIENT's name plates carry a name alone, so
+  on a server that sends them (go-eqoa-server's 0x7EC2 offers, a u32 both ways; 0x7EC3: each creature
+  on the client's slots by its channel id, with the harmful effects the player, its pet or its mercs
+  put on it, each its icon, whose, ms left (0 no end) and name, whenever they change) each such
+  creature's plate gets a row of small icons under it (14 pixels of the 640x448 frame at the plates'
+  size, on a translucent dark tile each, six to a row, centred), the plates `labels` keeps only, each
+  with its time left at its foot while Buff Timers is on (`buffwnd::short_time`, yellow in its last
+  minute), counted down between sets (`Session::npc_debuffs_left`). Drawn under the HUD after it, as
+  the damage numbers. Extended > UI > Name Plates' Debuff Icons, on by default; off, or on a server
+  that sends none, nothing is drawn, as on a PS2. A server that turns Pet Effects off
+  (`qol::PET_EFFECTS`) turns this off too.
 - **Number colours by what made them** (the server owner's of 2026-11-09, of a player's
   ask "to see/change colors of damage/procs/healing for player/pets similar to the way SS
   does": "we can add the number colors to extended menu"; `numcolor.rs`): CLIENT colours

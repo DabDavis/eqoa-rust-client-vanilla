@@ -5,6 +5,9 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Your debuffs under the monsters' names
+- On a server that sends them, the debuffs, damage over time, roots and snares you (or your pet or mercenary) have on a monster now show as small icons under its name, with the time left on each while **Buff Timers** is on, so you can see when to cast them again. Only your own show, not other players'. **Options → Extended → UI → Name Plates → Debuff Icons** turns them off.
+
 ## 2026-11-25 · Typing keeps the HUD, cooldowns on spell icons, HUD layouts, mouseover casting, melee in the Stat Window
 
 - In the **PC** interface, pressing **Enter** to chat no longer hides your HUD: you now type straight into the chat box, with everything else still on screen. To go back to the old full-screen typing window, turn **Inline Keyboard Chat** off under **Options → Extended → UI → Chat**. The Controller interface is unchanged.

@@ -957,12 +957,21 @@ impl Ui {
     /// `text` drawn `scale` times its size from (x, y): its glyphs, their
     /// widths and the pixel between them all scaled (1 is `text` exactly).
     pub fn text_scaled(&mut self, font: usize, x: f32, y: f32, scale: f32, color: [f32; 4], s: &[u16]) {
+        for q in self.text_quads(font, x, y, scale, color, s) {
+            self.push(q);
+        }
+    }
+
+    /// `text_scaled`'s quads, at frame point (x, y) as given: not placed,
+    /// cut or pushed (for what floats over the world, `push_whole`'s kind);
+    /// none when the font lacks even `'?'`.
+    pub fn text_quads(&self, font: usize, x: f32, y: f32, scale: f32, color: [f32; 4], s: &[u16]) -> Vec<Quad> {
         let f = &self.fonts[font];
         let (tex, h) = (f.tex, f.height as f32 * scale);
         let mut x0 = x;
         let mut quads = Vec::new();
         for &c in s {
-            let Some(&(w, uv)) = f.find(c) else { return };
+            let Some(&(w, uv)) = f.find(c) else { return Vec::new() };
             let x1 = x0 + w as f32 * scale;
             quads.push(Quad {
                 tex,
@@ -974,9 +983,7 @@ impl Ui {
             });
             x0 = x1 + scale;
         }
-        for q in quads {
-            self.push(q);
-        }
+        quads
     }
 
     /// Quads from `first` already have final screen positions and scissors
