@@ -112,11 +112,25 @@ pub struct MemberState {
     /// server last sent it (`Session::power_of`), none when there is none to
     /// show.
     pub power: Option<u8>,
-    /// The client's own (Extended's Group Effects): the icons (DictIDs) of the
-    /// effects on it in their order, as the server last sent them
-    /// (`Session::effects_of`), drawn tiny beside its gauges
-    /// (`member_effects_pieces`); none with Group Effects off.
-    pub effects: Vec<u32>,
+    /// The client's own (Extended's Group Effects): the effects on it in their
+    /// order, as the server last sent them (`Session::effects_of`), drawn tiny
+    /// beside its gauges (`member_effects_pieces`); none with Group Effects
+    /// off.
+    pub effects: Vec<MemberFx>,
+}
+
+/// One effect on a group member as its bar shows it (Extended's Group
+/// Effects): its icon (a DictID), and from a server that sends them its name
+/// (empty from one that does not) and its time left at this frame
+/// (`net::buffs::NO_END`: none), the name shown under the mouse and the time
+/// on the icon with Buff Timers on (Heirloom petition 2962, Graga: "the buff
+/// icons of group members should reveal the buff when mouse hovering and have
+/// timers like the new buff timers").
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemberFx {
+    pub icon: u32,
+    pub name: String,
+    pub left_ms: u32,
 }
 
 /// What `DrawPet` reads: `GetPetName`, whether the pet is the target, and
@@ -357,13 +371,102 @@ pub fn member_effects_pieces(at: [i32; 2], status: usize, icons: &[u32]) -> Vec<
 }
 
 /// A member's tiny icons drawn: each one's translucent tile, then the icons
-/// whole.
-fn draw_member_effects(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], status: usize, icons: &[u32]) {
-    let pieces = member_effects_pieces(at, status, icons);
+/// whole, then with `timers` (Buff Timers) each time left on its icon
+/// (`member_fx_times`). The pieces, for a pointer.
+fn draw_member_effects(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], status: usize, fx: &[MemberFx], timers: bool) -> Vec<FxPiece> {
+    let icons: Vec<u32> = fx.iter().map(|e| e.icon).collect();
+    let pieces = member_effects_pieces(at, status, &icons);
     for p in &pieces {
         ui.blit(icon_id("black"), 0, [p.r[0] as i32, p.r[1] as i32], [0, 0], [MEMBER_FX, MEMBER_FX], 3, MEMBER_FX_SHADE);
     }
     draw_fx_pieces(vui, ui, &pieces, 1.0);
+    if timers {
+        draw_icon_times(ui, &member_fx_times(&pieces, fx), IconTimes::Tiny);
+    }
+    pieces
+}
+
+/// Buff Timers on a member's tiny icons: each icon (as `member_effects_pieces`
+/// placed it) whose effect has an end, with its time left as the buff
+/// window's icons carry theirs (`buffwnd::short_time`: "45s", "12m", "2h").
+pub fn member_fx_times(pieces: &[FxPiece], fx: &[MemberFx]) -> Vec<([f32; 4], String)> {
+    pieces
+        .iter()
+        .zip(fx)
+        .filter_map(|(p, e)| {
+            let t = crate::buffwnd::short_time(e.left_ms);
+            (!t.is_empty()).then_some((p.r, t))
+        })
+        .collect()
+}
+
+/// The member's effect whose tiny icon (`pieces`, as drawn) is under frame
+/// point `f`, each icon's corners where `placed` puts them on the screen: its
+/// rectangle as drawn, its name and its time left; none off the icons or on
+/// one the server sent no name for (a server sending icons alone).
+pub fn member_fx_at(pieces: &[FxPiece], fx: &[MemberFx], f: [f32; 2], placed: impl Fn([f32; 2]) -> [f32; 2]) -> Option<([f32; 4], String, u32)> {
+    pieces.iter().zip(fx).find_map(|(p, e)| {
+        let (a, b) = (placed([p.r[0], p.r[1]]), placed([p.r[0] + p.r[2], p.r[1] + p.r[3]]));
+        let on = f[0] >= a[0] && f[0] < b[0] && f[1] >= a[1] && f[1] < b[1];
+        (on && !e.name.is_empty()).then(|| (p.r, e.name.clone(), e.left_ms))
+    })
+}
+
+/// Which icons times are drawn on (`draw_icon_times`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum IconTimes {
+    /// the buff window's: a third of the icon high (8 pixels at least), at
+    /// the foot of its cell's frame (the icon hangs 4 of its 32 below it), so
+    /// the words stand on the icon, not on the world under the bar
+    Buffs,
+    /// a member's tiny icons (`MEMBER_FX` square): 6 pixels high at the
+    /// icon's foot, narrowed to the icon's width and a pixel each side, so a
+    /// time stays on its own icon
+    Tiny,
+}
+
+/// Times drawn on icons (Buff Timers): each at its icon's foot, right
+/// aligned, outlined in black; white, yellow in its last minute.
+pub fn draw_icon_times(r: &mut UiRaster, times: &[([f32; 4], String)], kind: IconTimes) {
+    let Some(font) = r.assets.font else { return };
+    let fh = r.ui.fonts[font].height.max(1) as f32;
+    for (icon, t) in times {
+        let w = wide(t);
+        let full = r.ui.fonts[font].string_width(&w) as f32;
+        let (h, foot) = match kind {
+            IconTimes::Buffs => ((icon[3] * 0.36).max(8.0), icon[3] * 26.0 / 32.0),
+            IconTimes::Tiny => (6.0, icon[3]),
+        };
+        let mut scale = h / fh;
+        if kind == IconTimes::Tiny && full > 0.0 {
+            scale = scale.min((icon[2] + 2.0) / full);
+        }
+        let tw = full * scale;
+        let (x, y) = (icon[0] + icon[2] - tw - if kind == IconTimes::Tiny { 0.0 } else { 1.0 }, icon[1] + foot - fh * scale);
+        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+            r.ui.text_scaled(font, x + dx, y + dy, scale, [0.0, 0.0, 0.0, 0.9], &w);
+        }
+        let color = if t.ends_with('s') { [1.0, 0.9, 0.3, 1.0] } else { [1.0; 4] };
+        r.ui.text_scaled(font, x, y, scale, color, &w);
+    }
+}
+
+/// The name of a member's effect under the mouse (`Hud::member_fx_hover`), as
+/// the buff window names its own (`BuffWnd::draw_info`): its name and its time
+/// left (`buffwnd::time_text`; none with no end) in a box under its tiny icon
+/// `cell`, over it where the screen ends first, within `screen`.
+fn draw_member_fx_name(vui: &Vui, r: &mut UiRaster, cell: [f32; 4], name: &str, left_ms: u32, screen: [i32; 4]) {
+    let fh = vui.font_height(r);
+    let (name, left) = (wide(name), wide(&crate::buffwnd::time_text(left_ms)));
+    let lw = vui.string_width(r, &left);
+    let w = vui.string_width(r, &name) + lw + if lw > 0 { 36 } else { 20 };
+    let h = fh + 10;
+    let at = crate::buffwnd::info_at(cell, [w, h], screen);
+    r.blit(icon_id("black"), 0, at, [0, 0], [w, h], 3, 0.8);
+    let fp = vi::ui::FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 1), br: (106, 0), bottom: (102, 2), bl: (105, 0), left: (104, 0) };
+    vui.blit_frame(r, at, [w, h], &fp, 3, 1.0, true);
+    vui.draw_string_ex(r, &name, at[0] + 10, at[1] + 5, [1.0, 1.0, 0.0, 1.0], true);
+    vui.draw_string_ex(r, &left, at[0] + w - 10 - lw, at[1] + 5, [1.0; 4], true);
 }
 
 /// Pieces of an effects' row drawn (the pet's, `buffwnd`'s), each at `alpha`.
@@ -451,6 +554,11 @@ pub struct Hud {
     /// Where the DPS meter's panel lay at the last frame, how many items it
     /// showed and how far its list steps (`Hud::meter_wheel`, `meter_page`).
     meter_panel: Option<([f32; 4], usize, usize)>,
+    /// The mouse's frame point while it may name a member's tiny icon
+    /// (`Hud::member_fx_hover`), and the icon it is over as last drawn: its
+    /// rectangle in the group's piece, its name and time left.
+    fx_point: Option<[f32; 2]>,
+    fx_named: Option<([f32; 4], String, u32)>,
 }
 
 /// What a pointer finds on the HUD's left side (`Hud::pick`): the player's
@@ -498,7 +606,17 @@ impl Hud {
             raid_panel: None,
             raid_more: 0,
             meter_panel: None,
+            fx_point: None,
+            fx_named: None,
         }
+    }
+
+    /// The mouse at frame point `p` (none: off the window, or the HUD not
+    /// there to point at): the group member's tiny icon under it named in a
+    /// box at the next frame (`draw_member_fx_name`), where the server sent
+    /// its name.
+    pub fn member_fx_hover(&mut self, p: Option<[f32; 2]>) {
+        self.fx_point = p;
     }
 
     /// The wheel's `lines` (up positive) over the DPS meter at frame point `p`,
@@ -625,6 +743,7 @@ impl Hud {
             b[3] + 2
         };
         crate::hudlayout::end(ui.ui, m);
+        let named = self.fx_named.take();
         let m = crate::hudlayout::begin(ui.ui, Piece::Pet);
         let pet_at = if pc { PC_PET_AT } else { [GROUP_AT[0], stacked_pet_y] };
         self.draw_pet(vui, ui, pet_at, s);
@@ -689,6 +808,19 @@ impl Hud {
             self.note(ui, [at[0], at[1], at[0] + 94, at[1] + 25], Pick::Settings);
             crate::hudlayout::end(ui.ui, mark);
         }
+        // the member's icon under the mouse named, over the rest of the HUD,
+        // at the group's place but not counted in it
+        if let Some((cell, name, left)) = named {
+            let (anchor, vertical) = (ui.ui.anchor, ui.ui.vertical);
+            ui.ui.anchor = Anchor::Left;
+            ui.ui.vertical = Vertical::Top;
+            let m = crate::hudlayout::begin(ui.ui, Piece::Group);
+            let m = crate::hudlayout::seal(ui.ui, m);
+            let screen = crate::hudlayout::screen_rect(ui.ui, &m);
+            draw_member_fx_name(vui, ui, cell, &name, left, screen);
+            crate::hudlayout::end(ui.ui, m);
+            (ui.ui.anchor, ui.ui.vertical) = (anchor, vertical);
+        }
     }
 
     /// `DrawGroup`: a bar for each other active member, 48 apart: its name,
@@ -696,6 +828,7 @@ impl Hud {
     fn draw_group(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2], s: &HudState) {
         let mut p = at;
         let mut glowing = false;
+        self.fx_named = None;
         for m in &s.group {
             let start = p;
             self.note(ui, [p[0], p[1], p[0] + 174, p[1] + 46], Pick::Member(m.id));
@@ -714,7 +847,14 @@ impl Hud {
             }
             if !m.effects.is_empty() {
                 let status = m.hp.map_or(0, |(_, f4, f8)| f4 as usize + f8 as usize);
-                draw_member_effects(vui, ui, start, status, &m.effects);
+                let pieces = draw_member_effects(vui, ui, start, status, &m.effects, crate::settings::buff_timers());
+                // the icon under the mouse, where placed, if the server named it
+                if let Some(f) = self.fx_point {
+                    let ui = &*ui;
+                    if let Some(n) = member_fx_at(&pieces, &m.effects, f, |q| ui.ui.placed(q)) {
+                        self.fx_named = Some(n);
+                    }
+                }
             }
             if let Some((hp, f4, f8)) = m.hp {
                 p = [p[0] + GAUGE_IN[0], p[1] + GAUGE_IN[1]];
@@ -1042,6 +1182,36 @@ mod tests {
         assert_eq!((two[0].r[0], two.len()), ((at[0] + 126) as f32, 8), "past both: four to a row, the rest left out");
         assert_eq!(member_effects_pieces(at, 0, &(1..=30).collect::<Vec<u32>>()).len(), 18, "two rows of nine at most");
         assert!(member_effects_pieces(at, 0, &[]).is_empty(), "the control: none, nothing");
+    }
+
+    /// Group Effects' names and times (Heirloom petition 2962): each tiny icon
+    /// carries its time left as the buff window's icons do (`short_time`), none
+    /// for an effect with no end; the mouse over an icon, where the piece was
+    /// placed (here moved and scaled twice), finds its name and time, and
+    /// between two icons, off them, or on one with no name (a server sending
+    /// icons alone: the control) finds none.
+    #[test]
+    fn a_members_tiny_icons_carry_times_and_names() {
+        use super::{MemberFx, member_fx_at, member_fx_times};
+        use net::buffs::NO_END;
+        let at = GROUP_AT;
+        let fx = vec![
+            MemberFx { icon: 1, name: "Courage".into(), left_ms: 44_100 },
+            MemberFx { icon: 2, name: "Breeze".into(), left_ms: 12 * 60_000 },
+            MemberFx { icon: 3, name: "Marked".into(), left_ms: NO_END },
+            MemberFx { icon: 4, name: String::new(), left_ms: NO_END },
+        ];
+        let p = member_effects_pieces(at, 0, &fx.iter().map(|e| e.icon).collect::<Vec<_>>());
+        let t = member_fx_times(&p, &fx);
+        assert_eq!(t, [(p[0].r, "45s".to_string()), (p[1].r, "12m".to_string())], "the times on their icons, none with no end");
+        let placed = |q: [f32; 2]| [q[0] * 2.0 + 100.0, q[1] * 2.0 + 50.0];
+        let centre = |r: [f32; 4]| placed([r[0] + r[2] / 2.0, r[1] + r[3] / 2.0]);
+        assert_eq!(member_fx_at(&p, &fx, centre(p[1].r), placed), Some((p[1].r, "Breeze".to_string(), 12 * 60_000)), "the second icon named");
+        assert_eq!(member_fx_at(&p, &fx, centre(p[2].r), placed).map(|n| n.1), Some("Marked".to_string()), "no end, still named");
+        assert_eq!(member_fx_at(&p, &fx, [p[0].r[0] + p[0].r[2] / 2.0, p[0].r[1] + p[0].r[3] / 2.0], placed), None, "unplaced, the frame point is elsewhere");
+        let gap = placed([p[0].r[0] + p[0].r[2] + 0.5, p[0].r[1] + 2.0]);
+        assert_eq!(member_fx_at(&p, &fx, gap, placed), None, "between two icons");
+        assert_eq!(member_fx_at(&p, &fx, centre(p[3].r), placed), None, "the control: no name sent, nothing to show");
     }
 
     /// Health Numbers (Live petition 5393, Spoony: "add the option to overlay

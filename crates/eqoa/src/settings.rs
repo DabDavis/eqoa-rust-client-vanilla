@@ -1071,7 +1071,9 @@ pub struct ClientOptions {
     /// effects on each group member as tiny icons beside its bar's gauges
     /// (`hud::member_effects_pieces`), where the server sends them
     /// (`Session::agree_group_effects`, go-eqoa-server's 0x7EC0/0x7EC1); off,
-    /// none, as the game shows another's effects nowhere. On by default; a
+    /// none, as the game shows another's effects nowhere. From a server that
+    /// sends version 2 (petition 2962) each icon's name shows under the mouse
+    /// and, with Buff Timers on, its time left on it. On by default; a
     /// server that turns Pet Effects off turns this off with it.
     pub group_effects: bool,
     /// Buff Window (`buffwnd`; a GM's petition 1761): on a server that
@@ -1083,9 +1085,11 @@ pub struct ClientOptions {
     /// Buff Timers (petition 2924: "On the icons themselves, a number showing
     /// how long it has remaining"): each of the player's buffs in the Buff
     /// Window carries its time left on its icon ("45s", "12m", "2h";
-    /// `buffwnd::short_time`); off, the icons alone, as before. On by
-    /// default: the Buff Window is the client's own. A server that turns the
-    /// Buff Window off turns this off with it.
+    /// `buffwnd::short_time`), and so does each group member's tiny icon
+    /// where the server sends its time (Group Effects, petition 2962); off,
+    /// the icons alone, as before. On by default: the Buff Window is the
+    /// client's own. A server that turns the Buff Window off turns this off
+    /// with it.
     pub buff_timers: bool,
     /// Stat Window (petition 2925: "a stat box ... health, power, resists,
     /// AC ... HoT and PoT"): the client's own panel of what the stat channel
