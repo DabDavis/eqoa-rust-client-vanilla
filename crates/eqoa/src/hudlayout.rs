@@ -1003,7 +1003,21 @@ pub fn dragged() -> Option<Piece> {
 
 /// `/hud`: Move HUD turned (no word), on (`move`, `unlock`), off (`lock`), or
 /// every piece back (`reset`); the line said in the chat box.
-pub fn command(arg: &str) -> &'static str {
+pub fn command(arg: &str) -> String {
+    // the profiles (petition 2947): /hud save|load|delete <name>, /hud list
+    let (word, name) = arg.trim().split_once(char::is_whitespace).map_or((arg.trim(), ""), |(w, n)| (w, n.trim()));
+    match word.to_ascii_lowercase().as_str() {
+        "save" => return save_profile(name),
+        "load" => return load_profile(name),
+        "delete" | "remove" => return delete_profile(name),
+        "list" | "profiles" => return list_profiles(),
+        _ => {}
+    }
+    command_word(arg).to_string()
+}
+
+/// `/hud`'s words that are not a profile's.
+fn command_word(arg: &str) -> &'static str {
     match arg.trim().to_ascii_lowercase().as_str() {
         "" => {
             let on = !unlocked();
@@ -1022,8 +1036,125 @@ pub fn command(arg: &str) -> &'static str {
             reset();
             "The HUD is back where the game puts it."
         }
-        _ => "Type /hud to move the HUD's pieces (drag them; /hud again to lock them), /hud reset to put them back.",
+        _ => "Type /hud to move the HUD's pieces (drag them; /hud again to lock them), /hud reset to put them back; /hud save, load or delete <name> and /hud list for named layouts.",
     }
+}
+
+// ---- named layouts (Heirloom petition 2947) --------------------------------
+
+/// Named layouts at most, and a name's longest (characters).
+pub const PROFILES_MOST: usize = 20;
+const PROFILE_NAME_MOST: usize = 24;
+
+/// The profiles file read (`settings::hud_profiles`): each `profile <name>`
+/// line, then the layout's lines (`Layout::to_text`, and `hudscale <n>`) up
+/// to the next; in the order they were first saved.
+fn profiles() -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in crate::settings::hud_profiles().lines() {
+        if let Some(name) = line.strip_prefix("profile ") {
+            out.push((name.trim().to_string(), String::new()));
+        } else if let Some((_, body)) = out.last_mut() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    out
+}
+
+fn keep_profiles(list: &[(String, String)]) -> bool {
+    let text: String = list.iter().map(|(n, b)| format!("profile {n}\n{b}")).collect();
+    crate::settings::save_hud_profiles(&text)
+}
+
+/// A profile's name as typed: its words, one space between, letters,
+/// digits, `-` and `_`; none when empty, too long or holding anything else.
+fn profile_name(name: &str) -> Option<String> {
+    let n = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let ok = !n.is_empty() && n.chars().count() <= PROFILE_NAME_MOST && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_'));
+    ok.then_some(n)
+}
+
+/// The profile of `name` (any case) in `list`.
+fn find(list: &[(String, String)], name: &str) -> Option<usize> {
+    list.iter().position(|(n, _)| n.eq_ignore_ascii_case(name))
+}
+
+/// The names kept, for the options' list.
+pub fn profile_names() -> Vec<String> {
+    profiles().into_iter().map(|(n, _)| n).collect()
+}
+
+/// The HUD as it is now (every piece's place and size, and the interface's
+/// HUD Scale) kept under `name`, over one of the name.
+pub fn save_profile(name: &str) -> String {
+    let Some(name) = profile_name(name) else {
+        return format!("Name the layout: /hud save <name> (letters, digits, - and _, {PROFILE_NAME_MOST} at most).");
+    };
+    let body = format!("{}hudscale {}\n", with(|s| s.layout.to_text()), crate::settings::hud_scale_percent());
+    let mut list = profiles();
+    match find(&list, &name) {
+        Some(i) => list[i] = (name.clone(), body),
+        None if list.len() >= PROFILES_MOST => return format!("There are {PROFILES_MOST} HUD layouts already: /hud delete one first."),
+        None => list.push((name.clone(), body)),
+    }
+    if keep_profiles(&list) { format!("HUD layout \"{name}\" saved: /hud load {name} puts it back.") } else { "The HUD layout could not be saved.".to_string() }
+}
+
+/// The profile `name` put on the HUD: its places, sizes and HUD Scale,
+/// kept as this window's layout (as a drag keeps one).
+pub fn load_profile(name: &str) -> String {
+    let list = profiles();
+    let Some(i) = find(&list, name.trim()) else {
+        return if name.trim().is_empty() { "Which layout? /hud load <name> (/hud list names them).".to_string() } else { format!("No HUD layout is named \"{}\" (/hud list names them).", name.trim()) };
+    };
+    let (name, body) = &list[i];
+    with(|s| {
+        s.layout = Layout::from_text(body);
+        s.drag = None;
+        s.natural = [None; N];
+    });
+    keep();
+    if let Some(v) = body.lines().find_map(|l| l.strip_prefix("hudscale ")).and_then(|v| v.trim().parse::<u8>().ok()) {
+        crate::settings::set_hud_scale_percent(v);
+    }
+    format!("HUD layout \"{name}\" loaded.")
+}
+
+/// The profile `name` let go.
+pub fn delete_profile(name: &str) -> String {
+    let mut list = profiles();
+    let Some(i) = find(&list, name.trim()) else {
+        return format!("No HUD layout is named \"{}\".", name.trim());
+    };
+    let (gone, _) = list.remove(i);
+    if keep_profiles(&list) { format!("HUD layout \"{gone}\" deleted.") } else { "The HUD layouts could not be saved.".to_string() }
+}
+
+thread_local! {
+    /// The profile Extended's HUD Layouts row shows (an index of `profile_names`).
+    static PICKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Extended's HUD Layouts row moved `d` through the profiles' names.
+pub fn step_picked(d: i32) {
+    let n = profile_names().len();
+    if n > 0 {
+        PICKED.with(|p| p.set((p.get() as i64 + i64::from(d.signum())).rem_euclid(n as i64) as usize));
+    }
+}
+
+/// The profile Extended's HUD Layouts row shows: none with none saved.
+pub fn picked() -> Option<String> {
+    let names = profile_names();
+    let i = PICKED.with(|p| p.get());
+    names.get(i).or(names.first()).cloned()
+}
+
+/// The profiles' names in a line.
+fn list_profiles() -> String {
+    let names = profile_names();
+    if names.is_empty() { "No HUD layouts saved: /hud save <name> keeps the HUD as it is now.".to_string() } else { format!("HUD layouts: {} (/hud load <name>)", names.join(", ")) }
 }
 
 const MOVING: &str = "Move HUD: drag the HUD's pieces where you want them; /hud or Lock at the top when done.";
@@ -1676,5 +1807,41 @@ mod tests {
         command("reset");
         assert_eq!(layout(), Layout::default());
         assert!(command("what").starts_with("Type /hud"));
+    }
+
+    /// Named layouts (petition 2947): saved with the HUD Scale, listed,
+    /// loaded back over another layout (any case), saved again over the
+    /// same name, deleted; a bad or missing name refused. The control: a
+    /// load of a name never saved changes nothing.
+    #[test]
+    fn hud_profiles_save_load_delete() {
+        testing_reset();
+        crate::settings::testing::reset(false);
+        let mut wide = Layout::default();
+        wide.set(Piece::Pet, Some(Place { h: Edge::Start, dx: 40.0, v: Edge::Start, dy: 7.0 }));
+        wide.percent[Piece::SpellBars.index()] = 80;
+        with(|s| s.layout = wide);
+        crate::settings::set_hud_scale_percent(70);
+        assert!(command("save Ultra Wide").contains("saved"));
+        with(|s| s.layout = Layout::default());
+        crate::settings::set_hud_scale_percent(100);
+        assert!(command("save dualbox").contains("saved"));
+        assert_eq!(profile_names(), ["Ultra Wide", "dualbox"]);
+        assert!(command("list").contains("Ultra Wide, dualbox"));
+        assert!(command("load nothing").starts_with("No HUD layout"));
+        assert_eq!(layout(), Layout::default(), "the control: nothing loaded");
+        assert!(command("load ultra wide").contains("loaded"));
+        assert_eq!(layout(), wide);
+        assert_eq!(crate::settings::hud_scale_percent(), 70);
+        assert_eq!(Layout::from_text(&crate::settings::hud_layout()), wide, "kept as the window's layout");
+        assert!(command("load DUALBOX").contains("loaded"));
+        assert_eq!((layout(), crate::settings::hud_scale_percent()), (Layout::default(), 100));
+        assert!(command("save dualbox").contains("saved"));
+        assert_eq!(profile_names().len(), 2, "saved over its own name");
+        assert!(command("delete ultra wide").contains("deleted"));
+        assert_eq!(profile_names(), ["dualbox"]);
+        assert!(command("save").starts_with("Name the layout"));
+        assert!(command("save a|b").starts_with("Name the layout"));
+        assert!(command("load").starts_with("Which layout"));
     }
 }

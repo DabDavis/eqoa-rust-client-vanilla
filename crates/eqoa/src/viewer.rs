@@ -6270,6 +6270,7 @@ impl App {
                     p.map.mini_hover(None);
                     p.spell_gem_leave();
                     p.spell_hover(None, (1, 1));
+                    p.pointer = None;
                 }
             }
             WindowEvent::MouseInput { state, button, .. } if matches!(button, MouseButton::Left | MouseButton::Right) => {
@@ -6376,6 +6377,8 @@ impl App {
                 {
                     p.chat_moved(self.cursor, (g.config.width, g.config.height));
                     p.spell_hover(Some([position.x as f32, position.y as f32]), (g.config.width, g.config.height));
+                    // Mouseover Casting (petition 2960)
+                    p.pointer = Some(self.cursor);
                 }
                 // a drag begun: the pointer taken, within the press's
                 // gesture; a confined cursor put back to the middle
@@ -7140,6 +7143,9 @@ impl App {
                     None => self.camera.view(self.bounds, g.config.width as f32 / g.config.height as f32),
                 };
                 self.last_view = Some(view.view_proj);
+                if let Some(p) = self.play.as_mut() {
+                    p.pointer_view = Some((view.view_proj, (g.config.width, g.config.height)));
+                }
                 // the minimap inside (`map::indoor`): the ceiling over the
                 // player, in the collision world
                 if let (Some(p), Some(w)) = (self.play.as_mut(), self.walker.as_mut()) {

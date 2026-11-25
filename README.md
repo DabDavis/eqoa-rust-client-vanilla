@@ -443,6 +443,24 @@ or a browser (each described where it lives below):
   a Utility Bars cell names what is on it ("Empty item slot" for none), as the equipment bar's cells are
   named. Extended > UI > HUD Extras' Item Slot Icons: Item (the default) or Slot (the game's). A server
   that turns the spell bars' additions off (`settings::qol::SPELL_BARS`) keeps the game's slot icons.
+- **Spell Cooldowns** (petition 2946; `hudmenu::Cooldowns`): an ability's icon on the bars (the stacked
+  and PC bars, the carousel's list) darkened by its recast time left, a clock's hand sweeping it clear from
+  twelve, and the seconds left in its middle ("12", "3m"): the server's lockout (0x00CD's milliseconds,
+  `Msg00CD`) counted from when it came, gone at its end or the server's 0. Extended > UI > HUD Extras, on
+  by default; off, the game's lock badge alone. Off with `settings::qol::SPELL_BARS`.
+- **Hotkey Label Size %** (petition 2945): the PC bars' key names at 40-100% of the font (Extended > UI >
+  Interface Size, PC), 100 the font's own as before; smaller, scaled (`Raster::draw_string_scaled`) and cut
+  to the cell later.
+- **HUD layouts** (petition 2947; `hudlayout`): `/hud save <name>` keeps the HUD as it is (every piece's
+  place and size, and the interface's HUD Scale) under a name, `/hud load <name>`, `/hud delete <name>`,
+  `/hud list`; Extended > UI > HUD Extras' HUD Layouts steps through them and ✕ loads one. 20 at most, one
+  file an interface (`hud-profiles-pc.opt`, `hud-profiles.opt`), shared by every window and account (a
+  full screen's layout and a half screen's for multiboxing).
+- **Mouseover Casting** (petition 2960, PC): a heal or buff cast at a target (scope 1, `autocast::guess`)
+  goes to the friend under the mouse (the pet, the group, their mercs: `Play::own_side`) without
+  targeting it: 0x0032 names its own target, which go-eqoa-server casts at. Extended > Other > Combat:
+  Off (the default), Mouseover First, Target First (the target when it is a friend). Off with
+  `settings::qol::AUTO_CAST`.
 - **Loading tips** (a GM's petition 1778, 2026-11-12; `tips.rs`, `tips.txt`): one "Did you
   know" sentence, picked at random as each loading screen comes up (world entry, a logout's way back,
   a zone or world change, a coach, a gate, a rez), under its bar in the 4:3 frame's middle, never the

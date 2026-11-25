@@ -504,6 +504,11 @@ pub struct Play {
     dyepick: dyeplay::DyePlay,
     /// The Stat Window as last drawn (`statwnd`, `statplay`), for a pointer.
     stat_panel: Option<crate::statwnd::Panel>,
+    /// Mouseover Casting (petition 2960): where the mouse is over the window
+    /// (none off it) and the last frame's view and window size, so a cast
+    /// can name the friend under it (`mouseover_target`).
+    pub pointer: Option<(f64, f64)>,
+    pub pointer_view: Option<(glam::Mat4, (u32, u32))>,
     /// `VIWndMBox` (mode 14).
     mbox: crate::dialog::MBox,
     /// The player's death camera (`m_pC1B0`) and the screen's fade; the
@@ -3632,7 +3637,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None, pointer: None, pointer_view: None };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -4199,6 +4204,8 @@ impl Play {
                     self.ability_token = token;
                     if let Some(a) = self.abilities.values_mut().find(|a| a.display_index == index as i64) {
                         a.lockout = lockout as i64;
+                        // its recast timer from now (Spell Cooldowns, petition 2946)
+                        self.hud_menus.cooldowns.set(a.id, lockout as i64, self.session.now() as i64);
                     }
                 }
                 Event::Action { id, action } => {
@@ -6126,6 +6133,31 @@ impl Play {
         best.map(|b| b.0)
     }
 
+    /// Mouseover Casting (Heirloom petition 2960: "if opted, healers mouseover
+    /// the player/pet without selecting it and then use a hotkey to cast a
+    /// heal spell ... a hierarchy the player chooses (mouseover before target
+    /// if friendly or target if friendly before mouseover)"): for ability `a`,
+    /// a heal or buff cast at a target (scope 1, `autocast::guess`), in the
+    /// PC interface with the mouse in the window, the friend to cast it at in
+    /// place of the target, which stays as it is: the player's side under the
+    /// mouse (`own_side`: its pet, its group, their mercs) by Mouseover First,
+    /// or by Target First only when the target is not one of them (nor the
+    /// player). None: the target as ever.
+    pub fn mouseover_target(&self, a: &net::dump::Ability) -> Option<u32> {
+        use crate::settings::MouseoverCast;
+        let order = crate::settings::mouseover_cast();
+        if order == MouseoverCast::Off || !crate::settings::pc_mode() || a.scope != 1 || !matches!(crate::autocast::guess(a), Some(crate::autocast::Kind::Heal | crate::autocast::Kind::Buff)) {
+            return None;
+        }
+        let (at, (vp, size)) = (self.pointer?, self.pointer_view?);
+        let under = self.creature_at(at, size, vp).filter(|&id| self.entities.slots.iter().flatten().any(|e| e.id == id && self.own_side(e)))?;
+        let friendly = |id: u32| Some(id) == self.self_id32() || self.entities.slots.iter().flatten().any(|e| e.id == id && self.own_side(e));
+        match order {
+            MouseoverCast::TargetFirst if self.target != u32::MAX && friendly(self.target) => None,
+            _ => Some(under),
+        }
+    }
+
     /// Whether a right click passes `e` over for anything else under the
     /// cursor (`creature_at_for`): the player's pet, a merc hired by the
     /// player or a group member (`net::session::Mercs::owner`, where the
@@ -6852,7 +6884,7 @@ impl Play {
             // the HUD's layout (`hudlayout`), the client's own
             "/hud" => {
                 let line = crate::hudlayout::command(&rest);
-                self.add_chat(line.to_string(), [1.0; 4]);
+                self.add_chat(line, [1.0; 4]);
             }
             "/time" => self.do_action(0x0B0E_0008, 0),
             "/follow" => self.do_action(0x0B0E_0007, 0),
@@ -9311,8 +9343,12 @@ impl Play {
         }
         let Some(slot) = self.abilities.get(&id).map(|a| a.slot) else { return };
         eprintln!("play: use slot {slot} ({:?})", self.abilities.get(&id).map_or("", |a| a.name.as_str()));
+        // Mouseover Casting (petition 2960): a friend's heal or buff at the
+        // one under the mouse, the target kept (0x0032 names its own target,
+        // which the server casts at)
+        let at = self.abilities.get(&id).and_then(|a| self.mouseover_target(a)).unwrap_or(self.target);
         let mut w = net::stream::Writer::op(0x0032);
-        w.u32(self.ability_token).u8(slot as u8).u32(self.target);
+        w.u32(self.ability_token).u8(slot as u8).u32(at);
         if crate::s2::get().use_skill_record {
             w.bytes(&self.presses.tail());
         }
@@ -11179,6 +11215,9 @@ impl Play {
                 // played with a controller (no key, mouse or finger last):
                 // the selection's name over the bars (petition 2457)
                 self.hud_menus.named = !self.keyboard && !self.touched;
+                // Spell Cooldowns (petition 2946): the lockouts as of now
+                self.hud_menus.cooldowns.now = self.session.now() as i64;
+                self.hud_menus.cooldowns.shown = crate::settings::spell_cooldowns();
                 if self.hud_menus.stacked {
                     let (anchor, vertical) = (r.ui.anchor, r.ui.vertical);
                     r.ui.anchor = Anchor::Right;
@@ -13294,6 +13333,60 @@ mod commands {
         assert_eq!(p.actor_pos(0x0010_1076), Some([0.0, 0.0, -10.0]));
         assert_eq!(p.slot4_of(1), None, "no body, no slot 4");
         assert_eq!(p.actor_pos(0x0020_0001), None, "the control: another world's has no actor here");
+    }
+
+    /// Mouseover Casting (petition 2960): a heal cast from the bars with
+    /// the pointer on the player's pet goes to the pet (0x0032 names it),
+    /// the target kept; Target First casts at a friendly target instead, and
+    /// at the pet when the target is a foe. The controls: Off, a harmful
+    /// spell, the Controller interface, the pointer off the pet, a stranger
+    /// under it: the target, as ever.
+    #[test]
+    fn mouseover_casting_heals_the_friend_under_the_mouse() {
+        use crate::settings::{ClientOptions, MouseoverCast, client, set_client};
+        crate::settings::testing::reset(false);
+        let mut p = play();
+        p.session.record = Some(Vec::new());
+        let creature = |id: u32, z: f32, x: f32, name: &str| net::entity::Entity { id, kind: 130, p18: 1, p19: 1, pos: [x, 0.0, z], actor_pos: [x, 0.0, z], creature: Some(net::entity::Creature { name: name.into(), ..Default::default() }), ..Default::default() };
+        let (pet, foe, mate, stranger) = (0x0010_0003, 0x0010_0005, 0x0000_0102, 0x0010_0009);
+        p.entities.slots[0] = Some(creature(pet, -10.0, 0.0, "Gobbler"));
+        p.entities.slots[1] = Some(creature(foe, -10.0, 6.0, "an orc pawn"));
+        p.entities.slots[2] = Some(creature(mate, -10.0, -6.0, "Groupmate"));
+        p.entities.slots[3] = Some(creature(stranger, -10.0, 3.0, "Someone"));
+        p.pet_id = pet;
+        p.group.in_group = true;
+        p.group.members = vec![crate::group::Member { id: mate, name: "Groupmate".into(), ..Default::default() }];
+        let view = glam::camera::rh::view::look_to_mat4(glam::Vec3::new(0.0, 1.0, 0.0), glam::Vec3::NEG_Z, glam::Vec3::Y);
+        let m = crate::walker::projection_to(4.0 / 3.0, 6000.0) * view;
+        let at = |x: f32| {
+            let c = m * glam::Vec4::new(x, 0.5, -10.0, 1.0);
+            (((c.x / c.w + 1.0) * 0.5 * 640.0) as f64, ((1.0 - c.y / c.w) * 0.5 * 480.0) as f64)
+        };
+        p.pointer_view = Some((m, (640, 480)));
+        p.pointer = Some(at(0.0));
+        let heal = net::dump::Ability { id: 9, scope: 1, name: "Minor Healing".into(), desc: "Heals the target for 50 hit points".into(), ..Default::default() };
+        let bolt = net::dump::Ability { id: 10, scope: 1, name: "Fire Bolt".into(), desc: "Target, decrease hitpoints by 40 (fire damage)".into(), ..Default::default() };
+        p.target = foe;
+        let set = |m: MouseoverCast, pc: bool| set_client(ClientOptions { mouseover_cast: m, pc_mode: pc, ..client() });
+        set(MouseoverCast::Off, true);
+        assert_eq!(p.mouseover_target(&heal), None, "the control: Off");
+        set(MouseoverCast::MouseoverFirst, true);
+        assert_eq!(p.mouseover_target(&heal), Some(pet), "the pet under the mouse");
+        assert_eq!(p.mouseover_target(&bolt), None, "the control: a harm goes at the target");
+        p.target = mate;
+        assert_eq!(p.mouseover_target(&heal), Some(pet), "Mouseover First: the pet over the friendly target");
+        set(MouseoverCast::TargetFirst, true);
+        assert_eq!(p.mouseover_target(&heal), None, "Target First: the friendly target");
+        p.target = foe;
+        assert_eq!(p.mouseover_target(&heal), Some(pet), "Target First: a foe targeted, the pet");
+        p.pointer = Some(at(3.0));
+        assert_eq!(p.mouseover_target(&heal), None, "the control: a stranger under the mouse");
+        p.pointer = None;
+        assert_eq!(p.mouseover_target(&heal), None, "the control: the mouse off the window");
+        p.pointer = Some(at(0.0));
+        set(MouseoverCast::MouseoverFirst, false);
+        assert_eq!(p.mouseover_target(&heal), None, "the control: the Controller interface");
+        crate::settings::testing::reset(false);
     }
 
     /// Heirloom 2897: a dead pickclaw shaman with the player's merc standing

@@ -308,6 +308,50 @@ pub fn save_hud_layout(text: &str) -> bool {
     }
 }
 
+/// The named HUD layouts (`hudlayout::save_profile`, Heirloom petition 2947:
+/// "save the UI I have customized and have more than 1 ... ultrawide full
+/// screen vs half screen (dualbox)"): one file an interface, shared by every
+/// window and account (a profile is a screen's, not a character's).
+pub fn hud_profiles() -> String {
+    let file = if pc_mode() { "hud-profiles-pc.opt" } else { "hud-profiles.opt" };
+    store::read(file).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+}
+
+/// Keeps the named HUD layouts (`hud_profiles`): whether they were kept.
+pub fn save_hud_profiles(text: &str) -> bool {
+    let file = if pc_mode() { "hud-profiles-pc.opt" } else { "hud-profiles.opt" };
+    match store::write(file, text.as_bytes()) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::say(&format!("the HUD profiles were not kept: {e}"));
+            false
+        }
+    }
+}
+
+/// The interface's HUD Scale % now (the PC's or the Controller's).
+pub fn hud_scale_percent() -> u8 {
+    let c = client();
+    if c.pc_mode { c.hud_scale } else { c.controller_hud_scale }
+}
+
+/// The interface's HUD Scale % set (a HUD profile's, `hudlayout`), kept; out
+/// of its range, nothing.
+pub fn set_hud_scale_percent(v: u8) {
+    if !(HUD_SCALE_MIN..=HUD_SCALE_MAX).contains(&v) {
+        return;
+    }
+    // the kept options (`write_client` writes what Save Changes would)
+    let c = kept_client();
+    let next = if c.pc_mode { ClientOptions { hud_scale: v, ..c } } else { ClientOptions { controller_hud_scale: v, ..c } };
+    if next != c {
+        CLIENT.with(|k| k.set(Some((cache_key(), next))));
+        if let Err(e) = write_client(next) {
+            crate::say(&format!("the HUD Scale was not kept: {e}"));
+        }
+    }
+}
+
 pub(crate) fn pc_window_layout() -> String {
     read_interface_file("windows-pc").map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
 }
@@ -1057,6 +1101,15 @@ pub struct ClientOptions {
     /// that turns the spell bars' additions off (`qol::SPELL_BARS`: the game's
     /// carousel) turns this to Slot.
     pub item_icons: bool,
+    /// Spell Cooldowns (Heirloom petition 2946: "a raw number on each spell
+    /// icon on our bar representing how long until we can recast, or ...
+    /// darkened with a clock swipe"): an ability's icon on the bars darkened
+    /// by its recast time left (the server's lockout, 0x00CD), a clock's hand
+    /// sweeping it clear, and the seconds left in its middle
+    /// (`hudmenu::Cooldowns`); off, the game's lock badge alone. On by default,
+    /// as Buff Timers. A server that turns the spell bars' additions off
+    /// (`qol::SPELL_BARS`) turns this off with them.
+    pub spell_cooldowns: bool,
     /// Quest Markers over the heads (Extended > UI > Name Plates;
     /// a GM's petition 1813): on a server that sends them
     /// (`Session::agree_head_marks`), a yellow "!" over an NPC with a quest
@@ -1133,6 +1186,13 @@ pub struct ClientOptions {
     /// target or a dead one, the nearest creature fighting the player (else
     /// its pet or group) targeted. Off by default.
     pub auto_target: bool,
+    /// Mouseover Casting (Heirloom petition 2960): in the PC interface, a heal
+    /// or buff cast at a target goes to the friend under the mouse (the
+    /// player's pet, group or their mercs) without targeting it: Mouseover
+    /// First, or Target First (only when the target is no friend). Off by
+    /// default (`Play::mouseover_target`). A server that turns auto-cast off
+    /// (`qol::AUTO_CAST`) turns this off with it.
+    pub mouseover_cast: MouseoverCast,
     /// Weapon Swap Back (a GM, 2026-11-16, work board 1581): a weapon set
     /// used from the HUD asks the server to put back what it took off when
     /// pressed again (0x0022's swap-back byte, `gear::use_message`). Off by
@@ -1164,6 +1224,11 @@ pub struct ClientOptions {
     pub controller_nameplate_scale: u8,
     pub chat_width: u8,
     pub chat_rows: u8,
+    /// Hotkey Label Size % (Heirloom petition 2945: "The hotkey label for the
+    /// spells/spellbar are quite large compared to the icons. Could the
+    /// size/scale be an option"): the PC bars' key names drawn at this share
+    /// of the font, 40 to 100, 100 (the font's own) by default.
+    pub hotkey_label_scale: u8,
     pub chat_opacity: u8,
     /// PC chat idle fade delay in seconds; zero leaves chat visible.
     pub chat_fade_seconds: u8,
@@ -1646,6 +1711,7 @@ impl Default for ClientOptions {
             buff_timers: true,
             stat_window: false,
             item_icons: true,
+            spell_cooldowns: true,
             head_marks: true,
             target_level: true,
             power_bars: true,
@@ -1658,6 +1724,7 @@ impl Default for ClientOptions {
             item_links: true,
             auto_cast: true,
             auto_target: false,
+            mouseover_cast: MouseoverCast::Off,
             weapon_swap_back: false,
             chat_always: false,
             hud_scale: 100,
@@ -1666,6 +1733,7 @@ impl Default for ClientOptions {
             controller_nameplate_scale: 100,
             chat_width: 100,
             chat_rows: 5,
+            hotkey_label_scale: 100,
             chat_opacity: 75,
             chat_fade_seconds: 0,
             chat_wake_on_message: false,
@@ -1821,6 +1889,9 @@ impl ClientOptions {
         if self.stat_window {
             s.push_str("stat_window=on\n");
         }
+        if !self.spell_cooldowns {
+            s.push_str("spell_cooldowns=off\n");
+        }
         if !self.item_icons {
             s.push_str("item_icons=slot\n");
         }
@@ -1864,6 +1935,11 @@ impl ClientOptions {
         if !self.auto_cast {
             s.push_str("auto_cast=off\n");
         }
+        match self.mouseover_cast {
+            MouseoverCast::Off => {}
+            MouseoverCast::MouseoverFirst => s.push_str("mouseover_cast=mouseover\n"),
+            MouseoverCast::TargetFirst => s.push_str("mouseover_cast=target\n"),
+        }
         if self.auto_target {
             s.push_str("auto_target=on\n");
         }
@@ -1887,6 +1963,7 @@ impl ClientOptions {
         for (key, value, default) in [
             ("hud_scale", self.hud_scale, 100), ("nameplate_scale", self.nameplate_scale, 100), ("controller_hud_scale", self.controller_hud_scale, 100), ("controller_nameplate_scale", self.controller_nameplate_scale, 100),
             ("chat_width", self.chat_width, 100), ("chat_rows", self.chat_rows, 5), ("chat_opacity", self.chat_opacity, 75),
+            ("hotkey_label_scale", self.hotkey_label_scale, 100),
         ] {
             if value != default {
                 s.push_str(&format!("{key}={value}\n"));
@@ -2161,6 +2238,8 @@ impl ClientOptions {
                 ("buff_timers", "off") => c.buff_timers = false,
                 ("stat_window", "on") => c.stat_window = true,
                 ("stat_window", "off") => c.stat_window = false,
+                ("spell_cooldowns", "on") => c.spell_cooldowns = true,
+                ("spell_cooldowns", "off") => c.spell_cooldowns = false,
                 ("item_icons", "item") => c.item_icons = true,
                 ("item_icons", "slot") => c.item_icons = false,
                 ("head_marks", "on") => c.head_marks = true,
@@ -2183,6 +2262,9 @@ impl ClientOptions {
                 ("item_links", "off") => c.item_links = false,
                 ("auto_cast", "on") => c.auto_cast = true,
                 ("auto_cast", "off") => c.auto_cast = false,
+                ("mouseover_cast", "off") => c.mouseover_cast = MouseoverCast::Off,
+                ("mouseover_cast", "mouseover") => c.mouseover_cast = MouseoverCast::MouseoverFirst,
+                ("mouseover_cast", "target") => c.mouseover_cast = MouseoverCast::TargetFirst,
                 ("auto_target", "on") => c.auto_target = true,
                 ("auto_target", "off") => c.auto_target = false,
                 ("weapon_swap_back", "on") => c.weapon_swap_back = true,
@@ -2197,7 +2279,7 @@ impl ClientOptions {
                 ("chat_wake_any_tab", "off") => c.chat_wake_any_tab = false,
                 ("inline_chat", "on") => c.inline_chat = true,
                 ("inline_chat", "off") => c.inline_chat = false,
-                (key @ ("hud_scale" | "nameplate_scale" | "controller_hud_scale" | "controller_nameplate_scale" | "chat_width" | "chat_rows" | "chat_opacity"), v) => {
+                (key @ ("hud_scale" | "nameplate_scale" | "controller_hud_scale" | "controller_nameplate_scale" | "chat_width" | "chat_rows" | "chat_opacity" | "hotkey_label_scale"), v) => {
                     let (field, range) = match key {
                         "hud_scale" => (&mut c.hud_scale, HUD_SCALE_MIN..=HUD_SCALE_MAX),
                         "controller_hud_scale" => (&mut c.controller_hud_scale, HUD_SCALE_MIN..=HUD_SCALE_MAX),
@@ -2205,6 +2287,7 @@ impl ClientOptions {
                         "nameplate_scale" => (&mut c.nameplate_scale, NAMEPLATE_MIN..=200),
                         "chat_width" => (&mut c.chat_width, 50..=125),
                         "chat_rows" => (&mut c.chat_rows, 3..=12),
+                        "hotkey_label_scale" => (&mut c.hotkey_label_scale, HOTKEY_LABEL_MIN..=100),
                         _ => (&mut c.chat_opacity, 0..=100),
                     };
                     if let Some(n) = v.parse::<u8>().ok().filter(|n| range.contains(n)) {
@@ -2733,8 +2816,8 @@ pub mod qol {
             83 | crate::options::BUFF_TIMERS => BUFF_WINDOW,
             crate::options::STAT_WINDOW => STAT_CAPS,
             58 | crate::options::GROUP_EFFECTS => PET_EFFECTS,
-            78 | 79 => AUTO_CAST,
-            22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT | crate::options::SPELL_BAR_SIZE | crate::options::ITEM_ICONS => SPELL_BARS,
+            78 | 79 | crate::options::MOUSEOVER_CAST => AUTO_CAST,
+            22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT | crate::options::SPELL_BAR_SIZE | crate::options::ITEM_ICONS | crate::options::SPELL_COOLDOWNS => SPELL_BARS,
             _ => return None,
         })
     }
@@ -2787,14 +2870,14 @@ pub mod qol {
             (c.pet_effects, c.group_effects) = (false, false);
         }
         if off(AUTO_CAST) {
-            (c.auto_cast, c.auto_target) = (false, false);
+            (c.auto_cast, c.auto_target, c.mouseover_cast) = (false, false, super::MouseoverCast::Off);
         }
         if off(ITEM_LINKS) {
             c.item_links = c.item_links_here && !off(LOCKED);
         }
         if off(SPELL_BARS) {
             (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) = (super::ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft);
-            c.item_icons = false;
+            (c.item_icons, c.spell_cooldowns) = (false, false);
         }
         c
     }
@@ -2833,7 +2916,7 @@ pub mod qol {
             (v.pet_effects, v.group_effects) = (kept.pet_effects, kept.group_effects);
         }
         if off(AUTO_CAST) {
-            (v.auto_cast, v.auto_target) = (kept.auto_cast, kept.auto_target);
+            (v.auto_cast, v.auto_target, v.mouseover_cast) = (kept.auto_cast, kept.auto_target, kept.mouseover_cast);
         }
         if off(ITEM_LINKS) {
             v.item_links_here = if off(LOCKED) { kept.item_links_here } else { v.item_links };
@@ -2841,7 +2924,7 @@ pub mod qol {
         }
         if off(SPELL_BARS) {
             (v.ability_bars, v.stacked_bars, v.spell_bar_layout, v.utility_layout) = (kept.ability_bars, kept.stacked_bars, kept.spell_bar_layout, kept.utility_layout);
-            v.item_icons = kept.item_icons;
+            (v.item_icons, v.spell_cooldowns) = (kept.item_icons, kept.spell_cooldowns);
         }
         v
     }
@@ -3003,6 +3086,52 @@ pub fn buff_timers() -> bool {
 /// Stat Window: the client's panel of the stat channel (`statwnd`).
 pub fn stat_window() -> bool {
     client().stat_window
+}
+
+/// Mouseover Casting's order (petition 2960, `Play::mouseover_target`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MouseoverCast {
+    #[default]
+    Off,
+    /// the friend under the mouse before the target
+    MouseoverFirst,
+    /// the target when it is a friend, else the friend under the mouse
+    TargetFirst,
+}
+
+impl MouseoverCast {
+    pub fn name(self) -> &'static str {
+        match self {
+            MouseoverCast::Off => "Off",
+            MouseoverCast::MouseoverFirst => "Mouseover First",
+            MouseoverCast::TargetFirst => "Target First",
+        }
+    }
+
+    /// The next (`d` > 0) or the one before.
+    pub fn step(self, d: i32) -> Self {
+        let all = [MouseoverCast::Off, MouseoverCast::MouseoverFirst, MouseoverCast::TargetFirst];
+        let i = all.iter().position(|&m| m == self).unwrap_or(0) as i32;
+        all[(i + d.signum()).rem_euclid(3) as usize]
+    }
+}
+
+/// Mouseover Casting now.
+pub fn mouseover_cast() -> MouseoverCast {
+    client().mouseover_cast
+}
+
+/// Spell Cooldowns: the bars' icons show their recast time (`hudmenu`).
+pub fn spell_cooldowns() -> bool {
+    client().spell_cooldowns
+}
+
+/// The smallest Hotkey Label Size % (petition 2945).
+pub const HOTKEY_LABEL_MIN: u8 = 40;
+
+/// Hotkey Label Size %: the PC bars' key names' share of the font (`hudmenu`).
+pub fn hotkey_label_scale() -> f32 {
+    f32::from(client().hotkey_label_scale.clamp(HOTKEY_LABEL_MIN, 100)) / 100.0
 }
 
 /// Item Slot Icons at Item: an item quick slot shows its item's own icon
@@ -4507,7 +4636,7 @@ mod tests {
         assert!(!(c.map || c.minimap || map() || minimap()), "the map, off by default");
         assert!(c.map_markers, "its markers the player's, with it");
         assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
-        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.buff_timers || buff_timers() || c.stat_window || stat_window() || c.item_icons || item_icons() || c.pet_effects || c.group_effects || c.auto_cast || c.auto_target), "the rest");
+        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.buff_timers || buff_timers() || c.stat_window || stat_window() || c.item_icons || item_icons() || c.spell_cooldowns || spell_cooldowns() || c.pet_effects || c.group_effects || c.auto_cast || c.auto_target || c.mouseover_cast != MouseoverCast::Off), "the rest");
         assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
         assert!(!c.item_links && (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) == (ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft), "item links off by default, the game's two bars");
         let d = ClientOptions::default();
@@ -4716,6 +4845,22 @@ mod tests {
         assert_eq!(ClientOptions::from_text(&c.to_text()), c, "round trip");
         assert!(!ClientOptions::from_text("stat_window=off").stat_window);
         assert!(!ClientOptions::from_text("stat_window=maybe").stat_window, "the default");
+    }
+
+    /// Spell Cooldowns (petition 2946): on by default and not written, off
+    /// written and read back. Hotkey Label Size % (petition 2945): 100 by
+    /// default and not written, another kept, out of 40..=100 the default.
+    #[test]
+    fn spell_cooldowns_and_hotkey_label_size_are_kept() {
+        let d = ClientOptions::default();
+        assert!(d.spell_cooldowns && !d.to_text().contains("spell_cooldowns"));
+        let c = ClientOptions { spell_cooldowns: false, hotkey_label_scale: 60, ..d };
+        assert!(c.to_text().contains("spell_cooldowns=off\n") && c.to_text().contains("hotkey_label_scale=60\n"));
+        assert_eq!(ClientOptions::from_text(&c.to_text()), c);
+        assert_eq!(d.hotkey_label_scale, 100);
+        assert!(!d.to_text().contains("hotkey_label_scale"));
+        assert_eq!(ClientOptions::from_text("hotkey_label_scale=30").hotkey_label_scale, 100, "under the least: the default");
+        assert_eq!(ClientOptions::from_text("hotkey_label_scale=120").hotkey_label_scale, 100);
     }
 
     /// Buff Timers (petition 2924): on by default and not written; off

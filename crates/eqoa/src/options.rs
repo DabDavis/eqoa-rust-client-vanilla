@@ -1005,6 +1005,12 @@ impl WndOptions {
                     // Item Slot Icons (petitions 2926, 2928): Item or Slot,
                     // the quick slots drawn so from the next frame (`hudmenu`)
                     ITEM_ICONS => c.item_icons = !c.item_icons,
+                    // HUD Layouts (petition 2947): the next name; ✕ loads it (`select`)
+                    HUD_PROFILE => crate::hudlayout::step_picked(d),
+                    // Mouseover Casting (petition 2960): the next cast on
+                    MOUSEOVER_CAST => c.mouseover_cast = c.mouseover_cast.step(d),
+                    // Spell Cooldowns (petition 2946): the bars from the next frame
+                    SPELL_COOLDOWNS => c.spell_cooldowns = !c.spell_cooldowns,
                     // Quest Markers: the server told from the next frame
                     // (`Session::agree_head_marks`), the marks drawn or not
                     // over the NPCs' names (`Play::plates`)
@@ -1145,6 +1151,9 @@ impl WndOptions {
                     NAMEPLATE_SCALE => slide(&mut c.controller_nameplate_scale, NAMEPLATE_MIN, 200, 5),
                     CHAT_WIDTH => slide(&mut c.chat_width, 50, 125, 5),
                     CHAT_ROWS => slide(&mut c.chat_rows, 3, 12, 1),
+                    // Hotkey Label Size (petition 2945): the PC bars' key
+                    // names from the next frame (`hudmenu::shortcut_label`)
+                    HOTKEY_LABEL => slide(&mut c.hotkey_label_scale, crate::settings::HOTKEY_LABEL_MIN, 100, 5),
                     CHAT_OPACITY => slide(&mut c.chat_opacity, 0, 100, 5),
                     CHAT_FADE_DELAY => slide(&mut c.chat_fade_seconds, 0, 120, 1),
                     // Wake on New Chat: Off, Active Tab, Any Tab (petition 2953)
@@ -1389,6 +1398,17 @@ impl WndOptions {
         if self.page == 3 && self.cat.is_some() && self.item == 72 {
             crate::dpsmeter::ask_reset();
             cues.push(8);
+            return false;
+        }
+        // HUD Layouts: the one shown loaded (petition 2947)
+        if self.page == 3 && self.cat.is_some() && self.item == HUD_PROFILE {
+            match crate::hudlayout::picked() {
+                Some(name) => {
+                    crate::hudlayout::load_profile(&name);
+                    cues.push(8);
+                }
+                None => cues.push(9),
+            }
             return false;
         }
         // Reset HUD the same; Move HUD turns, as left and right turn it
@@ -1949,7 +1969,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 117] = [
+const EXTENDED_ITEMS: [(i32, &str); 121] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -2067,6 +2087,10 @@ const EXTENDED_ITEMS: [(i32, &str); 117] = [
     (BUFF_TIMERS, "Buff Timers"),
     (STAT_WINDOW, "Stat Window"),
     (ITEM_ICONS, "Item Slot Icons"),
+    (HOTKEY_LABEL, "Hotkey Label Size %"),
+    (SPELL_COOLDOWNS, "Spell Cooldowns"),
+    (HUD_PROFILE, "HUD Layouts"),
+    (MOUSEOVER_CAST, "Mouseover Casting"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2158,6 +2182,15 @@ const AD_KEYS: i32 = 250;
 pub(crate) const BUFF_TIMERS: i32 = 251;
 pub(crate) const STAT_WINDOW: i32 = 252;
 pub(crate) const ITEM_ICONS: i32 = 253;
+/// Spell Cooldowns (petition 2946), with HUD Extras' rows.
+pub(crate) const SPELL_COOLDOWNS: i32 = 255;
+/// Mouseover Casting (petition 2960), with Combat's rows (the PC's).
+pub(crate) const MOUSEOVER_CAST: i32 = 257;
+/// HUD Layouts (petition 2947): the named layouts `/hud save` kept, stepped
+/// through with left and right, the one shown loaded with ✕.
+const HUD_PROFILE: i32 = 256;
+/// Hotkey Label Size % (petition 2945), with the PC's Interface Size rows.
+const HOTKEY_LABEL: i32 = 254;
 
 /// Slow When Not Focused's item (a GM's petition 1634; natively:
 /// a page's pace in the back is the browser's).
@@ -2265,7 +2298,7 @@ const ALL_CATEGORIES: [Category; 26] = [
     Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
     Category { name: "Chat", items: &[73, 89, R2_CHANNELS, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY], note: Note::Links, group: Group::Ui },
     Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE], note: Note::Shortcuts, group: Group::Other },
-    Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK], note: Note::None, group: Group::Other },
+    Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK, MOUSEOVER_CAST], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18, AD_KEYS], note: Note::None, group: Group::Other },
     Category { name: "Size & Look", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Touch },
     Category { name: "Sound", items: &[32], note: Note::Output, group: Group::Other },
@@ -2282,10 +2315,10 @@ const ALL_CATEGORIES: [Category; 26] = [
     // how they do texture packs like precaching"): Textures' page is full;
     // natively, as Textures (a page's list ends before it)
     Category { name: "Texture Cache", items: &[PACK_PRECACHE, PACK_COMPRESS, PACK_REBUILD], note: Note::Textures, group: Group::Graphics },
-    Category { name: "Interface Size", items: &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS], note: Note::None, group: Group::Ui },
+    Category { name: "Interface Size", items: &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS, HOTKEY_LABEL], note: Note::None, group: Group::Ui },
     // what the HUD tells of its own pieces (petitions 2924-2928): HUD's page
     // is full
-    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS], note: Note::None, group: Group::Ui },
+    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS, SPELL_COOLDOWNS, HUD_PROFILE], note: Note::None, group: Group::Ui },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -2306,6 +2339,8 @@ fn category(i: usize) -> Category {
         (false, "Interface Size") => &[HUD_SCALE, NAMEPLATE_SCALE],
         (false, "Chat") => &[73, 89, R2_CHANNELS],
         (false, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT],
+        // Mouseover Casting is the mouse's (petition 2960)
+        (false, "Combat") => &[78, 79, PETS_PASS, WEAPON_SWAP_BACK],
         (true, "Chat") => &[73, 89, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY, CHAT_WAKE_ON_MESSAGE],
         (true, "HUD") => &[22, 30, 40, 58, 83],
         (true, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, UTILITY_LAYOUT, SPELL_BAR_SIZE],
@@ -2470,6 +2505,9 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         BUFF_TIMERS => on_off(c.buff_timers),
         STAT_WINDOW => on_off(c.stat_window),
         ITEM_ICONS => wide(if c.item_icons { "Item" } else { "Slot" }),
+        SPELL_COOLDOWNS => on_off(c.spell_cooldowns),
+        MOUSEOVER_CAST => wide(c.mouseover_cast.name()),
+        HUD_PROFILE => wide(&crate::hudlayout::picked().unwrap_or_else(|| "None saved".to_string())),
         85 => on_off(c.head_marks),
         TARGET_LEVEL => on_off(c.target_level),
         84 => on_off(c.loading_tips),
@@ -2604,6 +2642,7 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         }
         CHAT_WIDTH => (at(c.chat_width as f32, 50.0, 125.0), Some(c.chat_width as u16)),
         CHAT_ROWS => (at(c.chat_rows as f32, 3.0, 12.0), Some(c.chat_rows as u16)),
+        HOTKEY_LABEL => (at(c.hotkey_label_scale as f32, crate::settings::HOTKEY_LABEL_MIN as f32, 100.0), Some(c.hotkey_label_scale as u16)),
         CHAT_OPACITY => (c.chat_opacity as f32 / 100.0, Some(c.chat_opacity as u16)),
         36 => share_slider(c.flora),
         37 => share_slider(c.environment),
@@ -2779,7 +2818,7 @@ mod tests {
         let size = CATEGORIES.iter().position(|c| c.name == "Interface Size").unwrap();
         assert_eq!(category(size).items, &[HUD_SCALE, NAMEPLATE_SCALE], "the Controller's: HUD Scale and Nameplate Size (petitions 2912, 2908)");
         w.key(&vui, &mut r, &mut o, 17, 0, &mut cues, &mut ups);
-        assert_eq!(category(size).items, &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS]);
+        assert_eq!(category(size).items, &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS, HOTKEY_LABEL]);
         w.key(&vui, &mut r, &mut o, 13, 0, &mut cues, &mut ups);
         assert!(!settings::pc_mode());
     }
@@ -4109,7 +4148,7 @@ mod tests {
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
-                ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons"]),
+                ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "HUD Layouts"]),
             ],
             "UI: what is drawn over the world"
         );
@@ -4611,7 +4650,7 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");

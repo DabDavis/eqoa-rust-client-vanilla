@@ -272,6 +272,24 @@ fn shortcut_label(r: &dyn Raster, cell: [i32; 4], label: &str) -> Option<([i32; 
     Some(([cell[2] - 3 - w, cell[1] + 1], wide))
 }
 
+/// `shortcut_label` at `scale` of the font (Hotkey Label Size %, petition
+/// 2945): cut to the cell's width as drawn so small, at its top right.
+fn shortcut_label_scaled(r: &dyn Raster, cell: [i32; 4], label: &str, scale: f32) -> Option<([f32; 2], Vec<u16>)> {
+    let width = (cell[2] - cell[0] - 5) as f32;
+    let h = r.point_size() as f32 * scale;
+    if width <= 0.0 || h <= 0.0 || h + 3.0 > (cell[3] - cell[1]) as f32 {
+        return None;
+    }
+    let w = |s: &[u16]| r.string_width(s) as f32 * scale;
+    let mut chars: Vec<char> = label.chars().collect();
+    let mut wide = crate::ui::wide(label);
+    while w(&wide) > width {
+        chars.pop()?;
+        wide = crate::ui::wide(&format!("{}..", chars.iter().collect::<String>()));
+    }
+    Some(([cell[2] as f32 - 3.0 - w(&wide), cell[1] as f32 + 1.0], wide))
+}
+
 /// How far the stacked bars stand above the chat box's window top, frame pixels:
 /// its panel is drawn 10 inside it, so they stand 2 above the panel.
 const STACKED_GAP: i32 = -8;
@@ -457,7 +475,7 @@ impl HudMenu {
     /// the stack (2, its slot icons the live client's with `live`) or the
     /// sets (3).
     #[allow(clippy::too_many_arguments)]
-    fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menu: &MenuDef, now: i64, name: &dyn Fn(u32, i64) -> Vec<u16>, live: bool, auto: &[i64]) {
+    fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, menu: &MenuDef, now: i64, name: &dyn Fn(u32, i64) -> Vec<u16>, live: bool, auto: &[i64], cd: &Cooldowns) {
         if self.time < now {
             self.lit = -1;
         }
@@ -469,7 +487,7 @@ impl HudMenu {
         match self.index as usize {
             ITEMS => self.draw_stack(vui, r, menu, name, live),
             GEAR => self.draw_gear(vui, r, menu, name),
-            _ => self.draw_list(vui, r, menu, name, auto),
+            _ => self.draw_list(vui, r, menu, name, auto, cd),
         }
     }
 
@@ -477,7 +495,7 @@ impl HudMenu {
     /// down a frame that grows past five, each its icon, badged while locked;
     /// an ability the player made auto (`autocast`, the client's own) marked
     /// with a gold "A" in its icon's corner.
-    fn draw_list(&mut self, vui: &Vui, r: &mut dyn Raster, menu: &MenuDef, name: &dyn Fn(u32, i64) -> Vec<u16>, auto: &[i64]) {
+    fn draw_list(&mut self, vui: &Vui, r: &mut dyn Raster, menu: &MenuDef, name: &dyn Fn(u32, i64) -> Vec<u16>, auto: &[i64], cd: &Cooldowns) {
         let a = self.alpha;
         let at = self.pos;
         let sel = menu.entries.get(self.sel.max(0) as usize).copied().unwrap_or_default();
@@ -507,6 +525,10 @@ impl HudMenu {
             }
             if e.msg == 0x8060000 && e.icon2 != -1 && auto.contains(&e.id) {
                 draw_auto_mark(r, icon, a);
+            }
+            // Spell Cooldowns (petition 2946)
+            if e.msg == 0x8060000 && e.icon2 != -1 && let Some(left) = cd.left(e.id) {
+                draw_cooldown(vui, r, [icon[0], icon[1], 22, 22], left);
             }
             pos[1] += 31;
             n += 1;
@@ -641,6 +663,108 @@ pub struct HudMenus {
     pub named: bool,
     /// Last mouse position resolved against the spell cells.
     hover: Option<(usize, i32)>,
+    /// The abilities' recast timers as the server sent them (0x00CD), drawn
+    /// on their icons with Spell Cooldowns on (petition 2946, `Cooldowns`).
+    pub cooldowns: Cooldowns,
+}
+
+/// Spell Cooldowns (Heirloom petition 2946: "a raw number on each spell icon
+/// on our bar representing how long until we can recast, or ... darkened
+/// with a clock swipe"): each ability's lockout (0x00CD, `Msg00CD`'s
+/// milliseconds, 0 when it is over) kept from when it came, by its id, so
+/// the bars darken its icon by the time left, a clock's hand sweeping round
+/// from twelve, and say the seconds left in its middle (`draw_cooldown`).
+#[derive(Clone, Debug, Default)]
+pub struct Cooldowns {
+    /// The session's clock now (ms), set each frame (`Play`).
+    pub now: i64,
+    /// Drawn (Spell Cooldowns on, and not under the game's own UI).
+    pub shown: bool,
+    on: BTreeMap<i64, (i64, i64)>,
+}
+
+impl Cooldowns {
+    /// Ability `id`'s lockout of `ms` came at `now`; 0 (or less) ends it.
+    pub fn set(&mut self, id: i64, ms: i64, now: i64) {
+        if ms > 0 {
+            self.on.insert(id, (now, ms));
+        } else {
+            self.on.remove(&id);
+        }
+    }
+
+    /// What is left of ability `id`'s lockout now: the share of it (1 at its
+    /// start) and the milliseconds; none when it is not shown, has none, or
+    /// its time is up.
+    pub fn left(&self, id: i64) -> Option<(f32, i64)> {
+        if !self.shown {
+            return None;
+        }
+        let &(at, total) = self.on.get(&id)?;
+        let gone = self.now - at;
+        let left = total - gone.max(0);
+        (left > 0 && gone >= 0).then(|| (left as f32 / total as f32, left))
+    }
+}
+
+/// The seconds a lockout's `ms` show on its icon: "12" (rounded up), "2m"
+/// past a minute and a half, "1h" past ninety minutes.
+pub fn cooldown_text(ms: i64) -> String {
+    let s = (ms + 999) / 1000;
+    if s >= 5400 {
+        format!("{}h", (s + 1800) / 3600)
+    } else if s >= 90 {
+        format!("{}m", (s + 30) / 60)
+    } else {
+        s.to_string()
+    }
+}
+
+/// The points of the clock swipe over an icon `rect` (x, y, w, h) with
+/// `share` of the time left: from twelve o'clock round the rectangle's edge
+/// clockwise, the dark part the time still to go (it sweeps back toward
+/// twelve as the lockout runs out), as triangles from the middle, each
+/// (middle, a, b): split at the corners so they keep to the square.
+pub fn swipe_triangles(rect: [i32; 4], share: f32) -> Vec<[[f32; 2]; 3]> {
+    let [x, y, w, h] = rect.map(|v| v as f32);
+    let mid = [x + w / 2.0, y + h / 2.0];
+    // the edge from twelve clockwise as a length round the perimeter
+    let per = 2.0 * (w + h);
+    let at = |d: f32| -> [f32; 2] {
+        let d = d.rem_euclid(per);
+        let half = w / 2.0;
+        if d <= half {
+            [mid[0] + d, y]
+        } else if d <= half + h {
+            [x + w, y + (d - half)]
+        } else if d <= half + h + w {
+            [x + w - (d - half - h), y + h]
+        } else if d <= half + 2.0 * h + w {
+            [x, y + h - (d - half - h - w)]
+        } else {
+            [x + (d - half - 2.0 * h - w), y]
+        }
+    };
+    let share = share.clamp(0.0, 1.0);
+    // the time gone is the clear part from twelve; the rest, to twelve, dark
+    let (from, to) = (per * (1.0 - share), per);
+    let corners = [w / 2.0, w / 2.0 + h, w / 2.0 + h + w, w / 2.0 + 2.0 * h + w];
+    let mut cuts = vec![from];
+    cuts.extend(corners.iter().copied().filter(|&c| c > from && c < to));
+    cuts.push(to);
+    cuts.windows(2).filter(|p| p[1] > p[0]).map(|p| [mid, at(p[0]), at(p[1])]).collect()
+}
+
+/// A lockout's look over an icon `rect` (x, y, w, h): the clock swipe's
+/// dark part (`swipe_triangles`) and the seconds left in its middle,
+/// outlined (Spell Cooldowns, petition 2946).
+fn draw_cooldown(vui: &Vui, r: &mut dyn Raster, rect: [i32; 4], (share, ms): (f32, i64)) {
+    for [m, a, b] in swipe_triangles(rect, share) {
+        let p = |q: [f32; 2]| [q[0].round() as i32, q[1].round() as i32];
+        r.fill_fan([0.0, 0.0, 0.0, 0.6], [p(m), p(a), p(b), p(b)]);
+    }
+    let text = crate::ui::wide(&cooldown_text(ms));
+    vui.draw_centered_string_ex(r, &text, rect[0] + rect[2] / 2, rect[1] + rect[3] / 2, [1.0, 0.95, 0.6, 1.0], 0, true);
 }
 
 impl Default for HudMenus {
@@ -664,6 +788,7 @@ impl Default for HudMenus {
             utility_hover: None,
             named: false,
             hover: None,
+            cooldowns: Cooldowns::default(),
         }
     }
 }
@@ -782,7 +907,7 @@ impl HudMenus {
         let k = self.up();
         let def = self.defs[k].clone();
         let live = self.live;
-        self.menus[k].draw(vui, r, &def, now, name, live, &self.auto);
+        self.menus[k].draw(vui, r, &def, now, name, live, &self.auto, &self.cooldowns);
     }
 
     /// Stacked Spell Bars (the module's doc): every bar shown (the second
@@ -852,6 +977,12 @@ impl HudMenus {
                 if e.msg == 0x8060000 && e.icon2 != -1 && self.auto.contains(&e.id) {
                     draw_auto_mark(r, icon, 1.0);
                 }
+                // Spell Cooldowns (petition 2946): over the cell's inside on
+                // a computer's bars (the gem's art fills it), else the icon
+                if e.msg == 0x8060000 && e.icon2 != -1 && let Some(left) = self.cooldowns.left(e.id) {
+                    let rect = if pc { [x + 2, y + 2, cw - 4, ch - 4] } else { [icon[0], icon[1], s(22), s(22)] };
+                    draw_cooldown(vui, r, rect, left);
+                }
                 if menu < MENUS && menu == up && n == self.menus[menu].sel {
                     let rect = if pc { [x + 1, y + 1, x + cw - 2, y + ch - 2] } else { [icon[0] - 2, icon[1] - 2, icon[0] + s(22) + 1, icon[1] + s(22) + 1] };
                     outline(r, rect, [1.0, 0.85, 0.3, 1.0]);
@@ -864,8 +995,17 @@ impl HudMenus {
                         else { BAR_MENUS.iter().position(|&m| m == menu).map(|bar| format!("bar{}_slot{}", bar + 1, n + 1)) };
                     if let Some(row) = row {
                         let label = crate::binds::row_named(&row).and_then(|i| crate::settings::with_binds(|b| b.profile_key(i, true).filter(|k| !k.is_empty()).map(crate::binds::display)));
-                        if let Some((at, label)) = label.and_then(|label| shortcut_label(r, [x, y, x + cw, y + ch], &label)) {
-                            vui.draw_string_ex(r, &label, at[0], at[1], [1.0, 1.0, 1.0, 1.0], true);
+                        // Hotkey Label Size % (petition 2945): the font's own
+                        // at 100, as ever; smaller, scaled
+                        let scale = crate::settings::hotkey_label_scale();
+                        if scale >= 1.0 {
+                            if let Some((at, label)) = label.and_then(|label| shortcut_label(r, [x, y, x + cw, y + ch], &label)) {
+                                vui.draw_string_ex(r, &label, at[0], at[1], [1.0, 1.0, 1.0, 1.0], true);
+                            }
+                        } else if let Some((at, label)) = label.and_then(|label| shortcut_label_scaled(r, [x, y, x + cw, y + ch], &label, scale)) {
+                            let shadow = (2.0 * scale).max(1.0);
+                            r.draw_string_scaled([at[0] + shadow, at[1] + shadow], [0.0, 0.0, 0.0, 1.0], &label, scale);
+                            r.draw_string_scaled(at, [1.0; 4], &label, scale);
                         }
                     }
                 }
@@ -1393,6 +1533,57 @@ mod tests {
             }
         }
         assert!(super::shortcut_label(&r, [0, 0, 10, 10], "1").is_none(), "do not spill out when even the font cannot fit");
+    }
+    /// Spell Cooldowns (petition 2946): a lockout counts down from when it
+    /// came, is gone at its end and at the server's 0, and only while shown;
+    /// the seconds round up; the swipe covers the whole icon at the start,
+    /// half of it half way (the left half: the hand has swept the right
+    /// clear), none at the end. The control: a lockout from the clock's
+    /// future (a wrap) shows nothing.
+    #[test]
+    fn cooldowns_count_down_and_sweep() {
+        let mut c = super::Cooldowns { now: 1000, shown: true, ..Default::default() };
+        c.set(7, 10_000, 1000);
+        assert_eq!(c.left(7), Some((1.0, 10_000)));
+        c.now = 6000;
+        assert_eq!(c.left(7), Some((0.5, 5000)));
+        c.shown = false;
+        assert_eq!(c.left(7), None, "Spell Cooldowns off");
+        c.shown = true;
+        c.now = 11_000;
+        assert_eq!(c.left(7), None, "its time up");
+        c.now = 2000;
+        c.set(7, 0, 2000);
+        assert_eq!(c.left(7), None, "the server's end");
+        c.set(8, 3000, 5000);
+        assert_eq!(c.left(8), None, "the control: from the future");
+        assert_eq!((super::cooldown_text(4001), super::cooldown_text(1), super::cooldown_text(89_000), super::cooldown_text(150_000), super::cooldown_text(7_200_000)), ("5".into(), "1".into(), "89".into(), "3m".into(), "2h".into()));
+        let area = |t: &[[[f32; 2]; 3]]| t.iter().map(|[m, a, b]| ((a[0] - m[0]) * (b[1] - m[1]) - (b[0] - m[0]) * (a[1] - m[1])).abs() / 2.0).sum::<f32>();
+        let rect = [10, 20, 22, 22];
+        assert!((area(&super::swipe_triangles(rect, 1.0)) - 484.0).abs() < 0.5, "the whole icon");
+        let half = super::swipe_triangles(rect, 0.5);
+        assert!((area(&half) - 242.0).abs() < 0.5, "half");
+        assert!(half.iter().flatten().all(|p| p[0] <= 21.0 + 0.01), "the left half dark");
+        assert!(area(&super::swipe_triangles(rect, 0.0)) < 0.01, "none");
+    }
+
+    /// Hotkey Label Size % (petition 2945): a smaller label is narrower and
+    /// shorter than the font's own, at the cell's top right, a long one cut
+    /// later than at 100 (more of it fits). The control: in a cell the font's
+    /// own size overflows, a half-size label still fits.
+    #[test]
+    fn hotkey_labels_shrink_with_their_size() {
+        use vi::ui::Raster;
+        let r = crate::pointer::testing::NullRaster;
+        let cell = [150, 390, 184, 419];
+        let (full_at, full) = super::shortcut_label(&r, cell, "shift+f12").unwrap();
+        let (at, small) = super::shortcut_label_scaled(&r, cell, "shift+f12", 0.5).unwrap();
+        assert!(small.len() > full.len(), "more of it fits: {:?} vs {:?}", String::from_utf16_lossy(&small), String::from_utf16_lossy(&full));
+        assert!(at[0] + r.string_width(&small) as f32 * 0.5 + 3.0 <= cell[2] as f32 + 0.01);
+        assert!(at[0] >= cell[0] as f32 && at[1] as i32 == full_at[1]);
+        let short = [0, 0, 30, r.point_size() + 2];
+        assert!(super::shortcut_label(&r, short, "1").is_none(), "the control: the font's own does not fit");
+        assert!(super::shortcut_label_scaled(&r, short, "1", 0.5).is_some(), "half of it does");
     }
     #[test]
     fn pc_pairs_real_menus_and_keeps_packed_slots_accessible() {

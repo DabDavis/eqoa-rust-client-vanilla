@@ -445,6 +445,12 @@ impl Raster for UiRaster<'_> {
         self.assets.font.map_or(0, |f| self.ui.fonts[f].string_width(s))
     }
 
+    fn draw_string_scaled(&mut self, at: [f32; 2], color: [f32; 4], s: &[u16], scale: f32) {
+        if let Some(f) = self.assets.font {
+            self.ui.text_scaled(f, at[0], at[1], scale, color, s);
+        }
+    }
+
     fn point_size(&self) -> i32 {
         self.assets.font.map_or(0, |f| self.ui.fonts[f].height as i32)
     }

@@ -97,6 +97,13 @@ pub trait Raster {
     /// `DrawCenteredString(font, at, c, s, mode)`: 1 centres vertically, 2
     /// horizontally, 0 and 3 both, anything else draws nothing.
     fn draw_centered_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16], mode: u32);
+    /// `s` at `scale` times the font's size, its top left at `at` (the
+    /// client's own, not the game's: a hotkey label's Size %). A raster with
+    /// no scaled text draws it at the font's size.
+    fn draw_string_scaled(&mut self, at: [f32; 2], color: [f32; 4], s: &[u16], scale: f32) {
+        let _ = scale;
+        self.draw_string([at[0] as i32, at[1] as i32], color, s);
+    }
     /// `GetStringWidth`: each glyph's width plus one, `'?'` for a missing
     /// one, -1 when that is missing too.
     fn string_width(&self, s: &[u16]) -> i32;
