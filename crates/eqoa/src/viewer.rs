@@ -1413,11 +1413,11 @@ pub fn shot_with(
             cords.extend(p.decor_presents(walker.eye_position().to_array()));
             crate::decorlights::light_cords(&mut cords, &view);
             // the model bulbs, unlit: a bulb is its own light
-            cords.extend(p.decor_globes(walker.eye_position().to_array(), t));
-            // and the Strings of Lights' glass (`toys::glass`)
-            cords.extend(p.worn_light_glass(&walker, pose, t));
-            // with the world, before the name plates (`draw_decor`)
-            renderer.decor = cords;
+            renderer.set_decor(render::billboard::Decorations {
+                cords_and_presents: cords,
+                globes: p.decor_globes(eye, t),
+                worn_glass: p.worn_light_glass(&walker, pose, t),
+            });
         }
         renderer.strips = shot_bolts;
         renderer.strips.append(&mut shot_trails);
@@ -4303,7 +4303,7 @@ impl App {
                 t.plates.clear();
             }
             g.renderer.strips.clear();
-            g.renderer.decor.clear();
+            g.renderer.set_decor(Default::default());
             g.renderer.set_overlay(&g.device, &g.queue, glam::Mat4::IDENTITY, &[], &|_| None);
             g.window.request_redraw();
         }
@@ -7041,11 +7041,11 @@ impl App {
                         cords.extend(p.decor_presents(w.eye_position().to_array()));
                         crate::decorlights::light_cords(&mut cords, &lights.0);
                         // the model bulbs, unlit: a bulb is its own light
-                        cords.extend(p.decor_globes(w.eye_position().to_array(), now));
-                        // and the Strings of Lights' glass (`toys::glass`)
-                        cords.extend(p.worn_light_glass(w, m, now));
-                        // with the world, before the name plates (`draw_decor`)
-                        g.renderer.decor = cords;
+                        g.renderer.set_decor(render::billboard::Decorations {
+                            cords_and_presents: cords,
+                            globes: p.decor_globes(w.eye_position().to_array(), now),
+                            worn_glass: p.worn_light_glass(w, m, now),
+                        });
                     }
                     // the characters' blob shadows (`VIScene::RenderShadows`,
                     // `shadows`): drawn after the particle system's batches,
@@ -7285,7 +7285,7 @@ impl App {
                 // they painted over when drawn after them
                 match bb_view {
                     Some((v, p)) => g.renderer.draw_decor(&g.device, &g.queue, &mut enc, st, &f.depth, v, p, &textures),
-                    None => g.renderer.decor.clear(),
+                    None => g.renderer.set_decor(Default::default()),
                 }
                 // the effect volumes' fans, then the particles over them,
                 // all in the scene (the Brightness curve takes them too)
