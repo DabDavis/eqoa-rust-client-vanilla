@@ -116,9 +116,15 @@ impl Entry {
 /// near square, about a spell icon's 22 (Heirloom petition 2956: "the new
 /// icons are a bit too wide and a bit too short for the native ability
 /// bar", a 60 by 40 middle drawn 30 by 20). The crop's shape is the size's,
-/// so the item is not stretched.
-pub const ART_CROP: [i32; 4] = [35, 2, 44, 40];
-pub const ART_SIZE: [i32; 2] = [24, 22];
+/// so the item is not stretched. Centred where the disc's items stand, 54
+/// across (their middles over all 379 icons, measured; not the banner's 57),
+/// their whole height (4 to 40), 55 across (27 to 82: a potion's whole
+/// width, the widest of what goes on a quick slot; a long weapon's ends cut),
+/// drawn 32 by 23 (Graga's again, "truncated on the left side ... weren't
+/// increased in height": the 44 by 40 crop centred at 57 cut a potion's cork
+/// and bulb, 22 high).
+pub const ART_CROP: [i32; 4] = [27, 2, 55, 40];
+pub const ART_SIZE: [i32; 2] = [32, 23];
 
 /// Draws item art `id` (`ART_CROP`) `size` big with its middle at `mid`, at
 /// `alpha`. False when the raster has no such surface (the slot's own icon
@@ -2055,18 +2061,19 @@ mod tests {
         assert_eq!(h.point_utility(mid([216, bottom - ch, 216 + cw, bottom])), None, "hidden: nothing found");
     }
 
-    /// An item's art on a slot (petition 2956): near a spell icon's square
-    /// (22), not the 3 to 2 strip it was (30 by 20), and its crop the size's
-    /// shape (no stretch), centred on the banner's middle (57 of 114). The
-    /// control: the old size fails the shape's bound.
+    /// An item's art on a slot (petition 2956): taller than a spell icon's 22
+    /// and the 3 to 2 strip it was (30 by 20), its crop the size's shape (no
+    /// stretch), centred where the items stand (54 of 114), all their height
+    /// and a potion's width. The control: the old size fails the bound.
     #[test]
     fn item_art_is_near_square_and_unstretched() {
         let ([x, y, w, h], [sw, sh]) = (ART_CROP, ART_SIZE);
-        let square = |sw: i32, sh: i32| (sw * 100 / sh) <= 115 && sh >= 20;
+        let square = |sw: i32, sh: i32| (sw * 100 / sh) <= 140 && sh >= 23;
         assert!(square(sw, sh), "{sw}x{sh}");
         assert!(!square(30, 20), "the control: the old strip");
         assert!(((w * sh) - (h * sw)).abs() * 100 <= w * sh * 3, "crop {w}x{h} drawn {sw}x{sh} keeps its shape");
-        assert_eq!((x + w / 2, y + h / 2), (57, 22), "the banner's middle");
+        assert_eq!((x + w / 2, y + h / 2), (54, 22), "where the items stand");
+        assert!(y <= 4 && y + h >= 40 && x <= 27 && x + w >= 82, "their whole height, a potion's whole width");
     }
 
     /// Item Slot Icons (petitions 2926, 2928): each quick slot's item's own
