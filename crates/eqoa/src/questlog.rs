@@ -77,8 +77,12 @@ impl Quests {
     }
 }
 
-/// An untracked quest's title (petition 3013).
-const UNTRACKED: [f32; 4] = [0.55, 0.55, 0.55, 1.0];
+/// An untracked quest's title (petition 3013): a dark grey. The journal's
+/// stone backdrop is a light grey-beige, and the 0.55 grey first used read
+/// as the backdrop itself: an untracked quest seemed gone from the journal
+/// (Heirloom petition 3064, "it also makes it disappear from the quest
+/// log"; `offline_quest_journal_png` shows it).
+const UNTRACKED: [f32; 4] = [0.3, 0.3, 0.3, 1.0];
 
 /// What the journal asks of the game.
 #[derive(Clone, Debug, PartialEq)]
@@ -312,6 +316,16 @@ impl QuestLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Heirloom petition 3064: an untracked quest's title stays readable on
+    /// the journal's light backdrop, darker than the game's dim grey and
+    /// lighter than the text's black.
+    #[test]
+    fn an_untracked_title_is_a_readable_grey() {
+        let grey = UNTRACKED;
+        assert!(grey[0] == grey[1] && grey[1] == grey[2] && grey[3] == 1.0, "a grey, opaque");
+        assert!(grey[0] > UI_COLORS[0][0] && grey[0] < UI_COLORS[2][0], "{grey:?}");
+    }
 
     fn w(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()

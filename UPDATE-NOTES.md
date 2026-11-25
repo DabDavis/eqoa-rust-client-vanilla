@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Untracked quests stay readable, flight sticks no longer turn you
+
+- A quest you take off the quest tracker now stays plainly listed in the **Quest Journal**, in dark grey: the light grey it was drawn in before matched the journal's background, so the quest looked gone.
+- A controller axis that sits off its middle from the moment it connects (a flight stick's throttle or slider, a wheel's pedal) no longer turns or moves your character on its own: it is ignored until you bring it back to its middle once. Ordinary gamepads work as before.
+
 ## 2026-11-25 · Optional FPS display
 
 - The browser client hides its FPS counter by default. Toggle **Show FPS** under **Options → Extended → Graphics → Video** and choose **Save Changes** to keep your choice.

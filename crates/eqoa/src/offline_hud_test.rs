@@ -299,3 +299,23 @@ fn offline_chat_move_resize_pin_reopen_and_hit_test() {
     assert_eq!(crate::settings::client().chat_pane_sizes[0], Some([resized_main.0, resized_main.1]));
     eprintln!("independent chat moves, width/height grips, pin and profile reload verified; main {resized_main:?}, pane {resized_pane:?}; screen {:?}", beyond.screen());
 }
+
+/// The Quest Journal with one quest off the tracker (Heirloom petition 3064:
+/// an untracked quest must stay listed, only greyed): a PNG to look at.
+#[test]
+#[ignore = "manual offline GPU fixture: requires local disc and output directory"]
+fn offline_quest_journal_png() {
+    let (mut lib, src, output) = offline_assets();
+    crate::settings::testing::reset(false);
+    let mut p = fixture_play();
+    let names = ["The Orc Pawn", "Gnoll Fangs for the Guard", "A Letter to Freeport"];
+    p.quests.titles = names.iter().map(|n| crate::ui::wide(&format!("{n}: speak to the guard"))).collect();
+    p.session.quest_progress = names.iter().map(|n| net::session::TrackedQuest { name: (*n).into(), goals: Vec::new(), ability: false }).collect();
+    p.quests.untracked.character(p.player.server_id, &p.dump.player.name);
+    assert!(!p.quests.untracked.toggle(names[1]));
+    p.mode = 22;
+    p.quest_open = true;
+    let script = crate::viewer::Script { ms: 1000, controls: Default::default() };
+    let path = output.join("offline-quest-journal.png");
+    crate::viewer::shot_with(&mut lib, &src, None, Some(script), (960, 540), path.to_str().unwrap(), Some(p)).expect("journal capture");
+}
