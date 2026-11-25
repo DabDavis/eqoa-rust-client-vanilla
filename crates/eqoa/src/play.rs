@@ -508,6 +508,8 @@ pub struct Play {
     dyepick: dyeplay::DyePlay,
     /// The Stat Window as last drawn (`statwnd`, `statplay`), for a pointer.
     stat_panel: Option<crate::statwnd::Panel>,
+    /// The focus target (`focus`, Heirloom petition 3038): none until Set Focus.
+    focus: Option<crate::focus::Focus>,
     /// Mouseover Casting (petition 2960): where the mouse is over the window
     /// (none off it) and the last frame's view and window size, so a cast
     /// can name the friend under it (`mouseover_target`).
@@ -1048,6 +1050,30 @@ mod login_world {
             control_fails |= by_path(&p) != want;
         }
         assert!(control_fails, "the path alone must miss one");
+    }
+}
+
+/// How long after an attack ability is sent its lockout may come and start
+/// the auto-attack (Attack With Abilities, petition 3015).
+const ABILITY_ATTACK_WAIT_MS: u32 = 3000;
+
+/// Whether ability `a` starts the auto-attack with Attack With Abilities on
+/// (petition 3015): one cast at a target that harms it (`autocast::guess`'s
+/// Attack: a nuke, a strike, a taunt), or a melee art named so (a kick, a
+/// bash, a taunt; a strike the guess could not place), never one it took
+/// for a heal or a pet. Never a
+/// heal, a buff, the pet's, the group's or the player's own.
+pub fn starts_attack(a: &net::dump::Ability) -> bool {
+    if a.scope != 1 {
+        return false;
+    }
+    // a melee art's name ("Shield Bash" reads as a buff by its words)
+    let n = a.name.to_lowercase();
+    let art = ["kick", "bash", "taunt", "slam", "backstab", "punch"].iter().any(|w| n.contains(w));
+    match crate::autocast::guess(a) {
+        Some(crate::autocast::Kind::Attack) => true,
+        Some(crate::autocast::Kind::Heal | crate::autocast::Kind::Pet) => false,
+        _ => art || (n.contains("strike") && crate::autocast::guess(a).is_none()),
     }
 }
 
@@ -3795,7 +3821,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None, pointer: None, pointer_view: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None, focus: None, pointer: None, pointer_view: None };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -3969,6 +3995,10 @@ impl Play {
                 Event::TargetInfo { disposition, b, title, guild, .. } => {
                     self.target_info = Some(disposition);
                     self.rings.con = Some(b);
+                    // the focus's con, while it is the target (`focus`)
+                    if let Some(f) = self.focus.as_mut().filter(|f| f.id == self.target) {
+                        f.con = Some(b);
+                    }
                     self.target_title = title;
                     self.target_guild = guild;
                 }
@@ -4215,7 +4245,17 @@ impl Play {
                         self.trainer_refresh = true;
                     }
                 }
-                Event::Opcode { op: 0x007D, data } => self.quests.recv_remove(&data),
+                Event::Opcode { op: 0x007D, data } => {
+                    // the quest gone off the tracked set too (petition 3013):
+                    // the tracker's quest at its index, as it was
+                    let name = net::stream::Reader::new(&data[4.min(data.len())..]).signed();
+                    let name = usize::try_from(name).ok().and_then(|i| self.session.quest_progress.get(i)).map(|q| q.name.clone());
+                    if self.quests.recv_remove(&data).is_some()
+                        && let Some(n) = name
+                    {
+                        self.quests.untracked.gone(&n);
+                    }
+                }
                 Event::Opcode { op: op @ 0x1003..=0x1006, data } => {
                     self.ignore.recv(op, &data);
                     // Msg1003Done (not for a rename): every creature's
@@ -4361,9 +4401,16 @@ impl Play {
                     // Msg00CD
                     self.ability_token = token;
                     if let Some(a) = self.abilities.values_mut().find(|a| a.display_index == index as i64) {
-                        a.lockout = lockout as i64;
-                        // its recast timer from now (Spell Cooldowns, petition 2946)
-                        self.hud_menus.cooldowns.set(a.id, lockout as i64, self.session.now() as i64);
+                        // its lockout (the game's lock badge) and its recast
+                        // timer from now (Spell Cooldowns, petition 2946); an
+                        // end that is the last lockout's kept out (3012)
+                        if !self.hud_menus.cooldowns.came(a.id, &mut a.lockout, lockout as i64, self.session.now() as i64) {
+                            eprintln!("play: 0x00CD end of ability {} with its lockout still running: the last one's, kept", a.id);
+                        }
+                        if lockout > 0 {
+                            let id = a.id;
+                            self.attack_with_ability(id);
+                        }
                     }
                 }
                 Event::Action { id, action } => {
@@ -4663,6 +4710,7 @@ impl Play {
         // Options > Interface's Profanity Filter, to a server that asks (0x7E60)
         self.session.agree_profanity_filter(crate::settings::profanity_filter().wire());
         self.drop_dead_target_info();
+        self.drop_lost_focus();
         self.drop_stale_mob_info(now);
         if self.has_self() {
             self.auto_attack_tick(walker, now);
@@ -5416,8 +5464,9 @@ impl Play {
             // Extended's Quest Markers is on (`net::headmarks`)
             let mark = crate::settings::head_marks().then(|| self.session.head_mark(e.id)).flatten();
             // the player's effects on it, from a server that sends them,
-            // while Extended's Debuff Icons is on (petition 2997)
-            let debuffs = if crate::settings::npc_debuffs() { self.session.npc_debuffs_left(e.id, self.session.now()) } else { Vec::new() };
+            // while Extended's Debuff Icons says Name Plate (petitions 2997,
+            // 3020; Target Window's go in the target box, `target_effects`)
+            let debuffs = if crate::settings::debuff_icons() == crate::settings::DebuffIcons::Plate { self.session.npc_debuffs_left(e.id, self.session.now()) } else { Vec::new() };
             out.push(Plate { at, color: self.name_color(c), name: c.name.clone(), tag: self.merc_tag(c), mark, debuffs });
         }
         out
@@ -7059,6 +7108,8 @@ impl Play {
             "/dps" => self.dps_command(&rest),
             // the Stat Window's (`statwnd`, petition 2925), the client's own
             "/stats" => self.stats_command(&rest),
+            // the focus target's (`focus`, Heirloom petition 3038), the client's own
+            "/focus" => self.focus_command(&rest),
             // a local look at the regional weather (`weather_zones`), never sent
             "/weatherpreview" => self.weather_preview_command(&rest),
             // the chat tabs' (`chat`, ticket 1951), the client's own
@@ -7858,7 +7909,8 @@ impl Play {
         // the dump's quests (m_questCount, m_questTitle) and their stamp
         // ReadState: the MemoryDump's Class Mastery
         self.cm.m = self.dump.mastery.clone();
-        self.quests = crate::questlog::Quests { titles: self.dump.quests.iter().map(|q| crate::ui::wide(q)).collect(), stamp: self.dump.p2bb0c };
+        let untracked = std::mem::take(&mut self.quests.untracked);
+        self.quests = crate::questlog::Quests { titles: self.dump.quests.iter().map(|q| crate::ui::wide(q)).collect(), untracked, stamp: self.dump.p2bb0c };
     }
 
     /// A word with a name in its `%s` to the chat log.
@@ -8776,7 +8828,10 @@ impl Play {
             ups.extend(self.quest_log.key(vui, &self.quests, k, down, now, &mut cues));
         }
         if self.mode == 22 {
-            self.quest_log.draw(vui, r, &self.quests, now, &mut cues);
+            let progress = &self.session.quest_progress;
+            let quests = &self.quests;
+            let tracked = |i: i32| usize::try_from(i).ok().and_then(|i| progress.get(i)).map(|q| quests.untracked.tracked(&q.name));
+            self.quest_log.draw(vui, r, &self.quests, &tracked, now, &mut cues);
         }
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
         for up in ups {
@@ -8792,6 +8847,18 @@ impl Play {
                 crate::questlog::QuestUp::Drop(i) => {
                     let m = self.quests.send_remove(i);
                     self.session.send(&m);
+                }
+                // □ (petition 3013): the tracker's quest at its place
+                crate::questlog::QuestUp::Track(i) => {
+                    self.quests.untracked.character(self.player.server_id, &self.dump.player.name);
+                    let name = usize::try_from(i).ok().and_then(|i| self.session.quest_progress.get(i)).map(|q| q.name.clone());
+                    match name {
+                        Some(n) => {
+                            let on = self.quests.untracked.toggle(&n);
+                            self.add_chat(format!("{n}: {} the quest tracker.", if on { "back on" } else { "off" }), [1.0; 4]);
+                        }
+                        None => self.cues.push(crate::sound::Cue::Ui(9)),
+                    }
                 }
             }
         }
@@ -9533,6 +9600,10 @@ impl Play {
         // one under the mouse, the target kept (0x0032 names its own target,
         // which the server casts at)
         let at = self.abilities.get(&id).and_then(|a| self.mouseover_target(a)).unwrap_or(self.target);
+        // Attack With Abilities (petition 3015): an attack ability at a
+        // hostile target, its start of the auto-attack waiting on the
+        // server's lockout for it
+        self.attack.ability_sent = self.abilities.get(&id).filter(|a| crate::settings::attack_abilities() && !self.auto_attack && at == self.target && starts_attack(a) && self.hostile(at)).map(|_| (id, at, self.session.now()));
         let mut w = net::stream::Writer::op(0x0032);
         w.u32(self.ability_token).u8(slot as u8).u32(at);
         if crate::s2::get().use_skill_record {
@@ -10153,12 +10224,51 @@ impl Play {
         }
     }
 
+    /// Attack With Abilities (Heirloom petition 3015): the server took
+    /// ability `id` (its lockout came); when it is the attack ability sent at
+    /// a hostile target a moment ago (`send_0032`), the target unchanged,
+    /// still hostile and not being fought, the auto-attack starts as the
+    /// attack button starts it (`attack_press`), and with the button held
+    /// (the game's way) it is on until the target dies, the target changes
+    /// or the button is pressed and let go.
+    fn attack_with_ability(&mut self, id: i64) {
+        let Some((sent, target, at)) = self.attack.ability_sent else { return };
+        if sent != id {
+            return;
+        }
+        self.attack.ability_sent = None;
+        let now = self.session.now();
+        if now.wrapping_sub(at) > ABILITY_ATTACK_WAIT_MS || !crate::settings::attack_abilities() || self.auto_attack || target != self.target || !self.hostile(target) || self.is_dead() {
+            return;
+        }
+        eprintln!("play: an attack ability taken: the auto-attack on (Attack With Abilities)");
+        self.attack_press();
+        self.attack.by_ability = self.auto_attack;
+    }
+
+    /// Whether `id` is a creature to fight: not the player nor its side
+    /// (`own_side`), not a player, alive, not a corpse, attackable (not
+    /// flagged 0x80, which the attack button passes over).
+    fn hostile(&self, id: u32) -> bool {
+        if id == u32::MAX || Some(id) == self.self_id32() {
+            return false;
+        }
+        let Some(e) = self.entities.slots.iter().flatten().find(|e| e.id == id) else { return false };
+        let Some(c) = e.creature.as_ref() else { return false };
+        e.p18 & 2 == 0 && e.p19 != 0 && c.npc_flags & 0x80 == 0 && c.p256 != 2 && !self.own_side(e)
+    }
+
     /// `VIClient::Process`'s part of the options: with Auto Attack on, a
     /// target gone, not to be fought or oneself stops it; the faction and
     /// loot filters sent when they change (201, 202: off, then 1), and once
     /// after the world entry (then 0).
     fn options_tick(&mut self) {
-        if self.options.auto_attack != 0 && self.target != u32::MAX && self.auto_attack {
+        // an auto-attack an ability started (petition 3015) ends with its
+        // target, as the Auto Attack option's does
+        if !self.auto_attack {
+            self.attack.by_ability = false;
+        }
+        if (self.options.auto_attack != 0 || self.attack.by_ability) && self.target != u32::MAX && self.auto_attack {
             let alive = self.entities.slots.iter().flatten().find(|e| e.id == self.target).is_some_and(|e| e.p19 != 0);
             if !alive || Some(self.target) == self.self_id32() {
                 self.auto_attack = false;
@@ -10634,6 +10744,8 @@ impl Play {
     pub fn map_frame(&mut self, walker: &Walker, lib: &Library, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, size: (u32, u32), dt: f32, sticks: [f32; 4]) {
         let now = self.session.now();
         self.guide_frame(walker, now);
+        // the character's tracked quests (petition 3013)
+        self.quests.untracked.character(self.player.server_id, &self.dump.player.name);
         if !crate::settings::map() {
             self.map.off();
             return;
@@ -10753,7 +10865,8 @@ impl Play {
         } else if self.guide_on(self.session.now()) {
             self.guide.estimate.tracker.clone()
         } else {
-            self.session.quest_progress.clone()
+            // less the quests the player untracked (petition 3013)
+            self.quests.untracked.filter(self.session.quest_progress.clone())
         }
     }
 
@@ -11037,6 +11150,7 @@ impl Play {
             target_name: target.and_then(|e| e.creature.as_ref()).map(|c| c.name.clone()),
             target_level: self.target_level(crate::settings::target_level()),
             target_hp: target.map_or(0, |e| e.p19 as i32),
+            target_effects: self.target_effects(target.filter(|e| e.creature.is_some()).map(|e| e.id)),
             target_info: self.target_info,
             self_targeted_flag: Some(self.target) == me && self.dump.player.p2c > 0,
             pet,
@@ -11169,6 +11283,14 @@ impl Play {
                 facts.figures = self.session.stat_figures;
                 let word = |w: i32| vui.words.get(w, vui.language).to_string();
                 self.stat_panel = Some(crate::statwnd::draw(&mut r, &facts, crate::statwnd::TITLE, &word));
+                crate::hudlayout::end(r.ui, m);
+            }
+            // the focus target's window (`focus`, petition 3038), while one holds
+            if crate::influence::shown(self.mode)
+                && let Some(f) = self.focus_shown()
+            {
+                let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Focus);
+                crate::focus::draw(&mut r, &f);
                 crate::hudlayout::end(r.ui, m);
             }
             r.ui.anchor = Anchor::Right;
@@ -11638,6 +11760,16 @@ impl Play {
         self.session.effects_of(id, now).into_iter().map(|e| crate::hud::MemberFx { icon: e.icon, name: e.name, left_ms: e.left_ms }).collect()
     }
 
+    /// Debuff Icons in the target box (Heirloom petition 3020): the player's
+    /// effects on targeted creature `id` the server sent, with their names and
+    /// times left, while Extended's Debuff Icons says Target Window (the
+    /// default); none otherwise, or for no creature targeted.
+    fn target_effects(&self, id: Option<u32>) -> Vec<crate::hud::MemberFx> {
+        let Some(id) = id.filter(|_| crate::settings::debuff_icons() == crate::settings::DebuffIcons::Target) else { return Vec::new() };
+        let now = self.session.now();
+        self.session.npc_debuffs_of(id, now).into_iter().map(|e| crate::hud::MemberFx { icon: e.icon, name: e.name, left_ms: e.left_ms }).collect()
+    }
+
     /// Number Colors: the server told to tag the numbers while a row is not
     /// Default, and to stop when every one is (`numcolor::wanted`).
     fn agree_number_tags(&mut self) {
@@ -11991,6 +12123,69 @@ impl Play {
             let_go(s, p);
             *p = None;
         }
+    }
+
+    /// Set Focus (`focus`, Heirloom petition 3038: `[`, `/focus`): the target,
+    /// a creature, the focus, its con with it while its target info is in;
+    /// the focus's own target again, or no target, lets it go. Said in chat.
+    pub fn focus_key(&mut self) {
+        let target = self.entities.slots.iter().flatten().find(|e| e.id == self.target && self.target != u32::MAX);
+        let cand = target.and_then(|e| e.creature.as_ref().map(|c| crate::focus::Candidate { id: e.id, name: c.name.as_str(), alive: e.p19 != 0 }));
+        let con = self.target_info.and(self.rings.con);
+        let line = match crate::focus::press(&mut self.focus, cand, con) {
+            crate::focus::Pressed::Set(name) => format!("Focus target: {name}."),
+            crate::focus::Pressed::Cleared => "Focus target cleared.".to_string(),
+            crate::focus::Pressed::NoTarget => "You have no target to focus.".to_string(),
+            crate::focus::Pressed::Dead(name) => format!("{name} is dead: no focus taken."),
+        };
+        self.add_chat(line, [1.0; 4]);
+    }
+
+    /// Target Focus (`focus`: `]`, `/focus target`): the focus targeted as the
+    /// target cycle leaves a choice (`target_id`), the target's details asked
+    /// again; with none, said so.
+    pub fn target_focus(&mut self) {
+        match self.focus.as_ref().map(|f| f.id) {
+            Some(id) if id == self.target => {}
+            Some(id) => self.target_id(id),
+            None => self.add_chat("You have no focus target.".to_string(), [1.0; 4]),
+        }
+    }
+
+    /// `/focus` (`focus::command`).
+    fn focus_command(&mut self, rest: &str) {
+        use crate::focus::Command;
+        match crate::focus::command(rest) {
+            Command::Press => self.focus_key(),
+            Command::Target => self.target_focus(),
+            Command::Clear => {
+                let line = if self.focus.take().is_some() { "Focus target cleared." } else { "You have no focus target." };
+                self.add_chat(line.to_string(), [1.0; 4]);
+            }
+            Command::Help => self.add_chat(crate::focus::HELP.to_string(), [1.0; 4]),
+        }
+    }
+
+    /// The focus let go once its creature is (`focus::holds`): out of the
+    /// entities, dead, in another world, or its id another's.
+    fn drop_lost_focus(&mut self) {
+        let Some(f) = self.focus.as_ref() else { return };
+        let e = self.entities.slots.iter().flatten().find(|e| e.id == f.id).and_then(|e| e.creature.as_ref().map(|c| (c.name.as_str(), e.p19, e.world as i64)));
+        if !crate::focus::holds(f, e, self.player.world) {
+            self.focus = None;
+        }
+    }
+
+    /// The focus window's facts (`focus::Shown`), while a focus holds: its
+    /// distance from the player's own place as drawn.
+    fn focus_shown(&self) -> Option<crate::focus::Shown> {
+        let f = self.focus.as_ref()?;
+        let e = self.entities.slots.iter().flatten().find(|e| e.id == f.id)?;
+        let distance = self.self_at.map(|(me, _)| {
+            let d = [e.actor_pos[0] - me[0], e.actor_pos[1] - me[1], e.actor_pos[2] - me[2]];
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+        });
+        Some(crate::focus::Shown { name: f.name.clone(), con: f.con, hp: e.p19, distance })
     }
 
     fn drop_dead_target_info(&mut self) {
@@ -13575,6 +13770,70 @@ mod commands {
         p.pointer = Some(at(0.0));
         set(MouseoverCast::MouseoverFirst, false);
         assert_eq!(p.mouseover_target(&heal), None, "the control: the Controller interface");
+        crate::settings::testing::reset(false);
+    }
+
+    /// Attack With Abilities (Heirloom petition 3015): which abilities start
+    /// the auto-attack: attacks at a target (a nuke, a taunt, a kick by
+    /// name), never a heal, a buff, the player's own or the group's.
+    #[test]
+    fn attack_abilities_are_the_harms_at_a_target() {
+        let ab = |scope: i64, name: &str, desc: &str| net::dump::Ability { id: 1, scope, name: name.into(), desc: desc.into(), ..Default::default() };
+        assert!(starts_attack(&ab(1, "Fire Bolt", "Target, decrease hitpoints by 40 (fire damage)")));
+        assert!(starts_attack(&ab(1, "Taunt", "Taunts the target, increasing its hate")));
+        assert!(starts_attack(&ab(1, "Kick", "")), "a melee art by its name");
+        assert!(starts_attack(&ab(1, "Shield Bash", "")));
+        assert!(!starts_attack(&ab(1, "Minor Healing", "Heals the target for 50 hit points")), "a heal");
+        assert!(!starts_attack(&ab(1, "Strength", "Increases the target's strength for 30 min")), "a buff");
+        assert!(!starts_attack(&ab(0, "Kick", "")), "the player's own");
+        assert!(!starts_attack(&ab(2, "Fire Storm", "decrease hitpoints by 40 (fire damage)")), "the group's");
+    }
+
+    /// Attack With Abilities: off by default nothing starts; on, an attack
+    /// ability at a foe starts the auto-attack (0x000F, as the button) once
+    /// the server's lockout for it comes, not before; never a heal, never at
+    /// a friend, never where the server turns automation off (`qol`), never
+    /// for another ability's lockout.
+    #[test]
+    fn an_attack_ability_starts_the_auto_attack() {
+        use crate::settings::{ClientOptions, client, qol, set_client};
+        crate::settings::testing::reset(false);
+        let mut p = play();
+        p.session.record = Some(Vec::new());
+        let creature = |id: u32, name: &str| net::entity::Entity { id, kind: 130, p18: 1, p19: 1, creature: Some(net::entity::Creature { name: name.into(), ..Default::default() }), ..Default::default() };
+        let (foe, pet) = (0x0010_0005, 0x0010_0003);
+        p.entities.slots[0] = Some(creature(foe, "an orc pawn"));
+        p.entities.slots[1] = Some(creature(pet, "Gobbler"));
+        p.pet_id = pet;
+        let kick = net::dump::Ability { id: 10, slot: 0, valid: 1, scope: 1, name: "Kick".into(), ..Default::default() };
+        let heal = net::dump::Ability { id: 11, slot: 1, valid: 1, scope: 1, name: "Minor Healing".into(), desc: "Heals the target for 50 hit points".into(), ..Default::default() };
+        p.abilities.insert(10, kick);
+        p.abilities.insert(11, heal);
+        let sent_000f = |p: &mut Play| p.session.record.as_mut().map(std::mem::take).unwrap_or_default().iter().any(|(_, m)| m.starts_with(&[0x0F, 0x00]));
+        let try_ = |p: &mut Play, id: i64, target: u32| {
+            p.auto_attack = false;
+            p.target = target;
+            p.send_0032(id);
+            let before = p.auto_attack;
+            p.attack_with_ability(id);
+            (before, p.auto_attack)
+        };
+        assert_eq!(try_(&mut p, 10, foe), (false, false), "off by default");
+        set_client(ClientOptions { attack_abilities: true, ..client() });
+        sent_000f(&mut p);
+        assert_eq!(try_(&mut p, 10, foe), (false, true), "on: started when the server took it");
+        assert!(sent_000f(&mut p), "as the attack button: 0x000F");
+        assert!(p.attack.by_ability);
+        assert_eq!(try_(&mut p, 11, foe), (false, false), "a heal");
+        assert_eq!(try_(&mut p, 10, pet), (false, false), "at the pet");
+        p.auto_attack = false;
+        p.target = foe;
+        p.send_0032(10);
+        p.attack_with_ability(11);
+        assert!(!p.auto_attack, "another ability's lockout");
+        qol::set_off(qol::AUTO_CAST);
+        assert_eq!(try_(&mut p, 10, foe), (false, false), "locked off by the server");
+        qol::set_off(0);
         crate::settings::testing::reset(false);
     }
 
@@ -15715,6 +15974,59 @@ mod commands {
         assert_eq!((p.target, p.auto_attack), (0x300, true));
         p.msg_007b(u32::MAX);
         assert_eq!((p.target, last_line(&p)), (0x300, "(word 838)"));
+    }
+
+    /// Focus Target (`focus`, Heirloom petition 3038): Set Focus takes the
+    /// target with its con, Target Focus targets it again, the window shows
+    /// its name, health and distance; it goes when its creature dies or
+    /// leaves, and `/focus clear` lets it go. The controls: no target is no
+    /// focus, and a living focus in view is kept.
+    #[test]
+    fn a_focus_is_set_targeted_and_let_go_with_its_creature() {
+        let mut p = play();
+        let world = p.player.world as i8;
+        let gnoll = |hp| net::entity::Entity { id: 0x500, kind: 130, p19: hp, world, actor_pos: [3.0, 0.0, 4.0], creature: Some(net::entity::Creature { name: "a gnoll".into(), ..Default::default() }), ..Default::default() };
+        p.entities.slots[4] = Some(gnoll(200));
+        p.focus_key();
+        assert_eq!((p.focus.is_none(), last_line(&p)), (true, "You have no target to focus."));
+        p.target = 0x500;
+        p.target_info = Some(1);
+        p.rings.con = Some(0);
+        p.focus_key();
+        assert_eq!(p.focus, Some(crate::focus::Focus { id: 0x500, name: "a gnoll".into(), con: Some(0) }));
+        assert_eq!(last_line(&p), "Focus target: a gnoll.");
+        p.self_at = Some(([0.0; 3], None));
+        let shown = p.focus_shown().expect("the window while a focus holds");
+        assert_eq!((shown.hp, shown.distance, shown.con), (200, Some(5.0), Some(0)));
+        // another target, then Target Focus brings the focus back
+        p.target_id(0x600);
+        p.target_focus();
+        assert_eq!(p.target, 0x500);
+        p.drop_lost_focus();
+        assert!(p.focus.is_some(), "the control: alive and in view, kept");
+        // dead: gone
+        p.entities.slots[4] = Some(gnoll(0));
+        p.drop_lost_focus();
+        assert_eq!((p.focus.is_none(), p.focus_shown()), (true, None));
+        // set again, then out of view: gone, and Target Focus says so
+        p.entities.slots[4] = Some(gnoll(200));
+        p.focus_key();
+        assert!(p.focus.is_some());
+        p.entities.slots[4] = None;
+        p.drop_lost_focus();
+        assert!(p.focus.is_none(), "despawned or out of view");
+        p.target_focus();
+        assert_eq!(last_line(&p), "You have no focus target.");
+        // the same target twice lets it go; /focus clear too
+        p.entities.slots[4] = Some(gnoll(200));
+        p.target = 0x500;
+        p.focus_key();
+        p.focus_key();
+        assert_eq!((p.focus.is_none(), last_line(&p)), (true, "Focus target cleared."));
+        p.chat_line("/focus");
+        assert!(p.focus.is_some(), "/focus is Set Focus");
+        p.chat_line("/focus clear");
+        assert!(p.focus.is_none());
     }
 
     /// Hide UI (`hideui`): a click on the quick menu's title bar turns to the

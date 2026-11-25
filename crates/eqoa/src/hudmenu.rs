@@ -680,6 +680,11 @@ pub struct HudMenus {
 /// milliseconds, 0 when it is over) kept from when it came, by its id, so
 /// the bars darken its icon by the time left, a clock's hand sweeping round
 /// from twelve, and say the seconds left in its middle (`draw_cooldown`).
+/// How much of a kept lockout may still be to run when the server's end of
+/// it comes, for the end to be its own (`Cooldowns::stale_end`): a trip and
+/// a tick's lateness either way.
+pub const STALE_END_MS: i64 = 1000;
+
 #[derive(Clone, Debug, Default)]
 pub struct Cooldowns {
     /// The session's clock now (ms), set each frame (`Play`).
@@ -697,6 +702,33 @@ impl Cooldowns {
         } else {
             self.on.remove(&id);
         }
+    }
+
+    /// Whether a lockout's end (0x00CD of 0) for ability `id` coming at `now`
+    /// is a stale one: the one kept has more than `STALE_END_MS` still to
+    /// run (Heirloom petition 3012, Cucumber: "when you fast click an ability
+    /// it seems to skip over the cooldown/recast ... wont let me cast again,
+    /// but it visually shows available"). go-eqoa-server ends a lockout on
+    /// its tick after its time: a press that casts again in the moment
+    /// between (a button pressed fast as it comes ready) begins a new lockout,
+    /// and the old one's end follows it and read as the new one's. A
+    /// server's real end comes when the kept time is up (give or take the
+    /// trip), so one with seconds still to go is the old one's.
+    pub fn stale_end(&self, id: i64, now: i64) -> bool {
+        self.on.get(&id).is_some_and(|&(at, total)| total - (now - at).max(0) > STALE_END_MS)
+    }
+
+    /// Msg00CD's lockout of `ms` for ability `id` came at `now`: into the
+    /// ability's own field (`held`, `Ability::lockout`, the game's lock
+    /// badge) and the recast timer, unless it is a stale end (`stale_end`),
+    /// which changes neither (false).
+    pub fn came(&mut self, id: i64, held: &mut i64, ms: i64, now: i64) -> bool {
+        if ms <= 0 && *held > 0 && self.stale_end(id, now) {
+            return false;
+        }
+        *held = ms;
+        self.set(id, ms, now);
+        true
     }
 
     /// What is left of ability `id`'s lockout now: the share of it (1 at its
@@ -1571,6 +1603,31 @@ mod tests {
         assert!((area(&half) - 242.0).abs() < 0.5, "half");
         assert!(half.iter().flatten().all(|p| p[0] <= 21.0 + 0.01), "the left half dark");
         assert!(area(&super::swipe_triangles(rect, 0.0)) < 0.01, "none");
+    }
+
+    /// Heirloom petition 3012: a press that cast again as its lockout came
+    /// ready, the server's end of the old lockout (on its tick after) comes
+    /// after the new one and is kept out: the badge and the sweep stay; the
+    /// new lockout's own end, at its time, clears them. The control: an end
+    /// at its time, and one with no lockout kept, are taken.
+    #[test]
+    fn a_stale_lockout_end_keeps_the_new_one() {
+        let mut c = super::Cooldowns { now: 0, shown: true, ..Default::default() };
+        let mut held = 0;
+        assert!(c.came(7, &mut held, 5000, 0));
+        assert!(c.came(7, &mut held, 0, 5050), "its own end, a trip late");
+        assert_eq!(held, 0);
+        // pressed fast as it came ready: cast again before the old one's end
+        assert!(c.came(7, &mut held, 5000, 5000));
+        assert!(!c.came(7, &mut held, 0, 5040), "the old one's end, after the new");
+        c.now = 5100;
+        assert_eq!((held, c.left(7).map(|l| l.1)), (5000, Some(4900)), "badge and sweep kept");
+        assert!(c.came(7, &mut held, 0, 9600), "the new one's end, near its time");
+        c.now = 9600;
+        assert_eq!((held, c.left(7)), (0, None));
+        assert!(c.came(8, &mut held, 0, 100), "the control: nothing kept");
+        let mut h8 = 4000;
+        assert!(c.came(8, &mut h8, 0, 100), "the control: a lockout with no timer kept");
     }
 
     /// Hotkey Label Size % (petition 2945): a smaller label is narrower and

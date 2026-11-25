@@ -76,14 +76,16 @@ pub enum Piece {
     RaidPrompts,
     /// The Stat Window (`statwnd`), at the left.
     Stats,
+    /// The focus target's window (`focus`), above the target box.
+    Focus,
 }
 
 /// Each piece, in `Piece`'s order.
-pub const PIECES: [Piece; 21] = [
+pub const PIECES: [Piece; 22] = [
     Piece::Player, Piece::Group, Piece::Pet, Piece::Target, Piece::Minimap, Piece::Quests,
     Piece::Meter, Piece::Effects, Piece::Chat, Piece::Chat1, Piece::Chat2, Piece::Chat3,
     Piece::Settings, Piece::Breath, Piece::QuickMenus, Piece::SpellBars, Piece::UtilityBars,
-    Piece::EquipmentBar, Piece::TargetInfo, Piece::RaidPrompts, Piece::Stats,
+    Piece::EquipmentBar, Piece::TargetInfo, Piece::RaidPrompts, Piece::Stats, Piece::Focus,
 ];
 const N: usize = PIECES.len();
 
@@ -167,6 +169,7 @@ impl Piece {
             Piece::TargetInfo => "targetinfo",
             Piece::RaidPrompts => "raidprompts",
             Piece::Stats => "stats",
+            Piece::Focus => "focus",
         }
     }
 
@@ -194,6 +197,7 @@ impl Piece {
             Piece::TargetInfo => "Target Details",
             Piece::RaidPrompts => "Raid Prompts",
             Piece::Stats => "Stat Window",
+            Piece::Focus => "Focus Target",
         }
     }
 
@@ -202,7 +206,7 @@ impl Piece {
     pub fn own(self) -> (Edge, Edge) {
         match self {
             Piece::Player | Piece::Group | Piece::Pet | Piece::Effects => (Edge::Start, Edge::Start),
-            Piece::Target => (Edge::Start, Edge::End),
+            Piece::Target | Piece::Focus => (Edge::Start, Edge::End),
             Piece::Stats => (Edge::Start, Edge::Middle),
             Piece::TargetInfo => (Edge::End, Edge::Middle),
             Piece::RaidPrompts => (Edge::Middle, Edge::Middle),

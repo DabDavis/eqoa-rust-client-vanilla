@@ -44,6 +44,13 @@ pub struct AttackClock {
     hit_at: Option<u32>,
     /// the last round's first hit's arrival
     round_at: Option<u32>,
+    /// Attack With Abilities (petition 3015): an attack ability sent at a
+    /// hostile target, waiting for the server to take it (its lockout): the
+    /// ability's id, the target and when
+    pub ability_sent: Option<(i64, u32, u32)>,
+    /// the auto-attack was started by an ability (it then ends with its
+    /// target's death, as the Auto Attack option's does)
+    pub by_ability: bool,
 }
 
 impl AttackClock {

@@ -5,6 +5,10 @@
 //! selection is whole; X asks (word 574) and a yes sends 0x007D with the
 //! quest's index (`Send007D`). A pointer (`pointer`) selects a quest and asks
 //! about the selected one; with the box up, its buttons.
+//!
+//! The client's own: □ tracks or untracks the selected quest on the quest
+//! tracker (Heirloom petition 3013, `questtrack`), said in the legend while
+//! the server's tracker has the quest; an untracked quest's title is grey.
 
 use crate::dialog::{BoxAnswer, Key, MBox};
 use crate::pointer::{Hits, MOVED, key, rows_rect};
@@ -17,6 +21,8 @@ use vi::ui::{Raster, UI_COLORS, Vui, Window, wide};
 pub struct Quests {
     pub titles: Vec<Vec<u16>>,
     pub stamp: u32,
+    /// the quests the player took off the tracker (`questtrack`)
+    pub untracked: crate::questtrack::Untracked,
 }
 
 impl Quests {
@@ -51,14 +57,16 @@ impl Quests {
         }
     }
 
-    /// 0x007D's body: the stamp and a zigzag index.
-    pub fn recv_remove(&mut self, data: &[u8]) {
+    /// 0x007D's body: the stamp and a zigzag index; the index dropped.
+    pub fn recv_remove(&mut self, data: &[u8]) -> Option<i32> {
         let mut r = net::stream::Reader::new(data);
         self.stamp = r.u32();
         let i = r.signed() as i32;
         if !r.error {
             self.remove(i);
+            return Some(i);
         }
+        None
     }
 
     /// `Send007D(x)`: the stamp and the index.
@@ -69,6 +77,9 @@ impl Quests {
     }
 }
 
+/// An untracked quest's title (petition 3013).
+const UNTRACKED: [f32; 4] = [0.55, 0.55, 0.55, 1.0];
+
 /// What the journal asks of the game.
 #[derive(Clone, Debug, PartialEq)]
 pub enum QuestUp {
@@ -76,6 +87,8 @@ pub enum QuestUp {
     Close,
     /// the box said yes: 0x007D for the quest
     Drop(i32),
+    /// □: the quest at the index tracked or untracked (`questtrack`)
+    Track(i32),
 }
 
 /// `VIWndQuestLog`.
@@ -224,13 +237,19 @@ impl QuestLog {
                 cues.push(8);
                 return Some(QuestUp::Close);
             }
+            // □: track or untrack it (petition 3013)
+            133 if (self.sel as usize) < quests.titles.len() => {
+                cues.push(13);
+                return Some(QuestUp::Track(self.sel));
+            }
             _ => {}
         }
         None
     }
 
-    /// `OnDrawSelf`, the box over it.
-    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, quests: &Quests, now: i64, cues: &mut Vec<i32>) {
+    /// `OnDrawSelf`, the box over it; `tracked(i)`: whether the quest at `i`
+    /// is on the quest tracker, none where the tracker does not have it.
+    pub fn draw(&mut self, vui: &Vui, r: &mut dyn Raster, quests: &Quests, tracked: &dyn Fn(i32) -> Option<bool>, now: i64, cues: &mut Vec<i32>) {
         let count = quests.titles.len() as i32;
         self.clamp_sel(count);
         self.drawn = now;
@@ -238,7 +257,13 @@ impl QuestLog {
         crate::ui::window_backdrop(vui, r, 641);
         self.window.draw(vui, r);
         let w = |id: i32| vui.words.get(id, vui.language).to_string();
-        self.window.text(vui, r, &wide(&format!("|x{}   |t{}", w(516), w(161))), 40, 13, UI_COLORS[0], 0);
+        // □ Track / Untrack (petition 3013) while the tracker has the quest
+        let track = match tracked(self.sel) {
+            Some(true) => "   |sUntrack",
+            Some(false) => "   |sTrack",
+            None => "",
+        };
+        self.window.text(vui, r, &wide(&format!("|x{}{track}   |t{}", w(516), w(161))), 40, 13, UI_COLORS[0], 0);
         let t = if self.top > 0 { (self.top as f32 / (count - self.page_end - 1) as f32).clamp(0.0, 1.0) } else { 0.0 };
         let width = self.window.size[0];
         self.window.draw_frame_vscroll(vui, r, 30, 0, width - 60, 12, t);
@@ -257,7 +282,9 @@ impl QuestLog {
                 if i == self.sel {
                     self.window.tick_r(vui, r, 45, y, self.active);
                 }
-                self.window.text_box(vui, r, title, 45, y, width - 80, rows, UI_COLORS[(i == self.sel) as usize], 0);
+                // an untracked quest grey (petition 3013)
+                let color = if tracked(i) == Some(false) { UNTRACKED } else { UI_COLORS[(i == self.sel) as usize] };
+                self.window.text_box(vui, r, title, 45, y, width - 80, rows, color, 0);
                 self.hits.push(rows_rect(&self.window, vui, r, 45, y, width - 80, rows), i);
                 y = end;
                 self.last = i;
@@ -313,6 +340,28 @@ mod tests {
         assert_eq!(q.send_remove(3), vec![0x7D, 0, 0x34, 0x12, 0, 0, 6]);
     }
 
+    /// □ asks to track or untrack the selected quest (petition 3013); with
+    /// no quest, nothing. The control: ✕ still asks about dropping it.
+    #[test]
+    fn square_tracks_the_selected_quest() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let (vui, mut r) = (vui(), NullRaster);
+        let mut l = QuestLog::default();
+        l.open(&vui, &r);
+        let mut cues = Vec::new();
+        let empty = Quests::default();
+        assert_eq!(l.key(&vui, &empty, key::SQUARE, true, 0, &mut cues), None, "no quest");
+        let mut q = Quests::default();
+        q.add(w("one"));
+        q.add(w("two"));
+        l.draw(&vui, &mut r, &q, &|i| Some(i != 1), 0, &mut cues);
+        l.sel = 1;
+        assert_eq!(l.key(&vui, &q, key::SQUARE, true, 0, &mut cues), Some(QuestUp::Track(1)));
+        assert!(!l.boxed, "no box");
+        assert_eq!(l.key(&vui, &q, key::CROSS, true, 0, &mut cues), None);
+        assert!(l.boxed, "the control: ✕ asks");
+    }
+
     /// A click selects a quest (a title wrapped to two rows is two rows
     /// tall), a second asks about it; then the box takes the clicks, the
     /// list under it none; nothing below the last quest.
@@ -328,7 +377,7 @@ mod tests {
         let mut l = QuestLog::default();
         l.open(&vui, &r);
         let mut cues = Vec::new();
-        l.draw(&vui, &mut r, &q, 0, &mut cues);
+        l.draw(&vui, &mut r, &q, &|_| None, 0, &mut cues);
         let row = |l: &QuestLog, row: i32| rows_rect(&l.window, &vui, &NullRaster, 45, row, 470, 1);
         assert_eq!(l.point(mid(row(&l, 3))), vec![MOVED], "the third quest, under the two-row title");
         assert_eq!(l.sel, 2);
@@ -340,7 +389,7 @@ mod tests {
         // Select opens the box; then a quest row is not the box's
         l.key(&vui, &q, key::CROSS, true, 0, &mut cues);
         assert!(l.boxed);
-        l.draw(&vui, &mut r, &q, 0, &mut cues);
+        l.draw(&vui, &mut r, &q, &|_| None, 0, &mut cues);
         assert!(l.point(mid(row(&l, 0))).is_empty(), "the list under the box");
         assert_eq!(l.sel, 1);
     }

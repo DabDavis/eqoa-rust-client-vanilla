@@ -4253,7 +4253,7 @@ impl App {
         match frame {
             Some(f) => g.queue.present(f),
             None => {
-                let _ = g.device.poll(wgpu::PollType::wait_indefinitely());
+                crate::gpulost::poll(&g.device, wgpu::PollType::wait_indefinitely());
             }
         }
         match done {
@@ -5220,6 +5220,17 @@ impl App {
                 // the game's keyboard table)
                 (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.eq_ignore_ascii_case("f") && !event.repeat => {
                     p.assist_target();
+                    return;
+                }
+                // [ and ]: Set Focus and Target Focus (the client's own,
+                // `focus`, Heirloom petition 3038; free in the game's
+                // keyboard table), in play and the manual camera
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.as_str() == "[" && !event.repeat => {
+                    p.focus_key();
+                    return;
+                }
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.as_str() == "]" && !event.repeat => {
+                    p.target_focus();
                     return;
                 }
                 // X (88, 120): autorun (`ToggleP74`), as L3.
@@ -7326,7 +7337,7 @@ impl App {
                     Some(f) => g.queue.present(f),
                     None => {
                         if let Some(prev) = g.in_flight.replace(sent) {
-                            let _ = g.device.poll(wgpu::PollType::Wait { submission_index: Some(prev), timeout: None });
+                            crate::gpulost::poll(&g.device, wgpu::PollType::Wait { submission_index: Some(prev), timeout: None });
                         }
                     }
                 }

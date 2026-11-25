@@ -339,7 +339,8 @@ impl TileShot {
     /// Whether the picture has come back (`Some(false)`: the copy failed and
     /// the shot is over), driving the device's callbacks without waiting.
     pub fn ready(&self, device: &wgpu::Device) -> Option<bool> {
-        if self.state.load(Ordering::Acquire) == 1 {
+        // (never on a lost device: wgpu's poll panics there)
+        if self.state.load(Ordering::Acquire) == 1 && !crate::device_lost(device) {
             let _ = device.poll(wgpu::PollType::Poll);
         }
         match self.state.load(Ordering::Acquire) {

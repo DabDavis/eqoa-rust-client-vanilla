@@ -38,6 +38,11 @@ pub struct HudState {
     pub target_level: Option<i32>,
     /// The target's +0x19.
     pub target_hp: i32,
+    /// Debuff Icons in the target box (Heirloom petition 3020): the player's
+    /// effects on the targeted creature the server sent, drawn as the group's
+    /// bars carry their tiny icons, beside its con (`target_effects_pieces`);
+    /// none unless Extended's Debuff Icons says Target Window.
+    pub target_effects: Vec<MemberFx>,
     /// `m_targetInfoValid` and `m_targetDisposition`.
     pub target_info: Option<u8>,
     /// The player has targeted themselves and has +0x2C (`m_p2C > 0`).
@@ -236,6 +241,27 @@ pub fn target_number(at: [i32; 2], s: &HudState) -> Option<HealthNumber> {
     health_number([at[0] + GAUGE_IN[0], at[1] + 25 + GAUGE_IN[1]], s.target_hp)
 }
 
+/// The target box's bar (25 under "Target" at `at`) and how many of its status
+/// icons show (the con's while the target's disposition is known, the
+/// self-target flag's), as `draw_target` draws them.
+fn target_bar(at: [i32; 2], s: &HudState) -> ([i32; 2], usize) {
+    let status = (s.target_info.is_some() && s.target_name.is_some()) as usize + s.self_targeted_flag as usize;
+    ([at[0], at[1] + 25], status)
+}
+
+/// Debuff Icons in the target box (Heirloom petition 3020, Cucumber: "It
+/// should be moved to their target/con area to align with the group buffs"):
+/// the player's effects on the target as a group member's tiny icons sit on its
+/// bar (`member_effects_pieces`: the same size, rows and room), right of the
+/// health gauge and past the con; none without a creature targeted.
+pub fn target_effects_pieces(at: [i32; 2], s: &HudState) -> Vec<FxPiece> {
+    if s.target_name.is_none() {
+        return Vec::new();
+    }
+    let (bar, status) = target_bar(at, s);
+    member_effects_pieces(bar, status, &s.target_effects.iter().map(|e| e.icon).collect::<Vec<_>>())
+}
+
 /// The player's own health gauge's number (the gauge at `PLAYER_GAUGE`),
 /// while the player's entity is there.
 pub fn self_number(s: &HudState) -> Option<HealthNumber> {
@@ -376,14 +402,20 @@ pub fn member_effects_pieces(at: [i32; 2], status: usize, icons: &[u32]) -> Vec<
 fn draw_member_effects(vui: &Vui, ui: &mut UiRaster, at: [i32; 2], status: usize, fx: &[MemberFx], timers: bool) -> Vec<FxPiece> {
     let icons: Vec<u32> = fx.iter().map(|e| e.icon).collect();
     let pieces = member_effects_pieces(at, status, &icons);
-    for p in &pieces {
+    draw_tiny_pieces(vui, ui, &pieces, fx, timers);
+    pieces
+}
+
+/// Tiny icons' `pieces` drawn (a member's, the target box's): each one's
+/// translucent tile, the icons whole, then with `timers` their times.
+fn draw_tiny_pieces(vui: &Vui, ui: &mut UiRaster, pieces: &[FxPiece], fx: &[MemberFx], timers: bool) {
+    for p in pieces {
         ui.blit(icon_id("black"), 0, [p.r[0] as i32, p.r[1] as i32], [0, 0], [MEMBER_FX, MEMBER_FX], 3, MEMBER_FX_SHADE);
     }
-    draw_fx_pieces(vui, ui, &pieces, 1.0);
+    draw_fx_pieces(vui, ui, pieces, 1.0);
     if timers {
-        draw_icon_times(ui, &member_fx_times(&pieces, fx), IconTimes::Tiny);
+        draw_icon_times(ui, &member_fx_times(pieces, fx), IconTimes::Tiny);
     }
-    pieces
 }
 
 /// Buff Timers on a member's tiny icons: each icon (as `member_effects_pieces`
@@ -554,11 +586,12 @@ pub struct Hud {
     /// Where the DPS meter's panel lay at the last frame, how many items it
     /// showed and how far its list steps (`Hud::meter_wheel`, `meter_page`).
     meter_panel: Option<([f32; 4], usize, usize)>,
-    /// The mouse's frame point while it may name a member's tiny icon
-    /// (`Hud::member_fx_hover`), and the icon it is over as last drawn: its
-    /// rectangle in the group's piece, its name and time left.
+    /// The mouse's frame point while it may name a member's tiny icon (or the
+    /// target box's, petition 3020) (`Hud::member_fx_hover`), and the icon it is
+    /// over as last drawn: the piece it is in, its rectangle there, its name
+    /// and time left.
     fx_point: Option<[f32; 2]>,
-    fx_named: Option<([f32; 4], String, u32)>,
+    fx_named: Option<(Piece, [f32; 4], String, u32)>,
 }
 
 /// What a pointer finds on the HUD's left side (`Hud::pick`): the player's
@@ -676,6 +709,7 @@ impl Hud {
     /// its bottom (the target's bar: `Vertical`).
     pub fn draw(&mut self, vui: &Vui, ui: &mut UiRaster, s: &HudState) {
         self.update_glow();
+        self.fx_named = None;
         ui.ui.anchor = Anchor::Left;
         ui.ui.vertical = Vertical::Top;
         self.hits.clear();
@@ -743,7 +777,6 @@ impl Hud {
             b[3] + 2
         };
         crate::hudlayout::end(ui.ui, m);
-        let named = self.fx_named.take();
         let m = crate::hudlayout::begin(ui.ui, Piece::Pet);
         let pet_at = if pc { PC_PET_AT } else { [GROUP_AT[0], stacked_pet_y] };
         self.draw_pet(vui, ui, pet_at, s);
@@ -809,12 +842,12 @@ impl Hud {
             crate::hudlayout::end(ui.ui, mark);
         }
         // the member's icon under the mouse named, over the rest of the HUD,
-        // at the group's place but not counted in it
-        if let Some((cell, name, left)) = named {
+        // at the group's place (or the target box's) but not counted in it
+        if let Some((piece, cell, name, left)) = self.fx_named.take() {
             let (anchor, vertical) = (ui.ui.anchor, ui.ui.vertical);
             ui.ui.anchor = Anchor::Left;
-            ui.ui.vertical = Vertical::Top;
-            let m = crate::hudlayout::begin(ui.ui, Piece::Group);
+            ui.ui.vertical = if piece == Piece::Target { Vertical::Bottom } else { Vertical::Top };
+            let m = crate::hudlayout::begin(ui.ui, piece);
             let m = crate::hudlayout::seal(ui.ui, m);
             let screen = crate::hudlayout::screen_rect(ui.ui, &m);
             draw_member_fx_name(vui, ui, cell, &name, left, screen);
@@ -828,7 +861,6 @@ impl Hud {
     fn draw_group(&mut self, vui: &Vui, ui: &mut UiRaster, at: [i32; 2], s: &HudState) {
         let mut p = at;
         let mut glowing = false;
-        self.fx_named = None;
         for m in &s.group {
             let start = p;
             self.note(ui, [p[0], p[1], p[0] + 174, p[1] + 46], Pick::Member(m.id));
@@ -851,8 +883,8 @@ impl Hud {
                 // the icon under the mouse, where placed, if the server named it
                 if let Some(f) = self.fx_point {
                     let ui = &*ui;
-                    if let Some(n) = member_fx_at(&pieces, &m.effects, f, |q| ui.ui.placed(q)) {
-                        self.fx_named = Some(n);
+                    if let Some((r, name, left)) = member_fx_at(&pieces, &m.effects, f, |q| ui.ui.placed(q)) {
+                        self.fx_named = Some((Piece::Group, r, name, left));
                     }
                 }
             }
@@ -958,6 +990,18 @@ impl Hud {
         }
         if s.self_targeted_flag {
             vui.blit_ex(ui, 211, p, 3, self.glow0, 0);
+        }
+        // Debuff Icons (petition 3020): the player's effects on the target
+        // beside its con, as a member's bar carries its tiny icons
+        let pieces = target_effects_pieces(at, s);
+        if !pieces.is_empty() {
+            draw_tiny_pieces(vui, ui, &pieces, &s.target_effects, crate::settings::buff_timers());
+            if let Some(f) = self.fx_point {
+                let ui = &*ui;
+                if let Some((r, name, left)) = member_fx_at(&pieces, &s.target_effects, f, |q| ui.ui.placed(q)) {
+                    self.fx_named = Some((Piece::Target, r, name, left));
+                }
+            }
         }
     }
 
@@ -1182,6 +1226,33 @@ mod tests {
         assert_eq!((two[0].r[0], two.len()), ((at[0] + 126) as f32, 8), "past both: four to a row, the rest left out");
         assert_eq!(member_effects_pieces(at, 0, &(1..=30).collect::<Vec<u32>>()).len(), 18, "two rows of nine at most");
         assert!(member_effects_pieces(at, 0, &[]).is_empty(), "the control: none, nothing");
+    }
+
+    /// Debuff Icons in the target box (Heirloom petition 3020: "It should be
+    /// moved to their target/con area to align with the group buffs"): the
+    /// target's effects sit on its bar (25 under "Target") as a member's tiny
+    /// icons sit on its bar, the same size, rows and room: right of the health
+    /// gauge, pushed past the con (and the self-target flag) when shown, inside
+    /// the bar's 174 by 46. The control: no creature targeted, none.
+    #[test]
+    fn the_targets_debuffs_sit_beside_its_con_as_a_members_icons() {
+        use super::{MemberFx, TARGET_AT, target_effects_pieces};
+        let fx: Vec<MemberFx> = (1..=16).map(|i| MemberFx { icon: i, name: format!("Debuff {i}"), left_ms: 30_000 }).collect();
+        let icons: Vec<u32> = fx.iter().map(|e| e.icon).collect();
+        let bar = [TARGET_AT[0], TARGET_AT[1] + 25];
+        let s = HudState { target_name: Some("a gnoll".into()), target_effects: fx.clone(), ..Default::default() };
+        let p = target_effects_pieces(TARGET_AT, &s);
+        assert_eq!(p, member_effects_pieces(bar, 0, &icons), "a member's layout on the target's bar");
+        assert_eq!(p[0].r, [(bar[0] + 76) as f32, (bar[1] + 25) as f32, 10.0, 10.0], "right of the gauge, level with it, the group's size");
+        for q in &p {
+            assert!(q.r[0] + q.r[2] <= (bar[0] + 174) as f32 && q.r[1] + q.r[3] <= (bar[1] + 46) as f32, "inside the bar: {:?}", q.r);
+        }
+        let con = HudState { target_info: Some(2), ..s.clone() };
+        let p = target_effects_pieces(TARGET_AT, &con);
+        assert_eq!((p[0].r[0], p.len()), ((bar[0] + 101) as f32, 12), "past the con (115-117, 25 on)");
+        let both = HudState { self_targeted_flag: true, ..con.clone() };
+        assert_eq!(target_effects_pieces(TARGET_AT, &both)[0].r[0], (bar[0] + 126) as f32, "and past the self-target flag");
+        assert!(target_effects_pieces(TARGET_AT, &HudState { target_name: None, ..con }).is_empty(), "the control: no creature targeted");
     }
 
     /// Group Effects' names and times (Heirloom petition 2962): each tiny icon

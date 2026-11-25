@@ -2292,13 +2292,20 @@ impl Session {
     /// icon and the ms left of it ([`crate::buffs::NO_END`] for no end), in their
     /// order; none for a creature it sent none of.
     pub fn npc_debuffs_left(&self, id: u32, now: u32) -> Vec<(u32, u32)> {
+        self.npc_debuffs_of(id, now).into_iter().map(|e| (e.icon, e.left_ms)).collect()
+    }
+
+    /// [`Session::npc_debuffs_left`] whole: each effect as the server sent it
+    /// (its name too, for the target box's, petition 3020), its `left_ms` what
+    /// is left of it at `now`.
+    pub fn npc_debuffs_of(&self, id: u32, now: u32) -> Vec<NpcDebuff> {
         let Some((_, fx)) = self.npc_debuffs.iter().find(|(i, _)| *i == id) else { return Vec::new() };
         let gone = now.wrapping_sub(self.npc_debuffs_at);
         // a clock read before the set came (none: it is read after) counts as no time gone
         let gone = if (gone as i32) < 0 { 0 } else { gone };
         fx.iter()
             .filter(|e| e.left_ms == crate::buffs::NO_END || e.left_ms > gone)
-            .map(|e| (e.icon, if e.left_ms == crate::buffs::NO_END { e.left_ms } else { e.left_ms - gone }))
+            .map(|e| NpcDebuff { left_ms: if e.left_ms == crate::buffs::NO_END { e.left_ms } else { e.left_ms - gone }, ..e.clone() })
             .collect()
     }
 
