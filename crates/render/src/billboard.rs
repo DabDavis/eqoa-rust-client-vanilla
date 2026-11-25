@@ -16,7 +16,8 @@
 
 use crate::{DEPTH_FORMAT, Renderer, Textures};
 use bytemuck::{Pod, Zeroable};
-use glam::Mat4;
+use glam::{Mat4, Vec3};
+use std::sync::Arc;
 
 /// The 28 corner UVs of the seven layouts (`BeginBillboards`' constant
 /// block), four a layout: (left, bottom), (left, top), (right, bottom),
@@ -86,6 +87,27 @@ pub struct Strips {
     pub colors: Vec<Vec<[f32; 4]>>,
 }
 
+/// One copy of an opaque decoration model's material. Its triangle list
+/// (UV and offset from the model's centre) is shared by all its bulbs.
+pub struct DecorInstance {
+    pub triangles: Arc<[([f32; 2], Vec3)]>,
+    pub center: Vec3,
+    pub scale: f32,
+    pub color: [f32; 4],
+}
+
+pub struct DecorBatch {
+    pub texture: i32,
+    pub instances: Vec<DecorInstance>,
+}
+
+#[derive(Default)]
+pub struct Decorations {
+    pub cords_and_presents: Vec<Strips>,
+    pub globes: Vec<DecorBatch>,
+    pub worn_glass: Vec<Strips>,
+}
+
 /// A run of vertices to draw: the pipeline (blend, Z test, Z write), the
 /// texture, the first vertex and the end, and whether it is blended as the
 /// PS2's 16-bit frame keeps a blend (`fog16`).
@@ -102,6 +124,74 @@ struct Vert {
     corner: [f32; 2],
     uv: [f32; 2],
     color: [f32; 4],
+}
+
+impl Decorations {
+    fn vertices(&self, verts: &mut Vec<Vert>, draws: &mut Vec<Run>) {
+        append_strips(&self.cords_and_presents, verts, draws);
+        for batch in &self.globes {
+            let start = verts.len() as u32;
+            verts.reserve(batch.instances.iter().map(|i| i.triangles.len()).sum());
+            for bulb in &batch.instances {
+                verts.extend(bulb.triangles.iter().map(|&(uv, offset)| Vert {
+                    center: (bulb.center + offset * bulb.scale).to_array(),
+                    corner: [0.0; 2],
+                    uv,
+                    color: bulb.color,
+                }));
+            }
+            if verts.len() as u32 > start {
+                draws.push(((0, true, true), batch.texture, start, verts.len() as u32, false));
+            }
+        }
+        append_strips(&self.worn_glass, verts, draws);
+    }
+}
+
+fn append_strips(strips: &[Strips], verts: &mut Vec<Vert>, draws: &mut Vec<Run>) {
+    for s in strips {
+        let start = verts.len() as u32;
+        for (k, strip) in s.strips.iter().enumerate() {
+            let v = |i: usize| Vert { center: strip[i].1, corner: [0.0, 0.0], uv: strip[i].0, color: s.colors.get(k).and_then(|c| c.get(i)).copied().unwrap_or(s.color) };
+            for i in 2..strip.len() {
+                verts.extend([v(i - 2), v(i - 1), v(i)]);
+            }
+        }
+        if verts.len() as u32 > start {
+            draws.push(((s.blend.min(4), s.ztest, s.zwrite), s.texture, start, verts.len() as u32, false));
+        }
+    }
+}
+
+#[cfg(test)]
+mod decor_tests {
+    use super::*;
+
+    #[test]
+    fn shared_bulbs_keep_the_vertex_bytes_and_draw_order() {
+        let uv = [[0.0, 1.0], [0.5, 0.0], [1.0, 1.0]];
+        let mesh: Arc<[_]> = Arc::from([(uv[0], Vec3::X), (uv[1], Vec3::Y), (uv[2], Vec3::Z)]);
+        let mut legacy = Strips { texture: 7, blend: 0, ztest: true, zwrite: true, color: [1.0; 4], strips: vec![], colors: vec![] };
+        let mut instances = Vec::new();
+        for (center, scale, color) in [(Vec3::splat(25319.16), 0.17, [1.5, 0.1, 0.2, 1.0]), (Vec3::ZERO, 4.0, [0.1, 1.1, 0.3, 1.0])] {
+            legacy.strips.push(mesh.iter().map(|&(uv, p)| (uv, (center + p * scale).to_array())).collect());
+            legacy.colors.push(vec![color; 3]);
+            instances.push(DecorInstance { triangles: Arc::clone(&mesh), center, scale, color });
+        }
+        let cord = Strips { texture: 9, ..legacy.clone() };
+        let glass = Strips { texture: 0, ..legacy.clone() };
+        let mut expected = Vec::new();
+        let mut expected_runs = Vec::new();
+        append_strips(&[cord.clone(), legacy, glass.clone()], &mut expected, &mut expected_runs);
+        let decor = Decorations {
+            cords_and_presents: vec![cord], globes: vec![DecorBatch { texture: 7, instances }], worn_glass: vec![glass],
+        };
+        let mut actual = Vec::new();
+        let mut actual_runs = Vec::new();
+        decor.vertices(&mut actual, &mut actual_runs);
+        assert_eq!(bytemuck::cast_slice::<Vert, u8>(&actual), bytemuck::cast_slice::<Vert, u8>(&expected));
+        assert_eq!(actual_runs, expected_runs);
+    }
 }
 
 #[repr(C)]
@@ -484,6 +574,13 @@ impl Renderer {
         }
     }
 
+    /// Queue the world's solid decorations in their original depth-write order.
+    pub fn set_decor(&mut self, decor: Decorations) {
+        self.decor = decor.cords_and_presents;
+        self.decor_globes = decor.globes;
+        self.decor_worn_glass = decor.worn_glass;
+    }
+
     /// The decorations' strips queued for this frame (`decor`: a server's
     /// lights' cords and presents), drawn and let go. They are solid things
     /// standing in the world, Z tested and written, so they go with the
@@ -503,10 +600,15 @@ impl Renderer {
         proj: Mat4,
         textures: &Textures,
     ) {
-        let strips = std::mem::take(&mut self.decor);
-        if !strips.is_empty() {
-            self.strips_in(device, queue, encoder, target, depth, view, proj, &strips, textures, Slot::Decor);
-        }
+        let decor = Decorations {
+            cords_and_presents: std::mem::take(&mut self.decor),
+            globes: std::mem::take(&mut self.decor_globes),
+            worn_glass: std::mem::take(&mut self.decor_worn_glass),
+        };
+        let mut verts = Vec::new();
+        let mut draws = Vec::new();
+        decor.vertices(&mut verts, &mut draws);
+        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, &[], textures, Slot::Decor, None);
     }
 
     /// Triangle strips (lightning), over what `draw` drew, in the order given.
@@ -523,39 +625,10 @@ impl Renderer {
         strips: &[Strips],
         textures: &Textures,
     ) {
-        self.strips_in(device, queue, encoder, target, depth, view, proj, strips, textures, Slot::Strips);
-    }
-
-    /// `draw_strips` through `slot`'s buffers.
-    #[allow(clippy::too_many_arguments)]
-    fn strips_in(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        depth: &wgpu::TextureView,
-        view: Mat4,
-        proj: Mat4,
-        strips: &[Strips],
-        textures: &Textures,
-        slot: Slot,
-    ) {
-        let mut verts: Vec<Vert> = Vec::new();
+        let mut verts = Vec::new();
         let mut draws = Vec::new();
-        for s in strips {
-            let start = verts.len() as u32;
-            for (k, strip) in s.strips.iter().enumerate() {
-                let v = |i: usize| Vert { center: strip[i].1, corner: [0.0, 0.0], uv: strip[i].0, color: s.colors.get(k).and_then(|c| c.get(i)).copied().unwrap_or(s.color) };
-                for i in 2..strip.len() {
-                    verts.extend([v(i - 2), v(i - 1), v(i)]);
-                }
-            }
-            if verts.len() as u32 > start {
-                draws.push(((s.blend.min(4), s.ztest, s.zwrite), s.texture, start, verts.len() as u32, false));
-            }
-        }
-        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, &[], textures, slot, None);
+        append_strips(strips, &mut verts, &mut draws);
+        self.draw_verts(device, queue, encoder, target, depth, view, proj, &verts, &draws, &[], textures, Slot::Strips, None);
     }
 
     /// The billboard program over `verts`, a run of them per (pipeline key,

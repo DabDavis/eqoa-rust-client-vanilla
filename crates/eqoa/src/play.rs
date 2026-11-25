@@ -12007,7 +12007,7 @@ impl Play {
 
     /// The decorations' model bulbs this frame (`decorlights::globes`), drawn
     /// as they are (a bulb is its own light).
-    pub fn decor_globes(&self, eye: [f32; 3], ms: i64) -> Vec<render::billboard::Strips> {
+    pub fn decor_globes(&self, eye: [f32; 3], ms: i64) -> Vec<render::billboard::DecorBatch> {
         if !crate::decorlights::any() {
             return Vec::new();
         }

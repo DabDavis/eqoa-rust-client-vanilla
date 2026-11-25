@@ -984,6 +984,8 @@ pub struct Renderer {
     /// presents): solid, drawn with the world before the name plates
     /// (`draw_decor`).
     pub decor: Vec<billboard::Strips>,
+    decor_globes: Vec<billboard::DecorBatch>,
+    decor_worn_glass: Vec<billboard::Strips>,
     /// How many of the batches `draw_billboards_and_shadows` is handed are
     /// the particle system's: the shadows and the strips go after them, the
     /// rest (the weather's) after those. Set for each frame.
@@ -1325,6 +1327,8 @@ impl Renderer {
             overlay: None,
             strips: Vec::new(),
             decor: Vec::new(),
+            decor_globes: Vec::new(),
+            decor_worn_glass: Vec::new(),
             particles_end: 0,
             drawn: Default::default(),
             materials: Default::default(),

@@ -46,8 +46,9 @@
 //! A server that sends none, and a PS2, draw nothing of it.
 
 use net::decor::{Anchor, Decor};
-use render::billboard::{Batch, Quad, Strips};
-use std::cell::RefCell;
+use render::billboard::{Batch, DecorBatch, DecorInstance, Quad, Strips};
+use std::cell::{OnceCell, RefCell};
+use std::sync::Arc;
 
 /// The bulb's glow: SPELLFX.CSF's soft round flare, white at its heart.
 pub const BULB: i32 = 0x0BE1_EF02;
@@ -88,6 +89,29 @@ pub struct Globe {
     pub mid: glam::Vec3,
     pub across: f32,
     pub tinted: usize,
+    materials: OnceCell<Vec<GlobeMaterial>>,
+}
+
+struct GlobeMaterial {
+    texture: i32,
+    tinted: bool,
+    triangles: Arc<[([f32; 2], glam::Vec3)]>,
+}
+
+impl Globe {
+    // Other decorations and pet art share the asset store. Only a model
+    // actually drawn as a bulb needs its flat, centre-relative triangles.
+    fn materials(&self) -> &[GlobeMaterial] {
+        self.materials.get_or_init(|| self.model.batches.iter().enumerate().map(|(i, batch)| {
+            let tinted = i == self.tinted;
+            let texture = if tinted { grey_id(batch.texture()) } else { batch.texture() };
+            let triangles = batch.indices.chunks_exact(3).flatten().map(|&index| {
+                let i = index as usize;
+                (self.model.uv.get(i).copied().unwrap_or([0.0; 2]), glam::Vec3::from(self.model.pos[i]) - self.mid)
+            }).collect();
+            GlobeMaterial { texture, tinted, triangles }
+        }).collect())
+    }
 }
 
 /// How light a globe's tinted glass is at its darkest (`greyed`): bright
@@ -232,7 +256,7 @@ fn keep_assets(models: &mut std::collections::HashMap<u32, std::rc::Rc<Globe>>, 
             hi = hi.max(glam::Vec3::from(*p));
         }
         let across = (hi - lo).max_element().max(1e-3);
-        models.insert(id, std::rc::Rc::new(Globe { model: m, mid: (lo + hi) / 2.0, across, tinted }));
+        models.insert(id, std::rc::Rc::new(Globe { model: m, mid: (lo + hi) / 2.0, across, tinted, materials: OnceCell::new() }));
         kept += 1;
     }
     kept
@@ -720,23 +744,20 @@ fn cords_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3]) -> Vec<Str
 /// model `bulb_scale` across, its middle on the bulb, tinted the bulb's colour
 /// as lit now, a strip a triangle, a Strips a texture. Drawn as they are, not
 /// lit by the scene: a bulb is its own light.
-pub fn globes(holders: &[Holder], world: i64, eye: [f32; 3], ms: i64) -> Vec<Strips> {
+pub fn globes(holders: &[Holder], world: i64, eye: [f32; 3], ms: i64) -> Vec<DecorBatch> {
     DECOR.with_borrow(|d| globes_of(d, holders, world, eye, ms, &asset_model))
 }
 
-#[allow(clippy::type_complexity)]
-fn globes_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64, model: &dyn Fn(u32) -> Option<std::rc::Rc<Globe>>) -> Vec<Strips> {
+fn globes_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64, model: &dyn Fn(u32) -> Option<std::rc::Rc<Globe>>) -> Vec<DecorBatch> {
     use glam::Vec3;
     let t = ms as f64 / 1000.0;
     let e = Vec3::from(eye);
-    // by texture: its strips and their colours
-    let mut by: Vec<(i32, Vec<Vec<([f32; 2], [f32; 3])>>, Vec<Vec<[f32; 4]>>)> = Vec::new();
+    let mut by: Vec<DecorBatch> = Vec::new();
     for (si, s) in d.strings.iter().enumerate() {
         if s.look.bulb_model == 0 {
             continue;
         }
         let Some(m) = model(s.look.bulb_model) else { continue };
-        let (g, m, mid, across) = (&*m, &m.model, m.mid, m.across);
         let boned = rides_bones(s);
         let frames: Vec<([f32; 3], f32, f32, Option<&Bones>)> = match &s.anchor {
             Anchor::Npc(key) => holders.iter().filter(|h| net::npctint::key(h.name) == *key).map(|h| (h.at, h.heading, h.scale, h.bones.as_ref().filter(|_| boned))).collect(),
@@ -762,27 +783,24 @@ fn globes_of(d: &Decor, holders: &[Holder], world: i64, eye: [f32; 3], ms: i64, 
                 let color = [((c >> 24) & 0xFF) as f32 / 255.0 * k, ((c >> 16) & 0xFF) as f32 / 255.0 * k, ((c >> 8) & 0xFF) as f32 / 255.0 * k, 1.0];
                 // the rest (a stand) as it is, lit a little with it
                 let plain = [0.75 + 0.25 * lit, 0.75 + 0.25 * lit, 0.75 + 0.25 * lit, 1.0];
-                let f = s.look.bulb_scale.max(0.01) * scale.max(0.1) / across;
-                let place = |v: [f32; 3]| (p + (Vec3::from(v) - mid) * f).to_array();
-                for (bi, bt) in m.batches.iter().enumerate() {
-                    let (tex, color) = if bi == g.tinted { (grey_id(bt.texture()), color) } else { (bt.texture(), plain) };
-                    let i = match by.iter().position(|x| x.0 == tex) {
+                let f = s.look.bulb_scale.max(0.01) * scale.max(0.1) / m.across;
+                for material in m.materials() {
+                    let i = match by.iter().position(|batch| batch.texture == material.texture) {
                         Some(i) => i,
                         None => {
-                            by.push((tex, Vec::new(), Vec::new()));
+                            by.push(DecorBatch { texture: material.texture, instances: Vec::new() });
                             by.len() - 1
                         }
                     };
-                    for tri in bt.indices.chunks(3).filter(|t| t.len() == 3) {
-                        let v = |k: usize| (m.uv.get(tri[k] as usize).copied().unwrap_or([0.0; 2]), place(m.pos[tri[k] as usize]));
-                        by[i].1.push(vec![v(0), v(1), v(2)]);
-                        by[i].2.push(vec![color; 3]);
-                    }
+                    by[i].instances.push(DecorInstance {
+                        triangles: Arc::clone(&material.triangles), center: p, scale: f,
+                        color: if material.tinted { color } else { plain },
+                    });
                 }
             }
         }
     }
-    by.into_iter().map(|(texture, strips, colors)| Strips { texture, blend: 0, ztest: true, zwrite: true, color: [1.0; 4], strips, colors }).collect()
+    by
 }
 
 /// The cords lit as the world's own matte geometry is: their colour times the
@@ -1068,15 +1086,17 @@ mod tests {
         m.pos = vec![[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 2.0, 0.0]];
         m.uv = vec![[0.0; 2]; 3];
         m.batches.push(esf::Batch { material: 0, layers: Vec::new(), indices: vec![0, 1, 2], lod: None });
-        let rc = std::rc::Rc::new(Globe { model: m, mid: glam::Vec3::new(1.0, 1.0, 0.0), across: 2.0, tinted: 0 });
+        let rc = std::rc::Rc::new(Globe { model: m, mid: glam::Vec3::new(1.0, 1.0, 0.0), across: 2.0, tinted: 0, materials: OnceCell::new() });
         let h = [Holder { name: "christmas tree", at: [0.0; 3], heading: 0.0, scale: 1.0, bones: None, art: false }];
         let g = globes_of(&d, &h, 0, [0.0, 3.0, -20.0], 0, &|id| (id == 0xF8E6_C045).then(|| rc.clone()));
         assert_eq!(g.len(), 1);
-        assert_eq!(g[0].strips.len(), 3, "a triangle a bulb, the star none");
+        assert_eq!(g[0].instances.len(), 3, "a triangle a bulb, the star none");
         // the first bulb at (1, 2, 0): the corners a quarter of their way from the middle
-        let first = &g[0].strips[0];
-        assert!((glam::Vec3::from(first[0].1) - glam::Vec3::new(0.75, 1.75, 0.0)).length() < 1e-4, "{first:?}");
-        assert!(g[0].colors[0][0][0] > 1.0 && g[0].colors[0][0][1] < 0.3, "red, lifted");
+        let first = &g[0].instances[0];
+        let corner = first.center + first.triangles[0].1 * first.scale;
+        assert!((corner - glam::Vec3::new(0.75, 1.75, 0.0)).length() < 1e-4, "{corner:?}");
+        assert!(first.color[0] > 1.0 && first.color[1] < 0.3, "red, lifted");
+        assert!(Arc::ptr_eq(&first.triangles, &g[0].instances[1].triangles));
         // no model read: none
         assert!(globes_of(&d, &h, 0, [0.0; 3], 0, &|_| None).is_empty());
         // the textured cord: two spans, a strip each, u 0 to 1 along it
