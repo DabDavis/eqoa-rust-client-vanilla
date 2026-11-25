@@ -515,6 +515,13 @@ pub struct Play {
     /// can name the friend under it (`mouseover_target`).
     pub pointer: Option<(f64, f64)>,
     pub pointer_view: Option<(glam::Mat4, (u32, u32))>,
+    /// Coach Talk on Arrival (Heirloom petition 3091): a coach's ride under
+    /// way, until when the coachman where it sets down is looked for and
+    /// talked to, and the coachman who sent it (`coach_talk_frame`).
+    coach_talk: Option<(i64, u32)>,
+    /// The player's own name node this frame, where Own Name Plate is drawn
+    /// (petition 3081): none without a body.
+    self_name_at: Option<[f32; 3]>,
     /// `VIWndMBox` (mode 14).
     mbox: crate::dialog::MBox,
     /// The player's death camera (`m_pC1B0`) and the screen's fade; the
@@ -787,6 +794,40 @@ fn number_rgb(patch: bool, rest: &[u8], tags: bool, choices: &[crate::numcolor::
         return (rest.len() >= 3).then(|| [rest[0], rest[1], rest[2]]);
     }
     crate::numcolor::rgb(net::session::number_tag(rest, tags), choices)
+}
+
+/// A friendly NPC's role as the minimap's tooltip says it under its name:
+/// "Spell Merchant (Wizard)" with the class the server named, else the role.
+fn mini_role_line(r: crate::minimapcolor::Role, spell_class: Option<u8>) -> String {
+    match (r, spell_class.and_then(crate::minimapcolor::class_name)) {
+        (crate::minimapcolor::Role::Spells, Some(class)) => format!("{} ({class})", r.label()),
+        _ => r.label().to_string(),
+    }
+}
+
+/// A coachman's name, as go-eqoa-server's `IsCoachman` reads it.
+fn is_coachman(name: &str) -> bool {
+    name.starts_with("Coachman ") || name.starts_with("Coachwoman ")
+}
+
+/// How long after a coach's ride Coach Talk on Arrival looks for the coachman
+/// (the world's load and his entity's coming into view), and how near the
+/// player he stands (a coach sets its rider down 5 in front of him).
+const COACH_TALK_MS: i64 = 20_000;
+const COACH_TALK_REACH: f32 = 12.0;
+
+/// The coachman nearest `at` within `COACH_TALK_REACH` (x, z and y), alive,
+/// not `from` (the one the ride left).
+fn coachman_near(entities: &Entities, at: [f32; 3], from: u32) -> Option<u32> {
+    entities
+        .slots
+        .iter()
+        .flatten()
+        .filter(|e| e.id != from && e.p18 & 2 == 0 && e.creature.as_ref().is_some_and(|c| is_coachman(&c.name)))
+        .map(|e| (e.id, (0..3).map(|i| (e.pos[i] - at[i]).powi(2)).sum::<f32>().sqrt()))
+        .filter(|(_, d)| *d <= COACH_TALK_REACH)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(id, _)| id)
 }
 
 /// The quest marks for the map and the minimap: the guide's while it is on
@@ -3821,7 +3862,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None, focus: None, pointer: None, pointer_view: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None, focus: None, pointer: None, pointer_view: None, coach_talk: None, self_name_at: None };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -3951,6 +3992,7 @@ impl Play {
         // dump (`inventory::pack_cap`; CLIENT's 40 where none says)
         crate::inventory::set_caps(self.session.item_lists);
         self.server_ui();
+        self.coach_talk_frame(walker.cam.walk.phys.smooth_location().to_array(), now as i64);
         // a server's races' own options and the looks chosen (`raceopts`): the
         // creatures in a look made again in it (`apply`)
         crate::raceopts::set_options(self.session.race_options.as_ref());
@@ -5060,8 +5102,11 @@ impl Play {
             let centre = cs.h.calc_trans_about_center(&actor, &walker.anims);
             crate::trails::process(&mut self.trails, &mut p.trail, cs, &p.weapons, &centre, game_ms);
             self.self_at = Some((walker.cam.walk.phys.smooth_location().to_array(), slot_point(cs, 4, &centre)));
+            // its name node, as another's (Own Name Plate, `plates`)
+            self.self_name_at = cs.h.nodes.get(cs.node_ids[3].max(0) as usize).filter(|_| cs.node_ids[3] >= 0).map(|n| Matrix44::mul(&n.world, &centre).mul_point(&Vect3::of(0.0, 0.6, 0.0)).to_array());
         } else {
             self.self_at = None;
+            self.self_name_at = None;
         }
         self.trail_strips = crate::trails::render(&mut self.trails, game_ms);
         // The camera style: the first entry's ToggleCameraStyle; the start
@@ -5469,7 +5514,25 @@ impl Play {
             let debuffs = if crate::settings::debuff_icons() == crate::settings::DebuffIcons::Plate { self.session.npc_debuffs_left(e.id, self.session.now()) } else { Vec::new() };
             out.push(Plate { at, color: self.name_color(c), name: c.name.clone(), tag: self.merc_tag(c), mark, debuffs });
         }
+        // Own Name Plate (Heirloom petition 3081): the player's own, drawn as
+        // the others' are, while its body is drawn (not from inside it, a
+        // first person camera's); the game draws none
+        if let Some(p) = self.own_plate() {
+            out.push(p);
+        }
         out
+    }
+
+    /// The player's own plate while Own Name Plate is on and its body drawn
+    /// (`self_shown`): its name in its name's colour at its name node.
+    fn own_plate(&self) -> Option<Plate> {
+        if !crate::settings::own_plate() || !self.self_shown {
+            return None;
+        }
+        let at = self.self_name_at?;
+        let me = self.self_id32()?;
+        let c = self.entities.slots.iter().flatten().find(|e| e.id == me)?.creature.as_ref()?;
+        (!c.name.is_empty()).then(|| Plate { at, color: self.name_color(c), name: c.name.clone(), tag: None, mark: None, debuffs: Vec::new() })
     }
 
     /// Debuff Icons (petition 2997) for this frame's kept plates (`debuff_marks`),
@@ -6000,6 +6063,7 @@ impl Play {
     fn msg_00b2(&mut self, walker: &mut Walker, world: u8, pos: [f32; 3], hpr: [f32; 3], token: u32, now: i64) {
         // a move of the server's puts the player where it says: off any ride
         self.ride = None;
+        self.arm_coach_talk(now);
         walker.cam.effect.reset();
         walker.cam.effect.end_manual(F::ZERO);
         if self.session.self_id.is_some() {
@@ -6299,6 +6363,42 @@ impl Play {
         let mut w = net::stream::Writer::op(0x0010);
         w.u32(0).u32(id);
         self.session.send(&w.data);
+    }
+
+    /// Coach Talk on Arrival (Heirloom petition 3091): once a coach's ride has
+    /// set the player down (the move answered, the world in, no loading
+    /// screen), the coachman within `COACH_TALK_REACH` of `at` (not the one who
+    /// sent it) targeted and talked to (0x0004, as `InteractWithTarget` talks):
+    /// the server opens his menu. Given up `COACH_TALK_MS` after the ride, or
+    /// when the option is turned off.
+    fn coach_talk_frame(&mut self, at: [f32; 3], now: i64) {
+        let Some((until, from)) = self.coach_talk else { return };
+        if now > until || !crate::settings::coach_talk() {
+            self.coach_talk = None;
+            return;
+        }
+        if self.loading.up() || self.world_change.is_some() || !self.arrival.is_empty() {
+            return;
+        }
+        let Some(id) = coachman_near(&self.entities, at, from) else { return };
+        self.coach_talk = None;
+        eprintln!("play: Coach Talk on Arrival: talking to {id:08x}");
+        self.target_id(id);
+        let mut w = net::stream::Writer::op(0x0004);
+        w.u32(id);
+        self.session.send(&w.data);
+    }
+
+    /// A server's move (0x00B2) while the coachman talked to is the target: a
+    /// coach's ride, so Coach Talk on Arrival looks for the coachman where it
+    /// sets down (`coach_talk_frame`); any other move ends a look under way.
+    fn arm_coach_talk(&mut self, now: i64) {
+        self.coach_talk = (crate::settings::coach_talk() && self.creature_name(self.target).is_some_and(is_coachman)).then_some((now + COACH_TALK_MS, self.target));
+    }
+
+    /// An entity's creature's name, none for an entity not in view.
+    fn creature_name(&self, id: u32) -> Option<&str> {
+        self.entities.slots.iter().flatten().find(|e| e.id == id)?.creature.as_ref().map(|c| c.name.as_str())
     }
 
     /// `id` targeted, as `CycleTarget` leaves a choice: the attack off, the
@@ -8486,7 +8586,15 @@ impl Play {
             return;
         }
         let rest = &r.data[r.pos..];
-        let rgb = number_rgb(crate::s2::get().damage_rgb, rest, tags, &crate::settings::number_colors());
+        let patch = crate::s2::get().damage_rgb;
+        let choices = crate::settings::number_colors();
+        let mut rgb = number_rgb(patch, rest, tags, &choices);
+        // Damage Taken (Heirloom petition 3081): a hit another made on the
+        // player, in its row's colour (no tag says it; never while a patch
+        // colours the numbers)
+        if !patch && rgb.is_none() && amount < 0 && Some(defender) == self.self_id32() && Some(attacker) != self.self_id32() {
+            rgb = crate::numcolor::taken_rgb(&choices);
+        }
         // `EQOA_DAMAGE_TRACE`: each one as read, what followed its body and the
         // colour it is drawn in (none: the game's), on stderr
         if std::env::var_os("EQOA_DAMAGE_TRACE").is_some() {
@@ -10973,9 +11081,18 @@ impl Play {
     /// the scene but the player and the group (the minimap draws those as
     /// the map does) and corpses, in its name's colour (`plates`), and the
     /// target.
+    ///
+    /// A friendly NPC's square is its role's colour (Minimap Colors, Heirloom
+    /// petition 3092: `minimapcolor::role`, from its name, its flags, the
+    /// server's spell merchants and its quest mark), Default its name's; and
+    /// its name and role are the minimap's tooltip under the mouse's pointer
+    /// (petition 3093).
     fn mini_view(&self) -> crate::map::mini::MiniView {
         let me = self.self_id32();
         let group: Vec<u32> = self.group.members[..self.group.count()].iter().map(|m| m.id).collect();
+        let (colors, mine) = crate::settings::minimap_colors();
+        let mine = mine.then_some(self.dump.player.class as u8);
+        let mut names = Vec::new();
         let dots = self
             .entities
             .slots
@@ -10984,11 +11101,23 @@ impl Play {
             .filter(|e| Some(e.id) != me && !group.contains(&e.id) && e.p18 & 2 == 0 && self.in_scene(e))
             .filter_map(|e| {
                 let c = e.creature.as_ref()?;
-                Some(([e.actor_pos[0], e.actor_pos[2]], self.name_color(c)))
+                let at = [e.actor_pos[0], e.actor_pos[2]];
+                let npc = crate::minimapcolor::Npc {
+                    name: &c.name,
+                    npc_flags: c.npc_flags,
+                    p256: c.p256,
+                    spell_class: self.session.spell_merchants.get(&c.name).copied(),
+                    quest_mark: self.session.head_mark(e.id).is_some(),
+                };
+                let role = crate::minimapcolor::role(&npc, mine);
+                if c.npc_flags & 0x80 != 0 && c.p256 < 2 && !c.name.is_empty() {
+                    names.push((at, c.name.clone(), role.map_or(String::new(), |r| mini_role_line(r, npc.spell_class))));
+                }
+                Some((at, role.and_then(|r| crate::minimapcolor::rgba(r, &colors)).unwrap_or_else(|| self.name_color(c))))
             })
             .collect();
         let target = self.actor_pos(self.target).filter(|_| Some(self.target) != me).map(|p| [p[0], p[2]]);
-        crate::map::mini::MiniView { dots, target, marks: self.mini_marks() }
+        crate::map::mini::MiniView { dots, target, marks: self.mini_marks(), names }
     }
 
     /// The marks on the minimap (`map::mini::Mark`: a kind, a world, a place
@@ -15395,6 +15524,168 @@ mod commands {
         p.damage_indication(&hit(me, 0x200), 0);
         let s = shown(&mut p, 0x200);
         assert_eq!((s.len(), s[0].color), (1, [1.0; 4]));
+    }
+
+    /// Own Name Plate (Heirloom petition 3081): off by default, no plate of
+    /// the player's own (the game's); on, its name at its name node in its
+    /// name's colour, while its body is drawn; not from a first person camera
+    /// (the body hidden) and not without a name node.
+    #[test]
+    fn own_name_plate_is_drawn_as_the_others() {
+        crate::settings::testing::reset(false);
+        let mut p = play();
+        // the world entry's loading screen down
+        assert!(p.loading.end(true, i64::MAX).is_some());
+        let me = p.self_id32().unwrap();
+        p.entities.slots[0] = Some(net::entity::Entity { id: me, kind: net::entity::TYPE_CREATURE, creature: Some(net::entity::Creature { name: "Dabtest".into(), p256: 2, ..Default::default() }), ..Default::default() });
+        p.self_name_at = Some([1.0, 2.5, 3.0]);
+        assert!(p.plates().iter().all(|pl| pl.name != "Dabtest"), "off: the game's, none");
+        let mut c = crate::settings::client();
+        c.own_plate = true;
+        crate::settings::set_client(c);
+        let mine: Vec<Plate> = p.plates().into_iter().filter(|pl| pl.name == "Dabtest").collect();
+        assert_eq!(mine.len(), 1, "on: the player's own");
+        assert_eq!((mine[0].at, mine[0].color, mine[0].tag.clone()), ([1.0, 2.5, 3.0], NAME_COLORS[1], None), "at its name node, a player's colour");
+        p.self_shown = false;
+        assert!(p.plates().iter().all(|pl| pl.name != "Dabtest"), "the body hidden (first person): none");
+        p.self_shown = true;
+        p.self_name_at = None;
+        assert!(p.plates().iter().all(|pl| pl.name != "Dabtest"), "no name node: none");
+        crate::settings::testing::reset(false);
+    }
+
+    /// Coach Talk on Arrival (Heirloom petition 3091): a 0x00B2 while the
+    /// coachman talked to is the target arms it; once the ride is answered and
+    /// the world in, the coachman by the landing (not the one who sent it, not
+    /// one farther than the reach) is targeted and talked to, 0x0004 with his
+    /// id, once. The controls: off, or a move with another target, sends
+    /// nothing; armed, no coachman near sends nothing until one comes.
+    #[test]
+    fn coach_talk_on_arrival_talks_to_the_coachman_there() {
+        let npc = |id: u32, name: &str, at: [f32; 3]| net::entity::Entity { id, kind: net::entity::TYPE_CREATURE, pos: at, actor_pos: at, creature: Some(net::entity::Creature { name: name.into(), npc_flags: 0x180, ..Default::default() }), ..Default::default() };
+        let talks = |p: &mut Play| -> Vec<u32> {
+            p.session.record.take().unwrap_or_default().into_iter().map(|(_, m)| m).filter(|m| m[..2] == [0x04, 0x00]).map(|m| u32::from_le_bytes([m[2], m[3], m[4], m[5]])).collect()
+        };
+        let arm = |p: &mut Play, from: u32| {
+            p.target = from;
+            p.arm_coach_talk(1000);
+        };
+        crate::settings::testing::reset(false);
+        let mut p = play();
+        assert!(p.loading.end(true, i64::MAX).is_some(), "the world entry's loading screen down");
+        assert!(p.coach_talk.is_none() && p.arrival.is_empty() && p.world_change.is_none());
+        p.entities.slots[1] = Some(npc(0x51, "Coachman Ronks", [5000.0, 0.0, 5000.0]));
+        p.entities.slots[2] = Some(npc(0x52, "Coachman Doba", [100.0, 0.0, 105.0]));
+        p.entities.slots[3] = Some(npc(0x53, "Merchant Perry", [100.0, 0.0, 101.0]));
+        arm(&mut p, 0x51);
+        assert_eq!(p.coach_talk, None, "off by default: not armed");
+        let mut c = crate::settings::client();
+        c.coach_talk = true;
+        crate::settings::set_client(c);
+        arm(&mut p, 0x53);
+        assert_eq!(p.coach_talk, None, "another target (a merchant): not armed");
+        arm(&mut p, 0x51);
+        assert_eq!(p.coach_talk, Some((1000 + COACH_TALK_MS, 0x51)), "the coachman talked to: armed");
+        p.session.record = Some(Vec::new());
+        p.coach_talk_frame([100.0, 0.0, 100.0], 2000);
+        assert_eq!((talks(&mut p), p.target, p.coach_talk), (vec![0x52], 0x52, None), "the coachman by the landing, targeted and talked to");
+        p.session.record = Some(Vec::new());
+        p.coach_talk_frame([100.0, 0.0, 100.0], 2100);
+        assert!(talks(&mut p).is_empty(), "once");
+        // none near yet: waits, then gives up
+        arm(&mut p, 0x51);
+        p.session.record = Some(Vec::new());
+        p.coach_talk_frame([300.0, 0.0, 300.0], 2000);
+        assert!(talks(&mut p).is_empty() && p.coach_talk.is_some(), "no coachman within reach: waits");
+        p.coach_talk_frame([300.0, 0.0, 300.0], 1000 + COACH_TALK_MS + 1);
+        assert_eq!(p.coach_talk, None, "given up after its time");
+        // the ride's own coachman beside the landing is not the one
+        arm(&mut p, 0x52);
+        p.session.record = Some(Vec::new());
+        p.coach_talk_frame([100.0, 0.0, 100.0], 2000);
+        assert!(talks(&mut p).is_empty(), "the coachman who sent the ride: not him");
+        // locked with the automation (`qol::AUTO_CAST`)
+        crate::settings::qol::set_off(crate::settings::qol::AUTO_CAST);
+        arm(&mut p, 0x51);
+        assert_eq!(p.coach_talk, None, "the game's own UI: off");
+        crate::settings::qol::set_off(0);
+        crate::settings::testing::reset(false);
+    }
+
+    /// Minimap Colors (Heirloom petitions 3092, 3093): a friendly NPC's square
+    /// is its role's colour, a spell merchant known from the server's list,
+    /// Default its name's; its name and role go with it for the tooltip; a
+    /// creature's is its name's colour and nameless.
+    #[test]
+    fn minimap_squares_by_role_and_named() {
+        crate::settings::testing::reset(false);
+        let npc = |id: u32, name: &str, flags: u16, at: [f32; 3]| net::entity::Entity { id, kind: net::entity::TYPE_CREATURE, pos: at, actor_pos: at, creature: Some(net::entity::Creature { name: name.into(), npc_flags: flags, ..Default::default() }), ..Default::default() };
+        let mut p = play();
+        p.entities.slots[1] = Some(npc(0x61, "Merchant Timmerin", 0x81, [10.0, 0.0, 0.0]));
+        p.entities.slots[2] = Some(npc(0x62, "Banker Lars", 0x82, [20.0, 0.0, 0.0]));
+        p.entities.slots[3] = Some(npc(0x63, "orc pawn", 0, [30.0, 0.0, 0.0]));
+        p.session.spell_merchants.insert("Merchant Timmerin".into(), 13);
+        let mv = p.mini_view();
+        let colour = |x: f32| mv.dots.iter().find(|d| d.0 == [x, 0.0]).map(|d| d.1).unwrap();
+        let rgba = |k: &str| { let c = crate::numcolor::PALETTE.iter().find(|q| q.key == k).unwrap().rgb; [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0] };
+        assert_eq!(colour(10.0), rgba("purple"), "a spell merchant the server named: Spell Merchants' purple");
+        assert_eq!(colour(20.0), rgba("cyan"), "a banker: Bankers' cyan");
+        assert_eq!(colour(30.0), NAME_COLORS[0], "a creature: its name's colour");
+        assert_eq!(mv.names, vec![([10.0, 0.0], "Merchant Timmerin".to_string(), "Spell Merchant (Wizard)".to_string()), ([20.0, 0.0], "Banker Lars".to_string(), "Banker".to_string())]);
+        // the control: unnamed by the server, a merchant; Default, the name's colour
+        p.session.spell_merchants.clear();
+        let mut c = crate::settings::client();
+        c.minimap_colors[crate::minimapcolor::Role::Bankers as usize] = 0;
+        crate::settings::set_client(c);
+        let mv = p.mini_view();
+        assert_eq!(mv.dots.iter().find(|d| d.0 == [10.0, 0.0]).unwrap().1, rgba("yellow"), "a merchant: Merchants' yellow");
+        assert_eq!(mv.dots.iter().find(|d| d.0 == [20.0, 0.0]).unwrap().1, NAME_COLORS[0], "Bankers Default: the name's colour");
+        crate::settings::testing::reset(false);
+    }
+
+    /// Damage Taken (Heirloom petition 3081): a creature's hit on the player,
+    /// drawn over the player, in the row's colour; Default, the game's yellow.
+    /// Not a heal another gave, not the player's own hit, not a hit on another
+    /// (the controls), and not while a patch colours the numbers.
+    #[test]
+    fn damage_taken_is_its_rows_colour() {
+        let num = |attacker: u32, amount: i64, defender: u32| {
+            let mut w = net::stream::Writer::default();
+            w.u32(attacker).signed(amount).u32(defender);
+            w.data
+        };
+        let shown = |p: &mut Play, id: u32| p.damage.step(33, |e| (e == id).then_some(crate::damage::Target { pos: [0.0; 3], slot4: None }));
+        crate::settings::testing::reset(false);
+        let mut c = crate::settings::client();
+        c.number_colors[crate::numcolor::TAKEN] = crate::numcolor::from_key("cyan").unwrap();
+        crate::settings::set_client(c);
+        let cyan = [0.0, 240.0 / 255.0, 240.0 / 255.0, 1.0];
+        let yellow = [0.8, 0.8, 0.1, 1.0];
+        let mut p = play();
+        let me = p.self_id32().expect("the player's id");
+        p.damage_indication(&num(0x300, -40, me), 1);
+        let s = shown(&mut p, me);
+        assert_eq!((s.len(), s[0].color), (1, cyan), "a creature's hit on the player: Damage Taken's");
+        let mut p = play();
+        p.damage_indication(&num(0x300, 25, me), 1);
+        assert_eq!(shown(&mut p, me)[0].color, [0.0, 1.0, 0.0, 1.0], "the control: another's heal stays green");
+        let mut p = play();
+        p.damage_indication(&num(me, -40, 0x300), 1);
+        assert_eq!(shown(&mut p, 0x300)[0].color, [1.0; 4], "the control: the player's own hit stays white");
+        let mut p = play();
+        p.damage_indication(&num(0x300, -40, 0x301), 1);
+        assert_eq!(shown(&mut p, me)[0].color, yellow, "the control: a hit on another, the game's yellow");
+        let colored = crate::s2::Rules { damage_rgb: true, ..crate::s2::Rules::retail() };
+        let s = crate::s2::with_rules(colored, || {
+            let mut p = play();
+            p.damage_indication(&num(0x300, -40, me), 1);
+            shown(&mut p, me)
+        });
+        assert_eq!(s[0].color, yellow, "a patch colours the numbers: Damage Taken not read");
+        crate::settings::testing::reset(false);
+        let mut p = play();
+        p.damage_indication(&num(0x300, -40, me), 1);
+        assert_eq!(shown(&mut p, me)[0].color, yellow, "Default: the game's yellow");
     }
 
     /// What colours a number (`number_rgb`): a patch's three bytes when it

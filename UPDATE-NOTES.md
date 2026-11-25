@@ -5,6 +5,14 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Damage Taken colour, your own name plate, coach talk, minimap colours, faster sidestep
+
+- **Options → Extended → UI → Number Colors** has a new row, **Damage Taken**: the colour of the numbers when a creature (or anyone else) hits you. Default keeps the game's yellow.
+- **Options → Extended → UI → Name Plates → Own Name Plate**: turn it on to see your own name over your character, drawn like everyone else's. Off by default.
+- **Options → Extended → Other → Movement → Coach Talk on Arrival** (off by default): when a coach sets you down, you talk to the coachman there at once, his travel list open.
+- **Options → Extended → UI → Minimap Colors**: friendly NPCs' squares on the minimap are coloured by what they do: spell merchants, smiths, merchants, bankers, trainers, coachmen and quest givers, each with its own colour you can change (Default keeps the old colour). **Spell Merchants Shown → My Class** colours only the spell merchants who sell your class's spells. With a mouse, point at a square to see the NPC's name and what they do.
+- **Options → Extended → Other → Movement → Strafe Speed**: **Match Forward** makes sidestepping as fast as running forward. **Retail** (the default) keeps the game's slow sidestep.
+
 ## 2026-11-25 · Untracked quests stay readable, flight sticks no longer turn you
 
 - A quest you take off the quest tracker now stays plainly listed in the **Quest Journal**, in dark grey: the light grey it was drawn in before matched the journal's background, so the quest looked gone.

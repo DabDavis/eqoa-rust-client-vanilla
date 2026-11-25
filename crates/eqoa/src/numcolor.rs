@@ -29,20 +29,35 @@
 //! apart from the player's own without a pick, and the client asks for the tags
 //! from the first login (`wanted`). Set to Default they are the game's colour:
 //! a merc's hit the white of the player's own, its heal the green of any.
+//!
+//! One row more on Number Colors' page, Damage Taken (Heirloom petition 3081:
+//! "change the colour of the damage numbers a mob does to me"): a hit another
+//! made on the player, drawn over the player (the game's yellow,
+//! `damage::Numbers`), in its colour. It needs no tag: the client knows a hit
+//! taken by its attacker and defender (`TAKEN`, `taken_rgb`), so it asks
+//! nothing of the server (`wanted` leaves it out) and works on any server but
+//! one whose patch colours the numbers.
 
 use net::session::NumberTag;
 
 /// The rows, in the page's order: what each is called and its key in
 /// `client.opt`.
-pub const ROWS: usize = 8;
-pub const LABELS: [&str; ROWS] = ["Your Damage", "Your Procs", "Your Heals", "Pet Damage", "Pet Procs", "Pet Heals", "Merc Damage", "Merc Heals"];
-pub const KEYS: [&str; ROWS] = ["damage", "procs", "heals", "pet_damage", "pet_procs", "pet_heals", "merc_damage", "merc_heals"];
+pub const ROWS: usize = 9;
+pub const LABELS: [&str; ROWS] = ["Your Damage", "Your Procs", "Your Heals", "Pet Damage", "Pet Procs", "Pet Heals", "Merc Damage", "Merc Heals", "Damage Taken"];
+pub const KEYS: [&str; ROWS] = ["damage", "procs", "heals", "pet_damage", "pet_procs", "pet_heals", "merc_damage", "merc_heals", "taken"];
+
+/// Damage Taken's row: a hit another made on the player (no tag says it).
+pub const TAKEN: usize = 8;
+/// Damage Taken's Extended item (290, not the next free: sibling lanes take
+/// the next ones).
+pub const TAKEN_ITEM: i32 = 290;
 
 /// The Extended page's items for the rows (`options::EXTENDED_ITEMS`), in the
 /// rows' order.
-pub const ITEMS: [i32; ROWS] = [64, 65, 66, 67, 68, 69, 80, 81];
-/// Number Colors' page: the player's and the pet's rows.
-pub const NUMBER_ITEMS: [i32; 6] = [64, 65, 66, 67, 68, 69];
+pub const ITEMS: [i32; ROWS] = [64, 65, 66, 67, 68, 69, 80, 81, TAKEN_ITEM];
+/// Number Colors' page: the player's and the pet's rows, then Damage Taken
+/// (seven: the page takes the menu's place, as Chat Tabs').
+pub const NUMBER_ITEMS: [i32; 7] = [64, 65, 66, 67, 68, 69, TAKEN_ITEM];
 /// Merc Colors' page: the merc's rows.
 pub const MERC_ITEMS: [i32; 2] = [80, 81];
 
@@ -55,7 +70,7 @@ pub fn row_of_item(item: i32) -> Option<usize> {
 /// for the merc's, Light Blue for its damage and Purple for its heals, each
 /// unlike the game's white, yellow and green (the owner, petition 1613: a
 /// merc's numbers distinct from the player's own as they come).
-pub const DEFAULTS: [Choice; ROWS] = [0, 0, 0, 0, 0, 0, 8, 6];
+pub const DEFAULTS: [Choice; ROWS] = [0, 0, 0, 0, 0, 0, 8, 6, 0];
 
 /// One colour a row may take: its name on the page, its key in `client.opt`,
 /// and the number's RGB.
@@ -141,11 +156,17 @@ pub fn rgb(tag: Option<NumberTag>, choices: &[Choice; ROWS]) -> Option<[u8; 3]> 
     paint(choices[row(tag?)?]).map(|p| p.rgb)
 }
 
-/// Whether the server should tag the numbers: any row not Default
-/// (`Session::agree_number_tags`); with the merc's rows' `DEFAULTS`, from the
-/// first login.
+/// Whether the server should tag the numbers: any row read off a tag not
+/// Default (`Session::agree_number_tags`; Damage Taken needs none); with the
+/// merc's rows' `DEFAULTS`, from the first login.
 pub fn wanted(choices: &[Choice; ROWS]) -> bool {
-    choices.iter().any(|&c| paint(c).is_some())
+    choices.iter().enumerate().any(|(i, &c)| i != TAKEN && paint(c).is_some())
+}
+
+/// The colour a hit taken is drawn in (a negative figure another made on the
+/// player, untagged): Damage Taken's, none (the game's yellow) when Default.
+pub fn taken_rgb(choices: &[Choice; ROWS]) -> Option<[u8; 3]> {
+    paint(choices[TAKEN]).map(|p| p.rgb)
 }
 
 /// How a row's value is drawn on the page: in its colour (each channel a
@@ -226,7 +247,11 @@ mod tests {
         assert_eq!(rgb(tag(9, false), &c), None, "a kind not known: the game's");
         assert_eq!(rgb(merc(1), &c), None, "Merc Damage set to Default: the game's");
         assert!(LABELS.iter().zip(KEYS).all(|(l, k)| LABELS.iter().filter(|&&m| m == *l).count() == 1 && KEYS.iter().filter(|&&j| j == k).count() == 1));
-        assert_eq!(NUMBER_ITEMS.iter().chain(&MERC_ITEMS).copied().collect::<Vec<_>>(), ITEMS, "the two pages hold every row once");
+        let mut paged: Vec<i32> = NUMBER_ITEMS.iter().chain(&MERC_ITEMS).copied().collect();
+        paged.sort();
+        let mut all = ITEMS.to_vec();
+        all.sort();
+        assert_eq!(paged, all, "the two pages hold every row once");
         assert_eq!(ITEMS.map(|i| row_of_item(i)), core::array::from_fn(Some));
     }
 
@@ -255,5 +280,25 @@ mod tests {
         assert_eq!(name(200), "Default", "past the palette reads as Default");
         assert_eq!(swatch(0), None);
         assert_eq!(swatch(from_key("white").unwrap()), Some([1.0; 4]));
+    }
+
+    /// Damage Taken (petition 3081): its own row, read off no tag; chosen, it
+    /// colours a hit taken and asks nothing of the server; Default, the game's.
+    #[test]
+    fn damage_taken_is_its_own_row_and_needs_no_tag() {
+        let mut c = [0; ROWS];
+        assert_eq!(taken_rgb(&c), None, "Default: the game's yellow");
+        c[TAKEN] = from_key("red").unwrap();
+        assert_eq!(taken_rgb(&c), Some([255, 48, 48]));
+        assert!(!wanted(&c), "no tag asked for it");
+        for k in 1..=7 {
+            assert_ne!(row(NumberTag { kind: k, pet: false, merc: false }), Some(TAKEN), "no tag reads as Damage Taken");
+            assert_eq!(rgb(Some(NumberTag { kind: k, pet: true, merc: false }), &c), None);
+        }
+        assert_eq!((row_of_item(TAKEN_ITEM), LABELS[TAKEN], KEYS[TAKEN]), (Some(TAKEN), "Damage Taken", "taken"));
+        assert!(NUMBER_ITEMS.contains(&TAKEN_ITEM) && !MERC_ITEMS.contains(&TAKEN_ITEM));
+        // the control: another row chosen asks for the tags
+        c[0] = 1;
+        assert!(wanted(&c));
     }
 }

@@ -1244,6 +1244,45 @@ mod view_tests {
     }
 }
 
+/// Strafe Speed's Match Forward (Live petition 5633: "a way to increase
+/// strafe speed? It is super slow"): `VIWalkControl::Move` as the game runs it
+/// (`WalkControl::move_stick`, untouched), then the sidestep's thrust topped up
+/// from the walk's to the pace forward would go. The game's `Run` pushes a
+/// sidestep at the run's pace only while running forward too; alone, or
+/// beside a step back, at the walk's (its `else`), so a sidestep goes at 3 where
+/// a run goes 8.8. Here, where the stick runs (past `m_runThreshold`) and its
+/// forward part does not, the side part gets what `Run` gives forward: the
+/// run's on land (the walk's in mud, `SLOW_RUN`), the run's in water, the
+/// walk's in mud's liquid. Walking (under the threshold, or `Walk` itself), the
+/// game's. The pace is the server's own run speed (0x00F8), so its movement
+/// check (go-eqoa-server's `movecheck`, a distance per second at the run speed
+/// whatever the way) takes it as any run.
+pub fn move_stick_matched(w: &mut WalkControl<Ee>, x: F<Ee>, y: F<Ee>) {
+    use flags::{AT_MUD_SURFACE, B1, IN_MUD, LIQUID, SLOW_RUN};
+    w.move_stick(x, y);
+    let mut v = vi::vect::Vect2::new(x, y);
+    let m = v.magnitude();
+    if !(w.move_deadzone < m && w.run_threshold < m) {
+        return;
+    }
+    v.normalize();
+    let f = w.phys.flags;
+    // `Run`'s own case: running forward, the side already at the run's pace;
+    // nothing pushes off a floor or out of a liquid
+    if w.run_threshold < v.x || f & (ON_FLOOR | B1 | LIQUID) == 0 {
+        return;
+    }
+    let forward = if f & LIQUID == 0 {
+        if f & SLOW_RUN == 0 { w.run_accel } else { w.walk_accel }
+    } else if f & (IN_MUD | AT_MUD_SURFACE) == 0 {
+        w.run_accel
+    } else {
+        w.walk_accel
+    };
+    let right = w.right;
+    w.phys.force.add_scaled(&right, (forward - w.walk_accel) * v.y);
+}
+
 impl crate::controls::Walk for Walker {
     fn camera_mode(&self) -> i32 {
         self.cam.camera_mode
@@ -1267,7 +1306,12 @@ impl crate::controls::Walk for Walker {
         !self.flying && self.cam.walk.is_at_liquid_surface()
     }
     fn move_stick(&mut self, x: F<Ee>, y: F<Ee>) {
-        self.cam.walk.move_stick(x, y);
+        // Strafe Speed's Match Forward (Live petition 5633), else the game's
+        if crate::settings::strafe_match() {
+            move_stick_matched(&mut self.cam.walk, x, y);
+        } else {
+            self.cam.walk.move_stick(x, y);
+        }
     }
     fn walk(&mut self, x: F<Ee>, y: F<Ee>) {
         self.cam.walk.walk(x, y);
@@ -3558,5 +3602,81 @@ pub(crate) mod tests {
         let Some(plain) = frames(&crate::controls::Client::default(), -1) else { return };
         assert_eq!(frames(&jumper(), -1).unwrap(), plain, "a client that may jump, not jumping");
         assert_ne!(frames(&jumper(), 1500).unwrap().1, plain.1, "the control: a jump asked");
+    }
+}
+
+#[cfg(test)]
+mod strafe_tests {
+    use super::*;
+    use vi::walk::flags::{IN_MUD, IN_WATER, SLOW_RUN};
+
+    /// The thrust a stick (x forward, y right) gives a body with `flags`, the
+    /// game's or Match Forward's: its part along Right and along Forward.
+    fn thrust(matched: bool, flags: u32, x: f32, y: f32) -> (f32, f32) {
+        let mut w = WalkControl::<Ee>::default();
+        w.init_parms();
+        w.init_intermediate();
+        w.phys.flags = flags;
+        let (x, y) = (F::new(x), F::new(y));
+        if matched {
+            move_stick_matched(&mut w, x, y);
+        } else {
+            w.move_stick(x, y);
+        }
+        let dot = |d: Vect3<Ee>| w.phys.force.x.0 * d.x.0 + w.phys.force.y.0 * d.y.0 + w.phys.force.z.0 * d.z.0;
+        (dot(w.right), dot(w.forward))
+    }
+
+    /// Strafe Speed (Live petition 5633): the game's sidestep alone pushes at
+    /// the walk's pace (its `Run`'s `else`); Match Forward's at the run's, so
+    /// its terminal speed is the run speed. Running forward, walking, and off
+    /// the floor, both are the game's bit for bit (the controls); in mud (and
+    /// `SLOW_RUN`) the walk's, in water the run's, as forward goes there.
+    #[test]
+    fn match_forward_sidesteps_at_the_forward_pace() {
+        let mut w = WalkControl::<Ee>::default();
+        w.init_parms();
+        w.init_intermediate();
+        let (walk, run) = (w.walk_accel.0, w.run_accel.0);
+        assert!((run / walk - vi::walk::RUN_SPEED / 3.0).abs() < 1e-4, "the accelerations go as the speeds: {run} / {walk}");
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-3 * b.abs().max(1.0);
+        // the game's: a sidestep alone at the walk's
+        let (side, fwd) = thrust(false, ON_FLOOR, 0.0, 1.0);
+        assert!(near(side, walk) && fwd.abs() < 1e-3, "the game's sidestep: {side} (walk {walk})");
+        // Match Forward: at the run's, either way
+        let (side, fwd) = thrust(true, ON_FLOOR, 0.0, 1.0);
+        assert!(near(side, run) && fwd.abs() < 1e-3, "matched: {side} (run {run})");
+        let (side, _) = thrust(true, ON_FLOOR, 0.0, -1.0);
+        assert!(near(side, -run), "matched, the other way: {side}");
+        // a step back and aside: its side part at the run's, its back part the game's
+        let (side, back) = thrust(true, ON_FLOOR, -0.7071, 0.7071);
+        let (_, back_game) = thrust(false, ON_FLOOR, -0.7071, 0.7071);
+        assert!(near(side, run * 0.7071) && back == back_game, "back and aside: {side}, {back} (game {back_game})");
+        // the controls: the game's bit for bit where it already runs, walks, or cannot push
+        for (flags, x, y, what) in [(ON_FLOOR, 1.0, 0.0, "a run forward"), (ON_FLOOR, 0.7071, 0.7071, "forward and aside"), (ON_FLOOR, 0.0, 0.5, "a walk's stick aside"), (0, 0.0, 1.0, "in the air")] {
+            assert_eq!(thrust(true, flags, x, y), thrust(false, flags, x, y), "{what}");
+        }
+        // as forward goes: the walk's in mud and where the run is slowed, the run's in water
+        assert!(near(thrust(true, ON_FLOOR | SLOW_RUN, 0.0, 1.0).0, walk), "SLOW_RUN");
+        assert!(near(thrust(true, IN_WATER, 0.0, 1.0).0, run), "in water");
+        assert!(near(thrust(true, IN_MUD, 0.0, 1.0).0, walk), "in mud");
+    }
+
+    /// The setting picks the walk's path: the game's unless Match Forward is
+    /// on, and never where the server turns the automation off
+    /// (`qol::AUTO_CAST`).
+    #[test]
+    fn strafe_speed_is_the_settings_and_locked_with_the_automation() {
+        crate::settings::testing::reset(false);
+        assert!(!crate::settings::strafe_match(), "Retail by default");
+        let mut c = crate::settings::client();
+        c.strafe_match = true;
+        crate::settings::set_client(c);
+        assert!(crate::settings::strafe_match());
+        crate::settings::qol::set_off(crate::settings::qol::AUTO_CAST);
+        assert!(!crate::settings::strafe_match(), "the game's own UI: Retail");
+        crate::settings::qol::set_off(0);
+        assert!(crate::settings::strafe_match(), "the player's choice kept");
+        crate::settings::testing::reset(false);
     }
 }

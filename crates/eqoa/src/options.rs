@@ -22,8 +22,8 @@
 //! as that one is, of four groups (a GM's petitions 1631 and 1634,
 //! 2026-11-11: `GROUPS`): Graphics (Video, World, Lighting, Characters,
 //! natively Textures, Weather), UI (HUD, HUD Layout, Name Plates, Map, Number Colors,
-//! Merc Colors, DPS Meter, Chat, Chat Tabs), Other (General, Combat, Camera, natively
-//! Sound), Touch Controls (Size & Look, Layout: every row of the touch
+//! Merc Colors, DPS Meter, Chat, Chat Tabs, Minimap Colors), Other (General, Combat,
+//! Camera, natively Sound, Movement), Touch Controls (Size & Look, Layout: every row of the touch
 //! screen's pad, a GM's petition 2084) and the Multi-boxing
 //! settings. A group opens a menu of its
 //! categories in the place of the groups' (`CATEGORIES`), the Multi-boxing
@@ -1028,6 +1028,23 @@ impl WndOptions {
                     // Target Level: drawn or not from the next frame
                     // (`hud::draw_target`)
                     TARGET_LEVEL => c.target_level = !c.target_level,
+                    // Own Name Plate: the player's plate from the next frame
+                    // (`Play::plates`)
+                    OWN_PLATE => c.own_plate = !c.own_plate,
+                    // Coach Talk on Arrival: from the next coach's arrival
+                    // (`Play::coach_talk_frame`)
+                    COACH_TALK => c.coach_talk = !c.coach_talk,
+                    // Strafe Speed: Retail or Match Forward, the walk's from
+                    // the next frame (`walker::move_stick_matched`)
+                    STRAFE_SPEED => c.strafe_match = !c.strafe_match,
+                    // Minimap Colors: round Default and the palette, the
+                    // squares from the next frame (`Play::mini_view`)
+                    300..=306 => {
+                        if let Some(row) = crate::minimapcolor::row_of_item(self.item) {
+                            c.minimap_colors[row] = crate::numcolor::step(c.minimap_colors[row], d);
+                        }
+                    }
+                    crate::minimapcolor::SPELLS_SHOWN_ITEM => c.minimap_spells_mine = !c.minimap_spells_mine,
                     // Loading Tips: from the next loading screen (`tips`)
                     84 => c.loading_tips = !c.loading_tips,
                     // the Map: the map, the minimap and the waypoints from
@@ -1133,7 +1150,7 @@ impl WndOptions {
                     // Number Colors: round Default and the palette, the next
                     // number drawn in it and the server told from the next
                     // frame whether to tag them (`Session::agree_number_tags`)
-                    64..=69 | 80 | 81 => {
+                    64..=69 | 80 | 81 | crate::numcolor::TAKEN_ITEM => {
                         if let Some(row) = crate::numcolor::row_of_item(self.item) {
                             c.number_colors[row] = crate::numcolor::step(c.number_colors[row], d);
                         }
@@ -2123,6 +2140,18 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (ATTACK_ABILITIES, "Attack With Abilities"),
     (DPS_COLUMNS, "DPS Meter Columns"),
     (DPS_SORT, "DPS Meter Sort"),
+    (crate::numcolor::TAKEN_ITEM, crate::numcolor::LABELS[crate::numcolor::TAKEN]),
+    (OWN_PLATE, "Own Name Plate"),
+    (COACH_TALK, "Coach Talk on Arrival"),
+    (STRAFE_SPEED, "Strafe Speed"),
+    (300, crate::minimapcolor::LABELS[0]),
+    (301, crate::minimapcolor::LABELS[1]),
+    (302, crate::minimapcolor::LABELS[2]),
+    (303, crate::minimapcolor::LABELS[3]),
+    (304, crate::minimapcolor::LABELS[4]),
+    (305, crate::minimapcolor::LABELS[5]),
+    (306, crate::minimapcolor::LABELS[6]),
+    (crate::minimapcolor::SPELLS_SHOWN_ITEM, "Spell Merchants Shown"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2218,6 +2247,14 @@ pub(crate) const DPS_COLUMNS: i32 = 272;
 pub(crate) const DPS_SORT: i32 = 273;
 #[cfg(target_arch = "wasm32")]
 const SHOW_FPS: i32 = 274;
+/// Own Name Plate's item (Heirloom petition 3081), with Name Plates' rows.
+/// 291, not the next free, as Damage Taken's 290 (`numcolor::TAKEN_ITEM`).
+const OWN_PLATE: i32 = 291;
+/// Coach Talk on Arrival's (Heirloom petition 3091) and Strafe Speed's (Live
+/// petition 5633) items, on Other's Movement page; the server's
+/// `qol::AUTO_CAST` turns them off with the automation.
+pub(crate) const COACH_TALK: i32 = 292;
+pub(crate) const STRAFE_SPEED: i32 = 293;
 
 const HUD_SCALE: i32 = 240;
 const NAMEPLATE_SCALE: i32 = 241;
@@ -2330,7 +2367,7 @@ const GROUPS: [(Group, &str); 5] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// Capture Controller and Sound in Background the Multi-boxing settings',
 /// Controller's touch rows Other's Touch; petition 2084, 2026-11-14: Touch a
 /// group of its own, Touch Controls, its rows Size & Look and Layout).
-const ALL_CATEGORIES: [Category; 26] = [
+const ALL_CATEGORIES: [Category; 28] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
@@ -2346,7 +2383,8 @@ const ALL_CATEGORIES: [Category; 26] = [
     // Spell Bar Opacity (2026-11-13, ticket 1953) here: HUD's page is full
     Category { name: "HUD Layout", items: &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT], note: Note::Hud, group: Group::Ui },
     // Debuff Icons (petition 2997) with the other things drawn at a plate
-    Category { name: "Name Plates", items: &[27, 34, 85, TARGET_LEVEL, NPC_DEBUFFS], note: Note::None, group: Group::Ui },
+    // Own Name Plate (petition 3081) with the plates' rows
+    Category { name: "Name Plates", items: &[27, 34, 85, TARGET_LEVEL, NPC_DEBUFFS, OWN_PLATE], note: Note::None, group: Group::Ui },
     Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
@@ -2374,6 +2412,11 @@ const ALL_CATEGORIES: [Category; 26] = [
     // what the HUD tells of its own pieces (petitions 2924-2928): HUD's page
     // is full
     Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS, SPELL_COOLDOWNS, HUD_PROFILE], note: Note::None, group: Group::Ui },
+    // the friendly NPCs' squares on the minimap by role (petition 3092,
+    // `minimapcolor`), and whose spell merchants
+    Category { name: "Minimap Colors", items: &[300, 301, 302, 303, 304, 305, 306, crate::minimapcolor::SPELLS_SHOWN_ITEM], note: Note::None, group: Group::Ui },
+    // the walk's own (petitions 5633, 3091): General's and Combat's pages are full
+    Category { name: "Movement", items: &[STRAFE_SPEED, COACH_TALK], note: Note::None, group: Group::Other },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -2382,7 +2425,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24], a[25]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24], a[25], a[26], a[27]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -2570,6 +2613,11 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         HUD_PROFILE => wide(&crate::hudlayout::picked().unwrap_or_else(|| "None saved".to_string())),
         85 => on_off(c.head_marks),
         TARGET_LEVEL => on_off(c.target_level),
+        OWN_PLATE => on_off(c.own_plate),
+        COACH_TALK => on_off(c.coach_talk),
+        STRAFE_SPEED => wide(if c.strafe_match { "Match Forward" } else { "Retail" }),
+        300..=306 => wide(crate::numcolor::name(c.minimap_colors[crate::minimapcolor::row_of_item(item)?])),
+        crate::minimapcolor::SPELLS_SHOWN_ITEM => wide(if c.minimap_spells_mine { "My Class" } else { "All" }),
         84 => on_off(c.loading_tips),
         50 => on_off(c.texture_packs),
         51 => on_off(c.dump_textures),
@@ -2585,7 +2633,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         56 => on_off(c.light_shadows),
         54 => on_off(c.ambient_occlusion),
         63 => wide(if c.ps2_particles { "PS2" } else { "Exact" }),
-        64..=69 | 80 | 81 => wide(crate::numcolor::name(c.number_colors[crate::numcolor::row_of_item(item)?])),
+        64..=69 | 80 | 81 | crate::numcolor::TAKEN_ITEM => wide(crate::numcolor::name(c.number_colors[crate::numcolor::row_of_item(item)?])),
         70 => on_off(c.dps_meter),
         71 => wide(c.dps_view.name()),
         DPS_COLUMNS => wide(c.dps_columns.name()),
@@ -2645,6 +2693,10 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
 /// The colour an Extended row's value is drawn in, none for the windows'
 /// own: a Number Colors row's colour (Default none).
 fn value_paint(item: i32) -> Option<[f32; 4]> {
+    // a Minimap Colors row's too (petition 3092)
+    if let Some(row) = crate::minimapcolor::row_of_item(item) {
+        return crate::numcolor::swatch(crate::settings::client().minimap_colors[row]);
+    }
     let row = crate::numcolor::row_of_item(item)?;
     crate::numcolor::swatch(crate::settings::client().number_colors[row])
 }
@@ -3786,7 +3838,8 @@ mod tests {
         goto!(64);
         assert_eq!(w.item, 64, "Number Colors, Your Damage");
         let last = crate::numcolor::PALETTE.len() as u8;
-        for (row, item) in crate::numcolor::NUMBER_ITEMS.into_iter().enumerate() {
+        for item in crate::numcolor::NUMBER_ITEMS {
+            let row = crate::numcolor::row_of_item(item).unwrap();
             assert_eq!((w.item, label_of(item)), (item, crate::numcolor::LABELS[row]));
             assert_eq!(settings::number_colors(), crate::numcolor::DEFAULTS, "{}: every row as it came", label_of(item));
             assert_eq!((value_text(&vui, item), value_paint(item)), (Some(wide("Default")), None), "{}: Default, drawn as any value", label_of(item));
@@ -3802,7 +3855,7 @@ mod tests {
             assert_eq!(settings::number_colors()[row], 0, "{}: and round to Default", label_of(item));
             press(&mut w, &mut o, key::DOWN, &mut cues);
         }
-        assert_eq!((w.row, cues.last()), (5, Some(&9)), "Number Colors' last row");
+        assert_eq!((w.row, cues.last()), (6, Some(&9)), "Number Colors' last row: Damage Taken");
         // Merc Colors: Merc Damage Light Blue and Merc Heals Purple as they
         // come (the owner, petition 1613: distinct from the player's own
         // without a pick), each drawn in its colour, then round the palette,
@@ -4272,15 +4325,16 @@ mod tests {
                 ("HUD", vec!["Ability Bars", "Stacked Spell Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
                 ("Group & Raid", vec!["Raid List", "Power Bars", "Health Numbers", "Group Effects", "Raid Mercenaries"]),
                 ("HUD Layout", vec!["Move HUD", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity", "Spell Bar Layout", "Utility Bar Layout"]),
-                ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers", "Target Level", "Debuff Icons"]),
+                ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers", "Target Level", "Debuff Icons", "Own Name Plate"]),
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
-                ("Number Colors", n[..6].to_vec()),
+                ("Number Colors", [&n[..6], &n[8..]].concat()),
                 ("Merc Colors", n[6..8].to_vec()),
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "DPS Meter Columns", "DPS Meter Sort", "Reset DPS Meter"]),
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
                 ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "HUD Layouts"]),
+                ("Minimap Colors", crate::minimapcolor::LABELS.iter().copied().chain(["Spell Merchants Shown"]).collect()),
             ],
             "UI: what is drawn over the world"
         );
@@ -4291,6 +4345,7 @@ mod tests {
                 ("Combat", vec!["Auto-Cast", "Auto Target", "Pets Pass Through", "Weapon Swap Back", "Attack With Abilities"]),
                 ("Camera", vec!["Camera Distance", "Camera Turn Speed", "Screen Shake", "A/D Keys"]),
                 ("Sound", vec!["Output Device"]),
+                ("Movement", vec!["Strafe Speed", "Coach Talk on Arrival"]),
             ],
             "Other: the rest"
         );
@@ -4782,7 +4837,7 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST, AUTO_LOOT, ATTACK_ABILITIES, DPS_COLUMNS, DPS_SORT];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST, AUTO_LOOT, ATTACK_ABILITIES, DPS_COLUMNS, DPS_SORT, crate::numcolor::TAKEN_ITEM, COACH_TALK, STRAFE_SPEED];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
@@ -4945,18 +5000,18 @@ mod tests {
             t.0
         };
         let red = [1.0, 48.0 / 255.0, 48.0 / 255.0, 1.0];
-        let drawn = page([0, crate::numcolor::from_key("red").unwrap(), 0, 0, 0, 0, 0, 0]);
+        let drawn = page([0, crate::numcolor::from_key("red").unwrap(), 0, 0, 0, 0, 0, 0, 0]);
         let of = |s: &str| drawn.iter().filter(|d| d.2 == s).cloned().collect::<Vec<_>>();
         let reds = of("Red");
         assert_eq!(reds.len(), 2, "its shadow and itself: {drawn:?}");
         assert_eq!((reds[0].1, reds[1].1), ([0.0, 0.0, 0.0, 1.0], red), "a black shadow under it, then it in red");
         assert_eq!(reds[0].0, [reds[1].0[0] + 2, reds[1].0[1] + 2], "the shadow 2 down and right");
         let defaults = of("Default");
-        assert_eq!(defaults.len(), 5, "five rows Default, no shadows: {defaults:?}");
+        assert_eq!(defaults.len(), 6, "six rows Default (Damage Taken's too), no shadows: {defaults:?}");
         assert!(defaults.iter().all(|d| d.1 == UI_COLORS[0]), "Default in the window's black");
         let plain = page([0; crate::numcolor::ROWS]);
-        assert!(plain.iter().filter(|d| d.2 == "Default").all(|d| d.1 == UI_COLORS[0]) && plain.iter().filter(|d| d.2 == "Default").count() == 6);
-        for p in &crate::numcolor::LABELS[..6] {
+        assert!(plain.iter().filter(|d| d.2 == "Default").all(|d| d.1 == UI_COLORS[0]) && plain.iter().filter(|d| d.2 == "Default").count() == 7);
+        for p in crate::numcolor::LABELS[..6].iter().chain(&crate::numcolor::LABELS[8..]) {
             assert!(plain.iter().any(|d| d.2 == *p), "{p}'s label on the page");
         }
         crate::settings::testing::reset(false);
