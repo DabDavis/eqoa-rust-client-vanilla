@@ -8,9 +8,13 @@
 //! spells add over the base, and the six resists as Character > Summary's
 //! Details shows them (`trainer::Data::derived`: CLIENT's `CurStat`).
 //!
-//! OFF and DEF MOD are not in the channel (go-eqoa-server's are fitted
-//! placeholders no roll reads, `#stats`), so they are not shown: a server
-//! would have to send them.
+//! OFF and DEF are not in the channel (go-eqoa-server's OFF and DEF MOD are
+//! fitted placeholders no roll reads), so a server sends the real figures its
+//! rolls use (`net::statfig`, while the window is open: `Play::frame`'s
+//! `agree_stat_figures`): the player's hit on a creature of its own level,
+//! melee or (a ranged weapon worn) an arrow, and such a creature's hit on it.
+//! Their row is shown only once they came; a PS2's server, or a server
+//! without them, sends none and the window shows the channel's alone.
 //!
 //! Opened and closed by its key (F4, the Controls page's "Stat Window"),
 //! `/stats`, or Extended > UI > HUD Extras' Stat Window; its title's X closes
@@ -47,6 +51,9 @@ pub struct Facts {
     /// fire, ice (cold), lightning, arcane, poison, disease, as CLIENT
     /// derives them (`RESISTS`' order)
     pub resists: [i32; 6],
+    /// the server's offence and defence figures (`net::statfig`), none until
+    /// they come
+    pub figures: net::statfig::Figures,
 }
 
 /// The seven stats' words (Str .. Cha).
@@ -72,7 +79,19 @@ pub fn facts(cur: &[i32; 29], base: &[i32; 29]) -> Facts {
         ac: cur[14],
         stats: std::array::from_fn(|i| [cur[i], base[i]]),
         resists: RESISTS.map(|(s, _)| crate::trainer::Data::derived(cur, s)),
+        figures: Default::default(),
     }
+}
+
+/// The figures' labels: the player's hit (melee, or an arrow of its ranged
+/// weapon) and a creature's hit on it (the damage taken).
+pub const MELEE: &str = "Melee";
+pub const RANGED: &str = "Ranged";
+pub const DEFENCE: &str = "Taken";
+
+/// A range as the window shows it: "12-31", one figure when both ends agree.
+pub fn range(r: [i32; 2]) -> String {
+    if r[0] == r[1] { r[0].to_string() } else { format!("{}-{}", r[0], r[1]) }
 }
 
 /// One entry: its label, its value and (dim, after it) what is added over
@@ -96,8 +115,10 @@ pub fn bonus(now: i32, base: i32) -> String {
 
 /// The entries for `f`, the game's words by `word`: health and power, then
 /// HoT, PoT and AC; then the seven stats, two to a row; then the resists, two
-/// to a row. With the rows each section takes (its last row's index + 1).
-pub fn entries(f: &Facts, word: &dyn Fn(i32) -> String) -> (Vec<Entry>, [usize; 3]) {
+/// to a row; then, once the server sent them, the offence and defence figures
+/// (a row: the player's hit, a creature's on it). With where each section ends
+/// (its last row's index + 1): the figures' end is the resists' without them.
+pub fn entries(f: &Facts, word: &dyn Fn(i32) -> String) -> (Vec<Entry>, [usize; 4]) {
     let mut out = Vec::new();
     let e = |label: String, value: String, extra: String, i: usize, first: usize| Entry { label, value, extra, col: i % 2, row: first + i / 2 };
     let vitals = [
@@ -119,7 +140,19 @@ pub fn entries(f: &Facts, word: &dyn Fn(i32) -> String) -> (Vec<Entry>, [usize; 
     for (i, &(_, w)) in RESISTS.iter().enumerate() {
         out.push(e(word(w), f.resists[i].to_string(), String::new(), i, s2));
     }
-    (out, [s1, s2, s2 + 3])
+    let s3 = s2 + 3;
+    let g = &f.figures;
+    let offence = g.ranged.map(|r| (RANGED, r)).or(g.melee.map(|r| (MELEE, r)));
+    let figs: Vec<(&str, [i32; 2])> = offence.into_iter().chain(g.defence.map(|r| (DEFENCE, r))).collect();
+    for (i, (l, r)) in figs.iter().enumerate() {
+        out.push(e(l.to_string(), range(*r), String::new(), i, s3));
+    }
+    (out, [s1, s2, s3, s3 + figs.len().div_ceil(2)])
+}
+
+/// The sections' gaps: one after each section with a section of rows after it.
+fn gaps_in(sections: [usize; 4]) -> usize {
+    sections[..3].iter().filter(|&&s| s < sections[3]).count()
 }
 
 /// Where the panel is: its rectangle, its title's and its X's (frame pixels,
@@ -131,15 +164,15 @@ pub struct Panel {
 }
 
 /// The panel for `rows` (`entries`' sections) at `AT`.
-pub fn panel(sections: [usize; 3]) -> Panel {
-    let h = HEAD_H + sections[2] as i32 * ROW_H + 2 * GAP + 3;
+pub fn panel(sections: [usize; 4]) -> Panel {
+    let h = HEAD_H + sections[3] as i32 * ROW_H + gaps_in(sections) as i32 * GAP + 3;
     let rect = [AT[0], AT[1], AT[0] + WIDTH, AT[1] + h];
     Panel { rect, close: [rect[2] - HEAD_H, rect[1], rect[2], rect[1] + HEAD_H] }
 }
 
 /// A row's top in `p` (its section's gaps above it).
-pub fn row_top(p: &Panel, sections: [usize; 3], row: usize) -> i32 {
-    let gaps = sections[..2].iter().filter(|&&s| row >= s).count() as i32;
+pub fn row_top(p: &Panel, sections: [usize; 4], row: usize) -> i32 {
+    let gaps = sections[..3].iter().filter(|&&s| row >= s && s < sections[3]).count() as i32;
     p.rect[1] + HEAD_H + 2 + row as i32 * ROW_H + gaps * GAP
 }
 
@@ -168,7 +201,7 @@ pub fn draw(ui: &mut UiRaster, f: &Facts, title: &str, word: &dyn Fn(i32) -> Str
     let r = p.rect.map(|v| v as f32);
     ui.solid(3, BACK, corners(r));
     ui.solid(3, HEAD_BACK, corners([r[0], r[1], r[2], r[1] + HEAD_H as f32]));
-    for &s in &sections[..2] {
+    for &s in &sections[..gaps_in(sections)] {
         let y = row_top(&p, sections, s) as f32 - GAP as f32 / 2.0 - 1.0;
         ui.solid(3, RULE, corners([r[0] + 4.0, y, r[2] - 4.0, y + 1.0]));
     }
@@ -273,7 +306,8 @@ mod tests {
         let (cur, base) = arrays();
         let word = |w: i32| format!("w{w}");
         let (es, sections) = entries(&facts(&cur, &base), &word);
-        assert_eq!(sections, [3, 7, 10]);
+        assert_eq!(sections, [3, 7, 10, 10], "no figures: no row of them");
+        assert!(!es.iter().any(|e| e.label == MELEE || e.label == DEFENCE));
         assert_eq!(es.len(), 5 + 7 + 6);
         let at = |label: &str| es.iter().find(|e| e.label == label).unwrap().clone();
         assert_eq!(at("w233"), Entry { label: "w233".into(), value: "750/1000".into(), extra: String::new(), col: 0, row: 0 });
@@ -291,7 +325,7 @@ mod tests {
     /// the title's right; the rows inside it.
     #[test]
     fn the_panel_holds_its_rows() {
-        let sections = [3, 7, 10];
+        let sections = [3, 7, 10, 10];
         let p = panel(sections);
         assert_eq!(p.rect, [AT[0], AT[1], AT[0] + WIDTH, AT[1] + HEAD_H + 10 * ROW_H + 2 * GAP + 3]);
         assert_eq!(p.close, [AT[0] + WIDTH - HEAD_H, AT[1], AT[0] + WIDTH, AT[1] + HEAD_H]);
@@ -299,6 +333,38 @@ mod tests {
         assert_eq!(row_top(&p, sections, 3) - row_top(&p, sections, 2), ROW_H + GAP, "a gap after the vitals");
         assert_eq!(row_top(&p, sections, 6) - row_top(&p, sections, 5), ROW_H, "none inside a section");
         assert!(row_top(&p, sections, 9) + ROW_H <= p.rect[3], "the last row inside");
+    }
+
+    /// Once the server sent them, the figures: a row after the resists, the
+    /// hit (melee, or the arrow's while a ranged weapon is worn) at the left
+    /// and the hit taken at the right, a range each; a gap above it, the panel
+    /// a row and a gap taller, the row inside it. Half a set shows its half.
+    #[test]
+    fn the_figures_shown_once_they_came() {
+        use net::statfig::Figures;
+        let (cur, base) = arrays();
+        let word = |w: i32| format!("w{w}");
+        let mut f = facts(&cur, &base);
+        let (_, plain) = entries(&f, &word);
+        f.figures = Figures { melee: Some([12, 31]), ranged: None, defence: Some([4, 17]) };
+        let (es, sections) = entries(&f, &word);
+        assert_eq!(sections, [3, 7, 10, 11]);
+        assert_eq!(es.len(), 5 + 7 + 6 + 2);
+        let at = |es: &[Entry], label: &str| es.iter().find(|e| e.label == label).cloned();
+        assert_eq!(at(&es, MELEE), Some(Entry { label: MELEE.into(), value: "12-31".into(), extra: String::new(), col: 0, row: 10 }));
+        assert_eq!(at(&es, DEFENCE).map(|e| (e.value, e.col, e.row)), Some(("4-17".into(), 1, 10)));
+        let (a, b) = (panel(plain), panel(sections));
+        assert_eq!(b.rect[3] - a.rect[3], ROW_H + GAP, "a row and a gap taller");
+        assert_eq!(row_top(&b, sections, 10) - row_top(&b, sections, 9), ROW_H + GAP, "a gap after the resists");
+        assert_eq!(row_top(&b, sections, 9), row_top(&a, plain, 9), "the rows above unmoved");
+        assert!(row_top(&b, sections, 10) + ROW_H <= b.rect[3], "inside");
+        f.figures = Figures { melee: Some([12, 31]), ranged: Some([9, 22]), defence: None };
+        let (es, sections) = entries(&f, &word);
+        assert_eq!(sections[3], 11);
+        assert!(at(&es, MELEE).is_none(), "a ranged weapon: the arrow's alone");
+        assert_eq!(at(&es, RANGED).map(|e| (e.value, e.col)), Some(("9-22".into(), 0)));
+        assert!(at(&es, DEFENCE).is_none());
+        assert_eq!((range([7, 7]), range([0, 3])), ("7".into(), "0-3".into()));
     }
 
     #[test]

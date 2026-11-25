@@ -1600,6 +1600,13 @@ pub struct Session {
     buffs_asked: Option<bool>,
     pub buffs: Vec<crate::buffs::Line>,
     pub buffs_at: u32,
+    /// Whether the server offered the Stat Window's offence and defence
+    /// figures ([`crate::statfig::OP_OFFER`]) on this connection, what it was
+    /// last told (none since the offer), and the figures it last sent
+    /// ([`crate::statfig::OP_FIGURES`]).
+    pub stat_figures_offer: bool,
+    stat_figures_asked: Option<bool>,
+    pub stat_figures: crate::statfig::Figures,
     /// Whether the server offered the quest marks over the NPCs' heads
     /// ([`crate::headmarks::OP_OFFER`]) on this connection, what it was last
     /// told (none since the offer), and the marks it last sent
@@ -1830,6 +1837,9 @@ impl Session {
             buffs_asked: None,
             buffs: Vec::new(),
             buffs_at: 0,
+            stat_figures_offer: false,
+            stat_figures_asked: None,
+            stat_figures: Default::default(),
             head_marks_offer: false,
             head_marks_asked: None,
             head_marks: Default::default(),
@@ -2245,6 +2255,22 @@ impl Session {
             return None;
         }
         self.head_marks.get(&id).copied()
+    }
+
+    /// The Stat Window's figures: a server that offered them
+    /// ([`crate::statfig::OP_OFFER`]) is told whether to send them (`want`:
+    /// the window open), at once and whenever that changes, and afresh at
+    /// another offer; one that made no offer is told nothing. Off, the
+    /// figures it sent are forgotten.
+    pub fn agree_stat_figures(&mut self, want: bool) {
+        if !want {
+            self.stat_figures = Default::default();
+        }
+        if !self.stat_figures_offer || self.stat_figures_asked == Some(want) {
+            return;
+        }
+        self.stat_figures_asked = Some(want);
+        self.send(&crate::statfig::answer(want));
     }
 
     /// Whether the server sends the buff window's set (offered and asked).
@@ -2706,6 +2732,9 @@ impl Session {
                 self.buffs_offer = false;
                 self.buffs_asked = None;
                 self.buffs.clear();
+                self.stat_figures_offer = false;
+                self.stat_figures_asked = None;
+                self.stat_figures = Default::default();
                 self.head_marks_offer = false;
                 self.head_marks_asked = None;
                 self.head_marks.clear();
@@ -3425,6 +3454,21 @@ impl Session {
                     self.buffs_asked = None;
                 }
             }
+            // the Stat Window's figures offered (again at every world entry),
+            // in the layout this client reads: told afresh whether its window
+            // is open (`agree_stat_figures`); another layout is no offer
+            crate::statfig::OP_OFFER => {
+                let layout = r.u8();
+                if !r.error && layout == crate::statfig::LAYOUT {
+                    self.stat_figures_offer = true;
+                    self.stat_figures_asked = None;
+                }
+            }
+            crate::statfig::OP_FIGURES => match crate::statfig::read(&m.data[2.min(m.data.len())..]) {
+                Some(f) if self.stat_figures_asked == Some(true) => self.stat_figures = f,
+                Some(_) => {}
+                None => eprintln!("net: stat figures of {} bytes not read", m.data.len()),
+            },
             // the quest marks over the NPCs' heads offered (again at every
             // world entry), in the layout this client reads: told afresh
             // whether the client wants them (`agree_head_marks`); another
@@ -5726,6 +5770,46 @@ mod tests {
         assert!(!s.dps_meter_offer, "a new connection: no offer");
         s.agree_dps_meter(true);
         assert!(!s.reset_dps_meter());
+        assert_eq!(answers(&mut s), [], "a new connection: nothing asked before its offer");
+    }
+
+    // The Stat Window's figures (go-eqoa-server's 0x7E84/0x7E85): nothing
+    // asked with no offer; an offer of another layout is none; an offer
+    // answered with whether the window is open, again only when that changes;
+    // the figures taken only while asked, forgotten when closed; a new
+    // connection asks nothing until it is offered again.
+    #[test]
+    fn stat_figures_offer_answer_and_figures() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.len() >= 2 && d[1] == 0x7E && d[0] == 0x84).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        let figures = vec![0x85, 0x7E, 4, 1, 12, 0, 0, 0, 2, 31, 0, 0, 0, 5, 4, 0, 0, 0, 6, 17, 0, 0, 0];
+        s.agree_stat_figures(true);
+        assert_eq!(answers(&mut s), [], "no offer, nothing asked");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x84, 0x7E, 2]);
+        assert!(!s.stat_figures_offer, "another layout is no offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x84, 0x7E, 1]);
+        assert!(s.stat_figures_offer);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, figures.clone());
+        assert!(!s.stat_figures.any(), "not asked: not taken");
+        s.agree_stat_figures(false);
+        assert_eq!(answers(&mut s), [(251, vec![0x84, 0x7E, 0])], "closed: told at once, 0");
+        s.agree_stat_figures(true);
+        s.agree_stat_figures(true);
+        assert_eq!(answers(&mut s), [(251, vec![0x84, 0x7E, 1])], "open: asked once");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, figures.clone());
+        assert_eq!((s.stat_figures.melee, s.stat_figures.ranged, s.stat_figures.defence), (Some([12, 31]), None, Some([4, 17])));
+        s.agree_stat_figures(false);
+        assert!(!s.stat_figures.any(), "closed: forgotten");
+        assert_eq!(answers(&mut s), [(251, vec![0x84, 0x7E, 0])]);
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.stat_figures_offer, "a new connection: no offer");
+        s.agree_stat_figures(true);
         assert_eq!(answers(&mut s), [], "a new connection: nothing asked before its offer");
     }
 

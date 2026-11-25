@@ -5,7 +5,7 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
-## 2026-11-25 · Typing keeps the HUD, cooldowns on spell icons, HUD layouts, mouseover casting
+## 2026-11-25 · Typing keeps the HUD, cooldowns on spell icons, HUD layouts, mouseover casting, melee in the Stat Window
 
 - In the **PC** interface, pressing **Enter** to chat no longer hides your HUD: you now type straight into the chat box, with everything else still on screen. To go back to the old full-screen typing window, turn **Inline Keyboard Chat** off under **Options → Extended → UI → Chat**. The Controller interface is unchanged.
 - **Wake on New Chat** (**Options → Extended → UI → Chat**) now wakes a faded chat box only for a line in the **tab you are looking at**: looting, experience and faction lines going to another tab just mark that tab as unread. Pick **Any Tab** on the same row to have every new line wake it, as before.
@@ -20,6 +20,7 @@ is put on the page by `.github/workflows/notes.yml`.
 - **Save your HUD layouts**: type `/hud save fullscreen` (any name) to keep your HUD as it is now, every piece where you put it and its size, and the HUD Scale, then `/hud load fullscreen` to put it back, `/hud list` to see them and `/hud delete <name>` to remove one. Handy for one layout full screen and another for a half-screen window when multiboxing. You can also pick and load a saved layout with **HUD Layouts** under **Options → Extended → UI → HUD Extras**.
 - **Mouseover Casting** (PC interface) under **Options → Extended → Other → Combat**: with it on, a heal or buff cast from your bars goes to your **pet or groupmate (or their merc) under the mouse**, without changing your target. **Mouseover First** always takes the one under the mouse; **Target First** casts at your target when it is friendly and at the one under the mouse otherwise. Off by default.
 - **Capes** now rest on the shoulders of humans (and other races whose capes stood up above them) instead of floating a little above.
+- The **Stat Window** (F4 or `/stats`) now shows your real **offence and defence** on a server that sends them: **Melee**, how much one hit of your main hand does to a creature of your own level (or **Ranged**, one arrow, while a ranged weapon is equipped), and **Taken**, how much a creature of your own level hits you for after your AC and agility. They are the numbers the server's combat rolls use, and they update as your gear, buffs, stats and level change. They appear under your resists once the server has sent them; a server that does not send them shows the window as before.
 
 ## 2026-11-24 · Buff names and timers, a Stat Window, item icons on the quick slots
 

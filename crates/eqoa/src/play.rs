@@ -4484,6 +4484,10 @@ impl Play {
         self.weather_world();
         // Buff Window: the server told what its row says (off, the game's strip)
         self.session.agree_buffs(crate::settings::buff_window());
+        // Stat Window: a server that sends its offence and defence figures
+        // told whether the window is open (closed, or the stat caps the
+        // game's, they are forgotten: `statwnd`)
+        self.session.agree_stat_figures(crate::settings::stat_window());
         // Quest Markers: the server told what its row says (off, none drawn)
         self.session.agree_head_marks(crate::settings::head_marks());
         self.agree_number_tags();
@@ -10979,7 +10983,8 @@ impl Play {
             self.stat_panel = None;
             if crate::settings::stat_window() && crate::influence::shown(self.mode) {
                 let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Stats);
-                let facts = crate::statwnd::facts(&self.stats.stat, &self.stats.base);
+                let mut facts = crate::statwnd::facts(&self.stats.stat, &self.stats.base);
+                facts.figures = self.session.stat_figures;
                 let word = |w: i32| vui.words.get(w, vui.language).to_string();
                 self.stat_panel = Some(crate::statwnd::draw(&mut r, &facts, crate::statwnd::TITLE, &word));
                 crate::hudlayout::end(r.ui, m);
