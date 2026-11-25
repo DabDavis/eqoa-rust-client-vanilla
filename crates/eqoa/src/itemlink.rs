@@ -78,6 +78,35 @@ pub struct Wnd {
     x_hit: [i32; 4],
     /// Fixed PC close control, outside the scrollable item content.
     pc_x: [f32; 4],
+    /// The description's first row shown, and as the last draw laid it out
+    /// its rows in all and the rows shown (Heirloom petition 2961: "when
+    /// looking at linked items need the 'square' button to be able to read
+    /// the entire description"; `page`, `scroll`).
+    top: i32,
+    lines: i32,
+    rows: i32,
+}
+
+impl Wnd {
+    /// The description moved `by` rows (kept within it). Whether it moved.
+    fn scroll(&mut self, by: i32) -> bool {
+        let top = (self.top + by).clamp(0, (self.lines - self.rows).max(0));
+        std::mem::replace(&mut self.top, top) != top
+    }
+
+    /// □: a page further down, back to the top from the end. Whether there
+    /// is more than a page.
+    fn page(&mut self) -> bool {
+        if self.lines <= self.rows {
+            return false;
+        }
+        if self.top >= self.lines - self.rows {
+            self.top = 0;
+        } else {
+            self.scroll(self.rows.max(1));
+        }
+        true
+    }
 }
 
 /// The open link windows (oldest first) and the records the server sent.
@@ -107,7 +136,7 @@ impl Links {
         };
         let slot = (0..WINDOWS).find(|slot| self.windows.iter().all(|w| w.slot != *slot)).unwrap();
         self.frames[slot].clear();
-        self.windows.push(Wnd { id, slot, name: name.to_string(), item, gone, rect: [0; 4], x_hit: [0; 4], pc_x: [0.0; 4] });
+        self.windows.push(Wnd { id, slot, name: name.to_string(), item, gone, rect: [0; 4], x_hit: [0; 4], pc_x: [0.0; 4], top: 0, lines: 0, rows: 0 });
         known.is_none().then_some(id)
     }
 
@@ -123,6 +152,26 @@ impl Links {
         while self.known.len() > KNOWN_MOST {
             self.known.pop_front();
         }
+    }
+
+    /// □ (the game's Inspect key, while the chat box's history is held): the
+    /// newest window's description a page on, from the top again after its
+    /// end (petition 2961). False with none, or none longer than its window.
+    pub fn page_newest(&mut self) -> bool {
+        self.windows.last_mut().is_some_and(Wnd::page)
+    }
+
+    /// The wheel's `lines` (up positive) over the window at frame point `p`:
+    /// its description scrolled a row a line. Whether one was there.
+    pub fn wheel(&mut self, p: [f32; 2], lines: f32) -> bool {
+        let pc = crate::settings::pc_mode();
+        let frames = &self.frames;
+        let Some(w) = self.windows.iter_mut().rev().find(|w| if pc { frames[w.slot].covers(Self::key(w.slot), p) } else { inside(w.rect, p) }) else { return false };
+        let by = -(lines.round() as i32);
+        if by != 0 {
+            w.scroll(by);
+        }
+        true
     }
 
     pub fn is_open(&self) -> bool {
@@ -274,8 +323,14 @@ impl Links {
             let name_rows = Window::default().count_lines(vui, r, &name, name_w).clamp(1, NAME_ROWS);
             let head = (name_top + name_rows * step + 4).max(32);
             let room_rows = ((BOTTOM - TOP - head - 8) / step).clamp(1, ROWS_MOST);
-            let rows = Window::default().count_lines(vui, r, &text, ww - 20).clamp(1, room_rows);
-            let h = head + rows * step + 8;
+            // past the room, the rest a scroll away (`top`, petition 2961),
+            // a row kept for "□ More" (the controller's; the wheel's too)
+            let lines = Window::default().count_lines(vui, r, &text, ww - 20).max(1);
+            let more = lines > room_rows;
+            let rows = if more { (room_rows - 1).max(1) } else { lines };
+            (w.lines, w.rows) = (lines, rows);
+            w.top = w.top.clamp(0, (lines - rows).max(0));
+            let h = head + (rows + more as i32) * step + 8;
             w.rect = [at[0], at[1], at[0] + ww, at[1] + h];
             r.blit(icon_id("black"), 0, at, [0, 0], [ww, h], 3, 0.8);
             vui.blit_frame(r, at, [ww, h], &fp, 3, 1.0, true);
@@ -287,7 +342,12 @@ impl Links {
             if native_x { vui.draw_string_ex(r, &wide("x"), xx, at[1] + 5, white, true); }
             w.x_hit = [xx - 6, at[1], at[0] + ww, at[1] + 24];
             // the lines under the head
-            rows_at(vui, r, at, ww, at[1] + head + step / 2, rows).text_box(vui, r, &text, 10, 0, ww - 20, rows, white, 3);
+            rows_at(vui, r, at, ww, at[1] + head + step / 2, rows).text_box(vui, r, &text, 10, 0, ww - 20, rows, white, ((w.top as u32) << 24) | 3);
+            if more {
+                let last = (w.top + rows).min(lines);
+                let hint = if native_x { format!("|s More  {last}/{lines}") } else { format!("Wheel for more  {last}/{lines}") };
+                rows_at(vui, r, at, ww, at[1] + head + rows * step + step / 2, 1).text_box(vui, r, &wide(&hint), 10, 0, ww - 20, 1, [0.85, 0.85, 0.85, 1.0], 3);
+            }
     }
 }
 
@@ -315,6 +375,31 @@ mod tests {
         let mut it = NetItem::default();
         it.item.name = name.to_string();
         it
+    }
+
+    /// A description longer than its window (petition 2961): □ pages it down
+    /// and back to the top after its end, the wheel a row a line, kept
+    /// within it. The control: one that fits does not move.
+    #[test]
+    fn a_long_description_pages_and_scrolls() {
+        let mut l = Links::default();
+        l.open(1, "Robe");
+        l.windows[0].rect = [0, 0, 100, 100];
+        (l.windows[0].lines, l.windows[0].rows) = (30, 12);
+        assert!(l.page_newest());
+        assert_eq!(l.windows[0].top, 12);
+        assert!(l.page_newest());
+        assert_eq!(l.windows[0].top, 18, "the last page ends at the last row");
+        assert!(l.page_newest());
+        assert_eq!(l.windows[0].top, 0, "the top again");
+        assert!(l.wheel([50.0, 50.0], -3.0));
+        assert_eq!(l.windows[0].top, 3, "down three rows");
+        assert!(l.wheel([50.0, 50.0], 10.0));
+        assert_eq!(l.windows[0].top, 0, "not past the top");
+        assert!(!l.wheel([500.0, 50.0], -3.0), "off the window");
+        (l.windows[0].lines, l.windows[0].rows) = (5, 5);
+        assert!(!l.page_newest(), "the control: it fits");
+        assert_eq!(l.windows[0].top, 0);
     }
 
     /// Two at most: a third opens in place of the oldest; one open already is

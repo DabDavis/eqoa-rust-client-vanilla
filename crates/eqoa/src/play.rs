@@ -6503,7 +6503,11 @@ impl Play {
     /// The wheel's `lines` over the chat box's history (`WndChat::wheel`).
     pub fn chat_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
         let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
-        if matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.links.covers(f) { return true; }
+        // over an item link's window, its description (petition 2961)
+        if matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.links.covers(f) {
+            self.links.wheel(f, lines);
+            return true;
+        }
         let held = self.mode == 33;
         let now = self.session.now();
         self.wnd_chat.as_mut().is_some_and(|c| {

@@ -81,6 +81,13 @@ impl Play {
                 true
             }
             132 | 27 if self.links.is_open() => self.close_link_window(),
+            // □ (the inventory's Inspect key): the newest window's
+            // description a page on, the top again after its end (petition 2961)
+            133 if self.links.is_open() => {
+                let more = self.links.page_newest();
+                self.cues.push(crate::sound::Cue::Ui(if more { 11 } else { 9 }));
+                true
+            }
             _ => false,
         }
     }
