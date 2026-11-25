@@ -111,10 +111,14 @@ impl Entry {
 
 /// An item's banner (ITEMICON.ESF's, `wndlist::draw_icon`'s 114 by 44: the
 /// item drawn in its middle on a grey plate) as a quick slot shows it: the
-/// middle, where the item is (texels x, y, w, h; a wide gem or stone whole
-/// in it, 3 to 2), drawn `ART_SIZE` big (frame pixels, before a bar's scale).
-pub const ART_CROP: [i32; 4] = [27, 2, 60, 40];
-pub const ART_SIZE: [i32; 2] = [30, 20];
+/// middle, where the item is (texels x, y, w, h: a potion, gem or stone
+/// whole in it), drawn `ART_SIZE` big (frame pixels, before a bar's scale):
+/// near square, about a spell icon's 22 (Heirloom petition 2956: "the new
+/// icons are a bit too wide and a bit too short for the native ability
+/// bar", a 60 by 40 middle drawn 30 by 20). The crop's shape is the size's,
+/// so the item is not stretched.
+pub const ART_CROP: [i32; 4] = [35, 2, 44, 40];
+pub const ART_SIZE: [i32; 2] = [24, 22];
 
 /// Draws item art `id` (`ART_CROP`) `size` big with its middle at `mid`, at
 /// `alpha`. False when the raster has no such surface (the slot's own icon
@@ -1858,6 +1862,20 @@ mod tests {
         assert_eq!(HudMenus::utility_height(DISC, UtilityLayout::Below), ch + s(COLUMN_GAP));
         h.hide_utility();
         assert_eq!(h.point_utility(mid([216, bottom - ch, 216 + cw, bottom])), None, "hidden: nothing found");
+    }
+
+    /// An item's art on a slot (petition 2956): near a spell icon's square
+    /// (22), not the 3 to 2 strip it was (30 by 20), and its crop the size's
+    /// shape (no stretch), centred on the banner's middle (57 of 114). The
+    /// control: the old size fails the shape's bound.
+    #[test]
+    fn item_art_is_near_square_and_unstretched() {
+        let ([x, y, w, h], [sw, sh]) = (ART_CROP, ART_SIZE);
+        let square = |sw: i32, sh: i32| (sw * 100 / sh) <= 115 && sh >= 20;
+        assert!(square(sw, sh), "{sw}x{sh}");
+        assert!(!square(30, 20), "the control: the old strip");
+        assert!(((w * sh) - (h * sw)).abs() * 100 <= w * sh * 3, "crop {w}x{h} drawn {sw}x{sh} keeps its shape");
+        assert_eq!((x + w / 2, y + h / 2), (57, 22), "the banner's middle");
     }
 
     /// Item Slot Icons (petitions 2926, 2928): each quick slot's item's own

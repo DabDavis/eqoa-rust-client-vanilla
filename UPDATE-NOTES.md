@@ -11,6 +11,7 @@ is put on the page by `.github/workflows/notes.yml`.
 - **Wake on New Chat** (**Options → Extended → UI → Chat**) now wakes a faded chat box only for a line in the **tab you are looking at**: looting, experience and faction lines going to another tab just mark that tab as unread. Pick **Any Tab** on the same row to have every new line wake it, as before.
 - Hovering or clicking a buff in the **Buff Window** now shows its name box **right at the icon** (under it, or over it near the bottom of the screen), drawn on top of your ability bars and kept on screen, instead of under the buff bar where a moved bar could hide it.
 - Fixed a crash in the browser (seen in Firefox after hours with the tab in the background): when the browser takes the game's picture away mid-frame, that frame is now skipped instead of the game stopping.
+- The **item icons** on your quick slots (potions, gems and stones) are now drawn the shape of a spell icon, instead of a wide, short strip that did not fit the ability bar.
 
 ## 2026-11-24 · Buff names and timers, a Stat Window, item icons on the quick slots
 
