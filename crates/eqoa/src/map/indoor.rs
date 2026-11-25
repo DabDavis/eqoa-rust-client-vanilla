@@ -46,8 +46,16 @@ pub const PROBE_R: f32 = 3.0;
 /// The cut's distance under the ceiling found (FrontiersForge's
 /// `ceiling_margin`).
 pub const MARGIN: f32 = 3.0;
-/// How long a change in or out must hold (seconds).
+/// How long a change in must hold (seconds).
 pub const HOLD: f32 = 0.5;
+/// How long a change out must hold (seconds): longer than in, and only once
+/// the middle probe too has open sky (`take_with`). Heirloom petition 2958
+/// (world 14, the raid instance, at Abyssaxis: "the minimap seems to shift
+/// between its views"): in a hall whose roof a probe 3 off the player
+/// misses, or over 250 up, the five-probe answer went in and out as the
+/// player stepped, and the minimap flipped between the floors under the
+/// ceiling and the map's pictures (each its own zoom) every half second.
+pub const HOLD_OUT: f32 = 2.0;
 /// How far under the player floors are drawn, fading out toward it.
 pub const BELOW: f32 = 90.0;
 /// The picture's pixels across.
@@ -174,8 +182,8 @@ pub struct Indoor {
     pub scale: Option<f32>,
     /// the seconds counted (the probes' and the picture's ages)
     clock: f32,
-    /// the last probe: where, when, and the ceiling it found
-    probed: Option<([f32; 3], f32, Option<f32>)>,
+    /// the last probe: where, when, the ceiling it found and the middle's
+    probed: Option<([f32; 3], f32, Option<f32>, Option<f32>)>,
     /// in or out as it counts (held `HOLD`), the ceiling then, and since when
     /// the probes have said otherwise
     inside: bool,
@@ -206,9 +214,11 @@ impl Indoor {
     /// or down, half a second): in or out, held `HOLD` before it counts.
     pub fn probe(&mut self, w: &mut World<Ee>, p: [f32; 3], dt: f32) {
         self.clock += dt.clamp(0.0, 0.25);
-        let stale = self.probed.is_none_or(|(q, t, _)| (p[0] - q[0]).hypot(p[2] - q[2]) > 2.0 || (p[1] - q[1]).abs() > 2.0 || self.clock - t > 0.5);
+        let stale = self.probed.is_none_or(|(q, t, _, _)| (p[0] - q[0]).hypot(p[2] - q[2]) > 2.0 || (p[1] - q[1]).abs() > 2.0 || self.clock - t > 0.5);
         if stale {
             let c = ceiling(w, p);
+            // the middle alone, which keeps a player inside (`take_with`)
+            let centre = if c.is_some() { c } else { ceiling_at(w, p[0], p[1], p[2]) };
             if super::build::trace() {
                 let each: Vec<String> = [(0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)]
                     .iter()
@@ -221,15 +231,23 @@ impl Indoor {
                     .collect();
                 crate::say(&format!("minimap: probe at ({:.1}, {:.1}, {:.1}): {c:?} (up/down first hits {})", p[0], p[1], p[2], each.join(" ")));
             }
-            self.probed = Some((p, self.clock, c));
+            self.probed = Some((p, self.clock, c, centre));
         }
-        let found = self.probed.and_then(|x| x.2);
-        self.take(found);
+        let (found, centre) = self.probed.map_or((None, None), |x| (x.2, x.3));
+        self.take_with(found, centre);
     }
 
     /// A probe's answer `found` (the ceiling, none: open sky) taken into the
     /// held state at the clock now.
     pub fn take(&mut self, found: Option<f32>) {
+        self.take_with(found, found);
+    }
+
+    /// `take`, with `centre` the middle probe's ceiling alone: in, all five
+    /// must have one (`found`); once in, the middle's is enough to stay
+    /// (petition 2958), and out must hold `HOLD_OUT`.
+    pub fn take_with(&mut self, found: Option<f32>, centre: Option<f32>) {
+        let found = if self.inside { found.or(centre) } else { found };
         let raw = found.is_some();
         if raw == self.inside {
             self.flip_since = None;
@@ -240,7 +258,7 @@ impl Indoor {
         }
         match self.flip_since {
             None => self.flip_since = Some(self.clock),
-            Some(t) if self.clock - t >= HOLD => {
+            Some(t) if self.clock - t >= if raw { HOLD } else { HOLD_OUT } => {
                 self.inside = raw;
                 self.held_ceiling = found;
                 self.flip_since = None;
@@ -327,9 +345,41 @@ mod tests {
         assert!(d.inside());
         step(&mut d, None, 0.4);
         assert!(d.inside(), "not held long enough yet");
-        step(&mut d, None, 0.1);
-        assert!(!d.inside(), "out once it held");
+        step(&mut d, None, 1.7);
+        assert!(!d.inside(), "out once it held HOLD_OUT");
         assert!(d.picture().is_none());
+    }
+
+    /// Petition 2958: inside a hall, probes round the player that miss the
+    /// roof keep it inside while the middle has one; out only once the
+    /// middle has open sky too, held `HOLD_OUT`. In needs all five, as ever.
+    /// The control: the middle's open sky held takes it out.
+    #[test]
+    fn a_hall_with_gaps_keeps_the_minimap_inside() {
+        let mut d = Indoor::default();
+        let step = |d: &mut Indoor, found: Option<f32>, centre: Option<f32>, dt: f32| {
+            d.clock += dt;
+            d.take_with(found, centre);
+        };
+        step(&mut d, None, Some(200.0), 0.1);
+        step(&mut d, None, Some(200.0), 1.0);
+        assert!(!d.inside(), "in needs all five");
+        step(&mut d, Some(200.0), Some(200.0), 0.1);
+        step(&mut d, Some(200.0), Some(200.0), 0.6);
+        assert!(d.inside());
+        for _ in 0..20 {
+            step(&mut d, None, Some(200.0), 0.3);
+        }
+        assert!(d.inside(), "a probe off the roof: still inside");
+        step(&mut d, None, None, 0.1);
+        step(&mut d, None, None, 1.0);
+        step(&mut d, Some(200.0), Some(200.0), 0.1);
+        assert!(d.inside(), "the roof again: the hold let go");
+        step(&mut d, None, None, 0.1);
+        step(&mut d, None, None, 1.5);
+        assert!(d.inside(), "open sky under 2 s: still inside");
+        step(&mut d, None, None, 0.6);
+        assert!(!d.inside(), "open sky held");
     }
 
     /// The cut is `MARGIN` under the ceiling, but under a low one never into

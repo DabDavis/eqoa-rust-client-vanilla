@@ -14,6 +14,7 @@ is put on the page by `.github/workflows/notes.yml`.
 - The **item icons** on your quick slots (potions, gems and stones) are now drawn the shape of a spell icon, instead of a wide, short strip that did not fit the ability bar.
 - You can now type the **#** sign in chat and every other text box (it was ignored before). Pasting text with a # in it keeps it too.
 - An **item link's window** that is too short for the item's whole description now says **More** at its foot: press **□** (Square) with the chat history held to page through the rest (it starts over at the top after the end), or scroll the **mouse wheel** over the window.
+- The **minimap** no longer keeps switching between its inside view and the outside map in big halls and caves (seen in the raid dungeon): once it shows the inside view it stays there until you are really out under the sky.
 
 ## 2026-11-24 · Buff names and timers, a Stat Window, item icons on the quick slots
 
