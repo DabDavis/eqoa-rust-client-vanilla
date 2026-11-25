@@ -6700,6 +6700,11 @@ impl Play {
 
     pub fn spell_hover(&mut self, at: Option<[f32; 2]>, size: (u32, u32)) {
         self.gem_pointer(at, size);
+        // the item menu's item under the mouse described and compared
+        // (`itemmenu::hover`, petition 3118)
+        let items_at = at.filter(|_| self.mode == 13 && self.items.visible && !self.map.open)
+            .and_then(|at| self.pc_windows.input(self.pc_window().map(|(id, _)| id), render::ui::frame_from_window(size, at)));
+        self.items.hover(items_at);
         // the buff window's names under the mouse (`buffwnd`, petition 2924)
         self.buff_hover(at.map(|at| crate::hudlayout::local_point(crate::hudlayout::Piece::Effects, render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size))));
         // a group member's tiny icon under the mouse named (petition 2962),
@@ -8289,6 +8294,8 @@ impl Play {
         let built = crate::mercwnd::with_give(built, inv, give_on);
         self.items.set_built(crate::hidelook::with_rows(built, inv, &self.session.hide_look));
         self.items.set_gear(self.gear.view(inv, &vui.words, vui.language));
+        // Compare Gear's (`compare`): who would wear it
+        self.items.set_player(pl.class, pl.race, pl.level);
         let info = crate::infotext::Info {
             words: &vui.words,
             inv,
@@ -12109,7 +12116,13 @@ impl Play {
     /// true when it took it.
     pub fn book_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {
         let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
-        self.mode == 5 && self.pc_windows.input(self.pc_window().map(|(id, _)| id), f).is_some_and(|at| self.book.wheel(at, lines))
+        let at = self.pc_windows.input(self.pc_window().map(|(id, _)| id), f);
+        // the item menu's Bags grid (`bags`): its rows
+        if self.mode == 13 && self.items.visible {
+            let rows = if lines > 0.0 { lines.ceil() } else { lines.floor() } as i32;
+            return at.is_some_and(|at| self.items.wheel(at, rows));
+        }
+        self.mode == 5 && at.is_some_and(|at| self.book.wheel(at, lines))
     }
 
     pub fn raid_wheel(&mut self, at: (f64, f64), size: (u32, u32), lines: f32) -> bool {

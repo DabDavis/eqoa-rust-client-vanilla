@@ -1230,6 +1230,18 @@ pub struct ClientOptions {
     /// default (`Play::mouseover_target`). A server that turns auto-cast off
     /// (`qol::AUTO_CAST`) turns this off with it.
     pub mouseover_cast: MouseoverCast,
+    /// Inventory Style (Heirloom petition 3118, Mythilles: "The inventory
+    /// system is just awful. A huge list and you cannot compare gear. A bag
+    /// system more like EQ or a typical MMO would be preferred"): the game's
+    /// tabbed list (Retail List, the default) or the pack as a grid of its
+    /// icons (Bags, `bags`), with the same actions.
+    pub inventory_bags: bool,
+    /// Bag Sort: the order the Bags grid lays the pack out in (`bags::Sort`).
+    pub bag_sort: crate::bags::Sort,
+    /// Compare Gear (petition 3118): an equippable item beside what it would
+    /// replace (`compare`): in the Bags grid only (the default), with the
+    /// Retail List too, or never.
+    pub compare_gear: CompareGear,
     /// Weapon Swap Back (a GM, 2026-11-16, work board 1581): a weapon set
     /// used from the HUD asks the server to put back what it took off when
     /// pressed again (0x0022's swap-back byte, `gear::use_message`). Off by
@@ -1782,6 +1794,9 @@ impl Default for ClientOptions {
             auto_cast: true,
             auto_target: false,
             mouseover_cast: MouseoverCast::Off,
+            inventory_bags: false,
+            bag_sort: crate::bags::Sort::Pack,
+            compare_gear: CompareGear::Bags,
             weapon_swap_back: false,
             auto_loot: false,
             attack_abilities: false,
@@ -2011,6 +2026,18 @@ impl ClientOptions {
             MouseoverCast::Off => {}
             MouseoverCast::MouseoverFirst => s.push_str("mouseover_cast=mouseover\n"),
             MouseoverCast::TargetFirst => s.push_str("mouseover_cast=target\n"),
+        }
+        // Inventory Style, Bag Sort and Compare Gear only when not the default
+        if self.inventory_bags {
+            s.push_str("inventory_style=bags\n");
+        }
+        if self.bag_sort != crate::bags::Sort::Pack {
+            s.push_str(&format!("bag_sort={}\n", self.bag_sort.key()));
+        }
+        match self.compare_gear {
+            CompareGear::Bags => {}
+            CompareGear::Always => s.push_str("compare_gear=always\n"),
+            CompareGear::Off => s.push_str("compare_gear=off\n"),
         }
         if self.auto_target {
             s.push_str("auto_target=on\n");
@@ -2356,6 +2383,12 @@ impl ClientOptions {
                 ("mouseover_cast", "off") => c.mouseover_cast = MouseoverCast::Off,
                 ("mouseover_cast", "mouseover") => c.mouseover_cast = MouseoverCast::MouseoverFirst,
                 ("mouseover_cast", "target") => c.mouseover_cast = MouseoverCast::TargetFirst,
+                ("inventory_style", "bags") => c.inventory_bags = true,
+                ("inventory_style", "list") => c.inventory_bags = false,
+                ("bag_sort", v) if crate::bags::Sort::from_key(v).is_some() => c.bag_sort = crate::bags::Sort::from_key(v).unwrap_or_default(),
+                ("compare_gear", "bags") => c.compare_gear = CompareGear::Bags,
+                ("compare_gear", "always") => c.compare_gear = CompareGear::Always,
+                ("compare_gear", "off") => c.compare_gear = CompareGear::Off,
                 ("auto_target", "on") => c.auto_target = true,
                 ("auto_target", "off") => c.auto_target = false,
                 ("weapon_swap_back", "on") => c.weapon_swap_back = true,
@@ -2933,6 +2966,10 @@ pub mod qol {
         if off(LOCKED) && ((off(MAP) && matches!(item, 41 | 42)) || (off(ITEM_LINKS) && item == 73)) {
             return true;
         }
+        // the Bags grid and Compare Gear: the game's list on an [OG] account
+        if off(LOCKED) && matches!(item, crate::options::INVENTORY_STYLE | crate::options::BAG_SORT | crate::options::COMPARE_GEAR) {
+            return true;
+        }
         of_item(item).is_some_and(off)
     }
 
@@ -3222,6 +3259,64 @@ pub fn buff_timers() -> bool {
 /// Stat Window: the client's panel of the stat channel (`statwnd`).
 pub fn stat_window() -> bool {
     client().stat_window
+}
+
+/// Compare Gear (petition 3118, `compare`): where the comparison is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CompareGear {
+    /// in the Bags grid only
+    #[default]
+    Bags,
+    /// in the Bags grid and the Retail List
+    Always,
+    Off,
+}
+
+impl CompareGear {
+    pub fn name(self) -> &'static str {
+        match self {
+            CompareGear::Bags => "Bags Only",
+            CompareGear::Always => "Always",
+            CompareGear::Off => "Off",
+        }
+    }
+
+    /// The next (`d` > 0) or the one before.
+    pub fn step(self, d: i32) -> Self {
+        let all = [CompareGear::Bags, CompareGear::Always, CompareGear::Off];
+        let i = all.iter().position(|&m| m == self).unwrap_or(0) as i32;
+        all[(i + d.signum()).rem_euclid(3) as usize]
+    }
+}
+
+/// Inventory Style at Bags: the pack as a grid (`bags`). An [OG] account's
+/// (`qol::LOCKED`, the owner's "opt-out of the QoL changes") is the game's
+/// list whatever is kept.
+pub fn inventory_bags() -> bool {
+    client().inventory_bags && !qol::off(qol::LOCKED)
+}
+
+/// Bag Sort now.
+pub fn bag_sort() -> crate::bags::Sort {
+    client().bag_sort
+}
+
+/// Bag Sort turned and kept (the Bags grid's own Sort button), as Save
+/// Changes keeps it.
+pub fn set_bag_sort(sort: crate::bags::Sort) -> Result<(), String> {
+    set_client(ClientOptions { bag_sort: sort, ..client() });
+    save_client()
+}
+
+/// Whether the comparison is drawn in the view shown (`bags` the grid's):
+/// never on an [OG] account's.
+pub fn compare_gear(bags: bool) -> bool {
+    !qol::off(qol::LOCKED)
+        && match client().compare_gear {
+            CompareGear::Bags => bags,
+            CompareGear::Always => true,
+            CompareGear::Off => false,
+        }
 }
 
 /// Mouseover Casting's order (petition 2960, `Play::mouseover_target`).
@@ -4990,6 +5085,38 @@ mod tests {
         assert_eq!(ClientOptions::from_text(&c.to_text()), c, "round trip");
         assert!(ClientOptions::from_text("item_icons=item").item_icons);
         assert!(ClientOptions::from_text("item_icons=banner").item_icons, "the default");
+    }
+
+    /// Inventory Style, Bag Sort and Compare Gear (petition 3118): the
+    /// game's list, Pack Order and Bags Only by default and not written;
+    /// each other value written and read back; an unknown value the default.
+    /// Compare Gear's place by the view; an [OG] account's (`qol::LOCKED`)
+    /// the game's list with no comparison, whatever is kept.
+    #[test]
+    fn the_inventory_rows_round_trip() {
+        let d = ClientOptions::default();
+        assert!(!d.inventory_bags && d.bag_sort == crate::bags::Sort::Pack && d.compare_gear == CompareGear::Bags);
+        let text = d.to_text();
+        assert!(!text.contains("inventory_style") && !text.contains("bag_sort") && !text.contains("compare_gear"));
+        for sort in crate::bags::Sort::ALL {
+            for compare in [CompareGear::Bags, CompareGear::Always, CompareGear::Off] {
+                let c = ClientOptions { inventory_bags: true, bag_sort: sort, compare_gear: compare, ..d };
+                let back = ClientOptions::from_text(&c.to_text());
+                assert_eq!((back.inventory_bags, back.bag_sort, back.compare_gear), (true, sort, compare));
+            }
+        }
+        let odd = ClientOptions::from_text("inventory_style=heap\nbag_sort=size\ncompare_gear=maybe\n");
+        assert!(!odd.inventory_bags && odd.bag_sort == crate::bags::Sort::Pack && odd.compare_gear == CompareGear::Bags);
+        assert_eq!(CompareGear::Off.step(1), CompareGear::Bags);
+        assert_eq!(CompareGear::Bags.step(-1), CompareGear::Off);
+        testing::reset(false);
+        set_client(ClientOptions { inventory_bags: true, ..ClientOptions::default() });
+        assert!(inventory_bags());
+        assert!(compare_gear(true) && !compare_gear(false), "Bags Only");
+        qol::set_off(qol::LOCKED);
+        assert!(!inventory_bags() && !compare_gear(true), "an [OG] account's");
+        assert!(qol::item_off(crate::options::INVENTORY_STYLE, -1) && qol::item_off(crate::options::COMPARE_GEAR, -1));
+        testing::reset(false);
     }
 
     /// Stat Window (petition 2925): off by default and not written; on

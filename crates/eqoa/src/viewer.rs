@@ -351,7 +351,7 @@ fn change_world(lib: &mut Library, file: &str, at: Spawn) -> Result<(Walker, Str
 
 /// The font name plates use (`VICSprite::FontResourceID`, "Arial"), if a
 /// loaded file has it.
-fn arial(lib: &Library) -> Option<esf::font::Font> {
+pub(crate) fn arial(lib: &Library) -> Option<esf::font::Font> {
     let id = vi::hsprite::hash_ref_id("Arial");
     if let Some(r) = lib.lookup(id)
         && lib.file(r.file).node(r.node).ty == 0x7000
@@ -1613,7 +1613,7 @@ fn read_back(device: &wgpu::Device, queue: &wgpu::Queue, t: &wgpu::Texture) -> V
     out
 }
 
-fn write_png(path: &str, w: u32, h: u32, rgba: &[u8]) -> Result<(), Error> {
+pub(crate) fn write_png(path: &str, w: u32, h: u32, rgba: &[u8]) -> Result<(), Error> {
     let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(path)?), w, h);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);

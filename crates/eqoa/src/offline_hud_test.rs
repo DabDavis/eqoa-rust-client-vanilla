@@ -23,6 +23,8 @@ const FIXTURE_SPELLS: [(&str, i64, i64, i64, i64, i64, i64, i64); 8] = [
 mod pc_window_test;
 #[path = "resized_hud_test.rs"]
 mod resized_hud_test;
+#[path = "bag_view_test.rs"]
+mod bag_view_test;
 
 struct Nowhere;
 impl net::session::Datagrams for Nowhere {
