@@ -14,6 +14,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 - The browser client hides its FPS counter by default. Toggle **Show FPS** under **Options → Extended → Graphics → Video** and choose **Save Changes** to keep your choice.
 
+## 2026-11-25 · Controller chat on touch browsers
+
+- Opening chat with a physical controller on a touch browser shows EQOA’s letter grid. Use the D-pad to move, ✕ to pick a letter, and R2 to send. Tap the chat box to use your device’s keyboard.
+
 ## 2026-11-25 · Healing and power on the DPS meter
 
 - The **DPS meter** can now show **healing per second (HPS)** and **power given per second** beside the DPS, on a server that counts them. Pick **DPS Meter Columns** under **Options → Extended → UI → DPS Meter** (**DPS**, as before; **DPS + HPS**; or **DPS + HPS + Power**), and **DPS Meter Sort** to rank the list and draw its bars by damage, healing or power. Healing counts what your heals actually restored (no overhealing), your pet's and mercenary's heals included; power counts the power you gave others (Clarity, power songs and spells, a shared power tap), not your own.

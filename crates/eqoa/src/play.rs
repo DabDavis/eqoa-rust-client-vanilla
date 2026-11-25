@@ -9114,6 +9114,28 @@ impl Play {
         self.mode == 2 && self.edit.inline_chat
     }
 
+    /// A physical controller opened a chat editor in a browser with a touch keyboard.
+    #[cfg(target_arch = "wasm32")]
+    pub fn note_controller_chat(&mut self) -> bool {
+        if self.mode != 2 || self.edit.purpose != 0x0B0F_0000 || !crate::web::has_touch_keyboard() {
+            return false;
+        }
+        self.edit.controller_chat = true;
+        self.edit.inline_chat = false;
+        true
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn controller_chat(&self) -> bool {
+        self.mode == 2 && self.edit.controller_chat
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn controller_chat_text_at(&self, at: [f32; 2]) -> bool {
+        self.controller_chat()
+            && self.pc_windows.input(self.pc_window().map(|(id, _)| id), at).is_some_and(|point| self.edit.text_contains(point))
+    }
+
     /// A key for the edit box (the game's codes), handled with the next HUD
     /// frame.
     pub fn edit_key(&mut self, key: i32, down: bool) {
@@ -11112,7 +11134,10 @@ impl Play {
         let reticle = (self.mode == 38 && walker.cam.effect.manual_terp == F::ONE).then(|| self.target_centre(walker, view_proj));
         // VIWndEdit::OnDrawSelf's `sPadOnly`: a keyboard in use and the
         // options' Soft Keyboard on show the compact face
-        crate::editbox::set_pad_only(crate::editbox::compact_face(self.keyboard, self.options.compact != 0));
+        let compact = crate::editbox::compact_face(self.keyboard, self.options.compact != 0);
+        #[cfg(target_arch = "wasm32")]
+        let compact = compact && !self.controller_chat();
+        crate::editbox::set_pad_only(compact);
         let under_liquid = walker.cam.walk.is_under_liquid();
         let (start_stats, start_loc) = self.start_view(walker);
         let pc = crate::settings::pc_mode();

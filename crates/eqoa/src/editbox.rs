@@ -220,6 +220,9 @@ pub struct EditBox {
     pub purpose: u32,
     /// The physical keyboard opened this chat line in the HUD.
     pub inline_chat: bool,
+    /// On a touch browser, keep the letter grid for a controller-opened chat.
+    #[cfg(target_arch = "wasm32")]
+    pub controller_chat: bool,
     /// `m_x18C`: every character drawn as a star (STATION's password
     /// fields; CLIENT never sets it)
     pub password: bool,
@@ -257,6 +260,8 @@ impl Default for EditBox {
             title: Vec::new(),
             purpose: 0,
             inline_chat: false,
+            #[cfg(target_arch = "wasm32")]
+            controller_chat: false,
             password: false,
             pos: [16, 40],
             alpha: 0.0,
@@ -393,6 +398,10 @@ impl EditBox {
     /// `OnMessage` 295: the focus starts a fresh session.
     pub fn focus(&mut self, now: i64) {
         self.inline_chat = false;
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.controller_chat = false;
+        }
         self.time = now;
         self.alpha = 0.0;
         self.pulse = 0.0;
@@ -700,6 +709,16 @@ impl EditBox {
     /// triangle cancel). `Some(None)` on the box elsewhere, `None` off it.
     pub fn point(&mut self, p: [f32; 2]) -> Option<Option<i32>> {
         self.point_with(p, !pad_only())
+    }
+
+    fn text_rect(&self) -> ([i32; 2], [i32; 2]) {
+        ([self.pos[0] + 16, self.pos[1] + 16], [420, self.rows * 17 + 8])
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn text_contains(&self, at: [f32; 2]) -> bool {
+        let ([left, top], [width, height]) = self.text_rect();
+        (left as f32..(left + width) as f32).contains(&at[0]) && (top as f32..(top + height) as f32).contains(&at[1])
     }
 
     /// `point`, with the soft keyboard showing or not.
@@ -1053,7 +1072,8 @@ impl EditBox {
         let fp3 = FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 1), br: (106, 0), bottom: (102, 2), bl: (105, 0), left: (104, 0) };
         vui.blit_rect(r, 51, pos, size, 3, a);
         vui.blit_frame(r, pos, size, &fp0, 3, a, true);
-        vui.blit_fill_frame(r, [pos[0] + 16, pos[1] + 16], [420, rows * 17 + 8], &fp3, 96, 3, a, true);
+        let (text_pos, text_size) = self.text_rect();
+        vui.blit_fill_frame(r, text_pos, text_size, &fp3, 96, 3, a, true);
         let word = |id: i32| vui.words.get(id, vui.language).to_string();
         if !pad_only() {
             // the legend under the box: Done, Cancel, Space, Newline, Back

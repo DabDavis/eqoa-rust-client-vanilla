@@ -453,20 +453,30 @@ typed.addEventListener('paste', (e) => {
   pasteDone();
 });
 let lastTouch = false;
-window.eqoaWantText = (on) => {
+let controllerChat = false;
+window.eqoaWantText = (on, fromController) => {
   wantText = !!on;
-  if (!wantText && document.activeElement === typed) $('eqoa').focus();
+  controllerChat = wantText && !!fromController;
+  if (controllerChat) lastTouch = false;
+  if (!wantText || controllerChat) {
+    if (document.activeElement === typed) $('eqoa').focus();
+    return;
+  }
   // the touch that opened the box still the user's gesture: the keyboard up at once
   // (where a browser allows it; else at the next touch)
-  if (wantText && lastTouch && navigator.userActivation && navigator.userActivation.isActive) typeHere();
+  if (lastTouch && navigator.userActivation?.isActive) typeHere();
+};
+window.eqoaFocusTouchText = () => {
+  if (controllerChat) typeHere();
 };
 onCanvas('pointerdown', (e) => {
   lastTouch = e.pointerType === 'touch';
   $('eqoa').focus();
 });
-// winit puts the focus on the canvas at every press: a touch while the game
-// wants text puts it back in the input, the device's keyboard with it
-onCanvas('pointerup', (e) => { if (wantText && e.pointerType === 'touch') typeHere(); });
+// A controller-opened chat checks where the touch landed before showing the keyboard.
+onCanvas('pointerup', (e) => {
+  if (wantText && !controllerChat && e.pointerType === 'touch') typeHere();
+});
 
 // ---- a DNAS module off the disc (CLIENT, for the start menu): unpacked by
 // the disc's own library in a worker (unpack.js), and kept in this origin's

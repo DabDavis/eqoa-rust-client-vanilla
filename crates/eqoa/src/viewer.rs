@@ -2551,9 +2551,8 @@ struct App {
     fingers: Vec<(u64, Finger)>,
     /// `EQOA_TOUCHES` in a window: finger events at ms on `clock`.
     touch_script: Vec<(i64, u64, crate::touch::Phase, [f32; 2])>,
-    /// An edit box of the game's had the keys at the last frame (told to a
-    /// page as it changes, `note_typing`).
-    typing: bool,
+    /// Whether an editor has the keys and whether browser controller chat is active.
+    typing: (bool, bool),
     /// The game's frames among those drawn (`frames.rs`): what the game
     /// counts in frames steps on these.
     frames: crate::frames::Frames,
@@ -2758,7 +2757,7 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
             s.sort_by_key(|e| e.0);
             s
         },
-        typing: false,
+        typing: (false, false),
         frames: crate::frames::Frames::default(),
         drawn_at: None,
         frame_s: 1.0 / 60.0,
@@ -3361,6 +3360,9 @@ impl App {
     fn poll_pad(&mut self, el: &ActiveEventLoop) {
         let (mut report, mut connected, motors) = self.pads.poll();
         self.arrival_pad(report.buttons);
+        // Read the physical buttons before adding the touchscreen's pad.
+        #[cfg(target_arch = "wasm32")]
+        let may_open_controller_chat = report.buttons != 0 && self.play.as_ref().is_some_and(|p| p.mode != 2);
         // a controller in use: the touch screen's pad goes
         if report.buttons != 0 || report.sticks.iter().any(|v| v.abs() > 0.5) {
             self.touch.hide();
@@ -3432,6 +3434,10 @@ impl App {
             }
         }
         self.pad_rows(el, &f.rows);
+        #[cfg(target_arch = "wasm32")]
+        if may_open_controller_chat && self.play.as_mut().is_some_and(|p| p.note_controller_chat()) {
+            self.note_typing();
+        }
     }
 
     /// A controller's buttons on rows of the client's keys (`binds`, the map
@@ -3633,6 +3639,12 @@ impl App {
     /// there does.
     fn finger(&mut self, id: u64, phase: crate::touch::Phase, at: [f32; 2], size: (u32, u32)) {
         use crate::touch::Phase;
+        // The browser can show its keyboard during this gesture, before a
+        // queued touchpad click is handled in the next frame.
+        #[cfg(target_arch = "wasm32")]
+        if phase == Phase::Ended && self.play.as_ref().is_some_and(|p| p.controller_chat_text_at(render::ui::frame_from_window(size, at))) {
+            crate::web::focus_touch_text();
+        }
         if self.touch_shut() {
             return;
         }
@@ -3782,9 +3794,14 @@ impl App {
             Some(h) => h.pre.typing(),
             None => self.play.as_mut().is_some_and(|p| p.keyboard_typing()),
         };
-        if on != std::mem::replace(&mut self.typing, on) {
+        #[cfg(target_arch = "wasm32")]
+        let controller_chat = self.play.as_ref().is_some_and(|p| p.controller_chat());
+        #[cfg(not(target_arch = "wasm32"))]
+        let controller_chat = false;
+        let typing = (on, controller_chat);
+        if typing != std::mem::replace(&mut self.typing, typing) {
             #[cfg(target_arch = "wasm32")]
-            crate::web::want_text(on);
+            crate::web::want_text(on, controller_chat);
             #[cfg(target_os = "android")]
             crate::android::want_text(on);
         }

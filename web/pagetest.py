@@ -922,6 +922,19 @@ async def tests(a, site, base, page):
     check("the box gone, the focus is the canvas's again", await page.js("document.activeElement && document.activeElement.id") == "eqoa")
     check("and a touch puts no keyboard up any more", await page.js(touch_up) != "eqoatyped")
 
+    await page.js("""
+        Object.defineProperty(navigator, 'userActivation', {configurable: true, value: {isActive: true}});
+        document.getElementById('eqoa').dispatchEvent(new PointerEvent('pointerdown', {pointerType: 'touch'}));
+        window.eqoaWantText(true, true);
+    """)
+    active = "document.activeElement && document.activeElement.id"
+    check("controller chat leaves focus on the canvas after a recent touch", await page.js(active) == "eqoa")
+    check("a touch outside the controller chat editor keeps the device keyboard closed", await page.js(touch_up) == "eqoa")
+    await page.js("window.eqoaFocusTouchText(); true")
+    check("tapping the controller chat editor can still raise the device keyboard", await page.js(active) == "eqoatyped")
+    await page.js("window.eqoaWantText(false); delete navigator.userActivation; true")
+    check("closing controller chat returns focus to the canvas", await page.js(active) == "eqoa")
+
     # ---- fullscreen: Start puts the page full screen in its own click on a
     # computer whose browser keeps Escape for the page (Keyboard Lock) and on
     # a touch device (CDP's touch emulation: its pointer coarse), where a touch
