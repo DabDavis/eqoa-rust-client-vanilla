@@ -46,12 +46,14 @@ pub fn log(s: &str) {
     web_sys::console::log_1(&JsValue::from_str(s));
 }
 
+fn page_function(name: &str) -> Option<js_sys::Function> {
+    let w = web_sys::window()?;
+    js_sys::Reflect::get(&w, &name.into()).ok()?.dyn_into().ok()
+}
+
 /// Calls `window.<name>(arg)` if the page defines it.
 fn call_page(name: &str, arg: &JsValue) {
-    let Some(w) = web_sys::window() else { return };
-    if let Ok(f) = js_sys::Reflect::get(&w, &name.into())
-        && let Some(f) = f.dyn_ref::<js_sys::Function>()
-    {
+    if let Some(f) = page_function(name) {
         let _ = f.call1(&JsValue::NULL, arg);
     }
 }
@@ -330,8 +332,17 @@ pub fn set_title(t: &str) {
 /// a phone's or a tablet's own keyboard up for it at the next touch, and its
 /// characters come to the canvas as key events (`window.eqoaWantText`,
 /// main.js).
-pub fn want_text(on: bool) {
-    call_page("eqoaWantText", &JsValue::from_bool(on));
+pub fn want_text(on: bool, controller_chat: bool) {
+    if let Some(f) = page_function("eqoaWantText") {
+        let _ = f.call2(&JsValue::NULL, &JsValue::from_bool(on), &JsValue::from_bool(controller_chat));
+    }
+}
+
+/// A touch landed inside the controller-opened chat editor.
+pub fn focus_touch_text() {
+    if let Some(f) = page_function("eqoaFocusTouchText") {
+        let _ = f.call0(&JsValue::NULL);
+    }
 }
 
 /// An edit box is on the screen: the page's clipboard keys are its (main.js).
@@ -383,12 +394,14 @@ pub fn device_keyboard() -> bool {
 /// Whether the page is on a touch-first device (`window.eqoaTouchFirst`:
 /// its main pointer is coarse), so the touch screen's pad shows at once.
 pub fn touch_first() -> bool {
-    let Some(w) = web_sys::window() else { return false };
-    js_sys::Reflect::get(&w, &"eqoaTouchFirst".into())
-        .ok()
-        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+    page_function("eqoaTouchFirst")
         .and_then(|f| f.call0(&JsValue::NULL).ok())
         .is_some_and(|v| v.is_truthy())
+}
+
+/// Android can still use a touch keyboard when its main pointer is a mouse.
+pub fn has_touch_keyboard() -> bool {
+    touch_first() || web_sys::window().and_then(|w| w.navigator().user_agent().ok()).is_some_and(|ua| ua.contains("Android"))
 }
 
 /// Whether the page holds the pointer (`document.pointerLockElement`): the
