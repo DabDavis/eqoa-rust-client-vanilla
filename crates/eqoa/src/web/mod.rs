@@ -684,8 +684,8 @@ pub fn page_port(var: &str) -> Option<u16> {
     page_value(&var.trim_start_matches("EQOA_").to_ascii_lowercase())?.parse().ok()
 }
 
-/// Once a second, the frame rate and the wasm heap on the status line,
-/// after `what`.
+/// Once a second, the wasm heap and, if enabled, the frame rate on the
+/// status line after `what`.
 fn rate(what: &'static str) {
     wasm_bindgen_futures::spawn_local(async move {
         let mut last = viewer::FRAMES.load(std::sync::atomic::Ordering::Relaxed);
@@ -696,9 +696,14 @@ fn rate(what: &'static str) {
             let [lead, dry] = &crate::audio::PAGE_SOUND;
             let lead = lead.load(std::sync::atomic::Ordering::Relaxed);
             let sound = if lead > 0 { format!(" · sound +{lead} ms, dry {}", dry.load(std::sync::atomic::Ordering::Relaxed)) } else { String::new() };
+            let fps = if crate::settings::client().show_fps {
+                format!(" · {} fps", n.wrapping_sub(last))
+            } else {
+                String::new()
+            };
             // the status line only: once a second in the console would bury
             // everything else
-            let line = format!("{what} · {} fps · {:.0} MB{sound}", n.wrapping_sub(last), mem / 1048576.0);
+            let line = format!("{what}{fps} · {:.0} MB{sound}", mem / 1048576.0);
             call_page("eqoaStatus", &JsValue::from_str(&line));
             last = n;
         }

@@ -1012,6 +1012,8 @@ pub struct ClientOptions {
     /// Frame Rate as chosen; `None` until it is, the platform's
     /// (`set_platform_rate`: 30 on a page's WebGL2, else the display's)
     pub frame_rate: Option<FrameRate>,
+    /// Show FPS in the browser client's status line.
+    pub show_fps: bool,
     /// Camera Distance: the follow orbit's ceiling, and the Follow camera's
     /// (the game options' 3rd Person Camera: Follow, petition 2909),
     /// `CAMERA_MIN` to `CAMERA_MAX`
@@ -1745,6 +1747,7 @@ impl Default for ClientOptions {
             brightness: BRIGHTNESS_AS_DRAWN,
             fog: crate::fog::GAME,
             frame_rate: None,
+            show_fps: false,
             camera_distance: crate::camstyle::FOLLOW_MAX_DISTANCE as u8,
             camera_turn: TURN_GAME,
             screen_shake: true,
@@ -1889,6 +1892,9 @@ impl ClientOptions {
         }
         if let Some(r) = self.frame_rate {
             s.push_str(&format!("frame_rate={}\n", r.key()));
+        }
+        if self.show_fps {
+            s.push_str("show_fps=on\n");
         }
         if self.camera_turn != TURN_GAME {
             s.push_str(&format!("camera_turn={}\n", self.camera_turn));
@@ -2275,6 +2281,8 @@ impl ClientOptions {
                     }
                 }
                 ("frame_rate", v) => c.frame_rate = FrameRate::ALL.into_iter().find(|r| r.key() == v).or(c.frame_rate),
+                ("show_fps", "on") => c.show_fps = true,
+                ("show_fps", "off") => c.show_fps = false,
                 ("camera_distance", v) => {
                     if let Some(d) = v.parse::<u8>().ok().filter(|d| (CAMERA_MIN..=CAMERA_MAX).contains(d)) {
                         c.camera_distance = d;
@@ -4231,6 +4239,7 @@ mod tests {
             ClientOptions::default(),
             ClientOptions { lod: false, brightness: 0, frame_rate: Some(FrameRate::Thirty), camera_distance: 8, ..Default::default() },
             ClientOptions { lod: true, brightness: 10, frame_rate: Some(FrameRate::Display), camera_distance: 50, ..Default::default() },
+            ClientOptions { show_fps: true, ..Default::default() },
             ClientOptions { camera_turn: TURN_MIN, ..Default::default() },
             ClientOptions { camera_turn: TURN_MAX, ..Default::default() },
             ClientOptions { controller: std::array::from_fn(|k| Focus::ALL[k % Focus::ALL.len()]), ..Default::default() },

@@ -968,6 +968,8 @@ impl WndOptions {
                     25 => c.art = crate::era::other(c.art),
                     26 if cfg!(target_arch = "wasm32") => cues.push(9),
                     26 => c.vsync = !c.vsync,
+                    #[cfg(target_arch = "wasm32")]
+                    SHOW_FPS => c.show_fps = !c.show_fps,
                     // Update Notices (`update::asks`)
                     29 => c.update_notices = !c.update_notices,
                     // Overlapping Names: the plates kept from the next
@@ -1992,10 +1994,12 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 126] = [
+const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
+    #[cfg(target_arch = "wasm32")]
+    (SHOW_FPS, "Show FPS"),
     (15, "Camera Distance"),
     (16, "Controller Focus"),
     (17, "Camera Turn Speed"),
@@ -2212,6 +2216,8 @@ pub(crate) const ATTACK_ABILITIES: i32 = 271;
 /// with the meter.
 pub(crate) const DPS_COLUMNS: i32 = 272;
 pub(crate) const DPS_SORT: i32 = 273;
+#[cfg(target_arch = "wasm32")]
+const SHOW_FPS: i32 = 274;
 
 const HUD_SCALE: i32 = 240;
 const NAMEPLATE_SCALE: i32 = 241;
@@ -2411,14 +2417,14 @@ fn lone_category(g: usize) -> Option<usize> {
 }
 
 /// Video's rows: natively Display first (F3 20261024-201507: full screen was
-/// F11's alone); a page's full screen is the browser's. Fog and Mipmaps went
-/// to World with Art (the user's, 2026-10-25); Text went back to UI beside
+/// F11's alone); a page has Show FPS and the browser handles full screen.
+/// Fog and Mipmaps went to World with Art (the user's, 2026-10-25); Text went back to UI beside
 /// HUD when Render Scale came (2026-10-27); Loading Screens to Other's
 /// General (2026-11-11).
 #[cfg(not(target_arch = "wasm32"))]
 const VIDEO: &[i32] = &[33, 13, 14, 26, 39];
 #[cfg(target_arch = "wasm32")]
-const VIDEO: &[i32] = &[13, 14, 26, 39];
+const VIDEO: &[i32] = &[13, 14, SHOW_FPS, 26, 39];
 
 /// The Multi-boxing settings' rows: natively Slow When Not Focused first (a
 /// page's pace in the back is the browser's), then Controller Focus, Capture
@@ -2535,6 +2541,8 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
             esf::Era::Y2002 => "2002",
         }),
         26 => on_off(crate::settings::vsync()),
+        #[cfg(target_arch = "wasm32")]
+        SHOW_FPS => on_off(c.show_fps),
         29 => on_off(c.update_notices),
         41 => on_off(c.map),
         42 => on_off(c.minimap),
@@ -4236,8 +4244,8 @@ mod tests {
     }
 
     /// Each group's categories and their rows, the petitions' grouping
-    /// (natively; a page has no Textures, no Sound, and Video and the
-    /// Multi-boxing settings a row less).
+    /// (natively; a page has no Textures or Sound, Video has Show FPS in place
+    /// of Display, and Multi-boxing has a row less).
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn each_group_holds_its_kind() {
