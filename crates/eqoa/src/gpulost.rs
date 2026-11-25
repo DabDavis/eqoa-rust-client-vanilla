@@ -83,8 +83,15 @@ pub fn watch(device: &wgpu::Device, recovered: bool) {
         // window's, not the device's, made again from the window by the
         // next frame (`surface`), never a panic (the crash reports of
         // 2026-11-19/21, "In Surface::configure  Invalid surface")
+        // the window's own texture gone under a submission (Live crash
+        // report 5605, Firefox's WebGPU after hours with the tab in the
+        // back: "In Queue::submit In a pass parameter Texture with ''
+        // label has been destroyed"): every texture the game makes carries
+        // a label, so the unlabelled one is the canvas's, which the browser
+        // destroys when it takes the frame back; the frame is lost, the
+        // surface made again, never a panic
         if let wgpu::Error::Validation { description, .. } = &e
-            && is_surface_error(description)
+            && (is_surface_error(description) || is_window_texture_gone(description))
         {
             surface_failed(description);
             return;
@@ -114,6 +121,14 @@ static SURFACE_FAILED: AtomicBool = AtomicBool::new(false);
 /// Surface::get_current_texture_view", "In Surface::present").
 pub fn is_surface_error(description: &str) -> bool {
     description.contains("In Surface::") || description.contains("Error in Surface::")
+}
+
+/// Whether a validation error is a submission's that drew on the window's
+/// own texture after it was destroyed (`watch`): the one texture without a
+/// label (wgpu's and the browser's surface textures; every one the game makes
+/// is named).
+pub fn is_window_texture_gone(description: &str) -> bool {
+    description.contains("In Queue::submit") && description.contains("Texture with '' label has been destroyed")
 }
 
 /// The window's surface refused a call (`is_surface_error`): taken by the
@@ -539,6 +554,17 @@ mod tests {
         assert!(is_surface_error("Validation Error\n\nCaused by:\n  In Surface::get_current_texture_view\n    Surface is not configured for presentation\n"));
         assert!(!is_surface_error("Validation Error\n\nCaused by:\n  In Device::create_buffer, label = 'vertices'\n    Buffer size 0 is invalid\n"), "the control");
         assert!(!is_surface_error("In a render pass\n  Surface texture used after present"), "the control: a pass's words, not a surface call's");
+    }
+
+    /// Live crash report 5605's words are the window's texture gone; the
+    /// controls: a named texture destroyed under a pass is the game's own
+    /// (a fault to see, still wgpu's panic), and a submit's other errors.
+    #[test]
+    fn the_window_texture_gone_is_the_surfaces() {
+        let report = "Validation Error\n\nCaused by:\n  In Queue::submit\n    Validation Error\n\nCaused by:\n  In Queue::submit\n    In a pass parameter\n      Texture with '' label has been destroyed\n";
+        assert!(is_window_texture_gone(report));
+        assert!(!is_window_texture_gone(&report.replace("''", "'map tile'")), "the control: a texture of the game's");
+        assert!(!is_window_texture_gone("Validation Error\n\nCaused by:\n  In Queue::submit\n    Buffer with 'vertices' label has been destroyed\n"), "the control: a buffer");
     }
 
     #[test]
