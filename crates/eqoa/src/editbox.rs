@@ -81,8 +81,14 @@ pub fn pad_only() -> bool {
 /// terminator past its 256 characters and over its own stack: a gram of 360
 /// characters of `|+` killed the game as it was opened (tried in the tracer,
 /// 2026-11-07, through the read window's `CountLines`).
+///
+/// `#` too, though a console's keyboard has none (Live petition 5607: "Cant
+/// type the pound sign into any chat within the client"): a console draws it
+/// as any other letter (ARIAL's glyph; only `|` is a text box's code), and
+/// go-eqoa-server reads a line that starts with it as a GM's command, which
+/// it refuses anyone else.
 pub fn typable(c: char) -> bool {
-    c.is_ascii_alphanumeric() || " !\"%'()*+,-./:;=?@_~".contains(c)
+    c.is_ascii_alphanumeric() || " !\"#%'()*+,-./:;=?@_~".contains(c)
 }
 
 /// The most of a clipboard read: past any editor's length (512).
@@ -520,7 +526,7 @@ impl EditBox {
                 return EditUp::Done(self.purpose);
             }
             4 => return EditUp::Done(self.purpose),
-            32 | 33 | 34 | 37 | 39 | 40 | 41 | 43 | 44 | 45 | 46 | 47 | 58 | 59 | 61 | 63 | 64 | 95 | 126 => {
+            32 | 33 | 34 | 35 | 37 | 39 | 40 | 41 | 43 | 44 | 45 | 46 | 47 | 58 | 59 | 61 | 63 | 64 | 95 | 126 => {
                 let ok = self.insert(c, now);
                 Self::sound(ok, cues);
             }
@@ -1285,10 +1291,11 @@ mod tests {
         for c in soft {
             assert!(typable(c), "the soft keyboard's {c:?}");
         }
-        for c in "abcxyzABCXYZ0189!\"%'()+,-./:;=?@_~".chars() {
+        // and `#` (Live petition 5607), past the console's own
+        for c in "abcxyzABCXYZ0189!\"#%'()+,-./:;=?@_~".chars() {
             assert!(typable(c), "the keyboard's {c:?}");
         }
-        for c in "|#$&<>[]\\^`{}\n\r\t\u{0}\u{7f}\u{e9}\u{4e2d}\u{1f600}".chars() {
+        for c in "|$&<>[]\\^`{}\n\r\t\u{0}\u{7f}\u{e9}\u{4e2d}\u{1f600}".chars() {
             assert!(!typable(c), "{c:?}");
         }
     }
@@ -1302,7 +1309,7 @@ mod tests {
         // the character that brings a console down, and the rest of what it has no key for
         assert_eq!(paste_chars("|+|+|t||x|", false), "++tx");
         assert_eq!(paste_chars("|+|+|t||x|", true), "++tx");
-        assert_eq!(paste_chars("a#b$c&d<e>f[g]h\\i^j`k{l}m", false), "abcdefghijklm");
+        assert_eq!(paste_chars("a#b$c&d<e>f[g]h\\i^j`k{l}m", false), "a#bcdefghijklm");
         // line ends and tabs as spaces, one for a Windows line end
         assert_eq!(paste_chars("one\r\ntwo\nthree\rfour\tfive", false), "one two three four five");
         // where the box has lines they stay lines, the tab still a space
