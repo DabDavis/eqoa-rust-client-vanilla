@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Resize the minimap on the Controller interface
+
+- The **Controller interface's minimap** can now be made bigger or smaller, the way the PC interface's HUD pieces are: turn on **Move HUD** (**Options → Extended → UI → HUD Layout**, or type `/hud`), then drag the small grip at a corner of the minimap. Its size is kept for the Controller interface (the PC interface keeps its own), and **Reset HUD** puts it back.
+
 ## 2026-11-25 · The web page starts again on older Edge and Chrome
 
 - On Edge or Chrome version 131 (and other browsers whose WebGPU is that age), the page stopped with "Cannot read properties of undefined (reading 'description')" as the game loaded. It now starts and plays; updating the browser is no longer needed for it.
