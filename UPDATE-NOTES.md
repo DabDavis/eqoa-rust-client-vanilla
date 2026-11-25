@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Smoother near the Freeport coach and its Christmas tree
+
+- The frame rate no longer drops near the **Freeport plaza's Christmas decorations** (the coach and the tree): their bulbs are now prepared once instead of every frame. They look the same as before.
+
 ## 2026-11-25 · Item icons whole on the quick slots
 
 - The **item icons** on your quick slots now show the whole potion, gem or stone (they were cut off on the sides) and are drawn taller, filling more of the slot.
