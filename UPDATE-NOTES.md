@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Character names up to 15 letters
+
+- A new character's **name can now be up to 15 letters** (it was 12), on a server that takes them. Names still need at least three letters, letters only.
+
 ## 2026-11-25 · Focus Target
 
 - New **Focus Target**: target a creature and press **[** (or type **/focus**) to make it your focus. A small window above your target box then shows it all the time: its name in its con colour, its health and how far away it is, while you target other things. Press **]** (or type **/focus target**) to target your focus again in one press. Handy for healers watching the tank, tanks watching a loose add, or anyone keeping an eye on a named monster.

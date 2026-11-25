@@ -1,6 +1,7 @@
 //! `VIWndCharCreateName` (CLIENT `viwndcharcreatename.cpp`): the name page.
 //! The editor (`VIWndEdit`, the client's `editbox.rs`) at (90, 75), no
-//! spaces, 13 characters with the terminator, titled "Character Name"; under
+//! spaces, `NAME_MAX` letters (CLIENT's 13 with the terminator, twelve; 15
+//! the owner's, 2026-11-25, the server's too), titled "Character Name"; under
 //! it a legend: circle Generate Name (0x0012 with the form's race and sex,
 //! `Send0012`; the server's name comes back into the editor), cross Select,
 //! triangle Back. The editor's Done validates the name (three letters or
@@ -44,6 +45,11 @@ impl Default for NamePage {
 /// The fewest letters a name may have: three (CLIENT's `Validate` four).
 pub const NAME_MIN: usize = 3;
 
+/// The most letters a name may have: 15 (the owner, 2026-11-25; CLIENT's
+/// `Activate` gives the editor 13 with the terminator, twelve). The server
+/// takes 15; a PS2 still types twelve, and shows 15.
+pub const NAME_MAX: usize = 15;
+
 /// The refusal of a name under `NAME_MIN`, in word 875's words (which say four).
 pub const NAME_SHORT: &str = "Name must be at least three characters long.";
 
@@ -69,7 +75,8 @@ impl NamePage {
 
     /// `Activate`: the editor up on the form's name, if it has one.
     pub fn activate(&mut self, now: i64, vui: &vi::ui::Vui, form: &NewChar) {
-        self.edit.set_max_length(13);
+        // the box's length counts the terminator (CLIENT's 13)
+        self.edit.set_max_length(NAME_MAX + 1);
         self.edit.title = word(vui, 260);
         self.mbox_up = false;
         // SetActiveWindow(m_edit): its 295, a fresh session
@@ -211,20 +218,20 @@ mod tests {
     }
 
     #[test]
-    fn the_editor_takes_no_spaces_and_thirteen_less_one() {
+    fn the_editor_takes_no_spaces_and_fifteen_letters() {
         let mut p = NamePage::default();
         let v = super::super::tests_vui();
         p.activate(0, &v, &super::super::blank_form());
         let r = crate::pointer::testing::NullRaster;
         let mut s = Vec::new();
         let mut sess = sess();
-        for c in "abc defghijklmnop".bytes() {
+        for c in "abc defghijklmnopqrs".bytes() {
             p.key(c as i32, 0, &v, &r, &super::super::blank_form(), &mut sess, &mut s);
         }
-        assert_eq!(String::from_utf16_lossy(&p.edit.text), "abcdefghijkl", "no space, twelve characters");
+        assert_eq!(String::from_utf16_lossy(&p.edit.text), "abcdefghijklmno", "no space, fifteen characters (CLIENT's twelve)");
         // Enter: the name up, capitalised
         let m = p.key(13, 0, &v, &r, &super::super::blank_form(), &mut sess, &mut s);
-        assert_eq!(m, Some(Msg::Name("Abcdefghijkl".into())));
+        assert_eq!(m, Some(Msg::Name("Abcdefghijklmno".into())));
         // a short one: the message box, which Enter takes down
         for c in "ab".bytes() {
             p.key(c as i32, 0, &v, &r, &super::super::blank_form(), &mut sess, &mut s);
@@ -245,6 +252,9 @@ mod tests {
         let form = NewChar { name: "Brakk".into(), ..super::super::blank_form() };
         p.activate(0, &v, &form);
         assert_eq!(String::from_utf16_lossy(&p.edit.text), "Brakk");
+        // a fifteen-letter name comes back whole
+        p.activate(0, &v, &NewChar { name: "Abcdefghijklmno".into(), ..super::super::blank_form() });
+        assert_eq!(String::from_utf16_lossy(&p.edit.text), "Abcdefghijklmno");
         p.set_name("Ghurt");
         assert_eq!(String::from_utf16_lossy(&p.edit.text), "Ghurt");
         // the control: a blank form, a blank editor
