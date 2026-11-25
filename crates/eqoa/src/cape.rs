@@ -357,7 +357,7 @@ pub fn model(lib: &Library, cape: Cape, wearer: u32, cs: &CSprite<Ee>) -> Option
                 }
             };
             let bones = worn_bones(wearer, cs);
-            let f = fit(&src, &bones, &body, &poses, CROUCHED.contains(&wearer)).map(|mut m| {
+            let f = fit(&src, &bones, &body, &poses, CROUCHED.contains(&wearer), wearer).map(|mut m| {
                 tail_skin(&mut m, &bones);
                 Rc::new(m)
             });
@@ -442,7 +442,7 @@ fn tint(m: &mut esf::Model, color: u32) {
 /// then settled on the body, posed as `poses` (skin palettes: `palettes`), so
 /// no part of it shows through (`settle`). `EQOA_CAPE_DEBUG=1` says which way
 /// and by what measures; `EQOA_CAPE_PLAIN=1` leaves it unsettled, to compare.
-fn fit(src: &Source, to: &Bones, body: &esf::Model, poses: &[Vec<glam::Mat4>], crouched: bool) -> Option<esf::Model> {
+fn fit(src: &Source, to: &Bones, body: &esf::Model, poses: &[Vec<glam::Mat4>], crouched: bool, wearer: u32) -> Option<esf::Model> {
     let debug = std::env::var_os("EQOA_CAPE_DEBUG").is_some();
     let into = Frame::of(to, body);
     // a body that stands crouched (`CROUCHED`): sized as it stands, not as it
@@ -454,11 +454,61 @@ fn fit(src: &Source, to: &Bones, body: &esf::Model, poses: &[Vec<glam::Mat4>], c
         eprintln!("cape: crouched, sized as it stands: {stand:?}, across by its shoulders: {:?}", sized.as_ref().map(|f| f.half_width));
     }
     let mut m = placed(src, to, sized.as_ref().or(into.as_ref()), stand, debug)?;
+    if let Some(f) = into.as_ref().filter(|_| PLAYER_BODIES.contains(&wearer)) {
+        rest_on_shoulders(&mut m, body, f, debug);
+    }
     if let Some(f) = into.as_ref().filter(|_| std::env::var_os("EQOA_CAPE_PLAIN").is_none()) {
         settle(&mut m, to, f, body, poses, debug);
     }
     Some(m)
 }
+
+/// The ten player races' bodies, man and woman (the wire's model ids):
+/// `rest_on_shoulders`.
+pub const PLAYER_BODIES: &[u32] = &[
+    0x70D8_98C6, 0x0D53_7335, 0xD8D5_6FF8, 0xE189_19F7, 0x7ED8_9DAA, 0x8C9B_4B39, 0xA99C_6B15, 0x4C40_84FC, 0xAA5B_0447, 0x350B_FDBE,
+    0x4C6F_A532, 0x4DE3_2701, 0x61CA_3EDF, 0xC44A_D516, 0xA3DB_3FE2, 0x8A27_A731, 0x320C_0B47, 0x4F1A_3CBE, 0x8480_7490, 0xACC0_0B4F,
+];
+
+/// How far over a player's shoulders a cape's top may rest (of the body's
+/// height to the shoulders, the cloth's own thickness), and how far it is
+/// moved down at the most (`rest_on_shoulders`).
+const REST: (f32, f32) = (0.02, 0.1);
+
+/// A cape on a player race's body rests on its shoulders (Heirloom petition
+/// 2985, a human druid: "Capes rest a bit high above Human shoulders
+/// currently. Likely need tweaks for other races as well"): the capes come
+/// off the bodies they were made for (the silver knight's and the Dawn
+/// Maiden's on the forty-node skeleton, Dread's on the forty-three), whose
+/// armoured shoulders stand higher than a bare player's, and on a skeleton
+/// that is its own a cape went on as it was. Over each shoulder, between
+/// the neck and the arm's top (`SHOULDER_BAND` of the half width out from
+/// the middle), the cape's top is measured against the body's own top
+/// there, and the whole cape is moved down by what lies over `REST.0`, at
+/// most `REST.1`; then settled as ever (`settle`), which lifts it only where
+/// the body would come through. Never up.
+fn rest_on_shoulders(m: &mut esf::Model, body: &esf::Model, f: &Frame, debug: bool) {
+    let h = (f.shoulder_y - f.ground).max(1e-3);
+    let band = |p: &[f32; 3]| {
+        let off = (p[0] - f.mid_x).abs() / f.half_width.max(1e-3);
+        (SHOULDER_BAND.0..=SHOULDER_BAND.1).contains(&off) && (p[1] - f.shoulder_y).abs() <= 0.25 * h
+    };
+    let top = |pos: &[[f32; 3]]| pos.iter().filter(|p| band(p)).map(|p| p[1]).reduce(f32::max);
+    let (Some(cape), Some(own)) = (top(&m.pos), top(&body.pos)) else { return };
+    let down = ((cape - own) - REST.0 * h).clamp(0.0, REST.1 * h);
+    if debug {
+        eprintln!("cape: its top over the shoulders {:+.3} of the body's height over the body's, moved down {:.3}", (cape - own) / h, down / h);
+    }
+    if down > 0.0 {
+        for p in &mut m.pos {
+            p[1] -= down;
+        }
+    }
+}
+
+/// Where a shoulder is measured (`rest_on_shoulders`): out from the body's
+/// middle, of its half width (past the neck, short of the arm's end).
+const SHOULDER_BAND: (f32, f32) = (0.6, 0.9);
 
 /// The poses a cape is fitted against (`settle`): standing (`SetLocomotion`
 /// 0, the pose a character rests in), and the walk and the run (`SetAction` 1
@@ -1677,6 +1727,45 @@ mod tests {
         }
     }
 
+    /// Petition 2985 ("Capes rest a bit high above Human shoulders"): on a
+    /// human, man and woman, each cape's top (not the fur mantle's) over the shoulders (the body's
+    /// own top between the neck and the arm, `SHOULDER_BAND`) is at most 4%
+    /// of the height to the shoulders over the body's, settled as drawn; the
+    /// control: fitted as before (no rest), the knight's cape stood higher
+    /// than that on both.
+    #[test]
+    fn capes_rest_on_human_shoulders() {
+        let Some(lib) = char_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        for id in [0x70D8_98C6u32, 0x0D53_7335] {
+            let (cs, body) = sprite(&lib, id);
+            let bones = Bones::of(&cs);
+            let poses = palettes(&lib, id);
+            let f = Frame::of(&bones, &body).unwrap();
+            let h = f.shoulder_y - f.ground;
+            let band = |p: &[f32; 3]| {
+                let off = (p[0] - f.mid_x).abs() / f.half_width;
+                (SHOULDER_BAND.0..=SHOULDER_BAND.1).contains(&off) && (p[1] - f.shoulder_y).abs() <= 0.25 * h
+            };
+            let top = |pos: &[[f32; 3]]| pos.iter().filter(|p| band(p)).map(|p| p[1]).reduce(f32::max);
+            let own = top(&body.pos).unwrap();
+            // Dread's fur mantle (style 5) lies over the shoulders, its fur's depth
+            // above them: the capes alone
+            for s in STYLES.iter().filter(|s| s.id != 5) {
+                let src = source(&lib, s).unwrap();
+                // a cape with nothing over the shoulders' tops (one narrower) has none to rest
+                let Some(t) = top(&fit(&src, &bones, &body, &poses, false, id).unwrap().pos) else { continue };
+                let over = (t - own) / h;
+                assert!(over <= 0.04, "{id:08X} style {}: {over:+.3} over the shoulders", s.id);
+            }
+            let src = source(&lib, &STYLES[0]).unwrap();
+            let before = (top(&fit(&src, &bones, &body, &poses, false, 0).unwrap().pos).unwrap() - own) / h;
+            assert!(before > 0.04, "{id:08X}: the control, {before:+.3} as before");
+        }
+    }
+
     fn sprite(lib: &Library, id: u32) -> (CSprite<Ee>, esf::Model) {
         let r = lib.lookup(id as i32).unwrap_or_else(|| panic!("{id:08X} in CHAR.ESF"));
         let cs = load_csprite::<Ee>(lib, r, &mut AnimScene::default(), &mut AnimCache::new(), &mut Rand(1)).unwrap();
@@ -1771,7 +1860,8 @@ mod tests {
                 let tall = f.shoulder_y - f.ground;
                 if Bones::of(&cs).same(&src.bones) {
                     let most = m.pos.iter().zip(&src.model.pos).map(|(a, b)| Vec3::from(*a).distance(Vec3::from(*b))).fold(0.0f32, f32::max);
-                    assert!(most <= SWAY.2 * tall + 1e-4, "style {} on {id:08X}: as it is, or moved out a little ({most:.3})", s.id);
+                    // and on a player's own shoulders (`rest_on_shoulders`, petition 2985)
+                    assert!(most <= (SWAY.2 + REST.1) * tall + 1e-4, "style {} on {id:08X}: as it is, or moved out and down a little ({most:.3})", s.id);
                     continue;
                 }
                 let (lo, hi) = m.pos.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(Vec3::from(*p)), hi.max(Vec3::from(*p))));
@@ -1836,8 +1926,8 @@ mod tests {
             let tall = (f.shoulder_y - f.ground) * k;
             for s in STYLES {
                 let src = source(&lib, s).unwrap();
-                let hem = lowest(&fit(&src, &bones, &body, &poses, true).unwrap(), &poses[0]);
-                let before = lowest(&fit(&src, &bones, &body, &poses, false).unwrap(), &poses[0]);
+                let hem = lowest(&fit(&src, &bones, &body, &poses, true, 0).unwrap(), &poses[0]);
+                let before = lowest(&fit(&src, &bones, &body, &poses, false, 0).unwrap(), &poses[0]);
                 eprintln!("{id:08X} style {}: hem {:+.3} over the ground (before {:+.3}), of its height {:.2}", s.id, hem - ground, before - ground, tall);
                 assert!(hem > ground, "{id:08X} style {}: its hem {:.3} over the ground", s.id, hem - ground);
                 // (the goblin chieftain's high collar, style 2, comes down off its
@@ -1854,7 +1944,7 @@ mod tests {
             let (cs, body) = sprite(&lib, id);
             let src = source(&lib, &STYLES[0]).unwrap();
             let Some(drawn) = model(&lib, Cape { style: 1, color: 0 }, id, &cs) else { continue };
-            let as_before = fit(&src, &Bones::of(&cs), &body, &palettes(&lib, id), false).unwrap();
+            let as_before = fit(&src, &Bones::of(&cs), &body, &palettes(&lib, id), false, id).unwrap();
             let same = drawn.pos.iter().flatten().map(|f| f.to_bits()).eq(as_before.pos.iter().flatten().map(|f| f.to_bits())) && drawn.bones == as_before.bones && drawn.weights == as_before.weights;
             assert_eq!(same, !CROUCHED.contains(&id), "{id:08X}: changed only if a goblin's");
             others += !CROUCHED.contains(&id) as usize;
@@ -1926,8 +2016,8 @@ mod tests {
         let stand = standing(&f, &b, &poses).unwrap();
         for s in STYLES {
             let src = source(&lib, s).unwrap();
-            let goblin = size(&fit(&src, &gb, &gbody, &gposes, true).unwrap(), &gposes[0]);
-            let after = fit(&src, &b, &body, &poses, true).unwrap();
+            let goblin = size(&fit(&src, &gb, &gbody, &gposes, true, 0).unwrap(), &gposes[0]);
+            let after = fit(&src, &b, &body, &poses, true, 0).unwrap();
             // the cape it wore before: sized by its torso, as `fit` did
             let mut before = placed(&src, &b, Some(&f), stand, false).unwrap();
             settle(&mut before, &b, &f, &body, &poses, false);
@@ -1940,7 +2030,7 @@ mod tests {
                 .iter()
                 .map(|&id| {
                     let (gb, gbody, gposes, _) = worn(id);
-                    worst(&fit(&src, &gb, &gbody, &gposes, true).unwrap(), id)
+                    worst(&fit(&src, &gb, &gbody, &gposes, true, 0).unwrap(), id)
                 })
                 .fold(0.0f32, f32::max);
             eprintln!("style {}: {covers:.2} of the bare goblin's ground, {:.2} across and {:.2} deep (before {covered:.2}: {:.2}, {:.2}); the body through it by {through:.3} (the goblins seen, at most {seen:.3}; before {:.3})", s.id, a.x, a.z, was.x, was.z, worst(&before, CHIEFTAIN));

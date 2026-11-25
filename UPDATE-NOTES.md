@@ -19,6 +19,7 @@ is put on the page by `.github/workflows/notes.yml`.
 - **Hotkey Label Size %** under **Options → Extended → UI → Interface Size** (PC interface): make the key names on your spell bars smaller, down to 40%. It starts at 100%, as before.
 - **Save your HUD layouts**: type `/hud save fullscreen` (any name) to keep your HUD as it is now, every piece where you put it and its size, and the HUD Scale, then `/hud load fullscreen` to put it back, `/hud list` to see them and `/hud delete <name>` to remove one. Handy for one layout full screen and another for a half-screen window when multiboxing. You can also pick and load a saved layout with **HUD Layouts** under **Options → Extended → UI → HUD Extras**.
 - **Mouseover Casting** (PC interface) under **Options → Extended → Other → Combat**: with it on, a heal or buff cast from your bars goes to your **pet or groupmate (or their merc) under the mouse**, without changing your target. **Mouseover First** always takes the one under the mouse; **Target First** casts at your target when it is friendly and at the one under the mouse otherwise. Off by default.
+- **Capes** now rest on the shoulders of humans (and other races whose capes stood up above them) instead of floating a little above.
 
 ## 2026-11-24 · Buff names and timers, a Stat Window, item icons on the quick slots
 
