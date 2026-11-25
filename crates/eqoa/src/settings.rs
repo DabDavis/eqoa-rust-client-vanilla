@@ -1076,6 +1076,16 @@ pub struct ClientOptions {
     /// and, with Buff Timers on, its time left on it. On by default; a
     /// server that turns Pet Effects off turns this off with it.
     pub group_effects: bool,
+    /// Debuff Icons (Extended > UI > Name Plates; Heirloom petition 2997:
+    /// "Debuffs cast on evil NPCs (combat) give an icon under their ID plate
+    /// with remaining time on the debuff (so you know when to refresh)"): the
+    /// harmful effects the player, its pet and its mercs have on a creature as
+    /// small icons under its name plate (`play::debuff_quads`), each with its
+    /// time left while Buff Timers is on, where the server sends them
+    /// (`Session::agree_npc_debuffs`, go-eqoa-server's 0x7EC2/0x7EC3); off,
+    /// none, as the game's plates carry a name alone. On by default; a server
+    /// that turns Pet Effects off turns this off with it.
+    pub npc_debuffs: bool,
     /// Buff Window (`buffwnd`; a GM's petition 1761): on a server that
     /// offers it (`Session::agree_buffs`), the player's effects in two rows and
     /// its pet's in a third, each with its name and time left and a beneficial
@@ -1711,6 +1721,7 @@ impl Default for ClientOptions {
             raid_list: true,
             pet_effects: true,
             group_effects: true,
+            npc_debuffs: true,
             buff_window: true,
             buff_timers: true,
             stat_window: false,
@@ -1883,6 +1894,9 @@ impl ClientOptions {
         }
         if !self.group_effects {
             s.push_str("group_effects=off\n");
+        }
+        if !self.npc_debuffs {
+            s.push_str("npc_debuffs=off\n");
         }
         if !self.buff_window {
             s.push_str("buff_window=off\n");
@@ -2236,6 +2250,8 @@ impl ClientOptions {
                 ("pet_effects", "off") => c.pet_effects = false,
                 ("group_effects", "on") => c.group_effects = true,
                 ("group_effects", "off") => c.group_effects = false,
+                ("npc_debuffs", "on") => c.npc_debuffs = true,
+                ("npc_debuffs", "off") => c.npc_debuffs = false,
                 ("buff_window", "on") => c.buff_window = true,
                 ("buff_window", "off") => c.buff_window = false,
                 ("buff_timers", "on") => c.buff_timers = true,
@@ -2819,7 +2835,7 @@ pub mod qol {
             86 | crate::options::HEALTH_NUMBERS => POWER_BARS,
             83 | crate::options::BUFF_TIMERS => BUFF_WINDOW,
             crate::options::STAT_WINDOW => STAT_CAPS,
-            58 | crate::options::GROUP_EFFECTS => PET_EFFECTS,
+            58 | crate::options::GROUP_EFFECTS | crate::options::NPC_DEBUFFS => PET_EFFECTS,
             78 | 79 | crate::options::MOUSEOVER_CAST => AUTO_CAST,
             22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT | crate::options::SPELL_BAR_SIZE | crate::options::ITEM_ICONS | crate::options::SPELL_COOLDOWNS => SPELL_BARS,
             _ => return None,
@@ -2871,7 +2887,7 @@ pub mod qol {
             (c.buff_window, c.buff_timers) = (false, false);
         }
         if off(PET_EFFECTS) {
-            (c.pet_effects, c.group_effects) = (false, false);
+            (c.pet_effects, c.group_effects, c.npc_debuffs) = (false, false, false);
         }
         if off(AUTO_CAST) {
             (c.auto_cast, c.auto_target, c.mouseover_cast) = (false, false, super::MouseoverCast::Off);
@@ -2917,7 +2933,7 @@ pub mod qol {
             (v.buff_window, v.buff_timers) = (kept.buff_window, kept.buff_timers);
         }
         if off(PET_EFFECTS) {
-            (v.pet_effects, v.group_effects) = (kept.pet_effects, kept.group_effects);
+            (v.pet_effects, v.group_effects, v.npc_debuffs) = (kept.pet_effects, kept.group_effects, kept.npc_debuffs);
         }
         if off(AUTO_CAST) {
             (v.auto_cast, v.auto_target, v.mouseover_cast) = (kept.auto_cast, kept.auto_target, kept.mouseover_cast);
@@ -3075,6 +3091,12 @@ pub fn pet_effects() -> bool {
 /// (`hud`).
 pub fn group_effects() -> bool {
     client().group_effects
+}
+
+/// Debuff Icons: the player's effects on creatures as small icons under their
+/// name plates (`play::debuff_quads`).
+pub fn npc_debuffs() -> bool {
+    client().npc_debuffs
 }
 
 /// Buff Window: the client's own effects window (`buffwnd`).
@@ -4640,7 +4662,7 @@ mod tests {
         assert!(!(c.map || c.minimap || map() || minimap()), "the map, off by default");
         assert!(c.map_markers, "its markers the player's, with it");
         assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
-        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.buff_timers || buff_timers() || c.stat_window || stat_window() || c.item_icons || item_icons() || c.spell_cooldowns || spell_cooldowns() || c.pet_effects || c.group_effects || c.auto_cast || c.auto_target || c.mouseover_cast != MouseoverCast::Off), "the rest");
+        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.buff_timers || buff_timers() || c.stat_window || stat_window() || c.item_icons || item_icons() || c.spell_cooldowns || spell_cooldowns() || c.pet_effects || c.group_effects || c.npc_debuffs || c.auto_cast || c.auto_target || c.mouseover_cast != MouseoverCast::Off), "the rest");
         assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
         assert!(!c.item_links && (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) == (ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft), "item links off by default, the game's two bars");
         let d = ClientOptions::default();
@@ -4934,6 +4956,18 @@ mod tests {
         assert!(ClientOptions::from_text("head_marks=on").head_marks);
         assert!(ClientOptions::from_text("head_marks=maybe").head_marks, "the default");
         assert!(ClientOptions::from_text("quest_markers=off").head_marks, "the control: the map's row is not this");
+    }
+
+    #[test]
+    fn npc_debuffs_are_kept_only_when_off() {
+        assert!(ClientOptions::default().npc_debuffs, "on by default");
+        assert!(!ClientOptions::default().to_text().contains("npc_debuffs"));
+        let t = ClientOptions { npc_debuffs: false, ..Default::default() }.to_text();
+        assert!(t.contains("npc_debuffs=off\n"), "{t}");
+        assert!(!ClientOptions::from_text(&t).npc_debuffs, "read back");
+        assert!(ClientOptions::from_text("npc_debuffs=on").npc_debuffs);
+        assert!(ClientOptions::from_text("npc_debuffs=maybe").npc_debuffs, "the default");
+        assert!(ClientOptions::from_text("group_effects=off").npc_debuffs, "the control: Group Effects' key is not this");
     }
 
     #[test]

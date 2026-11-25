@@ -1482,6 +1482,10 @@ pub fn shot_with(
                 if hide {
                     t.plates.clear();
                     t.labels.clear();
+                } else if let Some(u) = renderer.ui.as_mut() {
+                    // Debuff Icons under the plates kept (petition 2997)
+                    let marks = crate::play::debuff_marks(&plates, &pv, view.view_proj, t);
+                    p.draw_debuffs(u, &marks, (w, h));
                 }
             }
         }
@@ -7206,6 +7210,10 @@ impl App {
                         if hide {
                             t.plates.clear();
                             t.labels.clear();
+                        } else if let Some(u) = g.renderer.ui.as_mut() {
+                            // Debuff Icons under the plates kept (petition 2997)
+                            let marks = crate::play::debuff_marks(&plates, &pv, view.view_proj, t);
+                            p.draw_debuffs(u, &marks, (g.config.width, g.config.height));
                         }
                     }
                     // the frame's sends leave at its end (`Play::flush`)

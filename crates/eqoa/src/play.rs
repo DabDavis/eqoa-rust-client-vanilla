@@ -202,6 +202,10 @@ pub struct Plate {
     pub name: String,
     pub tag: Option<String>,
     pub mark: Option<u8>,
+    /// Debuff Icons (petition 2997): the player's harmful effects on the
+    /// creature the server sent, each its icon and ms left (`NO_END` for no
+    /// end), drawn small under the plate (`debuff_quads`); none for most.
+    pub debuffs: Vec<(u32, u32)>,
 }
 
 /// A quest mark's colour (a GM's petition 1813: "yellow ! and ?").
@@ -2044,6 +2048,140 @@ pub fn labels(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, text: &
 /// `labels` with the font's measures: a string's `width` and the `height`,
 /// in the PS2's pixels.
 fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: impl Fn(&str) -> u32, height: u32) -> Vec<render::text::Label> {
+    // a tag where the name would be and its name a line above it, the line
+    // the font's height at the plates' size (`Text::vertices`: a pixel of the
+    // PS2's 448 lines is 2 / 448 high)
+    let line = 2.0 * height as f32 * view.scale / render::text::SCREEN_H;
+    let mut out = Vec::new();
+    for (w, ndc, p, fade) in kept_plates(plates, view, view_proj, width, height) {
+        let up = if p.tag.is_some() { line } else { 0.0 };
+        let color = [p.color[0], p.color[1], p.color[2], p.color[3] * fade];
+        out.push(render::text::Label { at: [ndc.x, ndc.y + up, ndc.z], color, text: p.name.clone(), size: 1.0 });
+        if let Some(t) = &p.tag {
+            out.push(render::text::Label { at: ndc.to_array(), color, text: t.clone(), size: tag_size(height) });
+        }
+        // the quest mark over the name: its centre half the name's line and
+        // half its own above the name's, and a little more
+        if let Some(sign) = p.mark.and_then(net::headmarks::sign) {
+            let size = mark_size(w);
+            let at = ndc.y + up + line * (0.5 + 0.5 * size + 0.15);
+            let mut color = MARK_COLOR;
+            color[3] *= fade;
+            out.push(render::text::Label { at: [ndc.x, at, ndc.z], color, text: sign.into(), size });
+        }
+    }
+    out
+}
+
+/// One plate's Debuff Icons (petition 2997) where `debuff_marks` placed them:
+/// the point under the plate their row hangs from, centred, in normalised
+/// device coordinates (y up), the plates' size (`PlateView::scale`), the
+/// plate's fade in a storm's fog, and the icons with their ms left.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebuffMark {
+    pub at: [f32; 2],
+    pub scale: f32,
+    pub fade: f32,
+    pub icons: Vec<(u32, u32)>,
+}
+
+/// The plates `labels` keeps that carry Debuff Icons, each its row's place
+/// under its lowest line (the name, or a merc's tag under it): the same plates
+/// as the names drawn, so a creature whose name is dropped (past Name Distance,
+/// behind a nearer plate) has no icons either.
+pub fn debuff_marks(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, text: &render::text::Text) -> Vec<DebuffMark> {
+    debuff_marks_by(plates, view, view_proj, |s| text.width(s), text.height())
+}
+
+fn debuff_marks_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: impl Fn(&str) -> u32, height: u32) -> Vec<DebuffMark> {
+    if plates.iter().all(|p| p.debuffs.is_empty()) {
+        return Vec::new();
+    }
+    let line = 2.0 * height as f32 * view.scale / render::text::SCREEN_H;
+    kept_plates(plates, view, view_proj, width, height)
+        .into_iter()
+        .filter(|(_, _, p, _)| !p.debuffs.is_empty())
+        .map(|(_, ndc, p, fade)| {
+            // the lowest line's foot: the name's, or the tag's (a smaller line at the name's place)
+            let half = if p.tag.is_some() { 0.5 * line * tag_size(height) } else { 0.5 * line };
+            DebuffMark { at: [ndc.x, ndc.y - half], scale: view.scale, fade, icons: p.debuffs.clone() }
+        })
+        .collect()
+}
+
+/// A Debuff Icon's side, the gap under the plate and between icons, and how
+/// many go in a row, at the plates' size 1 (the HUD's frame's pixels: the
+/// buff window's icons are 32, the group bars' tiny ones 10).
+const DEBUFF_ICON: f32 = 14.0;
+const DEBUFF_GAP: f32 = 1.0;
+const DEBUFF_PER_ROW: usize = 6;
+
+/// The rectangles (x, y, width, height, in the HUD's frame) of a mark's icons:
+/// `DEBUFF_PER_ROW` to a row, each row centred under the plate, the first
+/// `DEBUFF_GAP` under it; the scale the plates' (no smaller than half).
+pub fn debuff_rects(m: &DebuffMark, size: (u32, u32)) -> Vec<[f32; 4]> {
+    let top = render::ui::frame_from_ndc(size, m.at);
+    let k = m.scale.max(0.5);
+    let (side, gap) = (DEBUFF_ICON * k, DEBUFF_GAP * k);
+    let mut out = Vec::with_capacity(m.icons.len());
+    for (row, chunk) in m.icons.chunks(DEBUFF_PER_ROW).enumerate() {
+        let w = chunk.len() as f32 * side + (chunk.len() - 1) as f32 * gap;
+        let y = top[1] + gap + row as f32 * (side + gap);
+        for i in 0..chunk.len() {
+            out.push([top[0] - w / 2.0 + i as f32 * (side + gap), y, side, side]);
+        }
+    }
+    out
+}
+
+/// A mark's quads (`debuff_rects`), cut only to the target (`push_whole`'s
+/// kind, as they float over the world): each icon on a translucent dark tile
+/// (`white` tinted, as the group bars' tiny icons sit on theirs) and whole, and
+/// with `timers` (Buff Timers) its time left at its foot as the buff window's
+/// icons carry it (`buffwnd::short_time`; outlined in black, white, yellow in
+/// its last minute; none for no end), each at the plate's fade. An icon the
+/// layer lacks is left out.
+pub fn debuff_quads(ui: &render::ui::Ui, assets: &crate::ui::UiAssets, marks: &[DebuffMark], size: (u32, u32), timers: bool) -> Vec<render::ui::Quad> {
+    let whole = |tex: usize, r: [f32; 4], color: [f32; 4]| render::ui::Quad {
+        tex,
+        blend: 0,
+        pos: [[r[0], r[1]], [r[0] + r[2], r[1]], [r[0] + r[2], r[1] + r[3]], [r[0], r[1] + r[3]]],
+        uv: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        color,
+        clip: Some(render::ui::WHOLE),
+    };
+    let mut out = Vec::new();
+    for m in marks {
+        for (r, &(icon, left)) in debuff_rects(m, size).into_iter().zip(&m.icons) {
+            let Some(tex) = assets.surface(icon) else { continue };
+            if let Some(white) = assets.white {
+                out.push(whole(white, [r[0] - 1.0, r[1] - 1.0, r[2] + 2.0, r[3] + 2.0], [0.0, 0.0, 0.0, 0.5 * m.fade]));
+            }
+            out.push(whole(tex, r, [1.0, 1.0, 1.0, m.fade]));
+            let t = crate::buffwnd::short_time(left);
+            let Some(font) = assets.font.filter(|_| timers && !t.is_empty()) else { continue };
+            let fh = ui.fonts[font].height.max(1) as f32;
+            let h = (r[3] * 0.6).max(8.0);
+            let scale = h / fh;
+            let w = crate::ui::wide(&t);
+            let tw = ui.fonts[font].string_width(&w) as f32 * scale;
+            let (x, y) = (r[0] + r[2] - tw, r[1] + r[3] - h + 1.0);
+            for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+                out.extend(ui.text_quads(font, x + dx, y + dy, scale, [0.0, 0.0, 0.0, 0.9 * m.fade], &w));
+            }
+            let color = if t.ends_with('s') { [1.0, 0.9, 0.3, m.fade] } else { [1.0, 1.0, 1.0, m.fade] };
+            out.extend(ui.text_quads(font, x, y, scale, color, &w));
+        }
+    }
+    for q in &mut out {
+        q.clip = Some(render::ui::WHOLE);
+    }
+    out
+}
+
+/// The plates `labels` keeps, in the order they are drawn: each one's clip
+/// depth, its point in normalised device coordinates, the plate and its fade.
+fn kept_plates<'a>(plates: &'a [Plate], view: &PlateView, view_proj: glam::Mat4, width: impl Fn(&str) -> u32, height: u32) -> Vec<(f32, glam::Vec3, &'a Plate, f32)> {
     let mut queued = Vec::new();
     let reach = view.distance * view.distance;
     for p in plates {
@@ -2101,29 +2239,7 @@ fn labels_by(plates: &[Plate], view: &PlateView, view_proj: glam::Mat4, width: i
     if view.overlap {
         kept.reverse();
     }
-    // a tag where the name would be and its name a line above it, the line
-    // the font's height at the plates' size (`Text::vertices`: a pixel of the
-    // PS2's 448 lines is 2 / 448 high)
-    let line = 2.0 * height as f32 * view.scale / render::text::SCREEN_H;
-    let mut out = Vec::new();
-    for (w, _, _, ndc, p, fade) in kept {
-        let up = if p.tag.is_some() { line } else { 0.0 };
-        let color = [p.color[0], p.color[1], p.color[2], p.color[3] * fade];
-        out.push(render::text::Label { at: [ndc.x, ndc.y + up, ndc.z], color, text: p.name.clone(), size: 1.0 });
-        if let Some(t) = &p.tag {
-            out.push(render::text::Label { at: ndc.to_array(), color, text: t.clone(), size: tag_size(height) });
-        }
-        // the quest mark over the name: its centre half the name's line and
-        // half its own above the name's, and a little more
-        if let Some(sign) = p.mark.and_then(net::headmarks::sign) {
-            let size = mark_size(w);
-            let at = ndc.y + up + line * (0.5 + 0.5 * size + 0.15);
-            let mut color = MARK_COLOR;
-            color[3] *= fade;
-            out.push(render::text::Label { at: [ndc.x, at, ndc.z], color, text: sign.into(), size });
-        }
-    }
-    out
+    kept.into_iter().map(|(w, _, _, ndc, p, fade)| (w, ndc, p, fade)).collect()
 }
 
 /// How much smaller a merc's tag is drawn than its name: two of the font's
@@ -2764,11 +2880,53 @@ mod name_plates {
     /// A plate at `at` (the view is the identity, so its x and y are where
     /// it is on the screen, -1 to 1).
     fn plate(at: [f32; 3], name: &str) -> Plate {
-        Plate { at, color: [1.0; 4], name: name.into(), tag: None, mark: None }
+        Plate { at, color: [1.0; 4], name: name.into(), tag: None, mark: None, debuffs: Vec::new() }
     }
 
     fn names(view: &PlateView, plates: &[Plate]) -> Vec<String> {
         labels_by(plates, view, Mat4::IDENTITY, width, 12).into_iter().map(|l| l.text).collect()
+    }
+
+    /// Debuff Icons (petition 2997): only a kept plate that carries some has a
+    /// mark, hung from its name's foot (half the font's line under its point;
+    /// a merc's from its smaller tag's), at the plates' size and fade; a plate
+    /// past Name Distance has its name dropped and no icons either. Its icons go
+    /// six to a row, each row centred under the plate, the first a gap under
+    /// it. The control: the same plates with no debuffs have no marks.
+    #[test]
+    fn debuff_icons_hang_under_the_kept_plates_that_carry_them() {
+        let eye = Vec3::new(0.0, 0.0, -1.0);
+        let view = PlateView::game(eye);
+        let mut gnoll = plate([0.0, 0.0, 0.5], "a gnoll");
+        gnoll.debuffs = (0..8).map(|i| (0xBB00_0000 + i, 30_000)).collect();
+        let bare = plate([0.5, 0.0, 0.5], "a bat");
+        let mut far = plate([-0.5, 0.0, 40.0], "a far orc");
+        far.debuffs = vec![(1, 1000)];
+        let mut merc = plate([0.0, -0.5, 0.5], "Ralthas");
+        merc.tag = Some("<Lonewulf's Mercenary>".into());
+        merc.debuffs = vec![(2, net::buffs::NO_END)];
+        let plates = [gnoll, bare, far, merc];
+        let marks = debuff_marks_by(&plates, &view, Mat4::IDENTITY, width, 12);
+        assert_eq!(marks.len(), 2, "the gnoll and the merc, not the bat (none) nor the far orc (no name): {marks:?}");
+        let line = 2.0 * 12.0 / 448.0;
+        let g = marks.iter().find(|m| m.icons.len() == 8).unwrap();
+        assert!((g.at[1] + 0.5 * line).abs() < 1e-6 && g.at[0] == 0.0, "under the name's foot: {:?}", g.at);
+        assert_eq!((g.scale, g.fade), (1.0, 1.0));
+        let m = marks.iter().find(|m| m.icons.len() == 1).unwrap();
+        assert!((m.at[1] - (-0.5 - 0.5 * line * 10.0 / 12.0)).abs() < 1e-6, "under the merc's tag: {:?}", m.at);
+        // 640x448: the frame is the target, so frame pixels are the target's
+        let rects = debuff_rects(g, (640, 448));
+        let foot = render::ui::frame_from_ndc((640, 448), g.at);
+        assert_eq!(rects.len(), 8);
+        let (side, gap) = (DEBUFF_ICON, DEBUFF_GAP);
+        assert!((rects[0][1] - (foot[1] + gap)).abs() < 1e-3, "a gap under the plate: {:?} {foot:?}", rects[0]);
+        let row = 6.0 * side + 5.0 * gap;
+        assert!((rects[0][0] - (320.0 - row / 2.0)).abs() < 1e-3 && (rects[5][0] + side - (320.0 + row / 2.0)).abs() < 1e-3, "six centred: {rects:?}");
+        assert!((rects[6][1] - (rects[0][1] + side + gap)).abs() < 1e-3, "then a second row");
+        assert!((rects[6][0] - (320.0 - (2.0 * side + gap) / 2.0)).abs() < 1e-3, "itself centred: {:?}", rects[6]);
+        let [mut gnoll, bare, _, _] = plates;
+        gnoll.debuffs.clear();
+        assert_eq!(debuff_marks_by(&[gnoll, bare], &view, Mat4::IDENTITY, width, 12), [], "the control: no debuffs, no marks");
     }
 
     /// A merc's tag (`mercplay`) sits where its name would, the name a line
@@ -4475,6 +4633,9 @@ impl Play {
         self.session.agree_pet_effects(crate::settings::pet_effects());
         // Group Effects: the same for the members' tiny icons (off, none drawn)
         self.session.agree_group_effects(crate::settings::group_effects());
+        // Debuff Icons: the same for the player's effects on creatures (off,
+        // none drawn under their plates)
+        self.session.agree_npc_debuffs(crate::settings::npc_debuffs());
         // Power Bars: the server told what its row says (off, what it sent
         // forgotten and the raid list's power not drawn)
         self.session.agree_power_bars(crate::settings::power_bars());
@@ -5254,9 +5415,24 @@ impl Play {
             // a quest mark over it from a server that sends them, while
             // Extended's Quest Markers is on (`net::headmarks`)
             let mark = crate::settings::head_marks().then(|| self.session.head_mark(e.id)).flatten();
-            out.push(Plate { at, color: self.name_color(c), name: c.name.clone(), tag: self.merc_tag(c), mark });
+            // the player's effects on it, from a server that sends them,
+            // while Extended's Debuff Icons is on (petition 2997)
+            let debuffs = if crate::settings::npc_debuffs() { self.session.npc_debuffs_left(e.id, self.session.now()) } else { Vec::new() };
+            out.push(Plate { at, color: self.name_color(c), name: c.name.clone(), tag: self.merc_tag(c), mark, debuffs });
         }
         out
+    }
+
+    /// Debuff Icons (petition 2997) for this frame's kept plates (`debuff_marks`),
+    /// under the HUD (as the damage numbers: after `hud` made or kept its
+    /// quads). Nothing before the HUD's layer is here.
+    pub fn draw_debuffs(&self, ui: &mut render::ui::Ui, marks: &[DebuffMark], size: (u32, u32)) {
+        if marks.is_empty() {
+            return;
+        }
+        let Some((_, assets, _)) = self.hud.as_ref() else { return };
+        let quads = debuff_quads(ui, assets, marks, size, crate::settings::buff_timers());
+        ui.quads.splice(0..0, quads);
     }
 
     /// Mode 33 (R2 held): the chat box has the keys (`VIWndChat::OnKeyDown`

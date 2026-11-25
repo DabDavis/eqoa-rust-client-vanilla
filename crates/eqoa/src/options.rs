@@ -991,6 +991,10 @@ impl WndOptions {
                     // (`Session::agree_group_effects`), the members' tiny
                     // icons drawn or not (`hud`)
                     GROUP_EFFECTS => c.group_effects = !c.group_effects,
+                    // Debuff Icons (petition 2997): the server told from the
+                    // next frame (`Session::agree_npc_debuffs`), the icons
+                    // under the creatures' plates drawn or not (`play`)
+                    NPC_DEBUFFS => c.npc_debuffs = !c.npc_debuffs,
                     // Buff Window: the server told from the next frame
                     // (`Session::agree_buffs`), ours or the game's strip
                     // drawn (`buffwnd`)
@@ -1969,7 +1973,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 121] = [
+const EXTENDED_ITEMS: [(i32, &str); 122] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -2091,6 +2095,7 @@ const EXTENDED_ITEMS: [(i32, &str); 121] = [
     (SPELL_COOLDOWNS, "Spell Cooldowns"),
     (HUD_PROFILE, "HUD Layouts"),
     (MOUSEOVER_CAST, "Mouseover Casting"),
+    (NPC_DEBUFFS, "Debuff Icons"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2164,6 +2169,11 @@ pub(crate) const HEALTH_NUMBERS: i32 = 220;
 /// versions for the buffs group members have"). 230, as Health Numbers' 220;
 /// the server's `qol::PET_EFFECTS` turns it off with Pet Effects.
 pub(crate) const GROUP_EFFECTS: i32 = 230;
+/// Debuff Icons' item (Heirloom petition 2997: "Debuffs cast on evil NPCs
+/// (combat) give an icon under their ID plate with remaining time on the
+/// debuff"). 260, not the next free (sibling lanes may take 258 onwards); the
+/// server's `qol::PET_EFFECTS` turns it off with Pet Effects.
+pub(crate) const NPC_DEBUFFS: i32 = 260;
 
 const HUD_SCALE: i32 = 240;
 const NAMEPLATE_SCALE: i32 = 241;
@@ -2291,7 +2301,8 @@ const ALL_CATEGORIES: [Category; 26] = [
     // Minimap Scroll Frame (2026-11-13) here: Map's page was full
     // Spell Bar Opacity (2026-11-13, ticket 1953) here: HUD's page is full
     Category { name: "HUD Layout", items: &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT], note: Note::Hud, group: Group::Ui },
-    Category { name: "Name Plates", items: &[27, 34, 85, TARGET_LEVEL], note: Note::None, group: Group::Ui },
+    // Debuff Icons (petition 2997) with the other things drawn at a plate
+    Category { name: "Name Plates", items: &[27, 34, 85, TARGET_LEVEL, NPC_DEBUFFS], note: Note::None, group: Group::Ui },
     Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
@@ -2500,6 +2511,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         86 => on_off(c.power_bars),
         HEALTH_NUMBERS => on_off(c.health_numbers),
         GROUP_EFFECTS => on_off(c.group_effects),
+        NPC_DEBUFFS => on_off(c.npc_debuffs),
         88 => wide(if c.raid_mercs { "Shown" } else { "Hidden" }),
         83 => on_off(c.buff_window),
         BUFF_TIMERS => on_off(c.buff_timers),
@@ -3380,6 +3392,16 @@ mod tests {
         assert!(settings::pet_effects() && settings::power_bars(), "moving no other row");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(settings::group_effects(), "and back: two values");
+        goto!(NPC_DEBUFFS);
+        assert_eq!(w.item, NPC_DEBUFFS, "Debuff Icons");
+        assert!(settings::npc_debuffs(), "on: the icons under the creatures' plates");
+        assert_eq!(value_text(&vui, NPC_DEBUFFS), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::npc_debuffs(), cues.last()), (false, Some(&11)), "off: the game's plates");
+        assert_eq!(value_text(&vui, NPC_DEBUFFS), Some(wide(vui.words.get(552, vui.language))));
+        assert!(settings::group_effects() && settings::pet_effects(), "moving no other row");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(settings::npc_debuffs(), "and back: two values");
         goto!(88);
         assert_eq!(w.item, 88, "Raid Mercenaries");
         assert_eq!((settings::raid_mercs(), value_text(&vui, 88)), (false, Some(wide("Hidden"))), "Hidden by default");
@@ -4140,7 +4162,7 @@ mod tests {
                 ("HUD", vec!["Ability Bars", "Stacked Spell Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
                 ("Group & Raid", vec!["Raid List", "Power Bars", "Health Numbers", "Group Effects", "Raid Mercenaries"]),
                 ("HUD Layout", vec!["Move HUD", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity", "Spell Bar Layout", "Utility Bar Layout"]),
-                ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers", "Target Level"]),
+                ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers", "Target Level", "Debuff Icons"]),
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
                 ("Number Colors", n[..6].to_vec()),
                 ("Merc Colors", n[6..8].to_vec()),
@@ -4650,13 +4672,13 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
         }
         let off_text = Some(wide(vui.words.get(552, vui.language)));
-        for item in [44, TARGET_LEVEL, 70, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, 78, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
+        for item in [44, TARGET_LEVEL, 70, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
             for k in path_to(&w, item) {
                 w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
                 w.draw(&vui, &mut NullRaster, &o, &mut ups);

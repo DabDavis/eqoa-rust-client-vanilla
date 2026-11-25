@@ -13,6 +13,10 @@ is put on the page by `.github/workflows/notes.yml`.
 
 - The tiny buff icons beside your **group members' bars** now work like your own Buff Window's: hover the mouse over one to see the buff's **name** and how long it has left, and each icon shows its **time left** ("45s", "12m", "2h"), in yellow in its last minute, counting down as you play. The numbers follow **Buff Timers** under **Options → Extended → UI → HUD Extras**, as your own buffs' do. Needs a server that sends them; on one that does not, the icons show as before.
 
+## 2026-11-25 · Your debuffs under the monsters' names
+
+- On a server that sends them, the debuffs, damage over time, roots and snares you (or your pet or mercenary) have on a monster now show as small icons under its name, with the time left on each while **Buff Timers** is on, so you can see when to cast them again. Only your own show, not other players'. **Options → Extended → UI → Name Plates → Debuff Icons** turns them off.
+
 ## 2026-11-25 · Typing keeps the HUD, cooldowns on spell icons, HUD layouts, mouseover casting, melee in the Stat Window
 
 - In the **PC** interface, pressing **Enter** to chat no longer hides your HUD: you now type straight into the chat box, with everything else still on screen. To go back to the old full-screen typing window, turn **Inline Keyboard Chat** off under **Options → Extended → UI → Chat**. The Controller interface is unchanged.
