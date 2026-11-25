@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Focus Target
+
+- New **Focus Target**: target a creature and press **[** (or type **/focus**) to make it your focus. A small window above your target box then shows it all the time: its name in its con colour, its health and how far away it is, while you target other things. Press **]** (or type **/focus target**) to target your focus again in one press. Handy for healers watching the tank, tanks watching a loose add, or anyone keeping an eye on a named monster.
+- Press **[** again on the same target, or with nothing targeted, to let the focus go (or type **/focus clear**). The focus also goes by itself when the creature dies or leaves your view.
+- Both keys can be changed on the **Controls** page (**Set Focus** and **Target Focus**), and a controller button can be given to either; none is set by default. You can move the focus window like the rest of your HUD.
+
 ## 2026-11-25 · Auto Loot, Attack With Abilities, choose your tracked quests, debuffs in the target window, spell cooldowns after a fast click
 
 - New **Auto Loot** option under **Options → Extended → Other → General** (Off by default): with it on, opening a corpse takes every item on it for you, one after another, as if you had picked each one. **NO TRADE** items are left on the corpse so you never pick one up by accident, and so are Lore items you already carry and anything your pack has no room for: the loot window stays open showing what is left, for you to take or leave. A corpse it empties closes by itself. Coins come as they always do. It never takes from a raid corpse you are the master looter of. Servers that keep the game's own interface turn it off.

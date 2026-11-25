@@ -218,6 +218,8 @@ pub const ROWS: &[Row] = &[
     row("target_5", "Target: group 5", &["5"], Pad::None, ""),
     row("target_pet", "Target: {418}", &["6"], Pad::None, ""),
     row("target_target", "Assist Target", &["f"], Pad::None, "The game's Assist Target: whom the target is targeting, as the server answers."),
+    row("focus_set", "Set Focus", &["["], Pad::None, "Makes your target your focus target, shown in its own window above the target box (its name in its con colour, its health, how far it is). Again on the same target, or with no target, lets the focus go; it goes by itself when the creature dies or leaves. /focus does the same. No controller button until you give it one."),
+    row("focus_target", "Target Focus", &["]"], Pad::None, "Targets your focus target. /focus target does the same. No controller button until you give it one."),
     row("orbit_left", "Orbit left", &["home"], Pad::None, "The orbiting camera's. On the map: |x."),
     row("orbit_right", "Orbit right", &["end"], Pad::None, "The orbiting camera's."),
     row("tilt_up", "Tilt up, zoom in", &["pageup"], Pad::None, "On the map: zoom in."),
@@ -1822,6 +1824,24 @@ mod tests {
         assert_eq!(with_macro.alias("1"), Alias::Macro);
     }
     use super::*;
+
+    /// Set Focus and Target Focus (petition 3038) are on `[` and `]` by
+    /// default, with no controller button; moved to another key they are kept
+    /// in `keys.opt` and their own keys do nothing; a button given to one
+    /// presses its key. The control: the defaults are themselves.
+    #[test]
+    fn the_focus_rows_move_and_are_kept() {
+        let (set, tgt) = (row_named("focus_set").unwrap(), row_named("focus_target").unwrap());
+        let mut b = Binds::default();
+        assert_eq!((b.key(set), b.key(tgt), b.alias("[")), (Some("["), Some("]"), Alias::Same));
+        assert_eq!((b.row_button(set), b.row_button(tgt)), (None, None), "no button by default");
+        b.bind_key(set, "y");
+        let back = Binds::from_text(&b.to_text());
+        assert_eq!((back.alias("y"), back.alias("["), back.alias("]")), (Alias::To("["), Alias::Nothing, Alias::Same), "kept: {}", b.to_text());
+        b.bind_row_button(tgt, bit::L3.trailing_zeros() as u8);
+        let back = Binds::from_text(&b.to_text());
+        assert_eq!(back.row_of_button(bit::L3.trailing_zeros() as u8), Some(tgt));
+    }
 
     /// The default table is today's layout: every key the client's keyboard
     /// dispatch matches outside an edit box (read out of `viewer.rs` itself,

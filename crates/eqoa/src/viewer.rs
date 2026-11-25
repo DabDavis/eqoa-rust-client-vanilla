@@ -5222,6 +5222,17 @@ impl App {
                     p.assist_target();
                     return;
                 }
+                // [ and ]: Set Focus and Target Focus (the client's own,
+                // `focus`, Heirloom petition 3038; free in the game's
+                // keyboard table), in play and the manual camera
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.as_str() == "[" && !event.repeat => {
+                    p.focus_key();
+                    return;
+                }
+                (None, Key::Character(c)) if (p.mode == 0 || p.mode == 38) && c.as_str() == "]" && !event.repeat => {
+                    p.target_focus();
+                    return;
+                }
                 // X (88, 120): autorun (`ToggleP74`), as L3.
                 (None, Key::Character(c)) if p.mode == 0 && c.eq_ignore_ascii_case("x") => {
                     p.toggle_autorun();

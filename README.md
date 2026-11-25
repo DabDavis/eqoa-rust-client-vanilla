@@ -437,6 +437,15 @@ or a browser (each described where it lives below):
   and the six resists as Character > Summary's Details shows them (CLIENT's `CurStat`). OFF and DEF MOD
   are not in the channel, so it does not show them. A server that turns the stat caps off
   (`settings::qol::STAT_CAPS`) turns it off too.
+- **Focus Target** (Heirloom petition 3038; `focus.rs`): Set Focus (`[`, a Controls row, or `/focus`)
+  keeps the target as a second creature, the focus; again on the same target, or with no target, lets it
+  go (`/focus clear` too). Target Focus (`]`, `/focus target`) targets it with the game's 0x0010, as the
+  target cycle does: nothing new goes to a server. While a focus holds, a window above the target box
+  (`hudlayout::Piece::Focus`, moved as a piece of the HUD) shows its name in its con colour (the game's
+  `TrackTarget` colours, of the target info in force when it was set or while it is the target; white
+  with none), its health (+0x19, as the target box's gauge) and its distance. It goes when the creature
+  dies, leaves the entities (out of view, despawned, a world changed) or its id is another's. No
+  controller button by default. Not automation, so no server's QoL bit turns it off.
 - **Item Slot Icons** (petitions 2926, 2928; `hudmenu`): each item quick slot holding an item shows the
   item's own icon (`VIClient::ItemIcon`, the middle of its ITEMICON.ESF banner, `hudmenu::ART_CROP`) where
   the game shows the slot's gem or potion, on the Utility Bars and in the carousel's stack; the mouse over

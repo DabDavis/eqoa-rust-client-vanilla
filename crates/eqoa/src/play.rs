@@ -508,6 +508,8 @@ pub struct Play {
     dyepick: dyeplay::DyePlay,
     /// The Stat Window as last drawn (`statwnd`, `statplay`), for a pointer.
     stat_panel: Option<crate::statwnd::Panel>,
+    /// The focus target (`focus`, Heirloom petition 3038): none until Set Focus.
+    focus: Option<crate::focus::Focus>,
     /// Mouseover Casting (petition 2960): where the mouse is over the window
     /// (none off it) and the last frame's view and window size, so a cast
     /// can name the friend under it (`mouseover_target`).
@@ -3819,7 +3821,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None, pointer: None, pointer_view: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None, focus: None, pointer: None, pointer_view: None };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -3993,6 +3995,10 @@ impl Play {
                 Event::TargetInfo { disposition, b, title, guild, .. } => {
                     self.target_info = Some(disposition);
                     self.rings.con = Some(b);
+                    // the focus's con, while it is the target (`focus`)
+                    if let Some(f) = self.focus.as_mut().filter(|f| f.id == self.target) {
+                        f.con = Some(b);
+                    }
                     self.target_title = title;
                     self.target_guild = guild;
                 }
@@ -4704,6 +4710,7 @@ impl Play {
         // Options > Interface's Profanity Filter, to a server that asks (0x7E60)
         self.session.agree_profanity_filter(crate::settings::profanity_filter().wire());
         self.drop_dead_target_info();
+        self.drop_lost_focus();
         self.drop_stale_mob_info(now);
         if self.has_self() {
             self.auto_attack_tick(walker, now);
@@ -7101,6 +7108,8 @@ impl Play {
             "/dps" => self.dps_command(&rest),
             // the Stat Window's (`statwnd`, petition 2925), the client's own
             "/stats" => self.stats_command(&rest),
+            // the focus target's (`focus`, Heirloom petition 3038), the client's own
+            "/focus" => self.focus_command(&rest),
             // a local look at the regional weather (`weather_zones`), never sent
             "/weatherpreview" => self.weather_preview_command(&rest),
             // the chat tabs' (`chat`, ticket 1951), the client's own
@@ -11276,6 +11285,14 @@ impl Play {
                 self.stat_panel = Some(crate::statwnd::draw(&mut r, &facts, crate::statwnd::TITLE, &word));
                 crate::hudlayout::end(r.ui, m);
             }
+            // the focus target's window (`focus`, petition 3038), while one holds
+            if crate::influence::shown(self.mode)
+                && let Some(f) = self.focus_shown()
+            {
+                let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Focus);
+                crate::focus::draw(&mut r, &f);
+                crate::hudlayout::end(r.ui, m);
+            }
             r.ui.anchor = Anchor::Right;
             r.ui.vertical = Vertical::Bottom;
             let in_play = matches!(self.mode, 0 | 33);
@@ -12106,6 +12123,69 @@ impl Play {
             let_go(s, p);
             *p = None;
         }
+    }
+
+    /// Set Focus (`focus`, Heirloom petition 3038: `[`, `/focus`): the target,
+    /// a creature, the focus, its con with it while its target info is in;
+    /// the focus's own target again, or no target, lets it go. Said in chat.
+    pub fn focus_key(&mut self) {
+        let target = self.entities.slots.iter().flatten().find(|e| e.id == self.target && self.target != u32::MAX);
+        let cand = target.and_then(|e| e.creature.as_ref().map(|c| crate::focus::Candidate { id: e.id, name: c.name.as_str(), alive: e.p19 != 0 }));
+        let con = self.target_info.and(self.rings.con);
+        let line = match crate::focus::press(&mut self.focus, cand, con) {
+            crate::focus::Pressed::Set(name) => format!("Focus target: {name}."),
+            crate::focus::Pressed::Cleared => "Focus target cleared.".to_string(),
+            crate::focus::Pressed::NoTarget => "You have no target to focus.".to_string(),
+            crate::focus::Pressed::Dead(name) => format!("{name} is dead: no focus taken."),
+        };
+        self.add_chat(line, [1.0; 4]);
+    }
+
+    /// Target Focus (`focus`: `]`, `/focus target`): the focus targeted as the
+    /// target cycle leaves a choice (`target_id`), the target's details asked
+    /// again; with none, said so.
+    pub fn target_focus(&mut self) {
+        match self.focus.as_ref().map(|f| f.id) {
+            Some(id) if id == self.target => {}
+            Some(id) => self.target_id(id),
+            None => self.add_chat("You have no focus target.".to_string(), [1.0; 4]),
+        }
+    }
+
+    /// `/focus` (`focus::command`).
+    fn focus_command(&mut self, rest: &str) {
+        use crate::focus::Command;
+        match crate::focus::command(rest) {
+            Command::Press => self.focus_key(),
+            Command::Target => self.target_focus(),
+            Command::Clear => {
+                let line = if self.focus.take().is_some() { "Focus target cleared." } else { "You have no focus target." };
+                self.add_chat(line.to_string(), [1.0; 4]);
+            }
+            Command::Help => self.add_chat(crate::focus::HELP.to_string(), [1.0; 4]),
+        }
+    }
+
+    /// The focus let go once its creature is (`focus::holds`): out of the
+    /// entities, dead, in another world, or its id another's.
+    fn drop_lost_focus(&mut self) {
+        let Some(f) = self.focus.as_ref() else { return };
+        let e = self.entities.slots.iter().flatten().find(|e| e.id == f.id).and_then(|e| e.creature.as_ref().map(|c| (c.name.as_str(), e.p19, e.world as i64)));
+        if !crate::focus::holds(f, e, self.player.world) {
+            self.focus = None;
+        }
+    }
+
+    /// The focus window's facts (`focus::Shown`), while a focus holds: its
+    /// distance from the player's own place as drawn.
+    fn focus_shown(&self) -> Option<crate::focus::Shown> {
+        let f = self.focus.as_ref()?;
+        let e = self.entities.slots.iter().flatten().find(|e| e.id == f.id)?;
+        let distance = self.self_at.map(|(me, _)| {
+            let d = [e.actor_pos[0] - me[0], e.actor_pos[1] - me[1], e.actor_pos[2] - me[2]];
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+        });
+        Some(crate::focus::Shown { name: f.name.clone(), con: f.con, hp: e.p19, distance })
     }
 
     fn drop_dead_target_info(&mut self) {
@@ -15894,6 +15974,59 @@ mod commands {
         assert_eq!((p.target, p.auto_attack), (0x300, true));
         p.msg_007b(u32::MAX);
         assert_eq!((p.target, last_line(&p)), (0x300, "(word 838)"));
+    }
+
+    /// Focus Target (`focus`, Heirloom petition 3038): Set Focus takes the
+    /// target with its con, Target Focus targets it again, the window shows
+    /// its name, health and distance; it goes when its creature dies or
+    /// leaves, and `/focus clear` lets it go. The controls: no target is no
+    /// focus, and a living focus in view is kept.
+    #[test]
+    fn a_focus_is_set_targeted_and_let_go_with_its_creature() {
+        let mut p = play();
+        let world = p.player.world as i8;
+        let gnoll = |hp| net::entity::Entity { id: 0x500, kind: 130, p19: hp, world, actor_pos: [3.0, 0.0, 4.0], creature: Some(net::entity::Creature { name: "a gnoll".into(), ..Default::default() }), ..Default::default() };
+        p.entities.slots[4] = Some(gnoll(200));
+        p.focus_key();
+        assert_eq!((p.focus.is_none(), last_line(&p)), (true, "You have no target to focus."));
+        p.target = 0x500;
+        p.target_info = Some(1);
+        p.rings.con = Some(0);
+        p.focus_key();
+        assert_eq!(p.focus, Some(crate::focus::Focus { id: 0x500, name: "a gnoll".into(), con: Some(0) }));
+        assert_eq!(last_line(&p), "Focus target: a gnoll.");
+        p.self_at = Some(([0.0; 3], None));
+        let shown = p.focus_shown().expect("the window while a focus holds");
+        assert_eq!((shown.hp, shown.distance, shown.con), (200, Some(5.0), Some(0)));
+        // another target, then Target Focus brings the focus back
+        p.target_id(0x600);
+        p.target_focus();
+        assert_eq!(p.target, 0x500);
+        p.drop_lost_focus();
+        assert!(p.focus.is_some(), "the control: alive and in view, kept");
+        // dead: gone
+        p.entities.slots[4] = Some(gnoll(0));
+        p.drop_lost_focus();
+        assert_eq!((p.focus.is_none(), p.focus_shown()), (true, None));
+        // set again, then out of view: gone, and Target Focus says so
+        p.entities.slots[4] = Some(gnoll(200));
+        p.focus_key();
+        assert!(p.focus.is_some());
+        p.entities.slots[4] = None;
+        p.drop_lost_focus();
+        assert!(p.focus.is_none(), "despawned or out of view");
+        p.target_focus();
+        assert_eq!(last_line(&p), "You have no focus target.");
+        // the same target twice lets it go; /focus clear too
+        p.entities.slots[4] = Some(gnoll(200));
+        p.target = 0x500;
+        p.focus_key();
+        p.focus_key();
+        assert_eq!((p.focus.is_none(), last_line(&p)), (true, "Focus target cleared."));
+        p.chat_line("/focus");
+        assert!(p.focus.is_some(), "/focus is Set Focus");
+        p.chat_line("/focus clear");
+        assert!(p.focus.is_none());
     }
 
     /// Hide UI (`hideui`): a click on the quick menu's title bar turns to the

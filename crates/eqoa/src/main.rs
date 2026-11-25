@@ -84,6 +84,7 @@ mod icon_art;
 mod saveicon;
 mod editbox;
 mod clipboard;
+mod focus;
 mod fog;
 mod frames;
 mod group;
