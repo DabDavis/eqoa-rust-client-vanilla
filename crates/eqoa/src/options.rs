@@ -1147,7 +1147,13 @@ impl WndOptions {
                     CHAT_ROWS => slide(&mut c.chat_rows, 3, 12, 1),
                     CHAT_OPACITY => slide(&mut c.chat_opacity, 0, 100, 5),
                     CHAT_FADE_DELAY => slide(&mut c.chat_fade_seconds, 0, 120, 1),
-                    CHAT_WAKE_ON_MESSAGE => c.chat_wake_on_message = !c.chat_wake_on_message,
+                    // Wake on New Chat: Off, Active Tab, Any Tab (petition 2953)
+                    CHAT_WAKE_ON_MESSAGE => {
+                        let at = if !c.chat_wake_on_message { 0 } else if c.chat_wake_any_tab { 2 } else { 1 };
+                        let next = (at + d.signum()).rem_euclid(3);
+                        c.chat_wake_on_message = next != 0;
+                        c.chat_wake_any_tab = next == 2;
+                    }
                     SPELL_BAR_SIZE => {
                         let piece = crate::hudlayout::Piece::SpellBars;
                         let old = crate::hudlayout::piece_scale_percent(piece);
@@ -1860,7 +1866,7 @@ impl WndOptions {
             Note::Links => match self.item {
                 73 => self.links_note.clone(),
                 CHAT_FADE_DELAY => Some("Off: no fade; otherwise fades after inactivity".to_string()),
-                CHAT_WAKE_ON_MESSAGE => Some("New messages also wake their chat pane".to_string()),
+                CHAT_WAKE_ON_MESSAGE => Some(if crate::settings::client().chat_wake_any_tab { "A line for any tab wakes the chat" } else { "A line for the tab shown wakes its pane" }.to_string()),
                 _ => None,
             },
             Note::TouchLayout => match self.item {
@@ -2493,7 +2499,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         73 => on_off(c.item_links),
         89 => on_off(c.chat_always),
         CHAT_FADE_DELAY => if c.chat_fade_seconds == 0 { wide("Off") } else { wide(&format!("{} s", c.chat_fade_seconds)) },
-        CHAT_WAKE_ON_MESSAGE => on_off(c.chat_wake_on_message),
+        CHAT_WAKE_ON_MESSAGE => wide(if !c.chat_wake_on_message { "Off" } else if c.chat_wake_any_tab { "Any Tab" } else { "Active Tab" }),
         INLINE_CHAT => on_off(c.inline_chat),
         PETS_PASS => on_off(c.pets_pass),
         SHARED_SHORTCUTS => on_off(c.shared_shortcuts),

@@ -782,6 +782,7 @@ pub struct WndChat {
     last_activity: Option<u32>,
     hovered: bool,
     wake_on_message: bool,
+    wake_any_tab: bool,
     /// PC mode: the tab strip sits against the painted frame. Controller mode
     /// keeps its tabs where they were (`draw_tabs`).
     pub pc_tabs: bool,
@@ -804,7 +805,7 @@ impl WndChat {
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
         let size = ChatSize::ORIGINAL;
-        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, history_held: false, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, arrived: 0, down_gap: f32::INFINITY, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None, last_activity: None, hovered: false, wake_on_message: false, pc_tabs: false }
+        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, history_held: false, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, arrived: 0, down_gap: f32::INFINITY, link_hits: Vec::new(), show_links: true, walk: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None, last_activity: None, hovered: false, wake_on_message: false, wake_any_tab: false, pc_tabs: false }
     }
 
     /// A pointer action or active interaction restores this pane without
@@ -814,6 +815,8 @@ impl WndChat {
     /// Set once per frame before routing incoming messages, rather than
     /// consulting settings separately for every line in a busy channel.
     pub fn set_wake_on_message(&mut self, on: bool) { self.wake_on_message = on; }
+    /// Wake on New Chat's Any Tab: a line for a tab not shown wakes Main too.
+    pub fn set_wake_any_tab(&mut self, on: bool) { self.wake_any_tab = on; }
 
     /// Hover includes the pane's tab and detach/dock controls, even when its
     /// quads are fully transparent; hit testing is never removed by fading.
@@ -896,7 +899,9 @@ impl WndChat {
             self.text.add_text_linked(&wide, c, now, width, links);
             if self.scroll == 1 { self.arrived += (self.text.seq - seq) as usize; }
         } else {
-            if self.wake_on_message { self.activity(now); }
+            // a tab not shown is marked unread; only Any Tab wakes Main for
+            // it (Heirloom petition 2953)
+            if self.wake_on_message && self.wake_any_tab { self.activity(now); }
             let ring = self.tabs.parked[t].get_or_insert_with(|| ChatText::new(self.size.wrap_width()));
             ring.add_text_linked(&wide, c, now, width, links);
             self.tabs.unread[t] = true;
@@ -2132,7 +2137,14 @@ mod tests {
         assert_eq!(c.fade_alpha(7000, 5, true, false), 0.0, "other pane remains faded");
         assert_eq!(c.pane_mut(1).unwrap().fade_alpha(7000, 5, true, false), 1.0, "routed message restores its pane");
         c.add_line("You hit a target for 10 damage.", [1.0; 4], 7000, width, &[]);
-        assert_eq!(c.fade_alpha(7000, 5, true, false), 1.0, "opt-in parked-tab activity restores Main");
+        assert_eq!(c.fade_alpha(7000, 5, true, false), 0.0, "a tab not shown does not wake Main (petition 2953)");
+        assert!(c.tabs.unread[2], "it is marked unread");
+        c.add_line("Bob says, 'hi'", [1.0; 4], 7000, width, &[]);
+        assert_eq!(c.fade_alpha(7000, 5, true, false), 1.0, "a line for the tab shown wakes it");
+        c.activity(1000);
+        c.set_wake_any_tab(true);
+        c.add_line("You hit a target for 10 damage.", [1.0; 4], 7000, width, &[]);
+        assert_eq!(c.fade_alpha(7000, 5, true, false), 1.0, "Any Tab: parked-tab activity restores Main");
         let pane = c.pane_mut(1).unwrap();
         pane.draw(&vui(), &mut Rows, 7000, 0.1);
         pane.draw_pane_control(&vui(), &mut Rows, true);

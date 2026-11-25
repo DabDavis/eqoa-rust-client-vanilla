@@ -1169,6 +1169,11 @@ pub struct ClientOptions {
     pub chat_fade_seconds: u8,
     /// Let newly received chat wake its PC pane; otherwise only interaction does.
     pub chat_wake_on_message: bool,
+    /// Wake on New Chat's Any Tab (Heirloom petition 2953: "chat 'wakes up'
+    /// when any tab gets a new entry ... Make it wake only when the active
+    /// tab gets a new entry"): off, a line for a tab not shown marks the tab
+    /// and wakes nothing; on, it wakes Main as it did before.
+    pub chat_wake_any_tab: bool,
     /// Inline Keyboard Chat: on a computer Enter types into the chat box
     /// itself, the HUD kept (on by default since Heirloom petition 2943: "if
     /// I press Enter most of my UI disappears. I am in the PC mode"); off,
@@ -1664,6 +1669,7 @@ impl Default for ClientOptions {
             chat_opacity: 75,
             chat_fade_seconds: 0,
             chat_wake_on_message: false,
+            chat_wake_any_tab: false,
             inline_chat: true,
             r2_channels: false,
             stacked_bars: false,
@@ -1877,6 +1883,7 @@ impl ClientOptions {
             s.push_str(&format!("chat_fade_seconds={}\n", self.chat_fade_seconds));
         }
         if self.chat_wake_on_message { s.push_str("chat_wake_on_message=on\n"); }
+        if self.chat_wake_any_tab { s.push_str("chat_wake_any_tab=on\n"); }
         for (key, value, default) in [
             ("hud_scale", self.hud_scale, 100), ("nameplate_scale", self.nameplate_scale, 100), ("controller_hud_scale", self.controller_hud_scale, 100), ("controller_nameplate_scale", self.controller_nameplate_scale, 100),
             ("chat_width", self.chat_width, 100), ("chat_rows", self.chat_rows, 5), ("chat_opacity", self.chat_opacity, 75),
@@ -2186,6 +2193,8 @@ impl ClientOptions {
                 }
                 ("chat_wake_on_message", "on") => c.chat_wake_on_message = true,
                 ("chat_wake_on_message", "off") => c.chat_wake_on_message = false,
+                ("chat_wake_any_tab", "on") => c.chat_wake_any_tab = true,
+                ("chat_wake_any_tab", "off") => c.chat_wake_any_tab = false,
                 ("inline_chat", "on") => c.inline_chat = true,
                 ("inline_chat", "off") => c.inline_chat = false,
                 (key @ ("hud_scale" | "nameplate_scale" | "controller_hud_scale" | "controller_nameplate_scale" | "chat_width" | "chat_rows" | "chat_opacity"), v) => {
@@ -2453,7 +2462,7 @@ impl ClientOptions {
     pub(crate) fn display_ui(self) -> Self {
         if self.pc_mode { return self; }
         Self { hud_scale: self.controller_hud_scale, nameplate_scale: self.controller_nameplate_scale, chat_width: 100, chat_rows: 5,
-            chat_opacity: 75, chat_fade_seconds: 0, chat_wake_on_message: false, inline_chat: false, chat_detached: [false; crate::chat::TABS], ..self }
+            chat_opacity: 75, chat_fade_seconds: 0, chat_wake_on_message: false, chat_wake_any_tab: false, inline_chat: false, chat_detached: [false; crate::chat::TABS], ..self }
     }
 
     pub(crate) fn with_interface(self, ui: Self) -> Self {
@@ -2461,7 +2470,7 @@ impl ClientOptions {
             pc_mode: ui.pc_mode, pc_action_rows: ui.pc_action_rows, ability_bars: ui.ability_bars, stacked_bars: ui.stacked_bars,
             spell_bar_opacity: ui.spell_bar_opacity, spell_bar_layout: ui.spell_bar_layout, utility_layout: ui.utility_layout,
             hud_scale: ui.hud_scale, nameplate_scale: ui.nameplate_scale,
-            chat_always: ui.chat_always, chat_width: ui.chat_width, chat_rows: ui.chat_rows, chat_opacity: ui.chat_opacity, chat_fade_seconds: ui.chat_fade_seconds, chat_wake_on_message: ui.chat_wake_on_message,
+            chat_always: ui.chat_always, chat_width: ui.chat_width, chat_rows: ui.chat_rows, chat_opacity: ui.chat_opacity, chat_fade_seconds: ui.chat_fade_seconds, chat_wake_on_message: ui.chat_wake_on_message, chat_wake_any_tab: ui.chat_wake_any_tab,
             inline_chat: ui.inline_chat, chat_tabs: ui.chat_tabs, chat_tab_names: ui.chat_tab_names, chat_detached: ui.chat_detached,
             chat_pane_sizes: ui.chat_pane_sizes,
             health_numbers: ui.health_numbers, ..self
@@ -3684,6 +3693,11 @@ mod tests {
         assert!(default.with_interface(wake).chat_wake_on_message);
         assert!(!ClientOptions { pc_mode: false, ..wake }.display_ui().chat_wake_on_message);
         assert!(!ClientOptions::from_text("chat_wake_on_message=invalid\n").chat_wake_on_message);
+        // Any Tab (petition 2953): off by default, kept, with the PC profile
+        assert!(!default.chat_wake_any_tab && !default.to_text().contains("chat_wake_any_tab"));
+        let any = ClientOptions { chat_wake_any_tab: true, ..wake };
+        assert!(ClientOptions::from_text(&any.to_text()).chat_wake_any_tab);
+        assert!(default.with_interface(any).chat_wake_any_tab);
     }
     use super::*;
 

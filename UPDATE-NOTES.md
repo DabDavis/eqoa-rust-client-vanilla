@@ -8,6 +8,7 @@ is put on the page by `.github/workflows/notes.yml`.
 ## 2026-11-25 · Typing keeps the HUD, cooldowns on spell icons, HUD profiles, /target
 
 - In the **PC** interface, pressing **Enter** to chat no longer hides your HUD: you now type straight into the chat box, with everything else still on screen. To go back to the old full-screen typing window, turn **Inline Keyboard Chat** off under **Options → Extended → UI → Chat**. The Controller interface is unchanged.
+- **Wake on New Chat** (**Options → Extended → UI → Chat**) now wakes a faded chat box only for a line in the **tab you are looking at**: looting, experience and faction lines going to another tab just mark that tab as unread. Pick **Any Tab** on the same row to have every new line wake it, as before.
 
 ## 2026-11-24 · Buff names and timers, a Stat Window, item icons on the quick slots
 

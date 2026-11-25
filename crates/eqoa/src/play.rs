@@ -10971,6 +10971,7 @@ impl Play {
                 c.typing = self.mode == 2 && self.edit.inline_chat;
                 c.set_tabs(opts.chat_tabs, opts.chat_tab_names);
                 c.set_wake_on_message(pc && opts.chat_wake_on_message);
+                c.set_wake_any_tab(opts.chat_wake_any_tab);
                 c.pc_tabs = pc;
                 for t in 1..=crate::chat::TABS {
                     c.set_detached(t, pc && opts.chat_detached[t - 1]);
