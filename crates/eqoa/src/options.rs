@@ -479,6 +479,9 @@ pub struct WndOptions {
     /// In the world on a server that keeps no damage meter, that it keeps
     /// none (`Play::agree_dps_meter` sets it), the Combat page's legend's
     pub meter_note: Option<String>,
+    /// And on one whose meter counts damage alone (layout 1), that it does,
+    /// while DPS Meter Columns or Sort is chosen
+    pub meter_heal_note: Option<String>,
     /// In the world on a server that offers no item links, that it has none
     /// (`Play::agree_item_links` sets it), the Chat page's legend's
     pub links_note: Option<String>,
@@ -1137,6 +1140,11 @@ impl WndOptions {
                     70 => c.dps_meter = !c.dps_meter,
                     // DPS Meter Shows: the panel's view from the next frame
                     71 => c.dps_view = c.dps_view.other(),
+                    // DPS Meter Columns: round the DPS alone, with the HPS,
+                    // with the HPS and Power, from the next frame (`dpsmeter`)
+                    DPS_COLUMNS => c.dps_columns = c.dps_columns.step(d),
+                    // DPS Meter Sort: round the columns shown
+                    DPS_SORT => c.dps_sort = c.dps_sort.step(c.dps_columns, d),
                     // Item Links: the server told from the next frame
                     // (`Session::agree_item_links`), the chat box's links drawn
                     // or plain, the windows closed when off (`itemlink`)
@@ -1886,7 +1894,11 @@ impl WndOptions {
                 56 => light_note(&crate::settings::client()),
                 _ => None,
             },
-            Note::Meter => self.meter_note.clone().filter(|_| matches!(self.item, 70..=72)),
+            Note::Meter => match self.item {
+                DPS_COLUMNS | DPS_SORT => self.meter_note.clone().or_else(|| self.meter_heal_note.clone()),
+                70..=72 => self.meter_note.clone(),
+                _ => None,
+            },
             Note::Links => match self.item {
                 73 => self.links_note.clone(),
                 CHAT_FADE_DELAY => Some("Off: no fade; otherwise fades after inactivity".to_string()),
@@ -1973,7 +1985,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 122] = [
+const EXTENDED_ITEMS: [(i32, &str); 124] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -2096,6 +2108,8 @@ const EXTENDED_ITEMS: [(i32, &str); 122] = [
     (HUD_PROFILE, "HUD Layouts"),
     (MOUSEOVER_CAST, "Mouseover Casting"),
     (NPC_DEBUFFS, "Debuff Icons"),
+    (DPS_COLUMNS, "DPS Meter Columns"),
+    (DPS_SORT, "DPS Meter Sort"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2174,6 +2188,13 @@ pub(crate) const GROUP_EFFECTS: i32 = 230;
 /// debuff"). 260, not the next free (sibling lanes may take 258 onwards); the
 /// server's `qol::PET_EFFECTS` turns it off with Pet Effects.
 pub(crate) const NPC_DEBUFFS: i32 = 260;
+/// DPS Meter Columns' and DPS Meter Sort's items (Heirloom petition 3030:
+/// "DPS meter should have options to include healing per second, and if
+/// possible power provided per second"). 270 and 271, not the next free, as
+/// Debuff Icons' 260; the server's `qol::DPS_METER` turns them off with the
+/// meter.
+pub(crate) const DPS_COLUMNS: i32 = 270;
+pub(crate) const DPS_SORT: i32 = 271;
 
 const HUD_SCALE: i32 = 240;
 const NAMEPLATE_SCALE: i32 = 241;
@@ -2306,7 +2327,7 @@ const ALL_CATEGORIES: [Category; 26] = [
     Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
-    Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
+    Category { name: "DPS Meter", items: &[70, 71, DPS_COLUMNS, DPS_SORT, 72], note: Note::Meter, group: Group::Ui },
     Category { name: "Chat", items: &[73, 89, R2_CHANNELS, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY], note: Note::Links, group: Group::Ui },
     Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE], note: Note::Shortcuts, group: Group::Other },
     Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK, MOUSEOVER_CAST], note: Note::None, group: Group::Other },
@@ -2540,6 +2561,8 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         64..=69 | 80 | 81 => wide(crate::numcolor::name(c.number_colors[crate::numcolor::row_of_item(item)?])),
         70 => on_off(c.dps_meter),
         71 => wide(c.dps_view.name()),
+        DPS_COLUMNS => wide(c.dps_columns.name()),
+        DPS_SORT => wide(c.dps_sort.fit(c.dps_columns).name()),
         72 => wide("Reset"),
         76 => on_off(crate::hudlayout::unlocked()),
         MOVE_TOUCH => on_off(crate::touch::editing()),
@@ -3786,6 +3809,37 @@ mod tests {
         assert_eq!((settings::dps_view(), value_text(&vui, 71), cues.last()), (crate::dpsmeter::View::Overall, Some(wide("Overall")), Some(&11)), "Overall");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!(settings::dps_view(), crate::dpsmeter::View::Fight, "and back: two values");
+        // DPS Meter Columns (Heirloom petition 3030): the DPS alone by default,
+        // round three values; DPS Meter Sort round those the columns show
+        {
+            use crate::dpsmeter::{Columns, Metric};
+            press(&mut w, &mut o, key::DOWN, &mut cues);
+            assert_eq!((w.item, value_text(&vui, DPS_COLUMNS)), (DPS_COLUMNS, Some(wide("DPS"))), "DPS Meter Columns, the DPS alone");
+            press(&mut w, &mut o, key::DOWN, &mut cues);
+            assert_eq!((w.item, value_text(&vui, DPS_SORT)), (DPS_SORT, Some(wide("DPS"))), "DPS Meter Sort, by damage");
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!(settings::client().dps_sort, Metric::Damage, "the DPS alone: nothing else to sort by");
+            press(&mut w, &mut o, key::UP, &mut cues);
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((settings::dps_columns(), value_text(&vui, DPS_COLUMNS), cues.last()), (Columns::Hps, Some(wide("DPS + HPS")), Some(&11)));
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((settings::dps_columns(), value_text(&vui, DPS_COLUMNS)), (Columns::All, Some(wide("DPS + HPS + Power"))));
+            press(&mut w, &mut o, key::DOWN, &mut cues);
+            for want in [Metric::Healing, Metric::Power, Metric::Damage] {
+                press(&mut w, &mut o, key::RIGHT, &mut cues);
+                assert_eq!((settings::dps_sort(), value_text(&vui, DPS_SORT)), (want, Some(wide(want.name()))));
+            }
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+            assert_eq!(settings::dps_sort(), Metric::Power, "left: back round");
+            press(&mut w, &mut o, key::UP, &mut cues);
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((settings::dps_columns(), settings::dps_sort(), value_text(&vui, DPS_SORT)), (Columns::Dps, Metric::Damage, Some(wide("DPS"))), "round to the DPS alone: by damage");
+            assert_eq!(w.page_note(w.cat.unwrap()), None, "no note off a server");
+            w.meter_heal_note = Some("This server's meter counts damage alone".into());
+            assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some("This server's meter counts damage alone"), "on the columns' row");
+            w.meter_heal_note = None;
+            press(&mut w, &mut o, key::DOWN, &mut cues);
+        }
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.item, value_text(&vui, 72)), (72, Some(wide("Reset"))), "Reset DPS Meter");
         assert!(!crate::dpsmeter::take_reset(), "none asked yet");
@@ -4166,7 +4220,7 @@ mod tests {
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
                 ("Number Colors", n[..6].to_vec()),
                 ("Merc Colors", n[6..8].to_vec()),
-                ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "Reset DPS Meter"]),
+                ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "DPS Meter Columns", "DPS Meter Sort", "Reset DPS Meter"]),
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
@@ -4672,7 +4726,7 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST, DPS_COLUMNS, DPS_SORT];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");

@@ -4021,8 +4021,8 @@ impl Play {
                 // `EQOA_DPS_TRACE`: each as read, on stderr
                 Event::DpsMeter(m) => {
                     if std::env::var_os("EQOA_DPS_TRACE").is_some() {
-                        let lines: Vec<String> = m.lines.iter().map(|l| format!("{}{} {} (pet {}){}", l.name, if l.own { "*" } else { "" }, l.damage, l.pet, if l.left { " left" } else { "" })).collect();
-                        eprintln!("dps: fight {} {} {} ms, {} of {} lines (own place {}), whole {}: {}", m.fight, if m.over { "over" } else { "on" }, m.length_ms, m.lines.len(), m.count, m.place, m.total, lines.join(", "));
+                        let lines: Vec<String> = m.lines.iter().map(|l| format!("{}{} {} (pet {}) heal {} (pet {}) power {}{}", l.name, if l.own { "*" } else { "" }, l.damage, l.pet, l.heal, l.heal_pet, l.power, if l.left { " left" } else { "" })).collect();
+                        eprintln!("dps: layout {} fight {} {} {} ms, {} of {} lines (own place {}), whole {} heal {} power {}: {}", m.layout, m.fight, if m.over { "over" } else { "on" }, m.length_ms, m.lines.len(), m.count, m.place, m.total, m.heal_total, m.power_total, lines.join(", "));
                     }
                     self.meter.take(m);
                 }
@@ -11660,6 +11660,11 @@ impl Play {
         if self.options_wnd.meter_note.as_deref() != note {
             self.options_wnd.meter_note = note.map(str::to_string);
         }
+        // a meter of damage alone (layout 1): no healing or power to show
+        let heal_note = (self.session.dps_meter_offer && self.session.dps_meter_layout < 2).then_some("This server's meter counts damage alone");
+        if self.options_wnd.meter_heal_note.as_deref() != heal_note {
+            self.options_wnd.meter_heal_note = heal_note.map(str::to_string);
+        }
     }
 
     /// Whether the HUD's pieces move now (`hudlayout`): Move HUD on, in play
@@ -11763,7 +11768,8 @@ impl Play {
     /// What the DPS meter's panel shows while it is up: the DPS Meter on, a
     /// server that keeps one, the HUD's right side up (`right_hud_up`).
     fn meter_shown(&self) -> Option<crate::dpsmeter::Shown> {
-        (crate::settings::dps_meter() && self.session.dps_meter_offer && self.right_hud_up()).then(|| self.meter.shown(crate::settings::dps_view(), &self.pet_name))
+        (crate::settings::dps_meter() && self.session.dps_meter_offer && self.right_hud_up())
+            .then(|| self.meter.shown_by(crate::settings::dps_view(), &self.pet_name, crate::settings::dps_columns(), crate::settings::dps_sort()))
     }
 
     /// The meter's other view (Fight or Overall), from its list's top.
@@ -11899,7 +11905,7 @@ impl Play {
     }
 
     fn dps_command(&mut self, arg: &str) {
-        use crate::dpsmeter::{Command, View};
+        use crate::dpsmeter::{Columns, Command, Metric, View};
         let offer = self.session.dps_meter_offer;
         let cmd = crate::dpsmeter::command(arg);
         let line = match cmd {
@@ -11924,9 +11930,34 @@ impl Play {
                 self.meter.first = 0;
                 if c.dps_view == View::Fight { "The DPS meter shows the fight." } else { "The DPS meter shows every fight since the login." }
             }
+            // healing and power (Heirloom petition 3030): from a server that
+            // counts them (layout 2)
+            Command::Sort(_) | Command::Columns if self.session.dps_meter_layout < 2 => "This server's DPS meter counts damage alone.",
+            Command::Sort(m) => {
+                let mut c = crate::settings::client();
+                c.dps_columns = c.dps_columns.with(m);
+                c.dps_sort = m;
+                crate::settings::set_client(c);
+                self.meter.first = 0;
+                match m {
+                    Metric::Damage => "The DPS meter is ranked by damage.",
+                    Metric::Healing => "The DPS meter is ranked by healing.",
+                    Metric::Power => "The DPS meter is ranked by power given.",
+                }
+            }
+            Command::Columns => {
+                let mut c = crate::settings::client();
+                c.dps_columns = c.dps_columns.step(1);
+                crate::settings::set_client(c);
+                match c.dps_columns {
+                    Columns::Dps => "The DPS meter shows the DPS.",
+                    Columns::Hps => "The DPS meter shows the DPS and HPS.",
+                    Columns::All => "The DPS meter shows the DPS, HPS and power given a second.",
+                }
+            }
         };
         self.add_chat(line.to_string(), [1.0; 4]);
-        if offer && !crate::settings::dps_meter() && matches!(cmd, Command::Toggle | Command::Show(_) | Command::Reset) {
+        if offer && !crate::settings::dps_meter() && matches!(cmd, Command::Toggle | Command::Show(_) | Command::Reset | Command::Sort(_) | Command::Columns) {
             self.add_chat("The DPS meter is off: Extended > Combat, or /dps on.".to_string(), [1.0; 4]);
         }
     }
@@ -15285,6 +15316,7 @@ mod commands {
             count: 1,
             place: 1,
             lines: vec![net::session::DpsLine { own: true, class: 3, damage: 400, name: "Dab".into(), ..Default::default() }],
+            ..Default::default()
         };
         let said = |p: &Play| p.chat.back().map(|(t, _)| t.clone()).unwrap_or_default();
         // off by default: nothing asked, offer or none
@@ -15320,6 +15352,27 @@ mod commands {
         assert!(p.meter.shown(View::Overall, "").rows.is_empty());
         p.chat_line("/dps what");
         assert_eq!(said(&p), crate::dpsmeter::HELP);
+        // healing and power (Heirloom petition 3030): a server of layout 1 counts
+        // damage alone (the Combat page says so on their rows), one of layout 2
+        // is answered 2, and /dps hps, power and columns turn the panel's
+        {
+            use crate::dpsmeter::{Columns, Metric};
+            p.agree_dps_meter();
+            assert_eq!(p.options_wnd.meter_heal_note.as_deref(), Some("This server's meter counts damage alone"));
+            p.chat_line("/dps hps");
+            assert_eq!((said(&p), crate::settings::dps_columns()), ("This server's DPS meter counts damage alone.".to_string(), Columns::Dps));
+            p.session.dps_meter_layout = 2;
+            p.agree_dps_meter();
+            assert_eq!(p.options_wnd.meter_heal_note, None, "layout 2: no note");
+            p.chat_line("/dps hps");
+            assert_eq!((said(&p), crate::settings::dps_columns(), crate::settings::dps_sort()), ("The DPS meter is ranked by healing.".to_string(), Columns::Hps, Metric::Healing));
+            p.chat_line("/dps power");
+            assert_eq!((crate::settings::dps_columns(), crate::settings::dps_sort()), (Columns::All, Metric::Power), "power widens the columns");
+            p.chat_line("/dps columns");
+            assert_eq!((said(&p), crate::settings::dps_columns(), crate::settings::dps_sort()), ("The DPS meter shows the DPS.".to_string(), Columns::Dps, Metric::Damage), "round to the DPS alone: by damage");
+            p.chat_line("/dps damage");
+            assert_eq!(said(&p), "The DPS meter is ranked by damage.");
+        }
         p.chat_line("/dps off");
         assert!(!crate::settings::dps_meter());
         p.meter.take(fight(7, false));

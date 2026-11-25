@@ -23,6 +23,17 @@
 //! Extended > Combat has its rows (DPS Meter, off by default; DPS Meter Shows;
 //! Reset DPS Meter) for a controller. Off, or on a server that keeps none,
 //! nothing is drawn or asked.
+//!
+//! Healing and power (Heirloom petition 3030: "DPS meter should have options to
+//! include healing per second, and if possible power provided per second"): a
+//! server of layout 2 sends each line's healing (what its heals restored, no
+//! overhealing) and the power it gave others beside its damage. DPS Meter
+//! Columns (DPS, the default; DPS + HPS; DPS + HPS + Power) puts their rates
+//! beside the DPS in the same panel, each under its heading, and DPS Meter Sort
+//! ranks the lines, draws the bars and gives the title's whole by one of them
+//! (the heading in gold). `/dps hps`, `/dps power`, `/dps damage` sort by one
+//! (showing its column), `/dps columns` steps the columns. On a server of layout
+//! 1 the panel is the DPS alone, as before.
 
 use crate::ui::{Layout, UiRaster, wide};
 use net::session::DpsMeter;
@@ -61,6 +72,121 @@ impl View {
     }
 }
 
+/// What the lines are ranked and drawn by: damage, healing or power given.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Metric {
+    #[default]
+    Damage,
+    Healing,
+    Power,
+}
+
+impl Metric {
+    /// Its name on the Extended page, and its column's heading.
+    pub fn name(self) -> &'static str {
+        match self {
+            Metric::Damage => "DPS",
+            Metric::Healing => "HPS",
+            Metric::Power => "Power",
+        }
+    }
+
+    /// Its rate's unit after the title's whole.
+    pub fn unit(self) -> &'static str {
+        match self {
+            Metric::Damage => "DPS",
+            Metric::Healing => "HPS",
+            Metric::Power => "PPS",
+        }
+    }
+
+    /// In `client.opt`'s line.
+    pub fn key(self) -> &'static str {
+        match self {
+            Metric::Damage => "dps",
+            Metric::Healing => "hps",
+            Metric::Power => "power",
+        }
+    }
+
+    /// This, or DPS when `columns` do not show it.
+    pub fn fit(self, columns: Columns) -> Metric {
+        if columns.has(self) { self } else { Metric::Damage }
+    }
+
+    /// The next (`d` > 0) or the one before among those `columns` show, round.
+    pub fn step(self, columns: Columns, d: i32) -> Metric {
+        let all = [Metric::Damage, Metric::Healing, Metric::Power];
+        let shown: Vec<Metric> = all.into_iter().filter(|m| columns.has(*m)).collect();
+        let at = shown.iter().position(|m| *m == self.fit(columns)).unwrap_or(0) as i32;
+        shown[(at + d.signum()).rem_euclid(shown.len() as i32) as usize]
+    }
+}
+
+/// The rates a row shows: the DPS alone (as the meter was), with the HPS, or
+/// with the HPS and the power given a second.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Columns {
+    #[default]
+    Dps,
+    Hps,
+    All,
+}
+
+impl Columns {
+    /// Its name on the Extended page.
+    pub fn name(self) -> &'static str {
+        match self {
+            Columns::Dps => "DPS",
+            Columns::Hps => "DPS + HPS",
+            Columns::All => "DPS + HPS + Power",
+        }
+    }
+
+    /// In `client.opt`'s line.
+    pub fn key(self) -> &'static str {
+        match self {
+            Columns::Dps => "dps",
+            Columns::Hps => "hps",
+            Columns::All => "all",
+        }
+    }
+
+    /// Whether a row shows `m`'s rate.
+    pub fn has(self, m: Metric) -> bool {
+        match m {
+            Metric::Damage => true,
+            Metric::Healing => self != Columns::Dps,
+            Metric::Power => self == Columns::All,
+        }
+    }
+
+    /// The fewest columns that show `m` and all these do.
+    pub fn with(self, m: Metric) -> Columns {
+        match m {
+            _ if self.has(m) => self,
+            Metric::Power => Columns::All,
+            _ => Columns::Hps,
+        }
+    }
+
+    /// The next (`d` > 0) or the one before, round.
+    pub fn step(self, d: i32) -> Columns {
+        let all = [Columns::Dps, Columns::Hps, Columns::All];
+        let at = all.iter().position(|c| *c == self).unwrap_or(0) as i32;
+        all[(at + d.signum()).rem_euclid(3) as usize]
+    }
+
+    /// The metrics shown, in the columns' order from the left.
+    pub fn metrics(self) -> &'static [Metric] {
+        match self {
+            Columns::Dps => &[Metric::Damage],
+            Columns::Hps => &[Metric::Damage, Metric::Healing],
+            Columns::All => &[Metric::Damage, Metric::Healing, Metric::Power],
+        }
+    }
+}
+
 /// One line as the panel draws it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Row {
@@ -79,6 +205,42 @@ pub struct Row {
     pub own: bool,
     /// No longer in the player's group (it did damage in this fight and left).
     pub left: bool,
+    /// Its healing (what its heals restored), its pet's and merc's share of
+    /// that, and the power it gave others; each over the fight's length.
+    pub heal: u64,
+    pub heal_pet: u64,
+    pub power: u64,
+    pub hps: f64,
+    pub pps: f64,
+}
+
+impl Row {
+    /// Its figure of `m`.
+    pub fn of(&self, m: Metric) -> u64 {
+        match m {
+            Metric::Damage => self.damage,
+            Metric::Healing => self.heal,
+            Metric::Power => self.power,
+        }
+    }
+
+    /// Its rate of `m`.
+    pub fn rate_of(&self, m: Metric) -> f64 {
+        match m {
+            Metric::Damage => self.dps,
+            Metric::Healing => self.hps,
+            Metric::Power => self.pps,
+        }
+    }
+
+    /// Its pet's (and merc's) part of its figure of `m`.
+    fn pet_of(&self, m: Metric) -> u64 {
+        match m {
+            Metric::Damage => self.pet,
+            Metric::Healing => self.heal_pet,
+            Metric::Power => 0,
+        }
+    }
 }
 
 /// What the panel shows.
@@ -93,10 +255,16 @@ pub struct Shown {
     pub dps: f64,
     pub rows: Vec<Row>,
     /// The player's pet's part of its own line, when it has one: its name,
-    /// damage, DPS and share.
+    /// its figure of `sort`, that a second and its share.
     pub pet: Option<(String, u64, f64, f64)>,
+    /// And its rates of each metric (its power none).
+    pub pet_rates: [f64; 3],
     /// The panel's first item showing (`Meter::first`).
     pub first: usize,
+    /// The rates each row shows, and what they are ranked by: the DPS alone
+    /// from a server that counts no healing (layout 1).
+    pub columns: Columns,
+    pub sort: Metric,
 }
 
 /// A name's sums over the fights counted (Overall).
@@ -104,8 +272,23 @@ pub struct Shown {
 struct Total {
     damage: u64,
     pet: u64,
+    heal: u64,
+    heal_pet: u64,
+    power: u64,
     class: u8,
     own: bool,
+}
+
+impl Total {
+    fn add(&mut self, l: &net::session::DpsLine) {
+        self.damage += l.damage as u64;
+        self.pet += l.pet as u64;
+        self.heal += l.heal as u64;
+        self.heal_pet += l.heal_pet as u64;
+        self.power += l.power as u64;
+        self.class = l.class;
+        self.own |= l.own;
+    }
 }
 
 /// The meter's fights: the one the server last sent, a reset's fight (its
@@ -121,6 +304,8 @@ pub struct Meter {
     /// The panel's first item showing (the wheel's and a click's), back to
     /// the top at each new fight.
     pub first: usize,
+    /// A fight came in layout 2 (healing and power): the columns can show.
+    heals: bool,
 }
 
 /// The least length a DPS is taken over: a fight of one hit is a second's.
@@ -136,6 +321,7 @@ impl Meter {
         if Some(m.fight) == self.dropped {
             return;
         }
+        self.heals |= m.layout >= 2;
         if let Some(cur) = self.fight.take() {
             if cur.fight != m.fight {
                 self.first = 0;
@@ -153,11 +339,7 @@ impl Meter {
     /// `m` summed into Overall.
     fn count(&mut self, m: &DpsMeter) {
         for l in &m.lines {
-            let t = self.overall.entry(l.name.clone()).or_default();
-            t.damage += l.damage as u64;
-            t.pet += l.pet as u64;
-            t.class = l.class;
-            t.own |= l.own;
+            self.overall.entry(l.name.clone()).or_default().add(l);
         }
         self.overall_ms += (m.length_ms as u64).max(LEAST_MS);
         self.counted = Some(m.fight);
@@ -168,7 +350,7 @@ impl Meter {
     /// (`Session::reset_dps_meter`).
     pub fn reset(&mut self) {
         let live = self.fight.as_ref().filter(|f| !f.over).map(|f| f.fight);
-        *self = Meter { dropped: live.or(self.dropped), ..Meter::default() };
+        *self = Meter { dropped: live.or(self.dropped), heals: self.heals, ..Meter::default() };
     }
 
     /// Whether a fight is under way.
@@ -177,15 +359,34 @@ impl Meter {
     }
 
     /// What the panel shows of `view`, the player's pet named `pet_name`
-    /// (its own name, "Pet" when it has none).
+    /// (its own name, "Pet" when it has none): the DPS alone, ranked by damage.
     pub fn shown(&self, view: View, pet_name: &str) -> Shown {
-        let (title, ms, mut rows, count_place) = match view {
+        self.shown_by(view, pet_name, Columns::Dps, Metric::Damage)
+    }
+
+    /// What the panel shows of `view` with `columns`, its lines ranked by
+    /// `sort` (one the columns show, else damage); the DPS alone, by damage,
+    /// until a fight came with healing and power (layout 2).
+    pub fn shown_by(&self, view: View, pet_name: &str, columns: Columns, sort: Metric) -> Shown {
+        let columns = if self.heals { columns } else { Columns::Dps };
+        let sort = sort.fit(columns);
+        // the lines (name, their sums, own, left), the fight's whole of each
+        // metric and the player's own place by each, as the server sent them
+        type Line = (String, Total, bool);
+        let (title, ms, mut lines, sent): (String, u64, Vec<Line>, Option<([u64; 3], [usize; 3])>) = match view {
             View::Fight => match &self.fight {
                 None => ("DPS Meter".to_string(), 0, Vec::new(), None),
                 Some(f) => {
-                    let rows = f.lines.iter().map(|l| (l.name.clone(), l.class, l.damage as u64, l.pet as u64, l.own, l.left)).collect();
+                    let mut lines = Vec::with_capacity(f.lines.len());
+                    for l in &f.lines {
+                        let mut t = Total::default();
+                        t.add(l);
+                        lines.push((l.name.clone(), t, l.left));
+                    }
                     let title = if f.over { "Last Fight" } else { "Fight" };
-                    (title.to_string(), f.length_ms as u64, rows, Some((f.total as u64, f.place as usize, f.lines.len())))
+                    let wholes = [f.total as u64, f.heal_total as u64, f.power_total as u64];
+                    let places = [f.place as usize, f.heal_place as usize, f.power_place as usize];
+                    (title.to_string(), f.length_ms as u64, lines, Some((wholes, places)))
                 }
             },
             View::Overall => {
@@ -194,49 +395,85 @@ impl Meter {
                 // the fight under way, not yet summed
                 if let Some(f) = self.fight.as_ref().filter(|f| self.counted != Some(f.fight)) {
                     for l in &f.lines {
-                        let t = sums.entry(l.name.clone()).or_default();
-                        t.damage += l.damage as u64;
-                        t.pet += l.pet as u64;
-                        t.class = l.class;
-                        t.own |= l.own;
+                        sums.entry(l.name.clone()).or_default().add(l);
                     }
                     ms += (f.length_ms as u64).max(LEAST_MS);
                 }
-                let mut rows: Vec<_> = sums.into_iter().map(|(name, t)| (name, t.class, t.damage, t.pet, t.own, false)).collect();
-                rows.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
-                let title = if rows.is_empty() { "DPS Meter" } else { "Overall" };
-                (title.to_string(), if rows.is_empty() { 0 } else { ms }, rows, None)
+                let mut lines: Vec<Line> = sums.into_iter().map(|(name, t)| (name, t, false)).collect();
+                lines.sort_by(|a, b| b.1.damage.cmp(&a.1.damage).then_with(|| a.0.cmp(&b.0)));
+                let title = if lines.is_empty() { "DPS Meter" } else { "Overall" };
+                (title.to_string(), if lines.is_empty() { 0 } else { ms }, lines, None)
             }
         };
+        let figure = |t: &Total, m: Metric| match m {
+            Metric::Damage => t.damage,
+            Metric::Healing => t.heal,
+            Metric::Power => t.power,
+        };
+        // ranked by the sort's figure, the server's order (damage) among equals
+        if sort != Metric::Damage {
+            lines.sort_by(|a, b| figure(&b.1, sort).cmp(&figure(&a.1, sort)));
+        }
+        let mi = sort as usize;
         let secs_div = ms.max(LEAST_MS) as f64 / 1000.0;
-        let (total, place, sent) = count_place.unwrap_or_else(|| (rows.iter().map(|r| r.2).sum(), 0, rows.len()));
-        let top = rows.first().map_or(0, |r| r.2).max(1);
-        let mut out: Vec<Row> = rows
-            .drain(..)
+        let sums = |m: Metric| lines.iter().map(|l| figure(&l.1, m)).sum::<u64>();
+        let (wholes, place) = match sent {
+            Some((w, p)) => (w, p[mi]),
+            None => ([sums(Metric::Damage), sums(Metric::Healing), sums(Metric::Power)], 0),
+        };
+        let total = wholes[mi];
+        let top = lines.first().map_or(0, |l| figure(&l.1, sort)).max(1);
+        let mut out: Vec<Row> = lines
+            .into_iter()
             .enumerate()
-            .map(|(i, (name, class, damage, pet, own, left))| Row {
-                rank: i + 1,
-                name,
-                class,
-                damage,
-                pet,
-                dps: damage as f64 / secs_div,
-                share: if total > 0 { damage as f64 / total as f64 } else { 0.0 },
-                bar: (damage as f64 / top as f64).min(1.0) as f32,
-                own,
-                left,
+            .map(|(i, (name, t, left))| {
+                let v = figure(&t, sort);
+                Row {
+                    rank: i + 1,
+                    name,
+                    class: t.class,
+                    damage: t.damage,
+                    pet: t.pet,
+                    dps: t.damage as f64 / secs_div,
+                    share: if total > 0 { v as f64 / total as f64 } else { 0.0 },
+                    bar: (v as f64 / top as f64).min(1.0) as f32,
+                    own: t.own,
+                    left,
+                    heal: t.heal,
+                    heal_pet: t.heal_pet,
+                    power: t.power,
+                    hps: t.heal as f64 / secs_div,
+                    pps: t.power as f64 / secs_div,
+                }
             })
             .collect();
-        // the player's own, last of the sent past the rest: its place said
-        if place > 0 && sent > 0 && out.last().is_some_and(|r| r.own) {
-            out[sent - 1].rank = place;
+        // the player's own, past the rest sent: last, its place said
+        if let Some(o) = out.iter().position(|r| r.own)
+            && place > o + 1
+        {
+            let mut r = out.remove(o);
+            r.rank = place;
+            out.push(r);
         }
-        let pet = out.iter().find(|r| r.own && r.pet > 0).map(|r| {
+        let pet = out.iter().find(|r| r.own && (r.pet_of(sort) > 0 || columns.metrics().iter().any(|m| r.pet_of(*m) > 0))).map(|r| {
             let name = if pet_name.is_empty() { "Pet" } else { pet_name };
-            (name.to_string(), r.pet, r.pet as f64 / secs_div, if total > 0 { r.pet as f64 / total as f64 } else { 0.0 })
+            let v = r.pet_of(sort);
+            (name.to_string(), v, v as f64 / secs_div, if total > 0 { v as f64 / total as f64 } else { 0.0 })
         });
-        let whole: u64 = if view == View::Fight { total } else { out.iter().map(|r| r.damage).sum() };
-        Shown { view, title, secs: ms / 1000, dps: if out.is_empty() { 0.0 } else { whole as f64 / secs_div }, rows: out, pet, first: self.first }
+        let pet_rates = out.iter().find(|r| r.own).map_or([0.0; 3], |r| [r.pet as f64 / secs_div, r.heal_pet as f64 / secs_div, 0.0]);
+        let whole: u64 = if view == View::Fight { total } else { out.iter().map(|r| r.of(sort)).sum() };
+        Shown {
+            view,
+            title,
+            secs: ms / 1000,
+            dps: if out.is_empty() { 0.0 } else { whole as f64 / secs_div },
+            rows: out,
+            pet,
+            pet_rates,
+            first: self.first,
+            columns,
+            sort,
+        }
     }
 }
 
@@ -313,14 +550,21 @@ pub struct Panel {
     pub room: usize,
 }
 
+/// The title's height, with the columns' headings under it when there are
+/// columns besides the DPS.
+pub fn head_h(s: &Shown) -> i32 {
+    if s.columns == Columns::Dps { HEAD_H } else { HEAD_H + ROW_H }
+}
+
 /// The panel for `s` with `room` frame pixels for it above the column's bottom:
 /// as many rows as it has, `MOST_ROWS` at most, fewer to fit (one at least).
 pub fn panel(s: &Shown, room: i32) -> Panel {
     let all = items(s);
-    let fit = ((room - HEAD_H - 2) / ROW_H).max(1) as usize;
+    let head_h = head_h(s);
+    let fit = ((room - head_h - 2) / ROW_H).max(1) as usize;
     let slots = all.len().min(MOST_ROWS).min(fit);
     let shown = window(s, &all, s.first, slots);
-    let h = HEAD_H + shown.len() as i32 * ROW_H + 2;
+    let h = head_h + shown.len() as i32 * ROW_H + 2;
     let (x0, x1, bottom) = (COLUMN[0], COLUMN[2], COLUMN[3]);
     let top = bottom - h;
     let mid = (x0 + x1) / 2 + 30;
@@ -328,7 +572,7 @@ pub fn panel(s: &Shown, room: i32) -> Panel {
         rect: [x0, top, x1, bottom],
         view: [x0, top, mid, top + HEAD_H],
         reset: [x1 - 40, top, x1, top + HEAD_H],
-        rows: [x0, top + HEAD_H, x1, bottom],
+        rows: [x0, top + head_h, x1, bottom],
         shown,
         items: all.len(),
         room: all.len() - slots,
@@ -425,9 +669,11 @@ const HEAD_BACK: [f32; 4] = [0.0, 0.0, 0.0, 0.3];
 const OUTLINE: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
 
 /// What the panel draws for `s` at `p`, its words measured by `width`: the
-/// title (the view's name and the fight's length, the whole's DPS, Reset), then
-/// each row's bar and words: its place and name, its damage, DPS and share; the
-/// pet's row indented.
+/// title (the view's name and the fight's length, the whole's rate of the
+/// sort, Reset), then each row's bar and words: its place and name, its damage,
+/// DPS and share; the pet's row indented. With more columns than the DPS, the
+/// columns' headings under the title (the sort's in gold) and each row's place,
+/// name and rates alone.
 pub fn pieces(s: &Shown, p: &Panel, width: impl Fn(&str) -> f32) -> (Vec<Bar>, Vec<Text>) {
     let (mut bars, mut texts) = (Vec::new(), Vec::new());
     let x0 = p.rect[0] as f32 + 3.0;
@@ -440,14 +686,25 @@ pub fn pieces(s: &Shown, p: &Panel, width: impl Fn(&str) -> f32) -> (Vec<Bar>, V
     texts.push(Text { s: "Reset".into(), x: x1, right: true, y: ty(head) + 1.0, color: DIM });
     if !s.rows.is_empty() {
         let reset_w = width("Reset");
-        texts.push(Text { s: format!("{} DPS", rate(s.dps)), x: x1 - reset_w - 8.0, right: true, y: ty(head) + 1.0, color: WHITE });
+        texts.push(Text { s: format!("{} {}", rate(s.dps), s.sort.unit()), x: x1 - reset_w - 8.0, right: true, y: ty(head) + 1.0, color: WHITE });
     }
-    // the columns, from the right: share, DPS, damage; the name before them
+    let multi = s.columns != Columns::Dps;
+    // the columns, from the right: share, DPS, damage; the name before them.
+    // More columns: each metric's rate, the last at the right
     let share_r = x1;
     let dps_r = x1 - width("100%") - 6.0;
     let dmg_r = dps_r - width("8888.8") - 6.0;
-    let name_most = (dmg_r - width("888.8k") - 6.0) - x0;
-    let top_dmg = s.rows.first().map_or(1, |r| r.damage.max(1));
+    let metrics = s.columns.metrics();
+    let col_w = width("8888.8").max(width("Power")) + 6.0;
+    let rate_r = |k: usize| x1 - (metrics.len() - 1 - k) as f32 * col_w;
+    let name_most = if multi { rate_r(0) - col_w - x0 } else { (dmg_r - width("888.8k") - 6.0) - x0 };
+    if multi {
+        for (k, m) in metrics.iter().enumerate() {
+            texts.push(Text { s: m.name().into(), x: rate_r(k), right: true, y: ty(head + HEAD_H), color: if *m == s.sort { OWN } else { DIM } });
+        }
+    }
+    let sort = s.sort;
+    let top_v = s.rows.first().map_or(1, |r| r.of(sort).max(1));
     for (k, item) in p.shown.iter().enumerate() {
         let y = p.rows[1] + k as i32 * ROW_H;
         let (yt, yb) = (y as f32 + 1.0, (y + ROW_H) as f32 - 1.0);
@@ -461,7 +718,8 @@ pub fn pieces(s: &Shown, p: &Panel, width: impl Fn(&str) -> f32) -> (Vec<Bar>, V
                 let r = &s.rows[i];
                 let c = class_colour(r.class);
                 let w = full * r.bar;
-                let own_w = if r.damage > 0 { w * (r.damage - r.pet) as f32 / r.damage as f32 } else { 0.0 };
+                let v = r.of(sort);
+                let own_w = if v > 0 { w * (v - r.pet_of(sort).min(v)) as f32 / v as f32 } else { 0.0 };
                 if w > 0.0 {
                     bars.push(Bar { r: [x0 - 2.0, yt, x0 - 2.0 + own_w, yb], color: [c[0], c[1], c[2], 0.55] });
                     if own_w < w {
@@ -477,21 +735,34 @@ pub fn pieces(s: &Shown, p: &Panel, width: impl Fn(&str) -> f32) -> (Vec<Bar>, V
                 };
                 let name = fit(&format!("{}. {}", r.rank, r.name), name_most, &width);
                 texts.push(Text { s: name, x: x0, right: false, y: ty(y), color });
-                texts.push(Text { s: amount(r.damage), x: dmg_r, right: true, y: ty(y), color });
-                texts.push(Text { s: rate(r.dps), x: dps_r, right: true, y: ty(y), color });
-                texts.push(Text { s: percent(r.share), x: share_r, right: true, y: ty(y), color });
+                if multi {
+                    for (k, m) in metrics.iter().enumerate() {
+                        texts.push(Text { s: rate(r.rate_of(*m)), x: rate_r(k), right: true, y: ty(y), color });
+                    }
+                } else {
+                    texts.push(Text { s: amount(r.damage), x: dmg_r, right: true, y: ty(y), color });
+                    texts.push(Text { s: rate(r.dps), x: dps_r, right: true, y: ty(y), color });
+                    texts.push(Text { s: percent(r.share), x: share_r, right: true, y: ty(y), color });
+                }
             }
             Item::Pet => {
-                let Some((name, damage, dps, share)) = &s.pet else { continue };
-                let w = full * (*damage as f64 / top_dmg as f64).min(1.0) as f32;
+                let Some((name, figure, dps, share)) = &s.pet else { continue };
+                let w = full * (*figure as f64 / top_v as f64).min(1.0) as f32;
                 let c = class_colour(s.rows.iter().find(|r| r.own).map_or(255, |r| r.class));
                 if w > 0.0 {
                     bars.push(Bar { r: [x0 + 6.0, yt, x0 + 6.0 + (w - 8.0).max(0.0), yb], color: [c[0], c[1], c[2], 0.28] });
                 }
                 texts.push(Text { s: fit(name, name_most - 8.0, &width), x: x0 + 8.0, right: false, y: ty(y), color: DIM });
-                texts.push(Text { s: amount(*damage), x: dmg_r, right: true, y: ty(y), color: DIM });
-                texts.push(Text { s: rate(*dps), x: dps_r, right: true, y: ty(y), color: DIM });
-                texts.push(Text { s: percent(*share), x: share_r, right: true, y: ty(y), color: DIM });
+                if multi {
+                    for (k, m) in metrics.iter().enumerate() {
+                        let words = if *m == Metric::Power { "-".to_string() } else { rate(s.pet_rates[*m as usize]) };
+                        texts.push(Text { s: words, x: rate_r(k), right: true, y: ty(y), color: DIM });
+                    }
+                } else {
+                    texts.push(Text { s: amount(*figure), x: dmg_r, right: true, y: ty(y), color: DIM });
+                    texts.push(Text { s: rate(*dps), x: dps_r, right: true, y: ty(y), color: DIM });
+                    texts.push(Text { s: percent(*share), x: share_r, right: true, y: ty(y), color: DIM });
+                }
             }
         }
     }
@@ -565,6 +836,10 @@ pub enum Command {
     Show(View),
     Reset,
     On(bool),
+    /// ranked by a metric, its column shown
+    Sort(Metric),
+    /// the next columns
+    Columns,
     Help,
 }
 
@@ -576,12 +851,16 @@ pub fn command(arg: &str) -> Command {
         "reset" | "clear" => Command::Reset,
         "on" => Command::On(true),
         "off" => Command::On(false),
+        "dps" | "damage" => Command::Sort(Metric::Damage),
+        "hps" | "heal" | "healing" => Command::Sort(Metric::Healing),
+        "power" | "pps" | "mana" => Command::Sort(Metric::Power),
+        "columns" | "cols" => Command::Columns,
         _ => Command::Help,
     }
 }
 
 /// What `/dps` with no meant word says.
-pub const HELP: &str = "/dps: the DPS meter's other view; /dps fight, /dps overall, /dps reset, /dps on, /dps off";
+pub const HELP: &str = "/dps: the DPS meter's other view; /dps fight, /dps overall, /dps reset, /dps on, /dps off; /dps damage, /dps hps, /dps power (ranked by it), /dps columns";
 
 #[cfg(test)]
 mod tests {
@@ -589,13 +868,13 @@ mod tests {
     use net::session::DpsLine;
 
     fn line(name: &str, class: u8, damage: u32, pet: u32, own: bool) -> DpsLine {
-        DpsLine { own, left: false, class, damage, pet, name: name.into() }
+        DpsLine { own, left: false, class, damage, pet, name: name.into(), ..Default::default() }
     }
 
     fn fight(n: u32, over: bool, ms: u32, lines: Vec<DpsLine>) -> DpsMeter {
         let total = lines.iter().map(|l| l.damage).sum();
         let place = lines.iter().position(|l| l.own).map_or(0, |p| p as u16 + 1);
-        DpsMeter { fight: n, over, length_ms: ms, total, count: lines.len() as u16, place, lines }
+        DpsMeter { layout: 1, fight: n, over, length_ms: ms, total, count: lines.len() as u16, place, lines, ..Default::default() }
     }
 
     /// A fight's course as the panel shows it: under way, each message the
@@ -769,6 +1048,129 @@ mod tests {
             let (l, r) = if t.right { (t.x - width(&t.s), t.x) } else { (t.x, t.x + width(&t.s)) };
             assert!(l >= p.rect[0] as f32 && r <= p.rect[2] as f32, "{t:?} out of {:?}", p.rect);
         }
+    }
+
+    /// A line of layout 2: its damage, healing and power given.
+    fn line2(name: &str, class: u8, damage: u32, heal: u32, power: u32, own: bool) -> DpsLine {
+        DpsLine { own, left: false, class, damage, heal, power, name: name.into(), ..Default::default() }
+    }
+
+    fn fight2(n: u32, over: bool, ms: u32, lines: Vec<DpsLine>) -> DpsMeter {
+        let mut f = fight(n, over, ms, lines);
+        f.layout = 2;
+        f.heal_total = f.lines.iter().map(|l| l.heal).sum();
+        f.power_total = f.lines.iter().map(|l| l.power).sum();
+        let place = |of: fn(&DpsLine) -> u32| {
+            let own = f.lines.iter().find(|l| l.own).map_or(0, of);
+            f.lines.iter().filter(|l| of(l) > own).count() as u16 + 1
+        };
+        (f.heal_place, f.power_place) = (place(|l| l.heal), place(|l| l.power));
+        f
+    }
+
+    /// Healing and power (Heirloom petition 3030): ranked by healing, the
+    /// healer first, its bar the longest, its share of the healing, the
+    /// title's whole the HPS; by power the same. The DPS columns alone ranks
+    /// by damage whatever the sort (the control); a fight of layout 1 shows
+    /// the DPS alone whatever is chosen, until one of layout 2 comes.
+    #[test]
+    fn healing_and_power_rank_and_draw() {
+        let lines = vec![line2("Tank", 0, 900, 0, 0, false), line2("Dab", 9, 300, 600, 20, true), line2("Ench", 12, 100, 200, 400, false)];
+        let mut m = Meter::default();
+        m.take(fight(1, false, 2000, lines.clone()));
+        let s = m.shown_by(View::Fight, "", Columns::All, Metric::Healing);
+        assert_eq!((s.columns, s.sort), (Columns::Dps, Metric::Damage), "layout 1: the DPS alone");
+        m.take(fight2(2, false, 2000, lines));
+        let s = m.shown_by(View::Fight, "", Columns::Hps, Metric::Healing);
+        assert_eq!((s.columns, s.sort), (Columns::Hps, Metric::Healing));
+        assert_eq!(s.rows.iter().map(|r| (r.rank, r.name.as_str())).collect::<Vec<_>>(), [(1, "Dab"), (2, "Ench"), (3, "Tank")]);
+        assert_eq!((s.rows[0].hps, s.rows[0].dps, s.rows[0].bar, s.rows[1].bar), (300.0, 150.0, 1.0, 200.0 / 600.0));
+        assert!((s.rows[0].share - 0.75).abs() < 1e-9);
+        assert_eq!(s.dps, 400.0, "the title's whole: the HPS");
+        let p = m.shown_by(View::Fight, "", Columns::All, Metric::Power);
+        assert_eq!(p.rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["Ench", "Dab", "Tank"]);
+        assert_eq!((p.rows[0].pps, p.dps), (200.0, 210.0));
+        let hidden = m.shown_by(View::Fight, "", Columns::Hps, Metric::Power);
+        assert_eq!(hidden.sort, Metric::Damage, "a sort the columns do not show: damage");
+        let c = m.shown_by(View::Fight, "", Columns::Dps, Metric::Healing);
+        assert_eq!((c.sort, c.rows[0].name.as_str()), (Metric::Damage, "Tank"), "the control: the DPS alone");
+        // Overall sums the healing and power too
+        m.take(fight2(2, true, 2000, vec![line2("Dab", 9, 300, 600, 20, true)]));
+        m.take(fight2(3, false, 2000, vec![line2("Dab", 9, 0, 200, 0, true)]));
+        let o = m.shown_by(View::Overall, "", Columns::All, Metric::Healing);
+        // fights 1 (its lines carry healing, as layout 1 never does) and 2
+        // summed once each, 3 under way: 600 + 600 + 200 over 6 s
+        assert_eq!((o.rows[0].heal, o.secs), (1400, 6));
+        assert!((o.rows[0].hps - 1400.0 / 6.0).abs() < 1e-9);
+    }
+
+    /// Ranked by healing, the player's own line pinned past the lines sent
+    /// is placed by its place by healing (the server's), not by damage's.
+    #[test]
+    fn the_own_line_is_placed_by_the_sort() {
+        let mut lines: Vec<DpsLine> = (0..23).map(|i| line2(&format!("M{i:02}"), 0, 1000 - i, 500 - i, 0, false)).collect();
+        lines.push(line2("Dab", 3, 10, 5, 0, true));
+        let mut f = fight2(4, false, 1000, lines);
+        (f.count, f.place, f.heal_place) = (40, 37, 31);
+        let mut m = Meter::default();
+        m.take(f);
+        let s = m.shown_by(View::Fight, "", Columns::Hps, Metric::Healing);
+        assert_eq!((s.rows[23].own, s.rows[23].rank), (true, 31), "by healing: 31st");
+        assert_eq!(m.shown(View::Fight, "").rows[23].rank, 37, "the control: by damage, 37th");
+    }
+
+    /// More columns: their headings under the title, the sort's in gold, a
+    /// row's rates under them, every word inside the panel and the name clear
+    /// of the first rate; the pet's row with its damage's and healing's rates
+    /// and no power. The rows begin under the headings.
+    #[test]
+    fn the_columns_draw_under_their_headings() {
+        let mut lines = vec![line2("Averyveryverylongname", 9, 900, 450, 30, true), line2("Tank", 0, 1200, 0, 0, false)];
+        lines[0].pet = 300;
+        lines[0].heal_pet = 150;
+        let mut m = Meter::default();
+        m.take(fight2(1, false, 1000, lines));
+        let s = m.shown_by(View::Fight, "Spirit", Columns::All, Metric::Healing);
+        assert_eq!(s.pet, Some(("Spirit".to_string(), 150, 150.0, 1.0 / 3.0)));
+        let p = panel(&s, 300);
+        assert_eq!(p.rows[1], p.rect[1] + HEAD_H + ROW_H, "under the headings");
+        let width = |t: &str| t.len() as f32 * 6.0;
+        let (_, texts) = pieces(&s, &p, width);
+        let heads: Vec<_> = texts.iter().filter(|t| ["DPS", "HPS", "Power"].contains(&t.s.as_str())).collect();
+        assert_eq!(heads.len(), 3, "{texts:?}");
+        assert!(heads.iter().all(|t| (t.color == OWN) == (t.s == "HPS")), "the sort's heading gold: {heads:?}");
+        let name = texts.iter().find(|t| t.s.starts_with("1.")).unwrap();
+        let dps = texts.iter().find(|t| t.s == "900").unwrap();
+        assert!(name.s.ends_with("...") && name.x + width(&name.s) < dps.x - width("900"), "{name:?} {dps:?}");
+        assert!(texts.iter().any(|t| t.s == "450") && texts.iter().any(|t| t.s == "30.0"), "its HPS and power a second: {texts:?}");
+        assert!(texts.iter().any(|t| t.s == "-" && t.color == DIM), "the pet's row has no power");
+        assert!(texts.iter().any(|t| t.s == "Fight 0:01") && texts.iter().any(|t| t.s == "450 HPS"));
+        for t in &texts {
+            let (l, r) = if t.right { (t.x - width(&t.s), t.x) } else { (t.x, t.x + width(&t.s)) };
+            assert!(l >= p.rect[0] as f32 && r <= p.rect[2] as f32, "{t:?} out of {:?}", p.rect);
+        }
+        let one = panel(&m.shown(View::Fight, ""), 300);
+        assert_eq!(one.rows[1], one.rect[1] + HEAD_H, "the control: the DPS alone has no headings");
+    }
+
+    /// The sort steps round the columns shown; the columns round three; a
+    /// sort asked widens the columns to show it.
+    #[test]
+    fn the_sort_and_columns_step() {
+        assert_eq!(Metric::Damage.step(Columns::All, 1), Metric::Healing);
+        assert_eq!(Metric::Power.step(Columns::All, 1), Metric::Damage);
+        assert_eq!(Metric::Damage.step(Columns::All, -1), Metric::Power);
+        assert_eq!(Metric::Damage.step(Columns::Hps, -1), Metric::Healing);
+        assert_eq!(Metric::Healing.step(Columns::Dps, 1), Metric::Damage);
+        assert_eq!(Columns::All.step(1), Columns::Dps);
+        assert_eq!(Columns::Dps.step(-1), Columns::All);
+        assert_eq!(Columns::Dps.with(Metric::Healing), Columns::Hps);
+        assert_eq!(Columns::Hps.with(Metric::Power), Columns::All);
+        assert_eq!(Columns::All.with(Metric::Healing), Columns::All);
+        assert_eq!(command("hps"), Command::Sort(Metric::Healing));
+        assert_eq!(command("Power"), Command::Sort(Metric::Power));
+        assert_eq!(command("damage"), Command::Sort(Metric::Damage));
+        assert_eq!(command("columns"), Command::Columns);
     }
 
     /// `/dps`'s words.

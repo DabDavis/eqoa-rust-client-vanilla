@@ -1542,7 +1542,7 @@ mod tests {
         let fight = |n: u32| {
             let mut m = crate::dpsmeter::Meter::default();
             let lines = (0..n).map(|i| net::session::DpsLine { own: i == 0, class: 1, damage: 1000 - i, name: format!("N{i}"), ..Default::default() }).collect();
-            m.take(net::session::DpsMeter { fight: 1, over: false, length_ms: 5000, total: 3000, count: n as u16, place: 1, lines });
+            m.take(net::session::DpsMeter { fight: 1, over: false, length_ms: 5000, total: 3000, count: n as u16, place: 1, lines, ..Default::default() });
             m.shown(crate::dpsmeter::View::Fight, "")
         };
         // three lines: the panel 14 + 3 x 13 + 2 high on the column's bottom (336)

@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Healing and power on the DPS meter
+
+- The **DPS meter** can now show **healing per second (HPS)** and **power given per second** beside the DPS, on a server that counts them. Pick **DPS Meter Columns** under **Options → Extended → UI → DPS Meter** (**DPS**, as before; **DPS + HPS**; or **DPS + HPS + Power**), and **DPS Meter Sort** to rank the list and draw its bars by damage, healing or power. Healing counts what your heals actually restored (no overhealing), your pet's and mercenary's heals included; power counts the power you gave others (Clarity, power songs and spells, a shared power tap), not your own.
+- Or type `/dps hps`, `/dps power` or `/dps damage` to rank by one (its column shown), and `/dps columns` to step through the columns.
+
 ## 2026-11-25 · Smoother near the Freeport coach and its Christmas tree
 
 - The frame rate no longer drops near the **Freeport plaza's Christmas decorations** (the coach and the tree): their bulbs are now prepared once instead of every frame. They look the same as before.
