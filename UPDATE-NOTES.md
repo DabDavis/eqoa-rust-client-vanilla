@@ -5,6 +5,35 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · The web page starts again on older Edge and Chrome
+
+- On Edge or Chrome version 131 (and other browsers whose WebGPU is that age), the page stopped with "Cannot read properties of undefined (reading 'description')" as the game loaded. It now starts and plays; updating the browser is no longer needed for it.
+
+## 2026-11-25 · Wing beats stop with their creature
+
+- A flying creature's wing beat (bats, the winged fiends, the forest qex and others) no longer keeps flapping in your ears after the creature is gone: it stops when the creature leaves, when you port, coach or zone away, and when it flies out of earshot.
+
+## 2026-11-25 · Damage Taken colour, your own name plate, coach talk, minimap colours, faster sidestep
+
+- **Options → Extended → UI → Number Colors** has a new row, **Damage Taken**: the colour of the numbers when a creature (or anyone else) hits you. Default keeps the game's yellow.
+- **Options → Extended → UI → Name Plates → Own Name Plate**: turn it on to see your own name over your character, drawn like everyone else's. Off by default.
+- **Options → Extended → Other → Movement → Coach Talk on Arrival** (off by default): when a coach sets you down, you talk to the coachman there at once, his travel list open.
+- **Options → Extended → UI → Minimap Colors**: friendly NPCs' squares on the minimap are coloured by what they do: spell merchants, smiths, merchants, bankers, trainers, coachmen and quest givers, each with its own colour you can change (Default keeps the old colour). **Spell Merchants Shown → My Class** colours only the spell merchants who sell your class's spells. With a mouse, point at a square to see the NPC's name and what they do.
+- **Options → Extended → Other → Movement → Strafe Speed**: **Match Forward** makes sidestepping as fast as running forward. **Retail** (the default) keeps the game's slow sidestep.
+
+## 2026-11-25 · Untracked quests stay readable, flight sticks no longer turn you
+
+- A quest you take off the quest tracker now stays plainly listed in the **Quest Journal**, in dark grey: the light grey it was drawn in before matched the journal's background, so the quest looked gone.
+- A controller axis that sits off its middle from the moment it connects (a flight stick's throttle or slider, a wheel's pedal) no longer turns or moves your character on its own: it is ignored until you bring it back to its middle once. Ordinary gamepads work as before.
+
+## 2026-11-25 · Optional FPS display
+
+- The browser client hides its FPS counter by default. Toggle **Show FPS** under **Options → Extended → Graphics → Video** and choose **Save Changes** to keep your choice.
+
+## 2026-11-25 · Controller chat on touch browsers
+
+- Opening chat with a physical controller on a touch browser shows EQOA’s letter grid. Use the D-pad to move, ✕ to pick a letter, and R2 to send. Tap the chat box to use your device’s keyboard.
+
 ## 2026-11-25 · Healing and power on the DPS meter
 
 - The **DPS meter** can now show **healing per second (HPS)** and **power given per second** beside the DPS, on a server that counts them. Pick **DPS Meter Columns** under **Options → Extended → UI → DPS Meter** (**DPS**, as before; **DPS + HPS**; or **DPS + HPS + Power**), and **DPS Meter Sort** to rank the list and draw its bars by damage, healing or power. Healing counts what your heals actually restored (no overhealing), your pet's and mercenary's heals included; power counts the power you gave others (Clarity, power songs and spells, a shared power tap), not your own.

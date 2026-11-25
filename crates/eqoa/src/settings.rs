@@ -1012,6 +1012,8 @@ pub struct ClientOptions {
     /// Frame Rate as chosen; `None` until it is, the platform's
     /// (`set_platform_rate`: 30 on a page's WebGL2, else the display's)
     pub frame_rate: Option<FrameRate>,
+    /// Show FPS in the browser client's status line.
+    pub show_fps: bool,
     /// Camera Distance: the follow orbit's ceiling, and the Follow camera's
     /// (the game options' 3rd Person Camera: Follow, petition 2909),
     /// `CAMERA_MIN` to `CAMERA_MAX`
@@ -1257,6 +1259,29 @@ pub struct ClientOptions {
     /// rows with the last lines in it, never sliding away (`chat::WndChat::
     /// always`). Off by default, the game's box.
     pub chat_always: bool,
+    /// Own Name Plate (Heirloom petition 3081: "see my own nameplate as an
+    /// on/off option"): the player's name over its own character, drawn as
+    /// the others' plates are (`Play::plates`). Off by default: the game
+    /// draws none.
+    pub own_plate: bool,
+    /// Coach Talk on Arrival (Heirloom petition 3091): set down by a coach,
+    /// the player talks to the coachman there at once, his menu open
+    /// (`Play::coach_talk_frame`). Off by default; the server's
+    /// `qol::AUTO_CAST` (the client's automation) turns it off.
+    pub coach_talk: bool,
+    /// Strafe Speed (Live petition 5633: "a way to increase strafe speed? It
+    /// is super slow"): Retail, the game's sidestep at the walk's pace unless
+    /// running forward too; Match Forward (true), a sidestep at the pace
+    /// forward would go (`walker::move_stick_matched`). Off by default; the
+    /// server's `qol::AUTO_CAST` turns it off with the automation.
+    pub strafe_match: bool,
+    /// Minimap Colors (Heirloom petition 3092, `minimapcolor`): each role's
+    /// square colour, `numcolor::PALETTE`'s place from 1, 0 the name's
+    /// colour; `minimapcolor::DEFAULTS` until chosen.
+    pub minimap_colors: [crate::numcolor::Choice; crate::minimapcolor::ROLES],
+    /// Spell Merchants Shown: All (false) or My Class (true), the others'
+    /// squares the Merchants' colour.
+    pub minimap_spells_mine: bool,
     /// Interface sizes and chat background opacity, in percent of the original
     /// sizes and of full opacity. Chat height is a count of visible rows.
     pub hud_scale: u8,
@@ -1745,6 +1770,7 @@ impl Default for ClientOptions {
             brightness: BRIGHTNESS_AS_DRAWN,
             fog: crate::fog::GAME,
             frame_rate: None,
+            show_fps: false,
             camera_distance: crate::camstyle::FOLLOW_MAX_DISTANCE as u8,
             camera_turn: TURN_GAME,
             screen_shake: true,
@@ -1786,6 +1812,11 @@ impl Default for ClientOptions {
             auto_loot: false,
             attack_abilities: false,
             chat_always: false,
+            own_plate: false,
+            coach_talk: false,
+            strafe_match: false,
+            minimap_colors: crate::minimapcolor::DEFAULTS,
+            minimap_spells_mine: false,
             hud_scale: 100,
             nameplate_scale: 100,
             controller_hud_scale: 100,
@@ -1889,6 +1920,9 @@ impl ClientOptions {
         }
         if let Some(r) = self.frame_rate {
             s.push_str(&format!("frame_rate={}\n", r.key()));
+        }
+        if self.show_fps {
+            s.push_str("show_fps=on\n");
         }
         if self.camera_turn != TURN_GAME {
             s.push_str(&format!("camera_turn={}\n", self.camera_turn));
@@ -2034,6 +2068,26 @@ impl ClientOptions {
         // Chat Always Shown and Stacked Spell Bars only when on
         if self.chat_always {
             s.push_str("chat_always=on\n");
+        }
+        // Own Name Plate, Coach Talk on Arrival, Strafe Speed's Match Forward
+        // and Spell Merchants Shown's My Class only when on; a Minimap Colors
+        // row only when not as it came
+        if self.own_plate {
+            s.push_str("own_name_plate=on\n");
+        }
+        if self.coach_talk {
+            s.push_str("coach_talk=on\n");
+        }
+        if self.strafe_match {
+            s.push_str("strafe_speed=forward\n");
+        }
+        if self.minimap_spells_mine {
+            s.push_str("minimap_spells=mine\n");
+        }
+        for ((key, &c), d) in crate::minimapcolor::KEYS.iter().zip(&self.minimap_colors).zip(crate::minimapcolor::DEFAULTS) {
+            if c != d {
+                s.push_str(&format!("minimap_color.{key}={}\n", crate::numcolor::paint(c).map_or("default", |p| p.key)));
+            }
         }
         if self.chat_fade_seconds != 0 {
             s.push_str(&format!("chat_fade_seconds={}\n", self.chat_fade_seconds));
@@ -2275,6 +2329,8 @@ impl ClientOptions {
                     }
                 }
                 ("frame_rate", v) => c.frame_rate = FrameRate::ALL.into_iter().find(|r| r.key() == v).or(c.frame_rate),
+                ("show_fps", "on") => c.show_fps = true,
+                ("show_fps", "off") => c.show_fps = false,
                 ("camera_distance", v) => {
                     if let Some(d) = v.parse::<u8>().ok().filter(|d| (CAMERA_MIN..=CAMERA_MAX).contains(d)) {
                         c.camera_distance = d;
@@ -2365,6 +2421,16 @@ impl ClientOptions {
                 ("attack_abilities", "on") => c.attack_abilities = true,
                 ("attack_abilities", "off") => c.attack_abilities = false,
                 ("chat_always", "on") => c.chat_always = true,
+                ("own_name_plate", v) => c.own_plate = v == "on",
+                ("coach_talk", v) => c.coach_talk = v == "on",
+                ("strafe_speed", v) => c.strafe_match = v == "forward",
+                ("minimap_spells", v) => c.minimap_spells_mine = v == "mine",
+                (k, v) if k.starts_with("minimap_color.") => {
+                    let row = crate::minimapcolor::KEYS.iter().position(|&r| r == &k["minimap_color.".len()..]);
+                    if let (Some(row), Some(choice)) = (row, crate::numcolor::from_key(v)) {
+                        c.minimap_colors[row] = choice;
+                    }
+                }
                 ("chat_fade_seconds", v) => {
                     if let Ok(n) = v.parse::<u8>() && n <= 120 { c.chat_fade_seconds = n; }
                 }
@@ -2856,7 +2922,9 @@ pub mod qol {
     /// The pet's effects under its bar (Pet Effects).
     pub const PET_EFFECTS: u32 = 1 << 8;
     /// Auto-cast on the quick bars and Auto Target (and Mouseover Casting,
-    /// Auto Loot and Attack With Abilities, the client's other automation).
+    /// Auto Loot and Attack With Abilities, the client's other automation;
+    /// Coach Talk on Arrival, and Strafe Speed's Match Forward, a change to
+    /// the walk the game's own UI keeps out: Live petition 5633).
     pub const AUTO_CAST: u32 = 1 << 9;
     /// Item links in chat (Item Links) OFF BY DEFAULT, not locked: read from
     /// `item_links_here`, the player's to turn there (plain names until then).
@@ -2907,12 +2975,12 @@ pub mod qol {
         Some(match item {
             44 | 45 | 85 => QUEST_HELPER,
             70..=72 | crate::options::DPS_COLUMNS | crate::options::DPS_SORT => DPS_METER,
-            64..=69 | 80 | 81 => NUMBER_COLORS,
+            64..=69 | 80 | 81 | crate::numcolor::TAKEN_ITEM => NUMBER_COLORS,
             86 | crate::options::HEALTH_NUMBERS => POWER_BARS,
             83 | crate::options::BUFF_TIMERS => BUFF_WINDOW,
             crate::options::STAT_WINDOW => STAT_CAPS,
             58 | crate::options::GROUP_EFFECTS | crate::options::NPC_DEBUFFS => PET_EFFECTS,
-            78 | 79 | crate::options::MOUSEOVER_CAST | crate::options::AUTO_LOOT | crate::options::ATTACK_ABILITIES => AUTO_CAST,
+            78 | 79 | crate::options::MOUSEOVER_CAST | crate::options::AUTO_LOOT | crate::options::ATTACK_ABILITIES | crate::options::COACH_TALK | crate::options::STRAFE_SPEED => AUTO_CAST,
             22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT | crate::options::SPELL_BAR_SIZE | crate::options::ITEM_ICONS | crate::options::SPELL_COOLDOWNS => SPELL_BARS,
             _ => return None,
         })
@@ -2967,6 +3035,7 @@ pub mod qol {
         }
         if off(AUTO_CAST) {
             (c.auto_cast, c.auto_target, c.mouseover_cast, c.auto_loot, c.attack_abilities) = (false, false, super::MouseoverCast::Off, false, false);
+            (c.coach_talk, c.strafe_match) = (false, false);
         }
         if off(ITEM_LINKS) {
             c.item_links = c.item_links_here && !off(LOCKED);
@@ -3013,6 +3082,7 @@ pub mod qol {
         }
         if off(AUTO_CAST) {
             (v.auto_cast, v.auto_target, v.mouseover_cast, v.auto_loot, v.attack_abilities) = (kept.auto_cast, kept.auto_target, kept.mouseover_cast, kept.auto_loot, kept.attack_abilities);
+            (v.coach_talk, v.strafe_match) = (kept.coach_talk, kept.strafe_match);
         }
         if off(ITEM_LINKS) {
             v.item_links_here = if off(LOCKED) { kept.item_links_here } else { v.item_links };
@@ -3316,6 +3386,30 @@ pub fn raid_mercs() -> bool {
 /// Loading Tips: a tip on every loading screen (`tips`).
 pub fn loading_tips() -> bool {
     client().loading_tips
+}
+
+/// Own Name Plate now (petition 3081).
+pub fn own_plate() -> bool {
+    client().own_plate
+}
+
+/// Coach Talk on Arrival now (petition 3091): off where the server turns the
+/// automation off (`qol::AUTO_CAST`).
+pub fn coach_talk() -> bool {
+    client().coach_talk
+}
+
+/// Strafe Speed's Match Forward now (petition 5633): off where the server
+/// turns the automation off (`qol::AUTO_CAST`).
+pub fn strafe_match() -> bool {
+    client().strafe_match
+}
+
+/// Minimap Colors now (petition 3092): each role's choice, and Spell
+/// Merchants Shown's My Class.
+pub fn minimap_colors() -> ([crate::numcolor::Choice; crate::minimapcolor::ROLES], bool) {
+    let c = client();
+    (c.minimap_colors, c.minimap_spells_mine)
 }
 
 /// Number Colors now: each row's choice (`numcolor`).
@@ -4231,6 +4325,7 @@ mod tests {
             ClientOptions::default(),
             ClientOptions { lod: false, brightness: 0, frame_rate: Some(FrameRate::Thirty), camera_distance: 8, ..Default::default() },
             ClientOptions { lod: true, brightness: 10, frame_rate: Some(FrameRate::Display), camera_distance: 50, ..Default::default() },
+            ClientOptions { show_fps: true, ..Default::default() },
             ClientOptions { camera_turn: TURN_MIN, ..Default::default() },
             ClientOptions { camera_turn: TURN_MAX, ..Default::default() },
             ClientOptions { controller: std::array::from_fn(|k| Focus::ALL[k % Focus::ALL.len()]), ..Default::default() },
@@ -5323,6 +5418,34 @@ mod tests {
         assert!(ClientOptions::from_text("item_links=maybe").item_links, "the default");
     }
 
+    /// Own Name Plate, Coach Talk on Arrival, Strafe Speed and Minimap Colors
+    /// (petitions 3081, 3091, 5633, 3092): off, Retail and the roles' colours
+    /// by default, nothing written as they came; each kept by its key and read
+    /// back; a key or colour not understood leaves it as it came.
+    #[test]
+    fn the_petition_rows_are_kept_only_when_chosen() {
+        let d = ClientOptions::default();
+        assert!(!d.own_plate && !d.coach_talk && !d.strafe_match && !d.minimap_spells_mine);
+        assert_eq!(d.minimap_colors, crate::minimapcolor::DEFAULTS);
+        let t = d.to_text();
+        assert!(!["own_name_plate", "coach_talk", "strafe_speed", "minimap_"].iter().any(|k| t.contains(k)), "{t}");
+        let mut c = d.clone();
+        (c.own_plate, c.coach_talk, c.strafe_match, c.minimap_spells_mine) = (true, true, true, true);
+        c.minimap_colors[1] = crate::numcolor::from_key("red").unwrap();
+        c.minimap_colors[6] = 0;
+        let t = c.to_text();
+        for line in ["own_name_plate=on\n", "coach_talk=on\n", "strafe_speed=forward\n", "minimap_spells=mine\n", "minimap_color.smiths=red\n", "minimap_color.quest_givers=default\n"] {
+            assert!(t.contains(line), "{line:?} in {t}");
+        }
+        assert_eq!(t.matches("minimap_color.").count(), 2, "{t}");
+        let back = ClientOptions::from_text(&t);
+        assert!(back.own_plate && back.coach_talk && back.strafe_match && back.minimap_spells_mine);
+        assert_eq!(back.minimap_colors, c.minimap_colors);
+        let odd = ClientOptions::from_text("minimap_color.smiths=mauve\nminimap_color.elbows=red\nstrafe_speed=warp");
+        assert_eq!(odd.minimap_colors, crate::minimapcolor::DEFAULTS);
+        assert!(!odd.strafe_match);
+    }
+
     /// Number Colors: every row Default by default and written not at all; a
     /// chosen row is one line by its row's and its colour's keys, and reads
     /// back to itself, the others Default; a row or colour not understood is
@@ -5330,7 +5453,7 @@ mod tests {
     #[test]
     fn number_colors_are_kept_only_when_chosen() {
         let d = ClientOptions::default();
-        assert_eq!(d.number_colors, [0, 0, 0, 0, 0, 0, 8, 6], "Default by default, the merc's Light Blue and Purple");
+        assert_eq!(d.number_colors, [0, 0, 0, 0, 0, 0, 8, 6, 0], "Default by default, the merc's Light Blue and Purple");
         assert!(!d.to_text().contains("number_color"), "nothing written as they came");
         let mut c = ClientOptions::default();
         c.number_colors[1] = crate::numcolor::from_key("red").unwrap();
@@ -5342,7 +5465,9 @@ mod tests {
         assert_eq!(ClientOptions::from_text(&text), c, "and nothing else changed");
         let odd = ClientOptions::from_text("number_color.procs=mauve\nnumber_color.elbows=red\nnumber_color.heals=default");
         assert_eq!(odd.number_colors, crate::numcolor::DEFAULTS, "not understood: as they came");
-        assert_eq!(ClientOptions::from_text("number_color.pet_damage=orange").number_colors, [0, 0, 0, 3, 0, 0, 8, 6]);
+        assert_eq!(ClientOptions::from_text("number_color.pet_damage=orange").number_colors, [0, 0, 0, 3, 0, 0, 8, 6, 0]);
+        // Damage Taken (petition 3081): kept by its key
+        assert_eq!(ClientOptions::from_text("number_color.taken=pink").number_colors[crate::numcolor::TAKEN], crate::numcolor::from_key("pink").unwrap());
         // a merc row chosen Default is kept as `default`, another colour as its key
         let mut m = ClientOptions::default();
         m.number_colors[6] = 0;

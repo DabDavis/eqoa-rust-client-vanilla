@@ -270,6 +270,32 @@ impl<M: Model> CSprite<M> {
         }
     }
 
+    /// Everything the sprite has playing stopped: its continuous sound
+    /// (`m_snd.m_channel`, which `VICSprite::Release` stops) and each
+    /// layer's last trigger sound (`m_cur`/`m_prev[i].m_flags`, which only
+    /// `SetDeath` and the layer's next trigger stop). A departure for the
+    /// second: on the console a released sprite's trigger playback runs on
+    /// until its wave's last share goes (`ReleaseSound`), and a trigger
+    /// sound can be a LOOP: CHAR.ESF's wing beat 0x8B150560, the
+    /// locomotion entries' sound of 59 bodies (the forest qex's 0x4E2A945C
+    /// among them), plays on with the creature gone for as long as any
+    /// other body in the world shares it (Heirloom petition 3108: "flapping
+    /// wing sound keeps active even after porting").
+    pub fn stop_sounds(&mut self, sd: &mut dyn SoundSink) {
+        if self.snd.channel != -1 {
+            sd.stop(self.snd.channel);
+            self.snd.channel = -1;
+        }
+        for i in 0..2 {
+            for l in [&mut self.cur[i], &mut self.prev[i]] {
+                if l.flags != -1 {
+                    sd.stop(l.flags);
+                    l.flags = -1;
+                }
+            }
+        }
+    }
+
     /// Every sound the sprite can play: what its loader shares with it.
     pub fn sounds(&self) -> Vec<u32> {
         let mut v: Vec<u32> = self.entries.iter().flat_map(|e| e.sound).chain(std::iter::once(self.snd.sound)).filter(|&s| s != 0).collect();

@@ -149,7 +149,7 @@ impl Filter {
     /// page and on Android the narrow one, and in a page on WebGL2 one
     /// comparison.
     pub fn for_device(device: &wgpu::Device) -> Filter {
-        Self::of(cfg!(target_arch = "wasm32"), REACH < 3.0, device.adapter_info().backend)
+        Self::of(cfg!(target_arch = "wasm32"), REACH < 3.0, crate::device_info(device).backend)
     }
 
     /// The filter in a page (`page`) or not, where the platform's tent is

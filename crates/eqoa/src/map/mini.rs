@@ -274,6 +274,11 @@ pub struct MiniView {
     /// marks of every kind (`Mark`): the XP camps and coach stops, the
     /// quests' (`Play::mini_view` gathers them)
     pub marks: Vec<Mark>,
+    /// the friendly NPCs' dots' names and roles (an empty line for none),
+    /// (x, z) first: the tooltip under the mouse's pointer where no mark is
+    /// (Heirloom petition 3093: "mouse-over a friendly NPC square ... shows
+    /// its name")
+    pub names: Vec<([f32; 2], String, String)>,
 }
 
 /// A quest's mark's gold.
@@ -421,6 +426,18 @@ fn place_marks<'a>(marks: &[&'a Mark], world: i32, to_px: &dyn Fn([f32; 2]) -> [
     placed.extend(lies(&|k| k.quest() && !k.on_rim()));
     placed.extend(here().filter(|m| m.kind.on_rim()).map(|m| (to_rim(mid, to_px(m.at), edge), m)));
     placed
+}
+
+/// The friendly NPC whose square is nearest window pixel `c`, within `reach`
+/// of it: its place on the minimap (window pixels by `to_px`), name and role.
+fn npc_under<'a>(names: &'a [([f32; 2], String, String)], to_px: &impl Fn([f32; 2]) -> [f32; 2], c: [f32; 2], reach: f32) -> Option<([f32; 2], &'a String, &'a String)> {
+    names
+        .iter()
+        .map(|(at, n, r)| (to_px(*at), n, r))
+        .map(|(q, n, r)| ((q[0] - c[0]).hypot(q[1] - c[1]), q, n, r))
+        .filter(|(d, ..)| *d <= reach)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, q, n, r)| (q, n, r))
 }
 
 /// The mark whose tooltip shows with the mouse's pointer at window pixel
@@ -696,7 +713,14 @@ impl Map {
         let b = pixels.point([outer[2], outer[3]]);
         let outer = [a[0], a[1], b[0], b[1]];
         let reach = (MARK_REACH * px_line).max(half) + px_line;
-        if let (Some(vui), Some((q, m))) = (cx.vui, self.mini.cursor.and_then(|c| mark_under(&placed, pixels.inverse(c), reach))) {
+        // a mark's card, else the name of the friendly NPC whose square is
+        // under the pointer
+        let named: Option<([f32; 2], Mark)> = self.mini.cursor.and_then(|c| npc_under(&mv.names, &to_px, pixels.inverse(c), dot * 2.0 + dot_o + px_line)).map(|(q, n, r)| {
+            let text = if r.is_empty() { n.clone() } else { format!("{n}\n{r}") };
+            (q, Mark::text(MarkKind::Camp, cx.world, [0.0; 2], &text))
+        });
+        let hovered = self.mini.cursor.and_then(|c| mark_under(&placed, pixels.inverse(c), reach)).or_else(|| named.as_ref().map(|(q, m)| (*q, m)));
+        if let (Some(vui), Some((q, m))) = (cx.vui, hovered) {
             r.ui.anchor = Anchor::Middle;
             r.ui.vertical = Vertical::Middle;
             let lines: Vec<(Vec<u16>, [f32; 4])> = m
@@ -938,6 +962,18 @@ mod tests {
         assert!(own_marks(&made, 0, false).is_empty(), "Map Markers off");
         assert!(own_marks(&made, 2, true).is_empty(), "made for another world");
         assert!(own_marks(&None, 0, true).is_empty());
+    }
+
+    /// A friendly NPC's square under the pointer gives its name and role (Heirloom
+    /// petition 3093): the nearest within the reach; none past it (the control).
+    #[test]
+    fn an_npcs_square_under_the_pointer_names_it() {
+        let names = vec![([10.0, 0.0], "Banker Lars".to_string(), "Banker".to_string()), ([14.0, 0.0], "Merchant Perry".to_string(), "Merchant".to_string())];
+        let to_px = |q: [f32; 2]| [q[0] * 2.0, q[1] * 2.0];
+        let got = npc_under(&names, &to_px, [21.0, 1.0], 4.0).map(|(q, n, r)| (q, n.clone(), r.clone()));
+        assert_eq!(got, Some(([20.0, 0.0], "Banker Lars".to_string(), "Banker".to_string())));
+        assert_eq!(npc_under(&names, &to_px, [27.0, 0.0], 4.0).map(|(_, n, _)| n.as_str()), Some("Merchant Perry"), "the nearest");
+        assert!(npc_under(&names, &to_px, [60.0, 0.0], 4.0).is_none(), "none past the reach");
     }
 
     /// The tooltip is the topmost mark's under the pointer: a quest's over a

@@ -1049,6 +1049,37 @@ pub const OP_CON_LEVEL_OFFER: u16 = 0x7E70;
 /// locked, no mouse, no touch.
 pub const OP_VANILLA_UI: u16 = 0x7EA0;
 
+/// go-eqoa-server's own: what it knows of its NPCs that a client cannot read off
+/// their names and flags, for the minimap's colours (Heirloom petition 3092:
+/// a spell merchant is a "Merchant" like any other, known only by what he
+/// sells). Server to client, to a client that answered the bug report offer
+/// (never to a PS2), at that answer: a u8 version (1), a u8 of flags (1 the
+/// first part: forget what the last said; 2 the last), a u16 count, then each
+/// NPC a u8 role (1 a spell merchant), a u8 class (0-14 the class whose scrolls
+/// it sells most, 255 none) and its name (u8-counted UTF-8). Answered nothing.
+pub const OP_NPC_ROLES: u16 = 0x7EE0;
+
+/// One [`OP_NPC_ROLES`] part: whether it is the first, and its spell merchants
+/// (name, class); none for another version or a part cut short.
+fn read_npc_roles(r: &mut crate::stream::Reader) -> Option<(bool, Vec<(String, u8)>)> {
+    let (version, flags, n) = (r.u8(), r.u8(), r.u16());
+    if r.error || version != 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        let (role, class, len) = (r.u8(), r.u8(), r.u8());
+        let name = String::from_utf8_lossy(r.bytes(len as usize)).into_owned();
+        if r.error {
+            return None;
+        }
+        if role == 1 {
+            out.push((name, class));
+        }
+    }
+    Some((flags & 1 != 0, out))
+}
+
 /// go-eqoa-server's own: how many answers an NPC's box (0x0034) may hold (the
 /// owner, 2026-11-15: "lets increase the dialog box for heroic dungeons,
 /// coachmen etc. to stack higher before pagination"). Both ways, a u32: the
@@ -1766,6 +1797,10 @@ pub struct Session {
     /// ([`OP_VANILLA_UI`]) on this connection, a bit each; 0, everything on,
     /// until it says.
     pub qol_off: u32,
+    /// The spell merchants the server named ([`OP_NPC_ROLES`]) on this
+    /// connection, by name: the class whose scrolls each sells most (255
+    /// none); empty until it says.
+    pub spell_merchants: std::collections::HashMap<String, u8>,
     /// The worn looks the character hides, as the server told them
     /// (`crate::hidelook`): none offered until it does.
     pub hide_look: crate::hidelook::State,
@@ -1993,6 +2028,7 @@ impl Session {
             profanity_asked: None,
             con_level_offer: false,
             qol_off: 0,
+            spell_merchants: Default::default(),
             hide_look: crate::hidelook::State::default(),
             user: user.to_string(),
             token,
@@ -2948,6 +2984,7 @@ impl Session {
                 self.profanity_asked = None;
                 self.con_level_offer = false;
                 self.qol_off = 0;
+                self.spell_merchants.clear();
                 self.hide_look = crate::hidelook::State::default();
                 ev.push(Event::Promoted);
             }
@@ -3356,6 +3393,17 @@ impl Session {
                 let off = r.u32();
                 if !r.error && version == 1 {
                     self.qol_off = off;
+                }
+            }
+            // the NPCs' roles (at the bug report answer): the spell merchants
+            // by name, a part at a time; another version, or a part cut short,
+            // is left alone whole
+            OP_NPC_ROLES => {
+                if let Some((first, named)) = read_npc_roles(&mut r) {
+                    if first {
+                        self.spell_merchants.clear();
+                    }
+                    self.spell_merchants.extend(named);
                 }
             }
             // the server's most answers in a box offered (each world entry):
@@ -4363,6 +4411,43 @@ mod tests {
         assert_eq!(s.record.as_ref().unwrap().len(), 0, "answered with nothing");
         deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
         assert_eq!(s.qol_off, 0, "a new connection forgets it");
+    }
+
+    /// The NPCs' roles (go-eqoa-server's 0x7EE0, TestNpcRolesNameTheSpellMerchants'
+    /// layout): the spell merchants by name and class, a part at a time, the
+    /// first part forgetting the last list; answered nothing. The controls: a
+    /// part cut short or of another version is not taken, a new connection
+    /// forgets them.
+    #[test]
+    fn the_npcs_roles_are_kept_by_name() {
+        let part = |flags: u8, names: &[(&str, u8)]| {
+            let mut w = crate::stream::Writer::op(OP_NPC_ROLES);
+            w.u8(1).u8(flags).u16(names.len() as u16);
+            for (n, c) in names {
+                w.u8(1).u8(*c).u8(n.len() as u8).bytes(n.as_bytes());
+            }
+            w.data
+        };
+        let mut s = session();
+        s.record = Some(Vec::new());
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, part(1, &[("Merchant Timmerin", 13)]));
+        assert!(ev.is_empty(), "the message is the session's: {ev:?}");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, part(2, &[("Merchant Coridon", 12), ("Chemist Falen", 255)]));
+        assert_eq!(s.spell_merchants.len(), 3);
+        assert_eq!((s.spell_merchants["Merchant Timmerin"], s.spell_merchants["Chemist Falen"]), (13, 255));
+        let mut cut = part(3, &[("Merchant Verona", 10)]);
+        cut.pop();
+        deliver(&mut s, drdp::TYPE_GUARANTEED, cut);
+        assert_eq!(s.spell_merchants.len(), 3, "a part cut short is none, nor clears");
+        let mut other = part(3, &[("Merchant Verona", 10)]);
+        other[2] = 2;
+        deliver(&mut s, drdp::TYPE_GUARANTEED, other);
+        assert!(!s.spell_merchants.contains_key("Merchant Verona"), "another version is none");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, part(3, &[("Merchant Verona", 10)]));
+        assert_eq!(s.spell_merchants.keys().collect::<Vec<_>>(), vec!["Merchant Verona"], "a first part forgets the last list");
+        assert_eq!(s.record.as_ref().unwrap().len(), 0, "answered with nothing");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(s.spell_merchants.is_empty(), "a new connection forgets them");
     }
 
     /// More answers in an NPC's box (go-eqoa-server's 0x7E71): an offer of

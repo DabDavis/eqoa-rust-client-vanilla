@@ -113,6 +113,7 @@ mod rollwnd;
 mod masterloot;
 mod damage;
 mod numcolor;
+mod minimapcolor;
 mod autocast;
 mod dpsmeter;
 #[cfg(not(target_arch = "wasm32"))]

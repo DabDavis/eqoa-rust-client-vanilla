@@ -189,6 +189,19 @@ impl RunHold {
     }
 }
 
+/// A stick axis counts once it has read under this, through the dead zone
+/// ([`Report::settle`]): each controller's from when it is first read. A
+/// stick rests in its middle, so a pad's own sticks count at once; an axis
+/// read as a stick that sits off its middle from the start (a flight
+/// stick's throttle or slider, a wheel's pedal: what a browser or the
+/// system gives on Z or Rz, read here as the right stick) would hold the
+/// stick over for good, the player turning with nothing touched (Heirloom
+/// petition 3068: two VKB Gladiator NXT flight sticks beside an Xbox pad in
+/// Chrome on Windows, "constantly turns to the right ... even with the
+/// controller off"). Such an axis counts once it has been brought to its
+/// middle.
+const SETTLED: f32 = 0.25;
+
 /// [`STICK_DEAD_ZONE`], or the player's.
 pub fn dead_zone() -> f32 {
     #[cfg(target_arch = "wasm32")]
@@ -241,6 +254,17 @@ impl Report {
             if x * x + y * y < dz * dz {
                 self.sticks[k] = 0.0;
                 self.sticks[k + 1] = 0.0;
+            }
+        }
+    }
+
+    /// Each stick axis that has not yet been seen at rest (`seen`, the
+    /// controller's) put at rest: [`Settle`].
+    pub fn settle(&mut self, seen: &mut [bool; 4]) {
+        for (v, s) in self.sticks.iter_mut().zip(seen.iter_mut()) {
+            *s |= v.abs() < SETTLED;
+            if !*s {
+                *v = 0.0;
             }
         }
     }
@@ -847,6 +871,9 @@ pub struct Gamepads {
     seen: Vec<String>,
     trace: bool,
     last: Report,
+    /// each controller's stick axes seen at rest (`Report::settle`), by its
+    /// name; forgotten when it goes
+    settled: Vec<(String, [bool; 4])>,
     /// [`dead_zone`]
     pub dead_zone: f32,
     /// natively, whether this window has the focus (as it opened, then the
@@ -928,6 +955,7 @@ impl Gamepads {
             seen: Vec::new(),
             trace: trace(),
             last: Report::default(),
+            settled: Vec::new(),
             dead_zone: dead_zone(),
             focused: true,
             front: None,
@@ -950,7 +978,8 @@ impl Gamepads {
     /// and the client's other windows open) as one report; whether it reads
     /// one (else the pad reads as unplugged), and whether one can rumble.
     pub fn poll(&mut self) -> (Report, bool, bool) {
-        let pads = self.read();
+        let mut pads = self.read();
+        settle_all(&mut self.settled, &mut pads);
         let focus = crate::settings::focus();
         let seat = crate::multibox::seat();
         let names: Vec<&str> = pads.iter().map(|c| c.name.as_str()).collect();
@@ -1500,6 +1529,39 @@ fn reads_text(pick: &Pick, names: &[&str], seat: &Seat, captured: bool) -> Strin
     }
 }
 
+/// Each controller's sticks through `Report::settle`, by its name (one gone
+/// forgotten, so it settles again when it comes back); an axis held off is
+/// said in its `how` (a bug report's controllers line).
+fn settle_all(settled: &mut Vec<(String, [bool; 4])>, pads: &mut [Controller]) {
+    settled.retain(|(n, _)| pads.iter().any(|c| c.name == *n));
+    for c in pads.iter_mut() {
+        let k = match settled.iter().position(|(n, _)| *n == c.name) {
+            Some(k) => k,
+            None => {
+                settled.push((c.name.clone(), [false; 4]));
+                settled.len() - 1
+            }
+        };
+        if let Some(off) = settle_one(&mut settled[k].1, &mut c.report) {
+            c.how.push_str(&off);
+        }
+    }
+}
+
+/// One controller's report through `Report::settle`; the axes held off
+/// their middle, in words for its `how`, if any.
+fn settle_one(seen: &mut [bool; 4], report: &mut Report) -> Option<String> {
+    let held = report.sticks;
+    report.settle(seen);
+    let off: Vec<&str> = ["right stick X", "right stick Y", "left stick X", "left stick Y"]
+        .iter()
+        .zip(seen.iter().zip(held))
+        .filter(|(_, (s, v))| !**s && v.abs() >= SETTLED)
+        .map(|(n, _)| *n)
+        .collect();
+    (!off.is_empty()).then(|| format!(", {} off its middle since it came (ignored until centred)", off.join(" and ")))
+}
+
 /// What a window reads, said as it changes.
 fn describe(pick: &Pick, pads: &[Controller], seat: &Seat, focus: Focus, captured: bool) -> String {
     let window = if seat.alone() { String::new() } else { format!("window {} of {}, ", seat.place + 1, seat.others.len() + 1) };
@@ -1831,6 +1893,34 @@ fn web_can_rumble() -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Heirloom petition 3068: a flight stick's axis read as the right
+    /// stick's X, off its middle from the start, turned the player for good.
+    /// It counts once it has been centred; a pad's own sticks at once.
+    #[test]
+    fn a_stick_axis_off_its_middle_from_the_start_counts_once_centred() {
+        let mut seen = [false; 4];
+        let mut r = Report { sticks: [1.0, 0.02, 0.0, -0.1], ..Default::default() };
+        r.rest(STICK_DEAD_ZONE);
+        let off = settle_one(&mut seen, &mut r);
+        assert_eq!(r.sticks, [0.0, 0.02, 0.0, 0.0], "the throttle at rest, the rest as read");
+        assert_eq!(off.as_deref(), Some(", right stick X off its middle since it came (ignored until centred)"));
+        // still held over: still nothing
+        let mut r = Report { sticks: [-0.8, 0.0, 0.5, 0.0], ..Default::default() };
+        assert_eq!(settle_one(&mut seen, &mut r).as_deref(), Some(", right stick X off its middle since it came (ignored until centred)"));
+        assert_eq!(r.sticks, [0.0, 0.0, 0.5, 0.0], "the left stick moves the player");
+        // brought to its middle, then turned: it counts
+        let mut r = Report { sticks: [0.1, 0.0, 0.0, 0.0], ..Default::default() };
+        assert_eq!(settle_one(&mut seen, &mut r), None);
+        let mut r = Report { sticks: [0.9, 0.0, 0.0, 0.0], ..Default::default() };
+        assert_eq!(settle_one(&mut seen, &mut r), None);
+        assert_eq!(r.sticks, [0.9, 0.0, 0.0, 0.0]);
+        // a pad at rest from the start: every axis counts at once
+        let mut seen = [false; 4];
+        let mut r = Report::default();
+        settle_one(&mut seen, &mut r);
+        assert_eq!(seen, [true; 4]);
+    }
+
     use super::*;
 
     /// What a read gives of a controller that sent `states` since the last
