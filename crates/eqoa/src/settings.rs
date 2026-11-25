@@ -1199,6 +1199,13 @@ pub struct ClientOptions {
     /// DPS Meter Shows: the fight (under way, or the last) or Overall, every
     /// fight since the login; a click on the panel's title or `/dps` turns it.
     pub dps_view: crate::dpsmeter::View,
+    /// DPS Meter Columns (Heirloom petition 3030): the DPS alone (the
+    /// default), with the HPS, or with the HPS and the power given a second, on
+    /// a server that counts them (layout 2).
+    pub dps_columns: crate::dpsmeter::Columns,
+    /// DPS Meter Sort: what the lines are ranked and the bars drawn by, one
+    /// of the columns shown (damage by default).
+    pub dps_sort: crate::dpsmeter::Metric,
     /// Item Links (`itemlink`; a GM's petition 1463: "This should be
     /// off by default for ps2 players and a toggle option. If toggled off for
     /// players, they should just see a plain text item name if linked"): links
@@ -1769,6 +1776,8 @@ impl Default for ClientOptions {
             number_colors: crate::numcolor::DEFAULTS,
             dps_meter: false,
             dps_view: crate::dpsmeter::View::Fight,
+            dps_columns: crate::dpsmeter::Columns::Dps,
+            dps_sort: crate::dpsmeter::Metric::Damage,
             item_links: true,
             auto_cast: true,
             auto_target: false,
@@ -1985,6 +1994,13 @@ impl ClientOptions {
         }
         if self.dps_view != crate::dpsmeter::View::Fight {
             s.push_str(&format!("dps_meter_shows={}\n", self.dps_view.key()));
+        }
+        // its columns and sort only when not the DPS alone, by damage
+        if self.dps_columns != crate::dpsmeter::Columns::Dps {
+            s.push_str(&format!("dps_meter_columns={}\n", self.dps_columns.key()));
+        }
+        if self.dps_sort != crate::dpsmeter::Metric::Damage {
+            s.push_str(&format!("dps_meter_sort={}\n", self.dps_sort.key()));
         }
         // Item Links only when off
         // Auto-Cast only when off, Auto Target only when on
@@ -2327,6 +2343,12 @@ impl ClientOptions {
                 ("dps_meter", "off") => c.dps_meter = false,
                 ("dps_meter_shows", "fight") => c.dps_view = crate::dpsmeter::View::Fight,
                 ("dps_meter_shows", "overall") => c.dps_view = crate::dpsmeter::View::Overall,
+                ("dps_meter_columns", "dps") => c.dps_columns = crate::dpsmeter::Columns::Dps,
+                ("dps_meter_columns", "hps") => c.dps_columns = crate::dpsmeter::Columns::Hps,
+                ("dps_meter_columns", "all") => c.dps_columns = crate::dpsmeter::Columns::All,
+                ("dps_meter_sort", "dps") => c.dps_sort = crate::dpsmeter::Metric::Damage,
+                ("dps_meter_sort", "hps") => c.dps_sort = crate::dpsmeter::Metric::Healing,
+                ("dps_meter_sort", "power") => c.dps_sort = crate::dpsmeter::Metric::Power,
                 ("item_links", "on") => c.item_links = true,
                 ("item_links", "off") => c.item_links = false,
                 ("auto_cast", "on") => c.auto_cast = true,
@@ -2884,7 +2906,7 @@ pub mod qol {
     pub fn of_item(item: i32) -> Option<u32> {
         Some(match item {
             44 | 45 | 85 => QUEST_HELPER,
-            70..=72 => DPS_METER,
+            70..=72 | crate::options::DPS_COLUMNS | crate::options::DPS_SORT => DPS_METER,
             64..=69 | 80 | 81 => NUMBER_COLORS,
             86 | crate::options::HEALTH_NUMBERS => POWER_BARS,
             83 | crate::options::BUFF_TIMERS => BUFF_WINDOW,
@@ -3399,6 +3421,17 @@ pub fn map_pointer() -> crate::map::Pointer {
 /// What the DPS Meter shows (`dpsmeter::View`).
 pub fn dps_view() -> crate::dpsmeter::View {
     client().dps_view
+}
+
+/// DPS Meter Columns.
+pub fn dps_columns() -> crate::dpsmeter::Columns {
+    client().dps_columns
+}
+
+/// DPS Meter Sort, as the columns shown let it be.
+pub fn dps_sort() -> crate::dpsmeter::Metric {
+    let c = client();
+    c.dps_sort.fit(c.dps_columns)
 }
 
 /// What the windows share as another window saved it (Capture Controller,
@@ -5350,6 +5383,27 @@ mod tests {
         assert_eq!(ClientOptions::from_text("dps_meter_shows=fight").dps_view, View::Fight);
         let odd = ClientOptions::from_text("dps_meter=maybe\ndps_meter_shows=sideways");
         assert!(!odd.dps_meter && odd.dps_view == View::Fight, "anything else: the defaults");
+    }
+
+    /// DPS Meter Columns and Sort (Heirloom petition 3030): the DPS alone by
+    /// damage by default, writing nothing; each other kept and read back; an
+    /// odd word the default; a sort the columns do not show read as damage.
+    #[test]
+    fn the_dps_meters_columns_and_sort_are_kept() {
+        use crate::dpsmeter::{Columns, Metric};
+        let d = ClientOptions::default();
+        assert_eq!((d.dps_columns, d.dps_sort), (Columns::Dps, Metric::Damage), "the DPS alone by default");
+        assert!(!d.to_text().contains("dps_meter_columns") && !d.to_text().contains("dps_meter_sort"));
+        for (cols, sort) in [(Columns::Hps, Metric::Healing), (Columns::All, Metric::Power), (Columns::All, Metric::Damage)] {
+            let c = ClientOptions { dps_columns: cols, dps_sort: sort, ..Default::default() };
+            let back = ClientOptions::from_text(&c.to_text());
+            assert_eq!((back.dps_columns, back.dps_sort), (cols, sort), "{}", c.to_text());
+            assert_eq!(back, c, "nothing else changed");
+        }
+        let odd = ClientOptions::from_text("dps_meter_columns=everything\ndps_meter_sort=luck");
+        assert_eq!((odd.dps_columns, odd.dps_sort), (Columns::Dps, Metric::Damage), "anything else: the defaults");
+        assert_eq!(Metric::Power.fit(Columns::Hps), Metric::Damage, "not shown: damage");
+        assert_eq!(Metric::Healing.fit(Columns::Hps), Metric::Healing);
     }
 
     #[test]

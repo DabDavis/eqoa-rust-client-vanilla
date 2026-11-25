@@ -708,13 +708,21 @@ pub const NUMBER_TAGS_LAYOUT: u8 = 2;
 /// go-eqoa-server's own: a damage meter, who in the player's group did how much
 /// damage in the fight and how fast (`dpsmeter`, the Extended page's DPS Meter;
 /// the server owner, 2026-11-10: "lets add dps meters, will work solo, group,
-/// raid"). The offer, server to client once the player is in the world: a u8, 1,
-/// [`OP_DPS_METER_DATA`]'s layout. CLIENT has no such case, so a PS2 ignores it;
-/// nothing is asked of a server that made no offer.
+/// raid"). The offer, server to client once the player is in the world: a u8,
+/// the newest [`OP_DPS_METER_DATA`] layout it writes (1, damage alone; 2 since
+/// 2026-11-25, healing and power too). CLIENT has no such case, so a PS2
+/// ignores it; nothing is asked of a server that made no offer.
 pub const OP_DPS_METER_OFFER: u16 = 0x7E3A;
 /// The answer to [`OP_DPS_METER_OFFER`], client to server, at once and whenever
-/// it changes (`agree_dps_meter`): a u8, 1 to be sent the meter, 0 to stop.
+/// it changes (`agree_dps_meter`): a u8, the layout to be sent the meter in (the
+/// offer's, at most [`DPS_METER_LAYOUT`]), 0 to stop. A server of layout 1
+/// alone reads any answer but 0 as 1.
 pub const OP_DPS_METER_ANSWER: u16 = 0x7E3B;
+/// The newest DPS meter layout this client reads: 2, each line's healing and
+/// the power it gave beside its damage (go-eqoa-server, Heirloom petition 3030:
+/// "DPS meter should have options to include healing per second, and if
+/// possible power provided per second").
+pub const DPS_METER_LAYOUT: u8 = 2;
 /// The meter, from a server the client asked: the fight of the player's group
 /// at most once a second while it changes, and once more as it ends (the server
 /// ends it 10 s after the group's last damage). [`DpsMeter`] has the layout.
@@ -723,14 +731,17 @@ pub const OP_DPS_METER_DATA: u16 = 0x7E3C;
 /// fight under way (nothing more is sent of it) and numbers its next another.
 pub const OP_DPS_METER_RESET: u16 = 0x7E3D;
 
-/// A fight on the meter ([`OP_DPS_METER_DATA`]): u8 layout (1), u32 its number
-/// (another number, another fight), u8 1 when it is over (its last message), u32
-/// its length in ms (from its first damage to its latest), u32 the damage of all
-/// its lines, u16 how many lines it has, u16 the player's own line's place among
-/// them (1 the most damage), u8 how many this message holds, then each
-/// [`DpsLine`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A fight on the meter ([`OP_DPS_METER_DATA`]): u8 layout (1 or 2), u32 its
+/// number (another number, another fight), u8 1 when it is over (its last
+/// message), u32 its length in ms (from its first damage to its latest), u32 the
+/// damage of all its lines, u16 how many lines it has, u16 the player's own
+/// line's place among them (1 the most damage); layout 2: u32 the healing of all
+/// its lines, u32 their power given, u16 the player's own place by healing, u16
+/// by power; then u8 how many lines this message holds, and each [`DpsLine`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DpsMeter {
+    /// The layout it came in: 1 has no healing or power (each 0).
+    pub layout: u8,
     pub fight: u32,
     pub over: bool,
     pub length_ms: u32,
@@ -742,12 +753,20 @@ pub struct DpsMeter {
     pub count: u16,
     /// The player's own line's place among all of them, 1 the most damage.
     pub place: u16,
+    /// Layout 2: the healing and the power given of every line, and the
+    /// player's own places by each (1 the most).
+    pub heal_total: u32,
+    pub power_total: u32,
+    pub heal_place: u16,
+    pub power_place: u16,
     pub lines: Vec<DpsLine>,
 }
 
 /// A line of the meter: u8 flags (1 the player's own, 2 no longer in its group),
-/// u8 class, u32 damage (its pet's included), u32 its pet's share of that, and
-/// its name (a u8 byte count and UTF-8).
+/// u8 class, u32 damage (its pet's included), u32 its pet's share of that;
+/// layout 2: u32 its healing (what its heals restored, its pet's and merc's
+/// included), u32 their share of that, u32 the power it gave others; and its
+/// name (a u8 byte count and UTF-8).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DpsLine {
     pub own: bool,
@@ -755,24 +774,34 @@ pub struct DpsLine {
     pub class: u8,
     pub damage: u32,
     pub pet: u32,
+    pub heal: u32,
+    pub heal_pet: u32,
+    pub power: u32,
     pub name: String,
 }
 
-/// [`OP_DPS_METER_DATA`]'s body, or None when it is short or of another layout.
+/// [`OP_DPS_METER_DATA`]'s body, or None when it is short or of a layout this
+/// client does not read.
 fn read_dps_meter(r: &mut Reader) -> Option<DpsMeter> {
-    if r.u8() != 1 {
+    let layout = r.u8();
+    if !(1..=DPS_METER_LAYOUT).contains(&layout) {
         return None;
     }
     let (fight, over, length_ms, total, count, place) = (r.u32(), r.u8() == 1, r.u32(), r.u32(), r.u16(), r.u16());
+    let mut m = DpsMeter { layout, fight, over, length_ms, total, count, place, ..DpsMeter::default() };
+    if layout >= 2 {
+        (m.heal_total, m.power_total, m.heal_place, m.power_place) = (r.u32(), r.u32(), r.u16(), r.u16());
+    }
     let n = r.u8() as usize;
-    let mut lines = Vec::with_capacity(n);
+    m.lines = Vec::with_capacity(n);
     for _ in 0..n {
         let (flags, class, damage, pet) = (r.u8(), r.u8(), r.u32(), r.u32());
+        let (heal, heal_pet, power) = if layout >= 2 { (r.u32(), r.u32(), r.u32()) } else { (0, 0, 0) };
         let len = r.u8() as usize;
         let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
-        lines.push(DpsLine { own: flags & 1 != 0, left: flags & 2 != 0, class, damage, pet, name });
+        m.lines.push(DpsLine { own: flags & 1 != 0, left: flags & 2 != 0, class, damage, pet, heal, heal_pet, power, name });
     }
-    (!r.error).then_some(DpsMeter { fight, over, length_ms, total, count, place, lines })
+    (!r.error).then_some(m)
 }
 /// go-eqoa-server's own, no retail message: a raid's windows (`raid`; a
 /// GM's petitions 1448 and 1451: the leader's mark, the loot rolls' pop-up,
@@ -1687,8 +1716,10 @@ pub struct Session {
     /// The layout the offer named ([`OP_NUMBER_TAGS_OFFER`]).
     number_tags_layout: u8,
     number_tags_asked: Option<bool>,
-    /// The same for the damage meter ([`OP_DPS_METER_OFFER`]).
+    /// The same for the damage meter ([`OP_DPS_METER_OFFER`]), and the newest
+    /// layout it offered (2: healing and power too).
     pub dps_meter_offer: bool,
+    pub dps_meter_layout: u8,
     dps_meter_asked: Option<bool>,
     /// Whether the server offered the raid's windows ([`OP_RAID_OFFER`]) on
     /// this connection, and what it was last told (none since the offer).
@@ -1940,6 +1971,7 @@ impl Session {
             number_tags_layout: 0,
             number_tags_asked: None,
             dps_meter_offer: false,
+            dps_meter_layout: 0,
             dps_meter_asked: None,
             raid_offer: false,
             raid_asked: None,
@@ -2350,7 +2382,7 @@ impl Session {
         }
         self.dps_meter_asked = Some(want);
         let mut w = Writer::op(OP_DPS_METER_ANSWER);
-        w.u8(want as u8);
+        w.u8(if want { self.dps_meter_layout.clamp(1, DPS_METER_LAYOUT) } else { 0 });
         self.send(&w.data);
     }
 
@@ -2908,6 +2940,7 @@ impl Session {
                 self.number_tags_offer = false;
                 self.number_tags_asked = None;
                 self.dps_meter_offer = false;
+                self.dps_meter_layout = 0;
                 self.dps_meter_asked = None;
                 self.item_links_offer = false;
                 self.item_links_asked = None;
@@ -3601,9 +3634,10 @@ impl Session {
             // the damage meter offered (again at every world entry): told
             // afresh whether the client wants it (`agree_dps_meter`)
             OP_DPS_METER_OFFER => {
-                r.u8();
+                let layout = r.u8();
                 if !r.error {
                     self.dps_meter_offer = true;
+                    self.dps_meter_layout = layout;
                     self.dps_meter_asked = None;
                 }
             }
@@ -6045,6 +6079,7 @@ mod tests {
         m.extend_from_slice(&body);
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());
         let want = DpsMeter {
+            layout: 1,
             fight: 0x0102_0304,
             over: true,
             length_ms: 1500,
@@ -6052,17 +6087,51 @@ mod tests {
             count: 2,
             place: 1,
             lines: vec![
-                DpsLine { own: true, left: false, class: 3, damage: 1000, pet: 0, name: "Dab".into() },
-                DpsLine { own: false, left: true, class: 10, damage: 300, pet: 120, name: "Jib".into() },
+                DpsLine { own: true, left: false, class: 3, damage: 1000, pet: 0, name: "Dab".into(), ..Default::default() },
+                DpsLine { own: false, left: true, class: 10, damage: 300, pet: 120, name: "Jib".into(), ..Default::default() },
             ],
+            ..Default::default()
         };
         assert!(matches!(&ev[..], [Event::DpsMeter(got)] if *got == want), "{ev:?}");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m[..m.len() - 1].to_vec());
         assert!(!ev.iter().any(|e| matches!(e, Event::DpsMeter(_))), "cut short: {ev:?}");
         let mut other = m.clone();
-        other[2] = 2;
+        other[2] = 3;
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, other);
         assert!(!ev.iter().any(|e| matches!(e, Event::DpsMeter(_))), "another layout: {ev:?}");
+
+        // layout 2 (go-eqoa-server's TestDPSMeterLayoutTwoOnTheWire's bytes):
+        // the healing and power of all, the own places by each, each line's
+        // healing, its pet's share and its power
+        let body2 = [
+            2, 4, 3, 2, 1, 1, 0xDC, 5, 0, 0, 0x14, 5, 0, 0, 2, 0, 1, 0, 0xB6, 3, 0, 0, 40, 0, 0, 0, 2, 0, 2, 0, 2, //
+            1, 3, 0xE8, 3, 0, 0, 0, 0, 0, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, b'D', b'a', b'b', //
+            2, 9, 0x2C, 1, 0, 0, 0x78, 0, 0, 0, 0x84, 3, 0, 0, 100, 0, 0, 0, 40, 0, 0, 0, 3, b'J', b'i', b'b',
+        ];
+        let mut m2 = vec![0x3C, 0x7E];
+        m2.extend_from_slice(&body2);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m2.clone());
+        let want2 = DpsMeter {
+            layout: 2,
+            fight: 0x0102_0304,
+            over: true,
+            length_ms: 1500,
+            total: 1300,
+            count: 2,
+            place: 1,
+            heal_total: 950,
+            power_total: 40,
+            heal_place: 2,
+            power_place: 2,
+            lines: vec![
+                DpsLine { own: true, left: false, class: 3, damage: 1000, pet: 0, heal: 50, heal_pet: 0, power: 0, name: "Dab".into() },
+                DpsLine { own: false, left: true, class: 9, damage: 300, pet: 120, heal: 900, heal_pet: 100, power: 40, name: "Jib".into() },
+            ],
+        };
+        assert!(matches!(&ev[..], [Event::DpsMeter(got)] if *got == want2), "layout 2: {ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m2[..m2.len() - 1].to_vec());
+        assert!(!ev.iter().any(|e| matches!(e, Event::DpsMeter(_))), "layout 2 cut short: {ev:?}");
+
 
         // the offer again (the next world entry): told afresh
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3A, 0x7E, 1]);
@@ -6073,6 +6142,23 @@ mod tests {
         s.agree_dps_meter(true);
         assert!(!s.reset_dps_meter());
         assert_eq!(answers(&mut s), [], "a new connection: nothing asked before its offer");
+    }
+
+    // The DPS meter's answer names the layout offered, at most this client's
+    // newest (DPS_METER_LAYOUT): a server of layout 1 is answered 1, of 2 2, of
+    // a later one 2; off is 0 whatever was offered. A fresh connection each.
+    #[test]
+    fn dps_meter_answer_names_the_layout_offered() {
+        for (offer, answer) in [(1u8, 1u8), (2, 2), (9, DPS_METER_LAYOUT)] {
+            let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+            deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3A, 0x7E, offer]);
+            assert_eq!(s.dps_meter_layout, offer);
+            s.agree_dps_meter(true);
+            s.flush();
+            let got: Vec<_> = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.len() >= 2 && d[1] == 0x7E && d[0] == 0x3B).collect();
+            assert_eq!(got, [(251, vec![0x3B, 0x7E, answer])], "offered {offer}");
+        }
     }
 
     // The Stat Window's figures (go-eqoa-server's 0x7E84/0x7E85): nothing
