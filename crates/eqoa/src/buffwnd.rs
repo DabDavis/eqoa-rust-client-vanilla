@@ -415,8 +415,13 @@ impl BuffWnd {
 
     /// Over the rows (`pieces`): the lit buff framed, and under the rows its
     /// name, its time left at `now` and what may be done with it; with none
-    /// lit, the one the mouse is over (`hover`), unframed.
-    pub fn draw_info(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64) {
+    /// lit, the one the mouse is over (`hover`), unframed. The box is drawn
+    /// after the rest of the HUD (`Play`'s frame, over the spell bars) at the
+    /// icon (`info_at`), kept within `screen` (the piece's own pixels,
+    /// `hudlayout::screen_rect`): under the rows at the bar's left, it was
+    /// buried under the ability bar with the buffs moved down there
+    /// (Heirloom petition 2944).
+    pub fn draw_info(&mut self, vui: &Vui, r: &mut dyn Raster, now: i64, screen: [i32; 4]) {
         let (lines, cells) = (&self.lines, &self.cells);
         // the lit buff: a frame round its icon, and its name and time under the rows
         let shown = self.focused || now < self.lit_until;
@@ -444,7 +449,7 @@ impl BuffWnd {
         let mut win = Window::default();
         let w = if info { vui.string_width(r, &name) + vui.string_width(r, &left) + 36 } else { 0 }.max(win.text_width(vui, r, &hint) + 20).max(180);
         let h = if info { fh * 2 + 12 } else { fh + 12 };
-        let at = [AT[0], bottom(cells) + 2];
+        let at = info_at(c.r, [w, h], screen);
         r.blit(icon_id("black"), 0, at, [0, 0], [w, h], 3, 0.8);
         let fp = FrameParam { tl: (101, 0), top: (102, 0), tr: (103, 0), right: (104, 1), br: (106, 0), bottom: (102, 2), bl: (105, 0), left: (104, 0) };
         vui.blit_frame(r, at, [w, h], &fp, 3, 1.0, true);
@@ -459,6 +464,16 @@ impl BuffWnd {
         win.open(true);
         win.draw_text_internal(vui, r, &hint, at[0] + 10, y + fh / 2, [0.85, 0.85, 0.85, 1.0], 1);
     }
+}
+
+/// Where the name's box (`w` x `h`) goes for the buff whose cell is `cell`:
+/// centred under its icon, else over it where the screen ends first, moved
+/// in to stay within `screen` (left, top, right, bottom).
+pub fn info_at(cell: [f32; 4], [w, h]: [i32; 2], screen: [i32; 4]) -> [i32; 2] {
+    let (top, foot) = (cell[1].floor() as i32, (cell[1] + cell[3]).ceil() as i32);
+    let y = if foot + 2 + h <= screen[3] || top - 2 - h < screen[1] { foot + 2 } else { top - 2 - h };
+    let x = (cell[0] + cell[2] / 2.0).round() as i32 - w / 2;
+    [x.min(screen[2] - w).max(screen[0]), y.min(screen[3] - h).max(screen[1])]
 }
 
 /// The line under a selected buff's name: what may be done with it, for the
@@ -580,7 +595,7 @@ mod tests {
         assert!(b.hover(Some([170.0, 20.0])));
         assert_eq!(b.hovered.as_ref().map(|k| k.1), Some(1));
         assert!(b.lit.is_none() && !b.chosen, "a hover selects nothing");
-        b.draw_info(&Vui::new(Default::default(), Default::default(), vec![vi::ui::UiTexEntry::default(); 161]), &mut NullRaster, 0);
+        b.draw_info(&Vui::new(Default::default(), Default::default(), vec![vi::ui::UiTexEntry::default(); 161]), &mut NullRaster, 0, SCREEN);
         assert!(b.hover(Some([210.0, 20.0])));
         assert_eq!(b.hovered.as_ref().map(|k| k.1), Some(2), "the next one");
         assert!(!b.hover(Some([600.0, 20.0])), "off the bar");
@@ -694,12 +709,26 @@ mod tests {
         let p = b.pieces(&vui, &l, true, [10.0, 0.0]);
         assert_eq!(p.len(), 2 + 4 * 2 + 2 + 2, "two rows: caps, a cell and an icon a buff");
         assert_eq!(b.point(at, 0, false, false, &mut cues), Some(None));
-        b.draw_info(&vui, &mut NullRaster, 10);
+        b.draw_info(&vui, &mut NullRaster, 10, SCREEN);
         assert_eq!(b.point(at, 20, true, false, &mut cues), Some(Some(l[1].clone())));
         b.take_focus(&l, true);
-        b.draw_info(&vui, &mut NullRaster, 30);
+        b.draw_info(&vui, &mut NullRaster, 30, SCREEN);
         b.key(134, &l, true, &mut cues);
-        b.draw_info(&vui, &mut NullRaster, 40);
+        b.draw_info(&vui, &mut NullRaster, 40, SCREEN);
+    }
+
+    const SCREEN: [i32; 4] = [0, 0, 640, 448];
+
+    /// The name's box (petition 2944): under the icon, centred on it; over it
+    /// where the screen ends under it; never past a side. The control: the
+    /// box the bar's left used to take, under every row, is not where it goes.
+    #[test]
+    fn the_name_box_sits_at_its_icon_on_the_screen() {
+        assert_eq!(info_at([200.0, 20.0, 36.0, 34.0], [180, 40], SCREEN), [128, 56], "under the icon, centred");
+        assert_eq!(info_at([200.0, 400.0, 36.0, 34.0], [180, 40], SCREEN), [128, 358], "over it at the screen's foot");
+        assert_eq!(info_at([10.0, 20.0, 36.0, 34.0], [180, 40], SCREEN), [0, 56], "in from the left");
+        assert_eq!(info_at([620.0, 20.0, 36.0, 34.0], [180, 40], SCREEN), [460, 56], "in from the right");
+        assert_ne!(info_at([300.0, 20.0, 36.0, 34.0], [180, 40], SCREEN)[0], AT[0]);
     }
 
     /// A pointer (petition 1809): a left click selects a buff, a left click on

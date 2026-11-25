@@ -735,6 +735,15 @@ pub fn screen_x(ui: &Ui, m: &Mark) -> [i32; 2] {
     [local_point(m.piece, [s[0], 0.0], b)[0].ceil() as i32, local_point(m.piece, [s[2], 0.0], b)[0].floor() as i32]
 }
 
+/// The screen as the piece of `m` draws (`screen_x`, and its top and
+/// bottom): left, top, right, bottom, whole pixels within it.
+pub fn screen_rect(ui: &Ui, m: &Mark) -> [i32; 4] {
+    let b = Beyond { side: ui.side(), top: ui.top() };
+    let s = b.screen();
+    let (a, z) = (local_point(m.piece, [s[0], s[1]], b), local_point(m.piece, [s[2], s[3]], b));
+    [a[0].ceil() as i32, a[1].ceil() as i32, z[0].floor() as i32, z[1].floor() as i32]
+}
+
 /// The frame rectangle `quads` show: each one's bounds within its cut, a quad
 /// cut to nothing left out. A name scrolled in its box (`TextScroll`: the quick
 /// bar's selected ability, 158 pixels wide) is drawn whole and cut to the box;

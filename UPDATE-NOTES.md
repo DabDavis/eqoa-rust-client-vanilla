@@ -9,6 +9,8 @@ is put on the page by `.github/workflows/notes.yml`.
 
 - In the **PC** interface, pressing **Enter** to chat no longer hides your HUD: you now type straight into the chat box, with everything else still on screen. To go back to the old full-screen typing window, turn **Inline Keyboard Chat** off under **Options → Extended → UI → Chat**. The Controller interface is unchanged.
 - **Wake on New Chat** (**Options → Extended → UI → Chat**) now wakes a faded chat box only for a line in the **tab you are looking at**: looting, experience and faction lines going to another tab just mark that tab as unread. Pick **Any Tab** on the same row to have every new line wake it, as before.
+- Hovering or clicking a buff in the **Buff Window** now shows its name box **right at the icon** (under it, or over it near the bottom of the screen), drawn on top of your ability bars and kept on screen, instead of under the buff bar where a moved bar could hide it.
+- Fixed a crash in the browser (seen in Firefox after hours with the tab in the background): when the browser takes the game's picture away mid-frame, that frame is now skipped instead of the game stopping.
 
 ## 2026-11-24 · Buff names and timers, a Stat Window, item icons on the quick slots
 

@@ -11242,6 +11242,14 @@ impl Play {
                 self.hud_menus.hide_utility();
                 self.hud_menus.stacked = false;
             }
+            // the buff's name box over the bars (petition 2944)
+            if crate::influence::shown(self.mode) && self.buff_window_on() {
+                let (anchor, vertical) = (r.ui.anchor, r.ui.vertical);
+                r.ui.anchor = Anchor::Left;
+                r.ui.vertical = Vertical::Top;
+                self.draw_buff_info(vui, &mut r);
+                (r.ui.anchor, r.ui.vertical) = (anchor, vertical);
+            }
             // Move HUD (`hudlayout`): the pieces outlined and named, the bar
             // at the top with Lock and Reset, over everything but the fade
             crate::hudlayout::frame_end();

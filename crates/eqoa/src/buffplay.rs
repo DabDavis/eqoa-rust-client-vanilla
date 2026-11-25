@@ -104,13 +104,23 @@ impl Play {
     /// the effects' piece's place (`hudlayout`).
     pub(super) fn draw_buffs(&mut self, vui: &vi::ui::Vui, r: &mut crate::ui::UiRaster) {
         let lines = self.buff_lines();
-        let now = self.session.now() as i64;
         let pieces = self.buffs.pieces(vui, &lines, crate::settings::pet_effects(), [0.0; 2]);
         crate::hud::draw_fx_pieces(vui, r, &pieces, 1.0);
         if crate::settings::buff_timers() {
             draw_timers(r, &self.buffs.timers());
         }
-        self.buffs.draw_info(vui, r, now);
+    }
+
+    /// The lit or hovered buff's name box (`BuffWnd::draw_info`), after the
+    /// rest of the HUD so no bar covers it (petition 2944), in the effects'
+    /// piece's place but not counted in it.
+    pub(super) fn draw_buff_info(&mut self, vui: &vi::ui::Vui, r: &mut crate::ui::UiRaster) {
+        let now = self.session.now() as i64;
+        let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Effects);
+        let m = crate::hudlayout::seal(r.ui, m);
+        let screen = crate::hudlayout::screen_rect(r.ui, &m);
+        self.buffs.draw_info(vui, r, now, screen);
+        crate::hudlayout::end(r.ui, m);
     }
 
     /// The mouse moved to frame point `f` (none: it left the window): the
