@@ -4290,9 +4290,13 @@ impl App {
             None => "logged out: back to the server list".to_string(),
             Some(r) => format!("disconnected (reason {r}): back to the game's screens"),
         });
-        // the creatures' sounds go with them, their loops stopped
+        // the creatures' sounds go with them, their loops stopped, and the
+        // character's own body's
         if let (Some(p), Some(s)) = (self.play.as_mut(), self.sound.as_mut()) {
             p.let_go_sounds(s);
+        }
+        if let (Some(cs), Some(s)) = (self.walker.as_mut().and_then(|w| w.sprite.as_mut()), self.sound.as_mut()) {
+            cs.stop_sounds(&mut s.sink());
         }
         self.play = None;
         self.walker = None;
@@ -6825,6 +6829,11 @@ impl App {
                         // Built in its model's art (`era`): the 2002 disc's
                         // whole while it is drawn and has that model.
                         if let Some(model) = p.frame(w, lib, gpu, now, game_frame, sound.as_mut()) {
+                            // the body before stops what it had playing (a
+                            // form's wing beat loops: `CSprite::stop_sounds`)
+                            if let (Some(s), Some(cs)) = (sound.as_mut(), w.sprite.as_mut()) {
+                                cs.stop_sounds(&mut s.sink());
+                            }
                             lib.with_view(lib.view_for(model as i32), || {
                                 if let Some(r) = lib.lookup(model as i32)
                                     && let Some(m) = lib.build_model(r)

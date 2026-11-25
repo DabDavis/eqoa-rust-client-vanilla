@@ -1873,11 +1873,13 @@ fn apply(lib: &Library, g: &mut Gpu, p: &mut Option<Puppet>, e: &net::entity::En
     }
 }
 
-/// A creature's puppet goes or is made anew: its continuous sound stopped
-/// and its sounds let go, as `VICSprite::Release` does (`Sound::let_go`).
-fn let_go(s: &mut crate::sound::Sound, p: &Option<Puppet>) {
-    let Some(cs) = p.as_ref().and_then(|p| p.sprite.as_ref()) else { return };
-    s.let_go(&cs.sounds(), cs.snd.channel);
+/// A creature's puppet goes or is made anew: what it has playing stopped
+/// (its continuous sound and its trigger sounds, a wing beat's loop among
+/// them) and its sounds let go, as `VICSprite::Release` does
+/// (`Sound::let_go`).
+fn let_go(s: &mut crate::sound::Sound, p: &mut Option<Puppet>) {
+    let Some(cs) = p.as_mut().and_then(|p| p.sprite.as_mut()) else { return };
+    s.let_go(cs);
 }
 
 /// The creatures whose sounds are made this frame (`VICSprite::Process`'s
@@ -1923,15 +1925,16 @@ fn unrastered(world: &mut vi::world::World<Ee>, drawn: &[(usize, Option<usize>, 
     drawn.iter().filter(|(_, a, _)| !a.is_some_and(|a| rastered.contains(&a))).map(|&(slot, _, _)| slot).collect()
 }
 
-/// A creature not heard this frame (`heard_slots`): its loop stopped, as one
-/// out of earshot is (`VICSprite::Process` with a volume of 0), and its
-/// tripped sound triggers let go unplayed, as a creature in no slot trips
-/// none.
+/// A creature not heard this frame (`heard_slots`), or out of earshot (50
+/// units, where `CalcVolumeAndPan` gives it no volume): its loops stopped,
+/// as one out of earshot has its continuous sound stopped
+/// (`VICSprite::Process` with a volume of 0), its trigger sounds with it
+/// (`CSprite::stop_sounds`: a wing beat is a loop, which the console left
+/// playing at its last volume as its creature flew off, Heirloom petition
+/// 3108), and its tripped sound triggers let go unplayed, as a creature in
+/// no slot trips none.
 fn hush(cs: &mut CSprite<Ee>, s: &mut crate::sound::Sound) {
-    if cs.snd.channel != -1 {
-        s.dev.stop(cs.snd.channel);
-        cs.snd.channel = -1;
-    }
+    cs.stop_sounds(&mut s.sink());
     for i in 0..cs.h.triggers.len() {
         cs.h.reset_trigger(i);
     }
@@ -2533,7 +2536,8 @@ mod entity_actors {
         assert!(h[23] && !h[24], "the tie's lower slot");
     }
 
-    /// A creature past the 24 (`hush`): its loop stopped and its tripped
+    /// A creature past the 24 or out of earshot (`hush`): its loops stopped
+    /// (its continuous sound's and its trigger sound's) and its tripped
     /// triggers let go, unplayed. The control: before it, the loop plays and
     /// the trigger is tripped.
     #[test]
@@ -2559,11 +2563,15 @@ mod entity_actors {
         let mut link = s.audio().link();
         s.dev.flush(&mut link);
         let h = s.dev.play(w, 0, 0);
-        assert!(h >= 0 && s.dev.is_playing(h), "the control: the loop plays");
+        // and as a layer's trigger sound (a wing beat: petition 3108)
+        let t = s.dev.play(w, 0, 0);
+        assert!(h >= 0 && s.dev.is_playing(h) && t >= 0 && s.dev.is_playing(t), "the control: the loops play");
         cs.snd.channel = h;
+        cs.cur[0].flags = t;
         cs.h.triggers[0].tripped = 1;
         hush(&mut cs, &mut s);
         assert!(!s.dev.is_playing(h) && cs.snd.channel == -1, "the loop stopped");
+        assert!(!s.dev.is_playing(t) && cs.cur[0].flags == -1, "the trigger's loop stopped");
         assert!(cs.h.triggers.iter().all(|t| t.tripped == 0), "the trips let go");
     }
 
@@ -4914,17 +4922,17 @@ impl Play {
             let sounds_of = |p: &Option<Puppet>| p.as_ref().and_then(|p| p.sprite.as_ref()).map(|cs| cs.sounds()).unwrap_or_default();
             let Some(e) = want else {
                 if let Some(s) = sound.as_deref_mut() {
-                    let_go(s, &self.puppets[slot]);
+                    let_go(s, &mut self.puppets[slot]);
                 }
                 self.puppets[slot] = None;
                 continue;
             };
             let look = e.creature.as_ref().map(look_of);
-            if let Some(old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms, self.session.creation.as_ref(), self.session.mercs.as_ref(), self.session.jumps)
+            if let Some(mut old) = apply(lib, &mut g, &mut self.puppets[slot], e, look, slot, game_ms, self.session.creation.as_ref(), self.session.mercs.as_ref(), self.session.jumps)
                 && let Some(s) = sound.as_deref_mut()
             {
                 s.share_sounds(lib, &sounds_of(&self.puppets[slot]));
-                let_go(s, &old);
+                let_go(s, &mut old);
             }
             let Some(p) = self.puppets[slot].as_mut() else { continue };
             wear_cape(lib, &mut g, p, cape_of(&self.session, e));
@@ -5008,14 +5016,16 @@ impl Play {
                         }
                     }
                     // VICSprite::Process: the sounds its triggers fired, for the
-                    // 24 heard (`heard_slots`); past them it is quiet
+                    // 24 heard (`heard_slots`) within earshot; past them it is
+                    // quiet, its loops stopped (`hush`)
                     if let Some(s) = sound.as_deref_mut() {
-                        if heard[slot] && p.wisp {
+                        let heard = heard[slot] && CSprite::calc_volume_and_pan(&walker.eye.position, &walker.eye.direction, &at).0 > F::ZERO;
+                        if heard && p.wisp {
                             // a Wisp's moving makes no sound (`wisp::Hushed`)
                             let quiet = crate::wisp::step_sounds(cs);
                             let mut sink = s.sink();
                             cs.process_sounds(&walker.eye.position, &walker.eye.direction, &at, Some(&mut crate::wisp::Hushed { inner: &mut sink, quiet }));
-                        } else if heard[slot] {
+                        } else if heard {
                             cs.process_sounds(&walker.eye.position, &walker.eye.direction, &at, Some(&mut s.sink()));
                         } else {
                             hush(cs, s);

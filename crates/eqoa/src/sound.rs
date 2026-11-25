@@ -556,15 +556,14 @@ impl Sound {
     }
 
     /// A creature's sprite goes (it left, or is made anew for another model
-    /// or look): `VICSprite::Release`'s sound half. Its continuous sound
-    /// (`snd.channel`, a loop) is stopped, then its share of each sound let
-    /// go. Releasing alone leaves the loop playing for as long as another
-    /// creature shares its wave, and on after a logout.
-    pub fn let_go(&mut self, ids: &[u32], cont_channel: i32) {
-        if cont_channel != -1 {
-            self.dev.stop(cont_channel);
-        }
-        self.release_sounds(ids);
+    /// or look): `VICSprite::Release`'s sound half. Whatever it has playing
+    /// is stopped (`CSprite::stop_sounds`: its continuous sound, a loop, and
+    /// its layers' trigger sounds, which can loop too), then its share of
+    /// each sound let go. Releasing alone leaves a loop playing for as long
+    /// as another creature shares its wave, and on after a logout.
+    pub fn let_go(&mut self, cs: &mut vi::csprite::CSprite<Ee>) {
+        cs.stop_sounds(&mut self.sink());
+        self.release_sounds(&cs.sounds());
     }
 
     /// The creature went: its share of each sound with it.
@@ -1097,12 +1096,15 @@ mod tests {
         assert_eq!(no_fx, control, "Fx Volume 0: the new track as the control's");
     }
 
-    /// A creature's continuous sound (a loop) stops when its sprite goes,
-    /// as `VICSprite::Release` stops `m_snd.m_channel` before it releases,
-    /// even while another creature of its model still shares the wave. The
-    /// control only releases, as the client did: the loop plays on.
+    /// A creature's loops stop when its sprite goes, even while another
+    /// creature of its model still shares their waves: its continuous sound
+    /// (the bat 0x8023AD71's 0x1DB6CA44), as `VICSprite::Release` stops
+    /// `m_snd.m_channel`, and its layer's trigger sound, a loop too (the
+    /// forest qex 0x4E2A945C's wing beat 0x8B150560, its walk's sound:
+    /// Heirloom petition 3108, the flapping heard on after a port). The
+    /// control only releases, as the client did: both loops play on.
     #[test]
-    fn a_creatures_loop_stops_when_it_goes() {
+    fn a_creatures_loops_stop_when_it_goes() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
         if !path.exists() {
             eprintln!("SKIP: no run/eqoa.iso");
@@ -1110,38 +1112,52 @@ mod tests {
         }
         let mut iso = iso::Iso::open(&path).unwrap();
         let ch = esf::Container::open(iso.read("DATA/CHAR.ESF").unwrap()).unwrap();
-        // the continuous sound twelve of CHAR.ESF's models loop
-        let id = 0x1db6_ca44u32;
-        let w = esf::sound::wave(&ch, ch.lookup(id as i32).unwrap()).unwrap();
-        assert_eq!(w.looped, 1, "a loop");
+        let (bat, qex, cont, beat) = (0x8023_ad71u32, 0x4e2a_945cu32, 0x1db6_ca44u32, 0x8b15_0560u32);
+        for id in [cont, beat] {
+            let w = esf::sound::wave(&ch, ch.lookup(id as i32).unwrap()).unwrap();
+            assert_eq!(w.looped, 1, "{id:08X} a loop");
+        }
         let mut lib = esf::Library::new();
         lib.add("CHAR.ESF", ch);
+        let load = |model: u32| {
+            let r = lib.lookup(model as i32).unwrap();
+            vi::character::load_csprite::<Ee>(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut vi::csprite::Rand(1)).unwrap()
+        };
+        assert_eq!(load(bat).snd.sound, cont, "the bat's continuous sound");
+        assert_eq!(load(qex).entries[1].sound[0], beat, "the qex's walk sounds the wing beat");
         for stop in [false, true] {
             let audio = Audio::offline(Box::new(crate::audio::IsoDisc(iso::Iso::open(&path).unwrap())));
             let mut s = Sound::with(&mut |p| iso.read(p).ok(), audio).unwrap();
-            // two creatures of the model come; the first one's loop plays
-            s.share_sounds(&lib, &[id]);
-            s.share_sounds(&lib, &[id]);
+            // two of each come; the first one's loops play
+            let (mut b, mut q) = (load(bat), load(qex));
+            for cs in [&b, &q, &load(bat), &load(qex)] {
+                s.share_sounds(&lib, &cs.sounds());
+            }
             s.dev.flush(&mut s.link);
-            let h = vi::csprite::SoundSink::play(&mut s.sink(), id);
-            assert!(h >= 0, "the loop starts: {h}");
+            b.snd.channel = vi::csprite::SoundSink::play(&mut s.sink(), cont);
+            q.cur[0].flags = vi::csprite::SoundSink::play(&mut s.sink(), beat);
+            let (hb, hq) = (b.snd.channel, q.cur[0].flags);
+            assert!(hb >= 0 && hq >= 0, "the loops start: {hb} {hq}");
             for _ in 0..30 {
                 s.frame_alone();
                 s.audio.render(1600);
             }
-            assert!(s.dev.is_playing(h), "the loop plays");
-            // the first creature goes
-            if stop {
-                s.let_go(&[id], h);
-            } else {
-                s.release_sounds(&[id]);
+            assert!(s.dev.is_playing(hb) && s.dev.is_playing(hq), "the loops play");
+            // the first two go
+            for cs in [&mut b, &mut q] {
+                if stop {
+                    s.let_go(cs);
+                } else {
+                    s.release_sounds(&cs.sounds());
+                }
             }
             for _ in 0..30 {
                 s.frame_alone();
                 s.audio.render(1600);
             }
-            assert_eq!(s.dev.is_playing(h), !stop, "stopped with its creature: {stop}");
-            assert!(s.chars.contains_key(&id), "the other creature still shares the wave");
+            assert_eq!(s.dev.is_playing(hb), !stop, "the continuous loop stopped with its creature: {stop}");
+            assert_eq!(s.dev.is_playing(hq), !stop, "the wing beat stopped with its creature: {stop}");
+            assert!(s.chars.contains_key(&cont) && s.chars.contains_key(&beat), "the others still share the waves");
         }
     }
 

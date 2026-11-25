@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Wing beats stop with their creature
+
+- A flying creature's wing beat (bats, the winged fiends, the forest qex and others) no longer keeps flapping in your ears after the creature is gone: it stops when the creature leaves, when you port, coach or zone away, and when it flies out of earshot.
+
 ## 2026-11-25 · Damage Taken colour, your own name plate, coach talk, minimap colours, faster sidestep
 
 - **Options → Extended → UI → Number Colors** has a new row, **Damage Taken**: the colour of the numbers when a creature (or anyone else) hits you. Default keeps the game's yellow.
