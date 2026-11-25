@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Character names up to 15 letters
+
+- A new character's **name can now be up to 15 letters** (it was 12), on a server that takes them. Names still need at least three letters, letters only.
+
 ## 2026-11-25 · Typing keeps the HUD, cooldowns on spell icons, HUD layouts, mouseover casting, melee in the Stat Window
 
 - In the **PC** interface, pressing **Enter** to chat no longer hides your HUD: you now type straight into the chat box, with everything else still on screen. To go back to the old full-screen typing window, turn **Inline Keyboard Chat** off under **Options → Extended → UI → Chat**. The Controller interface is unchanged.
