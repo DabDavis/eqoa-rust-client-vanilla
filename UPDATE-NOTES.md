@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Typing keeps the HUD, cooldowns on spell icons, HUD profiles, /target
+
+- In the **PC** interface, pressing **Enter** to chat no longer hides your HUD: you now type straight into the chat box, with everything else still on screen. To go back to the old full-screen typing window, turn **Inline Keyboard Chat** off under **Options → Extended → UI → Chat**. The Controller interface is unchanged.
+
 ## 2026-11-24 · Buff names and timers, a Stat Window, item icons on the quick slots
 
 - Hover the mouse over a buff or debuff in the **Buff Window** to see its name and how long it has left, without clicking. Each of your buffs now also shows its **time left** on its icon ("45s", "12m", "2h"), in yellow in its last minute. Turn the numbers off with **Buff Timers** under **Options → Extended → UI → HUD Extras**.

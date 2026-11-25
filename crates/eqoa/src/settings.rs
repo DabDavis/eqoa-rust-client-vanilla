@@ -1169,6 +1169,11 @@ pub struct ClientOptions {
     pub chat_fade_seconds: u8,
     /// Let newly received chat wake its PC pane; otherwise only interaction does.
     pub chat_wake_on_message: bool,
+    /// Inline Keyboard Chat: on a computer Enter types into the chat box
+    /// itself, the HUD kept (on by default since Heirloom petition 2943: "if
+    /// I press Enter most of my UI disappears. I am in the PC mode"); off,
+    /// the game's Text Entry window, which hides the HUD as a console did.
+    /// The Controller interface keeps the game's window either way.
     pub inline_chat: bool,
     /// R2 Channel Switch (the server owner, 2026-11-18: "for switching chat
     /// channels hold r2 then dpad left/right can switch channels if players
@@ -1659,7 +1664,7 @@ impl Default for ClientOptions {
             chat_opacity: 75,
             chat_fade_seconds: 0,
             chat_wake_on_message: false,
-            inline_chat: false,
+            inline_chat: true,
             r2_channels: false,
             stacked_bars: false,
             spell_bar_opacity: 100,
@@ -1880,8 +1885,10 @@ impl ClientOptions {
                 s.push_str(&format!("{key}={value}\n"));
             }
         }
-        if self.inline_chat {
-            s.push_str("inline_chat=on\n");
+        // on by default since Heirloom petition 2943 (a computer's Enter
+        // hid the HUD behind the game's Text Entry window): only Off is kept
+        if !self.inline_chat {
+            s.push_str("inline_chat=off\n");
         }
         if self.stacked_bars {
             s.push_str("stacked_bars=on\n");
@@ -3818,6 +3825,11 @@ mod tests {
         for key in ["hud_scale=", "nameplate_scale=", "chat_width=", "chat_rows=", "chat_opacity=", "inline_chat="] {
             assert!(!defaults.to_text().contains(key));
         }
+        // Inline Keyboard Chat on by default (petition 2943): Off is what is kept
+        assert!(defaults.inline_chat);
+        let off = ClientOptions { inline_chat: false, ..defaults };
+        assert!(off.to_text().contains("inline_chat=off\n"));
+        assert_eq!(ClientOptions::from_text(&off.to_text()), off);
     }
 
     /// The Controller interface's HUD Scale (petition 2912): its own key,
