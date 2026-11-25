@@ -1918,7 +1918,7 @@ impl WndOptions {
                 _ => None,
             },
             Note::Hud => match self.item {
-                76 if crate::hudlayout::unlocked() => Some(if crate::settings::pc_mode() { "Drag, pin or unpin each piece" } else { "Leave the menu and drag the pieces" }.to_string()),
+                76 if crate::hudlayout::unlocked() => Some(if crate::settings::pc_mode() { "Drag, pin or unpin each piece" } else { "Leave the menu and drag the pieces; the minimap's corner resizes it" }.to_string()),
                 SPELL_BAR_SIZE => Some("Also adjustable by dragging in Move HUD".to_string()),
                 _ => None,
             },
@@ -4019,7 +4019,7 @@ mod tests {
         assert_eq!(w.page_note(w.cat.unwrap()), None, "no note while off");
         press(&mut w, &mut o, key::RIGHT, &mut cues);
         assert_eq!((crate::hudlayout::unlocked(), cues.last()), (true, Some(&11)), "on");
-        assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some("Leave the menu and drag the pieces"));
+        assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some("Leave the menu and drag the pieces; the minimap's corner resizes it"));
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert!(!crate::hudlayout::unlocked(), "✕ turns it too");
         press(&mut w, &mut o, key::DOWN, &mut cues);

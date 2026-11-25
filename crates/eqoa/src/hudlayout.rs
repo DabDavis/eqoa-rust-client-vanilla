@@ -27,6 +27,9 @@
 //!   `hud-<n>.opt`, `settings::hud_layout`; in a page the origin's storage),
 //!   and read at the next start. Reset HUD (Extended, the bar's Reset, `/hud
 //!   reset`) puts every piece back at once and keeps that.
+//! - Sized from a corner's grip while the HUD moves: every piece in the PC
+//!   interface, the minimap alone in the Controller's (Heirloom petition
+//!   3065), each interface's sizes in its own layout (`sizable`).
 
 use render::ui::{HudScale, SCREEN_H, SCREEN_W, Ui};
 use std::cell::RefCell;
@@ -482,9 +485,18 @@ pub fn unlocked() -> bool {
     with(|s| s.unlocked)
 }
 
-/// An individual PC piece's size relative to the player's global HUD scale.
+/// Whether `piece` has a size of its own in this interface: every piece in the
+/// PC's, the minimap alone in the Controller's (Heirloom petition 3065: "allow
+/// the controller mini-map to be able to have its size increased/decreased the
+/// same way"), each interface's kept in its own layout (`hud` or `hud-pc`).
+fn sizable(pc: bool, piece: Piece) -> bool {
+    pc || piece == Piece::Minimap
+}
+
+/// An individual piece's size relative to the player's global HUD scale
+/// (`sizable`; 100 for one that has none in this interface).
 pub fn piece_scale_percent(piece: Piece) -> u16 {
-    with(|s| if s.read_for.is_some_and(|(_, pc)| pc) { s.layout.percent[piece.index()] } else { 100 })
+    with(|s| if sizable(s.read_for.is_some_and(|(_, pc)| pc), piece) { s.layout.percent[piece.index()] } else { 100 })
 }
 
 /// Used by the Spell Bar Size option. Its center stays put across edits even
@@ -493,7 +505,7 @@ pub fn set_piece_scale_percent(piece: Piece, percent: u16) {
     let changed = with(|s| {
         let i = piece.index();
         let next = size_step(percent);
-        if !s.read_for.is_some_and(|(_, pc)| pc) || s.layout.percent[i] == next { return false; }
+        if !sizable(s.read_for.is_some_and(|(_, pc)| pc), piece) || s.layout.percent[i] == next { return false; }
         if piece == Piece::SpellBars && let Some(pos) = s.layout.places[i].as_mut() {
             let global = crate::settings::client().display_ui().hud_scale as f32 / 100.0;
             pos.dx += (SCREEN_W / 2.0) * global * (f32::from(next) - f32::from(s.layout.percent[i])) / 100.0;
@@ -1175,7 +1187,7 @@ const BAR: [f32; 4] = [0.0, 0.0, 0.0, 0.7];
 const BUTTON: [f32; 4] = [0.35, 0.3, 0.12, 0.95];
 
 /// The bar's words.
-const BAR_TEXT: &str = "Move HUD: drag a piece to move it";
+const BAR_TEXT: &str = "Move HUD: drag a piece to move it, the minimap's corner to resize it";
 const PC_BAR_TEXT: &str = "Move HUD: drag a piece or resize from a corner";
 
 /// Diagonal grips face the screen's center and its opposite corner, so even a
@@ -1262,7 +1274,9 @@ pub fn draw_moving(r: &mut crate::ui::UiRaster) {
             x = right + 3.0;
         }
         words(ui, x, at[1] + 2.0, piece.label(), WORDS);
-        if pc {
+        // its corner grips: every piece unpinned in the PC interface, the
+        // minimap in the Controller's (`sizable`: petition 3065)
+        let resizable = if pc {
             let label = if pins[piece.index()] { "Unpin" } else { "Pin" };
             let w = width(ui, label) + 8.0;
             let left = (at[2] - w).max(x + width(ui, piece.label()) + 3.0).clamp(-b.side, SCREEN_W + b.side - w);
@@ -1271,25 +1285,28 @@ pub fn draw_moving(r: &mut crate::ui::UiRaster) {
             fill(ui, rect, BUTTON);
             words(ui, left + 4.0, top + 2.0, label, [1.0; 4]);
             buttons.push((rect, Button::Pin(piece)));
-            if !pins[piece.index()] {
-                for grip in grips(piece, at, b) {
-                    let [l, t, r, bottom] = grip.rect;
-                    let [dx, dy] = grip.direction;
-                    let (cx, cy) = ((l + r) * 0.5, (t + bottom) * 0.5);
-                    // On a short piece at the display edge, keep Pin and the
-                    // chat reflow grip exposed; the opposite corner still works.
-                    if buttons.iter().any(|(btn, _)| btn[0] <= cx && cx < btn[2] && btn[1] <= cy && cy < btn[3])
-                        || chat_grips.iter().any(|(_, btn, _)| btn[0] <= cx && cx < btn[2] && btn[1] <= cy && cy < btn[3]) { continue; }
-                    fill(ui, grip.rect, BUTTON);
-                    for step in [-2.5, -0.5, 1.5] {
-                        let (x, y) = (cx + dx * step, cy + dy * step);
-                        fill(ui, [x - 1., y - 1., x + 1., y + 1.], WORDS);
-                    }
-                    let (x, y) = (cx + dx * 3., cy + dy * 3.);
-                    fill(ui, [x.min(cx) - 0.8, y - 0.8, x.max(cx) + 0.8, y + 0.8], WORDS);
-                    fill(ui, [x - 0.8, y.min(cy) - 0.8, x + 0.8, y.max(cy) + 0.8], WORDS);
-                    scale_grips.push(grip);
+            !pins[piece.index()]
+        } else {
+            sizable(false, piece)
+        };
+        if resizable {
+            for grip in grips(piece, at, b) {
+                let [l, t, r, bottom] = grip.rect;
+                let [dx, dy] = grip.direction;
+                let (cx, cy) = ((l + r) * 0.5, (t + bottom) * 0.5);
+                // On a short piece at the display edge, keep Pin and the
+                // chat reflow grip exposed; the opposite corner still works.
+                if buttons.iter().any(|(btn, _)| btn[0] <= cx && cx < btn[2] && btn[1] <= cy && cy < btn[3])
+                    || chat_grips.iter().any(|(_, btn, _)| btn[0] <= cx && cx < btn[2] && btn[1] <= cy && cy < btn[3]) { continue; }
+                fill(ui, grip.rect, BUTTON);
+                for step in [-2.5, -0.5, 1.5] {
+                    let (x, y) = (cx + dx * step, cy + dy * step);
+                    fill(ui, [x - 1., y - 1., x + 1., y + 1.], WORDS);
                 }
+                let (x, y) = (cx + dx * 3., cy + dy * 3.);
+                fill(ui, [x.min(cx) - 0.8, y - 0.8, x.max(cx) + 0.8, y + 0.8], WORDS);
+                fill(ui, [x - 0.8, y.min(cy) - 0.8, x + 0.8, y.max(cy) + 0.8], WORDS);
+                scale_grips.push(grip);
             }
         }
     }
@@ -1367,6 +1384,48 @@ mod tests {
         reset();
         testing_reset();
         assert_eq!(layout(), Layout::default());
+    }
+
+    /// Heirloom petition 3065: the Controller interface's minimap is resized
+    /// from its corner as the PC's pieces are, kept in the Controller's own
+    /// layout; its other pieces keep their native sizes.
+    #[test]
+    fn controller_minimap_resizes_from_its_corner_and_keeps_its_size() {
+        testing_reset();
+        crate::settings::testing::reset(false);
+        crate::settings::set_ui_mode(false).unwrap();
+        set_unlocked(true);
+        assert!(sizable(false, Piece::Minimap) && !sizable(false, Piece::Target) && !sizable(false, Piece::Chat));
+        let piece = Piece::Minimap;
+        let rect = [230.0, 150.0, 330.0, 214.0];
+        with(|s| s.layout.set(piece, Some(Place::of(piece, [0.0; 2], rect, WIDE))));
+        frame_begin();
+        note(piece, rect, [0.0; 2]);
+        frame_end();
+        let grip = grips(piece, rect, WIDE)[0];
+        with(|s| s.scale_grips = vec![grip]);
+        let start = [(grip.rect[0] + grip.rect[2]) * 0.5, (grip.rect[1] + grip.rect[3]) * 0.5];
+        let far = std::array::from_fn(|a| rect[if grip.direction[a] > 0.0 { a } else { a + 2 }]);
+        let fixed = local_point(piece, far, WIDE);
+        assert_eq!(press(start, WIDE), Press::Piece(piece));
+        drag_to([start[0] + 25.0 * grip.direction[0], start[1] + 16.0 * grip.direction[1]], WIDE);
+        assert!(release());
+        assert_eq!(piece_scale_percent(piece), 125);
+        assert_eq!(scale(piece, WIDE).factor, crate::settings::client().display_ui().hud_scale as f32 / 100.0 * 1.25);
+        let after = frame_point(piece, fixed, WIDE);
+        assert!((far[0] - after[0]).abs() <= 0.51 && (far[1] - after[1]).abs() <= 0.51, "{far:?} -> {after:?}");
+        assert!(layout().to_text().contains("size minimap 125\n"));
+        // the Controller's other pieces keep the game's sizes
+        set_piece_scale_percent(Piece::Target, 150);
+        assert_eq!(piece_scale_percent(Piece::Target), 100);
+        // the PC's layout is its own, and the Controller's comes back with its size
+        crate::settings::set_ui_mode(true).unwrap();
+        assert_eq!(piece_scale_percent(piece), 100);
+        crate::settings::set_ui_mode(false).unwrap();
+        assert_eq!(piece_scale_percent(piece), 125);
+        reset();
+        assert_eq!(piece_scale_percent(piece), 100, "Reset HUD puts it back");
+        testing_reset();
     }
 
     #[test]
