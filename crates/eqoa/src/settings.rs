@@ -409,6 +409,18 @@ pub fn save_dye_recent(text: &str) -> bool {
     }
 }
 
+// ---- the tracked quests (`questtrack`) ----------------------------------------------
+
+/// A file of the config directory's (`questtrack`'s), none when not kept.
+pub fn store_read(name: &str) -> Option<Vec<u8>> {
+    store::read(name)
+}
+
+/// Keeps a file of the config directory's (`questtrack`'s).
+pub fn store_write(name: &str, b: &[u8]) -> Result<(), String> {
+    store::write(name, b)
+}
+
 // ---- the auto slots (`autocast`) --------------------------------------------------
 
 /// The auto slots' file as text (empty when there is none): a line a
@@ -1212,6 +1224,23 @@ pub struct ClientOptions {
     /// pressed again (0x0022's swap-back byte, `gear::use_message`). Off by
     /// default.
     pub weapon_swap_back: bool,
+    /// Auto Loot (Heirloom petition 3008, Cucumber: "when you open the loot
+    /// window and auto loot is selected it auto loots everything. Probably
+    /// have it not auto loot NO TRADE stuff"): a corpse opened takes each of
+    /// its items but the NO TRADE ones (and a Lore one already held) with the
+    /// window's own take, one `LootOne` an item (`loot::auto_takes`). Off by
+    /// default. A server that turns auto-cast off (`qol::AUTO_CAST`: the
+    /// game's own UI, an [OG] account) turns this off with it.
+    pub auto_loot: bool,
+    /// Attack With Abilities (Heirloom petition 3015, Cucumber: "an option
+    /// that if you use an attack skill as tank/melee, it auto starts your
+    /// regular attack/auto attack"): an attack ability (`autocast::Kind::
+    /// Attack` at a target: a taunt, a kick, a bash, a strike, a nuke) the
+    /// server takes (its lockout, 0x00CD) on a hostile target starts the
+    /// auto-attack as the attack button does (`Play::attack_with_ability`).
+    /// Off by default. A server that turns auto-cast off (`qol::AUTO_CAST`)
+    /// turns this off with it.
+    pub attack_abilities: bool,
     /// Chat Always Shown (a player's ticket 1914: "allows your chat box to stay
     /// fully visible without auto collapse"): the chat box open at its five
     /// rows with the last lines in it, never sliding away (`chat::WndChat::
@@ -1741,6 +1770,8 @@ impl Default for ClientOptions {
             auto_target: false,
             mouseover_cast: MouseoverCast::Off,
             weapon_swap_back: false,
+            auto_loot: false,
+            attack_abilities: false,
             chat_always: false,
             hud_scale: 100,
             nameplate_scale: 100,
@@ -1964,6 +1995,14 @@ impl ClientOptions {
         // Weapon Swap Back only when on
         if self.weapon_swap_back {
             s.push_str("weapon_swap_back=on\n");
+        }
+        // Auto Loot only when on
+        if self.auto_loot {
+            s.push_str("auto_loot=on\n");
+        }
+        // Attack With Abilities only when on
+        if self.attack_abilities {
+            s.push_str("attack_abilities=on\n");
         }
         // R2 Channel Switch only when on
         if self.r2_channels {
@@ -2289,6 +2328,10 @@ impl ClientOptions {
                 ("auto_target", "off") => c.auto_target = false,
                 ("weapon_swap_back", "on") => c.weapon_swap_back = true,
                 ("weapon_swap_back", "off") => c.weapon_swap_back = false,
+                ("auto_loot", "on") => c.auto_loot = true,
+                ("auto_loot", "off") => c.auto_loot = false,
+                ("attack_abilities", "on") => c.attack_abilities = true,
+                ("attack_abilities", "off") => c.attack_abilities = false,
                 ("chat_always", "on") => c.chat_always = true,
                 ("chat_fade_seconds", v) => {
                     if let Ok(n) = v.parse::<u8>() && n <= 120 { c.chat_fade_seconds = n; }
@@ -2780,7 +2823,8 @@ pub mod qol {
     pub const BUFF_WINDOW: u32 = 1 << 7;
     /// The pet's effects under its bar (Pet Effects).
     pub const PET_EFFECTS: u32 = 1 << 8;
-    /// Auto-cast on the quick bars and Auto Target.
+    /// Auto-cast on the quick bars and Auto Target (and Mouseover Casting,
+    /// Auto Loot and Attack With Abilities, the client's other automation).
     pub const AUTO_CAST: u32 = 1 << 9;
     /// Item links in chat (Item Links) OFF BY DEFAULT, not locked: read from
     /// `item_links_here`, the player's to turn there (plain names until then).
@@ -2836,7 +2880,7 @@ pub mod qol {
             83 | crate::options::BUFF_TIMERS => BUFF_WINDOW,
             crate::options::STAT_WINDOW => STAT_CAPS,
             58 | crate::options::GROUP_EFFECTS | crate::options::NPC_DEBUFFS => PET_EFFECTS,
-            78 | 79 | crate::options::MOUSEOVER_CAST => AUTO_CAST,
+            78 | 79 | crate::options::MOUSEOVER_CAST | crate::options::AUTO_LOOT | crate::options::ATTACK_ABILITIES => AUTO_CAST,
             22 | 90 | crate::options::SPELL_BAR_LAYOUT | crate::options::UTILITY_LAYOUT | crate::options::SPELL_BAR_SIZE | crate::options::ITEM_ICONS | crate::options::SPELL_COOLDOWNS => SPELL_BARS,
             _ => return None,
         })
@@ -2890,7 +2934,7 @@ pub mod qol {
             (c.pet_effects, c.group_effects, c.npc_debuffs) = (false, false, false);
         }
         if off(AUTO_CAST) {
-            (c.auto_cast, c.auto_target, c.mouseover_cast) = (false, false, super::MouseoverCast::Off);
+            (c.auto_cast, c.auto_target, c.mouseover_cast, c.auto_loot, c.attack_abilities) = (false, false, super::MouseoverCast::Off, false, false);
         }
         if off(ITEM_LINKS) {
             c.item_links = c.item_links_here && !off(LOCKED);
@@ -2936,7 +2980,7 @@ pub mod qol {
             (v.pet_effects, v.group_effects, v.npc_debuffs) = (kept.pet_effects, kept.group_effects, kept.npc_debuffs);
         }
         if off(AUTO_CAST) {
-            (v.auto_cast, v.auto_target, v.mouseover_cast) = (kept.auto_cast, kept.auto_target, kept.mouseover_cast);
+            (v.auto_cast, v.auto_target, v.mouseover_cast, v.auto_loot, v.attack_abilities) = (kept.auto_cast, kept.auto_target, kept.mouseover_cast, kept.auto_loot, kept.attack_abilities);
         }
         if off(ITEM_LINKS) {
             v.item_links_here = if off(LOCKED) { kept.item_links_here } else { v.item_links };
@@ -3236,6 +3280,18 @@ pub fn auto_target() -> bool {
 /// Weapon Swap Back (work board 1581).
 pub fn weapon_swap_back() -> bool {
     client().weapon_swap_back
+}
+
+/// Auto Loot (Heirloom petition 3008), off where the server turns
+/// auto-cast off (`qol::AUTO_CAST`).
+pub fn auto_loot() -> bool {
+    client().auto_loot
+}
+
+/// Attack With Abilities (Heirloom petition 3015), off where the server
+/// turns auto-cast off (`qol::AUTO_CAST`).
+pub fn attack_abilities() -> bool {
+    client().attack_abilities
 }
 
 /// R2 Channel Switch (Extended > UI > Chat; the server owner, 2026-11-18).
@@ -4652,7 +4708,7 @@ mod tests {
     #[test]
     fn the_server_turns_additions_off_and_the_choices_stay() {
         testing::reset(false);
-        let chosen = ClientOptions { dps_meter: true, auto_target: true, stat_window: true, health_numbers: true, number_colors: [3; crate::numcolor::ROWS], ability_bars: 4, stacked_bars: true, spell_bar_layout: crate::hudmenu::Layout::Columns, utility_layout: crate::hudmenu::UtilityLayout::Below, ..Default::default() };
+        let chosen = ClientOptions { dps_meter: true, auto_target: true, auto_loot: true, attack_abilities: true, stat_window: true, health_numbers: true, number_colors: [3; crate::numcolor::ROWS], ability_bars: 4, stacked_bars: true, spell_bar_layout: crate::hudmenu::Layout::Columns, utility_layout: crate::hudmenu::UtilityLayout::Below, ..Default::default() };
         set_client(chosen);
         assert_eq!(client(), chosen, "nothing off: as kept");
         let all = qol::MAP | qol::QUEST_HELPER | qol::TARGET_LEVEL | qol::DPS_METER | qol::NUMBER_COLORS | qol::STAT_CAPS | qol::POWER_BARS | qol::BUFF_WINDOW | qol::PET_EFFECTS | qol::AUTO_CAST | qol::ITEM_LINKS | qol::SPELL_BARS;
@@ -4662,7 +4718,7 @@ mod tests {
         assert!(!(c.map || c.minimap || map() || minimap()), "the map, off by default");
         assert!(c.map_markers, "its markers the player's, with it");
         assert!(!(c.quest_helper || c.quest_markers || c.quest_tracker || c.head_marks || quest_helper() || quest_markers() || quest_tracker()), "the quest helper");
-        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.buff_timers || buff_timers() || c.stat_window || stat_window() || c.item_icons || item_icons() || c.spell_cooldowns || spell_cooldowns() || c.pet_effects || c.group_effects || c.npc_debuffs || c.auto_cast || c.auto_target || c.mouseover_cast != MouseoverCast::Off), "the rest");
+        assert!(!(c.target_level || c.dps_meter || c.power_bars || c.health_numbers || health_numbers() || c.buff_window || c.buff_timers || buff_timers() || c.stat_window || stat_window() || c.item_icons || item_icons() || c.spell_cooldowns || spell_cooldowns() || c.pet_effects || c.group_effects || c.npc_debuffs || c.auto_cast || c.auto_target || c.mouseover_cast != MouseoverCast::Off || c.auto_loot || auto_loot() || c.attack_abilities || attack_abilities()), "the rest");
         assert_eq!(c.number_colors, [0; crate::numcolor::ROWS], "every number the game's colour");
         assert!(!c.item_links && (c.ability_bars, c.stacked_bars, c.spell_bar_layout, c.utility_layout) == (ABILITY_BARS_GAME, false, crate::hudmenu::Layout::Stacked, crate::hudmenu::UtilityLayout::UpperLeft), "item links off by default, the game's two bars");
         let d = ClientOptions::default();
@@ -5074,6 +5130,35 @@ mod tests {
         assert_eq!(ClientOptions::from_text(&t), c, "round trip");
         assert!(!ClientOptions::from_text("weapon_swap_back=off").weapon_swap_back);
         assert!(!ClientOptions::from_text("weapon_swap_back=maybe").weapon_swap_back, "the default");
+    }
+
+    /// Attack With Abilities (petition 3015): off by default, written only
+    /// when on, read back, an unknown value left at the default.
+    #[test]
+    fn attack_abilities_is_kept_only_when_on() {
+        let d = ClientOptions::default();
+        assert!(!d.attack_abilities, "off by default");
+        assert!(!d.to_text().contains("attack_abilities"));
+        let c = ClientOptions { attack_abilities: true, ..Default::default() };
+        let t = c.to_text();
+        assert!(t.contains("attack_abilities=on\n"), "{t}");
+        assert_eq!(ClientOptions::from_text(&t), c, "round trip");
+        assert!(!ClientOptions::from_text("attack_abilities=maybe").attack_abilities, "the default");
+    }
+
+    /// Auto Loot (petition 3008): off by default, written only when on, read
+    /// back, an unknown value left at the default.
+    #[test]
+    fn auto_loot_is_kept_only_when_on() {
+        let d = ClientOptions::default();
+        assert!(!d.auto_loot, "off by default");
+        assert!(!d.to_text().contains("auto_loot"));
+        let c = ClientOptions { auto_loot: true, ..Default::default() };
+        let t = c.to_text();
+        assert!(t.contains("auto_loot=on\n"), "{t}");
+        assert_eq!(ClientOptions::from_text(&t), c, "round trip");
+        assert!(!ClientOptions::from_text("auto_loot=off").auto_loot);
+        assert!(!ClientOptions::from_text("auto_loot=maybe").auto_loot, "the default");
     }
 
     /// R2 Channel Switch: off by default, written only when on, read back, an

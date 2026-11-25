@@ -1220,6 +1220,12 @@ impl WndOptions {
                     // Weapon Swap Back (work board 1581): a weapon set's next
                     // 0x0022 (`gear::use_message`)
                     WEAPON_SWAP_BACK => c.weapon_swap_back = !c.weapon_swap_back,
+                    // Auto Loot (petition 3008): the next corpse opened
+                    // (`Play::auto_loot`)
+                    AUTO_LOOT => c.auto_loot = !c.auto_loot,
+                    // Attack With Abilities (petition 3015): the next attack
+                    // ability (`Play::attack_with_ability`)
+                    ATTACK_ABILITIES => c.attack_abilities = !c.attack_abilities,
                     // R2 Channel Switch: R2's next hold (`Play::chat_channel_step`)
                     R2_CHANNELS => c.r2_channels = !c.r2_channels,
                     // Move Touch Pad: the pad's parts dragged and pinched once
@@ -1973,7 +1979,7 @@ const CENTER: [i32; 2] = [320, 246];
 /// Extended's rows, by the item each changes (`change`), and their labels.
 /// A row is drawn by its item (`value_text`, or `slider_at` for a slider)
 /// and shown on the page of the category that lists it (`CATEGORIES`).
-const EXTENDED_ITEMS: [(i32, &str); 122] = [
+const EXTENDED_ITEMS: [(i32, &str); 124] = [
     (12, "Level of Detail"),
     (13, "Brightness"),
     (14, "Frame Rate"),
@@ -2096,6 +2102,8 @@ const EXTENDED_ITEMS: [(i32, &str); 122] = [
     (HUD_PROFILE, "HUD Layouts"),
     (MOUSEOVER_CAST, "Mouseover Casting"),
     (NPC_DEBUFFS, "Debuff Icons"),
+    (AUTO_LOOT, "Auto Loot"),
+    (ATTACK_ABILITIES, "Attack With Abilities"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2174,6 +2182,13 @@ pub(crate) const GROUP_EFFECTS: i32 = 230;
 /// debuff"). 260, not the next free (sibling lanes may take 258 onwards); the
 /// server's `qol::PET_EFFECTS` turns it off with Pet Effects.
 pub(crate) const NPC_DEBUFFS: i32 = 260;
+/// Auto Loot's item (Heirloom petition 3008), with General's rows (Combat's
+/// page is full). 270, not the next free, as Debuff Icons' 260; the server's
+/// `qol::AUTO_CAST` turns it off with Auto-Cast.
+pub(crate) const AUTO_LOOT: i32 = 270;
+/// Attack With Abilities' item (Heirloom petition 3015), with Combat's rows;
+/// off with Auto-Cast, as Auto Loot.
+pub(crate) const ATTACK_ABILITIES: i32 = 271;
 
 const HUD_SCALE: i32 = 240;
 const NAMEPLATE_SCALE: i32 = 241;
@@ -2308,8 +2323,8 @@ const ALL_CATEGORIES: [Category; 26] = [
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "DPS Meter", items: &[70, 71, 72], note: Note::Meter, group: Group::Ui },
     Category { name: "Chat", items: &[73, 89, R2_CHANNELS, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY], note: Note::Links, group: Group::Ui },
-    Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE], note: Note::Shortcuts, group: Group::Other },
-    Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK, MOUSEOVER_CAST], note: Note::None, group: Group::Other },
+    Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE, AUTO_LOOT], note: Note::Shortcuts, group: Group::Other },
+    Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK, MOUSEOVER_CAST, ATTACK_ABILITIES], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18, AD_KEYS], note: Note::None, group: Group::Other },
     Category { name: "Size & Look", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Touch },
     Category { name: "Sound", items: &[32], note: Note::Output, group: Group::Other },
@@ -2351,7 +2366,7 @@ fn category(i: usize) -> Category {
         (false, "Chat") => &[73, 89, R2_CHANNELS],
         (false, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT],
         // Mouseover Casting is the mouse's (petition 2960)
-        (false, "Combat") => &[78, 79, PETS_PASS, WEAPON_SWAP_BACK],
+        (false, "Combat") => &[78, 79, PETS_PASS, WEAPON_SWAP_BACK, ATTACK_ABILITIES],
         (true, "Chat") => &[73, 89, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY, CHAT_WAKE_ON_MESSAGE],
         (true, "HUD") => &[22, 30, 40, 58, 83],
         (true, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, UTILITY_LAYOUT, SPELL_BAR_SIZE],
@@ -2572,6 +2587,8 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         78 => on_off(c.auto_cast),
         79 => on_off(c.auto_target),
         WEAPON_SWAP_BACK => on_off(c.weapon_swap_back),
+        AUTO_LOOT => on_off(c.auto_loot),
+        ATTACK_ABILITIES => on_off(c.attack_abilities),
         R2_CHANNELS => on_off(c.r2_channels),
         52 => on_off(c.dynamic_lighting),
         38 => wide(if c.loading_longer { "Longer" } else { "Instant" }),
@@ -3822,6 +3839,24 @@ mod tests {
         assert_eq!((settings::weapon_swap_back(), cues.last()), (true, Some(&11)), "on");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::weapon_swap_back(), "and back");
+        // Auto Loot Off by default (petition 3008), two values
+        goto!(AUTO_LOOT);
+        assert_eq!(w.item, AUTO_LOOT, "Auto Loot");
+        assert!(!settings::auto_loot(), "off by default");
+        assert_eq!(value_text(&vui, AUTO_LOOT), Some(wide(vui.words.get(552, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::auto_loot(), cues.last()), (true, Some(&11)), "on");
+        assert_eq!(value_text(&vui, AUTO_LOOT), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::auto_loot(), "and back");
+        // Attack With Abilities Off by default (petition 3015), two values
+        goto!(ATTACK_ABILITIES);
+        assert_eq!(w.item, ATTACK_ABILITIES, "Attack With Abilities");
+        assert!(!settings::attack_abilities(), "off by default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::attack_abilities(), cues.last()), (true, Some(&11)), "on");
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::attack_abilities(), "and back");
         // Buff Timers On by default (petition 2924), two values
         goto!(BUFF_TIMERS);
         assert_eq!(w.item, BUFF_TIMERS, "Buff Timers");
@@ -4177,8 +4212,8 @@ mod tests {
         assert_eq!(
             of(2),
             vec![
-                ("General", vec!["Update Notices", "Loading Screens", "Loading Tips", "Same Shortcuts", "Auto Save Options"]),
-                ("Combat", vec!["Auto-Cast", "Auto Target", "Pets Pass Through", "Weapon Swap Back"]),
+                ("General", vec!["Update Notices", "Loading Screens", "Loading Tips", "Same Shortcuts", "Auto Save Options", "Auto Loot"]),
+                ("Combat", vec!["Auto-Cast", "Auto Target", "Pets Pass Through", "Weapon Swap Back", "Attack With Abilities"]),
                 ("Camera", vec!["Camera Distance", "Camera Turn Speed", "Screen Shake", "A/D Keys"]),
                 ("Sound", vec!["Output Device"]),
             ],
@@ -4672,13 +4707,13 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST, AUTO_LOOT, ATTACK_ABILITIES];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
         }
         let off_text = Some(wide(vui.words.get(552, vui.language)));
-        for item in [44, TARGET_LEVEL, 70, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
+        for item in [44, TARGET_LEVEL, 70, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, AUTO_LOOT, ATTACK_ABILITIES, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
             for k in path_to(&w, item) {
                 w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
                 w.draw(&vui, &mut NullRaster, &o, &mut ups);

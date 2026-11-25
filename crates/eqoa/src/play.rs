@@ -1051,6 +1051,30 @@ mod login_world {
     }
 }
 
+/// How long after an attack ability is sent its lockout may come and start
+/// the auto-attack (Attack With Abilities, petition 3015).
+const ABILITY_ATTACK_WAIT_MS: u32 = 3000;
+
+/// Whether ability `a` starts the auto-attack with Attack With Abilities on
+/// (petition 3015): one cast at a target that harms it (`autocast::guess`'s
+/// Attack: a nuke, a strike, a taunt), or a melee art named so (a kick, a
+/// bash, a taunt; a strike the guess could not place), never one it took
+/// for a heal or a pet. Never a
+/// heal, a buff, the pet's, the group's or the player's own.
+pub fn starts_attack(a: &net::dump::Ability) -> bool {
+    if a.scope != 1 {
+        return false;
+    }
+    // a melee art's name ("Shield Bash" reads as a buff by its words)
+    let n = a.name.to_lowercase();
+    let art = ["kick", "bash", "taunt", "slam", "backstab", "punch"].iter().any(|w| n.contains(w));
+    match crate::autocast::guess(a) {
+        Some(crate::autocast::Kind::Attack) => true,
+        Some(crate::autocast::Kind::Heal | crate::autocast::Kind::Pet) => false,
+        _ => art || (n.contains("strike") && crate::autocast::guess(a).is_none()),
+    }
+}
+
 impl Play {
     /// `ShowDialog` as 0x0046 calls it (`b` 1): expanded (`%p` and the icon
     /// codes), shown now when nothing else is up, else queued.
@@ -4215,7 +4239,17 @@ impl Play {
                         self.trainer_refresh = true;
                     }
                 }
-                Event::Opcode { op: 0x007D, data } => self.quests.recv_remove(&data),
+                Event::Opcode { op: 0x007D, data } => {
+                    // the quest gone off the tracked set too (petition 3013):
+                    // the tracker's quest at its index, as it was
+                    let name = net::stream::Reader::new(&data[4.min(data.len())..]).signed();
+                    let name = usize::try_from(name).ok().and_then(|i| self.session.quest_progress.get(i)).map(|q| q.name.clone());
+                    if self.quests.recv_remove(&data).is_some()
+                        && let Some(n) = name
+                    {
+                        self.quests.untracked.gone(&n);
+                    }
+                }
                 Event::Opcode { op: op @ 0x1003..=0x1006, data } => {
                     self.ignore.recv(op, &data);
                     // Msg1003Done (not for a rename): every creature's
@@ -4361,9 +4395,16 @@ impl Play {
                     // Msg00CD
                     self.ability_token = token;
                     if let Some(a) = self.abilities.values_mut().find(|a| a.display_index == index as i64) {
-                        a.lockout = lockout as i64;
-                        // its recast timer from now (Spell Cooldowns, petition 2946)
-                        self.hud_menus.cooldowns.set(a.id, lockout as i64, self.session.now() as i64);
+                        // its lockout (the game's lock badge) and its recast
+                        // timer from now (Spell Cooldowns, petition 2946); an
+                        // end that is the last lockout's kept out (3012)
+                        if !self.hud_menus.cooldowns.came(a.id, &mut a.lockout, lockout as i64, self.session.now() as i64) {
+                            eprintln!("play: 0x00CD end of ability {} with its lockout still running: the last one's, kept", a.id);
+                        }
+                        if lockout > 0 {
+                            let id = a.id;
+                            self.attack_with_ability(id);
+                        }
                     }
                 }
                 Event::Action { id, action } => {
@@ -7858,7 +7899,8 @@ impl Play {
         // the dump's quests (m_questCount, m_questTitle) and their stamp
         // ReadState: the MemoryDump's Class Mastery
         self.cm.m = self.dump.mastery.clone();
-        self.quests = crate::questlog::Quests { titles: self.dump.quests.iter().map(|q| crate::ui::wide(q)).collect(), stamp: self.dump.p2bb0c };
+        let untracked = std::mem::take(&mut self.quests.untracked);
+        self.quests = crate::questlog::Quests { titles: self.dump.quests.iter().map(|q| crate::ui::wide(q)).collect(), untracked, stamp: self.dump.p2bb0c };
     }
 
     /// A word with a name in its `%s` to the chat log.
@@ -8776,7 +8818,10 @@ impl Play {
             ups.extend(self.quest_log.key(vui, &self.quests, k, down, now, &mut cues));
         }
         if self.mode == 22 {
-            self.quest_log.draw(vui, r, &self.quests, now, &mut cues);
+            let progress = &self.session.quest_progress;
+            let quests = &self.quests;
+            let tracked = |i: i32| usize::try_from(i).ok().and_then(|i| progress.get(i)).map(|q| quests.untracked.tracked(&q.name));
+            self.quest_log.draw(vui, r, &self.quests, &tracked, now, &mut cues);
         }
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
         for up in ups {
@@ -8792,6 +8837,18 @@ impl Play {
                 crate::questlog::QuestUp::Drop(i) => {
                     let m = self.quests.send_remove(i);
                     self.session.send(&m);
+                }
+                // □ (petition 3013): the tracker's quest at its place
+                crate::questlog::QuestUp::Track(i) => {
+                    self.quests.untracked.character(self.player.server_id, &self.dump.player.name);
+                    let name = usize::try_from(i).ok().and_then(|i| self.session.quest_progress.get(i)).map(|q| q.name.clone());
+                    match name {
+                        Some(n) => {
+                            let on = self.quests.untracked.toggle(&n);
+                            self.add_chat(format!("{n}: {} the quest tracker.", if on { "back on" } else { "off" }), [1.0; 4]);
+                        }
+                        None => self.cues.push(crate::sound::Cue::Ui(9)),
+                    }
                 }
             }
         }
@@ -9533,6 +9590,10 @@ impl Play {
         // one under the mouse, the target kept (0x0032 names its own target,
         // which the server casts at)
         let at = self.abilities.get(&id).and_then(|a| self.mouseover_target(a)).unwrap_or(self.target);
+        // Attack With Abilities (petition 3015): an attack ability at a
+        // hostile target, its start of the auto-attack waiting on the
+        // server's lockout for it
+        self.attack.ability_sent = self.abilities.get(&id).filter(|a| crate::settings::attack_abilities() && !self.auto_attack && at == self.target && starts_attack(a) && self.hostile(at)).map(|_| (id, at, self.session.now()));
         let mut w = net::stream::Writer::op(0x0032);
         w.u32(self.ability_token).u8(slot as u8).u32(at);
         if crate::s2::get().use_skill_record {
@@ -10153,12 +10214,51 @@ impl Play {
         }
     }
 
+    /// Attack With Abilities (Heirloom petition 3015): the server took
+    /// ability `id` (its lockout came); when it is the attack ability sent at
+    /// a hostile target a moment ago (`send_0032`), the target unchanged,
+    /// still hostile and not being fought, the auto-attack starts as the
+    /// attack button starts it (`attack_press`), and with the button held
+    /// (the game's way) it is on until the target dies, the target changes
+    /// or the button is pressed and let go.
+    fn attack_with_ability(&mut self, id: i64) {
+        let Some((sent, target, at)) = self.attack.ability_sent else { return };
+        if sent != id {
+            return;
+        }
+        self.attack.ability_sent = None;
+        let now = self.session.now();
+        if now.wrapping_sub(at) > ABILITY_ATTACK_WAIT_MS || !crate::settings::attack_abilities() || self.auto_attack || target != self.target || !self.hostile(target) || self.is_dead() {
+            return;
+        }
+        eprintln!("play: an attack ability taken: the auto-attack on (Attack With Abilities)");
+        self.attack_press();
+        self.attack.by_ability = self.auto_attack;
+    }
+
+    /// Whether `id` is a creature to fight: not the player nor its side
+    /// (`own_side`), not a player, alive, not a corpse, attackable (not
+    /// flagged 0x80, which the attack button passes over).
+    fn hostile(&self, id: u32) -> bool {
+        if id == u32::MAX || Some(id) == self.self_id32() {
+            return false;
+        }
+        let Some(e) = self.entities.slots.iter().flatten().find(|e| e.id == id) else { return false };
+        let Some(c) = e.creature.as_ref() else { return false };
+        e.p18 & 2 == 0 && e.p19 != 0 && c.npc_flags & 0x80 == 0 && c.p256 != 2 && !self.own_side(e)
+    }
+
     /// `VIClient::Process`'s part of the options: with Auto Attack on, a
     /// target gone, not to be fought or oneself stops it; the faction and
     /// loot filters sent when they change (201, 202: off, then 1), and once
     /// after the world entry (then 0).
     fn options_tick(&mut self) {
-        if self.options.auto_attack != 0 && self.target != u32::MAX && self.auto_attack {
+        // an auto-attack an ability started (petition 3015) ends with its
+        // target, as the Auto Attack option's does
+        if !self.auto_attack {
+            self.attack.by_ability = false;
+        }
+        if (self.options.auto_attack != 0 || self.attack.by_ability) && self.target != u32::MAX && self.auto_attack {
             let alive = self.entities.slots.iter().flatten().find(|e| e.id == self.target).is_some_and(|e| e.p19 != 0);
             if !alive || Some(self.target) == self.self_id32() {
                 self.auto_attack = false;
@@ -10634,6 +10734,8 @@ impl Play {
     pub fn map_frame(&mut self, walker: &Walker, lib: &Library, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, size: (u32, u32), dt: f32, sticks: [f32; 4]) {
         let now = self.session.now();
         self.guide_frame(walker, now);
+        // the character's tracked quests (petition 3013)
+        self.quests.untracked.character(self.player.server_id, &self.dump.player.name);
         if !crate::settings::map() {
             self.map.off();
             return;
@@ -10753,7 +10855,8 @@ impl Play {
         } else if self.guide_on(self.session.now()) {
             self.guide.estimate.tracker.clone()
         } else {
-            self.session.quest_progress.clone()
+            // less the quests the player untracked (petition 3013)
+            self.quests.untracked.filter(self.session.quest_progress.clone())
         }
     }
 
@@ -13575,6 +13678,70 @@ mod commands {
         p.pointer = Some(at(0.0));
         set(MouseoverCast::MouseoverFirst, false);
         assert_eq!(p.mouseover_target(&heal), None, "the control: the Controller interface");
+        crate::settings::testing::reset(false);
+    }
+
+    /// Attack With Abilities (Heirloom petition 3015): which abilities start
+    /// the auto-attack: attacks at a target (a nuke, a taunt, a kick by
+    /// name), never a heal, a buff, the player's own or the group's.
+    #[test]
+    fn attack_abilities_are_the_harms_at_a_target() {
+        let ab = |scope: i64, name: &str, desc: &str| net::dump::Ability { id: 1, scope, name: name.into(), desc: desc.into(), ..Default::default() };
+        assert!(starts_attack(&ab(1, "Fire Bolt", "Target, decrease hitpoints by 40 (fire damage)")));
+        assert!(starts_attack(&ab(1, "Taunt", "Taunts the target, increasing its hate")));
+        assert!(starts_attack(&ab(1, "Kick", "")), "a melee art by its name");
+        assert!(starts_attack(&ab(1, "Shield Bash", "")));
+        assert!(!starts_attack(&ab(1, "Minor Healing", "Heals the target for 50 hit points")), "a heal");
+        assert!(!starts_attack(&ab(1, "Strength", "Increases the target's strength for 30 min")), "a buff");
+        assert!(!starts_attack(&ab(0, "Kick", "")), "the player's own");
+        assert!(!starts_attack(&ab(2, "Fire Storm", "decrease hitpoints by 40 (fire damage)")), "the group's");
+    }
+
+    /// Attack With Abilities: off by default nothing starts; on, an attack
+    /// ability at a foe starts the auto-attack (0x000F, as the button) once
+    /// the server's lockout for it comes, not before; never a heal, never at
+    /// a friend, never where the server turns automation off (`qol`), never
+    /// for another ability's lockout.
+    #[test]
+    fn an_attack_ability_starts_the_auto_attack() {
+        use crate::settings::{ClientOptions, client, qol, set_client};
+        crate::settings::testing::reset(false);
+        let mut p = play();
+        p.session.record = Some(Vec::new());
+        let creature = |id: u32, name: &str| net::entity::Entity { id, kind: 130, p18: 1, p19: 1, creature: Some(net::entity::Creature { name: name.into(), ..Default::default() }), ..Default::default() };
+        let (foe, pet) = (0x0010_0005, 0x0010_0003);
+        p.entities.slots[0] = Some(creature(foe, "an orc pawn"));
+        p.entities.slots[1] = Some(creature(pet, "Gobbler"));
+        p.pet_id = pet;
+        let kick = net::dump::Ability { id: 10, slot: 0, valid: 1, scope: 1, name: "Kick".into(), ..Default::default() };
+        let heal = net::dump::Ability { id: 11, slot: 1, valid: 1, scope: 1, name: "Minor Healing".into(), desc: "Heals the target for 50 hit points".into(), ..Default::default() };
+        p.abilities.insert(10, kick);
+        p.abilities.insert(11, heal);
+        let sent_000f = |p: &mut Play| p.session.record.as_mut().map(std::mem::take).unwrap_or_default().iter().any(|(_, m)| m.starts_with(&[0x0F, 0x00]));
+        let try_ = |p: &mut Play, id: i64, target: u32| {
+            p.auto_attack = false;
+            p.target = target;
+            p.send_0032(id);
+            let before = p.auto_attack;
+            p.attack_with_ability(id);
+            (before, p.auto_attack)
+        };
+        assert_eq!(try_(&mut p, 10, foe), (false, false), "off by default");
+        set_client(ClientOptions { attack_abilities: true, ..client() });
+        sent_000f(&mut p);
+        assert_eq!(try_(&mut p, 10, foe), (false, true), "on: started when the server took it");
+        assert!(sent_000f(&mut p), "as the attack button: 0x000F");
+        assert!(p.attack.by_ability);
+        assert_eq!(try_(&mut p, 11, foe), (false, false), "a heal");
+        assert_eq!(try_(&mut p, 10, pet), (false, false), "at the pet");
+        p.auto_attack = false;
+        p.target = foe;
+        p.send_0032(10);
+        p.attack_with_ability(11);
+        assert!(!p.auto_attack, "another ability's lockout");
+        qol::set_off(qol::AUTO_CAST);
+        assert_eq!(try_(&mut p, 10, foe), (false, false), "locked off by the server");
+        qol::set_off(0);
         crate::settings::testing::reset(false);
     }
 

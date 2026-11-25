@@ -20,6 +20,15 @@
 //! of the corpse (go-eqoa-server's 0x7E47), the choice of an item opens the
 //! master looter's menu in place of taking it (`masterloot`: Take, Inspect,
 //! Assign, Abandon); on any other corpse the window is the game's.
+//!
+//! Also the client's own: Auto Loot (Extended > Other > Combat, Heirloom
+//! petition 3008), `AutoLoot`. A corpse opened takes each of its items in
+//! turn with the window's own take (`LootOne`, one at a time, the next once
+//! the server has answered the last), but the NO TRADE ones, a Lore one the
+//! pack already holds (the server refuses it) and what the pack has no room
+//! for, which stay on the corpse with the window open on them; a corpse left
+//! empty is closed. The coins are the server's to give at the open, as with
+//! Take All. Never on a corpse whose master looter this player is.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -209,10 +218,189 @@ impl Loot {
     }
 }
 
+/// Auto Loot's next take off `corpse`: the first item that is not NO TRADE,
+/// not a Lore item `inv` holds already (nor one of an item skipped, its id in
+/// `skipped`) and that the pack has room for (`inventory::add_item` on a
+/// copy, `cap` its records): its place in the list and its whole count, as
+/// the window takes it.
+pub fn auto_take(corpse: &ItemList, inv: &ItemList, cap: usize, skipped: &[i64]) -> Option<(usize, i64)> {
+    corpse.items.iter().enumerate().find_map(|(i, it)| {
+        let held = |id: i64| inv.items.iter().any(|h| h.item.id == id);
+        if it.quantity <= 0 || it.item.no_trade != 0 || skipped.contains(&it.item.id) || (it.item.lore != 0 && held(it.item.id)) {
+            return None;
+        }
+        let mut copy = inv.clone();
+        let mut one = it.clone();
+        one.equip_slot = -1;
+        (crate::inventory::add_item(&mut copy, &one, it.item.max_stack, cap) > 0).then_some((i, it.quantity))
+    })
+}
+
+/// How long a beat after the window opens before the first take: the server's
+/// word that this player is the corpse's master looter (0x7E47) comes after
+/// its 0x0018, and its corpse is not taken.
+const AUTO_BEAT_MS: i64 = 300;
+/// How long a take waits for its answer (0x0019, or the corpse sent again);
+/// with none (the server refused it: a Lore item held, no room) the item is
+/// left on the corpse and the next one taken.
+const AUTO_WAIT_MS: i64 = 2000;
+
+/// Auto Loot over one open of the corpse window (`auto_take`).
+#[derive(Default, Debug)]
+pub struct AutoLoot {
+    armed: bool,
+    /// the corpse's keys were their places when it came (go-eqoa-server's: the
+    /// server reads a take's key as the record's place in its own list, which
+    /// a 0x0019 keeps the client's list matching): the takes after the first
+    /// send the place. Else (a server whose keys are ids) each item's own key.
+    by_place: bool,
+    opened: Option<i64>,
+    /// the take sent: its item's id, and until when its answer is waited for
+    waiting: Option<(i64, i64)>,
+    skipped: Vec<i64>,
+    took: bool,
+}
+
+impl AutoLoot {
+    /// A corpse window opened with Auto Loot on.
+    pub fn arm(&mut self, corpse: &ItemList) {
+        let by_place = corpse.items.iter().enumerate().all(|(i, it)| it.inv_index as usize == i);
+        *self = AutoLoot { armed: true, by_place, ..Default::default() };
+    }
+
+    /// The server's answer to a take (0x0019): the next may go.
+    pub fn answered(&mut self) {
+        if self.waiting.take().is_some() {
+            self.took = true;
+        }
+    }
+
+    /// Whether it is still taking.
+    #[cfg(test)]
+    pub fn armed(&self) -> bool {
+        self.armed
+    }
+
+    /// The take to send now, or the window closed when the corpse is left
+    /// empty by it; `on` is the setting now (a server may turn it off), `ml`
+    /// whether this player is the corpse's master looter.
+    pub fn step(&mut self, now: i64, on: bool, ml: bool, corpse: &ItemList, inv: &ItemList, cap: usize) -> Option<LootOut> {
+        if !self.armed {
+            return None;
+        }
+        if !on || ml {
+            self.armed = false;
+            return None;
+        }
+        let opened = *self.opened.get_or_insert(now);
+        if now - opened < AUTO_BEAT_MS {
+            return None;
+        }
+        if let Some((id, until)) = self.waiting {
+            if now < until {
+                return None;
+            }
+            self.skipped.push(id);
+            self.waiting = None;
+        }
+        match auto_take(corpse, inv, cap, &self.skipped) {
+            Some((i, n)) => {
+                let it = &corpse.items[i];
+                self.waiting = Some((it.item.id, now + AUTO_WAIT_MS));
+                let key = if self.by_place { i as i32 } else { it.inv_index as i32 };
+                Some(LootOut::One(key, n as i32))
+            }
+            None => {
+                self.armed = false;
+                (self.took && corpse.items.is_empty()).then_some(LootOut::Close)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use net::dump::NetItem;
+
+    fn item(id: i64, n: i64, key: u32, no_trade: i64, lore: i64) -> NetItem {
+        let mut it = NetItem { quantity: n, inv_index: key, equip_slot: -1, quick_slot: -1, ..Default::default() };
+        (it.item.id, it.item.no_trade, it.item.lore, it.item.max_stack) = (id, no_trade, lore, if n > 1 { 20 } else { 1 });
+        it
+    }
+
+    /// Auto Loot's choice: NO TRADE items left (the control: the same item
+    /// without the flag is taken), a Lore item held left, one not held taken,
+    /// a full pack's new record left but a stack it can join taken.
+    #[test]
+    fn auto_take_skips_no_trade_and_lore_held() {
+        let inv = ItemList { p04: 1, items: vec![item(50, 1, 0, 0, 1)] };
+        let c = ItemList { p04: 0, items: vec![item(7, 1, 0, 1, 0), item(50, 1, 1, 0, 1), item(8, 3, 2, 0, 0)] };
+        assert_eq!(auto_take(&c, &inv, 40, &[]), Some((2, 3)), "past the NO TRADE and the Lore held");
+        let c2 = ItemList { p04: 0, items: vec![item(7, 1, 0, 0, 0)] };
+        assert_eq!(auto_take(&c2, &inv, 40, &[]), Some((0, 1)), "the control: not NO TRADE, taken");
+        let c3 = ItemList { p04: 0, items: vec![item(51, 1, 0, 0, 1)] };
+        assert_eq!(auto_take(&c3, &inv, 40, &[]), Some((0, 1)), "a Lore item not held");
+        assert_eq!(auto_take(&c, &inv, 40, &[8]), None, "skipped");
+        let full = ItemList { p04: 2, items: vec![item(9, 1, 0, 0, 0), item(8, 2, 1, 0, 0)] };
+        let c4 = ItemList { p04: 0, items: vec![item(10, 1, 0, 0, 0), item(8, 3, 1, 0, 0)] };
+        assert_eq!(auto_take(&c4, &full, 2, &[]), Some((1, 3)), "a full pack: the stack it joins");
+    }
+
+    /// Auto Loot over one open: a beat, then one take at a time, each after
+    /// the last's answer; an unanswered take's item left; a corpse it emptied
+    /// closed; off (or the master looter's corpse) it stops.
+    #[test]
+    fn auto_loot_takes_one_at_a_time() {
+        let inv = ItemList::default();
+        let mut c = ItemList { p04: 0, items: vec![item(7, 1, 0, 0, 0), item(8, 1, 1, 1, 0), item(9, 2, 2, 0, 0)] };
+        let mut a = AutoLoot::default();
+        assert_eq!(a.step(0, true, false, &c, &inv, 40), None, "not armed");
+        a.arm(&c);
+        assert_eq!(a.step(1000, true, false, &c, &inv, 40), None, "the beat");
+        assert_eq!(a.step(1299, true, false, &c, &inv, 40), None);
+        assert_eq!(a.step(1300, true, false, &c, &inv, 40), Some(LootOut::One(0, 1)));
+        assert_eq!(a.step(1400, true, false, &c, &inv, 40), None, "waiting for the answer");
+        c.items.remove(0);
+        a.answered();
+        assert_eq!(a.step(1500, true, false, &c, &inv, 40), Some(LootOut::One(1, 2)), "the NO TRADE passed, the key its place");
+        c.items.remove(1);
+        a.answered();
+        assert_eq!(a.step(1600, true, false, &c, &inv, 40), None, "the NO TRADE left: the window stays");
+        assert!(!a.armed());
+        // emptied: closed; an unanswered take left
+        let mut c = ItemList { p04: 0, items: vec![item(7, 1, 0, 0, 0), item(9, 1, 1, 0, 0)] };
+        a.arm(&c);
+        assert_eq!(a.step(0, true, false, &c, &inv, 40), None);
+        assert_eq!(a.step(300, true, false, &c, &inv, 40), Some(LootOut::One(0, 1)));
+        assert_eq!(a.step(2299, true, false, &c, &inv, 40), None);
+        assert_eq!(a.step(2300, true, false, &c, &inv, 40), Some(LootOut::One(1, 1)), "no answer: left, the next");
+        c.items.remove(1);
+        a.answered();
+        assert_eq!(a.step(2400, true, false, &c, &inv, 40), None, "one left, refused: open");
+        c.items.clear();
+        a.arm(&ItemList { p04: 0, items: vec![item(9, 1, 0, 0, 0)] });
+        let one = ItemList { p04: 0, items: vec![item(9, 1, 0, 0, 0)] };
+        assert_eq!(a.step(0, true, false, &one, &inv, 40), None);
+        assert_eq!(a.step(300, true, false, &one, &inv, 40), Some(LootOut::One(0, 1)));
+        a.answered();
+        assert_eq!(a.step(400, true, false, &c, &inv, 40), Some(LootOut::Close), "emptied: closed");
+        // a corpse opened empty is left open; off, or the master looter's: stops
+        a.arm(&c);
+        assert_eq!((a.step(0, true, false, &c, &inv, 40), a.step(300, true, false, &c, &inv, 40)), (None, None));
+        let c = ItemList { p04: 0, items: vec![item(9, 1, 0, 0, 0)] };
+        a.arm(&c);
+        assert_eq!(a.step(500, false, false, &c, &inv, 40), None);
+        assert!(!a.armed(), "turned off");
+        a.arm(&c);
+        assert_eq!(a.step(500, true, true, &c, &inv, 40), None);
+        assert!(!a.armed(), "the master looter's");
+        // keys that are not places (a server's ids): each item's own
+        let c = ItemList { p04: 0, items: vec![item(9, 1, 40, 0, 0)] };
+        a.arm(&c);
+        a.step(0, true, false, &c, &inv, 40);
+        assert_eq!(a.step(300, true, false, &c, &inv, 40), Some(LootOut::One(40, 1)));
+    }
 
     fn corpse(n: usize) -> ItemList {
         let items = (0..n).map(|k| NetItem { quantity: 1 + k as i64, inv_index: 10 + k as u32, equip_slot: -1, quick_slot: -1, ..Default::default() }).collect();

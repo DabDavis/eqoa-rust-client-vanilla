@@ -446,7 +446,9 @@ or a browser (each described where it lives below):
 - **Spell Cooldowns** (petition 2946; `hudmenu::Cooldowns`): an ability's icon on the bars (the stacked
   and PC bars, the carousel's list) darkened by its recast time left, a clock's hand sweeping it clear from
   twelve, and the seconds left in its middle ("12", "3m"): the server's lockout (0x00CD's milliseconds,
-  `Msg00CD`) counted from when it came, gone at its end or the server's 0. Extended > UI > HUD Extras, on
+  `Msg00CD`) counted from when it came, gone at its end or the server's 0 (a 0 with more than a second
+  of the kept lockout still to run is the previous lockout's, after a press that cast again as it came
+  ready, and is passed over: petition 3012, `Cooldowns::came`). Extended > UI > HUD Extras, on
   by default; off, the game's lock badge alone. Off with `settings::qol::SPELL_BARS`.
 - **Hotkey Label Size %** (petition 2945): the PC bars' key names at 40-100% of the font (Extended > UI >
   Interface Size, PC), 100 the font's own as before; smaller, scaled (`Raster::draw_string_scaled`) and cut
@@ -461,6 +463,21 @@ or a browser (each described where it lives below):
   targeting it: 0x0032 names its own target, which go-eqoa-server casts at. Extended > Other > Combat:
   Off (the default), Mouseover First, Target First (the target when it is a friend). Off with
   `settings::qol::AUTO_CAST`.
+- **Auto Loot** (petition 3008; `loot::AutoLoot`): Extended > Other > General, Off by default. A corpse
+  opened takes its items one at a time with the window's own take (`LootOne`, the next once the server
+  answered the last with 0x0019, or after 2 s without), past the NO TRADE ones, a Lore one held and what
+  the pack has no room for; the window stays open on what is left, a corpse it emptied is closed. Never
+  on the master looter's corpse (0x7E47). The key is the item's place once a corpse's keys are their
+  places (go-eqoa-server's, which reads a take's key so), else its own. Off with `qol::AUTO_CAST`.
+- **Attack With Abilities** (petition 3015; `Play::attack_with_ability`): Extended > Other > Combat, Off by
+  default. An attack ability at a target (`play::starts_attack`: `autocast::guess`'s Attack, or a melee
+  art by its name) sent at a hostile creature starts the auto-attack as the attack button does
+  (`attack_press`) when the server's lockout for it (0x00CD) comes; held-button play then ends it with the
+  target's death. Off with `qol::AUTO_CAST`.
+- **Tracked quests** (petition 3013; `questtrack`): □ in the quest journal takes the selected quest off
+  the quest tracker or puts it back (the server's tracker's quest at the journal's place, by its name);
+  an untracked one is grey there. A character's own, one file for every window (`questtrack.opt`, as the
+  auto slots'); a quest the journal drops (0x007D) leaves the set.
 - **Loading tips** (a GM's petition 1778, 2026-11-12; `tips.rs`, `tips.txt`): one "Did you
   know" sentence, picked at random as each loading screen comes up (world entry, a logout's way back,
   a zone or world change, a coach, a gate, a rez), under its bar in the 4:3 frame's middle, never the

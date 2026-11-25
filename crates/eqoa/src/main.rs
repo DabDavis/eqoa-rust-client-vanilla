@@ -162,6 +162,7 @@ mod multibox;
 mod quantity;
 mod questguide;
 mod questlog;
+mod questtrack;
 mod tracker;
 mod quickchat;
 mod racebody;

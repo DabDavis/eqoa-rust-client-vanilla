@@ -5,7 +5,7 @@
 //! A child of `play`, for `Play`'s fields.
 
 use super::Play;
-use crate::loot::{Loot, LootOut};
+use crate::loot::{AutoLoot, Loot, LootOut};
 use crate::merchant::{Merchant, MerchantOut, Shop};
 use crate::trade::{Trade, TradeMsg, TradeOut, TradeState};
 use net::dump::ItemList;
@@ -17,6 +17,8 @@ pub struct NpcWindows {
     pub corpse: Option<ItemList>,
     loot: Loot,
     loot_open: bool,
+    /// Auto Loot over the corpse open (`loot::AutoLoot`)
+    auto_loot: AutoLoot,
     /// `m_merchant` and its fields (0x00B7)
     pub shop: Shop,
     merchant: Merchant,
@@ -129,6 +131,7 @@ impl Play {
                 let _ = r.signed();
                 if !r.error {
                     self.msg_0019(slot);
+                    self.npcw.auto_loot.answered();
                 }
             }
             0x0085 => {
@@ -154,6 +157,13 @@ impl Play {
                 if self.mode == 0 {
                     self.npcw.loot_open = true;
                     self.mode = 1;
+                    // Auto Loot (petition 3008): its takes from the next frames
+                    self.npcw.auto_loot = AutoLoot::default();
+                    if crate::settings::auto_loot() {
+                        if let Some(c) = self.npcw.corpse.as_ref() {
+                            self.npcw.auto_loot.arm(c);
+                        }
+                    }
                 } else {
                     self.session.send_opcode(0x0016);
                 }
@@ -164,6 +174,7 @@ impl Play {
                     self.mode = 0;
                 }
                 self.npcw.loot.visible = false;
+                self.npcw.auto_loot = AutoLoot::default();
                 self.npcw.corpse = None;
                 self.npcw.loot.ml.set(None);
             }
@@ -461,6 +472,9 @@ impl Play {
                     let corpse = w.corpse.as_ref().unwrap_or(&empty);
                     let inv = &self.dump.inventory;
                     w.loot.draw(vui, r, &info, corpse, &|k| icon(&inv.items[k]), &|k| icon(&corpse.items[k]), now, &mut cues);
+                    // Auto Loot's next take (or the emptied corpse closed)
+                    let ml = w.loot.ml.on() || w.loot.ml.busy();
+                    loot_out.extend(w.auto_loot.step(now, crate::settings::auto_loot(), ml, corpse, inv, crate::inventory::pack_cap()));
                 }
                 10 => {
                     let view = crate::merchant::View { info: &info, shop: &w.shop, coin: self.dump.player.p34 as i32, can_use: &can_use, inv_icon: &icon };
