@@ -6477,6 +6477,12 @@ impl Play {
         self.gem_pointer(at, size);
         // the buff window's names under the mouse (`buffwnd`, petition 2924)
         self.buff_hover(at.map(|at| crate::hudlayout::local_point(crate::hudlayout::Piece::Effects, render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size))));
+        // a group member's tiny icon under the mouse named (petition 2962),
+        // where the HUD is up in play
+        let up = matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden();
+        if let Some(h) = self.hud.as_mut() {
+            h.2.member_fx_hover(at.filter(|_| up).map(|at| render::ui::frame_from_window(size, at)));
+        }
         let p = at.filter(|_| crate::binds::pc_shortcuts() && self.mode == 0 && !self.map.open && !self.search.open && !crate::hideui::hidden())
             .map(|at| crate::hudlayout::local_point(crate::hudlayout::Piece::SpellBars, render::ui::frame_from_window(size, at), crate::hudlayout::Beyond::of(size)));
         self.hud_menus.hover_stacked(p);
@@ -11444,14 +11450,16 @@ impl Play {
 
     /// The effects on group member `id` the server sent (`Session::agree_group_effects`,
     /// which each frame tells it what Extended's Group Effects says): their icons in
-    /// their order, drawn tiny beside the member's gauges (`hud::member_effects_pieces`).
-    /// None with the row off or from a server that sends none; the game shows
-    /// another's effects nowhere.
-    fn member_effects(&self, id: u32) -> Vec<u32> {
+    /// their order, drawn tiny beside the member's gauges (`hud::member_effects_pieces`),
+    /// each with its name and its time left now where the server sends them
+    /// (petition 2962), counted down from the set. None with the row off or from a
+    /// server that sends none; the game shows another's effects nowhere.
+    fn member_effects(&self, id: u32) -> Vec<crate::hud::MemberFx> {
         if !crate::settings::group_effects() {
             return Vec::new();
         }
-        self.session.effects_of(id).to_vec()
+        let now = self.session.now();
+        self.session.effects_of(id, now).into_iter().map(|e| crate::hud::MemberFx { icon: e.icon, name: e.name, left_ms: e.left_ms }).collect()
     }
 
     /// Number Colors: the server told to tag the numbers while a row is not
