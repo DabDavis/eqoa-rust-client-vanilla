@@ -3582,13 +3582,13 @@ impl Session {
                     self.send(&w.data);
                 }
             }
-            // the merc windows offered (each world entry): answered 1, the
-            // layout read (`mercwin`)
+            // the merc windows offered (each world entry): answered 2, the
+            // layout read (1's with the kind USE: `mercwin`)
             crate::mercwin::OP_MERC_WINDOW_OFFER => {
                 let layout = r.u8();
                 if !r.error && layout == crate::mercwin::LAYOUT {
                     let mut w = Writer::op(crate::mercwin::OP_MERC_WINDOW_OFFER);
-                    w.u8(crate::mercwin::LAYOUT);
+                    w.u8(crate::mercwin::LAYOUT_USE);
                     self.send(&w.data);
                     self.merc_windows = true;
                 }
@@ -5139,7 +5139,7 @@ mod tests {
         assert!(!s.merc_windows && ours(&mut s).is_empty(), "another layout: nothing");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x72, 0x7E, 1]);
         assert!(s.merc_windows);
-        assert_eq!(ours(&mut s), vec![vec![0x72, 0x7E, 1]], "answered 1");
+        assert_eq!(ours(&mut s), vec![vec![0x72, 0x7E, 2]], "answered 2 (the kind USE read)");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x74, 0x7E, 1, 0]);
         assert!(matches!(&ev[..], [Event::Opcode { op: 0x7E74, data }] if data[..] == [1, 0]), "{ev:?}");
     }
