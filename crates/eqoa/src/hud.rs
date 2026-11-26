@@ -11,7 +11,7 @@
 //! the minimap, the meter on its bottom and the tracker over what it leaves.
 
 use crate::hudlayout::Piece;
-use crate::ui::{Raster, UiRaster, Vui, icon_id, wide};
+use crate::ui::{Layout, Raster, UiRaster, Vui, icon_id, wide};
 use render::ui::{Anchor, Quad, Vertical};
 use vi::ui::TextScroll;
 
@@ -617,9 +617,50 @@ pub enum Pick {
 
 /// Where `DrawGroup` starts the group's bars and `DrawTarget` the target's.
 const GROUP_AT: [i32; 2] = [20, 93];
-const TARGET_AT: [i32; 2] = [20, 348];
+pub(crate) const TARGET_AT: [i32; 2] = [20, 348];
 /// The PC pet's fixed origin, matching the old solo position for saved offsets.
 const PC_PET_AT: [i32; 2] = [20, 93];
+
+pub(crate) const TARGET_OF_TARGET_AT: [f32; 2] = [33.0, 414.0];
+pub(crate) const TARGET_OF_TARGET_WIDTH: f32 = 148.0;
+
+/// A compact name and health readout, or an empty frame while arranging the HUD.
+pub(crate) fn draw_target_of_target(ui: &mut UiRaster, health: Option<(&str, u8)>) {
+    let (anchor, vertical) = (ui.ui.anchor, ui.ui.vertical);
+    ui.ui.anchor = Anchor::Left;
+    ui.ui.vertical = Vertical::Bottom;
+    let mark = crate::hudlayout::begin(ui.ui, Piece::TargetOfTarget);
+
+    let [x, y] = TARGET_OF_TARGET_AT;
+    let right = x + TARGET_OF_TARGET_WIDTH;
+    let (left, inner_right) = (x + 4.0, right - 4.0);
+    let corners = |l, t, r, b| [[l, t], [r, t], [r, b], [l, b]];
+    ui.solid(3, [0.03, 0.03, 0.03, 0.80], corners(x, y, right, y + 24.0));
+    ui.solid(3, [0.20, 0.11, 0.11, 1.0], corners(left, y + 15.0, inner_right, y + 20.0));
+
+    if let Some((name, hp)) = health {
+        if hp > 0 {
+            let fill = left + (inner_right - left) * f32::from(hp) / 255.0;
+            ui.solid(3, [0.82, 0.13, 0.10, 1.0], corners(left, y + 15.0, fill, y + 20.0));
+        }
+        if let Some(font) = ui.assets.font {
+            let color = [0.96, 0.94, 0.90, 1.0];
+            let metrics = &ui.ui.fonts[font];
+            let scale = 10.0 / metrics.height.max(1) as f32;
+            let percent = wide(&health_text(hp));
+            let percent_x = inner_right - metrics.string_width(&percent) as f32 * scale;
+            let mut name = wide(name);
+            while !name.is_empty() && left + metrics.string_width(&name) as f32 * scale + 4.0 > percent_x {
+                name.pop();
+            }
+            ui.ui.text_scaled(font, left, y + 2.0, scale, color, &name);
+            ui.ui.text_scaled(font, percent_x, y + 2.0, scale, color, &percent);
+        }
+    }
+
+    crate::hudlayout::end(ui.ui, mark);
+    (ui.ui.anchor, ui.ui.vertical) = (anchor, vertical);
+}
 
 impl Hud {
     pub fn new() -> Self {

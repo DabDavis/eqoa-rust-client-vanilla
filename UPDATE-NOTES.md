@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Target of Target health bar
+
+- Enable **Target of Target** under **Options → Extended → UI → HUD Extras**
+  to see the name and health of your current target's target. It starts off.
+  Use **Move HUD** to drag it into place or resize it from a corner in either
+  interface.
+
 ## 2026-11-25 · Mercs on their own DPS meter lines
 
 - The **DPS meter** now gives each mercenary its own line, by its name and its owner's (for example *Kellasis (Cucumber's merc)*), with its own damage, healing and power given, ranked with the players by whatever the meter is sorted by. Merc lines are drawn a shade dimmer, with a fainter bar. Your own merc's line is tinted like your own. The pet row under your line now shows only your summoned or charmed pet. Overall keeps each merc apart, even if a player or another player's merc has the same name. This needs the server's new meter; on an older server the meter works as before.

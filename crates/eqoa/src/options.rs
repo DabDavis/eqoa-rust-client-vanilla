@@ -1034,6 +1034,7 @@ impl WndOptions {
                     // Target Level: drawn or not from the next frame
                     // (`hud::draw_target`)
                     TARGET_LEVEL => c.target_level = !c.target_level,
+                    TARGET_OF_TARGET => c.target_of_target_bar = !c.target_of_target_bar,
                     // Own Name Plate: the player's plate from the next frame
                     // (`Play::plates`)
                     OWN_PLATE => c.own_plate = !c.own_plate,
@@ -2153,6 +2154,7 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (OWN_PLATE, "Own Name Plate"),
     (COACH_TALK, "Coach Talk on Arrival"),
     (STRAFE_SPEED, "Strafe Speed"),
+    (TARGET_OF_TARGET, "Target of Target"),
     (300, crate::minimapcolor::LABELS[0]),
     (301, crate::minimapcolor::LABELS[1]),
     (302, crate::minimapcolor::LABELS[2]),
@@ -2264,6 +2266,7 @@ const OWN_PLATE: i32 = 291;
 /// `qol::AUTO_CAST` turns them off with the automation.
 pub(crate) const COACH_TALK: i32 = 292;
 pub(crate) const STRAFE_SPEED: i32 = 293;
+pub(crate) const TARGET_OF_TARGET: i32 = 294;
 /// Inventory's rows (Heirloom petition 3118): Inventory Style (Retail List
 /// or Bags, `bags`), Bag Sort, Compare Gear (`compare`). An [OG] account's
 /// (`qol::LOCKED`) read as the game's and do not turn.
@@ -2426,7 +2429,7 @@ const ALL_CATEGORIES: [Category; 29] = [
     Category { name: "Interface Size", items: &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS, HOTKEY_LABEL], note: Note::None, group: Group::Ui },
     // what the HUD tells of its own pieces (petitions 2924-2928): HUD's page
     // is full
-    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS, SPELL_COOLDOWNS, HUD_PROFILE], note: Note::None, group: Group::Ui },
+    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS, SPELL_COOLDOWNS, HUD_PROFILE, TARGET_OF_TARGET], note: Note::None, group: Group::Ui },
     // the friendly NPCs' squares on the minimap by role (petition 3092,
     // `minimapcolor`), and whose spell merchants
     Category { name: "Minimap Colors", items: &[300, 301, 302, 303, 304, 305, 306, crate::minimapcolor::SPELLS_SHOWN_ITEM], note: Note::None, group: Group::Ui },
@@ -2634,6 +2637,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         HUD_PROFILE => wide(&crate::hudlayout::picked().unwrap_or_else(|| "None saved".to_string())),
         85 => on_off(c.head_marks),
         TARGET_LEVEL => on_off(c.target_level),
+        TARGET_OF_TARGET => on_off(c.target_of_target_bar),
         OWN_PLATE => on_off(c.own_plate),
         COACH_TALK => on_off(c.coach_talk),
         STRAFE_SPEED => wide(if c.strafe_match { "Match Forward" } else { "Retail" }),
@@ -3507,6 +3511,14 @@ mod tests {
         assert!(settings::power_bars() && settings::raid_list(), "moving no other row");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::health_numbers(), "and back: two values");
+        goto!(TARGET_OF_TARGET);
+        assert_eq!(w.item, TARGET_OF_TARGET);
+        assert_eq!(value_text(&vui, TARGET_OF_TARGET), Some(wide(vui.words.get(552, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert!(settings::target_of_target_bar());
+        assert_eq!(value_text(&vui, TARGET_OF_TARGET), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::target_of_target_bar());
         goto!(GROUP_EFFECTS);
         assert_eq!(w.item, GROUP_EFFECTS, "Group Effects");
         assert!(settings::group_effects(), "on: the members' tiny icons beside their bars");
@@ -4354,7 +4366,7 @@ mod tests {
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
-                ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "HUD Layouts"]),
+                ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "HUD Layouts", "Target of Target"]),
                 ("Minimap Colors", crate::minimapcolor::LABELS.iter().copied().chain(["Spell Merchants Shown"]).collect()),
                 ("Inventory", vec!["Inventory Style", "Bag Sort", "Compare Gear"]),
             ],
@@ -4859,13 +4871,13 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST, AUTO_LOOT, ATTACK_ABILITIES, DPS_COLUMNS, DPS_SORT, crate::numcolor::TAKEN_ITEM, COACH_TALK, STRAFE_SPEED];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, TARGET_OF_TARGET, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST, AUTO_LOOT, ATTACK_ABILITIES, DPS_COLUMNS, DPS_SORT, crate::numcolor::TAKEN_ITEM, COACH_TALK, STRAFE_SPEED];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
         }
         let off_text = Some(wide(vui.words.get(552, vui.language)));
-        for item in [44, TARGET_LEVEL, 70, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, AUTO_LOOT, ATTACK_ABILITIES, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
+        for item in [44, TARGET_LEVEL, TARGET_OF_TARGET, 70, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, AUTO_LOOT, ATTACK_ABILITIES, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
             for k in path_to(&w, item) {
                 w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
                 w.draw(&vui, &mut NullRaster, &o, &mut ups);
