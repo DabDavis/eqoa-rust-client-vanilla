@@ -1071,6 +1071,26 @@ impl StartData {
         }
     }
 
+    /// Character > Bestiary (`bestiary`), the client's own entry, put last in every
+    /// Character menu (title word 415), after Combat Record when it is there, or taken
+    /// out. Its words are set at run time (`Menus::labels`): the game has none. The
+    /// client shows it while the server offers the bestiary (`bestiaryplay`).
+    pub fn set_bestiary(&mut self, on: bool) {
+        use crate::client_image::{Label, MenuEntry};
+        let msg = crate::bestiary::MSG_BESTIARY;
+        self.menus.labels.insert((msg, 0), Label { text: vi::ui::wide(crate::bestiary::ENTRY), ..Default::default() });
+        for m in self.menus.list.iter_mut().filter(|m| m.x04 == 415) {
+            let at = m.entries.iter().position(|e| e.msg == msg);
+            match (on, at) {
+                (true, None) => m.entries.push(MenuEntry { msg, id: 0, ..Default::default() }),
+                (false, Some(k)) => {
+                    m.entries.remove(k);
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Community > Group > Raid (the client's own; a GM's petitions 1448
     /// and 1451, `raidplay`): an entry put after Leave in every Group menu (title
     /// word 107: Community's, reached from every start table) while the server
@@ -1626,6 +1646,36 @@ pub(crate) mod tests {
             let ch = root.entries.iter().find(|e| e.word == 415).and_then(|e| e.sub).expect("Character in the root");
             assert_eq!(d.menus.list[ch].entries.last().map(|e| e.msg), Some(msg), "reached from table {bank} {x}");
         }
+        d.set_record(false);
+        assert_eq!(character(&d), disc, "taken out");
+    }
+
+    /// Character > Bestiary: put last in the Character menu on every table, after
+    /// Combat Record when it is there, once however often it is set, its words set at
+    /// run time; taken out again, the record's entry left (the control: the disc's
+    /// Character menu). Needs `run/client.bin` (SKIPs without).
+    #[test]
+    fn the_bestiary_entry_goes_in_character() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/client.bin");
+        let Some(img) = std::fs::read(&path).ok().and_then(crate::client_image::ClientImage::from_bytes) else {
+            eprintln!("SKIP: no run/client.bin");
+            return;
+        };
+        let mut d = StartData::from_image(&img);
+        let character = |d: &StartData| -> Vec<Vec<u32>> {
+            d.menus.list.iter().filter(|m| m.x04 == 415).map(|m| m.entries.iter().map(|e| e.msg).collect()).collect()
+        };
+        let disc = character(&d);
+        d.set_record(true);
+        d.set_bestiary(true);
+        d.set_bestiary(true);
+        let (rec, msg) = (crate::record::MSG_RECORD, crate::bestiary::MSG_BESTIARY);
+        for (m, before) in character(&d).iter().zip(&disc) {
+            assert_eq!(m.len(), before.len() + 2, "once");
+            assert_eq!(m[m.len() - 2..], [rec, msg], "after Combat Record, last");
+        }
+        assert_eq!(d.menus.labels.get(&(msg, 0)).map(|l| String::from_utf16_lossy(&l.text)), Some("Bestiary".into()));
+        d.set_bestiary(false);
         d.set_record(false);
         assert_eq!(character(&d), disc, "taken out");
     }

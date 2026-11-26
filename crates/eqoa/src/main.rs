@@ -178,6 +178,7 @@ mod wisp;
 mod hat;
 mod toys;
 mod record;
+mod bestiary;
 mod alarm;
 mod startmenu;
 mod textlist;
