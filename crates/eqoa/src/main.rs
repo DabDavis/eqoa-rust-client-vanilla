@@ -142,6 +142,7 @@ mod groupsearch;
 mod inventory;
 mod hidelook;
 mod itemlink;
+mod mobwnd;
 mod itemmenu;
 mod bags;
 mod compare;
