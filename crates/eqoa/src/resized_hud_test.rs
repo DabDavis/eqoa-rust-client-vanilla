@@ -251,6 +251,69 @@ fn fade(world: &mut World, p: &mut Play, size: Size, out: &Path) {
 }
 
 #[test]
+#[ignore = "manual real-disc offline GPU, PC and Controller"]
+fn offline_target_of_target_moves_resizes_and_hides() {
+    use crate::settings;
+
+    let (lib, source, out) = offline_assets();
+    settings::testing::reset(false);
+    hudlayout::testing_reset();
+    let mut p = fixture_play();
+    let target = p.target;
+    p.target_info = Some(1);
+    p.entities.slots[1].as_mut().unwrap().creature.as_mut().unwrap().target = 0x100;
+    let mut world = World::new(lib, &source, &mut p);
+    let size = (960, 540);
+    let piece = Piece::TargetOfTarget;
+    let enable = |on| settings::set_client(settings::ClientOptions { target_of_target_bar: on, ..settings::client() });
+
+    for pc in [false, true] {
+        settings::set_ui_mode(pc).unwrap();
+        world.frame(&mut p, size);
+        assert!(hudlayout::drawn(piece).is_none(), "off by default");
+        enable(true);
+        for _ in 0..8 { world.frame(&mut p, size); }
+        let original = rect(piece);
+        assert!(original[1] >= rect(Piece::Target)[3], "bar is below the target, PC={pc}");
+        assert!(original[3] <= Beyond::of(size).screen()[3], "bar fits on screen, PC={pc}");
+        let mode = if pc { "pc" } else { "controller" };
+        let pixels = world.pixels(&p, size);
+        let rgba = pixels.as_chunks::<4>().0;
+        let [left, top] = pixel(size, in_rect(original, 0.0, 0.65)).map(|v| v.floor() as usize);
+        let [right, bottom] = pixel(size, [original[2], original[3]]).map(|v| v.ceil() as usize);
+        assert!((top..bottom).any(|y| {
+            let row = y * size.0 as usize;
+            rgba[row + left..row + right].iter().any(|&[r, g, b, _]| r > 120 && r > g.saturating_add(64) && r > b.saturating_add(64))
+        }), "health fill is visible, PC={pc}");
+        crate::texpack::write_png(&out.join(format!("target-of-target-{mode}.png")), size.0, size.1, &pixels).unwrap();
+
+        p.target = u32::MAX;
+        world.frame(&mut p, size);
+        assert!(hudlayout::drawn(piece).is_none(), "no target in play");
+        hudlayout::set_unlocked(true);
+        world.frame(&mut p, size);
+        let from = in_rect(rect(piece), 0.5, 0.6);
+        assert!(p.hud_press(pixel(size, from), size));
+        assert_eq!(hudlayout::dragged(), Some(piece));
+        assert!(p.hud_drag(pixel(size, [from[0] + 170.0, from[1] - 12.0]), size) && p.hud_release());
+        world.frame(&mut p, size);
+        assert!(rect(piece)[0] > original[0] + 100.0);
+        resize(&mut world, &mut p, size, piece);
+        let saved = hudlayout::layout();
+
+        hudlayout::set_unlocked(false);
+        hudlayout::testing_reset();
+        assert_eq!(hudlayout::layout(), saved);
+        p.target = target;
+        world.frame(&mut p, size);
+        assert!(rect(piece)[0] > original[0] + 100.0);
+        enable(false);
+        world.frame(&mut p, size);
+        assert!(hudlayout::drawn(piece).is_none(), "toggle hides the bar");
+    }
+}
+
+#[test]
 #[ignore = "manual real-disc offline GPU, 960x540 and 640x480"]
 fn offline_resized_hud_inputs_and_timed_chat() {
     let (lib, source, out) = offline_assets();

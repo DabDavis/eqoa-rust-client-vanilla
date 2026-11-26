@@ -1156,6 +1156,8 @@ pub struct ClientOptions {
     /// level after "Target" over its name in the target box; off, or on any
     /// other server, the box the game's. On by default.
     pub target_level: bool,
+    /// Target of Target (Extended > UI > HUD Extras), off by default.
+    pub target_of_target_bar: bool,
     /// Power Bars (Extended > UI > HUD; the server owner's of 2026-11-12, "lets
     /// add power bars to group/raid display"): a thin blue bar of each member's
     /// power under its health in the group's bars (a server's others' power,
@@ -1808,6 +1810,7 @@ impl Default for ClientOptions {
             spell_cooldowns: true,
             head_marks: true,
             target_level: true,
+            target_of_target_bar: false,
             power_bars: true,
             health_numbers: false,
             raid_mercs: false,
@@ -2016,6 +2019,9 @@ impl ClientOptions {
         }
         if !self.target_level {
             s.push_str("target_level=off\n");
+        }
+        if self.target_of_target_bar {
+            s.push_str("target_of_target_bar=on\n");
         }
         if !self.power_bars {
             s.push_str("power_bars=off\n");
@@ -2419,6 +2425,8 @@ impl ClientOptions {
                 ("head_marks", "off") => c.head_marks = false,
                 ("target_level", "on") => c.target_level = true,
                 ("target_level", "off") => c.target_level = false,
+                ("target_of_target_bar", "on") => c.target_of_target_bar = true,
+                ("target_of_target_bar", "off") => c.target_of_target_bar = false,
                 ("power_bars", "on") => c.power_bars = true,
                 ("power_bars", "off") => c.power_bars = false,
                 ("health_numbers", "on") => c.health_numbers = true,
@@ -2945,7 +2953,7 @@ pub mod qol {
     /// The Quest Helper: the guide, the tracker, the map's and the minimap's
     /// quest marks and the marks over quest NPCs' heads.
     pub const QUEST_HELPER: u32 = 1 << 1;
-    /// A target's level in the target box (Target Level).
+    /// Extra target information (Target Level and Target of Target).
     pub const TARGET_LEVEL: u32 = 1 << 2;
     /// The DPS meter.
     pub const DPS_METER: u32 = 1 << 3;
@@ -3014,6 +3022,7 @@ pub mod qol {
     pub fn of_item(item: i32) -> Option<u32> {
         Some(match item {
             44 | 45 | 85 => QUEST_HELPER,
+            crate::options::TARGET_OF_TARGET => TARGET_LEVEL,
             70..=72 | crate::options::DPS_COLUMNS | crate::options::DPS_SORT | crate::options::DPS_HIDE_MERCS => DPS_METER,
             64..=69 | 80 | 81 | crate::numcolor::TAKEN_ITEM => NUMBER_COLORS,
             86 | crate::options::HEALTH_NUMBERS => POWER_BARS,
@@ -3058,6 +3067,7 @@ pub mod qol {
         }
         if off(TARGET_LEVEL) {
             c.target_level = false;
+            c.target_of_target_bar = false;
         }
         if off(STAT_CAPS) {
             c.stat_window = false;
@@ -3106,6 +3116,7 @@ pub mod qol {
         }
         if off(TARGET_LEVEL) {
             v.target_level = kept.target_level;
+            v.target_of_target_bar = kept.target_of_target_bar;
         }
         if off(STAT_CAPS) {
             v.stat_window = kept.stat_window;
@@ -3467,6 +3478,10 @@ pub fn head_marks() -> bool {
 /// offers it (`hud::draw_target`).
 pub fn target_level() -> bool {
     client().target_level
+}
+
+pub fn target_of_target_bar() -> bool {
+    client().target_of_target_bar
 }
 
 /// Power Bars: others' power under their health in the group's bars, the
@@ -5305,6 +5320,26 @@ mod tests {
         assert!(ClientOptions::from_text("power_bars=on").power_bars);
         assert!(ClientOptions::from_text("power_bars=maybe").power_bars, "the default");
         assert!(ClientOptions::from_text("mana_bars=off").power_bars, "the control: the old Mana Bars' key is not this");
+    }
+
+    #[test]
+    fn target_of_target_bar_requires_an_explicit_opt_in() {
+        let default = ClientOptions::default();
+        assert!(!default.target_of_target_bar);
+        assert!(!default.to_text().contains("target_of_target_bar"));
+        let enabled = ClientOptions { target_of_target_bar: true, ..default };
+        let saved = enabled.to_text();
+        assert!(saved.contains("target_of_target_bar=on\n"));
+        assert_eq!(ClientOptions::from_text(&saved), enabled);
+        assert!(!ClientOptions::from_text("target_of_target=on").target_of_target_bar);
+
+        testing::reset(false);
+        set_client(enabled);
+        qol::set_off(qol::TARGET_LEVEL);
+        assert!(!target_of_target_bar());
+        set_client(ClientOptions { flora: 30, ..client() });
+        qol::set_off(0);
+        assert!(target_of_target_bar());
     }
 
     #[test]

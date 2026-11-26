@@ -83,6 +83,10 @@ or a browser (each described where it lives below):
   frame and equipment switch bar. **Extended → UI → HUD Layout → Spell Bar Size %**
   also scales the full stack of spell bars. Click **Pin** to lock a piece against dragging,
   **Unpin** to edit it again, and **Lock** at the top to return to play.
+- **Target of Target**. Turn it on under **Extended → UI → HUD Extras** to
+  see the name and health of whoever your selected target is targeting.
+  Use **Move HUD** to position the bar and drag a corner to scale it from
+  **50% to 200%**. PC and Controller each remember the bar's layout.
 - **HUD Scale and Nameplate Size in either interface**. **Extended → UI → Interface
   Size → HUD Scale %** sizes the whole HUD from **50% to 150%** (100%, the game's, by
   default), each piece about its own corner, and clicks follow it; **Nameplate Size %**

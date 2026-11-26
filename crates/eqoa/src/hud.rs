@@ -617,9 +617,49 @@ pub enum Pick {
 
 /// Where `DrawGroup` starts the group's bars and `DrawTarget` the target's.
 const GROUP_AT: [i32; 2] = [20, 93];
-const TARGET_AT: [i32; 2] = [20, 348];
+pub(crate) const TARGET_AT: [i32; 2] = [20, 348];
+const TARGET_NAMEPLATE_WIDTH: i32 = 174;
 /// The PC pet's fixed origin, matching the old solo position for saved offsets.
 const PC_PET_AT: [i32; 2] = [20, 93];
+
+// Leave room below the target's disposition icon in the Controller layout.
+pub(crate) const TARGET_OF_TARGET_AT: [f32; 2] = [46.0, 422.0];
+const TARGET_OF_TARGET_ART_SCALE: f32 = 0.70;
+pub(crate) const TARGET_OF_TARGET_WIDTH: f32 = TARGET_NAMEPLATE_WIDTH as f32 * TARGET_OF_TARGET_ART_SCALE;
+
+/// The target's nameplate and health gauge at a smaller natural size.
+pub(crate) fn draw_target_of_target(vui: &Vui, ui: &mut UiRaster, health: Option<(&str, u8)>) {
+    let (anchor, vertical) = (ui.ui.anchor, ui.ui.vertical);
+    ui.ui.anchor = Anchor::Left;
+    ui.ui.vertical = Vertical::Bottom;
+    let mark = crate::hudlayout::begin(ui.ui, Piece::TargetOfTarget);
+
+    // Draw the stock art within the original frame's clipping bounds, then
+    // align its scaled top left with the new piece's position.
+    let at = [TARGET_AT[0], TARGET_AT[1] + 25];
+    let corner = ui.ui.placed(TARGET_OF_TARGET_AT);
+    ui.ui.hud_scale.factor *= TARGET_OF_TARGET_ART_SCALE;
+    let art_corner = ui.ui.placed(at.map(|v| v as f32));
+    for axis in 0..2 {
+        ui.ui.shift[axis] += corner[axis] - art_corner[axis];
+    }
+
+    let (name, hp) = health.unwrap_or(("", 0));
+    let mut name = wide(name);
+    while !name.is_empty() && vui.string_width(ui, &name) > TARGET_NAMEPLATE_WIDTH - 16 {
+        name.pop();
+    }
+    vui.blit_bar(ui, &name, [0.0, 0.0, 0.0, 1.0], at, 25, 26, TARGET_NAMEPLATE_WIDTH, 3, 1.0, 0, false);
+    let gauge = [at[0] + GAUGE_IN[0], at[1] + GAUGE_IN[1]];
+    draw_gauge(vui, ui, 7, 136, gauge, health.is_some(), f32::from(hp) / 255.0);
+    if health.is_some() {
+        let at = [gauge[0] + GAUGE[0] / 2, gauge[1] + GAUGE[1] / 2];
+        draw_health_number(ui, &HealthNumber { at, text: health_text(hp) });
+    }
+
+    crate::hudlayout::end(ui.ui, mark);
+    (ui.ui.anchor, ui.ui.vertical) = (anchor, vertical);
+}
 
 impl Hud {
     pub fn new() -> Self {
@@ -965,12 +1005,12 @@ impl Hud {
         // where the bar under it ends (Live petition 5130)
         if let (Some(level), true) = (s.target_level, has) {
             let text = wide(&target_level_text(vui.words.get(503, vui.language), level));
-            let x = p[0] + 174 - vui.string_width(ui, &text);
+            let x = p[0] + TARGET_NAMEPLATE_WIDTH - vui.string_width(ui, &text);
             vui.draw_string_ex(ui, &text, x, p[1], [1.0, 1.0, 1.0, self.glow0], true);
         }
         p[1] += 25;
-        vui.blit_bar(ui, &[], [0.0; 4], p, 25, 26, 174, 3, self.glow0, 0, true);
-        self.scroll.init(vui, ui, [p[0] + 87, p[1] + 12], 160, 0, 1);
+        vui.blit_bar(ui, &[], [0.0; 4], p, 25, 26, TARGET_NAMEPLATE_WIDTH, 3, self.glow0, 0, true);
+        self.scroll.init(vui, ui, [p[0] + TARGET_NAMEPLATE_WIDTH / 2, p[1] + 12], 160, 0, 1);
         self.scroll.window.open(true);
         if name.is_empty() {
             self.scroll.reset();

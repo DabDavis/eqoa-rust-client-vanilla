@@ -11421,6 +11421,13 @@ impl Play {
                 vui.blit_bar(&mut r, &text, [0.8, 0.8, 0.8, a], [320 - ((w + 50) >> 1), 229], 33, 34, w + 50, 3, a, 0, true);
             }
             hud.draw(vui, &mut r, &state);
+            if crate::settings::target_of_target_bar() {
+                let moving = self.hud_moving();
+                let health = if moving { None } else { self.target_of_target(target) };
+                if moving || health.is_some() {
+                    crate::hud::draw_target_of_target(vui, &mut r, health);
+                }
+            }
             // a server's player search (`searchwnd`), drawn where S2 draws
             // it, in `VIWndGame::OnDrawSelf` before the windows it owns (the
             // effects, the chat box); while it is up the player and the
@@ -12407,6 +12414,21 @@ impl Play {
             (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
         });
         Some(crate::focus::Shown { name: f.name.clone(), con: f.con, hp: e.p19, distance })
+    }
+
+    /// Follow the selected creature's target ID in this session's entity stream.
+    fn target_of_target(&self, target: Option<&net::entity::Entity>) -> Option<(&str, u8)> {
+        let target = target?;
+        if target.id == u32::MAX || target.p19 == 0 || target.p18 & 2 != 0 || i64::from(target.world) != self.player.world {
+            return None;
+        }
+        let id = target.creature.as_ref()?.target;
+        if matches!(id, 0 | u32::MAX) {
+            return None;
+        }
+        let entity = self.entities.slots.iter().flatten().find(|e| e.id == id && e.world == target.world)?;
+        let name = entity.creature.as_ref()?.name.as_str();
+        Some((name, entity.p19))
     }
 
     fn drop_dead_target_info(&mut self) {
@@ -16396,6 +16418,41 @@ mod commands {
         assert_eq!((p.target, p.auto_attack), (0x300, true));
         p.msg_007b(u32::MAX);
         assert_eq!((p.target, last_line(&p)), (0x300, "(word 838)"));
+    }
+
+    #[test]
+    fn target_of_target_follows_the_current_entity_and_health() {
+        use net::entity::{Creature, Entity, TYPE_CREATURE};
+
+        let mut p = play();
+        let world = p.player.world as i8;
+        let actor = |id, name: &str, hp, target| Entity {
+            id, kind: TYPE_CREATURE, world, p19: hp,
+            creature: Some(Creature { name: name.into(), target, ..Default::default() }),
+            ..Default::default()
+        };
+        p.entities.slots[0] = Some(actor(0x100, "Adventurer", 175, 0));
+        p.entities.slots[1] = Some(actor(0x300, "Guard", 128, 0));
+        let mut target = actor(0x200, "Attacker", 255, 0x100);
+        assert_eq!(p.target_of_target(None), None);
+        assert_eq!(p.target_of_target(Some(&target)), Some(("Adventurer", 175)));
+
+        target.creature.as_mut().unwrap().target = 0x300;
+        assert_eq!(p.target_of_target(Some(&target)), Some(("Guard", 128)));
+        p.entities.slots[1].as_mut().unwrap().p19 = 0;
+        assert_eq!(p.target_of_target(Some(&target)), Some(("Guard", 0)));
+        p.entities.slots[1].as_mut().unwrap().world = world.wrapping_add(1);
+        assert_eq!(p.target_of_target(Some(&target)), None);
+        p.entities.slots[1] = None;
+        assert_eq!(p.target_of_target(Some(&target)), None);
+
+        for id in [0, u32::MAX] {
+            target.creature.as_mut().unwrap().target = id;
+            assert_eq!(p.target_of_target(Some(&target)), None);
+        }
+        target.creature.as_mut().unwrap().target = 0x100;
+        target.p18 |= 2;
+        assert_eq!(p.target_of_target(Some(&target)), None);
     }
 
     /// Focus Target (`focus`, Heirloom petition 3038): Set Focus takes the

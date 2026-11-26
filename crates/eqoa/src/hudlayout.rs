@@ -45,6 +45,8 @@ pub enum Piece {
     Pet,
     /// the target's bar
     Target,
+    /// the health bar for the selected target's target
+    TargetOfTarget,
     /// the minimap (`map::mini`)
     Minimap,
     /// the quest tracker (`tracker`)
@@ -84,8 +86,8 @@ pub enum Piece {
 }
 
 /// Each piece, in `Piece`'s order.
-pub const PIECES: [Piece; 22] = [
-    Piece::Player, Piece::Group, Piece::Pet, Piece::Target, Piece::Minimap, Piece::Quests,
+pub const PIECES: [Piece; 23] = [
+    Piece::Player, Piece::Group, Piece::Pet, Piece::Target, Piece::TargetOfTarget, Piece::Minimap, Piece::Quests,
     Piece::Meter, Piece::Effects, Piece::Chat, Piece::Chat1, Piece::Chat2, Piece::Chat3,
     Piece::Settings, Piece::Breath, Piece::QuickMenus, Piece::SpellBars, Piece::UtilityBars,
     Piece::EquipmentBar, Piece::TargetInfo, Piece::RaidPrompts, Piece::Stats, Piece::Focus,
@@ -155,6 +157,7 @@ impl Piece {
             Piece::Group => "group",
             Piece::Pet => "pet",
             Piece::Target => "target",
+            Piece::TargetOfTarget => "target-of-target",
             Piece::Minimap => "minimap",
             Piece::Quests => "quests",
             Piece::Meter => "dps",
@@ -183,6 +186,7 @@ impl Piece {
             Piece::Group => "Group",
             Piece::Pet => "Pet",
             Piece::Target => "Target",
+            Piece::TargetOfTarget => "Target of Target",
             Piece::Minimap => "Minimap",
             Piece::Quests => "Quest Tracker",
             Piece::Meter => "DPS Meter",
@@ -209,7 +213,7 @@ impl Piece {
     pub fn own(self) -> (Edge, Edge) {
         match self {
             Piece::Player | Piece::Group | Piece::Pet | Piece::Effects => (Edge::Start, Edge::Start),
-            Piece::Target | Piece::Focus => (Edge::Start, Edge::End),
+            Piece::Target | Piece::TargetOfTarget | Piece::Focus => (Edge::Start, Edge::End),
             Piece::Stats => (Edge::Start, Edge::Middle),
             Piece::TargetInfo => (Edge::End, Edge::Middle),
             Piece::RaidPrompts => (Edge::Middle, Edge::Middle),
@@ -485,12 +489,10 @@ pub fn unlocked() -> bool {
     with(|s| s.unlocked)
 }
 
-/// Whether `piece` has a size of its own in this interface: every piece in the
-/// PC's, the minimap alone in the Controller's (Heirloom petition 3065: "allow
-/// the controller mini-map to be able to have its size increased/decreased the
-/// same way"), each interface's kept in its own layout (`hud` or `hud-pc`).
+/// Every PC piece can be resized. In Controller mode, the minimap and the
+/// Target of Target bar can be resized. Each interface keeps its own layout.
 fn sizable(pc: bool, piece: Piece) -> bool {
-    pc || piece == Piece::Minimap
+    pc || matches!(piece, Piece::Minimap | Piece::TargetOfTarget)
 }
 
 /// An individual piece's size relative to the player's global HUD scale
@@ -645,6 +647,14 @@ fn pc_offset(piece: Piece, b: Beyond, layout: &Layout) -> Option<[f32; 2]> {
         Piece::Pet => [212.0 * k, 0.0],
         Piece::SpellBars => [-b.side - 320.0 * (1.0 - spell), -3.0],
         Piece::Target => [320.0 + b.side - 107.0 * factor(piece), 18.0 - SCREEN_H - 2.0 * b.top + 100.0 * factor(piece)],
+        Piece::TargetOfTarget => {
+            let [x, y] = crate::hud::TARGET_OF_TARGET_AT;
+            let center = x + crate::hud::TARGET_OF_TARGET_WIDTH / 2.0;
+            let below_target = y - crate::hud::TARGET_AT[1] as f32;
+            // Center below the PC target's default spot, allowing for its scale.
+            [320.0 + b.side - center * factor(piece),
+                18.0 - SCREEN_H - 2.0 * b.top + below_target * factor(Piece::Target) + (SCREEN_H - y) * factor(piece)]
+        }
         Piece::Chat => [left, main_y],
         Piece::Chat1 => {
             let [pane_width, rows] = c.chat_pane_sizes[0].unwrap_or([c.chat_width, c.chat_rows]);
@@ -1187,7 +1197,7 @@ const BAR: [f32; 4] = [0.0, 0.0, 0.0, 0.7];
 const BUTTON: [f32; 4] = [0.35, 0.3, 0.12, 0.95];
 
 /// The bar's words.
-const BAR_TEXT: &str = "Move HUD: drag a piece to move it, the minimap's corner to resize it";
+const BAR_TEXT: &str = "Move HUD: drag a piece or use a corner grip";
 const PC_BAR_TEXT: &str = "Move HUD: drag a piece or resize from a corner";
 
 /// Diagonal grips face the screen's center and its opposite corner, so even a
@@ -1274,8 +1284,7 @@ pub fn draw_moving(r: &mut crate::ui::UiRaster) {
             x = right + 3.0;
         }
         words(ui, x, at[1] + 2.0, piece.label(), WORDS);
-        // its corner grips: every piece unpinned in the PC interface, the
-        // minimap in the Controller's (`sizable`: petition 3065)
+        // Draw corner grips for pieces that can be resized in this interface.
         let resizable = if pc {
             let label = if pins[piece.index()] { "Unpin" } else { "Pin" };
             let w = width(ui, label) + 8.0;
