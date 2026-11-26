@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Click the Focus Target window to target it
+
+- A **left click** (or a tap) on the **Focus Target** window now makes your focus your current target, the same as the Target Focus key. A focus that has left your view or died is let go of already, so its window is not there to click. There is no new controller button: bind **Target Focus** to one under Controls if you want it on a pad.
+
 ## 2026-11-26 · More foliage, and foliage that moves
 
 - New **Foliage** page under **Options → Extended → Graphics**, both off unless you choose them:

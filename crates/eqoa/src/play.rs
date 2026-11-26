@@ -6580,6 +6580,11 @@ impl Play {
         if matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.stat_point(local(Piece::Stats)) {
             return true;
         }
+        // the focus target's window (`focus`, petition 3228): a left click or
+        // tap on it targets the focus, as Target Focus does
+        if matches!(c, Click::Target(..)) && matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.focus_point(local(Piece::Focus)) {
+            return true;
+        }
         // the item links' windows (`itemlink`): a click on one is theirs, on
         // its X it closes
         if matches!(c, Click::Target(..) | Click::Interact(..)) && matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.links.covers(f) {
@@ -12418,6 +12423,22 @@ impl Play {
         }
     }
 
+    /// A left click or tap at frame point `f` (the window's own place): on
+    /// the drawn focus window it targets the focus (`target_focus`) and is the
+    /// window's own. A focus out of view is already let go and its window not
+    /// drawn, so such a click is the world's, as a roster name's out of view.
+    fn focus_point(&mut self, f: [f32; 2]) -> bool {
+        if self.focus_shown().is_none() {
+            return false;
+        }
+        let r = crate::focus::rect();
+        if f[0] >= r[0] as f32 && f[0] < r[2] as f32 && f[1] >= r[1] as f32 && f[1] < r[3] as f32 {
+            self.target_focus();
+            return true;
+        }
+        false
+    }
+
     /// `/focus` (`focus::command`).
     fn focus_command(&mut self, rest: &str) {
         use crate::focus::Command;
@@ -16600,6 +16621,32 @@ mod commands {
         assert!(p.focus.is_some(), "/focus is Set Focus");
         p.chat_line("/focus clear");
         assert!(p.focus.is_none());
+    }
+
+    /// A left click on the focus window targets the focus (Heirloom petition
+    /// 3228): on it, the window's own; off it, the world's; a focus gone,
+    /// the window is not there to click.
+    #[test]
+    fn a_click_on_the_focus_window_targets_the_focus() {
+        let mut p = play();
+        let world = p.player.world as i8;
+        let gnoll = net::entity::Entity { id: 0x500, kind: 130, p19: 200, world, actor_pos: [3.0, 0.0, 4.0], creature: Some(net::entity::Creature { name: "a gnoll".into(), ..Default::default() }), ..Default::default() };
+        p.entities.slots[4] = Some(gnoll);
+        p.target = 0x500;
+        p.focus_key();
+        p.target_id(0x600);
+        let r = crate::focus::rect();
+        let inside = [(r[0] + 10) as f32, (r[1] + 5) as f32];
+        assert!(!p.focus_point([(r[2] + 5) as f32, inside[1]]), "off it: the world's");
+        assert_eq!(p.target, 0x600);
+        assert!(p.focus_point(inside), "on it: its own");
+        assert_eq!(p.target, 0x500, "the focus is the target");
+        assert!(p.focus_point(inside), "again: still its own, nothing resent");
+        p.entities.slots[4] = None;
+        p.drop_lost_focus();
+        p.target_id(0x600);
+        assert!(!p.focus_point(inside), "gone: no window, the world's");
+        assert_eq!(p.target, 0x600);
     }
 
     /// Hide UI (`hideui`): a click on the quick menu's title bar turns to the
