@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Mercs on their own DPS meter lines
+
+- The **DPS meter** now gives each mercenary its own line, by its name and its owner's (for example *Kellasis (Cucumber's merc)*), with its own damage, healing and power given, ranked with the players by whatever the meter is sorted by. Merc lines are drawn a shade dimmer, with a fainter bar. Your own merc's line is tinted like your own. The pet row under your line now shows only your summoned or charmed pet. Overall keeps each merc apart, even if a player or another player's merc has the same name. This needs the server's new meter; on an older server the meter works as before.
+
 ## 2026-11-25 · Resize the minimap on the Controller interface
 
 - The **Controller interface's minimap** can now be made bigger or smaller, the way the PC interface's HUD pieces are: turn on **Move HUD** (**Options → Extended → UI → HUD Layout**, or type `/hud`), then drag the small grip at a corner of the minimap. Its size is kept for the Controller interface (the PC interface keeps its own), and **Reset HUD** puts it back.
