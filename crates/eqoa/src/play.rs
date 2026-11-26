@@ -11421,7 +11421,7 @@ impl Play {
                 let moving = self.hud_moving();
                 let health = if moving { None } else { self.target_of_target(target) };
                 if moving || health.is_some() {
-                    crate::hud::draw_target_of_target(&mut r, health);
+                    crate::hud::draw_target_of_target(vui, &mut r, health);
                 }
             }
             // a server's player search (`searchwnd`), drawn where S2 draws

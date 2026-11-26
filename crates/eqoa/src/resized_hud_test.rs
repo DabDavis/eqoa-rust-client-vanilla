@@ -260,6 +260,7 @@ fn offline_target_of_target_moves_resizes_and_hides() {
     hudlayout::testing_reset();
     let mut p = fixture_play();
     let target = p.target;
+    p.target_info = Some(1);
     p.entities.slots[1].as_mut().unwrap().creature.as_mut().unwrap().target = 0x100;
     let mut world = World::new(lib, &source, &mut p);
     let size = (960, 540);
@@ -274,8 +275,17 @@ fn offline_target_of_target_moves_resizes_and_hides() {
         for _ in 0..8 { world.frame(&mut p, size); }
         let original = rect(piece);
         assert!(original[1] >= rect(Piece::Target)[3], "bar is below the target, PC={pc}");
+        assert!(original[3] <= Beyond::of(size).screen()[3], "bar fits on screen, PC={pc}");
         let mode = if pc { "pc" } else { "controller" };
-        crate::texpack::write_png(&out.join(format!("target-of-target-{mode}.png")), size.0, size.1, &world.pixels(&p, size)).unwrap();
+        let pixels = world.pixels(&p, size);
+        let rgba = pixels.as_chunks::<4>().0;
+        let [left, top] = pixel(size, in_rect(original, 0.0, 0.65)).map(|v| v.floor() as usize);
+        let [right, bottom] = pixel(size, [original[2], original[3]]).map(|v| v.ceil() as usize);
+        assert!((top..bottom).any(|y| {
+            let row = y * size.0 as usize;
+            rgba[row + left..row + right].iter().any(|&[r, g, b, _]| r > 120 && r > g.saturating_add(64) && r > b.saturating_add(64))
+        }), "health fill is visible, PC={pc}");
+        crate::texpack::write_png(&out.join(format!("target-of-target-{mode}.png")), size.0, size.1, &pixels).unwrap();
 
         p.target = u32::MAX;
         world.frame(&mut p, size);

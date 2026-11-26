@@ -8,7 +8,8 @@ is put on the page by `.github/workflows/notes.yml`.
 ## 2026-11-25 · Target of Target health bar
 
 - Enable **Target of Target** under **Options → Extended → UI → HUD Extras**
-  to see the name and health of your current target's target. It starts off.
+  to see the name and health of your current target's target in a smaller
+  version of the target bar. It starts off.
   Use **Move HUD** to drag it into place or resize it from a corner in either
   interface.
 
