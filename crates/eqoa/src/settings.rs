@@ -5084,7 +5084,10 @@ mod tests {
     }
 
     /// The options kept by a build with the Stats Box, others' mana bars
-    /// and Target of Target (all gone) still load: their lines are left out
+    /// and the old Target of Target (all gone; Target of Target back on
+    /// 2026-11-26, the owner's call, as an opt-in under its own line,
+    /// `target_of_target_bar`, so an old `target_of_target=on` does not turn
+    /// it on) still load: their lines are left out
     /// and written back no more; the map's and the quests' beside them (gone
     /// on 2026-10-27, back on 2026-11-09) are read again. The control: the
     /// lines beside them are read.
