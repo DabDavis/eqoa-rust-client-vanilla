@@ -123,6 +123,44 @@ fn kept(id: i32) -> &'static [i32] {
     KEPT.iter().find(|(b, _)| *b == id as u32).map_or(&[], |(_, e)| e)
 }
 
+/// Parts of a body's own model that keep their look under armour drawn in one
+/// palette entry with the skin they lie on, as the area of the entry's texture
+/// they are drawn from: body (its CHAR.ESF DictID), palette entry, and the
+/// area (`u0, v0, u1, v1`, in the texture's own 0-1 square, the texture
+/// repeated); a triangle whose middle lies in it keeps the body's look. The
+/// kappa's shell (petition 3279, a player: "kappa robes and chest items
+/// currently going over the shell. would it make more or less sense to go
+/// under the main back shell part?"): its body is one atlas (A5A430BC, entry
+/// 0) for its torso, arms and shell, the shell drawn from the atlas's lower
+/// right (its plates and rim, and the shell's dark underside left of them,
+/// from 0.32 across: two slivers of the arms' are drawn from 0.3125), the
+/// skin, the belly and the legs' spots from the rest. The shell's 104
+/// triangles are skinned to the spine as the back would be, so the fit took
+/// them for the torso and laid the chest and the robe across the shell; kept,
+/// the armour goes on the kappa's front, sides and arms, under the shell.
+const KEPT_AREAS: &[(u32, i32, [f32; 4])] = &[(0x31A1_5F17, 0, [0.32, 0.37, 1.0, 1.0])];
+
+/// Which of body `id`'s triangles can wear armour (`wearing`, its `KEPT`
+/// entries kept), less the parts of its `KEPT_AREAS`.
+fn wearing_of(lib: &Library, id: i32, model: &esf::Model) -> Vec<Vec<bool>> {
+    let mut wear = wearing(model, kept(id), |t| colours_of(lib, t));
+    for &(_, entry, [u0, v0, u1, v1]) in KEPT_AREAS.iter().filter(|(b, _, _)| *b == id as u32) {
+        for (b, on) in model.batches.iter().zip(&mut wear) {
+            if b.material != entry || b.layers.is_empty() {
+                continue;
+            }
+            for (t, w) in b.indices.chunks_exact(3).zip(on.iter_mut()) {
+                let uv = t.iter().map(|&v| b.layers[0].apply_uv(model.uv[v as usize])).fold([0f32; 2], |a, p| [a[0] + p[0] / 3.0, a[1] + p[1] / 3.0]);
+                let (u, v) = (uv[0].rem_euclid(1.0), uv[1].rem_euclid(1.0));
+                if (u0..=u1).contains(&u) && (v0..=v1).contains(&v) {
+                    *w = false;
+                }
+            }
+        }
+    }
+    wear
+}
+
 /// Bodies that wear armour as a human does, round them, not laid on their
 /// own triangles: the skeleton's, whose bones are too thin to carry it (the
 /// user, 2026-11-08: "lets fit armor on skeletons like humans or similar,
@@ -641,7 +679,7 @@ fn crossed_legs(lib: &Library, id: i32, model: &esf::Model, cs: &CSprite<Ee>, ar
         return None;
     }
     let r = reference(lib, cs.sex != 0)?;
-    let wear = wearing(model, kept(id), |t| colours_of(lib, t));
+    let wear = wearing_of(lib, id, model);
     let (pieces, lines) = leg_pieces(model);
     let segs = |leg: usize| -> [Frame; 3] { std::array::from_fn(|k| Frame::new(lines[leg][k], lines[leg][k + 1])) };
     let mut ours = [segs(0), segs(1)];
@@ -1517,7 +1555,7 @@ pub fn fit_of(lib: &Library, id: i32, model: &esf::Model, cs: &CSprite<Ee>, art:
     });
     let fit = r.and_then(|r| {
         let c = CARRIED.with(|c| c.borrow().get(&(id, era)).cloned()).unwrap_or_else(|| {
-            let made = Carried::of(&r, model, cs, &wearing(model, kept(id), |t| colours_of(lib, t))).map(Rc::new);
+            let made = Carried::of(&r, model, cs, &wearing_of(lib, id, model)).map(Rc::new);
             CARRIED.with(|c| c.borrow_mut().insert((id, era), made.clone()));
             made
         })?;
@@ -2407,7 +2445,7 @@ fn seg_distance(f: &Frame, p: Vec3) -> f32 {
 pub fn debug_groups(lib: &Library, id: i32, model: &esf::Model, cs: &CSprite<Ee>) -> Option<Vec<Vec<u8>>> {
     let mut rig = Rig::of_sprite(cs)?;
     rig.neck();
-    let wearing = wearing(model, kept(id), |t| colours_of(lib, t));
+    let wearing = wearing_of(lib, id, model);
     let verts: Vec<usize> = model.batches.iter().zip(&wearing).flat_map(|(b, on)| b.indices.chunks_exact(3).zip(on).filter(|(_, on)| **on).flat_map(|(t, _)| t.iter().map(|&v| v as usize))).collect();
     let body = frames(&rig, verts.iter().filter(|&&v| part_of(model, &rig, v) == Part::Body).map(|&v| (pos(model, v), Seg::Body)))[&Seg::Body];
     let on: Vec<(Vec3, usize)> = verts.iter().filter_map(|&v| bone_of(model, v).map(|b| (pos(model, v), b))).collect();
@@ -2777,7 +2815,8 @@ mod tests {
 
     /// The kappa fitted to the human: its torso, arms, legs and feet take
     /// the chest, bracer, gloves, legs and boots slots, its head none; in
-    /// plate the chest is the slot with the most triangles. The fit is made
+    /// plate the chest has more triangles than the bracer and the boots (its
+    /// shell kept, `KEPT_AREAS`, the gloves on its long hands have more). The fit is made
     /// once per look (the same `Rc` again).
     #[test]
     fn the_kappa_wears_each_slot() {
@@ -2793,7 +2832,7 @@ mod tests {
         let fit = fit_of(&lib, id, &model, &cs, art, false).expect("a fit");
         let n: Vec<usize> = fit.tris.iter().map(Vec::len).collect();
         assert!(n.iter().all(|&k| k > 0), "{n:?}");
-        assert!(n[0] > n[1] && n[0] > n[2] && n[0] > n[4], "{n:?}");
+        assert!(n[0] > n[1] && n[0] > n[4], "{n:?}");
         assert!(Rc::ptr_eq(&fit, &fit_of(&lib, id, &model, &cs, art, false).unwrap()));
         // its head and neck keep their own look (no fitted triangle has two
         // corners on them: the six at the collar, in the head's material, sit
@@ -2809,6 +2848,51 @@ mod tests {
         assert!(fit.tris.iter().flatten().any(|t| t.v.iter().all(|v| torso.contains(v))));
         // the control: read without the neck rule, the head's material wears more
         assert!(Rig::of_sprite(&cs).unwrap().part[4] == Part::Body && rig.part[4] == Part::Head);
+    }
+
+    /// The kappa's shell keeps its own look under a robe or a chest
+    /// (`KEPT_AREAS`, petition 3279): the triangles of its atlas drawn from the
+    /// shell's area wear nothing, and they are the shell (behind the spine,
+    /// none on the belly or the arms); in a robe and in plate the fit carries
+    /// none of them, and still dresses the kappa's front, arms and legs. The
+    /// control: without the area every one of them wore armour.
+    #[test]
+    fn the_kappas_shell_stays_on_top() {
+        let Some(lib) = disc() else { return };
+        let id = NINE[0] as i32;
+        let r = lib.lookup(id).unwrap();
+        let model = lib.build_model(r).unwrap();
+        let cs = vi::character::load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut vi::character::AnimCache::new(), &mut Rand(1)).unwrap();
+        let plain = wearing(&model, kept(id), |t| colours_of(&lib, t));
+        let wear = wearing_of(&lib, id, &model);
+        let mut shell = std::collections::HashSet::new();
+        for ((b, was), now) in model.batches.iter().zip(&plain).zip(&wear) {
+            for ((t, &was), &now) in b.indices.chunks_exact(3).zip(was).zip(now) {
+                if was && !now {
+                    assert_eq!(b.material, 0, "the atlas's entry alone");
+                    shell.insert([t[0], t[1], t[2]]);
+                }
+            }
+        }
+        assert!(shell.len() >= 100, "the shell: {} triangles", shell.len());
+        let mid = |t: &[u32; 3]| t.iter().map(|&v| pos(&model, v as usize)).sum::<Vec3>() / 3.0;
+        let behind = shell.iter().filter(|t| mid(t).z < 0.0).count();
+        assert!(behind * 10 >= shell.len() * 9, "{behind} of {} behind the spine", shell.len());
+        assert!(shell.iter().all(|t| mid(t).x.abs() < 0.45), "none on the arms");
+        // its belly (on the spine's lowest node alone, in front) still wears armour
+        let belly: Vec<[u32; 3]> = model.batches[0].indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).filter(|t| t.iter().all(|&v| model.bones[v as usize][0] == 1) && mid(t).z > 0.0).collect();
+        assert!(!belly.is_empty() && belly.iter().all(|t| !shell.contains(t)), "the belly wears it");
+        let t = Tables::retail();
+        let has = |id: u32| lib.surface(id as i32).is_some();
+        for look in [Look { robe: 1, ..Default::default() }, Look { armor: [4; 6], robe: -1, ..Default::default() }] {
+            let art = worn(&vi::cust::apply_look_slots(&slots(), cs.race, cs.sex, &look, false, has, &t)).map(|(t, _)| t);
+            let robed = look.robe >= 0;
+            let fit = fit_of(&lib, id, &model, &cs, art, robed).expect("a fit");
+            let carried: Vec<[u32; 3]> = fit.tris.iter().flatten().map(|t| t.v.map(|v| v as u32)).collect();
+            assert!(carried.iter().all(|t| !shell.contains(t)), "robe {}: nothing laid on the shell", look.robe);
+            assert!(fit.tris[0].len() > 50, "robe {}: its chest on the front ({})", look.robe, fit.tris[0].len());
+            assert!(carried.iter().any(|t| belly.contains(t)), "robe {}: on the belly", look.robe);
+        }
     }
 
     /// A triangle skinned to the spine that runs along an arm from the
@@ -4644,7 +4728,7 @@ mod tests {
             let art = worn(&vi::cust::apply_look_slots(&slots(), cs.race, cs.sex, &Look { robe: 0, ..Default::default() }, false, |i| lib.surface(i as i32).is_some(), &t)).map(|(t, _)| t);
             assert!(art[0].is_some() && art[3].is_some(), "{id:08X}: the robe's chest and skirt");
             let human = Reference::of(&lib, &Human::load(&lib, cs.sex != 0).unwrap()).unwrap();
-            let carried = Carried::of(&human, &model, &cs, &wearing(&model, kept(id as i32), |t| colours_of(&lib, t))).unwrap();
+            let carried = Carried::of(&human, &model, &cs, &wearing_of(&lib, id as i32, &model)).unwrap();
             let alpha: [Option<Rc<Alpha>>; SLOTS] = std::array::from_fn(|i| alpha_of(&lib, art[i].map_or(human.own[i], |t| t as i32)));
             let mut rig = Rig::of_sprite(&cs).unwrap();
             rig.neck();

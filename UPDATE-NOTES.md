@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · A kappa's shell over its robe
+
+- A **Kappa**'s shell stays its own: a robe, a tunic or a breastplate goes on its front, sides and arms, under the shell, instead of being stretched across the shell's back.
+
 ## 2026-11-26 · No map on Night 4
 
 - On the Plane of Sky's **Night Chain 4**, the isle whose floor has squares that are not really there, the **minimap** no longer shows the floor: standing on the isle it is blank and says *The sky hides the way*. The **map** (M) shows the isle as a plain square, so neither gives away which squares are false. Everywhere else both are as before.
