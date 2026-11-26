@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Auto-cast takes the vampires' Feed
+
+- A vampire's **Feed** can now be marked for **auto-cast** with a right click, a long press or ○/E held on its quick slot, like any attack: it fires off its timer in a fight, at your target. Before, auto-cast said it could not tell when to use Feed.
+
 ## 2026-11-26 · Guild roster rows and the minimap's name box
 
 - The **guild roster** no longer draws one member's name on top of the next: a member of a race the game has no short name for (a froglok) used to leave the rest of the list one line short. Each member now has a row of their own.
