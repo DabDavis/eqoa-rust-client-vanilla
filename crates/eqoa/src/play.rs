@@ -12041,6 +12041,8 @@ impl Play {
         }
         self.options_wnd.meter_merc_note = (self.session.dps_meter_offer && self.session.dps_meter_layout < net::session::DPS_METER_MERC_LINES)
             .then_some("Mercenary breakdown requires a newer server");
+        self.options_wnd.meter_merc_rows_note = (self.session.dps_meter_offer && self.session.dps_meter_layout < net::session::DPS_METER_MERC_ROWS)
+            .then_some("Each merc's own row requires a newer server");
     }
 
     /// The Faction Tracker: the character's followed faction read, the server
@@ -12246,7 +12248,8 @@ impl Play {
         let c = crate::settings::client();
         (c.dps_meter && self.session.dps_meter_offer && self.right_hud_up()).then(|| {
             let hide_mercs = (self.session.dps_meter_layout >= net::session::DPS_METER_MERC_LINES).then_some(c.dps_hide_mercenary);
-            self.meter.shown_by(c.dps_view, &self.pet_name, c.dps_columns, c.dps_sort, hide_mercs)
+            let own_rows = self.session.dps_meter_layout >= net::session::DPS_METER_MERC_ROWS && c.dps_merc_rows;
+            self.meter.shown_with(c.dps_view, &self.pet_name, c.dps_columns, c.dps_sort, hide_mercs, own_rows)
         })
     }
 

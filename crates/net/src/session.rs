@@ -717,9 +717,12 @@ pub const OP_DPS_METER_OFFER: u16 = 0x7E3A;
 /// alone reads any answer but 0 as 1.
 pub const OP_DPS_METER_ANSWER: u16 = 0x7E3B;
 /// The newest DPS meter layout this client reads.
-pub const DPS_METER_LAYOUT: u8 = 4;
+pub const DPS_METER_LAYOUT: u8 = 5;
 /// The first layout to distinguish mercenary contributions.
 pub const DPS_METER_MERC_LINES: u8 = 3;
+/// The first layout with each merc's own figures beside layout 4's rows
+/// ([`DpsMeter::merc_lines`]; Heirloom petition 3136).
+pub const DPS_METER_MERC_ROWS: u8 = 5;
 /// The meter, from a server the client asked: the fight of the player's group
 /// at most once a second while it changes, and once more as it ends (the server
 /// ends it 10 s after the group's last damage). [`DpsMeter`] has the layout.
@@ -752,6 +755,11 @@ pub const OP_FACTION_TRACK_DATA: u16 = 0x7E88;
 /// owner's line without it; the wholes the same).
 /// Layout 4 sends player rows and includes the mercenary shares in those
 /// rows. The header includes totals and the receiver's places for both views.
+/// Layout 5 is layout 4, then u8 how many merc lines and each: u8 flags (4, 8
+/// the player's own merc, 2 its owner no longer in the group), u8 class, u32
+/// damage, its own pet's share, healing, its pet's share, power, u8 its
+/// owner's place among the lines sent (0 the first), its name. Each merc's
+/// figures are in its owner's `merc_share` too.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DpsMeter {
     /// The layout it came in: 1 has no healing or power (each 0).
@@ -775,6 +783,10 @@ pub struct DpsMeter {
     pub power_place: u16,
     pub without_mercs: Option<DpsRankedTotals>,
     pub lines: Vec<DpsLine>,
+    /// Layout 5: each merc's own line (`merc` set, `owner` its owner's line's
+    /// name), the most damage first; those the server had no room for are
+    /// left in their owner's `merc_share` alone.
+    pub merc_lines: Vec<DpsLine>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -868,6 +880,32 @@ fn read_dps_meter(r: &mut Reader) -> Option<DpsMeter> {
             owner,
             merc_share: if layout >= 4 && flags & 4 != 0 { [r.u32(), r.u32(), r.u32()] } else { [0; 3] },
         });
+    }
+    if layout >= DPS_METER_MERC_ROWS {
+        let n = r.u8() as usize;
+        for _ in 0..n {
+            if r.error {
+                break;
+            }
+            let (flags, class, damage, pet, heal, heal_pet, power, at) = (r.u8(), r.u8(), r.u32(), r.u32(), r.u32(), r.u32(), r.u32(), r.u8() as usize);
+            let len = r.u8() as usize;
+            let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
+            let owner = m.lines.get(at).map(|l| l.name.clone()).unwrap_or_default();
+            m.merc_lines.push(DpsLine {
+                left: flags & 2 != 0,
+                class,
+                damage,
+                pet,
+                heal,
+                heal_pet,
+                power,
+                name,
+                merc: true,
+                own_merc: flags & 8 != 0,
+                owner,
+                ..DpsLine::default()
+            });
+        }
     }
     (!r.error).then_some(m)
 }
@@ -6363,6 +6401,7 @@ mod tests {
             heal_place: 2,
             power_place: 2,
             without_mercs: None,
+            merc_lines: Vec::new(),
             lines: vec![
                 DpsLine { own: true, left: false, class: 3, damage: 1000, pet: 0, heal: 50, heal_pet: 0, power: 0, name: "Dab".into(), ..DpsLine::default() },
                 DpsLine { own: false, left: true, class: 9, damage: 300, pet: 120, heal: 900, heal_pet: 100, power: 40, name: "Jib".into(), ..DpsLine::default() },
@@ -6413,6 +6452,32 @@ mod tests {
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m4[..m4.len() - 1].to_vec());
         assert!(!ev.iter().any(|e| matches!(e, Event::DpsMeter(_))), "layout 4 cut short: {ev:?}");
 
+        // Layout 5: layout 4 and its merc lines (TestDPSMeterLayoutFiveMercRows's
+        // on the server, the same rows with Dab's two mercs)
+        let mut m5 = m4.clone();
+        m5[2] = 5;
+        m5.extend([2u8,
+            4 | 8, 9, 200, 0, 0, 0, 0, 0, 0, 0, 0x84, 3, 0, 0, 0, 0, 0, 0, 40, 0, 0, 0, 0, 3, b'K', b'e', b'l',
+            4 | 8, 0, 100, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, b'O', b'r', b'd',
+        ]);
+        let want5 = DpsMeter {
+            layout: 5,
+            merc_lines: vec![
+                DpsLine { class: 9, damage: 200, heal: 900, power: 40, name: "Kel".into(), merc: true, own_merc: true, owner: "Dab".into(), ..DpsLine::default() },
+                DpsLine { class: 0, damage: 100, pet: 10, name: "Ord".into(), merc: true, own_merc: true, owner: "Dab".into(), ..DpsLine::default() },
+            ],
+            ..want4.clone()
+        };
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m5.clone());
+        assert!(matches!(&ev[..], [Event::DpsMeter(got)] if *got == want5), "layout 5: {ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m5[..m5.len() - 1].to_vec());
+        assert!(!ev.iter().any(|e| matches!(e, Event::DpsMeter(_))), "layout 5 cut short: {ev:?}");
+        let mut none = m4.clone();
+        none[2] = 5;
+        none.push(0);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, none);
+        assert!(matches!(&ev[..], [Event::DpsMeter(got)] if *got == DpsMeter { layout: 5, ..want4.clone() }), "layout 5 of no mercs: {ev:?}");
+
         // the offer again (the next world entry): told afresh
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3A, 0x7E, 1]);
         s.agree_dps_meter(true);
@@ -6426,11 +6491,11 @@ mod tests {
 
     // The DPS meter's answer names the layout offered, at most this client's
     // newest (DPS_METER_LAYOUT): a server of layout 1 is answered 1, of 2 2, of
-    // 3 3, of 4 or above 4; off is 0 whatever was offered. A fresh connection
+    // 3 3, of 4 4, of 5 or above 5; off is 0 whatever was offered. A fresh connection
     // each.
     #[test]
     fn dps_meter_answer_names_the_layout_offered() {
-        for (offer, answer) in [(1u8, 1u8), (2, 2), (3, 3), (4, 4), (9, DPS_METER_LAYOUT)] {
+        for (offer, answer) in [(1u8, 1u8), (2, 2), (3, 3), (4, 4), (5, 5), (9, DPS_METER_LAYOUT)] {
             let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
             let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
             deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3A, 0x7E, offer]);
