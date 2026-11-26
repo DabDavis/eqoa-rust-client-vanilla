@@ -1096,6 +1096,8 @@ impl WndOptions {
                     // the next frame (`Play::map_frame`; off, an open map
                     // closes)
                     41 => c.map = !c.map,
+                    // Town Map First: from the next M (`map::Map::show`)
+                    TOWN_MAP => c.town_map = !c.town_map,
                     // Minimap: drawn or not from the next frame (`map::mini`)
                     42 => c.minimap = !c.minimap,
                     // Map Pointer: the dart on the minimap and the map turned
@@ -2240,6 +2242,7 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (FACTION_TRACK_STYLE, "Faction Tracker Shows"),
     (MASTER_VOLUME, "Master Volume"),
     (HUD_SAVE, "Save HUD Layout"),
+    (TOWN_MAP, "Town Map First"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2356,6 +2359,9 @@ pub(crate) const MASTER_VOLUME: i32 = 340;
 /// the options (`hudlayout::save_picked`), on UI's HUD Layout page with Load
 /// HUD Layout (`HUD_PROFILE`) and Reset HUD.
 pub(crate) const HUD_SAVE: i32 = 341;
+/// Town Map First's (Live petition 5650): M in a town opens the map on the
+/// town (`map::Map::show`), on UI's Map page.
+pub(crate) const TOWN_MAP: i32 = 342;
 pub(crate) const FOLIAGE_REACTS: i32 = 321;
 /// The Faction Tracker's rows (Heirloom petition 3216, 2026-11-26): Faction
 /// Tracker (Off, On: `factiontrack`) and Faction Tracker Shows (Number, Bar,
@@ -2503,7 +2509,8 @@ const ALL_CATEGORIES: [Category; 31] = [
     // Debuff Icons (petition 2997) with the other things drawn at a plate
     // Own Name Plate (petition 3081) with the plates' rows
     Category { name: "Name Plates", items: &[27, 34, 85, TARGET_LEVEL, NPC_DEBUFFS, OWN_PLATE], note: Note::None, group: Group::Ui },
-    Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
+    // Town Map First (Live petition 5650) at the foot
+    Category { name: "Map", items: &[41, 42, 87, 43, 44, 45, TOWN_MAP], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "DPS Meter", items: &[70, 71, DPS_COLUMNS, DPS_SORT, DPS_HIDE_MERCS, 72], note: Note::Meter, group: Group::Ui },
@@ -2719,6 +2726,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         SHOW_FPS => on_off(c.show_fps),
         29 => on_off(c.update_notices),
         41 => on_off(c.map),
+        TOWN_MAP => on_off(c.town_map),
         42 => on_off(c.minimap),
         87 => wide(c.map_pointer.name()),
         91 => on_off(c.minimap_scroll),
@@ -4060,7 +4068,7 @@ mod tests {
         // (after Minimap) Facing then Camera, moving none of them
         goto!(41);
         assert_eq!(w.item, 41, "Map, the Map");
-        for (item, on) in [(41, settings::map as fn() -> bool), (42, settings::minimap), (43, settings::map_markers), (44, settings::quest_helper), (45, settings::quest_tracker)] {
+        for (item, on) in [(41, settings::map as fn() -> bool), (42, settings::minimap), (43, settings::map_markers), (44, settings::quest_helper), (45, settings::quest_tracker), (TOWN_MAP, settings::town_map)] {
             if item == 43 {
                 use crate::map::Pointer;
                 assert_eq!(w.item, 87, "Map Pointer, after Minimap");
@@ -4082,7 +4090,7 @@ mod tests {
             assert!(on(), "{}: and back, two values", label_of(item));
             press(&mut w, &mut o, key::DOWN, &mut cues);
         }
-        assert_eq!((w.row, cues.last()), (5, Some(&9)), "Map's last row");
+        assert_eq!((w.row, cues.last()), (6, Some(&9)), "Map's last row, Town Map First");
         // Number Colors: six rows, each Default (the game's colour, drawn as
         // any value) then round the palette either way, each drawn in its
         // colour, one moving no other
@@ -4590,7 +4598,7 @@ mod tests {
                 ("Group & Raid", vec!["Raid List", "Power Bars", "Health Numbers", "Group Effects", "Raid Mercenaries"]),
                 ("HUD Layout", vec!["Move HUD", "Save HUD Layout", "Load HUD Layout", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity", "Spell Bar Layout", "Utility Bar Layout"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers", "Target Level", "Debuff Icons", "Own Name Plate"]),
-                ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
+                ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker", "Town Map First"]),
                 ("Number Colors", [&n[..6], &n[8..]].concat()),
                 ("Merc Colors", n[6..8].to_vec()),
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "DPS Meter Columns", "DPS Meter Sort", "Hide mercs", "Reset DPS Meter"]),

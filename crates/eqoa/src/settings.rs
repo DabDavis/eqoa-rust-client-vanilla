@@ -1460,6 +1460,11 @@ pub struct ClientOptions {
     /// map too", `map::markers`): the map's own key (T, Select) turns them,
     /// kept as Map Markers is; on by default.
     pub map_towns: bool,
+    /// Town Map First (Live petition 5650: "pressing M in a city should open
+    /// that city's map"): M inside a town (`map::places::town_at`) opens the
+    /// map close in on the town, the world's view a press of M (✕ on a pad)
+    /// away; on by default. Off, M opens the world's view as it did.
+    pub town_map: bool,
     /// Quest Helper (the user, 2026-11-09; on by default): the quest marks on
     /// the map and the minimap (a "!" at each giver of a quest the player may
     /// take, a "?" where a step is to be done) and the quest tracker on the
@@ -1892,6 +1897,7 @@ impl Default for ClientOptions {
             map_pointer: crate::map::Pointer::Facing,
             map_markers: true,
             map_towns: true,
+            town_map: true,
             quest_helper: true,
             quest_markers: true,
             quest_tracker: true,
@@ -2228,6 +2234,7 @@ impl ClientOptions {
             (self.minimap_scroll, "minimap_scroll"),
             (self.map_markers, "map_markers"),
             (self.map_towns, "map_towns"),
+            (self.town_map, "town_map"),
             (self.quest_helper, "quest_helper"),
             (self.quest_markers, "quest_markers"),
             (self.quest_tracker, "quest_tracker"),
@@ -2616,6 +2623,8 @@ impl ClientOptions {
                 ("map_markers", "on") => c.map_markers = true,
                 ("map_markers", "off") => c.map_markers = false,
                 ("map_towns", "on") => c.map_towns = true,
+                ("town_map", "on") => c.town_map = true,
+                ("town_map", "off") => c.town_map = false,
                 ("map_towns", "off") => c.map_towns = false,
                 ("quest_helper", "on") => c.quest_helper = true,
                 ("quest_helper", "off") => c.quest_helper = false,
@@ -3848,6 +3857,11 @@ pub fn set_map_markers(on: bool) -> Result<(), String> {
 /// Whether the map names the towns.
 pub fn map_towns() -> bool {
     client().map_towns
+}
+
+/// Town Map First now (`ClientOptions::town_map`).
+pub fn town_map() -> bool {
+    client().town_map
 }
 
 /// The map's town names turned (its own key), and kept at once.

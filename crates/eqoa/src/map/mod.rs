@@ -358,6 +358,11 @@ pub struct Map {
     home: Option<World>,
     /// the minimap inside a building, a cave or a dungeon (`indoor`)
     pub indoor: indoor::Indoor,
+    /// the player's place (x, z) last frame; the town the map was opened on
+    /// (Town Map First, `show`) and the world's view it stands in for
+    player_at: Option<[f32; 2]>,
+    town: Option<usize>,
+    town_back: Option<View>,
 }
 
 /// O on a keyboard while the map is up (`keyboard`): the group's waypoint at
@@ -368,6 +373,9 @@ pub const KEY_GROUP: i32 = 0x7E31_0001;
 /// row's index past `KEY_PLACE_ROW`.
 pub const KEY_PLACES: i32 = 0x7E31_0002;
 pub const KEY_PLACE_ROW: i32 = 0x7E32_0000;
+/// M on a keyboard while the map is up: on the town's map (Town Map First)
+/// the world's view, else the map closed (as △).
+pub const KEY_M: i32 = 0x7E31_0003;
 
 impl Map {
     /// Opens the map on the player's area (the view it was last left at, or
@@ -385,11 +393,54 @@ impl Map {
         self.pointer_seen = false;
         self.waypoint_fresh = false;
         self.square_hold = None;
+        self.open_on_town();
+    }
+
+    /// Town Map First (Live petition 5650, "pressing M in a city should open
+    /// that city's map instead of the world map"): with the player in a town
+    /// of the world mapped (`places::town_at`), the map opens close in on it
+    /// as the list of places shows a town (`centre_on`), the world's view as
+    /// it was kept for M (✕ on a pad, `world_view`). Nothing with the row off,
+    /// outside every town, or before the world's map is made.
+    fn open_on_town(&mut self) {
+        self.town = None;
+        self.town_back = None;
+        if !crate::settings::town_map() || self.shown.is_some() {
+            return;
+        }
+        let Some(w) = self.world.as_ref().filter(|w| w.index == self.player_world) else { return };
+        let Some(t) = self.player_at.and_then(|p| places::town_at(w.index, p)) else { return };
+        let Some((_, at)) = places::town(t) else { return };
+        self.town_back = self.view.or(w.view);
+        self.centre_on(at);
+        self.town = Some(t);
+    }
+
+    /// From the town's map to the world's view as it was (`open_on_town`),
+    /// following the player; whether the town's map was up.
+    fn world_view(&mut self) -> bool {
+        if self.town.take().is_none() {
+            return false;
+        }
+        let back = self.town_back.take();
+        self.view = back;
+        if let Some(w) = self.world.as_mut() {
+            w.view = back;
+        }
+        self.follow = true;
+        true
+    }
+
+    /// The town the map was opened on (Town Map First), while its map is up.
+    pub fn town(&self) -> Option<usize> {
+        self.town
     }
 
     /// Closes the map; its tiles leave the GPU (they come back from the
     /// cache when it is opened again), the overview stays.
     pub fn close(&mut self) {
+        self.town = None;
+        self.town_back = None;
         self.places.open = false;
         // the player's own world's map again (`places`)
         self.unpick();
@@ -454,9 +505,17 @@ impl Map {
             KEY_PLACES | key::START if down => self.toggle_places(),
             k if down && (KEY_PLACE_ROW..KEY_PLACE_ROW + 0x1_0000).contains(&k) => self.take_place((k - KEY_PLACE_ROW) as usize),
             key::TRIANGLE if down => self.close(),
-            // Center: the player again, back on its own world (`places`)
+            // M: from the town's map the world's view, else closed
+            KEY_M if down => {
+                if !self.world_view() {
+                    self.close();
+                }
+            }
+            // Center: the player again, back on its own world (`places`);
+            // from the town's map, the world's view about the player
             key::CROSS if down => {
                 self.unpick();
+                self.world_view();
                 self.follow = true;
             }
             key::SQUARE => self.square_key(down),
@@ -1319,6 +1378,9 @@ impl Map {
     fn take_place(&mut self, i: usize) {
         let rows = self.place_rows();
         let Some(&row) = rows.get(i) else { return };
+        // a place picked: the town's map is left as the world's is
+        self.town = None;
+        self.town_back = None;
         let home = self.home_index();
         match row {
             places::Row::Here => {
@@ -1479,6 +1541,7 @@ impl Map {
         self.keyboard = cx.keyboard;
         self.target = cx.target;
         self.player_world = cx.world;
+        self.player_at = cx.player.map(|(p, _)| [p[0], p[2]]);
         if self.open {
             self.hold(cx.dt);
         }
@@ -1870,6 +1933,7 @@ impl Map {
             group: cx.in_group,
             travel: self.travel,
             places: place_rows,
+            town: self.town.is_some(),
         };
         let fallback;
         let vui = match cx.vui {
@@ -2177,7 +2241,10 @@ pub fn keyboard(name: &str) -> Option<(i32, Hold)> {
         // towns' names
         "x" => (key::CIRCLE, Hold::Once),
         "t" => (key::SELECT, Hold::Once),
-        "escape" | "backspace" | "m" => (key::TRIANGLE, Hold::Once),
+        "escape" | "backspace" => (key::TRIANGLE, Hold::Once),
+        // M: the world's view from the town's map (Town Map First), else
+        // closed as Escape closes it
+        "m" => (KEY_M, Hold::Once),
         "space" | "enter" | "home" => (key::CROSS, Hold::Once),
         // Q is the keyboard's □ (`binds`' "talk" row): the waypoint, held
         // the group's (its release counts, `Map::square_key`)

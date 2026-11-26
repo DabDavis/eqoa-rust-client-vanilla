@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · M in a town opens the town's map
+
+- Pressing **M** while you are in a town or city (Freeport, Qeynos, Neriak, Halas, Oggok and the others the map knows) now opens the map zoomed in on that town, like picking it from **Places**. Press **M** again (✕ on a controller) for the world map as you left it, and **M** once more to close. Outside towns, M opens the world map as before.
+- Turn it off under **Options → Extended → UI → Map → Town Map First** if you would rather M always opened the world map.
+
 ## 2026-11-26 · The compare box no longer covers your bags
 
 - With **Inventory Style** at **Bags**, the **Compare Gear** box now sits in the column to the right of the grid, at the bottom, instead of under the item you are on: it never covers the bag slots, so you can always see where you are in the row. In the Retail List it stays beside the list as before.

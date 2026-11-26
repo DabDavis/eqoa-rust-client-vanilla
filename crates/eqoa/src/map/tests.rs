@@ -1089,3 +1089,48 @@ fn the_map_pointer_follows_the_facing_or_the_camera() {
     crate::settings::testing::reset(false);
     assert_eq!(pointer_heading(facing, camera), facing, "back to Facing");
 }
+
+/// Town Map First (Live petition 5650): M in Freeport opens the map close in
+/// on Freeport, not following, the legend's M the world's; M again is the
+/// world's view as it was (about the player, following), and M once more
+/// closes it; on a pad ✕ is that step. The controls: outside every town, or
+/// with the row off, the map opens on the world's view as before.
+#[test]
+fn m_in_a_town_opens_the_towns_map() {
+    crate::settings::testing::reset(false);
+    let size = (1280, 720);
+    let mut m = up(size);
+    let world = m.view.unwrap();
+    m.close();
+    let freeport = super::markers_data::TOWNS.iter().position(|t| t.name == "Freeport").unwrap();
+    m.player_at = Some(FREEPORT);
+    m.show();
+    assert_eq!(m.town(), Some(freeport));
+    assert_eq!(m.view.unwrap().center, super::markers_data::TOWNS[freeport].at);
+    assert_eq!(m.view.unwrap().scale, places::TOWN_SCALE);
+    assert!(!m.follow, "the town, not the player");
+    m.keyboard_key("m", true, false);
+    assert!(m.open && m.town().is_none(), "M: the world's view, still up");
+    assert!(m.follow);
+    assert_eq!(m.view, Some(world), "as it was left");
+    m.keyboard_key("m", true, false);
+    assert!(!m.open, "M again closes it");
+    // a pad: ✕ is the step
+    m.show();
+    assert!(m.town().is_some());
+    m.key(key::CROSS, true);
+    assert!(m.open && m.town().is_none() && m.follow);
+    m.close();
+    // the controls: outside every town; the row off
+    m.player_at = Some([10_000.0, 30_000.0]);
+    m.show();
+    assert!(m.town().is_none() && m.follow, "outside every town: the world's view");
+    m.close();
+    m.player_at = Some(FREEPORT);
+    let mut c = crate::settings::client();
+    c.town_map = false;
+    crate::settings::set_client(c);
+    m.show();
+    assert!(m.town().is_none() && m.follow, "Town Map First off: the world's view");
+    crate::settings::testing::reset(false);
+}

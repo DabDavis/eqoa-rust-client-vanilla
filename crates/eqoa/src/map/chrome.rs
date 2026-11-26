@@ -70,6 +70,9 @@ pub struct Chrome {
     pub travel: bool,
     /// the list of places, while it is up (`places`)
     pub places: Option<Places>,
+    /// opened on the player's town (Town Map First, `Map::show`): M (✕ on a
+    /// pad) is the world's view, said in the legend
+    pub town: bool,
 }
 
 /// The list of places as the chrome draws it: each row's words and whether
@@ -247,6 +250,16 @@ pub fn draw(r: &mut dyn Raster, vui: &Vui, c: &Chrome) -> Vec<Button> {
         (true, true) => KEY_LEGEND_PLACES.iter().map(|s| (-1, *s)).collect(),
         (false, true) => PAD_LEGEND_PLACES.to_vec(),
     };
+    if c.town && c.places.is_none() {
+        // the town's map: M (✕) goes to the world's
+        for p in &mut pieces {
+            if p.1 == "M Close" {
+                p.1 = "M World map";
+            } else if *p == PAD_LEGEND[1] {
+                p.1 = "World map";
+            }
+        }
+    }
     if c.places.is_some() {
         // the list's keys alone
     } else if c.group {
@@ -359,7 +372,7 @@ mod tests {
     }
 
     fn chrome(keyboard: bool) -> Chrome {
-        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)), quests: None, pointer: None, notice: None, group: false, travel: false, places: None }
+        Chrome { corners: [[-106.0, 0.0], [746.0, 448.0]], title: "Tunaria: Freeport (North)".into(), names: Vec::new(), keyboard, progress: Some((3, 175)), quests: None, pointer: None, notice: None, group: false, travel: false, places: None, town: false }
     }
 
     /// The chrome's footprint covers its title (top left), its buttons (top

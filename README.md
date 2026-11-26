@@ -167,6 +167,12 @@ or a browser (each described where it lives below):
   quests' marks, the tracker and the guide; with both off the game is as it is without
   them (M, N and the compass do nothing, a group line is a chat line, no server is
   asked for marks or a tracker and nothing is built or kept).
+- **The town's map first** (Live petition 5650, "when you press m ... and you are in a city, it should pull
+  up a map of the city"; `map::Map::open_on_town`, `map::places::town_at`): M within 600 of a town's middle
+  (`markers_data::TOWNS`, the radius they were found with) opens the map close in on that town, as Places
+  shows one; M again (✕ on a pad) is the world's view as it was left, following the player, and M once more
+  closes it (the legend says so). Extended > UI > Map's Town Map First, on by default; off, M opens the
+  world's view as before.
 - **The map** (M), drawn from the player's own disc for every world, on any
   server, with a waypoint of the player's own (a click or a tap on the map,
   □ or Q at its middle once the map is moved, on the target while it follows
