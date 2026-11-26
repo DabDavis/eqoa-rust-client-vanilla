@@ -90,6 +90,8 @@ pub mod cells;
 pub mod chrome;
 pub mod community;
 pub mod group_waypoint;
+// where the map and the minimap show nothing (`hidden`: Night 4's false floors)
+pub mod hidden;
 // the minimap inside: the floors under the ceiling (`indoor`)
 pub mod indoor;
 pub mod markers;
@@ -1757,6 +1759,10 @@ impl Map {
             if let Some(cell) = cells.cell_of[zi] {
                 l.map.quads.push(MapQuad::rect(t, rect_of(cells.rect(cell)), full, [1.0; 4]));
             }
+        }
+        // over the pictures, a plain square where the floor would give a puzzle away (`hidden`)
+        for r in hidden::covers(w.index, extent) {
+            l.map.quads.push(MapQuad::rect(l.white, rect_of(r), full, hidden::COVER));
         }
         // over it, against the window, in the frame's units
         let ui = &mut l.ui;
