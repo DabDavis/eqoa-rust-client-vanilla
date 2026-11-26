@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Guild roster rows and the minimap's name box
+
+- The **guild roster** no longer draws one member's name on top of the next: a member of a race the game has no short name for (a froglok) used to leave the rest of the list one line short. Each member now has a row of their own.
+- The box that names what is under the mouse on the **minimap** (an NPC's name, a camp, a coach) now always sits beside the minimap, never over it: to its left as before, or to its right when the minimap has been moved to the left of the screen.
+
 ## 2026-11-25 · Bags inventory and Compare Gear
 
 - New **Inventory Style** under **Options → Extended → UI → Inventory**: **Retail List** (the game's tabbed list, as before) or **Bags**, which shows your whole pack as a grid of item icons, like the bags in EQ and most MMOs. Stacks show their count on the icon, worn items have a gold frame and a **W**, and gear your class cannot wear is tinted red. The grid shows how full your pack is (for example **16/40**).

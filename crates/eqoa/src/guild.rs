@@ -912,10 +912,17 @@ impl WndGuild {
             cell(r, &wide(&String::from_utf8_lossy(&name)), x[0], y, c);
             let rank = RANK_WORDS.get(m.rank.clamp(0, 3) as usize).copied().unwrap_or(541);
             cell(r, &word(rank), x[1], y, c);
-            let Some(race) = race_short(m.race) else { continue };
-            cell(r, &crate::racelabel::short(&m.name).map_or_else(|| word(race), |s| wide(&s)), x[2], y, c);
-            let Some(class) = class_short(m.class) else { continue };
-            cell(r, &word(class), x[3], y, c);
+            // CLIENT `continue`s past a race or class it has no word for,
+            // before its `y += lineH`, so the next member is drawn over this
+            // one (a froglok, race 10, petition 2976): here the row keeps its
+            // line and the cell is left empty
+            let race = crate::racelabel::short(&m.name).map(|s| wide(&s)).or_else(|| race_short(m.race).map(word));
+            if let Some(race) = race {
+                cell(r, &race, x[2], y, c);
+            }
+            if let Some(class) = class_short(m.class) {
+                cell(r, &word(class), x[3], y, c);
+            }
             cell(r, &wide(&(m.level as u32).to_string()), x[4], y, c);
             cell(r, &word(if m.online { 21 } else { 22 }), x[5], y, c);
             y += line_h;
@@ -1175,6 +1182,55 @@ mod tests {
         assert_eq!(names(&g), ["Beardy", "Zgiant", "Aogre"], "its word before OGR, though a name after");
         crate::racelabel::clear();
         assert_eq!(names(&g), ["Beardy", "Aogre", "Zgiant"], "the control: both ogres, by name");
+    }
+
+    /// Where each string is drawn.
+    #[derive(Default)]
+    struct Placed(Vec<(String, [i32; 2])>);
+
+    impl crate::ui::Layout for Placed {}
+
+    impl vi::ui::Raster for Placed {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, p: [i32; 2], _: [f32; 4], s: &[u16]) {
+            self.0.push((String::from_utf16_lossy(s), p));
+        }
+        fn draw_centered_string(&mut self, p: [i32; 2], _: [f32; 4], s: &[u16], _: u32) {
+            self.0.push((String::from_utf16_lossy(s), p));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            s.len() as i32 * 8
+        }
+        fn point_size(&self) -> i32 {
+            16
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 640, 448]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// A member whose race (a froglok's 10) or class the game has no word
+    /// for keeps a line of its own: CLIENT's `continue` skipped the line's
+    /// step, and the next member was drawn on top of it (petition 2976).
+    #[test]
+    fn a_member_with_no_race_word_keeps_its_line() {
+        let vui = crate::racelabel::tests::numbered_vui();
+        crate::racelabel::clear();
+        let g = roster(&[(1, "Gor", 0, 23 % 10, 60, 0, true), (2, "Lazarus", 11, 2, 60, 3, true), (3, "Pestilence", 11, 10, 1, 1, false), (4, "Tootielovr", 8, 9, 28, 2, false), (5, "Zork", 99, 0, 5, 0, false)]);
+        let mut r = Placed::default();
+        let mut w = WndGuild::default();
+        w.close(&vui, &r, 0);
+        w.draw(&vui, &mut r, &Menus::default(), &g, 0, &mut Vec::new());
+        let y = |name: &str| r.0.iter().find(|(s, _)| s.starts_with(name)).map(|(_, p)| p[1]).unwrap_or_else(|| panic!("{name} not drawn: {:?}", r.0));
+        let ys = ["Gor", "Lazarus", "Pestilen", "Tootielo", "Zork"].map(y);
+        assert!(ys.windows(2).all(|p| p[1] > p[0]), "one line a member: {ys:?}");
+        // the froglok's level and the unknown class's level are drawn on their own lines
+        assert!(r.0.iter().any(|(s, p)| s == "1" && p[1] == ys[2]), "{:?}", r.0);
+        assert!(r.0.iter().any(|(s, p)| s == "5" && p[1] == ys[4]), "{:?}", r.0);
     }
 
     /// The client's sort (F3 20261023-090229): by name from A to Z, case

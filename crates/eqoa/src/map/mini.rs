@@ -739,8 +739,8 @@ impl Map {
                 // the window
                 let (corner, at) = (f([0.0, 0.0]), f([outer[0], pixels.point(q)[1]]));
                 let plate = crate::hudlayout::frame_point(crate::hudlayout::Piece::QuickMenus, [0.0, PLATE[3] as f32], crate::hudlayout::Beyond::of(size))[1] + 1.0;
-                let bottom = f([0.0, size.1 as f32])[1];
-                let x = (at[0] - 6.0 - w).max(corner[0] + 1.0);
+                let (bottom, right) = (f([0.0, size.1 as f32])[1], f([size.0 as f32, 0.0])[0]);
+                let x = tip_x([at[0], f([outer[2], 0.0])[0]], w, [corner[0] + 1.0, right - 1.0]);
                 let y = (at[1] - hgt / 2.0).min(bottom - hgt - 1.0).max(plate);
                 let from = r.ui.quads.len();
                 plain(r.ui, white, corners([x - 1.0, y - 1.0, x + w + 1.0, y + hgt + 1.0]), OUTLINE, None);
@@ -777,6 +777,25 @@ impl Map {
         l.map.draw(device, &mut pass, window);
         l.ui.draw(device, &mut pass, size);
     }
+}
+
+/// Where a tooltip `w` wide starts across: beside the minimap's frame (`frame`,
+/// its left and right), never over it (Heirloom petition 3148: "the box
+/// covers a large part of the minimap"). Left of it where it fits in the
+/// window (`window`, its first and last column), else right of it where it
+/// fits there, else on the side with more room, kept in the window.
+fn tip_x(frame: [f32; 2], w: f32, window: [f32; 2]) -> f32 {
+    let (left, right) = (frame[0] - 6.0 - w, frame[1] + 6.0);
+    let x = if left >= window[0] {
+        left
+    } else if right + w <= window[1] {
+        right
+    } else if frame[0] - window[0] >= window[1] - frame[1] {
+        left
+    } else {
+        right
+    };
+    x.min(window[1] - w).max(window[0])
 }
 
 /// A creature's or a player's dot on the minimap, its half-width and its
@@ -974,6 +993,24 @@ mod tests {
         assert_eq!(got, Some(([20.0, 0.0], "Banker Lars".to_string(), "Banker".to_string())));
         assert_eq!(npc_under(&names, &to_px, [27.0, 0.0], 4.0).map(|(_, n, _)| n.as_str()), Some("Merchant Perry"), "the nearest");
         assert!(npc_under(&names, &to_px, [60.0, 0.0], 4.0).is_none(), "none past the reach");
+    }
+
+    /// A tooltip goes beside the minimap, never over it (Heirloom petition
+    /// 3148): left of it where it fits, else right of it (a minimap moved to
+    /// the window's left), else the roomier side, in the window.
+    #[test]
+    fn the_tooltip_goes_beside_the_minimap_never_over_it() {
+        let window = [0.0, 640.0];
+        assert_eq!(tip_x([474.0, 586.0], 100.0, window), 368.0, "the game's place: left of it");
+        assert_eq!(tip_x([10.0, 122.0], 100.0, window), 128.0, "at the window's left: right of it");
+        assert_eq!(tip_x([10.0, 122.0], 100.0, [-80.0, 560.0]), 128.0, "a wide window's frame");
+        // a minimap across most of the window: the roomier side, inside it
+        assert_eq!(tip_x([60.0, 600.0], 100.0, window), 0.0);
+        assert_eq!(tip_x([20.0, 560.0], 100.0, window), 540.0);
+        for (l, r) in [(474.0, 586.0), (10.0, 122.0), (300.0, 412.0)] {
+            let x = tip_x([l, r], 100.0, window);
+            assert!(x + 100.0 <= l || x >= r, "{l}..{r}: {x} overlaps it");
+        }
     }
 
     /// The tooltip is the topmost mark's under the pointer: a quest's over a
