@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · More foliage, and foliage that moves
+
+- New **Foliage** page under **Options → Extended → Graphics**, both off unless you choose them:
+- **Foliage Density**: **Retail** (the game's grass and plants, exactly as before), **2x** or **3x**. More plants grow on the same ground the game plants on, in the same mix, and the same ones every time you come back. The game's own plants are all still there; the extra ones are added among them. 3x costs the most on slower computers and phones.
+- **Foliage Reacts**: **On** makes the grass and plants lean away from you and from the players and creatures walking through them, and spring back slowly once they have passed.
+
 ## 2026-11-26 · Yellow quest marks in the coach list
 
 - In a coachman's list of stops, the **?** that marks a stop on a quest you are doing is now drawn **yellow**, like the quest marks over NPCs' heads, and sits at the end of the line after the period (for example *Get me a horse to Aviak Village.* **?**). It follows **Quest Markers** under **Options → Extended → UI → Name Plates**: turned off, it stays white.

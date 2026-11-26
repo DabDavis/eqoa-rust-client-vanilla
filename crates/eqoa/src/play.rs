@@ -12814,6 +12814,32 @@ impl Play {
         self.self_puppet.as_ref().is_some_and(|p| p.wisp)
     }
 
+    /// The bodies the radial flora leans from with Foliage Reacts on
+    /// (`flora::React`): the player where the walk has it, and every other
+    /// player and creature drawn, each by its feet and a reach off its
+    /// actor's bound (half its radius, 0.8 to 4: a rat's little, a giant's
+    /// wide). A Wisp's, which has no feet, none.
+    pub fn flora_movers(&self, walker: &Walker) -> Vec<crate::flora::Mover> {
+        let reach = |actor: Option<usize>| actor.and_then(|a| walker.scene.actors.get(a)).map_or(1.2, |a| (a.bound.r.0 * 0.5).clamp(0.8, 4.0));
+        let me = self.self_id32();
+        let mut out = Vec::new();
+        if self.self_shown && !self.self_puppet.as_ref().is_some_and(|p| p.wisp) {
+            let at = walker.cam.walk.phys.position;
+            out.push(crate::flora::Mover { at: [at.x.0, at.y.0, at.z.0], reach: reach(self.self_actor.map(|a| a.actor)) });
+        }
+        for (slot, e) in self.entities.slots.iter().enumerate() {
+            let Some(e) = e else { continue };
+            if Some(e.id) == me {
+                continue;
+            }
+            let Some(p) = self.puppets[slot].as_ref().filter(|p| p.shown && !p.wisp) else { continue };
+            let t = p.actor_m.m[3];
+            let actor = self.actors[slot].filter(|a| a.id == e.id).map(|a| a.actor);
+            out.push(crate::flora::Mover { at: [t.x.0, t.y.0, t.z.0], reach: reach(actor) });
+        }
+        out
+    }
+
     pub fn shadow_casters(&self, walker: &mut Walker, lib: &Library) -> Vec<crate::shadows::Caster> {
         let me = self.self_id32();
         let mut out = Vec::new();

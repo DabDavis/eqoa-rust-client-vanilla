@@ -91,6 +91,12 @@
 //!   splashes' brightness, 100, the game's, to 0 in tens,
 //!   `weather::Weather::render`; the sky, the sound and the lightning the
 //!   weather's own);
+//! - Foliage (2026-11-26, Heirloom petition 3197; World's page full):
+//!   Foliage Density (Retail, the game's radial flora; 2x or 3x, as many
+//!   again a pass grown by the game's rule off seeds of their own, and that
+//!   many more drawn, `vi::flora::System::density`) and Foliage Reacts (Off,
+//!   the game's; On, the plants round a player or a creature leaning away
+//!   from it and easing back, `flora::React`);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Stacked Spell Bars (2026-11-13,
 //!   a player's ticket 1913, Off by default: On, on a computer, every bar shown
@@ -1045,6 +1051,15 @@ impl WndOptions {
                     // Strafe Speed: Retail or Match Forward, the walk's from
                     // the next frame (`walker::move_stick_matched`)
                     STRAFE_SPEED => c.strafe_match = !c.strafe_match,
+                    // Foliage Density: Retail, 2x, 3x round (the swatches
+                    // grown again at the next frame, `flora::Flora::frame`)
+                    FOLIAGE_DENSITY => {
+                        let n = vi::flora::DENSITY_MOST as i32;
+                        c.foliage_density = ((c.foliage_density.clamp(1, vi::flora::DENSITY_MOST) as i32 - 1 + d.signum() + n).rem_euclid(n) + 1) as u8;
+                    }
+                    // Foliage Reacts: the plants lean from the next frame
+                    // (`flora::React`)
+                    FOLIAGE_REACTS => c.foliage_reacts = !c.foliage_reacts,
                     // Minimap Colors: round Default and the palette, the
                     // squares from the next frame (`Play::mini_view`)
                     300..=306 => {
@@ -2176,6 +2191,8 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (305, crate::minimapcolor::LABELS[5]),
     (306, crate::minimapcolor::LABELS[6]),
     (crate::minimapcolor::SPELLS_SHOWN_ITEM, "Spell Merchants Shown"),
+    (FOLIAGE_DENSITY, "Foliage Density"),
+    (FOLIAGE_REACTS, "Foliage Reacts"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2280,6 +2297,11 @@ const OWN_PLATE: i32 = 291;
 pub(crate) const COACH_TALK: i32 = 292;
 pub(crate) const STRAFE_SPEED: i32 = 293;
 pub(crate) const TARGET_OF_TARGET: i32 = 294;
+/// Foliage's rows (Heirloom petition 3197, 2026-11-26): Foliage Density
+/// (Retail, 2x, 3x: `vi::flora::System::density`) and Foliage Reacts (Off,
+/// On: `flora::React`), on Graphics' Foliage page. 320, not the next free.
+pub(crate) const FOLIAGE_DENSITY: i32 = 320;
+pub(crate) const FOLIAGE_REACTS: i32 = 321;
 /// Inventory's rows (Heirloom petition 3118): Inventory Style (Retail List
 /// or Bags, `bags`), Bag Sort, Compare Gear (`compare`). An [OG] account's
 /// (`qol::LOCKED`) read as the game's and do not turn.
@@ -2399,7 +2421,7 @@ const GROUPS: [(Group, &str); 5] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// Capture Controller and Sound in Background the Multi-boxing settings',
 /// Controller's touch rows Other's Touch; petition 2084, 2026-11-14: Touch a
 /// group of its own, Touch Controls, its rows Size & Look and Layout).
-const ALL_CATEGORIES: [Category; 29] = [
+const ALL_CATEGORIES: [Category; 30] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
@@ -2451,6 +2473,8 @@ const ALL_CATEGORIES: [Category; 29] = [
     Category { name: "Movement", items: &[STRAFE_SPEED, COACH_TALK], note: Note::None, group: Group::Other },
     // the item menu's (petition 3118): its grid, its order, the comparison
     Category { name: "Inventory", items: &[INVENTORY_STYLE, BAG_SORT, COMPARE_GEAR], note: Note::None, group: Group::Ui },
+    // the radial flora's more and its lean (petition 3197): World's page is full
+    Category { name: "Foliage", items: &[FOLIAGE_DENSITY, FOLIAGE_REACTS], note: Note::None, group: Group::Graphics },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -2459,7 +2483,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24], a[25], a[26], a[27], a[28]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24], a[25], a[26], a[27], a[28], a[29]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -2655,6 +2679,12 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         OWN_PLATE => on_off(c.own_plate),
         COACH_TALK => on_off(c.coach_talk),
         STRAFE_SPEED => wide(if c.strafe_match { "Match Forward" } else { "Retail" }),
+        FOLIAGE_DENSITY => wide(match c.foliage_density {
+            2 => "2x",
+            3 => "3x",
+            _ => "Retail",
+        }),
+        FOLIAGE_REACTS => on_off(c.foliage_reacts),
         300..=306 => wide(crate::numcolor::name(c.minimap_colors[crate::minimapcolor::row_of_item(item)?])),
         crate::minimapcolor::SPELLS_SHOWN_ITEM => wide(if c.minimap_spells_mine { "My Class" } else { "All" }),
         84 => on_off(c.loading_tips),
@@ -4370,6 +4400,7 @@ mod tests {
                 ("Textures", textures),
                 ("Weather", vec!["Weather"]),
                 ("Texture Cache", vec!["Precache Textures", "Pack Compression", "Rebuild Pack Cache"]),
+                ("Foliage", vec!["Foliage Density", "Foliage Reacts"]),
             ],
             "Graphics: how the world is drawn"
         );

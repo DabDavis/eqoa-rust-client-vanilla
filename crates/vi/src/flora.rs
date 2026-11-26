@@ -319,12 +319,35 @@ pub struct System<M: Model> {
     pub rebuild: bool,
     /// newlib's `rand()` (`srand`'s state), as the flora seeds and draws it.
     pub rand: Rand,
+    /// The client's Foliage Density (not the game's): 1, the game's, every
+    /// swatch grown and drawn exactly as `CreateFloraInsts` and `Render` do;
+    /// 2 or 3, after the game's plants, more grown by the same rule (each
+    /// triangle's set weight times its area, a pass a time, `grow`) off
+    /// seeds of their own, and that many times the 500 a swatch and the 700
+    /// drawn. The game's plants and `rand()`'s state after are the same at
+    /// any density: the extra passes come between the game's and its
+    /// `srand(GetTime())`.
+    pub density: u8,
 }
 
 impl<M: Model> Default for System<M> {
     fn default() -> Self {
-        System { loc: Loc::default(), swatches: Default::default(), sorted: Vec::new(), rebuild: true, rand: Rand(1) }
+        System { loc: Loc::default(), swatches: Default::default(), sorted: Vec::new(), rebuild: true, rand: Rand(1), density: 1 }
     }
+}
+
+/// The most plants `CreateFloraInsts` grows a swatch (at the game's density).
+pub const SWATCH_MOST: usize = 500;
+/// The most plants `Render` draws (`m_sorted`, at the game's density).
+pub const DRAWN_MOST: usize = 700;
+/// Foliage Density's highest (3x).
+pub const DENSITY_MOST: u8 = 3;
+
+/// The seed of a swatch's extra pass `pass` (Foliage Density), off the
+/// game's seed: its own for each pass and each sub-cell, the same at every
+/// visit.
+pub fn extra_seed(seed: i32, pass: u8) -> i32 {
+    (seed as u32).wrapping_mul(0x9E37_79B1).wrapping_add((pass as u32).wrapping_mul(0x85EB_CA6B)) as i32 ^ 0x5F0E_F10A
 }
 
 /// `VIRAND`: ten bits of `rand()`, a fraction in [0, 1].
@@ -418,11 +441,12 @@ impl<M: Model> System<M> {
     pub fn render(&mut self, frustum: &Frustum<M>, eye: &Vect3<M>) -> Vec<Drawn<M>> {
         self.sorted.clear();
         let id = Matrix44::identity();
+        let most = DRAWN_MOST * self.density() as usize;
         for i in 0..9 {
             if let Some(s) = &self.swatches[i]
                 && !frustum.cull_bbox(&s.bbox, &id)
             {
-                Self::draw_swatch(&mut self.sorted, i as i32, s, frustum, eye);
+                Self::draw_swatch(&mut self.sorted, i as i32, s, frustum, eye, most);
             }
         }
         // qsort with QSortCompare: below, equal, above (not stable; distances
@@ -449,9 +473,9 @@ impl<M: Model> System<M> {
     }
 
     /// `DrawSwatch(i, cam)`.
-    fn draw_swatch(sorted: &mut Vec<Sort<M>>, i: i32, s: &Swatch<M>, frustum: &Frustum<M>, eye: &Vect3<M>) {
+    fn draw_swatch(sorted: &mut Vec<Sort<M>>, i: i32, s: &Swatch<M>, frustum: &Frustum<M>, eye: &Vect3<M>, most: usize) {
         for (j, inst) in s.insts.iter().enumerate() {
-            if sorted.len() >= 700 {
+            if sorted.len() >= most {
                 break;
             }
             let p = inst.world.m[3].xyz();
@@ -481,23 +505,48 @@ impl<M: Model> System<M> {
         self.create_flora_insts(sc, i);
     }
 
-    /// `CreateFloraInsts(i)`.
+    /// `CreateFloraInsts(i)`; at a Foliage Density past 1, the extra passes
+    /// after the game's (`density`).
     fn create_flora_insts(&mut self, sc: &mut impl FloraScene<M>, i: usize) {
         let (loc, bbox) = {
             let s = self.swatches[i].as_ref().unwrap();
             (s.loc, s.bbox)
         };
-        self.srand(loc.sub[0] * 100 + loc.sub[1]);
+        let seed = loc.sub[0] * 100 + loc.sub[1];
+        self.srand(seed);
         if sc.flora(loc.zone).is_none_or(|f| f.sets.is_empty()) {
             return;
         }
         let mut q = QueryTriList::new(100, &bbox, Vect3::new(F::ZERO, F::ONE, F::ZERO), F::new(30.0));
         sc.query(&bbox, &mut q);
         let flora = sc.flora(loc.zone).unwrap().clone();
-        let mut insts: Vec<Inst<M>> = Vec::with_capacity(500);
+        let density = self.density();
+        let mut insts: Vec<Inst<M>> = Vec::with_capacity(SWATCH_MOST * density as usize);
+        self.grow(&flora, &q.tris, &mut insts, 0, SWATCH_MOST);
+        for pass in 1..density {
+            self.srand(extra_seed(seed, pass));
+            self.grow(&flora, &q.tris, &mut insts, pass, SWATCH_MOST * (pass as usize + 1));
+        }
+        self.swatches[i].as_mut().unwrap().insts = insts;
+        self.srand(sc.time() as i32);
+    }
+
+    /// The density, 1 to 3 (`density`, out of range read as the nearest).
+    pub fn density(&self) -> u8 {
+        self.density.clamp(1, DENSITY_MOST)
+    }
+
+    /// `CreateFloraInsts`'s loop over the triangles: pass 0 is the game's,
+    /// each triangle `(int)(area * weight)` plants, the swatch's plants
+    /// `most` at most. Pass k > 0 (Foliage Density) grows on each triangle
+    /// the plants that take it from k to k + 1 times the game's share
+    /// (`(int)(area * weight * (k + 1)) - (int)(area * weight * k)`), so a
+    /// triangle too small for one plant at the game's density gets its own
+    /// at a higher one, by the same rule.
+    fn grow(&mut self, flora: &ZoneFlora<M>, tris: &[QueryTri<M>], insts: &mut Vec<Inst<M>>, pass: u8, most: usize) {
         let mut mid = 0i32;
-        for t in &q.tris {
-            if insts.len() >= 500 {
+        for t in tris {
+            if insts.len() >= most {
                 break;
             }
             let set = t.actor;
@@ -512,9 +561,10 @@ impl<M: Model> System<M> {
             let c = Vect3::cross(&e2, &e1);
             let mut n = c;
             n.normalize();
-            let num = (c.dot(&n) * F::new(0.5) * fs.weight).to_int();
+            let share = c.dot(&n) * F::new(0.5) * fs.weight;
+            let num = if pass == 0 { share.to_int() } else { (share * F::from_int(pass as i32 + 1)).to_int() - (share * F::from_int(pass as i32)).to_int() };
             for _ in 0..num.max(0) {
-                if insts.len() >= 500 {
+                if insts.len() >= most {
                     break;
                 }
                 let r = virand::<M>(&mut self.rand);
@@ -566,8 +616,6 @@ impl<M: Model> System<M> {
                 insts.push(Inst { world, sphere, prim: model.prim, pal: model.pal });
             }
         }
-        self.swatches[i].as_mut().unwrap().insts = insts;
-        self.srand(sc.time() as i32);
     }
 
     /// `CalcRadialLoc(p, loc)`: the cell the point is in and its 40-unit
