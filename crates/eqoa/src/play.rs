@@ -729,6 +729,10 @@ pub struct Play {
     live: liveplay::LivePlay,
     /// The button glyphs the last HUD frame drew, where (`pointer`).
     glyphs: crate::pointer::Glyphs,
+    /// The scroll bars the last frame's windows drew, and the knob of one the
+    /// pointer holds (`scrollbar`).
+    bars: Vec<vi::ui::VBar>,
+    bar_follow: Option<crate::scrollbar::Follow>,
     /// The wheel's lines not yet turned into a window's up or down.
     wheel: f32,
     /// A pointer's keys for the window up, and the one held (`press`).
@@ -3870,7 +3874,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None, focus: None, pointer: None, pointer_view: None, coach_talk: None, self_name_at: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), bars: Vec::new(), bar_follow: None, wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None, focus: None, pointer: None, pointer_view: None, coach_talk: None, self_name_at: None };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -11299,6 +11303,7 @@ impl Play {
     fn draw_hud(&mut self, ui: &mut render::ui::Ui, walker: &Walker, time_ms: i64, view_proj: glam::Mat4, size: (u32, u32)) {
         ui.begin(size);
         if self.pc_window().is_none() { self.pc_windows.clear(); }
+        self.bar_follow_tick();
         // the pieces this frame draws, where (`hudlayout`)
         crate::hudlayout::frame_begin();
         // LoadingProgress in place of the game's frame: no HUD, no windows
@@ -11837,6 +11842,7 @@ impl Play {
                 eprintln!("glyphs (mode {}): {}", self.mode, list.join(", "));
             }
             self.glyphs = std::mem::take(&mut r.glyphs);
+            self.bars = std::mem::take(&mut r.bars);
             // DrawFade, last, as `Process` draws it after every window: black
             // over the whole screen at the fade's alpha (the game's spans the
             // wide edges; here past the 4:3 frame's sides)
@@ -11860,6 +11866,7 @@ impl Play {
             self.hud = Some((vui_o, assets, hud_o));
         } else {
             crate::hudlayout::frame_end();
+            self.bars.clear();
         }
         self.start_actions(actions);
         self.quick_outs(quick_outs);
@@ -12068,6 +12075,7 @@ impl Play {
         use crate::hudlayout::{Beyond, Button, Press};
         let f = render::ui::frame_from_window(size, at);
         if matches!(self.mode, 0 | 33 | 38) && !self.search.open && !crate::hideui::hidden() && self.links.press(f) { return true; }
+        if self.bar_press(at, size) { return true; }
         let key = self.pc_window().map(|(id, _)| id);
         if self.pc_windows.press(key, f) { return true; }
         // the dyers' colour picker up: every press is its (`dyeplay`)
@@ -12096,6 +12104,7 @@ impl Play {
     pub fn hud_drag(&mut self, at: [f32; 2], size: (u32, u32)) -> bool {
         let f = render::ui::frame_from_window(size, at);
         if self.links.drag(f) { return true; }
+        if self.bar_drag(at, size) { return true; }
         let key = self.pc_window().map(|(id, _)| id);
         if self.pc_windows.drag(key, f) { return true; }
         if self.dyepick_owns() && self.pc_windows.input(key, f).is_some_and(|p| self.dyepick_drag(p)) {
@@ -12108,9 +12117,108 @@ impl Play {
         true
     }
 
+    /// A press (the mouse's left button, a finger) at window pixels `at` on a
+    /// scroll bar's knob (`scrollbar`): the chat box's (and its panes') history
+    /// goes where the pointer holds the knob, a window's list follows by the
+    /// d-pad's steps (`bar_follow_tick`); a press on the chat's track pages it.
+    /// True when it was a bar's.
+    fn bar_press(&mut self, at: [f32; 2], size: (u32, u32)) -> bool {
+        use crate::scrollbar::{Follow, SLOP};
+        let f = render::ui::frame_from_window(size, at);
+        let pt = (at[0] as f64, at[1] as f64);
+        // the chat box, in play or in its history, as `chat_press` has it
+        let lines = ((self.mode == 0 && !self.search.open) || self.mode == 33) && !crate::hideui::hidden();
+        if lines && !self.links.covers(f) {
+            let now = self.session.now();
+            if let Some(c) = self.wnd_chat.as_mut() {
+                for t in (1..=crate::chat::TABS).rev() {
+                    let p = Self::chat_pane_point(pt, size, t);
+                    if let Some(pane) = c.pane_mut(t)
+                        && pane.bar_press(p)
+                    {
+                        pane.activity(now);
+                        return true;
+                    }
+                }
+                if c.bar_press(Self::chat_point(pt, size)) {
+                    c.activity(now);
+                    return true;
+                }
+            }
+        }
+        // a window's: its knob, as drawn (the chat's is not among them)
+        if !self.bars.is_empty() && self.mode != 0 {
+            let key = self.pc_window().map(|(id, _)| id);
+            if let Some(w) = self.pc_windows.input(key, f)
+                && let Some(g) = Follow::press(&self.bars, w, SLOP)
+            {
+                self.bar_follow = Some(g);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The pointer at window pixels `at` while a knob is held: false with none.
+    fn bar_drag(&mut self, at: [f32; 2], size: (u32, u32)) -> bool {
+        let pt = (at[0] as f64, at[1] as f64);
+        let mut took = false;
+        if let Some(c) = self.wnd_chat.as_mut() {
+            for t in 1..=crate::chat::TABS {
+                let p = Self::chat_pane_point(pt, size, t);
+                if let Some(pane) = c.pane_mut(t).filter(|p| p.bar_dragging()) {
+                    took |= pane.bar_moved(p);
+                }
+            }
+            if c.bar_dragging() {
+                took |= c.bar_moved(Self::chat_point(pt, size));
+            }
+        }
+        if self.bar_follow.is_some() {
+            let key = self.pc_window().map(|(id, _)| id);
+            if let Some(w) = self.pc_windows.input(key, render::ui::frame_from_window(size, at))
+                && let Some(g) = self.bar_follow.as_mut()
+            {
+                g.moved(w);
+            }
+            took = true;
+        }
+        took
+    }
+
+    /// The knob let go. False with none held.
+    fn bar_release(&mut self) -> bool {
+        let mut took = self.bar_follow.take().is_some();
+        if let Some(c) = self.wnd_chat.as_mut() {
+            for t in 1..=crate::chat::TABS {
+                if let Some(pane) = c.pane_mut(t) {
+                    took |= pane.bar_release();
+                }
+            }
+            took |= c.bar_release();
+        }
+        took
+    }
+
+    /// A frame's start with a window's knob held: the key (Up or Down) that
+    /// brings its list a step to the pointer, as the d-pad would.
+    fn bar_follow_tick(&mut self) {
+        use crate::scrollbar::Step;
+        let Some(g) = self.bar_follow.as_mut() else { return };
+        // a key still being let go is the last step's: its answer is not drawn yet
+        if self.held.is_some() || !self.key_queue.is_empty() {
+            return;
+        }
+        match g.tick(&self.bars) {
+            Step::Key(k) => self.press(&[k]),
+            Step::Wait => {}
+            Step::Gone => self.bar_follow = None,
+        }
+    }
+
     /// The press let go: a dragged piece stays, kept. False with none.
     pub fn hud_release(&mut self) -> bool {
-        self.links.release() || self.pc_windows.release() || self.dyepick_release() || crate::hudlayout::release() || self.raid_drag_release()
+        self.bar_release() || self.links.release() || self.pc_windows.release() || self.dyepick_release() || crate::hudlayout::release() || self.raid_drag_release()
     }
 
     /// The meter cleared, and the server told to drop the fight under way.

@@ -370,6 +370,9 @@ impl Raster for QuestTail<'_> {
     fn native_list_scrollbars(&self) -> bool {
         self.0.native_list_scrollbars()
     }
+    fn note_vscroll(&mut self, bar: vi::ui::VBar) {
+        self.0.note_vscroll(bar)
+    }
     fn has(&self, id: u32) -> bool {
         self.0.has(id)
     }

@@ -882,6 +882,10 @@ pub struct WndChat {
     /// The lines selected: the one it began on and the one it has come to.
     sel: Option<(u64, u64)>,
     drag: Option<Drag>,
+    /// The scroll bar the last frame drew, and how far down its knob the pointer
+    /// holds it while a grab is on (`scrollbar`).
+    bar: Option<vi::ui::VBar>,
+    bar_grip: Option<f32>,
     /// What `FOR_COPY` was last told of (the lines' count, the selection).
     told: Option<(u64, Option<(u64, u64)>)>,
     /// The wheel's part of a line not yet stepped.
@@ -946,7 +950,7 @@ impl WndChat {
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
         let size = ChatSize::ORIGINAL;
-        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, history_held: false, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, told: None, wheel: 0.0, following: false, arrived: 0, down_gap: f32::INFINITY, link_hits: Vec::new(), show_links: true, walk: None, name_hits: Vec::new(), click_names: false, pointer: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None, last_activity: None, hovered: false, wake_on_message: false, wake_any_tab: false, pc_tabs: false }
+        WndChat { mode: 0, height: 0, target: 0, lines: 0, text: ChatText::new(size.wrap_width()), window: Window::default(), scroll: 0, top: 0, bottom: 0, history_held: false, held: 0, repeat: 0.0, cues: Vec::new(), shown: Vec::new(), sel: None, drag: None, bar: None, bar_grip: None, told: None, wheel: 0.0, following: false, arrived: 0, down_gap: f32::INFINITY, link_hits: Vec::new(), show_links: true, walk: None, name_hits: Vec::new(), click_names: false, pointer: None, always: false, size, opacity: 75, typing: false, row_height: 17, tabs: Tabs::default(), panes: std::array::from_fn(|_| None), pane_title: None, control_hit: None, last_activity: None, hovered: false, wake_on_message: false, wake_any_tab: false, pc_tabs: false }
     }
 
     /// A pointer action or active interaction restores this pane without
@@ -1486,13 +1490,15 @@ impl WndChat {
         self.draw_tabs(vui, ui);
         self.drag_on(dt);
         self.tell_copy();
+        self.bar = None;
         if self.scroll_indicator(crate::settings::pc_mode()) {
             let n = self.text.count();
             let rows = self.size.rows as usize;
             let t = if n > rows { self.text.index(self.top) as f32 / (n - rows) as f32 } else { 0.0 };
             let tl = self.window.top_left();
             let at = [tl[0] + 10, tl[1] + 10];
-            self.window.draw_vscroll(vui, ui, at, self.window.bottom_right()[1] - tl[1] - 40, t);
+            // where it went is the box's own to grab (`bar_press`), not a window's
+            self.bar = self.window.draw_vscroll_bar(vui, ui, at, self.window.bottom_right()[1] - tl[1] - 40, t);
         }
         let step = (dt * 200.0) as i32;
         if self.height < self.target {
@@ -1583,6 +1589,72 @@ impl WndChat {
         if let Some(s) = self.sel.as_mut() {
             s.1 = head;
         }
+    }
+
+    /// The left button down at point `p` on the scroll bar the box drew: its
+    /// knob taken (the history goes where the pointer holds it), or a press on
+    /// the track above or below it pages the history as its keys do. True when
+    /// the bar's.
+    pub fn bar_press(&mut self, p: [f32; 2]) -> bool {
+        let Some(bar) = self.bar.filter(|_| self.window.is_open() && self.scroll == 1) else { return false };
+        match crate::scrollbar::zone(&bar, p, crate::scrollbar::SLOP) {
+            Some(crate::scrollbar::Zone::Knob) => {
+                self.bar_grip = Some(crate::scrollbar::grip_at(&bar, p[1]));
+                true
+            }
+            Some(crate::scrollbar::Zone::Above) => {
+                self.page_history(true);
+                true
+            }
+            Some(crate::scrollbar::Zone::Below) => {
+                self.page_history(false);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A grab of the knob is on.
+    pub fn bar_dragging(&self) -> bool {
+        self.bar_grip.is_some()
+    }
+
+    /// The pointer at `p` with the knob held: the history's view at the place
+    /// the knob would be.
+    pub fn bar_moved(&mut self, p: [f32; 2]) -> bool {
+        let (Some(grip), Some(bar)) = (self.bar_grip, self.bar) else { return false };
+        let n = self.text.count();
+        let rows = self.size.rows as usize;
+        if n <= rows || self.scroll != 1 {
+            return true;
+        }
+        let want = (crate::scrollbar::t_at(&bar, grip, p[1]) * (n - rows) as f32).round() as usize;
+        let cues = self.cues.len();
+        loop {
+            let at = self.text.index(self.top);
+            if at > want && self.top != self.text.first() {
+                self.scroll_up();
+            } else if at < want && self.bottom != self.text.end() {
+                self.scroll_down();
+            } else {
+                break;
+            }
+        }
+        self.cues.truncate(cues);
+        true
+    }
+
+    /// The knob let go (or the pointer gone): at the newest line the view is
+    /// live again, as the wheel's last notch down leaves it.
+    pub fn bar_release(&mut self) -> bool {
+        if self.bar_grip.take().is_none() {
+            return false;
+        }
+        self.wheel = 0.0;
+        if self.bottom == self.text.end() && !self.selecting() {
+            self.set_scroll(0);
+        }
+        true
     }
 
     /// The left button let go.
@@ -2774,6 +2846,89 @@ mod tests {
             notches += 1;
             assert!(notches <= 20, "Main never reached the newest line");
         }
+    }
+
+    /// A knob to hold: the bar the last frame drew, with a knob of its own
+    /// size (the test's atlas has none).
+    fn knobbed(c: &mut WndChat) -> vi::ui::VBar {
+        let mut b = c.bar.expect("the history's bar is drawn");
+        b.knob = [7, 20];
+        b.w = 5;
+        c.bar = Some(b);
+        b
+    }
+
+    /// The scroll bar's knob dragged: the history goes where the pointer holds
+    /// the knob, in proportion, to the oldest line at the top of the track and
+    /// the newest at its foot (where it is live again on release); the control:
+    /// a press off the bar is none of its.
+    #[test]
+    fn the_knob_drags_the_history() {
+        let mut c = with_lines(205);
+        assert!(c.bar.is_none(), "live: no bar");
+        assert!(!c.bar_press([30.0, 40.0]));
+        assert!(c.pc_wheel(on(&c, 204), 4.0));
+        frame(&mut c, 0.016);
+        let bar = knobbed(&mut c);
+        let rows = c.size.rows as usize;
+        let n = c.text.count();
+        assert_eq!(n, 205);
+        // off the bar: not its press
+        assert!(!c.bar_press([bar.at[0] as f32 + 100.0, bar.at[1] as f32 + 50.0]));
+        assert!(!c.bar_dragging());
+        // on the knob, 5 down it
+        let top = crate::scrollbar::knob_top(&bar) as f32;
+        let x = bar.at[0] as f32 + 2.0;
+        assert!(c.bar_press([x, top + 5.0]));
+        assert!(c.bar_dragging());
+        // to the middle of the track
+        let travel = (bar.h - bar.knob[1]) as f32;
+        assert!(c.bar_moved([x, bar.at[1] as f32 + 5.0 + travel / 2.0]));
+        let want = ((n - rows) as f32 / 2.0).round() as usize;
+        assert_eq!(c.text.index(c.top), want, "the middle of the history");
+        assert_eq!(c.text.index(c.bottom) - c.text.index(c.top), rows, "the view is still whole rows");
+        // to the top and past it, then to the foot and past it
+        assert!(c.bar_moved([x, -500.0]));
+        assert_eq!(c.top, c.text.first(), "the oldest at the top");
+        assert!(c.bar_moved([x, 5000.0]));
+        assert_eq!(c.bottom, c.text.end(), "the newest at the foot");
+        assert!(c.cues.is_empty(), "silent, a step's tick not played a hundred times");
+        // let go at the foot: live
+        assert!(c.bar_release());
+        assert!(!c.bar_dragging());
+        assert_eq!(c.scroll, 0, "live again");
+        assert!(!c.bar_release(), "nothing more held");
+    }
+
+    /// Let go in the middle, the view stays; and a press on the track above or
+    /// below the knob pages as the page keys do.
+    #[test]
+    fn the_track_pages_and_a_release_in_the_middle_stays() {
+        let mut c = with_lines(205);
+        assert!(c.pc_wheel(on(&c, 204), 4.0));
+        frame(&mut c, 0.016);
+        let bar = knobbed(&mut c);
+        let rows = c.size.rows as usize;
+        let x = bar.at[0] as f32 + 2.0;
+        let at = c.text.index(c.top);
+        // the knob is near the foot: a press above it pages to older lines
+        assert!(c.bar_press([x, bar.at[1] as f32 + 1.0]));
+        assert!(!c.bar_dragging(), "a page is no grab");
+        assert_eq!(c.text.index(c.top), at - rows, "a page older");
+        frame(&mut c, 0.016);
+        let bar = knobbed(&mut c);
+        // below it: a page newer
+        assert!(c.bar_press([x, (bar.at[1] + bar.h) as f32 - 1.0]));
+        assert_eq!(c.text.index(c.top), at, "and a page back");
+        // a grab let go mid-history keeps the view
+        frame(&mut c, 0.016);
+        let bar = knobbed(&mut c);
+        assert!(c.bar_press([x, crate::scrollbar::knob_top(&bar) as f32 + 3.0]));
+        assert!(c.bar_moved([x, bar.at[1] as f32 + 3.0 + (bar.h - bar.knob[1]) as f32 * 0.25]));
+        let kept = c.text.index(c.top);
+        assert!(c.bar_release());
+        assert_eq!(c.scroll, 1, "still reading");
+        assert_eq!(c.text.index(c.top), kept);
     }
 
     #[test]
