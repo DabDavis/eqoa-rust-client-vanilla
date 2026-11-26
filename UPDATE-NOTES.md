@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Mercs on their own DPS meter lines
+
+- The **DPS meter** now gives each mercenary its own line, by its name and its owner's (for example *Kellasis (Cucumber's merc)*), with its own damage, healing and power given, ranked with the players by whatever the meter is sorted by. Merc lines are drawn a shade dimmer, with a fainter bar. Your own merc's line is tinted like your own. The pet row under your line now shows only your summoned or charmed pet. Overall keeps each merc apart, even if a player or another player's merc has the same name. This needs the server's new meter; on an older server the meter works as before.
+
 ## 2026-11-25 · Bags inventory and Compare Gear
 
 - New **Inventory Style** under **Options → Extended → UI → Inventory**: **Retail List** (the game's tabbed list, as before) or **Bags**, which shows your whole pack as a grid of item icons, like the bags in EQ and most MMOs. Stacks show their count on the icon, worn items have a gold frame and a **W**, and gear your class cannot wear is tinted red. The grid shows how full your pack is (for example **16/40**).

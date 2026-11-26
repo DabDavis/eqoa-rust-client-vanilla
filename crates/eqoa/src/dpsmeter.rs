@@ -34,6 +34,16 @@
 //! (the heading in gold). `/dps hps`, `/dps power`, `/dps damage` sort by one
 //! (showing its column), `/dps columns` steps the columns. On a server of layout
 //! 1 the panel is the DPS alone, as before.
+//!
+//! Mercs (Heirloom petition 3134: "Mercenary DPS, HPS seem to fall under a
+//! broad 'Pet' category on the DPS meter. Recommend splitting them into the
+//! mercenary names. Also PPS seems to not work from mercenary actions on the
+//! meter"): a server of layout 3 sends each merc's line apart from its owner's,
+//! its damage, healing and power given its own. It is drawn ranked with the
+//! players by the sort, its name and its owner's ("Kellasis (Cucumber's
+//! merc)"), a shade dimmer and its bar fainter; the pet's row under the
+//! player's own line is then its summoned or charmed pet's alone. Overall sums
+//! a merc by its name and its owner's, never into a player of its name.
 
 use crate::ui::{Layout, UiRaster, wide};
 use net::session::DpsMeter;
@@ -212,9 +222,25 @@ pub struct Row {
     pub power: u64,
     pub hps: f64,
     pub pps: f64,
+    /// A merc's line (layout 3): the player's own merc's, and its owner's name
+    /// (empty when the server left it out).
+    pub merc: bool,
+    pub own_merc: bool,
+    pub owner: String,
 }
 
 impl Row {
+    /// The name as the panel writes it: a merc's with its owner's, or "merc".
+    pub fn label(&self) -> String {
+        if !self.merc {
+            self.name.clone()
+        } else if self.owner.is_empty() {
+            format!("{} (merc)", self.name)
+        } else {
+            format!("{} ({}'s merc)", self.name, self.owner)
+        }
+    }
+
     /// Its figure of `m`.
     pub fn of(&self, m: Metric) -> u64 {
         match m {
@@ -277,10 +303,26 @@ struct Total {
     power: u64,
     class: u8,
     own: bool,
+    /// Its name (Overall's key is a merc's with its owner's: `key`), and a
+    /// merc's: its owner's name, the player's own.
+    name: String,
+    merc: bool,
+    own_merc: bool,
+    owner: String,
+}
+
+/// Overall's key for a line: its name; a merc's with its owner's, apart from
+/// any player's (or another owner's merc's) of its name.
+fn key(l: &net::session::DpsLine) -> String {
+    if l.merc { format!("{}\u{1}{}", l.name, l.owner) } else { l.name.clone() }
 }
 
 impl Total {
     fn add(&mut self, l: &net::session::DpsLine) {
+        self.name.clone_from(&l.name);
+        self.merc = l.merc;
+        self.own_merc |= l.own_merc;
+        self.owner.clone_from(&l.owner);
         self.damage += l.damage as u64;
         self.pet += l.pet as u64;
         self.heal += l.heal as u64;
@@ -339,7 +381,7 @@ impl Meter {
     /// `m` summed into Overall.
     fn count(&mut self, m: &DpsMeter) {
         for l in &m.lines {
-            self.overall.entry(l.name.clone()).or_default().add(l);
+            self.overall.entry(key(l)).or_default().add(l);
         }
         self.overall_ms += (m.length_ms as u64).max(LEAST_MS);
         self.counted = Some(m.fight);
@@ -395,11 +437,11 @@ impl Meter {
                 // the fight under way, not yet summed
                 if let Some(f) = self.fight.as_ref().filter(|f| self.counted != Some(f.fight)) {
                     for l in &f.lines {
-                        sums.entry(l.name.clone()).or_default().add(l);
+                        sums.entry(key(l)).or_default().add(l);
                     }
                     ms += (f.length_ms as u64).max(LEAST_MS);
                 }
-                let mut lines: Vec<Line> = sums.into_iter().map(|(name, t)| (name, t, false)).collect();
+                let mut lines: Vec<Line> = sums.into_values().map(|t| (t.name.clone(), t, false)).collect();
                 lines.sort_by(|a, b| b.1.damage.cmp(&a.1.damage).then_with(|| a.0.cmp(&b.0)));
                 let title = if lines.is_empty() { "DPS Meter" } else { "Overall" };
                 (title.to_string(), if lines.is_empty() { 0 } else { ms }, lines, None)
@@ -444,6 +486,9 @@ impl Meter {
                     power: t.power,
                     hps: t.heal as f64 / secs_div,
                     pps: t.power as f64 / secs_div,
+                    merc: t.merc,
+                    own_merc: t.own_merc,
+                    owner: t.owner,
                 }
             })
             .collect();
@@ -664,6 +709,10 @@ pub struct Bar {
 const WHITE: [f32; 4] = [0.95, 0.95, 0.92, 1.0];
 const DIM: [f32; 4] = [0.62, 0.62, 0.6, 1.0];
 const OWN: [f32; 4] = [1.0, 0.86, 0.35, 1.0];
+/// A merc's line: a shade under a player's, the player's own merc's under its
+/// own gold.
+const MERC: [f32; 4] = [0.80, 0.80, 0.76, 1.0];
+const OWN_MERC: [f32; 4] = [0.86, 0.75, 0.42, 1.0];
 const BACK: [f32; 4] = [0.0, 0.0, 0.0, 0.4];
 const HEAD_BACK: [f32; 4] = [0.0, 0.0, 0.0, 0.3];
 const OUTLINE: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
@@ -720,8 +769,9 @@ pub fn pieces(s: &Shown, p: &Panel, width: impl Fn(&str) -> f32) -> (Vec<Bar>, V
                 let w = full * r.bar;
                 let v = r.of(sort);
                 let own_w = if v > 0 { w * (v - r.pet_of(sort).min(v)) as f32 / v as f32 } else { 0.0 };
+                let solid = if r.merc { 0.38 } else { 0.55 }; // a merc's bar fainter
                 if w > 0.0 {
-                    bars.push(Bar { r: [x0 - 2.0, yt, x0 - 2.0 + own_w, yb], color: [c[0], c[1], c[2], 0.55] });
+                    bars.push(Bar { r: [x0 - 2.0, yt, x0 - 2.0 + own_w, yb], color: [c[0], c[1], c[2], solid] });
                     if own_w < w {
                         bars.push(Bar { r: [x0 - 2.0 + own_w, yt, x0 - 2.0 + w, yb], color: [c[0], c[1], c[2], 0.28] });
                     }
@@ -730,10 +780,14 @@ pub fn pieces(s: &Shown, p: &Panel, width: impl Fn(&str) -> f32) -> (Vec<Bar>, V
                     OWN
                 } else if r.left {
                     DIM
+                } else if r.own_merc {
+                    OWN_MERC
+                } else if r.merc {
+                    MERC
                 } else {
                     WHITE
                 };
-                let name = fit(&format!("{}. {}", r.rank, r.name), name_most, &width);
+                let name = fit(&format!("{}. {}", r.rank, r.label()), name_most, &width);
                 texts.push(Text { s: name, x: x0, right: false, y: ty(y), color });
                 if multi {
                     for (k, m) in metrics.iter().enumerate() {
@@ -1184,5 +1238,62 @@ mod tests {
         assert_eq!(command("off"), Command::On(false));
         assert_eq!(command("nonsense"), Command::Help);
         assert_eq!(View::Fight.other(), View::Overall);
+    }
+
+    /// A merc's line of layout 3: its owner named, the player's own merc's
+    /// flagged.
+    fn merc3(name: &str, class: u8, damage: u32, heal: u32, power: u32, owner: &str, own_merc: bool) -> DpsLine {
+        DpsLine { class, damage, heal, power, name: name.into(), merc: true, own_merc, owner: owner.into(), ..Default::default() }
+    }
+
+    /// Mercs on their own lines (Heirloom petition 3134): ranked with the
+    /// players by the sort (by power the enchanter merc first), named with
+    /// their owners', a shade dimmer than a player's (the player's own merc's
+    /// under its gold) and their bars fainter; the pet's row is the summoned
+    /// pet's alone. Overall sums a merc by its name and its owner's: two
+    /// owners' Ralthas and a player named Ralthas stay three lines. A merc
+    /// whose owner the server left out reads "(merc)".
+    #[test]
+    fn mercs_have_their_own_lines() {
+        let mut dab = line2("Dab", 11, 300, 0, 0, true);
+        dab.pet = 120; // its summoned pet's
+        let lines = vec![
+            merc3("Ralthas", 0, 500, 0, 0, "Dab", true),
+            dab,
+            merc3("Kellasis", 12, 100, 0, 700, "Dab", true),
+            line2("Jib", 9, 80, 600, 0, false),
+            merc3("Ralthas", 0, 60, 0, 0, "Jib", false),
+            line2("Ralthas", 6, 40, 0, 0, false),
+        ];
+        let mut f = fight2(1, true, 2000, lines);
+        f.layout = 3;
+        let mut m = Meter::default();
+        m.take(f);
+        let s = m.shown_by(View::Fight, "Spectre", Columns::All, Metric::Power);
+        let names: Vec<String> = s.rows.iter().map(|r| r.label()).collect();
+        assert_eq!(names[0], "Kellasis (Dab's merc)", "by power the enchanter merc first: {names:?}");
+        assert_eq!(s.rows.len(), 6);
+        assert_eq!(s.pet.as_ref().map(|p| (p.0.as_str(), p.1)), Some(("Spectre", 0)), "the pet's row is its pet's: {:?}", s.pet);
+        let d = m.shown_by(View::Fight, "Spectre", Columns::Dps, Metric::Damage);
+        assert_eq!(d.rows[0].label(), "Ralthas (Dab's merc)");
+        assert_eq!(d.pet.as_ref().map(|p| p.1), Some(120), "its summoned pet's damage alone");
+        let p = panel(&d, 400);
+        let width = |t: &str| t.len() as f32 * 4.0;
+        let (bars, texts) = pieces(&d, &p, width);
+        let at = |pre: &str| texts.iter().find(|t| t.s.starts_with(pre)).unwrap().color;
+        assert_eq!(at("1. Ralthas (Dab"), OWN_MERC);
+        assert_eq!(at("2. Dab"), OWN);
+        assert_eq!(at("5. Ralthas (Jib"), MERC);
+        assert_eq!(at("6. Ralthas"), WHITE, "the player Ralthas");
+        assert!((bars[0].color[3] - 0.38).abs() < 1e-6, "the merc's bar fainter: {:?}", bars[0]);
+        assert!(bars.iter().any(|b| (b.color[3] - 0.55).abs() < 1e-6), "a player's bar as ever");
+
+        let o = m.shown_by(View::Overall, "", Columns::Dps, Metric::Damage);
+        let mut ov: Vec<String> = o.rows.iter().map(|r| r.label()).collect();
+        ov.sort();
+        assert_eq!(ov, ["Dab", "Jib", "Kellasis (Dab's merc)", "Ralthas", "Ralthas (Dab's merc)", "Ralthas (Jib's merc)"]);
+        let r = Row { name: "Kel".into(), merc: true, ..Row::default() };
+        assert_eq!(r.label(), "Kel (merc)");
+        assert_eq!(Row { name: "Kel".into(), ..Row::default() }.label(), "Kel", "the control: a player's name alone");
     }
 }
