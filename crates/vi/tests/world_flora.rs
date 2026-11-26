@@ -90,6 +90,9 @@ fn flora_on_tunaria() {
     // the flora at points round Freeport
     let mut sys = System::<Ieee>::default();
     let (mut grown, mut places, mut on_ground, mut checked) = (0usize, 0, 0, 0);
+    // Foliage Density 3x (the client's): the game's plants first, more on
+    // the ground, and its time
+    let (mut dense, mut dense_ground, mut dense_ms) = (0usize, 0usize, 0f64);
     let t0 = std::time::Instant::now();
     for _ in 0..12 {
         let (x, z) = (r.range(23600.0, 25400.0), r.range(13600.0, 15400.0));
@@ -124,7 +127,29 @@ fn flora_on_tunaria() {
         sys.update(&mut w, &at);
         let again: Vec<_> = sys.swatches.iter().map(|s| s.as_ref().map(|s| s.insts.iter().map(|p| (p.world, p.sphere.r.bits())).collect::<Vec<_>>())).collect();
         assert!(format!("{first:?}") == format!("{again:?}"), "a Reset grew other plants at {at:?}");
+        let t = std::time::Instant::now();
+        let mut d3 = System::<Ieee> { density: 3, ..Default::default() };
+        d3.update(&mut w, &at);
+        dense_ms += t.elapsed().as_secs_f64() * 1000.0;
+        for (k, s) in d3.swatches.iter().enumerate() {
+            let game = first[k].clone().unwrap_or_default();
+            let ours: Vec<_> = s.as_ref().map(|s| s.insts.iter().map(|p| (p.world, p.sphere.r.bits())).collect()).unwrap_or_default();
+            assert!(ours.len() >= game.len() && format!("{:?}", &ours[..game.len()]) == format!("{game:?}"), "3x: the game's plants first at {at:?}");
+            for p in s.iter().flat_map(|s| &s.insts[game.len()..]) {
+                let c = p.world.m[3];
+                let mut down = vi::coll::CollRay::<Ieee>::default();
+                down.init(Vect3::of(c.x.0, c.y.0 + 0.5, c.z.0), Vect3::of(c.x.0, c.y.0 - 0.5, c.z.0));
+                let mut fl = vi::scene::Filter::new(vi::scene::FilterKind::Scene, -1);
+                if w.collide_ray(&mut down, &mut fl) && (down.hit_point().y.0 - c.y.0).abs() < 0.05 {
+                    dense_ground += 1;
+                }
+                dense += 1;
+            }
+        }
     }
+    eprintln!("flora 3x: {dense} more plants, {dense_ground} on the ground ({:.1} ms a full 3x3)", dense_ms / places.max(1) as f64);
+    assert!(dense >= grown * 2, "3x grew {dense} more over the game's {grown}");
+    assert!(dense_ground * 100 >= dense * 95, "3x plants off the ground: {dense_ground} of {dense}");
     let per = t0.elapsed().as_secs_f64() * 1000.0 / (places.max(1) * 2) as f64;
     eprintln!("flora: {grown} plants at {places} places ({per:.1} ms a full 3x3), {on_ground} of {checked} on the ground");
     assert!(grown > 1000, "too few plants grew");

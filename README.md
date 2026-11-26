@@ -139,7 +139,8 @@ or a browser (each described where it lives below):
   screen, as F11 and Alt+Enter toggle it; Brightness, Frame Rate, VSync, Render
   Scale: x1, x2 or x4, Loading Screens: Longer or Instant), World (Fog, Mipmaps,
   Flora and Environment: sliders, 0 to 100% of the plants and of the effect volumes, 100 the game's, Ground Fog: PS2
-  or Exact, Art), Weather (a slider: 0 to 100% of the rain's and the snow's drops, 100 the game's), Lighting (Dynamic Lighting, Sun Shadows, Light Shadows,
+  or Exact, Art), Weather (a slider: 0 to 100% of the rain's and the snow's drops, 100 the game's), Foliage (Foliage Density: Retail, the
+  game's, or 2x or 3x the plants grown by its rule, its own first; Foliage Reacts: Off, or On, the plants leaning from players and creatures and easing back), Lighting (Dynamic Lighting, Sun Shadows, Light Shadows,
   Shadow Distance: 250 to 1000, Ambient Occlusion, Particles: PS2 or Exact), UI (Ability Bars, Update
   Notices, Text: Sharp or Smooth, HUD: Nearest or Sharp, Raid List, Pet Effects), Controller (Controller
   Focus, Capture Controller, and the touch screen's pad: Touch Stick Size and Touch Button Size,

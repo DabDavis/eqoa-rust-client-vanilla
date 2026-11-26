@@ -1516,6 +1516,15 @@ pub struct ClientOptions {
     /// game's. The weather itself (its sky, its sound, its lightning) is the
     /// server's as ever.
     pub weather: u8,
+    /// Foliage Density (Heirloom petition 3197, 2026-11-26): 1, Retail, the
+    /// radial flora as the game grows it; 2 or 3, the game's plants and as
+    /// many again a pass more, grown by the same rule off seeds of their own
+    /// (`vi::flora::System::density`), and that many more drawn.
+    pub foliage_density: u8,
+    /// Foliage Reacts (petition 3197): off, the game's still plants; on, the
+    /// plants round a player or a creature lean away from it and ease back
+    /// once it has passed (`flora::React`).
+    pub foliage_reacts: bool,
     /// Ground Fog: PS2, the effect volumes' fog blended as the GS blends it
     /// into the PS2's 16-bit frame, dithered and cut to five bits a channel
     /// (`render::fog16`: a low, dim band, as the game shows it); Exact, blended
@@ -1877,6 +1886,8 @@ impl Default for ClientOptions {
             shadows: true,
             environment: SHARE_FULL,
             weather: SHARE_FULL,
+            foliage_density: 1,
+            foliage_reacts: false,
             ps2_fog: true,
             ps2_particles: true,
             ambient_occlusion: false,
@@ -2233,6 +2244,13 @@ impl ClientOptions {
         if let Some(v) = share_text(self.environment) {
             s.push_str(&format!("environment={v}\n"));
         }
+        // Foliage Density and Foliage Reacts only when not the game's
+        if self.foliage_density > 1 {
+            s.push_str(&format!("foliage_density={}\n", self.foliage_density.min(vi::flora::DENSITY_MOST)));
+        }
+        if self.foliage_reacts {
+            s.push_str("foliage_reacts=on\n");
+        }
         if let Some(v) = share_text(self.weather) {
             s.push_str(&format!("weather={v}\n"));
         }
@@ -2568,6 +2586,13 @@ impl ClientOptions {
                         c.flora = v;
                     }
                 }
+                ("foliage_density", v) => {
+                    if let Ok(v @ 1..=vi::flora::DENSITY_MOST) = v.parse::<u8>() {
+                        c.foliage_density = v;
+                    }
+                }
+                ("foliage_reacts", "on") => c.foliage_reacts = true,
+                ("foliage_reacts", "off") => c.foliage_reacts = false,
                 ("shadows", "on") => c.shadows = true,
                 ("shadows", "off") => c.shadows = false,
                 ("environment", v) => {
@@ -4863,6 +4888,26 @@ mod tests {
         for bad in ["flora=45", "environment=no", "flora=", "weather=110", "weather=-10"] {
             let c = ClientOptions::from_text(bad);
             assert_eq!((c.flora, c.environment, c.weather), (100, 100, 100), "{bad}: the default");
+        }
+    }
+
+    /// Foliage Density (Retail, 2x, 3x) and Foliage Reacts (off): the game's
+    /// by default and then not written; kept otherwise and read back; a
+    /// density outside 1 to 3 is the default.
+    #[test]
+    fn foliage_kept_only_off_the_games() {
+        let d = ClientOptions::default();
+        assert_eq!((d.foliage_density, d.foliage_reacts), (1, false), "the game's");
+        assert!(!d.to_text().contains("foliage"), "nothing kept at the game's");
+        let c = ClientOptions { foliage_density: 3, foliage_reacts: true, ..Default::default() };
+        let t = c.to_text();
+        assert!(t.contains("foliage_density=3\n") && t.contains("foliage_reacts=on\n"), "{t}");
+        assert!(ClientOptions::from_text(&t) == c, "read back");
+        let c = ClientOptions::from_text("foliage_density=2");
+        assert_eq!((c.foliage_density, c.foliage_reacts, c.flora), (2, false, 100), "Density alone");
+        for bad in ["foliage_density=0", "foliage_density=4", "foliage_density=x", "foliage_reacts=yes"] {
+            let c = ClientOptions::from_text(bad);
+            assert_eq!((c.foliage_density, c.foliage_reacts), (1, false), "{bad}: the default");
         }
     }
 

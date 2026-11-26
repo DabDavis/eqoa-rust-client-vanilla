@@ -1439,7 +1439,16 @@ pub fn shot_with(
         // whenever it is made, so the walk's frames need not have grown it
         if crate::settings::client().flora > 0 {
             let fl = flora.insert(crate::flora::Flora::new());
-            let drawn = fl.frame(&mut walker.scene, &vi::vect::Vect3::of(shot_eye.x, shot_eye.y, shot_eye.z), view.view_proj);
+            // Foliage Reacts' bodies, as a frame of the walk has them
+            let movers = match play.as_ref() {
+                _ if !crate::settings::client().foliage_reacts => Vec::new(),
+                Some(p) => p.flora_movers(&walker),
+                None => {
+                    let at = walker.cam.walk.phys.position;
+                    vec![crate::flora::Mover { at: [at.x.0, at.y.0, at.z.0], reach: 1.2 }]
+                }
+            };
+            let drawn = fl.frame(&mut walker.scene, &vi::vect::Vect3::of(shot_eye.x, shot_eye.y, shot_eye.z), view.view_proj, &movers);
             fl.upload(&mut renderer, &device, &queue, lib, &walker.scene, &drawn);
             eprintln!("{}", fl.describe());
         }
@@ -7136,7 +7145,19 @@ impl App {
                     // with the options' Flora off
                     if let Some(fl) = flora.as_mut().filter(|_| !unseen) {
                         if crate::settings::client().flora > 0 {
-                            let drawn = fl.frame(&mut w.scene, &w.eye.position, proj * v);
+                            // Foliage Reacts' bodies: the player and what is drawn
+                            let movers = if crate::settings::client().foliage_reacts {
+                                match play.as_ref() {
+                                    Some(p) => p.flora_movers(w),
+                                    None => {
+                                        let at = w.cam.walk.phys.position;
+                                        vec![crate::flora::Mover { at: [at.x.0, at.y.0, at.z.0], reach: 1.2 }]
+                                    }
+                                }
+                            } else {
+                                Vec::new()
+                            };
+                            let drawn = fl.frame(&mut w.scene, &w.eye.position, proj * v, &movers);
                             fl.upload(&mut g.renderer, &g.device, &g.queue, lib, &w.scene, &drawn);
                         } else {
                             fl.clear();
