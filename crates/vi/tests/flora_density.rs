@@ -7,12 +7,16 @@
 //! and no disc: a scene of its own (a height field, Odus's numbers).
 
 use vi::flora::{Dist, FloraModel, FloraScene, Frustum, QueryTriList, Set, System, ZoneFlora, extra_seed};
-use vi::fpu::{F, Ieee};
+use ee::libm::{cosf, sinf};
+use vi::fpu::{Ee, F};
 use vi::geom::{BBox, Plane, Sphere};
 use vi::vect::Vect3;
 use vi::world::Grid;
 
-type M = Ieee;
+/// The console's model, the client's: `Ieee` would hand the flora's
+/// `atan2f`/`cosf` to the host's libm, whose last bits differ between glibcs
+/// (CI's Ubuntu 22.04 grew other plants than Debian 13: build443's run).
+type M = Ee;
 
 struct Fake {
     grid: Grid<M>,
@@ -69,7 +73,9 @@ fn scene() -> Fake {
     zf.sets.push(Set { first: 0, count: 3, ..Default::default() });
     zf.sets.push(Set { first: 3, count: 2, ..Default::default() });
     zf.precalc(|s| Some((100 + s, 200 + s, Sphere { c: Vect3::of(0.0, 0.4, 0.0), r: F::new(0.5) })));
-    let h = |x: f32, z: f32| 30.0 + 6.0 * (x * 0.05).sin() * (z * 0.07).cos() + 1.2 * (x * 0.31 + z * 0.17).sin();
+    // newlib's sinf/cosf as the PS2 has them (`ee::libm`), not the host's:
+    // the same ground on every machine
+    let h = |x: f32, z: f32| 30.0 + 6.0 * sinf(x * 0.05) * cosf(z * 0.07) + 1.2 * sinf(x * 0.31 + z * 0.17);
     let p = |x: f32, z: f32| Vect3::of(x, h(x, z), z);
     let (s, x0, z0) = (7.3f32, 1780.37f32, 900.21f32);
     let mut soup = Vec::new();
@@ -142,8 +148,9 @@ const AT: [f32; 3] = [1905.0, 34.0, 1012.0];
 
 /// At the game's density (the default) the plants are the port's before
 /// Foliage Density existed, bit for bit: the fingerprint was taken off
-/// `248d3627`'s `CreateFloraInsts` over this scene. The control: a plant one
-/// bit off changes it.
+/// `248d3627`'s `CreateFloraInsts` over this scene, in the `Ee` model (the
+/// `Ieee` one's, 16782693215220620819, was the host libm's and failed on CI).
+/// The control: a plant one bit off changes it.
 #[test]
 fn the_default_is_the_games_flora() {
     assert_eq!(System::<M>::default().density, 1, "the game's by default");
@@ -157,7 +164,7 @@ fn the_default_is_the_games_flora() {
 }
 
 const RETAIL_PLANTS: usize = 2575;
-const RETAIL_PRINT: u64 = 16_782_693_215_220_620_819;
+const RETAIL_PRINT: u64 = 14_460_987_615_827_895_426;
 
 /// At 2x and 3x every swatch starts with the game's plants in the game's
 /// order, then more, at least as many again a pass; the same at a second
