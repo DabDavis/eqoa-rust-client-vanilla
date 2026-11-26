@@ -620,6 +620,23 @@ or a browser (each described where it lives below):
   keyboard. Extended > Combat: DPS Meter (off by default), DPS Meter Shows and Reset DPS
   Meter, for a controller. Off, or on a server that keeps none (the reference server, eqoa.live),
   nothing is drawn or asked, as on a PS2.
+- **A faction tracker** (Heirloom petition 3216, Cucumber: "track one chosen faction on screen,
+  outside the faction window"; `factiontrack.rs`): one faction's standing on the HUD, as a
+  number (red below zero, blue above), the faction window's bar (from its middle, red to the
+  left and blue to the right, darker toward the ends) or both. The faction is picked in the
+  faction window (✕ on a faction shows its box, whose ✕ Track follows it and ✕ again on the one
+  followed stops; a click on the box's ✕ too) or typed, `/track faction <name>` (a part of one
+  name will do: the server's whole name for it is kept), `/track off`; it is kept by name for
+  the character (`factiontrack.opt`, a line a character), so it is there at the next login,
+  and picking one turns the tracker on. The game sends standings only while its window is open
+  (0x0AC4, 0x07E2), so on a server that offers its own (go-eqoa-server's 0x7E86; 0x7E87 names
+  the faction, "" none; 0x7E88 is its standing, at once and whenever a kill's, a quest's or a
+  GM's change moves it) the panel follows it; the window's pages set it too. It sits in the
+  quest tracker's column above the DPS meter (or the chat box), the quest tracker over it, and
+  moves with Move HUD (Faction Tracker). Extended > UI > Faction Tracker: Faction Tracker (off
+  by default) and Faction Tracker Shows (Number, Bar, Both). Off, with none picked, or on a
+  server that offers none (a PS2's, world.vanilla_ui, an [OG] character), nothing is drawn or
+  asked.
 - **Auto-cast and auto targeting** (the server owner's of 2026-11-11, "lets add auto-cast to
   abilities to fire off cooldown/timer/buff gone/pet's die similar to the mercs, also auto
   targeting"; `autocast.rs`, `autoplay.rs`): an ability on a quick bar the player marks
@@ -1087,7 +1104,7 @@ or a browser (each described where it lives below):
   UI elements and also reset button"; `hudlayout`): Extended > HUD Layout's
   Move HUD, or `/hud`, outlines every HUD piece drawn (the frame with the
   compass and gauges, the group or raid, the pet, the target, the minimap, the
-  quest tracker, the DPS meter, the effects, the chat box, the breath gauge,
+  quest tracker, the DPS meter, the faction tracker, the effects, the chat box, the breath gauge,
   the quick bars) once the menu is left, with a bar at the top (Lock, Reset);
   the mouse's left button or a finger drags a piece. Locked, every click on
   the HUD is the game's as ever. A piece is kept per window (`hud.opt`) and per account (see Options per account) as a

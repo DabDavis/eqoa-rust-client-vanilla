@@ -5,6 +5,13 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Track a faction on screen
+
+- New **Faction Tracker**: keep one faction's standing on screen while you play, without opening the faction window. It shows the faction's name and its standing as a **number** (red when negative, blue when positive), a **bar** (the faction window's own bar: red to the left, blue to the right), or **both**.
+- To pick a faction, open **Factions**, press **✕** on a faction to see its standing, then **✕ Track** (or click it). Press **✕** on the tracked faction again to stop. You can also type `/track faction <name>` (part of the name works, for example `/track faction militia`) and `/track off`.
+- The standing updates as it changes: kills, quests, everything that moves it. Your choice is kept for each character and is still there the next time you log in.
+- Settings are under **Options → Extended → UI → Faction Tracker**: **Faction Tracker** (off until you pick a faction) and **Faction Tracker Shows** (**Number**, **Bar** or **Both**). The tracker sits above the DPS meter on the right, and you can move it with **Move HUD**. It needs the server's new update; on a server without it nothing is shown.
+
 ## 2026-11-26 · Click the Focus Target window to target it
 
 - A **left click** (or a tap) on the **Focus Target** window now makes your focus your current target, the same as the Target Focus key. A focus that has left your view or died is let go of already, so its window is not there to click. There is no new controller button: bind **Target Focus** to one under Controls if you want it on a pad.

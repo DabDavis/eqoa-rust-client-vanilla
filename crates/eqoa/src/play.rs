@@ -643,6 +643,11 @@ pub struct Play {
     faction_wnd: crate::faction::FactionWnd,
     faction_open: bool,
     faction_keys: Vec<(i32, bool)>,
+    /// The faction followed on the HUD (`factiontrack`, petition 3216), kept
+    /// by name a character, and its standing last heard (the server's
+    /// tracker, or the window's page).
+    faction_follow: crate::factiontrack::Followed,
+    faction_heard: Option<crate::factiontrack::Heard>,
     who_tell: Option<String>,
     /// `VIGameOptions` and the Options window (mode 34); what it asked of
     /// the sound device, done in the next frame; a camera style to apply
@@ -3870,7 +3875,7 @@ impl Play {
         crate::racelabel::clear();
         // Msg000D reads `m_speed` out of the dump
         let speed = dump.speed;
-        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None, focus: None, pointer: None, pointer_view: None, coach_talk: None, self_name_at: None };
+        let mut p = Play { session, player, dump, entities: Entities::default(), view_sent: None, last_send: -1, stood_sent: false, last_pos: [0.0; 3], send_interval: 100, puppets: (0..MAX_SLOTS).map(|_| None).collect(), cues: vec![crate::sound::Cue::Named("respawn", 0.4)], weather: Vec::new(), regional: Default::default(), regional_clock: web_time::Instant::now(), retail_weather: 0, weather_fog: None, abilities: Default::default(), ability_token: 0, presses: Default::default(), hud_menus: Default::default(), pc_gems: Default::default(), autocast: Default::default(), slot_asked: None, gear: Default::default(), walks: (0..MAX_SLOTS).map(|_| None).collect(), aloft_vy: vec![None; MAX_SLOTS], airs: vec![Default::default(); MAX_SLOTS], carried: vec![false; MAX_SLOTS], carry_buf: vec![Default::default(); MAX_SLOTS], actors: vec![None; MAX_SLOTS], actor_passes: vec![false; MAX_SLOTS], shortcuts: (false, false), self_actor: None, actors_in: 0, refresh_collision: false, self_model: None, self_puppet: None, self_shown: true, cam_inside: false, cam_carry: None, chat: Default::default(), typing: None, target: u32::MAX, auto_attack: false, attack: Default::default(), swung: 0, stats: Default::default(), effects: Default::default(), damage: Default::default(), rings: Default::default(), self_at: None, words: None, ui_textures: None, ui_data: None, ui_assets: None, ui_art: None, modules_taken: [false; 2], hud: None, target_info: None, target_title: String::new(), target_guild: String::new(), info_up: false, mob_info: None, talk_held: false, mob_shown_at: None, pet_id: u32::MAX, pet_name: String::new(), info_window: Default::default(), chat_pending: Vec::new(), links: Default::default(), buffs: Default::default(), link_draft: None, event_no: 0, next_links: None, shift: false, wnd_chat: None, hud_last: 0, channel: 0, reply_name: String::new(), mode: 0, dialogs: Default::default(), priv_chat: Default::default(), response: Default::default(), pending_box: None, world_change: None, arrival: Vec::new(), group: Default::default(), mbox: Default::default(), trails: Default::default(), trail_strips: Vec::new(), race_cams: None, light: Default::default(), cam_preset: Default::default(), cam_saved: Default::default(), cam_entered: false, race_framed: false, race_frame_due: Vec::new(), death: None, fade: Default::default(), dead_casters: Vec::new(), death_ms: 0, death_eye: None, start: None, quit: false, booted: false, disconnected: None, hc_fall: None, start_open: None, start_keys: Vec::new(), emote: None, edit: Default::default(), edit_keys: Vec::new(), who: Default::default(), who_wnd: Default::default(), who_open: false, search_mode: false, search: Default::default(), who_keys: Vec::new(), who_tell: None, edit_typed: 0, spells: None, projectiles: Default::default(), casts: Vec::new(), petart: Default::default(), pet_tops: Default::default(), spell_ids: vec![None; MAX_SLOTS], spell_rand: Rand(1), book: Default::default(), book_open: false, book_keys: Vec::new(), items: Default::default(), waiting: false, quests: Default::default(), quest_log: Default::default(), quest_open: false, quest_from_hud: false, quest_keys: Vec::new(), guide: Default::default(), server_quests: false, guide_from: None, guide_forced: std::env::var_os("EQOA_QUEST_GUIDE").is_some(), trainer: Default::default(), trainer_open: false, trainer_refresh: false, trainer_keys: Vec::new(), cm: Default::default(), cm_wnd: Default::default(), cm_wait_since: None, cm_open: false, cm_msgs: Vec::new(), cm_keys: Vec::new(), factions: Default::default(), faction_wnd: Default::default(), faction_open: false, faction_keys: Vec::new(), faction_follow: Default::default(), faction_heard: None, npcw: Default::default(), options: crate::options::GameOptions { compact: std::env::var_os("EQOA_SOFT_KEYBOARD").is_none() as u8, ..Default::default() }, options_wnd: Default::default(), sound_ops: Vec::new(), apply_camera: false, filters_sent: None, shouts_told: false, shouts_dropped: false, chat_unsent: 0, reopened: 0, buddies: Default::default(), buddy_wnd: crate::social::BuddyList::new(0), ignore: Default::default(), ignore_wnd: crate::social::IgnoreList::new(0), panel_open: false, pc_windows: Default::default(), panel_keys: Vec::new(), controls_open: false, guild: Default::default(), guild_cmds: Default::default(), guild_wnd: Default::default(), guild_open: None, guild_keys: Vec::new(), craft: Default::default(), recipe_wnd: Default::default(), exp_wnd: Default::default(), craft_keys: Vec::new(), craft_outs: Vec::new(), mail: Default::default(), support: Default::default(), bank: Default::default(), autorun: false, following: false, follow_id: u32::MAX, cast_window: (0, 0), rooted: false, ride: None, locks: (true, true), aim_hold: false, aim_at: 0, manual_on: false, reticle_alpha: F::new(0.5), pad_mode: 0, last_group: false, keyboard: true, touched: false, rumbles: Vec::new(), glyphs: Default::default(), wheel: 0.0, key_queue: Default::default(), held: None, quick: Default::default(), quick_held: None, alarm: Default::default(), quick_typed: (0, 0), map: Default::default(), loading: Default::default(), speed, walk_speed: 3.0, drawn: 0, far_last: 0, fish: Default::default(), admin: Default::default(), live: Default::default(), duel: Default::default(), record: Default::default(), raid: Default::default(), meter: Default::default(), merc: Default::default(), dyepick: Default::default(), stat_panel: None, focus: None, pointer: None, pointer_view: None, coach_talk: None, self_name_at: None };
         p.take_abilities();
         p.npcw_world_entry();
         // world entry: LoadModels and StreamFillCache under the loading screen
@@ -4106,6 +4111,8 @@ impl Play {
                     }
                     self.meter.take(m);
                 }
+                // the followed faction's standing (`factiontrack`)
+                Event::FactionTrack { known, name, standing } => self.faction_track_heard(known, name, standing),
                 Event::RaidState(st) => self.raid_state(st),
                 // a server's word on a monster with nothing to say
                 // (`world.mob_info`): its name and level, for the info window
@@ -4280,7 +4287,10 @@ impl Play {
                         self.guild_out(o);
                     }
                 }
-                Event::Opcode { op: 0x07E2, data } => self.factions.recv(&data),
+                Event::Opcode { op: 0x07E2, data } => {
+                    self.factions.recv(&data);
+                    self.faction_page_heard();
+                }
                 // the training points as they now are (a level's, a refund's)
                 Event::Opcode { op: 0x0036, data } => self.msg_0036(&data, &mut walker.cam, &mut walker.scene),
                 Event::Opcode { op: 0x001C, data } => self.msg_001c(&data),
@@ -4750,6 +4760,7 @@ impl Play {
         self.session.agree_head_marks(crate::settings::head_marks());
         self.agree_number_tags();
         self.agree_dps_meter();
+        self.agree_faction_track();
         self.agree_quests();
         self.guide_wait(now);
         self.record_menu(); // Character > Combat Record once the server offers it
@@ -7242,6 +7253,8 @@ impl Play {
             "/alarm" => self.alarm_command(&rest),
             // the DPS meter's (`dpsmeter`), the client's own
             "/dps" => self.dps_command(&rest),
+            // the faction tracker's (`factiontrack`, petition 3216), the client's own
+            "/track" => self.track_command(&rest),
             // the Stat Window's (`statwnd`, petition 2925), the client's own
             "/stats" => self.stats_command(&rest),
             // the focus target's (`focus`, Heirloom petition 3038), the client's own
@@ -8831,6 +8844,7 @@ impl Play {
             ups.extend(self.faction_wnd.key(&mut self.factions, k, down, &mut cues));
         }
         if self.mode == 41 {
+            self.faction_wnd.tracked = self.faction_follow.name().to_string();
             self.faction_wnd.draw(vui, r, &self.factions, now, &mut cues);
         }
         self.cues.extend(cues.into_iter().map(crate::sound::Cue::Ui));
@@ -8843,6 +8857,8 @@ impl Play {
                     self.open_start_menu(false);
                 }
                 crate::faction::FactionUp::Send(m) => self.session.send(&m),
+                // the client's own: the faction followed on the HUD
+                crate::faction::FactionUp::Track(name) => self.follow_faction(&name, true),
             }
         }
     }
@@ -11403,6 +11419,7 @@ impl Play {
             minimap: self.minimap_up(),
             tracker: self.tracker_quests(),
             meter: self.meter_shown(),
+            faction: self.faction_shown(),
         };
         let now = self.session.now();
         let dt = ((time_ms - self.hud_last).clamp(0, 250)) as f32 / 1000.0;
@@ -12024,6 +12041,105 @@ impl Play {
         }
         self.options_wnd.meter_merc_note = (self.session.dps_meter_offer && self.session.dps_meter_layout < net::session::DPS_METER_MERC_LINES)
             .then_some("Mercenary breakdown requires a newer server");
+    }
+
+    /// The Faction Tracker: the character's followed faction read, the server
+    /// told it (none while the row is off), and the page's note.
+    fn agree_faction_track(&mut self) {
+        self.faction_follow.character(self.player.server_id, &self.dump.player.name);
+        let (on, _) = crate::settings::faction_track();
+        let name = if on { self.faction_follow.name().to_string() } else { String::new() };
+        self.session.agree_faction_track(&name);
+        let note = if !self.session.faction_track_offer {
+            "This server keeps no faction tracker".to_string()
+        } else if self.faction_follow.name().is_empty() {
+            "Pick a faction in the faction window (Track), or /track faction <name>".to_string()
+        } else {
+            format!("Tracking {}", self.faction_follow.name())
+        };
+        if self.options_wnd.faction_note.as_deref() != Some(note.as_str()) {
+            self.options_wnd.faction_note = Some(note);
+        }
+    }
+
+    /// Follows `name` on the HUD ("" none), kept for the character; `on`
+    /// turns the Faction Tracker on with it. A line says so.
+    fn follow_faction(&mut self, name: &str, on: bool) {
+        self.faction_follow.character(self.player.server_id, &self.dump.player.name);
+        self.faction_follow.set(name);
+        self.faction_heard = None;
+        self.faction_page_heard();
+        let line = if name.trim().is_empty() {
+            "No faction is tracked.".to_string()
+        } else {
+            if on {
+                crate::settings::set_client(crate::settings::ClientOptions { faction_track: true, ..crate::settings::client() });
+            }
+            if self.session.faction_track_offer {
+                format!("Tracking faction: {}.", name.trim())
+            } else {
+                format!("Tracking faction: {} (this server keeps no faction tracker; it shows on servers that do).", name.trim())
+            }
+        };
+        self.add_chat(line, [1.0; 4]);
+    }
+
+    /// The server's word on the followed faction: its standing, by the
+    /// faction's own name (a part typed becomes the whole name, kept), or that
+    /// the words name no one faction.
+    fn faction_track_heard(&mut self, known: bool, name: String, standing: i32) {
+        let followed = self.faction_follow.name().to_string();
+        if followed.is_empty() {
+            return;
+        }
+        if known && !name.trim().is_empty() && !name.trim().eq_ignore_ascii_case(&followed) {
+            // `/track faction militia`: the faction it names, by its own name
+            self.faction_follow.set(&name);
+        } else if !known && !name.trim().eq_ignore_ascii_case(&followed) {
+            return; // an answer to words since changed
+        }
+        let name = if known { name } else { followed };
+        self.faction_heard = Some(crate::factiontrack::Heard { name, standing, known });
+    }
+
+    /// The faction window's page, when it lists the followed faction: its
+    /// standing heard.
+    fn faction_page_heard(&mut self) {
+        let followed = self.faction_follow.name();
+        if followed.is_empty() || !self.factions.ready {
+            return;
+        }
+        if let Some((n, v)) = self.factions.list.iter().find(|(n, _)| String::from_utf16_lossy(n).trim().eq_ignore_ascii_case(followed)) {
+            self.faction_heard = Some(crate::factiontrack::Heard { name: String::from_utf16_lossy(n).trim().to_string(), standing: *v, known: true });
+        }
+    }
+
+    /// What the faction tracker shows while it is up: the row on, a faction
+    /// followed and heard, a server that keeps a tracker, the HUD's right side
+    /// up.
+    fn faction_shown(&self) -> Option<crate::factiontrack::Shown> {
+        let (on, style) = crate::settings::faction_track();
+        let followed = self.faction_follow.name();
+        if !on || followed.is_empty() || !self.session.faction_track_offer || !self.right_hud_up() {
+            return None;
+        }
+        let heard = self.faction_heard.clone().filter(|h| h.is(followed))?;
+        Some(crate::factiontrack::Shown { heard, style })
+    }
+
+    /// `/track faction <name>`, `/track off`, `/track on`.
+    fn track_command(&mut self, arg: &str) {
+        use crate::factiontrack::Command;
+        match crate::factiontrack::command(arg) {
+            Command::Faction(name) => self.follow_faction(&name, true),
+            Command::Stop => self.follow_faction("", false),
+            Command::On => {
+                crate::settings::set_client(crate::settings::ClientOptions { faction_track: true, ..crate::settings::client() });
+                let line = if self.faction_follow.name().is_empty() { crate::factiontrack::HELP.to_string() } else { format!("Tracking faction: {}.", self.faction_follow.name()) };
+                self.add_chat(line, [1.0; 4]);
+            }
+            Command::Help => self.add_chat(crate::factiontrack::HELP.to_string(), [1.0; 4]),
+        }
     }
 
     /// Whether the HUD's pieces move now (`hudlayout`): Move HUD on, in play
@@ -16001,6 +16117,87 @@ mod commands {
         p.agree_number_tags();
         assert_eq!(answers(&mut p), vec![vec![0x39, 0x7E, 1]], "a row chosen: asked");
         crate::settings::testing::reset(false);
+    }
+
+    /// The Faction Tracker (petition 3216): nothing asked before the offer
+    /// (the control) nor while no faction is picked; the faction window's
+    /// Track names it to the server (0x7E87, once), turns the row on and says
+    /// so; a part typed (`/track faction militia`) becomes the faction's own
+    /// name when the server answers with it; the choice is the character's,
+    /// read back by a new session (a re-login); the window's page sets the
+    /// standing too; `/track off` stops it (an empty name).
+    #[test]
+    fn the_faction_tracker_names_its_faction_and_keeps_it() {
+        struct Rec;
+        impl net::session::Datagrams for Rec {
+            fn send_to(&mut self, _: &[u8], _: [u8; 4], _: u16) {}
+            fn recv_from(&mut self) -> Option<(Vec<u8>, [u8; 4], u16)> {
+                None
+            }
+        }
+        crate::settings::testing::reset(false);
+        // what the game sent, as the session records it (DRDP's window holds
+        // a guaranteed message back once several are unacknowledged)
+        let new_play = || {
+            let mut s = Session::connect_with(Box::new(Rec), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+            s.self_id = Some(0x100);
+            s.record = Some(Vec::new());
+            let mut p = Play::new(s, Player { server_id: 42, ..Player::default() }, Box::default());
+            p.dump.player.name = "Cucumber".into();
+            p
+        };
+        let mut p = new_play();
+        let ours = |p: &mut Play| -> Vec<Vec<u8>> {
+            let r = p.session.record.replace(Vec::new()).unwrap_or_default();
+            r.into_iter().map(|(_, m)| m).filter(|m| m.len() >= 2 && m[1] == 0x7E && m[0] == 0x87).collect()
+        };
+        let answer = |name: &str| {
+            let mut w = net::stream::Writer::op(net::session::OP_FACTION_TRACK_ANSWER);
+            w.wide(name);
+            w.data
+        };
+        let said = |p: &Play| p.chat.back().map(|(t, _)| t.clone()).unwrap_or_default();
+        p.agree_faction_track();
+        assert!(ours(&mut p).is_empty(), "no offer: nothing asked");
+        assert_eq!(p.options_wnd.faction_note.as_deref(), Some("This server keeps no faction tracker"));
+        p.session.faction_track_offer = true;
+        p.agree_faction_track();
+        assert_eq!(ours(&mut p), vec![answer("")], "offered, off: none named");
+        assert!(!crate::settings::faction_track().0, "off by default");
+        // the window's Track
+        p.follow_faction("The Freeport Militia", true);
+        assert!(crate::settings::faction_track().0, "picking one turns it on");
+        assert_eq!(said(&p), "Tracking faction: The Freeport Militia.");
+        p.agree_faction_track();
+        p.agree_faction_track();
+        assert_eq!(ours(&mut p), vec![answer("The Freeport Militia")], "named once");
+        assert_eq!(p.options_wnd.faction_note.as_deref(), Some("Tracking The Freeport Militia"));
+        p.faction_track_heard(true, "The Freeport Militia".into(), -49);
+        assert_eq!(p.faction_heard.as_ref().map(|h| (h.name.as_str(), h.standing)), Some(("The Freeport Militia", -49)));
+        // a part typed: the server's name for it kept
+        p.chat_line("/track faction citizens of free");
+        p.agree_faction_track();
+        assert_eq!(ours(&mut p), vec![answer("citizens of free")]);
+        p.faction_track_heard(true, "Citizens of Freeport".into(), 120);
+        assert_eq!(p.faction_follow.name(), "Citizens of Freeport");
+        p.agree_faction_track();
+        assert_eq!(ours(&mut p), vec![answer("Citizens of Freeport")], "the whole name told");
+        // a re-login reads it back
+        let mut q = new_play();
+        q.session.faction_track_offer = true;
+        q.agree_faction_track();
+        assert_eq!(ours(&mut q), vec![answer("Citizens of Freeport")], "kept by name for the character");
+        // the window's page
+        q.factions.ready = true;
+        q.factions.list = vec![(vi::ui::wide("Citizens of Freeport"), 300)];
+        q.faction_page_heard();
+        assert_eq!(q.faction_heard.as_ref().map(|h| h.standing), Some(300));
+        // off
+        q.chat_line("/track off");
+        q.agree_faction_track();
+        assert_eq!((said(&q), ours(&mut q)), ("No faction is tracked.".to_string(), vec![answer("")]));
+        q.chat_line("/track what");
+        assert_eq!(said(&q), crate::factiontrack::HELP);
     }
 
     /// The DPS Meter asks a server that offered a meter (0x7E3A) for it while

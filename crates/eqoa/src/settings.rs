@@ -1211,6 +1211,14 @@ pub struct ClientOptions {
     /// of the columns shown (damage by default).
     pub dps_sort: crate::dpsmeter::Metric,
     pub dps_hide_mercenary: bool,
+    /// Faction Tracker (`factiontrack`, Heirloom petition 3216): one faction's
+    /// standing on the HUD, the one picked in the faction window or by `/track
+    /// faction` (kept by name a character, `factiontrack::FILE`), where the
+    /// server offers it. Off by default; picking a faction turns it on.
+    pub faction_track: bool,
+    /// Faction Tracker Shows: its standing as a number, a bar, or both (the
+    /// default).
+    pub faction_track_style: crate::factiontrack::Style,
     /// Item Links (`itemlink`; a GM's petition 1463: "This should be
     /// off by default for ps2 players and a toggle option. If toggled off for
     /// players, they should just see a plain text item name if linked"): links
@@ -1830,6 +1838,8 @@ impl Default for ClientOptions {
             dps_columns: crate::dpsmeter::Columns::Dps,
             dps_sort: crate::dpsmeter::Metric::Damage,
             dps_hide_mercenary: false,
+            faction_track: false,
+            faction_track_style: crate::factiontrack::Style::Both,
             item_links: true,
             auto_cast: true,
             auto_target: false,
@@ -2072,6 +2082,13 @@ impl ClientOptions {
         }
         if self.dps_hide_mercenary {
             s.push_str("dps_hide_mercenary=on\n");
+        }
+        // the Faction Tracker only when on, its style only when not Both
+        if self.faction_track {
+            s.push_str("faction_track=on\n");
+        }
+        if self.faction_track_style != crate::factiontrack::Style::Both {
+            s.push_str(&format!("faction_track_shows={}\n", self.faction_track_style.key()));
         }
         // Item Links only when off
         // Auto-Cast only when off, Auto Target only when on
@@ -2465,6 +2482,13 @@ impl ClientOptions {
                 ("dps_meter_sort", "power") => c.dps_sort = crate::dpsmeter::Metric::Power,
                 ("dps_hide_mercenary", "on") => c.dps_hide_mercenary = true,
                 ("dps_hide_mercenary", "off") => c.dps_hide_mercenary = false,
+                ("faction_track", "on") => c.faction_track = true,
+                ("faction_track", "off") => c.faction_track = false,
+                ("faction_track_shows", v) => {
+                    if let Some(st) = crate::factiontrack::Style::from_key(v) {
+                        c.faction_track_style = st;
+                    }
+                }
                 ("item_links", "on") => c.item_links = true,
                 ("item_links", "off") => c.item_links = false,
                 ("auto_cast", "on") => c.auto_cast = true,
@@ -3564,6 +3588,12 @@ pub fn number_colors() -> [crate::numcolor::Choice; crate::numcolor::ROWS] {
 /// The DPS Meter (`dpsmeter`).
 pub fn dps_meter() -> bool {
     client().dps_meter
+}
+
+/// The Faction Tracker (`factiontrack`): on, and how it shows the standing.
+pub fn faction_track() -> (bool, crate::factiontrack::Style) {
+    let c = client();
+    (c.faction_track, c.faction_track_style)
 }
 
 /// Item Links (`itemlink`).
@@ -4919,6 +4949,23 @@ mod tests {
             let c = ClientOptions::from_text(bad);
             assert_eq!((c.flora, c.environment, c.weather), (100, 100, 100), "{bad}: the default");
         }
+    }
+
+    /// The Faction Tracker: off and Both by default and then not written; kept
+    /// otherwise and read back; a style not known is the default.
+    #[test]
+    fn faction_tracker_kept_only_off_the_default() {
+        use crate::factiontrack::Style;
+        let d = ClientOptions::default();
+        assert_eq!((d.faction_track, d.faction_track_style), (false, Style::Both));
+        assert!(!d.to_text().contains("faction_track"), "nothing kept by default");
+        let c = ClientOptions { faction_track: true, faction_track_style: Style::Bar, ..Default::default() };
+        let t = c.to_text();
+        assert!(t.contains("faction_track=on\n") && t.contains("faction_track_shows=bar\n"), "{t}");
+        assert!(ClientOptions::from_text(&t) == c, "read back");
+        let c = ClientOptions::from_text("faction_track_shows=number");
+        assert_eq!((c.faction_track, c.faction_track_style), (false, Style::Number));
+        assert_eq!(ClientOptions::from_text("faction_track_shows=x").faction_track_style, Style::Both, "unknown: the default");
     }
 
     /// Foliage Density (Retail, 2x, 3x) and Foliage Reacts (off): the game's

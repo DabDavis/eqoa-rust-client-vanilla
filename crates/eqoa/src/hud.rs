@@ -82,6 +82,9 @@ pub struct HudState {
     /// tracker, above the chat box; a pointer on its title shows its other
     /// view or resets it, on its rows pages through them.
     pub meter: Option<crate::dpsmeter::Shown>,
+    /// The faction tracker (`factiontrack`), while it is up: drawn above the
+    /// DPS meter (or the chat box), under the quest tracker.
+    pub faction: Option<crate::factiontrack::Shown>,
     /// `m_selfId` and `m_target`.
     pub self_id: Option<u32>,
     pub target: u32,
@@ -856,6 +859,15 @@ impl Hud {
             (m, crate::dpsmeter::panel(m, room))
         });
         let bottom = meter.as_ref().map_or(col[3], |(_, p)| p.rect[1] - crate::dpsmeter::GAP);
+        // the faction tracker (`factiontrack`) on what is left, the quest
+        // tracker over it
+        let faction = s.faction.as_ref().map(|f| (f, crate::factiontrack::panel(f, bottom)));
+        let bottom = faction.as_ref().map_or(bottom, |(_, p)| p.rect[1] - crate::factiontrack::GAP);
+        if let Some((f, p)) = &faction {
+            let mark = crate::hudlayout::begin(ui.ui, Piece::Faction);
+            crate::factiontrack::draw(ui, f, p);
+            crate::hudlayout::end(ui.ui, mark);
+        }
         let m = crate::hudlayout::begin(ui.ui, Piece::Quests);
         if let Some(r) = crate::tracker::draw(ui, &s.tracker, bottom) {
             self.note(ui, r, Pick::Quests);
