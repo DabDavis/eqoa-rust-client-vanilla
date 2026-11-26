@@ -827,6 +827,9 @@ impl Hud {
             crate::dpsmeter::draw(ui, m, &p);
             self.note(ui, p.view, Pick::Meter(crate::dpsmeter::Hit::View));
             self.note(ui, p.reset, Pick::Meter(crate::dpsmeter::Hit::Reset));
+            if let Some(filter) = p.merc_filter {
+                self.note(ui, filter, Pick::Meter(crate::dpsmeter::Hit::HideMercs));
+            }
             self.note(ui, p.rows, Pick::Meter(crate::dpsmeter::Hit::Rows));
             let (a, b) = (ui.ui.placed([p.rect[0] as f32, p.rect[1] as f32]), ui.ui.placed([p.rect[2] as f32, p.rect[3] as f32]));
             self.meter_panel = Some(([a[0], a[1], b[0], b[1]], p.shown.len(), p.room));
@@ -1630,6 +1633,11 @@ mod tests {
             if side + up > 0.0 {
                 assert_eq!(hud.pick(view), None, "{size:?}: not at the frame's own place");
             }
+            ui.begin(size);
+            let shown = crate::dpsmeter::Shown { hide_mercs: Some(false), ..fight(3) };
+            hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { meter: Some(shown), ..Default::default() });
+            assert_eq!(hud.pick(at(view)), Some(Pick::Meter(Hit::HideMercs)), "{size:?}");
+            assert_eq!(hud.pick(at(row)), Some(Pick::Meter(Hit::Rows)), "{size:?}");
             // twenty lines: ten show, the wheel and a click step them
             ui.begin(size);
             hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { meter: Some(fight(20)), ..Default::default() });

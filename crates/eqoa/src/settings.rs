@@ -1208,6 +1208,7 @@ pub struct ClientOptions {
     /// DPS Meter Sort: what the lines are ranked and the bars drawn by, one
     /// of the columns shown (damage by default).
     pub dps_sort: crate::dpsmeter::Metric,
+    pub dps_hide_mercenary: bool,
     /// Item Links (`itemlink`; a GM's petition 1463: "This should be
     /// off by default for ps2 players and a toggle option. If toggled off for
     /// players, they should just see a plain text item name if linked"): links
@@ -1816,6 +1817,7 @@ impl Default for ClientOptions {
             dps_view: crate::dpsmeter::View::Fight,
             dps_columns: crate::dpsmeter::Columns::Dps,
             dps_sort: crate::dpsmeter::Metric::Damage,
+            dps_hide_mercenary: false,
             item_links: true,
             auto_cast: true,
             auto_target: false,
@@ -2050,6 +2052,9 @@ impl ClientOptions {
         }
         if self.dps_sort != crate::dpsmeter::Metric::Damage {
             s.push_str(&format!("dps_meter_sort={}\n", self.dps_sort.key()));
+        }
+        if self.dps_hide_mercenary {
+            s.push_str("dps_hide_mercenary=on\n");
         }
         // Item Links only when off
         // Auto-Cast only when off, Auto Target only when on
@@ -2432,6 +2437,8 @@ impl ClientOptions {
                 ("dps_meter_sort", "dps") => c.dps_sort = crate::dpsmeter::Metric::Damage,
                 ("dps_meter_sort", "hps") => c.dps_sort = crate::dpsmeter::Metric::Healing,
                 ("dps_meter_sort", "power") => c.dps_sort = crate::dpsmeter::Metric::Power,
+                ("dps_hide_mercenary", "on") => c.dps_hide_mercenary = true,
+                ("dps_hide_mercenary", "off") => c.dps_hide_mercenary = false,
                 ("item_links", "on") => c.item_links = true,
                 ("item_links", "off") => c.item_links = false,
                 ("auto_cast", "on") => c.auto_cast = true,
@@ -3007,7 +3014,7 @@ pub mod qol {
     pub fn of_item(item: i32) -> Option<u32> {
         Some(match item {
             44 | 45 | 85 => QUEST_HELPER,
-            70..=72 | crate::options::DPS_COLUMNS | crate::options::DPS_SORT => DPS_METER,
+            70..=72 | crate::options::DPS_COLUMNS | crate::options::DPS_SORT | crate::options::DPS_HIDE_MERCS => DPS_METER,
             64..=69 | 80 | 81 | crate::numcolor::TAKEN_ITEM => NUMBER_COLORS,
             86 | crate::options::HEALTH_NUMBERS => POWER_BARS,
             83 | crate::options::BUFF_TIMERS => BUFF_WINDOW,
@@ -3057,6 +3064,7 @@ pub mod qol {
         }
         if off(DPS_METER) {
             c.dps_meter = false;
+            c.dps_hide_mercenary = false;
         }
         if off(NUMBER_COLORS) {
             c.number_colors = [0; crate::numcolor::ROWS];
@@ -3104,6 +3112,7 @@ pub mod qol {
         }
         if off(DPS_METER) {
             v.dps_meter = kept.dps_meter;
+            v.dps_hide_mercenary = kept.dps_hide_mercenary;
         }
         if off(NUMBER_COLORS) {
             v.number_colors = kept.number_colors;
@@ -3621,6 +3630,12 @@ pub fn dps_columns() -> crate::dpsmeter::Columns {
 pub fn dps_sort() -> crate::dpsmeter::Metric {
     let c = client();
     c.dps_sort.fit(c.dps_columns)
+}
+
+pub fn toggle_dps_hide_mercenary() {
+    let mut c = client();
+    c.dps_hide_mercenary = !c.dps_hide_mercenary;
+    set_client(c);
 }
 
 /// What the windows share as another window saved it (Capture Controller,
@@ -5621,16 +5636,17 @@ mod tests {
     }
 
     #[test]
-    fn the_dps_meter_is_kept_only_when_on_and_overall() {
+    fn the_dps_meter_preferences_round_trip() {
         use crate::dpsmeter::View;
         let d = ClientOptions::default();
-        assert!(!d.dps_meter && d.dps_view == View::Fight, "off by default, on the fight");
+        assert!(!d.dps_meter && !d.dps_hide_mercenary && d.dps_view == View::Fight);
         assert!(!d.to_text().contains("dps_meter"), "the defaults write nothing");
-        let c = ClientOptions { dps_meter: true, dps_view: View::Overall, ..Default::default() };
+        let c = ClientOptions { dps_meter: true, dps_view: View::Overall, dps_hide_mercenary: true, ..Default::default() };
         let t = c.to_text();
         assert!(t.contains("dps_meter=on\n") && t.contains("dps_meter_shows=overall\n"), "{t}");
         let back = ClientOptions::from_text(&t);
-        assert!(back.dps_meter && back.dps_view == View::Overall, "round trip");
+        assert!(back.dps_meter && back.dps_view == View::Overall && back.dps_hide_mercenary, "round trip");
+        assert!(!ClientOptions::from_text("dps_hide_mercenary=off").dps_hide_mercenary);
         assert!(!ClientOptions::from_text("dps_meter=off").dps_meter);
         assert_eq!(ClientOptions::from_text("dps_meter_shows=fight").dps_view, View::Fight);
         let odd = ClientOptions::from_text("dps_meter=maybe\ndps_meter_shows=sideways");

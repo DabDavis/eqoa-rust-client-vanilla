@@ -35,19 +35,15 @@
 //! (showing its column), `/dps columns` steps the columns. On a server of layout
 //! 1 the panel is the DPS alone, as before.
 //!
-//! Mercs (Heirloom petition 3134: "Mercenary DPS, HPS seem to fall under a
-//! broad 'Pet' category on the DPS meter. Recommend splitting them into the
-//! mercenary names. Also PPS seems to not work from mercenary actions on the
-//! meter"): a server of layout 3 sends each merc's line apart from its owner's,
-//! its damage, healing and power given its own. It is drawn ranked with the
-//! players by the sort, its name and its owner's ("Kellasis (Cucumber's
-//! merc)"), a shade dimmer and its bar fainter; the pet's row under the
-//! player's own line is then its summoned or charmed pet's alone. Overall sums
-//! a merc by its name and its owner's, never into a player of its name.
+//! Mercenary contributions are part of the owner's row, with a distinct
+//! segment in the bar. Hide mercs filters them out of both views. Layout 4
+//! sends the amounts on each player row; layout 3's separate records are
+//! grouped by owner when the snapshot arrives.
 
 use crate::ui::{Layout, UiRaster, wide};
-use net::session::DpsMeter;
+use net::session::{DPS_METER_MERC_LINES, DpsLine, DpsMeter};
 use render::ui::{Anchor, Vertical};
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 /// What the meter shows: the fight (under way, or the last), or every fight.
@@ -215,32 +211,18 @@ pub struct Row {
     pub own: bool,
     /// No longer in the player's group (it did damage in this fight and left).
     pub left: bool,
-    /// Its healing (what its heals restored), its pet's and merc's share of
-    /// that, and the power it gave others; each over the fight's length.
+    /// Its healing (what its heals restored), its pet's share of that, and
+    /// the power it gave others; each over the fight's length.
     pub heal: u64,
     pub heal_pet: u64,
     pub power: u64,
     pub hps: f64,
     pub pps: f64,
-    /// A merc's line (layout 3): the player's own merc's, and its owner's name
-    /// (empty when the server left it out).
-    pub merc: bool,
-    pub own_merc: bool,
-    pub owner: String,
+    /// The included mercenary contribution for each metric.
+    pub merc: [u64; 3],
 }
 
 impl Row {
-    /// The name as the panel writes it: a merc's with its owner's, or "merc".
-    pub fn label(&self) -> String {
-        if !self.merc {
-            self.name.clone()
-        } else if self.owner.is_empty() {
-            format!("{} (merc)", self.name)
-        } else {
-            format!("{} ({}'s merc)", self.name, self.owner)
-        }
-    }
-
     /// Its figure of `m`.
     pub fn of(&self, m: Metric) -> u64 {
         match m {
@@ -259,7 +241,7 @@ impl Row {
         }
     }
 
-    /// Its pet's (and merc's) part of its figure of `m`.
+    /// Its pet's part of its figure of `m`.
     fn pet_of(&self, m: Metric) -> u64 {
         match m {
             Metric::Damage => self.pet,
@@ -291,9 +273,11 @@ pub struct Shown {
     /// from a server that counts no healing (layout 1).
     pub columns: Columns,
     pub sort: Metric,
+    /// The filter's state, when the server supplies a mercenary breakdown.
+    pub hide_mercs: Option<bool>,
 }
 
-/// A name's sums over the fights counted (Overall).
+/// A player's figures for a fight or the sum across fights.
 #[derive(Clone, Debug, Default)]
 struct Total {
     damage: u64,
@@ -303,33 +287,102 @@ struct Total {
     power: u64,
     class: u8,
     own: bool,
-    /// Its name (Overall's key is a merc's with its owner's: `key`), and a
-    /// merc's: its owner's name, the player's own.
     name: String,
-    merc: bool,
-    own_merc: bool,
-    owner: String,
-}
-
-/// Overall's key for a line: its name; a merc's with its owner's, apart from
-/// any player's (or another owner's merc's) of its name.
-fn key(l: &net::session::DpsLine) -> String {
-    if l.merc { format!("{}\u{1}{}", l.name, l.owner) } else { l.name.clone() }
+    left: bool,
+    merc: [u64; 3],
 }
 
 impl Total {
-    fn add(&mut self, l: &net::session::DpsLine) {
-        self.name.clone_from(&l.name);
-        self.merc = l.merc;
-        self.own_merc |= l.own_merc;
-        self.owner.clone_from(&l.owner);
-        self.damage += l.damage as u64;
-        self.pet += l.pet as u64;
-        self.heal += l.heal as u64;
-        self.heal_pet += l.heal_pet as u64;
-        self.power += l.power as u64;
-        self.class = l.class;
-        self.own |= l.own;
+    fn from_line(l: DpsLine) -> Self {
+        Self {
+            damage: l.damage.into(), pet: l.pet.into(), heal: l.heal.into(), heal_pet: l.heal_pet.into(),
+            power: l.power.into(), class: l.class, own: l.own, name: l.name, left: l.left,
+            merc: l.merc_share.map(u64::from),
+        }
+    }
+
+    fn add(&mut self, other: &Self) {
+        self.damage += other.damage;
+        self.pet += other.pet;
+        self.heal += other.heal;
+        self.heal_pet += other.heal_pet;
+        self.power += other.power;
+        for (amount, add) in self.merc.iter_mut().zip(other.merc) {
+            *amount += add;
+        }
+        if other.class != u8::MAX {
+            self.class = other.class;
+        }
+        self.own |= other.own;
+    }
+
+    fn figures(&self, hide_mercs: bool) -> [u64; 3] {
+        if hide_mercs {
+            [self.damage, self.heal, self.power]
+        } else {
+            [self.damage + self.merc[0], self.heal + self.merc[1], self.power + self.merc[2]]
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Fight {
+    id: u32,
+    over: bool,
+    length_ms: u32,
+    lines: Vec<Total>,
+    totals: [u64; 3],
+    places: [usize; 3],
+    without_mercs: [u64; 3],
+    places_without_mercs: [usize; 3],
+}
+
+impl From<DpsMeter> for Fight {
+    fn from(m: DpsMeter) -> Self {
+        let totals = [m.total, m.heal_total, m.power_total].map(u64::from);
+        let mut places = [m.place, m.heal_place, m.power_place].map(usize::from);
+        let (player_lines, merc_lines): (Vec<_>, Vec<_>) = m.lines.into_iter().partition(|line| !line.merc);
+        let mut lines: Vec<_> = player_lines.into_iter().map(Total::from_line).collect();
+        let (without_mercs, places_without_mercs) = if let Some(t) = m.without_mercs {
+            (t.totals.map(u64::from), t.places.map(usize::from))
+        } else if m.layout == DPS_METER_MERC_LINES {
+            let own = lines.iter().position(|line| line.own);
+            for merc in merc_lines {
+                let by_name = || lines.iter().position(|line| line.name == merc.owner);
+                let owner = if merc.own_merc { own.or_else(by_name) } else { by_name() };
+                let share = [merc.damage, merc.heal, merc.power].map(u64::from);
+                if let Some(i) = owner {
+                    for (amount, add) in lines[i].merc.iter_mut().zip(share) {
+                        *amount += add;
+                    }
+                } else if !merc.owner.is_empty() {
+                    // A layout 3 raid snapshot can omit the player row.
+                    lines.push(Total { name: merc.owner, class: u8::MAX, left: merc.left, own: merc.own_merc, merc: share, ..Total::default() });
+                }
+            }
+            // Layout 3's places rank mercs as competitors and its totals only
+            // cover the combined view. Rank players and sum their visible base
+            // figures locally when filtering that feed.
+            places = [0; 3];
+            let mut sum = [0; 3];
+            for line in &lines {
+                for (amount, add) in sum.iter_mut().zip(line.figures(true)) {
+                    *amount += add;
+                }
+            }
+            (sum, [0; 3])
+        } else {
+            (totals, places)
+        };
+        Self { id: m.fight, over: m.over, length_ms: m.length_ms, lines, totals, places, without_mercs, places_without_mercs }
+    }
+}
+
+impl Fight {
+    fn add_to(&self, overall: &mut BTreeMap<String, Total>) {
+        for line in &self.lines {
+            overall.entry(line.name.clone()).and_modify(|total| total.add(line)).or_insert_with(|| line.clone());
+        }
     }
 }
 
@@ -338,7 +391,7 @@ impl Total {
 /// their lengths, and which fight was summed last.
 #[derive(Clone, Debug, Default)]
 pub struct Meter {
-    fight: Option<DpsMeter>,
+    fight: Option<Fight>,
     dropped: Option<u32>,
     overall: BTreeMap<String, Total>,
     overall_ms: u64,
@@ -364,34 +417,33 @@ impl Meter {
             return;
         }
         self.heals |= m.layout >= 2;
+        let m = Fight::from(m);
         if let Some(cur) = self.fight.take() {
-            if cur.fight != m.fight {
+            if cur.id != m.id {
                 self.first = 0;
-                if self.counted != Some(cur.fight) {
+                if self.counted != Some(cur.id) {
                     self.count(&cur);
                 }
             }
         }
-        if m.over && self.counted != Some(m.fight) {
+        if m.over && self.counted != Some(m.id) {
             self.count(&m);
         }
         self.fight = Some(m);
     }
 
     /// `m` summed into Overall.
-    fn count(&mut self, m: &DpsMeter) {
-        for l in &m.lines {
-            self.overall.entry(key(l)).or_default().add(l);
-        }
+    fn count(&mut self, m: &Fight) {
+        m.add_to(&mut self.overall);
         self.overall_ms += (m.length_ms as u64).max(LEAST_MS);
-        self.counted = Some(m.fight);
+        self.counted = Some(m.id);
     }
 
     /// Everything cleared: the fight shown, the last one and Overall; the
     /// fight under way, if any, is dropped, as the server is told
     /// (`Session::reset_dps_meter`).
     pub fn reset(&mut self) {
-        let live = self.fight.as_ref().filter(|f| !f.over).map(|f| f.fight);
+        let live = self.fight.as_ref().filter(|f| !f.over).map(|f| f.id);
         *self = Meter { dropped: live.or(self.dropped), heals: self.heals, ..Meter::default() };
     }
 
@@ -403,92 +455,69 @@ impl Meter {
     /// What the panel shows of `view`, the player's pet named `pet_name`
     /// (its own name, "Pet" when it has none): the DPS alone, ranked by damage.
     pub fn shown(&self, view: View, pet_name: &str) -> Shown {
-        self.shown_by(view, pet_name, Columns::Dps, Metric::Damage)
+        self.shown_by(view, pet_name, Columns::Dps, Metric::Damage, None)
     }
 
     /// What the panel shows of `view` with `columns`, its lines ranked by
     /// `sort` (one the columns show, else damage); the DPS alone, by damage,
     /// until a fight came with healing and power (layout 2).
-    pub fn shown_by(&self, view: View, pet_name: &str, columns: Columns, sort: Metric) -> Shown {
+    pub fn shown_by(&self, view: View, pet_name: &str, columns: Columns, sort: Metric, hide_mercs: Option<bool>) -> Shown {
         let columns = if self.heals { columns } else { Columns::Dps };
         let sort = sort.fit(columns);
-        // the lines (name, their sums, own, left), the fight's whole of each
-        // metric and the player's own place by each, as the server sent them
-        type Line = (String, Total, bool);
-        let (title, ms, mut lines, sent): (String, u64, Vec<Line>, Option<([u64; 3], [usize; 3])>) = match view {
+        let hidden = hide_mercs == Some(true);
+        let mi = sort as usize;
+        let (title, ms, mut lines, sent) = match view {
             View::Fight => match &self.fight {
-                None => ("DPS Meter".to_string(), 0, Vec::new(), None),
+                None => ("DPS Meter", 0, Vec::new(), None),
                 Some(f) => {
-                    let mut lines = Vec::with_capacity(f.lines.len());
-                    for l in &f.lines {
-                        let mut t = Total::default();
-                        t.add(l);
-                        lines.push((l.name.clone(), t, l.left));
-                    }
                     let title = if f.over { "Last Fight" } else { "Fight" };
-                    let wholes = [f.total as u64, f.heal_total as u64, f.power_total as u64];
-                    let places = [f.place as usize, f.heal_place as usize, f.power_place as usize];
-                    (title.to_string(), f.length_ms as u64, lines, Some((wholes, places)))
+                    let (totals, places) = if hidden { (f.without_mercs, f.places_without_mercs) } else { (f.totals, f.places) };
+                    (title, u64::from(f.length_ms), f.lines.clone(), Some((totals[mi], places[mi])))
                 }
             },
             View::Overall => {
                 let mut sums: BTreeMap<String, Total> = self.overall.clone();
                 let mut ms = self.overall_ms;
                 // the fight under way, not yet summed
-                if let Some(f) = self.fight.as_ref().filter(|f| self.counted != Some(f.fight)) {
-                    for l in &f.lines {
-                        sums.entry(key(l)).or_default().add(l);
-                    }
+                if let Some(f) = self.fight.as_ref().filter(|f| self.counted != Some(f.id)) {
+                    f.add_to(&mut sums);
                     ms += (f.length_ms as u64).max(LEAST_MS);
                 }
-                let mut lines: Vec<Line> = sums.into_values().map(|t| (t.name.clone(), t, false)).collect();
-                lines.sort_by(|a, b| b.1.damage.cmp(&a.1.damage).then_with(|| a.0.cmp(&b.0)));
+                let lines: Vec<_> = sums.into_values().collect();
                 let title = if lines.is_empty() { "DPS Meter" } else { "Overall" };
-                (title.to_string(), if lines.is_empty() { 0 } else { ms }, lines, None)
+                (title, if lines.is_empty() { 0 } else { ms }, lines, None)
             }
         };
-        let figure = |t: &Total, m: Metric| match m {
-            Metric::Damage => t.damage,
-            Metric::Healing => t.heal,
-            Metric::Power => t.power,
-        };
-        // ranked by the sort's figure, the server's order (damage) among equals
-        if sort != Metric::Damage {
-            lines.sort_by(|a, b| figure(&b.1, sort).cmp(&figure(&a.1, sort)));
-        }
-        let mi = sort as usize;
+        let figure = |t: &Total| t.figures(hidden)[mi];
+        // Break ties in the server's order, by combined damage.
+        lines.sort_by_key(|t| (Reverse(figure(t)), Reverse(t.figures(false)[Metric::Damage as usize])));
         let secs_div = ms.max(LEAST_MS) as f64 / 1000.0;
-        let sums = |m: Metric| lines.iter().map(|l| figure(&l.1, m)).sum::<u64>();
-        let (wholes, place) = match sent {
-            Some((w, p)) => (w, p[mi]),
-            None => ([sums(Metric::Damage), sums(Metric::Healing), sums(Metric::Power)], 0),
-        };
-        let total = wholes[mi];
-        let top = lines.first().map_or(0, |l| figure(&l.1, sort)).max(1);
+        let (total, place) = sent.unwrap_or_else(|| (lines.iter().map(figure).sum(), 0));
+        let top = lines.first().map_or(0, figure).max(1);
         let mut out: Vec<Row> = lines
             .into_iter()
             .enumerate()
-            .map(|(i, (name, t, left))| {
-                let v = figure(&t, sort);
+            .map(|(i, t)| {
+                let figures = t.figures(hidden);
+                let [damage, heal, power] = figures;
+                let v = figures[mi];
                 Row {
                     rank: i + 1,
-                    name,
+                    name: t.name,
                     class: t.class,
-                    damage: t.damage,
+                    damage,
                     pet: t.pet,
-                    dps: t.damage as f64 / secs_div,
+                    dps: damage as f64 / secs_div,
                     share: if total > 0 { v as f64 / total as f64 } else { 0.0 },
                     bar: (v as f64 / top as f64).min(1.0) as f32,
                     own: t.own,
-                    left,
-                    heal: t.heal,
+                    left: view == View::Fight && t.left,
+                    heal,
                     heal_pet: t.heal_pet,
-                    power: t.power,
-                    hps: t.heal as f64 / secs_div,
-                    pps: t.power as f64 / secs_div,
-                    merc: t.merc,
-                    own_merc: t.own_merc,
-                    owner: t.owner,
+                    power,
+                    hps: heal as f64 / secs_div,
+                    pps: power as f64 / secs_div,
+                    merc: if hidden { [0; 3] } else { t.merc },
                 }
             })
             .collect();
@@ -506,18 +535,18 @@ impl Meter {
             (name.to_string(), v, v as f64 / secs_div, if total > 0 { v as f64 / total as f64 } else { 0.0 })
         });
         let pet_rates = out.iter().find(|r| r.own).map_or([0.0; 3], |r| [r.pet as f64 / secs_div, r.heal_pet as f64 / secs_div, 0.0]);
-        let whole: u64 = if view == View::Fight { total } else { out.iter().map(|r| r.of(sort)).sum() };
         Shown {
             view,
-            title,
+            title: title.to_string(),
             secs: ms / 1000,
-            dps: if out.is_empty() { 0.0 } else { whole as f64 / secs_div },
+            dps: if out.is_empty() { 0.0 } else { total as f64 / secs_div },
             rows: out,
             pet,
             pet_rates,
             first: self.first,
             columns,
             sort,
+            hide_mercs,
         }
     }
 }
@@ -581,13 +610,14 @@ pub const MOST_ROWS: usize = 10;
 pub const GAP: i32 = 4;
 
 /// Where the panel is and what it shows: its rectangle in the HUD's frame, its
-/// title's two buttons (the view's name, Reset), its rows' rectangle and the
+/// controls (the view's name, Reset, Hide mercs), its rows' rectangle and the
 /// items showing; and how many items there are and how far the list steps.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Panel {
     pub rect: [i32; 4],
     pub view: [i32; 4],
     pub reset: [i32; 4],
+    pub merc_filter: Option<[i32; 4]>,
     pub rows: [i32; 4],
     pub shown: Vec<Item>,
     pub items: usize,
@@ -595,17 +625,12 @@ pub struct Panel {
     pub room: usize,
 }
 
-/// The title's height, with the columns' headings under it when there are
-/// columns besides the DPS.
-pub fn head_h(s: &Shown) -> i32 {
-    if s.columns == Columns::Dps { HEAD_H } else { HEAD_H + ROW_H }
-}
-
 /// The panel for `s` with `room` frame pixels for it above the column's bottom:
 /// as many rows as it has, `MOST_ROWS` at most, fewer to fit (one at least).
 pub fn panel(s: &Shown, room: i32) -> Panel {
     let all = items(s);
-    let head_h = head_h(s);
+    let controls_h = HEAD_H + if s.hide_mercs.is_some() { ROW_H } else { 0 };
+    let head_h = controls_h + if s.columns == Columns::Dps { 0 } else { ROW_H };
     let fit = ((room - head_h - 2) / ROW_H).max(1) as usize;
     let slots = all.len().min(MOST_ROWS).min(fit);
     let shown = window(s, &all, s.first, slots);
@@ -617,6 +642,7 @@ pub fn panel(s: &Shown, room: i32) -> Panel {
         rect: [x0, top, x1, bottom],
         view: [x0, top, mid, top + HEAD_H],
         reset: [x1 - 40, top, x1, top + HEAD_H],
+        merc_filter: s.hide_mercs.map(|_| [x0, top + HEAD_H, x1, top + controls_h]),
         rows: [x0, top + head_h, x1, bottom],
         shown,
         items: all.len(),
@@ -709,10 +735,7 @@ pub struct Bar {
 const WHITE: [f32; 4] = [0.95, 0.95, 0.92, 1.0];
 const DIM: [f32; 4] = [0.62, 0.62, 0.6, 1.0];
 const OWN: [f32; 4] = [1.0, 0.86, 0.35, 1.0];
-/// A merc's line: a shade under a player's, the player's own merc's under its
-/// own gold.
-const MERC: [f32; 4] = [0.80, 0.80, 0.76, 1.0];
-const OWN_MERC: [f32; 4] = [0.86, 0.75, 0.42, 1.0];
+const MERC: [f32; 4] = [0.80, 0.40, 0.94, 0.70];
 const BACK: [f32; 4] = [0.0, 0.0, 0.0, 0.4];
 const HEAD_BACK: [f32; 4] = [0.0, 0.0, 0.0, 0.3];
 const OUTLINE: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
@@ -737,6 +760,14 @@ pub fn pieces(s: &Shown, p: &Panel, width: impl Fn(&str) -> f32) -> (Vec<Bar>, V
         let reset_w = width("Reset");
         texts.push(Text { s: format!("{} {}", rate(s.dps), s.sort.unit()), x: x1 - reset_w - 8.0, right: true, y: ty(head) + 1.0, color: WHITE });
     }
+    if let (Some(hidden), Some(button)) = (s.hide_mercs, p.merc_filter) {
+        let y = button[1] as f32;
+        bars.push(Bar { r: [x0 - 1.0, y, x1 + 1.0, y + ROW_H as f32 - 1.0], color: HEAD_BACK });
+        bars.push(Bar { r: [x0 + 1.0, y + 3.0, x0 + 8.0, y + 10.0], color: MERC });
+        texts.push(Text { s: "Hide mercs".into(), x: x0 + 12.0, right: false, y: ty(button[1]), color: WHITE });
+        let (state, color) = if hidden { ("On", OWN) } else { ("Off", DIM) };
+        texts.push(Text { s: state.into(), x: x1, right: true, y: ty(button[1]), color });
+    }
     let multi = s.columns != Columns::Dps;
     // the columns, from the right: share, DPS, damage; the name before them.
     // More columns: each metric's rate, the last at the right
@@ -749,7 +780,7 @@ pub fn pieces(s: &Shown, p: &Panel, width: impl Fn(&str) -> f32) -> (Vec<Bar>, V
     let name_most = if multi { rate_r(0) - col_w - x0 } else { (dmg_r - width("888.8k") - 6.0) - x0 };
     if multi {
         for (k, m) in metrics.iter().enumerate() {
-            texts.push(Text { s: m.name().into(), x: rate_r(k), right: true, y: ty(head + HEAD_H), color: if *m == s.sort { OWN } else { DIM } });
+            texts.push(Text { s: m.name().into(), x: rate_r(k), right: true, y: ty(p.rows[1] - ROW_H), color: if *m == s.sort { OWN } else { DIM } });
         }
     }
     let sort = s.sort;
@@ -768,26 +799,33 @@ pub fn pieces(s: &Shown, p: &Panel, width: impl Fn(&str) -> f32) -> (Vec<Bar>, V
                 let c = class_colour(r.class);
                 let w = full * r.bar;
                 let v = r.of(sort);
-                let own_w = if v > 0 { w * (v - r.pet_of(sort).min(v)) as f32 / v as f32 } else { 0.0 };
-                let solid = if r.merc { 0.38 } else { 0.55 }; // a merc's bar fainter
-                if w > 0.0 {
-                    bars.push(Bar { r: [x0 - 2.0, yt, x0 - 2.0 + own_w, yb], color: [c[0], c[1], c[2], solid] });
-                    if own_w < w {
-                        bars.push(Bar { r: [x0 - 2.0 + own_w, yt, x0 - 2.0 + w, yb], color: [c[0], c[1], c[2], 0.28] });
+                if w > 0.0 && v > 0 {
+                    let merc = r.merc[sort as usize].min(v);
+                    let pet = r.pet_of(sort).min(v - merc);
+                    let mut start = x0 - 2.0;
+                    let mut end = 0;
+                    let segments = [
+                        (v - merc - pet, [c[0], c[1], c[2], 0.55]),
+                        (pet, [c[0], c[1], c[2], 0.28]),
+                        (merc, MERC),
+                    ];
+                    for (amount, color) in segments {
+                        end += amount;
+                        let next = x0 - 2.0 + w * (end as f64 / v as f64) as f32;
+                        if next > start {
+                            bars.push(Bar { r: [start, yt, next, yb], color });
+                        }
+                        start = next;
                     }
                 }
                 let color = if r.own {
                     OWN
                 } else if r.left {
                     DIM
-                } else if r.own_merc {
-                    OWN_MERC
-                } else if r.merc {
-                    MERC
                 } else {
                     WHITE
                 };
-                let name = fit(&format!("{}. {}", r.rank, r.label()), name_most, &width);
+                let name = fit(&format!("{}. {}", r.rank, r.name), name_most, &width);
                 texts.push(Text { s: name, x: x0, right: false, y: ty(y), color });
                 if multi {
                     for (k, m) in metrics.iter().enumerate() {
@@ -878,6 +916,7 @@ pub enum Hit {
     View,
     /// Reset
     Reset,
+    HideMercs,
     /// the rows: a page on
     Rows,
 }
@@ -1132,26 +1171,26 @@ mod tests {
         let lines = vec![line2("Tank", 0, 900, 0, 0, false), line2("Dab", 9, 300, 600, 20, true), line2("Ench", 12, 100, 200, 400, false)];
         let mut m = Meter::default();
         m.take(fight(1, false, 2000, lines.clone()));
-        let s = m.shown_by(View::Fight, "", Columns::All, Metric::Healing);
+        let s = m.shown_by(View::Fight, "", Columns::All, Metric::Healing, None);
         assert_eq!((s.columns, s.sort), (Columns::Dps, Metric::Damage), "layout 1: the DPS alone");
         m.take(fight2(2, false, 2000, lines));
-        let s = m.shown_by(View::Fight, "", Columns::Hps, Metric::Healing);
+        let s = m.shown_by(View::Fight, "", Columns::Hps, Metric::Healing, None);
         assert_eq!((s.columns, s.sort), (Columns::Hps, Metric::Healing));
         assert_eq!(s.rows.iter().map(|r| (r.rank, r.name.as_str())).collect::<Vec<_>>(), [(1, "Dab"), (2, "Ench"), (3, "Tank")]);
         assert_eq!((s.rows[0].hps, s.rows[0].dps, s.rows[0].bar, s.rows[1].bar), (300.0, 150.0, 1.0, 200.0 / 600.0));
         assert!((s.rows[0].share - 0.75).abs() < 1e-9);
         assert_eq!(s.dps, 400.0, "the title's whole: the HPS");
-        let p = m.shown_by(View::Fight, "", Columns::All, Metric::Power);
+        let p = m.shown_by(View::Fight, "", Columns::All, Metric::Power, None);
         assert_eq!(p.rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["Ench", "Dab", "Tank"]);
         assert_eq!((p.rows[0].pps, p.dps), (200.0, 210.0));
-        let hidden = m.shown_by(View::Fight, "", Columns::Hps, Metric::Power);
+        let hidden = m.shown_by(View::Fight, "", Columns::Hps, Metric::Power, None);
         assert_eq!(hidden.sort, Metric::Damage, "a sort the columns do not show: damage");
-        let c = m.shown_by(View::Fight, "", Columns::Dps, Metric::Healing);
+        let c = m.shown_by(View::Fight, "", Columns::Dps, Metric::Healing, None);
         assert_eq!((c.sort, c.rows[0].name.as_str()), (Metric::Damage, "Tank"), "the control: the DPS alone");
         // Overall sums the healing and power too
         m.take(fight2(2, true, 2000, vec![line2("Dab", 9, 300, 600, 20, true)]));
         m.take(fight2(3, false, 2000, vec![line2("Dab", 9, 0, 200, 0, true)]));
-        let o = m.shown_by(View::Overall, "", Columns::All, Metric::Healing);
+        let o = m.shown_by(View::Overall, "", Columns::All, Metric::Healing, None);
         // fights 1 (its lines carry healing, as layout 1 never does) and 2
         // summed once each, 3 under way: 600 + 600 + 200 over 6 s
         assert_eq!((o.rows[0].heal, o.secs), (1400, 6));
@@ -1168,7 +1207,7 @@ mod tests {
         (f.count, f.place, f.heal_place) = (40, 37, 31);
         let mut m = Meter::default();
         m.take(f);
-        let s = m.shown_by(View::Fight, "", Columns::Hps, Metric::Healing);
+        let s = m.shown_by(View::Fight, "", Columns::Hps, Metric::Healing, None);
         assert_eq!((s.rows[23].own, s.rows[23].rank), (true, 31), "by healing: 31st");
         assert_eq!(m.shown(View::Fight, "").rows[23].rank, 37, "the control: by damage, 37th");
     }
@@ -1184,7 +1223,7 @@ mod tests {
         lines[0].heal_pet = 150;
         let mut m = Meter::default();
         m.take(fight2(1, false, 1000, lines));
-        let s = m.shown_by(View::Fight, "Spirit", Columns::All, Metric::Healing);
+        let s = m.shown_by(View::Fight, "Spirit", Columns::All, Metric::Healing, None);
         assert_eq!(s.pet, Some(("Spirit".to_string(), 150, 150.0, 1.0 / 3.0)));
         let p = panel(&s, 300);
         assert_eq!(p.rows[1], p.rect[1] + HEAD_H + ROW_H, "under the headings");
@@ -1246,21 +1285,14 @@ mod tests {
         DpsLine { class, damage, heal, power, name: name.into(), merc: true, own_merc, owner: owner.into(), ..Default::default() }
     }
 
-    /// Mercs on their own lines (Heirloom petition 3134): ranked with the
-    /// players by the sort (by power the enchanter merc first), named with
-    /// their owners', a shade dimmer than a player's (the player's own merc's
-    /// under its gold) and their bars fainter; the pet's row is the summoned
-    /// pet's alone. Overall sums a merc by its name and its owner's: two
-    /// owners' Ralthas and a player named Ralthas stay three lines. A merc
-    /// whose owner the server left out reads "(merc)".
     #[test]
-    fn mercs_have_their_own_lines() {
+    fn legacy_mercenary_lines_fold_into_their_owners() {
         let mut dab = line2("Dab", 11, 300, 0, 0, true);
         dab.pet = 120; // its summoned pet's
         let lines = vec![
             merc3("Ralthas", 0, 500, 0, 0, "Dab", true),
             dab,
-            merc3("Kellasis", 12, 100, 0, 700, "Dab", true),
+            merc3("Kellasis", 12, 100, 0, 700, "", true), // owner name omitted
             line2("Jib", 9, 80, 600, 0, false),
             merc3("Ralthas", 0, 60, 0, 0, "Jib", false),
             line2("Ralthas", 6, 40, 0, 0, false),
@@ -1269,31 +1301,58 @@ mod tests {
         f.layout = 3;
         let mut m = Meter::default();
         m.take(f);
-        let s = m.shown_by(View::Fight, "Spectre", Columns::All, Metric::Power);
-        let names: Vec<String> = s.rows.iter().map(|r| r.label()).collect();
-        assert_eq!(names[0], "Kellasis (Dab's merc)", "by power the enchanter merc first: {names:?}");
-        assert_eq!(s.rows.len(), 6);
-        assert_eq!(s.pet.as_ref().map(|p| (p.0.as_str(), p.1)), Some(("Spectre", 0)), "the pet's row is its pet's: {:?}", s.pet);
-        let d = m.shown_by(View::Fight, "Spectre", Columns::Dps, Metric::Damage);
-        assert_eq!(d.rows[0].label(), "Ralthas (Dab's merc)");
-        assert_eq!(d.pet.as_ref().map(|p| p.1), Some(120), "its summoned pet's damage alone");
-        let p = panel(&d, 400);
-        let width = |t: &str| t.len() as f32 * 4.0;
-        let (bars, texts) = pieces(&d, &p, width);
-        let at = |pre: &str| texts.iter().find(|t| t.s.starts_with(pre)).unwrap().color;
-        assert_eq!(at("1. Ralthas (Dab"), OWN_MERC);
-        assert_eq!(at("2. Dab"), OWN);
-        assert_eq!(at("5. Ralthas (Jib"), MERC);
-        assert_eq!(at("6. Ralthas"), WHITE, "the player Ralthas");
-        assert!((bars[0].color[3] - 0.38).abs() < 1e-6, "the merc's bar fainter: {:?}", bars[0]);
-        assert!(bars.iter().any(|b| (b.color[3] - 0.55).abs() < 1e-6), "a player's bar as ever");
+        for view in [View::Fight, View::Overall] {
+            let shown = m.shown_by(view, "Spectre", Columns::All, Metric::Power, Some(false));
+            assert_eq!(shown.rows[0].name, "Dab");
+            assert_eq!(shown.rows[0].power, 700);
+            assert_eq!(shown.rows[0].merc, [600, 0, 700]);
+            let hidden = m.shown_by(view, "Spectre", Columns::Dps, Metric::Damage, Some(true));
+            let figures: Vec<_> = hidden.rows.iter().map(|r| (r.name.as_str(), r.damage)).collect();
+            assert_eq!(figures, [("Dab", 300), ("Jib", 80), ("Ralthas", 40)]);
+            assert_eq!(hidden.pet.as_ref().map(|p| p.1), Some(120));
+            assert!(hidden.rows.iter().all(|r| r.merc == [0; 3]));
+        }
+    }
 
-        let o = m.shown_by(View::Overall, "", Columns::Dps, Metric::Damage);
-        let mut ov: Vec<String> = o.rows.iter().map(|r| r.label()).collect();
-        ov.sort();
-        assert_eq!(ov, ["Dab", "Jib", "Kellasis (Dab's merc)", "Ralthas", "Ralthas (Dab's merc)", "Ralthas (Jib's merc)"]);
-        let r = Row { name: "Kel".into(), merc: true, ..Row::default() };
-        assert_eq!(r.label(), "Kel (merc)");
-        assert_eq!(Row { name: "Kel".into(), ..Row::default() }.label(), "Kel", "the control: a player's name alone");
+    #[test]
+    fn integrated_mercenary_shares_update_ranks_and_bar_segments() {
+        let mut dab = line2("Dab", 11, 300, 50, 0, true);
+        dab.pet = 100;
+        dab.merc_share = [900, 280, 60];
+        let jib = line2("Jib", 8, 500, 80, 20, false);
+        let mut f = fight2(1, true, 2000, vec![dab, jib]);
+        f.layout = 4;
+        (f.total, f.heal_total, f.power_total, f.place) = (1700, 410, 80, 1);
+        // The full fight has contributors beyond this snapshot's two rows.
+        f.without_mercs = Some(net::session::DpsRankedTotals { totals: [1000, 130, 20], places: [3, 2, 2] });
+        let mut m = Meter::default();
+        m.take(f.clone());
+        m.take(f);
+        let visible = m.shown_by(View::Fight, "Spectre", Columns::Dps, Metric::Damage, Some(false));
+        assert_eq!((visible.rows[0].damage, visible.rows[0].dps, visible.dps), (1200, 600.0, 850.0));
+        let p = panel(&visible, 400);
+        let (bars, texts) = pieces(&visible, &p, |t| t.len() as f32 * 4.0);
+        let row: Vec<_> = bars.iter().filter(|b| b.r[1] == p.rows[1] as f32 + 1.0).collect();
+        assert_eq!(row.len(), 3);
+        assert_eq!(row[2].color, MERC);
+        assert_eq!(row[0].r[2], row[1].r[0]);
+        assert_eq!(row[1].r[2], row[2].r[0]);
+        let full = row[2].r[2] - row[0].r[0];
+        assert!(((row[2].r[2] - row[2].r[0]) / full - 0.75).abs() < 1e-6);
+        assert!(texts.iter().any(|t| t.s == "Hide mercs"));
+        assert!(texts.iter().any(|t| t.s == "Off"));
+
+        let hidden = m.shown_by(View::Fight, "Spectre", Columns::Dps, Metric::Damage, Some(true));
+        assert_eq!(hidden.rows[0].name, "Jib");
+        assert_eq!((hidden.rows[1].damage, hidden.rows[1].rank, hidden.dps), (300, 3, 500.0));
+        let p = panel(&hidden, 400);
+        let (bars, texts) = pieces(&hidden, &p, |t| t.len() as f32 * 4.0);
+        assert!(bars.iter().all(|b| b.r[1] < p.rows[1] as f32 || b.color != MERC));
+        assert!(texts.iter().any(|t| t.s == "On"));
+        let all = m.shown_by(View::Overall, "", Columns::All, Metric::Healing, Some(false));
+        assert_eq!((all.rows[0].heal, all.rows[0].power), (330, 60));
+        let all_hidden = m.shown_by(View::Overall, "", Columns::All, Metric::Healing, Some(true));
+        assert_eq!(all_hidden.rows[0].name, "Jib");
+        assert_eq!((all_hidden.rows[1].heal, all_hidden.rows[1].power), (50, 0));
     }
 }

@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-25 · Hide mercs on the DPS meter
+
+- The **DPS meter** combines mercenary contributions with their owner's totals. The purple part of each bar shows the mercenary share. Turn on **Hide mercs** on the meter or under **Options → Extended → UI → DPS Meter** to exclude those contributions from Fight and Overall. The updated server sends the full breakdown for raids.
+
 ## 2026-11-25 · Self-only spell targeting
 
 - Spells marked **Self** cast on you even when you have someone else selected. Casting keeps your current target selected.
