@@ -727,6 +727,19 @@ pub const OP_DPS_METER_DATA: u16 = 0x7E3C;
 /// A reset, client to server (`reset_dps_meter`): a u8, 1. The server drops the
 /// fight under way (nothing more is sent of it) and numbers its next another.
 pub const OP_DPS_METER_RESET: u16 = 0x7E3D;
+/// go-eqoa-server's own: one faction's standing on the HUD (`factiontrack`,
+/// Heirloom petition 3216: "track one chosen faction on screen, outside the
+/// faction window"). The offer, server to client at every world entry: a u8,
+/// the [`OP_FACTION_TRACK_DATA`] layout (1). A PS2 ignores it.
+pub const OP_FACTION_TRACK_OFFER: u16 = 0x7E86;
+/// The answer to [`OP_FACTION_TRACK_OFFER`], client to server, at once and
+/// whenever it changes (`agree_faction_track`): a wide string, the faction's
+/// name (any case), empty to follow none.
+pub const OP_FACTION_TRACK_ANSWER: u16 = 0x7E87;
+/// The standing, from a server the client named a faction: at once and whenever
+/// it changes. A u8 layout (1), a u8 known (0: the name is no one faction's,
+/// the standing 0), the wide name (the faction's own), a zigzag standing.
+pub const OP_FACTION_TRACK_DATA: u16 = 0x7E88;
 
 /// A fight on the meter ([`OP_DPS_METER_DATA`]): u8 layout (1 to 3), u32 its
 /// number (another number, another fight), u8 1 when it is over (its last
@@ -798,6 +811,18 @@ pub struct DpsLine {
     pub own_merc: bool,
     pub owner: String,
     pub merc_share: [u32; 3],
+}
+
+/// [`OP_FACTION_TRACK_DATA`]'s body: (known, name, standing), or None when it
+/// is short or of another layout. A standing is held to the window's -2000..2000.
+fn read_faction_track(r: &mut Reader) -> Option<(bool, String, i32)> {
+    if r.u8() != 1 {
+        return None;
+    }
+    let known = r.u8() != 0;
+    let name = r.wide(128);
+    let standing = r.signed().clamp(-2000, 2000) as i32;
+    (!r.error).then_some((known, name, standing))
 }
 
 /// [`OP_DPS_METER_DATA`]'s body, or None when it is short or of a layout this
@@ -1425,6 +1450,9 @@ pub enum Event {
     RaidRoster { total: usize, first: usize, rows: Vec<RaidMember> },
     /// [`OP_DPS_METER_DATA`]: the meter's fight as it stands.
     DpsMeter(DpsMeter),
+    /// [`OP_FACTION_TRACK_DATA`]: the followed faction's standing; `known`
+    /// false when the name asked is no one faction's.
+    FactionTrack { known: bool, name: String, standing: i32 },
     /// [`OP_RAID_STATE`]: the raid as it is now.
     RaidState(crate::raid::State),
     /// [`OP_MOB_INFO`]: the monster the client knows by `id` has nothing to say;
@@ -1795,6 +1823,11 @@ pub struct Session {
     pub dps_meter_offer: bool,
     pub dps_meter_layout: u8,
     dps_meter_asked: Option<bool>,
+    /// Whether the server offered the faction tracker
+    /// ([`OP_FACTION_TRACK_OFFER`]) on this connection, and the name it was
+    /// last told (none since the offer).
+    pub faction_track_offer: bool,
+    faction_track_asked: Option<String>,
     /// Whether the server offered the raid's windows ([`OP_RAID_OFFER`]) on
     /// this connection, and what it was last told (none since the offer).
     pub raid_offer: bool,
@@ -2051,6 +2084,8 @@ impl Session {
             dps_meter_offer: false,
             dps_meter_layout: 0,
             dps_meter_asked: None,
+            faction_track_offer: false,
+            faction_track_asked: None,
             raid_offer: false,
             raid_asked: None,
             ready_offer: false,
@@ -2462,6 +2497,20 @@ impl Session {
         self.dps_meter_asked = Some(want);
         let mut w = Writer::op(OP_DPS_METER_ANSWER);
         w.u8(if want { self.dps_meter_layout.clamp(1, DPS_METER_LAYOUT) } else { 0 });
+        self.send(&w.data);
+    }
+
+    /// The faction tracker: a server that offered it ([`OP_FACTION_TRACK_OFFER`])
+    /// is told the faction followed (`name`, "" none), at once and whenever that
+    /// changes, and afresh at another offer; one that made no offer is told
+    /// nothing.
+    pub fn agree_faction_track(&mut self, name: &str) {
+        if !self.faction_track_offer || self.faction_track_asked.as_deref() == Some(name) {
+            return;
+        }
+        self.faction_track_asked = Some(name.to_string());
+        let mut w = Writer::op(OP_FACTION_TRACK_ANSWER);
+        w.wide(name);
         self.send(&w.data);
     }
 
@@ -3021,6 +3070,8 @@ impl Session {
                 self.dps_meter_offer = false;
                 self.dps_meter_layout = 0;
                 self.dps_meter_asked = None;
+                self.faction_track_offer = false;
+                self.faction_track_asked = None;
                 self.item_links_offer = false;
                 self.item_links_asked = None;
                 self.profanity_offer = false;
@@ -3735,6 +3786,20 @@ impl Session {
             OP_DPS_METER_DATA => {
                 if let Some(m) = read_dps_meter(&mut r) {
                     ev.push(Event::DpsMeter(m));
+                }
+            }
+            // the faction tracker offered (again at every world entry): told
+            // afresh which faction the client follows (`agree_faction_track`)
+            OP_FACTION_TRACK_OFFER => {
+                r.u8();
+                if !r.error {
+                    self.faction_track_offer = true;
+                    self.faction_track_asked = None;
+                }
+            }
+            OP_FACTION_TRACK_DATA => {
+                if let Some((known, name, standing)) = read_faction_track(&mut r) {
+                    ev.push(Event::FactionTrack { known, name, standing });
                 }
             }
             // the raid's windows offered (again at every world entry): told
@@ -6164,6 +6229,52 @@ mod tests {
         assert!(matches!(&ev[..], [Event::MobInfo { id: 0x10, level: 20, name, extra }] if name == "Karn" && extra == &["/merc", "/merc dismiss"]), "{ev:?}");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, wire[..wire.len() - 2].to_vec());
         assert!(ev.is_empty(), "cut short: nothing: {ev:?}");
+    }
+
+    /// The faction tracker: nothing asked before an offer (the control); after
+    /// it the name told at once as a wide string, again only when it changes, ""
+    /// to stop; another offer has it told afresh; the standing read as the
+    /// server writes it (go-eqoa-server's factionTrackBody), one of another
+    /// layout or cut short not taken.
+    #[test]
+    fn faction_track_offer_answer_and_standing() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(_, d)| d.len() >= 2 && d[1] == 0x7E && d[0] == 0x87).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        let wide = |name: &str| {
+            let mut w = Writer::op(OP_FACTION_TRACK_ANSWER);
+            w.wide(name);
+            w.data
+        };
+        s.agree_faction_track("Citizens of Freeport");
+        assert_eq!(answers(&mut s), Vec::<Vec<u8>>::new(), "no offer, nothing asked");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x86, 0x7E]);
+        assert!(!s.faction_track_offer, "a short offer is no offer");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x86, 0x7E, 1]);
+        assert!(s.faction_track_offer);
+        s.agree_faction_track("Citizens of Freeport");
+        s.agree_faction_track("Citizens of Freeport");
+        assert_eq!(answers(&mut s), [wide("Citizens of Freeport")], "told once");
+        s.agree_faction_track("");
+        assert_eq!(answers(&mut s), [vec![0x87, 0x7E, 0, 0, 0, 0]], "none: an empty string");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x86, 0x7E, 1]);
+        s.agree_faction_track("");
+        assert_eq!(answers(&mut s), [vec![0x87, 0x7E, 0, 0, 0, 0]], "another offer: told afresh");
+        // layout 1, known, "Ab", -49 (zigzag 97)
+        let data = vec![0x88, 0x7E, 1, 1, 2, 0, 0, 0, b'A', 0, b'b', 0, 97];
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, data.clone());
+        assert!(matches!(&ev[..], [Event::FactionTrack { known: true, name, standing: -49 }] if name == "Ab"), "{ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, data[..data.len() - 1].to_vec());
+        assert!(!ev.iter().any(|e| matches!(e, Event::FactionTrack { .. })), "cut short: {ev:?}");
+        let mut other = data.clone();
+        other[2] = 2;
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, other);
+        assert!(!ev.iter().any(|e| matches!(e, Event::FactionTrack { .. })), "another layout: {ev:?}");
     }
 
     // The damage meter (go-eqoa-server's 0x7E3A-0x7E3D): nothing asked with no

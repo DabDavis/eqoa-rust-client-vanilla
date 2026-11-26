@@ -149,6 +149,7 @@ mod mercwnd;
 mod classmastery;
 mod cs;
 mod faction;
+mod factiontrack;
 mod fishing;
 mod duel;
 mod duelwnd;

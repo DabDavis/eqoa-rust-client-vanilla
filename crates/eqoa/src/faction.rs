@@ -5,7 +5,9 @@
 //! count, the list); a reply for an older request is dropped. Each standing
 //! is a bar from the middle of its cell, red to the left and blue to the
 //! right. A pointer (`pointer`) selects a faction and shows the selected
-//! one's standing; a click off that box closes it.
+//! one's standing; a click off that box closes it. The client's own (Heirloom
+//! petition 3216): the box's ✕ Track has the faction followed on the HUD
+//! (`factiontrack`), ✕ again on the one followed stops it.
 
 use crate::pointer::{Hits, MOVED, key, rows_rect};
 use crate::startmenu::KeyFlash;
@@ -66,6 +68,8 @@ pub enum FactionUp {
     Close,
     /// a page asked for
     Send(Vec<u8>),
+    /// the faction to follow on the HUD (`factiontrack`), "" none
+    Track(String),
 }
 
 /// `VIWndFaction`.
@@ -82,6 +86,9 @@ pub struct FactionWnd {
     /// draw's time (a selection's tick pulse starts over then)
     hits: Hits,
     drawn: i64,
+    /// the faction followed on the HUD (`factiontrack`), "" none: play sets
+    /// it, the box says Track or Stop Tracking by it
+    pub tracked: String,
 }
 
 impl FactionWnd {
@@ -149,6 +156,9 @@ impl FactionWnd {
             }
             19 | 138 if self.mode == 0 => self.flash.press(138),
             20 | 139 if self.mode == 0 => self.flash.press(139),
+            // the client's own: in the box ✕, the faction followed on the
+            // HUD, or no more when it is the one followed
+            13 | 134 if self.mode == 1 => return self.track(part, cues),
             // Select: the standing in a box
             13 | 134 if self.mode == 0 => {
                 if !part.ready || self.sel >= part.list.len() as i32 {
@@ -161,6 +171,24 @@ impl FactionWnd {
             _ => {}
         }
         None
+    }
+
+    /// The selected faction followed (or no more, it being the one followed),
+    /// the box closed.
+    fn track(&mut self, part: &Factions, cues: &mut Vec<i32>) -> Option<FactionUp> {
+        let Some((name, _)) = part.list.get(self.sel as usize).filter(|_| part.ready) else {
+            cues.push(9);
+            return None;
+        };
+        let name = String::from_utf16_lossy(name).trim().to_string();
+        cues.push(13);
+        self.mode = 0;
+        Some(FactionUp::Track(if self.followed(&name) { String::new() } else { name }))
+    }
+
+    /// Whether `name` is the faction followed.
+    fn followed(&self, name: &str) -> bool {
+        !self.tracked.is_empty() && self.tracked.trim().eq_ignore_ascii_case(name.trim())
     }
 
     /// `DrawStanding(value, x, row, w)`: clamped to +-2000, a bar from the
@@ -221,14 +249,16 @@ impl FactionWnd {
                     let mut s = name.clone();
                     s.extend(wide(&format!(": {value}")));
                     let lines = self.detail.count_lines(vui, r, &s, 310);
-                    self.detail.init(vui, r, [320, 180], 350, lines + 2, 1);
+                    let track = if self.followed(&String::from_utf16_lossy(name)) { "Stop Tracking" } else { "Track" };
+                    self.detail.init(vui, r, [320, 180], 350, lines + 3, 1);
                     self.detail.open(false);
                     self.detail.draw(vui, r);
                     let (tl, br) = (self.detail.top_left(), self.detail.bottom_right());
                     self.hits.push([tl[0], tl[1], br[0], br[1]], -1);
                     let c = [1.0, 1.0, 1.0, self.detail.open];
                     self.detail.text_box(vui, r, &s, 20, 0, 310, lines, c, 1);
-                    self.detail.text_box(vui, r, &wide(&format!("|t{}", word(161))), 20, lines + 1, 350, 1, c, 1);
+                    self.detail.text_box(vui, r, &wide(&format!("|x{track}")), 20, lines + 1, 350, 1, c, 1);
+                    self.detail.text_box(vui, r, &wide(&format!("|t{}", word(161))), 20, lines + 2, 350, 1, c, 1);
                 }
             } else {
                 self.detail.close(true);
@@ -341,5 +371,30 @@ mod tests {
         assert!(w.point(mid([tl[0], tl[1], br[0], br[1]])).is_empty(), "on the box");
         assert_eq!(w.point([20.0, 20.0]), vec![key::TRIANGLE], "off the box: closed");
         assert_eq!(w.sel, 2, "no other faction selected under the box");
+    }
+
+    /// The box's ✕ follows the selected faction and closes the box; ✕ on
+    /// the one followed stops it; the control: ✕ on the list opens the box
+    /// and follows nothing.
+    #[test]
+    fn the_box_tracks_the_faction() {
+        let mut f = Factions::default();
+        let mut w = FactionWnd::default();
+        let mut cues = Vec::new();
+        f.page = 0;
+        f.pages = 1;
+        f.list = vec![(wide("Citizens of Freeport"), 10), (wide("The Freeport Militia"), -49)];
+        f.ready = true;
+        w.sel = 1;
+        assert_eq!(w.key(&mut f, key::CROSS, true, &mut cues), None, "the list's ✕: the box, nothing followed");
+        assert_eq!(w.mode, 1, "the box");
+        assert_eq!(w.key(&mut f, key::CROSS, true, &mut cues), Some(FactionUp::Track("The Freeport Militia".into())));
+        assert_eq!(w.mode, 0, "the box closed");
+        w.tracked = "the freeport militia".into();
+        w.key(&mut f, key::CROSS, true, &mut cues);
+        assert_eq!(w.key(&mut f, key::CROSS, true, &mut cues), Some(FactionUp::Track(String::new())), "the one followed: stopped");
+        w.sel = 0;
+        w.key(&mut f, key::CROSS, true, &mut cues);
+        assert_eq!(w.key(&mut f, key::CROSS, true, &mut cues), Some(FactionUp::Track("Citizens of Freeport".into())), "another");
     }
 }

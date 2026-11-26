@@ -91,6 +91,10 @@
 //!   splashes' brightness, 100, the game's, to 0 in tens,
 //!   `weather::Weather::render`; the sky, the sound and the lightning the
 //!   weather's own);
+//! - Faction Tracker (2026-11-26, Heirloom petition 3216): Faction Tracker
+//!   (Off by default; On, the faction picked in the faction window or by
+//!   `/track faction` drawn on the HUD with its standing where the server
+//!   offers it, `factiontrack`) and Faction Tracker Shows (Number, Bar, Both);
 //! - Foliage (2026-11-26, Heirloom petition 3197; World's page full):
 //!   Foliage Density (Retail, the game's radial flora; 2x or 3x, as many
 //!   again a pass grown by the game's rule off seeds of their own, and that
@@ -489,6 +493,10 @@ pub struct WndOptions {
     /// while DPS Meter Columns or Sort is chosen
     pub meter_heal_note: Option<String>,
     pub meter_merc_note: Option<&'static str>,
+    /// The Faction Tracker page's legend (`Play::agree_faction_track` sets
+    /// it): that this server keeps none, or the faction followed, or how to
+    /// pick one
+    pub faction_note: Option<String>,
     /// In the world on a server that offers no item links, that it has none
     /// (`Play::agree_item_links` sets it), the Chat page's legend's
     pub links_note: Option<String>,
@@ -1189,6 +1197,11 @@ impl WndOptions {
                     // DPS Meter Sort: round the columns shown
                     DPS_SORT => c.dps_sort = c.dps_sort.step(c.dps_columns, d),
                     DPS_HIDE_MERCS => c.dps_hide_mercenary = !c.dps_hide_mercenary,
+                    // Faction Tracker: the server told from the next frame
+                    // (`Session::agree_faction_track`), the panel drawn or not
+                    FACTION_TRACK => c.faction_track = !c.faction_track,
+                    // Faction Tracker Shows: round Number, Bar, Both
+                    FACTION_TRACK_STYLE => c.faction_track_style = c.faction_track_style.step(d),
                     // Item Links: the server told from the next frame
                     // (`Session::agree_item_links`), the chat box's links drawn
                     // or plain, the windows closed when off (`itemlink`)
@@ -1959,6 +1972,7 @@ impl WndOptions {
                 70..=72 => self.meter_note.clone(),
                 _ => None,
             },
+            Note::Faction => self.faction_note.clone(),
             Note::Links => match self.item {
                 73 => self.links_note.clone(),
                 CHAT_FADE_DELAY => Some("Off: no fade; otherwise fades after inactivity".to_string()),
@@ -2193,6 +2207,8 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (crate::minimapcolor::SPELLS_SHOWN_ITEM, "Spell Merchants Shown"),
     (FOLIAGE_DENSITY, "Foliage Density"),
     (FOLIAGE_REACTS, "Foliage Reacts"),
+    (FACTION_TRACK, "Faction Tracker"),
+    (FACTION_TRACK_STYLE, "Faction Tracker Shows"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2302,6 +2318,11 @@ pub(crate) const TARGET_OF_TARGET: i32 = 294;
 /// On: `flora::React`), on Graphics' Foliage page. 320, not the next free.
 pub(crate) const FOLIAGE_DENSITY: i32 = 320;
 pub(crate) const FOLIAGE_REACTS: i32 = 321;
+/// The Faction Tracker's rows (Heirloom petition 3216, 2026-11-26): Faction
+/// Tracker (Off, On: `factiontrack`) and Faction Tracker Shows (Number, Bar,
+/// Both), on UI's Faction Tracker page.
+pub(crate) const FACTION_TRACK: i32 = 330;
+pub(crate) const FACTION_TRACK_STYLE: i32 = 331;
 /// Inventory's rows (Heirloom petition 3118): Inventory Style (Retail List
 /// or Bags, `bags`), Bag Sort, Compare Gear (`compare`). An [OG] account's
 /// (`qol::LOCKED`) read as the game's and do not turn.
@@ -2370,6 +2391,9 @@ enum Note {
     /// that this server has no item links, while Item Links is chosen
     /// (`WndOptions::links_note`, which play sets)
     Links,
+    /// what the Faction Tracker follows, or that this server keeps none
+    /// (`WndOptions::faction_note`, which play sets)
+    Faction,
     /// how the HUD's pieces move while Move HUD is on and chosen (`hudlayout`)
     Hud,
     /// how a chat tab is named (`/tabname`), on the Chat Tabs page
@@ -2421,7 +2445,7 @@ const GROUPS: [(Group, &str); 5] = [(Group::Graphics, "Graphics"), (Group::Ui, "
 /// Capture Controller and Sound in Background the Multi-boxing settings',
 /// Controller's touch rows Other's Touch; petition 2084, 2026-11-14: Touch a
 /// group of its own, Touch Controls, its rows Size & Look and Layout).
-const ALL_CATEGORIES: [Category; 30] = [
+const ALL_CATEGORIES: [Category; 31] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
@@ -2475,6 +2499,8 @@ const ALL_CATEGORIES: [Category; 30] = [
     Category { name: "Inventory", items: &[INVENTORY_STYLE, BAG_SORT, COMPARE_GEAR], note: Note::None, group: Group::Ui },
     // the radial flora's more and its lean (petition 3197): World's page is full
     Category { name: "Foliage", items: &[FOLIAGE_DENSITY, FOLIAGE_REACTS], note: Note::None, group: Group::Graphics },
+    // one faction's standing on the HUD (petition 3216), picked in the faction window
+    Category { name: "Faction Tracker", items: &[FACTION_TRACK, FACTION_TRACK_STYLE], note: Note::Faction, group: Group::Ui },
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
@@ -2483,7 +2509,7 @@ const CATEGORIES: &[Category] = &ALL_CATEGORIES;
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24], a[25], a[26], a[27], a[28], a[29]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24], a[25], a[26], a[27], a[28], a[29], a[30]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -2685,6 +2711,8 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
             _ => "Retail",
         }),
         FOLIAGE_REACTS => on_off(c.foliage_reacts),
+        FACTION_TRACK => on_off(c.faction_track),
+        FACTION_TRACK_STYLE => wide(c.faction_track_style.name()),
         300..=306 => wide(crate::numcolor::name(c.minimap_colors[crate::minimapcolor::row_of_item(item)?])),
         crate::minimapcolor::SPELLS_SHOWN_ITEM => wide(if c.minimap_spells_mine { "My Class" } else { "All" }),
         84 => on_off(c.loading_tips),
@@ -4422,6 +4450,7 @@ mod tests {
                 ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "HUD Layouts", "Target of Target"]),
                 ("Minimap Colors", crate::minimapcolor::LABELS.iter().copied().chain(["Spell Merchants Shown"]).collect()),
                 ("Inventory", vec!["Inventory Style", "Bag Sort", "Compare Gear"]),
+                ("Faction Tracker", vec!["Faction Tracker", "Faction Tracker Shows"]),
             ],
             "UI: what is drawn over the world"
         );
@@ -4828,7 +4857,8 @@ mod tests {
         assert_eq!(CATEGORIES[by_name("Chat")].note, Note::Links);
         assert_eq!(CATEGORIES[by_name("Chat Tabs")].note, Note::ChatTabs);
         assert_eq!(CATEGORIES[by_name("HUD Layout")].note, Note::Hud);
-        assert_eq!(CATEGORIES.iter().filter(|c| c.note != Note::None).count(), if cfg!(target_arch = "wasm32") { 11 } else { 14 }, "the notes only");
+        assert_eq!(CATEGORIES[by_name("Faction Tracker")].note, Note::Faction);
+        assert_eq!(CATEGORIES.iter().filter(|c| c.note != Note::None).count(), if cfg!(target_arch = "wasm32") { 12 } else { 15 }, "the notes only");
         assert_eq!(CATEGORIES.iter().find(|c| c.name == "Texture Cache").map(|c| c.note), if cfg!(target_arch = "wasm32") { None } else { Some(Note::Textures) });
         #[cfg(not(target_arch = "wasm32"))]
         {

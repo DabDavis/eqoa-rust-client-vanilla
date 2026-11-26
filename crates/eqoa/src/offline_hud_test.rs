@@ -136,6 +136,32 @@ fn offline_pc_and_controller_hud_png() {
     }
 }
 
+/// The faction tracker (Heirloom petition 3216) in the Controller's HUD: a
+/// standing below zero (red, the bar to the left) and one above (blue, to the
+/// right), each in Both; Number and Bar alone once each.
+#[test]
+#[ignore = "manual offline GPU fixture: requires local disc and output directory"]
+fn offline_faction_tracker_png() {
+    let (mut lib, src, output) = offline_assets();
+    let script = crate::viewer::Script { ms: 1000, controls: Default::default() };
+    for (name, standing, style) in [
+        ("offline-faction-both-red.png", -480, crate::factiontrack::Style::Both),
+        ("offline-faction-both-blue.png", 820, crate::factiontrack::Style::Both),
+        ("offline-faction-number.png", -49, crate::factiontrack::Style::Number),
+        ("offline-faction-bar.png", 1500, crate::factiontrack::Style::Bar),
+    ] {
+        crate::settings::testing::reset(false);
+        crate::settings::set_client(crate::settings::ClientOptions { faction_track_style: style, ..crate::settings::client() });
+        let mut p = fixture_play();
+        p.session.faction_track_offer = true;
+        p.follow_faction("The Freeport Militia", true);
+        p.faction_track_heard(true, "The Freeport Militia".into(), standing);
+        let path = output.join(name);
+        crate::viewer::shot_with(&mut lib, &src, None, Some(script), (960, 540), path.to_str().unwrap(), Some(p)).expect("offline HUD capture");
+        eprintln!("{name}: pieces {:?}", crate::hudlayout::drawn_all());
+    }
+}
+
 /// Uses actual HUD quads and Move HUD controls, but an in-memory account and a
 /// transport that cannot contact a server. Run alone (`--test-threads=1`).
 #[test]

@@ -53,6 +53,8 @@ pub enum Piece {
     Quests,
     /// the DPS meter (`dpsmeter`)
     Meter,
+    /// the faction tracker (`factiontrack`)
+    Faction,
     /// the player's effects (`influence`)
     Effects,
     /// the chat box (`chat`)
@@ -86,9 +88,9 @@ pub enum Piece {
 }
 
 /// Each piece, in `Piece`'s order.
-pub const PIECES: [Piece; 23] = [
+pub const PIECES: [Piece; 24] = [
     Piece::Player, Piece::Group, Piece::Pet, Piece::Target, Piece::TargetOfTarget, Piece::Minimap, Piece::Quests,
-    Piece::Meter, Piece::Effects, Piece::Chat, Piece::Chat1, Piece::Chat2, Piece::Chat3,
+    Piece::Meter, Piece::Faction, Piece::Effects, Piece::Chat, Piece::Chat1, Piece::Chat2, Piece::Chat3,
     Piece::Settings, Piece::Breath, Piece::QuickMenus, Piece::SpellBars, Piece::UtilityBars,
     Piece::EquipmentBar, Piece::TargetInfo, Piece::RaidPrompts, Piece::Stats, Piece::Focus,
 ];
@@ -161,6 +163,7 @@ impl Piece {
             Piece::Minimap => "minimap",
             Piece::Quests => "quests",
             Piece::Meter => "dps",
+            Piece::Faction => "faction",
             Piece::Effects => "effects",
             Piece::Chat => "chat",
             Piece::Chat1 => "chat1",
@@ -190,6 +193,7 @@ impl Piece {
             Piece::Minimap => "Minimap",
             Piece::Quests => "Quest Tracker",
             Piece::Meter => "DPS Meter",
+            Piece::Faction => "Faction Tracker",
             Piece::Effects => "Effects",
             Piece::Chat => "Chat",
             Piece::Chat1 => "Chat Tab 1",
@@ -218,7 +222,7 @@ impl Piece {
             Piece::TargetInfo => (Edge::End, Edge::Middle),
             Piece::RaidPrompts => (Edge::Middle, Edge::Middle),
             Piece::Chat | Piece::Chat1 | Piece::Chat2 | Piece::Chat3 | Piece::Settings | Piece::SpellBars | Piece::EquipmentBar => (Edge::End, Edge::End),
-            Piece::Minimap | Piece::Quests | Piece::Meter | Piece::Breath | Piece::QuickMenus => (Edge::End, Edge::Start),
+            Piece::Minimap | Piece::Quests | Piece::Meter | Piece::Faction | Piece::Breath | Piece::QuickMenus => (Edge::End, Edge::Start),
             // the side Utility Bar Layout draws them at (`Play::draw_hud`)
             Piece::UtilityBars => match crate::settings::utility_layout() {
                 crate::hudmenu::UtilityLayout::UpperLeft => (Edge::Start, Edge::Start),
