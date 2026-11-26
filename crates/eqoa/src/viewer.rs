@@ -6542,6 +6542,8 @@ impl App {
                 // a minimised window has not; one merely covered by another
                 // while it has it is still the player's)
                 crate::audio::set_heard(crate::settings::background_sound() || self.pads.in_front());
+                // Master Volume (Extended > Other > Sound)
+                crate::audio::set_master(crate::settings::master_gain());
                 // macOS: Settings… (⌘,): the Options where the player is, in
                 // the world the Options window, at the title its Options
                 #[cfg(target_os = "macos")]

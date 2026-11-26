@@ -152,7 +152,7 @@ or a browser (each described where it lives below):
   to 200%; Touch Edge, 0 to 10% of the screen in from its sides; since 2026-11-14 all of them Touch
   Controls', with Move Touch Pad, Button Layout and Reset Touch Pad), Camera (Distance, Turn Speed, Screen Shake),
   Characters (Level of Detail, NPC/PC Display and Distance, Name Distance,
-  Overlapping Names, Shadows), Sound (Sound in Background, Output Device: the system's
+  Overlapping Names, Shadows), Sound (Master Volume, Sound in Background, Output Device: the system's
   default, followed when it changes, or a device by its name), natively Textures
   (Texture Packs, Dump Textures, and on a computer Texture Folder), Map (Map,
   Minimap, Map Markers, Quest Helper, Quest Tracker), Number Colors (Your Damage,
@@ -167,6 +167,12 @@ or a browser (each described where it lives below):
   quests' marks, the tracker and the guide; with both off the game is as it is without
   them (M, N and the compass do nothing, a group line is a chat line, no server is
   asked for marks or a tracker and nothing is built or kept).
+- **The town's map first** (Live petition 5650, "when you press m ... and you are in a city, it should pull
+  up a map of the city"; `map::Map::open_on_town`, `map::places::town_at`): M within 600 of a town's middle
+  (`markers_data::TOWNS`, the radius they were found with) opens the map close in on that town, as Places
+  shows one; M again (✕ on a pad) is the world's view as it was left, following the player, and M once more
+  closes it (the legend says so). Extended > UI > Map's Town Map First, on by default; off, M opens the
+  world's view as before.
 - **The map** (M), drawn from the player's own disc for every world, on any
   server, with a waypoint of the player's own (a click or a tap on the map,
   □ or Q at its middle once the map is moved, on the target while it follows
@@ -461,9 +467,18 @@ or a browser (each described where it lives below):
   interface frames it as the list (`pcwindows`, Inventory); the mouse selects, uses, scrolls (the wheel)
   and hovers. Compare Gear (Bags Only, the default; Always, the list too; Off): an equippable item's stats
   beside the worn items wearing it would take off (`compare::replaced`: `EquipSlotFor` and `Msg003F`'s own
-  rule on a copy of the list), with the difference in green or red, as a tooltip at its cell or row. An
+  rule on a copy of the list), with the difference in green or red: beside the list level with the row, and
+  at Bags in the column right of the grid, never over it (Heirloom petition 3267, `itemmenu::compare_at`,
+  `compare::WIDTH_BESIDE`). An
   [OG] account's (`settings::qol::LOCKED`) is the game's list with no comparison. Nothing new goes to a
   server.
+- **The bank as bags, with a filter** (Heirloom petition 3265; `bank.rs`, `bags::Grid`, `bags::Filter`): at
+  Inventory Style Bags the bank's item page shows the pack and the bank as the item menu's grid does
+  (`bags::draw_grid`: icons, counts, worn items framed, what cannot be worn washed red), by Bag Sort, two
+  cells across and seven rows each where the lists are, the item's text between them. □ or the Filter
+  button shows All, Equipment, Gems, Crafting or Consumables on both sides (the client's own reading of the
+  records: worn, the game's Use, a server's craft mark or a gem's name). The d-pad crosses from one side to
+  the other at the edge; ✕ sends the list's own 0x1254 by the item's place. Retail List keeps the game's lists.
 - **Item Slot Icons** (petitions 2926, 2928; `hudmenu`): each item quick slot holding an item shows the
   item's own icon (`VIClient::ItemIcon`, the middle of its ITEMICON.ESF banner, `hudmenu::ART_CROP`) where
   the game shows the slot's gem or potion, on the Utility Bars and in the carousel's stack; the mouse over
@@ -477,12 +492,20 @@ or a browser (each described where it lives below):
   of the kept lockout still to run is the previous lockout's, after a press that cast again as it came
   ready, and is passed over: petition 3012, `Cooldowns::came`). Extended > UI > HUD Extras, on
   by default; off, the game's lock badge alone. Off with `settings::qol::SPELL_BARS`.
+- **Quieter sound** (Heirloom petition 3261, "the game's sound is loud even at the lowest setting";
+  `options::volume_step`, `audio::set_master`): the Sound page's Fx and Music Volume go on under the
+  game's lowest step (0.1) by 0.05, 0.02 and 0.01 before silence, and back up the same way (over 0.1 a
+  step is the game's tenth, so a volume kept before steps as it did); Extended > Other > Sound's Master
+  Volume (100%, the game's, down to 1% and off, finer near the bottom) scales the whole output after the
+  mix, eased as Sound in Background's silence is, and is kept in `client.opt` only when turned down.
 - **Hotkey Label Size %** (petition 2945): the PC bars' key names at 40-100% of the font (Extended > UI >
   Interface Size, PC), 100 the font's own as before; smaller, scaled (`Raster::draw_string_scaled`) and cut
   to the cell later.
 - **HUD layouts** (petition 2947; `hudlayout`): `/hud save <name>` keeps the HUD as it is (every piece's
   place and size, and the interface's HUD Scale) under a name, `/hud load <name>`, `/hud delete <name>`,
-  `/hud list`; Extended > UI > HUD Extras' HUD Layouts steps through them and ✕ loads one. 20 at most, one
+  `/hud list`; Extended > UI > HUD Layout's Load HUD Layout steps through them and ✕ loads one, and its Save
+  HUD Layout (Heirloom petition 3266, `hudlayout::save_picked`) keeps the HUD as a new "Layout N" or over a
+  name stepped to, beside Move HUD and Reset HUD. 20 at most, one
   file an interface (`hud-profiles-pc.opt`, `hud-profiles.opt`), shared by every window and account (a
   full screen's layout and a half screen's for multiboxing).
 - **Mouseover Casting** (petition 2960, PC): a heal or buff cast at a target (scope 1, `autocast::guess`)

@@ -124,6 +124,20 @@ pub const WIDTH: i32 = 224;
 const COL_NEW: i32 = 118;
 const COL_WORN: i32 = 172;
 const COL_DIFF: i32 = 218;
+/// The panel's width beside the item menu's grid (Heirloom petition 3267:
+/// over the grid it hid the cells round the one compared), in the column
+/// right of it.
+pub const WIDTH_BESIDE: i32 = 200;
+
+/// The value columns' right edges (new, worn, difference) in a panel
+/// `width` wide: `WIDTH`'s own, or a narrower one's closer together.
+pub fn columns(width: i32) -> [i32; 3] {
+    if width >= WIDTH {
+        return [COL_NEW + width - WIDTH, COL_WORN + width - WIDTH, COL_DIFF + width - WIDTH];
+    }
+    let diff = width - 6;
+    [diff - 80, diff - 40, diff]
+}
 /// A line's height.
 pub const ROW: i32 = 15;
 
@@ -139,12 +153,19 @@ pub fn height(c: &Compare) -> i32 {
 /// a dark panel with a gold rule, the replaced items' names, then a line a
 /// stat with the candidate's value, the worn value and the difference.
 pub fn draw(vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, c: &Compare, inv: &ItemList, at: [i32; 2], alpha: f32) {
+    draw_w(vui, r, c, inv, at, WIDTH, alpha);
+}
+
+/// `draw`, the panel `width` wide (`columns`).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_w(vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, c: &Compare, inv: &ItemList, at: [i32; 2], width: i32, alpha: f32) {
     use vi::ui::wide;
+    let [col_new, col_worn, col_diff] = columns(width);
     let h = height(c);
     let [x, y] = at;
-    r.fill_fan([0.04, 0.035, 0.025, 0.88 * alpha], [[x, y], [x + WIDTH, y], [x + WIDTH, y + h], [x, y + h]]);
+    r.fill_fan([0.04, 0.035, 0.025, 0.88 * alpha], [[x, y], [x + width, y], [x + width, y + h], [x, y + h]]);
     let gold = [0.78, 0.66, 0.35, alpha];
-    for (a, b) in [([x, y], [x + WIDTH, y + 1]), ([x, y + h - 1], [x + WIDTH, y + h]), ([x, y], [x + 1, y + h]), ([x + WIDTH - 1, y], [x + WIDTH, y + h])] {
+    for (a, b) in [([x, y], [x + width, y + 1]), ([x, y + h - 1], [x + width, y + h]), ([x, y], [x + 1, y + h]), ([x + width - 1, y], [x + width, y + h])] {
         r.fill_fan(gold, [a, [b[0], a[1]], b, [a[0], b[1]]]);
     }
     let white = [1.0, 1.0, 1.0, alpha];
@@ -178,25 +199,25 @@ pub fn draw(vui: &vi::ui::Vui, r: &mut dyn vi::ui::Raster, c: &Compare, inv: &It
         for (n, &k) in c.replaced.iter().enumerate() {
             let worn = inv.items.get(k).map_or("", |it| it.item.name.as_str());
             let lead = if n == 0 { "Replaces " } else { "and " };
-            let s = clip(r, &format!("{lead}{worn}"), WIDTH - 10);
+            let s = clip(r, &format!("{lead}{worn}"), width - 10);
             text(r, &s, x + 5, py, gold);
             py += ROW;
         }
     }
-    right(r, "New", x + COL_NEW, py, grey);
-    right(r, "Worn", x + COL_WORN, py, grey);
-    right(r, "+/-", x + COL_DIFF, py, grey);
+    right(r, "New", x + col_new, py, grey);
+    right(r, "Worn", x + col_worn, py, grey);
+    right(r, "+/-", x + col_diff, py, grey);
     py += ROW;
     if c.lines.is_empty() {
         text(r, "No stats", x + 5, py, grey);
     }
     for l in &c.lines {
         let d = l.diff();
-        let s = clip(r, &label(&vui.words, vui.language, l.stat), COL_NEW - 45);
+        let s = clip(r, &label(&vui.words, vui.language, l.stat), col_new - 45);
         text(r, &s, x + 5, py, white);
-        right(r, &l.new.to_string(), x + COL_NEW, py, white);
-        right(r, &l.worn.to_string(), x + COL_WORN, py, grey);
-        right(r, &signed(d), x + COL_DIFF, py, colour(d, alpha));
+        right(r, &l.new.to_string(), x + col_new, py, white);
+        right(r, &l.worn.to_string(), x + col_worn, py, grey);
+        right(r, &signed(d), x + col_diff, py, colour(d, alpha));
         py += ROW;
     }
 }
@@ -276,6 +297,17 @@ mod tests {
         let c = compare(&full, 2, 0, 0, 10).unwrap();
         assert_eq!(c.replaced, vec![1], "the second finger's");
         assert_eq!(c.lines[0].diff(), -1);
+    }
+
+    /// The columns: `WIDTH`'s own as they were; a narrower panel's inside it,
+    /// in order, the labels' room (to the new column less a number's) still
+    /// most of a word.
+    #[test]
+    fn the_columns_fit_the_width() {
+        assert_eq!(columns(WIDTH), [COL_NEW, COL_WORN, COL_DIFF], "the control: as before");
+        let c = columns(WIDTH_BESIDE);
+        assert!(c[0] < c[1] && c[1] < c[2] && c[2] < WIDTH_BESIDE, "{c:?}");
+        assert!(c[0] - 45 >= 60, "a label's room: {}", c[0] - 45);
     }
 
     /// The difference's sign and colour, and what is not compared (an item

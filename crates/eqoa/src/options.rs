@@ -538,6 +538,9 @@ pub struct WndOptions {
     /// `HIT_ROWS` + row); and when
     hits: Hits,
     now: i64,
+    /// what Save or Load HUD Layout's ✕ said, on that row's page note
+    /// until the row is left or turned (petition 3266)
+    hud_said: Option<(i32, String)>,
 }
 
 impl WndOptions {
@@ -911,15 +914,9 @@ impl WndOptions {
             return;
         }
         let tracks = if FEATURES & 0x100 != 0 { 10 } else { 3 };
-        let step = F::<Ee>::new(0.1);
         let volume = |v: &mut F<Ee>, cues: &mut Vec<i32>| {
-            if d < 0 && F::ZERO < *v {
-                let n = *v - step;
-                *v = if n < F::ZERO { F::ZERO } else { n };
-                cues.push(11);
-            } else if d > 0 && *v < F::ONE {
-                let n = *v + step;
-                *v = if F::ONE < n { F::ONE } else { n };
+            if (d < 0 && F::ZERO < *v) || (d > 0 && *v < F::ONE) {
+                *v = volume_step(*v, d);
                 cues.push(11);
             } else {
                 cues.push(9);
@@ -1036,8 +1033,17 @@ impl WndOptions {
                     INVENTORY_STYLE => c.inventory_bags = !c.inventory_bags,
                     BAG_SORT => c.bag_sort = c.bag_sort.step(d),
                     COMPARE_GEAR => c.compare_gear = c.compare_gear.step(d),
-                    // HUD Layouts (petition 2947): the next name; ✕ loads it (`select`)
-                    HUD_PROFILE => crate::hudlayout::step_picked(d),
+                    // Load HUD Layout (petition 2947): the next name; ✕ loads it (`select`)
+                    HUD_PROFILE => {
+                        crate::hudlayout::step_picked(d);
+                        self.hud_said = None;
+                    }
+                    // Save HUD Layout (petition 3266): a new layout or a
+                    // kept name to save over; ✕ saves (`select`)
+                    HUD_SAVE => {
+                        crate::hudlayout::step_save_pick(d);
+                        self.hud_said = None;
+                    }
                     // Mouseover Casting (petition 2960): the next cast on
                     MOUSEOVER_CAST => c.mouseover_cast = c.mouseover_cast.step(d),
                     // Spell Cooldowns (petition 2946): the bars from the next frame
@@ -1068,6 +1074,14 @@ impl WndOptions {
                     // Foliage Reacts: the plants lean from the next frame
                     // (`flora::React`)
                     FOLIAGE_REACTS => c.foliage_reacts = !c.foliage_reacts,
+                    // Master Volume: a step, stopping at the ends (as the
+                    // game's volumes stop), heard from the next frame
+                    // (`audio::set_master`)
+                    MASTER_VOLUME => {
+                        let v = crate::settings::master_volume_step(c.master_volume, d);
+                        cues.push(if v == c.master_volume { 9 } else { 11 });
+                        c.master_volume = v;
+                    }
                     // Minimap Colors: round Default and the palette, the
                     // squares from the next frame (`Play::mini_view`)
                     300..=306 => {
@@ -1082,6 +1096,8 @@ impl WndOptions {
                     // the next frame (`Play::map_frame`; off, an open map
                     // closes)
                     41 => c.map = !c.map,
+                    // Town Map First: from the next M (`map::Map::show`)
+                    TOWN_MAP => c.town_map = !c.town_map,
                     // Minimap: drawn or not from the next frame (`map::mini`)
                     42 => c.minimap = !c.minimap,
                     // Map Pointer: the dart on the minimap and the map turned
@@ -1387,16 +1403,19 @@ impl WndOptions {
             _ => {}
         }
         // (Texture Folder and Reset DPS Meter make their own sound)
-        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == 55 || self.item == 72 || self.item == 77 || self.item == RESET_TOUCH || self.item == CHAT_FADE_DELAY;
+        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == MASTER_VOLUME || self.item == 55 || self.item == 72 || self.item == 77 || self.item == RESET_TOUCH || self.item == CHAT_FADE_DELAY;
         let slides = matches!(self.item, 3 | 4) || slider_at(self.item).is_some();
         if !slides && !inert && ((0..=11).contains(&self.item) || extended(self.item)) {
             cues.push(11);
         }
+        // the game snaps under 0.05 to silence; the finer steps under 0.1
+        // (`volume_step`, Heirloom petition 3261) snap only what is left of
+        // a float's error
         if d < 0 {
-            if o.fx_volume < F::new(0.05) {
+            if o.fx_volume < FINE_SNAP {
                 o.fx_volume = F::ZERO;
             }
-            if o.music_volume < F::new(0.05) {
+            if o.music_volume < FINE_SNAP {
                 o.music_volume = F::ZERO;
             }
         } else {
@@ -1484,15 +1503,24 @@ impl WndOptions {
             }
             return false;
         }
-        // HUD Layouts: the one shown loaded (petition 2947)
+        // Load HUD Layout: the one shown loaded (petition 2947)
         if self.page == 3 && self.cat.is_some() && self.item == HUD_PROFILE {
             match crate::hudlayout::picked() {
                 Some(name) => {
                     crate::hudlayout::load_profile(&name);
+                    self.hud_said = Some((HUD_PROFILE, format!("Loaded {name}")));
                     cues.push(8);
                 }
                 None => cues.push(9),
             }
+            return false;
+        }
+        // Save HUD Layout: the HUD as it is kept under the row's name
+        // (petition 3266)
+        if self.page == 3 && self.cat.is_some() && self.item == HUD_SAVE {
+            let (kept, said) = crate::hudlayout::save_picked();
+            cues.push(if kept { 8 } else { 9 });
+            self.hud_said = Some((HUD_SAVE, said));
             return false;
         }
         // Reset HUD the same; Move HUD turns, as left and right turn it
@@ -1985,6 +2013,9 @@ impl WndOptions {
                 _ => None,
             },
             Note::Hud => match self.item {
+                HUD_SAVE | HUD_PROFILE if self.hud_said.as_ref().is_some_and(|s| s.0 == self.item) => self.hud_said.as_ref().map(|s| s.1.clone()),
+                HUD_SAVE => Some("Saves the HUD as it is now".to_string()),
+                HUD_PROFILE if crate::hudlayout::picked().is_some() => Some("Puts this layout on the HUD".to_string()),
                 76 if crate::hudlayout::unlocked() => Some(if crate::settings::pc_mode() { "Drag, pin or unpin each piece" } else { "Leave the menu and drag the pieces; the minimap's corner resizes it" }.to_string()),
                 SPELL_BAR_SIZE => Some("Also adjustable by dragging in Move HUD".to_string()),
                 _ => None,
@@ -2181,7 +2212,7 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (ITEM_ICONS, "Item Slot Icons"),
     (HOTKEY_LABEL, "Hotkey Label Size %"),
     (SPELL_COOLDOWNS, "Spell Cooldowns"),
-    (HUD_PROFILE, "HUD Layouts"),
+    (HUD_PROFILE, "Load HUD Layout"),
     (MOUSEOVER_CAST, "Mouseover Casting"),
     (NPC_DEBUFFS, "Debuff Icons"),
     (AUTO_LOOT, "Auto Loot"),
@@ -2209,6 +2240,9 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (FOLIAGE_REACTS, "Foliage Reacts"),
     (FACTION_TRACK, "Faction Tracker"),
     (FACTION_TRACK_STYLE, "Faction Tracker Shows"),
+    (MASTER_VOLUME, "Master Volume"),
+    (HUD_SAVE, "Save HUD Layout"),
+    (TOWN_MAP, "Town Map First"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2317,6 +2351,17 @@ pub(crate) const TARGET_OF_TARGET: i32 = 294;
 /// (Retail, 2x, 3x: `vi::flora::System::density`) and Foliage Reacts (Off,
 /// On: `flora::React`), on Graphics' Foliage page. 320, not the next free.
 pub(crate) const FOLIAGE_DENSITY: i32 = 320;
+/// Master Volume's (Heirloom petition 3261, 2026-11-26): the whole output
+/// turned down under the game's Fx and Music Volume (`audio::set_master`),
+/// on Other's Sound page. 340, not the next free.
+pub(crate) const MASTER_VOLUME: i32 = 340;
+/// Save HUD Layout's (Heirloom petition 3266): the HUD kept under a name from
+/// the options (`hudlayout::save_picked`), on UI's HUD Layout page with Load
+/// HUD Layout (`HUD_PROFILE`) and Reset HUD.
+pub(crate) const HUD_SAVE: i32 = 341;
+/// Town Map First's (Live petition 5650): M in a town opens the map on the
+/// town (`map::Map::show`), on UI's Map page.
+pub(crate) const TOWN_MAP: i32 = 342;
 pub(crate) const FOLIAGE_REACTS: i32 = 321;
 /// The Faction Tracker's rows (Heirloom petition 3216, 2026-11-26): Faction
 /// Tracker (Off, On: `factiontrack`) and Faction Tracker Shows (Number, Bar,
@@ -2459,11 +2504,13 @@ const ALL_CATEGORIES: [Category; 31] = [
     Category { name: "Group & Raid", items: &[49, 86, HEALTH_NUMBERS, GROUP_EFFECTS, 88], note: Note::None, group: Group::Ui },
     // Minimap Scroll Frame (2026-11-13) here: Map's page was full
     // Spell Bar Opacity (2026-11-13, ticket 1953) here: HUD's page is full
-    Category { name: "HUD Layout", items: &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT], note: Note::Hud, group: Group::Ui },
+    // Save and Load HUD Layout (petition 3266) with Move and Reset HUD
+    Category { name: "HUD Layout", items: &[76, HUD_SAVE, HUD_PROFILE, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT], note: Note::Hud, group: Group::Ui },
     // Debuff Icons (petition 2997) with the other things drawn at a plate
     // Own Name Plate (petition 3081) with the plates' rows
     Category { name: "Name Plates", items: &[27, 34, 85, TARGET_LEVEL, NPC_DEBUFFS, OWN_PLATE], note: Note::None, group: Group::Ui },
-    Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
+    // Town Map First (Live petition 5650) at the foot
+    Category { name: "Map", items: &[41, 42, 87, 43, 44, 45, TOWN_MAP], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "DPS Meter", items: &[70, 71, DPS_COLUMNS, DPS_SORT, DPS_HIDE_MERCS, 72], note: Note::Meter, group: Group::Ui },
@@ -2472,7 +2519,7 @@ const ALL_CATEGORIES: [Category; 31] = [
     Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK, MOUSEOVER_CAST, ATTACK_ABILITIES], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18, AD_KEYS], note: Note::None, group: Group::Other },
     Category { name: "Size & Look", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Touch },
-    Category { name: "Sound", items: &[32], note: Note::Output, group: Group::Other },
+    Category { name: "Sound", items: SOUND, note: Note::Output, group: Group::Other },
     Category { name: "Multi-boxing settings", items: MULTIBOX, note: Note::Reads, group: Group::Multibox },
     // the chat tabs (ticket 1951): each kind of line to Main or a tab of its own
     Category { name: "Chat Tabs", items: &[92, 93, 94, 95, 96, 97, 98, 99, 100, 101], note: Note::ChatTabs, group: Group::Ui },
@@ -2489,7 +2536,7 @@ const ALL_CATEGORIES: [Category; 31] = [
     Category { name: "Interface Size", items: &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS, HOTKEY_LABEL], note: Note::None, group: Group::Ui },
     // what the HUD tells of its own pieces (petitions 2924-2928): HUD's page
     // is full
-    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS, SPELL_COOLDOWNS, HUD_PROFILE, TARGET_OF_TARGET], note: Note::None, group: Group::Ui },
+    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS, SPELL_COOLDOWNS, TARGET_OF_TARGET], note: Note::None, group: Group::Ui },
     // the friendly NPCs' squares on the minimap by role (petition 3092,
     // `minimapcolor`), and whose spell merchants
     Category { name: "Minimap Colors", items: &[300, 301, 302, 303, 304, 305, 306, crate::minimapcolor::SPELLS_SHOWN_ITEM], note: Note::None, group: Group::Ui },
@@ -2504,12 +2551,12 @@ const ALL_CATEGORIES: [Category; 31] = [
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
-/// A page's: all but Textures and Sound (Output Device, its one row, is the
-/// browser's).
+/// A page's: all but Textures and Texture Cache (Sound has Master Volume
+/// alone: Output Device is the browser's).
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24], a[25], a[26], a[27], a[28], a[29], a[30]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[18], a[19], a[20], a[21], a[22], a[24], a[25], a[26], a[27], a[28], a[29], a[30]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -2520,12 +2567,12 @@ fn category(i: usize) -> Category {
         // 2908), the chat's sizes the PC's
         (false, "Interface Size") => &[HUD_SCALE, NAMEPLATE_SCALE],
         (false, "Chat") => &[73, 89, R2_CHANNELS],
-        (false, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT],
+        (false, "HUD Layout") => &[76, HUD_SAVE, HUD_PROFILE, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT],
         // Mouseover Casting is the mouse's (petition 2960)
         (false, "Combat") => &[78, 79, PETS_PASS, WEAPON_SWAP_BACK, ATTACK_ABILITIES],
         (true, "Chat") => &[73, 89, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY, CHAT_WAKE_ON_MESSAGE],
         (true, "HUD") => &[22, 30, 40, 58, 83],
-        (true, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, UTILITY_LAYOUT, SPELL_BAR_SIZE],
+        (true, "HUD Layout") => &[76, HUD_SAVE, HUD_PROFILE, 77, 91, SPELL_BAR_OPACITY, UTILITY_LAYOUT, SPELL_BAR_SIZE],
         _ => cat.items,
     };
     cat
@@ -2552,6 +2599,13 @@ fn lone_category(g: usize) -> Option<usize> {
 const VIDEO: &[i32] = &[33, 13, 14, 26, 39];
 #[cfg(target_arch = "wasm32")]
 const VIDEO: &[i32] = &[13, 14, SHOW_FPS, 26, 39];
+
+/// Sound's rows: Master Volume (petition 3261), then natively Output Device
+/// (a page's output is the browser's).
+#[cfg(not(target_arch = "wasm32"))]
+const SOUND: &[i32] = &[MASTER_VOLUME, 32];
+#[cfg(target_arch = "wasm32")]
+const SOUND: &[i32] = &[MASTER_VOLUME];
 
 /// The Multi-boxing settings' rows: natively Slow When Not Focused first (a
 /// page's pace in the back is the browser's), then Controller Focus, Capture
@@ -2672,6 +2726,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         SHOW_FPS => on_off(c.show_fps),
         29 => on_off(c.update_notices),
         41 => on_off(c.map),
+        TOWN_MAP => on_off(c.town_map),
         42 => on_off(c.minimap),
         87 => wide(c.map_pointer.name()),
         91 => on_off(c.minimap_scroll),
@@ -2699,12 +2754,14 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         SPELL_COOLDOWNS => on_off(c.spell_cooldowns),
         MOUSEOVER_CAST => wide(c.mouseover_cast.name()),
         HUD_PROFILE => wide(&crate::hudlayout::picked().unwrap_or_else(|| "None saved".to_string())),
+        HUD_SAVE => wide(&crate::hudlayout::save_target().unwrap_or_else(|| "New Layout".to_string())),
         85 => on_off(c.head_marks),
         TARGET_LEVEL => on_off(c.target_level),
         TARGET_OF_TARGET => on_off(c.target_of_target_bar),
         OWN_PLATE => on_off(c.own_plate),
         COACH_TALK => on_off(c.coach_talk),
         STRAFE_SPEED => wide(if c.strafe_match { "Match Forward" } else { "Retail" }),
+        MASTER_VOLUME => wide(&format!("{}%", c.master_volume.min(100))),
         FOLIAGE_DENSITY => wide(match c.foliage_density {
             2 => "2x",
             3 => "3x",
@@ -2825,6 +2882,36 @@ fn step_output(c: &mut ClientOptions, names: &[String], d: i32) {
 
 /// An Extended row's slider, if it is one: where its knob is (0 to 1), and
 /// the number shown before it where it has one.
+/// The Fx and Music Volume's steps under the game's lowest (0.1; Heirloom
+/// petition 3261, "the game's sound is loud even at the lowest setting"):
+/// left from 0.1 goes 0.05, 0.02, 0.01, then silence, and right back up the
+/// same way; at and over 0.1 a step is the game's 0.1. A volume kept before
+/// (any tenth) steps as it did.
+const FINE_VOLUMES: [f32; 4] = [0.01, 0.02, 0.05, 0.1];
+/// What is snapped to silence turning a volume down: under the finest step.
+const FINE_SNAP: F<Ee> = F::new(0.005);
+
+fn volume_step(v: F<Ee>, d: i32) -> F<Ee> {
+    let step = F::<Ee>::new(0.1);
+    // a hair either side of a step, for a tenth summed in floats
+    let near = F::<Ee>::new(0.001);
+    let top = F::<Ee>::new(0.1);
+    if d < 0 {
+        if top + near < v {
+            let n = v - step;
+            // a tenth summed short of 0.1 is 0.1
+            return if n < top - near { top } else { n };
+        }
+        FINE_VOLUMES.iter().rev().map(|&f| F::<Ee>::new(f)).find(|&f| f + near < v).unwrap_or(F::ZERO)
+    } else {
+        if top - near <= v {
+            let n = v + step;
+            return if F::ONE < n { F::ONE } else { n };
+        }
+        FINE_VOLUMES.iter().map(|&f| F::<Ee>::new(f)).find(|&f| v + near < f).unwrap_or(top)
+    }
+}
+
 fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
     let c = crate::settings::client();
     let at = |v: f32, lo: f32, hi: f32| (v - lo) / (hi - lo);
@@ -2925,7 +3012,9 @@ mod tests {
         assert!(category(hud).items.contains(&SPELL_BAR_SIZE));
         assert!(category(chat).items.contains(&CHAT_FADE_DELAY));
         assert!(category(chat).items.contains(&CHAT_WAKE_ON_MESSAGE));
-        assert!(category(hud).items.len() <= STANDARD_PAGE_ITEMS);
+        // HUD Layout is a long page since Save and Load HUD Layout came to it
+        // (petition 3266): it takes the menu's place, as Chat Tabs does
+        assert!(category(hud).items.len() <= MENU_MOST);
         assert!(category(chat).items.len() <= STANDARD_PAGE_ITEMS);
         let vui = vui();
         let mut options = GameOptions::default();
@@ -3162,8 +3251,9 @@ mod tests {
         assert!(w.back(&mut cues));
     }
 
-    /// A volume stops at its ends with sound 9 and snaps within 0.05 of
-    /// them; ten steps down from 1 reach exactly 0.
+    /// A volume stops at its ends with sound 9; nine steps down from 1 reach
+    /// the game's lowest, 0.1, and four finer ones (0.05, 0.02, 0.01:
+    /// Heirloom petition 3261) silence, exactly 0; up again the same way.
     #[test]
     fn volumes_stop_at_their_ends() {
         let mut w = WndOptions { item: 3, ..Default::default() };
@@ -3171,16 +3261,79 @@ mod tests {
         let (mut cues, mut ups) = (Vec::new(), Vec::new());
         w.change(&mut o, 1, &mut cues, &mut ups);
         assert_eq!(cues, vec![9], "already at 1");
-        for _ in 0..10 {
+        for _ in 0..9 {
             w.change(&mut o, -1, &mut cues, &mut ups);
         }
+        assert!((o.fx_volume.0 - 0.1).abs() < 0.001, "the game's lowest: {}", o.fx_volume.0);
+        let mut fine = Vec::new();
+        for _ in 0..4 {
+            w.change(&mut o, -1, &mut cues, &mut ups);
+            fine.push(o.fx_volume.0);
+        }
+        assert_eq!(fine, vec![0.05, 0.02, 0.01, 0.0], "the finer steps under it");
         assert_eq!(o.fx_volume, F::ZERO);
-        assert_eq!(cues.len(), 11);
+        assert_eq!(cues.len(), 14);
         assert!(cues[1..].iter().all(|&c| c == 11));
         assert_eq!(ups.last(), Some(&OptionsUp::Volume(0, F::ZERO)));
         w.change(&mut o, -1, &mut cues, &mut ups);
         assert_eq!(cues.last(), Some(&9));
         assert_ne!(o.music_volume, F::ZERO, "the other volume is untouched");
+        let mut up = Vec::new();
+        for _ in 0..5 {
+            w.change(&mut o, 1, &mut cues, &mut ups);
+            up.push(o.fx_volume.0);
+        }
+        assert_eq!(up[..4], [0.01, 0.02, 0.05, 0.1], "back up the same steps");
+        assert!((up[4] - 0.2).abs() < 0.001, "then the game's tenths: {}", up[4]);
+    }
+
+    /// The steps on their own: a tenth kept by an older build (summed in
+    /// floats, a hair off) steps by tenths down to 0.1 and then finely; a
+    /// value between the fine steps goes to the next one its way. The
+    /// control: over 0.1 a step is the game's 0.1.
+    #[test]
+    fn volume_steps_under_the_games_lowest() {
+        let f = |v: f32| F::<Ee>::new(v);
+        assert!((volume_step(f(0.3), -1).0 - 0.2).abs() < 0.001, "the control: a tenth");
+        assert!((volume_step(f(0.199_999_99), -1).0 - 0.1).abs() < 0.001);
+        assert_eq!(volume_step(f(0.100_000_01), -1).0, 0.05, "0.1 kept a hair over");
+        assert_eq!(volume_step(f(0.099_999_99), -1).0, 0.05, "and a hair under");
+        assert_eq!(volume_step(f(0.03), -1).0, 0.02);
+        assert_eq!(volume_step(f(0.03), 1).0, 0.05);
+        assert_eq!(volume_step(f(0.0), 1).0, 0.01);
+        assert_eq!(volume_step(f(0.01), -1).0, 0.0);
+        assert_eq!(volume_step(f(0.95), 1), F::ONE, "no further than 1");
+    }
+
+    /// Master Volume (petition 3261): Other's Sound page, natively before
+    /// Output Device; left and right step it through its percents, stopping
+    /// at the ends with sound 9; kept in the client's options.
+    #[test]
+    fn master_volume_steps_and_is_kept() {
+        crate::settings::testing::reset(false);
+        let at = CATEGORIES.iter().position(|c| c.name == "Sound").unwrap();
+        assert_eq!(CATEGORIES[at].items[0], MASTER_VOLUME);
+        let mut w = WndOptions { item: MASTER_VOLUME, page: 3, cat: Some(at), ..Default::default() };
+        let mut o = GameOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        assert_eq!(crate::settings::client().master_volume, 100, "the game's");
+        w.change(&mut o, 1, &mut cues, &mut ups);
+        assert_eq!((crate::settings::client().master_volume, cues.clone()), (100, vec![9]), "already at the top");
+        cues.clear();
+        for _ in 0..12 {
+            w.change(&mut o, -1, &mut cues, &mut ups);
+        }
+        assert_eq!(crate::settings::client().master_volume, 5);
+        assert_eq!(crate::settings::master_gain(), 0.05);
+        for _ in 0..5 {
+            w.change(&mut o, -1, &mut cues, &mut ups);
+        }
+        assert_eq!(crate::settings::client().master_volume, 0);
+        assert_eq!(cues.iter().filter(|&&c| c == 11).count(), 15);
+        assert_eq!(cues.last(), Some(&9), "stops at silence");
+        assert!(ups.is_empty(), "not the game's volumes");
+        assert_eq!(crate::settings::master_volume_step(33, -1), 30, "off the steps: the next one down");
+        assert_eq!(crate::settings::master_volume_step(33, 1), 40);
     }
 
     /// A pointer on the options: a menu row chosen at once; a page's row
@@ -3915,7 +4068,7 @@ mod tests {
         // (after Minimap) Facing then Camera, moving none of them
         goto!(41);
         assert_eq!(w.item, 41, "Map, the Map");
-        for (item, on) in [(41, settings::map as fn() -> bool), (42, settings::minimap), (43, settings::map_markers), (44, settings::quest_helper), (45, settings::quest_tracker)] {
+        for (item, on) in [(41, settings::map as fn() -> bool), (42, settings::minimap), (43, settings::map_markers), (44, settings::quest_helper), (45, settings::quest_tracker), (TOWN_MAP, settings::town_map)] {
             if item == 43 {
                 use crate::map::Pointer;
                 assert_eq!(w.item, 87, "Map Pointer, after Minimap");
@@ -3937,7 +4090,7 @@ mod tests {
             assert!(on(), "{}: and back, two values", label_of(item));
             press(&mut w, &mut o, key::DOWN, &mut cues);
         }
-        assert_eq!((w.row, cues.last()), (5, Some(&9)), "Map's last row");
+        assert_eq!((w.row, cues.last()), (6, Some(&9)), "Map's last row, Town Map First");
         // Number Colors: six rows, each Default (the game's colour, drawn as
         // any value) then round the palette either way, each drawn in its
         // colour, one moving no other
@@ -4197,6 +4350,11 @@ mod tests {
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert!(!crate::hudlayout::unlocked(), "✕ turns it too");
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, HUD_SAVE)), (HUD_SAVE, Some(wide("New Layout"))), "Save HUD Layout");
+        assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some("Saves the HUD as it is now"));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, HUD_PROFILE)), (HUD_PROFILE, Some(wide("None saved"))), "Load HUD Layout");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.item, value_text(&vui, 77)), (77, Some(wide("Reset"))), "Reset HUD");
         for k in [key::RIGHT, key::LEFT, key::CROSS] {
             testing::put("hud.opt", b"chat l 1 t 1\n");
@@ -4438,16 +4596,16 @@ mod tests {
             vec![
                 ("HUD", vec!["Ability Bars", "Stacked Spell Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
                 ("Group & Raid", vec!["Raid List", "Power Bars", "Health Numbers", "Group Effects", "Raid Mercenaries"]),
-                ("HUD Layout", vec!["Move HUD", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity", "Spell Bar Layout", "Utility Bar Layout"]),
+                ("HUD Layout", vec!["Move HUD", "Save HUD Layout", "Load HUD Layout", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity", "Spell Bar Layout", "Utility Bar Layout"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers", "Target Level", "Debuff Icons", "Own Name Plate"]),
-                ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
+                ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker", "Town Map First"]),
                 ("Number Colors", [&n[..6], &n[8..]].concat()),
                 ("Merc Colors", n[6..8].to_vec()),
                 ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "DPS Meter Columns", "DPS Meter Sort", "Hide mercs", "Reset DPS Meter"]),
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
-                ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "HUD Layouts", "Target of Target"]),
+                ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "Target of Target"]),
                 ("Minimap Colors", crate::minimapcolor::LABELS.iter().copied().chain(["Spell Merchants Shown"]).collect()),
                 ("Inventory", vec!["Inventory Style", "Bag Sort", "Compare Gear"]),
                 ("Faction Tracker", vec!["Faction Tracker", "Faction Tracker Shows"]),
@@ -4460,7 +4618,7 @@ mod tests {
                 ("General", vec!["Update Notices", "Loading Screens", "Loading Tips", "Same Shortcuts", "Auto Save Options", "Auto Loot"]),
                 ("Combat", vec!["Auto-Cast", "Auto Target", "Pets Pass Through", "Weapon Swap Back", "Attack With Abilities"]),
                 ("Camera", vec!["Camera Distance", "Camera Turn Speed", "Screen Shake", "A/D Keys"]),
-                ("Sound", vec!["Output Device"]),
+                ("Sound", vec!["Master Volume", "Output Device"]),
                 ("Movement", vec!["Strafe Speed", "Coach Talk on Arrival"]),
             ],
             "Other: the rest"
@@ -5275,7 +5433,8 @@ mod tests {
             press(&mut w, &mut o, k, &mut ups);
         }
         assert_eq!(w.item, 3, "Fx Volume");
-        for _ in 0..10 {
+        // nine tenths to 0.1, four finer steps to silence (`volume_step`)
+        for _ in 0..13 {
             press(&mut w, &mut o, key::LEFT, &mut ups);
         }
         press(&mut w, &mut o, key::DOWN, &mut ups);

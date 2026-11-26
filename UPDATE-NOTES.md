@@ -5,6 +5,32 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · M in a town opens the town's map
+
+- Pressing **M** while you are in a town or city (Freeport, Qeynos, Neriak, Halas, Oggok and the others the map knows) now opens the map zoomed in on that town, like picking it from **Places**. Press **M** again (✕ on a controller) for the world map as you left it, and **M** once more to close. Outside towns, M opens the world map as before.
+- Turn it off under **Options → Extended → UI → Map → Town Map First** if you would rather M always opened the world map.
+
+## 2026-11-26 · The compare box no longer covers your bags
+
+- With **Inventory Style** at **Bags**, the **Compare Gear** box now sits in the column to the right of the grid, at the bottom, instead of under the item you are on: it never covers the bag slots, so you can always see where you are in the row. In the Retail List it stays beside the list as before.
+
+## 2026-11-26 · Save and load the HUD layout from Options
+
+- **Options → Extended → UI → HUD Layout** now has **Save HUD Layout** and **Load HUD Layout**, beside **Move HUD** and **Reset HUD**, so you no longer need to type `/hud save` or `/hud load`.
+- **Save HUD Layout**: shows **New Layout** (saved as *Layout 1*, *Layout 2* and so on) or, with left and right, one of your saved layouts to save over. Press ✕ (or click) to keep the HUD as it is now; the page says what it was saved as.
+- **Load HUD Layout**: left and right pick a saved layout, ✕ puts it on the HUD. (It was called *HUD Layouts* under HUD Extras.) `/hud save`, `/hud load`, `/hud delete` and `/hud list` still work.
+
+## 2026-11-26 · Bank as bags, with a filter
+
+- With **Inventory Style** set to **Bags** (**Options → Extended → UI → Inventory**), the bank's **Items** page now shows your pack and your bank the same way: as grids of the items' icons, with stack counts, worn items framed in gold and what you cannot wear washed red, in your **Bag Sort** order. The selected item's description stays in the middle.
+- New **Filter** under the description: **All**, **Equipment**, **Gems**, **Crafting** or **Consumables**, on both sides at once. Press □ (or click the button) to change it.
+- Move around with the d-pad or arrows (right from your pack's last column goes to the bank, left from the bank's first column back), and ✕ or a click on the selected item moves it, the same as before. With **Retail List** the bank is unchanged.
+
+## 2026-11-26 · Quieter sound
+
+- The **Fx Volume** and **Music Volume** sliders under **Options → Sound** now go lower than before: below the old lowest step they go down in finer steps (half, a fifth, a tenth of it) before silence, so the game can be very quiet without being muted. Your saved volumes are kept as they were.
+- New **Master Volume** under **Options → Extended → Other → Sound**: turns the whole game's sound down (music, effects, ambience and the menus' sounds together), from 100% (as before) down to 1% and off, with finer steps near the bottom.
+
 ## 2026-11-26 · Bestiary
 
 - New **Character → Bestiary** (on servers that keep one): every kind of creature you have fought, listed by the zone it comes from, with how many you have killed and the day you first met it. Creatures in a heroic dungeon are listed under that dungeon. Turn the pages with **←** and **→** (or click the ends of the page line), and leave with **△** (Escape). It starts counting from the server's update, so creatures you fought before are not in it yet.

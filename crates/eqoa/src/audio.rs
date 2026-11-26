@@ -88,9 +88,19 @@ pub fn game_waits() -> Duration {
     Duration::from_micros(GAME_WAITED.load(Ordering::Relaxed))
 }
 
-/// The output's gain wanted now: 1 heard, 0 not.
+/// Master Volume (`settings::master_gain`) as f32 bits: 1.0 until set.
+static MASTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000);
+
+/// Master Volume (Extended > Other > Sound, Heirloom petition 3261): the
+/// whole output's gain under the game's own volumes, 1 the game's. The
+/// output eases to it as it does to silence (`ramp`).
+pub fn set_master(gain: f32) {
+    MASTER.store(gain.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+}
+
+/// The output's gain wanted now: Master Volume heard, 0 not.
 fn heard_gain() -> f32 {
-    if HEARD.load(Ordering::Relaxed) { 1.0 } else { 0.0 }
+    if HEARD.load(Ordering::Relaxed) { f32::from_bits(MASTER.load(Ordering::Relaxed)) } else { 0.0 }
 }
 
 /// The gain a frame on, `step` nearer `target` (no further): muting and
@@ -1194,6 +1204,20 @@ mod tests {
         assert_eq!(heard_gain(), 0.0);
         set_heard(true);
         assert_eq!(heard_gain(), 1.0);
+        // Master Volume (petition 3261): the gain wanted while heard, eased
+        // to as silence is; not heard is silence whatever it is
+        set_master(0.25);
+        assert_eq!(heard_gain(), 0.25);
+        let mut quiet = tone(960);
+        apply_gain(&mut quiet, &mut gain, heard_gain());
+        assert_eq!(gain, 0.25);
+        assert!(quiet[2 * 900..].iter().all(|&v| v == 3000), "a quarter of the tone once eased");
+        assert!(steps(&quiet) <= (12000.0 * FADE_48K) as i32 + 1, "no click turning it down");
+        set_heard(false);
+        assert_eq!(heard_gain(), 0.0, "not heard: silent at any Master Volume");
+        set_heard(true);
+        set_master(1.0);
+        assert_eq!(heard_gain(), 1.0, "the control: the game's");
     }
 
     /// Each call first mixes up to the output's present: what was last

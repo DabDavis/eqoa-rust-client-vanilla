@@ -1460,6 +1460,11 @@ pub struct ClientOptions {
     /// map too", `map::markers`): the map's own key (T, Select) turns them,
     /// kept as Map Markers is; on by default.
     pub map_towns: bool,
+    /// Town Map First (Live petition 5650: "pressing M in a city should open
+    /// that city's map"): M inside a town (`map::places::town_at`) opens the
+    /// map close in on the town, the world's view a press of M (✕ on a pad)
+    /// away; on by default. Off, M opens the world's view as it did.
+    pub town_map: bool,
     /// Quest Helper (the user, 2026-11-09; on by default): the quest marks on
     /// the map and the minimap (a "!" at each giver of a quest the player may
     /// take, a "?" where a step is to be done) and the quest tracker on the
@@ -1536,6 +1541,10 @@ pub struct ClientOptions {
     /// plants round a player or a creature lean away from it and ease back
     /// once it has passed (`flora::React`).
     pub foliage_reacts: bool,
+    /// Master Volume (Heirloom petition 3261: "the game's sound is loud even
+    /// at the lowest setting"): the whole output, in percent of the game's,
+    /// one of `MASTER_VOLUMES` (`audio::set_master`); 100, the game's.
+    pub master_volume: u8,
     /// Ground Fog: PS2, the effect volumes' fog blended as the GS blends it
     /// into the PS2's 16-bit frame, dithered and cut to five bits a channel
     /// (`render::fog16`: a low, dim band, as the game shows it); Exact, blended
@@ -1888,6 +1897,7 @@ impl Default for ClientOptions {
             map_pointer: crate::map::Pointer::Facing,
             map_markers: true,
             map_towns: true,
+            town_map: true,
             quest_helper: true,
             quest_markers: true,
             quest_tracker: true,
@@ -1903,6 +1913,7 @@ impl Default for ClientOptions {
             weather: SHARE_FULL,
             foliage_density: 1,
             foliage_reacts: false,
+            master_volume: 100,
             ps2_fog: true,
             ps2_particles: true,
             ambient_occlusion: false,
@@ -2223,6 +2234,7 @@ impl ClientOptions {
             (self.minimap_scroll, "minimap_scroll"),
             (self.map_markers, "map_markers"),
             (self.map_towns, "map_towns"),
+            (self.town_map, "town_map"),
             (self.quest_helper, "quest_helper"),
             (self.quest_markers, "quest_markers"),
             (self.quest_tracker, "quest_tracker"),
@@ -2278,6 +2290,10 @@ impl ClientOptions {
         }
         if self.foliage_reacts {
             s.push_str("foliage_reacts=on\n");
+        }
+        // Master Volume only when turned down
+        if self.master_volume < 100 {
+            s.push_str(&format!("master_volume={}\n", self.master_volume));
         }
         if let Some(v) = share_text(self.weather) {
             s.push_str(&format!("weather={v}\n"));
@@ -2607,6 +2623,8 @@ impl ClientOptions {
                 ("map_markers", "on") => c.map_markers = true,
                 ("map_markers", "off") => c.map_markers = false,
                 ("map_towns", "on") => c.map_towns = true,
+                ("town_map", "on") => c.town_map = true,
+                ("town_map", "off") => c.town_map = false,
                 ("map_towns", "off") => c.map_towns = false,
                 ("quest_helper", "on") => c.quest_helper = true,
                 ("quest_helper", "off") => c.quest_helper = false,
@@ -2631,6 +2649,11 @@ impl ClientOptions {
                     }
                 }
                 ("foliage_reacts", "on") => c.foliage_reacts = true,
+                ("master_volume", v) => {
+                    if let Ok(v @ 0..=100) = v.parse::<u8>() {
+                        c.master_volume = v;
+                    }
+                }
                 ("foliage_reacts", "off") => c.foliage_reacts = false,
                 ("shadows", "on") => c.shadows = true,
                 ("shadows", "off") => c.shadows = false,
@@ -3295,6 +3318,25 @@ pub fn capture() -> bool {
 }
 
 /// Sound in Background now: one setting for every window of the client.
+/// Master Volume's steps, in percent: finer near silence, where a step is
+/// heard most.
+pub const MASTER_VOLUMES: [u8; 16] = [0, 1, 2, 5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100];
+
+/// Master Volume a step down (`d` < 0) or up from `v`, stopping at the ends
+/// (a value kept off the steps goes to the next one its way).
+pub fn master_volume_step(v: u8, d: i32) -> u8 {
+    if d < 0 {
+        MASTER_VOLUMES.iter().rev().copied().find(|&s| s < v).unwrap_or(v)
+    } else {
+        MASTER_VOLUMES.iter().copied().find(|&s| s > v).unwrap_or(v)
+    }
+}
+
+/// Master Volume now, as a gain (1 the game's).
+pub fn master_gain() -> f32 {
+    client().master_volume.min(100) as f32 / 100.0
+}
+
 pub fn background_sound() -> bool {
     client().background_sound
 }
@@ -3815,6 +3857,11 @@ pub fn set_map_markers(on: bool) -> Result<(), String> {
 /// Whether the map names the towns.
 pub fn map_towns() -> bool {
     client().map_towns
+}
+
+/// Town Map First now (`ClientOptions::town_map`).
+pub fn town_map() -> bool {
+    client().town_map
 }
 
 /// The map's town names turned (its own key), and kept at once.
@@ -4966,6 +5013,25 @@ mod tests {
         let c = ClientOptions::from_text("faction_track_shows=number");
         assert_eq!((c.faction_track, c.faction_track_style), (false, Style::Number));
         assert_eq!(ClientOptions::from_text("faction_track_shows=x").faction_track_style, Style::Both, "unknown: the default");
+    }
+
+    /// Master Volume (petition 3261): 100, the game's, by default and then not
+    /// written (a client.opt of before reads as the game's); turned down it is
+    /// kept and read back; a value past 100 or not a number is the game's.
+    #[test]
+    fn master_volume_kept_only_turned_down() {
+        let d = ClientOptions::default();
+        assert_eq!(d.master_volume, 100);
+        assert!(!d.to_text().contains("master_volume"), "nothing kept by default");
+        let c = ClientOptions { master_volume: 15, ..Default::default() };
+        let t = c.to_text();
+        assert!(t.contains("master_volume=15\n"), "{t}");
+        assert_eq!(ClientOptions::from_text(&t).master_volume, 15);
+        assert_eq!(ClientOptions::from_text("master_volume=0").master_volume, 0, "silence kept");
+        for bad in ["master_volume=101", "master_volume=x", "master_volume=-5"] {
+            assert_eq!(ClientOptions::from_text(bad).master_volume, 100, "{bad}: the game's");
+        }
+        assert_eq!(ClientOptions::from_text("foliage_reacts=on").master_volume, 100, "an older file: the game's");
     }
 
     /// Foliage Density (Retail, 2x, 3x) and Foliage Reacts (off): the game's

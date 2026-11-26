@@ -1181,6 +1181,51 @@ pub fn picked() -> Option<String> {
     names.get(i).or(names.first()).cloned()
 }
 
+thread_local! {
+    /// What Extended's Save HUD Layout row saves over: 0 a new layout, else
+    /// the `profile_names` entry before it (Heirloom petition 3266).
+    static SAVE_PICK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Extended's Save HUD Layout row moved `d` round a new layout and the
+/// profiles' names.
+pub fn step_save_pick(d: i32) {
+    let n = profile_names().len() as i64 + 1;
+    SAVE_PICK.with(|p| p.set((p.get() as i64 + i64::from(d.signum())).rem_euclid(n) as usize));
+}
+
+/// The profile Save HUD Layout saves over: none for a new one.
+pub fn save_target() -> Option<String> {
+    let i = SAVE_PICK.with(|p| p.get());
+    profile_names().get(i.checked_sub(1)?).cloned()
+}
+
+/// A new profile's name: the first "Layout N" (from 1) no profile has.
+pub fn new_profile_name() -> String {
+    let list = profiles();
+    (1..).map(|n| format!("Layout {n}")).find(|n| find(&list, n).is_none()).unwrap_or_default()
+}
+
+/// Save HUD Layout's ✕ (Heirloom petition 3266: "save and load the HUD
+/// layout from the options menu instead of typing a chat command"): the HUD
+/// as it is now kept under the row's name (`save_target`, else
+/// `new_profile_name`), as `/hud save` keeps it; then both rows name it, so
+/// Load HUD Layout puts it back. Whether it was kept, and what to say.
+pub fn save_picked() -> (bool, String) {
+    let name = save_target().unwrap_or_else(new_profile_name);
+    let said = save_profile(&name);
+    // `save_profile`'s own words when it kept it
+    let kept = said.contains("\" saved");
+    match find(&profiles(), &name).filter(|_| kept) {
+        Some(i) => {
+            SAVE_PICK.with(|p| p.set(i + 1));
+            PICKED.with(|p| p.set(i));
+            (true, format!("Saved as {name}"))
+        }
+        None => (false, said),
+    }
+}
+
 /// The profiles' names in a line.
 fn list_profiles() -> String {
     let names = profile_names();
@@ -1919,5 +1964,48 @@ mod tests {
         assert!(command("save").starts_with("Name the layout"));
         assert!(command("save a|b").starts_with("Name the layout"));
         assert!(command("load").starts_with("Which layout"));
+    }
+
+    /// Save HUD Layout (petition 3266): a new layout by default, named the
+    /// first free "Layout N"; saved, both rows name it and Load puts it back;
+    /// stepped to a kept name, ✕ saves over it; the control: with 20 kept a
+    /// new one is refused and nothing changes.
+    #[test]
+    fn the_options_save_a_layout() {
+        testing_reset();
+        crate::settings::testing::reset(false);
+        SAVE_PICK.with(|p| p.set(0));
+        PICKED.with(|p| p.set(0));
+        assert_eq!(save_target(), None, "a new layout");
+        assert_eq!(new_profile_name(), "Layout 1");
+        let mut moved = Layout::default();
+        moved.set(Piece::Chat, Some(Place { h: Edge::Start, dx: 12.0, v: Edge::End, dy: 30.0 }));
+        with(|s| s.layout = moved);
+        assert_eq!(save_picked(), (true, "Saved as Layout 1".to_string()));
+        assert_eq!((save_target().as_deref(), picked().as_deref()), (Some("Layout 1"), Some("Layout 1")), "both rows name it");
+        with(|s| s.layout = Layout::default());
+        assert!(load_profile(&picked().unwrap()).contains("loaded"));
+        assert_eq!(layout(), moved, "Load puts it back");
+        // a second, new
+        step_save_pick(1);
+        assert_eq!(save_target(), None, "round to a new one");
+        assert_eq!(save_picked().1, "Saved as Layout 2");
+        assert_eq!(profile_names(), ["Layout 1", "Layout 2"]);
+        // over Layout 1: the row names Layout 2, just saved; one back
+        step_save_pick(-1);
+        assert_eq!(save_target().as_deref(), Some("Layout 1"));
+        with(|s| s.layout = Layout::default());
+        assert!(save_picked().0);
+        assert_eq!(profile_names().len(), 2, "saved over, not added");
+        assert!(load_profile("Layout 1").contains("loaded"));
+        assert_eq!(layout(), Layout::default());
+        // the control: the most kept, a new one refused
+        for n in 3..=PROFILES_MOST {
+            assert!(save_profile(&format!("Layout {n}")).contains("saved"));
+        }
+        SAVE_PICK.with(|p| p.set(0));
+        let (ok, said) = save_picked();
+        assert!(!ok && said.contains("already"), "{said}");
+        assert_eq!(profile_names().len(), PROFILES_MOST);
     }
 }

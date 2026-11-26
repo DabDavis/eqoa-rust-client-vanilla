@@ -27,6 +27,23 @@ pub const SHOWN: usize = 12;
 /// ground round it).
 pub const TOWN_SCALE: f32 = 3.0;
 
+/// How far from a town's middle (`markers_data::TOWNS`' `at`) the player is
+/// in it, for Town Map First (Live petition 5650): the radius the towns were
+/// found with (their spawns "about it", within 600 of the middle).
+pub const TOWN_RADIUS: f32 = 600.0;
+
+/// The town of world `world` the player at `p` (x, z) is in: the nearest
+/// within `TOWN_RADIUS`, none outside every town.
+pub fn town_at(world: i32, p: [f32; 2]) -> Option<usize> {
+    let d2 = |t: &markers::Town| (t.at[0] - p[0]).powi(2) + (t.at[1] - p[1]).powi(2);
+    super::markers_data::TOWNS
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.world == world && d2(t) <= TOWN_RADIUS * TOWN_RADIUS)
+        .min_by(|a, b| d2(a.1).total_cmp(&d2(b.1)))
+        .map(|(i, _)| i)
+}
+
 /// A row of the list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
@@ -134,6 +151,22 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort_by_key(|n| n.to_ascii_lowercase());
         assert_eq!(names, sorted, "by name");
+    }
+
+    /// In a town: Freeport's middle and a step inside its radius are
+    /// Freeport, the nearest when two are near; the controls: past the radius
+    /// nowhere, and Freeport's place in another world nothing.
+    #[test]
+    fn the_town_the_player_is_in() {
+        let freeport = super::super::markers_data::TOWNS.iter().position(|t| t.name == "Freeport").unwrap();
+        let at = super::super::markers_data::TOWNS[freeport].at;
+        assert_eq!(town_at(0, at), Some(freeport));
+        assert_eq!(town_at(0, [at[0] + 400.0, at[1] - 300.0]), Some(freeport), "500 from its middle");
+        assert_eq!(town_at(0, [at[0] + 700.0, at[1]]), None, "the control: outside it");
+        assert_eq!(town_at(1, at), None, "the control: another world");
+        let good = super::super::markers_data::TOWNS.iter().position(|t| t.name == "Hazinak (Good)").unwrap();
+        let g = super::super::markers_data::TOWNS[good].at;
+        assert_eq!(town_at(0, [g[0] + 10.0, g[1] + 10.0]), Some(good), "the nearer of the two Hazinaks");
     }
 
     /// The selection stops at the ends and the list scrolls to keep it shown.
