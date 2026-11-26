@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Yellow quest marks in the coach list
+
+- In a coachman's list of stops, the **?** that marks a stop on a quest you are doing is now drawn **yellow**, like the quest marks over NPCs' heads, and sits at the end of the line after the period (for example *Get me a horse to Aviak Village.* **?**). It follows **Quest Markers** under **Options → Extended → UI → Name Plates**: turned off, it stays white.
+
 ## 2026-11-26 · Click a name in chat to send them a tell
 
 - On the **PC interface**, the name at the start of someone's chat line (a say, shout, tell, whisper, group, raid or guild line) lights up under the mouse: **click it** and the chat line opens with `/tell <Name> ` already typed, ready for your message. Tags such as **[GM]**, **[OG]**, **[HC]** or **[AFK]** and a raid's **[L]**/**[H]** are left out, so the tell reaches them. NPCs' lines and the server's notices are not clickable.
