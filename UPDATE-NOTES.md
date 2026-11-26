@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Bank as bags, with a filter
+
+- With **Inventory Style** set to **Bags** (**Options → Extended → UI → Inventory**), the bank's **Items** page now shows your pack and your bank the same way: as grids of the items' icons, with stack counts, worn items framed in gold and what you cannot wear washed red, in your **Bag Sort** order. The selected item's description stays in the middle.
+- New **Filter** under the description: **All**, **Equipment**, **Gems**, **Crafting** or **Consumables**, on both sides at once. Press □ (or click the button) to change it.
+- Move around with the d-pad or arrows (right from your pack's last column goes to the bank, left from the bank's first column back), and ✕ or a click on the selected item moves it, the same as before. With **Retail List** the bank is unchanged.
+
 ## 2026-11-26 · Quieter sound
 
 - The **Fx Volume** and **Music Volume** sliders under **Options → Sound** now go lower than before: below the old lowest step they go down in finer steps (half, a fifth, a tenth of it) before silence, so the game can be very quiet without being muted. Your saved volumes are kept as they were.

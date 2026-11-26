@@ -464,6 +464,13 @@ or a browser (each described where it lives below):
   rule on a copy of the list), with the difference in green or red, as a tooltip at its cell or row. An
   [OG] account's (`settings::qol::LOCKED`) is the game's list with no comparison. Nothing new goes to a
   server.
+- **The bank as bags, with a filter** (Heirloom petition 3265; `bank.rs`, `bags::Grid`, `bags::Filter`): at
+  Inventory Style Bags the bank's item page shows the pack and the bank as the item menu's grid does
+  (`bags::draw_grid`: icons, counts, worn items framed, what cannot be worn washed red), by Bag Sort, two
+  cells across and seven rows each where the lists are, the item's text between them. □ or the Filter
+  button shows All, Equipment, Gems, Crafting or Consumables on both sides (the client's own reading of the
+  records: worn, the game's Use, a server's craft mark or a gem's name). The d-pad crosses from one side to
+  the other at the edge; ✕ sends the list's own 0x1254 by the item's place. Retail List keeps the game's lists.
 - **Item Slot Icons** (petitions 2926, 2928; `hudmenu`): each item quick slot holding an item shows the
   item's own icon (`VIClient::ItemIcon`, the middle of its ITEMICON.ESF banner, `hudmenu::ART_CROP`) where
   the game shows the slot's gem or potion, on the Utility Bars and in the carousel's stack; the mouse over

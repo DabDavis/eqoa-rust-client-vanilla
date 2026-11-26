@@ -15,6 +15,19 @@
 //! selection moved, a row of the other list selected and that list taken
 //! up (left or right, as the d-pad does); the pickers and the auction's
 //! form as theirs.
+//!
+//! With Inventory Style at Bags (Heirloom petition 3265: "view bank items
+//! the same way as the new inventory", "or filter the bank by equipment,
+//! gems and so on") the item page shows the two sides as the item menu's
+//! grid does (`bags::draw_grid`: the items' icons, a stack's count, worn
+//! items framed, what the class cannot wear washed red), laid out by Bag
+//! Sort, two cells across, the item's text between them as the lists have
+//! it; □ (or the Filter button) shows All, Equipment, Gems, Crafting or
+//! Consumables on both sides (`bags::Filter`). The d-pad moves over a grid
+//! (left from the bank's first column and right from the inventory's last
+//! go to the other side), ✕ moves the item as the list's ✕ does: the same
+//! 0x1254, by the item's place in its list. Vanilla's own; Retail List keeps
+//! the game's lists.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -91,6 +104,15 @@ struct BankItem {
     window: Window,
     /// the two lists' frames (0 the inventory, 1 the bank), for a pointer
     hits: Hits,
+    /// at Bags (petition 3265): each side's grid moves (0 the inventory, 1
+    /// the bank), the side in use, the filter, the items each grid showed
+    /// last frame (their places in their lists, in the cells' order), and
+    /// where the cells and the Filter button were drawn
+    grids: [crate::bags::Bag; 2],
+    side: usize,
+    filter: crate::bags::Filter,
+    shown: [Vec<usize>; 2],
+    grid_hits: Hits,
 }
 
 impl Default for BankItem {
@@ -100,8 +122,37 @@ impl Default for BankItem {
         let mut bank = WndList::with_rows([475, 37], 0, 40);
         inv.x84 = true;
         bank.x84 = true;
-        BankItem { inv, bank, qty: Quantity::default(), from: -1, text: String::new(), window: Window::default(), hits: Hits::default() }
+        BankItem {
+            inv,
+            bank,
+            qty: Quantity::default(),
+            from: -1,
+            text: String::new(),
+            window: Window::default(),
+            hits: Hits::default(),
+            grids: Default::default(),
+            side: 0,
+            filter: crate::bags::Filter::All,
+            shown: Default::default(),
+            grid_hits: Hits::default(),
+        }
     }
+}
+
+/// The item page's grids at Bags (petition 3265): the inventory's at the
+/// left and the bank's at the right, where the lists are, two cells across
+/// and seven rows shown, clear of the text between them.
+pub const GRIDS: [crate::bags::Grid; 2] = [crate::bags::Grid { origin: [24, 60], cols: 2, rows: 7 }, crate::bags::Grid { origin: [460, 60], cols: 2, rows: 7 }];
+/// The Filter button under the text (frame points).
+pub const FILTER_BUTTON: [i32; 4] = [212, 278, 428, 300];
+/// A bank cell's hit is this and its number (an inventory cell's its number).
+const BANK_CELLS: i32 = 10_000;
+
+/// The grids' cells for `shown` items of a list of `items` in a room of
+/// `room`: unfiltered the room, as the item menu's; filtered only what is
+/// kept, a row at least.
+fn grid_cells(g: &crate::bags::Grid, filter: crate::bags::Filter, items: usize, shown: usize, room: usize) -> i32 {
+    if filter == crate::bags::Filter::All { g.cells(items, room) } else { g.cells(shown, 0).max(g.cols) }
 }
 
 /// `VIWndBank`.
@@ -206,9 +257,88 @@ impl Bank {
         it.bank.set_x64(false);
         it.bank.reset_scroll();
         it.qty.visible = false;
+        it.grids = Default::default();
+        it.side = 0;
         it.window.init(vui, r, [323, 188], 290, 15, 1);
         it.window.open(true);
         self.page = Page::Items;
+    }
+
+    /// The grids' orders now (petition 3265): each list by Bag Sort, then
+    /// what the filter keeps.
+    fn grid_orders(&self, v: &View) -> [Vec<usize>; 2] {
+        let (sort, f) = (crate::settings::bag_sort(), self.item.filter);
+        [crate::bags::order_filtered(v.inv, sort, f), crate::bags::order_filtered(v.bank, sort, f)]
+    }
+
+    /// The grids' cells now, by their orders.
+    fn grid_counts(&self, v: &View, orders: &[Vec<usize>; 2]) -> [i32; 2] {
+        let f = self.item.filter;
+        [
+            grid_cells(&GRIDS[0], f, v.inv.items.len(), orders[0].len(), crate::inventory::pack_cap()),
+            grid_cells(&GRIDS[1], f, v.bank.items.len(), orders[1].len(), crate::inventory::bank_cap()),
+        ]
+    }
+
+    /// A key to the item page at Bags: the d-pad over the grid in use (left
+    /// from the bank's first column, right from the inventory's last, to the
+    /// other side), □ the next filter (both grids from their tops), ✕ the
+    /// cell's item moved as the list's ✕ moves it (`items_key`), △ back.
+    fn grid_key(&mut self, vui: &Vui, r: &dyn Raster, v: &View, key: i32, down: bool, cues: &mut Vec<i32>, out: &mut Vec<BankOut>) {
+        if !down {
+            return;
+        }
+        let orders = self.grid_orders(v);
+        let cells = self.grid_counts(v, &orders);
+        let it = &mut self.item;
+        let s = it.side;
+        let g = &GRIDS[s];
+        let col = it.grids[s].sel % g.cols;
+        match key {
+            27 | 132 => {
+                cues.push(8);
+                self.back(vui, r, out);
+            }
+            133 => {
+                cues.push(11);
+                it.filter = it.filter.step(1);
+                it.grids = Default::default();
+            }
+            17 | 136 if s == 1 && col == 0 => {
+                cues.push(11);
+                it.side = 0;
+            }
+            18 | 137 if s == 0 && (col == g.cols - 1 || it.grids[0].sel + 1 >= cells[0]) => {
+                cues.push(11);
+                it.side = 1;
+            }
+            17 | 136 => cues.push(it.grids[s].step_in(g, -1, 0, cells[s])),
+            18 | 137 => cues.push(it.grids[s].step_in(g, 1, 0, cells[s])),
+            19 | 138 => cues.push(it.grids[s].step_in(g, 0, -1, cells[s])),
+            20 | 139 => cues.push(it.grids[s].step_in(g, 0, 1, cells[s])),
+            13 | 134 => {
+                let Some(&k) = orders[s].get(it.grids[s].sel.max(0) as usize) else {
+                    cues.push(10);
+                    return;
+                };
+                if !v.idle {
+                    cues.push(9);
+                    return;
+                }
+                cues.push(13);
+                it.from = -1;
+                let list = if s == 1 { v.bank } else { v.inv };
+                let item = &list.items[k];
+                if item.item.max_stack != 0 && item.quantity >= 2 {
+                    it.from = s as i32;
+                    it.qty.open(vui, r, item.quantity as i32, k as i32, -1);
+                    self.page = Page::Quantity;
+                } else {
+                    out.push(BankOut::Move(s as u8, k as i32, 1));
+                }
+            }
+            _ => {}
+        }
     }
 
     /// 260 from a page to `VIWndBank`: the chat box live, the menu again.
@@ -374,6 +504,12 @@ impl Bank {
         if !self.visible || self.page != Page::Items {
             return None;
         }
+        if crate::settings::inventory_bags() {
+            let c = self.item.grid_hits.at(p).filter(|&c| c >= 0)?;
+            let side = (c >= BANK_CELLS) as usize;
+            let k = *self.item.shown[side].get((c % BANK_CELLS) as usize)?;
+            return Some((side as u8, k as i32));
+        }
         let side = self.item.hits.at(p)?;
         let list = if side == 0 { &self.item.inv } else { &self.item.bank };
         let row = list.row_at(p)?;
@@ -403,6 +539,22 @@ impl Bank {
                 None => Vec::new(),
             },
             Page::Deposit => self.deposit.point(p),
+            Page::Items if crate::settings::inventory_bags() => {
+                let it = &mut self.item;
+                match it.grid_hits.at(p) {
+                    Some(-2) => vec![key::SQUARE],
+                    Some(c) if c >= 0 => {
+                        let (side, cell) = ((c >= BANK_CELLS) as usize, c % BANK_CELLS);
+                        if side == it.side && cell == it.grids[side].sel {
+                            return vec![key::CROSS];
+                        }
+                        it.side = side;
+                        it.grids[side].sel = cell;
+                        vec![crate::pointer::MOVED]
+                    }
+                    _ => Vec::new(),
+                }
+            }
             Page::Items => {
                 let it = &mut self.item;
                 let Some(side) = it.hits.at(p) else { return Vec::new() };
@@ -428,6 +580,10 @@ impl Bank {
 
     /// `VIWndBankItem::OnKeyDown` / `OnKeyUp`, and the lists' 256.
     fn items_key(&mut self, vui: &Vui, r: &dyn Raster, v: &View, key: i32, down: bool, cues: &mut Vec<i32>, out: &mut Vec<BankOut>) {
+        if crate::settings::inventory_bags() {
+            self.grid_key(vui, r, v, key, down, cues, out);
+            return;
+        }
         let it = &mut self.item;
         if !down {
             if it.inv.x64 {
@@ -589,6 +745,10 @@ impl Bank {
         let title = wide(vui.words.get(300, vui.language));
         let w = vui.string_width(r, &title) + 64;
         vui.blit_bar(r, &title, white, [(640 - w) / 2, 8], 33, 34, w, 0, 1.0, 0, true);
+        if crate::settings::inventory_bags() {
+            self.draw_grids(vui, r, info, v, icon, can_use, now);
+            return;
+        }
         let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
         vui.blit_fill_frame(r, [165, 48], [310, 267], &fp, 35, 0, 1.0, true);
         vui.blit_studded_horz(r, [165, 37], 37, 38, 310, 2, 0, 1.0, 0);
@@ -609,6 +769,67 @@ impl Bank {
         }
         it.inv.draw(vui, r, now, cues);
         it.bank.draw(vui, r, now, cues);
+    }
+
+    /// The item page at Bags (petition 3265): each side's header (its name,
+    /// the room taken, the filter's count when filtered), its grid
+    /// (`bags::draw_grid`, the selection only on the side in use), the
+    /// framed panel between them with the selected item's text, and the
+    /// Filter button under it.
+    fn draw_grids(&mut self, vui: &Vui, r: &mut dyn Raster, info: &Info, v: &View, icon: &dyn Fn(&NetItem) -> i32, can_use: &dyn Fn(&NetItem) -> bool, now: i64) {
+        let orders = self.grid_orders(v);
+        let cells = self.grid_counts(v, &orders);
+        let it = &mut self.item;
+        for (s, g) in GRIDS.iter().enumerate() {
+            it.grids[s].show_in(g, cells[s]);
+        }
+        it.shown = orders;
+        // the selected item's text (`UpdateText`'s, the side in use)
+        it.text.clear();
+        if let Some(&k) = it.shown[it.side].get(it.grids[it.side].sel.max(0) as usize) {
+            it.text = if it.side == 0 { info.inv_item(k as i32, 0) } else { v.bank.items.get(k).map_or_else(String::new, |x| info.bank_item(x)) };
+        }
+        let fp = FrameParam { tl: (44, 0), top: (45, 0), tr: (46, 0), right: (52, 0), br: (50, 0), bottom: (49, 0), bl: (48, 0), left: (47, 0) };
+        vui.blit_fill_frame(r, [196, 48], [248, 222], &fp, 35, 0, 1.0, true);
+        vui.blit_studded_horz(r, [196, 37], 37, 38, 248, 2, 0, 1.0, 0);
+        vui.blit_studded_horz(r, [196, 268], 40, 41, 248, 2, 0, 1.0, 0);
+        vui.blit_horz(r, [16, 322], 60, 608, 0, 1.0, 0);
+        it.window.init(vui, r, [320, 160], 228, 12, 1);
+        let text = wide(&it.text);
+        it.window.text_box(vui, r, &text, 0, 0, 218, 11, [0.0, 0.0, 0.0, 1.0], 2);
+        let (gold, dim, white) = ([0.95, 0.82, 0.45, 1.0], [0.7, 0.62, 0.42, 1.0], [1.0; 4]);
+        let pulse = 0.55 + 0.45 * ((now % 1000) as f32 / 1000.0 * std::f32::consts::TAU).cos();
+        it.grid_hits.clear();
+        let filtered = it.filter != crate::bags::Filter::All;
+        let sides = [(v.inv, "Inventory", crate::inventory::pack_cap(), true), (v.bank, "Bank", crate::inventory::bank_cap(), false)];
+        for (s, (list, name, room, worn)) in sides.into_iter().enumerate() {
+            let g = &GRIDS[s];
+            let head = if filtered { format!("{name}  {} of {}", it.shown[s].len(), list.items.len()) } else { format!("{name}  {}/{room}", list.items.len()) };
+            let head = wide(&head);
+            let x = if s == 0 { g.origin[0] } else { g.rect()[2] - vui.string_width(r, &head) };
+            vui.draw_string_ex(r, &head, x, 34, if s == it.side { gold } else { dim }, true);
+            let shown: Vec<Option<crate::bags::Cell>> = (0..cells[s])
+                .map(|c| {
+                    let k = *it.shown[s].get(c as usize)?;
+                    let x = list.items.get(k)?;
+                    Some(crate::bags::Cell { icon: icon(x), quantity: x.quantity, worn: worn && x.equip_slot != -1, unusable: x.item.wear_slot != -1 && !can_use(x), carried: false })
+                })
+                .collect();
+            crate::bags::draw_grid(vui, r, g, &it.grids[s], &shown, pulse, s == it.side, if s == 1 { BANK_CELLS } else { 0 }, &mut it.grid_hits);
+        }
+        // the Filter button, □ before its words on the Controller interface
+        let b = FILTER_BUTTON;
+        r.fill_fan([0.12, 0.1, 0.06, 0.9], [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]);
+        crate::bags::outline(r, [0.62, 0.52, 0.28, 1.0], b, 1);
+        let label = wide(&format!("Filter: {}", it.filter.name()));
+        let w = vui.string_width(r, &label);
+        let glyph = if crate::settings::pc_mode() { 0 } else { vui.entry(71).uv1[0] + 4 };
+        let x = b[0] + (b[2] - b[0] - w - glyph) / 2;
+        if glyph > 0 {
+            vui.blit_ex(r, 71, [x, b[1] + (b[3] - b[1] - vui.entry(71).uv1[1]) / 2], 3, 1.0, 0);
+        }
+        vui.draw_string_ex(r, &label, x + glyph, b[1] + 3, white, true);
+        it.grid_hits.push(b, -2);
     }
 }
 
@@ -827,5 +1048,77 @@ mod tests {
         assert_eq!(b.item_at([320.0, 150.0]), None);
         b.page = Page::Menu;
         assert_eq!(b.item_at(row(16.0, 2)), None, "the control: off the item page");
+    }
+
+    /// Inventory Style at Bags (petition 3265): the item page's two grids.
+    /// The inventory's in use first; right from its last column the bank's;
+    /// ✕ moves the cell's item by its place in its list (a stack asks how
+    /// many); □ filters both sides (Equipment: the helm alone on the bank's)
+    /// and the cells then hold only what is kept; a click on the other side
+    /// takes it up, a second click moves; a Shift+click's item is the
+    /// cell's. The control: at Retail List the lists as ever.
+    #[test]
+    fn bags_show_the_bank_as_grids_with_a_filter() {
+        use crate::pointer::key;
+        use crate::pointer::testing::mid;
+        crate::settings::testing::reset(false);
+        let mut c = crate::settings::client();
+        c.inventory_bags = true;
+        crate::settings::set_client(c);
+        let (vui, mut r) = (vui(), NullRaster);
+        let inv = list(&[1, 4]);
+        let mut bank = list(&[1, 1, 3]);
+        bank.items[1].item.wear_slot = 1;
+        bank.items[1].item.name = "Iron Helm".into();
+        let base = [0; 29];
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let v = View { carried: 0, banked: 0, inv: &inv, bank: &bank, idle: true };
+        let (icon, can_use) = (|it: &NetItem| it.inv_index as i32, |_: &NetItem| true);
+        let (mut cues, mut out) = (Vec::new(), Vec::new());
+        let mut b = Bank::default();
+        b.open(&vui, &r, false);
+        b.key(&vui, &r, &v, key::DOWN, true, 0, &mut cues, &mut out);
+        b.key(&vui, &r, &v, key::CROSS, true, 0, &mut cues, &mut out);
+        assert_eq!(b.page, Page::Items);
+        b.draw(&vui, &mut r, &info, &v, &icon, &can_use, 0, &mut cues);
+        assert_eq!(b.item.shown, [vec![0, 1], vec![0, 1, 2]]);
+        // right: the second column, then the bank's side
+        b.key(&vui, &r, &v, key::RIGHT, true, 0, &mut cues, &mut out);
+        assert_eq!((b.item.side, b.item.grids[0].sel), (0, 1));
+        b.key(&vui, &r, &v, key::RIGHT, true, 0, &mut cues, &mut out);
+        assert_eq!(b.item.side, 1, "the bank's");
+        b.key(&vui, &r, &v, key::RIGHT, true, 0, &mut cues, &mut out);
+        b.key(&vui, &r, &v, key::CROSS, true, 0, &mut cues, &mut out);
+        assert_eq!(out.last(), Some(&BankOut::Move(1, 1, 1)), "the helm, the bank's second item");
+        // □: Equipment; the bank's grid shows the helm alone
+        b.key(&vui, &r, &v, key::SQUARE, true, 0, &mut cues, &mut out);
+        assert_eq!(b.item.filter, crate::bags::Filter::Equipment);
+        b.draw(&vui, &mut r, &info, &v, &icon, &can_use, 0, &mut cues);
+        assert_eq!(b.item.shown, [vec![], vec![1]]);
+        b.key(&vui, &r, &v, key::CROSS, true, 0, &mut cues, &mut out);
+        assert_eq!(out.last(), Some(&BankOut::Move(1, 1, 1)), "the bank's first cell is the helm now");
+        // the pointer: the filter button, the inventory's cells
+        assert_eq!(b.point(mid(FILTER_BUTTON)), vec![key::SQUARE]);
+        b.key(&vui, &r, &v, key::SQUARE, true, 0, &mut cues, &mut out);
+        b.key(&vui, &r, &v, key::SQUARE, true, 0, &mut cues, &mut out);
+        b.key(&vui, &r, &v, key::SQUARE, true, 0, &mut cues, &mut out);
+        b.key(&vui, &r, &v, key::SQUARE, true, 0, &mut cues, &mut out);
+        assert_eq!(b.item.filter, crate::bags::Filter::All, "round");
+        b.draw(&vui, &mut r, &info, &v, &icon, &can_use, 0, &mut cues);
+        let cell1 = mid(GRIDS[0].cell_rect(1, 0).unwrap());
+        assert_eq!(b.point(cell1), vec![crate::pointer::MOVED]);
+        assert_eq!((b.item.side, b.item.grids[0].sel), (0, 1), "the inventory's side taken up");
+        assert_eq!(b.item_at(cell1), Some((0, 1)));
+        out.clear();
+        assert_eq!(b.point(cell1), vec![key::CROSS]);
+        b.key(&vui, &r, &v, key::CROSS, true, 0, &mut cues, &mut out);
+        assert_eq!((b.page, b.item.from, b.item.qty.max), (Page::Quantity, 0, 4), "a stack: how many");
+        assert!(out.is_empty());
+        // the control: Retail List
+        b.page = Page::Items;
+        crate::settings::testing::reset(false);
+        b.draw(&vui, &mut r, &info, &v, &icon, &can_use, 0, &mut cues);
+        assert_eq!(b.point([475.0 + 57.0, 37.0 + 22.0]), vec![key::RIGHT], "the bank's list row, as ever");
+        assert_eq!(b.item_at([16.0 + 57.0, 37.0 + 22.0]), Some((0, 0)), "the inventory's first row");
     }
 }
