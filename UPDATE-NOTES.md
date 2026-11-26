@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Bank pages from the bank window
+
+- At the banker, on the **Items** page, you can now turn your bank's page without typing **/bank next**: press **R1** for the next page and **L1** for the one before (**Page Down** and **Page Up** on the keyboard). With **Inventory Style** set to **Bags** there are **Page** buttons under the bank's grid too, to click or tap. The chat says which page you are on, and the bank's side starts again from its top.
+- On a server whose bank has no pages, the server just tells you so.
+
 ## 2026-11-26 · A creature's details and loot chart
 
 - **Right-click a creature** to see its details in a window at the top of the screen: its level, class, how it cons to you and its hit points, then what it can drop, grouped as what it carries, its loot tables, its region's drops and quest items, each with its chance a kill (**every kill**, **common**, **uncommon** or **rare**, and the percent). The chances are read from the same tables its corpse rolls with, so the chart shows what *can* drop, not what will. Your own quest's items say so.

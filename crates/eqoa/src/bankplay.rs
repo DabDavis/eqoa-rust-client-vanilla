@@ -251,6 +251,9 @@ impl Play {
                     let text = self.words.as_ref().map_or_else(String::new, |w| w.get(1727, 0).to_string());
                     self.add_chat(text, [1.0, 0.25, 0.25, 1.0]);
                 }
+                // the bank's page (petition 3297): the server's own "/bank
+                // next" or "/bank prev", sent as the chat line sends it typed
+                BankOut::Page(d) => self.chat_line(crate::bank::page_line(d)),
             }
         }
     }
@@ -320,5 +323,40 @@ mod tests {
         assert!(row(None, true) && !row(None, false), "the disc: the dump's flag");
         assert!(row(Some(0x1B), false), "bit 0x01");
         assert!(!row(Some(0x10), true), "the control: a word without 0x01");
+    }
+    /// The bank's pages (petition 3297): R1 on the item page sends the
+    /// server's own "/bank next" as the chat line sends it typed (0x000B,
+    /// the line, the target), L1 "/bank prev". The control: the menu's
+    /// R1 sends nothing.
+    #[test]
+    fn a_page_turn_is_the_bank_line_said() {
+        use crate::pointer::key;
+        let (vui, mut r) = (vui(), NullRaster);
+        crate::settings::testing::reset(false);
+        let mut p = crate::play::liveplay::tests::play();
+        let said = |p: &mut crate::play::Play| -> Vec<Vec<u8>> { p.session.record.as_mut().map(std::mem::take).unwrap_or_default().into_iter().map(|(_, d)| d).filter(|d| d.starts_with(&0x000Bu16.to_le_bytes())).collect() };
+        let line = |text: &str, target: u32| {
+            let mut w = net::stream::Writer::op(0x000B);
+            w.wide(text).u32(target);
+            w.data
+        };
+        p.mode = 11;
+        p.bank.open = true;
+        p.run_bank(&vui, &mut r);
+        said(&mut p);
+        p.bank_key(key::R1, true);
+        p.run_bank(&vui, &mut r);
+        assert!(said(&mut p).is_empty(), "the control: the menu's R1 says nothing");
+        for k in [key::DOWN, key::CROSS] {
+            p.bank_key(k, true);
+        }
+        p.run_bank(&vui, &mut r);
+        p.bank_key(key::R1, true);
+        p.run_bank(&vui, &mut r);
+        let target = p.target;
+        assert_eq!(said(&mut p), vec![line("/bank next", target)]);
+        p.bank_key(key::L1, true);
+        p.run_bank(&vui, &mut r);
+        assert_eq!(said(&mut p), vec![line("/bank prev", target)]);
     }
 }

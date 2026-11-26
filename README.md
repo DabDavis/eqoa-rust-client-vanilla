@@ -479,6 +479,12 @@ or a browser (each described where it lives below):
   button shows All, Equipment, Gems, Crafting or Consumables on both sides (the client's own reading of the
   records: worn, the game's Use, a server's craft mark or a gem's name). The d-pad crosses from one side to
   the other at the edge; ✕ sends the list's own 0x1254 by the item's place. Retail List keeps the game's lists.
+- **The bank's pages** (Heirloom petition 3297; `bank.rs`, `bank::page_line`): with go-eqoa-server's account bank
+  (`world.account_bank`) the bank list a client holds is a page of the account's bank, turned by the server's
+  own "/bank next" and "/bank prev". On the bank's item page L1 and R1 (Page Up and Page Down) send those lines
+  as the chat line sends them typed (0x000B), and at Bags the Page buttons under the bank's grid press them;
+  the bank's side starts from its top again, the server's reply in the chat says which page it is. Refused
+  while a move waits. Nothing new goes to a server: one without pages answers the line itself.
 - **Item Slot Icons** (petitions 2926, 2928; `hudmenu`): each item quick slot holding an item shows the
   item's own icon (`VIClient::ItemIcon`, the middle of its ITEMICON.ESF banner, `hudmenu::ART_CROP`) where
   the game shows the slot's gem or potion, on the Utility Bars and in the carousel's stack; the mouse over
