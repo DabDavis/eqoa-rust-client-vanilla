@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Lore items at the auction house
+
+- **Lore** items can now be put up for auction at a banker, like any other item: they are no longer greyed out in the sell list. **No Trade** and **No Rent** items still cannot be sold there.
+- You still can only hold one of a Lore item: the auction house will not let you bid on or buy one while you already have one (in your pack, worn or in your bank), and tells you so.
+
 ## 2026-11-26 · More foliage, and foliage that moves
 
 - New **Foliage** page under **Options → Extended → Graphics**, both off unless you choose them:
