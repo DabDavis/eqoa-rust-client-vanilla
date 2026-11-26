@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Click a name in chat to send them a tell
+
+- On the **PC interface**, the name at the start of someone's chat line (a say, shout, tell, whisper, group, raid or guild line) lights up under the mouse: **click it** and the chat line opens with `/tell <Name> ` already typed, ready for your message. Tags such as **[GM]**, **[OG]**, **[HC]** or **[AFK]** and a raid's **[L]**/**[H]** are left out, so the tell reaches them. NPCs' lines and the server's notices are not clickable.
+
 ## 2026-11-25 · Bags inventory and Compare Gear
 
 - New **Inventory Style** under **Options → Extended → UI → Inventory**: **Retail List** (the game's tabbed list, as before) or **Bags**, which shows your whole pack as a grid of item icons, like the bags in EQ and most MMOs. Stacks show their count on the icon, worn items have a gold frame and a **W**, and gear your class cannot wear is tinted red. The grid shows how full your pack is (for example **16/40**).
