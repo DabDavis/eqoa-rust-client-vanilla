@@ -1235,8 +1235,8 @@ impl ItemMenu {
             if let Some(c) = crate::compare::compare(info.inv, shown.max(0) as usize, class, race, level).filter(|_| shown >= 0)
                 && let Some(anchor) = self.shown_rect()
             {
-                let at = compare_at(crate::compare::height(&c), anchor, bags);
-                crate::compare::draw(vui, r, &c, info.inv, at, 1.0);
+                let (at, w) = compare_at(crate::compare::height(&c), anchor, bags);
+                crate::compare::draw_w(vui, r, &c, info.inv, at, w, 1.0);
             }
         }
         if self.inspect.visible {
@@ -1355,21 +1355,22 @@ impl ItemMenu {
     }
 }
 
-/// Where Compare Gear's panel (`h` high) goes, as a tooltip of the item
-/// shown at `anchor` (its cell or its row): in the grid under the cell (over
-/// it when there is no room), across the grid; beside the list, in the
-/// middle of the picture, level with the row. Kept above the start menu's
-/// bottom rail.
-fn compare_at(h: i32, anchor: [i32; 4], bags: bool) -> [i32; 2] {
+/// Where Compare Gear's panel (`h` high) goes, and how wide, for the item
+/// shown at `anchor` (its cell or its row): beside the grid, never over it
+/// (Heirloom petition 3267: under the cell it hid most of the grid round
+/// it), in the column right of the grid at the foot of the item's text,
+/// `compare::WIDTH_BESIDE` wide; beside the list, in the middle of the
+/// picture, level with the row. Kept above the start menu's bottom rail.
+fn compare_at(h: i32, anchor: [i32; 4], bags: bool) -> ([i32; 2], i32) {
     const BOTTOM: i32 = 334;
-    let w = crate::compare::WIDTH;
     if bags {
         let g = crate::bags::grid_rect();
-        let x = ((anchor[0] + anchor[2]) / 2 - w / 2).clamp(g[0] - 8, g[2] + 8 - w);
-        let y = if anchor[3] + 4 + h <= BOTTOM { anchor[3] + 4 } else { (anchor[1] - 4 - h).max(4) };
-        [x, y]
+        // right of the grid's frame (8 out from its cells), to the picture's edge
+        let x = g[2] + 8 + 4;
+        let w = crate::compare::WIDTH_BESIDE.min(640 - 4 - x);
+        ([x, (BOTTOM - h).max(4)], w)
     } else {
-        [anchor[2] + 34, anchor[1].clamp(48, (BOTTOM - h).max(48))]
+        ([anchor[2] + 34, anchor[1].clamp(48, (BOTTOM - h).max(48))], crate::compare::WIDTH)
     }
 }
 
@@ -1377,6 +1378,25 @@ fn compare_at(h: i32, anchor: [i32; 4], bags: bool) -> [i32; 2] {
 mod tests {
     use super::*;
     use net::dump::NetItem;
+
+    /// Compare Gear beside the grid (petition 3267): for every cell shown,
+    /// and a short and a tall panel, the panel is clear of the grid's frame
+    /// and inside the picture, above the bottom rail; the control: the
+    /// list's is beside its row as before.
+    #[test]
+    fn the_comparison_never_covers_the_grid() {
+        let g = crate::bags::grid_rect();
+        let frame = [g[0] - 8, g[1] - 8, g[2] + 8, g[3] + 8];
+        for cell in 0..crate::bags::COLS * crate::bags::ROWS {
+            let anchor = crate::bags::cell_rect(cell, 0).unwrap();
+            for h in [60, 200] {
+                let ([x, y], w) = compare_at(h, anchor, true);
+                assert!(x >= frame[2] && x + w <= 640 && y >= 0 && y + h <= 334, "cell {cell}, {h} high: at ({x}, {y}), {w} wide");
+            }
+        }
+        let row = [32, 92, 146, 136];
+        assert_eq!(compare_at(100, row, false), ([180, 92], crate::compare::WIDTH), "the control: the list's");
+    }
 
     fn it(wear: i64, p4c: i64, p54: i64, qty: i64) -> NetItem {
         let mut n = NetItem { quantity: qty, equip_slot: -1, quick_slot: -1, ..Default::default() };

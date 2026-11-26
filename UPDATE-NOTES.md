@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · The compare box no longer covers your bags
+
+- With **Inventory Style** at **Bags**, the **Compare Gear** box now sits in the column to the right of the grid, at the bottom, instead of under the item you are on: it never covers the bag slots, so you can always see where you are in the row. In the Retail List it stays beside the list as before.
+
 ## 2026-11-26 · Save and load the HUD layout from Options
 
 - **Options → Extended → UI → HUD Layout** now has **Save HUD Layout** and **Load HUD Layout**, beside **Move HUD** and **Reset HUD**, so you no longer need to type `/hud save` or `/hud load`.

@@ -461,7 +461,9 @@ or a browser (each described where it lives below):
   interface frames it as the list (`pcwindows`, Inventory); the mouse selects, uses, scrolls (the wheel)
   and hovers. Compare Gear (Bags Only, the default; Always, the list too; Off): an equippable item's stats
   beside the worn items wearing it would take off (`compare::replaced`: `EquipSlotFor` and `Msg003F`'s own
-  rule on a copy of the list), with the difference in green or red, as a tooltip at its cell or row. An
+  rule on a copy of the list), with the difference in green or red: beside the list level with the row, and
+  at Bags in the column right of the grid, never over it (Heirloom petition 3267, `itemmenu::compare_at`,
+  `compare::WIDTH_BESIDE`). An
   [OG] account's (`settings::qol::LOCKED`) is the game's list with no comparison. Nothing new goes to a
   server.
 - **The bank as bags, with a filter** (Heirloom petition 3265; `bank.rs`, `bags::Grid`, `bags::Filter`): at
