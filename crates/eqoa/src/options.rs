@@ -538,6 +538,9 @@ pub struct WndOptions {
     /// `HIT_ROWS` + row); and when
     hits: Hits,
     now: i64,
+    /// what Save or Load HUD Layout's ✕ said, on that row's page note
+    /// until the row is left or turned (petition 3266)
+    hud_said: Option<(i32, String)>,
 }
 
 impl WndOptions {
@@ -1030,8 +1033,17 @@ impl WndOptions {
                     INVENTORY_STYLE => c.inventory_bags = !c.inventory_bags,
                     BAG_SORT => c.bag_sort = c.bag_sort.step(d),
                     COMPARE_GEAR => c.compare_gear = c.compare_gear.step(d),
-                    // HUD Layouts (petition 2947): the next name; ✕ loads it (`select`)
-                    HUD_PROFILE => crate::hudlayout::step_picked(d),
+                    // Load HUD Layout (petition 2947): the next name; ✕ loads it (`select`)
+                    HUD_PROFILE => {
+                        crate::hudlayout::step_picked(d);
+                        self.hud_said = None;
+                    }
+                    // Save HUD Layout (petition 3266): a new layout or a
+                    // kept name to save over; ✕ saves (`select`)
+                    HUD_SAVE => {
+                        crate::hudlayout::step_save_pick(d);
+                        self.hud_said = None;
+                    }
                     // Mouseover Casting (petition 2960): the next cast on
                     MOUSEOVER_CAST => c.mouseover_cast = c.mouseover_cast.step(d),
                     // Spell Cooldowns (petition 2946): the bars from the next frame
@@ -1489,15 +1501,24 @@ impl WndOptions {
             }
             return false;
         }
-        // HUD Layouts: the one shown loaded (petition 2947)
+        // Load HUD Layout: the one shown loaded (petition 2947)
         if self.page == 3 && self.cat.is_some() && self.item == HUD_PROFILE {
             match crate::hudlayout::picked() {
                 Some(name) => {
                     crate::hudlayout::load_profile(&name);
+                    self.hud_said = Some((HUD_PROFILE, format!("Loaded {name}")));
                     cues.push(8);
                 }
                 None => cues.push(9),
             }
+            return false;
+        }
+        // Save HUD Layout: the HUD as it is kept under the row's name
+        // (petition 3266)
+        if self.page == 3 && self.cat.is_some() && self.item == HUD_SAVE {
+            let (kept, said) = crate::hudlayout::save_picked();
+            cues.push(if kept { 8 } else { 9 });
+            self.hud_said = Some((HUD_SAVE, said));
             return false;
         }
         // Reset HUD the same; Move HUD turns, as left and right turn it
@@ -1990,6 +2011,9 @@ impl WndOptions {
                 _ => None,
             },
             Note::Hud => match self.item {
+                HUD_SAVE | HUD_PROFILE if self.hud_said.as_ref().is_some_and(|s| s.0 == self.item) => self.hud_said.as_ref().map(|s| s.1.clone()),
+                HUD_SAVE => Some("Saves the HUD as it is now".to_string()),
+                HUD_PROFILE if crate::hudlayout::picked().is_some() => Some("Puts this layout on the HUD".to_string()),
                 76 if crate::hudlayout::unlocked() => Some(if crate::settings::pc_mode() { "Drag, pin or unpin each piece" } else { "Leave the menu and drag the pieces; the minimap's corner resizes it" }.to_string()),
                 SPELL_BAR_SIZE => Some("Also adjustable by dragging in Move HUD".to_string()),
                 _ => None,
@@ -2186,7 +2210,7 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (ITEM_ICONS, "Item Slot Icons"),
     (HOTKEY_LABEL, "Hotkey Label Size %"),
     (SPELL_COOLDOWNS, "Spell Cooldowns"),
-    (HUD_PROFILE, "HUD Layouts"),
+    (HUD_PROFILE, "Load HUD Layout"),
     (MOUSEOVER_CAST, "Mouseover Casting"),
     (NPC_DEBUFFS, "Debuff Icons"),
     (AUTO_LOOT, "Auto Loot"),
@@ -2215,6 +2239,7 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (FACTION_TRACK, "Faction Tracker"),
     (FACTION_TRACK_STYLE, "Faction Tracker Shows"),
     (MASTER_VOLUME, "Master Volume"),
+    (HUD_SAVE, "Save HUD Layout"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2327,6 +2352,10 @@ pub(crate) const FOLIAGE_DENSITY: i32 = 320;
 /// turned down under the game's Fx and Music Volume (`audio::set_master`),
 /// on Other's Sound page. 340, not the next free.
 pub(crate) const MASTER_VOLUME: i32 = 340;
+/// Save HUD Layout's (Heirloom petition 3266): the HUD kept under a name from
+/// the options (`hudlayout::save_picked`), on UI's HUD Layout page with Load
+/// HUD Layout (`HUD_PROFILE`) and Reset HUD.
+pub(crate) const HUD_SAVE: i32 = 341;
 pub(crate) const FOLIAGE_REACTS: i32 = 321;
 /// The Faction Tracker's rows (Heirloom petition 3216, 2026-11-26): Faction
 /// Tracker (Off, On: `factiontrack`) and Faction Tracker Shows (Number, Bar,
@@ -2469,7 +2498,8 @@ const ALL_CATEGORIES: [Category; 31] = [
     Category { name: "Group & Raid", items: &[49, 86, HEALTH_NUMBERS, GROUP_EFFECTS, 88], note: Note::None, group: Group::Ui },
     // Minimap Scroll Frame (2026-11-13) here: Map's page was full
     // Spell Bar Opacity (2026-11-13, ticket 1953) here: HUD's page is full
-    Category { name: "HUD Layout", items: &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT], note: Note::Hud, group: Group::Ui },
+    // Save and Load HUD Layout (petition 3266) with Move and Reset HUD
+    Category { name: "HUD Layout", items: &[76, HUD_SAVE, HUD_PROFILE, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT], note: Note::Hud, group: Group::Ui },
     // Debuff Icons (petition 2997) with the other things drawn at a plate
     // Own Name Plate (petition 3081) with the plates' rows
     Category { name: "Name Plates", items: &[27, 34, 85, TARGET_LEVEL, NPC_DEBUFFS, OWN_PLATE], note: Note::None, group: Group::Ui },
@@ -2499,7 +2529,7 @@ const ALL_CATEGORIES: [Category; 31] = [
     Category { name: "Interface Size", items: &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS, HOTKEY_LABEL], note: Note::None, group: Group::Ui },
     // what the HUD tells of its own pieces (petitions 2924-2928): HUD's page
     // is full
-    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS, SPELL_COOLDOWNS, HUD_PROFILE, TARGET_OF_TARGET], note: Note::None, group: Group::Ui },
+    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS, SPELL_COOLDOWNS, TARGET_OF_TARGET], note: Note::None, group: Group::Ui },
     // the friendly NPCs' squares on the minimap by role (petition 3092,
     // `minimapcolor`), and whose spell merchants
     Category { name: "Minimap Colors", items: &[300, 301, 302, 303, 304, 305, 306, crate::minimapcolor::SPELLS_SHOWN_ITEM], note: Note::None, group: Group::Ui },
@@ -2530,12 +2560,12 @@ fn category(i: usize) -> Category {
         // 2908), the chat's sizes the PC's
         (false, "Interface Size") => &[HUD_SCALE, NAMEPLATE_SCALE],
         (false, "Chat") => &[73, 89, R2_CHANNELS],
-        (false, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT],
+        (false, "HUD Layout") => &[76, HUD_SAVE, HUD_PROFILE, 77, 91, SPELL_BAR_OPACITY, SPELL_BAR_LAYOUT, UTILITY_LAYOUT],
         // Mouseover Casting is the mouse's (petition 2960)
         (false, "Combat") => &[78, 79, PETS_PASS, WEAPON_SWAP_BACK, ATTACK_ABILITIES],
         (true, "Chat") => &[73, 89, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY, CHAT_WAKE_ON_MESSAGE],
         (true, "HUD") => &[22, 30, 40, 58, 83],
-        (true, "HUD Layout") => &[76, 77, 91, SPELL_BAR_OPACITY, UTILITY_LAYOUT, SPELL_BAR_SIZE],
+        (true, "HUD Layout") => &[76, HUD_SAVE, HUD_PROFILE, 77, 91, SPELL_BAR_OPACITY, UTILITY_LAYOUT, SPELL_BAR_SIZE],
         _ => cat.items,
     };
     cat
@@ -2716,6 +2746,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         SPELL_COOLDOWNS => on_off(c.spell_cooldowns),
         MOUSEOVER_CAST => wide(c.mouseover_cast.name()),
         HUD_PROFILE => wide(&crate::hudlayout::picked().unwrap_or_else(|| "None saved".to_string())),
+        HUD_SAVE => wide(&crate::hudlayout::save_target().unwrap_or_else(|| "New Layout".to_string())),
         85 => on_off(c.head_marks),
         TARGET_LEVEL => on_off(c.target_level),
         TARGET_OF_TARGET => on_off(c.target_of_target_bar),
@@ -2973,7 +3004,9 @@ mod tests {
         assert!(category(hud).items.contains(&SPELL_BAR_SIZE));
         assert!(category(chat).items.contains(&CHAT_FADE_DELAY));
         assert!(category(chat).items.contains(&CHAT_WAKE_ON_MESSAGE));
-        assert!(category(hud).items.len() <= STANDARD_PAGE_ITEMS);
+        // HUD Layout is a long page since Save and Load HUD Layout came to it
+        // (petition 3266): it takes the menu's place, as Chat Tabs does
+        assert!(category(hud).items.len() <= MENU_MOST);
         assert!(category(chat).items.len() <= STANDARD_PAGE_ITEMS);
         let vui = vui();
         let mut options = GameOptions::default();
@@ -4309,6 +4342,11 @@ mod tests {
         press(&mut w, &mut o, key::CROSS, &mut cues);
         assert!(!crate::hudlayout::unlocked(), "✕ turns it too");
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, HUD_SAVE)), (HUD_SAVE, Some(wide("New Layout"))), "Save HUD Layout");
+        assert_eq!(w.page_note(w.cat.unwrap()).as_deref(), Some("Saves the HUD as it is now"));
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, HUD_PROFILE)), (HUD_PROFILE, Some(wide("None saved"))), "Load HUD Layout");
+        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.item, value_text(&vui, 77)), (77, Some(wide("Reset"))), "Reset HUD");
         for k in [key::RIGHT, key::LEFT, key::CROSS] {
             testing::put("hud.opt", b"chat l 1 t 1\n");
@@ -4550,7 +4588,7 @@ mod tests {
             vec![
                 ("HUD", vec!["Ability Bars", "Stacked Spell Bars", "Text", "HUD", "Pet Effects", "Buff Window"]),
                 ("Group & Raid", vec!["Raid List", "Power Bars", "Health Numbers", "Group Effects", "Raid Mercenaries"]),
-                ("HUD Layout", vec!["Move HUD", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity", "Spell Bar Layout", "Utility Bar Layout"]),
+                ("HUD Layout", vec!["Move HUD", "Save HUD Layout", "Load HUD Layout", "Reset HUD", "Minimap Scroll Frame", "Spell Bar Opacity", "Spell Bar Layout", "Utility Bar Layout"]),
                 ("Name Plates", vec!["Name Distance", "Overlapping Names", "Quest Markers", "Target Level", "Debuff Icons", "Own Name Plate"]),
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
                 ("Number Colors", [&n[..6], &n[8..]].concat()),
@@ -4559,7 +4597,7 @@ mod tests {
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
-                ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "HUD Layouts", "Target of Target"]),
+                ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "Target of Target"]),
                 ("Minimap Colors", crate::minimapcolor::LABELS.iter().copied().chain(["Spell Merchants Shown"]).collect()),
                 ("Inventory", vec!["Inventory Style", "Bag Sort", "Compare Gear"]),
                 ("Faction Tracker", vec!["Faction Tracker", "Faction Tracker Shows"]),

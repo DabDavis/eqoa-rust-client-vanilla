@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Save and load the HUD layout from Options
+
+- **Options → Extended → UI → HUD Layout** now has **Save HUD Layout** and **Load HUD Layout**, beside **Move HUD** and **Reset HUD**, so you no longer need to type `/hud save` or `/hud load`.
+- **Save HUD Layout**: shows **New Layout** (saved as *Layout 1*, *Layout 2* and so on) or, with left and right, one of your saved layouts to save over. Press ✕ (or click) to keep the HUD as it is now; the page says what it was saved as.
+- **Load HUD Layout**: left and right pick a saved layout, ✕ puts it on the HUD. (It was called *HUD Layouts* under HUD Extras.) `/hud save`, `/hud load`, `/hud delete` and `/hud list` still work.
+
 ## 2026-11-26 · Bank as bags, with a filter
 
 - With **Inventory Style** set to **Bags** (**Options → Extended → UI → Inventory**), the bank's **Items** page now shows your pack and your bank the same way: as grids of the items' icons, with stack counts, worn items framed in gold and what you cannot wear washed red, in your **Bag Sort** order. The selected item's description stays in the middle.

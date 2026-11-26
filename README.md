@@ -495,7 +495,9 @@ or a browser (each described where it lives below):
   to the cell later.
 - **HUD layouts** (petition 2947; `hudlayout`): `/hud save <name>` keeps the HUD as it is (every piece's
   place and size, and the interface's HUD Scale) under a name, `/hud load <name>`, `/hud delete <name>`,
-  `/hud list`; Extended > UI > HUD Extras' HUD Layouts steps through them and ✕ loads one. 20 at most, one
+  `/hud list`; Extended > UI > HUD Layout's Load HUD Layout steps through them and ✕ loads one, and its Save
+  HUD Layout (Heirloom petition 3266, `hudlayout::save_picked`) keeps the HUD as a new "Layout N" or over a
+  name stepped to, beside Move HUD and Reset HUD. 20 at most, one
   file an interface (`hud-profiles-pc.opt`, `hud-profiles.opt`), shared by every window and account (a
   full screen's layout and a half screen's for multiboxing).
 - **Mouseover Casting** (petition 2960, PC): a heal or buff cast at a target (scope 1, `autocast::guess`)
