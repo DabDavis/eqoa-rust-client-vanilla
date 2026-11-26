@@ -279,7 +279,11 @@ impl Response {
             let on = n as i32 + self.first == self.sel;
             let c = if on { [1.0, 1.0, 0.0, 1.0] } else { [1.0; 4] };
             let lines = self.window.count_lines(vui, r, &o.text, 430);
-            self.window.text_box(vui, r, &o.text, 50, row, 430, lines, c, 3);
+            if o.kind == 1 && quest_tail(&o.text) && crate::settings::head_marks() {
+                self.window.text_box(vui, &mut QuestTail(&mut *r), &o.text, 50, row, 430, lines, c, 3);
+            } else {
+                self.window.text_box(vui, r, &o.text, 50, row, 430, lines, c, 3);
+            }
             if on {
                 self.window.tick_r(vui, r, 40, row, true);
             }
@@ -290,6 +294,84 @@ impl Response {
         row += 1;
         let s = wide(&format!("|t{}", vui.words.get(161, vui.language)));
         self.window.text(vui, r, &s, 20, row, [1.0; 4], 1);
+    }
+}
+
+/// The yellow of a quest's mark: the head marks' (`play::MARK_COLOR`).
+const QUEST_MARK: [f32; 3] = [1.0, 0.86, 0.1];
+
+/// An answer that ends in " ?": go-eqoa-server's mark on a coach stop of a
+/// quest's step under way (its `questStopTag`, petition 3191), drawn yellow
+/// as the quest marks over the heads while Extended's Quest Markers is on;
+/// the PS2 shows it white.
+fn quest_tail(s: &[u16]) -> bool {
+    s.ends_with(&[b' ' as u16, b'?' as u16])
+}
+
+/// A raster that draws the last "?" of a row of a `quest_tail` answer in
+/// `QUEST_MARK` (keeping the row's alpha), the rest as asked: a row that ends
+/// " ?" or is that "?" alone, wrapped (a row cut at a space keeps the space,
+/// so a "?" ending a row is the mark's). The shadow (black) is left as it is.
+struct QuestTail<'a>(&'a mut dyn Raster);
+
+impl QuestTail<'_> {
+    /// `s` split before its mark, where a row ends in it.
+    fn split(s: &[u16]) -> Option<&[u16]> {
+        (s == [b'?' as u16] || quest_tail(s)).then(|| &s[..s.len() - 1])
+    }
+}
+
+impl Raster for QuestTail<'_> {
+    fn blit(&mut self, id: u32, flags: u32, at: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32) {
+        self.0.blit(id, flags, at, a, b, mode, alpha)
+    }
+    fn stretch_blit(&mut self, id: u32, flags: u32, at: [i32; 2], size: [i32; 2], a: [i32; 2], b: [i32; 2], mode: i32, alpha: f32) {
+        self.0.stretch_blit(id, flags, at, size, a, b, mode, alpha)
+    }
+    fn fill_fan(&mut self, color: [f32; 4], corners: [[i32; 2]; 4]) {
+        self.0.fill_fan(color, corners)
+    }
+    fn blit_full(&mut self, id: u32, flags: u32, at: [i32; 2], mode: i32, alpha: f32) {
+        self.0.blit_full(id, flags, at, mode, alpha)
+    }
+    fn draw_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16]) {
+        self.0.draw_string(at, color, s)
+    }
+    fn draw_centered_string(&mut self, at: [i32; 2], color: [f32; 4], s: &[u16], mode: u32) {
+        // mode 1 centres a row vertically only: x is its left, so the mark
+        // goes where the rest ends
+        match Self::split(s) {
+            Some(head) if mode == 1 && color[..3] != [0.0, 0.0, 0.0] => {
+                if !head.is_empty() {
+                    self.0.draw_centered_string(at, color, head, mode);
+                }
+                let x = at[0] + self.0.string_width(head).max(0);
+                let mark = [QUEST_MARK[0], QUEST_MARK[1], QUEST_MARK[2], color[3]];
+                self.0.draw_centered_string([x, at[1]], mark, &s[s.len() - 1..], mode);
+            }
+            _ => self.0.draw_centered_string(at, color, s, mode),
+        }
+    }
+    fn draw_string_scaled(&mut self, at: [f32; 2], color: [f32; 4], s: &[u16], scale: f32) {
+        self.0.draw_string_scaled(at, color, s, scale)
+    }
+    fn string_width(&self, s: &[u16]) -> i32 {
+        self.0.string_width(s)
+    }
+    fn point_size(&self) -> i32 {
+        self.0.point_size()
+    }
+    fn viewport(&self) -> [i32; 4] {
+        self.0.viewport()
+    }
+    fn set_viewport(&mut self, v: [i32; 4]) {
+        self.0.set_viewport(v)
+    }
+    fn native_list_scrollbars(&self) -> bool {
+        self.0.native_list_scrollbars()
+    }
+    fn has(&self, id: u32) -> bool {
+        self.0.has(id)
     }
 }
 
@@ -595,5 +677,58 @@ mod tests {
         eprintln!("long answers: {} a page, the window {top}..{bottom}", w.page());
         assert!(top >= 0 && bottom <= 448, "the window {top}..{bottom}");
         assert_eq!(w.options.iter().filter(|o| o.kind == 2).count(), 1, "More");
+    }
+
+    /// A raster that keeps each string drawn, its place and colour, over
+    /// the game's font's measures.
+    struct Rec(Font, Vec<([i32; 2], [f32; 4], String)>);
+    impl Raster for Rec {
+        fn blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn stretch_blit(&mut self, _: u32, _: u32, _: [i32; 2], _: [i32; 2], _: [i32; 2], _: [i32; 2], _: i32, _: f32) {}
+        fn fill_fan(&mut self, _: [f32; 4], _: [[i32; 2]; 4]) {}
+        fn blit_full(&mut self, _: u32, _: u32, _: [i32; 2], _: i32, _: f32) {}
+        fn draw_string(&mut self, at: [i32; 2], c: [f32; 4], s: &[u16]) {
+            self.1.push((at, c, String::from_utf16_lossy(s)));
+        }
+        fn draw_centered_string(&mut self, at: [i32; 2], c: [f32; 4], s: &[u16], _: u32) {
+            self.1.push((at, c, String::from_utf16_lossy(s)));
+        }
+        fn string_width(&self, s: &[u16]) -> i32 {
+            self.0.string_width(s)
+        }
+        fn point_size(&self) -> i32 {
+            self.0.point_size()
+        }
+        fn viewport(&self) -> [i32; 4] {
+            [0, 0, 639, 447]
+        }
+        fn set_viewport(&mut self, _: [i32; 4]) {}
+    }
+
+    /// Heirloom petition 3191: a coach stop of a quest's step ends " ?"
+    /// (go-eqoa-server's questStopTag, after the coachman's period); its "?"
+    /// is drawn yellow, the quest marks' yellow, right after the rest of its
+    /// row, and its shadow stays black. The control: a stop with no tag, and
+    /// one whose sentence ends in a question mark of its own ("...Fayspires?"),
+    /// have no yellow.
+    #[test]
+    fn a_quest_stops_trailing_mark_is_yellow() {
+        let vui = Vui::new(Default::default(), Default::default(), Vec::new());
+        let mut r = Rec(font(), Vec::new());
+        let mut w = Response::default();
+        let stops = ["Get me a horse to Aviak Village. ?", "Get me a horse to West Plateau.", "How about one to Fayspires?"];
+        w.set_dialog(&vui, dialog("Welcome my friend, do you need to take a horse somewhere?", 3, |i| stops[i].to_string()));
+        w.draw(&vui, &mut r);
+        r.1.clear();
+        w.sel = 1; // the first unselected, drawn white
+        w.draw(&vui, &mut r);
+        let yellow: Vec<_> = r.1.iter().filter(|(_, c, _)| c[..3] == QUEST_MARK).collect();
+        assert_eq!(yellow.len(), 1, "one yellow mark: {:?}", r.1);
+        assert_eq!(yellow[0].2, "?");
+        let head = r.1.iter().find(|(_, c, s)| c[..3] == [1.0, 1.0, 1.0] && s == "Get me a horse to Aviak Village. ").expect("the rest of the row, white");
+        assert_eq!(yellow[0].0, [head.0[0] + r.string_width(&wide(&head.2)), head.0[1]], "the mark right after the row");
+        assert_eq!(yellow[0].1[3], head.1[3], "the row's alpha");
+        assert!(r.1.iter().any(|(_, c, s)| c[..3] == [0.0, 0.0, 0.0] && s == "Get me a horse to Aviak Village. ?"), "the shadow whole and black");
+        assert!(r.1.iter().any(|(_, c, s)| c[..3] == [1.0, 1.0, 1.0] && s == "How about one to Fayspires?"), "its own question mark white");
     }
 }
