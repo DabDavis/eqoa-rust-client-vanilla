@@ -206,6 +206,7 @@ mod particles;
 mod patcher;
 mod play;
 mod pointer;
+mod scrollbar;
 mod pregame;
 mod rings;
 mod scene;

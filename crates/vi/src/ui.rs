@@ -81,6 +81,18 @@ pub fn font_id() -> u32 {
 /// finds it in the dictionary first); a string goes in the font's colour
 /// as `VIFont` hands it over; the viewport is inclusive (x1, y1, x2, y2)
 /// and moves the origin as well as cutting.
+/// Where `DrawVScroll` put a scroll bar: its top left, its height, its width,
+/// the knob's size and where the knob is (`t`, 0 top to 1 bottom; outside
+/// that, no knob). The pointer's to grab (`eqoa::scrollbar`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VBar {
+    pub at: [i32; 2],
+    pub h: i32,
+    pub w: i32,
+    pub knob: [i32; 2],
+    pub t: f32,
+}
+
 pub trait Raster {
     /// `Blit(i, flags, at, a, b, m, alpha)`: texels `a` .. `a + b`, `b`
     /// big at `at`, mirrored by `flags & 3`.
@@ -114,6 +126,9 @@ pub trait Raster {
     /// Whether to draw the original lists' vertical position indicators.
     /// A PC window supplies its own interactive scrollbars when undersized.
     fn native_list_scrollbars(&self) -> bool { true }
+    /// A vertical scroll bar was just drawn (`Window::draw_vscroll`), here:
+    /// the client's pointer notes where, to grab its knob.
+    fn note_vscroll(&mut self, _bar: VBar) {}
     /// Whether surface `id` is there to draw (CLIENT's icon cache asks; a
     /// recorder has everything).
     fn has(&self, _id: u32) -> bool {
@@ -768,15 +783,25 @@ impl Window {
     }
 
     /// `DrawVScroll(at, h, t, flags)`: the bar down `h` and the thumb at
-    /// `t` (0 top, 1 bottom; none outside that).
+    /// `t` (0 top, 1 bottom; none outside that). The raster is told where it
+    /// went (`Raster::note_vscroll`).
     pub fn draw_vscroll(&self, vui: &Vui, ui: &mut dyn Raster, at: [i32; 2], h: i32, t: f32) {
-        if !ui.native_list_scrollbars() { return; }
+        if let Some(bar) = self.draw_vscroll_bar(vui, ui, at, h, t) {
+            ui.note_vscroll(bar);
+        }
+    }
+
+    /// `draw_vscroll`, handing back where the bar went (none when the raster
+    /// draws no such bars) instead of telling the raster.
+    pub fn draw_vscroll_bar(&self, vui: &Vui, ui: &mut dyn Raster, at: [i32; 2], h: i32, t: f32) -> Option<VBar> {
+        if !ui.native_list_scrollbars() { return None; }
         let e = vui.entry(84);
         vui.blit_vert_bar(ui, at, 81, 83, 82, h, 3, self.open);
         if (0.0..=1.0).contains(&t) {
             let p = [at[0] - 1, at[1] + (t * (h - e.uv1[1]) as f32) as i32];
             vui.blit_ex(ui, e.x00, p, 3, self.open, 0);
         }
+        Some(VBar { at, h, w: vui.entry(81).uv1[0], knob: [e.uv1[0], e.uv1[1]], t })
     }
 
     /// `CountLines(s, w)`: the rows `s` wraps to at `w` (`TextBox`

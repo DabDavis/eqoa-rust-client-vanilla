@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Drag the scroll bar's blue knob
+
+- In the **chat box**, with its history up (scrolled back), **press the blue knob on the scroll bar and drag it**: the history goes with the mouse (or your finger), from the oldest lines at the top of the bar to the newest at its foot, so a long history is a quick drag away. Let go at the foot and the chat is live again. A click on the bar **above or below the knob** pages the history older or newer.
+- In the game's **windows with a scroll bar** (the PS2-style windows, with the PC interface off), the same drag: hold the knob and move, and the list follows the pointer a row at a time.
+- The bars look as ever.
+
 ## 2026-11-26 · No map on Night 4
 
 - On the Plane of Sky's **Night Chain 4**, the isle whose floor has squares that are not really there, the **minimap** no longer shows the floor: standing on the isle it is blank and says *The sky hides the way*. The **map** (M) shows the isle as a plain square, so neither gives away which squares are false. Everywhere else both are as before.
