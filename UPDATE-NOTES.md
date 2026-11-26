@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · A kappa's shell over its robe
+
+- A **Kappa**'s shell stays its own: a robe, a tunic or a breastplate goes on its front, sides and arms, under the shell, instead of being stretched across the shell's back.
+
 ## 2026-11-26 · A Wisp in its raiment shows no skin
 
 - A **Wisp** wearing its gear (Wisp's Raiment) no longer shows a human's skin through its armour or robe: where a robe or a tunic is cut open (a female Wisp's robe at the chest, a tunic's bare arms) there is nothing, as everywhere else on a Wisp.
