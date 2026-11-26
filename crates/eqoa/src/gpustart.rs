@@ -75,6 +75,22 @@ fn choose(died: Option<Backends>, kept: Option<Backends>) -> (Option<Backends>, 
     }
 }
 
+/// What a Windows start asks of the instance when nothing chose (no
+/// `WGPU_BACKEND`, no marker, nothing kept): the primary APIs, Vulkan and
+/// DirectX 12, never OpenGL. wgpu's own choice there holds OpenGL too, and its
+/// Windows OpenGL (WGL) setup can die while the instance is made, before any
+/// adapter is asked for, on a machine that draws with Vulkan (Heirloom
+/// petition 3308 and F3 20261126-014252: an AMD Radeon Vega 8 on Vulkan,
+/// "wgpu-hal-30.0.1/src/gles/wgl.rs:173:46: called `Result::unwrap()` on an
+/// `Err` value ... The operation completed successfully", twice in a day).
+/// Elsewhere, and whenever something chose, the choice as it was.
+fn instance_backends(chosen: Option<Backends>, windows: bool) -> Option<Backends> {
+    match chosen {
+        None if windows => Some(Backends::PRIMARY),
+        other => other,
+    }
+}
+
 impl Start {
     /// Before the instance is made: the marker read, the choice made and
     /// logged, the marker written.
@@ -104,6 +120,7 @@ impl Start {
                 let _ = std::fs::remove_file(k);
             }
         }
+        let backends = instance_backends(backends, cfg!(windows));
         let trying = backends.unwrap_or(Backends::PRIMARY);
         if let Some(m) = &marker {
             let _ = std::fs::write(m, names(trying));
@@ -175,6 +192,20 @@ mod tests {
         for n in ["AMD Radeon RX 6600 (RADV NAVI23)", "NVIDIA GeForce RTX 3060", "Intel(R) UHD Graphics 630", "Apple M1"] {
             assert!(!software(n, false), "the control: {n}");
         }
+    }
+
+    /// A Windows start that nothing chose asks for the primary APIs, never
+    /// OpenGL, whose Windows setup can die while the instance is made
+    /// (petition 3308). The controls: a choice (a fallback, something kept)
+    /// stands as it was, and elsewhere nothing chosen is still wgpu's own.
+    #[test]
+    fn windows_asks_no_opengl_unless_chosen() {
+        let b = instance_backends(None, true).expect("a choice on Windows");
+        assert!(!b.contains(Backends::GL), "no OpenGL: {b:?}");
+        assert!(b.contains(Backends::VULKAN) && b.contains(Backends::DX12), "Vulkan and DirectX 12: {b:?}");
+        assert_eq!(instance_backends(Some(Backends::DX12), true), Some(Backends::DX12), "the control: a fallback stands");
+        assert_eq!(instance_backends(Some(Backends::GL), true), Some(Backends::GL), "the control: a kept OpenGL stands");
+        assert_eq!(instance_backends(None, false), None, "the control: elsewhere wgpu chooses");
     }
 
     #[test]
