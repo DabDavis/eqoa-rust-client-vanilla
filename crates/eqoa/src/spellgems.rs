@@ -366,7 +366,7 @@ mod tests {
         play.ability_token = 0x55;
         play.session.record = Some(Vec::new());
         for (id, display_index, slot) in [(10, 3, 0), (20, 4, 39)] {
-            play.abilities.insert(id, Ability { id, display_index, slot, valid: 1, ..Default::default() });
+            play.abilities.insert(id, Ability { id, display_index, slot, scope: 1, valid: 1, ..Default::default() });
         }
         let bars = play.hud_bars();
         play.hud_menus.build(&play.abilities, &play.dump.inventory, &play.gear, bars);

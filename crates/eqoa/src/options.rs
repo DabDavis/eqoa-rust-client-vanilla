@@ -482,6 +482,7 @@ pub struct WndOptions {
     /// And on one whose meter counts damage alone (layout 1), that it does,
     /// while DPS Meter Columns or Sort is chosen
     pub meter_heal_note: Option<String>,
+    pub meter_merc_note: Option<&'static str>,
     /// In the world on a server that offers no item links, that it has none
     /// (`Play::agree_item_links` sets it), the Chat page's legend's
     pub links_note: Option<String>,
@@ -1034,6 +1035,7 @@ impl WndOptions {
                     // Target Level: drawn or not from the next frame
                     // (`hud::draw_target`)
                     TARGET_LEVEL => c.target_level = !c.target_level,
+                    TARGET_OF_TARGET => c.target_of_target_bar = !c.target_of_target_bar,
                     // Own Name Plate: the player's plate from the next frame
                     // (`Play::plates`)
                     OWN_PLATE => c.own_plate = !c.own_plate,
@@ -1171,6 +1173,7 @@ impl WndOptions {
                     DPS_COLUMNS => c.dps_columns = c.dps_columns.step(d),
                     // DPS Meter Sort: round the columns shown
                     DPS_SORT => c.dps_sort = c.dps_sort.step(c.dps_columns, d),
+                    DPS_HIDE_MERCS => c.dps_hide_mercenary = !c.dps_hide_mercenary,
                     // Item Links: the server told from the next frame
                     // (`Session::agree_item_links`), the chat box's links drawn
                     // or plain, the windows closed when off (`itemlink`)
@@ -1442,6 +1445,15 @@ impl WndOptions {
         if self.page == 3 && self.cat.is_some() && self.item == 72 {
             crate::dpsmeter::ask_reset();
             cues.push(8);
+            return false;
+        }
+        if self.page == 3 && self.cat.is_some() && self.item == DPS_HIDE_MERCS {
+            if crate::settings::qol::item_off(self.item, TARGET_LEVEL) {
+                cues.push(9);
+            } else {
+                crate::settings::toggle_dps_hide_mercenary();
+                cues.push(11);
+            }
             return false;
         }
         // HUD Layouts: the one shown loaded (petition 2947)
@@ -1928,6 +1940,7 @@ impl WndOptions {
             },
             Note::Meter => match self.item {
                 DPS_COLUMNS | DPS_SORT => self.meter_note.clone().or_else(|| self.meter_heal_note.clone()),
+                DPS_HIDE_MERCS => self.meter_note.clone().or_else(|| self.meter_merc_note.map(str::to_string)),
                 70..=72 => self.meter_note.clone(),
                 _ => None,
             },
@@ -2149,10 +2162,12 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (INVENTORY_STYLE, "Inventory Style"),
     (BAG_SORT, "Bag Sort"),
     (COMPARE_GEAR, "Compare Gear"),
+    (DPS_HIDE_MERCS, "Hide mercs"),
     (crate::numcolor::TAKEN_ITEM, crate::numcolor::LABELS[crate::numcolor::TAKEN]),
     (OWN_PLATE, "Own Name Plate"),
     (COACH_TALK, "Coach Talk on Arrival"),
     (STRAFE_SPEED, "Strafe Speed"),
+    (TARGET_OF_TARGET, "Target of Target"),
     (300, crate::minimapcolor::LABELS[0]),
     (301, crate::minimapcolor::LABELS[1]),
     (302, crate::minimapcolor::LABELS[2]),
@@ -2264,12 +2279,14 @@ const OWN_PLATE: i32 = 291;
 /// `qol::AUTO_CAST` turns them off with the automation.
 pub(crate) const COACH_TALK: i32 = 292;
 pub(crate) const STRAFE_SPEED: i32 = 293;
+pub(crate) const TARGET_OF_TARGET: i32 = 294;
 /// Inventory's rows (Heirloom petition 3118): Inventory Style (Retail List
 /// or Bags, `bags`), Bag Sort, Compare Gear (`compare`). An [OG] account's
 /// (`qol::LOCKED`) read as the game's and do not turn.
 pub(crate) const INVENTORY_STYLE: i32 = 275;
 pub(crate) const BAG_SORT: i32 = 276;
 pub(crate) const COMPARE_GEAR: i32 = 277;
+pub(crate) const DPS_HIDE_MERCS: i32 = 278;
 
 const HUD_SCALE: i32 = 240;
 const NAMEPLATE_SCALE: i32 = 241;
@@ -2403,7 +2420,7 @@ const ALL_CATEGORIES: [Category; 29] = [
     Category { name: "Map", items: &[41, 42, 87, 43, 44, 45], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
-    Category { name: "DPS Meter", items: &[70, 71, DPS_COLUMNS, DPS_SORT, 72], note: Note::Meter, group: Group::Ui },
+    Category { name: "DPS Meter", items: &[70, 71, DPS_COLUMNS, DPS_SORT, DPS_HIDE_MERCS, 72], note: Note::Meter, group: Group::Ui },
     Category { name: "Chat", items: &[73, 89, R2_CHANNELS, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY], note: Note::Links, group: Group::Ui },
     Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE, AUTO_LOOT], note: Note::Shortcuts, group: Group::Other },
     Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK, MOUSEOVER_CAST, ATTACK_ABILITIES], note: Note::None, group: Group::Other },
@@ -2426,7 +2443,7 @@ const ALL_CATEGORIES: [Category; 29] = [
     Category { name: "Interface Size", items: &[HUD_SCALE, NAMEPLATE_SCALE, CHAT_WIDTH, CHAT_ROWS, HOTKEY_LABEL], note: Note::None, group: Group::Ui },
     // what the HUD tells of its own pieces (petitions 2924-2928): HUD's page
     // is full
-    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS, SPELL_COOLDOWNS, HUD_PROFILE], note: Note::None, group: Group::Ui },
+    Category { name: "HUD Extras", items: &[BUFF_TIMERS, STAT_WINDOW, ITEM_ICONS, SPELL_COOLDOWNS, HUD_PROFILE, TARGET_OF_TARGET], note: Note::None, group: Group::Ui },
     // the friendly NPCs' squares on the minimap by role (petition 3092,
     // `minimapcolor`), and whose spell merchants
     Category { name: "Minimap Colors", items: &[300, 301, 302, 303, 304, 305, 306, crate::minimapcolor::SPELLS_SHOWN_ITEM], note: Note::None, group: Group::Ui },
@@ -2634,6 +2651,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         HUD_PROFILE => wide(&crate::hudlayout::picked().unwrap_or_else(|| "None saved".to_string())),
         85 => on_off(c.head_marks),
         TARGET_LEVEL => on_off(c.target_level),
+        TARGET_OF_TARGET => on_off(c.target_of_target_bar),
         OWN_PLATE => on_off(c.own_plate),
         COACH_TALK => on_off(c.coach_talk),
         STRAFE_SPEED => wide(if c.strafe_match { "Match Forward" } else { "Retail" }),
@@ -2659,6 +2677,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         71 => wide(c.dps_view.name()),
         DPS_COLUMNS => wide(c.dps_columns.name()),
         DPS_SORT => wide(c.dps_sort.fit(c.dps_columns).name()),
+        DPS_HIDE_MERCS => on_off(c.dps_hide_mercenary),
         72 => wide("Reset"),
         76 => on_off(crate::hudlayout::unlocked()),
         MOVE_TOUCH => on_off(crate::touch::editing()),
@@ -3507,6 +3526,14 @@ mod tests {
         assert!(settings::power_bars() && settings::raid_list(), "moving no other row");
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::health_numbers(), "and back: two values");
+        goto!(TARGET_OF_TARGET);
+        assert_eq!(w.item, TARGET_OF_TARGET);
+        assert_eq!(value_text(&vui, TARGET_OF_TARGET), Some(wide(vui.words.get(552, vui.language))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert!(settings::target_of_target_bar());
+        assert_eq!(value_text(&vui, TARGET_OF_TARGET), Some(wide(vui.words.get(551, vui.language))));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::target_of_target_bar());
         goto!(GROUP_EFFECTS);
         assert_eq!(w.item, GROUP_EFFECTS, "Group Effects");
         assert!(settings::group_effects(), "on: the members' tiny icons beside their bars");
@@ -3953,6 +3980,13 @@ mod tests {
             press(&mut w, &mut o, key::DOWN, &mut cues);
         }
         press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!(w.item, DPS_HIDE_MERCS);
+        assert!(!settings::client().dps_hide_mercenary);
+        press(&mut w, &mut o, key::CROSS, &mut cues);
+        assert!(settings::client().dps_hide_mercenary);
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert!(!settings::client().dps_hide_mercenary);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.item, value_text(&vui, 72)), (72, Some(wide("Reset"))), "Reset DPS Meter");
         assert!(!crate::dpsmeter::take_reset(), "none asked yet");
         for k in [key::RIGHT, key::LEFT, key::CROSS] {
@@ -4350,11 +4384,11 @@ mod tests {
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker"]),
                 ("Number Colors", [&n[..6], &n[8..]].concat()),
                 ("Merc Colors", n[6..8].to_vec()),
-                ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "DPS Meter Columns", "DPS Meter Sort", "Reset DPS Meter"]),
+                ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "DPS Meter Columns", "DPS Meter Sort", "Hide mercs", "Reset DPS Meter"]),
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
-                ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "HUD Layouts"]),
+                ("HUD Extras", vec!["Buff Timers", "Stat Window", "Item Slot Icons", "Spell Cooldowns", "HUD Layouts", "Target of Target"]),
                 ("Minimap Colors", crate::minimapcolor::LABELS.iter().copied().chain(["Spell Merchants Shown"]).collect()),
                 ("Inventory", vec!["Inventory Style", "Bag Sort", "Compare Gear"]),
             ],
@@ -4859,13 +4893,13 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST, AUTO_LOOT, ATTACK_ABILITIES, DPS_COLUMNS, DPS_SORT, crate::numcolor::TAKEN_ITEM, COACH_TALK, STRAFE_SPEED];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, TARGET_OF_TARGET, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST, AUTO_LOOT, ATTACK_ABILITIES, DPS_COLUMNS, DPS_SORT, DPS_HIDE_MERCS, crate::numcolor::TAKEN_ITEM, COACH_TALK, STRAFE_SPEED];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");
         }
         let off_text = Some(wide(vui.words.get(552, vui.language)));
-        for item in [44, TARGET_LEVEL, 70, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, AUTO_LOOT, ATTACK_ABILITIES, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
+        for item in [44, TARGET_LEVEL, TARGET_OF_TARGET, 70, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, AUTO_LOOT, ATTACK_ABILITIES, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT] {
             for k in path_to(&w, item) {
                 w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
                 w.draw(&vui, &mut NullRaster, &o, &mut ups);

@@ -9741,12 +9741,16 @@ impl Play {
         if self.carried_gem() == Some(id) {
             return;
         }
-        let Some(slot) = self.abilities.get(&id).map(|a| a.slot) else { return };
-        eprintln!("play: use slot {slot} ({:?})", self.abilities.get(&id).map_or("", |a| a.name.as_str()));
-        // Mouseover Casting (petition 2960): a friend's heal or buff at the
-        // one under the mouse, the target kept (0x0032 names its own target,
-        // which the server casts at)
-        let at = self.abilities.get(&id).and_then(|a| self.mouseover_target(a)).unwrap_or(self.target);
+        let Some(ability) = self.abilities.get(&id) else { return };
+        let slot = ability.slot;
+        eprintln!("play: use slot {slot} ({:?})", ability.name);
+        // The cast request has its own target. Self-only abilities name the
+        // caster, and Mouseover Casting can redirect a targeted heal or buff.
+        let at = if ability.scope == 0 {
+            self.self_id32().unwrap_or(u32::MAX)
+        } else {
+            self.mouseover_target(ability).unwrap_or(self.target)
+        };
         // Attack With Abilities (petition 3015): an attack ability at a
         // hostile target, its start of the auto-attack waiting on the
         // server's lockout for it
@@ -11417,6 +11421,13 @@ impl Play {
                 vui.blit_bar(&mut r, &text, [0.8, 0.8, 0.8, a], [320 - ((w + 50) >> 1), 229], 33, 34, w + 50, 3, a, 0, true);
             }
             hud.draw(vui, &mut r, &state);
+            if crate::settings::target_of_target_bar() {
+                let moving = self.hud_moving();
+                let health = if moving { None } else { self.target_of_target(target) };
+                if moving || health.is_some() {
+                    crate::hud::draw_target_of_target(vui, &mut r, health);
+                }
+            }
             // a server's player search (`searchwnd`), drawn where S2 draws
             // it, in `VIWndGame::OnDrawSelf` before the windows it owns (the
             // effects, the chat box); while it is up the player and the
@@ -11968,6 +11979,8 @@ impl Play {
         if self.options_wnd.meter_heal_note.as_deref() != heal_note {
             self.options_wnd.meter_heal_note = heal_note.map(str::to_string);
         }
+        self.options_wnd.meter_merc_note = (self.session.dps_meter_offer && self.session.dps_meter_layout < net::session::DPS_METER_MERC_LINES)
+            .then_some("Mercenary breakdown requires a newer server");
     }
 
     /// Whether the HUD's pieces move now (`hudlayout`): Move HUD on, in play
@@ -12071,8 +12084,11 @@ impl Play {
     /// What the DPS meter's panel shows while it is up: the DPS Meter on, a
     /// server that keeps one, the HUD's right side up (`right_hud_up`).
     fn meter_shown(&self) -> Option<crate::dpsmeter::Shown> {
-        (crate::settings::dps_meter() && self.session.dps_meter_offer && self.right_hud_up())
-            .then(|| self.meter.shown_by(crate::settings::dps_view(), &self.pet_name, crate::settings::dps_columns(), crate::settings::dps_sort()))
+        let c = crate::settings::client();
+        (c.dps_meter && self.session.dps_meter_offer && self.right_hud_up()).then(|| {
+            let hide_mercs = (self.session.dps_meter_layout >= net::session::DPS_METER_MERC_LINES).then_some(c.dps_hide_mercenary);
+            self.meter.shown_by(c.dps_view, &self.pet_name, c.dps_columns, c.dps_sort, hide_mercs)
+        })
     }
 
     /// The meter's other view (Fight or Overall), from its list's top.
@@ -12090,6 +12106,10 @@ impl Play {
         match hit {
             Hit::View => self.dps_toggle_view(),
             Hit::Reset => self.dps_reset(),
+            Hit::HideMercs => {
+                crate::settings::toggle_dps_hide_mercenary();
+                self.meter.first = 0;
+            }
             Hit::Rows => {
                 let first = self.meter.first;
                 self.meter.first = self.hud.as_ref().map_or(0, |h| h.2.meter_page(first));
@@ -12394,6 +12414,21 @@ impl Play {
             (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
         });
         Some(crate::focus::Shown { name: f.name.clone(), con: f.con, hp: e.p19, distance })
+    }
+
+    /// Follow the selected creature's target ID in this session's entity stream.
+    fn target_of_target(&self, target: Option<&net::entity::Entity>) -> Option<(&str, u8)> {
+        let target = target?;
+        if target.id == u32::MAX || target.p19 == 0 || target.p18 & 2 != 0 || i64::from(target.world) != self.player.world {
+            return None;
+        }
+        let id = target.creature.as_ref()?.target;
+        if matches!(id, 0 | u32::MAX) {
+            return None;
+        }
+        let entity = self.entities.slots.iter().flatten().find(|e| e.id == id && e.world == target.world)?;
+        let name = entity.creature.as_ref()?.name.as_str();
+        Some((name, entity.p19))
     }
 
     fn drop_dead_target_info(&mut self) {
@@ -15048,7 +15083,7 @@ mod commands {
         let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
         let mut p = Play::new(s, Player::default(), Box::default());
-        p.abilities.insert(7, net::dump::Ability { slot: 1, name: "Sanctuary".into(), ..Default::default() });
+        p.abilities.insert(7, net::dump::Ability { slot: 1, scope: 1, name: "Minor Healing".into(), ..Default::default() });
         p.ability_token = 0x55;
         p.target = 0x4242;
         let used = |p: &mut Play, r: crate::s2::Rules| -> Vec<u8> {
@@ -15099,8 +15134,8 @@ mod commands {
             s.expansion = 2;
             let mut p = Play::new(s, Player::default(), Box::default());
             p.mode = 0;
-            for (id, slot, name) in [(1, 0, "Fire Bolt"), (2, 10, "Ice Comet"), (3, 19, "Lightning Strike"), (4, 7, "Gate")] {
-                p.abilities.insert(id, net::dump::Ability { id, valid: 1, slot, name: name.into(), icon_front: 100 + id, ..Default::default() });
+            for (id, slot, scope, name) in [(1, 0, 1, "Fire Bolt"), (2, 10, 1, "Ice Comet"), (3, 19, 1, "Lightning Strike"), (4, 7, 0, "Gate")] {
+                p.abilities.insert(id, net::dump::Ability { id, valid: 1, slot, scope, name: name.into(), icon_front: 100 + id, ..Default::default() });
             }
             p.ability_token = 0x55;
             p.target = 0x4242;
@@ -15118,7 +15153,12 @@ mod commands {
             guaranteed(&sent.borrow()).into_iter().find(|m| m.starts_with(&[0x32, 0x00]))
         };
         let retail = crate::s2::Rules::retail;
-        let used = |slot: u8| Some(vec![0x32, 0x00, 0x55, 0, 0, 0, slot, 0x42, 0x42, 0, 0]);
+        let used = |slot: u8| {
+            let target: u32 = if slot == 7 { 0x100 } else { 0x4242 };
+            let mut msg = vec![0x32, 0x00, 0x55, 0, 0, 0, slot];
+            msg.extend_from_slice(&target.to_le_bytes());
+            Some(msg)
+        };
 
         let mut p = fresh();
         p.hud_menus.menus[2].sel = 3;
@@ -15139,7 +15179,8 @@ mod commands {
         sent.borrow_mut().clear();
         clicked.hud_key(click);
         clicked.session.flush();
-        assert_eq!(guaranteed(&sent.borrow()).into_iter().find(|m| m.starts_with(&[0x32, 0x00])), used(7), "PC mouse slot reaches the same cast packet");
+        assert_eq!(guaranteed(&sent.borrow()).into_iter().find(|m| m.starts_with(&[0x32, 0x00])), used(7), "the self-only spell names the caster");
+        assert_eq!(clicked.target, 0x4242, "casting Gate keeps the selected target");
         assert_eq!(key(&mut p, 2, 0, retail()), used(10), "bar 3's first slot: slot 10");
         assert_eq!((p.hud_menus.menus[4].sel, p.hud_menus.menus[2].sel), (0, 3), "bar 3's menu selected, the items' left");
         assert_eq!(key(&mut p, 3, 4, retail()), used(19), "bar 4's fifth slot: slot 19");
@@ -15191,7 +15232,7 @@ mod commands {
         for slot in 20..40 {
             let mut pc = fresh();
             let (bar, cell) = (crate::hudmenu::PC_ACTION_BAR + (slot - 20) / 10, slot % 10);
-            pc.abilities.insert(120, net::dump::Ability { id: 120, display_index: 22, slot: -1, valid: 0, ..Default::default() });
+            pc.abilities.insert(120, net::dump::Ability { id: 120, display_index: 22, slot: -1, scope: 1, valid: 0, ..Default::default() });
             pc.book_actions(vec![crate::spellbook::Out::Send0033(22, slot as i64)]);
             pc.session.flush();
             assert_eq!(op(guaranteed(&sent.borrow()), 0x33), Some(vec![0x33, 0, 0x55, 0, 0, 0, 22, slot as u8]));
@@ -15200,7 +15241,7 @@ mod commands {
             assert_eq!(key(&mut pc, bar, cell, retail()), used(slot as u8), "acknowledged slot {}", slot + 1);
         }
         let mut limited = fresh();
-        limited.abilities.insert(120, net::dump::Ability { id: 120, slot: 39, valid: 1, ..Default::default() });
+        limited.abilities.insert(120, net::dump::Ability { id: 120, slot: 39, scope: 1, valid: 1, ..Default::default() });
         limited.session.expansion = 0;
         assert_eq!(limited.pc_slot_capacity(), Some(5));
         assert_eq!(key(&mut limited, crate::hudmenu::PC_ACTION_BAR + 1, 9, retail()), None);
@@ -15279,7 +15320,7 @@ mod commands {
             p.mode = 0;
             p.ability_token = 0x55;
             p.target = 0x4242;
-            p.abilities.insert(200, net::dump::Ability { id: 200, slot: slot as i64, valid: 1, icon_front: 101, ..Default::default() });
+            p.abilities.insert(200, net::dump::Ability { id: 200, slot: slot as i64, scope: 1, valid: 1, icon_front: 101, ..Default::default() });
             let bars = p.hud_bars();
             p.hud_menus.build(&p.abilities, &p.dump.inventory, &p.gear, bars);
             p.hud_menus.sync_pc_slots(&p.abilities, None);
@@ -15971,6 +16012,17 @@ mod commands {
             p.chat_line("/dps damage");
             assert_eq!(said(&p), "The DPS meter is ranked by damage.");
         }
+        assert_eq!(p.options_wnd.meter_merc_note, Some("Mercenary breakdown requires a newer server"));
+        p.session.dps_meter_layout = 4;
+        p.agree_dps_meter();
+        assert_eq!(p.options_wnd.meter_merc_note, None);
+        p.meter.first = 5;
+        p.meter_point(crate::dpsmeter::Hit::HideMercs);
+        assert!(crate::settings::client().dps_hide_mercenary);
+        assert_eq!(p.meter.first, 0);
+        assert!(ours(&mut p).is_empty(), "the filter is local to the client");
+        p.meter_point(crate::dpsmeter::Hit::HideMercs);
+        assert!(!crate::settings::client().dps_hide_mercenary);
         p.chat_line("/dps off");
         assert!(!crate::settings::dps_meter());
         p.meter.take(fight(7, false));
@@ -16366,6 +16418,41 @@ mod commands {
         assert_eq!((p.target, p.auto_attack), (0x300, true));
         p.msg_007b(u32::MAX);
         assert_eq!((p.target, last_line(&p)), (0x300, "(word 838)"));
+    }
+
+    #[test]
+    fn target_of_target_follows_the_current_entity_and_health() {
+        use net::entity::{Creature, Entity, TYPE_CREATURE};
+
+        let mut p = play();
+        let world = p.player.world as i8;
+        let actor = |id, name: &str, hp, target| Entity {
+            id, kind: TYPE_CREATURE, world, p19: hp,
+            creature: Some(Creature { name: name.into(), target, ..Default::default() }),
+            ..Default::default()
+        };
+        p.entities.slots[0] = Some(actor(0x100, "Adventurer", 175, 0));
+        p.entities.slots[1] = Some(actor(0x300, "Guard", 128, 0));
+        let mut target = actor(0x200, "Attacker", 255, 0x100);
+        assert_eq!(p.target_of_target(None), None);
+        assert_eq!(p.target_of_target(Some(&target)), Some(("Adventurer", 175)));
+
+        target.creature.as_mut().unwrap().target = 0x300;
+        assert_eq!(p.target_of_target(Some(&target)), Some(("Guard", 128)));
+        p.entities.slots[1].as_mut().unwrap().p19 = 0;
+        assert_eq!(p.target_of_target(Some(&target)), Some(("Guard", 0)));
+        p.entities.slots[1].as_mut().unwrap().world = world.wrapping_add(1);
+        assert_eq!(p.target_of_target(Some(&target)), None);
+        p.entities.slots[1] = None;
+        assert_eq!(p.target_of_target(Some(&target)), None);
+
+        for id in [0, u32::MAX] {
+            target.creature.as_mut().unwrap().target = id;
+            assert_eq!(p.target_of_target(Some(&target)), None);
+        }
+        target.creature.as_mut().unwrap().target = 0x100;
+        target.p18 |= 2;
+        assert_eq!(p.target_of_target(Some(&target)), None);
     }
 
     /// Focus Target (`focus`, Heirloom petition 3038): Set Focus takes the
