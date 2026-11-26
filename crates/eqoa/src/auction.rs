@@ -380,13 +380,15 @@ impl Auction {
     }
 }
 
-/// `VIWndAuction::CanSell`: tradeable, not lore, rentable, and its stack
-/// test as the server's patch leaves it (`s2::StackTest`): retail's, not a
-/// stack; the reference server's S2 lets a stack go too (its record 3 rewrites the
-/// test, so on its PS2s crafting materials and gems sell). The live client
-/// with its feature word's bit 0x08 (`live`, live 0x0130EDB8) asks only
-/// that it trades and rents: stacks and lore items go. Here a lore item
-/// stays greyed under the bit too: the server refuses it (petition 2135).
+/// `VIWndAuction::CanSell`: tradeable, rentable, and its stack test as the
+/// server's patch leaves it (`s2::StackTest`): retail's, not a stack; the
+/// reference server's S2 lets a stack go too (its record 3 rewrites the test,
+/// so on its PS2s crafting materials and gems sell). The live client with its
+/// feature word's bit 0x08 (`live`, live 0x0130EDB8) asks only that it trades
+/// and rents: stacks go. Retail's CanSell refuses a lore item too (word
+/// 1727); here one sells (petition 3245, 2026-11-26: go-eqoa-server takes
+/// one from this client and refuses a bid by a character that has one, so no
+/// buyer comes to hold two). From petition 2135 to then it stayed greyed.
 pub fn can_sell(it: &NetItem) -> bool {
     can_sell_by(it, crate::s2::get().sell_stack)
 }
@@ -397,12 +399,9 @@ pub fn can_sell_by(it: &NetItem, stack: crate::s2::StackTest) -> bool {
         return false;
     }
     if crate::live::features().has(crate::live::Features::STACKS) {
-        // the live client let a lore item go too; go-eqoa-server refuses one
-        // (word 1727: a buyer could come to hold two), so it is greyed here
-        // as the server will answer (petition 2135, 2026-11-14)
-        return it.item.lore == 0;
+        return true;
     }
-    it.item.lore == 0 && stack.passes(it.item.max_stack)
+    stack.passes(it.item.max_stack)
 }
 
 /// The sell form's fields as the client in play numbers them: the disc's
@@ -1135,8 +1134,8 @@ mod tests {
     /// A stack (a gem, a crafting material: max stack 20) is refused under
     /// retail's CanSell and sold under the reference server's S2, which rewrites the
     /// test; the form opens for it, or says 1727 and plays sound 9. The
-    /// other tests stand under both: lore, no trade and no rent stay
-    /// refused.
+    /// other tests stand under both: no trade and no rent stay refused, and
+    /// a lore item sells (petition 3245).
     #[test]
     fn a_stack_sells_where_the_patch_lets_it() {
         use crate::pointer::testing::{NullRaster, vui};
@@ -1152,15 +1151,17 @@ mod tests {
         // the control: retail's rules refuse the gem
         assert!(!can_sell(&gem) && can_sell(&sword));
         assert!(with_rules(sandstorm(), || can_sell(&gem) && can_sell(&sword)));
-        for (name, edit) in [("lore", 0), ("no trade", 1), ("no rent", 2)] {
+        for (name, edit) in [("no trade", 1), ("no rent", 2)] {
             let mut it = gem.clone();
             match edit {
-                0 => it.item.lore = 1,
                 1 => it.item.no_trade = 1,
                 _ => it.item.rent = 0,
             }
             assert!(!with_rules(sandstorm(), || can_sell(&it)), "{name}");
         }
+        let mut lore = gem.clone();
+        lore.item.lore = 1;
+        assert!(with_rules(sandstorm(), || can_sell(&lore)), "lore");
         let select = |rules: Rules| {
             with_rules(rules, || {
                 let (mut cues, mut out) = (Vec::new(), Vec::new());
@@ -1190,17 +1191,46 @@ mod tests {
     }
 
     /// The live client's CanSell (0x0130EDB8): with the feature word's bit
-    /// 0x08 a stack sells, a no-trade one never, and a lore item not either
-    /// (the live client let it go; the server refuses it, petition 2135);
-    /// without the bit (and with no word, the disc's) the stack and the lore
-    /// item do not (the control).
+    /// 0x08 a stack sells, a no-trade one never; without the bit (and with
+    /// no word, the disc's) the stack does not (the control). The lore
+    /// sword sells under every word (petition 3245: the server takes it and
+    /// keeps a buyer from holding two).
     #[test]
     fn stacks_and_lore_sell_with_bit_0x08() {
         let bank = stack_bank();
         let sells = |word| crate::live::with_features(word, || bank.items.iter().map(can_sell).collect::<Vec<_>>());
-        assert_eq!(sells(Some(0x1B)), vec![true, false, false]);
-        assert_eq!(sells(Some(0x10)), vec![false, false, false]);
-        assert_eq!(sells(None), vec![false, false, false]);
+        assert_eq!(sells(Some(0x1B)), vec![true, true, false]);
+        assert_eq!(sells(Some(0x10)), vec![false, true, false]);
+        assert_eq!(sells(None), vec![false, true, false]);
+    }
+
+    /// Petition 3245: a lore item sells, and only the lore flag changed:
+    /// a lore item that is also no trade, no rent or (under retail's test) a
+    /// stack is still refused, and its sell form opens.
+    #[test]
+    fn a_lore_item_sells_and_nothing_else_moved() {
+        use crate::pointer::testing::{NullRaster, vui};
+        let mut charm = NetItem { quantity: 1, equip_slot: -1, quick_slot: -1, ..Default::default() };
+        (charm.item.rent, charm.item.value, charm.item.max_stack, charm.item.lore) = (1, 300, 1, 1);
+        assert!(can_sell(&charm));
+        for word in [None, Some(0x10), Some(0x1B)] {
+            assert!(crate::live::with_features(word, || can_sell(&charm)), "{word:?}");
+        }
+        let mut bound = charm.clone();
+        bound.item.no_trade = 1;
+        let mut unrented = charm.clone();
+        unrented.item.rent = 0;
+        let mut stacked = charm.clone();
+        (stacked.quantity, stacked.item.max_stack) = (3, 20);
+        assert!(!can_sell(&bound) && !can_sell(&unrented) && !can_sell(&stacked));
+        let mut bank = ItemList::default();
+        bank.items.push(charm);
+        let (vui, r) = (vui(), NullRaster);
+        let (mut cues, mut out) = (Vec::new(), Vec::new());
+        let mut s = SellWnd::default();
+        s.focus(&vui, &r);
+        s.key(&vui, &r, &bank, 134, true, 0, &mut cues, &mut out);
+        assert_eq!((s.selling, s.price, cues, out), (true, 300, vec![13], vec![]));
     }
 
     /// The live sell form with bit 0x08 (0x0130E550..0x0130ECB8): Select
