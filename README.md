@@ -152,7 +152,7 @@ or a browser (each described where it lives below):
   to 200%; Touch Edge, 0 to 10% of the screen in from its sides; since 2026-11-14 all of them Touch
   Controls', with Move Touch Pad, Button Layout and Reset Touch Pad), Camera (Distance, Turn Speed, Screen Shake),
   Characters (Level of Detail, NPC/PC Display and Distance, Name Distance,
-  Overlapping Names, Shadows), Sound (Sound in Background, Output Device: the system's
+  Overlapping Names, Shadows), Sound (Master Volume, Sound in Background, Output Device: the system's
   default, followed when it changes, or a device by its name), natively Textures
   (Texture Packs, Dump Textures, and on a computer Texture Folder), Map (Map,
   Minimap, Map Markers, Quest Helper, Quest Tracker), Number Colors (Your Damage,
@@ -477,6 +477,12 @@ or a browser (each described where it lives below):
   of the kept lockout still to run is the previous lockout's, after a press that cast again as it came
   ready, and is passed over: petition 3012, `Cooldowns::came`). Extended > UI > HUD Extras, on
   by default; off, the game's lock badge alone. Off with `settings::qol::SPELL_BARS`.
+- **Quieter sound** (Heirloom petition 3261, "the game's sound is loud even at the lowest setting";
+  `options::volume_step`, `audio::set_master`): the Sound page's Fx and Music Volume go on under the
+  game's lowest step (0.1) by 0.05, 0.02 and 0.01 before silence, and back up the same way (over 0.1 a
+  step is the game's tenth, so a volume kept before steps as it did); Extended > Other > Sound's Master
+  Volume (100%, the game's, down to 1% and off, finer near the bottom) scales the whole output after the
+  mix, eased as Sound in Background's silence is, and is kept in `client.opt` only when turned down.
 - **Hotkey Label Size %** (petition 2945): the PC bars' key names at 40-100% of the font (Extended > UI >
   Interface Size, PC), 100 the font's own as before; smaller, scaled (`Raster::draw_string_scaled`) and cut
   to the cell later.

@@ -911,15 +911,9 @@ impl WndOptions {
             return;
         }
         let tracks = if FEATURES & 0x100 != 0 { 10 } else { 3 };
-        let step = F::<Ee>::new(0.1);
         let volume = |v: &mut F<Ee>, cues: &mut Vec<i32>| {
-            if d < 0 && F::ZERO < *v {
-                let n = *v - step;
-                *v = if n < F::ZERO { F::ZERO } else { n };
-                cues.push(11);
-            } else if d > 0 && *v < F::ONE {
-                let n = *v + step;
-                *v = if F::ONE < n { F::ONE } else { n };
+            if (d < 0 && F::ZERO < *v) || (d > 0 && *v < F::ONE) {
+                *v = volume_step(*v, d);
                 cues.push(11);
             } else {
                 cues.push(9);
@@ -1068,6 +1062,14 @@ impl WndOptions {
                     // Foliage Reacts: the plants lean from the next frame
                     // (`flora::React`)
                     FOLIAGE_REACTS => c.foliage_reacts = !c.foliage_reacts,
+                    // Master Volume: a step, stopping at the ends (as the
+                    // game's volumes stop), heard from the next frame
+                    // (`audio::set_master`)
+                    MASTER_VOLUME => {
+                        let v = crate::settings::master_volume_step(c.master_volume, d);
+                        cues.push(if v == c.master_volume { 9 } else { 11 });
+                        c.master_volume = v;
+                    }
                     // Minimap Colors: round Default and the palette, the
                     // squares from the next frame (`Play::mini_view`)
                     300..=306 => {
@@ -1387,16 +1389,19 @@ impl WndOptions {
             _ => {}
         }
         // (Texture Folder and Reset DPS Meter make their own sound)
-        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == 55 || self.item == 72 || self.item == 77 || self.item == RESET_TOUCH || self.item == CHAT_FADE_DELAY;
+        let inert = (self.item == 26 && cfg!(target_arch = "wasm32")) || self.item == MASTER_VOLUME || self.item == 55 || self.item == 72 || self.item == 77 || self.item == RESET_TOUCH || self.item == CHAT_FADE_DELAY;
         let slides = matches!(self.item, 3 | 4) || slider_at(self.item).is_some();
         if !slides && !inert && ((0..=11).contains(&self.item) || extended(self.item)) {
             cues.push(11);
         }
+        // the game snaps under 0.05 to silence; the finer steps under 0.1
+        // (`volume_step`, Heirloom petition 3261) snap only what is left of
+        // a float's error
         if d < 0 {
-            if o.fx_volume < F::new(0.05) {
+            if o.fx_volume < FINE_SNAP {
                 o.fx_volume = F::ZERO;
             }
-            if o.music_volume < F::new(0.05) {
+            if o.music_volume < FINE_SNAP {
                 o.music_volume = F::ZERO;
             }
         } else {
@@ -2209,6 +2214,7 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (FOLIAGE_REACTS, "Foliage Reacts"),
     (FACTION_TRACK, "Faction Tracker"),
     (FACTION_TRACK_STYLE, "Faction Tracker Shows"),
+    (MASTER_VOLUME, "Master Volume"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2317,6 +2323,10 @@ pub(crate) const TARGET_OF_TARGET: i32 = 294;
 /// (Retail, 2x, 3x: `vi::flora::System::density`) and Foliage Reacts (Off,
 /// On: `flora::React`), on Graphics' Foliage page. 320, not the next free.
 pub(crate) const FOLIAGE_DENSITY: i32 = 320;
+/// Master Volume's (Heirloom petition 3261, 2026-11-26): the whole output
+/// turned down under the game's Fx and Music Volume (`audio::set_master`),
+/// on Other's Sound page. 340, not the next free.
+pub(crate) const MASTER_VOLUME: i32 = 340;
 pub(crate) const FOLIAGE_REACTS: i32 = 321;
 /// The Faction Tracker's rows (Heirloom petition 3216, 2026-11-26): Faction
 /// Tracker (Off, On: `factiontrack`) and Faction Tracker Shows (Number, Bar,
@@ -2472,7 +2482,7 @@ const ALL_CATEGORIES: [Category; 31] = [
     Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK, MOUSEOVER_CAST, ATTACK_ABILITIES], note: Note::None, group: Group::Other },
     Category { name: "Camera", items: &[15, 17, 18, AD_KEYS], note: Note::None, group: Group::Other },
     Category { name: "Size & Look", items: &[59, 60, 61, 62], note: Note::Reads, group: Group::Touch },
-    Category { name: "Sound", items: &[32], note: Note::Output, group: Group::Other },
+    Category { name: "Sound", items: SOUND, note: Note::Output, group: Group::Other },
     Category { name: "Multi-boxing settings", items: MULTIBOX, note: Note::Reads, group: Group::Multibox },
     // the chat tabs (ticket 1951): each kind of line to Main or a tab of its own
     Category { name: "Chat Tabs", items: &[92, 93, 94, 95, 96, 97, 98, 99, 100, 101], note: Note::ChatTabs, group: Group::Ui },
@@ -2504,12 +2514,12 @@ const ALL_CATEGORIES: [Category; 31] = [
 ];
 #[cfg(not(target_arch = "wasm32"))]
 const CATEGORIES: &[Category] = &ALL_CATEGORIES;
-/// A page's: all but Textures and Sound (Output Device, its one row, is the
-/// browser's).
+/// A page's: all but Textures and Texture Cache (Sound has Master Volume
+/// alone: Output Device is the browser's).
 #[cfg(target_arch = "wasm32")]
 const CATEGORIES: &[Category] = &{
     let a = ALL_CATEGORIES;
-    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[19], a[20], a[21], a[22], a[24], a[25], a[26], a[27], a[28], a[29], a[30]]
+    [a[0], a[1], a[2], a[3], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15], a[16], a[17], a[18], a[19], a[20], a[21], a[22], a[24], a[25], a[26], a[27], a[28], a[29], a[30]]
 };
 
 /// The categories group `g` lists, by their place in `CATEGORIES`.
@@ -2552,6 +2562,13 @@ fn lone_category(g: usize) -> Option<usize> {
 const VIDEO: &[i32] = &[33, 13, 14, 26, 39];
 #[cfg(target_arch = "wasm32")]
 const VIDEO: &[i32] = &[13, 14, SHOW_FPS, 26, 39];
+
+/// Sound's rows: Master Volume (petition 3261), then natively Output Device
+/// (a page's output is the browser's).
+#[cfg(not(target_arch = "wasm32"))]
+const SOUND: &[i32] = &[MASTER_VOLUME, 32];
+#[cfg(target_arch = "wasm32")]
+const SOUND: &[i32] = &[MASTER_VOLUME];
 
 /// The Multi-boxing settings' rows: natively Slow When Not Focused first (a
 /// page's pace in the back is the browser's), then Controller Focus, Capture
@@ -2705,6 +2722,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         OWN_PLATE => on_off(c.own_plate),
         COACH_TALK => on_off(c.coach_talk),
         STRAFE_SPEED => wide(if c.strafe_match { "Match Forward" } else { "Retail" }),
+        MASTER_VOLUME => wide(&format!("{}%", c.master_volume.min(100))),
         FOLIAGE_DENSITY => wide(match c.foliage_density {
             2 => "2x",
             3 => "3x",
@@ -2825,6 +2843,36 @@ fn step_output(c: &mut ClientOptions, names: &[String], d: i32) {
 
 /// An Extended row's slider, if it is one: where its knob is (0 to 1), and
 /// the number shown before it where it has one.
+/// The Fx and Music Volume's steps under the game's lowest (0.1; Heirloom
+/// petition 3261, "the game's sound is loud even at the lowest setting"):
+/// left from 0.1 goes 0.05, 0.02, 0.01, then silence, and right back up the
+/// same way; at and over 0.1 a step is the game's 0.1. A volume kept before
+/// (any tenth) steps as it did.
+const FINE_VOLUMES: [f32; 4] = [0.01, 0.02, 0.05, 0.1];
+/// What is snapped to silence turning a volume down: under the finest step.
+const FINE_SNAP: F<Ee> = F::new(0.005);
+
+fn volume_step(v: F<Ee>, d: i32) -> F<Ee> {
+    let step = F::<Ee>::new(0.1);
+    // a hair either side of a step, for a tenth summed in floats
+    let near = F::<Ee>::new(0.001);
+    let top = F::<Ee>::new(0.1);
+    if d < 0 {
+        if top + near < v {
+            let n = v - step;
+            // a tenth summed short of 0.1 is 0.1
+            return if n < top - near { top } else { n };
+        }
+        FINE_VOLUMES.iter().rev().map(|&f| F::<Ee>::new(f)).find(|&f| f + near < v).unwrap_or(F::ZERO)
+    } else {
+        if top - near <= v {
+            let n = v + step;
+            return if F::ONE < n { F::ONE } else { n };
+        }
+        FINE_VOLUMES.iter().map(|&f| F::<Ee>::new(f)).find(|&f| v + near < f).unwrap_or(top)
+    }
+}
+
 fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
     let c = crate::settings::client();
     let at = |v: f32, lo: f32, hi: f32| (v - lo) / (hi - lo);
@@ -3162,8 +3210,9 @@ mod tests {
         assert!(w.back(&mut cues));
     }
 
-    /// A volume stops at its ends with sound 9 and snaps within 0.05 of
-    /// them; ten steps down from 1 reach exactly 0.
+    /// A volume stops at its ends with sound 9; nine steps down from 1 reach
+    /// the game's lowest, 0.1, and four finer ones (0.05, 0.02, 0.01:
+    /// Heirloom petition 3261) silence, exactly 0; up again the same way.
     #[test]
     fn volumes_stop_at_their_ends() {
         let mut w = WndOptions { item: 3, ..Default::default() };
@@ -3171,16 +3220,79 @@ mod tests {
         let (mut cues, mut ups) = (Vec::new(), Vec::new());
         w.change(&mut o, 1, &mut cues, &mut ups);
         assert_eq!(cues, vec![9], "already at 1");
-        for _ in 0..10 {
+        for _ in 0..9 {
             w.change(&mut o, -1, &mut cues, &mut ups);
         }
+        assert!((o.fx_volume.0 - 0.1).abs() < 0.001, "the game's lowest: {}", o.fx_volume.0);
+        let mut fine = Vec::new();
+        for _ in 0..4 {
+            w.change(&mut o, -1, &mut cues, &mut ups);
+            fine.push(o.fx_volume.0);
+        }
+        assert_eq!(fine, vec![0.05, 0.02, 0.01, 0.0], "the finer steps under it");
         assert_eq!(o.fx_volume, F::ZERO);
-        assert_eq!(cues.len(), 11);
+        assert_eq!(cues.len(), 14);
         assert!(cues[1..].iter().all(|&c| c == 11));
         assert_eq!(ups.last(), Some(&OptionsUp::Volume(0, F::ZERO)));
         w.change(&mut o, -1, &mut cues, &mut ups);
         assert_eq!(cues.last(), Some(&9));
         assert_ne!(o.music_volume, F::ZERO, "the other volume is untouched");
+        let mut up = Vec::new();
+        for _ in 0..5 {
+            w.change(&mut o, 1, &mut cues, &mut ups);
+            up.push(o.fx_volume.0);
+        }
+        assert_eq!(up[..4], [0.01, 0.02, 0.05, 0.1], "back up the same steps");
+        assert!((up[4] - 0.2).abs() < 0.001, "then the game's tenths: {}", up[4]);
+    }
+
+    /// The steps on their own: a tenth kept by an older build (summed in
+    /// floats, a hair off) steps by tenths down to 0.1 and then finely; a
+    /// value between the fine steps goes to the next one its way. The
+    /// control: over 0.1 a step is the game's 0.1.
+    #[test]
+    fn volume_steps_under_the_games_lowest() {
+        let f = |v: f32| F::<Ee>::new(v);
+        assert!((volume_step(f(0.3), -1).0 - 0.2).abs() < 0.001, "the control: a tenth");
+        assert!((volume_step(f(0.199_999_99), -1).0 - 0.1).abs() < 0.001);
+        assert_eq!(volume_step(f(0.100_000_01), -1).0, 0.05, "0.1 kept a hair over");
+        assert_eq!(volume_step(f(0.099_999_99), -1).0, 0.05, "and a hair under");
+        assert_eq!(volume_step(f(0.03), -1).0, 0.02);
+        assert_eq!(volume_step(f(0.03), 1).0, 0.05);
+        assert_eq!(volume_step(f(0.0), 1).0, 0.01);
+        assert_eq!(volume_step(f(0.01), -1).0, 0.0);
+        assert_eq!(volume_step(f(0.95), 1), F::ONE, "no further than 1");
+    }
+
+    /// Master Volume (petition 3261): Other's Sound page, natively before
+    /// Output Device; left and right step it through its percents, stopping
+    /// at the ends with sound 9; kept in the client's options.
+    #[test]
+    fn master_volume_steps_and_is_kept() {
+        crate::settings::testing::reset(false);
+        let at = CATEGORIES.iter().position(|c| c.name == "Sound").unwrap();
+        assert_eq!(CATEGORIES[at].items[0], MASTER_VOLUME);
+        let mut w = WndOptions { item: MASTER_VOLUME, page: 3, cat: Some(at), ..Default::default() };
+        let mut o = GameOptions::default();
+        let (mut cues, mut ups) = (Vec::new(), Vec::new());
+        assert_eq!(crate::settings::client().master_volume, 100, "the game's");
+        w.change(&mut o, 1, &mut cues, &mut ups);
+        assert_eq!((crate::settings::client().master_volume, cues.clone()), (100, vec![9]), "already at the top");
+        cues.clear();
+        for _ in 0..12 {
+            w.change(&mut o, -1, &mut cues, &mut ups);
+        }
+        assert_eq!(crate::settings::client().master_volume, 5);
+        assert_eq!(crate::settings::master_gain(), 0.05);
+        for _ in 0..5 {
+            w.change(&mut o, -1, &mut cues, &mut ups);
+        }
+        assert_eq!(crate::settings::client().master_volume, 0);
+        assert_eq!(cues.iter().filter(|&&c| c == 11).count(), 15);
+        assert_eq!(cues.last(), Some(&9), "stops at silence");
+        assert!(ups.is_empty(), "not the game's volumes");
+        assert_eq!(crate::settings::master_volume_step(33, -1), 30, "off the steps: the next one down");
+        assert_eq!(crate::settings::master_volume_step(33, 1), 40);
     }
 
     /// A pointer on the options: a menu row chosen at once; a page's row
@@ -4460,7 +4572,7 @@ mod tests {
                 ("General", vec!["Update Notices", "Loading Screens", "Loading Tips", "Same Shortcuts", "Auto Save Options", "Auto Loot"]),
                 ("Combat", vec!["Auto-Cast", "Auto Target", "Pets Pass Through", "Weapon Swap Back", "Attack With Abilities"]),
                 ("Camera", vec!["Camera Distance", "Camera Turn Speed", "Screen Shake", "A/D Keys"]),
-                ("Sound", vec!["Output Device"]),
+                ("Sound", vec!["Master Volume", "Output Device"]),
                 ("Movement", vec!["Strafe Speed", "Coach Talk on Arrival"]),
             ],
             "Other: the rest"
@@ -5275,7 +5387,8 @@ mod tests {
             press(&mut w, &mut o, k, &mut ups);
         }
         assert_eq!(w.item, 3, "Fx Volume");
-        for _ in 0..10 {
+        // nine tenths to 0.1, four finer steps to silence (`volume_step`)
+        for _ in 0..13 {
             press(&mut w, &mut o, key::LEFT, &mut ups);
         }
         press(&mut w, &mut o, key::DOWN, &mut ups);
