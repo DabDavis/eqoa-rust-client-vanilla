@@ -166,6 +166,13 @@ pub fn guess(a: &Ability) -> Option<Kind> {
         return Some(Kind::Pet);
     }
     let d = format!("{} {}", a.name, a.desc).to_lowercase();
+    // the vampires' Feed ("Primary method for gaining Units of Blood"): a bite
+    // of the target (go-eqoa-server's line "Target, Decrease Hitpoints by 400,
+    // Summon Unit of Blood") whose words name no harm, so it was guessed none
+    // and could not be made auto with a click (petition 3178)
+    if a.scope == 1 && d.contains("gaining units of blood") {
+        return Some(Kind::Attack);
+    }
     if has(&d, &["gate", "teleport", "portal", "invis", "conceal", "hide", "illusion", "assume the form", "form of", "disguise", "resurrect", "ressurect", "revive", "rez ", "an item", "summon item", "creates", "draught", "charm", "lull", "pacify", "calm", "feign", "camouflage", "levitat", "breath", "shrink", "grow", "track", "forage", "bind", "evacuat", "succor", "pickpocket", "stance", "raiment", "experience", "familiar", "eye of"]) {
         return None;
     }
@@ -862,7 +869,8 @@ mod tests {
         assert_eq!(g("Impart", "Pet Heal", 3), None);
         // an aura on the weapon is a buff, not a pet
         assert_eq!(g("Chilling Aura", "Summons an aura that surrounds your weapon, inflicting unholy damage.", 0), Some(Kind::Buff));
-
+        // the vampires' Feed bites its target for a Unit of Blood (petition 3178)
+        assert_eq!(g("Feed", "Primary method for gaining Units of Blood, which is used to power all Vampire abilities.", 1), Some(Kind::Attack));
     }
 
     /// Petition 2664: a harm whose words read as a buff's ("debuff", a damage
