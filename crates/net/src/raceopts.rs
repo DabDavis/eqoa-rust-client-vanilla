@@ -83,6 +83,11 @@ impl Row {
     pub fn parts_of(&self, body: u32) -> impl Iterator<Item = &Part> {
         self.parts.iter().filter(move |(b, _)| *b == body).map(|(_, p)| p)
     }
+
+    /// Whether there is a choice to show for this sex and body.
+    pub fn selectable_on(&self, sex: i32, body: u32) -> bool {
+        self.steps(sex).len() > 1 && (self.kind == Kind::Body || self.parts_of(body).next().is_some())
+    }
 }
 
 /// Every race's options, as the server last sent them.

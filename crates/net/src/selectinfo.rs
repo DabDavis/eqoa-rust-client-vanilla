@@ -4,16 +4,14 @@
 //! Alchemist", and a Wisp's colour at select's Customize). The character list
 //! (0x002C) carries a character's wire race (the game's race a server's own race
 //! passes as) and nothing of its masteries; a server that has more offers it after
-//! the session's first list, and this client answers 1 and is sent, after every
-//! list ([`crate::session::OP_SELECT_INFO_DATA`]), each character's own race, its
-//! race's name where the game has no word for it, its mastery points and the race
-//! option rows its Customize re-chooses. A server that never offers it (the reference server's,
-//! eqoa.live's) gets no answer, and select shows the game's two lines.
+//! the session's first list, and the client answers with its supported version.
+//! The reply ([`crate::session::OP_SELECT_INFO_DATA`]) carries each character's
+//! race, mastery points, appearance rows and, in version 2, saved choices.
 
 use crate::stream::Reader;
 
-/// The message's version, its first byte.
-pub const VERSION: u8 = 1;
+/// The version that adds the character's saved sex and appearance values.
+pub const APPEARANCE_VERSION: u8 = 2;
 
 /// One character's, by its server id in the list.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -27,6 +25,10 @@ pub struct Info {
     pub cms: u16,
     /// the keys of its race's option rows select's Customize re-chooses
     pub rows: Vec<String>,
+    /// The stored sex, which can differ from the sex inferred from a shared model.
+    pub sex: Option<u8>,
+    /// Saved custom appearance values by row key, including parts hidden by the current body.
+    pub values: Vec<(String, u32)>,
 }
 
 fn text(r: &mut Reader) -> String {
@@ -36,13 +38,15 @@ fn text(r: &mut Reader) -> String {
 
 /// The message's body (after the opcode): u8 version, u16 count, then each
 /// character's u32 server id, u8 race, u8-counted race name, u16 mastery points,
-/// u8 count of row keys and each u8-counted. None for another version or a body
-/// cut short or longer.
+/// u8 count of row keys and each u8-counted. Version 2 then has a u8 sex, a u8
+/// value count, and each u8-counted key and u32 value.
 pub fn read(data: &[u8]) -> Option<Vec<(u32, Info)>> {
     let mut r = Reader::new(data);
-    if r.u8() != VERSION {
-        return None;
-    }
+    let appearance = match r.u8() {
+        1 => false,
+        APPEARANCE_VERSION => true,
+        _ => return None,
+    };
     let n = r.u16() as usize;
     let mut out = Vec::with_capacity(n.min(4096));
     for _ in 0..n {
@@ -52,10 +56,20 @@ pub fn read(data: &[u8]) -> Option<Vec<(u32, Info)>> {
         let cms = r.u16();
         let k = r.u8() as usize;
         let rows = (0..k).map(|_| text(&mut r)).collect();
+        let (sex, values) = if appearance {
+            let sex = r.u8();
+            if sex > 1 {
+                return None;
+            }
+            let count = r.u8();
+            (Some(sex), (0..count).map(|_| (text(&mut r), r.u32())).collect())
+        } else {
+            (None, Vec::new())
+        };
         if r.error {
             return None;
         }
-        out.push((id, Info { race, race_name, cms, rows }));
+        out.push((id, Info { race, race_name, cms, rows, sex, values }));
     }
     (!r.error && r.pos == data.len()).then_some(out)
 }
@@ -67,7 +81,7 @@ pub(crate) mod tests {
     /// The bytes go-eqoa-server's `encodeSelectInfo` writes (its test's three
     /// characters): a human, a Ratman of 900 points, a Wisp with its colour row.
     pub fn sample() -> Vec<u8> {
-        let mut b = vec![VERSION, 3, 0];
+        let mut b = vec![1, 3, 0];
         let mut one = |id: u32, race: u8, name: &str, cms: u16, rows: &[&str]| {
             b.extend_from_slice(&id.to_le_bytes());
             b.push(race);
@@ -94,14 +108,33 @@ pub(crate) mod tests {
         let got = read(&b).expect("read");
         assert_eq!(got.len(), 3);
         assert_eq!(got[0], (7, Info::default()));
-        assert_eq!(got[1], (8, Info { race: 24, race_name: "Ratman".into(), cms: 900, rows: vec![] }));
-        assert_eq!(got[2], (9, Info { race: 31, race_name: "Wisp".into(), cms: 0, rows: vec!["wispcolor".into()] }));
+        assert_eq!(got[1], (8, Info { race: 24, race_name: "Ratman".into(), cms: 900, ..Info::default() }));
+        assert_eq!(got[2], (9, Info { race: 31, race_name: "Wisp".into(), rows: vec!["wispcolor".into()], ..Info::default() }));
         assert!(read(&b[..b.len() - 1]).is_none(), "cut short");
         let mut more = b.clone();
         more.push(0);
         assert!(read(&more).is_none(), "a byte too many");
-        let mut v2 = b.clone();
-        v2[0] = 2;
-        assert!(read(&v2).is_none(), "another version");
+        let mut unknown = b.clone();
+        unknown[0] = 3;
+        assert!(read(&unknown).is_none(), "another version");
+    }
+
+    #[test]
+    fn reads_saved_appearance_and_sex() {
+        let mut b = vec![APPEARANCE_VERSION, 1, 0];
+        b.extend(27u32.to_le_bytes());
+        b.extend(b"\x1c\x09Fungusman\x00\x00\x02\x04body\x03bag");
+        b.extend(b"\x01\x01\x03bag");
+        b.extend(0x0120_998Fu32.to_le_bytes());
+        let got = read(&b).unwrap();
+        assert_eq!(got, [(27, Info {
+            race: 28,
+            race_name: "Fungusman".into(),
+            rows: vec!["body".into(), "bag".into()],
+            sex: Some(1),
+            values: vec![("bag".into(), 0x0120_998F)],
+            ..Info::default()
+        })]);
+        assert!(read(&b[..b.len() - 1]).is_none());
     }
 }

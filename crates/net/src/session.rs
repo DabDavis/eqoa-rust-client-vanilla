@@ -242,7 +242,7 @@ pub const OP_CRASH_REPORT: u16 = 0x7E65;
 pub const OP_CRASH_FILED: u16 = 0x7E66;
 /// go-eqoa-server's own, no retail message either: more of each character at
 /// select (`selectinfo`), a u32 after the opcode, both ways. The server offers it
-/// (1) after the session's first character list; this client answers 1 at once and
+/// (1) after the session's first character list; the client answers with its supported version and
 /// is sent [`OP_SELECT_INFO_DATA`] after every list and at its answer. A PS2 ignores
 /// the offer; a server that never makes one gets no answer, and select shows the
 /// game's lines.
@@ -3460,7 +3460,7 @@ impl Session {
             // more of each character at select offered: taken (`selectinfo`)
             OP_SELECT_INFO => {
                 if r.u32() != 0 && !r.error {
-                    self.send_op_int(OP_SELECT_INFO, 1);
+                    self.send_op_int(OP_SELECT_INFO, u32::from(crate::selectinfo::APPEARANCE_VERSION));
                 }
             }
             OP_SELECT_INFO_DATA => match crate::selectinfo::read(&m.data[2.min(m.data.len())..]) {
@@ -7351,7 +7351,7 @@ mod tests {
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x67, 0x7E, 0, 0, 0, 0]);
         assert_eq!(answers(&mut s), [], "the controls: cut short, or 0");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x67, 0x7E, 1, 0, 0, 0]);
-        assert_eq!(answers(&mut s), [(251, vec![0x67, 0x7E, 1, 0, 0, 0])]);
+        assert_eq!(answers(&mut s), [(251, vec![0x67, 0x7E, 2, 0, 0, 0])]);
         let mut m = OP_SELECT_INFO_DATA.to_le_bytes().to_vec();
         m.extend(crate::selectinfo::tests::sample());
         deliver(&mut s, drdp::TYPE_GUARANTEED, m.clone());

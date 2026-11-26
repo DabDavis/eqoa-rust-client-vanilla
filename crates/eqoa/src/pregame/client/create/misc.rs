@@ -63,8 +63,7 @@ impl Opts {
     /// The rows shown on body `body`: more than one step for the sex, and a
     /// colour or texture row only with a part of the body.
     fn showing(&self, body: u32) -> Vec<usize> {
-        use net::raceopts::Kind;
-        (0..self.rows.len()).filter(|&i| self.rows[i].steps(self.sex).len() > 1 && (self.rows[i].kind == Kind::Body || self.rows[i].parts_of(body).next().is_some())).collect()
+        (0..self.rows.len()).filter(|&i| self.rows[i].selectable_on(self.sex, body)).collect()
     }
 
     /// The steps as a creation sends them: every row's, a row not shown its
