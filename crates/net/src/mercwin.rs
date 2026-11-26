@@ -28,8 +28,12 @@ pub const OP_MERC_SPELLS_ASK: u16 = 0x7E76;
 /// The merc's book and its ten slots ([`MercSpells`]).
 pub const OP_MERC_SPELLS_STATE: u16 = 0x7E77;
 
-/// The layout this client reads.
+/// The layout the server offers, and the spell window's state's.
 pub const LAYOUT: u8 = 1;
+/// The inventory state's layout this client answers the offer with: 1's with
+/// the record kind [`USE`] (go-eqoa-server's petition 3285). A server that
+/// knows only 1 sends 1, which reads the same.
+pub const LAYOUT_USE: u8 = 2;
 
 /// A state's flags: open its window; the hire is gone (or, the spell
 /// window's, the merc not out): close it; the spell window's ten set by the
@@ -46,6 +50,9 @@ pub const HEIRLOOM: u8 = 2;
 /// The owner's potion stock (an alchemist's window): its id the item's, its
 /// count the record's stack.
 pub const STOCK: u8 = 3;
+/// Carried, and a meal or a grocer's drink the merc can be given to eat or
+/// drink now ([`ASK_USE`]); layout 2's (layout 1 sends it [`CARRIED`]).
+pub const USE: u8 = 4;
 
 /// The inventory window's asks.
 pub const ASK_OPEN: u8 = 1;
@@ -58,6 +65,8 @@ pub const ASK_TAKE: u8 = 5;
 pub const ASK_STOCK: u8 = 6;
 /// The window is down: no stock's change is sent it.
 pub const ASK_CLOSE: u8 = 7;
+/// The merc eats or drinks a carried meal or drink ([`USE`]) now.
+pub const ASK_USE: u8 = 8;
 
 /// The spell window's asks.
 pub const SPELLS_OPEN: u8 = 1;
@@ -111,7 +120,7 @@ impl MercWindow {
     /// one.
     pub fn read(b: &[u8]) -> Option<MercWindow> {
         let mut r = Reader::new(b);
-        if r.u8() != LAYOUT {
+        if !(LAYOUT..=LAYOUT_USE).contains(&r.u8()) {
             return None;
         }
         let mut s = MercWindow { flags: r.u8(), slot: r.u8(), name: name(&mut r), class: r.u8(), race: r.u8(), level: r.u8(), ..Default::default() };
@@ -199,7 +208,7 @@ pub fn ask(slot: u8, op: u8, id: u32, equip: i8) -> Vec<u8> {
     let mut w = Writer::op(OP_MERC_WINDOW_ASK);
     w.u8(slot).u8(op);
     match op {
-        ASK_GIVE | ASK_UNEQUIP | ASK_TAKE => {
+        ASK_GIVE | ASK_UNEQUIP | ASK_TAKE | ASK_USE => {
             w.u32(id);
         }
         ASK_EQUIP => {
@@ -329,7 +338,9 @@ mod tests {
         assert_eq!(got, want);
         assert!(MercWindow::read(&b[..b.len() - 1]).is_none(), "short");
         let mut other = b.clone();
-        other[0] = 2;
+        other[0] = LAYOUT_USE;
+        assert!(MercWindow::read(&other).is_some(), "layout 2 (the kind USE) reads too");
+        other[0] = 3;
         assert!(MercWindow::read(&other).is_none(), "another layout");
     }
 
@@ -360,6 +371,7 @@ mod tests {
         assert_eq!(ask(1, ASK_STOCK, 0x0101, 0), vec![0x73, 0x7E, 1, 6, 1, 1, 0, 0, 0, 0, 0, 0]);
         assert_eq!(ask(1, ASK_STOCK, 0x0101, 1), vec![0x73, 0x7E, 1, 6, 1, 1, 0, 0, 1, 0, 0, 0]);
         assert_eq!(ask(1, ASK_CLOSE, 0, 0), vec![0x73, 0x7E, 1, 7]);
+        assert_eq!(ask(1, ASK_USE, 7, 0), vec![0x73, 0x7E, 1, 8, 7, 0, 0, 0]);
         assert_eq!(spells_ask(1, SPELLS_SET, 3, 950), vec![0x76, 0x7E, 1, 2, 3, 0xB6, 3, 0, 0]);
         assert_eq!(spells_ask(1, SPELLS_CLEAR, 0, 0), vec![0x76, 0x7E, 1, 3]);
         assert_eq!(spells_ask(1, SPELLS_DEFAULT, 0, 0), vec![0x76, 0x7E, 1, 4]);

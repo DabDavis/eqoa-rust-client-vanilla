@@ -1211,6 +1211,10 @@ pub struct ClientOptions {
     /// of the columns shown (damage by default).
     pub dps_sort: crate::dpsmeter::Metric,
     pub dps_hide_mercenary: bool,
+    /// Mercs as Own Rows (Heirloom petition 3136): each merc a row of its own
+    /// on the DPS meter (a server of layout 5), not a share of its owner's.
+    /// Off by default.
+    pub dps_merc_rows: bool,
     /// Faction Tracker (`factiontrack`, Heirloom petition 3216): one faction's
     /// standing on the HUD, the one picked in the faction window or by `/track
     /// faction` (kept by name a character, `factiontrack::FILE`), where the
@@ -1847,6 +1851,7 @@ impl Default for ClientOptions {
             dps_columns: crate::dpsmeter::Columns::Dps,
             dps_sort: crate::dpsmeter::Metric::Damage,
             dps_hide_mercenary: false,
+            dps_merc_rows: false,
             faction_track: false,
             faction_track_style: crate::factiontrack::Style::Both,
             item_links: true,
@@ -2090,6 +2095,9 @@ impl ClientOptions {
         }
         if self.dps_sort != crate::dpsmeter::Metric::Damage {
             s.push_str(&format!("dps_meter_sort={}\n", self.dps_sort.key()));
+        }
+        if self.dps_merc_rows {
+            s.push_str("dps_merc_rows=on\n");
         }
         if self.dps_hide_mercenary {
             s.push_str("dps_hide_mercenary=on\n");
@@ -2498,6 +2506,8 @@ impl ClientOptions {
                 ("dps_meter_sort", "power") => c.dps_sort = crate::dpsmeter::Metric::Power,
                 ("dps_hide_mercenary", "on") => c.dps_hide_mercenary = true,
                 ("dps_hide_mercenary", "off") => c.dps_hide_mercenary = false,
+                ("dps_merc_rows", "on") => c.dps_merc_rows = true,
+                ("dps_merc_rows", "off") => c.dps_merc_rows = false,
                 ("faction_track", "on") => c.faction_track = true,
                 ("faction_track", "off") => c.faction_track = false,
                 ("faction_track_shows", v) => {
@@ -3095,7 +3105,7 @@ pub mod qol {
         Some(match item {
             44 | 45 | 85 => QUEST_HELPER,
             crate::options::TARGET_OF_TARGET => TARGET_LEVEL,
-            70..=72 | crate::options::DPS_COLUMNS | crate::options::DPS_SORT | crate::options::DPS_HIDE_MERCS => DPS_METER,
+            70..=72 | crate::options::DPS_COLUMNS | crate::options::DPS_SORT | crate::options::DPS_HIDE_MERCS | crate::options::DPS_MERC_ROWS => DPS_METER,
             64..=69 | 80 | 81 | crate::numcolor::TAKEN_ITEM => NUMBER_COLORS,
             86 | crate::options::HEALTH_NUMBERS => POWER_BARS,
             83 | crate::options::BUFF_TIMERS => BUFF_WINDOW,
@@ -3147,6 +3157,7 @@ pub mod qol {
         if off(DPS_METER) {
             c.dps_meter = false;
             c.dps_hide_mercenary = false;
+            c.dps_merc_rows = false;
         }
         if off(NUMBER_COLORS) {
             c.number_colors = [0; crate::numcolor::ROWS];
@@ -3196,6 +3207,7 @@ pub mod qol {
         if off(DPS_METER) {
             v.dps_meter = kept.dps_meter;
             v.dps_hide_mercenary = kept.dps_hide_mercenary;
+            v.dps_merc_rows = kept.dps_merc_rows;
         }
         if off(NUMBER_COLORS) {
             v.number_colors = kept.number_colors;
@@ -3747,6 +3759,12 @@ pub fn dps_sort() -> crate::dpsmeter::Metric {
 pub fn toggle_dps_hide_mercenary() {
     let mut c = client();
     c.dps_hide_mercenary = !c.dps_hide_mercenary;
+    set_client(c);
+}
+
+pub fn toggle_dps_merc_rows() {
+    let mut c = client();
+    c.dps_merc_rows = !c.dps_merc_rows;
     set_client(c);
 }
 
@@ -5837,11 +5855,11 @@ mod tests {
         let d = ClientOptions::default();
         assert!(!d.dps_meter && !d.dps_hide_mercenary && d.dps_view == View::Fight);
         assert!(!d.to_text().contains("dps_meter"), "the defaults write nothing");
-        let c = ClientOptions { dps_meter: true, dps_view: View::Overall, dps_hide_mercenary: true, ..Default::default() };
+        let c = ClientOptions { dps_meter: true, dps_view: View::Overall, dps_hide_mercenary: true, dps_merc_rows: true, ..Default::default() };
         let t = c.to_text();
         assert!(t.contains("dps_meter=on\n") && t.contains("dps_meter_shows=overall\n"), "{t}");
         let back = ClientOptions::from_text(&t);
-        assert!(back.dps_meter && back.dps_view == View::Overall && back.dps_hide_mercenary, "round trip");
+        assert!(back.dps_meter && back.dps_view == View::Overall && back.dps_hide_mercenary && back.dps_merc_rows, "round trip");
         assert!(!ClientOptions::from_text("dps_hide_mercenary=off").dps_hide_mercenary);
         assert!(!ClientOptions::from_text("dps_meter=off").dps_meter);
         assert_eq!(ClientOptions::from_text("dps_meter_shows=fight").dps_view, View::Fight);

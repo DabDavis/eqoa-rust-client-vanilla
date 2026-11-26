@@ -727,9 +727,12 @@ pub const OP_DPS_METER_OFFER: u16 = 0x7E3A;
 /// alone reads any answer but 0 as 1.
 pub const OP_DPS_METER_ANSWER: u16 = 0x7E3B;
 /// The newest DPS meter layout this client reads.
-pub const DPS_METER_LAYOUT: u8 = 4;
+pub const DPS_METER_LAYOUT: u8 = 5;
 /// The first layout to distinguish mercenary contributions.
 pub const DPS_METER_MERC_LINES: u8 = 3;
+/// The first layout with each merc's own figures beside layout 4's rows
+/// ([`DpsMeter::merc_lines`]; Heirloom petition 3136).
+pub const DPS_METER_MERC_ROWS: u8 = 5;
 /// The meter, from a server the client asked: the fight of the player's group
 /// at most once a second while it changes, and once more as it ends (the server
 /// ends it 10 s after the group's last damage). [`DpsMeter`] has the layout.
@@ -737,6 +740,16 @@ pub const OP_DPS_METER_DATA: u16 = 0x7E3C;
 /// A reset, client to server (`reset_dps_meter`): a u8, 1. The server drops the
 /// fight under way (nothing more is sent of it) and numbers its next another.
 pub const OP_DPS_METER_RESET: u16 = 0x7E3D;
+/// go-eqoa-server's own: the characters' surnames for the name plates (Live
+/// petition 5648, `/surname`). The offer, server to client at every world
+/// entry: a u8, the [`OP_SURNAMES`] layout (1); answered at once with a u8, 1.
+/// A PS2 ignores it.
+pub const OP_SURNAME_OFFER: u16 = 0x7EF8;
+/// The surnames, from a server the client answered: u8 layout (1), u16 count,
+/// and each a character's name (its own, no tag) and its surname (empty: it
+/// has none any more), each a u8 byte count and UTF-8. The whole list once
+/// after the answer, then a character at a time ([`Session::surname`]).
+pub const OP_SURNAMES: u16 = 0x7EF9;
 /// go-eqoa-server's own: one faction's standing on the HUD (`factiontrack`,
 /// Heirloom petition 3216: "track one chosen faction on screen, outside the
 /// faction window"). The offer, server to client at every world entry: a u8,
@@ -762,6 +775,11 @@ pub const OP_FACTION_TRACK_DATA: u16 = 0x7E88;
 /// owner's line without it; the wholes the same).
 /// Layout 4 sends player rows and includes the mercenary shares in those
 /// rows. The header includes totals and the receiver's places for both views.
+/// Layout 5 is layout 4, then u8 how many merc lines and each: u8 flags (4, 8
+/// the player's own merc, 2 its owner no longer in the group), u8 class, u32
+/// damage, its own pet's share, healing, its pet's share, power, u8 its
+/// owner's place among the lines sent (0 the first), its name. Each merc's
+/// figures are in its owner's `merc_share` too.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DpsMeter {
     /// The layout it came in: 1 has no healing or power (each 0).
@@ -785,6 +803,10 @@ pub struct DpsMeter {
     pub power_place: u16,
     pub without_mercs: Option<DpsRankedTotals>,
     pub lines: Vec<DpsLine>,
+    /// Layout 5: each merc's own line (`merc` set, `owner` its owner's line's
+    /// name), the most damage first; those the server had no room for are
+    /// left in their owner's `merc_share` alone.
+    pub merc_lines: Vec<DpsLine>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -821,6 +843,27 @@ pub struct DpsLine {
     pub own_merc: bool,
     pub owner: String,
     pub merc_share: [u32; 3],
+}
+
+/// [`OP_SURNAMES`]'s body: each (name, surname), or None when it is short or of
+/// another layout.
+fn read_surnames(r: &mut Reader) -> Option<Vec<(String, String)>> {
+    if r.u8() != 1 {
+        return None;
+    }
+    let n = r.u16() as usize;
+    let mut out = Vec::with_capacity(n.min(512));
+    for _ in 0..n {
+        let a = r.u8() as usize;
+        let name = String::from_utf8_lossy(r.bytes(a)).into_owned();
+        let b = r.u8() as usize;
+        let surname = String::from_utf8_lossy(r.bytes(b)).into_owned();
+        if r.error {
+            return None;
+        }
+        out.push((name, surname));
+    }
+    (!r.error).then_some(out)
 }
 
 /// [`OP_FACTION_TRACK_DATA`]'s body: (known, name, standing), or None when it
@@ -878,6 +921,32 @@ fn read_dps_meter(r: &mut Reader) -> Option<DpsMeter> {
             owner,
             merc_share: if layout >= 4 && flags & 4 != 0 { [r.u32(), r.u32(), r.u32()] } else { [0; 3] },
         });
+    }
+    if layout >= DPS_METER_MERC_ROWS {
+        let n = r.u8() as usize;
+        for _ in 0..n {
+            if r.error {
+                break;
+            }
+            let (flags, class, damage, pet, heal, heal_pet, power, at) = (r.u8(), r.u8(), r.u32(), r.u32(), r.u32(), r.u32(), r.u32(), r.u8() as usize);
+            let len = r.u8() as usize;
+            let name = String::from_utf8_lossy(r.bytes(len)).into_owned();
+            let owner = m.lines.get(at).map(|l| l.name.clone()).unwrap_or_default();
+            m.merc_lines.push(DpsLine {
+                left: flags & 2 != 0,
+                class,
+                damage,
+                pet,
+                heal,
+                heal_pet,
+                power,
+                name,
+                merc: true,
+                own_merc: flags & 8 != 0,
+                owner,
+                ..DpsLine::default()
+            });
+        }
     }
     (!r.error).then_some(m)
 }
@@ -1665,6 +1734,9 @@ pub struct Session {
     /// ([`OP_GROUP_REG_STATE`]); none from a server that never offered it, and
     /// at a new connection.
     pub group_reg: Option<GroupReg>,
+    /// The characters' surnames the server told ([`OP_SURNAMES`]), by their
+    /// names in lower case; none at a new connection until told again.
+    pub surnames: std::collections::HashMap<String, String>,
     /// What character creation takes past the game's, as the server last told
     /// it ([`OP_CREATION_RACES`]); none from a server that never offers it.
     pub creation: Option<crate::creation::Creation>,
@@ -2030,6 +2102,7 @@ impl Session {
             mercs: None,
             merc_windows: false,
             group_reg: None,
+            surnames: std::collections::HashMap::new(),
             creation: None,
             server_worlds: None,
             worlds_building: None,
@@ -2596,6 +2669,12 @@ impl Session {
         self.send(&crate::headmarks::answer(want));
     }
 
+    /// The character `name`'s surname (its own name, no tag), as the server
+    /// told it ([`OP_SURNAMES`]); None for none.
+    pub fn surname(&self, name: &str) -> Option<&str> {
+        self.surnames.get(&name.to_lowercase()).map(String::as_str)
+    }
+
     /// The mark over the entity `id`'s head, from a server that sends them
     /// (offered and asked): [`crate::headmarks::TAKE`], [`crate::headmarks::STEP`],
     /// or None.
@@ -3057,6 +3136,8 @@ impl Session {
                 self.mercs = None;
                 self.merc_windows = false;
                 self.group_reg = None;
+                // the surnames: the next world entry offers them again
+                self.surnames.clear();
                 // the old connection's channels go with it
                 self.early_states.clear();
                 self.quest_marks_offer = false;
@@ -3615,13 +3696,13 @@ impl Session {
                     self.send(&w.data);
                 }
             }
-            // the merc windows offered (each world entry): answered 1, the
-            // layout read (`mercwin`)
+            // the merc windows offered (each world entry): answered 2, the
+            // layout read (1's with the kind USE: `mercwin`)
             crate::mercwin::OP_MERC_WINDOW_OFFER => {
                 let layout = r.u8();
                 if !r.error && layout == crate::mercwin::LAYOUT {
                     let mut w = Writer::op(crate::mercwin::OP_MERC_WINDOW_OFFER);
-                    w.u8(crate::mercwin::LAYOUT);
+                    w.u8(crate::mercwin::LAYOUT_USE);
                     self.send(&w.data);
                     self.merc_windows = true;
                 }
@@ -3806,6 +3887,27 @@ impl Session {
                     self.number_tags_asked = None;
                 }
             }
+            // the surnames offered (each world entry): answered 1 at once, the
+            // whole list to come (`OP_SURNAMES`)
+            OP_SURNAME_OFFER => {
+                if !r.error && r.u8() == 1 && !r.error {
+                    let mut w = Writer::op(OP_SURNAME_OFFER);
+                    w.u8(1);
+                    self.send(&w.data);
+                }
+            }
+            OP_SURNAMES => match read_surnames(&mut r) {
+                Some(pairs) => {
+                    for (name, surname) in pairs {
+                        if surname.is_empty() {
+                            self.surnames.remove(&name.to_lowercase());
+                        } else {
+                            self.surnames.insert(name.to_lowercase(), surname);
+                        }
+                    }
+                }
+                None => debug_line(&format!("[net] the surnames: {} bytes not read", m.data.len())),
+            },
             // the damage meter offered (again at every world entry): told
             // afresh whether the client wants it (`agree_dps_meter`)
             OP_DPS_METER_OFFER => {
@@ -5172,9 +5274,50 @@ mod tests {
         assert!(!s.merc_windows && ours(&mut s).is_empty(), "another layout: nothing");
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x72, 0x7E, 1]);
         assert!(s.merc_windows);
-        assert_eq!(ours(&mut s), vec![vec![0x72, 0x7E, 1]], "answered 1");
+        assert_eq!(ours(&mut s), vec![vec![0x72, 0x7E, 2]], "answered 2 (the kind USE read)");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x74, 0x7E, 1, 0]);
         assert!(matches!(&ev[..], [Event::Opcode { op: 0x7E74, data }] if data[..] == [1, 0]), "{ev:?}");
+    }
+
+    // The surnames (0x7EF8/0x7EF9, go-eqoa-server's /surname, Live petition
+    // 5648): the offer answered 1 at once, another layout nothing; the list
+    // kept by name in any case, a surname emptied forgotten, a short list not
+    // taken; a new connection forgets them.
+    #[test]
+    fn surnames_offered_answered_and_kept() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let ours = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        ours(&mut s);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xF8, 0x7E, 2]);
+        assert!(ours(&mut s).is_empty(), "another layout: nothing");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xF8, 0x7E, 1]);
+        assert_eq!(ours(&mut s), vec![vec![0xF8, 0x7E, 1]], "answered 1");
+        let list = |pairs: &[(&str, &str)]| {
+            let mut m = vec![0xF9, 0x7E, 1, pairs.len() as u8, 0];
+            for (a, b) in pairs {
+                m.push(a.len() as u8);
+                m.extend_from_slice(a.as_bytes());
+                m.push(b.len() as u8);
+                m.extend_from_slice(b.as_bytes());
+            }
+            m
+        };
+        deliver(&mut s, drdp::TYPE_GUARANTEED, list(&[("Cora", "Stoneheart"), ("Dab", "Ironhand")]));
+        assert_eq!((s.surname("Cora"), s.surname("cora"), s.surname("Dab"), s.surname("Bert")), (Some("Stoneheart"), Some("Stoneheart"), Some("Ironhand"), None));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, list(&[("Cora", "")]));
+        assert_eq!((s.surname("Cora"), s.surname("Dab")), (None, Some("Ironhand")), "emptied: forgotten");
+        let mut short = list(&[("Bert", "Oakshield")]);
+        short.pop();
+        deliver(&mut s, drdp::TYPE_GUARANTEED, short);
+        assert_eq!(s.surname("Bert"), None, "a short list not taken");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(s.surname("Dab"), None, "a new connection: none");
     }
 
     // The mercs (0x7E5A/0x7E5B) and the group search's standing (0x7E5D/
@@ -6396,6 +6539,7 @@ mod tests {
             heal_place: 2,
             power_place: 2,
             without_mercs: None,
+            merc_lines: Vec::new(),
             lines: vec![
                 DpsLine { own: true, left: false, class: 3, damage: 1000, pet: 0, heal: 50, heal_pet: 0, power: 0, name: "Dab".into(), ..DpsLine::default() },
                 DpsLine { own: false, left: true, class: 9, damage: 300, pet: 120, heal: 900, heal_pet: 100, power: 40, name: "Jib".into(), ..DpsLine::default() },
@@ -6446,6 +6590,32 @@ mod tests {
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m4[..m4.len() - 1].to_vec());
         assert!(!ev.iter().any(|e| matches!(e, Event::DpsMeter(_))), "layout 4 cut short: {ev:?}");
 
+        // Layout 5: layout 4 and its merc lines (TestDPSMeterLayoutFiveMercRows's
+        // on the server, the same rows with Dab's two mercs)
+        let mut m5 = m4.clone();
+        m5[2] = 5;
+        m5.extend([2u8,
+            4 | 8, 9, 200, 0, 0, 0, 0, 0, 0, 0, 0x84, 3, 0, 0, 0, 0, 0, 0, 40, 0, 0, 0, 0, 3, b'K', b'e', b'l',
+            4 | 8, 0, 100, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, b'O', b'r', b'd',
+        ]);
+        let want5 = DpsMeter {
+            layout: 5,
+            merc_lines: vec![
+                DpsLine { class: 9, damage: 200, heal: 900, power: 40, name: "Kel".into(), merc: true, own_merc: true, owner: "Dab".into(), ..DpsLine::default() },
+                DpsLine { class: 0, damage: 100, pet: 10, name: "Ord".into(), merc: true, own_merc: true, owner: "Dab".into(), ..DpsLine::default() },
+            ],
+            ..want4.clone()
+        };
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m5.clone());
+        assert!(matches!(&ev[..], [Event::DpsMeter(got)] if *got == want5), "layout 5: {ev:?}");
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, m5[..m5.len() - 1].to_vec());
+        assert!(!ev.iter().any(|e| matches!(e, Event::DpsMeter(_))), "layout 5 cut short: {ev:?}");
+        let mut none = m4.clone();
+        none[2] = 5;
+        none.push(0);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, none);
+        assert!(matches!(&ev[..], [Event::DpsMeter(got)] if *got == DpsMeter { layout: 5, ..want4.clone() }), "layout 5 of no mercs: {ev:?}");
+
         // the offer again (the next world entry): told afresh
         deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3A, 0x7E, 1]);
         s.agree_dps_meter(true);
@@ -6459,11 +6629,11 @@ mod tests {
 
     // The DPS meter's answer names the layout offered, at most this client's
     // newest (DPS_METER_LAYOUT): a server of layout 1 is answered 1, of 2 2, of
-    // 3 3, of 4 or above 4; off is 0 whatever was offered. A fresh connection
+    // 3 3, of 4 4, of 5 or above 5; off is 0 whatever was offered. A fresh connection
     // each.
     #[test]
     fn dps_meter_answer_names_the_layout_offered() {
-        for (offer, answer) in [(1u8, 1u8), (2, 2), (3, 3), (4, 4), (9, DPS_METER_LAYOUT)] {
+        for (offer, answer) in [(1u8, 1u8), (2, 2), (3, 3), (4, 4), (5, 5), (9, DPS_METER_LAYOUT)] {
             let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
             let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
             deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x3A, 0x7E, offer]);

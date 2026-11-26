@@ -39,6 +39,13 @@
 //! segment in the bar. Hide mercs filters them out of both views. Layout 4
 //! sends the amounts on each player row; layout 3's separate records are
 //! grouped by owner when the snapshot arrives.
+//!
+//! Mercs as Own Rows (Heirloom petition 3136: "Can we keep the option to see
+//! each merc's DPS individually?"; off by default) draws each merc as a row of
+//! its own instead, "Kel (Dab's merc)" in the mercs' colour, ranked with the
+//! players, its figures taken off its owner's row: a server of layout 5 sends
+//! each merc's own figures beside layout 4's rows. What the server had no room
+//! for stays in its owner's merc share. Hide mercs still hides them all.
 
 use crate::ui::{Layout, UiRaster, wide};
 use net::session::{DPS_METER_MERC_LINES, DpsLine, DpsMeter};
@@ -218,8 +225,11 @@ pub struct Row {
     pub power: u64,
     pub hps: f64,
     pub pps: f64,
-    /// The included mercenary contribution for each metric.
+    /// The included mercenary contribution for each metric (a merc's own row:
+    /// all of it).
     pub merc: [u64; 3],
+    /// A merc's own row (Mercs as Own Rows), its name "Name (Owner's merc)".
+    pub merc_row: bool,
 }
 
 impl Row {
@@ -290,6 +300,8 @@ struct Total {
     name: String,
     left: bool,
     merc: [u64; 3],
+    /// A merc's own line (layout 5): its owner's name.
+    merc_of: Option<String>,
 }
 
 impl Total {
@@ -297,8 +309,14 @@ impl Total {
         Self {
             damage: l.damage.into(), pet: l.pet.into(), heal: l.heal.into(), heal_pet: l.heal_pet.into(),
             power: l.power.into(), class: l.class, own: l.own, name: l.name, left: l.left,
-            merc: l.merc_share.map(u64::from),
+            merc: l.merc_share.map(u64::from), merc_of: None,
         }
+    }
+
+    /// A merc's own line of layout 5.
+    fn from_merc(l: DpsLine) -> Self {
+        let owner = l.owner.clone();
+        Self { own: false, merc_of: Some(owner), ..Self::from_line(DpsLine { merc_share: [0; 3], ..l }) }
     }
 
     fn add(&mut self, other: &Self) {
@@ -335,12 +353,15 @@ struct Fight {
     places: [usize; 3],
     without_mercs: [u64; 3],
     places_without_mercs: [usize; 3],
+    /// Layout 5: each merc's own line.
+    mercs: Vec<Total>,
 }
 
 impl From<DpsMeter> for Fight {
     fn from(m: DpsMeter) -> Self {
         let totals = [m.total, m.heal_total, m.power_total].map(u64::from);
         let mut places = [m.place, m.heal_place, m.power_place].map(usize::from);
+        let mercs: Vec<Total> = m.merc_lines.into_iter().map(Total::from_merc).collect();
         let (player_lines, merc_lines): (Vec<_>, Vec<_>) = m.lines.into_iter().partition(|line| !line.merc);
         let mut lines: Vec<_> = player_lines.into_iter().map(Total::from_line).collect();
         let (without_mercs, places_without_mercs) = if let Some(t) = m.without_mercs {
@@ -374,15 +395,34 @@ impl From<DpsMeter> for Fight {
         } else {
             (totals, places)
         };
-        Self { id: m.fight, over: m.over, length_ms: m.length_ms, lines, totals, places, without_mercs, places_without_mercs }
+        Self { id: m.fight, over: m.over, length_ms: m.length_ms, lines, totals, places, without_mercs, places_without_mercs, mercs }
     }
 }
 
 impl Fight {
-    fn add_to(&self, overall: &mut BTreeMap<String, Total>) {
+    fn add_to(&self, overall: &mut BTreeMap<String, Total>, mercs: &mut BTreeMap<(String, String), Total>) {
         for line in &self.lines {
             overall.entry(line.name.clone()).and_modify(|total| total.add(line)).or_insert_with(|| line.clone());
         }
+        for m in &self.mercs {
+            let key = (m.merc_of.clone().unwrap_or_default(), m.name.clone());
+            mercs.entry(key).and_modify(|total| total.add(m)).or_insert_with(|| m.clone());
+        }
+    }
+}
+
+/// Mercs as Own Rows: each merc's own line among `lines`, its figures taken off
+/// its owner's merc share (what is left there is what the server had no room
+/// to send apart).
+fn merc_rows(lines: &mut Vec<Total>, mercs: Vec<Total>) {
+    for m in mercs {
+        let owner = m.merc_of.as_deref().unwrap_or_default();
+        if let Some(o) = lines.iter_mut().find(|l| l.merc_of.is_none() && l.name == owner) {
+            for (share, take) in o.merc.iter_mut().zip([m.damage, m.heal, m.power]) {
+                *share = share.saturating_sub(take);
+            }
+        }
+        lines.push(m);
     }
 }
 
@@ -394,6 +434,8 @@ pub struct Meter {
     fight: Option<Fight>,
     dropped: Option<u32>,
     overall: BTreeMap<String, Total>,
+    /// Each merc's own lines summed (layout 5), by its owner's name and its own.
+    overall_mercs: BTreeMap<(String, String), Total>,
     overall_ms: u64,
     counted: Option<u32>,
     /// The panel's first item showing (the wheel's and a click's), back to
@@ -434,7 +476,7 @@ impl Meter {
 
     /// `m` summed into Overall.
     fn count(&mut self, m: &Fight) {
-        m.add_to(&mut self.overall);
+        m.add_to(&mut self.overall, &mut self.overall_mercs);
         self.overall_ms += (m.length_ms as u64).max(LEAST_MS);
         self.counted = Some(m.id);
     }
@@ -462,6 +504,12 @@ impl Meter {
     /// `sort` (one the columns show, else damage); the DPS alone, by damage,
     /// until a fight came with healing and power (layout 2).
     pub fn shown_by(&self, view: View, pet_name: &str, columns: Columns, sort: Metric, hide_mercs: Option<bool>) -> Shown {
+        self.shown_with(view, pet_name, columns, sort, hide_mercs, false)
+    }
+
+    /// `shown_by`, each merc a row of its own where `own_rows` (Mercs as Own
+    /// Rows) and the mercs are not hidden.
+    pub fn shown_with(&self, view: View, pet_name: &str, columns: Columns, sort: Metric, hide_mercs: Option<bool>, own_rows: bool) -> Shown {
         let columns = if self.heals { columns } else { Columns::Dps };
         let sort = sort.fit(columns);
         let hidden = hide_mercs == Some(true);
@@ -472,18 +520,31 @@ impl Meter {
                 Some(f) => {
                     let title = if f.over { "Last Fight" } else { "Fight" };
                     let (totals, places) = if hidden { (f.without_mercs, f.places_without_mercs) } else { (f.totals, f.places) };
-                    (title, u64::from(f.length_ms), f.lines.clone(), Some((totals[mi], places[mi])))
+                    let mut lines = f.lines.clone();
+                    // its own rows: the server's places rank players with their
+                    // mercs, so the player's own is placed here
+                    let sent = if own_rows && !hidden && !f.mercs.is_empty() {
+                        merc_rows(&mut lines, f.mercs.clone());
+                        (totals[mi], 0)
+                    } else {
+                        (totals[mi], places[mi])
+                    };
+                    (title, u64::from(f.length_ms), lines, Some(sent))
                 }
             },
             View::Overall => {
                 let mut sums: BTreeMap<String, Total> = self.overall.clone();
+                let mut mercs = self.overall_mercs.clone();
                 let mut ms = self.overall_ms;
                 // the fight under way, not yet summed
                 if let Some(f) = self.fight.as_ref().filter(|f| self.counted != Some(f.id)) {
-                    f.add_to(&mut sums);
+                    f.add_to(&mut sums, &mut mercs);
                     ms += (f.length_ms as u64).max(LEAST_MS);
                 }
-                let lines: Vec<_> = sums.into_values().collect();
+                let mut lines: Vec<_> = sums.into_values().collect();
+                if own_rows && !hidden {
+                    merc_rows(&mut lines, mercs.into_values().collect());
+                }
                 let title = if lines.is_empty() { "DPS Meter" } else { "Overall" };
                 (title, if lines.is_empty() { 0 } else { ms }, lines, None)
             }
@@ -501,9 +562,14 @@ impl Meter {
                 let figures = t.figures(hidden);
                 let [damage, heal, power] = figures;
                 let v = figures[mi];
+                let merc_row = t.merc_of.is_some();
                 Row {
                     rank: i + 1,
-                    name: t.name,
+                    name: match &t.merc_of {
+                        Some(o) if !o.is_empty() => format!("{} ({o}'s merc)", t.name),
+                        Some(_) => format!("{} (merc)", t.name),
+                        None => t.name,
+                    },
                     class: t.class,
                     damage,
                     pet: t.pet,
@@ -517,7 +583,8 @@ impl Meter {
                     power,
                     hps: heal as f64 / secs_div,
                     pps: power as f64 / secs_div,
-                    merc: if hidden { [0; 3] } else { t.merc },
+                    merc: if merc_row { figures } else if hidden { [0; 3] } else { t.merc },
+                    merc_row,
                 }
             })
             .collect();
@@ -736,6 +803,8 @@ const WHITE: [f32; 4] = [0.95, 0.95, 0.92, 1.0];
 const DIM: [f32; 4] = [0.62, 0.62, 0.6, 1.0];
 const OWN: [f32; 4] = [1.0, 0.86, 0.35, 1.0];
 const MERC: [f32; 4] = [0.80, 0.40, 0.94, 0.70];
+/// A merc's own row's words (Mercs as Own Rows).
+const MERC_TEXT: [f32; 4] = [0.88, 0.70, 0.98, 1.0];
 const BACK: [f32; 4] = [0.0, 0.0, 0.0, 0.4];
 const HEAD_BACK: [f32; 4] = [0.0, 0.0, 0.0, 0.3];
 const OUTLINE: [f32; 4] = [0.0, 0.0, 0.0, 0.85];
@@ -822,6 +891,8 @@ pub fn pieces(s: &Shown, p: &Panel, width: impl Fn(&str) -> f32) -> (Vec<Bar>, V
                     OWN
                 } else if r.left {
                     DIM
+                } else if r.merc_row {
+                    MERC_TEXT
                 } else {
                     WHITE
                 };
@@ -1354,5 +1425,50 @@ mod tests {
         let all_hidden = m.shown_by(View::Overall, "", Columns::All, Metric::Healing, Some(true));
         assert_eq!(all_hidden.rows[0].name, "Jib");
         assert_eq!((all_hidden.rows[1].heal, all_hidden.rows[1].power), (50, 0));
+    }
+
+    /// Mercs as Own Rows (Heirloom petition 3136): layout 5's merc lines drawn
+    /// as rows of their own, "Kel (Dab's merc)" in the mercs' colour, ranked
+    /// with the players, their figures off their owner's row; what the server
+    /// sent no line for stays in the owner's share. Overall sums them by owner
+    /// and name. The controls: off, and hidden, the rows are layout 4's.
+    #[test]
+    fn mercs_as_own_rows() {
+        let mut dab = line2("Dab", 11, 300, 50, 0, true);
+        dab.merc_share = [900, 280, 60];
+        let jib = line2("Jib", 8, 500, 80, 20, false);
+        let mut f = fight2(1, true, 2000, vec![dab, jib]);
+        f.layout = 5;
+        (f.total, f.heal_total, f.power_total, f.place) = (1700, 410, 80, 1);
+        f.without_mercs = Some(net::session::DpsRankedTotals { totals: [800, 130, 20], places: [2, 2, 2] });
+        let merc = |name: &str, class: u8, damage: u32, heal: u32, power: u32| DpsLine {
+            class, damage, heal, power, name: name.into(), merc: true, own_merc: true, owner: "Dab".into(), ..DpsLine::default()
+        };
+        // Kel and Ord sent apart; 100 damage of Dab's share the server had no room for
+        f.merc_lines = vec![merc("Kel", 9, 600, 280, 60), merc("Ord", 0, 200, 0, 0)];
+        let mut m = Meter::default();
+        m.take(f);
+
+        let off = m.shown_with(View::Fight, "", Columns::Dps, Metric::Damage, Some(false), false);
+        assert_eq!(off.rows.iter().map(|r| (r.name.as_str(), r.damage)).collect::<Vec<_>>(), [("Dab", 1200), ("Jib", 500)], "off: layout 4's");
+
+        let on = m.shown_with(View::Fight, "", Columns::Dps, Metric::Damage, Some(false), true);
+        let rows: Vec<_> = on.rows.iter().map(|r| (r.name.as_str(), r.damage, r.merc_row, r.rank)).collect();
+        assert_eq!(rows, [("Kel (Dab's merc)", 600, true, 1), ("Jib", 500, false, 2), ("Dab", 400, false, 3), ("Ord (Dab's merc)", 200, true, 4)]);
+        let dab = &on.rows[2];
+        assert_eq!((dab.merc, dab.own), ([100, 0, 0], true), "Dab keeps the share sent no line");
+        assert_eq!(on.rows[0].merc, [600, 280, 60], "a merc's row is all merc");
+        assert_eq!(on.dps, 850.0, "the whole is the same");
+        let p = panel(&on, 400);
+        let (bars, texts) = pieces(&on, &p, |t| t.len() as f32 * 4.0);
+        let first: Vec<_> = bars.iter().filter(|b| b.r[1] == p.rows[1] as f32 + 1.0).collect();
+        assert!(!first.is_empty() && first.iter().all(|b| b.color == MERC), "the merc's bar in the mercs' colour");
+        assert!(texts.iter().any(|t| t.s.contains("Kel (Dab's merc)") && t.color == MERC_TEXT));
+
+        let hidden = m.shown_with(View::Fight, "", Columns::Dps, Metric::Damage, Some(true), true);
+        assert!(hidden.rows.iter().all(|r| !r.merc_row), "hidden: no merc rows");
+
+        let all = m.shown_with(View::Overall, "", Columns::Dps, Metric::Damage, Some(false), true);
+        assert_eq!(all.rows.iter().map(|r| (r.name.as_str(), r.damage)).collect::<Vec<_>>(), [("Kel (Dab's merc)", 600), ("Jib", 500), ("Dab", 400), ("Ord (Dab's merc)", 200)]);
     }
 }

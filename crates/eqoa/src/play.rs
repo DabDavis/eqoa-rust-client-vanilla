@@ -5545,7 +5545,7 @@ impl Play {
             // while Extended's Debuff Icons says Name Plate (petitions 2997,
             // 3020; Target Window's go in the target box, `target_effects`)
             let debuffs = if crate::settings::debuff_icons() == crate::settings::DebuffIcons::Plate { self.session.npc_debuffs_left(e.id, self.session.now()) } else { Vec::new() };
-            out.push(Plate { at, color: self.name_color(c), name: c.name.clone(), tag: self.merc_tag(c), mark, debuffs });
+            out.push(Plate { at, color: self.name_color(c), name: self.plate_name(c), tag: self.merc_tag(c), mark, debuffs });
         }
         // Own Name Plate (Heirloom petition 3081): the player's own, drawn as
         // the others' are, while its body is drawn (not from inside it, a
@@ -5565,7 +5565,20 @@ impl Play {
         let at = self.self_name_at?;
         let me = self.self_id32()?;
         let c = self.entities.slots.iter().flatten().find(|e| e.id == me)?.creature.as_ref()?;
-        (!c.name.is_empty()).then(|| Plate { at, color: self.name_color(c), name: c.name.clone(), tag: None, mark: None, debuffs: Vec::new() })
+        (!c.name.is_empty()).then(|| Plate { at, color: self.name_color(c), name: self.plate_name(c), tag: None, mark: None, debuffs: Vec::new() })
+    }
+
+    /// A creature's name as its plate and its details box show it: a
+    /// player's with its surname after it (go-eqoa-server's `/surname`, Live
+    /// petition 5648: `OP_SURNAMES`, by its name without the tags before it),
+    /// anyone else's as it is.
+    fn plate_name(&self, c: &net::entity::Creature) -> String {
+        if c.p256 == 2
+            && let Some(s) = self.session.surname(crate::chat::plain_name(&c.name))
+        {
+            return format!("{} {s}", c.name);
+        }
+        c.name.clone()
     }
 
     /// Debuff Icons (petition 2997) for this frame's kept plates (`debuff_marks`),
@@ -12068,6 +12081,8 @@ impl Play {
         }
         self.options_wnd.meter_merc_note = (self.session.dps_meter_offer && self.session.dps_meter_layout < net::session::DPS_METER_MERC_LINES)
             .then_some("Mercenary breakdown requires a newer server");
+        self.options_wnd.meter_merc_rows_note = (self.session.dps_meter_offer && self.session.dps_meter_layout < net::session::DPS_METER_MERC_ROWS)
+            .then_some("Each merc's own row requires a newer server");
     }
 
     /// The Faction Tracker: the character's followed faction read, the server
@@ -12375,7 +12390,8 @@ impl Play {
         let c = crate::settings::client();
         (c.dps_meter && self.session.dps_meter_offer && self.right_hud_up()).then(|| {
             let hide_mercs = (self.session.dps_meter_layout >= net::session::DPS_METER_MERC_LINES).then_some(c.dps_hide_mercenary);
-            self.meter.shown_by(c.dps_view, &self.pet_name, c.dps_columns, c.dps_sort, hide_mercs)
+            let own_rows = self.session.dps_meter_layout >= net::session::DPS_METER_MERC_ROWS && c.dps_merc_rows;
+            self.meter.shown_with(c.dps_view, &self.pet_name, c.dps_columns, c.dps_sort, hide_mercs, own_rows)
         })
     }
 
@@ -12823,7 +12839,8 @@ impl Play {
             2 => {
                 let (guild, title) = if self.target_info.is_some() { (self.target_guild.as_str(), self.target_title.as_str()) } else { ("", "") };
                 let rank = if title.is_empty() { class.as_str() } else { title };
-                Some(if guild.is_empty() { format!("{}\n{race}\n{rank}\n{level}", c.name) } else { format!("{}\n{guild}\n{race}\n{rank}\n{level}", c.name) })
+                let name = self.plate_name(c);
+                Some(if guild.is_empty() { format!("{name}\n{race}\n{rank}\n{level}") } else { format!("{name}\n{guild}\n{race}\n{rank}\n{level}") })
             }
             // a merc's class (and a healer's mode) under its name, where the
             // server tells them (0x7E5B's layout 3: the owner's of 2026-11-12,
@@ -15946,6 +15963,23 @@ mod commands {
         p.self_name_at = None;
         assert!(p.plates().iter().all(|pl| pl.name != "Dabtest"), "no name node: none");
         crate::settings::testing::reset(false);
+    }
+
+    /// A surname the server told (go-eqoa-server's `/surname`, Live petition
+    /// 5648) after a player's name on its plate and in its details box, its
+    /// tags before the name read past; none for a merc or a pet of the name,
+    /// none for a player without one (the control).
+    #[test]
+    fn a_surname_follows_a_players_name() {
+        let mut p = play();
+        let player = net::entity::Creature { p256: 2, name: "[OG] Cora".into(), ..Default::default() };
+        let bert = net::entity::Creature { p256: 2, name: "Bert".into(), ..Default::default() };
+        let pet = net::entity::Creature { p256: 3, name: "Cora".into(), ..Default::default() };
+        assert_eq!(p.plate_name(&player), "[OG] Cora", "the control: nothing told");
+        p.session.surnames.insert("cora".into(), "Stoneheart".into());
+        assert_eq!(p.plate_name(&player), "[OG] Cora Stoneheart");
+        assert_eq!(p.plate_name(&bert), "Bert");
+        assert_eq!(p.plate_name(&pet), "Cora", "a pet or a merc: its own name");
     }
 
     /// Coach Talk on Arrival (Heirloom petition 3091): a 0x00B2 while the

@@ -5,6 +5,20 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Surnames on name plates
+
+- On a server that has them, players can take a **surname** with `/surname <name>` from level 20. The client now shows it after the player's first name **over their head** and in the **details box** (□ on a player), for example *Cora Stoneheart*. Pets and mercenaries are unchanged. On a server without surnames nothing changes.
+
+## 2026-11-26 · See each merc on the DPS meter
+
+- New option **Mercs as Own Rows** under **Options → Extended → UI → DPS Meter** (off unless you turn it on). On, each mercenary gets its **own row** on the DPS meter again, for example *Kel (Dab's merc)*, in the mercs' purple, ranked with the players by damage, healing or power, and its figures are no longer counted in its owner's row. Off, mercs stay part of their owner's row as now. **Hide mercs** still hides them all.
+- It works in **Fight** and **Overall**. It needs the server's new update; on a server without it the row says so and the meter is as before.
+
+## 2026-11-26 · Feed your merc from its inventory
+
+- Food and drink you have given your **mercenary** now have a **Use** option in its inventory window (the **Carried** tab): the merc eats or drinks it right away, and gets the same health or power over time it would get eating or drinking on its own. A new meal replaces the one it is eating; a drink replaces the one it is drinking. Mercs with no power will not take a drink.
+- Typing works too: `/merc use <item>` (for example `/merc use elven wine`, or `/merc Kel use jerky` with several mercs). It needs the server's new update.
+
 ## 2026-11-26 · M in a town opens the town's map
 
 - Pressing **M** while you are in a town or city (Freeport, Qeynos, Neriak, Halas, Oggok and the others the map knows) now opens the map zoomed in on that town, like picking it from **Places**. Press **M** again (✕ on a controller) for the world map as you left it, and **M** once more to close. Outside towns, M opens the world map as before.

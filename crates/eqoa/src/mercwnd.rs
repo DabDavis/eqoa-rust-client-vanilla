@@ -8,7 +8,9 @@
 //! Carried (what it holds), Your Pack (what the player may give it); the
 //! description beside the list is the merc's name, level, hit points, power,
 //! AC and stats over the selected item's. Each item's popup is the game's
-//! (Equip, Unequip, Inspect) with Take Back and Give, vanilla's own. Every move
+//! (Equip, Unequip, Use, Inspect) with Take Back and Give, vanilla's own: Use on
+//! a meal or a drink it carries has it eat or drink it now (go-eqoa-server's
+//! petition 3285, the server's record kind `USE`). Every move
 //! is asked of the server, which judges it by the player's rules and answers
 //! with the merc's new state; nothing here changes what it holds. The
 //! player's own inventory has Give to the merc on each item not worn while
@@ -18,7 +20,7 @@
 use crate::client_image::{Menu, MenuEntry, Menus};
 use crate::infotext;
 use net::dump::{ItemList, NetItem};
-use net::mercwin::{CARRIED, HEIRLOOM, MercWindow, STOCK, WORN};
+use net::mercwin::{CARRIED, HEIRLOOM, MercWindow, STOCK, USE, WORN};
 
 /// The popups' messages of the client's own (none of the game's): Take Back,
 /// and Give (the merc's window's, and the inventory's Give to the merc).
@@ -34,11 +36,12 @@ pub const MSG_TAKE_ONE: u32 = 0x7E73_0106;
 pub const WORD_TAKE_STACK: i32 = -23;
 pub const WORD_TAKE_ONE: i32 = -24;
 
-/// The game's popup rows: Equip, Unequip, Inspect.
+/// The game's popup rows: Equip, Unequip, Use, Inspect.
 const MSG_USE: u32 = 0x0203_0000;
 const MSG_INSPECT: u32 = 0x0202_0000;
 const WORD_EQUIP: i32 = 121;
 const WORD_UNEQUIP: i32 = 154;
+const WORD_USE: i32 = 120;
 const WORD_INSPECT: i32 = 122;
 
 /// The tabs' labels; an alchemist's window has the fourth, its owner's
@@ -86,7 +89,8 @@ pub fn view(m: &MercWindow, pack: &ItemList) -> View {
     let mut list = ItemList::default();
     let mut src = Vec::new();
     for kind in [WORN, HEIRLOOM, CARRIED, STOCK] {
-        for r in m.records.iter().filter(|r| r.kind == kind) {
+        // a meal or a drink (USE) among the carried, in the server's order
+        for r in m.records.iter().filter(|r| r.kind == kind || (kind == CARRIED && r.kind == USE)) {
             list.items.push(r.item.clone());
             src.push(Src::Merc { id: r.id, kind: r.kind });
         }
@@ -121,7 +125,8 @@ fn entry(word: i32, msg: u32, id: i32) -> MenuEntry {
 
 /// The three tabs' menus (and an empty fourth, never shown), each row's
 /// popup: worn, Unequip, Inspect, Take Back (an heirloom Inspect alone);
-/// carried, Equip (an item it may wear), Inspect, Take Back; the pack's, Give
+/// carried, Equip (an item it may wear) or Use (a meal or a drink), Inspect,
+/// Take Back; the pack's, Give
 /// and Inspect. `can_wear` is the merc's class, race and level's
 /// (`inventory::can_use`); one it may not wear is badged as the game badges
 /// the player's (140).
@@ -135,7 +140,7 @@ pub fn build(v: &View, count: usize, icon: &dyn Fn(&NetItem) -> i32, can_wear: &
             let id = k as i32;
             let shown = match (tab, src) {
                 (0, Src::Merc { kind, .. }) => *kind == WORN || *kind == HEIRLOOM,
-                (1, Src::Merc { kind, .. }) => *kind == CARRIED,
+                (1, Src::Merc { kind, .. }) => *kind == CARRIED || *kind == USE,
                 (3, Src::Merc { kind, .. }) => *kind == STOCK,
                 (2, Src::Pack { .. }) => true,
                 _ => false,
@@ -155,6 +160,9 @@ pub fn build(v: &View, count: usize, icon: &dyn Fn(&NetItem) -> i32, can_wear: &
                 Src::Merc { kind: WORN, .. } => {
                     e.icon2 = 138;
                     vec![entry(WORD_UNEQUIP, MSG_USE, id), entry(WORD_INSPECT, MSG_INSPECT, id), entry(WORD_TAKE, MSG_TAKE, id)]
+                }
+                Src::Merc { kind: USE, .. } => {
+                    vec![entry(WORD_USE, MSG_USE, id), entry(WORD_INSPECT, MSG_INSPECT, id), entry(WORD_TAKE, MSG_TAKE, id)]
                 }
                 Src::Merc { .. } => {
                     let mut rows = Vec::new();
@@ -188,23 +196,27 @@ pub enum Ask {
     Equip(u32),
     Unequip(u32),
     Take(u32),
+    /// a carried meal or drink eaten or drunk now
+    Use(u32),
     /// from the owner's stock: the item's id and how many (0 a stack)
     Stock(u32, u32),
 }
 
 /// The ask the item menu's answer `o` makes of the window's list, if any:
-/// Equip on a carried record, Unequip on a worn one, Take Back, Give.
+/// Equip on a carried record, Use on a meal or a drink, Unequip on a worn one,
+/// Take Back, Give.
 pub fn ask_of(o: &crate::itemmenu::ItemOut, v: &View) -> Option<Ask> {
     use crate::itemmenu::ItemOut;
     let src = |i: i32| v.src.get(usize::try_from(i).ok()?).copied();
     match *o {
         ItemOut::UseItem(i, _) => match src(i)? {
             Src::Merc { id, kind: CARRIED } => Some(Ask::Equip(id)),
+            Src::Merc { id, kind: USE } => Some(Ask::Use(id)),
             Src::Merc { id, kind: WORN } => Some(Ask::Unequip(id)),
             _ => None,
         },
         ItemOut::Custom(MSG_TAKE, i) => match src(i)? {
-            Src::Merc { id, kind } if kind == CARRIED || kind == WORN => Some(Ask::Take(id)),
+            Src::Merc { id, kind } if kind == CARRIED || kind == USE || kind == WORN => Some(Ask::Take(id)),
             _ => None,
         },
         ItemOut::Custom(msg @ (MSG_TAKE_STACK | MSG_TAKE_ONE), i) => match src(i)? {
@@ -221,12 +233,13 @@ pub fn ask_of(o: &crate::itemmenu::ItemOut, v: &View) -> Option<Ask> {
 
 /// The ask's bytes, of the merc of `slot`.
 pub fn ask_bytes(a: Ask, slot: u8) -> Vec<u8> {
-    use net::mercwin::{ASK_EQUIP, ASK_GIVE, ASK_STOCK, ASK_TAKE, ASK_UNEQUIP, ask};
+    use net::mercwin::{ASK_EQUIP, ASK_GIVE, ASK_STOCK, ASK_TAKE, ASK_UNEQUIP, ASK_USE, ask};
     match a {
         Ask::Give(key) => ask(slot, ASK_GIVE, key, 0),
         Ask::Equip(id) => ask(slot, ASK_EQUIP, id, -1),
         Ask::Unequip(id) => ask(slot, ASK_UNEQUIP, id, 0),
         Ask::Take(id) => ask(slot, ASK_TAKE, id, 0),
+        Ask::Use(id) => ask(slot, ASK_USE, id, 0),
         Ask::Stock(id, n) => ask(slot, ASK_STOCK, id, n.min(127) as i8),
     }
 }
@@ -362,6 +375,24 @@ mod tests {
         assert_eq!(ask_of(&ItemOut::Custom(MSG_TAKE, at("Infused Draught")), &v), None);
         assert_eq!(ask_of(&ItemOut::Custom(MSG_TAKE_STACK, at("Buckler")), &v), None);
         assert_eq!(ask_bytes(Ask::Stock(910010, 1), 1), vec![0x73, 0x7E, 1, 6, 0xBA, 0xE2, 0x0D, 0, 1, 0, 0, 0]);
+    }
+
+    /// A meal or a drink the merc carries (the server's kind USE) is among the
+    /// carried with Use, Inspect, Take Back; Use asks the server (ask 8), Take
+    /// Back takes it. The control: a carried record of kind CARRIED has no Use.
+    #[test]
+    fn use_a_meal_or_a_drink() {
+        let mut m = state();
+        m.records.push(item(12, USE, "Spiced Jerky", -1, -1));
+        let v = view(&m, &pack());
+        let b = build(&v, 40, &|_| -1, &|_| true);
+        let carried = names(&v, &b, 1);
+        assert_eq!(carried.last(), Some(&("Spiced Jerky".into(), vec![WORD_USE, WORD_INSPECT, WORD_TAKE])));
+        assert!(!carried.iter().any(|(n, w)| n == "Lucky Stone" && w.contains(&WORD_USE)), "the stone has no Use");
+        let at = |name: &str| v.list.items.iter().position(|it| it.item.name == name).unwrap() as i32;
+        assert_eq!(ask_of(&ItemOut::UseItem(at("Spiced Jerky"), 0), &v), Some(Ask::Use(12)));
+        assert_eq!(ask_of(&ItemOut::Custom(MSG_TAKE, at("Spiced Jerky")), &v), Some(Ask::Take(12)));
+        assert_eq!(ask_bytes(Ask::Use(12), 1), vec![0x73, 0x7E, 1, 8, 12, 0, 0, 0]);
     }
 
     /// The player's own inventory: Give to Merc after Inspect on an item not
