@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · A Wisp in its raiment shows no skin
+
+- A **Wisp** wearing its gear (Wisp's Raiment) no longer shows a human's skin through its armour or robe: where a robe or a tunic is cut open (a female Wisp's robe at the chest, a tunic's bare arms) there is nothing, as everywhere else on a Wisp.
+
 ## 2026-11-26 · Surnames on name plates
 
 - On a server that has them, players can take a **surname** with `/surname <name>` from level 20. The client now shows it after the player's first name **over their head** and in the **details box** (□ on a player), for example *Cora Stoneheart*. Pets and mercenaries are unchanged. On a server without surnames nothing changes.

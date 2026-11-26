@@ -14,7 +14,10 @@
 //! CLIENT's invisibility shows only what hangs on a body, but the worn slots kept:
 //! the triangles of the palette entries its chest, bracer, gloves, legs and boots
 //! slots name, where `ApplyLook` lays armour or a robe on them, and nothing of its
-//! skin, face or hair ([`strip`]). A set the clamp makes bare is bare (the character
+//! skin, face or hair ([`strip`]): not even the skin under the armour, the
+//! layers of a worn entry below the slot's (a human's limbs are skin with the
+//! armour a layer over it, and the skin showed through the armour's see-through
+//! texels: a female Wisp's bosom in a robe, petition 3277). A set the clamp makes bare is bare (the character
 //! list sends 0xFF for a slot with nothing on it, the world's channel 0). The wisp
 //! hangs where the helm does, at the head's top node, inside any helm, sized to a
 //! head ([`mesh`]), an attachment beside the held items and the helm ([`attachment`]:
@@ -70,19 +73,41 @@ fn is_body(lib: &Library, id: u32) -> bool {
 /// lays it) puts a texture, an armour set's or a robe's; a set at or past the
 /// tables' limit is clamped to none, as the game draws it.
 pub fn worn_entries(lib: &Library, cs: &CSprite<Ee>, look: &vi::cust::Look, t: &vi::cust::Tables) -> Vec<i32> {
+    worn_slots(lib, cs, look, t).into_iter().map(|(e, _)| e).collect()
+}
+
+/// The worn slots of [`worn_entries`] as the text slots name them: palette
+/// entry and the layer the armour or robe is laid on.
+pub fn worn_slots(lib: &Library, cs: &CSprite<Ee>, look: &vi::cust::Look, t: &vi::cust::Tables) -> Vec<(i32, i32)> {
     let changes = vi::cust::apply_look_with(cs, look, false, |id| lib.surface(id as i32).is_some(), t);
     (0..5)
         .map(|i| cs.text_slots[i])
         .filter(|&(e, l)| e >= 0 && changes.iter().any(|c| c.entry == e && c.layer == l && c.texture.is_some()))
-        .map(|(e, _)| e)
         .collect()
 }
 
 /// The body as a Wisp: only its worn slots' triangles (its armour, a robe), the rest
-/// (its skin, face, hair, the bare slots) taken out. Whether any is left.
+/// (its skin, face, hair, the bare slots) taken out, and of what is left the
+/// layers under the worn slot's layer drawn as nothing. Whether any is left.
+///
+/// A human's chest, arms and legs are two layers, its skin (layer 0) and the
+/// armour or robe over it (layer 1, the layer the text slot names), both drawn
+/// alpha-tested: where the armour's texture is see-through the skin showed. On
+/// HumanFemale in the robe the Ascended Robe of Intense Heat wears (robe 0) 30
+/// of the chest's 500 triangles are see-through at their middle, the bosom, where
+/// HumanMale's are 0 of 454 (petition 3277: "skin on the chest area" on a female
+/// Wisp in Wisp's Raiment). The skin layer stays (the slots' layer numbers, which
+/// the auras and trims read, are kept) with its alpha 0, which the alpha test
+/// discards: through the armour's see-through texels the Wisp shows nothing.
 pub fn strip(lib: &Library, model: &mut esf::Model, cs: &CSprite<Ee>, look: &vi::cust::Look, t: &vi::cust::Tables) -> bool {
-    let keep = worn_entries(lib, cs, look, t);
-    model.batches.retain(|b| keep.contains(&b.material));
+    let keep = worn_slots(lib, cs, look, t);
+    model.batches.retain(|b| keep.iter().any(|&(e, _)| e == b.material));
+    for b in &mut model.batches {
+        let over = keep.iter().filter(|&&(e, _)| e == b.material).map(|&(_, l)| l.max(0) as usize).min().unwrap_or(0);
+        for under in b.layers.iter_mut().take(over) {
+            under.color[3] = 0;
+        }
+    }
     !model.batches.is_empty()
 }
 
@@ -307,6 +332,81 @@ mod tests {
         assert!(!dress(&lib, HUMAN, &mut plain, &cs, &plate, Some(&look(0x1234, WISP)), &t), "a look on another body");
         assert!(attachment(&lib, HUMAN, &cs, Some(&look(0x1234, WISP))).is_none(), "a look on another body");
         assert_eq!(format!("{:?}", plain.batches), format!("{:?}", built.batches));
+    }
+
+    /// On the disc (petition 3277): a female Wisp in a robe shows nothing of its
+    /// skin through the robe. HumanFemale's chest in robe 0 is its skin (layer
+    /// 0) under the robe (layer 1), and the robe is see-through on some of its
+    /// triangles (the bosom), so the skin showed there; stripped, every worn
+    /// entry's layers under its slot's are alpha 0 (the alpha test draws
+    /// nothing) and the slot's own layer and the layer count are as they were
+    /// (the auras and trims read the slot's layer). A one-layer slot (her
+    /// boots, laid on layer 0) is untouched. The control: HumanMale in the
+    /// same robe has no see-through chest triangle, and a human's own body
+    /// (no wisp) keeps its skin.
+    #[test]
+    fn a_female_wisp_shows_no_skin_through_her_robe() {
+        let Some(lib) = disc_lib() else {
+            eprintln!("SKIP: no run/eqoa.iso");
+            return;
+        };
+        const HUMAN_FEMALE: u32 = 0x0D53_7335;
+        let t = vi::cust::Tables::retail();
+        let robed = vi::cust::Look { armor: [1; 6], robe: 0, ..Default::default() };
+        let body = |id: u32| {
+            let r = lib.lookup(id as i32).unwrap();
+            let cs = load_csprite(&lib, r, &mut vi::hsprite::AnimScene::default(), &mut AnimCache::new(), &mut Rand(1)).unwrap();
+            let mut m = lib.build_model(r).unwrap();
+            crate::play::dress_look(&lib, id as i32, &mut m, &cs, &robed, false, &t, false);
+            (m, cs)
+        };
+        // the chest's triangles whose slot layer is see-through at the middle
+        let see_through = |m: &esf::Model, cs: &CSprite<Ee>| {
+            let (ce, cl) = cs.text_slots[0];
+            let l = m.batches.iter().find(|b| b.material == ce).unwrap().layers[cl as usize].clone();
+            let im = lib.surface(l.texture).and_then(|(c, s)| s.decode(&c.data)).unwrap();
+            m.batches
+                .iter()
+                .filter(|b| b.material == ce)
+                .flat_map(|b| b.indices.chunks_exact(3))
+                .filter(|tri| {
+                    let uv = tri.iter().map(|&v| l.apply_uv(m.uv[v as usize])).fold([0f32; 2], |a, p| [a[0] + p[0] / 3.0, a[1] + p[1] / 3.0]);
+                    let (x, y) = ((uv[0].rem_euclid(1.0) * im.width as f32) as usize % im.width as usize, (uv[1].rem_euclid(1.0) * im.height as f32) as usize % im.height as usize);
+                    im.rgba[(y * im.width as usize + x) * 4 + 3] < 128
+                })
+                .count()
+        };
+        let (female, fcs) = body(HUMAN_FEMALE);
+        let (male, mcs) = body(HUMAN);
+        assert!(see_through(&female, &fcs) > 0, "her robe is see-through on her chest");
+        assert_eq!(see_through(&male, &mcs), 0, "the control: his is not");
+        let (ce, cl) = fcs.text_slots[0];
+        assert_eq!(cl, 1, "her chest's robe is a layer over her skin");
+        let skin = female.batches.iter().find(|b| b.material == ce).unwrap().layers[0].clone();
+        assert!(skin.color[3] > 0 && skin.texture != 0, "the skin drawn, before");
+        let mut stripped = female.clone();
+        assert!(dress(&lib, HUMAN_FEMALE, &mut stripped, &fcs, &robed, Some(&look(HUMAN_FEMALE, WISP)), &t));
+        let slots = worn_slots(&lib, &fcs, &robed, &t);
+        assert!(slots.contains(&(ce, 1)), "{slots:?}");
+        for b in &stripped.batches {
+            let was = female.batches.iter().find(|o| o.material == b.material && o.indices == b.indices).unwrap();
+            assert_eq!(b.layers.len(), was.layers.len(), "the layers kept");
+            let over = slots.iter().filter(|s| s.0 == b.material).map(|s| s.1 as usize).min().unwrap();
+            for (i, (l, w)) in b.layers.iter().zip(&was.layers).enumerate() {
+                if i < over {
+                    assert_eq!(l.color[3], 0, "entry {} layer {i}: the skin under the armour drawn as nothing", b.material);
+                } else {
+                    assert_eq!(format!("{l:?}"), format!("{w:?}"), "entry {} layer {i}: the armour as it was", b.material);
+                }
+            }
+        }
+        let boots = fcs.text_slots[4];
+        assert_eq!(boots.1, 0);
+        assert!(stripped.batches.iter().filter(|b| b.material == boots.0).all(|b| b.layers[0].color[3] > 0), "her boots, one layer, as they were");
+        // the control: a human's own body, no wisp, keeps its skin
+        let mut plain = female.clone();
+        assert!(!dress(&lib, HUMAN_FEMALE, &mut plain, &fcs, &robed, Some(&look(HUMAN_FEMALE, 0x98F8_6489)), &t));
+        assert_eq!(plain.batches.iter().find(|b| b.material == ce).unwrap().layers[0].color, skin.color);
     }
 
     /// On the disc: a colour part on the wisp's own part is the wisp's colour
