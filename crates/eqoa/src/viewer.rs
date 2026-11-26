@@ -4705,7 +4705,8 @@ impl App {
             return;
         }
         // The bank (mode 11): the arrows, Enter or E (X), Escape
-        // (triangle); the auction form's editor takes the keyboard.
+        // (triangle), Page Up and Page Down (L1, R1: the bank's page,
+        // petition 3297); the auction form's editor takes the keyboard.
         if let Some(p) = self.play.as_mut()
             && p.typing.is_none()
             && p.bank_owns()
@@ -4738,6 +4739,8 @@ impl App {
                 Key::Named(NamedKey::Enter) => Some(K::CROSS),
                 Key::Character(c) if c.eq_ignore_ascii_case("e") => Some(K::CROSS),
                 Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace) => Some(K::ESCAPE),
+                Key::Named(NamedKey::PageUp) => Some(crate::pointer::key::L1),
+                Key::Named(NamedKey::PageDown) => Some(crate::pointer::key::R1),
                 _ => None,
             };
             if let Some(k) = k

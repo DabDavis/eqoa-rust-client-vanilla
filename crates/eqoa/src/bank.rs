@@ -28,6 +28,18 @@
 //! go to the other side), ✕ moves the item as the list's ✕ does: the same
 //! 0x1254, by the item's place in its list. Vanilla's own; Retail List keeps
 //! the game's lists.
+//!
+//! The bank's pages (Heirloom petition 3297: "a way to change the bank pages
+//! while viewing the bank contents"): with go-eqoa-server's account bank
+//! (`world.account_bank`, 2000 records) the bank list a client holds is a
+//! PAGE of the account's bank, turned by the server's own "/bank next" and
+//! "/bank prev" (its accountbank.go: every record of the page taken off with
+//! 0x1250, the next page's added with 0x1251, a line in the chat saying
+//! which page it is). On the item page L1 and R1 (Page Up and Page Down on
+//! the keyboard) send those lines as the chat line would, and at Bags the
+//! Page buttons under the bank's grid press them; the bank's side goes back
+//! to its top. Nothing new goes to a server: a server without pages answers
+//! the line itself.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -56,6 +68,14 @@ pub enum BankOut {
     Sell(i32, i32, i32, i32, i32),
     /// `AddText(word 1727)` in red: that cannot be auctioned
     CannotSell,
+    /// The bank's page turned (petition 3297): -1 "/bank prev", 1 "/bank
+    /// next", the chat line go-eqoa-server's account bank pages by
+    Page(i32),
+}
+
+/// The chat line that turns the bank's page `d` (-1 back, 1 on).
+pub fn page_line(d: i32) -> &'static str {
+    if d < 0 { "/bank prev" } else { "/bank next" }
 }
 
 /// The page that has the keys.
@@ -145,6 +165,12 @@ impl Default for BankItem {
 pub const GRIDS: [crate::bags::Grid; 2] = [crate::bags::Grid { origin: [24, 60], cols: 2, rows: 7 }, crate::bags::Grid { origin: [460, 60], cols: 2, rows: 7 }];
 /// The Filter button under the text (frame points).
 pub const FILTER_BUTTON: [i32; 4] = [212, 278, 428, 300];
+/// The Page buttons under the bank's grid (petition 3297): back (L1) and on
+/// (R1), frame points.
+pub const PAGE_BUTTONS: [[i32; 4]; 2] = [[460, 299, 534, 320], [542, 299, 616, 320]];
+/// The hits of the Filter button and the two Page buttons.
+const FILTER_HIT: i32 = -2;
+const PAGE_HITS: [i32; 2] = [-3, -4];
 /// A bank cell's hit is this and its number (an inventory cell's its number).
 const BANK_CELLS: i32 = 10_000;
 
@@ -283,7 +309,8 @@ impl Bank {
     /// A key to the item page at Bags: the d-pad over the grid in use (left
     /// from the bank's first column, right from the inventory's last, to the
     /// other side), □ the next filter (both grids from their tops), ✕ the
-    /// cell's item moved as the list's ✕ moves it (`items_key`), △ back.
+    /// cell's item moved as the list's ✕ moves it (`items_key`), △ back,
+    /// L1 and R1 the bank's page (`turn_page`).
     fn grid_key(&mut self, vui: &Vui, r: &dyn Raster, v: &View, key: i32, down: bool, cues: &mut Vec<i32>, out: &mut Vec<BankOut>) {
         if !down {
             return;
@@ -304,6 +331,7 @@ impl Bank {
                 it.filter = it.filter.step(1);
                 it.grids = Default::default();
             }
+            140 | 142 => self.turn_page(v, if key == 140 { -1 } else { 1 }, cues, out),
             17 | 136 if s == 1 && col == 0 => {
                 cues.push(11);
                 it.side = 0;
@@ -339,6 +367,21 @@ impl Bank {
             }
             _ => {}
         }
+    }
+
+    /// L1 or R1 on the item page (petition 3297): the bank's page turned
+    /// (`d` -1 back, 1 on), the bank's side from its top again; refused
+    /// (sound 9) while a request waits, as a move is.
+    fn turn_page(&mut self, v: &View, d: i32, cues: &mut Vec<i32>, out: &mut Vec<BankOut>) {
+        if !v.idle {
+            cues.push(9);
+            return;
+        }
+        cues.push(11);
+        let it = &mut self.item;
+        it.grids[1] = Default::default();
+        it.bank.reset_scroll();
+        out.push(BankOut::Page(d));
     }
 
     /// 260 from a page to `VIWndBank`: the chat box live, the menu again.
@@ -542,7 +585,9 @@ impl Bank {
             Page::Items if crate::settings::inventory_bags() => {
                 let it = &mut self.item;
                 match it.grid_hits.at(p) {
-                    Some(-2) => vec![key::SQUARE],
+                    Some(FILTER_HIT) => vec![key::SQUARE],
+                    Some(c) if c == PAGE_HITS[0] => vec![key::L1],
+                    Some(c) if c == PAGE_HITS[1] => vec![key::R1],
                     Some(c) if c >= 0 => {
                         let (side, cell) = ((c >= BANK_CELLS) as usize, c % BANK_CELLS);
                         if side == it.side && cell == it.grids[side].sel {
@@ -578,7 +623,8 @@ impl Bank {
         self.page == Page::Auction && self.sell.typing()
     }
 
-    /// `VIWndBankItem::OnKeyDown` / `OnKeyUp`, and the lists' 256.
+    /// `VIWndBankItem::OnKeyDown` / `OnKeyUp`, and the lists' 256; L1 and
+    /// R1 the bank's page (petition 3297, `turn_page`).
     fn items_key(&mut self, vui: &Vui, r: &dyn Raster, v: &View, key: i32, down: bool, cues: &mut Vec<i32>, out: &mut Vec<BankOut>) {
         if crate::settings::inventory_bags() {
             self.grid_key(vui, r, v, key, down, cues, out);
@@ -598,6 +644,7 @@ impl Bank {
                 cues.push(8);
                 self.back(vui, r, out);
             }
+            140 | 142 => self.turn_page(v, if key == 140 { -1 } else { 1 }, cues, out),
             17 | 136 => {
                 cues.push(if it.bank.x64 { 11 } else { 9 });
                 it.inv.set_x64(true);
@@ -775,7 +822,7 @@ impl Bank {
     /// the room taken, the filter's count when filtered), its grid
     /// (`bags::draw_grid`, the selection only on the side in use), the
     /// framed panel between them with the selected item's text, and the
-    /// Filter button under it.
+    /// Filter button under it; the Page buttons under the bank's grid.
     fn draw_grids(&mut self, vui: &Vui, r: &mut dyn Raster, info: &Info, v: &View, icon: &dyn Fn(&NetItem) -> i32, can_use: &dyn Fn(&NetItem) -> bool, now: i64) {
         let orders = self.grid_orders(v);
         let cells = self.grid_counts(v, &orders);
@@ -829,7 +876,30 @@ impl Bank {
             vui.blit_ex(r, 71, [x, b[1] + (b[3] - b[1] - vui.entry(71).uv1[1]) / 2], 3, 1.0, 0);
         }
         vui.draw_string_ex(r, &label, x + glyph, b[1] + 3, white, true);
-        it.grid_hits.push(b, -2);
+        it.grid_hits.push(b, FILTER_HIT);
+        // the Page buttons (petition 3297): L1's glyph before the first's
+        // word and R1's after the second's on the Controller interface,
+        // arrows on the PC's
+        let pc = crate::settings::pc_mode();
+        for (k, b) in PAGE_BUTTONS.into_iter().enumerate() {
+            r.fill_fan([0.12, 0.1, 0.06, 0.9], [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]);
+            crate::bags::outline(r, [0.62, 0.52, 0.28, 1.0], b, 1);
+            let label = wide(match (pc, k) {
+                (true, 0) => "< Page",
+                (true, _) => "Page >",
+                _ => "Page",
+            });
+            let w = vui.string_width(r, &label);
+            let entry = if k == 0 { 191 } else { 193 };
+            let glyph = if pc { 0 } else { vui.entry(entry).uv1[0] + 4 };
+            let x = b[0] + (b[2] - b[0] - w - glyph) / 2;
+            if glyph > 0 {
+                let gx = if k == 0 { x } else { x + w + 4 };
+                vui.blit_ex(r, entry, [gx, b[1] + (b[3] - b[1] - vui.entry(entry).uv1[1]) / 2], 3, 1.0, 0);
+            }
+            vui.draw_string_ex(r, &label, if k == 0 { x + glyph } else { x }, b[1] + 2, white, true);
+            it.grid_hits.push(b, PAGE_HITS[k]);
+        }
     }
 }
 
@@ -1120,5 +1190,82 @@ mod tests {
         b.draw(&vui, &mut r, &info, &v, &icon, &can_use, 0, &mut cues);
         assert_eq!(b.point([475.0 + 57.0, 37.0 + 22.0]), vec![key::RIGHT], "the bank's list row, as ever");
         assert_eq!(b.item_at([16.0 + 57.0, 37.0 + 22.0]), Some((0, 0)), "the inventory's first row");
+    }
+    /// The bank's pages (petition 3297): on the item page R1 and L1 turn
+    /// the page ("/bank next", "/bank prev"), the bank's grid from its top
+    /// again; at Bags the Page buttons under the bank's grid press them; at
+    /// Retail List the shoulder buttons do the same, the bank list from its
+    /// top. The controls: a request waiting refuses the turn (sound 9,
+    /// nothing asked); the bank's menu takes no L1 or R1; the Filter button
+    /// is still □.
+    #[test]
+    fn the_shoulder_buttons_turn_the_banks_page() {
+        use crate::pointer::key;
+        use crate::pointer::testing::mid;
+        crate::settings::testing::reset(false);
+        let mut c = crate::settings::client();
+        c.inventory_bags = true;
+        crate::settings::set_client(c);
+        let (vui, mut r) = (vui(), NullRaster);
+        let (inv, bank) = (list(&[1, 4]), list(&[1; 30]));
+        let base = [0; 29];
+        let info = Info { words: &vui.words, inv: &inv, hp: [0; 4], base: &base, class: 0, level: 1, attack_words: &[] };
+        let v = View { carried: 0, banked: 0, inv: &inv, bank: &bank, idle: true };
+        let (icon, can_use) = (|it: &NetItem| it.inv_index as i32, |_: &NetItem| true);
+        let (mut cues, mut out) = (Vec::new(), Vec::new());
+        let mut b = Bank::default();
+        b.open(&vui, &r, false);
+        // the control: the menu takes no shoulder button
+        b.key(&vui, &r, &v, key::R1, true, 0, &mut cues, &mut out);
+        assert!(out.is_empty() && cues.is_empty(), "the menu: nothing");
+        b.key(&vui, &r, &v, key::DOWN, true, 0, &mut cues, &mut out);
+        b.key(&vui, &r, &v, key::CROSS, true, 0, &mut cues, &mut out);
+        assert_eq!(b.page, Page::Items);
+        out.clear();
+        b.draw(&vui, &mut r, &info, &v, &icon, &can_use, 0, &mut cues);
+        // down the bank's grid, then R1: the next page, the grid at its top
+        b.item.side = 1;
+        for _ in 0..9 {
+            b.key(&vui, &r, &v, key::DOWN, true, 0, &mut cues, &mut out);
+        }
+        assert!(b.item.grids[1].top > 0, "scrolled");
+        cues.clear();
+        b.key(&vui, &r, &v, key::R1, true, 0, &mut cues, &mut out);
+        assert_eq!((out.clone(), cues.clone()), (vec![BankOut::Page(1)], vec![11]));
+        assert_eq!((b.item.grids[1].sel, b.item.grids[1].top, b.item.side), (0, 0, 1), "from the top, the bank's side kept");
+        b.key(&vui, &r, &v, key::L1, true, 0, &mut cues, &mut out);
+        assert_eq!(out.last(), Some(&BankOut::Page(-1)));
+        assert_eq!((page_line(-1), page_line(1)), ("/bank prev", "/bank next"));
+        // a key let go asks nothing
+        out.clear();
+        b.key(&vui, &r, &v, key::R1, false, 0, &mut cues, &mut out);
+        assert!(out.is_empty());
+        // the control: a request waiting
+        let busy = View { idle: false, ..v };
+        cues.clear();
+        b.key(&vui, &r, &busy, key::R1, true, 0, &mut cues, &mut out);
+        assert_eq!((out.is_empty(), cues.clone()), (true, vec![9]), "refused while a request waits");
+        // the pointer: the Page buttons, the Filter button as before
+        b.draw(&vui, &mut r, &info, &v, &icon, &can_use, 0, &mut cues);
+        assert_eq!(b.point(mid(PAGE_BUTTONS[0])), vec![key::L1]);
+        assert_eq!(b.point(mid(PAGE_BUTTONS[1])), vec![key::R1]);
+        assert_eq!(b.point(mid(FILTER_BUTTON)), vec![key::SQUARE], "the control: the Filter's");
+        assert_eq!(b.item_at(mid(PAGE_BUTTONS[1])), None, "a button is no item");
+        // under the bank's grid, clear of its cells and the Filter button
+        let g = GRIDS[1].rect();
+        for p in PAGE_BUTTONS {
+            assert!(p[1] > g[3] && p[0] >= g[0] && p[2] <= g[2] && p[3] < 322, "{p:?} under {g:?}");
+        }
+        // Retail List: the shoulder buttons the same, the bank list from its top
+        crate::settings::testing::reset(false);
+        out.clear();
+        b.key(&vui, &r, &v, key::RIGHT, true, 0, &mut cues, &mut out);
+        b.item.bank.sel = 20;
+        b.item.bank.top = 15;
+        b.key(&vui, &r, &v, key::R1, true, 0, &mut cues, &mut out);
+        assert_eq!(out, vec![BankOut::Page(1)]);
+        assert_eq!((b.item.bank.sel, b.item.bank.top), (0, 0));
+        b.draw(&vui, &mut r, &info, &v, &icon, &can_use, 0, &mut cues);
+        assert!(b.point(mid(PAGE_BUTTONS[1])).iter().all(|&k| k != key::R1), "the control: no Page button on the game's lists");
     }
 }
