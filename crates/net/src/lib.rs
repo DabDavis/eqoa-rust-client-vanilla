@@ -17,6 +17,7 @@ pub mod headmarks;
 pub mod hidelook;
 pub mod itemlink;
 pub mod mercwin;
+pub mod mobdetails;
 pub mod npctint;
 pub mod petdye;
 pub mod raceopts;

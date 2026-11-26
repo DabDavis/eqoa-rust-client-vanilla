@@ -46,10 +46,12 @@ impl Play {
         self.cues.push(crate::sound::Cue::Ui(13));
     }
 
-    /// Escape or △ (the game's Exit; ○ in play is the HUD's Use): the newest
-    /// link window closed; false with none open.
+    /// Escape or △ (the game's Exit; ○ in play is the HUD's Use): a creature's
+    /// details window (`mobwnd`), else the newest link window closed; false
+    /// with none open.
     pub fn close_link_window(&mut self) -> bool {
-        let closed = self.links.close_newest();
+        // a creature's details window first (`mobwnd`): the newest of them
+        let closed = self.mobwnd.close() || self.links.close_newest();
         if closed {
             self.cues.push(crate::sound::Cue::Ui(8));
         }
@@ -236,6 +238,41 @@ mod tests {
         let mut p = Play::new(s, Player::default(), dump);
         p.agree_item_links();
         p
+    }
+
+    /// A right click on a monster where the server offered a creature's details
+    /// (`mobwnd`, Heirloom petition 3163): targeted, asked about (0x7EFB with its
+    /// id) and its window opened; the answer fills it, Escape (`close_link_window`)
+    /// closes it. The controls: a townsperson (the NPC bit), a player, a corpse,
+    /// and any creature on a server with no offer are no such click (false,
+    /// nothing sent).
+    #[test]
+    fn a_right_click_asks_for_a_creatures_details() {
+        let creature = |id: u32, name: &str, flags: u16, p256: u8, p18: u8| net::entity::Entity {
+            id,
+            p18,
+            creature: Some(net::entity::Creature { name: name.into(), npc_flags: flags, p256, ..Default::default() }),
+            ..Default::default()
+        };
+        let mut p = play(false);
+        p.entities.slots[0] = Some(creature(0x20, "moss snake", 0, 0, 0));
+        p.entities.slots[1] = Some(creature(0x21, "Guard Tolin", 0x80, 0, 0));
+        p.entities.slots[2] = Some(creature(0x22, "Kalamer", 0, 2, 0));
+        p.entities.slots[3] = Some(creature(0x23, "fruit bat", 0, 0, 2));
+        taken(&mut p);
+        assert!(!p.mob_details_click(Some(0x20)) && taken(&mut p).is_empty(), "the control: no offer");
+        p.session.mob_details_offer = true;
+        for id in [0x21, 0x22, 0x23] {
+            assert!(!p.mob_details_click(Some(id)), "{id:#x} is no monster");
+        }
+        assert!(taken(&mut p).is_empty() && !p.mobwnd.is_open());
+        assert!(p.mob_details_click(Some(0x20)));
+        assert_eq!(p.target, 0x20);
+        assert_eq!(taken(&mut p), vec![vec![0x10, 0, 0, 0, 0, 0, 0x20, 0, 0, 0], vec![0xFB, 0x7E, 1, 0x20, 0, 0, 0]], "targeted, then asked");
+        assert!(p.mobwnd.is_open());
+        let d = net::mobdetails::Details { name: "moss snake".into(), level: 3, class: "Warrior".into(), ..Default::default() };
+        assert!(p.mobwnd.record(net::mobdetails::Answer { id: 0x20, status: net::mobdetails::Status::Shown, details: Some(d) }));
+        assert!(p.close_link_window() && !p.mobwnd.is_open() && !p.close_link_window());
     }
 
     /// The messages sent since the last look (each its bytes, its opcode first).

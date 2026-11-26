@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · A creature's details and loot chart
+
+- **Right-click a creature** to see its details in a window at the top of the screen: its level, class, how it cons to you and its hit points, then what it can drop, grouped as what it carries, its loot tables, its region's drops and quest items, each with its chance a kill (**every kill**, **common**, **uncommon** or **rare**, and the percent). The chances are read from the same tables its corpse rolls with, so the chart shows what *can* drop, not what will. Your own quest's items say so.
+- The mouse wheel scrolls a long chart; click its **x**, or press **Escape** or **△**, to close it. Townspeople, players, pets and corpses are right-clicked as before.
+- Only on servers that offer it (eqoaclassic's Heirloom); elsewhere a right-click is as it was.
+
 ## 2026-11-26 · A kappa's shell over its robe
 
 - A **Kappa**'s shell stays its own: a robe, a tunic or a breastplate goes on its front, sides and arms, under the shell, instead of being stretched across the shell's back.

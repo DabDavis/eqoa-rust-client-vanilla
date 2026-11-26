@@ -3840,7 +3840,13 @@ impl App {
             return;
         }
         let interact = !matches!(c, crate::mouse::Click::Target(..));
-        p.click(p.creature_at_for(c.at(), size, vp, interact), interact);
+        let at = p.creature_at_for(c.at(), size, vp, interact);
+        // a right click on a monster, where the server offered its details:
+        // its details window (`mobwnd`, Heirloom petition 3163)
+        if !finger && matches!(c, crate::mouse::Click::Right(..)) && p.mob_details_click(at) {
+            return;
+        }
+        p.click(at, interact);
     }
 
     /// A mouse button on the chat box's lines (`Play::chat_press`), true when it

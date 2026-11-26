@@ -1014,6 +1014,16 @@ or a browser (each described where it lives below):
   is a tap. Another press of □ or Q, a change of target, a menu or the map opened, or the monster's death or leaving
   view closes it sooner. A monster that talks still talks, any other server is as before, and a PS2 on the same server
   is shown the two lines in a dialogue box.
+- **A creature's details and loot chart on a right click**, on a server that offers it (Heirloom petition 3163,
+  2026-11-26: "view a mob's loot chart: right-click a mob to view its details like stats and loot table", the
+  maintainer approved; go-eqoa-server's `world.mob_details`, its offer 0x7E86, this client's ask 0x7E87 and the answer
+  0x7E88, `net::mobdetails`): a right click on a monster (no player, pet, townsperson or corpse;
+  `Play::mob_details_click`) targets it, asks, and opens `mobwnd`'s window at the top middle in the item links' band:
+  the name and its x, the level, class, con and hit points, and what its corpse can hold grouped by where it comes
+  from (what it carries, its loot tables, its region's categories, quest items), each with its chance a kill as the
+  server read it off its loot model, in words (every kill; common from 25%, uncommon from 5%, rare below) and the
+  percent. The wheel scrolls it; its x, Escape or △ close it (before the item links' windows). Anywhere else, or on
+  any other server, a right click is what it was (a talk, a corpse opened).
 - **A target's level in the target box**, on a server that offers it (Live petition 5130, a player's, "Would it be
   possible to con an enemy to see what level it is?", the owner 2026-11-15: "yes lets allow"; go-eqoa-server's
   `world.con_level`, its offer 0x7E70, layout 1, answered with nothing): "Level" (word 503) and the target's level,

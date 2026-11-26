@@ -1534,6 +1534,9 @@ pub enum Event {
     FactionTrack { known: bool, name: String, standing: i32 },
     /// [`OP_RAID_STATE`]: the raid as it is now.
     RaidState(crate::raid::State),
+    /// [`crate::mobdetails::OP_DETAILS`]: the answer about a creature asked
+    /// about (`ask_mob_details`).
+    MobDetails(Box<crate::mobdetails::Answer>),
     /// [`OP_MOB_INFO`]: the monster the client knows by `id` has nothing to say;
     /// its name and level, for the target's details box.
     MobInfo { id: u32, level: u8, name: String, extra: Vec<String> },
@@ -1954,6 +1957,10 @@ pub struct Session {
     /// Whether the server offered its players their target's level
     /// ([`OP_CON_LEVEL_OFFER`]) on this connection: the target box draws it.
     pub con_level_offer: bool,
+    /// Whether the server offered a creature's details and loot chart
+    /// ([`crate::mobdetails::OP_OFFER`]) on this connection: a right click on
+    /// a creature asks for them (`eqoa`'s `mobwnd`).
+    pub mob_details_offer: bool,
     /// What the server turns off of this client's own additions
     /// ([`OP_VANILLA_UI`]) on this connection, a bit each; 0, everything on,
     /// until it says.
@@ -2192,6 +2199,7 @@ impl Session {
             profanity_offer: false,
             profanity_asked: None,
             con_level_offer: false,
+            mob_details_offer: false,
             qol_off: 0,
             spell_merchants: Default::default(),
             hide_look: crate::hidelook::State::default(),
@@ -2797,6 +2805,18 @@ impl Session {
         true
     }
 
+    /// A creature's details and loot chart asked for
+    /// ([`crate::mobdetails::OP_ASK`]): false (nothing sent) where the server
+    /// offered none.
+    pub fn ask_mob_details(&mut self, id: u32) -> bool {
+        if !self.mob_details_offer {
+            return false;
+        }
+        let m = crate::mobdetails::ask(id);
+        self.send(&m);
+        true
+    }
+
     /// A link opened ([`OP_ITEM_LINK_ASK`]), where links are in force.
     pub fn ask_item_link(&mut self, id: u32) -> bool {
         if !self.item_links() {
@@ -3184,6 +3204,7 @@ impl Session {
                 self.profanity_offer = false;
                 self.profanity_asked = None;
                 self.con_level_offer = false;
+                self.mob_details_offer = false;
                 self.qol_off = 0;
                 self.spell_merchants.clear();
                 self.hide_look = crate::hidelook::State::default();
@@ -3640,6 +3661,18 @@ impl Session {
             crate::hidelook::OP_OFFER | crate::hidelook::OP_STATE => {
                 self.hide_look.read(op, &m.data[2.min(m.data.len())..]);
             }
+            // a creature's details offered (each world entry), in the layout
+            // this client reads: a right click on a creature asks (`ask_mob_details`)
+            crate::mobdetails::OP_OFFER => {
+                let layout = r.u8();
+                if !r.error && layout == crate::mobdetails::LAYOUT {
+                    self.mob_details_offer = true;
+                }
+            }
+            crate::mobdetails::OP_DETAILS => match crate::mobdetails::read(&m.data[2.min(m.data.len())..]) {
+                Some(a) => ev.push(Event::MobDetails(Box::new(a))),
+                None => debug_line(&format!("[net] a creature's details: {} bytes not read", m.data.len())),
+            },
             OP_ITEM_LINKS => {
                 let layout = r.u8();
                 if !r.error && layout == crate::itemlink::LAYOUT {
@@ -4710,6 +4743,26 @@ mod tests {
         let sent = s.record.as_ref().unwrap();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].1, vec![0x71, 0x7E, DIALOG_ROOM as u8, 0, 0, 0]);
+    }
+
+    /// A creature's details (go-eqoa-server's `world.mob_details`): asked only
+    /// of a server that offered them in this client's layout; the answer is its
+    /// event; a new connection forgets the offer. The control: before the offer
+    /// (and after another layout's) nothing is sent.
+    #[test]
+    fn mob_details_are_asked_only_of_a_server_that_offered_them() {
+        let mut s = session();
+        s.record = Some(Vec::new());
+        assert!(!s.ask_mob_details(9), "no offer: nothing");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xFA, 0x7E, 2]);
+        assert!(!s.ask_mob_details(9), "another layout is not taken");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xFA, 0x7E, 1]);
+        assert!(s.ask_mob_details(9));
+        assert_eq!(s.record.as_ref().unwrap()[..], [(drdp::TYPE_GUARANTEED, vec![0xFB, 0x7E, 1, 9, 0, 0, 0])]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xFC, 0x7E, 1, 9, 0, 0, 0, 2]);
+        assert!(matches!(&ev[..], [Event::MobDetails(a)] if a.id == 9 && a.status == crate::mobdetails::Status::TooSoon), "{ev:?}");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert!(!s.mob_details_offer, "a new connection: the next world entry's offer");
     }
 
     #[test]
