@@ -11968,6 +11968,8 @@ impl Play {
         if self.options_wnd.meter_heal_note.as_deref() != heal_note {
             self.options_wnd.meter_heal_note = heal_note.map(str::to_string);
         }
+        self.options_wnd.meter_merc_note = (self.session.dps_meter_offer && self.session.dps_meter_layout < net::session::DPS_METER_MERC_LINES)
+            .then_some("Mercenary breakdown requires a newer server");
     }
 
     /// Whether the HUD's pieces move now (`hudlayout`): Move HUD on, in play
@@ -12071,8 +12073,11 @@ impl Play {
     /// What the DPS meter's panel shows while it is up: the DPS Meter on, a
     /// server that keeps one, the HUD's right side up (`right_hud_up`).
     fn meter_shown(&self) -> Option<crate::dpsmeter::Shown> {
-        (crate::settings::dps_meter() && self.session.dps_meter_offer && self.right_hud_up())
-            .then(|| self.meter.shown_by(crate::settings::dps_view(), &self.pet_name, crate::settings::dps_columns(), crate::settings::dps_sort()))
+        let c = crate::settings::client();
+        (c.dps_meter && self.session.dps_meter_offer && self.right_hud_up()).then(|| {
+            let hide_mercs = (self.session.dps_meter_layout >= net::session::DPS_METER_MERC_LINES).then_some(c.dps_hide_mercenary);
+            self.meter.shown_by(c.dps_view, &self.pet_name, c.dps_columns, c.dps_sort, hide_mercs)
+        })
     }
 
     /// The meter's other view (Fight or Overall), from its list's top.
@@ -12090,6 +12095,10 @@ impl Play {
         match hit {
             Hit::View => self.dps_toggle_view(),
             Hit::Reset => self.dps_reset(),
+            Hit::HideMercs => {
+                crate::settings::toggle_dps_hide_mercenary();
+                self.meter.first = 0;
+            }
             Hit::Rows => {
                 let first = self.meter.first;
                 self.meter.first = self.hud.as_ref().map_or(0, |h| h.2.meter_page(first));
@@ -15971,6 +15980,17 @@ mod commands {
             p.chat_line("/dps damage");
             assert_eq!(said(&p), "The DPS meter is ranked by damage.");
         }
+        assert_eq!(p.options_wnd.meter_merc_note, Some("Mercenary breakdown requires a newer server"));
+        p.session.dps_meter_layout = 4;
+        p.agree_dps_meter();
+        assert_eq!(p.options_wnd.meter_merc_note, None);
+        p.meter.first = 5;
+        p.meter_point(crate::dpsmeter::Hit::HideMercs);
+        assert!(crate::settings::client().dps_hide_mercenary);
+        assert_eq!(p.meter.first, 0);
+        assert!(ours(&mut p).is_empty(), "the filter is local to the client");
+        p.meter_point(crate::dpsmeter::Hit::HideMercs);
+        assert!(!crate::settings::client().dps_hide_mercenary);
         p.chat_line("/dps off");
         assert!(!crate::settings::dps_meter());
         p.meter.take(fight(7, false));
