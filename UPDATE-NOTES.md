@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Click a name in chat to send them a tell
+
+- On the **PC interface**, the name at the start of someone's chat line (a say, shout, tell, whisper, group, raid or guild line) lights up under the mouse: **click it** and the chat line opens with `/tell <Name> ` already typed, ready for your message. Tags such as **[GM]**, **[OG]**, **[HC]** or **[AFK]** and a raid's **[L]**/**[H]** are left out, so the tell reaches them. NPCs' lines and the server's notices are not clickable.
+
 ## 2026-11-26 · Auto-cast takes the vampires' Feed
 
 - A vampire's **Feed** can now be marked for **auto-cast** with a right click, a long press or ○/E held on its quick slot, like any attack: it fires off its timer in a fight, at your target. Before, auto-cast said it could not tell when to use Feed.

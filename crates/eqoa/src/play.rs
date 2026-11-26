@@ -456,7 +456,7 @@ pub struct Play {
     info_window: vi::ui::Window,
     /// Chat lines waiting for the chat box, with when they came and their item
     /// links (`itemlink`).
-    chat_pending: Vec<(String, [f32; 4], u32, Vec<net::itemlink::ChatLink>)>,
+    chat_pending: Vec<(String, [f32; 4], u32, Vec<net::itemlink::ChatLink>, Option<(u16, u16)>)>,
     /// Item links (`itemlink`): the windows open; the chat line kept with its
     /// links (cancelled with a link in it: until it is sent or emptied); the
     /// events read this frame counted, and the links of the line the next one
@@ -6850,7 +6850,23 @@ impl Play {
             self.open_link(*id, name);
             return crate::chat::Let::Done;
         }
+        // a click on a speaker's name opens the line to a tell to them, as
+        // the Reply key does (Heirloom 3140)
+        if let crate::chat::Let::Name(name) = &got {
+            self.tell_to(name);
+            return crate::chat::Let::Done;
+        }
         got
+    }
+
+    /// The chat line opened with "/tell <name> " in it (a speaker's name
+    /// clicked, `chat::Let::Name`), in the world with the HUD up.
+    pub fn tell_to(&mut self, name: &str) {
+        let name = crate::chat::plain_name(name);
+        if self.mode != 0 || !self.hud_ready() || name.is_empty() {
+            return;
+        }
+        self.keyboard_chat_key(&format!("/tell {name} "));
     }
 
     /// A press of the chat box's that is down (the other button's are nothing
@@ -7360,6 +7376,24 @@ impl Play {
         self.add_chat(text, color);
     }
 
+    /// A line's speaker, a player's name a click opens a tell to
+    /// (`chat::speaker`, Heirloom 3140): not the player's own, nor a creature in
+    /// view not a player's of that name (an NPC's say reads as a player's).
+    fn speaker_of(&self, text: &str, color: [f32; 4]) -> Option<(u16, u16)> {
+        let (a, n) = crate::chat::speaker(text, color)?;
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let name = String::from_utf16_lossy(wide.get(a as usize..a as usize + n as usize)?);
+        let same = |other: &str| crate::chat::plain_name(other).eq_ignore_ascii_case(&name);
+        if same(&self.player.name) || (!self.pet_name.is_empty() && same(&self.pet_name)) {
+            return None;
+        }
+        let creatures = || self.entities.slots.iter().flatten().filter(|e| e.creature.as_ref().is_some_and(|c| same(&c.name)));
+        if creatures().any(|e| !a_player(e)) && !creatures().any(a_player) {
+            return None;
+        }
+        Some((a, n))
+    }
+
     /// `VIWndGame::AddText`: a line for the chat box (queued with its time
     /// until the box, which measures with the font, takes it), and for the
     /// plain log shown when there is no HUD.
@@ -7381,7 +7415,8 @@ impl Play {
                 eprintln!("chat: link {} {:?}", l.id, String::from_utf16_lossy(&w[a..b]));
             }
         }
-        self.chat_pending.push((text.clone(), color, self.session.now(), links));
+        let name = self.speaker_of(&text, color);
+        self.chat_pending.push((text.clone(), color, self.session.now(), links, name));
         self.chat.push_back((text, color));
         while self.chat.len() > 8 {
             self.chat.pop_front();
@@ -11486,6 +11521,8 @@ impl Play {
                 }
                 // item links drawn as links, or the line's plain words (`itemlink`)
                 c.show_links = crate::settings::item_links();
+                // a speaker's name a click's tell, in the PC interface (Heirloom 3140)
+                c.click_names = crate::settings::pc_mode();
                 // the chat tabs (ticket 1951), each line into its kind's
                 let opts = crate::settings::client().display_ui();
                 // The configured PC fade owns visibility while enabled: keep
@@ -11507,9 +11544,9 @@ impl Play {
                 for t in 1..=crate::chat::TABS {
                     c.set_detached(t, pc && opts.chat_detached[t - 1]);
                 }
-                for (text, color, at, links) in self.chat_pending.drain(..) {
+                for (text, color, at, links, name) in self.chat_pending.drain(..) {
                     let rr = &r;
-                    c.add_line(&text, color, at, |s| vi::ui::Raster::string_width(rr, s), &links);
+                    c.add_line_named(&text, color, at, |s| vi::ui::Raster::string_width(rr, s), &links, name);
                 }
                 let composing = self.mode == 2 && self.edit.purpose == 0x0B0F_0000;
                 let m = crate::hudlayout::begin(r.ui, crate::hudlayout::Piece::Chat);
@@ -11525,6 +11562,7 @@ impl Play {
                     if let Some(pane) = c.pane_mut(t) {
                         if !in_play { pane.clear_selection(false); }
                         pane.show_links = crate::settings::item_links();
+                        pane.click_names = crate::settings::pc_mode();
                         pane.opacity = opts.chat_opacity;
                         pane.resize(pane_size(t), |s| vi::ui::Raster::string_width(&r, s));
                         let m = crate::hudlayout::begin(r.ui, Self::chat_piece(t));
@@ -16321,6 +16359,36 @@ mod commands {
     /// the group is followed and steered to; gone from the scene, lost. The
     /// controls: an NPC, a pet or a merc (its plate not a player's) outside
     /// the group is word 1195.
+    /// A line's speaker (Heirloom 3140): a player's name a click opens a tell
+    /// to, "/tell <name> " in the chat line, its tags left out. The controls:
+    /// the player's own say; an NPC in view of that name (an NPC's say reads as
+    /// a player's), but a player of it there too; the tell out of the world.
+    #[test]
+    fn a_speakers_name_opens_a_tell() {
+        crate::settings::testing::reset(false);
+        let mut p = play();
+        p.player.name = "Dab".into();
+        let put = |p: &mut Play, k: usize, name: &str, p256: u8| {
+            p.entities.slots[k] = Some(net::entity::Entity { id: 0x400 + k as u32, creature: Some(net::entity::Creature { p256, name: name.into(), ..Default::default() }), ..Default::default() });
+        };
+        assert_eq!(p.speaker_of("Ann: hi", [1.0; 4]), Some((0, 3)), "out of view: a player's");
+        assert_eq!(p.speaker_of("Dab: hi", [1.0; 4]), None, "the player's own");
+        put(&mut p, 0, "Valrean", 0);
+        assert_eq!(p.speaker_of("Valrean: welcome, traveler", [1.0; 4]), None, "an NPC in view");
+        put(&mut p, 1, "[GM] Ann", 2);
+        assert_eq!(p.speaker_of("[GM] Ann: hi", [1.0; 4]), Some((5, 3)), "a player in view, tagged");
+        put(&mut p, 2, "Ann", 0);
+        assert_eq!(p.speaker_of("Ann: hi", [1.0; 4]), Some((0, 3)), "a player and an NPC of the name: the player's");
+        p.hud = Some((crate::ui::Vui::new(Default::default(), Default::default(), Vec::new()), crate::ui::UiAssets::default(), crate::hud::Hud::new()));
+        p.mode = 5;
+        p.tell_to("Ann");
+        assert_eq!(p.mode, 5, "out of the world: nothing");
+        p.mode = 0;
+        p.tell_to("[OG] Ann");
+        assert_eq!(p.mode, 2);
+        assert_eq!(String::from_utf16_lossy(&p.edit.text), "/tell Ann ");
+    }
+
     #[test]
     fn follow_takes_any_player_in_view() {
         let mut p = play();
