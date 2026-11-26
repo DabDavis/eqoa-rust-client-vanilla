@@ -406,6 +406,16 @@ pub const OP_NOCLIP: u16 = 0x7E7A;
 pub const OP_COMBAT_RECORD: u16 = 0x7E20;
 /// The record: this client's ask (a u32 1), the server's rows (`record::read`).
 pub const OP_COMBAT_RECORD_DATA: u16 = 0x7E21;
+/// go-eqoa-server's own, no retail message either: the character's bestiary, the
+/// creatures it met by zone (`bestiary`), a u32 after the opcode, both ways. The
+/// server offers it (1) once the player is in the world, where its quality-of-life
+/// additions are on; this client answers 1 at once and shows Character > Bestiary,
+/// which asks for a page ([`OP_BESTIARY_DATA`], a u16) as its window opens and at
+/// each turn. A server that never offers it gets no answer and no entry shows.
+pub const OP_BESTIARY: u16 = 0x7EF4;
+/// A page of the bestiary: this client's ask (a u16 page, 0 the first), the
+/// server's page (`bestiary::read`).
+pub const OP_BESTIARY_DATA: u16 = 0x7EF5;
 /// go-eqoa-server's own, no retail message either: worlds the server has past
 /// the disc's, each made of the disc's own zones (`serverworlds`), a u32 after
 /// the opcode, both ways. The server offers them (1) after the session's first
@@ -1737,6 +1747,9 @@ pub struct Session {
     /// The server offered the combat record ([`OP_COMBAT_RECORD`]) and this
     /// client took it: Character > Combat Record. Kept for the session.
     pub combat_record: bool,
+    /// The server offered the bestiary ([`OP_BESTIARY`]) and this client took
+    /// it: Character > Bestiary. Kept for the session.
+    pub bestiary: bool,
     /// The server offered capes ([`OP_CAPES`]) and this client took them: a
     /// cape is worn in its slot and drawn. Kept for the session.
     pub capes: bool,
@@ -2046,6 +2059,7 @@ impl Session {
             raid_roster_groups: false,
             raid_roster_kinds: false,
             combat_record: false,
+            bestiary: false,
             capes: false,
             item_lists: [ITEM_LIST_DISC; 2],
             cape_list: Default::default(),
@@ -2250,6 +2264,18 @@ impl Session {
         w.u32(world).u32(x.to_bits()).u32(z.to_bits());
         self.send(&w.data);
         true
+    }
+
+    /// A page of the bestiary asked for now (its window opening, a page turned),
+    /// of a server that offered it ([`OP_BESTIARY`]); false, and nothing sent,
+    /// otherwise.
+    pub fn ask_bestiary(&mut self, page: u16) -> bool {
+        if self.bestiary {
+            let mut w = Writer::op(OP_BESTIARY_DATA);
+            w.u16(page);
+            self.send(&w.data);
+        }
+        self.bestiary
     }
 
     /// The combat record asked for now (its window opening), of a server that
@@ -3232,6 +3258,13 @@ impl Session {
                 if r.u32() != 0 && !r.error {
                     self.combat_record = true;
                     self.send_op_int(OP_COMBAT_RECORD, 1);
+                }
+            }
+            // the bestiary offered: taken (`bestiary`, Character > Bestiary)
+            OP_BESTIARY => {
+                if r.u32() != 0 && !r.error {
+                    self.bestiary = true;
+                    self.send_op_int(OP_BESTIARY, 1);
                 }
             }
             // the live duel's messages offered: taken (the client has the
@@ -7038,6 +7071,36 @@ mod tests {
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x21, 0x7E, 1, 0, 0]);
         assert!(matches!(&ev[..], [Event::Opcode { op: OP_COMBAT_RECORD_DATA, data }] if data[..] == [1, 0, 0]), "{ev:?}");
         assert_eq!(answers(&mut s), [], "the record answered nothing");
+    }
+
+    // The bestiary (0x7EF4): the offer answered with 1 at once and kept, so a page
+    // may be asked for (0x7EF5, a u16); a page itself passed on for `bestiary`,
+    // answered with nothing. The controls: an offer cut short and an offer of 0 are
+    // neither answered nor kept, and a session never offered one asks nothing.
+    #[test]
+    fn the_bestiary_offer_is_answered() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let answers = |s: &mut Session| -> Vec<(u8, Vec<u8>)> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        assert!(!s.ask_bestiary(0), "never offered: no ask");
+        assert_eq!(answers(&mut s), [], "never offered");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xF4, 0x7E, 1, 0, 0]);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xF4, 0x7E, 0, 0, 0, 0]);
+        assert!(!s.bestiary, "the controls: cut short, or 0");
+        assert_eq!(answers(&mut s), []);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xF4, 0x7E, 1, 0, 0, 0]);
+        assert!(ev.is_empty() && s.bestiary, "the offer is the session's: {ev:?}");
+        assert_eq!(answers(&mut s), [(251, vec![0xF4, 0x7E, 1, 0, 0, 0])]);
+        assert!(s.ask_bestiary(3));
+        assert_eq!(answers(&mut s), [(251, vec![0xF5, 0x7E, 3, 0])]);
+        let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xF5, 0x7E, 1, 0, 0]);
+        assert!(matches!(&ev[..], [Event::Opcode { op: OP_BESTIARY_DATA, data }] if data[..] == [1, 0, 0]), "{ev:?}");
+        assert_eq!(answers(&mut s), [], "the page answered nothing");
     }
 
     // Capes (0x7E25): the offer answered with 1 at once and kept; then the list's

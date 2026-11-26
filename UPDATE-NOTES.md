@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Bestiary
+
+- New **Character → Bestiary** (on servers that keep one): every kind of creature you have fought, listed by the zone it comes from, with how many you have killed and the day you first met it. Creatures in a heroic dungeon are listed under that dungeon. Turn the pages with **←** and **→** (or click the ends of the page line), and leave with **△** (Escape). It starts counting from the server's update, so creatures you fought before are not in it yet.
+
 ## 2026-11-26 · Drag the scroll bar's blue knob
 
 - In the **chat box**, with its history up (scrolled back), **press the blue knob on the scroll bar and drag it**: the history goes with the mouse (or your finger), from the oldest lines at the top of the bar to the newest at its foot, so a long history is a quick drag away. Let go at the foot and the chat is live again. A click on the bar **above or below the knob** pages the history older or newer.
