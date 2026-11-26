@@ -730,6 +730,16 @@ pub const OP_DPS_METER_DATA: u16 = 0x7E3C;
 /// A reset, client to server (`reset_dps_meter`): a u8, 1. The server drops the
 /// fight under way (nothing more is sent of it) and numbers its next another.
 pub const OP_DPS_METER_RESET: u16 = 0x7E3D;
+/// go-eqoa-server's own: the characters' surnames for the name plates (Live
+/// petition 5648, `/surname`). The offer, server to client at every world
+/// entry: a u8, the [`OP_SURNAMES`] layout (1); answered at once with a u8, 1.
+/// A PS2 ignores it.
+pub const OP_SURNAME_OFFER: u16 = 0x7EF8;
+/// The surnames, from a server the client answered: u8 layout (1), u16 count,
+/// and each a character's name (its own, no tag) and its surname (empty: it
+/// has none any more), each a u8 byte count and UTF-8. The whole list once
+/// after the answer, then a character at a time ([`Session::surname`]).
+pub const OP_SURNAMES: u16 = 0x7EF9;
 /// go-eqoa-server's own: one faction's standing on the HUD (`factiontrack`,
 /// Heirloom petition 3216: "track one chosen faction on screen, outside the
 /// faction window"). The offer, server to client at every world entry: a u8,
@@ -823,6 +833,27 @@ pub struct DpsLine {
     pub own_merc: bool,
     pub owner: String,
     pub merc_share: [u32; 3],
+}
+
+/// [`OP_SURNAMES`]'s body: each (name, surname), or None when it is short or of
+/// another layout.
+fn read_surnames(r: &mut Reader) -> Option<Vec<(String, String)>> {
+    if r.u8() != 1 {
+        return None;
+    }
+    let n = r.u16() as usize;
+    let mut out = Vec::with_capacity(n.min(512));
+    for _ in 0..n {
+        let a = r.u8() as usize;
+        let name = String::from_utf8_lossy(r.bytes(a)).into_owned();
+        let b = r.u8() as usize;
+        let surname = String::from_utf8_lossy(r.bytes(b)).into_owned();
+        if r.error {
+            return None;
+        }
+        out.push((name, surname));
+    }
+    (!r.error).then_some(out)
 }
 
 /// [`OP_FACTION_TRACK_DATA`]'s body: (known, name, standing), or None when it
@@ -1693,6 +1724,9 @@ pub struct Session {
     /// ([`OP_GROUP_REG_STATE`]); none from a server that never offered it, and
     /// at a new connection.
     pub group_reg: Option<GroupReg>,
+    /// The characters' surnames the server told ([`OP_SURNAMES`]), by their
+    /// names in lower case; none at a new connection until told again.
+    pub surnames: std::collections::HashMap<String, String>,
     /// What character creation takes past the game's, as the server last told
     /// it ([`OP_CREATION_RACES`]); none from a server that never offers it.
     pub creation: Option<crate::creation::Creation>,
@@ -2055,6 +2089,7 @@ impl Session {
             mercs: None,
             merc_windows: false,
             group_reg: None,
+            surnames: std::collections::HashMap::new(),
             creation: None,
             server_worlds: None,
             worlds_building: None,
@@ -2608,6 +2643,12 @@ impl Session {
         self.send(&crate::headmarks::answer(want));
     }
 
+    /// The character `name`'s surname (its own name, no tag), as the server
+    /// told it ([`OP_SURNAMES`]); None for none.
+    pub fn surname(&self, name: &str) -> Option<&str> {
+        self.surnames.get(&name.to_lowercase()).map(String::as_str)
+    }
+
     /// The mark over the entity `id`'s head, from a server that sends them
     /// (offered and asked): [`crate::headmarks::TAKE`], [`crate::headmarks::STEP`],
     /// or None.
@@ -3069,6 +3110,8 @@ impl Session {
                 self.mercs = None;
                 self.merc_windows = false;
                 self.group_reg = None;
+                // the surnames: the next world entry offers them again
+                self.surnames.clear();
                 // the old connection's channels go with it
                 self.early_states.clear();
                 self.quest_marks_offer = false;
@@ -3811,6 +3854,27 @@ impl Session {
                     self.number_tags_asked = None;
                 }
             }
+            // the surnames offered (each world entry): answered 1 at once, the
+            // whole list to come (`OP_SURNAMES`)
+            OP_SURNAME_OFFER => {
+                if !r.error && r.u8() == 1 && !r.error {
+                    let mut w = Writer::op(OP_SURNAME_OFFER);
+                    w.u8(1);
+                    self.send(&w.data);
+                }
+            }
+            OP_SURNAMES => match read_surnames(&mut r) {
+                Some(pairs) => {
+                    for (name, surname) in pairs {
+                        if surname.is_empty() {
+                            self.surnames.remove(&name.to_lowercase());
+                        } else {
+                            self.surnames.insert(name.to_lowercase(), surname);
+                        }
+                    }
+                }
+                None => debug_line(&format!("[net] the surnames: {} bytes not read", m.data.len())),
+            },
             // the damage meter offered (again at every world entry): told
             // afresh whether the client wants it (`agree_dps_meter`)
             OP_DPS_METER_OFFER => {
@@ -5180,6 +5244,47 @@ mod tests {
         assert_eq!(ours(&mut s), vec![vec![0x72, 0x7E, 2]], "answered 2 (the kind USE read)");
         let ev = deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0x74, 0x7E, 1, 0]);
         assert!(matches!(&ev[..], [Event::Opcode { op: 0x7E74, data }] if data[..] == [1, 0]), "{ev:?}");
+    }
+
+    // The surnames (0x7EF8/0x7EF9, go-eqoa-server's /surname, Live petition
+    // 5648): the offer answered 1 at once, another layout nothing; the list
+    // kept by name in any case, a surname emptied forgotten, a short list not
+    // taken; a new connection forgets them.
+    #[test]
+    fn surnames_offered_answered_and_kept() {
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut s = Session::connect_with(Box::new(Rec(sent.clone())), ([127, 0, 0, 1], 40000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
+        let ours = |s: &mut Session| -> Vec<Vec<u8>> {
+            s.flush();
+            let m = sent.borrow().iter().flat_map(|d| messages(d)).filter(|(ty, d)| *ty == 251 && d.get(1) == Some(&0x7E)).map(|(_, d)| d).collect();
+            sent.borrow_mut().clear();
+            m
+        };
+        ours(&mut s);
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xF8, 0x7E, 2]);
+        assert!(ours(&mut s).is_empty(), "another layout: nothing");
+        deliver(&mut s, drdp::TYPE_GUARANTEED, vec![0xF8, 0x7E, 1]);
+        assert_eq!(ours(&mut s), vec![vec![0xF8, 0x7E, 1]], "answered 1");
+        let list = |pairs: &[(&str, &str)]| {
+            let mut m = vec![0xF9, 0x7E, 1, pairs.len() as u8, 0];
+            for (a, b) in pairs {
+                m.push(a.len() as u8);
+                m.extend_from_slice(a.as_bytes());
+                m.push(b.len() as u8);
+                m.extend_from_slice(b.as_bytes());
+            }
+            m
+        };
+        deliver(&mut s, drdp::TYPE_GUARANTEED, list(&[("Cora", "Stoneheart"), ("Dab", "Ironhand")]));
+        assert_eq!((s.surname("Cora"), s.surname("cora"), s.surname("Dab"), s.surname("Bert")), (Some("Stoneheart"), Some("Stoneheart"), Some("Ironhand"), None));
+        deliver(&mut s, drdp::TYPE_GUARANTEED, list(&[("Cora", "")]));
+        assert_eq!((s.surname("Cora"), s.surname("Dab")), (None, Some("Ironhand")), "emptied: forgotten");
+        let mut short = list(&[("Bert", "Oakshield")]);
+        short.pop();
+        deliver(&mut s, drdp::TYPE_GUARANTEED, short);
+        assert_eq!(s.surname("Bert"), None, "a short list not taken");
+        deliver(&mut s, drdp::TYPE_CONNECT, Vec::new());
+        assert_eq!(s.surname("Dab"), None, "a new connection: none");
     }
 
     // The mercs (0x7E5A/0x7E5B) and the group search's standing (0x7E5D/
