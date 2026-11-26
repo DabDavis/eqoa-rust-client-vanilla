@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Guild roster rows and the minimap's name box
+
+- The **guild roster** no longer draws one member's name on top of the next: a member of a race the game has no short name for (a froglok) used to leave the rest of the list one line short. Each member now has a row of their own.
+- The box that names what is under the mouse on the **minimap** (an NPC's name, a camp, a coach) now always sits beside the minimap, never over it: to its left as before, or to its right when the minimap has been moved to the left of the screen.
+
 ## 2026-11-25 · Hide mercs on the DPS meter
 
 - The **DPS meter** combines mercenary contributions with their owner's totals. The purple part of each bar shows the mercenary share. Turn on **Hide mercs** on the meter or under **Options → Extended → UI → DPS Meter** to exclude those contributions from Fight and Overall. The updated server sends the full breakdown for raids.
