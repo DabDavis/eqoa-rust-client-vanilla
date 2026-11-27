@@ -1096,7 +1096,9 @@ impl Compose {
                     return Some(ComposeUp::Warn(1632));
                 } else if self.subject.is_empty() {
                     return Some(ComposeUp::Warn(1808));
-                } else if self.body.is_empty() {
+                } else if self.body.is_empty() && !(self.live && self.attaching && (self.item.is_some() || self.tunar > 0)) {
+                    // a gram that carries something needs no text
+                    // (`mailattach`; Heirloom petition 3341)
                     return Some(ComposeUp::Warn(873));
                 }
                 if self.live {
@@ -2319,6 +2321,71 @@ mod tests {
         d.sel = 3;
         d.key(&vui, &mut r, &mut g2, 13, true, 0, &mut cues);
         assert_eq!(g2.out.pop().unwrap()[..3], [0x01, 0x0D, 1]);
+    }
+
+    /// Heirloom petition 3341: a To and a Subject, no body, and an item
+    /// picked (with the mouse, as with the pad) shows on the Attach row and
+    /// goes: a gram that carries something needs no text. The control: with
+    /// nothing attached an empty body is still refused (873), as retail.
+    #[test]
+    fn a_gram_that_carries_something_needs_no_body() {
+        let (vui, mut r) = (mail_vui(), NullRaster);
+        let mut cues = Vec::new();
+        let mut g = live();
+        g.attach.offer = Some(crate::mailattach::Offer { items: 1, postage: 0 });
+        g.attach.pack = (0..90).map(|i| PackItem { key: i, name: format!("Thing {i}"), quantity: 1 }).collect();
+        g.attach.pack.push(PackItem { key: 247, name: "Sandals of Power".into(), quantity: 1 });
+        let mut c = Compose::new(false);
+        c.visible = true;
+        c.focus(&vui, &NullRaster);
+        c.draw(&vui, &mut r, &g, 0, &mut cues);
+        c.set_to(&wide("Bob"));
+        c.subject = wide("Gear");
+        assert!(c.body.is_empty());
+        // the mouse: the Attach row clicked twice (selected, then used), then
+        // the sandals' line
+        let at = |hits: &Hits, what: i32| hits.middle_of(what).expect("drawn");
+        for _ in 0..2 {
+            let p = at(&c.hits, 3);
+            for k in c.point(p) {
+                if k != crate::pointer::MOVED {
+                    c.key(&vui, &mut r, &mut g, k, true, 0, &mut cues);
+                    c.key(&vui, &mut r, &mut g, k, false, 0, &mut cues);
+                }
+            }
+            c.draw(&vui, &mut r, &g, 16, &mut cues);
+        }
+        assert!(c.picker.visible, "the pick is up");
+        let p = at(&c.picker.hits, 91);
+        for k in c.point(p) {
+            c.key(&vui, &mut r, &mut g, k, true, 0, &mut cues);
+            c.key(&vui, &mut r, &mut g, k, false, 0, &mut cues);
+        }
+        assert!(!c.picker.visible);
+        assert_eq!(c.item, Some((247, 1, "Sandals of Power".to_string())));
+        // Send, no body: it goes
+        c.sel = 5;
+        assert_eq!(c.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues), None);
+        assert_eq!(g.out.pop().unwrap(), crate::mailattach::send(&[b"Bob".to_vec()], &wide("Gear"), &[], 0, Some((247, 1))));
+        // the pad, the same pick (the send answered)
+        g.state = 0;
+        let mut d = Compose::new(false);
+        d.visible = true;
+        d.focus(&vui, &NullRaster);
+        d.draw(&vui, &mut r, &g, 0, &mut cues);
+        d.set_to(&wide("Bob"));
+        d.subject = wide("Gear");
+        d.sel = 3;
+        d.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        for _ in 0..91 {
+            d.key(&vui, &mut r, &mut g, 20, true, 0, &mut cues);
+        }
+        d.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues);
+        assert_eq!(d.item, Some((247, 1, "Sandals of Power".to_string())));
+        // the control: nothing attached, no body: refused as retail refuses it
+        d.item = None;
+        d.sel = 5;
+        assert_eq!(d.key(&vui, &mut r, &mut g, 13, true, 0, &mut cues), Some(ComposeUp::Warn(873)));
     }
 
     /// The reader shows what a gram carries and offers Take first; Take asks

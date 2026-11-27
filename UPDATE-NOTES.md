@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · Mail an item with no message
+
+- A tell-gram that carries an item or tunar now sends with just a recipient and a subject: the message box can be left empty. Before, Send refused it (the only sign a red line in the chat behind the window), so the attachment seemed not to take. A gram with nothing attached still needs a message, as before.
+
 ## 2026-11-27 · Trade items to your mercenary
 
 - You can now hand items to **your own mercenary** with the ordinary trade: target it and press **Trade**, as you would with another player. The trade window opens at once with your merc already accepting; put in what you want it to have and accept. The items go into its inventory, the same as giving them through its own window (what its window would not take, it will not take here either, and it takes no tunar).

@@ -72,6 +72,12 @@ impl Hits {
         self.0.push((r, what));
     }
 
+    /// The middle of the last rectangle drawn for `what` (tests).
+    #[cfg(test)]
+    pub fn middle_of(&self, what: i32) -> Option<[f32; 2]> {
+        self.0.iter().rev().find(|h| h.1 == what).map(|(r, _)| [(r[0] + r[2]) as f32 / 2.0, (r[1] + r[3]) as f32 / 2.0])
+    }
+
     /// What is under frame point `p`: the last drawn there.
     pub fn at(&self, p: [f32; 2]) -> Option<i32> {
         self.0.iter().rev().find(|(r, _)| inside(r.map(|v| v as f32), p, 0.0)).map(|h| h.1)
