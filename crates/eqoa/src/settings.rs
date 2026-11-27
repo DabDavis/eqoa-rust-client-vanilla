@@ -1240,8 +1240,8 @@ pub struct ClientOptions {
     /// target or a dead one, the nearest creature fighting the player (else
     /// its pet or group) targeted. Off by default.
     pub auto_target: bool,
-    /// Mouseover Casting (Heirloom petition 2960): in the PC interface, a heal
-    /// or buff cast at a target goes to the friend under the mouse (the
+    /// Mouseover Casting (Heirloom petition 2960): in the PC interface, a heal,
+    /// buff or friend's utility spell (petition 3350) cast at a target goes to the friend under the mouse (the
     /// player's pet, group or their mercs) without targeting it: Mouseover
     /// First, or Target First (only when the target is no friend). Off by
     /// default (`Play::mouseover_target`). A server that turns auto-cast off

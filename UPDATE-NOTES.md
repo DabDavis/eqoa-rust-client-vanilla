@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · Mouseover Casting for utility spells
+
+- **Mouseover Casting** (PC interface) now also sends your targeted **utility spells** to the pet or groupmate under the mouse: invisibility, illusions and glamours, cures (Antidote, Curative, Purity) and a few heals and buffs it missed before (Bind Wounds, Wild Growth, Forest's Succor, Tracker's Wisdom). Charms, lulls, calms, roots, pickpockets, gates and resurrections still go at your target, and auto-cast still never casts utility spells on its own.
+
 ## 2026-11-27 · Mail an item with no message
 
 - A tell-gram that carries an item or tunar now sends with just a recipient and a subject: the message box can be left empty. Before, Send refused it (the only sign a red line in the chat behind the window), so the attachment seemed not to take. A gram with nothing attached still needs a message, as before.

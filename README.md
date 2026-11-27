@@ -534,8 +534,9 @@ or a browser (each described where it lives below):
   name stepped to, beside Move HUD and Reset HUD. 20 at most, one
   file an interface (`hud-profiles-pc.opt`, `hud-profiles.opt`), shared by every window and account (a
   full screen's layout and a half screen's for multiboxing).
-- **Mouseover Casting** (petition 2960, PC): a heal or buff cast at a target (scope 1, `autocast::guess`)
-  goes to the friend under the mouse (the pet, the group, their mercs: `Play::own_side`) without
+- **Mouseover Casting** (petition 2960, PC): a heal or buff cast at a target (scope 1, `autocast::guess`),
+  or a friend's utility spell (petition 3350, `autocast::friend_utility`: invisibility, illusions, cures;
+  never a charm, a lull, a gate or a resurrection, and still never auto-cast) goes to the friend under the mouse (the pet, the group, their mercs: `Play::own_side`) without
   targeting it: 0x0032 names its own target, which go-eqoa-server casts at. Extended > Other > Combat:
   Off (the default), Mouseover First, Target First (the target when it is a friend). Off with
   `settings::qol::AUTO_CAST`.

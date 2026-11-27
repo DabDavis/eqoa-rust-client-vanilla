@@ -6538,8 +6538,9 @@ impl Play {
     /// the player/pet without selecting it and then use a hotkey to cast a
     /// heal spell ... a hierarchy the player chooses (mouseover before target
     /// if friendly or target if friendly before mouseover)"): for ability `a`,
-    /// a heal or buff cast at a target (scope 1, `autocast::guess`), in the
-    /// PC interface with the mouse in the window, the friend to cast it at in
+    /// a heal or buff cast at a target (scope 1, `autocast::guess`) or a
+    /// friend's utility spell (invisibility, an illusion, a cure...: petition
+    /// 3350, `autocast::friend_utility`), in the PC interface with the mouse in the window, the friend to cast it at in
     /// place of the target, which stays as it is: the player's side under the
     /// mouse (`own_side`: its pet, its group, their mercs) by Mouseover First,
     /// or by Target First only when the target is not one of them (nor the
@@ -6547,7 +6548,7 @@ impl Play {
     pub fn mouseover_target(&self, a: &net::dump::Ability) -> Option<u32> {
         use crate::settings::MouseoverCast;
         let order = crate::settings::mouseover_cast();
-        if order == MouseoverCast::Off || !crate::settings::pc_mode() || a.scope != 1 || !matches!(crate::autocast::guess(a), Some(crate::autocast::Kind::Heal | crate::autocast::Kind::Buff)) {
+        if order == MouseoverCast::Off || !crate::settings::pc_mode() || !crate::autocast::mouseover(a) {
             return None;
         }
         let (at, (vp, size)) = (self.pointer?, self.pointer_view?);
@@ -9901,7 +9902,8 @@ impl Play {
         let slot = ability.slot;
         eprintln!("play: use slot {slot} ({:?})", ability.name);
         // The cast request has its own target. Self-only abilities name the
-        // caster, and Mouseover Casting can redirect a targeted heal or buff.
+        // caster, and Mouseover Casting can redirect a targeted heal, buff or
+        // friend's utility spell.
         let at = if ability.scope == 0 {
             self.self_id32().unwrap_or(u32::MAX)
         } else {
@@ -14379,7 +14381,8 @@ mod commands {
 
     /// Mouseover Casting (petition 2960): a heal cast from the bars with
     /// the pointer on the player's pet goes to the pet (0x0032 names it),
-    /// the target kept; Target First casts at a friendly target instead, and
+    /// the target kept, and a friend's utility spell (petition 3350:
+    /// invisibility, levitation, an illusion) too, never a lull or a charm; Target First casts at a friendly target instead, and
     /// at the pet when the target is a foe. The controls: Off, a harmful
     /// spell, the Controller interface, the pointer off the pet, a stranger
     /// under it: the target, as ever.
@@ -14412,9 +14415,19 @@ mod commands {
         let set = |m: MouseoverCast, pc: bool| set_client(ClientOptions { mouseover_cast: m, pc_mode: pc, ..client() });
         set(MouseoverCast::Off, true);
         assert_eq!(p.mouseover_target(&heal), None, "the control: Off");
+        let invis = net::dump::Ability { id: 12, scope: 1, name: "Invisibility".into(), desc: "Invisibility".into(), ..Default::default() };
+        assert_eq!(p.mouseover_target(&invis), None, "the control: Off, a utility spell too");
         set(MouseoverCast::MouseoverFirst, true);
         assert_eq!(p.mouseover_target(&heal), Some(pet), "the pet under the mouse");
         assert_eq!(p.mouseover_target(&bolt), None, "the control: a harm goes at the target");
+        // a friend's utility spell too (petition 3350), never one on a creature
+        let utility = |name: &str, desc: &str| net::dump::Ability { id: 11, scope: 1, name: name.into(), desc: desc.into(), ..Default::default() };
+        for (name, desc) in [("Superior Invisibility", "Target, invis, 10min"), ("Levitate", "Target, Levitate, 10min"), ("Illusion: Dwarf", "Target, Dwarf form, Faction Change, 10min")] {
+            assert_eq!(p.mouseover_target(&utility(name, desc)), Some(pet), "{name}: the pet under the mouse");
+        }
+        for (name, desc) in [("Lull", "Reduces Aggression towards you."), ("Charm", "Target, Charm ; Increase 25% based on CHA, 2.2min")] {
+            assert_eq!(p.mouseover_target(&utility(name, desc)), None, "the control: {name} goes at the target");
+        }
         p.target = mate;
         assert_eq!(p.mouseover_target(&heal), Some(pet), "Mouseover First: the pet over the friendly target");
         set(MouseoverCast::TargetFirst, true);
