@@ -768,17 +768,18 @@ mod tests {
     }
 
     /// A camp's levels are its creatures' on the server (tools/gen_map_markers.py reads them out of npcs), not the
-    /// guide's range (Live petition 5675: the Salt Mine's siloths were drawn 45-50, the guide's, while they stood at
-    /// 39-41), and a lone boss above the camp is not its range (Overlord Xrag, 66). The control: the guide's own
-    /// note is kept.
+    /// guide's range, and a lone boss above the camp is not its range (Overlord Xrag, 66). Live petition 5675: the Salt
+    /// Mine's siloths were drawn 45-50, the guide's, while they stood at 39-41; the owner had them raised to the guide's
+    /// (campguide_levels_20261127.py, raise only, 2026-11-27). The control: the DFC, whose guide (29-34) is under its
+    /// creatures (none lowered), shows theirs; the guide's note is kept.
     #[test]
     fn a_camps_levels_are_its_creatures() {
         let camp = |name: &str| CAMPS.iter().find(|c| c.name == name && c.guide).unwrap();
         let siloths = camp("Siloths");
-        assert_eq!(siloths.levels, (39, 41), "the siloths' levels on the server");
-        assert_ne!(siloths.levels, (45, 50), "the guide's range");
+        assert_eq!(siloths.levels, (45, 50), "the siloths' levels on the server, raised to the guide's");
         assert_eq!(camp("Pariah of Xragg").levels, (61, 64), "his children's, Overlord Xrag's 66 left out");
-        assert!(siloths.note.contains("Valuable ring drops"), "the control: the guide's note kept: {}", siloths.note);
+        assert_eq!(camp("Deathfist Citadel (DFC)").levels, (31, 40), "the control: its creatures', not the guide's 29-34");
+        assert!(siloths.note.contains("Valuable ring drops"), "the guide's note kept: {}", siloths.note);
     }
 
     /// A camp's card: its name, its levels, the guide's note, its rare
