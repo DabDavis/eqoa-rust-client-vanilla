@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Feet on the ground on hills
+
+- Characters no longer sink their feet into hills. Going up or down a slope (or standing across one), a troll's, an ogre's or anyone's uphill foot used to go into the ground, knee deep on a steep hill. Now each foot stands on the ground under it: the body is lowered to the downhill foot and the uphill knee bends. This is for you, other players and the NPCs that walk on two legs.
+- It is on by default. If you prefer the original game's look, turn off **Extended > Graphics > Characters > Feet on Slopes**.
+
 ## 2026-11-26 · Bank pages from the bank window
 
 - At the banker, on the **Items** page, you can now turn your bank's page without typing **/bank next**: press **R1** for the next page and **L1** for the one before (**Page Down** and **Page Up** on the keyboard). With **Inventory Style** set to **Bags** there are **Page** buttons under the bank's grid too, to click or tap. The chat says which page you are on, and the bank's side starts again from its top.

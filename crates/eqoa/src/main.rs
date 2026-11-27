@@ -101,6 +101,7 @@ mod gear;
 mod gram;
 mod mailattach;
 mod hideui;
+mod feet;
 mod jump;
 mod livewords;
 mod hud;

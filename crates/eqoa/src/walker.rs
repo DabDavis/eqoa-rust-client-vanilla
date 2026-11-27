@@ -156,6 +156,8 @@ pub struct Walker {
     /// fall wholly in by its top (`jump::fall_by_top`), which a jump that
     /// reaches its top has already.
     in_jump: bool,
+    /// Feet on Slopes' fit of the character's legs (`feet`).
+    plant: crate::feet::Plant,
 }
 
 /// A jump's start speed upward (units a second): with the walk's own integrator,
@@ -508,7 +510,7 @@ impl Walker {
         cam.set_orbit_distance(dist);
         cam.set_orbit_angle_behind();
         let eye = cam.process(&mut scene);
-        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None, scale: F::ONE, flying: false, noclip: false, fly_tilt: None, frame_s: 0.0, jump_asked: None, jump_arc: JumpArc::HUMAN, in_jump: false }
+        Walker { cam, scene, eye, sprite: None, anims: AnimScene::default(), rand: Rand(1), shake: 0, reach: Default::default(), kept: None, rewound: false, given: None, scale: F::ONE, flying: false, noclip: false, fly_tilt: None, frame_s: 0.0, jump_asked: None, jump_arc: JumpArc::HUMAN, in_jump: false, plant: Default::default() }
     }
 
     /// `Respawn`'s placing: the character stood at `pos` (on the ground
@@ -632,6 +634,11 @@ impl Walker {
         let lod = crate::lod::anim_level(&cs.h, &actor, &eye, crate::settings::client().lod);
         cs.h.process(lod, &self.anims);
         let model = cs.h.calc_trans_about_center(&actor, &self.anims);
+        // Feet on Slopes (`feet`): the legs fitted to the ground under each
+        // foot as drawn; on a floor, out of liquid, not in a jump or flying
+        let p = &self.cam.walk.phys;
+        let can = !self.flying && !self.in_jump && !cs.dead && !sea && p.flags & ON_FLOOR != 0 && p.flags & flags::LIQUID == 0;
+        self.plant.plant(cs, &model, can, self.anims.time, &mut crate::feet::world_ground(&mut self.scene));
         cs.h.set_blend_matrices();
         (model.to_cols(), cs.h.blend.iter().map(|m| m.to_cols()).collect())
     }

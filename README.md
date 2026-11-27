@@ -152,7 +152,7 @@ or a browser (each described where it lives below):
   to 200%; Touch Edge, 0 to 10% of the screen in from its sides; since 2026-11-14 all of them Touch
   Controls', with Move Touch Pad, Button Layout and Reset Touch Pad), Camera (Distance, Turn Speed, Screen Shake),
   Characters (Level of Detail, NPC/PC Display and Distance, Name Distance,
-  Overlapping Names, Shadows), Sound (Master Volume, Sound in Background, Output Device: the system's
+  Overlapping Names, Shadows, Feet on Slopes), Sound (Master Volume, Sound in Background, Output Device: the system's
   default, followed when it changes, or a device by its name), natively Textures
   (Texture Packs, Dump Textures, and on a computer Texture Folder), Map (Map,
   Minimap, Map Markers, Quest Helper, Quest Tracker), Number Colors (Your Damage,
@@ -326,6 +326,26 @@ or a browser (each described where it lives below):
   everyone's feet (`render::ao`, from the frame's depth). Water, glows, the effect
   volumes' fog, the particles and spells, the blob shadows, the names and the HUD draw over
   it as they were, and it fades out with distance and into the fog.
+- **Feet on Slopes** (the owner's of 2026-11-26: "make feet on slopes on by default, because it is a
+  bug"; Extended > Graphics > Characters, **on by default**, `feet_on_slopes=off` in `client.opt` the
+  game's own): the game stands every body on one floor point, the ground straight under its middle
+  (`VIWalkControl::CalcFloor`'s 0.001 sphere, `ExtrapolateGround` for the NPCs), and never tips a living
+  biped to the slope, so on a hill the uphill foot went into the ground by its reach times the slope (a
+  troll's or a human's stride 0.3 m at 30 degrees, knee deep at 45; `../claude-notes/
+  hill-clip-feet-on-slopes-20261126.md`). On, a biped's legs are fitted to the ground as drawn (`feet.rs`):
+  the ground under each ankle looked for (its plane carried to the toe, and kept while the foot stays within
+  0.4 of it), the whole body lowered to the downhill foot's ground and each knee bent (two-bone IK in the
+  plane the animation bent it in) until its foot is on its own ground, the foot turned as the animation
+  turned it, eased in and out over 150 ms. The player's own character, the other players and the NPCs,
+  within 40 of the eye; never in the air, in or at the surface of a liquid, dead, swimming, flying, carried
+  or where the ground under the body is not where it stands. A biped is two mirrored leg chains (hip, knee,
+  ankle, up to two foot nodes, toe) read off the bind pose, the toes alone on the floor (`feet::legs_of`):
+  289 of CHAR.ESF's 568 bodies, every player race's both sexes among them; the quadrupeds (skeleton types 2
+  and 3), the fliers and floaters, the many-legged and those with a tail or a third limb on the floor are
+  drawn as the game draws them. Drawing only: the node matrices the skin, the attachments and the effects
+  read are changed after the pose; the walk, the collision, the positions sent and the network are the
+  game's. Off, nothing runs and every node is the game's bit for bit. About 14 us a running troll a frame
+  natively (two probes every few frames and the IK), 1.5 us standing.
 - **Sun Shadows** (2026-11-08; Extended > Lighting, off by default, drawn only with
   Dynamic Lighting on, and off every frame as it was): the sun's light stopped by
   what stands between a surface and the sun, which the strip programs let through
