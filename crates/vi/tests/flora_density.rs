@@ -224,3 +224,173 @@ fn render_draws_more_at_a_higher_density() {
     }
     assert!(counts[0] > 0 && counts[1] > counts[0] && counts[2] > counts[1], "{counts:?}");
 }
+
+/// A frustum of a box of 1000 round the eye: nothing culled.
+fn open_frustum() -> Frustum<M> {
+    let mut f = Frustum::<M>::default();
+    for (k, p) in f.planes.iter_mut().enumerate() {
+        let (n, c) = match k {
+            0 => (Vect3::of(1.0, 0.0, 0.0), AT[0]),
+            1 => (Vect3::of(-1.0, 0.0, 0.0), -AT[0]),
+            2 => (Vect3::of(0.0, 1.0, 0.0), AT[1]),
+            3 => (Vect3::of(0.0, -1.0, 0.0), -AT[1]),
+            4 => (Vect3::of(0.0, 0.0, 1.0), AT[2]),
+            _ => (Vect3::of(0.0, 0.0, -1.0), -AT[2]),
+        };
+        *p = Plane { n, d: F::new(-c - 1000.0) };
+    }
+    f
+}
+
+/// A plant's distance from the eye (in the host's floats, for the checks).
+fn dist_of(d: &vi::flora::Drawn<M>, at: Vect3<M>) -> f32 {
+    let p = d.world.m[3];
+    ((p.x.0 - at.x.0).powi(2) + (p.y.0 - at.y.0).powi(2) + (p.z.0 - at.z.0).powi(2)).sqrt()
+}
+
+/// A drawn list as bits: matrix, prim, palette, fade.
+fn drawn_bits(v: &[vi::flora::Drawn<M>]) -> Vec<[u32; 19]> {
+    v.iter()
+        .map(|d| {
+            let mut b = [0u32; 19];
+            for r in 0..4 {
+                for (c, x) in [d.world.m[r].x, d.world.m[r].y, d.world.m[r].z, d.world.m[r].w].into_iter().enumerate() {
+                    b[r * 4 + c] = x.bits();
+                }
+            }
+            b[16] = d.prim as u32;
+            b[17] = d.pal as u32;
+            b[18] = d.alpha.bits();
+            b
+        })
+        .collect()
+}
+
+/// Foliage Distance at Retail (the default, and 100 written out) is the
+/// game's: the 3 x 3 grid, the same plants (the fingerprint), the same list
+/// drawn to the bit, 700 at most, nothing past 40. The control: 1.5x draws
+/// another list.
+#[test]
+fn retail_distance_is_the_games() {
+    let d = System::<M>::default();
+    assert_eq!((d.distance, d.side(), d.radius().0, d.drawn_most()), (100, 3, 40.0, 700), "the game's by default");
+    let at = Vect3::of(AT[0], AT[1], AT[2]);
+    let f = open_frustum();
+    let mut game = System::<M>::default();
+    let mut sc = scene();
+    game.update(&mut sc, &at);
+    let mut put = System::<M> { distance: 100, ..Default::default() };
+    put.update(&mut sc, &at);
+    assert_eq!(fingerprint(&grow(1, at).0), (RETAIL_PLANTS, RETAIL_PRINT), "the game's plants");
+    let (a, b) = (game.render(&f, &at), put.render(&f, &at));
+    assert_eq!(drawn_bits(&a), drawn_bits(&b), "the same list");
+    assert!(a.len() <= 700 && a.iter().all(|d| dist_of(d, at) < 40.0));
+    let mut far = System::<M> { distance: 150, ..Default::default() };
+    far.update(&mut sc, &at);
+    assert_ne!(drawn_bits(&far.render(&f, &at)), drawn_bits(&a), "the control: farther draws otherwise");
+}
+
+/// Farther, the grid grows (5 x 5 to 2x, 7 x 7 at 3x), the game's 3 x 3 in
+/// the middle of it the same plants (each swatch is seeded off its own
+/// sub-cell), more plants drawn, out to the new radius and none past it, at
+/// most the game's 700 times the distance squared, farthest first.
+#[test]
+fn farther_draws_out_to_the_radius() {
+    let at = Vect3::of(AT[0], AT[1], AT[2]);
+    let f = open_frustum();
+    let mut sc = scene();
+    let mut game = System::<M>::default();
+    game.update(&mut sc, &at);
+    let game_sw: Vec<_> = game.swatches.iter().map(|s| s.as_ref().map(|s| s.insts.len())).collect();
+    let retail = game.render(&f, &at).len();
+    let mut last = retail;
+    for (dist, side) in [(150u16, 5), (200, 5), (300, 7)] {
+        for density in [1u8, 3] {
+            let mut sys = System::<M> { distance: dist, density, ..Default::default() };
+            sys.update(&mut sc, &at);
+            assert_eq!((sys.side(), sys.swatches.len()), (side, (side * side) as usize));
+            let n = (side as usize - 3) / 2;
+            if density == 1 {
+                for r in 0..3 {
+                    for c in 0..3 {
+                        let ours = sys.swatches[(r + n) * side as usize + c + n].as_ref().map(|s| s.insts.len());
+                        assert_eq!(ours, game_sw[r * 3 + c], "{dist}: the middle swatch {r},{c} is the game's");
+                    }
+                }
+            }
+            let drawn = sys.render(&f, &at);
+            let r = dist as f32 * 0.4;
+            let far = drawn.iter().map(|d| dist_of(d, at)).fold(0.0f32, f32::max);
+            assert!(drawn.len() <= sys.drawn_most(), "{dist}: {} of {}", drawn.len(), sys.drawn_most());
+            assert!(far < r && far > r * 0.9, "{dist}: plants out to {far} of {r}");
+            assert!(drawn.windows(2).all(|w| dist_of(&w[0], at) >= dist_of(&w[1], at) - 1e-3), "{dist}: farthest first");
+            if density == 1 {
+                assert!(drawn.len() > last, "{dist}: more than at the step before ({} <= {last})", drawn.len());
+                last = drawn.len();
+            }
+            eprintln!("distance {dist}% density {density}x: {} swatches, {} plants grown, {} drawn (retail {retail}), cap {}", sys.swatches.iter().flatten().count(), sys.swatches.iter().flatten().map(|s| s.insts.len()).sum::<usize>(), drawn.len(), sys.drawn_most());
+        }
+    }
+}
+
+/// The fade farther: the alpha falls (never rises) from 1 at a quarter of
+/// the radius to 0 at it; the grow-in is 1 inside the outer quarter and
+/// falls smoothly to 0 at the edge; a plant drawn in the band is scaled at
+/// its root by it (its root where it was). The control: Retail scales none.
+#[test]
+fn the_fade_band_ramps() {
+    use vi::flora::grow_in;
+    for r in [40.0f32, 60.0, 80.0, 120.0] {
+        let mut was = F::<M>::new(2.0);
+        for k in 0..=400 {
+            let d = r * k as f32 / 400.0;
+            let g = grow_in(F::<M>::new(d), F::new(r));
+            assert!(g.0 <= was.0 && (0.0..=1.0).contains(&g.0), "{r} at {d}: {} after {}", g.0, was.0);
+            if d <= r * 0.75 {
+                assert_eq!(g.0, 1.0, "{r} at {d}: whole inside the band");
+            }
+            was = g;
+        }
+        assert_eq!(grow_in(F::<M>::new(r), F::new(r)).0, 0.0, "gone at the edge");
+        assert!(grow_in(F::<M>::new(r * 0.875), F::new(r)).0 == 0.5, "half way in the band, half");
+    }
+    let at = Vect3::of(AT[0], AT[1], AT[2]);
+    let f = open_frustum();
+    let mut sc = scene();
+    let mut sys = System::<M> { distance: 200, ..Default::default() };
+    sys.update(&mut sc, &at);
+    let drawn = sys.render(&f, &at);
+    let r = 80.0;
+    let mut alpha_was = 0.0f32;
+    let mut in_band = 0;
+    // drawn farthest first: the alpha only rises along the list
+    for d in &drawn {
+        assert!(d.alpha.0 >= alpha_was - 1e-6, "the alpha falls outward");
+        alpha_was = d.alpha.0;
+        let x = dist_of(d, at);
+        if x <= r * 0.25 {
+            assert_eq!(d.alpha.0, 1.0);
+        }
+        // the plant as grown: the same root, to the bit
+        let root = |m: &vi::geom::Matrix44<M>| [m.m[3].x.bits(), m.m[3].y.bits(), m.m[3].z.bits()];
+        let grown = sys.swatches.iter().flatten().flat_map(|s| &s.insts).find(|p| root(&p.world) == root(&d.world)).expect("a grown plant");
+        let g = grow_in(F::<M>::new(x), F::new(r)).0;
+        let (ours, was) = (d.world.m[1].y.0, grown.world.m[1].y.0);
+        assert!((ours - was * g).abs() <= 1e-4 * was.abs().max(1.0), "{x}: scaled by {g}: {ours} of {was}");
+        if x > r * 0.8 {
+            in_band += 1;
+            assert!(ours.abs() < was.abs(), "{x}: smaller in the band");
+        }
+    }
+    assert!(in_band > 20, "plants in the band: {in_band}");
+    let mut game = System::<M>::default();
+    game.update(&mut sc, &at);
+    let g = game.render(&f, &at);
+    let near_edge = g.iter().filter(|d| dist_of(d, at) > 35.0).count();
+    assert!(near_edge > 0);
+    let mut grown = System::<M>::default();
+    grown.update(&mut sc, &at);
+    for (a, b) in game.render(&f, &at).iter().zip(&grown.render(&f, &at)) {
+        assert_eq!(a.world.m[0].x.bits(), b.world.m[0].x.bits(), "the control: Retail scales none");
+    }
+}

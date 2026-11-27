@@ -314,7 +314,9 @@ pub struct Drawn<M: Model> {
 #[derive(Clone, Debug)]
 pub struct System<M: Model> {
     pub loc: Loc,
-    pub swatches: [Option<Swatch<M>>; 9],
+    /// The grid's swatches, row by row: the game's 3 x 3 at Foliage
+    /// Distance's Retail, 5 x 5 or 7 x 7 farther (`side`).
+    pub swatches: Vec<Option<Swatch<M>>>,
     pub sorted: Vec<Sort<M>>,
     pub rebuild: bool,
     /// newlib's `rand()` (`srand`'s state), as the flora seeds and draws it.
@@ -328,11 +330,20 @@ pub struct System<M: Model> {
     /// any density: the extra passes come between the game's and its
     /// `srand(GetTime())`.
     pub density: u8,
+    /// The client's Foliage Distance (not the game's), in percent of the
+    /// game's 40 units: 100, the game's, every swatch, the 3 x 3 grid, the
+    /// 40 and the fade from 10 exactly as `Update` and `Render` have them;
+    /// farther (150, 200, 300), the radius that many times 40, the grid as
+    /// many swatches out as cover it (`reach`), the drawn most that many
+    /// times squared, the game's fade stretched to the radius and the plants
+    /// in the outer quarter grown in from nothing (`grow_in`), so the field
+    /// fills in as one runs instead of ending at a ring.
+    pub distance: u16,
 }
 
 impl<M: Model> Default for System<M> {
     fn default() -> Self {
-        System { loc: Loc::default(), swatches: Default::default(), sorted: Vec::new(), rebuild: true, rand: Rand(1), density: 1 }
+        System { loc: Loc::default(), swatches: empty(9), sorted: Vec::new(), rebuild: true, rand: Rand(1), density: 1, distance: DISTANCE_RETAIL }
     }
 }
 
@@ -342,6 +353,30 @@ pub const SWATCH_MOST: usize = 500;
 pub const DRAWN_MOST: usize = 700;
 /// Foliage Density's highest (3x).
 pub const DENSITY_MOST: u8 = 3;
+/// Foliage Distance's: the game's (its 40 units), and the farthest (3x).
+pub const DISTANCE_RETAIL: u16 = 100;
+pub const DISTANCE_MOST: u16 = 300;
+
+/// `n` empty swatch slots.
+fn empty<M: Model>(n: usize) -> Vec<Option<Swatch<M>>> {
+    (0..n).map(|_| None).collect()
+}
+
+/// Foliage Distance's grow-in: a plant `dist` from the eye with the radius
+/// `r`, its scale: 1 inside the outer quarter, then down to 0 at the edge by
+/// smoothstep (never rising outward).
+pub fn grow_in<M: Model>(dist: F<M>, r: F<M>) -> F<M> {
+    let band = r * F::new(0.25);
+    let from = r - band;
+    if !(from < dist) {
+        return F::ONE;
+    }
+    if !(dist < r) {
+        return F::ZERO;
+    }
+    let t = (r - dist) / band;
+    t * t * (F::new(3.0) - F::new(2.0) * t)
+}
 
 /// The seed of a swatch's extra pass `pass` (Foliage Density), off the
 /// game's seed: its own for each pass and each sub-cell, the same at every
@@ -360,7 +395,7 @@ impl<M: Model> System<M> {
     /// `Reset`: every swatch let go and the grid built again at the next
     /// update.
     pub fn reset(&mut self) {
-        self.swatches = Default::default();
+        self.swatches = empty(self.side() as usize * self.side() as usize);
         self.sorted.clear();
         self.rebuild = true;
     }
@@ -378,20 +413,26 @@ impl<M: Model> System<M> {
     pub fn update(&mut self, sc: &mut impl FloraScene<M>, v: &Vect3<M>) {
         let single = !(sc.grid_rows() != 1 && sc.grid_cols() != 1);
         let loc = self.calc_radial_loc(sc, *v);
+        // the grid's side (3, the game's) and how far out from the middle
+        let (side, n) = (self.side(), self.reach());
+        if self.swatches.len() != (side * side) as usize {
+            self.swatches = empty((side * side) as usize);
+            self.rebuild = true;
+        }
         if self.rebuild || loc.zone != self.loc.zone || loc.sub != self.loc.sub || loc.cell != self.loc.cell {
             self.rebuild = false;
-            let mut grid: [Option<Swatch<M>>; 9] = Default::default();
+            let mut grid = empty((side * side) as usize);
             let d0 = (self.loc.sub[0] - loc.sub[0]) + (self.loc.cell[0] - loc.cell[0]) * 50;
             let d1 = (self.loc.sub[1] - loc.sub[1]) + (self.loc.cell[1] - loc.cell[1]) * 50;
-            let k = d0 * 3 + d1;
+            let k = d0 * side + d1;
             let mut i = 0i32;
-            for r in 0..3 {
-                for c in 0..3 {
+            for r in 0..side {
+                for c in 0..side {
                     if let Some(s) = self.swatches[i as usize].take()
                         && r + d0 >= 0
-                        && r + d0 < 3
+                        && r + d0 < side
                         && c + d1 >= 0
-                        && c + d1 < 3
+                        && c + d1 < side
                     {
                         grid[(k + i) as usize] = Some(s);
                     }
@@ -401,19 +442,19 @@ impl<M: Model> System<M> {
             self.swatches = grid;
         }
         let mut i = 0usize;
-        let mut l = Loc { zone: -1, cell: [loc.cell[0], 0], sub: [loc.sub[0] - 1, 0] };
+        let mut l = Loc { zone: -1, cell: [loc.cell[0], 0], sub: [loc.sub[0] - n, 0] };
         if !single && l.sub[0] < -25 {
             l.cell[0] -= 1;
             l.sub[0] += 50;
         }
-        for _ in 0..3 {
-            l.sub[1] = loc.sub[1] - 1;
+        for _ in 0..side {
+            l.sub[1] = loc.sub[1] - n;
             l.cell[1] = loc.cell[1];
             if !single && l.sub[1] < -25 {
                 l.cell[1] -= 1;
                 l.sub[1] += 50;
             }
-            for _ in 0..3 {
+            for _ in 0..side {
                 if self.swatches[i].is_none() && l.cell[0] >= 0 && l.cell[0] < sc.grid_rows() && l.cell[1] >= 0 && l.cell[1] < sc.grid_cols() {
                     self.calc_zone_index(sc, &mut l);
                     self.create_swatch(sc, i, l);
@@ -441,12 +482,26 @@ impl<M: Model> System<M> {
     pub fn render(&mut self, frustum: &Frustum<M>, eye: &Vect3<M>) -> Vec<Drawn<M>> {
         self.sorted.clear();
         let id = Matrix44::identity();
-        let most = DRAWN_MOST * self.density() as usize;
-        for i in 0..9 {
+        let most = self.drawn_most();
+        let retail = self.distance() == DISTANCE_RETAIL;
+        let r = self.radius();
+        // the game's order at Retail; farther, the middle swatches first, so
+        // a full list leaves out the farthest plants, not near ones
+        let side = self.side();
+        let mut order: Vec<usize> = (0..self.swatches.len()).collect();
+        if !retail {
+            let ring = |i: usize| {
+                let (row, col) = (i as i32 / side - side / 2, i as i32 % side - side / 2);
+                row.abs().max(col.abs())
+            };
+            order.sort_by_key(|&i| ring(i));
+        }
+        let r2 = if retail { F::new(1600.0) } else { r * r };
+        for i in order {
             if let Some(s) = &self.swatches[i]
                 && !frustum.cull_bbox(&s.bbox, &id)
             {
-                Self::draw_swatch(&mut self.sorted, i as i32, s, frustum, eye, most);
+                Self::draw_swatch(&mut self.sorted, i as i32, s, frustum, eye, most, r2);
             }
         }
         // qsort with QSortCompare: below, equal, above (not stable; distances
@@ -464,16 +519,36 @@ impl<M: Model> System<M> {
         for s in self.sorted.iter().rev() {
             let Some(inst) = self.swatches[s.swatch as usize].as_ref().and_then(|w| w.insts.get(s.inst as usize)) else { continue };
             let mut a = F::ONE;
-            if F::new(10.0) < s.dist {
-                a = F::ONE - (s.dist - F::new(10.0)) * F::new(1.0 / 30.0);
+            if retail {
+                if F::new(10.0) < s.dist {
+                    a = F::ONE - (s.dist - F::new(10.0)) * F::new(1.0 / 30.0);
+                }
+                out.push(Drawn { world: inst.world, prim: inst.prim, pal: inst.pal, alpha: a });
+                continue;
             }
-            out.push(Drawn { world: inst.world, prim: inst.prim, pal: inst.pal, alpha: a });
+            // Foliage Distance farther: the game's fade stretched (whole to
+            // a quarter of the radius, gone at it) and the outer quarter
+            // grown in, each plant scaled at its root
+            let q = r * F::new(0.25);
+            if q < s.dist {
+                a = vimax(F::ZERO, F::ONE - (s.dist - q) / (r - q));
+            }
+            let g = grow_in(s.dist, r);
+            let mut world = inst.world;
+            if g < F::ONE {
+                for row in 0..3 {
+                    world.m[row].x = world.m[row].x * g;
+                    world.m[row].y = world.m[row].y * g;
+                    world.m[row].z = world.m[row].z * g;
+                }
+            }
+            out.push(Drawn { world, prim: inst.prim, pal: inst.pal, alpha: a });
         }
         out
     }
 
     /// `DrawSwatch(i, cam)`.
-    fn draw_swatch(sorted: &mut Vec<Sort<M>>, i: i32, s: &Swatch<M>, frustum: &Frustum<M>, eye: &Vect3<M>, most: usize) {
+    fn draw_swatch(sorted: &mut Vec<Sort<M>>, i: i32, s: &Swatch<M>, frustum: &Frustum<M>, eye: &Vect3<M>, most: usize, r2: F<M>) {
         for (j, inst) in s.insts.iter().enumerate() {
             if sorted.len() >= most {
                 break;
@@ -481,7 +556,7 @@ impl<M: Model> System<M> {
             let p = inst.world.m[3].xyz();
             let (cx, cy, cz) = (eye.x, eye.y, eye.z);
             let d = (cx - p.x) * (cx - p.x) + (cy - p.y) * (cy - p.y) + (cz - p.z) * (cz - p.z);
-            if d < F::new(1600.0) && !frustum.cull_sphere(&inst.sphere) {
+            if d < r2 && !frustum.cull_sphere(&inst.sphere) {
                 sorted.push(Sort { dist: d.sqrt(), swatch: i, inst: j as i32 });
             }
         }
@@ -534,6 +609,36 @@ impl<M: Model> System<M> {
     /// The density, 1 to 3 (`density`, out of range read as the nearest).
     pub fn density(&self) -> u8 {
         self.density.clamp(1, DENSITY_MOST)
+    }
+
+    /// Foliage Distance, 100 to 300 percent (`distance`, out of range read
+    /// as the nearest).
+    pub fn distance(&self) -> u16 {
+        self.distance.clamp(DISTANCE_RETAIL, DISTANCE_MOST)
+    }
+
+    /// The radius plants are drawn within: the game's 40 at Retail.
+    pub fn radius(&self) -> F<M> {
+        F::new(0.4 * self.distance() as f32)
+    }
+
+    /// How many swatches out from the middle one the grid reaches: enough
+    /// that the radius from anywhere in the middle swatch stays on the grid
+    /// (1, the game's, at Retail; 2 to 2x; 3 at 3x).
+    pub fn reach(&self) -> i32 {
+        (self.distance() as i32 + 99) / 100
+    }
+
+    /// The grid's side, in swatches (3, the game's).
+    pub fn side(&self) -> i32 {
+        2 * self.reach() + 1
+    }
+
+    /// The most plants `render` draws: the game's 700, times the density,
+    /// times the distance squared (the radius's area).
+    pub fn drawn_most(&self) -> usize {
+        let d = self.distance() as usize;
+        (DRAWN_MOST * self.density() as usize * d * d).div_ceil(DISTANCE_RETAIL as usize * DISTANCE_RETAIL as usize)
     }
 
     /// `CreateFloraInsts`'s loop over the triangles: pass 0 is the game's,
