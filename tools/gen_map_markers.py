@@ -8,8 +8,7 @@ tooltip:
     pois of category "camp", the 69 with a note being its XP-camp guide), the
     guide's camps (guide: true) and its other camps go-eqoa-server has (its
     internal/handlers/mapcamps.go, its gen_camp_teles.py --map-out: shown by the
-    name it gives, in their zone, at their creatures' levels where the map
-    writes none; drawn under the guide's), the guide's being the
+    name it gives, in their zone; drawn under the guide's), the guide's being the
     49 go-eqoa-server places (its internal/handlers/camps.go, written by its
     tools/gen_camp_teles.py: each camp on one of its creatures' spawns, where
     the guide's map point was off on the creatures' cluster): the guide's name,
@@ -34,15 +33,26 @@ tooltip:
     and its size, the spawns within TOWN_REACH of it, the order its name gives
     way in when names crowd.
 
+Every camp's levels are its creatures' on the server (the database's npc_level):
+the lowest and highest of the names gen_camp_teles.py gives it (camps.go's
+campNotes, mapcamps.go's Creatures) within its reach (CREATURE_REACH of its
+anchor; a FAQ, census or hand-placed camp's own centre and reach; a camp the
+FAQ re-levelled, its kinds in the FAQ's box; a lone boss above them all left
+out), never the
+guide's own range (Live petition 5675: the guide's siloths 45-50, the Salt
+Mine's 39-41). Only a camp none of whose creatures stand there keeps the
+guide's (said). --check-db <another shard's eqoa.db> says every camp whose
+levels differ there.
+
 Where the rare creatures stand: EQOA-Data's map points laid over the game by a
 fit of the camps' own points to where the camps are (Tunaria and Odus each
 their own, printed with how close they come).
 
     python3 -E -s tools/gen_map_markers.py --server ../go-eqoa-server \\
         --eqoa-data ../external/EQOA-Data --db <a copy of go-eqoa-server's eqoa.db> \\
-        [--out crates/eqoa/src/map/markers_data.rs]
+        [--check-db <the other shard's>] [--out crates/eqoa/src/map/markers_data.rs]
 
-The database is read only, for the coachmen's spawns (npcs). Without --out it
+The database is read only, for the camps' levels and the coachmen's spawns (npcs). Without --out it
 prints what it would write.
 """
 
@@ -129,6 +139,57 @@ def map_camps(path):
     return out
 
 
+def camp_creatures(camps_go, mapcamps_go):
+    """The creatures go-eqoa-server's gen_camp_teles.py names as each camp's (camps.go's campNotes, mapcamps.go's
+    Creatures): key -> [name, ...]."""
+    q = r'"((?:[^"\\]|\\.)*)"'
+    out = {}
+    for path in (camps_go, mapcamps_go):
+        if not os.path.exists(path):
+            continue
+        for m in re.finditer(r'\t"(\w+)":\s*\{[^\n]*?Creatures: \[\]string\{([^}]*)\}', open(path).read()):
+            out[m.group(1)] = [json.loads('"' + v + '"') for v in re.findall(q, m.group(2))]
+    return out
+
+
+def camp_reaches(teles):
+    """Where each camp's creatures are looked for: key -> (names or None for the camp's own, inside(camp, x, z)). The
+    FAQ's, the census's and the hand-placed camps were gathered round their own centre within their own reach; the
+    camps the FAQ re-levelled (gen_camp_teles.py FAQ_LEVELS) are their kinds in the FAQ's box (within
+    CREATURE_REACH x 4 of the anchor where it gave none), as the owner kept them (2026-11-14); the rest are their
+    creatures within CREATURE_REACH of the camp's anchor (gen_camp_teles.py's and seed_camp_loot.py's binding)."""
+    def round_(cx, cz, reach):
+        return lambda c, x, z: math.hypot(x - cx, z - cz) <= reach
+
+    out = {}
+    for key, _name, _w, (cx, cz), _pattern, reach in list(getattr(teles, "FAQ_CAMPS", ())) + list(getattr(teles, "CENSUS_CAMPS", ())):
+        out[key] = (None, round_(cx, cz, reach))
+    for key, _aliases, (_w, cx, cz, reach), _pattern, _label in getattr(teles, "EXTRA_CAMPS", ()):
+        out[key] = (None, round_(cx, cz, reach))
+    for key, _w, box, names in getattr(teles, "FAQ_LEVELS", ()):
+        if box:
+            out[key] = (names, lambda c, x, z, b=box: b[0] <= x <= b[2] and b[1] <= z <= b[3])
+        else:
+            out[key] = (names, lambda c, x, z: math.hypot(x - c["at"][0], z - c["at"][1]) <= teles.CREATURE_REACH * 4)
+    return out
+
+
+def server_levels(rows, names, world, inside):
+    """The lowest and highest npc_level of the creatures of those names (any case) in that world where inside(x, z),
+    the camp's lone boss left out, and how many: (lo, hi, n), or None where none stand there."""
+    want = {n.strip().lower() for n in names}
+    mine = [r for r in rows if r[0] == world and r[1] in want and r[4] and inside(r[2], r[3])]
+    if not mine:
+        return None
+    # the camp's lone boss (one spawn of its name, above every other creature, with three or more others) is not the
+    # camp's range (Overlord Xrag's 66 over his children's 61-64); a rare creature the map marks is listed as one
+    top = max(mine, key=lambda r: r[4])
+    if len(mine) >= 4 and sum(1 for r in mine if r[1] == top[1]) == 1 and all(r[4] < top[4] for r in mine if r is not top):
+        mine = [r for r in mine if r is not top]
+    lv = [r[4] for r in mine]
+    return min(lv), max(lv), len(lv)
+
+
 def level_range(text):
     """A level range as the server writes one ("33-40", "45") as (lo, hi)."""
     parts = [int(v) for v in text.split("-") if v.strip()]
@@ -165,6 +226,7 @@ def main():
     ap.add_argument("--server", default="../go-eqoa-server")
     ap.add_argument("--eqoa-data", default="../external/EQOA-Data")
     ap.add_argument("--db", required=True)
+    ap.add_argument("--check-db", help="another shard's database: says every camp whose creatures' levels differ there")
     ap.add_argument("--out")
     ap.add_argument("--camps-only", action="store_true",
                     help="rewrite only the camps (and the header) of the --out file, its coaches, towns and routes kept as they are")
@@ -232,6 +294,38 @@ def main():
     # the map's other camps under the guide's (drawn first, so a guide camp's
     # badge is over theirs)
     camps = others + camps
+
+    # every camp's levels: its creatures' here, the server's (Live petition 5675, 2026-11-27: the guide's siloths were
+    # 45-50 on the map, the Salt Mine's 39-41); the guide's or the map's kept only where none of them stand
+    named = camp_creatures(os.path.join(a.server, "internal", "handlers", "camps.go"),
+                           os.path.join(a.server, "internal", "handlers", "mapcamps.go"))
+    reaches = camp_reaches(teles)
+
+    def npc_rows(path):
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        return [(int(w), n.strip().lower(), x, z, lv) for n, w, x, z, lv in
+                con.execute("SELECT npc_name, world, x_coord, z_coord, npc_level FROM npcs WHERE npc_name IS NOT NULL")]
+
+    rows = npc_rows(a.db)
+    other = npc_rows(a.check_db) if a.check_db else None
+    for c in camps:
+        names, inside = reaches.get(c["key"], (None, None))
+        names = names or named.get(c["key"], [])
+        if inside is None:
+            inside = lambda c, x, z: math.hypot(x - c["at"][0], z - c["at"][1]) <= teles.CREATURE_REACH
+        here = lambda x, z, c=c, inside=inside: inside(c, x, z)
+        got = server_levels(rows, names, c["world"], here)
+        was = (c["lo"], c["hi"])
+        if got is None:
+            print(f"levels {c['key']:15} {'G' if c['guide'] else ' '} none of {names} there: kept {was[0]}-{was[1]}", file=sys.stderr)
+        else:
+            c["lo"], c["hi"] = got[0], got[1]
+            if (c["lo"], c["hi"]) != was:
+                print(f"levels {c['key']:15} {'G' if c['guide'] else ' '} {was[0]}-{was[1]} -> {c['lo']}-{c['hi']} ({got[2]} creatures)", file=sys.stderr)
+        if other is not None:
+            there = server_levels(other, names, c["world"], here)
+            if (there and there[:2]) != (got and got[:2]):
+                print(f"levels {c['key']:15} differ in --check-db: {got and got[:2]} here, {there and there[:2]} there", file=sys.stderr)
 
     rares = []
     for q in zones["pois"]:
