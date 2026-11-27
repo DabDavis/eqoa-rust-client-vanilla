@@ -862,7 +862,9 @@ $('iso').addEventListener('change', async () => {
 // select iso"). The disc is judged here anyway (SYSTEM.CNF, `disc_id`), so on those
 // the inputs take any file, and the picker that can be remembered names no types.
 const onIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const anyFile = onIOS || /Android/.test(navigator.userAgent) || window.eqoaTouchFirst();
+// The renderer also uses the mobile OS to choose its default frame rate.
+window.eqoaMobile = onIOS || /Android/.test(navigator.userAgent) || navigator.userAgentData?.platform === 'Android';
+const anyFile = window.eqoaMobile || window.eqoaTouchFirst();
 if (anyFile) for (const id of ['iso', 'iso2002']) $(id).removeAttribute('accept');
 
 // ---- the 2002 disc: EverQuest Online Adventures (USA), SLUS-20470, whose

@@ -26,8 +26,8 @@ or a browser (each described where it lives below):
 - **Widescreen**: the HUD at a wide window's edges; the start menu, its
   windows and the merchant's window the game's 4:3 picture in the middle,
   closed at its edges.
-- **A frame rate untethered** from the game's 30 frames a second (the game's
-  logic still steps at 30).
+- **Frame Rate** defaults to 30 on the Android app, mobile browsers and WebGL2.
+  Players can choose 30, 60 or Display. The game's frame-based logic steps at 30.
 - **The mouse and the touch screen.**
 - **The keyboard**, with WASD walking, and the options' **Controls** page: every
   key and button can be moved, and a controller's button can take any of the
@@ -1883,10 +1883,11 @@ own, so the device is made on the page's canvas before the event loop). The
 wasm is built with WebAssembly's SIMD (`web/build.sh`; `ee`'s four lanes, the
 matrix sums a third less time in Chromium and Firefox): Safari runs it from 16.4
 (an iPhone or iPad from iOS 16.4) and Firefox from 89, and a browser without is
-told which browsers run the game (`web/main.js`, `web/pagetest.py` "simd"). A
-page on WebGL2 draws 30 frames a second (`web::frame_due`: an animation frame
-before the next is due is skipped whole, the game's clocks seeing longer
-frames; the options' Frame Rate, or `?uncapped`, lifts it). A browser
+told which browsers run the game (`web/main.js`, `web/pagetest.py` "simd").
+Mobile browsers and pages using WebGL2 default to 30 frames a second.
+`web::frame_due` skips early animation frames so the game's clocks see the
+elapsed time. Players can change Frame Rate in Video options or use
+`?uncapped` to override the browser default. A browser
 drawing without the graphics card (a software renderer, by WebGL's unmasked
 renderer, WebGPU's adapter info or the client's adapter: SwiftShader, llvmpipe,
 softpipe, lavapipe, a "Software" renderer, or Windows' WARP, "Microsoft Basic

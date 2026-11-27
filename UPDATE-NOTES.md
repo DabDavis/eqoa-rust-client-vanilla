@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · Mobile defaults to 30 FPS
+
+- The Android app and mobile browsers now start at 30 FPS to reduce power use during play. You can choose 60 or Display under **Options > Extended > Graphics > Video > Frame Rate**. The game honors your saved choice.
+
 ## 2026-11-27 · DPS meter: damage taken, every merc, how many lines
 
 - **Damage taken**: on a server that counts it, **DPS Meter Columns** has a new choice, **DPS + Taken**, showing the damage each player took a second (**DTPS**) beside their DPS, so a tank can see whether a change cuts what they take; **DPS Meter Sort** (or `/dps taken`) ranks the meter by it. A merc's damage taken is part of its owner's line, or its own row with **Mercs as Own Rows**.

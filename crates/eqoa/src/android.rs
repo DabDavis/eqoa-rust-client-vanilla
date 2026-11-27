@@ -74,6 +74,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     let _ = APP.set(app.clone());
+    crate::settings::set_platform_rate(crate::settings::FrameRate::Thirty);
     // where the game keeps its settings and its cache: the activity set
     // them before the game started; the app's own folder else
     if std::env::var_os("EQOA_CONFIG").is_none()
