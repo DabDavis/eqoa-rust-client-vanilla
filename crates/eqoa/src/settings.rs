@@ -849,6 +849,11 @@ impl FrameRate {
     /// The row's order, which left and right step through (and round).
     pub const ALL: [FrameRate; 3] = [FrameRate::Thirty, FrameRate::Sixty, FrameRate::Display];
 
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub fn browser_default(mobile: bool, webgl: bool, uncapped: bool) -> Self {
+        if (mobile || webgl) && !uncapped { Self::Thirty } else { Self::Display }
+    }
+
     /// The time between two frames it keeps, in ms (0: every frame the
     /// display shows). 30 is the game's own frame (`frames::FRAME_MS`), so
     /// that under it every frame drawn is one of the game's: at the 33 ms a
@@ -1031,7 +1036,7 @@ pub struct ClientOptions {
     /// Fog, 0 (off) to `fog::STEPS`, the game's at `fog::GAME` (`fog`)
     pub fog: u8,
     /// Frame Rate as chosen; `None` until it is, the platform's
-    /// (`set_platform_rate`: 30 on a page's WebGL2, else the display's)
+    /// (30 on mobile and WebGL2 by default, otherwise the display's rate)
     pub frame_rate: Option<FrameRate>,
     /// Show FPS in the browser client's status line.
     pub show_fps: bool,
@@ -3323,9 +3328,8 @@ pub mod qol {
     }
 }
 
-/// The frame rate when the player chose none: a page on WebGL2 keeps 30
-/// (`web::gfx`), everything else the display's.
-#[cfg(any(target_arch = "wasm32", test))]
+/// The frame rate used until the player chooses one in Video options.
+#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
 pub fn set_platform_rate(r: FrameRate) {
     PLATFORM_RATE.with(|p| p.set(r));
 }
@@ -6430,6 +6434,19 @@ mod tests {
         assert_eq!(run(165.0, 0.0, 0.0, f64::INFINITY).0, 165.0, "the control");
     }
 
+    #[test]
+    fn mobile_and_webgl_frame_rate_defaults() {
+        for (mobile, webgl, expected) in [
+            (true, false, FrameRate::Thirty),
+            (true, true, FrameRate::Thirty),
+            (false, false, FrameRate::Display),
+            (false, true, FrameRate::Thirty),
+        ] {
+            assert_eq!(FrameRate::browser_default(mobile, webgl, false), expected);
+            assert_eq!(FrameRate::browser_default(mobile, webgl, true), FrameRate::Display);
+        }
+    }
+
     /// The rate in effect: the platform's until the player chooses one.
     #[test]
     fn the_players_rate_over_the_platforms() {
@@ -6437,12 +6454,12 @@ mod tests {
         assert_eq!(frame_rate(), FrameRate::Display);
         set_platform_rate(FrameRate::Thirty);
         assert_eq!(frame_rate(), FrameRate::Thirty);
-        set_client(ClientOptions { frame_rate: Some(FrameRate::Sixty), ..client() });
+        set_client(ClientOptions::from_text("frame_rate=60"));
         assert_eq!(frame_rate(), FrameRate::Sixty);
         assert!(frame_due(), "the first frame is due");
         assert!(!frame_due(), "the next comes a gap later");
         assert!(frame_wait().is_some());
-        set_client(ClientOptions { frame_rate: Some(FrameRate::Display), ..client() });
+        set_client(ClientOptions::from_text("frame_rate=display"));
         assert!(frame_due() && frame_due() && frame_wait().is_none(), "no cap: every frame");
         testing::reset(false);
     }

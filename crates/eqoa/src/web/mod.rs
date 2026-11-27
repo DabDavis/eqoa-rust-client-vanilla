@@ -747,10 +747,8 @@ fn rate(what: &'static str) {
 }
 
 /// Whether this animation frame is drawn under the options' Frame Rate
-/// (`settings::frame_due`): a page on WebGL2 keeps 30 frames a second unless
-/// the player chose otherwise (WebGL2 costs about twice the CPU of WebGPU;
-/// 2026-10-20, a tester's ask), `?uncapped` in the page's address lifting
-/// that default; WebGPU draws every animation frame unless capped.
+/// (`settings::frame_due`). Mobile browsers and WebGL2 default to 30 FPS.
+/// `?uncapped` lifts that default. A saved Frame Rate takes precedence.
 pub fn frame_due() -> bool {
     crate::settings::frame_due()
 }
@@ -862,13 +860,15 @@ async fn gfx_on(canvas: web_sys::HtmlCanvasElement, again: Option<wgpu::Backend>
     if let Some(ua) = web_sys::window().and_then(|w| w.navigator().user_agent().ok()) {
         crate::bugnote::set_browser(&ua);
     }
-    if info.backend == wgpu::Backend::Gl && !page_flag("uncapped") {
-        crate::settings::set_platform_rate(crate::settings::FrameRate::Thirty);
-    }
+    let mobile = web_sys::window()
+        .and_then(|w| js_sys::Reflect::get(&w, &"eqoaMobile".into()).ok())
+        .is_some_and(|v| v.is_truthy());
+    let rate = crate::settings::FrameRate::browser_default(mobile, info.backend == wgpu::Backend::Gl, page_flag("uncapped"));
+    crate::settings::set_platform_rate(rate);
     // the rate the page keeps (the options' Frame Rate, else the platform's)
     match crate::settings::frame_rate() {
-        crate::settings::FrameRate::Thirty => status("drawn at 30 frames a second (Options, Extended, Frame Rate lifts it; ?uncapped does on WebGL2)"),
-        crate::settings::FrameRate::Sixty => status("drawn at 60 frames a second (Options, Extended, Frame Rate)"),
+        crate::settings::FrameRate::Thirty => status("drawn at 30 frames a second (Options > Extended > Graphics > Video > Frame Rate)"),
+        crate::settings::FrameRate::Sixty => status("drawn at 60 frames a second (Options > Extended > Graphics > Video > Frame Rate)"),
         crate::settings::FrameRate::Display => {}
     }
     let limits = wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
