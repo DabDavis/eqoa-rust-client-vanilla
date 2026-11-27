@@ -1690,9 +1690,10 @@ mod tests {
             hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { meter: Some(shown), ..Default::default() });
             assert_eq!(hud.pick(at(view)), Some(Pick::Meter(Hit::HideMercs)), "{size:?}");
             assert_eq!(hud.pick(at(row)), Some(Pick::Meter(Hit::Rows)), "{size:?}");
-            // twenty lines: ten show, the wheel and a click step them
+            // twenty lines, DPS Meter Lines 10: ten show, the wheel and a click step them
             ui.begin(size);
-            hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { meter: Some(fight(20)), ..Default::default() });
+            let ten = crate::dpsmeter::Shown { most_rows: 10, ..fight(20) };
+            hud.draw(&vui, &mut assets.raster(&mut ui), &HudState { meter: Some(ten), ..Default::default() });
             let r = at([450.0, 300.0]);
             assert_eq!(hud.pick(r), Some(Pick::Meter(Hit::Rows)), "{size:?}");
             assert_eq!(hud.meter_wheel(r, -3.0, 0), Some(3), "{size:?}");

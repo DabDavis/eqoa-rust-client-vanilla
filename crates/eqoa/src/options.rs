@@ -1238,6 +1238,8 @@ impl WndOptions {
                     // Mercs as Own Rows: each merc a row of its own, from the
                     // next frame (`dpsmeter`)
                     DPS_MERC_ROWS => c.dps_merc_rows = !c.dps_merc_rows,
+                    // DPS Meter Lines: round All, 5, 10, 15, 20, 25
+                    DPS_LINES => c.dps_lines = crate::dpsmeter::lines_step(c.dps_lines, d),
                     // Faction Tracker: the server told from the next frame
                     // (`Session::agree_faction_track`), the panel drawn or not
                     FACTION_TRACK => c.faction_track = !c.faction_track,
@@ -2032,7 +2034,7 @@ impl WndOptions {
                 DPS_COLUMNS | DPS_SORT => self.meter_note.clone().or_else(|| self.meter_heal_note.clone()),
                 DPS_HIDE_MERCS => self.meter_note.clone().or_else(|| self.meter_merc_note.map(str::to_string)),
                 DPS_MERC_ROWS => self.meter_note.clone().or_else(|| self.meter_merc_rows_note.map(str::to_string)),
-                70..=72 => self.meter_note.clone(),
+                70..=72 | DPS_LINES => self.meter_note.clone(),
                 _ => None,
             },
             Note::Faction => self.faction_note.clone(),
@@ -2259,6 +2261,7 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (COMPARE_GEAR, "Compare Gear"),
     (DPS_HIDE_MERCS, "Hide mercs"),
     (DPS_MERC_ROWS, "Mercs as Own Rows"),
+    (DPS_LINES, "DPS Meter Lines"),
     (crate::numcolor::TAKEN_ITEM, crate::numcolor::LABELS[crate::numcolor::TAKEN]),
     (OWN_PLATE, "Own Name Plate"),
     (COACH_TALK, "Coach Talk on Arrival"),
@@ -2450,6 +2453,9 @@ pub(crate) const DPS_HIDE_MERCS: i32 = 278;
 /// see each merc's DPS individually?"), with the DPS Meter's rows: each merc a
 /// row of its own on a server of layout 5 (`dpsmeter`). Off by default.
 pub(crate) const DPS_MERC_ROWS: i32 = 279;
+/// DPS Meter Lines' item (Heirloom petition 3397): the most rows the meter
+/// shows, All (as many as fit, the default) or 5 to 25 (`dpsmeter::LINES`).
+pub(crate) const DPS_LINES: i32 = 281;
 
 const HUD_SCALE: i32 = 240;
 const NAMEPLATE_SCALE: i32 = 241;
@@ -2588,7 +2594,7 @@ const ALL_CATEGORIES: [Category; 31] = [
     Category { name: "Map", items: &[41, 42, 87, 43, 44, 45, TOWN_MAP], note: Note::None, group: Group::Ui },
     Category { name: "Number Colors", items: &crate::numcolor::NUMBER_ITEMS, note: Note::None, group: Group::Ui },
     Category { name: "Merc Colors", items: &crate::numcolor::MERC_ITEMS, note: Note::None, group: Group::Ui },
-    Category { name: "DPS Meter", items: &[70, 71, DPS_COLUMNS, DPS_SORT, DPS_HIDE_MERCS, DPS_MERC_ROWS, 72], note: Note::Meter, group: Group::Ui },
+    Category { name: "DPS Meter", items: &[70, 71, DPS_COLUMNS, DPS_SORT, DPS_HIDE_MERCS, DPS_MERC_ROWS, DPS_LINES, 72], note: Note::Meter, group: Group::Ui },
     Category { name: "Chat", items: &[73, 89, R2_CHANNELS, INLINE_CHAT, CHAT_OPACITY, CHAT_FADE_DELAY], note: Note::Links, group: Group::Ui },
     Category { name: "General", items: &[29, 38, 84, SHARED_SHORTCUTS, AUTO_SAVE, AUTO_LOOT], note: Note::Shortcuts, group: Group::Other },
     Category { name: "Combat", items: &[78, 79, PETS_PASS, WEAPON_SWAP_BACK, MOUSEOVER_CAST, ATTACK_ABILITIES], note: Note::None, group: Group::Other },
@@ -2871,6 +2877,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         DPS_SORT => wide(c.dps_sort.fit(c.dps_columns).name()),
         DPS_HIDE_MERCS => on_off(c.dps_hide_mercenary),
         DPS_MERC_ROWS => on_off(c.dps_merc_rows),
+        DPS_LINES => wide(&crate::dpsmeter::lines_name(c.dps_lines)),
         72 => wide("Reset"),
         76 => on_off(crate::hudlayout::unlocked()),
         MOVE_TOUCH => on_off(crate::touch::editing()),
@@ -4283,6 +4290,8 @@ mod tests {
             assert_eq!(settings::dps_sort(), Metric::Power, "left: back round");
             press(&mut w, &mut o, key::UP, &mut cues);
             press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((settings::dps_columns(), value_text(&vui, DPS_COLUMNS)), (Columns::Taken, Some(wide("DPS + Taken"))), "then the damage taken");
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
             assert_eq!((settings::dps_columns(), settings::dps_sort(), value_text(&vui, DPS_SORT)), (Columns::Dps, Metric::Damage, Some(wide("DPS"))), "round to the DPS alone: by damage");
             assert_eq!(w.page_note(w.cat.unwrap()), None, "no note off a server");
             w.meter_heal_note = Some("This server's meter counts damage alone".into());
@@ -4304,6 +4313,15 @@ mod tests {
         assert!(settings::client().dps_merc_rows);
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert!(!settings::client().dps_merc_rows);
+        press(&mut w, &mut o, key::DOWN, &mut cues);
+        assert_eq!((w.item, value_text(&vui, DPS_LINES), settings::client().dps_lines), (DPS_LINES, Some(wide("All")), 0), "DPS Meter Lines: All by default");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::client().dps_lines, value_text(&vui, DPS_LINES)), (5, Some(wide("5"))));
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        press(&mut w, &mut o, key::LEFT, &mut cues);
+        assert_eq!((settings::client().dps_lines, value_text(&vui, DPS_LINES)), (25, Some(wide("25"))), "left: round to 25");
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!(settings::client().dps_lines, 0, "and back to All");
         press(&mut w, &mut o, key::DOWN, &mut cues);
         assert_eq!((w.item, value_text(&vui, 72)), (72, Some(wide("Reset"))), "Reset DPS Meter");
         assert!(!crate::dpsmeter::take_reset(), "none asked yet");
@@ -4708,7 +4726,7 @@ mod tests {
                 ("Map", vec!["Map", "Minimap", "Map Pointer", "Map Markers", "Quest Helper", "Quest Tracker", "Town Map First"]),
                 ("Number Colors", [&n[..6], &n[8..]].concat()),
                 ("Merc Colors", n[6..8].to_vec()),
-                ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "DPS Meter Columns", "DPS Meter Sort", "Hide mercs", "Mercs as Own Rows", "Reset DPS Meter"]),
+                ("DPS Meter", vec!["DPS Meter", "DPS Meter Shows", "DPS Meter Columns", "DPS Meter Sort", "Hide mercs", "Mercs as Own Rows", "DPS Meter Lines", "Reset DPS Meter"]),
                 ("Chat", vec!["Item Links", "Chat Always Shown", "R2 Channel Switch"]),
                 ("Chat Tabs", vec!["Say", "Tells", "Group", "Guild", "Shouts", "Combat", "Loot", "Rolls", "Experience", "System"]),
                 ("Interface Size", vec!["HUD Scale %", "Nameplate Size %"]),
@@ -5219,7 +5237,7 @@ mod tests {
         for k in [key::DOWN, key::DOWN, key::DOWN, key::CROSS] {
             w.key(&vui, &mut NullRaster, &mut o, k, 0, &mut cues, &mut ups);
         }
-        let off_rows = [44, 45, 85, TARGET_LEVEL, TARGET_OF_TARGET, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST, AUTO_LOOT, ATTACK_ABILITIES, DPS_COLUMNS, DPS_SORT, DPS_HIDE_MERCS, DPS_MERC_ROWS, crate::numcolor::TAKEN_ITEM, COACH_TALK, STRAFE_SPEED];
+        let off_rows = [44, 45, 85, TARGET_LEVEL, TARGET_OF_TARGET, 70, 71, 72, 64, 65, 66, 67, 68, 69, 80, 81, 86, HEALTH_NUMBERS, 83, BUFF_TIMERS, STAT_WINDOW, 58, GROUP_EFFECTS, NPC_DEBUFFS, 78, 79, 22, 90, SPELL_BAR_LAYOUT, UTILITY_LAYOUT, SPELL_BAR_SIZE, ITEM_ICONS, SPELL_COOLDOWNS, MOUSEOVER_CAST, AUTO_LOOT, ATTACK_ABILITIES, DPS_COLUMNS, DPS_SORT, DPS_HIDE_MERCS, DPS_MERC_ROWS, DPS_LINES, crate::numcolor::TAKEN_ITEM, COACH_TALK, STRAFE_SPEED];
         qol::set_off(0xFFF);
         for &(item, _) in EXTENDED_ITEMS.iter() {
             assert_eq!(qol::item_off(item, TARGET_LEVEL), off_rows.contains(&item), "row {item}");

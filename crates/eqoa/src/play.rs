@@ -12488,7 +12488,8 @@ impl Play {
         (c.dps_meter && self.session.dps_meter_offer && self.right_hud_up()).then(|| {
             let hide_mercs = (self.session.dps_meter_layout >= net::session::DPS_METER_MERC_LINES).then_some(c.dps_hide_mercenary);
             let own_rows = self.session.dps_meter_layout >= net::session::DPS_METER_MERC_ROWS && c.dps_merc_rows;
-            self.meter.shown_with(c.dps_view, &self.pet_name, c.dps_columns, c.dps_sort, hide_mercs, own_rows)
+            let s = self.meter.shown_with(c.dps_view, &self.pet_name, c.dps_columns, c.dps_sort, hide_mercs, own_rows);
+            crate::dpsmeter::Shown { most_rows: c.dps_lines, ..s }
         })
     }
 
@@ -12657,6 +12658,8 @@ impl Play {
             // healing and power (Heirloom petition 3030): from a server that
             // counts them (layout 2)
             Command::Sort(_) | Command::Columns if self.session.dps_meter_layout < 2 => "This server's DPS meter counts damage alone.",
+            // damage taken (Heirloom petition 3397): from a server of layout 6
+            Command::Sort(Metric::Taken) if self.session.dps_meter_layout < net::session::DPS_METER_TAKEN => "This server's DPS meter counts no damage taken.",
             Command::Sort(m) => {
                 let mut c = crate::settings::client();
                 c.dps_columns = c.dps_columns.with(m);
@@ -12667,6 +12670,7 @@ impl Play {
                     Metric::Damage => "The DPS meter is ranked by damage.",
                     Metric::Healing => "The DPS meter is ranked by healing.",
                     Metric::Power => "The DPS meter is ranked by power given.",
+                    Metric::Taken => "The DPS meter is ranked by damage taken.",
                 }
             }
             Command::Columns => {
@@ -12677,6 +12681,7 @@ impl Play {
                     Columns::Dps => "The DPS meter shows the DPS.",
                     Columns::Hps => "The DPS meter shows the DPS and HPS.",
                     Columns::All => "The DPS meter shows the DPS, HPS and power given a second.",
+                    Columns::Taken => "The DPS meter shows the DPS and damage taken a second.",
                 }
             }
         };
@@ -16603,8 +16608,15 @@ mod commands {
             assert_eq!((said(&p), crate::settings::dps_columns(), crate::settings::dps_sort()), ("The DPS meter is ranked by healing.".to_string(), Columns::Hps, Metric::Healing));
             p.chat_line("/dps power");
             assert_eq!((crate::settings::dps_columns(), crate::settings::dps_sort()), (Columns::All, Metric::Power), "power widens the columns");
+            p.chat_line("/dps taken");
+            assert_eq!(said(&p), "This server's DPS meter counts no damage taken.", "layout 2: no damage taken");
+            p.chat_line("/dps columns");
+            assert_eq!((said(&p), crate::settings::dps_columns()), ("The DPS meter shows the DPS and damage taken a second.".to_string(), Columns::Taken));
             p.chat_line("/dps columns");
             assert_eq!((said(&p), crate::settings::dps_columns(), crate::settings::dps_sort()), ("The DPS meter shows the DPS.".to_string(), Columns::Dps, Metric::Damage), "round to the DPS alone: by damage");
+            p.session.dps_meter_layout = net::session::DPS_METER_TAKEN;
+            p.chat_line("/dps taken");
+            assert_eq!((said(&p), crate::settings::dps_columns(), crate::settings::dps_sort()), ("The DPS meter is ranked by damage taken.".to_string(), Columns::Taken, Metric::Taken), "layout 6: by damage taken");
             p.chat_line("/dps damage");
             assert_eq!(said(&p), "The DPS meter is ranked by damage.");
         }
