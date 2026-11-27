@@ -58,6 +58,15 @@ fn call_page(name: &str, arg: &JsValue) {
     }
 }
 
+/// Whether a row or a macro is on the mouse's side buttons (`binds::sides_bound`):
+/// the page then keeps their presses on the canvas from the browser, whose
+/// back and forward they are (`window.eqoaMouseSidesBound`, web/main.js).
+pub fn mouse_sides(bound: bool) {
+    if let Some(w) = web_sys::window() {
+        let _ = js_sys::Reflect::set(&w, &"eqoaMouseSidesBound".into(), &JsValue::from_bool(bound));
+    }
+}
+
 pub fn keyboard_profile(pc: bool) {
     call_page("eqoaKeyboardProfile", &JsValue::from_bool(pc));
 }

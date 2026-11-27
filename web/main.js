@@ -488,6 +488,14 @@ onCanvas('pointerdown', (e) => {
   lastTouch = e.pointerType === 'touch';
   $('eqoa').focus();
 });
+// The mouse's side buttons (3 Back, 4 Forward) on the canvas, while a row or a
+// macro of the Controls is on one (window.eqoaMouseSidesBound, the game's:
+// web::mouse_sides): the game's, not the browser's back and forward.
+for (const type of ['mousedown', 'mouseup', 'auxclick', 'pointerdown', 'pointerup']) {
+  onCanvas(type, (e) => {
+    if ((e.button === 3 || e.button === 4) && window.eqoaMouseSidesBound) e.preventDefault();
+  });
+}
 // A controller-opened chat checks where the touch landed before showing the keyboard.
 onCanvas('pointerup', (e) => {
   if (wantText && !controllerChat && e.pointerType === 'touch') typeHere();

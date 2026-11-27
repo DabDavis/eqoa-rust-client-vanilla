@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · Mouse buttons and the wheel in Key Bindings
+
+- In **Options → Controls** a row's key can now be a mouse input: the middle button (**Middle Mouse**), the side buttons (**Mouse 4**, **Mouse 5** and more) or the wheel (**Wheel Up**, **Wheel Down**): pick the row's key, then click or scroll. A wheel notch is one tap of the row (on Autorun it turns autorun on and off) and no longer zooms; an unbound wheel still zooms as before. Mouse binds work in the world only, not over the chat box, the minimap or an open window, and the left and right buttons stay as they are.
+
 ## 2026-11-27 · Foliage Distance
 
 - A new **Foliage Distance** row in **Options → Extended → Graphics → Foliage** draws the grass and plants farther out: **Retail** (the game's, exactly as before, the default), **1.5x**, **2x** or **3x** (2x the most in the browser and on phones). Farther out the plants grow in gradually toward the edge as you run, instead of ending at a ring; 3x with 3x Foliage Density costs the most.

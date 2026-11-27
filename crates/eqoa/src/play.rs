@@ -7009,6 +7009,33 @@ impl Play {
         })
     }
 
+    /// Whether the mouse's bindable inputs (`binds::mouse_name`, the wheel's
+    /// ways: petition 3359) may act as their rows' keys with the pointer at
+    /// window pixels `at` on a `size` window: in play or the manual camera
+    /// (no window up: a window's list takes the wheel, `window_wheel`), the
+    /// map and the player search closed, no line being typed, and the
+    /// pointer on none of what takes the wheel or a click over the world:
+    /// the chat box and its panes, an item link's window, a creature's
+    /// details, the rolls' strips, the minimap.
+    pub fn mouse_binds_at(&mut self, at: (f64, f64), size: (u32, u32)) -> bool {
+        if !matches!(self.mode, 0 | 38) || self.map.open || self.search.open || self.keyboard_typing() {
+            return false;
+        }
+        let f = render::ui::frame_from_window(size, [at.0 as f32, at.1 as f32]);
+        let shown = !crate::hideui::hidden();
+        if shown && (self.links.covers(f) || self.mobwnd.covers(f) || self.rolls_cover([at.0 as f32, at.1 as f32], size)) {
+            return false;
+        }
+        if self.map.mini_contains([at.0 as f32, at.1 as f32]) {
+            return false;
+        }
+        let Some(c) = self.wnd_chat.as_ref() else { return true };
+        if c.contains(Self::chat_point(at, size)) {
+            return false;
+        }
+        !(1..=crate::chat::TABS).any(|t| c.pane(t).is_some_and(|p| p.contains(Self::chat_pane_point(at, size, t))))
+    }
+
     /// The wheel's `lines` (up positive; a finger's drag down) on the window
     /// up: the d-pad's up or down for each whole line (a few at most
     /// waiting). False in play.
@@ -13298,6 +13325,49 @@ mod commands {
         let mut s = Session::connect_with(Box::new(Nowhere), ([127, 0, 0, 1], 5000), ([127, 0, 0, 1], 10070), "test", [0; 32]).unwrap();
         s.self_id = Some(0x100);
         Play::new(s, Player::default(), dump)
+    }
+
+    /// The mouse's bindings (petition 3359) act only with the pointer on the
+    /// world in play: over the chat box, with a window up, the map open or a
+    /// line being typed the wheel and the buttons are the mouse's, as they
+    /// were. The control: the same pointer off the chat box is the world's.
+    #[test]
+    fn mouse_binds_act_only_on_the_world() {
+        crate::settings::testing::reset(false);
+        let size = (640, 480);
+        let mut p = play();
+        p.loading.wait = None;
+        let mut chat = crate::chat::WndChat::new();
+        chat.test_place([320, 400], [400, 100]);
+        p.wnd_chat = Some(chat);
+        let world = (320.0, 120.0);
+        // the chat box's middle, where `chat_point` puts it
+        let on_chat = (0..size.1).flat_map(|y| (0..size.0).map(move |x| (x as f64, y as f64)))
+            .find(|&at| p.wnd_chat.as_ref().unwrap().contains(Play::chat_point(at, size)))
+            .expect("the chat box under some pixel");
+        assert!(p.mouse_binds_at(world, size), "the control: on the world, in play");
+        assert!(!p.mouse_binds_at(on_chat, size), "over the chat box: the wheel scrolls it");
+        p.mode = 38;
+        assert!(p.mouse_binds_at(world, size), "the manual camera keeps them");
+        p.mode = 34;
+        assert!(!p.mouse_binds_at(world, size), "a window up (Options): its list takes the wheel");
+        p.mode = 0;
+        p.map.open = true;
+        assert!(!p.mouse_binds_at(world, size), "the map up: its zoom");
+        p.map.open = false;
+        p.mode = 2;
+        assert!(!p.mouse_binds_at(world, size), "a line typed");
+        p.mode = 0;
+        assert!(p.mouse_binds_at(world, size));
+        // and through the bindings: Wheel Up on the autorun's row is the
+        // row's X on the world, the zoom over the chat box
+        let mut b = crate::binds::Binds::default();
+        b.bind_key(crate::binds::row_named("autorun").unwrap(), "wheelup");
+        let mut n = crate::binds::WheelNotches::default();
+        let use_at = |p: &mut Play, at, n: &mut crate::binds::WheelNotches| crate::binds::wheel_use(1.0, n, false, p.mouse_binds_at(at, size), (false, false, false), &b, false);
+        assert_eq!(use_at(&mut p, world, &mut n), crate::binds::WheelUse::Keys("wheelup".into(), 1));
+        assert_eq!(use_at(&mut p, on_chat, &mut n), crate::binds::WheelUse::Mouse);
+        crate::settings::testing::reset(false);
     }
 
     /// A world change that failed (entry 1323) logs out (0x09B0 sent) and

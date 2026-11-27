@@ -947,6 +947,12 @@ impl WndChat {
         (self.window.is_open() || self.window.is_opening()) && p[0] >= tl[0] as f32 && p[0] < br[0] as f32 && p[1] >= tl[1] as f32 && p[1] < br[1] as f32
     }
 
+    /// The box open at `center`, `size` (a test's, without drawing it).
+    #[cfg(test)]
+    pub fn test_place(&mut self, center: [i32; 2], size: [i32; 2]) {
+        (self.window.center, self.window.size, self.window.open) = (center, size, 1.0);
+    }
+
     /// `Init`: the window is 462 wide and lines wrap at its width less 45.
     pub fn new() -> Self {
         let size = ChatSize::ORIGINAL;
