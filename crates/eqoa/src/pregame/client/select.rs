@@ -556,8 +556,9 @@ impl CharSelect {
             let rc = chars.get(self.sel as usize).and_then(|c| cx.race_cams.and_then(|t| crate::camstyle::race_camera(t, like(c), cx.expansion)));
             if self.sel < count {
                 let mut fr = framing(rc, true);
-                if let (Some(c), Some(lib)) = (chars.get(self.sel as usize), cx.lib) {
-                    fr = super::create::body_framing(lib, fr, c.model, super::create::tables::stand_in(c.model).unwrap_or(c.model));
+                if let (Some(figure), Some(lib)) = (self.figure.as_ref(), cx.lib) {
+                    let model = figure.model;
+                    fr = super::create::body_framing(lib, fr, model, super::create::tables::stand_in(model).unwrap_or(model));
                 }
                 let [h, l, p, d] = fr;
                 let f = F::<Ee>::new;
@@ -666,9 +667,8 @@ impl CharSelect {
         let race = super::create::tables::like(c.race);
         let at = select_place(race, c.class, c.level, expansion);
         let hpr = st.cam.walk.committed.angles.to_array();
-        // a server's race's look on its parts, by the character's name (`raceopts`)
-        let race_look = crate::raceopts::look_of(&c.name).map(|l| (*l).clone());
-        self.figure = Figure::new_dressed(lib, g, c.model, look_of(c, true), race_look, c.weapons, at, hpr, now);
+        let (model, race_look) = c.preview(&c.options);
+        self.figure = Figure::new_dressed(lib, g, model, look_of(c, true), race_look, c.weapons, at, hpr, now);
         if let Some(f) = self.figure.as_mut() {
             f.wear_cape(lib, g, c.cape);
         }
@@ -1053,12 +1053,12 @@ mod tests {
         let mut c = CharRecord { level: 1, class: 14, ..rec("Squeak", 8) };
         let alchemist = String::from_utf16_lossy(&word(get_class(14).name));
         assert_eq!(text(&c), ["w503 1".to_string(), alchemist.clone()], "the control: the game's two");
-        c.info = Some(net::selectinfo::Info { race: 24, race_name: "Ratman".into(), cms: 0, rows: vec![] });
+        c.info = Some(net::selectinfo::Info { race: 24, race_name: "Ratman".into(), ..Default::default() });
         assert_eq!(text(&c), ["w503 1", "0 CMs", "Ratman", &alchemist]);
-        c.info = Some(net::selectinfo::Info { race: 4, race_name: String::new(), cms: 1, rows: vec![] });
+        c.info = Some(net::selectinfo::Info { race: 4, cms: 1, ..Default::default() });
         assert_eq!(text(&c), ["w503 1", "1 CM", "race4", &alchemist]);
         c.level = 60;
-        c.info = Some(net::selectinfo::Info { race: 31, race_name: "Wisp".into(), cms: 1500, rows: vec!["wispcolor".into()] });
+        c.info = Some(net::selectinfo::Info { race: 31, race_name: "Wisp".into(), cms: 1500, rows: vec!["wispcolor".into()], ..Default::default() });
         assert_eq!(text(&c), ["w503 60", "1500 CMs", "Wisp", &alchemist]);
         // Hardcore (`net::hardcore`): its mark, or a fallen one's death
         c.hc = Some(net::hardcore::Char { name: "Squeak".into(), hardcore: true, ..Default::default() });

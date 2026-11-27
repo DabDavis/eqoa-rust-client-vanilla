@@ -69,9 +69,8 @@ pub fn look_of(name: &str) -> Option<Rc<Look>> {
     LOOKS.with_borrow(|l| l.get(name).cloned())
 }
 
-/// The look of the character of this name made `look` here (select's
-/// Customize re-chose its skin): drawn so until the server's next list, which
-/// replaces every look whole. None takes its look away.
+/// Set an individual look in a test fixture.
+#[cfg(test)]
 pub fn set_look_of(name: &str, look: Option<Look>) {
     let changed = LOOKS.with_borrow_mut(|l| match look {
         Some(look) if l.get(name).map(|o| **o != look).unwrap_or(true) => {
@@ -98,13 +97,27 @@ pub fn rechosen(base: Option<&Look>, rows: &[Row], sex: i32, steps: &[usize], bo
     (!parts.is_empty()).then_some(Look { body, parts })
 }
 
-/// [`rechosen`] for the choices Accept hands up (each a row's key and step) of
-/// race `race`'s rows, on the look the server told of the character `name`.
-pub fn rechosen_by_name(name: &str, race: i32, sex: i32, body: u32, choices: &[(String, u8)]) -> Option<Look> {
-    let o = options()?;
-    let rows: Vec<Row> = o.rows(race).iter().filter(|r| choices.iter().any(|(k, _)| *k == r.key)).cloned().collect();
-    let steps: Vec<usize> = rows.iter().map(|r| choices.iter().find(|(k, _)| *k == r.key).map_or(0, |(_, s)| *s as usize)).collect();
-    rechosen(look_of(name).as_deref(), &rows, sex, &steps, body)
+/// Preview character select edits against the server's look. If the body
+/// changes, lay the saved options on the parts of the new body.
+pub fn reselected(name: &str, race: i32, sex: i32, body: u32, choices: &[(String, u8)], saved: &[(String, u32)]) -> (u32, Option<Look>) {
+    let base = look_of(name);
+    let Some(options) = options().filter(|_| !choices.is_empty()) else {
+        return (body, base.as_deref().cloned());
+    };
+    let known = options.rows(race);
+    let (rows, steps): (Vec<_>, Vec<_>) = known.iter().filter_map(|row| {
+        let (_, step) = choices.iter().find(|(key, _)| *key == row.key)?;
+        Some((row.clone(), usize::from(*step)))
+    }).unzip();
+    let model = body_of_steps(&rows, sex, &steps).unwrap_or(body);
+    let remapped = (model != body).then(|| {
+        let parts = known.iter().filter_map(|row| {
+            let (_, value) = saved.iter().find(|(key, _)| *key == row.key)?;
+            Some(row.parts_of(model).map(move |part| (row.kind, *value, part.clone())))
+        }).flatten().collect();
+        Look { body: model, parts }
+    });
+    (model, rechosen(remapped.as_ref().or(base.as_deref()), &rows, sex, &steps, model))
 }
 
 /// `model` drawn in colour `value` (a race option's colour, `render::recolor`)
@@ -124,6 +137,9 @@ pub fn colour_all(lib: &esf::Library, model: &mut esf::Model, value: u32) -> boo
 pub fn steps_of_look(rows: &[Row], sex: i32, body: u32, look: Option<&Look>) -> Vec<usize> {
     rows.iter()
         .map(|r| {
+            if r.kind == Kind::Body {
+                return r.steps(sex).iter().position(|step| step.value == body).unwrap_or(0);
+            }
             let Some(l) = look.filter(|l| l.body == body) else { return 0 };
             let mine: Vec<&Part> = r.parts_of(body).collect();
             l.parts.iter().filter(|(k, _, p)| *k == r.kind && mine.contains(&p)).find_map(|(_, v, _)| r.steps(sex).iter().position(|s| s.value == *v)).unwrap_or(0)
@@ -606,7 +622,7 @@ pub(crate) mod tests {
         let o = net::raceopts::Options { races: vec![(31, vec![Row { key: "wisp".into(), label: "Wisp".into(), kind: Kind::Texture, parts: vec![(human, at.clone())], male: vec![step("Will o' wisp", 0x8143_DC70)], female: vec![] }, colour.clone()])] };
         set_options(Some(&o));
         set_look_of("Glim", Some(base.clone()));
-        let got = rechosen_by_name("Glim", 31, 0, human, &[("wispcolor".into(), 2)]).unwrap();
+        let got = reselected("Glim", 31, 0, human, &[("wispcolor".into(), 2)], &[]).1.unwrap();
         assert_eq!(got.parts, vec![wisp, (Kind::Colour, rose, at)], "by name, on the server's look");
         set_look_of("Glim", None);
         set_options(None);

@@ -109,8 +109,7 @@ pub struct CharRecord {
     /// The cape it wears, on a server with capes (`cape`: the session's
     /// `cape_list` by its server id, which comes after the list).
     pub cape: Option<net::cape::Cape>,
-    /// Its race's options re-chosen at Customize (a game race's skin shade,
-    /// `raceopts`), sent with 0x002A when it is played; empty, as it was.
+    /// The appearance choices accepted at Customize and sent with 0x002A.
     pub options: Vec<(String, u8)>,
     /// More of it from a server that sends it (`net::selectinfo`, by its server
     /// id, after the list): its own race and the race's name, its mastery
@@ -133,11 +132,18 @@ impl CharRecord {
         self.info.as_ref().map_or(self.race, |i| i.race as i32)
     }
 
-    /// Its sex, by its body (a record has none of its own): 1 for its own
-    /// race's female body where that is not the male's, else 0.
+    /// The stored sex when the server supplies it. Older servers only send the body.
     pub fn sex(&self) -> i32 {
+        if let Some(sex) = self.info.as_ref().and_then(|info| info.sex) {
+            return i32::from(sex);
+        }
         let female = |race: i32| create::tables::model_of(race, 1) == self.model && create::tables::model_of(race, 0) != self.model;
         (female(self.race) || female(self.own_race())) as i32
+    }
+
+    fn preview(&self, choices: &[(String, u8)]) -> (u32, Option<net::raceopts::Look>) {
+        let saved = self.info.as_ref().map_or(&[][..], |info| info.values.as_slice());
+        crate::raceopts::reselected(&self.name, self.own_race(), self.sex(), self.model, choices, saved)
     }
 
     /// `CharacterList`'s read: the zigzags, then the 32 raw bytes (`m_robe`
@@ -971,13 +977,8 @@ impl Client {
                     if self.expansion() & 2 != 0 && i < self.chars.len() && self.chars.len() <= self.char_slots() as usize {
                         let c = &mut self.chars[i];
                         (c.face, c.hair_style, c.hair_length, c.hair_color) = (face, style, length, color);
-                        // the race's options re-chosen: kept for the 0x002A, and
-                        // the character drawn in them here until the server's
-                        // list says (`raceopts`)
-                        if !options.is_empty() {
-                            crate::raceopts::set_look_of(&c.name, crate::raceopts::rechosen_by_name(&c.name, c.own_race(), c.sex(), c.model, &options));
-                            c.options = options;
-                        }
+                        c.options = options;
+                        self.select.relook();
                     }
                 }
                 Req::Msg0777 => {

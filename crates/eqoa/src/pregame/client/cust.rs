@@ -10,10 +10,8 @@
 //! sprite in place: `SetFace`, `SetHair`), which starts its standing loop
 //! over.
 //!
-//! A game race's options from the server (go-eqoa-server's skin shades,
-//! `raceopts`) are rows under the four, four rows in view and scrolling with
-//! the cursor, each starting at the step the character's look has; Accept
-//! hands them up with the four, for the 0x002A (`net::session::Character::options`).
+//! Custom races show their own appearance rows. Retail races keep the four
+//! face and hair rows and any options the server adds underneath them.
 
 use super::select::{framing, look_of};
 use super::{CharRecord, UiCx};
@@ -21,6 +19,7 @@ use crate::pointer::{Hits, key};
 use crate::pregame::Scene;
 use crate::pregame::figure::Figure;
 use crate::pregame::stage::{Stage, VIEWPORT};
+use net::raceopts::{Kind, Row};
 use vi::fpu::{Ee, F};
 use vi::ui::{FrameParam, UI_COLORS, Window, wide};
 
@@ -63,14 +62,20 @@ pub struct Cust {
     turn: Option<f32>,
     /// `SetChar` asked for, done at the next draw (it aims the camera)
     pending: Option<usize>,
+    camera_pending: bool,
     /// the focus arrived (295): the window made at the next draw
     focused: bool,
     shown: bool,
     hits: Hits,
-    /// the race's option rows under the four (a game race's: its skin), the
-    /// step on each, and the first row in view
-    extra: Vec<net::raceopts::Row>,
+    custom: bool,
+    sex: i32,
+    model: u32,
+    extra: Vec<Row>,
     steps: Vec<usize>,
+    visible: Vec<usize>,
+    edits: Vec<(String, u8)>,
+    info_seen: Option<net::selectinfo::Info>,
+    looks_seen: u64,
     top: usize,
     /// the steps the figure was made in
     made_steps: Vec<usize>,
@@ -88,6 +93,7 @@ impl Cust {
     /// where the camera is.
     pub fn set_char(&mut self, i: usize) {
         self.pending = Some(i);
+        self.camera_pending = true;
         self.focused = true;
     }
 
@@ -124,13 +130,13 @@ impl Cust {
         let mut stage = stage;
         if let Some(i) = self.pending.take()
             && let Some(c) = chars.get(i)
-            && let Some(st) = stage.as_deref_mut()
         {
-            // `SetChar`: the record's look, the camera at the select scene's
-            // place for it with the scenes' limits, orbiting
             self.index = i;
             (self.face, self.style, self.length, self.color) = (c.face, c.hair_style, c.hair_length, c.hair_color);
             self.set_extra(c);
+        }
+        if self.camera_pending && let Some(st) = stage.as_deref_mut() {
+            self.camera_pending = false;
             self.pos = st.cam.walk.committed.position.to_array();
             self.hpr = st.cam.walk.committed.angles.to_array();
             st.aim(self.pos, [0.0; 3]);
@@ -140,6 +146,10 @@ impl Cust {
             st.cam.min_collision_dist = f(3.5);
             st.cam.set_camera_mode(1);
         }
+        let c = chars.get(self.index)?;
+        if self.info_seen != c.info || self.looks_seen != crate::raceopts::generation() {
+            self.refresh_extra(c);
+        }
         let (vui, r) = (cx.vui, &mut *cx.r);
         if self.focused {
             // 295: the window, open at once, on the first row
@@ -147,6 +157,7 @@ impl Cust {
             self.window.init(vui, r, [224, 320], 500, 1, 1);
             self.window.open(true);
             self.sel = 0;
+            self.top = 0;
             self.release();
         }
         let word = |id: i32| wide(vui.words.get(id, vui.language));
@@ -160,7 +171,6 @@ impl Cust {
         // the model (`CreateModel`), standing (`SetAction(0)`), the camera
         // (`UpdateCamera`), the scene into the viewport
         self.shown = false;
-        let c = chars.get(self.index)?;
         if self.made != Some(self.look()) || self.made_steps != self.steps {
             self.figure = None;
         }
@@ -171,10 +181,8 @@ impl Cust {
             (rec.face, rec.hair_style, rec.hair_length, rec.hair_color) = (self.face, self.style, self.length, self.color);
             // turned a little off the camera: the heading plus 5.934119
             let hpr = [(F::<Ee>::new(self.hpr[0]) + F::new(5.934_119)).0, self.hpr[1], self.hpr[2]];
-            // the race's options as stepped here, on the look the server told
-            // of it (a Wisp's wisp kept): with none, that look
-            let base = crate::raceopts::look_of(&rec.name);
-            let race_look = if self.extra.is_empty() { base.map(|l| (*l).clone()) } else { crate::raceopts::rechosen(base.as_deref(), &self.extra, self.sex_of(&rec), &self.steps, rec.model) };
+            let (model, race_look) = c.preview(&self.edits);
+            rec.model = model;
             self.figure = Figure::new_dressed(lib, g, rec.model, look_of(&rec, false), race_look, rec.weapons, self.pos, hpr, cx.now);
             self.made = Some(self.look());
             self.made_steps = self.steps.clone();
@@ -261,19 +269,26 @@ impl Cust {
         let pulse = self.window.tick_pulse(vui.time);
         let mut base = [27, 92];
         // the icon and its offset, the glow and its offset, the word and its offset
-        type Row = (i32, [i32; 2], i32, [i32; 2], i32, [i32; 2]);
-        let rows: [Row; 4] = [
+        type RowArt = (i32, [i32; 2], i32, [i32; 2], i32, [i32; 2]);
+        let rows: [RowArt; 4] = [
             (131, [95, -40], 206, [9, 15], 604, [25, 60]),
             (132, [95, -40], 207, [23, 25], 605, [25, 60]),
             (133, [95, -40], 208, [1, 2], 606, [25, 60]),
             (134, [95, -35], 209, [5, 6], 607, [25, 56]),
         ];
         // every row: its art, its word, its slider's place
-        let mut all: Vec<(Row, Vec<u16>, f32)> = rows.iter().zip([(self.face, 3.0), (self.style, 3.0), (self.length, 3.0), (self.color, 7.0)]).map(|(&row, (v, top))| (row, wide(vui.words.get(row.4, vui.language)), v as f32 / top)).collect();
-        for (row, &k) in self.extra.iter().zip(&self.steps) {
-            let steps = row.steps(0);
+        let mut all: Vec<(RowArt, Vec<u16>, f32)> = rows.iter().take(self.retail_rows()).zip([(self.face, 3.0), (self.style, 3.0), (self.length, 3.0), (self.color, 7.0)]).map(|(&row, (v, top))| (row, wide(vui.words.get(row.4, vui.language)), v as f32 / top)).collect();
+        for &i in &self.visible {
+            let (row, k) = (&self.extra[i], self.steps[i]);
+            let steps = row.steps(self.sex);
             let name = steps.get(k).map_or("", |s| s.name.as_str());
-            all.push((rows[3], wide(&format!("{}: {}", row.label, name)), k as f32 / (steps.len().max(2) - 1) as f32));
+            let art = match row.kind {
+                Kind::Body => rows[0],
+                Kind::Texture if row.key == "face" => rows[0],
+                Kind::Texture => rows[1],
+                Kind::Colour => rows[3],
+            };
+            all.push((art, wide(&format!("{}: {}", row.label, name)), k as f32 / (steps.len() - 1) as f32));
         }
         let top = self.top;
         for (k, ((icon, off, glow, goff, _, woff), label, _)) in all.iter().enumerate().skip(top).take(4) {
@@ -291,10 +306,12 @@ impl Cust {
             r.draw_centered_string(pos, black, label, 0);
             base[1] += 84;
         }
-        let mut pos = [73, (self.sel - top as i32) * 83 + 75];
-        vui.blit_ex(r, 85, pos, 0, 1.0, 0);
-        pos[0] += 125;
-        vui.blit_ex(r, 85, pos, 0, 1.0, 1);
+        if !all.is_empty() {
+            let mut pos = [73, (self.sel - top as i32) * 83 + 75];
+            vui.blit_ex(r, 85, pos, 0, 1.0, 0);
+            pos[0] += 125;
+            vui.blit_ex(r, 85, pos, 0, 1.0, 1);
+        }
         self.window.init(vui, r, [142, 240], 280, 16, 1);
         let w = self.window.size[0];
         for (line, (_, _, v)) in [1, 6, 11, 16].into_iter().zip(all.iter().skip(top)) {
@@ -302,31 +319,60 @@ impl Cust {
         }
     }
 
-    /// The race's option rows under the four for character `c`, each at the
-    /// step its look has (`raceopts`): those the server names for it
-    /// (`net::selectinfo`: a game race's skin, a Wisp's colour, of its own race),
-    /// else a game race's (as the list names it); only rows of more than one
-    /// step with a part of its body; none for any other.
     fn set_extra(&mut self, c: &CharRecord) {
+        self.edits = c.options.clone();
         self.top = 0;
-        let fits = |r: &&net::raceopts::Row| r.steps(0).len() > 1 && r.parts_of(c.model).next().is_some();
-        self.extra = match (crate::raceopts::options(), &c.info) {
-            (Some(o), Some(info)) => o.rows(info.race as i32).iter().filter(|r| info.rows.contains(&r.key)).filter(fits).cloned().collect(),
-            (Some(o), None) if (0..=9).contains(&c.race) => o.rows(c.race).iter().filter(fits).cloned().collect(),
-            _ => Vec::new(),
-        };
+        self.refresh_extra(c);
+    }
+
+    /// Select info and race looks can arrive after Customize is already open.
+    /// Refresh the available rows while keeping the user's draft choices.
+    fn refresh_extra(&mut self, c: &CharRecord) {
+        self.info_seen = c.info.clone();
+        self.looks_seen = crate::raceopts::generation();
+        self.sex = c.sex();
+        self.custom = c.info.as_ref().is_some_and(|info| info.sex.is_some() && info.race >= 10);
+        self.model = c.model;
+        self.extra.clear();
+        if let Some(options) = crate::raceopts::options() {
+            self.extra.extend(options.rows(c.own_race()).iter().filter(|r| {
+                r.steps(self.sex).len() > 1 && c.info.as_ref().map_or_else(
+                    || (0..=9).contains(&c.race),
+                    |info| info.rows.contains(&r.key),
+                )
+            }).cloned());
+        }
         let look = crate::raceopts::look_of(&c.name);
-        self.steps = crate::raceopts::steps_of_look(&self.extra, self.sex_of(c), c.model, look.as_deref());
+        self.steps = crate::raceopts::steps_of_look(&self.extra, self.sex, c.model, look.as_deref());
+        for (row, step) in self.extra.iter().zip(&mut self.steps) {
+            let steps = row.steps(self.sex);
+            if let Some((_, edit)) = self.edits.iter().find(|(key, _)| *key == row.key)
+                && let Some(value) = steps.get(usize::from(*edit))
+            {
+                *step = usize::from(*edit);
+                if row.kind == Kind::Body {
+                    self.model = value.value;
+                }
+            } else if let Some((_, value)) = c.info.as_ref().and_then(|info| info.values.iter().find(|(key, _)| *key == row.key)) {
+                *step = steps.iter().position(|s| s.value == *value).unwrap_or(*step);
+            }
+        }
+        self.refresh_visible();
+        self.release();
     }
 
-    /// The character's sex, by its body (a record has none of its own).
-    fn sex_of(&self, c: &CharRecord) -> i32 {
-        c.sex()
+    fn refresh_visible(&mut self) {
+        self.visible = self.extra.iter().enumerate().filter_map(|(i, r)| r.selectable_on(self.sex, self.model).then_some(i)).collect();
+        self.sel = self.sel.clamp(0, (self.rows() - 1).max(0));
+        self.scroll_to_selection();
     }
 
-    /// The rows: the four and the race's.
+    fn retail_rows(&self) -> usize {
+        if self.custom { 0 } else { 4 }
+    }
+
     fn rows(&self) -> i32 {
-        4 + self.extra.len() as i32
+        (self.retail_rows() + self.visible.len()) as i32
     }
 
     /// `OnKeyDown`: back (260, nothing kept), Accept (the look kept), the
@@ -339,7 +385,7 @@ impl Cust {
             }
             13 | 134 => {
                 cues.push(13);
-                let options = self.extra.iter().zip(&self.steps).map(|(r, &k)| (r.key.clone(), k.min(255) as u8)).collect();
+                let options = std::mem::take(&mut self.edits);
                 return Some(Some((self.index, self.look(), options)));
             }
             17 | 136 => self.change(-1, now, cues),
@@ -356,7 +402,7 @@ impl Cust {
     /// draw, where the camera is).
     fn row(&mut self, d: i32, now: i64, cues: &mut Vec<i32>) {
         let s = self.sel + d;
-        let last = self.rows() - 1;
+        let last = (self.rows() - 1).max(0);
         if !(0..=last).contains(&s) {
             self.sel = s.clamp(0, last);
             cues.push(9);
@@ -364,25 +410,40 @@ impl Cust {
             self.sel = s;
             cues.push(11);
         }
-        // the cursor's row in view, four at a time
-        let sel = self.sel.max(0) as usize;
-        self.top = self.top.min(sel).max(sel.saturating_sub(3));
+        self.scroll_to_selection();
         self.window.reset_tick_pulse(now);
         self.turn = Some(self.orbit_angle());
+    }
+
+    fn scroll_to_selection(&mut self) {
+        let sel = self.sel as usize;
+        self.top = self.top.min(sel).max(sel.saturating_sub(3));
     }
 
     /// `Prev` / `Next`: the row's value, wrapping (0..3, the colour 0..7).
     fn change(&mut self, d: i32, now: i64, cues: &mut Vec<i32>) {
         cues.push(11);
-        match self.sel {
-            0 => self.face = wrap(self.face, d, 3),
-            1 => self.style = wrap(self.style, d, 3),
-            2 => self.length = wrap(self.length, d, 3),
-            3 => self.color = wrap(self.color, d, 7),
-            k => {
-                if let (Some(row), Some(step)) = (self.extra.get(k as usize - 4), self.steps.get_mut(k as usize - 4)) {
-                    *step = wrap(*step as i32, d, row.steps(0).len() as i32 - 1) as usize;
-                }
+        let sel = self.sel as usize;
+        if sel < self.retail_rows() {
+            match sel {
+                0 => self.face = wrap(self.face, d, 3),
+                1 => self.style = wrap(self.style, d, 3),
+                2 => self.length = wrap(self.length, d, 3),
+                _ => self.color = wrap(self.color, d, 7),
+            }
+        } else if let Some(&i) = self.visible.get(sel - self.retail_rows()) {
+            let row = &self.extra[i];
+            let steps = row.steps(self.sex);
+            let step = wrap(self.steps[i] as i32, d, steps.len() as i32 - 1) as usize;
+            self.steps[i] = step;
+            if let Some((_, edit)) = self.edits.iter_mut().find(|(key, _)| *key == row.key) {
+                *edit = step as u8;
+            } else {
+                self.edits.push((row.key.clone(), step as u8));
+            }
+            if row.kind == Kind::Body {
+                self.model = steps[step].value;
+                self.refresh_visible();
             }
         }
         self.window.reset_tick_pulse(now);
@@ -392,7 +453,7 @@ impl Cust {
     /// `SetOrbitAngle`): the hair rows a twelfth of a turn.
     fn orbit_angle(&self) -> f32 {
         // the game's 0.5235988f, which is pi/6's float
-        if matches!(self.sel, 2 | 3) { std::f32::consts::FRAC_PI_6 } else { 0.0 }
+        if !self.custom && matches!(self.sel, 2 | 3) { std::f32::consts::FRAC_PI_6 } else { 0.0 }
     }
 
     /// A pointer: a row selects it (the selected one's left or right half
@@ -508,7 +569,7 @@ mod tests {
             net::raceopts::Row { key: "wispcolor".into(), label: "Color".into(), kind: net::raceopts::Kind::Colour, parts: vec![(human, at)], male: vec![step("Natural", 0), step("Gold", 0x0122_D99A), step("Rose", 0x01EA_B399)], female: vec![] },
         ]));
         crate::raceopts::set_options(Some(&o));
-        let info = net::selectinfo::Info { race: 31, race_name: "Wisp".into(), cms: 0, rows: vec!["wispcolor".into()] };
+        let info = net::selectinfo::Info { race: 31, race_name: "Wisp".into(), rows: vec!["wispcolor".into()], ..Default::default() };
         let rec = CharRecord { name: "Glim".into(), server_id: 9, race: 0, model: human, info: Some(info), ..Default::default() };
         let mut c = Cust::default();
         c.set_extra(&rec);
@@ -524,6 +585,58 @@ mod tests {
         let mut c = Cust::default();
         c.set_extra(&CharRecord { info: None, ..rec });
         assert!(c.extra.iter().all(|r| r.key == "skin") && !c.extra.is_empty(), "the control: the list's race's rows");
+        crate::raceopts::set_options(None);
+    }
+
+    #[test]
+    fn a_custom_character_can_keep_and_change_creation_options() {
+        let blue = 0x4A4D_88FB;
+        let red = 0x5874_ACFC;
+        let gold = 0x0120_998F;
+        let mut opts = crate::raceopts::tests::fungus_options();
+        // This model is shared by both sexes. The stored sex selects the step order.
+        let body = &mut opts.races[0].1[0];
+        body.female = body.male.iter().rev().cloned().collect();
+        crate::raceopts::set_options(Some(&opts));
+        let mut record = CharRecord { name: "Sporey".into(), race: 1, model: red, ..Default::default() };
+        let mut cust = Cust::default();
+        cust.set_extra(&record);
+        assert_eq!(cust.rows(), 4);
+
+        record.info = Some(net::selectinfo::Info {
+            race: 28,
+            sex: Some(1),
+            rows: vec!["body".into(), "cap".into(), "bag".into(), "skin".into(), "one".into()],
+            values: vec![("bag".into(), gold)],
+            ..Default::default()
+        });
+        cust.refresh_extra(&record);
+        assert_eq!((cust.rows(), cust.model, cust.steps[0]), (3, red, 0));
+        assert_eq!(cust.retail_rows(), 0);
+
+        let mut cues = Vec::new();
+        cust.key(key::RIGHT, 0, &mut cues);
+        assert_eq!((cust.rows(), cust.model, cust.steps[2]), (4, blue, 2));
+        cust.key(key::DOWN, 0, &mut cues);
+        cust.key(key::RIGHT, 0, &mut cues);
+        let Some(Some((_, _, edits))) = cust.key(key::CROSS, 0, &mut cues) else {
+            panic!("expected accepted appearance");
+        };
+        assert_eq!(edits, [("body".into(), 1), ("cap".into(), 1)]);
+        record.options = edits;
+        let (model, look) = record.preview(&record.options);
+        assert_eq!(model, blue);
+        let look = look.unwrap();
+        assert_eq!(look.body, blue);
+        assert!(look.parts.iter().any(|(_, v, p)| *v == gold && p.entries == [2]));
+        assert!(look.parts.iter().any(|(_, v, p)| *v == 0x0100_8C79 && p.entries == [0]));
+
+        cust.set_extra(&record);
+        assert_eq!((cust.model, cust.steps[1]), (blue, 1));
+        cust.key(key::UP, 0, &mut cues);
+        cust.key(key::RIGHT, 0, &mut cues);
+        assert_eq!(cust.key(key::TRIANGLE, 0, &mut cues), Some(None));
+        assert_eq!(record.preview(&record.options).0, blue);
         crate::raceopts::set_options(None);
     }
 
