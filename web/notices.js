@@ -108,6 +108,11 @@ function platform() {
   return `${os} ${name}${b ? ' ' + b[2] : ''} ${graphics()}`.slice(0, 64);
 }
 
+// the wasm heap now, and an allocation the client was refused (main.js)
+function memoryFacts() {
+  try { return (typeof window.eqoaMemoryFacts === 'function' && window.eqoaMemoryFacts()) || '-'; } catch { return '-'; }
+}
+
 function pageFacts() {
   const c = $('eqoa');
   let kept = '';
@@ -120,6 +125,7 @@ function pageFacts() {
     `graphics: ${window.eqoaClientGraphics || '-'} (navigator.gpu ${navigator.gpu ? 'yes' : 'no'})`,
     `window ${innerWidth}x${innerHeight}, device pixel ratio ${devicePixelRatio}, canvas ${c ? c.width + 'x' + c.height : '-'}`,
     `memory: ${navigator.deviceMemory ? navigator.deviceMemory + ' GB (device)' : '-'}${performance.memory ? `, JS heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)} MB` : ''}`,
+    `memory at the report: ${memoryFacts()}`,
     `in the world: ${running ? 'yes' : 'no'}`,
     ...(kept ? ['', '[the client\'s own report of its panic]', kept.trimEnd()] : []),
   ];

@@ -5,6 +5,15 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · A custom race's looks at Customize Character
+
+- **Customize Character** (at character select) now shows a custom race's own appearance options, as at creation: its body variants, colours and textures. Pick and accept them there; colours you saved before come back when the body you pick has those parts. It needs the server's update (live).
+
+## 2026-11-27 · Crash reports say when the page ran out of memory
+
+- When the browser page stops with **"RuntimeError: unreachable"** because it was refused memory, its crash report now says how big the game's memory was and how much it had asked for, so the GMs can tell a game that grew out of control from a computer with no memory left to give (several windows multiboxing on one machine).
+- The page's memory line in the log now comes at once when the game's memory has grown a lot, not only every ten minutes, and on WebGL2 it no longer shows a falling, negative count of graphics buffers.
+
 ## 2026-11-26 · Feet on the ground on hills
 
 - Characters no longer sink their feet into hills. Going up or down a slope (or standing across one), a troll's, an ogre's or anyone's uphill foot used to go into the ground, knee deep on a steep hill. Now each foot stands on the ground under it: the body is lowered to the downhill foot and the uphill knee bends. This is for you, other players and the NPCs that walk on two legs.

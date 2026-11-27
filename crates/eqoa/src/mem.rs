@@ -14,6 +14,18 @@
 //! short of memory. Now the figures are taken every 10 s (the allocator's
 //! every minute: its report lists every allocation) on the frame that draws
 //! (`tick`), and every 10 minutes of the run they go into the log.
+//!
+//! Live petition 5666 (crash reports 20261127-000725): three pages of one
+//! machine (an 8 GB laptop's Intel UHD, four windows multiboxing) stopped in
+//! the same second on `RuntimeError: unreachable`, each in another small
+//! allocation of its frame's (wgpu's list of a write's staging buffers, its
+//! GL backend's command list, the spells' list of bodies): the allocator
+//! refused memory. Their last lines, half a minute before, had their heaps
+//! at 420 MB; nothing said whether a page's own heap had run away in the
+//! seconds between or the machine had none to give. Now a heap grown by
+//! `GROWN` since the last line is a line at once (its 10 s sampling), and a
+//! page remembers an allocation it was refused, for its crash report
+//! (`Watched`, `refused`).
 
 use std::sync::Mutex;
 use web_time::{Duration, Instant};
@@ -25,6 +37,10 @@ const GPU_EVERY: Duration = Duration::from_secs(60);
 /// The log's line, this often (natively `EQOA_MEM_EVERY=<seconds>` for a
 /// test's run).
 const LOG_EVERY: Duration = Duration::from_secs(600);
+/// What a heap (a page's wasm heap, the process's own memory) grows by
+/// since the log's last line for a line of its own at once: a heap running
+/// away is in the log as it goes, not only at the next period's line.
+const GROWN: u64 = 256 << 20;
 
 /// A size as a reader takes it: "640 KB", "812 MB", "3.1 GB", "16 GB".
 pub fn size(b: u64) -> String {
@@ -77,7 +93,12 @@ pub struct Machine {
 /// (DX12 counts both); the allocator's labels count them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Graphics {
-    pub buffers: i64,
+    /// none on GL (WebGL2 among it): wgpu-hal 30's GL backend makes a buffer
+    /// it maps by a copy of its own (every staging buffer of a page's
+    /// `write_buffer`) without counting it, and counts every buffer's
+    /// going, so its count only falls (the crash reports of petition 5666:
+    /// "graphics -2713663 buffers" after half an hour)
+    pub buffers: Option<i64>,
     pub buffer_bytes: i64,
     pub texture_bytes: i64,
     pub bind_groups: i64,
@@ -125,8 +146,9 @@ impl Graphics {
     /// (the run's time is `at`).
     pub fn of(device: &render::wgpu::Device, allocator: bool, at: Duration) -> Graphics {
         let c = device.get_internal_counters().hal;
+        let gl = render::device_info(device).backend == render::wgpu::Backend::Gl;
         Graphics {
-            buffers: c.buffers.read() as i64,
+            buffers: (!gl).then(|| c.buffers.read() as i64),
             buffer_bytes: c.buffer_memory.read() as i64,
             texture_bytes: c.texture_memory.read() as i64,
             bind_groups: c.bind_groups.read() as i64,
@@ -165,6 +187,12 @@ pub fn clock_at(t: Instant) -> String {
 }
 
 impl Sample {
+    /// The heap it holds: a page's wasm heap, else the process's own
+    /// memory (0 where neither is known).
+    fn held(&self) -> u64 {
+        self.page.map(|(wasm, _)| wasm).or(self.process.map(|p| p.own)).unwrap_or(0)
+    }
+
     /// The figures in a line.
     pub fn line(&self) -> String {
         let mut parts = Vec::new();
@@ -180,7 +208,8 @@ impl Sample {
             parts.push(format!("machine {} free of {}{commit}", size(m.free), size(m.total)));
         }
         if let Some(g) = &self.graphics {
-            let mut s = format!("graphics {} buffers ({}), textures {}, {} bind groups", g.buffers, size(g.buffer_bytes.max(0) as u64), size(g.texture_bytes.max(0) as u64), g.bind_groups);
+            let buffers = g.buffers.map_or("buffers not counted on GL".to_string(), |n| format!("{n} buffers"));
+            let mut s = format!("graphics {buffers} ({}), textures {}, {} bind groups", size(g.buffer_bytes.max(0) as u64), size(g.texture_bytes.max(0) as u64), g.bind_groups);
             if let Some(a) = &g.allocator {
                 let largest: Vec<String> = a.largest.iter().map(|&b| size(b)).collect();
                 let labels: Vec<String> = a.by_label.iter().map(|(l, b, n)| format!("{l} {} ({n})", size(*b))).collect();
@@ -200,9 +229,11 @@ struct Watch {
     taken: Option<Instant>,
     gpu_taken: Option<Instant>,
     logged: Option<Instant>,
+    /// the heap the last line had (`Sample::held`)
+    logged_held: u64,
 }
 
-static WATCH: Mutex<Watch> = Mutex::new(Watch { start: None, last: None, taken: None, gpu_taken: None, logged: None });
+static WATCH: Mutex<Watch> = Mutex::new(Watch { start: None, last: None, taken: None, gpu_taken: None, logged: None, logged_held: 0 });
 
 fn lock() -> std::sync::MutexGuard<'static, Watch> {
     WATCH.lock().unwrap_or_else(|e| e.into_inner())
@@ -225,14 +256,20 @@ impl Watch {
     }
 
     /// A sample `s` taken at `now`: kept as the last, and, when the log's
-    /// is due, handed back for the log.
-    fn keep(&mut self, s: Sample, now: Instant, every: Duration) -> Option<Sample> {
+    /// is due (or its heap has grown `GROWN` since the last line), handed
+    /// back for the log with what its heap grew by since that line when it
+    /// is early.
+    fn keep(&mut self, s: Sample, now: Instant, every: Duration) -> Option<(Sample, Option<u64>)> {
         self.last = Some(s.clone());
-        if !self.log_due(now, every) {
+        let held = s.held();
+        let grown = held.saturating_sub(self.logged_held);
+        let due = self.log_due(now, every);
+        if !due && grown < GROWN {
             return None;
         }
         self.logged = Some(now);
-        Some(s)
+        self.logged_held = held;
+        Some((s, (!due).then_some(grown)))
     }
 }
 
@@ -264,8 +301,76 @@ pub fn tick(device: Option<&render::wgpu::Device>) {
     }
     let logged = w.keep(s, now, every);
     drop(w);
-    if let Some(s) = logged {
-        crate::say(&format!("[memory] {} {}", clock(s.at), s.line()));
+    if let Some((s, early)) = logged {
+        let early = early.map_or(String::new(), |g| format!(" (grown {} since the last line)", size(g)));
+        crate::say(&format!("[memory] {}{early} {}", clock(s.at), s.line()));
+    }
+}
+
+// ---- a page's allocator ------------------------------------------------------
+
+/// A page's allocator: the system's (dlmalloc on the wasm heap), with an
+/// allocation it refuses remembered (`refused`): wasm has no stderr, so
+/// Rust's "memory allocation of N bytes failed" is never seen and the page
+/// only hears `RuntimeError: unreachable` (`handle_alloc_error`'s abort).
+/// The crash report then says how much was asked with the heap at what
+/// size: a heap at wasm's 4 GB is the page's own heap run away; one far
+/// under it, the browser or the machine refusing more (petition 5666: three
+/// pages on one 8 GB machine stopped in the same second, each in another
+/// small allocation, their heaps at 420 MB half a minute before).
+#[cfg(target_arch = "wasm32")]
+pub struct Watched;
+
+/// The last allocation refused: its size and the heap's then (0, 0: none).
+#[cfg(any(target_arch = "wasm32", test))]
+static REFUSED: [std::sync::atomic::AtomicU64; 2] = [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)];
+
+/// An allocation of `bytes` refused with the heap at `heap` bytes:
+/// remembered, nothing allocated (the allocator itself has none to give).
+#[cfg(any(target_arch = "wasm32", test))]
+fn note_refused(bytes: usize, heap: u64) {
+    REFUSED[0].store(bytes as u64, std::sync::atomic::Ordering::Relaxed);
+    REFUSED[1].store(heap, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The last allocation refused this run, if any: its size and the heap's
+/// then.
+#[cfg(any(target_arch = "wasm32", test))]
+pub fn refused() -> Option<(u64, u64)> {
+    let bytes = REFUSED[0].load(std::sync::atomic::Ordering::Relaxed);
+    (bytes != 0).then(|| (bytes, REFUSED[1].load(std::sync::atomic::Ordering::Relaxed)))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn wasm_heap() -> u64 {
+    core::arch::wasm32::memory_size::<0>() as u64 * 65536
+}
+
+#[cfg(target_arch = "wasm32")]
+unsafe impl std::alloc::GlobalAlloc for Watched {
+    unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
+        let p = unsafe { std::alloc::System.alloc(l) };
+        if p.is_null() {
+            note_refused(l.size(), wasm_heap());
+        }
+        p
+    }
+    unsafe fn alloc_zeroed(&self, l: std::alloc::Layout) -> *mut u8 {
+        let p = unsafe { std::alloc::System.alloc_zeroed(l) };
+        if p.is_null() {
+            note_refused(l.size(), wasm_heap());
+        }
+        p
+    }
+    unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(p, l) }
+    }
+    unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, new: usize) -> *mut u8 {
+        let q = unsafe { std::alloc::System.realloc(p, l, new) };
+        if q.is_null() {
+            note_refused(new, wasm_heap());
+        }
+        q
     }
 }
 
@@ -438,13 +543,16 @@ mod tests {
         let al = Allocator::of(&r, Duration::from_secs(60), 3, 2);
         assert_eq!(al.largest, vec![64 << 20, 32 << 20]);
         assert_eq!(al.by_label, vec![("vertices".to_string(), 5 << 20, 2), ("ui".to_string(), 1 << 20, 1)]);
-        let g = Graphics { buffers: 10, buffer_bytes: 5 << 20, texture_bytes: 1 << 20, bind_groups: 7, allocator: Some(al) };
+        let g = Graphics { buffers: Some(10), buffer_bytes: 5 << 20, texture_bytes: 1 << 20, bind_groups: 7, allocator: Some(al) };
         let line = Sample { at: Duration::from_secs(60), graphics: Some(g.clone()), ..Default::default() }.line();
         assert_eq!(line, "graphics 10 buffers (5 MB), textures 1 MB, 7 bind groups; allocator 96 MB in 2 blocks (largest 64 MB, 32 MB), 6 MB used by 4: vertices 5 MB (2), ui 1 MB (1)");
         assert!(!line.contains("(at "), "the control: a report of the sample's own moment says no time");
         // a report from a minute before says when it was
         let later = Sample { at: Duration::from_secs(70), graphics: Some(g), ..Default::default() }.line();
         assert!(later.contains("; allocator (at 0:01:00) 96 MB"), "{later}");
+        // GL's count is none: said so, never a count that only falls
+        let gl = Sample { graphics: Some(Graphics { buffers: None, bind_groups: 3, ..Default::default() }), ..Default::default() }.line();
+        assert_eq!(gl, "graphics buffers not counted on GL (0 KB), textures 0 KB, 3 bind groups");
     }
 
     /// The log has the figures once a period however often they are
@@ -453,17 +561,59 @@ mod tests {
     #[test]
     fn the_log_has_the_figures_once_a_period() {
         let t0 = Instant::now();
-        let mut w = Watch { start: Some(t0), last: None, taken: None, gpu_taken: None, logged: None };
+        let mut w = Watch { start: Some(t0), last: None, taken: None, gpu_taken: None, logged: None, logged_held: 0 };
         let every = Duration::from_secs(600);
         let mut logged = Vec::new();
         for i in 0..5 * 60 {
             let at = Duration::from_secs(i * 10);
             let s = Sample { at, process: Some(Process { resident: i, peak: None, own: i << 20, own_peak: None }), ..Default::default() };
-            if let Some(l) = w.keep(s, t0 + at, every) {
+            if let Some((l, early)) = w.keep(s, t0 + at, every) {
+                assert_eq!(early, None, "a heap growing 1 MB a sample is never early");
                 logged.push(l.at.as_secs());
             }
         }
         assert_eq!(logged, [0, 600, 1200, 1800, 2400], "one a period, the first at the start");
         assert_eq!(w.last.as_ref().unwrap().at, Duration::from_secs((5 * 60 - 1) * 10), "the control: the last taken is not the log's");
+    }
+
+    /// A page's heap running away is in the log as it goes: grown `GROWN`
+    /// since the last line, a line at once with what it grew by (petition
+    /// 5666's pages said 420 MB half a minute before they ran out). The
+    /// control: a heap steady at 420 MB, sampled as often, has only the
+    /// period's lines.
+    #[test]
+    fn a_heap_running_away_is_logged_as_it_goes() {
+        let run = |grow: u64| {
+            let t0 = Instant::now();
+            let mut w = Watch { start: Some(t0), last: None, taken: None, gpu_taken: None, logged: None, logged_held: 0 };
+            let mut lines = Vec::new();
+            for i in 0..60u64 {
+                let at = Duration::from_secs(i * 10);
+                let heap = (420 << 20) + i * grow;
+                let s = Sample { at, page: Some((heap, None)), ..Default::default() };
+                if let Some((l, early)) = w.keep(s, t0 + at, Duration::from_secs(600)) {
+                    lines.push((l.at.as_secs(), early.map(|g| g >> 20)));
+                }
+            }
+            lines
+        };
+        // 60 MB a second sampled each 10 s: 600 MB a sample, every sample a line
+        let away = run(600 << 20);
+        assert_eq!(away.len(), 60, "{away:?}");
+        assert_eq!(away[0], (0, None), "the first line is the period's");
+        assert_eq!(away[1], (10, Some(600)), "then each says what it grew by");
+        let steady = run(0);
+        assert_eq!(steady, [(0, None)], "the control: a steady heap has the period's line alone");
+    }
+
+    /// A refused allocation is remembered for the crash report, the last
+    /// one; the control: none refused, none said.
+    #[test]
+    fn a_refused_allocation_is_remembered() {
+        assert_eq!(refused(), None, "the control: nothing refused yet");
+        note_refused(16384, 420 << 20);
+        note_refused(65536, 421 << 20);
+        assert_eq!(refused(), Some((65536, 421 << 20)));
+        REFUSED[0].store(0, std::sync::atomic::Ordering::Relaxed);
     }
 }
