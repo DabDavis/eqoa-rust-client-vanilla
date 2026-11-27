@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · Feet on Slopes on stairs and steep ground
+
+- **Feet on Slopes** no longer flips your knees backwards or twitches your legs on stairs and steep ground: the knees stay bent forward, each foot follows a step up or down smoothly, and the fit no longer switches off and on between steps.
+
 ## 2026-11-27 · A custom race's looks at Customize Character
 
 - **Customize Character** (at character select) now shows a custom race's own appearance options, as at creation: its body variants, colours and textures. Pick and accept them there; colours you saved before come back when the body you pick has those parts. It needs the server's update (live).

@@ -15,6 +15,11 @@
 //! and toe, the whole body lowered to the downhill foot's ground, and each
 //! knee bent (two-bone IK, in the plane the animation bent it in) so its foot
 //! comes up onto its own ground, the foot kept as the animation turned it.
+//! Never past what a leg reaches with its knee forward (the ankle kept under
+//! the hip: on ground too steep for the stride a foot stays in it, as the
+//! game draws it), each foot's height following its ground at a bounded rate
+//! (a stair's edge is a step in it), and never let go over stairs (petition
+//! 3334: "twitches and flips my legs inside out").
 //!
 //! Drawing only: the node matrices the skin, the attachments and the effects
 //! read are changed after `VIHSprite::Process`, nothing else. The walk, the
@@ -163,6 +168,9 @@ pub struct Plant {
 /// standing body probes once and a runner about every third frame.
 pub const REUSE: f32 = 0.4;
 
+/// How fast (hip heights a second) a foot's fitted height follows its ground.
+pub const RATE: f32 = 6.0;
+
 /// The ground under (x, z), looked for from `top` down to `bottom` (world
 /// units): its height and its normal, or None.
 pub type Ground<'a> = dyn FnMut(f32, f32, f32, f32) -> Option<(f32, [f32; 3])> + 'a;
@@ -246,8 +254,18 @@ impl Plant {
             self.applied = Some(cs.h.pose_time);
             return;
         }
-        // going: the last fit's heights eased out
-        let dy = fit.unwrap_or(self.last);
+        // going: the last fit's heights eased out. Each foot's height goes
+        // to its ground at most [`RATE`] hip heights a second: the ground
+        // found under a foot steps at a stair's edge, and the foot follows
+        // it over a few frames, not in one.
+        let dy = match fit {
+            Some(f) if self.weight > step => {
+                let most = RATE * legs.hip_y * dt / 1000.0;
+                [0, 1].map(|i| self.last[i] + (f[i] - self.last[i]).clamp(-most, most))
+            }
+            Some(f) => f,
+            None => self.last,
+        };
         self.last = dy;
         apply(cs, &legs, [dy[0] * self.weight, dy[1] * self.weight]);
         self.applied = Some(cs.h.pose_time);
@@ -273,6 +291,7 @@ fn fit_of(cs: &CSprite<Ee>, legs: &Legs, m: &Matrix44<Ee>, planes: &mut [Option<
     let reach = legs.hip_y * s;
     let (top, bottom) = (o.y + reach + 0.5, o.y - reach - 1.0);
     let mut dy = [0.0f32; 2];
+    let mut stands = false;
     for ((leg, d), plane) in legs.chain.iter().zip(dy.iter_mut()).zip(planes.iter_mut()) {
         let (ankle, toe) = (to_world(at(cs, leg[2])), to_world(at(cs, leg[3])));
         let kept = plane.filter(|(p, _)| {
@@ -283,30 +302,45 @@ fn fit_of(cs: &CSprite<Ee>, legs: &Legs, m: &Matrix44<Ee>, planes: &mut [Option<
             Some(k) => k,
             None => {
                 let (y, n) = ground(ankle.x, ankle.z, top, bottom)?;
+                // ground steeper than a wall's limit is no slope to stand
+                // on: a straight-down ray meets it only at an edge (a
+                // stair's nosing), and the foot stands on the edge's height,
+                // level, rather than the whole fit let go and taken again
+                // the next frame
                 let n = Vec3::from(n);
-                // ground steeper than a wall's limit is no floor to stand on
-                if !(n.y > 0.3) {
-                    *plane = None;
-                    return None;
-                }
+                let n = if n.y > 0.3 { n } else { Vec3::Y };
                 *plane = Some((Vec3::new(ankle.x, y, ankle.z), n));
                 (Vec3::new(ankle.x, y, ankle.z), n)
             }
         };
-        // the ground under the body is where it stands
-        if (on_plane(p, n, o.x, o.z) - o.y).abs() > 0.15 * reach + 0.05 {
-            return None;
-        }
         let g = on_plane(p, n, ankle.x, ankle.z).max(on_plane(p, n, toe.x, toe.z));
+        // the ground under the body is where it stands: its plane through
+        // the floor (a hill), or the foot's ground over the floor or less
+        // than a leg under it (stairs, where every tread is a level floor
+        // of its own, a runner's feet two treads up and down)
+        stands |= (on_plane(p, n, o.x, o.z) - o.y).abs() <= 0.15 * reach + 0.05 || g - o.y >= -reach;
         *d = ((g - o.y) / s).clamp(-0.5 * legs.hip_y, 0.5 * legs.hip_y);
     }
-    Some(dy)
+    // neither foot on ground near the floor: a body over ground far under
+    // it (a deck, a swimmer, a flier). One foot over a stair two treads off
+    // is fitted as far as it goes, the fit kept, not let go and taken again.
+    stands.then_some(dy)
 }
 
 /// The fit: the whole body down by the lower foot's drop, then each leg's
 /// knee bent until its ankle is up by the rest.
 fn apply(cs: &mut CSprite<Ee>, legs: &Legs, dy: [f32; 2]) {
-    let drop = dy[0].min(dy[1]).min(0.0).max(-0.4 * legs.hip_y);
+    let mut drop = dy[0].min(dy[1]).min(0.0);
+    // the higher foot can be lifted only so far (`lift_leg`'s MIN_BELOW):
+    // where the body lowered to the lower foot would leave it deeper in its
+    // ground than that, the body is lowered less, the lower foot left over
+    // its ground by as much as the higher one stays in its own
+    let hi = if dy[0] > dy[1] { 0 } else { 1 };
+    let sink = dy[hi] - drop - most_lift(cs, &legs.chain[hi]);
+    if sink > 0.0 {
+        drop = (drop + 0.5 * sink).min(0.0);
+    }
+    let drop = drop.max(-0.4 * legs.hip_y);
     if drop != 0.0 {
         for n in &mut cs.h.nodes {
             n.world.m[3].y = F::new(n.world.m[3].y.0 + drop);
@@ -321,6 +355,21 @@ fn apply(cs: &mut CSprite<Ee>, legs: &Legs, dy: [f32; 2]) {
     }
 }
 
+/// How much of the body's forward (+z, model space) the knee's bend side
+/// takes, over the thigh's length: enough to bend a straight leg forward,
+/// too little to turn a pose's own bend.
+const KNEE_FORWARD: f32 = 0.02;
+
+/// How far under the hip (over the leg's length) the fit keeps an ankle.
+const MIN_BELOW: f32 = 0.1;
+
+/// The most `lift_leg` lifts the ankle of `leg` as posed: to MIN_BELOW of the
+/// leg under its hip.
+fn most_lift(cs: &CSprite<Ee>, leg: &[usize; 4]) -> f32 {
+    let (hp, kp, ap) = (at(cs, leg[0]), at(cs, leg[1]), at(cs, leg[2]));
+    hp.y - ap.y - MIN_BELOW * (hp.distance(kp) + kp.distance(ap))
+}
+
 /// Two-bone IK: the ankle of `leg` moved up by `lift` with the hip held, the
 /// knee in the plane the pose bent it in, the foot (the ankle and what hangs
 /// from it) carried as posed.
@@ -331,17 +380,26 @@ fn lift_leg(cs: &mut CSprite<Ee>, leg: &[usize; 4], lift: f32, buf: &mut Vec<usi
     if l1 < 1e-4 || l2 < 1e-4 {
         return;
     }
+    // never past the reach the leg can bend to with its knee forward: the
+    // ankle kept MIN_BELOW of the leg under the hip (on ground too steep for
+    // the stride the foot stays in it, as the game draws it, rather than the
+    // ankle pulled up to the hip and the knee folded sideways and back)
+    let lift = lift.min(most_lift(cs, leg));
+    if !(lift > 1e-4) {
+        return;
+    }
     let target = ap + Vec3::Y * lift;
     let to = target - hp;
     let d = to.length().clamp((l1 - l2).abs() + 1e-3, l1 + l2 - 1e-4);
     let dir = to.normalize_or(Vec3::NEG_Y);
     let target = hp + dir * d;
-    // the bend's side: the knee off the hip-ankle line, as posed
-    let mut pole = (kp - hp) - dir * (kp - hp).dot(dir);
-    if pole.length_squared() < 1e-8 {
-        pole = Vec3::Z - dir * Vec3::Z.dot(dir);
-    }
-    let pole = pole.normalize_or(Vec3::Z);
+    // the bend's side: the knee off the hip-ankle line AS POSED (not the
+    // line to the target: a near-straight leg's knee is off that one by the
+    // swing up to it, behind, and the knee bent backwards, inside out), with
+    // a little of the body's forward so a straight leg bends its knee forward
+    let posed = (ap - hp).normalize_or(Vec3::NEG_Y);
+    let bend = (kp - hp) - posed * (kp - hp).dot(posed) + Vec3::Z * (KNEE_FORWARD * l1);
+    let pole = (bend - dir * bend.dot(dir)).normalize_or(Vec3::Z);
     let along = (l1 * l1 - l2 * l2 + d * d) / (2.0 * d);
     let knee = hp + dir * along + pole * (l1 * l1 - along * along).max(0.0).sqrt();
     // the foot as posed, carried
@@ -423,10 +481,14 @@ mod tests {
     const HUMAN: u32 = 0x70D8_98C6;
 
     /// A troll running up a 30 degree hill (heading so it faces up it), over
-    /// two seconds of its run: with the fit, no ankle or toe is ever under
-    /// the ground and the planted foot is on it (within 3 cm); the control,
-    /// the same frames unfitted, sinks one by more than 20 cm. Off, every
-    /// node is bit for bit the game's.
+    /// two seconds of its run: with the fit, no ankle or toe is under the
+    /// ground by more than 18 cm and a third of what the game's pose sinks it
+    /// (the control, the same frames unfitted, sinks one by more than 20 cm),
+    /// and the nearer of them is on it (within 18 cm: where the uphill leg
+    /// cannot reach its ground, the downhill foot is left over its own by as
+    /// much). It once asked 3 cm: met only by lifting the forward ankle to the
+    /// hip and over, its knee bent backwards (petition 3334,
+    /// `stairs_and_steep_ground_never_flip_or_twitch_the_legs`).
     #[test]
     fn a_troll_running_up_a_hill_keeps_its_feet_on_it() {
         let Some(lib) = char_esf() else { return };
@@ -478,10 +540,153 @@ mod tests {
                     }
                 }
                 eprintln!("{id:08X} loco {loco}: worst under ground, fitted {worst_fit:.3}, game {worst_game:.3}, nearer of ankle/toe over its ground at most {planted_err:.3}");
-                assert!(worst_fit < 0.03, "{id:08X} loco {loco}: a foot {worst_fit} under the hill");
-                assert!(planted_err < 0.15, "{id:08X} loco {loco}: a foot {planted_err} over the hill");
+                assert!(worst_fit < 0.18 && worst_fit < worst_game.max(0.0) / 3.0 + 0.01, "{id:08X} loco {loco}: a foot {worst_fit} under the hill (the game's {worst_game})");
+                assert!(planted_err < 0.18, "{id:08X} loco {loco}: a foot {planted_err} over the hill");
                 if loco != 0 {
                     assert!(worst_game > 0.2, "{id:08X} loco {loco}: the control sinks a foot ({worst_game})");
+                }
+            }
+        }
+    }
+
+    const DELF_M: u32 = 0x7ED8_9DAA;
+    const DELF_F: u32 = 0x8C9B_4B39;
+
+    /// What a walk over some ground did to the legs.
+    #[derive(Debug, Default)]
+    struct Walked {
+        /// The least knee side (the knee off the hip-ankle line, along the
+        /// body's forward, over the leg's length): below 0, bent backwards.
+        knee_side: f32,
+        /// The same, of the game's own pose on the same frames.
+        knee_side_game: f32,
+        /// The largest change in a frame of the fit's move of a knee or an
+        /// ankle (model units, from the game's pose).
+        jump: f32,
+        /// Frames the fit was out (weight under 1) once in.
+        dropped: usize,
+        /// The deepest a foot went under its ground (world units).
+        under: f32,
+        /// The same, of the game's own pose.
+        under_game: f32,
+    }
+
+    /// A body walking at `speed` along +z (or facing -z with `back`) over
+    /// `ground`, the actor stood on its floor under the origin, `ms` of it.
+    fn walk_over(lib: &esf::Library, id: u32, loco: i32, speed: f32, back: bool, ms: i64, ground: &mut dyn FnMut(f32, f32) -> (f32, [f32; 3])) -> Walked {
+        let r = lib.lookup(id as i32).unwrap();
+        let mut anims = AnimScene::<Ee>::default();
+        let mut rand = Rand(1);
+        let mut cs = load_csprite(&lib, r, &mut anims, &mut AnimCache::new(), &mut rand).unwrap();
+        let legs = legs_of(&cs).expect("a biped's legs");
+        let mut rand2 = Rand(1);
+        let mut control = load_csprite(&lib, r, &mut anims, &mut AnimCache::new(), &mut rand2).unwrap();
+        cs.set_locomotion(loco, &anims, &mut rand);
+        control.set_locomotion(loco, &anims, &mut rand2);
+        let mut plant = Plant::default();
+        let mut w = Walked { knee_side: f32::MAX, knee_side_game: f32::MAX, under: f32::MIN, under_game: f32::MIN, ..Default::default() };
+        let mut last: Option<Vec<Vec3>> = None;
+        let mut was_in = false;
+        let heading = if back { std::f32::consts::PI } else { 0.0 };
+        let dir = if back { -1.0 } else { 1.0 };
+        for t in (0..ms).step_by(33) {
+            let z = dir * speed * t as f32 / 1000.0 + 0.123;
+            let (y, _) = ground(0.0, z);
+            let actor = Matrix44::transform(&Vect3::of(heading, 0.0, 0.0), F::ONE, &Vect3::of(0.0, y, z));
+            anims.time = t;
+            cs.h.process(0, &anims);
+            control.h.process(0, &anims);
+            let m = cs.h.calc_trans_about_center(&actor, &anims);
+            plant.plant_on(&mut cs, &m, true, t, &mut |x, z, _, _| Some(ground(x, z)));
+            if plant.weight >= 1.0 {
+                was_in = true;
+            } else if was_in {
+                w.dropped += 1;
+            }
+            let mut moves = Vec::new();
+            for leg in &legs.chain {
+                for (body, side) in [(&cs, &mut w.knee_side), (&control, &mut w.knee_side_game)] {
+                    let (hp, kp, ap) = (at(body, leg[0]), at(body, leg[1]), at(body, leg[2]));
+                    let d = (ap - hp).normalize();
+                    let b = (kp - hp) - d * (kp - hp).dot(d);
+                    let len = hp.distance(kp) + kp.distance(ap);
+                    if t >= 300 {
+                        *side = side.min(b.z / len);
+                    }
+                }
+                for &i in &leg[1..3] {
+                    moves.push(at(&cs, i) - at(&control, i));
+                }
+                for &i in &leg[2..4] {
+                    let p = world_of(&m, at(&cs, i));
+                    let base = control.h.nodes[i].world.m[3].y.0;
+                    if t >= 300 && plant.weight >= 1.0 {
+                        w.under = w.under.max(ground(p.x, p.z).0 + base - p.y);
+                        let mc = control.h.calc_trans_about_center(&actor, &anims);
+                        let pc = world_of(&mc, at(&control, i));
+                        w.under_game = w.under_game.max(ground(pc.x, pc.z).0 + base - pc.y);
+                    }
+                }
+            }
+            if let Some(l) = &last {
+                if t >= 300 {
+                    w.jump = moves.iter().zip(l).map(|(a, b)| a.distance(*b)).fold(w.jump, f32::max);
+                }
+            }
+            last = Some(moves);
+        }
+        w
+    }
+
+    /// Stairs: treads `run` deep, `rise` high, up along +z.
+    fn stairs(rise: f32, run: f32) -> impl FnMut(f32, f32) -> (f32, [f32; 3]) {
+        move |_x, z| ((z / run).floor() * rise, [0.0, 1.0, 0.0])
+    }
+
+    /// Stairs whose treads' nosings (the last tenth of each) the probe finds
+    /// as ground too steep to stand on, as a ray at a step's edge can.
+    fn stairs_nosed(rise: f32, run: f32) -> impl FnMut(f32, f32) -> (f32, [f32; 3]) {
+        move |_x, z| {
+            let y = (z / run).floor() * rise;
+            if (z / run).fract() > 0.9 { (y, [0.0, 0.2, -0.98]) } else { (y, [0.0, 1.0, 0.0]) }
+        }
+    }
+
+    /// Petition 3334 (a dark elf, 2026-11-27): "strange leg animation when
+    /// climbing up or down that twitches and flips my legs inside out".
+    /// Dark elves (both bodies) and a troll walking and running up and down
+    /// stairs (0.35 and 0.5 rises on 0.4 treads, one with nosings the probe
+    /// cannot stand on) and 40 and 50 degree slopes. Before the fix: on the
+    /// slopes the uphill ankle was lifted to over the hip, its knee bent
+    /// sideways and back (the knee's side -0.4 of the leg, the game's own pose
+    /// never under 0) and a knee or ankle jumped up to 0.83 in a frame; on
+    /// stairs the fit let go and came back every other frame (88 of 90 frames
+    /// out once in), its weight 0.22/0. Now: the knee never further behind the
+    /// hip-ankle line than the game's pose puts it, no frame's change of the
+    /// fit over 0.45, the fit never let go once in, and no foot deeper in its
+    /// ground than the game's (within 0.12: a foot following a riser up).
+    #[test]
+    fn stairs_and_steep_ground_never_flip_or_twitch_the_legs() {
+        let Some(lib) = char_esf() else { return };
+        for id in [DELF_M, DELF_F, TROLL] {
+            for (loco, speed) in [(1, 3.0), (3, 8.8)] {
+                for back in [false, true] {
+                    for (name, g) in [
+                        ("stairs .35/.4", &mut stairs(0.35, 0.4) as &mut dyn FnMut(f32, f32) -> (f32, [f32; 3])),
+                        ("stairs .5/.4", &mut stairs(0.5, 0.4)),
+                        ("nosed .35/.4", &mut stairs_nosed(0.35, 0.4)),
+                        ("slope 30", &mut |_x: f32, z: f32| { let k = 30f32.to_radians().tan(); (z * k, Vec3::new(0.0, 1.0, -k).normalize().to_array()) }),
+                        ("slope 40", &mut |_x: f32, z: f32| { let k = 40f32.to_radians().tan(); (z * k, Vec3::new(0.0, 1.0, -k).normalize().to_array()) }),
+                        ("slope 50", &mut |_x: f32, z: f32| { let k = 50f32.to_radians().tan(); (z * k, Vec3::new(0.0, 1.0, -k).normalize().to_array()) }),
+                    ] {
+                        let w = walk_over(&lib, id, loco, speed, back, 3000, g);
+                        let case = format!("{id:08X} loco {loco} {} {name}", if back { "down" } else { "up" });
+                        eprintln!("{case}: {w:?}");
+                        assert!(w.knee_side >= w.knee_side_game.min(0.0) - 0.01, "{case}: a knee bent backwards ({} of the leg, the game's {})", w.knee_side, w.knee_side_game);
+                        assert!(w.jump < 0.45, "{case}: the fit jumped {} in a frame", w.jump);
+                        assert!(w.dropped == 0, "{case}: the fit let go {} frames", w.dropped);
+                        assert!(w.under < w.under_game + 0.12, "{case}: a foot {} in its ground, the game's {}", w.under, w.under_game);
+                    }
                 }
             }
         }
