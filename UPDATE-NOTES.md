@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · Cures are no longer auto-cast attacks
+
+- **Auto-cast** no longer turns a cure into an attack: right-clicking an Antidote, Curative, Purity or other spell that removes poison, disease or harmful effects used to make it an Attack (or a Buff) slot fired at your foe or at yourself for nothing; now it says it can't tell when to use it, and casting one at a friend no longer starts your auto-attack. Poison and disease attacks are auto-cast as before.
+
 ## 2026-11-27 · Mouseover Casting for utility spells
 
 - **Mouseover Casting** (PC interface) now also sends your targeted **utility spells** to the pet or groupmate under the mouse: invisibility, illusions and glamours, cures (Antidote, Curative, Purity) and a few heals and buffs it missed before (Bind Wounds, Wild Growth, Forest's Succor, Tracker's Wisdom). Charms, lulls, calms, roots, pickpockets, gates and resurrections still go at your target, and auto-cast still never casts utility spells on its own.

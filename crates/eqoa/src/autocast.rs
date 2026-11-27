@@ -188,6 +188,18 @@ pub fn guess(a: &Ability) -> Option<Kind> {
     if !(0..=2).contains(&a.scope) {
         return None;
     }
+    // a cure: its words name what it takes away ("This spell will remove
+    // Minor Poison from the target", "Removes poison and disease"), which
+    // read as a harm below, so a right click made an Antidote an Attack slot
+    // fired at the foe in a fight (owner 2026-11-27). No kind: no slot waits
+    // for what it needs (the player poisoned or diseased: the client is not
+    // told an effect is one), and a Buff's would cast it on a clean player
+    // until its effect, which never shows, took it off. One that also makes
+    // a change kept up (Spirit of the Wolf's "Increases the target's
+    // movement speed. Removes harmful effects") stays as its change reads.
+    if cures(a) && !names_a_change(a) {
+        return None;
+    }
     let harmful = has(&d, &["decrease", "damage", "injur", "strike", "attack", "drain", "steal", "siphon", "resisted by", "debuff", "taunt", "hate", "root", "snare", "stun", "lance", "bolt", "blast", "burn", "shot", "blow", "slash", "pierce", "crush", "melee", "smite", "nuke", "lightning", "fire", "frost", "poison", "disease", "storm", "shock", "sleet", "spray", "jet", "slam", "malady", "affliction", "fever", "blight", "corrosive", "venom", "gale", "wilting", "sickening", "decaying wind"]);
     // a buff's own words go first: "increases the target's armor", "Defensive
     // Proc" (a proc names damage it does when the player is struck); never in
@@ -244,9 +256,7 @@ pub fn friend_utility(a: &Ability) -> bool {
     }
     let desc = a.desc.to_lowercase();
     let d = format!("{} {}", a.name, desc).to_lowercase();
-    // a harm, or a debuff of a creature (poison and disease stay out: a
-    // cure names what it removes)
-    if has(&d, &["decrease", "damage", "injur", "strike", "attack", "drain", "steal", "siphon", "resisted by", "debuff", "taunt", "hate", "stun", "slow", "bolt", "blast", "nuke", "aoe", "bite", "backstab", "foe", "claw", "rake"]) {
+    if has(&d, HARMS) {
         return false;
     }
     // what reads as a heal or buff of the target in the records' own words
@@ -258,7 +268,24 @@ pub fn friend_utility(a: &Ability) -> bool {
     if has(&d, &["charm", "lull", "pacify", "calm", "sooth", "aggress", "aggro", "root", "snare", "track", "pickpocket", "gate", "teleport", "portal", "evacuat", "succor", "resurrect", "ressurect", "reviv", "reanimat", "rez ", "summon", "creates", "an item", "draught", "potion", "feign", "bind", "self", "familiar", "its owner", "experience", "mask", "lich"]) {
         return false;
     }
-    has(&d, &["invis", "camouflage", "conceal", "illusion", "glamour", "form", "disguise", "appearance", "levitat", "breath", "shrink", "grow", "movement speed", "run faster", "runs faster", "sow", "spirit of the wolf", "remove", "cure", "antidote", "curative", "purity"])
+    has(&d, &["invis", "camouflage", "conceal", "illusion", "glamour", "form", "disguise", "appearance", "levitat", "breath", "shrink", "grow", "movement speed", "run faster", "runs faster", "sow", "spirit of the wolf"]) || has(&d, CURE_WORDS)
+}
+
+/// The words of a harm, or of a debuff of a creature, that a friend's spell
+/// never has (poison and disease stay out: a cure names what it removes).
+const HARMS: &[&str] = &["decrease", "damage", "injur", "strike", "attack", "drain", "steal", "siphon", "resisted by", "debuff", "taunt", "hate", "stun", "slow", "bolt", "blast", "nuke", "aoe", "bite", "backstab", "foe", "claw", "rake"];
+
+/// The words of a cure ("removes Poison", "Cures Posions", "Cure Mystical
+/// Plague"; "cure " and "cures", never "secure").
+const CURE_WORDS: &[&str] = &["remove", "cures", "cure ", "antidote", "curative", "purity"];
+
+/// Whether ability `a` cures (the Antidotes, the Curatives, the Purities,
+/// Cure Mystical Plague, Envaric Salve): its name or words name what it
+/// takes away, and no harm of its own (Christmas Rabies, "disease damage...
+/// It cannot be cured", is a harm).
+pub fn cures(a: &Ability) -> bool {
+    let d = format!("{} {}", a.name, a.desc).to_lowercase();
+    has(&d, CURE_WORDS) && !has(&d, HARMS)
 }
 
 /// Description `d` (lowercase) without the words of a harm that read as a
@@ -946,6 +973,68 @@ mod tests {
         assert_eq!(c.choose(&list, &now).map(|c| (c.id, c.at_self)), Some((7, false)));
     }
 
+    /// The owner, 2026-11-27: a cure's words name what it removes (poison,
+    /// disease), which read as a harm, so a right click made an Antidote an
+    /// Attack slot fired at the foe (and casting it at a friend started the
+    /// auto-attack). The records as eqoaclassic has them: every cure is no
+    /// kind now; the controls, every harm that names a poison or a disease,
+    /// stay Attacks, and a cure that also makes a lasting change stays a buff.
+    #[test]
+    fn a_cure_is_no_attack_and_a_poison_or_disease_harm_still_is() {
+        let list = [
+            ("Minor Antidote", "This spell will remove Minor Poison from the target.", 1),
+            ("Lesser Antidote", "This spell will remove Lesser Poison from the target.", 1),
+            ("Minor Curative", "This spell will remove Minor Infection from the target.", 1),
+            ("Antidote", "Target, Removes Poison", 1),
+            ("Greater Antidote", "Target, removes Greater Poison", 1),
+            ("Major Antidote", "Target, remove Major Poison", 1),
+            ("Vital Antidote", "Target, removes poison", 1),
+            ("Curative", "Target, Removes Infection", 1),
+            ("Vital Curative", "Target, removes Infection", 1),
+            ("Cure Mystical Plague", "Removes harmful effects from the target.", 1),
+            ("Envaric Salve", "Removes harmful effects from the target.", 1),
+            ("Minor Purity +", "CM: Removes harmful effects from the target.", 1),
+            ("Purity", "Removes poison and disease", 0),
+            ("Lesser Purity", "Self, Cures Posions", 0),
+            ("Major Purity", "Self, Removes poison and disease", 0),
+            ("Restorative", "Removes up to three harmful effects from you, the first you came by first.", 0),
+            ("Purifying Winds of Nife", "Removes diseases from you and those near you.", 0),
+            ("Revert Lich", "Self, Removes Lich form", 0),
+        ];
+        for (name, desc, scope) in list {
+            let a = ab(1, 0, name, desc, scope);
+            assert!(cures(&a), "{name}: a cure");
+            assert_eq!(guess(&a), None, "{name}: no kind for auto-cast");
+            assert!(!crate::play::starts_attack(&a), "{name}: starts no auto-attack");
+            let mut c = AutoCast::default();
+            assert!(c.toggle(&a).starts_with("Auto-cast can't tell"), "{name}: a right click makes no slot");
+            assert!(c.on.is_empty());
+        }
+        // a cure at a friend stays Mouseover Casting's
+        assert!(mouseover(&ab(1, 0, "Antidote", "Target, Removes Poison", 1)));
+        // a cure that also makes a lasting change: its change
+        assert_eq!(guess(&ab(1, 0, "Spirit of the Wolf", "Increases the target's movement speed. Removes harmful effects from the target.", 1)), Some(Kind::Buff));
+        let harms = [
+            ("Disease Cloud", "A cloud of infection harms your enemy. Modified by DEX."),
+            ("Rabid Infection", "Inflicts a lingering disease upon the target, causing damage over time. Modified by DEX. Resisted by DR"),
+            ("Plague", "Target, Decrease HP per tic by 14, 24s"),
+            ("Minor Malady", "Lowers the target's STR, AGI and DEX by 10 for 2 minutes. Modified by WIS. Resisted by DR."),
+            ("Infectious Spray", "TARGET Debuff HP by 1026 Modified 15% based on DEX"),
+            ("Poison Dart", "Target, Decrease Hitpoints by 966"),
+            ("Venom Bolt", "Strikes the target with poison for 374 damage, then 93 damage per tick for 24 seconds. Resisted by PR."),
+            ("Plague Bite", "CM: A bite that festers. Modified by DEX. Resisted by DISEASE."),
+            ("Cleansing Ward", "Target undead, Decrease Hitpoints by 100 ; Increase 6% based on CHA, 7.5min"),
+            ("Secure", "Target, Increase AC by 400, Decrease AC to self by 200"),
+        ];
+        for (name, desc) in harms {
+            let a = ab(1, 0, name, desc, 1);
+            assert_eq!(guess(&a), Some(Kind::Attack), "{name}: still an Attack");
+            assert!(!cures(&a), "{name}: no cure");
+        }
+        // a harm that says it cannot be cured is no cure
+        assert!(!cures(&ab(1, 0, "Christmas Rabies", "Enraged Gertrude's foaming bite: 5,000 disease damage at once and every 6 seconds for a minute. It cannot be cured.", 1)));
+    }
+
     /// Petition 3350: a friend's utility spell (the server's records, as
     /// eqoaclassic has them) is Mouseover Casting's, though `guess` still
     /// names it no kind, so auto-cast never starts one. The controls: what
@@ -979,8 +1068,8 @@ mod tests {
             assert!(friend_utility(&a) && mouseover(&a), "{name}: a friend's");
             assert!(!matches!(guess(&a), Some(Kind::Heal | Kind::Buff)), "{name}: guess's own reading never had it");
         }
-        // auto-cast still never starts the utilities themselves
-        for (name, desc) in &yes[..12] {
+        // auto-cast still never starts the utilities themselves, nor a cure
+        for (name, desc) in &yes[..15] {
             assert_eq!(guess(&ab(1, 0, name, desc, 1)), None, "{name}: no kind for auto-cast");
         }
         let no = [
