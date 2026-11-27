@@ -298,6 +298,20 @@ impl<A: winit::application::ApplicationHandler> winit::application::ApplicationH
     }
 }
 
+/// The last allocation the page's allocator refused, in bytes (0: none;
+/// `mem::Watched`), for the crash report (web/notices.js): read after the
+/// client stopped, it allocates nothing.
+#[wasm_bindgen]
+pub fn alloc_refused() -> f64 {
+    crate::mem::refused().map_or(0.0, |(bytes, _)| bytes as f64)
+}
+
+/// The wasm heap when that allocation was refused, in bytes (`alloc_refused`).
+#[wasm_bindgen]
+pub fn alloc_refused_heap() -> f64 {
+    crate::mem::refused().map_or(0.0, |(_, heap)| heap as f64)
+}
+
 /// Whether a call of the event loop's into the client never returned
 /// (`Guarded`): asked by the page in a task of its own (web/notices.js: after
 /// an uncaught error, and every second), when no call is under way, so a

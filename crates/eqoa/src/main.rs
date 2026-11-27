@@ -161,6 +161,11 @@ mod loot;
 mod map;
 // the memory the log carries (F3 crash 20261026-220031)
 mod mem;
+/// A page's allocator: the system's, an allocation it refuses remembered
+/// for the crash report (`mem::Watched`, petition 5666).
+#[cfg(target_arch = "wasm32")]
+#[global_allocator]
+static ALLOCATOR: mem::Watched = mem::Watched;
 mod merchant;
 mod modules;
 mod mouse;

@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · Crash reports say when the page ran out of memory
+
+- When the browser page stops with **"RuntimeError: unreachable"** because it was refused memory, its crash report now says how big the game's memory was and how much it had asked for, so the GMs can tell a game that grew out of control from a computer with no memory left to give (several windows multiboxing on one machine).
+- The page's memory line in the log now comes at once when the game's memory has grown a lot, not only every ten minutes, and on WebGL2 it no longer shows a falling, negative count of graphics buffers.
+
 ## 2026-11-26 · Bank pages from the bank window
 
 - At the banker, on the **Items** page, you can now turn your bank's page without typing **/bank next**: press **R1** for the next page and **L1** for the one before (**Page Down** and **Page Up** on the keyboard). With **Inventory Style** set to **Bags** there are **Page** buttons under the bank's grid too, to click or tap. The chat says which page you are on, and the bank's side starts again from its top.

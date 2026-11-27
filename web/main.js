@@ -7,7 +7,7 @@
 // (window.eqoaNotices). gpuguard.js first: WebGPU's calls on a lost device
 // give what the spec says, not Safari's InvalidStateError.
 import './gpuguard.js';
-import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick, field_up, field_text, chat_copy_text, chat_copied, field_cut, field_paste, lose_device, gpu_threw, event_loop_stuck, event_loop_stuck_in } from './eqoa.js';
+import init, { boot, view, disc_id, disc_2002, update_notices, hidden_tick, field_up, field_text, chat_copy_text, chat_copied, field_cut, field_paste, lose_device, gpu_threw, event_loop_stuck, event_loop_stuck_in, alloc_refused, alloc_refused_heap } from './eqoa.js';
 import { canRemember, keptHandle, keepHandle, forgetHandle } from './discstore.js';
 
 const $ = (id) => document.getElementById(id);
@@ -198,6 +198,21 @@ window.eqoaGpuThrew = (text) => { if (clientReady) gpu_threw(String(text)); };
 // (RedrawRequested), 3.2 s ago")
 window.eqoaLoopStuck = () => clientReady && event_loop_stuck();
 window.eqoaLoopStuckIn = () => (clientReady && event_loop_stuck_in()) || '';
+// the wasm heap's size, and the last allocation the client's allocator was
+// refused (mem::Watched), for a crash report (web/notices.js): whether a
+// page that stopped on "unreachable" had its own heap run away (at wasm's
+// 4 GB) or was refused memory far under it (petition 5666)
+let wasmMemory = null;
+window.eqoaMemoryFacts = () => {
+  const mb = (b) => `${(b / 1048576).toFixed(0)} MB`;
+  const heap = wasmMemory ? `wasm heap ${mb(wasmMemory.buffer.byteLength)}` : 'wasm heap -';
+  let refused = '';
+  try {
+    const bytes = clientReady ? alloc_refused() : 0;
+    if (bytes > 0) refused = `; out of memory: an allocation of ${bytes} bytes refused with the wasm heap at ${mb(alloc_refused_heap())}`;
+  } catch { /* the client is gone */ }
+  return heap + refused;
+};
 // The page going (a reload, a navigation away, the tab closed). On a loop
 // left dead (a call into the client that never returned: the browser
 // stopped the script mid-frame, as Firefox does when the player navigates
@@ -1385,7 +1400,8 @@ function hiddenTicker() {
 
 checkGraphics();
 const ready = init({ module_or_path: wasmModule });
-ready.then(() => {
+ready.then((wasm) => {
+  wasmMemory = wasm && wasm.memory;
   clientReady = true;
   hiddenTicker();
   status('ready');
