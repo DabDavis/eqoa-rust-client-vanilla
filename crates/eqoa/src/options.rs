@@ -102,7 +102,10 @@
 //!   again a pass grown by the game's rule off seeds of their own, and that
 //!   many more drawn, `vi::flora::System::density`) and Foliage Reacts (Off,
 //!   the game's; On, the plants round a player or a creature leaning away
-//!   from it and easing back, `flora::React`);
+//!   from it and easing back, `flora::React`), Foliage Distance (2026-11-27,
+//!   Heirloom petition 3356: Retail, the game's 40 units; 1.5x, 2x or 3x,
+//!   2x the most in a page and on a phone, the field growing in over its
+//!   outer quarter, `vi::flora::System::distance`);
 //! - UI: Ability Bars (the game's 2, or 3 or 4: the HUD's quick menus and
 //!   the spell book's slots, `hudmenu`), Stacked Spell Bars (2026-11-13,
 //!   a player's ticket 1913, Off by default: On, on a computer, every bar shown
@@ -1082,6 +1085,10 @@ impl WndOptions {
                     // Foliage Reacts: the plants lean from the next frame
                     // (`flora::React`)
                     FOLIAGE_REACTS => c.foliage_reacts = !c.foliage_reacts,
+                    // Foliage Distance: Retail, 1.5x, 2x, 3x round (2x the
+                    // most in a page and on a phone), the swatches grown
+                    // again at the next frame (`flora::Flora::frame`)
+                    FOLIAGE_DISTANCE => c.foliage_distance = foliage_distance_step(crate::settings::foliage_distance_drawn(&c), d),
                     // Master Volume: a step, stopping at the ends (as the
                     // game's volumes stop), heard from the next frame
                     // (`audio::set_master`)
@@ -2267,6 +2274,7 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (crate::minimapcolor::SPELLS_SHOWN_ITEM, "Spell Merchants Shown"),
     (FOLIAGE_DENSITY, "Foliage Density"),
     (FOLIAGE_REACTS, "Foliage Reacts"),
+    (FOLIAGE_DISTANCE, "Foliage Distance"),
     (FACTION_TRACK, "Faction Tracker"),
     (FACTION_TRACK_STYLE, "Faction Tracker Shows"),
     (MASTER_VOLUME, "Master Volume"),
@@ -2397,6 +2405,30 @@ pub(crate) const TOWN_MAP: i32 = 342;
 /// fitted to the ground under each foot (`feet`), on Graphics' Characters page.
 pub(crate) const FEET_ON_SLOPES: i32 = 343;
 pub(crate) const FOLIAGE_REACTS: i32 = 321;
+/// Foliage Distance's (Heirloom petition 3356, 2026-11-27): the plants drawn
+/// out to 1.5, 2 or 3 times the game's 40 units (`vi::flora::System::distance`),
+/// on Graphics' Foliage page.
+pub(crate) const FOLIAGE_DISTANCE: i32 = 322;
+
+/// Foliage Distance a step on (`d` > 0) or back, round this build's steps
+/// (`settings::foliage_distance_most`).
+pub(crate) fn foliage_distance_step(now: u16, d: i32) -> u16 {
+    let most = crate::settings::foliage_distance_most();
+    let steps: Vec<u16> = crate::settings::FOLIAGE_DISTANCES.into_iter().filter(|&v| v <= most).collect();
+    let n = steps.len() as i32;
+    let at = steps.iter().position(|&v| v == now).unwrap_or(0) as i32;
+    steps[(at + d.signum() + n).rem_euclid(n) as usize]
+}
+
+/// Foliage Distance's value as the row shows it.
+pub(crate) fn foliage_distance_name(v: u16) -> &'static str {
+    match v {
+        150 => "1.5x",
+        200 => "2x",
+        300 => "3x",
+        _ => "Retail",
+    }
+}
 /// Field of View's (Heirloom petition 3336, the owner's of 2026-11-27): the
 /// world's view up the height, 45 to 95 degrees, the game's 55 by default
 /// (`settings::ClientOptions::fov`, `walker::Walker::view`), on Graphics'
@@ -2588,7 +2620,7 @@ const ALL_CATEGORIES: [Category; 31] = [
     // the item menu's (petition 3118): its grid, its order, the comparison
     Category { name: "Inventory", items: &[INVENTORY_STYLE, BAG_SORT, COMPARE_GEAR], note: Note::None, group: Group::Ui },
     // the radial flora's more and its lean (petition 3197): World's page is full
-    Category { name: "Foliage", items: &[FOLIAGE_DENSITY, FOLIAGE_REACTS], note: Note::None, group: Group::Graphics },
+    Category { name: "Foliage", items: &[FOLIAGE_DENSITY, FOLIAGE_REACTS, FOLIAGE_DISTANCE], note: Note::None, group: Group::Graphics },
     // one faction's standing on the HUD (petition 3216), picked in the faction window
     Category { name: "Faction Tracker", items: &[FACTION_TRACK, FACTION_TRACK_STYLE], note: Note::Faction, group: Group::Ui },
 ];
@@ -2811,6 +2843,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
             _ => "Retail",
         }),
         FOLIAGE_REACTS => on_off(c.foliage_reacts),
+        FOLIAGE_DISTANCE => wide(foliage_distance_name(crate::settings::foliage_distance_drawn(&c))),
         FACTION_TRACK => on_off(c.faction_track),
         FACTION_TRACK_STYLE => wide(c.faction_track_style.name()),
         300..=306 => wide(crate::numcolor::name(c.minimap_colors[crate::minimapcolor::row_of_item(item)?])),
@@ -4660,7 +4693,7 @@ mod tests {
                 ("Textures", textures),
                 ("Weather", vec!["Weather"]),
                 ("Texture Cache", vec!["Precache Textures", "Pack Compression", "Rebuild Pack Cache"]),
-                ("Foliage", vec!["Foliage Density", "Foliage Reacts"]),
+                ("Foliage", vec!["Foliage Density", "Foliage Reacts", "Foliage Distance"]),
             ],
             "Graphics: how the world is drawn"
         );
@@ -5541,5 +5574,28 @@ mod tests {
         // the other settings' unsaved changes stay unsaved
         assert_eq!(GameOptions::from_card(&testing::kept("game.opt").unwrap()).unwrap().no_damage, GameOptions::default().no_damage);
         testing::reset(false);
+    }
+
+    /// Foliage Distance's row: Retail, 1.5x, 2x, 3x round and back (2x the
+    /// most in a page and on a phone); a value off the steps steps from
+    /// Retail. The control: a step back from Retail is the farthest.
+    #[test]
+    fn foliage_distance_steps_round() {
+        let most = crate::settings::foliage_distance_most();
+        let mut v = 100u16;
+        let mut seen = vec![v];
+        loop {
+            v = foliage_distance_step(v, 1);
+            if v == 100 {
+                break;
+            }
+            seen.push(v);
+        }
+        let want: Vec<u16> = [100u16, 150, 200, 300].into_iter().filter(|&x| x <= most).collect();
+        assert_eq!(seen, want);
+        assert_eq!(foliage_distance_step(100, -1), most, "the control: back from Retail");
+        assert_eq!(foliage_distance_step(150, -1), 100);
+        assert_eq!(foliage_distance_step(123, 1), 150, "off the steps: from Retail");
+        assert_eq!(want.iter().map(|&x| foliage_distance_name(x)).collect::<Vec<_>>(), ["Retail", "1.5x", "2x", "3x"][..want.len()].to_vec());
     }
 }

@@ -155,3 +155,109 @@ fn flora_on_tunaria() {
     assert!(grown > 1000, "too few plants grew");
     assert!(on_ground * 100 >= checked * 95, "plants off the ground: {on_ground} of {checked}");
 }
+
+/// Foliage Distance on the disc (Freeport's ground, the console's model, as
+/// the client runs it): at each distance and density, a whole grid grown,
+/// a walk east of 400 units (the swatches made as one runs), and `render`
+/// with nothing culled (the worst: all round the eye), each timed; plants
+/// grown and drawn. The numbers are printed (`--nocapture`); the checks: more
+/// drawn farther, never past the cap, Retail's 3 x 3 the game's.
+#[test]
+fn flora_distance_cost() {
+    use vi::flora::Frustum;
+    use vi::fpu::Ee;
+    use vi::geom::Plane;
+    let iso_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../run/eqoa.iso");
+    if !iso_path.exists() {
+        eprintln!("SKIP: no disc");
+        return;
+    }
+    let mut iso = iso::Iso::open(iso_path).unwrap();
+    let mut lib = esf::Library::new();
+    let f = lib.add("TUNARIA.ESF", esf::Container::open(iso.read("TUNARIA.ESF").unwrap()).unwrap());
+    let mut w = vi::world::World::<Ee>::load(&lib, f).unwrap();
+    // the ground under a point, and a frustum that culls nothing round it
+    let ground = |w: &mut vi::world::World<Ee>, x: f32, z: f32| {
+        let mut ray = vi::coll::CollRay::<Ee>::default();
+        ray.init(Vect3::of(x, 600.0, z), Vect3::of(x, -200.0, z));
+        let mut fl = vi::scene::Filter::new(vi::scene::FilterKind::Scene, -1);
+        w.collide_ray(&mut ray, &mut fl).then(|| Vect3::<Ee>::of(x, ray.hit_point().y.0 + 1.7, z))
+    };
+    let open = |at: &Vect3<Ee>| {
+        let mut fr = Frustum::<Ee>::default();
+        for (k, p) in fr.planes.iter_mut().enumerate() {
+            let (n, c) = match k {
+                0 => (Vect3::of(1.0, 0.0, 0.0), at.x.0),
+                1 => (Vect3::of(-1.0, 0.0, 0.0), -at.x.0),
+                2 => (Vect3::of(0.0, 1.0, 0.0), at.y.0),
+                3 => (Vect3::of(0.0, -1.0, 0.0), -at.y.0),
+                4 => (Vect3::of(0.0, 0.0, 1.0), at.z.0),
+                _ => (Vect3::of(0.0, 0.0, -1.0), -at.z.0),
+            };
+            *p = Plane { n, d: F::new(-c - 1000.0) };
+        }
+        fr
+    };
+    let view = |at: &Vect3<Ee>| {
+        let (h, v) = ((27.5f32.to_radians().tan() * 16.0 / 9.0).atan(), 27.5f32.to_radians());
+        let mut fr = Frustum::<Ee>::default();
+        let ns = [(-h.sin(), 0.0, h.cos()), (-h.sin(), 0.0, -h.cos()), (-v.sin(), v.cos(), 0.0), (-v.sin(), -v.cos(), 0.0), (-1.0, 0.0, 0.0), (1.0, 0.0, 0.0)];
+        for (k, (x, y, z)) in ns.into_iter().enumerate() {
+            let d = -(x * at.x.0 + y * at.y.0 + z * at.z.0) - if k == 5 { 5000.0 } else { 0.0 };
+            fr.planes[k] = Plane { n: Vect3::of(x, y, z), d: F::new(d) };
+        }
+        fr
+    };
+    // Freeport's grassland east of the city, and a run east across it
+    let (x0, z0) = (24200.0f32, 14300.0f32);
+    let mut last_drawn = 0usize;
+    for dist in [100u16, 150, 200, 300] {
+        for density in [1u8, 2, 3] {
+            let mut sys = vi::flora::System::<Ee> { distance: dist, density, ..Default::default() };
+            let Some(at) = ground(&mut w, x0, z0) else { panic!("no ground at the start") };
+            let t = std::time::Instant::now();
+            sys.update(&mut w, &at);
+            let full = t.elapsed().as_secs_f64() * 1000.0;
+            let grown: usize = sys.swatches.iter().flatten().map(|s| s.insts.len()).sum();
+            let fr = open(&at);
+            let t = std::time::Instant::now();
+            let mut drawn = 0;
+            for _ in 0..20 {
+                drawn = sys.render(&fr, &at).len();
+            }
+            let render = t.elapsed().as_secs_f64() * 1000.0 / 20.0;
+            assert!(drawn <= sys.drawn_most());
+            // and a view's: east, 55 degrees up the height at 16:9
+            let fr = view(&at);
+            let t = std::time::Instant::now();
+            let mut seen = Vec::new();
+            for _ in 0..20 {
+                seen = sys.render(&fr, &at);
+            }
+            let render_view = t.elapsed().as_secs_f64() * 1000.0 / 20.0;
+            let seen_far = seen.iter().map(|d| { let p = d.world.m[3]; ((p.x.0 - at.x.0).powi(2) + (p.z.0 - at.z.0).powi(2)).sqrt() }).fold(0.0f32, f32::max);
+            // the run: a step of 2 units at a time (a run's frame is ~0.3)
+            let (mut worst, mut total, mut steps) = (0f64, 0f64, 0);
+            for k in 1..=200 {
+                let Some(p) = ground(&mut w, x0 + k as f32 * 2.0, z0) else { continue };
+                let t = std::time::Instant::now();
+                sys.update(&mut w, &p);
+                let e = t.elapsed().as_secs_f64() * 1000.0;
+                worst = worst.max(e);
+                total += e;
+                steps += 1;
+            }
+            eprintln!(
+                "distance {dist}% density {density}x: {} swatches, {grown} grown, {drawn} drawn all round (cap {}), {} in a view out to {seen_far:.0}; whole grid {full:.2} ms, render {render:.2} ms all round, {render_view:.2} ms a view, run: worst step {worst:.2} ms, {:.3} ms a step over {steps}",
+                sys.swatches.iter().flatten().count(),
+                sys.drawn_most(),
+                seen.len(),
+                total / steps.max(1) as f64
+            );
+            if density == 1 {
+                assert!(drawn >= last_drawn, "{dist}: fewer drawn farther");
+                last_drawn = drawn;
+            }
+        }
+    }
+}

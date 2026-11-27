@@ -654,6 +654,23 @@ const SERVER_FILE: &str = "server.opt";
 /// client. apk users reporting they cannot login"): natively alone, as a page
 /// is told its own (`web`'s `server` option) and another site's page must not
 /// be sent here.
+/// Foliage Distance's steps, in percent of the game's 40 units: Retail,
+/// 1.5x, 2x, 3x (`vi::flora::System::distance`).
+pub const FOLIAGE_DISTANCES: [u16; 4] = [vi::flora::DISTANCE_RETAIL, 150, 200, vi::flora::DISTANCE_MOST];
+
+/// The farthest Foliage Distance this build draws: 3x on a computer; 2x in
+/// a page and on a phone (3x there is about 9 times the game's plants to
+/// sort and draw a frame, `world_flora`'s `flora_distance_cost`). A file
+/// kept at 3x elsewhere is drawn at 2x here and kept as it was.
+pub fn foliage_distance_most() -> u16 {
+    if cfg!(any(target_arch = "wasm32", target_os = "android")) { 200 } else { vi::flora::DISTANCE_MOST }
+}
+
+/// The Foliage Distance drawn: the option's, held to this build's most.
+pub fn foliage_distance_drawn(c: &ClientOptions) -> u16 {
+    c.foliage_distance.clamp(vi::flora::DISTANCE_RETAIL, foliage_distance_most())
+}
+
 pub const DEFAULT_SERVER: &str = "eqoaclassic.com";
 
 /// The server the title's Network Setup keeps (`server.opt`: the address
@@ -1550,6 +1567,12 @@ pub struct ClientOptions {
     /// plants round a player or a creature lean away from it and ease back
     /// once it has passed (`flora::React`).
     pub foliage_reacts: bool,
+    /// Foliage Distance (Heirloom petition 3356, 2026-11-27): 100, Retail,
+    /// the game's 40 units round the camera; 150, 200 or 300 (one of
+    /// `FOLIAGE_DISTANCES`), the plants drawn that many times as far, the
+    /// field growing in over its outer quarter (`vi::flora::System::distance`),
+    /// held to `foliage_distance_most` on a page and a phone.
+    pub foliage_distance: u16,
     /// Master Volume (Heirloom petition 3261: "the game's sound is loud even
     /// at the lowest setting"): the whole output, in percent of the game's,
     /// one of `MASTER_VOLUMES` (`audio::set_master`); 100, the game's.
@@ -1942,6 +1965,7 @@ impl Default for ClientOptions {
             weather: SHARE_FULL,
             foliage_density: 1,
             foliage_reacts: false,
+            foliage_distance: vi::flora::DISTANCE_RETAIL,
             master_volume: 100,
             ps2_fog: true,
             ps2_particles: true,
@@ -2328,6 +2352,9 @@ impl ClientOptions {
         if self.foliage_reacts {
             s.push_str("foliage_reacts=on\n");
         }
+        if self.foliage_distance != vi::flora::DISTANCE_RETAIL && FOLIAGE_DISTANCES.contains(&self.foliage_distance) {
+            s.push_str(&format!("foliage_distance={}\n", self.foliage_distance));
+        }
         // Master Volume only when turned down
         if self.master_volume < 100 {
             s.push_str(&format!("master_volume={}\n", self.master_volume));
@@ -2692,6 +2719,11 @@ impl ClientOptions {
                     }
                 }
                 ("foliage_reacts", "on") => c.foliage_reacts = true,
+                ("foliage_distance", v) => {
+                    if let Some(v) = v.parse::<u16>().ok().filter(|v| FOLIAGE_DISTANCES.contains(v)) {
+                        c.foliage_distance = v;
+                    }
+                }
                 ("master_volume", v) => {
                     if let Ok(v @ 0..=100) = v.parse::<u8>() {
                         c.master_volume = v;
@@ -5135,6 +5167,29 @@ mod tests {
             let c = ClientOptions::from_text(bad);
             assert_eq!((c.foliage_density, c.foliage_reacts), (1, false), "{bad}: the default");
         }
+    }
+
+    /// Foliage Distance (Retail): the game's by default and then not
+    /// written; each step kept and read back, beside the other Foliage rows;
+    /// anything not a step is Retail; drawn at most 2x in a page or on a
+    /// phone, 3x on a computer.
+    #[test]
+    fn foliage_distance_round_trips() {
+        let d = ClientOptions::default();
+        assert_eq!(d.foliage_distance, 100, "Retail");
+        assert!(!d.to_text().contains("foliage_distance"), "nothing kept at the game's");
+        for v in FOLIAGE_DISTANCES {
+            let c = ClientOptions { foliage_distance: v, foliage_density: 2, ..Default::default() };
+            let t = c.to_text();
+            assert_eq!(t.contains(&format!("foliage_distance={v}\n")), v != 100, "{t}");
+            assert!(ClientOptions::from_text(&t) == c, "{v}: read back");
+        }
+        for bad in ["foliage_distance=0", "foliage_distance=120", "foliage_distance=400", "foliage_distance=x", "foliage_distance=-150"] {
+            assert_eq!(ClientOptions::from_text(bad).foliage_distance, 100, "{bad}: Retail");
+        }
+        let far = ClientOptions { foliage_distance: 300, ..Default::default() };
+        assert_eq!(foliage_distance_drawn(&far), if cfg!(any(target_arch = "wasm32", target_os = "android")) { 200 } else { 300 });
+        assert_eq!(foliage_distance_drawn(&ClientOptions::default()), 100);
     }
 
     /// Render Scale, x1 by default, kept only above 1 and only as one of its

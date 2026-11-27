@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · Foliage Distance
+
+- A new **Foliage Distance** row in **Options → Extended → Graphics → Foliage** draws the grass and plants farther out: **Retail** (the game's, exactly as before, the default), **1.5x**, **2x** or **3x** (2x the most in the browser and on phones). Farther out the plants grow in gradually toward the edge as you run, instead of ending at a ring; 3x with 3x Foliage Density costs the most.
+
 ## 2026-11-27 · Map camps show their creatures' levels
 
 - **The map's camps** show the levels of the creatures there now, not the guide's: the Salt Mine's siloths said 45-50 while they were 39-41.

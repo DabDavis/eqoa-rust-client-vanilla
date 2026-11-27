@@ -24,6 +24,11 @@
 //! creature leaning away from it and easing back once it has passed
 //! (`React`): each plant's instance matrix sheared at its root, so the
 //! vertex shader bends it (its top furthest) with nothing new on the GPU.
+//! A third (Heirloom petition 3356, 2026-11-27): Foliage Distance, the
+//! plants drawn out to 1.5, 2 or 3 times the game's 40 units on a grid of as
+//! many more swatches, the game's fade stretched to the radius and the outer
+//! quarter grown in from nothing (`vi::flora::System::distance`); Retail,
+//! the game's, exactly as before.
 
 use esf::Library;
 use glam::Mat4;
@@ -34,10 +39,6 @@ use vi::fpu::{Ee, F};
 use vi::geom::Plane;
 use vi::vect::Vect3;
 use vi::world::World;
-
-/// The most plants `Render` draws a frame (`m_sorted`), at the game's
-/// density.
-const MOST: usize = vi::flora::DRAWN_MOST;
 
 /// The plants of `drawn` that the options' Flora draws at `share`
 /// (`settings::share_keeps`): each by where it stands, so a plant is drawn
@@ -91,8 +92,12 @@ impl Flora {
         // Foliage Density: every swatch grown again, and the models made
         // again with room for as many more drawn
         let density = c.foliage_density.clamp(1, vi::flora::DENSITY_MOST);
-        if self.sys.density != density {
+        // and Foliage Distance: the grid grown again, its models with room
+        // for the radius's area
+        let distance = crate::settings::foliage_distance_drawn(&c);
+        if self.sys.density != density || self.sys.distance != distance {
             self.sys.density = density;
+            self.sys.distance = distance;
             self.sys.reset();
             self.models.clear();
             self.runs.clear();
@@ -117,7 +122,7 @@ impl Flora {
         self.leans.clear();
         if c.foliage_reacts {
             let at = [eye.x.0, eye.y.0, eye.z.0];
-            self.leans = self.react.frame(&drawn, &nearest(movers, at), web_time::Instant::now());
+            self.leans = self.react.frame(&drawn, &nearest(movers, at, self.sys.radius().0), web_time::Instant::now());
         } else {
             self.react = React::default();
         }
@@ -150,7 +155,7 @@ impl Flora {
             let model = self.models.entry(*s).or_insert_with(|| {
                 let r = world.sprite_refs.get(*s)?;
                 let m = lib.file(r.file).build_model(r.node)?;
-                Some(renderer.upload_flora(device, queue, &m, MOST * self.sys.density() as usize, &render::library_textures(lib)))
+                Some(renderer.upload_flora(device, queue, &m, self.sys.drawn_most(), &render::library_textures(lib)))
             });
             if let Some(g) = model {
                 renderer.set_instances(queue, g, instances);
@@ -180,7 +185,7 @@ impl Flora {
     pub fn describe(&self) -> String {
         let swatches = self.sys.swatches.iter().flatten().count();
         let leaning = self.leans.iter().filter(|l| **l != [0.0, 0.0]).count();
-        format!("flora: {} plants in {swatches} swatches, {} drawn in {} runs, {} models, density {}, {leaning} leaning", self.grown, self.drawn, self.runs.len(), self.models.len(), self.sys.density())
+        format!("flora: {} plants in {swatches} swatches, {} drawn in {} runs, {} models, density {}, distance {}%, {leaning} leaning", self.grown, self.drawn, self.runs.len(), self.models.len(), self.sys.density(), self.sys.distance())
     }
 }
 
@@ -194,9 +199,9 @@ pub struct Mover {
 
 /// The most bodies the plants lean from at once: the nearest the eye.
 pub const MOVERS: usize = 8;
-/// How far a body is looked for round the eye (the flora's 40, and a body's
-/// reach past it).
-const MOVER_RANGE: f32 = 48.0;
+/// How far past the flora's radius (the game's 40, or Foliage Distance's) a
+/// body is looked for round the eye: a body's reach.
+const MOVER_PAST: f32 = 8.0;
 /// A plant's lean at its most: its top this many of its heights to the side
 /// (about 35 degrees).
 pub const LEAN_MOST: f32 = 0.7;
@@ -209,10 +214,12 @@ const OVER: f32 = 5.0;
 const EASE_IN: f32 = 0.08;
 const EASE_OUT: f32 = 0.6;
 
-/// The `MOVERS` bodies nearest `eye`, within `MOVER_RANGE`, nearest first.
-pub fn nearest(movers: &[Mover], eye: [f32; 3]) -> Vec<Mover> {
+/// The `MOVERS` bodies nearest `eye`, within the flora's `radius` and
+/// `MOVER_PAST`, nearest first.
+pub fn nearest(movers: &[Mover], eye: [f32; 3], radius: f32) -> Vec<Mover> {
     let d2 = |m: &Mover| (0..3).map(|k| (m.at[k] - eye[k]) * (m.at[k] - eye[k])).sum::<f32>();
-    let mut v: Vec<(f32, Mover)> = movers.iter().map(|m| (d2(m), *m)).filter(|(d, m)| *d < MOVER_RANGE * MOVER_RANGE && m.reach > 0.0 && d.is_finite()).collect();
+    let range = radius + MOVER_PAST;
+    let mut v: Vec<(f32, Mover)> = movers.iter().map(|m| (d2(m), *m)).filter(|(d, m)| *d < range * range && m.reach > 0.0 && d.is_finite()).collect();
     v.sort_by(|a, b| a.0.total_cmp(&b.0));
     v.into_iter().take(MOVERS).map(|(_, m)| m).collect()
 }
@@ -402,11 +409,15 @@ mod tests {
     #[test]
     fn the_nearest_bodies() {
         let all: Vec<Mover> = (0..20).map(|k| Mover { at: [k as f32 * 4.0, 0.0, 0.0], reach: 1.0 }).collect();
-        let n = nearest(&all, [0.0, 0.0, 0.0]);
+        let n = nearest(&all, [0.0, 0.0, 0.0], 40.0);
         assert_eq!(n.len(), MOVERS);
         assert_eq!(n[0].at[0], 0.0);
-        assert!(n.iter().all(|m| m.at[0] < MOVER_RANGE));
-        assert!(nearest(&all, [1000.0, 0.0, 0.0]).is_empty(), "none in range");
+        assert!(n.iter().all(|m| m.at[0] < 48.0));
+        assert!(nearest(&all, [1000.0, 0.0, 0.0], 40.0).is_empty(), "none in range");
+        // Foliage Distance: the bodies out at the farther plants are felt
+        let one = [Mover { at: [100.0, 0.0, 0.0], reach: 1.0 }];
+        assert!(nearest(&one, [0.0, 0.0, 0.0], 40.0).is_empty(), "past the game's 40");
+        assert_eq!(nearest(&one, [0.0, 0.0, 0.0], 120.0).len(), 1, "inside 3x's 120");
     }
 
     /// Flora at all of it is `Render`'s list as it is, in its order; below,
