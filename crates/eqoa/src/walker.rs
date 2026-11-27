@@ -1116,14 +1116,31 @@ impl Walker {
     }
 
 
-    /// The projection and the view matrix through the game's camera: its far
-    /// plane the terrain profiles' at the eye (`CalcFarPlane`, through the
-    /// Extended page's Fog, `fog::far_plane`).
+    /// The projection and the view matrix the world is drawn through: the
+    /// game's camera at the Extended page's Field of View (`settings::fov`,
+    /// the game's 55 by default), its far plane the terrain profiles' at the
+    /// eye (`CalcFarPlane`, through the Extended page's Fog,
+    /// `fog::far_plane`). Everything that culls or projects what is drawn
+    /// (the scene's rooms and actors, flora, particles, shadows, lights, name
+    /// plates, damage numbers, the rings, the mouse) takes this one, so it
+    /// widens with the picture.
     pub fn view(&self, aspect: f32) -> (Mat4, Mat4) {
+        self.view_at(aspect, crate::settings::fov() as f32)
+    }
+
+    /// `view` at the game's own 55 degrees whatever Field of View says: what
+    /// the game measures through its camera (`TargetCentre`'s and
+    /// `CycleTarget`'s ranking off the centre line), so a wider view keeps
+    /// the console's picks.
+    pub fn game_view(&self, aspect: f32) -> (Mat4, Mat4) {
+        self.view_at(aspect, FOV)
+    }
+
+    fn view_at(&self, aspect: f32, fov: f32) -> (Mat4, Mat4) {
         let eye = Vec3::from(self.eye.position.to_array());
         let dir = Vec3::from(self.eye.direction.to_array());
         let far = crate::fog::far_plane(&self.scene, eye, crate::settings::fog());
-        (projection_to(aspect, far), glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(Vec3::Z), Vec3::Y))
+        (projection_at(aspect, far, fov), glam::camera::rh::view::look_to_mat4(eye, dir.normalize_or(Vec3::Z), Vec3::Y))
     }
 
     /// Where the camera is.
@@ -1175,15 +1192,23 @@ pub fn projection(aspect: f32) -> Mat4 {
 
 /// `projection` ending at `far` (the game's far plane, `fog::far_plane`).
 pub fn projection_to(aspect: f32, far: f32) -> Mat4 {
-    glam::camera::rh::proj::directx::perspective(fov_y(aspect), FRAME_ASPECT * aspect * 0.75, 0.3, far)
+    projection_at(aspect, far, FOV)
 }
 
-/// The height's field of view for a window `aspect` wide, in radians: the
-/// game's 55 degrees in a 4:3 window or a wider one; in a narrower one what
-/// keeps the 4:3 picture's view across the width (the frame fits the width
-/// there, `render::ui`), 55 degrees over the frame's height in the middle.
-fn fov_y(aspect: f32) -> f32 {
-    let fov = FOV.to_radians();
+/// `projection_to` with `fov` degrees up a 4:3 picture's height in place of
+/// the game's 55 (the Extended page's Field of View): the same matrix,
+/// every bit, at `FOV`; Hor+ past 4:3 and the width kept below it as ever.
+pub fn projection_at(aspect: f32, far: f32, fov: f32) -> Mat4 {
+    glam::camera::rh::proj::directx::perspective(fov_y(aspect, fov), FRAME_ASPECT * aspect * 0.75, 0.3, far)
+}
+
+/// The height's field of view for a window `aspect` wide, in radians: `fov`
+/// degrees (the game's 55) in a 4:3 window or a wider one; in a narrower one
+/// what keeps the 4:3 picture's view across the width (the frame fits the
+/// width there, `render::ui`), `fov` degrees over the frame's height in the
+/// middle.
+fn fov_y(aspect: f32, fov: f32) -> f32 {
+    let fov = fov.to_radians();
     if aspect >= 4.0 / 3.0 {
         return fov;
     }
@@ -1245,9 +1270,69 @@ mod view_tests {
             assert!(x > 1.2, "the control: the height's 55 degrees put the game's side at {x}");
         }
         // continuous at 4:3, and a 4:3 window is the game's
-        assert_eq!(fov_y(4.0 / 3.0), FOV.to_radians());
-        assert!((fov_y(4.0 / 3.0 - 1e-6) - FOV.to_radians()).abs() < 1e-5);
+        assert_eq!(fov_y(4.0 / 3.0, FOV), FOV.to_radians());
+        assert!((fov_y(4.0 / 3.0 - 1e-6, FOV) - FOV.to_radians()).abs() < 1e-5);
         assert_eq!(projection(640.0 / 480.0), glam::camera::rh::proj::directx::perspective(FOV.to_radians(), FRAME_ASPECT * (640.0 / 480.0) * 0.75, 0.3, 6000.0));
+    }
+
+    /// Field of View at the game's 55 (`settings::FOV_GAME`, the default)
+    /// is the matrix the world was drawn through before the row, every bit,
+    /// at every window's shape and far plane; the walker's own `view` at the
+    /// default is its `game_view`. The control: a degree more is not.
+    #[test]
+    fn the_games_field_of_view_leaves_the_projection_as_it_was() {
+        crate::settings::testing::reset(false);
+        assert_eq!(crate::settings::fov(), crate::settings::FOV_GAME);
+        let before = |aspect: f32, far: f32| {
+            let fov = FOV.to_radians();
+            let y = if aspect >= 4.0 / 3.0 { fov } else { 2.0 * ((fov * 0.5).tan() * (4.0 / 3.0) / aspect).atan() };
+            glam::camera::rh::proj::directx::perspective(y, FRAME_ASPECT * aspect * 0.75, 0.3, far)
+        };
+        for aspect in [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 1707.0 / 932.0, 798.0 / 828.0, 9.0 / 16.0] {
+            for far in [300.0, 800.0, 6000.0] {
+                let want = before(aspect, far);
+                assert_eq!(projection_to(aspect, far).to_cols_array().map(f32::to_bits), want.to_cols_array().map(f32::to_bits), "{aspect} {far}");
+                assert_eq!(projection_at(aspect, far, crate::settings::fov() as f32).to_cols_array().map(f32::to_bits), want.to_cols_array().map(f32::to_bits), "{aspect} {far}: the setting's");
+                assert_ne!(projection_at(aspect, far, 56.0), want, "the control: 56 degrees");
+            }
+        }
+    }
+
+    /// A wider Field of View: the picture's top at the wider angle's, its
+    /// side that times the frame's 10/7 times the window's over 4:3 (Hor+
+    /// kept), a narrower window's width kept at it; and the frustum the
+    /// culling takes (`particles::frustum`, which flora, particles, shadows
+    /// and lights cull by; the rooms' and actors' walk unprojects the same
+    /// matrix, `shadows::game_camera`) is that same projection's: a point just inside the wide
+    /// picture's edge, outside the game's 55, is kept, one just past it is
+    /// not. The control: the game's frustum culls the first.
+    #[test]
+    fn a_wider_field_of_view_widens_the_culling_with_the_picture() {
+        for fov in [crate::settings::FOV_MIN as f32, 75.0, crate::settings::FOV_MAX as f32] {
+            let t = (fov.to_radians() * 0.5).tan();
+            for aspect in [4.0f32 / 3.0, 16.0 / 9.0, 21.0 / 9.0] {
+                let p = projection_at(aspect, 6000.0, fov);
+                let across = t * FRAME_ASPECT * aspect * 0.75;
+                let (x, y) = ndc(p, across, t);
+                assert!((x - 1.0).abs() < 1e-4 && (y - 1.0).abs() < 1e-4, "{fov} at {aspect}: ({x}, {y})");
+                let planes = crate::particles::frustum(p);
+                let inside = |v: Vec3| planes.iter().all(|pl| pl.dot(v.extend(1.0)) >= 0.0);
+                // 100 ahead, at 0.99 and 1.01 of the picture's side and top
+                for (dx, dy) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)] {
+                    let at = |k: f32| Vec3::new(dx * across * k * 100.0, dy * t * k * 100.0, -100.0);
+                    assert!(inside(at(0.99)), "{fov} at {aspect}: kept just inside ({dx}, {dy})");
+                    assert!(!inside(at(1.01)), "{fov} at {aspect}: culled just past ({dx}, {dy})");
+                }
+                let game = crate::particles::frustum(projection_to(aspect, 6000.0));
+                let edge = Vec3::new(across * 0.99 * 100.0, 0.0, -100.0);
+                let game_keeps = game.iter().all(|pl| pl.dot(edge.extend(1.0)) >= 0.0);
+                assert_eq!(game_keeps, fov < FOV, "{fov} at {aspect}: the control, the game's frustum at the wide edge");
+            }
+            // a narrower window keeps the width at the wider angle
+            let tall = projection_at(540.0 / 960.0, 6000.0, fov);
+            let (x, _) = ndc(tall, t * FRAME_ASPECT, t);
+            assert!((x - 1.0).abs() < 1e-4, "{fov}: a narrow window's side at {x}");
+        }
     }
 }
 

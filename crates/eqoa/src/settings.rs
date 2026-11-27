@@ -1594,6 +1594,13 @@ pub struct ClientOptions {
     /// every light Dynamic Lighting draws) in `SHADOW_DISTANCE_STEP`s
     /// (`render::Renderer::set_shadow_distance`).
     pub shadow_distance: u16,
+    /// Field of View (Extended > Graphics > Video, Heirloom petition 3336,
+    /// the owner's of 2026-11-27): the world's view up the picture's height in
+    /// a 4:3 window, in degrees, `FOV_MIN` to `FOV_MAX` in `FOV_STEP`s; the
+    /// game's `FOV_GAME` (`VICamera::Init`'s 55, `walker::FOV`) by default.
+    /// Wider windows keep it up the height and see more at the sides (Hor+),
+    /// narrower ones keep its width (`walker::projection_at`).
+    pub fov: u8,
     /// Dynamic Lighting (the user's of 2026-11-08, phase 1): off, the
     /// PS2's, the strip programs' light per vertex with the personal light
     /// the one point light; on, the light per fragment and the scene's fires,
@@ -1720,6 +1727,17 @@ pub const TOUCH_MOVE_MOST: i16 = (crate::touch::MOVE_MOST * 1000.0) as i16;
 pub const SHADOW_DISTANCE_GAME: u16 = 250;
 pub const SHADOW_DISTANCE_MAX: u16 = 1000;
 pub const SHADOW_DISTANCE_STEP: u16 = 125;
+
+/// Field of View's ends, step and the game's (`ClientOptions::fov`).
+pub const FOV_GAME: u8 = 55;
+pub const FOV_MIN: u8 = 45;
+pub const FOV_MAX: u8 = 95;
+pub const FOV_STEP: u8 = 5;
+
+/// Field of View now, in degrees up a 4:3 picture's height (`walker::Walker::view`).
+pub fn fov() -> u8 {
+    client().fov
+}
 
 /// Shadow Distance as the renderer takes it: times the game's.
 pub fn shadow_scale() -> f32 {
@@ -1931,6 +1949,7 @@ impl Default for ClientOptions {
             sun_shadows: false,
             light_shadows: false,
             shadow_distance: SHADOW_DISTANCE_GAME,
+            fov: FOV_GAME,
             dynamic_lighting: false,
             loading_longer: true,
             render_scale: 1,
@@ -2340,6 +2359,10 @@ impl ClientOptions {
         if self.shadow_distance != SHADOW_DISTANCE_GAME {
             s.push_str(&format!("shadow_distance={}\n", self.shadow_distance));
         }
+        // Field of View only when not the game's
+        if self.fov != FOV_GAME {
+            s.push_str(&format!("fov={}\n", self.fov));
+        }
         // Dynamic Lighting only when on
         if self.dynamic_lighting {
             s.push_str("dynamic_lighting=on\n");
@@ -2702,6 +2725,11 @@ impl ClientOptions {
                 ("shadow_distance", v) => {
                     if let Some(d) = v.parse::<u16>().ok().filter(|d| (SHADOW_DISTANCE_GAME..=SHADOW_DISTANCE_MAX).contains(d)) {
                         c.shadow_distance = d;
+                    }
+                }
+                ("fov", v) => {
+                    if let Some(f) = v.parse::<u8>().ok().filter(|f| (FOV_MIN..=FOV_MAX).contains(f)) {
+                        c.fov = f;
                     }
                 }
                 ("dynamic_lighting", "on") => c.dynamic_lighting = true,
@@ -4846,6 +4874,26 @@ mod tests {
         for bad in ["light_shadows=1", "light_shadows=", "light_shadows=On", "shadows=on", "sun_shadows=on"] {
             assert!(!ClientOptions::from_text(bad).light_shadows, "{bad}: off, the default");
         }
+    }
+
+    /// Field of View: the game's 55 by default and not written then, kept
+    /// from 45 to 95 and read back as kept; anything else leaves the game's.
+    #[test]
+    fn field_of_view_kept_when_changed() {
+        let d = ClientOptions::default();
+        assert_eq!(d.fov, 55, "the game's");
+        assert_eq!(FOV_GAME as f32, crate::walker::FOV, "the walker's camera's");
+        assert!(!d.to_text().contains("fov"), "the default not written");
+        for f in [FOV_MIN, 60, 75, FOV_MAX] {
+            let c = ClientOptions { fov: f, ..Default::default() };
+            let t = c.to_text();
+            assert!(t.contains(&format!("fov={f}\n")), "{t}");
+            assert_eq!(ClientOptions::from_text(&t), c, "{f}: round trip");
+        }
+        for bad in ["fov=44", "fov=96", "fov=", "fov=wide", "fov=-55", "fov=300"] {
+            assert_eq!(ClientOptions::from_text(bad).fov, FOV_GAME, "{bad}: the game's");
+        }
+        assert_eq!(ClientOptions::from_text("fov=95").fov, 95);
     }
 
     /// Shadow Distance, the game's 250 by default and not written then, kept

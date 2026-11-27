@@ -43,7 +43,9 @@
 //!   large for it, which beside Back it then says) and Loading Screens
 //!   (Longer: a long trip's loading screen up at least a second, as a PS2's
 //!   disc read keeps it; Instant: down as soon as the place is in,
-//!   `loading::Screen::hold_far`);
+//!   `loading::Screen::hold_far`); Field of View (2026-11-27, Heirloom
+//!   petition 3336: a slider and its number, 45 to 95 degrees up the
+//!   height in fives, the game's 55 by default, `walker::Walker::view`);
 //! - World (the user's, 2026-10-25): Fog (a slider: the game's distance fog
 //!   and far plane in the middle, off at the left, thicker to the right,
 //!   `fog`), Mipmaps (On, the game's: the textures' mip levels sampled by
@@ -1197,6 +1199,10 @@ impl WndOptions {
                             cues.push(9);
                         }
                     }
+                    // Field of View: a step of 5 degrees from 45 to 95, the
+                    // game's 55 between; the world drawn and culled through it
+                    // from the next frame (`walker::Walker::view`)
+                    FIELD_OF_VIEW => slide(&mut c.fov, crate::settings::FOV_MIN, crate::settings::FOV_MAX, crate::settings::FOV_STEP),
                     // Ambient Occlusion: its passes over the world from the
                     // next frame (`viewer`, `render::ao`)
                     54 => c.ambient_occlusion = !c.ambient_occlusion,
@@ -2267,6 +2273,7 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (HUD_SAVE, "Save HUD Layout"),
     (TOWN_MAP, "Town Map First"),
     (FEET_ON_SLOPES, "Feet on Slopes"),
+    (FIELD_OF_VIEW, "Field of View"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2390,6 +2397,11 @@ pub(crate) const TOWN_MAP: i32 = 342;
 /// fitted to the ground under each foot (`feet`), on Graphics' Characters page.
 pub(crate) const FEET_ON_SLOPES: i32 = 343;
 pub(crate) const FOLIAGE_REACTS: i32 = 321;
+/// Field of View's (Heirloom petition 3336, the owner's of 2026-11-27): the
+/// world's view up the height, 45 to 95 degrees, the game's 55 by default
+/// (`settings::ClientOptions::fov`, `walker::Walker::view`), on Graphics'
+/// Video page. 350, not the next free.
+pub(crate) const FIELD_OF_VIEW: i32 = 350;
 /// The Faction Tracker's rows (Heirloom petition 3216, 2026-11-26): Faction
 /// Tracker (Off, On: `factiontrack`) and Faction Tracker Shows (Number, Bar,
 /// Both), on UI's Faction Tracker page.
@@ -2627,9 +2639,9 @@ fn lone_category(g: usize) -> Option<usize> {
 /// HUD when Render Scale came (2026-10-27); Loading Screens to Other's
 /// General (2026-11-11).
 #[cfg(not(target_arch = "wasm32"))]
-const VIDEO: &[i32] = &[33, 13, 14, 26, 39];
+const VIDEO: &[i32] = &[33, 13, 14, 26, 39, FIELD_OF_VIEW];
 #[cfg(target_arch = "wasm32")]
-const VIDEO: &[i32] = &[13, 14, SHOW_FPS, 26, 39];
+const VIDEO: &[i32] = &[13, 14, SHOW_FPS, 26, 39, FIELD_OF_VIEW];
 
 /// Sound's rows: Master Volume (petition 3261), then natively Output Device
 /// (a page's output is the browser's).
@@ -2961,6 +2973,7 @@ fn slider_at(item: i32) -> Option<(f32, Option<u16>)> {
         61 => (at(c.touch_opacity as f32, TOUCH_OPACITY_MIN as f32, TOUCH_OPACITY_MAX as f32), Some(c.touch_opacity as u16)),
         62 => (c.touch_edge as f32 / TOUCH_EDGE_MAX as f32, Some(c.touch_edge as u16)),
         57 => (at(c.shadow_distance as f32, SHADOW_DISTANCE_GAME as f32, SHADOW_DISTANCE_MAX as f32), Some(c.shadow_distance)),
+        FIELD_OF_VIEW => (at(c.fov as f32, crate::settings::FOV_MIN as f32, crate::settings::FOV_MAX as f32), Some(c.fov as u16)),
         SPELL_BAR_OPACITY => (c.spell_bar_opacity as f32 / 100.0, Some(c.spell_bar_opacity as u16)),
         SPELL_BAR_SIZE => {
             let n = crate::hudlayout::piece_scale_percent(crate::hudlayout::Piece::SpellBars);
@@ -3566,6 +3579,27 @@ mod tests {
         press(&mut w, &mut o, key::LEFT, &mut cues);
         press(&mut w, &mut o, key::LEFT, &mut cues);
         assert_eq!(settings::client().render_scale, 1);
+        // Field of View: a slider and its number, the game's 55 two steps
+        // from the left (45), 5 degrees a press, 95 at the right
+        goto!(FIELD_OF_VIEW);
+        assert_eq!(w.item, FIELD_OF_VIEW, "Field of View");
+        assert_eq!((settings::fov(), slider_at(FIELD_OF_VIEW)), (55, Some((0.2, Some(55)))), "the game's 55");
+        for want in [50u8, 45, 45] {
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+            assert_eq!(settings::fov(), want);
+        }
+        assert_eq!(cues.last(), Some(&9), "nothing under 45");
+        for want in [50u8, 55, 60, 65, 70, 75, 80, 85, 90, 95] {
+            press(&mut w, &mut o, key::RIGHT, &mut cues);
+            assert_eq!((settings::fov(), cues.last()), (want, Some(&11)));
+        }
+        assert_eq!(slider_at(FIELD_OF_VIEW), Some((1.0, Some(95))));
+        press(&mut w, &mut o, key::RIGHT, &mut cues);
+        assert_eq!((settings::fov(), cues.last()), (95, Some(&9)), "nothing past 95");
+        for _ in 0..8 {
+            press(&mut w, &mut o, key::LEFT, &mut cues);
+        }
+        assert_eq!(settings::fov(), 55, "and back to the game's");
         goto!(38);
         assert_eq!(w.item, 38, "Loading Screens");
         assert!(settings::loading_longer(), "Longer, the default: a long trip's screen held");
@@ -4619,7 +4653,7 @@ mod tests {
         assert_eq!(
             of(0),
             vec![
-                ("Video", vec!["Display", "Brightness", "Frame Rate", "VSync", "Render Scale"]),
+                ("Video", vec!["Display", "Brightness", "Frame Rate", "VSync", "Render Scale", "Field of View"]),
                 ("World", vec!["Fog", "Mipmaps", "Flora", "Environment", "Ground Fog", "Art"]),
                 ("Lighting", vec!["Dynamic Lighting", "Sun Shadows", "Light Shadows", "Shadow Distance", "Ambient Occlusion", "Particles"]),
                 ("Characters", vec!["Level of Detail", "NPC/PC Display", "NPC/PC Distance", "Shadows", "Feet on Slopes"]),
