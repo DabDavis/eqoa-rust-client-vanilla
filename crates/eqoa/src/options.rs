@@ -165,9 +165,12 @@
 //!   the game's camera could be a name plate is drawn, the game's 22, then
 //!   30 to 200 in tens, `play::PlateView`) and Overlapping Names (Hide, the
 //!   game's: a name whose plate meets a nearer one's is not drawn; Show,
-//!   every one, the nearest over the rest: `play::labels`) and Shadows (On,
+//!   every one, the nearest over the rest: `play::labels`), Shadows (On,
 //!   the game's: the characters' blob shadows, `shadows`; Off: none; on
-//!   World until Ground Fog took its row, 2026-10-30);
+//!   World until Ground Fog took its row, 2026-10-30) and Feet on Slopes
+//!   (On, by default since the owner's of 2026-11-26: a biped's legs fitted
+//!   to the ground under each foot as drawn, `feet`; Off, the game's: the
+//!   uphill foot in the hill);
 //! - Sound: Sound in Background (one setting for every window: off, a window
 //!   not in front is not heard, `audio::set_heard`) and natively Output
 //!   Device (Default, the system's, followed when it changes, or a device
@@ -1171,6 +1174,9 @@ impl WndOptions {
                     WEATHER => slide(&mut c.weather, 0, crate::settings::SHARE_FULL, crate::settings::SHARE_STEP),
                     // Shadows: drawn or not from the next frame (`viewer`, `shadows`)
                     46 => c.shadows = !c.shadows,
+                    // Feet on Slopes: the legs fitted or not from the next
+                    // frame (`feet`)
+                    FEET_ON_SLOPES => c.feet_on_slopes = !c.feet_on_slopes,
                     // Ground Fog: the fog's fans from the next frame (`fx`,
                     // `render::fog16`)
                     47 => c.ps2_fog = !c.ps2_fog,
@@ -2260,6 +2266,7 @@ const EXTENDED_ITEMS: &[(i32, &str)] = &[
     (MASTER_VOLUME, "Master Volume"),
     (HUD_SAVE, "Save HUD Layout"),
     (TOWN_MAP, "Town Map First"),
+    (FEET_ON_SLOPES, "Feet on Slopes"),
 ];
 
 /// What a page says beside Back while a row the server turns off is chosen
@@ -2379,6 +2386,9 @@ pub(crate) const HUD_SAVE: i32 = 341;
 /// Town Map First's (Live petition 5650): M in a town opens the map on the
 /// town (`map::Map::show`), on UI's Map page.
 pub(crate) const TOWN_MAP: i32 = 342;
+/// Feet on Slopes' (the owner's of 2026-11-26, on by default): a biped's legs
+/// fitted to the ground under each foot (`feet`), on Graphics' Characters page.
+pub(crate) const FEET_ON_SLOPES: i32 = 343;
 pub(crate) const FOLIAGE_REACTS: i32 = 321;
 /// The Faction Tracker's rows (Heirloom petition 3216, 2026-11-26): Faction
 /// Tracker (Off, On: `factiontrack`) and Faction Tracker Shows (Number, Bar,
@@ -2515,7 +2525,7 @@ const ALL_CATEGORIES: [Category; 31] = [
     Category { name: "Video", items: VIDEO, note: Note::Scale, group: Group::Graphics },
     Category { name: "World", items: &[20, 35, 36, 37, 47, 25], note: Note::None, group: Group::Graphics },
     Category { name: "Lighting", items: &[52, 53, 56, 57, 54, 63], note: Note::Lighting, group: Group::Graphics },
-    Category { name: "Characters", items: &[12, 23, 24, 46], note: Note::Server, group: Group::Graphics },
+    Category { name: "Characters", items: &[12, 23, 24, 46, FEET_ON_SLOPES], note: Note::Server, group: Group::Graphics },
     Category { name: "Textures", items: TEXTURES, note: Note::Textures, group: Group::Graphics },
     Category { name: "HUD", items: &[22, 90, 30, 40, 58, 83], note: Note::None, group: Group::Ui },
     // the group's and the raid's windows (2026-11-12, Power Bars: HUD's page
@@ -2803,6 +2813,7 @@ fn value_text(vui: &Vui, item: i32) -> Option<Vec<u16>> {
         55 => wide("Open"),
         35 => on_off(c.mipmaps),
         46 => on_off(c.shadows),
+        FEET_ON_SLOPES => on_off(c.feet_on_slopes),
         47 => wide(if c.ps2_fog { "PS2" } else { "Exact" }),
         53 => on_off(c.sun_shadows),
         56 => on_off(c.light_shadows),
@@ -4611,7 +4622,7 @@ mod tests {
                 ("Video", vec!["Display", "Brightness", "Frame Rate", "VSync", "Render Scale"]),
                 ("World", vec!["Fog", "Mipmaps", "Flora", "Environment", "Ground Fog", "Art"]),
                 ("Lighting", vec!["Dynamic Lighting", "Sun Shadows", "Light Shadows", "Shadow Distance", "Ambient Occlusion", "Particles"]),
-                ("Characters", vec!["Level of Detail", "NPC/PC Display", "NPC/PC Distance", "Shadows"]),
+                ("Characters", vec!["Level of Detail", "NPC/PC Display", "NPC/PC Distance", "Shadows", "Feet on Slopes"]),
                 ("Textures", textures),
                 ("Weather", vec!["Weather"]),
                 ("Texture Cache", vec!["Precache Textures", "Pack Compression", "Rebuild Pack Cache"]),

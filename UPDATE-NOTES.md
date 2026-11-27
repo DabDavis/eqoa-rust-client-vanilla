@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-26 · Feet on the ground on hills
+
+- Characters no longer sink their feet into hills. Going up or down a slope (or standing across one), a troll's, an ogre's or anyone's uphill foot used to go into the ground, knee deep on a steep hill. Now each foot stands on the ground under it: the body is lowered to the downhill foot and the uphill knee bends. This is for you, other players and the NPCs that walk on two legs.
+- It is on by default. If you prefer the original game's look, turn off **Extended > Graphics > Characters > Feet on Slopes**.
+
 ## 2026-11-26 · Windows: no crash at start in the OpenGL setup
 
 - On Windows the client no longer asks for OpenGL when it starts: it uses Vulkan or DirectX 12, as it already drew with. On some machines (an AMD Radeon Vega 8 among them) Windows' OpenGL setup could close the game while it was starting, even though the game draws with Vulkan.

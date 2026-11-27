@@ -143,6 +143,8 @@ struct Puppet {
     /// Dressed as a player's character (`dressed_as_player`: a player's, or a
     /// server's mercenary's): a merc told after it was made is made anew.
     player: bool,
+    /// Feet on Slopes' fit of its legs to the ground (`feet`).
+    plant: crate::feet::Plant,
 }
 
 impl Puppet {
@@ -1568,7 +1570,7 @@ fn build_puppet_in(lib: &Library, g: &mut Gpu, e: &net::entity::Entity, look: Op
                     if !trims.is_empty() {
                         g.renderer.set_trims(g.device, g.queue, &mut gpu, &model, &trims, &textures);
                     }
-                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, lights: None, race_look, tint, petdye, aura, pieces, wisp, prop, player };
+                    let mut p = Puppet { id: e.id, model: e.drawn_model, look, sprite, anims, rand, gpu, attached, held, projectile, name_at: None, slot4_at: None, actor_m: Matrix44::identity(), centre: Matrix44::identity(), weapons, trail: Default::default(), first: true, shown: false, era, textures: crate::texpack::generation(), cape: None, lights: None, race_look, tint, petdye, aura, pieces, wisp, prop, player, plant: Default::default() };
                     p.set_casts();
                     Some(p)
                 })
@@ -5069,6 +5071,23 @@ impl Play {
                     }
                     p.first = false;
                     let m = cs.h.calc_trans_about_center(&actor, &p.anims);
+                    // Feet on Slopes (`feet`): the legs fitted to the ground
+                    // under each foot, for a body standing near the eye; drawing
+                    // only, after the pose and before what reads its nodes
+                    if pose {
+                        let standing = e.creature.as_ref().is_some_and(|c| {
+                            let walk = self.walks[slot].as_ref().map(|(_, w)| w).filter(|_| c.p255 != 0);
+                            walk.is_none_or(|w| w.phys.flags & vi::walk::flags::ON_FLOOR != 0 && w.phys.flags & vi::walk::flags::LIQUID == 0)
+                        });
+                        let can = standing
+                            && !cs.dead
+                            && prop.is_none()
+                            && !self.carried[slot]
+                            && matches!(self.airs[slot], crate::jump::Air::Ground)
+                            && !crate::seabody::swims(cs)
+                            && crate::lod::within(&at, &eye, crate::feet::NEAR);
+                        p.plant.plant(cs, &m, can, game_ms, &mut crate::feet::world_ground(&mut walker.scene));
+                    }
                     crate::trails::process(&mut self.trails, &mut p.trail, cs, &p.weapons, &m, game_ms);
                     if pose {
                         cs.h.set_blend_matrices();

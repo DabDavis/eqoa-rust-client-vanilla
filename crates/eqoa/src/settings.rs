@@ -1524,6 +1524,11 @@ pub struct ClientOptions {
     /// (`vi::shadow`, `shadows`: within 50 of the eye, on the ground and the
     /// props under each); off, none.
     pub shadows: bool,
+    /// Feet on Slopes: on (the owner's of 2026-11-26, "on by default, because it
+    /// is a bug"), a biped's legs fitted to the ground under each foot as drawn
+    /// (`feet`); off, the game's: the body on the one floor point under it, the
+    /// uphill foot in the hill.
+    pub feet_on_slopes: bool,
     /// Environment: how much of the effect volumes placed in the world
     /// (ground fog, dust, falling leaves, light shafts, the flocks of birds:
     /// `fx`) is drawn, 0 to 100 in tens: 100, the game's, as it draws them;
@@ -1914,6 +1919,7 @@ impl Default for ClientOptions {
             mipmaps: true,
             flora: SHARE_FULL,
             shadows: true,
+            feet_on_slopes: true,
             environment: SHARE_FULL,
             weather: SHARE_FULL,
             foliage_density: 1,
@@ -2288,6 +2294,10 @@ impl ClientOptions {
         // Shadows only when off
         if !self.shadows {
             s.push_str("shadows=off\n");
+        }
+        // Feet on Slopes only when off
+        if !self.feet_on_slopes {
+            s.push_str("feet_on_slopes=off\n");
         }
         if let Some(v) = share_text(self.environment) {
             s.push_str(&format!("environment={v}\n"));
@@ -2667,6 +2677,8 @@ impl ClientOptions {
                 ("foliage_reacts", "off") => c.foliage_reacts = false,
                 ("shadows", "on") => c.shadows = true,
                 ("shadows", "off") => c.shadows = false,
+                ("feet_on_slopes", "on") => c.feet_on_slopes = true,
+                ("feet_on_slopes", "off") => c.feet_on_slopes = false,
                 ("environment", v) => {
                     if let Some(v) = share_of(v) {
                         c.environment = v;
@@ -3875,6 +3887,11 @@ pub fn set_map_markers(on: bool) -> Result<(), String> {
 /// Whether the map names the towns.
 pub fn map_towns() -> bool {
     client().map_towns
+}
+
+/// Feet on Slopes now (`ClientOptions::feet_on_slopes`, `feet`).
+pub fn feet_on_slopes() -> bool {
+    client().feet_on_slopes
 }
 
 /// Town Map First now (`ClientOptions::town_map`).
@@ -5618,6 +5635,21 @@ mod tests {
         assert!(ClientOptions::from_text(&t).auto_save, "round trip");
         assert!(!ClientOptions::from_text("auto_save_options=off").auto_save);
         assert!(!ClientOptions::from_text("auto_save_options=maybe").auto_save, "the default");
+    }
+
+    /// Feet on Slopes (the owner's of 2026-11-26): on by default, a client.opt
+    /// without the key reads on, and it is written only when off.
+    #[test]
+    fn feet_on_slopes_is_on_unless_turned_off() {
+        let d = ClientOptions::default();
+        assert!(d.feet_on_slopes, "on by default");
+        assert!(!d.to_text().contains("feet_on_slopes"));
+        assert!(ClientOptions::from_text("lod=on\nbrightness=5\n").feet_on_slopes, "an old client.opt");
+        let t = ClientOptions { feet_on_slopes: false, ..Default::default() }.to_text();
+        assert!(t.contains("feet_on_slopes=off\n"), "{t}");
+        assert!(!ClientOptions::from_text(&t).feet_on_slopes, "round trip");
+        assert!(ClientOptions::from_text("feet_on_slopes=on").feet_on_slopes);
+        assert!(ClientOptions::from_text("feet_on_slopes=maybe").feet_on_slopes, "the default");
     }
 
     /// The rows of tickets 1951, 1953, 1977 and 1987: kept only when changed,
