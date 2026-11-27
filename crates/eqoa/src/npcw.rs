@@ -301,10 +301,22 @@ impl Play {
     /// `RequestTrade` (0x0B060000): the target must be a player and not the
     /// player; any trade going is cancelled; word 837 in purple, and 0x0057
     /// to the server.
+    ///
+    /// Or the player's own merc (Heirloom petition 3306, a player: "could you
+    /// make it to where you just send a trade to a merc to trade them
+    /// items?", the owner's yes 2026-11-27): a pet-side creature (`m_p256`
+    /// 3) whose hirer the server names as the player (`own_merc`, as □'s
+    /// talk to it), so the trade window hands it items as the merc's own
+    /// window does. CLIENT's `RequestTrade` asks only an `m_p256` 2, so the
+    /// PS2 never asks a merc; go-eqoa-server's `merctrade.go` answers this
+    /// one (the window opens at once, the merc offering nothing and
+    /// accepting) and refuses any other. Another's merc, a pet and an NPC
+    /// are not asked, as before.
     pub fn request_trade(&mut self) {
         let Some(e) = self.entities.slots.iter().flatten().find(|e| e.id == self.target) else { return };
         let Some(c) = &e.creature else { return };
-        if c.p256 != 2 || Some(self.target) == self.self_id32() {
+        let own_merc = c.p256 == 3 && self.own_merc(&c.name);
+        if (c.p256 != 2 && !own_merc) || Some(self.target) == self.self_id32() {
             return;
         }
         let name = c.name.clone();
@@ -656,6 +668,50 @@ mod tests {
         assert!(q.npcw_opcode(0x0019, &[0, 0x02]));
         assert!(q.npcw.corpse.as_ref().unwrap().items.is_empty());
         assert_eq!(ids(&q.dump.inventory), vec![(9, 23)]);
+    }
+
+    /// Trade asks one's own merc (Heirloom petition 3306): 0x0057 with its id,
+    /// as a player is asked, the trade remembered as asked of it. The
+    /// controls: another's merc, a pet and an NPC are not asked (nothing
+    /// sent, as CLIENT's `RequestTrade`), and a player is asked as before.
+    #[test]
+    fn trade_asks_ones_own_merc() {
+        let creature = |id: u32, name: &str, p256: u8| net::entity::Entity {
+            id,
+            creature: Some(net::entity::Creature { name: name.into(), p256, ..Default::default() }),
+            ..Default::default()
+        };
+        let mut p = play();
+        p.player.name = "Jibrish".into();
+        p.entities.slots[0] = Some(creature(0x30, "Jorador", 3));
+        p.entities.slots[1] = Some(creature(0x31, "Haldor", 3));
+        p.entities.slots[2] = Some(creature(0x32, "Fire Elemental", 3));
+        p.entities.slots[3] = Some(creature(0x33, "Merchant Ravnous", 0));
+        p.entities.slots[4] = Some(creature(0x34, "Tmac", 2));
+        p.session.mercs = Some(net::session::Mercs {
+            own: true,
+            names: vec!["Jorador".into(), "Haldor".into()],
+            owners: vec!["Jibrish".into(), "Tmac".into()],
+            ..Default::default()
+        });
+        sent(&mut p);
+        for (id, what) in [(0x31, "another's merc"), (0x32, "a pet"), (0x33, "an NPC")] {
+            p.target = id;
+            p.request_trade();
+            assert!(sent(&mut p).is_empty(), "{what}: asked");
+            assert_eq!(p.npcw.trade_state.with, u32::MAX, "{what}: remembered");
+        }
+        p.target = 0x30;
+        p.request_trade();
+        assert_eq!(sent(&mut p), vec![vec![0x57, 0x00, 0x30, 0, 0, 0]], "one's own merc: asked");
+        assert_eq!(p.npcw.trade_state.with, 0x30);
+        // the control: a player, as before
+        let mut q = play();
+        q.entities.slots[4] = Some(creature(0x34, "Tmac", 2));
+        sent(&mut q);
+        q.target = 0x34;
+        q.request_trade();
+        assert_eq!(sent(&mut q), vec![vec![0x57, 0x00, 0x34, 0, 0, 0]], "a player: asked");
     }
 
     /// `Trade02` puts the start menu away first (`SetMode(0)`): an inventory
