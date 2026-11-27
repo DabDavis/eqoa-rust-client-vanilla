@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · Map camps show their creatures' levels
+
+- **The map's camps** show the levels of the creatures there now, not the guide's: the Salt Mine's siloths said 45-50 while they were 39-41.
+
 ## 2026-11-27 · Cures are no longer auto-cast attacks
 
 - **Auto-cast** no longer turns a cure into an attack: right-clicking an Antidote, Curative, Purity or other spell that removes poison, disease or harmful effects used to make it an Attack (or a Buff) slot fired at your foe or at yourself for nothing; now it says it can't tell when to use it, and casting one at a friend no longer starts your auto-attack. Poison and disease attacks are auto-cast as before.

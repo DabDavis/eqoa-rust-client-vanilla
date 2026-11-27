@@ -45,8 +45,8 @@ pub struct Camp {
     pub world: i32,
     /// (x, z), game units
     pub at: [f32; 2],
-    /// the guide's level range (an other camp's creatures' here, where the map
-    /// writes none)
+    /// its creatures' levels on the server, lowest and highest (a lone boss
+    /// above them left out), the guide's range only where none stand there
     pub levels: (u8, u8),
     /// the guide's note ("" for an other camp)
     pub note: &'static str,
@@ -729,7 +729,7 @@ mod tests {
         let grid = |p: [f32; 2]| (2000.0..28000.0).contains(&p[0]) && (0.0..34000.0).contains(&p[1]);
         for c in CAMPS.iter() {
             assert!([0, 1, 2].contains(&c.world), "{}", c.name);
-            assert!(c.levels.0 >= 1 && c.levels.0 <= c.levels.1 && c.levels.1 <= if c.guide { 62 } else { 70 }, "{}: {:?}", c.name, c.levels);
+            assert!(c.levels.0 >= 1 && c.levels.0 <= c.levels.1 && c.levels.1 <= 70, "{}: {:?}", c.name, c.levels);
             if c.world == 0 {
                 assert!(grid(c.at), "{} at {:?}", c.name, c.at);
             }
@@ -756,14 +756,29 @@ mod tests {
         assert_eq!(of_world(1).filter(|m| matches!(m, Marker::Coach(_))).count(), 1, "Dilga, the Rathe's one coach");
         assert!(of_world(1).filter(|m| matches!(m, Marker::Camp(_))).count() > 10, "the Rathe's camps");
         assert!(of_world(1).any(|m| matches!(m, Marker::Camp(i) if CAMPS[i].name == "Hobgoblins (Cyclops' Fortress)" && CAMPS[i].levels == (46, 50))));
-        // the FAQ's camps (go-eqoa-server's faq_camps_20261114.py), and its re-levelled camps at its levels
+        // the FAQ's camps (go-eqoa-server's faq_camps_20261114.py), and its re-levelled camps at their creatures' levels in
+        // the FAQ's box (Cracktooth's lone Biter Cracktooth, 30, left out)
         for (name, levels) in [("Frosteye Orcs (the excavation)", (54, 57)), ("Tae Ew Aggressors", (33, 37)), ("Desert Bandits", (60, 62)),
-            ("Frogloks (Burial Mounds)", (60, 63)), ("Mossmouth Goblins", (21, 30)), ("Cracktooth Orcs", (21, 30)),
-            ("Tae Ew (Brokenskull Rock)", (41, 47)), ("Gargoyle", (41, 50)), ("Tendora-Buki", (46, 50))]
+            ("Frogloks (Burial Mounds)", (60, 63)), ("Mossmouth Goblins", (21, 30)), ("Cracktooth Orcs", (21, 28)),
+            ("Tae Ew (Brokenskull Rock)", (42, 47)), ("Gargoyle", (41, 50)), ("Tendora-Buki", (46, 50))]
         {
             assert!(CAMPS.iter().any(|c| c.name == name && c.levels == levels), "{name} {levels:?}");
         }
         assert!(of_world(2).all(|m| matches!(m, Marker::Camp(_))), "Odus has camps, no coach here");
+    }
+
+    /// A camp's levels are its creatures' on the server (tools/gen_map_markers.py reads them out of npcs), not the
+    /// guide's range (Live petition 5675: the Salt Mine's siloths were drawn 45-50, the guide's, while they stood at
+    /// 39-41), and a lone boss above the camp is not its range (Overlord Xrag, 66). The control: the guide's own
+    /// note is kept.
+    #[test]
+    fn a_camps_levels_are_its_creatures() {
+        let camp = |name: &str| CAMPS.iter().find(|c| c.name == name && c.guide).unwrap();
+        let siloths = camp("Siloths");
+        assert_eq!(siloths.levels, (39, 41), "the siloths' levels on the server");
+        assert_ne!(siloths.levels, (45, 50), "the guide's range");
+        assert_eq!(camp("Pariah of Xragg").levels, (61, 64), "his children's, Overlord Xrag's 66 left out");
+        assert!(siloths.note.contains("Valuable ring drops"), "the control: the guide's note kept: {}", siloths.note);
     }
 
     /// A camp's card: its name, its levels, the guide's note, its rare
@@ -774,7 +789,7 @@ mod tests {
         let dfc = CAMPS.iter().position(|c| c.name.starts_with("Deathfist Citadel")).unwrap();
         let card = Marker::Camp(dfc).card();
         assert_eq!(card[0].0, "Deathfist Citadel (DFC)");
-        assert_eq!(card[1].0, "XP camp, levels 29-34");
+        assert_eq!(card[1].0, "XP camp, levels 31-40", "its creatures' levels on the server, not the guide's 29-34");
         assert!(card[2].0.contains("best XP camps in the low 30s"), "{:?}", card[2]);
         assert!(card.iter().any(|l| l.0.starts_with("Drops (Desert table): ")), "{card:?}");
         assert!(!card.iter().any(|l| l.0.starts_with("Rare")), "the control: no rare creature at the DFC");
