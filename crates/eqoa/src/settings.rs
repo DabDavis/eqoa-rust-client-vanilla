@@ -1236,6 +1236,9 @@ pub struct ClientOptions {
     /// on the DPS meter (a server of layout 5), not a share of its owner's.
     /// Off by default.
     pub dps_merc_rows: bool,
+    /// DPS Meter Lines (Heirloom petition 3397): the most rows the panel
+    /// shows, 0 (All, the default) as many as fit (`dpsmeter::LINES`).
+    pub dps_lines: usize,
     /// Faction Tracker (`factiontrack`, Heirloom petition 3216): one faction's
     /// standing on the HUD, the one picked in the faction window or by `/track
     /// faction` (kept by name a character, `factiontrack::FILE`), where the
@@ -1902,6 +1905,7 @@ impl Default for ClientOptions {
             dps_sort: crate::dpsmeter::Metric::Damage,
             dps_hide_mercenary: false,
             dps_merc_rows: false,
+            dps_lines: 0,
             faction_track: false,
             faction_track_style: crate::factiontrack::Style::Both,
             item_links: true,
@@ -2148,6 +2152,9 @@ impl ClientOptions {
         }
         if self.dps_sort != crate::dpsmeter::Metric::Damage {
             s.push_str(&format!("dps_meter_sort={}\n", self.dps_sort.key()));
+        }
+        if self.dps_lines != 0 {
+            s.push_str(&format!("dps_meter_lines={}\n", self.dps_lines));
         }
         if self.dps_merc_rows {
             s.push_str("dps_merc_rows=on\n");
@@ -2565,6 +2572,9 @@ impl ClientOptions {
                 ("dps_meter_columns", "dps") => c.dps_columns = crate::dpsmeter::Columns::Dps,
                 ("dps_meter_columns", "hps") => c.dps_columns = crate::dpsmeter::Columns::Hps,
                 ("dps_meter_columns", "all") => c.dps_columns = crate::dpsmeter::Columns::All,
+                ("dps_meter_columns", "taken") => c.dps_columns = crate::dpsmeter::Columns::Taken,
+                ("dps_meter_sort", "taken") => c.dps_sort = crate::dpsmeter::Metric::Taken,
+                ("dps_meter_lines", n) if n.parse::<usize>().is_ok_and(|n| crate::dpsmeter::LINES.contains(&n)) => c.dps_lines = n.parse().unwrap_or(0),
                 ("dps_meter_sort", "dps") => c.dps_sort = crate::dpsmeter::Metric::Damage,
                 ("dps_meter_sort", "hps") => c.dps_sort = crate::dpsmeter::Metric::Healing,
                 ("dps_meter_sort", "power") => c.dps_sort = crate::dpsmeter::Metric::Power,
@@ -3181,7 +3191,7 @@ pub mod qol {
         Some(match item {
             44 | 45 | 85 => QUEST_HELPER,
             crate::options::TARGET_OF_TARGET => TARGET_LEVEL,
-            70..=72 | crate::options::DPS_COLUMNS | crate::options::DPS_SORT | crate::options::DPS_HIDE_MERCS | crate::options::DPS_MERC_ROWS => DPS_METER,
+            70..=72 | crate::options::DPS_COLUMNS | crate::options::DPS_SORT | crate::options::DPS_HIDE_MERCS | crate::options::DPS_MERC_ROWS | crate::options::DPS_LINES => DPS_METER,
             64..=69 | 80 | 81 | crate::numcolor::TAKEN_ITEM => NUMBER_COLORS,
             86 | crate::options::HEALTH_NUMBERS => POWER_BARS,
             83 | crate::options::BUFF_TIMERS => BUFF_WINDOW,
@@ -6015,7 +6025,7 @@ mod tests {
         let d = ClientOptions::default();
         assert_eq!((d.dps_columns, d.dps_sort), (Columns::Dps, Metric::Damage), "the DPS alone by default");
         assert!(!d.to_text().contains("dps_meter_columns") && !d.to_text().contains("dps_meter_sort"));
-        for (cols, sort) in [(Columns::Hps, Metric::Healing), (Columns::All, Metric::Power), (Columns::All, Metric::Damage)] {
+        for (cols, sort) in [(Columns::Hps, Metric::Healing), (Columns::All, Metric::Power), (Columns::All, Metric::Damage), (Columns::Taken, Metric::Taken)] {
             let c = ClientOptions { dps_columns: cols, dps_sort: sort, ..Default::default() };
             let back = ClientOptions::from_text(&c.to_text());
             assert_eq!((back.dps_columns, back.dps_sort), (cols, sort), "{}", c.to_text());
@@ -6025,6 +6035,24 @@ mod tests {
         assert_eq!((odd.dps_columns, odd.dps_sort), (Columns::Dps, Metric::Damage), "anything else: the defaults");
         assert_eq!(Metric::Power.fit(Columns::Hps), Metric::Damage, "not shown: damage");
         assert_eq!(Metric::Healing.fit(Columns::Hps), Metric::Healing);
+    }
+
+    /// DPS Meter Lines (Heirloom petition 3397): All (0) by default, writing
+    /// nothing; each of 5 to 25 kept and read back; any other number All.
+    #[test]
+    fn the_dps_meters_lines_are_kept() {
+        let d = ClientOptions::default();
+        assert_eq!(d.dps_lines, 0);
+        assert!(!d.to_text().contains("dps_meter_lines"));
+        for n in crate::dpsmeter::LINES {
+            let c = ClientOptions { dps_lines: n, ..Default::default() };
+            let back = ClientOptions::from_text(&c.to_text());
+            assert_eq!(back.dps_lines, n, "{}", c.to_text());
+            assert_eq!(back, c, "nothing else changed");
+        }
+        for odd in ["dps_meter_lines=7", "dps_meter_lines=all", "dps_meter_lines=-5"] {
+            assert_eq!(ClientOptions::from_text(odd).dps_lines, 0, "{odd}: All");
+        }
     }
 
     #[test]

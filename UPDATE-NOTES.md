@@ -5,6 +5,12 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · DPS meter: damage taken, every merc, how many lines
+
+- **Damage taken**: on a server that counts it, **DPS Meter Columns** has a new choice, **DPS + Taken**, showing the damage each player took a second (**DTPS**) beside their DPS, so a tank can see whether a change cuts what they take; **DPS Meter Sort** (or `/dps taken`) ranks the meter by it. A merc's damage taken is part of its owner's line, or its own row with **Mercs as Own Rows**.
+- **Every merc has a row**: with **Mercs as Own Rows** on, each merc out in your group shows on the meter from the start of the fight, even before it has done anything, so a healer merc no longer goes missing from the damage view.
+- **DPS Meter Lines** (Extended → UI → DPS Meter): how many rows the meter shows, **All** (as many as fit, the default) or **5** to **25**. The wheel and a click still page through the rest.
+
 ## 2026-11-27 · Mouse buttons and the wheel in Key Bindings
 
 - In **Options → Controls** a row's key can now be a mouse input: the middle button (**Middle Mouse**), the side buttons (**Mouse 4**, **Mouse 5** and more) or the wheel (**Wheel Up**, **Wheel Down**): pick the row's key, then click or scroll. A wheel notch is one tap of the row (on Autorun it turns autorun on and off) and no longer zooms; an unbound wheel still zooms as before. Mouse binds work in the world only, not over the chat box, the minimap or an open window, and the left and right buttons stay as they are.
