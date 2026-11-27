@@ -769,6 +769,8 @@ pub fn with_binds<R>(f: impl FnOnce(&crate::binds::Binds) -> R) -> R {
                 crate::say(&format!("keys and buttons: {}", b.describe()));
             }
             BINDS_KEPT.with(|k| *k.borrow_mut() = Some(b.clone()));
+            #[cfg(target_arch = "wasm32")]
+            crate::web::mouse_sides(crate::binds::sides_bound(&b));
             b
         });
         f(b)
@@ -797,6 +799,8 @@ pub fn binds() -> crate::binds::Binds {
 /// Changes them (the Controls page, as it moves them); kept only by Save
 /// Changes (`save`).
 pub fn set_binds(b: crate::binds::Binds) {
+    #[cfg(target_arch = "wasm32")]
+    crate::web::mouse_sides(crate::binds::sides_bound(&b));
     BINDS.with(|c| *c.borrow_mut() = Some(b));
 }
 

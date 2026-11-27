@@ -2533,6 +2533,11 @@ struct App {
     /// The player's own keys and buttons (`binds`) at the input's edge: what
     /// each key pressed was made, and the controllers' buttons a capture took.
     keys_edge: crate::binds::KeyEdge,
+    /// The mouse's inputs pressed as their rows' keys (`mouse_bind`), by
+    /// name: each let go as it was pressed, wherever the pointer went
+    mouse_keys: Vec<String>,
+    /// The wheel's motion toward whole notches for the bindings
+    wheel_notches: crate::binds::WheelNotches,
     pad_edge: crate::binds::PadEdge,
     /// the player's macros running (`macros`), and whether this frame drawn
     /// is one of the game's (they act at those, two fields each)
@@ -2749,6 +2754,8 @@ fn run_app(lib: Library, source: Source, play: Option<crate::play::Play>, pendin
         alt_enter_down: false,
         pad_script: crate::input::Script::from_env(),
         keys_edge: Default::default(),
+        mouse_keys: Vec::new(),
+        wheel_notches: Default::default(),
         pad_edge: Default::default(),
         macro_run: Default::default(),
         macro_frame: false,
@@ -3306,6 +3313,7 @@ impl App {
     fn let_go_keys(&mut self, el: &ActiveEventLoop) {
         use crate::binds::Sent;
         let aspect = self.gfx.as_ref().map_or(4.0 / 3.0, |g| g.config.width as f32 / g.config.height as f32);
+        self.mouse_keys.clear();
         for sent in self.keys_edge.let_go() {
             match sent {
                 Sent::Key(to) => self.keyboard(el, KeyIn::named(&to, false)),
@@ -3872,6 +3880,99 @@ impl App {
                 self.click(crate::mouse::Click::Target(x, y), false);
                 true
             }
+        }
+    }
+
+    /// One of the mouse's bindable inputs (`binds::mouse_name`, a wheel's
+    /// notch as `binds::wheel_name`: petition 3359) pressed or let go: true
+    /// when the bindings took it (`binds::mouse_use`). A Controls or Macros
+    /// page waiting for a key takes it as a key (Escape still gives up); in
+    /// play, with the pointer on the world (`Play::mouse_binds_at`), one a
+    /// row or a macro is on goes through the keyboard's dispatch as a key of
+    /// that name (`key_input`), and is let go as it was pressed, wherever the
+    /// pointer went. Anything else is the mouse's, as before (false).
+    fn mouse_bind(&mut self, el: &ActiveEventLoop, name: &str, down: bool) -> bool {
+        use crate::binds::MouseUse;
+        if !down && let Some(i) = self.mouse_keys.iter().position(|k| k == name) {
+            self.mouse_keys.remove(i);
+            self.key_input(el, KeyIn::named(name, false), false);
+            return true;
+        }
+        // the title's Options' Controls page waiting: the page's
+        if let Some(h) = self.host.as_ref() {
+            let Some(c) = h.pre.setup.capturing() else { return false };
+            let Some(n) = self.key_name(&KeyIn::named(name, down), true, false) else { return false };
+            let setup = &mut self.host.as_mut().unwrap().pre.setup;
+            if down {
+                setup.capture_key(&n);
+            } else if c == crate::bindpage::Column::Trigger {
+                setup.capture_key_up(&n);
+            }
+            return true;
+        }
+        if !down {
+            return false;
+        }
+        match self.mouse_use(name) {
+            MouseUse::Mouse => false,
+            MouseUse::Capture | MouseUse::Key(_) => {
+                self.mouse_keys.push(name.to_string());
+                self.key_input(el, KeyIn::named(name, true), false);
+                true
+            }
+        }
+    }
+
+    /// What `name` (one of the mouse's) pressed now is (`binds::mouse_use`):
+    /// in play, a page's capture, a row's key on the world, or the mouse's.
+    fn mouse_use(&mut self, name: &str) -> crate::binds::MouseUse {
+        let (Some(p), Some(g)) = (self.play.as_mut(), self.gfx.as_ref()) else { return crate::binds::MouseUse::Mouse };
+        let capturing = p.capturing().is_some();
+        let on_world = self.host.is_none() && self.walker.is_some() && p.mouse_binds_at(self.cursor, (g.config.width, g.config.height));
+        let mods = self.mods;
+        crate::settings::with_binds(|b| crate::binds::mouse_use(name, capturing, on_world, mods, b, crate::binds::pc_shortcuts()))
+    }
+
+    /// The wheel's `steps` (up positive) while a Controls or Macros page
+    /// waits for a key: each whole notch its way's key (`mouse_bind`); true
+    /// when one waits (the page's list does not scroll then).
+    fn wheel_capture(&mut self, el: &ActiveEventLoop, steps: f32) -> bool {
+        let waits = match self.host.as_ref() {
+            Some(h) => h.pre.setup.capturing().is_some(),
+            None => self.play.as_ref().is_some_and(|p| p.capturing().is_some()),
+        };
+        if !waits {
+            return false;
+        }
+        if let crate::binds::WheelUse::Capture(Some(name)) = crate::binds::wheel_use(steps, &mut self.wheel_notches, true, false, self.mods, &Default::default(), false) {
+            self.mouse_bind(el, name, true);
+            self.mouse_bind(el, name, false);
+        }
+        true
+    }
+
+    /// The wheel's `steps` (up positive) on the world in play, nothing over
+    /// it having taken them (`binds::wheel_use`): each whole notch its way's
+    /// key pressed and let go, a tap, when a row or a macro is on it; true
+    /// when one is (and the camera does not zoom).
+    fn wheel_bind(&mut self, el: &ActiveEventLoop, steps: f32) -> bool {
+        let name = crate::binds::wheel_name(steps > 0.0);
+        let on = matches!(self.mouse_use(name), crate::binds::MouseUse::Key(_));
+        let pc = crate::binds::pc_shortcuts();
+        let mods = self.mods;
+        let mut notches = self.wheel_notches;
+        let used = crate::settings::with_binds(|b| crate::binds::wheel_use(steps, &mut notches, false, on, mods, b, pc));
+        self.wheel_notches = notches;
+        match used {
+            crate::binds::WheelUse::Keys(_, n) => {
+                for _ in 0..n {
+                    if self.mouse_bind(el, name, true) {
+                        self.mouse_bind(el, name, false);
+                    }
+                }
+                true
+            }
+            _ => false,
         }
     }
 
@@ -6396,6 +6497,13 @@ impl App {
                     }
                 }
             }
+            // the middle and side buttons: the bindings' when a row is on
+            // one (`mouse_bind`), else nothing, as before
+            WindowEvent::MouseInput { state, button, .. } => {
+                if let Some(name) = crate::binds::mouse_name(button) {
+                    self.mouse_bind(el, &name, state == ElementState::Pressed);
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
                 // the update's question's list dragged (`update`)
@@ -6462,6 +6570,12 @@ impl App {
                     MouseScrollDelta::PixelDelta(p) => (p.y as f32 / 40.0, p.y as f32 / 100.0),
                 };
                 let at = [self.cursor.0 as f32, self.cursor.1 as f32];
+                // a Controls or Macros page waiting for a key: a notch is
+                // Wheel Up or Wheel Down (the page's list does not scroll
+                // while it waits)
+                if self.wheel_capture(el, steps) {
+                    return;
+                }
                 if let Some(p) = self.play.as_mut().filter(|p| p.map.open) {
                     p.map.wheel(steps, Some(at));
                 } else if let Some(p) = self.play.as_mut().filter(|p| p.map.mini_contains(at)) {
@@ -6479,7 +6593,9 @@ impl App {
                         }
                         _ => false,
                     };
-                    if !took {
+                    // on the world: a notch is the row's on its way when one
+                    // is (petition 3359), and no zoom; else the camera's
+                    if !took && !self.wheel_bind(el, steps) {
                         self.mouse.wheel(d, steps);
                     }
                 } else if let Camera::Orbit { zoom, .. } = &mut self.camera {

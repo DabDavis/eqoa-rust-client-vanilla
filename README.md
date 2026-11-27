@@ -31,7 +31,13 @@ or a browser (each described where it lives below):
 - **The mouse and the touch screen.**
 - **The keyboard**, with WASD walking, and the options' **Controls** page: every
   key and button can be moved, and a controller's button can take any of the
-  keyboard's own actions (the map on R3, Hide UI, F9's art).
+  keyboard's own actions (the map on R3, Hide UI, F9's art). A row's key can be the mouse's middle
+  or side buttons or the wheel's two ways too (petition 3359, the owner's of 2026-11-27: `binds::mouse_name`,
+  `mouse3`..`mouse16`, `wheelup`, `wheeldown`, kept in `keys.opt` as keys): a notch is a tap of the
+  row, and on the world only (`Play::mouse_binds_at`: not over the chat box, the minimap, a link's or a
+  creature's window, nor with a window up), where a bound wheel no longer zooms; the left and right
+  buttons stay the game's pointer, no row's. A page keeps bound side buttons from the browser's back and
+  forward (`web::mouse_sides`).
 - **Macros, as PCSX2's** (the user's of 2026-11-06, "pcsx2 has a nice macro system", and of
   2026-11-10, "it is not the same yet. lets also add it as its own menu entry": `macros`, `macropage`,
   `binds::Macro`, read off PCSX2's `pcsx2/SIO/Pad/Pad.cpp` and its editors): the options' own **Macros**

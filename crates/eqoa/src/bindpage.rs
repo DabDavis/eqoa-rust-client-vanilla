@@ -416,6 +416,7 @@ impl ControlsPage {
             let what = label(vui, self.row as usize);
             match c {
                 Column::Pad => format!("Press the controller's button for {what}. |t gives up."),
+                Column::Keyboard => format!("Press the key (or a middle or side mouse button, or turn the wheel) for {what}. Esc gives up."),
                 _ => format!("Press the key for {what}. Esc gives up."),
             }
         } else if let Some(n) = &self.note {

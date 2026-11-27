@@ -55,6 +55,16 @@
 //! (on a server that keeps them). Nothing is on them until the player puts a
 //! key there.
 //!
+//! The mouse (petition 3359): its middle and side buttons and the wheel's
+//! two ways are keys to all of this (`mouse_name`, `wheel_name`: `mouse4`,
+//! `wheelup`...), put on a row as a key is and kept in `keys.opt` as one; a
+//! notch of the wheel is a key pressed and let go (a toggle's tap, the
+//! autorun's). They act only in play with the pointer on the world (the
+//! viewer's `mouse_bind`): over the chat box, the minimap, a link's window
+//! or any window up they are the mouse's, as ever. The wheel on no row
+//! zooms the camera, as before; on one, it is that row's and does not zoom.
+//! The left and right buttons are the game's pointer and no row's.
+//!
 //! With nothing moved every key is itself and every button its own field
 //! (`Binds::default`, the tests). Kept per device in `keys.opt` beside the
 //! client's options (`settings`), as the PS2 keeps every option on its card.
@@ -434,7 +444,8 @@ pub fn axes(w: [f32; 8]) -> [f32; 4] {
 }
 
 /// One input of a trigger's chord: anything PCSX2 binds a trigger to that
-/// the client reads (not the mouse, which is the game's).
+/// the client reads (the mouse's bindable inputs as keys, `mouse_name`; its
+/// left and right buttons stay the game's).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Input {
     /// a key, by `name_of`'s name
@@ -1744,7 +1755,163 @@ fn display_key(name: &str) -> String {
         "delete" => "Delete".into(),
         // the windows' text marks a glyph with |, which is written twice
         "|" => "||".into(),
+        "mouse3" => "Middle Mouse".into(),
+        "wheelup" => "Wheel Up".into(),
+        "wheeldown" => "Wheel Down".into(),
+        n if is_mouse(n) => format!("Mouse {}", &n[5..]),
         n => n.to_uppercase(),
+    }
+}
+
+/// The mouse's inputs a row can be put on (petition 3359, "Keybindings for
+/// mouse (like mapping auto-run to wheel etc.)"; the owner, 2026-11-27): the
+/// middle button (the wheel's click, `mouse3`), the side buttons (Back
+/// `mouse4`, Forward `mouse5`, and a mouse's further ones, `mouse6` ..
+/// `mouse16`), and the wheel's two ways (`wheelup`, `wheeldown`), each a
+/// key's name to the bindings (`keys.opt`, the dispatch, `display`), which
+/// no keyboard key has. The left and right buttons are not among them: they
+/// are the game's pointer (a click targets or presses, a drag looks round,
+/// both run), everywhere, and no row can take them. Unbound, every one does
+/// what it did before: the wheel zooms the camera (and scrolls what it is
+/// over), the others nothing.
+pub fn mouse_name(button: winit::event::MouseButton) -> Option<String> {
+    use winit::event::MouseButton as M;
+    Some(match button {
+        M::Left | M::Right => return None,
+        M::Middle => "mouse3".into(),
+        M::Back => "mouse4".into(),
+        M::Forward => "mouse5".into(),
+        M::Other(n) if (6..=MOUSE_MOST).contains(&n) => format!("mouse{n}"),
+        M::Other(_) => return None,
+    })
+}
+
+/// The mouse's last numbered button a row takes (`mouse_name`).
+pub const MOUSE_MOST: u16 = 16;
+
+/// The wheel's way for a notch (`lines` up positive, as winit's): its name.
+pub fn wheel_name(up: bool) -> &'static str {
+    if up { "wheelup" } else { "wheeldown" }
+}
+
+/// Whether a key's name (its modifiers aside) is one of the mouse's
+/// (`mouse_name`, `wheel_name`).
+pub fn is_mouse(name: &str) -> bool {
+    let (_, k) = split_combo(name);
+    if matches!(k, "wheelup" | "wheeldown") {
+        return true;
+    }
+    k.strip_prefix("mouse").and_then(|n| n.parse::<u16>().ok()).is_some_and(|n| (3..=MOUSE_MOST).contains(&n) && k.len() == 5 + n.to_string().len())
+}
+
+/// Whether the side buttons (Back and Forward, `mouse4` and `mouse5`, with
+/// any modifiers) are anything's: a row's or a macro's trigger's. A page
+/// then keeps them from the browser (its back and forward, web/main.js).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn sides_bound(b: &Binds) -> bool {
+    let used = |k: &str| matches!(split_combo(k).1, "mouse4" | "mouse5");
+    b.keys.iter().chain(b.pc_keys.iter()).flatten().any(|k| used(k))
+        || b.macros.iter().flat_map(|m| m.triggers.iter().flatten()).any(|i| matches!(i, Input::Key(k) if used(k)))
+}
+
+/// What one of the mouse's inputs (`mouse_name`, `wheel_name`) is, pressed
+/// (`App::mouse_bind`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MouseUse {
+    /// a Controls or Macros page waits for a key: the page's
+    Capture,
+    /// a row or a macro is on it: a key of this name (its modifiers' first
+    /// where they are bound, as a key's are, `combo_name`) to the
+    /// keyboard's dispatch
+    Key(String),
+    /// the mouse's, as before (the wheel zooms or scrolls, the buttons
+    /// nothing)
+    Mouse,
+}
+
+/// `name` pressed with `mods` (ctrl, alt, shift) held: a page's while one
+/// `capturing`; with the pointer `on_world` (`Play::mouse_binds_at`) a key
+/// where a row or macro is on it; else the mouse's.
+pub fn mouse_use(name: &str, capturing: bool, on_world: bool, mods: (bool, bool, bool), b: &Binds, pc: bool) -> MouseUse {
+    if capturing {
+        return MouseUse::Capture;
+    }
+    if !on_world {
+        return MouseUse::Mouse;
+    }
+    let bound = |n: &str| b.profile_alias(n, pc) != Alias::Same;
+    let (ctrl, alt, shift) = mods;
+    if ctrl || alt || shift {
+        let combo = combo_name(ctrl, alt, shift, name);
+        if bound(&combo) {
+            return MouseUse::Key(combo);
+        }
+    }
+    if bound(name) { MouseUse::Key(name.to_string()) } else { MouseUse::Mouse }
+}
+
+/// What the wheel's `steps` (up positive: a line a notch, `WheelNotches`)
+/// are: a page's while one is `capturing` (`Capture`, with the way's name
+/// once a whole notch came); on the world with a row on the way, that many
+/// taps of it (`Keys`; none yet for a fraction); else the mouse's (`Mouse`:
+/// the camera's zoom). What a window or the chat box takes before (`Play`'s
+/// wheels) never comes here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WheelUse {
+    Capture(Option<&'static str>),
+    Keys(String, u32),
+    Mouse,
+}
+
+pub fn wheel_use(steps: f32, notches: &mut WheelNotches, capturing: bool, on_world: bool, mods: (bool, bool, bool), b: &Binds, pc: bool) -> WheelUse {
+    if steps == 0.0 || !steps.is_finite() {
+        return if capturing { WheelUse::Capture(None) } else { WheelUse::Mouse };
+    }
+    let way = wheel_name(steps > 0.0);
+    match mouse_use(way, capturing, on_world, mods, b, pc) {
+        MouseUse::Capture => {
+            let n = notches.take(steps);
+            if n != 0 {
+                notches.reset();
+            }
+            WheelUse::Capture((n != 0).then_some(way))
+        }
+        // a flick gives a few at most
+        MouseUse::Key(k) => WheelUse::Keys(k, notches.take(steps).unsigned_abs().min(4)),
+        MouseUse::Mouse => {
+            notches.reset();
+            WheelUse::Mouse
+        }
+    }
+}
+
+/// The wheel's motion made whole notches for the bindings: a line's worth
+/// (`steps`, as a window takes a notch: a line, a page's hundred pixels) is
+/// one, and a trackpad's fractions add up to one; a turn the other way
+/// starts again.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WheelNotches {
+    part: f32,
+}
+
+impl WheelNotches {
+    /// `steps` more (up positive): the whole notches they make, signed.
+    pub fn take(&mut self, steps: f32) -> i32 {
+        if !steps.is_finite() || steps == 0.0 {
+            return 0;
+        }
+        if (self.part > 0.0) != (steps > 0.0) {
+            self.part = 0.0;
+        }
+        self.part += steps;
+        let whole = self.part.trunc();
+        self.part -= whole;
+        whole as i32
+    }
+
+    /// The fractions forgotten (a wheel the bindings did not take).
+    pub fn reset(&mut self) {
+        self.part = 0.0;
     }
 }
 
@@ -2769,5 +2936,143 @@ mod tests {
         // negative control: unbound, the combination is itself, not the slot
         let d = Binds::default();
         assert_ne!(d.alias("shift+1"), Alias::Slot(0, 0));
+    }
+
+    /// The mouse's inputs (petition 3359): the middle and side buttons and
+    /// the wheel's ways have names, shown as a player reads them; the left
+    /// and right buttons have none (the game's pointer, no row's).
+    #[test]
+    fn the_mouse_has_names_but_its_left_and_right() {
+        use winit::event::MouseButton as M;
+        assert_eq!(mouse_name(M::Left), None, "the game's: targets, presses, looks");
+        assert_eq!(mouse_name(M::Right), None, "the game's: talks, looks, runs");
+        assert_eq!(mouse_name(M::Middle).as_deref(), Some("mouse3"));
+        assert_eq!(mouse_name(M::Back).as_deref(), Some("mouse4"));
+        assert_eq!(mouse_name(M::Forward).as_deref(), Some("mouse5"));
+        assert_eq!(mouse_name(M::Other(7)).as_deref(), Some("mouse7"));
+        assert_eq!(mouse_name(M::Other(2)), None, "a number Back and Forward have");
+        assert_eq!(mouse_name(M::Other(MOUSE_MOST + 1)), None);
+        assert_eq!([display("mouse3"), display("mouse4"), display("mouse5"), display("mouse7")], ["Middle Mouse", "Mouse 4", "Mouse 5", "Mouse 7"]);
+        assert_eq!([display("wheelup"), display("wheeldown"), display("shift+wheelup")], ["Wheel Up", "Wheel Down", "Shift+Wheel Up"]);
+        for n in ["mouse3", "mouse16", "wheelup", "ctrl+wheeldown", "shift+mouse4"] {
+            assert!(is_mouse(n), "{n}");
+        }
+        for n in ["mouse", "mouse1", "mouse2", "mouse04", "mouse17", "m", "wheel", "x"] {
+            assert!(!is_mouse(n), "{n}");
+        }
+        // no key of the keyboard is named so: unbound, each is itself
+        let d = Binds::default();
+        for n in ["mouse3", "mouse4", "mouse5", "wheelup", "wheeldown"] {
+            assert_eq!(d.alias(n), Alias::Same, "{n}");
+            assert_eq!(mouse_use(n, false, true, (false, false, false), &d, false), MouseUse::Mouse, "{n} unbound: the mouse's");
+        }
+    }
+
+    /// A row on Mouse 4 fires on that button, as its key would, and lets go
+    /// with it; the row's old key does nothing then. A row on Middle Mouse
+    /// too, and a bar's slot. The control: the default layout's Mouse 4 is
+    /// the mouse's.
+    #[test]
+    fn a_row_on_mouse_4_fires_on_it() {
+        let mut b = Binds::default();
+        let target = row_named("target_target").unwrap();
+        assert_eq!(b.bind_key(target, "mouse4"), Moved::Freed(Some("f".into())));
+        assert_eq!(mouse_use("mouse4", false, true, (false, false, false), &b, false), MouseUse::Key("mouse4".into()));
+        let mut e = KeyEdge::default();
+        assert_eq!(e.key("mouse4", true, false, false, &b), Some(Sent::Key("f".into())), "Assist Target's F");
+        assert_eq!(e.key("mouse4", false, false, false, &b), Some(Sent::Key("f".into())));
+        assert_eq!(b.alias("f"), Alias::Nothing, "the row left F");
+        assert_eq!(mouse_use("mouse5", false, true, (false, false, false), &b, false), MouseUse::Mouse, "Mouse 5 is still nothing's");
+        // Shift with it: Mouse 4's, while no row is on Shift+Mouse 4
+        assert_eq!(mouse_use("mouse4", false, true, (false, false, true), &b, false), MouseUse::Key("mouse4".into()));
+        b.bind_key(row_named("map").unwrap(), "shift+mouse4");
+        assert_eq!(mouse_use("mouse4", false, true, (false, false, true), &b, false), MouseUse::Key("shift+mouse4".into()));
+        assert_eq!(e.key("shift+mouse4", true, false, false, &b), Some(Sent::Key("m".into())));
+        // the middle button on a bar's slot
+        let slot = row_named("bar2_slot3").unwrap();
+        b.bind_key(slot, "mouse3");
+        assert_eq!(e.key("mouse3", true, false, false, &b), Some(Sent::Slot(1, 2)));
+        // over the UI, or with a page waiting, it is not the row's
+        assert_eq!(mouse_use("mouse4", false, false, (false, false, false), &b, false), MouseUse::Mouse, "over the UI");
+        assert_eq!(mouse_use("mouse4", true, true, (false, false, false), &b, false), MouseUse::Capture);
+        assert_eq!(mouse_use("mouse4", false, true, (false, false, false), &Binds::default(), false), MouseUse::Mouse, "the control");
+    }
+
+    /// Wheel Up on the autorun's row: a notch is X pressed and let go, the
+    /// autorun's toggle, and no zoom; two notches two toggles (on and off
+    /// again); a trackpad's half notches one toggle for two. The wheel's
+    /// other way, on no row, still zooms; the wheel with no row zooms both
+    /// ways (the control, today's).
+    #[test]
+    fn wheel_up_on_autorun_toggles_it_and_does_not_zoom() {
+        let mut b = Binds::default();
+        let autorun = row_named("autorun").unwrap();
+        b.bind_key(autorun, "wheelup");
+        let none = (false, false, false);
+        let mut n = WheelNotches::default();
+        let w = |steps: f32, n: &mut WheelNotches, b: &Binds| wheel_use(steps, n, false, true, none, b, false);
+        assert_eq!(w(1.0, &mut n, &b), WheelUse::Keys("wheelup".into(), 1), "a notch: a tap, not the zoom");
+        let mut e = KeyEdge::default();
+        let tap = |e: &mut KeyEdge| (e.key("wheelup", true, false, false, &b), e.key("wheelup", false, false, false, &b));
+        assert_eq!(tap(&mut e), (Some(Sent::Key("x".into())), Some(Sent::Key("x".into()))), "X pressed and let go: autorun's toggle");
+        assert_eq!(b.alias("x"), Alias::Nothing, "X left it");
+        assert_eq!(w(2.0, &mut n, &b), WheelUse::Keys("wheelup".into(), 2));
+        assert_eq!(w(0.5, &mut n, &b), WheelUse::Keys("wheelup".into(), 0), "half a notch: nothing yet, still no zoom");
+        assert_eq!(w(0.5, &mut n, &b), WheelUse::Keys("wheelup".into(), 1));
+        assert_eq!(w(40.0, &mut n, &b), WheelUse::Keys("wheelup".into(), 4), "a flick: a few at most");
+        assert_eq!(w(-1.0, &mut n, &b), WheelUse::Mouse, "Wheel Down on no row: the zoom");
+        let d = Binds::default();
+        assert_eq!(w(1.0, &mut n, &d), WheelUse::Mouse, "the control: no row, the zoom");
+        assert_eq!(w(-1.0, &mut n, &d), WheelUse::Mouse);
+        // over the UI the bound way is the UI's (or the zoom), never the row's
+        assert_eq!(wheel_use(1.0, &mut n, false, false, none, &b, false), WheelUse::Mouse);
+        // a page waiting takes whole notches as the way's name
+        assert_eq!(wheel_use(0.5, &mut n, true, true, none, &b, false), WheelUse::Capture(None));
+        assert_eq!(wheel_use(0.5, &mut n, true, true, none, &b, false), WheelUse::Capture(Some("wheelup")));
+        assert_eq!(wheel_use(-1.0, &mut n, true, true, none, &b, false), WheelUse::Capture(Some("wheeldown")));
+    }
+
+    /// The wheel's notches: whole lines, fractions summed, a turn back
+    /// starting again.
+    #[test]
+    fn wheel_notches_add_up() {
+        let mut n = WheelNotches::default();
+        assert_eq!(n.take(1.0), 1);
+        assert_eq!(n.take(0.4), 0);
+        assert_eq!(n.take(0.4), 0);
+        assert_eq!(n.take(0.4), 1);
+        assert_eq!(n.take(-0.6), 0, "the other way: the fraction kept up goes");
+        assert_eq!(n.take(-0.6), -1);
+        assert_eq!(n.take(f32::NAN), 0);
+        assert_eq!(n.take(0.0), 0);
+    }
+
+    /// Mouse binds kept in keys.opt beside the keys and read back, a macro's
+    /// trigger on one too; the side buttons bound say so (a page keeps them
+    /// from the browser). The control: the defaults have none.
+    #[test]
+    fn mouse_binds_round_trip_in_keys_opt() {
+        let mut b = Binds::default();
+        assert!(!sides_bound(&b), "the control");
+        b.bind_key(row_named("autorun").unwrap(), "wheelup");
+        b.bind_key(row_named("jump").unwrap(), "mouse3");
+        assert!(!sides_bound(&b), "the middle button is no page's");
+        b.bind_key(row_named("target_target").unwrap(), "shift+mouse5");
+        b.bind_key(row_named("bar1_slot1").unwrap(), "wheeldown");
+        b.set_trigger(0, None, vec![Input::Key("mouse4".into())]).unwrap();
+        b.macros[0].buttons = 1 << 14;
+        assert!(sides_bound(&b));
+        let text = b.to_text();
+        for line in ["key.autorun=wheelup", "key.jump=mouse3", "key.target_target=shift+mouse5", "key.bar1_slot1=wheeldown", "macro.1.trigger=key:mouse4"] {
+            assert!(text.lines().any(|l| l == line), "{line} in {text}");
+        }
+        let back = Binds::from_text(&text);
+        assert_eq!(back, b);
+        assert_eq!(back.alias("wheelup"), Alias::To("x"));
+        assert_eq!(back.alias("mouse4"), Alias::Macro);
+        let mut c = Binds::default();
+        c.bind_key(row_named("autorun").unwrap(), "mouse4");
+        assert!(sides_bound(&c));
+        assert!(!sides_bound(&Binds::default()));
     }
 }
