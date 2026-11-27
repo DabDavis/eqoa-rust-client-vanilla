@@ -5,6 +5,11 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · Field of View
+
+- A new **Field of View** slider in **Options > Extended > Graphics > Video** lets you see more of the world around you: from 45 up to 95 degrees in steps of 5. The original game's view, 55, is the default, so nothing changes until you move it.
+- It works in first and third person and as you move it. A wide window still shows more at the sides as before, and everything at the edges of the wider view is drawn: creatures, plants, name plates, shadows and effects. Targeting picks the same creature it always did.
+
 ## 2026-11-27 · Feet on Slopes on stairs and steep ground
 
 - **Feet on Slopes** no longer flips your knees backwards or twitches your legs on stairs and steep ground: the knees stay bent forward, each foot follows a step up or down smoothly, and the fit no longer switches off and on between steps.

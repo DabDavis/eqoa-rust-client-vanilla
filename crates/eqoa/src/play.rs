@@ -5690,7 +5690,7 @@ impl Play {
     ///
     /// How far off the centre line a creature is (its x after the divide)
     /// is measured through `game`, the game's own camera (`m_viewProj`: 55
-    /// degrees and 10/7 across a 4:3 picture, `walker.view(4/3)`), as
+    /// degrees and 10/7 across a 4:3 picture, `walker.game_view(4/3)`), as
     /// `TargetCentre` measures; what is in view (`m_frustum.Cull`) is the
     /// view as drawn, `view_proj` (a wider window's sides, a narrower one's
     /// top and bottom: a creature the player sees can be cycled to). A wider
@@ -5841,13 +5841,13 @@ impl Play {
     }
 
     /// `cycle_target` from `walker`'s camera in a window `aspect` wide:
-    /// measured through the game's camera (`walker.view(4/3)`), in view as
+    /// measured through the game's camera (`walker.game_view(4/3)`), in view as
     /// drawn (`walker.view(aspect)`). The PC interface measures from the
     /// character instead (`cycle_target_from_character`); the Controller
     /// interface keeps the PS2's camera.
     pub fn cycle_target_from(&mut self, group: bool, walker: &Walker, aspect: f32) {
         let (drawn, view) = walker.view(aspect);
-        let (game, _) = walker.view(4.0 / 3.0);
+        let (game, _) = walker.game_view(4.0 / 3.0);
         if crate::settings::pc_mode() {
             self.cycle_target_from_character(group, &walker.cam.walk.phys, game * view, drawn * view);
         } else {
@@ -6050,12 +6050,12 @@ impl Play {
     }
 
     /// `VIClient::TargetCentre` (the manual camera all the way in, a frame of
-    /// the game's), measured through the game's camera (`walker.view(4/3)`:
+    /// the game's), measured through the game's camera (`walker.game_view(4/3)`:
     /// the frame's 10/7 across a 4:3 picture, as the console measures) and in
     /// view as drawn (`view_proj`: a wider window's sides count). True when
     /// the target changed (`DrawReticle(1)`).
     fn target_centre(&mut self, walker: &Walker, view_proj: glam::Mat4) -> bool {
-        let (proj, view) = walker.view(4.0 / 3.0);
+        let (proj, view) = walker.game_view(4.0 / 3.0);
         let eye = walker.eye_position();
         let seen: Vec<Seen> = self
             .entities
@@ -14667,7 +14667,7 @@ mod commands {
     /// 20261026-154639, a tester at 1707x932: "a *slightly* higher preference to
     /// targeting mobs in front of you and close"). How far off the middle a
     /// creature is counts as the game's camera measures it
-    /// (`walker.view(4/3)`); the window's projection draws its x at 4/3 over
+    /// (`walker.game_view(4/3)`); the window's projection draws its x at 4/3 over
     /// the aspect of that (0.73 at the tester's shape, x squared 0.53), and at the
     /// game's in a window narrower than 4:3. From a camera at the origin
     /// looking along -z: A, 40 ahead (0.28), then B, 13 away and 5 to the
