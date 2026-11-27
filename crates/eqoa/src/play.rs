@@ -12947,9 +12947,12 @@ impl Play {
             // a merc's class (and a healer's mode) under its name, where the
             // server tells them (0x7E5B's layout 3: the owner's of 2026-11-12,
             // "for mercs show class also in the square pop up")
+            // its Master Class in place of its class once it has one (0x0010's
+            // title, entity/mercmaster.go MercTitle; Heirloom petition 3447)
             3 => Some(match self.session.mercs.as_ref().and_then(|m| m.class(&c.name)) {
                 Some((k, mode)) => {
-                    let class = word(if k < 15 { 165 + k as i32 } else { 165 });
+                    let title = if self.target_info.is_some() { self.target_title.as_str() } else { "" };
+                    let class = if title.is_empty() { word(if k < 15 { 165 + k as i32 } else { 165 }) } else { title.to_string() };
                     match mode {
                         1 => format!("{}\n{class} (Defensive)\n{level}", c.name),
                         2 => format!("{}\n{class} (Offensive)\n{level}", c.name),
@@ -17218,6 +17221,31 @@ mod commands {
         p.target = 0x11;
         assert_eq!(p.target_info_text().as_deref(), Some("Plainogre\nw190\nw174\nw503 60"), "a name not on the list");
         crate::racelabel::clear();
+    }
+
+    /// A merc's Master Class (0x0010's title) stands where its class would
+    /// (Heirloom petition 3447), its healer's mode kept; the controls: no
+    /// title, the class; and no target info yet, the class.
+    #[test]
+    fn a_mercs_master_class_stands_for_its_class() {
+        let mut p = play();
+        p.words = Some(crate::groupsearch::tests::numbered());
+        p.session.mercs = Some(net::session::Mercs { own: true, names: vec!["Carian".into()], owners: vec!["Owner".into()], classes: vec![(13, 0)] });
+        p.entities.slots[0] = Some(net::entity::Entity {
+            id: 0x20,
+            creature: Some(net::entity::Creature { name: "Carian".into(), level: 60, p256: 3, ..Default::default() }),
+            ..Default::default()
+        });
+        p.target = 0x20;
+        assert_eq!(p.target_info_text().as_deref(), Some("Carian\nw178\nw503 60"), "no target info yet: the class");
+        p.target_info = Some(1);
+        p.target_title = "Sorcerer".into();
+        assert_eq!(p.target_info_text().as_deref(), Some("Carian\nSorcerer\nw503 60"));
+        p.target_title.clear();
+        assert_eq!(p.target_info_text().as_deref(), Some("Carian\nw178\nw503 60"), "no title: the class");
+        p.session.mercs = Some(net::session::Mercs { own: true, names: vec!["Carian".into()], owners: vec!["Owner".into()], classes: vec![(9, 1)] });
+        p.target_title = "Templar".into();
+        assert_eq!(p.target_info_text().as_deref(), Some("Carian\nTemplar (Defensive)\nw503 60"), "a healer's mode kept");
     }
 
     /// The server's lines under the level (`OP_MOB_INFO` layout 2, entry 680):

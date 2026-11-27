@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-27 · A merc's Master Class on its target window
+
+- **Master Class shown**: considering a mercenary that has a Master Class (Sorcerer, Templar and the like) now shows it where its class was, as a player's does; a healer's Defensive or Offensive stays beside it.
+
 ## 2026-11-27 · Mobile defaults to 30 FPS
 
 - The Android app and mobile browsers now start at 30 FPS to reduce power use during play. You can choose 60 or Display under **Options > Extended > Graphics > Video > Frame Rate**. The game honors your saved choice.
