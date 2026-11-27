@@ -329,7 +329,7 @@ pub struct OptionList {
     pub visible: bool,
     window: Window,
     /// the choices drawn, for a pointer
-    hits: Hits,
+    pub(crate) hits: Hits,
 }
 
 impl OptionList {
