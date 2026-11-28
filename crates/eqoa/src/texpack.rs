@@ -2074,7 +2074,7 @@ mod tests {
     /// named absolutely, are each the program's own folder.
     #[test]
     fn the_folder_a_player_finds_the_program_in() {
-        let p = |s: &str| PathBuf::from(s);
+        let p = |s: &str| if cfg!(windows) && s.starts_with('/') { PathBuf::from(format!("C:{s}")) } else { PathBuf::from(s) };
         let got = |exe: &str, appimage: Option<(&str, &str)>, mac: bool| {
             let appimage = appimage.map(|(i, m)| (p(i), p(m)));
             program_folder(&p(exe), appimage.as_ref().map(|(i, m)| (i.as_path(), m.as_path())), mac)
