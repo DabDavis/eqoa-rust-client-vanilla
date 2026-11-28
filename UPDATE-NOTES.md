@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-28 · Target rings on signs
+
+- **Rings at the sign, not in the dirt**: targeting a sign or a statue that the server stands an invisible body in (Isle of Dread's Graumord signpost), the target and con rings now sit up at its face instead of lying on the ground at its foot.
+
 ## 2026-11-28 · Heroic Nagafen’s cinder pools
 
 - The damage circle around each cinder pool now has a bright red rim.

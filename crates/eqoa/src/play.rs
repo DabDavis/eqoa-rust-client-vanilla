@@ -2727,6 +2727,30 @@ mod entity_actors {
         assert_eq!(send(&mut p, &mut w, HUMAN, 0), human, "the model changed");
     }
 
+    /// Heirloom petition 3470: the rings round a blocker standing in for a sign
+    /// (Graumord's, scale 0.6) go at the top of its box, 1.5 over its origin on
+    /// the ground, not in the dirt; at scale 1 2.5 over. The control: an entity
+    /// of model 0 (no actor) gets no lift, the game's position kept.
+    #[test]
+    fn a_blockers_rings_sit_on_top_of_its_box() {
+        let (x, z) = (25275.115f32, 15766.627f32);
+        let Some((lib, file)) = freeport_lib(x, z) else { return };
+        let mut w = Walker::arrive(World::load(&lib, file).unwrap(), crate::walker::Spawn::ground(x, z, 0.0));
+        let mut p = super::commands::play();
+        let at = [x, 54.1, z];
+        for (model, scale, want) in [(BLOCKER, 0.6f32, Some(1.5f32)), (BLOCKER, 1.0, Some(2.5)), (0, 1.0, None)] {
+            let creature = Some(net::entity::Creature::default());
+            p.entities.slots[3] = Some(net::entity::Entity { id: 0x0135_5d7e, kind: net::entity::TYPE_CREATURE, model, drawn_model: model, scale, pos: at, actor_pos: at, creature, ..Default::default() });
+            p.place_actors(&mut w, &lib);
+            let got = p.blocker_ring_at(&w, 3, at).map(|r| r[1] - at[1]);
+            match (got, want) {
+                (Some(g), Some(t)) => assert!((g - t).abs() < 0.01, "model {model:#x} at {scale}: lifted {g}, want {t}"),
+                (None, None) => {}
+                _ => panic!("model {model:#x} at {scale}: lifted {got:?}, want {want:?}"),
+            }
+        }
+    }
+
     /// the reference server's blockers (F3 20261028-233048, an unnamed creature where
     /// the player stood; a quest's gate the players ran past): CHAR.ESF's
     /// 0x6F412342 is a SimpleSprite with an empty prim buffer and a
@@ -5532,7 +5556,8 @@ impl Play {
             }
             let k = self.entities.slots.iter().position(|e| e.as_ref().is_some_and(|e| e.id == id))?;
             let e = self.entities.slots[k].as_ref().filter(|e| self.in_scene(e))?;
-            Some(crate::rings::Aim { id, pos: e.actor_pos, slot4: self.slot4_of(k) })
+            let slot4 = self.slot4_of(k).or_else(|| self.blocker_ring_at(walker, k, e.actor_pos));
+            Some(crate::rings::Aim { id, pos: e.actor_pos, slot4 })
         });
         // UpdateGame: the target info stops counting while the target's
         // +0x19 is 0
@@ -12103,6 +12128,25 @@ impl Play {
     /// targetable only on a PS2).
     fn in_scene(&self, e: &net::entity::Entity) -> bool {
         e.world as i64 == self.player.world
+    }
+
+    /// Where the rings go round a target whose body draws nothing (no puppet)
+    /// but has an actor: the top of its sprite's box, as the actor is scaled.
+    /// `TrackTarget` puts them at a non-character's position, its origin: the
+    /// reference server's blocker (CHAR.ESF's 0x6F412342, a cube of collision
+    /// centred on its origin) stood in for a sign or a statue has its origin at
+    /// the ground, half its box under it, and the rings lay in the dirt there
+    /// (Heirloom petition 3470: Isle of Dread's Graumord signpost, a blocker of
+    /// 0.6 inside the village sign; the owner approved lifting them). A target
+    /// that draws is the game's: its slot 4, or its position.
+    fn blocker_ring_at(&self, walker: &Walker, slot: usize, pos: [f32; 3]) -> Option<[f32; 3]> {
+        if self.puppets.get(slot).is_some_and(|p| p.is_some()) {
+            return None;
+        }
+        let a = walker.scene.actors.get(self.actors.get(slot)?.as_ref()?.actor)?;
+        let sp = walker.scene.sprites.get(a.sprite?)?;
+        let top = (sp.bbox.max.y * a.scale).0;
+        (top > 0.0).then_some([pos[0], pos[1] + top, pos[2]])
     }
 
     /// The slot's character's slot 4 (`CalcSlotWorldTransform(4)`), when its
