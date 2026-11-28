@@ -120,6 +120,7 @@ mod dpsmeter;
 #[cfg(not(target_arch = "wasm32"))]
 mod decorfit;
 mod decorlights;
+mod cinderpool;
 mod ride;
 mod npctint;
 mod petart;
