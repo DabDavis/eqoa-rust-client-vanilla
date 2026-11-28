@@ -1421,6 +1421,9 @@ pub fn shot_with(
         }
         renderer.strips = shot_bolts;
         renderer.strips.append(&mut shot_trails);
+        if let Some(p) = play.as_mut() {
+            crate::cinderpool::Pool::draw(&mut p.cinder_pool, &mut walker.scene, p.player.world, &mut renderer.strips);
+        }
         // the sandstorm's dust (`sanddust`), in the storm's colour
         if let Some(f) = crate::weather_zones::fog(&weather.regional, shot_hour) {
             renderer.strips.extend(weather.dust_strips(shot_eye, f.color));
@@ -7200,6 +7203,10 @@ impl App {
                     g.renderer.strips = bolts;
                     if let Some(p) = play.as_mut() {
                         g.renderer.strips.append(&mut p.trail_strips);
+                        if !loading && p.cinder_pool.is_some() {
+                            crate::cinderpool::Pool::draw(&mut p.cinder_pool, &mut w.scene, p.player.world, &mut g.renderer.strips);
+                            bb_view = Some((v, proj));
+                        }
                     }
                     // the sandstorm's dust (`sanddust`), in the storm's colour
                     if let Some(wx) = weather.as_ref()
