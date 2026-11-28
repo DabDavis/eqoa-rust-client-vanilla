@@ -714,6 +714,18 @@ pub enum Pick {
     Nothing,
 }
 
+/// A window behind others (Auto, not in front) reads its controllers at
+/// rest, as they are: with none connected it reads none, rather than one at
+/// rest that is not there.
+#[cfg(any(windows, test))]
+fn background_pick(pick: Pick, focus: Focus, front: bool, has_pads: bool) -> Pick {
+    if pick == Pick::All && focus == Focus::Auto && !front {
+        if has_pads { Pick::Idle } else { Pick::Nothing }
+    } else {
+        pick
+    }
+}
+
 /// Which controllers a window reads (the Extended page's Controller Focus):
 /// `names` the connected ones in their order (the first controller first),
 /// `in_front` whether this window has the focus, `seat` it among the
@@ -1009,7 +1021,7 @@ impl Gamepads {
         // (Windows.Gaming.Input), so a window alone keeps that there: XInput,
         // which reads them behind, is for a window among others
         #[cfg(windows)]
-        let pick = if pick == Pick::All && focus == Focus::Auto && !front { Pick::Idle } else { pick };
+        let pick = background_pick(pick, focus, front, !pads.is_empty());
         // a controller pressed while this window has the focus and reads
         // none, said once a time it comes to the front: the presses a
         // player saw "ignored" (a second box, 2026-10-25) held back by these
@@ -1079,8 +1091,9 @@ impl Gamepads {
             }
         }
         if pick == Pick::Idle {
-            // still there, at rest: as it was found, motors and all
-            any = true;
+            // still there, at rest: as it was found, motors and all (a
+            // controller at rest is one that is connected)
+            any = !pads.is_empty();
             motors = pads.iter().any(|c| c.rumbles);
         }
         // what was pressed and let go since the last read (`Latch`): down
@@ -2384,6 +2397,17 @@ mod tests {
         assert!(wait_for_hid(false, HID_GRACE_MS - 1));
         assert!(!wait_for_hid(false, HID_GRACE_MS), "the control: after the moment, gilrs's");
         assert!(!wait_for_hid(true, 0), "refused: gilrs's at once");
+    }
+
+    /// A window behind others with no controller connected reports none: it
+    /// does not read one at rest that is not there. With one connected it
+    /// reads it at rest, and in front, or with a pad chosen, as before.
+    #[test]
+    fn a_window_behind_with_no_controller_connected_reads_none() {
+        assert_eq!(background_pick(Pick::All, Focus::Auto, false, false), Pick::Nothing);
+        assert_eq!(background_pick(Pick::All, Focus::Auto, false, true), Pick::Idle);
+        assert_eq!(background_pick(Pick::All, Focus::Auto, true, false), Pick::All);
+        assert_eq!(background_pick(Pick::One("pad".into()), Focus::Pad(1), false, true), Pick::One("pad".into()));
     }
 
     /// Off, Window and a Pad, each as it says; Auto alone reads every one,
