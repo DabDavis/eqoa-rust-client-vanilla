@@ -5597,9 +5597,12 @@ impl Play {
     /// A creature's name as its plate and its details box show it: a
     /// player's with its surname after it (go-eqoa-server's `/surname`, Live
     /// petition 5648: `OP_SURNAMES`, by its name without the tags before it),
-    /// anyone else's as it is.
+    /// and a merc's with its own (`/merc surname`, Heirloom petition 3430: a
+    /// merc's name is the world's, so the same list names it); anyone else's
+    /// as it is.
     fn plate_name(&self, c: &net::entity::Creature) -> String {
-        if c.p256 == 2
+        let merc = c.p256 == 3 && self.session.mercs.as_ref().is_some_and(|m| m.is(&c.name));
+        if (c.p256 == 2 || merc)
             && let Some(s) = self.session.surname(crate::chat::plain_name(&c.name))
         {
             return format!("{} {s}", c.name);
@@ -16139,6 +16142,13 @@ mod commands {
         assert_eq!(p.plate_name(&player), "[OG] Cora Stoneheart");
         assert_eq!(p.plate_name(&bert), "Bert");
         assert_eq!(p.plate_name(&pet), "Cora", "a pet or a merc: its own name");
+        // a merc's own surname (Heirloom petition 3430), a pet of no merc's name still none
+        let merc = net::entity::Creature { p256: 3, name: "Carian".into(), ..Default::default() };
+        p.session.surnames.insert("carian".into(), "Vale".into());
+        assert_eq!(p.plate_name(&merc), "Carian", "not a merc the list names: its own name");
+        p.session.mercs = Some(net::session::Mercs { own: false, names: vec!["Carian".into()], owners: vec!["Owner".into()], classes: vec![(13, 0)] });
+        assert_eq!(p.plate_name(&merc), "Carian Vale");
+        assert_eq!(p.plate_name(&pet), "Cora", "a pet the merc list does not name");
     }
 
     /// Coach Talk on Arrival (Heirloom petition 3091): a 0x00B2 while the

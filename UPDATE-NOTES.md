@@ -5,6 +5,10 @@ in the same push as the changes it describes. The dev release's page shows them
 (`release/notes.sh`, from `.github/workflows/dev.yml`); an edit to this file alone
 is put on the page by `.github/workflows/notes.yml`.
 
+## 2026-11-28 · Mercenary surnames
+
+- **Surnames for mercenaries**: on a server that has them, `/merc [name or 1-3] surname <surname>` gives your mercenary a surname, shown after its name on its name plate and in its details box, as a player's surname is; `/merc [name or 1-3] surname clear` takes it off.
+
 ## 2026-11-27 · A merc's Master Class on its target window
 
 - **Master Class shown**: considering a mercenary that has a Master Class (Sorcerer, Templar and the like) now shows it where its class was, as a player's does; a healer's Defensive or Offensive stays beside it.
