@@ -12,7 +12,7 @@ use web_time::{Duration, Instant};
 pub const OPCODE: u16 = 0x7EC4;
 const SEGMENTS: usize = 96;
 const DARK: [f32; 4] = [0.012, 0.023, 0.055, 1.0];
-const BRIGHT: [f32; 4] = [0.56, 1.0, 1.0, 1.0];
+const BRIGHT: [f32; 4] = [1.0, 0.18, 0.18, 1.0];
 
 pub struct Pool {
     world: u8,
