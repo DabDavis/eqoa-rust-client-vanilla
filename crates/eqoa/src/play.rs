@@ -8332,6 +8332,39 @@ impl Play {
         self.player.world as i32
     }
 
+    /// The group on the map, but the player: each member at its entity's
+    /// actor while it has one, else at channel 0x40's place in this world
+    /// while channel 0x40 lists it (`active`). One it has not placed, or left
+    /// out of its last record, keeps a place that is not its own (the world's
+    /// corner, or where it once was), and is not drawn.
+    fn map_group(&self, me: Option<u32>, world: i32) -> Vec<([f32; 3], usize)> {
+        self.group.members[..self.group.count()]
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| Some(m.id) != me)
+            .filter_map(|(index, m)| {
+                // the entity's actor while it has one, else channel 0x40's place in this world
+                let pos = self.actor_pos(m.id).or_else(|| (m.active && m.x == world).then_some(m.pos))?;
+                Some((pos, index))
+            })
+            .collect()
+    }
+
+    /// The compass's group patches: as the map's dots (`map_group`), and the
+    /// player at its own place.
+    fn compass_patches(&self, me: Option<u32>) -> Vec<crate::hud::PatchMember> {
+        self.group.members[..self.group.count()]
+            .iter()
+            .enumerate()
+            .map(|(index, m)| {
+                // the entity's actor while it has one, else channel 0x40's place in this world
+                let actor = if Some(m.id) == me { self.self_at.map(|a| a.0) } else { self.actor_pos(m.id) };
+                let pos = actor.or_else(|| (m.active && m.x == self.world_id()).then_some(m.pos));
+                crate::hud::PatchMember { index, id: m.id, pos }
+            })
+            .collect()
+    }
+
     /// What the start menu's stats column and `UpdateLocation` read.
     fn start_view(&self, walker: &Walker) -> (crate::startmenu::Stats, crate::startmenu::Location) {
         let st = crate::startmenu::Stats {
@@ -11110,16 +11143,7 @@ impl Play {
         let p = &walker.cam.walk.phys;
         let me = self.self_id32();
         let world = self.world_id();
-        let group = self.group.members[..self.group.count()]
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| Some(m.id) != me)
-            .filter_map(|(index, m)| {
-                // the entity's actor while it has one, else channel 0x40's place in this world
-                let pos = self.actor_pos(m.id).or_else(|| (m.x == world).then_some(m.pos))?;
-                Some((pos, index))
-            })
-            .collect();
+        let group = self.map_group(me, world);
         let origin = walker.scene.grid.as_ref().map_or([1000.0, 1000.0], |g| [g.origin.x.0, g.origin.z.0]);
         let cx = crate::map::Context {
             lib,
@@ -11535,16 +11559,7 @@ impl Play {
             raid: self.raid_rows(me, power_bars),
             raid_drop: self.raid_drag_shown().0,
             raid_new_group: self.raid_drag_shown().1,
-            patches: self.group.members[..self.group.count()]
-                .iter()
-                .enumerate()
-                .map(|(index, m)| {
-                    // the entity's actor while it has one, else channel 0x40's place in this world
-                    let actor = if Some(m.id) == me { self.self_at.map(|a| a.0) } else { self.actor_pos(m.id) };
-                    let pos = actor.or_else(|| (m.x == self.world_id()).then_some(m.pos));
-                    crate::hud::PatchMember { index, id: m.id, pos }
-                })
-                .collect(),
+            patches: self.compass_patches(me),
             self_id: me,
             target: self.target,
             camera: walker.eye.position.to_array(),
@@ -13545,6 +13560,54 @@ mod commands {
         p.invite_to_group(0x201, "Cael");
         assert!(said(&p, "(word 637) Cael"), "a member, offered: {:?}", p.chat.back());
         assert!(p.may_invite(), "InviteEntity's rule too");
+    }
+
+    /// The player (1) in a group of four in world 0: a member channel 0x40
+    /// never placed (2, at the world's corner), one its last record left out
+    /// (3, its old place kept) and one the record names (4).
+    fn group_of_four() -> Play {
+        let mut p = play();
+        p.session.self_id = Some(1);
+        p.player.world = 0;
+        p.group.in_group = true;
+        let names: Vec<String> = ["Me", "Never", "Gone", "Here"].iter().map(|s| s.to_string()).collect();
+        p.group.roster(&[1, 2, 3, 4], &names, Some(1));
+        let record = |id: u32, pos: [i16; 3]| {
+            let mut v = id.to_le_bytes().to_vec();
+            v.extend([1, 100, 0]);
+            for c in pos {
+                v.extend(c.to_le_bytes());
+            }
+            v
+        };
+        let mut both = record(3, [5, 0, 5]);
+        both.extend(record(4, [10, 0, 20]));
+        p.group.channel40(&both);
+        p.group.channel40(&record(4, [10, 0, 20]));
+        assert!(!p.group.members[1].active && !p.group.members[2].active && p.group.members[3].active);
+        assert_eq!(p.group.members[2].pos, [5.0, 0.0, 5.0], "the member left out keeps its old place");
+        p
+    }
+
+    /// A group member channel 0x40 does not list is no dot on the map: not
+    /// one never placed, drawn at the world's corner, nor one its last record
+    /// left out, drawn where it once was. The control: the member the record
+    /// names, at its place.
+    #[test]
+    fn a_member_channel_40_does_not_list_is_no_dot_on_the_map() {
+        let p = group_of_four();
+        assert_eq!(p.map_group(Some(1), 0), vec![([10.0, 0.0, 20.0], 3)]);
+    }
+
+    /// The same on the compass: no patch for the member never placed or left
+    /// out, a patch for the one the record names (the control).
+    #[test]
+    fn a_member_channel_40_does_not_list_is_no_patch_on_the_compass() {
+        let p = group_of_four();
+        let place = |id: u32| p.compass_patches(Some(1)).into_iter().find(|m| m.id == id).map(|m| m.pos);
+        assert_eq!(place(2), Some(None), "never placed: no patch at the world's corner");
+        assert_eq!(place(3), Some(None), "left out of the last record: no patch at its old place");
+        assert_eq!(place(4), Some(Some([10.0, 0.0, 20.0])), "the control: the member the record names");
     }
 
     /// The plain human body is drawn only for a walk with no server: in play
