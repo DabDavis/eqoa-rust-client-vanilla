@@ -154,10 +154,16 @@ impl Api {
                     if !self.up {
                         self.failed(events);
                     } else {
+                        // a server may answer and close in the same read: take
+                        // the reply before the close wins, and do not call a
+                        // deliberate close a lost connection
+                        let answered = self.parse(events);
                         self.stream = None;
                         self.up = false;
                         self.rx.clear();
-                        events.push(Event::Error(-50, LOST.into()));
+                        if !answered {
+                            events.push(Event::Error(-50, LOST.into()));
+                        }
                     }
                     return;
                 }
@@ -192,6 +198,13 @@ impl Api {
         if !self.up {
             return;
         }
+        self.parse(events);
+    }
+
+    /// The whole messages in `rx`: what the server said, `true` when one was
+    /// taken.
+    fn parse(&mut self, events: &mut Vec<Event>) -> bool {
+        let mut any = false;
         while self.rx.len() >= 4 {
             let len = u32::from_be_bytes(self.rx[0..4].try_into().unwrap()) as usize;
             let body = len.saturating_sub(4);
@@ -204,6 +217,7 @@ impl Api {
             if msg.len() >= 4 {
                 self.busy = false;
             }
+            any = true;
             match auth::parse_reply(&msg) {
                 Some(Reply::SessionKey(k)) => {
                     self.key = k;
@@ -213,6 +227,7 @@ impl Api {
                 None => {}
             }
         }
+        any
     }
 
     /// A request: connected (or connecting, when the stream holds it), not
@@ -402,6 +417,37 @@ mod tests {
         a.process(40, &mut ev);
         assert!(matches!(&ev[..], [Event::Reply(Reply::Login { result: 0, accstat: 3, .. })]));
         assert!(!a.busy, "the reply ended the request");
+    }
+
+    #[test]
+    fn a_reply_before_the_close_is_taken() {
+        let (mut a, f) = api();
+        let mut ev = Vec::new();
+        a.process(0, &mut ev);
+        ev.clear();
+        assert_eq!(a.validate_login("van", "pw", 10, &mut ev), 0);
+
+        // the shard's answer and its close arrive in the same frame
+        let reply = framed(67, 16, |b| b[8..12].copy_from_slice(&0u32.to_be_bytes()));
+        f.say(Got::Data(hello([5; 32])));
+        f.say(Got::Data(reply));
+        f.say(Got::Closed);
+        a.process(20, &mut ev);
+        assert_eq!(ev, vec![Event::Connected, Event::Reply(Reply::One { ty: 67, a: 0 })]);
+        assert!(!a.busy, "the reply ended the request");
+        assert!(!a.up, "the close still ends the connection");
+        assert!(!a.connecting());
+
+        // the control: a close with nothing said is a lost connection
+        let (mut a, f) = api();
+        let mut ev = Vec::new();
+        a.process(0, &mut ev);
+        f.say(Got::Data(hello([1; 32])));
+        a.process(1, &mut ev);
+        ev.clear();
+        f.say(Got::Closed);
+        a.process(2, &mut ev);
+        assert_eq!(ev, vec![Event::Error(-50, LOST.into())]);
     }
 
     #[test]
